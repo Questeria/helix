@@ -4259,24 +4259,17 @@ class TypeChecker:
         if not self._borrow_enforcement_enabled():
             self._check_loop_body_with_modal_union(body, scope)
             return
-        # Snapshot ALL places visible from this scope via chain
-        # walk, not just scope.borrows.state. A place defined in
-        # an outer scope but mutated in the body via chain-routing
-        # would land on outer.borrows.state — the snapshot needs
-        # to see those too. Walk the chain.
-        def _snapshot_chain(s):
-            states = {}
-            cur = s
-            while cur is not None:
-                for place, state in cur.borrows.state.items():
-                    states.setdefault(place, state)
-                cur = cur.parent
-            return states
-        entry_state = _snapshot_chain(scope)
+        # Stage 100 (Stage 99 re-audit NEW-1 fix) — use the Stage 95
+        # `Scope.borrows_snapshot_chain()` method instead of the
+        # closure-local helper that was here pre-Stage-100. Eliminates
+        # ~8 lines of duplication that Stage 99 audit flagged as
+        # drift-prone. Snapshot semantics identical (chain walk,
+        # inner-shadow-wins via setdefault).
+        entry_state = scope.borrows_snapshot_chain()
         # Run the body via the existing modal-union helper (which
         # also runs _check_block under the hood).
         self._check_loop_body_with_modal_union(body, scope)
-        exit_state = _snapshot_chain(scope)
+        exit_state = scope.borrows_snapshot_chain()
         # Rank ordering (mirrors A.If reconciliation).
         _rank = {
             BORROW_FREE: 0,
@@ -5608,13 +5601,21 @@ class TypeChecker:
                     # in pass-through cases (e.g. Private + bareT).
                     chosen_eps = repr(total)
                     wrapped = TyDP(epsilon=chosen_eps, inner=wrapped)
-                # Stage 69 Inc 2 — TyTaint wraps the absolute outermost
-                # layer (above Conf and DP). Information-flow labels
-                # propagate by MOST-RESTRICTIVE-WINS: public < internal
-                # < confidential < secret. So `Public<T> +
-                # Confidential<T>` yields `Confidential<T>` — the
-                # result must be treated as confidential because part
-                # of it was.
+                # Stage 69 Inc 2 — TyTaint propagates info-flow labels
+                # by MOST-RESTRICTIVE-WINS: public < internal <
+                # confidential < secret. So `Public<T> + Confidential<T>`
+                # yields `Confidential<T>` — the result must be treated
+                # as confidential because part of it was.
+                #
+                # Stage 100 (Stage 99 re-audit fix): the original Stage
+                # 69 comment claimed TyTaint was "the absolute outermost
+                # layer". After Stages 79 (Enclave) + 80 (Counterfactual)
+                # added wrappers OUTSIDE Taint in the canonical layering,
+                # that claim became stale. Current canonical wrap order
+                # (innermost → outermost as applied in this binop block):
+                # Logic, Diff, Conf, Quant, Attribution, Deadline, Energy,
+                # Robust, Domain, DP, Taint, Cfact, Enclave. TyTaint sits
+                # 3rd from outermost (above DP, below Cfact + Enclave).
                 if l_is_taint or r_is_taint:
                     _taint_rank = {
                         "public":       0,
@@ -5648,9 +5649,17 @@ class TypeChecker:
                     wrapped = TyCounterfactual(mode=chosen_mode,
                                                inner=wrapped)
                 # Stage 79 Inc 2 — TyEnclave is the absolute outermost
-                # wrapper (above TyTaint). Once a value is inside an
-                # enclave, the enclave boundary constrains everything
-                # nested inside. Composition: first-tagged-wins.
+                # wrapper in the canonical layering. Once a value is
+                # inside an enclave, the enclave boundary constrains
+                # everything nested inside. Composition: first-tagged-
+                # wins. NOTE post-Stage-100: this comment IS still
+                # correct — TyEnclave's wrap-block executes LAST in
+                # this binop chain, making it truly outermost. The
+                # Stage 69 comment block above had a similar claim
+                # that became stale after Stages 79+80 layered above
+                # Taint; that comment has been updated to acknowledge
+                # the layering shift. Enclave-above-everything
+                # invariant is preserved as a hard rule.
                 if l_is_enclave or r_is_enclave:
                     chosen_enclave = (l_enclave_name
                                       if l_enclave_name is not None
@@ -5770,45 +5779,36 @@ class TypeChecker:
                 # propagation). Same anti-pattern Stage 43 Inc 1 M1
                 # explicitly fixed for Tier 3 intro builtins.
                 #
-                # _WRAPPER_CTOR_TABLE drives both this and the Stage
-                # 87 wrapper-mismatch hint — single source of truth.
-                # Each entry: (builtin_name, wrapper_cls, default_kwargs).
-                _WRAPPER_CTOR_TABLE = [
-                    ("__wrap_conf",     TyConf,           {"level": "med"}),
-                    ("__wrap_taint",    TyTaint,          {"label": "confidential"}),
-                    ("__wrap_dp",       TyDP,             {"epsilon": "1.0"}),
-                    ("__wrap_quant",    TyQuant,          {"bits": 8}),
-                    ("__wrap_domain",   TyDomain,         {"status": "in"}),
-                    ("__wrap_robust",   TyRobust,         {"eps": "0.03"}),
-                    ("__wrap_energy",   TyEnergy,         {"budget": "1.0"}),
-                    ("__wrap_enclave",  TyEnclave,        {"enclave": "sgx"}),
-                    ("__wrap_cfact",    TyCounterfactual, {"mode": "counterfactual"}),
-                    ("__wrap_deadline", TyDeadline,       {"deadline_us": "1000.0"}),
-                    ("__wrap_attr",     TyAttribution,    {"source": "unknown"}),
-                ]
-                for (ctor_name, wrapper_cls, defaults) in _WRAPPER_CTOR_TABLE:
-                    if bn == ctor_name and len(arg_tys) == 1:
-                        arg_ty = arg_tys[0]
-                        if isinstance(arg_ty, wrapper_cls):
-                            self.errors.append(TypeError_(
-                                f"{ctor_name}({self._fmt(arg_ty)}): "
-                                f"received an already-wrapped value; "
-                                f"intro builtins are not idempotent "
-                                f"(Stage 96 / Stage 93 audit HIGH-#1 "
-                                f"fix — pre-Stage-96, double-wrap "
-                                f"silently broke composition semantics, "
-                                f"e.g. __wrap_dp(__wrap_dp(x)) yielded "
-                                f"Private<Private<f32>> not Private<f32>"
-                                f" eps=2.0)",
-                                expr.span,
-                                hint=f"pass the inner value directly, "
-                                     f"or use the binop propagation "
-                                     f"(e.g. `a + b` where both are "
-                                     f"{wrapper_cls.__name__}-wrapped) "
-                                     f"to combine wrappers correctly",
-                            ))
-                            return TyUnknown(hint=ctor_name)
-                        return wrapper_cls(**defaults, inner=arg_ty)
+                # Stage 100 — dispatch via class-level _WRAPPER_CTOR_TABLE
+                # (was closure-local in Stage 96; hoisted by Stage 100
+                # so each Call expression doesn't re-allocate the
+                # table). Same idempotency rejection semantics.
+                ctor_entry = self._wrapper_default_for(bn)
+                if (ctor_entry is not None
+                        and ctor_entry[0] is not None
+                        and len(arg_tys) == 1):
+                    wrapper_cls, defaults = ctor_entry
+                    arg_ty = arg_tys[0]
+                    if isinstance(arg_ty, wrapper_cls):
+                        self.errors.append(TypeError_(
+                            f"{bn}({self._fmt(arg_ty)}): "
+                            f"received an already-wrapped value; "
+                            f"intro builtins are not idempotent "
+                            f"(Stage 96 / Stage 93 audit HIGH-#1 "
+                            f"fix — pre-Stage-96, double-wrap "
+                            f"silently broke composition semantics, "
+                            f"e.g. __wrap_dp(__wrap_dp(x)) yielded "
+                            f"Private<Private<f32>> not Private<f32>"
+                            f" eps=2.0)",
+                            expr.span,
+                            hint=f"pass the inner value directly, "
+                                 f"or use the binop propagation "
+                                 f"(e.g. `a + b` where both are "
+                                 f"{wrapper_cls.__name__}-wrapped) "
+                                 f"to combine wrappers correctly",
+                        ))
+                        return TyUnknown(hint=bn)
+                    return wrapper_cls(**defaults, inner=arg_ty)
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the
@@ -5816,69 +5816,17 @@ class TypeChecker:
                 # TyConf-wrapped, the call is identity (returns x's
                 # type unchanged) so the builtin remains safe at
                 # any call site. Mirrors `unwrap_logic` semantics.
-                # Stage 97 (Stage 93 audit HIGH-#2 fix) — single
-                # table-driven strip helper. Pre-Stage-97, 11
-                # individual `_strip_X` closures each walked a
-                # different SUBSET of the 13-wrapper chain — 8 of
-                # 11 were incomplete (e.g. `_strip_conf` missed 9
-                # wrappers), so `__exit_enclave(x: FromUnknown<
-                # InEnclaveSGX<f32>>)` silently returned the input
-                # unchanged. Stage 97 collapses to one helper that
-                # walks the COMPLETE chain via a single registry.
-                #
-                # _ALL_WRAPPER_REBUILDERS: (cls, rebuild_lambda) per
-                # wrapper. Each rebuild_lambda takes (old_t, new_inner)
-                # and returns a new wrapper of the same cls with the
-                # same discriminating fields + the new inner.
-                _ALL_WRAPPER_REBUILDERS = [
-                    (TyConf,           lambda t, ni: TyConf(level=t.level, inner=ni)),
-                    (TyTaint,          lambda t, ni: TyTaint(label=t.label, inner=ni)),
-                    (TyDP,             lambda t, ni: TyDP(epsilon=t.epsilon, inner=ni)),
-                    (TyQuant,          lambda t, ni: TyQuant(bits=t.bits, inner=ni)),
-                    (TyDomain,         lambda t, ni: TyDomain(status=t.status, inner=ni)),
-                    (TyRobust,         lambda t, ni: TyRobust(eps=t.eps, inner=ni)),
-                    (TyEnergy,         lambda t, ni: TyEnergy(budget=t.budget, inner=ni)),
-                    (TyEnclave,        lambda t, ni: TyEnclave(enclave=t.enclave, inner=ni)),
-                    (TyCounterfactual, lambda t, ni: TyCounterfactual(mode=t.mode, inner=ni)),
-                    (TyDeadline,       lambda t, ni: TyDeadline(deadline_us=t.deadline_us, inner=ni)),
-                    (TyAttribution,    lambda t, ni: TyAttribution(source=t.source, inner=ni)),
-                    (TyDiff,           lambda t, ni: TyDiff(inner=ni)),
-                    (TyLogic,          lambda t, ni: TyLogic(inner=ni)),
-                ]
-                def _strip_wrapper_chain(target_cls, t):
-                    """Strip the OUTERMOST instance of target_cls
-                    from t's wrapper chain. Preserves all other
-                    wrappers via their rebuild lambdas. Identity if
-                    target_cls isn't in the chain."""
-                    if isinstance(t, target_cls):
-                        return t.inner
-                    for (cls, rebuild) in _ALL_WRAPPER_REBUILDERS:
-                        if isinstance(t, cls):
-                            return rebuild(
-                                t,
-                                _strip_wrapper_chain(target_cls, t.inner))
-                    return t
-
-                # _WRAPPER_STRIP_TABLE drives the per-builtin dispatch.
-                # Single source of truth: opt-out builtin name → target
-                # wrapper class to strip.
-                _WRAPPER_STRIP_TABLE = [
-                    ("__lift_conf",           TyConf),
-                    ("__declassify",          TyTaint),
-                    ("__exhaust_dp",          TyDP),
-                    ("__upcast_quant",        TyQuant),
-                    ("__assert_in_dist",      TyDomain),
-                    ("__widen_robustness",    TyRobust),
-                    ("__exhaust_energy",      TyEnergy),
-                    ("__exit_enclave",        TyEnclave),
-                    ("__as_actual",           TyCounterfactual),
-                    ("__miss_deadline",       TyDeadline),
-                    ("__attribute_verified",  TyAttribution),
-                ]
-                for (opt_out_name, target_cls) in _WRAPPER_STRIP_TABLE:
-                    if bn == opt_out_name and len(arg_tys) == 1:
-                        return _strip_wrapper_chain(
-                            target_cls, arg_tys[0])
+                # Stage 100 — dispatch via class-level _WRAPPER_STRIP_TABLE
+                # + hoisted `_strip_wrapper_chain` class method (was
+                # closure-local with embedded _ALL_WRAPPER_REBUILDERS
+                # in Stage 97). Each Call expression no longer re-
+                # allocates the 13-entry rebuilders list nor the 11-
+                # entry strip table nor the helper closure. Strip
+                # semantics identical to Stage 97.
+                strip_target = self._wrapper_target_for(bn)
+                if strip_target is not None and len(arg_tys) == 1:
+                    return self._strip_wrapper_chain(
+                        strip_target, arg_tys[0])
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():
@@ -11812,6 +11760,116 @@ class TypeChecker:
         ("TyDeadline",       "__miss_deadline",      "__wrap_deadline"),
         ("TyAttribution",    "__attribute_verified", "__wrap_attr"),
     ]
+
+    # Stage 100 (Stage 99 re-audit residual #7 fix) — hoist the 3
+    # wrapper tables and the strip helper that were closure-local
+    # in `_check_expr` to class scope. Pre-Stage-100, each Call
+    # expression typecheck re-allocated all 3 tables + 13 lambda
+    # closures. Hoisting eliminates the re-allocation + gives a
+    # single source of truth at class scope (alongside
+    # _WRAPPER_HINT_TABLE established by Stage 87).
+    _WRAPPER_CTOR_TABLE = [
+        # (builtin_name, wrapper_cls, default_kwargs)
+        ("__wrap_conf",     "TyConf",           {"level": "med"}),
+        ("__wrap_taint",    "TyTaint",          {"label": "confidential"}),
+        ("__wrap_dp",       "TyDP",             {"epsilon": "1.0"}),
+        ("__wrap_quant",    "TyQuant",          {"bits": 8}),
+        ("__wrap_domain",   "TyDomain",         {"status": "in"}),
+        ("__wrap_robust",   "TyRobust",         {"eps": "0.03"}),
+        ("__wrap_energy",   "TyEnergy",         {"budget": "1.0"}),
+        ("__wrap_enclave",  "TyEnclave",        {"enclave": "sgx"}),
+        ("__wrap_cfact",    "TyCounterfactual", {"mode": "counterfactual"}),
+        ("__wrap_deadline", "TyDeadline",       {"deadline_us": "1000.0"}),
+        ("__wrap_attr",     "TyAttribution",    {"source": "unknown"}),
+    ]
+
+    _WRAPPER_STRIP_TABLE = [
+        # (opt_out_builtin_name, target_wrapper_cls_name)
+        ("__lift_conf",           "TyConf"),
+        ("__declassify",          "TyTaint"),
+        ("__exhaust_dp",          "TyDP"),
+        ("__upcast_quant",        "TyQuant"),
+        ("__assert_in_dist",      "TyDomain"),
+        ("__widen_robustness",    "TyRobust"),
+        ("__exhaust_energy",      "TyEnergy"),
+        ("__exit_enclave",        "TyEnclave"),
+        ("__as_actual",           "TyCounterfactual"),
+        ("__miss_deadline",       "TyDeadline"),
+        ("__attribute_verified",  "TyAttribution"),
+    ]
+
+    # Wrapper class names that must be PRESERVED when stripping a
+    # different target (the 11 above + TyDiff + TyLogic). Cls names
+    # are strings here; resolved to types via globals() in the
+    # helper (avoids forward-reference issues since the class is
+    # below this method block).
+    _ALL_WRAPPER_CLS_NAMES = (
+        "TyConf", "TyTaint", "TyDP", "TyQuant", "TyDomain",
+        "TyRobust", "TyEnergy", "TyEnclave", "TyCounterfactual",
+        "TyDeadline", "TyAttribution", "TyDiff", "TyLogic",
+    )
+
+    def _wrapper_default_for(self, ctor_name: str):
+        """Stage 100 helper — look up the (wrapper_cls, default_kwargs)
+        pair for a given __wrap_X constructor name, or None if not
+        known. Resolves the class-name string from globals()."""
+        for (name, cls_str, defaults) in self._WRAPPER_CTOR_TABLE:
+            if name == ctor_name:
+                cls = globals().get(cls_str)
+                return (cls, defaults)
+        return None
+
+    def _wrapper_target_for(self, opt_out_name: str):
+        """Stage 100 helper — look up the target wrapper class for
+        a given __opt_out_X builtin name, or None if not known."""
+        for (name, cls_str) in self._WRAPPER_STRIP_TABLE:
+            if name == opt_out_name:
+                return globals().get(cls_str)
+        return None
+
+    def _strip_wrapper_chain(self, target_cls, t):
+        """Stage 100 — hoisted class method version of the Stage 97
+        closure-local helper. Strips the OUTERMOST instance of
+        target_cls from t's wrapper chain. Preserves all other
+        wrappers (TyConf/Taint/DP/Quant/Domain/Robust/Energy/Enclave/
+        Counterfactual/Deadline/Attribution/Diff/Logic) via rebuild
+        logic that uses each class's known field names."""
+        if isinstance(t, target_cls):
+            return t.inner
+        for cls_str in self._ALL_WRAPPER_CLS_NAMES:
+            cls = globals().get(cls_str)
+            if cls is None:
+                continue
+            if isinstance(t, cls):
+                new_inner = self._strip_wrapper_chain(target_cls, t.inner)
+                # Rebuild by replicating the discriminating field.
+                # Each wrapper class has a single discriminator field
+                # in addition to `inner` (or none for TyDiff/TyLogic).
+                if cls_str == "TyConf":
+                    return cls(level=t.level, inner=new_inner)
+                if cls_str == "TyTaint":
+                    return cls(label=t.label, inner=new_inner)
+                if cls_str == "TyDP":
+                    return cls(epsilon=t.epsilon, inner=new_inner)
+                if cls_str == "TyQuant":
+                    return cls(bits=t.bits, inner=new_inner)
+                if cls_str == "TyDomain":
+                    return cls(status=t.status, inner=new_inner)
+                if cls_str == "TyRobust":
+                    return cls(eps=t.eps, inner=new_inner)
+                if cls_str == "TyEnergy":
+                    return cls(budget=t.budget, inner=new_inner)
+                if cls_str == "TyEnclave":
+                    return cls(enclave=t.enclave, inner=new_inner)
+                if cls_str == "TyCounterfactual":
+                    return cls(mode=t.mode, inner=new_inner)
+                if cls_str == "TyDeadline":
+                    return cls(deadline_us=t.deadline_us, inner=new_inner)
+                if cls_str == "TyAttribution":
+                    return cls(source=t.source, inner=new_inner)
+                if cls_str in ("TyDiff", "TyLogic"):
+                    return cls(inner=new_inner)
+        return t
 
     # Stage 92 (Inc 5d, fix HIGH-#2 from Stage 91 audit batch 1) —
     # known-attribute whitelist. Pre-Stage-92, the parser accepted

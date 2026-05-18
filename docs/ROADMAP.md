@@ -303,6 +303,36 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 100 SHIPPED 2026-05-18** — Stage 99 audit-residual fixes
+  (3 items from the Stage 100+ backlog closed in one commit):
+  - **Hoist wrapper tables to class scope**: `_WRAPPER_CTOR_TABLE`
+    + `_WRAPPER_STRIP_TABLE` + `_ALL_WRAPPER_CLS_NAMES` are now
+    class attributes on TypeChecker (alongside the existing
+    `_WRAPPER_HINT_TABLE` from Stage 87). Pre-Stage-100, all 3
+    were closure-local inside `_check_expr` Call branch and
+    re-allocated on every Call expression typecheck (plus 13
+    lambda closures from the strip rebuilders). New class methods:
+    `_strip_wrapper_chain(target_cls, t)` (hoisted from Stage 97
+    closure), `_wrapper_default_for(ctor_name)` + `_wrapper_target
+    _for(opt_out_name)` (lookup helpers). Strip semantics
+    identical to Stage 97.
+  - **Stage 92 inline `_snapshot_chain` removed**: now calls
+    `scope.borrows_snapshot_chain()` (the Scope method Stage 95
+    introduced). Eliminates ~8 lines of duplication that Stage 99
+    audit B flagged as NEW-1 drift-risk.
+  - **Stale "absolute outermost" comments fixed** at typecheck.py:
+    5604 (TyTaint claim was true at Stage 69 but stale after
+    Stages 79 + 80 layered above it; comment updated to document
+    actual canonical layering order). typecheck.py:5651 (TyEnclave
+    claim was VERIFIED still accurate post-Stage-100; comment
+    updated to acknowledge the Stage 100 audit context).
+  - 2 new tests; 490 typecheck + 6 dogfood + 33 match GREEN.
+  - Closes 3 of 7 Stage 100+ backlog items. Remaining for future
+    stages: _is_copy_struct_ty wrapper recursion, typed-hole
+    expected-type plumbing to more contexts, multi-arg @property
+    typecheck rejection, add @property roundtrips for DP/Quant/
+    Domain/Robust/Energy to safety.hx.
+
 - **Stage 99 SHIPPED 2026-05-18** — RE-AUDIT verdict: 17 stages
   re-flip from 🟡 to ✅ FULLY CLOSED.
   - 3 combined-batch audits dispatched in parallel against post-

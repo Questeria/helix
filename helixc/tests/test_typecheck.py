@@ -4975,6 +4975,53 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage100_wrapper_tables_hoisted_to_class_level():
+    """Stage 100 (Stage 99 re-audit residual #7 fix) — the three
+    wrapper tables (_WRAPPER_CTOR_TABLE, _WRAPPER_STRIP_TABLE,
+    _ALL_WRAPPER_CLS_NAMES) are now class attributes on TypeChecker.
+    Pre-Stage-100, they were closure-local inside _check_expr and
+    re-allocated on every Call expression typecheck."""
+    from helixc.frontend.typecheck import TypeChecker
+
+    # Class-level access works without instantiation.
+    assert hasattr(TypeChecker, "_WRAPPER_CTOR_TABLE")
+    assert hasattr(TypeChecker, "_WRAPPER_STRIP_TABLE")
+    assert hasattr(TypeChecker, "_ALL_WRAPPER_CLS_NAMES")
+    assert hasattr(TypeChecker, "_strip_wrapper_chain")
+    assert hasattr(TypeChecker, "_wrapper_default_for")
+    assert hasattr(TypeChecker, "_wrapper_target_for")
+
+    # Tables have the expected 11-entry coverage matching the
+    # 11 Tier-S/A wrappers shipped in Stages 68-83.
+    assert len(TypeChecker._WRAPPER_CTOR_TABLE) == 11
+    assert len(TypeChecker._WRAPPER_STRIP_TABLE) == 11
+    # _ALL_WRAPPER_CLS_NAMES adds TyDiff + TyLogic.
+    assert len(TypeChecker._ALL_WRAPPER_CLS_NAMES) == 13
+
+
+def test_stage100_strip_wrapper_chain_still_correct_after_hoist():
+    """Stage 100 — the hoisted `_strip_wrapper_chain` method
+    produces identical results to the pre-Stage-100 closure-local
+    version. Regression check that the refactor is semantics-
+    preserving. Reuses the Stage 97 audit-repro case."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: FromUnknown<InEnclaveSGX<f32>>) -> FromUnknown<f32> {
+        __exit_enclave(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    return_errs = [str(e) for e in errors
+                   if "return type" in str(e).lower()
+                   or "FromUnknown" in str(e)
+                   or "InEnclaveSGX" in str(e)]
+    assert len(return_errs) == 0, return_errs
+
+
 def test_stage97_strip_enclave_inside_attribution_now_strips_correctly():
     """Stage 97 (Stage 93 audit HIGH-#2 fix) — pre-Stage-97,
     `__exit_enclave(x: FromUnknown<InEnclaveSGX<f32>>)` returned the
