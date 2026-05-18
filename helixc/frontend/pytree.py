@@ -339,6 +339,31 @@ def tree_zip(decl, struct_decls: dict, a_leaves: dict, b_leaves: dict,
     return unflatten_pytree(decl, struct_decls, zipped, default=default)
 
 
+def tree_equal(a_leaves: dict, b_leaves: dict, eq_fn=None) -> bool:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_equal.
+
+    Two pytrees are equal iff (a) they have the same set of leaf
+    paths AND (b) each path-aligned leaf pair satisfies `eq_fn(a, b)`.
+
+    `eq_fn` defaults to Python `==`. Pass a custom callable to opt
+    into approximate-equality (e.g., `lambda a, b: abs(a-b) < 1e-9`)
+    for floating-point pytrees where exact equality is too strict.
+
+    Use case: AGI verifier comparing reference-gradient vs
+    candidate-gradient pytrees for parameter-update correctness.
+    Composes with `tree_zip` which assumes equal shape — `tree_equal`
+    can verify that precondition before calling tree_zip.
+    """
+    if set(a_leaves.keys()) != set(b_leaves.keys()):
+        return False
+    if eq_fn is None:
+        eq_fn = lambda x, y: x == y
+    for path in a_leaves:
+        if not eq_fn(a_leaves[path], b_leaves[path]):
+            return False
+    return True
+
+
 def tree_reduce(leaves_by_path: dict, reduce_fn, init):
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_reduce.
 

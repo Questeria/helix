@@ -406,6 +406,42 @@ def test_tree_map_preserves_nested_shape():
     assert out["inner"]["v"] == 6.0
 
 
+def test_tree_equal_same_leaves():
+    """Stage 59 follow-on: tree_equal returns True for identical leaves."""
+    from helixc.frontend.pytree import tree_equal
+    a = {"x": 1.0, "y": 2.0}
+    b = {"x": 1.0, "y": 2.0}
+    assert tree_equal(a, b)
+
+
+def test_tree_equal_different_leaves():
+    """Stage 59 follow-on: tree_equal returns False on value mismatch."""
+    from helixc.frontend.pytree import tree_equal
+    a = {"x": 1.0, "y": 2.0}
+    b = {"x": 1.0, "y": 2.5}
+    assert not tree_equal(a, b)
+
+
+def test_tree_equal_different_shape():
+    """Stage 59 follow-on: tree_equal returns False on key mismatch."""
+    from helixc.frontend.pytree import tree_equal
+    a = {"x": 1.0, "y": 2.0}
+    b = {"x": 1.0}
+    assert not tree_equal(a, b)
+
+
+def test_tree_equal_approx_eq_fn():
+    """Stage 59 follow-on: tree_equal accepts a custom eq_fn for
+    approximate-equality (floating-point tolerance)."""
+    from helixc.frontend.pytree import tree_equal
+    a = {"x": 1.0, "y": 2.0}
+    b = {"x": 1.0 + 1e-12, "y": 2.0 - 1e-12}
+    # Strict == fails (the values differ slightly).
+    assert not tree_equal(a, b)
+    # Approximate equality succeeds.
+    assert tree_equal(a, b, eq_fn=lambda x, y: abs(x - y) < 1e-9)
+
+
 def test_tree_zip_gradient_update():
     """Stage 59 follow-on: tree_zip combines params + grads via
     SGD-style update `p - 0.01 * g`. Canonical use case."""
