@@ -57,6 +57,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
     --fn-callgraph-all <file.hx>
         Whole-program callgraph as JSON {fn: [callees...]} for tooling.
+    --fn-leaves <file.hx>
+        List 'leaf' fns (those that call no other fn) — sorted, one per line.
+    --fn-roots <file.hx>
+        List 'root' fns (never called locally) — dead-code candidates.
     --list-fn-attrs-json <file.hx>
         Same as --list-fn-attrs but machine-readable JSON output.
     --list-fns-by-attr <file.hx> <attr>
@@ -1294,6 +1298,113 @@ def _list_fn_attrs_json(path: str) -> int:
     return 0
 
 
+def _fn_leaves(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: list 'leaf' fns —
+    fns that DON'T call any other (locally-defined or otherwise) fn.
+
+    A leaf fn is one whose body contains no A.Call nodes (with a
+    resolvable Name/Path callee). One leaf-fn name per line, sorted.
+
+    Use case: bottom-up analysis. Leaf fns are the base of the
+    callgraph DAG — natural starting points for proof-carrying terms,
+    inlining candidates, or vectorization analysis.
+
+    Phase-0 limitation matches --fn-callgraph: indirect calls aren't
+    tracked, so a fn whose only calls go through fn pointers will be
+    incorrectly marked as a leaf.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _has_any_call(node) -> bool:
+        found = [False]
+
+        def _walk(n) -> None:
+            if found[0] or n is None:
+                return
+            if isinstance(n, A.Call):
+                if (isinstance(n.callee, A.Name)
+                        or (isinstance(n.callee, A.Path) and n.callee.segments)):
+                    found[0] = True
+                    return
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        _walk(node)
+        return found[0]
+
+    leaves: list[str] = []
+    for fn in iter_fn_decls(prog):
+        if fn.body is None or not _has_any_call(fn.body):
+            leaves.append(fn.name)
+    for name in sorted(leaves):
+        print(name)
+    return 0
+
+
+def _fn_roots(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: list 'root' fns — fns
+    that are NEVER called by any other locally-defined fn (i.e., have
+    zero in-edges in the local callgraph).
+
+    Use case: dead-code detection candidates (unreachable from any
+    entry point), public-API enumeration (the fns no internal code
+    calls are likely public surfaces).
+
+    Caveat: a fn never-called locally may still be invoked externally
+    (FFI export, dispatched via fn ptr, main entry). False-positive
+    rate depends on use case — this is a *candidate* list, not a
+    definitive dead-code marker.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fn_names: set[str] = set()
+    called_names: set[str] = set()
+
+    def _collect_calls(node) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            if isinstance(node.callee, A.Name):
+                called_names.add(node.callee.name)
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                called_names.add(node.callee.segments[-1])
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect_calls(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect_calls(x)
+                else:
+                    _collect_calls(v)
+
+    for fn in iter_fn_decls(prog):
+        all_fn_names.add(fn.name)
+        if fn.body is not None:
+            _collect_calls(fn.body)
+
+    roots = sorted(all_fn_names - called_names)
+    for name in roots:
+        print(name)
+    return 0
+
+
 def _fn_callgraph_all(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: whole-program call
     graph as JSON. Output:
@@ -1956,6 +2067,18 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_all(args[0]))
+
+    if "--fn-leaves" in flags:
+        if len(args) < 1:
+            print("usage: --fn-leaves <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_leaves(args[0]))
+
+    if "--fn-roots" in flags:
+        if len(args) < 1:
+            print("usage: --fn-roots <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_roots(args[0]))
 
     if "--list-fn-attrs-json" in flags:
         if len(args) < 1:

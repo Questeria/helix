@@ -5868,6 +5868,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr",
         "--fn-callgraph", "--fn-callers", "--fn-callgraph-all",
+        "--fn-leaves", "--fn-roots",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7250,6 +7251,54 @@ def test_stage59_list_fns_by_attr_missing_attr(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_leaves(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-leaves enumerates
+    fns whose body contains no Call nodes."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "lf.hx"
+    src.write_text(
+        "fn h1(x: i32) -> i32 { x + 1 }\n"
+        "fn h2(y: i32) -> i32 { y * 2 }\n"
+        "fn composed(n: i32) -> i32 { h1(h2(n)) }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-leaves", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # h1, h2 are leaves; composed calls them so it's not a leaf.
+    assert lines == ["h1", "h2"]
+
+
+def test_stage59_fn_roots(tmp_path):
+    """Stage 59 follow-on: --fn-roots enumerates fns never called
+    locally (dead-code candidates / public-API surface)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "lr.hx"
+    src.write_text(
+        "fn util(x: i32) -> i32 { x + 1 }\n"
+        "fn entry_a(n: i32) -> i32 { util(n) }\n"
+        "fn entry_b(n: i32) -> i32 { util(n) * 2 }\n"
+        "fn truly_dead() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-roots", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # util has 2 callers → not root; entry_a, entry_b, truly_dead
+    # never called locally → roots.
+    assert lines == ["entry_a", "entry_b", "truly_dead"]
 
 
 def test_stage59_fn_callgraph_all_whole_program(tmp_path):
