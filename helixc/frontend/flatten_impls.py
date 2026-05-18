@@ -175,18 +175,59 @@ def _rewrite_method_calls(prog: A.Program,
         _FIRST_SPAN = {}
 
 
+def _receiver_static_type_hint(receiver: A.Expr) -> "str | None":
+    """Stage 65 Inc 3 — extract a static type name from a receiver
+    expression where the syntactic shape unambiguously fixes the
+    type. Handles:
+
+    - StructLit:  `Pt { x: 1 }.method()` → "Pt"
+    - Cast:        `(x as Pt).method()`   → "Pt" (for TyName casts)
+
+    Returns None for expressions where the type can't be inferred
+    syntactically (Name, Field, Call, ...) — those fall back to
+    fail-closed DuplicateMethodError until typecheck-integrated
+    dispatch ships (Inc 4+).
+    """
+    if isinstance(receiver, A.StructLit):
+        return receiver.name
+    if isinstance(receiver, A.Cast):
+        target_ty = receiver.target_ty
+        if isinstance(target_ty, A.TyName):
+            return target_ty.name
+    return None
+
+
 def _resolve_method_target(method_name: str,
                             m2t: "dict[str, list[str]]",
-                            call_span: A.Span) -> str:
+                            call_span: A.Span,
+                            receiver: "A.Expr | None" = None) -> str:
     """Stage 65 Inc 1 — pick the single target for a method-call
-    rewrite. Raises DuplicateMethodError when ambiguous (multiple
-    targets registered, no type-driven dispatch yet). Inc 2 will
-    add type-driven dispatch by inspecting the receiver's static
-    type."""
+    rewrite. Raises DuplicateMethodError when ambiguous.
+
+    Stage 65 Inc 3: when multiple targets are registered AND the
+    receiver expression carries a syntactic type hint (StructLit
+    name or Cast target), pick the matching candidate. This
+    enables real multi-dispatch for the common patterns:
+
+        impl Pt   { @overload fn area(self: Pt)   -> f32 { ... } }
+        impl Line { @overload fn area(self: Line) -> f32 { ... } }
+        Pt { x: 1 }.area()       // dispatches to Pt__area
+        (x as Line).area()       // dispatches to Line__area
+
+    For receivers where the type can't be inferred syntactically,
+    fall back to the Inc 2 fail-closed DuplicateMethodError.
+    Future Inc 4 will run a post-typecheck pass to resolve
+    these via the receiver's typecheck-inferred type.
+    """
     targets = m2t.get(method_name) or []
     if len(targets) == 1:
         return targets[0]
     if len(targets) >= 2:
+        # Stage 65 Inc 3 — type-driven dispatch via syntactic hint.
+        if receiver is not None:
+            hint = _receiver_static_type_hint(receiver)
+            if hint is not None and hint in targets:
+                return hint
         sp = _FIRST_SPAN.get(method_name, call_span)
         raise DuplicateMethodError(
             method=method_name,
@@ -202,8 +243,12 @@ def _rewrite_expr(e: A.Expr, m2t: "dict[str, list[str]]") -> A.Expr:
         new_args = [_rewrite_expr(a, m2t) for a in e.args]
         # Method-call: Call(callee=Field(obj, name), args)
         if isinstance(e.callee, A.Field) and e.callee.name in m2t:
+            # Stage 65 Inc 3 — pass the (un-rewritten) receiver to
+            # the resolver so syntactic type hints (StructLit /
+            # Cast target) can drive multi-target dispatch.
             target = _resolve_method_target(
-                e.callee.name, m2t, e.span)
+                e.callee.name, m2t, e.span,
+                receiver=e.callee.obj)
             new_callee = A.Name(span=e.callee.span,
                                 name=target + "__" + e.callee.name,
                                 generics=[])

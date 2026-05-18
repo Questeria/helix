@@ -4008,6 +4008,169 @@ def test_flatten_impls_rejects_same_name_methods():
     assert ex.value.trap_id == 74002
 
 
+def test_stage65_inc3_dispatch_via_structlit_receiver():
+    """Stage 65 Inc 3 — Tier 4 #17 type-driven multi-dispatch via
+    syntactic hint. When a method-call receiver is a StructLit
+    (`Pt { x: 1 }.area()`), the resolver picks the matching
+    target from the multi-target registration list.
+
+    This works for the common case without requiring typecheck
+    integration. Inc 4 will add a post-typecheck pass for cases
+    where the receiver type is only known via typecheck (e.g.,
+    `let p: Pt = ...; p.area()`)."""
+    from helixc.frontend.flatten_impls import (
+        flatten_impls, _resolve_method_target,
+    )
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    # Simulate the post-registration state of _resolve_method_target.
+    m2t = {"area": ["Pt", "Line"]}
+    # StructLit receiver Pt { x: 1.0 }.area() → "Pt".
+    pt_lit = A.StructLit(span=span, name="Pt",
+                         fields=[("x", A.FloatLit(span=span, value=1.0,
+                                                    type_suffix="f32"))])
+    target = _resolve_method_target("area", m2t, span, receiver=pt_lit)
+    assert target == "Pt"
+
+    # StructLit Line { a: 0.5 }.area() → "Line".
+    line_lit = A.StructLit(span=span, name="Line",
+                            fields=[("a", A.FloatLit(span=span, value=0.5,
+                                                       type_suffix="f32"))])
+    target = _resolve_method_target("area", m2t, span, receiver=line_lit)
+    assert target == "Line"
+
+
+def test_stage65_inc3_dispatch_via_cast_receiver():
+    """Stage 65 Inc 3: receiver `(x as Pt).method()` carries a
+    Cast→TyName hint; resolver uses the cast target."""
+    from helixc.frontend.flatten_impls import _resolve_method_target
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+    m2t = {"area": ["Pt", "Line"]}
+    cast_expr = A.Cast(
+        span=span,
+        value=A.Name(span=span, name="x", generics=[]),
+        target_ty=A.TyName(span=span, name="Pt"),
+    )
+    target = _resolve_method_target("area", m2t, span, receiver=cast_expr)
+    assert target == "Pt"
+
+
+def test_stage65_inc3_falls_back_to_error_when_no_hint():
+    """Stage 65 Inc 3: when the receiver carries no syntactic
+    type hint (bare Name, Field, Call result, etc.), fail closed
+    — Inc 4 will add typecheck-driven dispatch for these."""
+    from helixc.frontend.flatten_impls import (
+        _resolve_method_target, DuplicateMethodError,
+    )
+    from helixc.frontend import ast_nodes as A
+    import pytest as _pt
+
+    span = A.Span(0, 0)
+    m2t = {"area": ["Pt", "Line"]}
+    bare_name = A.Name(span=span, name="x", generics=[])
+    with _pt.raises(DuplicateMethodError):
+        _resolve_method_target("area", m2t, span, receiver=bare_name)
+
+
+def test_stage65_inc3_end_to_end_overload_dispatch_via_flatten_impls():
+    """Stage 65 Inc 3 end-to-end: a @overload pair + caller using
+    StructLit receivers flattens cleanly with the right dispatch
+    rewrites."""
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    def mk_struct(name):
+        return A.StructDecl(
+            span=span, name=name, generics=[],
+            fields=[A.FnParam(span=span, name="x",
+                              ty=A.TyName(span=span, name="f32"),
+                              is_mut=False)],
+            is_pub=False,
+        )
+
+    def mk_method(target, ret_lit):
+        return A.FnDecl(
+            span=span, name="area", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=ret_lit,
+                             type_suffix="f32")),
+            attrs=["overload"], is_pub=False,
+        )
+
+    pt = mk_struct("Pt")
+    line = mk_struct("Line")
+    impl_pt = A.ImplBlock(span=span, target="Pt",
+                           methods=[mk_method("Pt", 1.0)],
+                           trait_name=None)
+    impl_line = A.ImplBlock(span=span, target="Line",
+                             methods=[mk_method("Line", 2.0)],
+                             trait_name=None)
+    # Caller: fn user() -> f32 { Pt { x: 1.0 }.area() + Line { x: 2.0 }.area() }
+    caller = A.FnDecl(
+        span=span, name="user", generics=[],
+        params=[],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[],
+                     final_expr=A.Binary(
+                         span=span, op="+",
+                         left=A.Call(
+                             span=span,
+                             callee=A.Field(
+                                 span=span,
+                                 obj=A.StructLit(
+                                     span=span, name="Pt",
+                                     fields=[("x", A.FloatLit(
+                                         span=span, value=1.0,
+                                         type_suffix="f32"))]),
+                                 name="area"),
+                             args=[]),
+                         right=A.Call(
+                             span=span,
+                             callee=A.Field(
+                                 span=span,
+                                 obj=A.StructLit(
+                                     span=span, name="Line",
+                                     fields=[("x", A.FloatLit(
+                                         span=span, value=2.0,
+                                         type_suffix="f32"))]),
+                                 name="area"),
+                             args=[])
+                     )),
+        attrs=[], is_pub=False,
+    )
+    prog = A.Program(module=None,
+                     items=[pt, line, impl_pt, impl_line, caller])
+    n = flatten_impls(prog)
+    assert n == 2
+    # Find the rewritten caller body.
+    caller_after = next(it for it in prog.items
+                        if hasattr(it, "name") and it.name == "user")
+    body_expr = caller_after.body.final_expr
+    assert isinstance(body_expr, A.Binary)
+    # Left: Pt__area called with Pt{...} as first arg.
+    left = body_expr.left
+    assert isinstance(left, A.Call)
+    assert isinstance(left.callee, A.Name)
+    assert left.callee.name == "Pt__area"
+    # Right: Line__area called with Line{...} as first arg.
+    right = body_expr.right
+    assert isinstance(right, A.Call)
+    assert right.callee.name == "Line__area"
+
+
 def test_stage65_inc2_overload_attr_allows_multi_target_registration():
     """Stage 65 Inc 2 — Tier 4 #17 multi-dispatch opt-in.
     When BOTH same-named methods carry `@overload`, the second

@@ -345,6 +345,22 @@ Re-sequenced after Stage 46-47 closed:
   - Inc 2 will wire enforcement at &/&mut sites; Inc 3 block-
     exit reconciliation; Inc 4 Copy marker; Inc 5 `move` keyword.
 
+- **Stage 65 Inc 3 SHIPPED 2026-05-18** — Tier 4 #17 type-driven
+  dispatch via syntactic hints:
+  - New `_receiver_static_type_hint(receiver)` helper extracts a
+    static type name from receivers where the syntactic shape
+    unambiguously fixes the type (StructLit name; Cast→TyName
+    target).
+  - `_resolve_method_target` enhanced: when multiple targets
+    registered + receiver carries a hint matching one of them →
+    pick that one. Otherwise fall back to Inc 2 fail-closed.
+  - Enables real multi-dispatch for the common patterns:
+    `Pt{x:1}.area()` → Pt__area; `(x as Line).area()` → Line__area.
+  - 4 new tests (incl. end-to-end flatten_impls dispatch);
+    223 self-host GREEN.
+  - Inc 4 will add post-typecheck dispatch for bare-Name receivers
+    where the type is known via typecheck inference.
+
 - **Stage 65 Inc 2 SHIPPED 2026-05-18** — Tier 4 #17 multi-
   dispatch opt-in attribute:
   - `@overload` attribute on impl-block methods now allows multi-
