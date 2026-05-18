@@ -2039,12 +2039,14 @@ class Lowerer:
             # Err(e)       -> RESULT_PACK(const_int(1), e)            : i64
             # unwrap_ok(r) -> RESULT_PAYLOAD(r)                       : i32
             # unwrap_err(r)-> RESULT_PAYLOAD(r)                       : i32
-            # __try(r)     -> RESULT_PAYLOAD(r)  (Inc 1 placeholder;
-            #                 the real conditional-branch IR ships in
-            #                 Inc 4 — for now `__try` extracts the Ok
-            #                 inner same as unwrap_ok, preserving the
-            #                 Phase-0 dogfood_17 exit-42 invariant on
-            #                 the static-Ok pathway.)
+            # __try(r)     -> COND_BR on RESULT_TAG; Err arm RETURNs
+            #                 the packed Result back to the caller, Ok
+            #                 arm extracts RESULT_PAYLOAD (Stage 49
+            #                 Inc 4 commit 47d8f66; see the dedicated
+            #                 arm at the `__try` branch ~line 2171).
+            #                 The Inc 1 placeholder that aliased __try
+            #                 to unwrap_ok was REPLACED by Inc 4 with
+            #                 a real conditional-branch IR.
             #
             # Note: unwrap_ok and unwrap_err emit the same i32 payload
             # extract, but Stage 49 Inc 1.5 (commit db26e1c) added a

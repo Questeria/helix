@@ -7,11 +7,14 @@ Typecheck validates that:
   - E1 is compatible with E2 (Err-type fits the propagation slot);
   - the expression's type is the operand's Ok inner.
 
-IR lowering: identity-lowered (Phase-0). Without a runtime Ok/Err
-tag, every Result is observationally Ok-shape, so `r?` reduces
-to extracting the Ok inner — semantically identical to
-`unwrap_ok(r)` until Stage 49 lands the runtime tag + real
-conditional-branch IR.
+IR lowering (historical): Phase-0 Stage 48 identity-lowered
+`__try` to unwrap_ok-equivalent extraction (every Result was
+observationally Ok-shape pre-Stage-49). Stage 49 Inc 4 (commit
+47d8f66) replaced this with a real COND_BR + RETURN + Ok
+payload-extract triple; the F2 / F5 pin tests below have been
+polarity-flipped accordingly. The remaining `assert errs == []`
+F5 reproducer is kept as a regression anchor for the
+typecheck-side guard.
 
 Test coverage:
   - happy path: `Ok(7)?` returns 7;
