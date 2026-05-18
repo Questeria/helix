@@ -59,6 +59,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Whole-program callgraph as JSON {fn: [callees...]} for tooling.
     --fn-callers-all <file.hx>
         Whole-program INVERSE callgraph as JSON {fn: [callers...]}.
+    --fn-reachable-from <file.hx> <entry_fn>
+        Transitive closure: BFS over callgraph from entry_fn (dead-code).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1573,6 +1575,84 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_reachable_from(path: str, entry_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: transitive callgraph
+    closure from an entry-point fn. BFS over the local callgraph
+    starting at `entry_name`.
+
+    Output: one reachable fn name per line (including entry_name
+    itself), sorted alphabetically.
+
+    Use cases:
+    - Dead-code elimination: 'starting from main, what fns are
+      actually used?' — the complement of this set is dead.
+    - Tree-shaking analysis: minimal-build computation for a given
+      entry point.
+    - Module-graph dependency tracing.
+
+    Phase-0 limitation matches the rest of the call-graph sub-arc:
+    indirect calls (fn pointers, dispatch) not tracked.
+
+    Exit 0 on success, 1 if entry_name not found.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    if entry_name not in all_names:
+        print(f"error: autodiff_cli: fn {entry_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    # Build adjacency: fn_name -> set of callees (locally-defined only).
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    # BFS from entry.
+    reachable: set = {entry_name}
+    frontier: list = [entry_name]
+    while frontier:
+        next_frontier: list = []
+        for v in frontier:
+            for w in graph.get(v, set()):
+                if w not in reachable:
+                    reachable.add(w)
+                    next_frontier.append(w)
+        frontier = next_frontier
+
+    for name in sorted(reachable):
+        print(name)
+    return 0
+
+
 def _fn_callers_all(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: whole-program inverse
     callgraph as JSON. Output:
@@ -2302,6 +2382,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callers_all(args[0]))
+
+    if "--fn-reachable-from" in flags:
+        if len(args) < 2:
+            print("usage: --fn-reachable-from <file.hx> <entry_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_reachable_from(args[0], args[1]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
