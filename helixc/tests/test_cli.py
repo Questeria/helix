@@ -5833,7 +5833,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
     assert proc.returncode == 2
     out = proc.stderr
     for flag in (
-        "--dump-ast-hashes", "--ast-stats",
+        "--dump-ast-hashes", "--ast-stats", "--ast-stats-json",
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--list-fn-attrs", "--check-program-hash",
@@ -6812,6 +6812,36 @@ def test_stage59_program_signature_hash_sig_change_differs(tmp_path):
         cwd=proj_root, capture_output=True, text=True, timeout=30,
     )
     assert proc_a.stdout.strip() != proc_b.stdout.strip()
+
+
+def test_stage59_ast_stats_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --ast-stats-json
+    outputs valid JSON with all stat fields."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "mix.hx"
+    src.write_text(
+        "struct M { w: D<f32> }\n"
+        "@pure\nfn f() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--ast-stats-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    expected_keys = {
+        "fns", "structs", "modules",
+        "autotune_fns", "kernel_fns", "pure_fns",
+        "traced_fns", "total_attrs",
+    }
+    assert set(result.keys()) == expected_keys
+    assert result["fns"] == 1
+    assert result["structs"] == 1
+    assert result["pure_fns"] == 1
 
 
 def test_stage59_ast_stats_basic(tmp_path):

@@ -12,6 +12,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print `<fn_name> : <12-char hex hash>` for every fn.
     --ast-stats <file.hx>
         High-level program stats: fn/struct/module/attr counts.
+    --ast-stats-json <file.hx>
+        Same as --ast-stats but machine-readable JSON output.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -129,6 +131,40 @@ def _parse_or_exit(src: str, path: str):
         # rc=2; runtime/internal errors are rc=1.
         print(f"error: autodiff_cli: parse: {path}: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def _ast_stats_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --ast-stats in
+    machine-readable JSON.
+
+    Output schema:
+      {
+        "fns": N, "structs": N, "modules": N,
+        "autotune_fns": N, "kernel_fns": N, "pure_fns": N,
+        "traced_fns": N, "total_attrs": N
+      }
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    from .autotune import has_autotune, has_kernel
+    from .trace_pass import is_traced
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    fns = list(iter_fn_decls(prog))
+    structs = [it for it in prog.items if isinstance(it, A.StructDecl)]
+    modules = [it for it in prog.items if isinstance(it, A.ModBlock)]
+    result = {
+        "fns": len(fns),
+        "structs": len(structs),
+        "modules": len(modules),
+        "autotune_fns": sum(1 for f in fns if has_autotune(f)),
+        "kernel_fns": sum(1 for f in fns if has_kernel(f)),
+        "pure_fns": sum(1 for f in fns if "pure" in f.attrs),
+        "traced_fns": sum(1 for f in fns if is_traced(f)),
+        "total_attrs": sum(len(f.attrs) for f in fns),
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
 
 
 def _ast_stats(path: str) -> int:
@@ -1238,6 +1274,12 @@ def main():
             print("usage: --ast-stats <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_ast_stats(args[0]))
+
+    if "--ast-stats-json" in flags:
+        if len(args) < 1:
+            print("usage: --ast-stats-json <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_ast_stats_json(args[0]))
 
     if "--program-hash" in flags:
         if len(args) < 1:
