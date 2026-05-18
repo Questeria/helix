@@ -4706,6 +4706,73 @@ def test_stage59_fn_sig_hash_param_type_change_differs(tmp_path):
         "param type change should flip signature hash"
 
 
+def test_stage59_check_program_hash_match_full(tmp_path):
+    """Stage 59 follow-on: --check-program-hash exits 0 silent on
+    full 64-hex match."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    # First compute the hash via --program-hash
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    full_hash = h_proc.stdout.strip()
+    # Now check with --check-program-hash
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash", str(src), full_hash],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "", \
+        f"expected silent success: {proc.stdout!r}"
+
+
+def test_stage59_check_program_hash_match_short(tmp_path):
+    """Stage 59 follow-on: --check-program-hash accepts 12-hex short
+    form via prefix-match heuristic."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    full_hash = h_proc.stdout.strip()
+    short_hash = full_hash[:12]
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash", str(src), short_hash],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+
+
+def test_stage59_check_program_hash_mismatch_exits_1(tmp_path):
+    """Stage 59 follow-on: --check-program-hash exits 1 + prints
+    expected/actual on mismatch."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    fake_hash = "0" * 64
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash", str(src), fake_hash],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    out = proc.stdout
+    assert "hash mismatch" in out
+    assert "expected: " in out
+    assert "actual: " in out
+
+
 def test_stage59_list_fns_enumerates_alphabetically(tmp_path):
     """Stage 59 follow-on: --list-fns enumerates all FnDecls
     alphabetically with sig+body hashes side by side."""
