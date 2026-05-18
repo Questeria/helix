@@ -789,9 +789,17 @@ class TypeChecker:
         # already popped the inner let-scope, so the Name("x")
         # lookup returned None.
         # Keyed by id(A.Block) — Python AST nodes are immutable so
-        # id() is stable across passes. The cache is per-check()
-        # (cleared in check() init) since AST identities are unique
-        # within a typecheck run.
+        # id() is stable across passes. Safe: prog.items retains all
+        # AST nodes for the duration of check(), so ids cannot be
+        # reused mid-pass (per gate-14 type-design verification).
+        # The cache is per-check() (cleared in check() init) since
+        # AST identities are unique within a typecheck run.
+        #
+        # IMPORTANT: lookup MUST use `id(b) in cache` (not `.get()`),
+        # because None is a distinct "checked, no static kind" state
+        # from "not yet visited / never populated". Using .get() would
+        # silently conflate the two and re-create the gate-13 silent-
+        # failure class (per gate-14 type-design MEDIUM-1 finding).
         self._block_modal_kind: dict[int, Optional[ModalKind]] = {}
         # Stage 52 gate-1 F1e / Inc 2: parallel stack tracking
         # names introduced via let in each open block. Used at
@@ -3120,7 +3128,25 @@ class TypeChecker:
         self._modal_origin_let_block_scopes.append(set())
         self._modal_origin_assigns_block_scopes.append(set())
         try:
-            return self._check_expr(expr, scope)
+            result = self._check_expr(expr, scope)
+            # Stage 52 Inc 12 / gate-14 type-design HIGH-1
+            # defensive fix: if the wrapped expr is itself an
+            # A.Block, ensure its modal kind is cached before
+            # the wrapper's scope pop. The inner _check_block
+            # already populates the cache, so this is a no-op
+            # for most cases — but if the inner Block check
+            # didn't run (e.g. an early return), this fallback
+            # ensures the cache is consistent. Defensive belt-
+            # and-suspenders per the gate-14 audit.
+            if (isinstance(expr, A.Block)
+                    and id(expr) not in self._block_modal_kind):
+                # Capture the kind while scope still live.
+                self._block_modal_kind[id(expr)] = (
+                    self._modal_origin_of_expr(expr.final_expr)
+                    if expr.final_expr is not None
+                    else None
+                )
+            return result
         finally:
             inner_lets = (self._result_let_block_scopes.pop()
                           if self._result_let_block_scopes
