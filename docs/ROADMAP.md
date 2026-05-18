@@ -413,8 +413,15 @@ These are blockers for any real ML training, in priority order.
     week.**
 
 15. **Pattern matching with guards + or-patterns + nested
-    destructuring.** Critical for AST-walking inside quote/splice.
-    **2 weeks.**
+    destructuring.** ✅ DONE 2026-05-18 (Stage 59 commit bb774ff).
+    Guards + PatOr + PatVariant + PatRange shipped earlier
+    (Stages 28.9 cycles 10-15). Stage 59 added the missing
+    struct destructuring (`PatStruct`) end-to-end: parser
+    handles `Point { x: 1, y }` / `Point { .. }` patterns;
+    `_collect_binds` binds field-access locals; `_pattern_test_expr`
+    builds the AND of sub-field tests; `ast_hash` distinguishes
+    field orderings. Critical for AST-walking inside quote/splice
+    + pytree compositions.
 
 16. **Borrow checker.** Compile-time aliasing safety. Eliminates an
     entire class of bugs in tile/buffer code. **Months.**
