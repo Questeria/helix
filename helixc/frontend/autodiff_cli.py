@@ -51,6 +51,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print {fn variants=N} for @autotune @kernel fns + total.
     --validate-autotune <file.hx>
         CI gate: validate every @autotune attr; exit 1 if any malformed.
+    --validate-trace-attrs <file.hx>
+        CI gate: validate @trace usage; rejects @trace on extern fns.
     --autotune-budget <file.hx> <max_total>
         CI gate: exit 0 if total variants <= budget, 1 if over.
 
@@ -553,6 +555,25 @@ def _pytree_shape(path: str, struct_name: str) -> int:
     return 0
 
 
+def _validate_trace_attrs(path: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: run validate_trace_attrs
+    over a file. Phase-0 rules:
+      * @trace on extern \"C\" fn is rejected (no body to instrument)
+      * @trace on @pure fn is allowed (tracing is observer-only)
+
+    Exits 0 silently on clean, 1 with diagnostics on rule violation.
+    """
+    from .trace_pass import validate_trace_attrs
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    diags = validate_trace_attrs(prog)
+    if not diags:
+        return 0
+    for d in diags:
+        print(d)
+    return 1
+
+
 def _validate_autotune(path: str) -> int:
     """Stage 59 follow-on / Tier 2 #8 polish: run validate_autotune_prog
     over a file and print all diagnostics. Exit 0 if clean, 1 if any.
@@ -960,6 +981,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_autotune(args[0]))
+
+    if "--validate-trace-attrs" in flags:
+        if len(args) < 1:
+            print("usage: --validate-trace-attrs <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_trace_attrs(args[0]))
 
     if "--autotune-budget" in flags:
         if len(args) < 2:
