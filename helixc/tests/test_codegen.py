@@ -15303,6 +15303,22 @@ def test_stage59_pat_struct_nested_typecheck_passes():
     assert errs == [], f"typecheck errors: {errs}"
 
 
+def test_stage67_dogfood_20_e2e_train_checkpoint_exits_42():
+    """Stage 67 end-to-end ML demo: train a 2-param model
+    (Model { w, b }) for 100 SGD steps, then exercise the Stage
+    60-62 stack (named per-leaf gradient accessors +
+    checkpoint_save_raw/_load_raw via dyn file I/O). Exit code 42
+    iff training converged to (round(w)=3, round(b)=5) AND
+    checkpoint round-trip wrote+read 7 bytes successfully."""
+    import os as _os
+    proj = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    src = open(_os.path.join(
+        proj, "helixc/examples/dogfood_20_e2e_train_checkpoint.hx")).read()
+    code = compile_and_run(src)
+    assert code == 42, f"dogfood_20 should exit 42, got {code}"
+
+
 def test_stage59_dogfood_19_pat_struct_guards_exits_42():
     """Stage 59 follow-on dogfood: PatStruct destructuring composed
     with guards. Verifies the typecheck path where guard expressions
