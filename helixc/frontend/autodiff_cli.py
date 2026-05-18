@@ -113,6 +113,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print the module hash (accepts dotted names for nested).
     --pytree-shape <file.hx> <struct_name>
         Print leaf-path / type / diff-classification for a struct.
+    --pytree-shape-json <file.hx> <struct_name>
+        Same as --pytree-shape but machine-readable JSON output.
+    --pytree-leaf-paths-json <file.hx> <struct_name>
+        Same as --pytree-leaf-paths but JSON output.
     --list-pytrees <file.hx>
         Inventory: leaf-count + diff/non-diff summary per struct.
     --list-pytrees-json <file.hx>
@@ -958,6 +962,83 @@ def _list_pytrees(path: str) -> int:
             # Strip trap-id from error for cleaner output.
             reason = str(e).split("(trap")[0].strip()
             print(f"{name} REJECTED {reason}")
+    return 0
+
+
+def _pytree_shape_json(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: --pytree-shape in
+    machine-readable JSON form.
+
+    Output schema:
+      {
+        "leaves": [
+          {"path": "<dotted>", "ty": "<prim>", "diff": <bool>}, ...
+        ],
+        "total": <int>,
+        "diff": <int>,
+        "non_diff": <int>
+      }
+    Leaves sorted by path.
+
+    Exit 0 success; 1 if struct not found or pytree-rejected.
+    """
+    import json
+    from .pytree import flatten_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    if struct_name not in struct_decls:
+        print(f"error: autodiff_cli: struct {struct_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+    try:
+        leaves = flatten_pytree(struct_decls[struct_name], struct_decls)
+    except ValueError as e:
+        print(f"error: autodiff_cli: pytree shape rejected for "
+              f"{struct_name!r}: {e}", file=sys.stderr)
+        return 1
+    leaves_sorted = sorted(leaves, key=lambda l: l.path)
+    diff = sum(1 for l in leaves if l.is_diff)
+    result = {
+        "leaves": [
+            {"path": l.path, "ty": l.ty_name, "diff": l.is_diff}
+            for l in leaves_sorted
+        ],
+        "total": len(leaves),
+        "diff": diff,
+        "non_diff": len(leaves) - diff,
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _pytree_leaf_paths_json(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 2 #7 polish: --pytree-leaf-paths in
+    machine-readable JSON form.
+
+    Output schema:
+      {"paths": ["<path1>", "<path2>", ...]}
+    Paths sorted alphabetically.
+    """
+    import json
+    from .pytree import flatten_pytree
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    if struct_name not in struct_decls:
+        print(f"error: autodiff_cli: struct {struct_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+    try:
+        leaves = flatten_pytree(struct_decls[struct_name], struct_decls)
+    except ValueError as e:
+        print(f"error: autodiff_cli: pytree shape rejected for "
+              f"{struct_name!r}: {e}", file=sys.stderr)
+        return 1
+    paths = sorted(l.path for l in leaves)
+    print(json.dumps({"paths": paths}, sort_keys=True, indent=2))
     return 0
 
 
@@ -3738,6 +3819,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_pytree_shape(args[0], args[1]))
+
+    if "--pytree-shape-json" in flags:
+        if len(args) < 2:
+            print("usage: --pytree-shape-json <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_pytree_shape_json(args[0], args[1]))
+
+    if "--pytree-leaf-paths-json" in flags:
+        if len(args) < 2:
+            print("usage: --pytree-leaf-paths-json <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_pytree_leaf_paths_json(args[0], args[1]))
 
     if "--list-pytrees" in flags:
         if len(args) < 1:

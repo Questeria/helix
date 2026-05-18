@@ -5883,7 +5883,9 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--check-program-signature-hash",
         "--check-program-signature-hash-from-file",
         "--list-modules", "--list-modules-json",
-        "--module-hash", "--pytree-shape",
+        "--module-hash",
+        "--pytree-shape", "--pytree-shape-json",
+        "--pytree-leaf-paths-json",
         "--list-pytrees", "--list-pytrees-json",
         "--pytree-leaf-paths",
         "--validate-pytrees", "--validate-pytrees-json",
@@ -5960,6 +5962,54 @@ def test_stage59_autotune_budget_bad_int_exits_2(tmp_path):
     )
     assert proc.returncode == 2
     assert "not an int" in proc.stderr
+
+
+def test_stage59_pytree_shape_json(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --pytree-shape-json emits
+    {leaves: [{path, ty, diff}], total, diff, non_diff} JSON."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "m.hx"
+    src.write_text(
+        "struct M { w1: D<f32>, w2: D<f32>, b: D<f32> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-shape-json", str(src), "M"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["total"] == 3
+    assert result["diff"] == 3
+    assert result["non_diff"] == 0
+    assert len(result["leaves"]) == 3
+    # Leaves sorted by path
+    paths = [l["path"] for l in result["leaves"]]
+    assert paths == ["b", "w1", "w2"]
+
+
+def test_stage59_pytree_leaf_paths_json(tmp_path):
+    """Stage 59 follow-on / Tier 2 #7 polish: --pytree-leaf-paths-json
+    emits {paths: [...]} JSON sorted alphabetically."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text(
+        "struct P { w1: D<f32>, w2: D<f32>, b: D<f64> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--pytree-leaf-paths-json", str(src), "P"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"paths": ["b", "w1", "w2"]}
 
 
 def test_stage59_pytree_shape_flat_struct(tmp_path):
