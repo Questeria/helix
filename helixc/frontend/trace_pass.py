@@ -94,6 +94,32 @@ def trace_equiv(a: TraceBuffer, b: TraceBuffer) -> bool:
     return True
 
 
+def trace_diff(a: TraceBuffer, b: TraceBuffer) -> Optional[tuple]:
+    """Stage 59 follow-on / Tier 3 #11 polish — find the first divergent
+    event between two traces. Useful debug helper when trace_equiv
+    returns False and the caller wants to know WHERE.
+
+    Returns:
+      None        — traces are equivalent (matches trace_equiv == True)
+      (idx, a_event, b_event) — first index where events differ
+        a_event = None means a was shorter than b at this index
+        b_event = None means b was shorter than a at this index
+
+    Use case: AGI verifier comparing reference-trace vs candidate-
+    trace can pinpoint the first behavioral divergence for a
+    minimal-witness-of-mismatch report.
+    """
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a.events[i] != b.events[i]:
+            return (i, a.events[i], b.events[i])
+    if len(a) < len(b):
+        return (len(a), None, b.events[len(a)])
+    if len(b) < len(a):
+        return (len(b), a.events[len(b)], None)
+    return None  # equal
+
+
 def traced_fn_names(prog: A.Program) -> list[str]:
     """List of fn names that carry `@trace` anywhere in the program.
 

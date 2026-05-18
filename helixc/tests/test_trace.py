@@ -305,5 +305,51 @@ def test_c2_2_early_return_void():
     assert len(exits) == 2
 
 
+def test_stage59_trace_diff_equal_returns_none():
+    """Stage 59 follow-on / Tier 3 #11 polish: trace_diff(a, a)
+    returns None for identical traces."""
+    from helixc.frontend.trace_pass import trace_diff
+    a = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1, 2)),
+        TraceEvent("exit", "f", (3,)),
+    ])
+    b = TraceBuffer(events=list(a.events))
+    assert trace_diff(a, b) is None
+
+
+def test_stage59_trace_diff_first_divergent_event():
+    """Stage 59 follow-on: trace_diff finds the first divergent index."""
+    from helixc.frontend.trace_pass import trace_diff
+    a = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1,)),
+        TraceEvent("entry", "g", (2,)),
+        TraceEvent("exit", "g", (3,)),
+    ])
+    b = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1,)),
+        TraceEvent("entry", "h", (2,)),  # diverges here
+        TraceEvent("exit", "h", (3,)),
+    ])
+    diff = trace_diff(a, b)
+    assert diff is not None
+    idx, ea, eb = diff
+    assert idx == 1
+    assert ea.fn_name == "g"
+    assert eb.fn_name == "h"
+
+
+def test_stage59_trace_diff_different_lengths():
+    """Stage 59 follow-on: trace_diff reports prefix-equal traces of
+    different lengths as a divergence with one side None."""
+    from helixc.frontend.trace_pass import trace_diff
+    a = TraceBuffer(events=[TraceEvent("entry", "f", ())])
+    b = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (1,)),
+    ])
+    diff = trace_diff(a, b)
+    assert diff == (1, None, b.events[1])
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
