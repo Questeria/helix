@@ -15319,6 +15319,28 @@ def test_stage67_dogfood_20_e2e_train_checkpoint_exits_42():
     assert code == 42, f"dogfood_20 should exit 42, got {code}"
 
 
+def test_stage75_dogfood_21_typed_security_stack_exits_42():
+    """Stage 75 end-to-end demo: exercises the Tier-S/A wrapper
+    stack shipped in Stages 68-73 + the Stage 75 wrapper
+    constructors. Validates the wrappers identity-erase at IR /
+    codegen and that the constructors + opt-out builtins compose
+    correctly end-to-end.
+
+    Exit code 42 iff:
+    1. All Stage 75 `__wrap_*` constructors typecheck cleanly.
+    2. Opt-out builtins (__lift_conf, __declassify,
+       __widen_robustness) strip the wrappers cleanly.
+    3. Identity-lowering at IR preserves the underlying f32 values
+       so the runtime arithmetic produces 41 + 1 + 0 = 42."""
+    import os as _os
+    proj = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    src = open(_os.path.join(
+        proj, "helixc/examples/dogfood_21_typed_security_stack.hx")).read()
+    code = compile_and_run(src)
+    assert code == 42, f"dogfood_21 should exit 42, got {code}"
+
+
 def test_stage59_dogfood_19_pat_struct_guards_exits_42():
     """Stage 59 follow-on dogfood: PatStruct destructuring composed
     with guards. Verifies the typecheck path where guard expressions

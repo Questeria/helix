@@ -303,6 +303,34 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 75 SHIPPED 2026-05-18** — Tier-S/A wrapper constructors
+  + end-to-end dogfood:
+  - 6 new constructor builtins (inverse of the opt-out family):
+    `__wrap_conf(x)` → `Conf<T>`, `__wrap_taint(x)` →
+    `Confidential<T>`, `__wrap_dp(x)` → `Private<T>`,
+    `__wrap_quant(x)` → `Q8<T>`, `__wrap_domain(x)` →
+    `InDist<T>`, `__wrap_robust(x)` → `Robust<T>`.
+  - Each constructor picks a sensible default tier: most-
+    restrictive for safety wrappers (Confidential for Taint,
+    InDist for Domain), medium-tier for unrelated (Conf "med",
+    Q8 8-bit, Private "1.0" eps, Robust "0.03" eps).
+  - IR `_lower_type` extended: 19 alias names (5 Conf + 4 Taint
+    + 3 DP + 3 Quant + 3 Domain + 3 Robust = 19 + 1 typo correction)
+    now lower to their inner type, mirroring the typecheck
+    `_resolve_type` resolution. Pre-Stage-75, only `Result` had
+    this type-position identity rule.
+  - lower_ast `_lower_expr` extended: all 6 constructor builtins
+    identity-lower at IR (just emit the arg expression).
+  - **End-to-end dogfood**: `helixc/examples/dogfood_21_
+    typed_security_stack.hx` exercises the full pipeline —
+    constructs Conf/Taint/Robust wrappers via the new builtins,
+    threads through fn boundaries, escapes via opt-out builtins,
+    arithmetic compiles to plain f32 at codegen, runtime returns
+    exit code 42. First Helix program to use any of the Stages
+    68-74 Tier-S/A wrappers in a compileable end-to-end program.
+  - 1 new codegen test (dogfood_21); 1029 codegen + 431 typecheck/
+    selfhost/IR GREEN.
+
 - **Stage 74 SHIPPED 2026-05-18** — Diagnostic UX: clean `_fmt`
   prettifiers for the 6 new Tier-S/A wrappers (Stages 68-73):
   - Pre-fix: `TyTaint(label='confidential', inner=TyPrim(name=

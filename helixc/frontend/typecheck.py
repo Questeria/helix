@@ -3082,6 +3082,19 @@ class TypeChecker:
         # budget-exhaustion point (the value is no longer tracked as
         # robust within any bound; downstream code accepts that risk).
         "__widen_robustness",
+        # Stage 75 — Tier-S/A wrapper constructor builtins. Inverse of
+        # the opt-out builtins: take a plain T (or already-wrapped T),
+        # add the appropriate wrapper at the outermost layer. Each
+        # constructor picks a sensible default tier (most-restrictive
+        # for safety types, medium for unrelated). Phase-0 representation
+        # is identity-erased, so these are typecheck-only metadata
+        # builtins; IR lowering is identity.
+        "__wrap_conf",       # adds Conf<T> at level "med"
+        "__wrap_taint",      # adds Confidential<T> (most-restrictive default)
+        "__wrap_dp",         # adds Private<T> (eps "1.0", default budget)
+        "__wrap_quant",      # adds Q8<T> (8-bit, typical INT8)
+        "__wrap_domain",     # adds InDist<T> (in-distribution default)
+        "__wrap_robust",     # adds Robust<T> (eps "0.03", typical)
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4976,6 +4989,23 @@ class TypeChecker:
                 # subsequent `&x` or `&mut x` is rejected by the Inc 3
                 # &/&mut wiring (check_borrow_* refuse from MOVED).
                 # Skipped if x's type is a `@copy` struct (Inc 4).
+                # Stage 75 — Tier-S/A wrapper constructor builtins.
+                # Each adds the appropriate wrapper at the outermost
+                # layer of the arg's type. Default tier choices are
+                # documented in the BUILTIN_NAMES comment block above.
+                # These are typecheck-only; IR lowering is identity.
+                if bn == "__wrap_conf" and len(arg_tys) == 1:
+                    return TyConf(level="med", inner=arg_tys[0])
+                if bn == "__wrap_taint" and len(arg_tys) == 1:
+                    return TyTaint(label="confidential", inner=arg_tys[0])
+                if bn == "__wrap_dp" and len(arg_tys) == 1:
+                    return TyDP(epsilon="1.0", inner=arg_tys[0])
+                if bn == "__wrap_quant" and len(arg_tys) == 1:
+                    return TyQuant(bits=8, inner=arg_tys[0])
+                if bn == "__wrap_domain" and len(arg_tys) == 1:
+                    return TyDomain(status="in", inner=arg_tys[0])
+                if bn == "__wrap_robust" and len(arg_tys) == 1:
+                    return TyRobust(eps="0.03", inner=arg_tys[0])
                 # Stage 68 Inc 3 — confidence-tag opt-out builtin.
                 # `__lift_conf(x)` returns the inner type of a TyConf
                 # value, acknowledging the user is exiting the

@@ -862,6 +862,28 @@ class Lowerer:
             # first family that NEEDS this type-position rule
             # because `?` only makes sense in a Result-returning
             # function, which forces Result into the fn signature.
+            # Stage 75 — Tier-S/A wrapper aliases lower to the inner
+            # type (identity-erased Phase-0 representation). Mirrors
+            # how the typecheck `_resolve_type` resolves these to
+            # TyConf/TyTaint/TyDP/TyQuant/TyDomain/TyRobust — at IR
+            # they collapse back to the inner T.
+            _STAGE75_WRAPPER_ALIASES = {
+                # TyConf (Stage 68)
+                "Confidence", "Conf", "HighConf", "LowConf", "Precise",
+                # TyTaint (Stage 69)
+                "Public", "Internal", "Confidential", "Secret",
+                # TyDP (Stage 70)
+                "TinyPrivate", "Private", "LoosePrivate",
+                # TyQuant (Stage 71)
+                "Q4", "Q8", "Q16",
+                # TyDomain (Stage 72)
+                "InDist", "OutDist", "UnkDist",
+                # TyRobust (Stage 73)
+                "TinyRobust", "Robust", "LooseRobust",
+            }
+            if (ty.base in _STAGE75_WRAPPER_ALIASES
+                    and len(ty.args) == 1):
+                return self._lower_type(ty.args[0])
             if ty.base == "Result" and len(ty.args) == 2:
                 # Stage 49 Inc 1: Result<T, E> lowers to a single packed
                 # i64 (tag in high 32 bits, payload in low 32 bits). See
@@ -1921,6 +1943,15 @@ class Lowerer:
             # `__widen_robustness(x)` strips TyRobust. Identity at IR.
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "__widen_robustness"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
+            # Stage 75 — Tier-S/A wrapper constructor builtins.
+            # All identity-erased at IR / codegen since the Phase-0
+            # representation is identity.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name in (
+                        "__wrap_conf", "__wrap_taint", "__wrap_dp",
+                        "__wrap_quant", "__wrap_domain", "__wrap_robust")
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
