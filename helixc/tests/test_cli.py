@@ -5997,6 +5997,50 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "Traceback" not in proc.stderr
 
 
+def test_stage59_diff_program_hash_body_only_marker(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-program-hash
+    now distinguishes body-only changes (signatures match) from
+    signature changes. Pin the body-only kind marker."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                  encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn add(p: i32, q: i32) -> i32 { p + q + 0 }\n",
+                  encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "DIFFER" in proc.stdout
+    assert "kind=body-only" in proc.stdout
+    assert "signatures match" in proc.stdout
+
+
+def test_stage59_diff_program_hash_signature_change_marker(tmp_path):
+    """Stage 59 follow-on: --diff-program-hash kind=signature-change
+    marker fires when both the full and signature hashes diverge."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                  encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn add(x: f32, y: f32) -> f32 { x + y }\n",
+                  encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-program-hash", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "DIFFER" in proc.stdout
+    assert "kind=signature-change" in proc.stdout
+
+
 def test_stage59_program_signature_hash_body_invariant(tmp_path):
     """Stage 59 follow-on / Tier 4 #13 polish: --program-signature-hash
     returns identical hashes for two programs differing only in fn

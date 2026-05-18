@@ -509,11 +509,17 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     equivalent (same AST hash modulo span/alpha-equivalence), or
     `DIFFER\\n  a=...\\n  b=...` + exits 1 when they diverge.
 
+    Stage 59 enhancement: when the two programs differ at the full
+    hash but match at the signature hash, the output adds a
+    `kind=body-only` marker — useful for code review (the diff is
+    semantic but doesn't break the ABI). When signature hashes also
+    differ, `kind=signature-change` is shown.
+
     Use case: CI sanity check that a refactor PR is semantically
     identical to the baseline (e.g., formatter-only diff, var
     rename, etc.). Build cache: if hashes match, skip recompile.
     """
-    from .ast_hash import program_hash, short_hash
+    from .ast_hash import program_hash, program_signature_hash, short_hash
     src_a = _read_source(path_a)
     src_b = _read_source(path_b)
     prog_a = _parse_or_exit(src_a, path_a)
@@ -526,6 +532,13 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     print("DIFFER")
     print(f"  a={short_hash(ha)} ({path_a})")
     print(f"  b={short_hash(hb)} ({path_b})")
+    sig_a = program_signature_hash(prog_a)
+    sig_b = program_signature_hash(prog_b)
+    if sig_a == sig_b:
+        print(f"  kind=body-only (signatures match: {short_hash(sig_a)})")
+    else:
+        print(f"  kind=signature-change "
+              f"(a_sig={short_hash(sig_a)} b_sig={short_hash(sig_b)})")
     return 1
 
 
