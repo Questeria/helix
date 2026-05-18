@@ -63,6 +63,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate top-level AgentDecls as '<name> methods=N' lines.
     --list-agents-json <file.hx>
         Same as --list-agents but JSON with method names included.
+    --agent-methods <file.hx> <agent_name>
+        Print method signatures of an agent (params + return ty).
     --enum-variants <file.hx> <enum_name>
         Print per-variant lines for an enum (with payload types if any).
     --enum-variants-json <file.hx> <enum_name>
@@ -4017,6 +4019,56 @@ def _list_agents_json(path: str) -> int:
     return 0
 
 
+def _agent_methods(path: str, agent_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-agent method
+    signature inspection.
+
+    Output: one line per method as
+        '<name>(<p1_ty>, <p2_ty>, ...) -> <ret_ty>'
+    Declaration order preserved.
+
+    Per-item introspection trio + 1:
+    - --struct-fields (StructDecl fields)
+    - --const-value (ConstDecl literal value)
+    - --enum-variants (EnumDecl variants + payload types)
+    - --agent-methods (AgentDecl method signatures) — NEW
+
+    Exit 0 success, 1 if agent_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        if ty is None:
+            return "()"
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.AgentDecl) and it.name == agent_name:
+            for m in it.methods:
+                params_str = ", ".join(_format_ty(p.ty) for p in m.params)
+                ret_str = _format_ty(m.return_ty)
+                print(f"{m.name}({params_str}) -> {ret_str}")
+            return 0
+    print(f"error: autodiff_cli: agent {agent_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _list_agents(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     AgentDecls (cognitive-architecture method bundles) in a file.
@@ -4527,6 +4579,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_agents_json(args[0]))
+
+    if "--agent-methods" in flags:
+        if len(args) < 2:
+            print("usage: --agent-methods <file.hx> <agent_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_agent_methods(args[0], args[1]))
 
     if "--list-type-aliases-json" in flags:
         if len(args) < 1:
