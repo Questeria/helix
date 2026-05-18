@@ -90,6 +90,54 @@ def _print_program_hash(path: str) -> int:
     return 0
 
 
+def _changed_fns(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: list FnDecls that
+    changed between two source files at the AST-hash level.
+
+    Prints per-changed-fn lines:
+      `+name : <hex12>`   — added in b (not in a)
+      `-name : <hex12>`   — removed in a (not in b)
+      `~name : <a12> -> <b12>` — present in both but body/sig changed
+
+    Exit code:
+      0 — no changes (or only unchanged fns)
+      1 — at least one changed fn
+
+    Use case: PR review — quickly identify which functions changed
+    semantically between baseline + branch, ignoring whitespace /
+    bound-variable renames / comment edits. Complements
+    --diff-program-hash (whole-program YES/NO) with fn-granular
+    breakdown.
+    """
+    from .ast_hash import structural_hash, short_hash
+    src_a = _read_source(path_a)
+    src_b = _read_source(path_b)
+    prog_a = _parse_or_exit(src_a, path_a)
+    prog_b = _parse_or_exit(src_b, path_b)
+    a_fns = {it.name: structural_hash(it) for it in prog_a.items
+             if isinstance(it, A.FnDecl)}
+    b_fns = {it.name: structural_hash(it) for it in prog_b.items
+             if isinstance(it, A.FnDecl)}
+    a_names = set(a_fns.keys())
+    b_names = set(b_fns.keys())
+    changed = 0
+    # Added fns (in b but not in a).
+    for name in sorted(b_names - a_names):
+        print(f"+{name} : {short_hash(b_fns[name])}")
+        changed += 1
+    # Removed fns (in a but not in b).
+    for name in sorted(a_names - b_names):
+        print(f"-{name} : {short_hash(a_fns[name])}")
+        changed += 1
+    # Modified fns (in both with different hash).
+    for name in sorted(a_names & b_names):
+        if a_fns[name] != b_fns[name]:
+            print(f"~{name} : {short_hash(a_fns[name])} -> "
+                  f"{short_hash(b_fns[name])}")
+            changed += 1
+    return 0 if changed == 0 else 1
+
+
 def _diff_program_hash(path_a: str, path_b: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: compare program_hash of
     two source files. Prints `MATCH` + exits 0 when semantically
@@ -160,6 +208,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_diff_program_hash(args[0], args[1]))
+
+    if "--changed-fns" in flags:
+        if len(args) < 2:
+            print("usage: --changed-fns <a.hx> <b.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_changed_fns(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
