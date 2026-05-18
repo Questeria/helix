@@ -5899,6 +5899,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--parse-only-json", "--autotune-budget-json",
         "--list-all-flags", "--list-all-flags-json",
         "--has-flag", "--has-flag-json",
+        "--flag-groups", "--flag-groups-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7561,6 +7562,54 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_flag_groups_text():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-groups outputs
+    grouped CLI flags by leading axis."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-groups"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    # Major groups must be present.
+    for group_prefix in ("fn:", "list:", "check:", "validate:",
+                          "diff:", "module:"):
+        assert group_prefix in out
+
+
+def test_stage59_flag_groups_json():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-groups-json
+    emits {groups, n_groups, n_flags}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-groups-json"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["n_flags"] > 100
+    assert result["n_groups"] > 10
+    # Spot-checks: 'fn' is the biggest group.
+    assert "fn" in result["groups"]
+    assert len(result["groups"]["fn"]) > 30
+    # All flags in 'fn' group actually start with --fn-.
+    for f in result["groups"]["fn"]:
+        assert f.startswith("--fn-")
+    # Regression guard: '--flag' / '--flag-name' (false-positives
+    # from docstring text matches) must NOT appear.
+    all_flags = []
+    for group_flags in result["groups"].values():
+        all_flags.extend(group_flags)
+    assert "--flag" not in all_flags
+    assert "--flag-name" not in all_flags
 
 
 def test_stage59_has_flag_exists():

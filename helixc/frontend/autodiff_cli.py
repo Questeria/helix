@@ -57,6 +57,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --has-flag-json <flag_name>
         Same as --has-flag but JSON
         {flag, exists, has_json_twin, is_json_twin}.
+    --flag-groups
+        Group CLI flags by their leading axis (e.g., 'fn-', 'list-',
+        'check-', 'validate-'). Higher-level shape view than
+        --list-all-flags.
+    --flag-groups-json
+        Same as --flag-groups but JSON {groups, n_groups, n_flags}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6492,6 +6498,80 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _flag_groups() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: group all CLI flags
+    by their leading axis (first hyphen-separated segment, with
+    --list-* and --check-* etc. collapsed into named buckets).
+
+    Output: one line per group as '<group>: N — <flag1>, <flag2>, ...'
+    Sorted alphabetically by group name. Flags within each group
+    are also sorted.
+
+    Use case: 'show me the shape of this CLI' — discoverability
+    at a higher level than --list-all-flags.
+
+    Exit 0 always.
+    """
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    # Match real dispatch branches only: must be at indent column
+    # (4-space leading whitespace), not inside docstrings.
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
+
+    groups: dict[str, list[str]] = {}
+    for fl in flags:
+        # Group by first hyphen-separated word after '--'.
+        body = fl[2:]
+        head = body.split("-", 1)[0]
+        groups.setdefault(head, []).append(fl)
+
+    for group in sorted(groups):
+        members = sorted(groups[group])
+        members_str = ", ".join(members)
+        print(f"{group}: {len(members)} — {members_str}")
+    return 0
+
+
+def _flag_groups_json() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-groups in
+    machine-readable JSON form.
+
+    Output schema:
+      {"groups": {"<group_name>": ["<flag>", ...], ...},
+       "n_groups": N,
+       "n_flags": N}
+    """
+    import json
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
+
+    groups: dict[str, list[str]] = {}
+    for fl in flags:
+        body = fl[2:]
+        head = body.split("-", 1)[0]
+        groups.setdefault(head, []).append(fl)
+
+    for g in groups:
+        groups[g] = sorted(groups[g])
+    print(json.dumps({
+        "groups": groups,
+        "n_groups": len(groups),
+        "n_flags": len(flags),
+    }, sort_keys=True, indent=2))
+    return 0
+
+
 def _has_flag(flag_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: tooling-friendly
     existence check for a CLI flag. Reads autodiff_cli's own source
@@ -6512,7 +6592,9 @@ def _has_flag(flag_name: str) -> int:
     here = os.path.abspath(__file__)
     with open(here, "r", encoding="utf-8") as f:
         src = f.read()
-    flags = set(re.findall(r'if "(--[a-z-]+)" in flags:', src))
+    flags = set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE))
     # Self-introspection: --has-flag itself should report as existing.
     # The pattern above only catches main()-dispatch flags; check
     # special cases here.
@@ -6540,7 +6622,9 @@ def _has_flag_json(flag_name: str) -> int:
     here = os.path.abspath(__file__)
     with open(here, "r", encoding="utf-8") as f:
         src = f.read()
-    flags = set(re.findall(r'if "(--[a-z-]+)" in flags:', src))
+    flags = set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE))
     flags.update({"--has-flag", "--has-flag-json", "--help", "-h"})
     exists = flag_name in flags
     is_json = flag_name.endswith("-json")
@@ -6572,7 +6656,9 @@ def _list_all_flags() -> int:
     with open(here, "r", encoding="utf-8") as f:
         src = f.read()
     # Match `if "--flag-name" in flags:` patterns (the dispatch idiom).
-    flags = sorted(set(re.findall(r'if "(--[a-z-]+)" in flags:', src)))
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
     for fl in flags:
         print(fl)
     return 0
@@ -6598,7 +6684,9 @@ def _list_all_flags_json() -> int:
     here = os.path.abspath(__file__)
     with open(here, "r", encoding="utf-8") as f:
         src = f.read()
-    flags = sorted(set(re.findall(r'if "(--[a-z-]+)" in flags:', src)))
+    flags = sorted(set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE)))
     flag_set = set(flags)
     json_twins = sorted(f for f in flags if f.endswith("-json"))
     text_only = sorted(
@@ -6646,6 +6734,12 @@ def main():
 
     if "--list-all-flags-json" in flags:
         sys.exit(_list_all_flags_json())
+
+    if "--flag-groups" in flags:
+        sys.exit(_flag_groups())
+
+    if "--flag-groups-json" in flags:
+        sys.exit(_flag_groups_json())
 
     # --has-flag / --has-flag-json take a flag-name positional that
     # itself usually starts with '--', so the standard args/flags
