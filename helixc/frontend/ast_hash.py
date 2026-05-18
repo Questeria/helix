@@ -572,3 +572,55 @@ def _hash_pattern(h: "hashlib._Hash", pat: A.Pattern,
 def short_hash(h: str) -> str:
     """Return a 12-hex-char abbreviation suitable for human inspection."""
     return h[:12]
+
+
+# ============================================================================
+# Stage 58 / Tier 4 #13 — content-addressed modules
+# ============================================================================
+def module_hash(decl: "A.ModuleDecl") -> str:
+    """Stage 58 / Tier 4 #13 — structural hash of a `mod X { ... }`
+    declaration. The hash covers:
+      - Module name (so two modules with same items hash differently)
+      - All items in declaration order (FnDecl/StructDecl/UseDecl/
+        ConstDecl/ImplDecl/TraitDecl/nested ModuleDecl)
+    Span-independent + insensitive to internal naming via the existing
+    `structural_hash` machinery.
+
+    Use case: content-addressed package references — a `use X::Y` can
+    cite the imported module by hash, allowing the compiler to detect
+    drift between import declaration and resolved module body.
+    """
+    h = hashlib.sha256()
+    _emit(h, "ModuleDecl", decl.name)
+    for it in decl.items:
+        item_h = structural_hash(it) if _is_hashable_item(it) else "<opaque>"
+        _emit(h, "Item", type(it).__name__, item_h)
+    return h.hexdigest()
+
+
+def program_hash(prog: "A.Program") -> str:
+    """Stage 58 / Tier 4 #13 — structural hash of a full Program.
+    Covers all top-level items in declaration order. Stable across
+    span / formatting / bound-name changes.
+
+    Use case: caching the entire compilation result by source-program
+    content hash; detecting that a re-parsed file is semantically
+    identical to a cached version.
+    """
+    h = hashlib.sha256()
+    _emit(h, "Program")
+    for it in prog.items:
+        item_h = structural_hash(it) if _is_hashable_item(it) else "<opaque>"
+        _emit(h, "Item", type(it).__name__, item_h)
+    return h.hexdigest()
+
+
+def _is_hashable_item(item: Any) -> bool:
+    """An item is hashable here if `_hash_into` has an explicit arm
+    for it. Today: FnDecl + StructDecl + ConstDecl + ModuleDecl (via
+    recursive call) + most other top-level items handled by the
+    `_hash_into` catchall. We let `structural_hash` raise for genuinely
+    unhandled subclasses (per the cycle-14/15 loud-fail discipline);
+    this helper exists as a forward-compat hook in case some items
+    need an opaque sentinel rather than a hash."""
+    return True

@@ -190,6 +190,54 @@ def test_nested_let_alpha_equivalence():
     assert h1 == h2
 
 
+# ============================================================================
+# Stage 58 / Tier 4 #13 — content-addressed modules
+# ============================================================================
+def test_stage58_program_hash_identical_programs_match():
+    """Stage 58 / Tier 4 #13: identical source programs produce
+    identical program_hash."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash
+    src = "fn main() -> i32 { 42 }"
+    h1 = program_hash(parse(src))
+    h2 = program_hash(parse(src))
+    assert h1 == h2, f"identical programs hashed differently: {h1} vs {h2}"
+
+
+def test_stage58_program_hash_changes_with_body():
+    """Stage 58 / Tier 4 #13: changing fn body changes program_hash."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash
+    h1 = program_hash(parse("fn main() -> i32 { 42 }"))
+    h2 = program_hash(parse("fn main() -> i32 { 43 }"))
+    assert h1 != h2, "different programs hashed identically"
+
+
+def test_stage58_program_hash_independent_of_span():
+    """Stage 58 / Tier 4 #13: source formatting (spans) doesn't
+    affect program_hash."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash
+    h1 = program_hash(parse("fn main() -> i32 { 42 }"))
+    h2 = program_hash(parse("""
+
+    fn main() -> i32 {
+        42
+    }
+    """))
+    assert h1 == h2, "span/formatting changes affected program_hash"
+
+
+def test_stage58_program_hash_alpha_equivalent_helpers():
+    """Stage 58 / Tier 4 #13: programs that differ ONLY in bound-
+    variable names hash identically (alpha-equivalence)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.ast_hash import program_hash
+    h1 = program_hash(parse("fn f(x: i32) -> i32 { x + 1 }"))
+    h2 = program_hash(parse("fn f(y: i32) -> i32 { y + 1 }"))
+    assert h1 == h2, "alpha-equivalent helpers hashed differently"
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
