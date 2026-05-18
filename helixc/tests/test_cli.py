@@ -5900,6 +5900,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-all-flags", "--list-all-flags-json",
         "--has-flag", "--has-flag-json",
         "--flag-groups", "--flag-groups-json",
+        "--flag-doc", "--flag-doc-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7562,6 +7563,72 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_flag_doc_found():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-doc prints the
+    docstring entry for a known flag."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-doc", "--program-hash"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "--program-hash" in out
+    assert "structural hash" in out
+
+
+def test_stage59_flag_doc_json_found():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-doc-json emits
+    {flag, usage, description, found}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-doc-json", "--program-hash"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["found"] is True
+    assert result["flag"] == "--program-hash"
+    assert "--program-hash" in result["usage"]
+    assert "structural hash" in result["description"]
+
+
+def test_stage59_flag_doc_missing():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-doc rc=1 for
+    unknown flags."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-doc", "--nope-not-real"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "no help entry" in proc.stderr
+
+
+def test_stage59_flag_doc_json_missing():
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-doc-json
+    emits found=false + rc=1 for unknown flags."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--flag-doc-json", "--nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["found"] is False
+    assert result["usage"] is None
 
 
 def test_stage59_flag_groups_text():

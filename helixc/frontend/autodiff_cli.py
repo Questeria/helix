@@ -63,6 +63,13 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         --list-all-flags.
     --flag-groups-json
         Same as --flag-groups but JSON {groups, n_groups, n_flags}.
+    --flag-doc <flag_name>
+        Print the help docstring entry for a single CLI flag (the
+        usage line + indented description). Tooling alternative to
+        running --help and grep'ing.
+    --flag-doc-json <flag_name>
+        Same as --flag-doc but JSON
+        {flag, usage, description, found}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6498,6 +6505,111 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _flag_doc(flag_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the docstring
+    excerpt for a single CLI flag (parsed from autodiff_cli's own
+    help docstring). Tooling alternative to running --help and
+    grep'ing.
+
+    Output: the description lines (everything indented under the
+    flag's usage line), trimmed. One line per actual line in the
+    docstring.
+
+    Exit 0 if found; 1 if flag has no docstring entry; 2 on missing
+    arg.
+    """
+    if not flag_name.startswith("--"):
+        flag_name = "--" + flag_name
+    doc = __doc__ or ""
+    lines = doc.splitlines()
+    # Find the line that starts with '    <flag_name> ' (4-space
+    # indent + flag + space or newline).
+    target_idx = -1
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if (stripped.startswith(flag_name + " ")
+                or stripped == flag_name):
+            # Confirm the flag is at a 4-space indent (the usage-line
+            # convention in the docstring).
+            if line.startswith("    " + flag_name):
+                target_idx = i
+                break
+    if target_idx < 0:
+        print(f"error: autodiff_cli: no help entry for {flag_name!r}",
+              file=sys.stderr)
+        return 1
+    # Collect description lines: subsequent lines that are indented
+    # MORE than 4 spaces. Stops at the next 4-indent flag entry or
+    # at a blank line followed by a 4-indent line.
+    out_lines = [lines[target_idx]]
+    for j in range(target_idx + 1, len(lines)):
+        next_line = lines[j]
+        if not next_line.strip():
+            # Blank line continues only if next non-blank is also
+            # deeper-indented.
+            out_lines.append(next_line)
+            continue
+        if next_line.startswith("        "):  # 8+ space indent
+            out_lines.append(next_line)
+        else:
+            break
+    # Strip trailing blank lines.
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+    print("\n".join(out_lines))
+    return 0
+
+
+def _flag_doc_json(flag_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --flag-doc in
+    machine-readable JSON form.
+
+    Output schema:
+      {"flag": "<flag>",
+       "usage": "<first line>",
+       "description": "<remaining lines joined>",
+       "found": bool}
+
+    rc=0 on found; 1 on not found.
+    """
+    import json
+    if not flag_name.startswith("--"):
+        flag_name = "--" + flag_name
+    doc = __doc__ or ""
+    lines = doc.splitlines()
+    target_idx = -1
+    for i, line in enumerate(lines):
+        if line.startswith("    " + flag_name + " ") or \
+                line.rstrip() == "    " + flag_name:
+            target_idx = i
+            break
+    if target_idx < 0:
+        print(json.dumps({
+            "flag": flag_name,
+            "usage": None,
+            "description": None,
+            "found": False,
+        }, sort_keys=True, indent=2))
+        return 1
+    usage_line = lines[target_idx].strip()
+    desc_lines: list[str] = []
+    for j in range(target_idx + 1, len(lines)):
+        next_line = lines[j]
+        if not next_line.strip():
+            continue  # skip blanks inside description
+        if next_line.startswith("        "):
+            desc_lines.append(next_line.strip())
+        else:
+            break
+    print(json.dumps({
+        "flag": flag_name,
+        "usage": usage_line,
+        "description": " ".join(desc_lines),
+        "found": True,
+    }, sort_keys=True, indent=2))
+    return 0
+
+
 def _flag_groups() -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: group all CLI flags
     by their leading axis (first hyphen-separated segment, with
@@ -6762,6 +6874,24 @@ def main():
             print("usage: --has-flag-json <flag_name>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_has_flag_json(target))
+
+    if "--flag-doc" in sys.argv[1:]:
+        try:
+            idx = sys.argv.index("--flag-doc")
+            target = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("usage: --flag-doc <flag_name>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_flag_doc(target))
+
+    if "--flag-doc-json" in sys.argv[1:]:
+        try:
+            idx = sys.argv.index("--flag-doc-json")
+            target = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("usage: --flag-doc-json <flag_name>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_flag_doc_json(target))
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:
