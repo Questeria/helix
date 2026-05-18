@@ -25,6 +25,9 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         / modules / signatures) for CI artifact diff-comparison.
     --diff-hash-dump <a.hx> <b.hx>
         Granular per-item drift report (added/removed/changed body/sig).
+    --diff-hash-dump-json <a.hx> <b.hx>
+        Same as --diff-hash-dump but JSON {match, fns, structs, modules}
+        with added/removed/changed lists per category.
     --hash-dump-short <file.hx>
         Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-trace <a.json> <b.json>
@@ -426,6 +429,82 @@ def _dump_ast_hashes_json(path: str) -> int:
     }
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0
+
+
+def _diff_hash_dump_json(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-hash-dump in
+    machine-readable JSON form.
+
+    Output schema:
+      {"match": bool,
+       "fns":     {"added":   [...], "removed": [...],
+                    "changed_sig": [...], "changed_body": [...]},
+       "structs": {"added":   [...], "removed": [...],
+                    "changed":     [...]},
+       "modules": {"added":   [...], "removed": [...],
+                    "changed":     [...]}}
+
+    rc=0 on match, 1 on differ (matches text-form semantics).
+    """
+    import json
+    from .ast_hash import program_hash_dump
+    src_a = _read_source(path_a)
+    src_b = _read_source(path_b)
+    prog_a = _parse_or_exit(src_a, path_a)
+    prog_b = _parse_or_exit(src_b, path_b)
+    a = program_hash_dump(prog_a)
+    b = program_hash_dump(prog_b)
+
+    if a == b:
+        print(json.dumps(
+            {"match": True,
+             "fns":     {"added": [], "removed": [],
+                          "changed_sig": [], "changed_body": []},
+             "structs": {"added": [], "removed": [], "changed": []},
+             "modules": {"added": [], "removed": [], "changed": []}},
+            sort_keys=True, indent=2))
+        return 0
+
+    a_fns, b_fns = a["fns"], b["fns"]
+    fns_added = sorted(set(b_fns) - set(a_fns))
+    fns_removed = sorted(set(a_fns) - set(b_fns))
+    fns_changed_sig: list = []
+    fns_changed_body: list = []
+    for name in sorted(set(a_fns) & set(b_fns)):
+        if a_fns[name] == b_fns[name]:
+            continue
+        if a_fns[name]["sig_hash"] != b_fns[name]["sig_hash"]:
+            fns_changed_sig.append(name)
+        else:
+            fns_changed_body.append(name)
+
+    structs_added = sorted(set(b["structs"]) - set(a["structs"]))
+    structs_removed = sorted(set(a["structs"]) - set(b["structs"]))
+    structs_changed = sorted(
+        n for n in (set(a["structs"]) & set(b["structs"]))
+        if a["structs"][n] != b["structs"][n]
+    )
+
+    modules_added = sorted(set(b["modules"]) - set(a["modules"]))
+    modules_removed = sorted(set(a["modules"]) - set(b["modules"]))
+    modules_changed = sorted(
+        n for n in (set(a["modules"]) & set(b["modules"]))
+        if a["modules"][n] != b["modules"][n]
+    )
+
+    print(json.dumps({
+        "match": False,
+        "fns":     {"added": fns_added, "removed": fns_removed,
+                     "changed_sig": fns_changed_sig,
+                     "changed_body": fns_changed_body},
+        "structs": {"added": structs_added,
+                     "removed": structs_removed,
+                     "changed": structs_changed},
+        "modules": {"added": modules_added,
+                     "removed": modules_removed,
+                     "changed": modules_changed},
+    }, sort_keys=True, indent=2))
+    return 1
 
 
 def _diff_hash_dump(path_a: str, path_b: str) -> int:
@@ -6224,6 +6303,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_diff_hash_dump(args[0], args[1]))
+
+    if "--diff-hash-dump-json" in flags:
+        if len(args) < 2:
+            print("usage: --diff-hash-dump-json <a.hx> <b.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_diff_hash_dump_json(args[0], args[1]))
 
     if "--hash-dump-short" in flags:
         if len(args) < 1:

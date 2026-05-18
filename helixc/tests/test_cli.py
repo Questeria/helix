@@ -5889,6 +5889,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-topo-sort-json", "--fn-isolated-json",
         "--fn-distance-json", "--fn-call-path-json",
         "--fn-callgraph-depth-json", "--fn-body-stats-rank-json",
+        "--diff-hash-dump-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7551,6 +7552,59 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_diff_hash_dump_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-hash-dump-json
+    emits structured per-category drift."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text(
+        "fn foo() -> i32 { 1 }\n"
+        "fn old_fn() -> i32 { 2 }\n",
+        encoding="utf-8",
+    )
+    b.write_text(
+        "fn foo() -> i32 { 2 }\n"  # body changed
+        "fn new_fn() -> i32 { 3 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-hash-dump-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["match"] is False
+    assert result["fns"]["added"] == ["new_fn"]
+    assert result["fns"]["removed"] == ["old_fn"]
+    assert result["fns"]["changed_body"] == ["foo"]
+    assert result["fns"]["changed_sig"] == []
+
+
+def test_stage59_diff_hash_dump_json_match(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --diff-hash-dump-json
+    emits match=true + all-empty + rc=0 on identical files."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = "fn foo() -> i32 { 1 }\n"
+    a = tmp_path / "a.hx"
+    b = tmp_path / "b.hx"
+    a.write_text(src, encoding="utf-8")
+    b.write_text(src, encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--diff-hash-dump-json", str(a), str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["match"] is True
 
 
 def test_stage59_fn_body_stats_rank_json(tmp_path):
