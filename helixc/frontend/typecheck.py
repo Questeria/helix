@@ -2499,18 +2499,31 @@ class TypeChecker:
         ('known'/'believed'/'goal'/'uncertain') of an expression if
         it can be statically determined, else None.
 
-        Cases handled:
-        - Name lookup in `_modal_origin_provenance` (covers let-alias
+        Cases handled (gate-13 type-design F-Inc11-2 fix: enumerate
+        all 9 wrapper-AST arms; was stale through Inc 6/8/10/11):
+        - A.Name lookup in `_modal_origin_provenance` (covers let-alias
           `let s = r;` where r is tainted — Stage 52 gate-6 CRITICAL-2).
-        - Direct `Call(Name(from_X), ...)` for any modal eliminator
-          (covers `match from_uncertain(u) { x => ... }` scrutinee
-          — Stage 52 gate-6 CRITICAL-1, and reuses the same map as
-          Let/Assign populate sites for invariant unity).
-        - Stage 53 Inc 1: `Call(Name(user_fn), ...)` where user_fn's
-          declared return type is a modal wrapper (TyModal). Closes
-          the helper-fn indirection laundering vector — `fn launder(
-          x: i32) -> Known<i32> { into_known(x) }` now propagates
-          'known' at every call site, just like into_known() itself.
+        - A.Call(Name(from_X), ...) for any modal eliminator (Stage 52
+          gate-6 CRITICAL-1; reuses _MODAL_ELIM_TO_KIND for invariant
+          unity).
+        - Stage 53 Inc 1: A.Call(Name(user_fn), ...) where user_fn's
+          declared return type is TyModal. Closes helper-fn indirection
+          laundering vector via _fn_modal_return_kind lookup.
+        - Stage 52 Inc 6 / gate-2 HIGH-2: A.Block tail (recurse on
+          final_expr) — `let v = { from_X(u) }` propagates.
+        - Stage 52 Inc 6: A.If (recurse both branches; propagate if
+          both agree, else drop). A.Match (recurse all arms; propagate
+          if all agree, else drop).
+        - Stage 52 Inc 8 / gate-11 CRITICAL-1: A.UnsafeBlock (recurse
+          on body) — `unsafe { from_X(u) }` no longer bypasses.
+        - Stage 52 Inc 10 / gate-12 CRITICAL-1: A.Cast (recurse on
+          value) — `from_X(u) as i32` no longer bypasses.
+        - Stage 52 Inc 11 (proactive cascade-break): A.Unary (recurse
+          operand). A.Binary (value-merge: same kind propagates,
+          one-sided propagates, mixed drops). Binary's one-sided
+          propagation INTENTIONALLY differs from If/Match drop — see
+          long comment at the Binary arm explaining the value-merge
+          vs control-flow-merge distinction.
 
         Returning None means "no static modal-origin claim" — the
         F1 launder consult falls through to the Phase-0 dynamic
@@ -2603,8 +2616,23 @@ class TypeChecker:
         # Binary: if both operands have a kind AND they agree,
         # propagate. If only one has a kind, propagate that kind
         # (mixed with non-modal preserves the modal claim). If
-        # both differ, return None (multi-kind divergence drop,
-        # matches existing gate-3 / gate-4 / If / Match semantics).
+        # both differ, return None (multi-kind divergence drop).
+        #
+        # Stage 52 closure gate-13 type-design F-Inc11-1 fix:
+        # Binary's "one-sided propagate" DIVERGES INTENTIONALLY
+        # from A.If/A.Match drop semantics (which return None if
+        # any branch yields None). Rationale: Binary operands are
+        # VALUE-MERGED at runtime (both always evaluated), so a
+        # tainted operand's epistemic status carries forward
+        # regardless of the other side's status. A.If/A.Match
+        # operands are CONTROL-FLOW-MERGED (one branch runs), so
+        # "no claim possible" on any branch means runtime might
+        # not pass through the tainted branch — drop is correct.
+        # These are two distinct semantic domains; do NOT "fix"
+        # Binary to match If/Match. (Note: this is also DIFFERENT
+        # from gate-6/7 kept_somewhere/cleared_names which operate
+        # on STATEMENT-scope name maps, not expression-tree
+        # operand merge — a third distinct domain.)
         if isinstance(expr, A.Unary):
             return self._modal_origin_of_expr(expr.operand)
         if isinstance(expr, A.Binary):
