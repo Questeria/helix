@@ -5890,6 +5890,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-distance-json", "--fn-call-path-json",
         "--fn-callgraph-depth-json", "--fn-body-stats-rank-json",
         "--diff-hash-dump-json",
+        "--check-program-hash-json",
+        "--check-program-signature-hash-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7552,6 +7554,84 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_check_program_hash_json_match(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-hash-json
+    emits {match: true, expected, actual_full, actual_short} + rc=0
+    when expected matches."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cphj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    # First, compute the expected hash via --program-hash.
+    proc_h = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_h.returncode == 0
+    expected_full = proc_h.stdout.strip()
+    # Now check via JSON.
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash-json", str(src), expected_full],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["match"] is True
+    assert result["expected"] == expected_full
+    assert result["actual_full"] == expected_full
+    assert len(result["actual_short"]) == 12
+
+
+def test_stage59_check_program_hash_json_mismatch(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-hash-json
+    emits match=false + rc=1 on mismatch."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cphjm.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    # Random wrong hash (64 hex zeros).
+    wrong = "0" * 64
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-hash-json", str(src), wrong],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["match"] is False
+    assert result["expected"] == wrong
+    assert result["actual_full"] != wrong
+
+
+def test_stage59_check_program_signature_hash_json_match(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish:
+    --check-program-signature-hash-json emits {match: true, ...} + rc=0."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cpshj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc_h = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_h.returncode == 0
+    expected = proc_h.stdout.strip()
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-signature-hash-json", str(src), expected],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["match"] is True
 
 
 def test_stage59_diff_hash_dump_json(tmp_path):

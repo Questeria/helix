@@ -28,6 +28,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --diff-hash-dump-json <a.hx> <b.hx>
         Same as --diff-hash-dump but JSON {match, fns, structs, modules}
         with added/removed/changed lists per category.
+    --check-program-hash-json <file.hx> <expected_hex>
+        Same as --check-program-hash but JSON
+        {match, expected, actual_full, actual_short}.
+    --check-program-signature-hash-json <file.hx> <expected_hex>
+        Same as --check-program-signature-hash but JSON.
     --hash-dump-short <file.hx>
         Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-trace <a.json> <b.json>
@@ -913,6 +918,68 @@ def _check_program_hash_from_file(path: str, expected_file: str) -> int:
               file=sys.stderr)
         return 2
     return _check_program_hash(path, lines[0])
+
+
+def _check_program_hash_json(path: str, expected: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-hash in
+    machine-readable JSON form. Same matching semantics (accepts
+    64-hex or 12-hex prefix), but emits structured output for CI
+    log artifacts.
+
+    Output schema:
+      {"match": bool,
+       "expected": "<hash>",
+       "actual_full": "<64hex>",
+       "actual_short": "<12hex>"}
+
+    rc=0 on match, 1 on mismatch (matches text-form semantics).
+    """
+    import json
+    from .ast_hash import program_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    actual = program_hash(prog)
+    actual_short = short_hash(actual)
+    matched = (actual == expected) or (
+        len(expected) == 12 and actual_short == expected
+    )
+    print(json.dumps({
+        "match": matched,
+        "expected": expected,
+        "actual_full": actual,
+        "actual_short": actual_short,
+    }, sort_keys=True, indent=2))
+    return 0 if matched else 1
+
+
+def _check_program_signature_hash_json(path: str, expected: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-
+    signature-hash in machine-readable JSON form.
+
+    Output schema:
+      {"match": bool,
+       "expected": "<hash>",
+       "actual_full": "<64hex>",
+       "actual_short": "<12hex>"}
+
+    rc=0 on match, 1 on mismatch.
+    """
+    import json
+    from .ast_hash import program_signature_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    actual = program_signature_hash(prog)
+    actual_short = short_hash(actual)
+    matched = (actual == expected) or (
+        len(expected) == 12 and actual_short == expected
+    )
+    print(json.dumps({
+        "match": matched,
+        "expected": expected,
+        "actual_full": actual,
+        "actual_short": actual_short,
+    }, sort_keys=True, indent=2))
+    return 0 if matched else 1
 
 
 def _check_program_hash(path: str, expected: str) -> int:
@@ -6903,6 +6970,13 @@ def main():
             sys.exit(2)
         sys.exit(_check_program_hash(args[0], args[1]))
 
+    if "--check-program-hash-json" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-hash-json <file.hx> "
+                  "<expected_hex_hash>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_hash_json(args[0], args[1]))
+
     if "--check-program-hash-from-file" in flags:
         if len(args) < 2:
             print("usage: --check-program-hash-from-file <file.hx> "
@@ -6916,6 +6990,13 @@ def main():
                   "<expected_hex_hash>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_check_program_signature_hash(args[0], args[1]))
+
+    if "--check-program-signature-hash-json" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-signature-hash-json <file.hx> "
+                  "<expected_hex_hash>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_signature_hash_json(args[0], args[1]))
 
     if "--check-program-signature-hash-from-file" in flags:
         if len(args) < 2:
