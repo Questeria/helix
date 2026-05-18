@@ -604,6 +604,35 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
         for t in sub_tests:
             full = A.Binary(span=span, op="&&", left=full, right=t)
         return full
+    if isinstance(pat, A.PatStruct):
+        # Stage 59 / Tier 4 #15 — struct destructuring pattern.
+        # The struct test is the AND of each field's sub-test on the
+        # corresponding field-access. Phase 0: no struct-tag check
+        # (Helix structs are nominal at typecheck, identity-lowered).
+        # If pat.fields is empty AND ignore_rest=True, the test is
+        # vacuously true (matches any value of that struct type).
+        if not pat.fields:
+            return A.BoolLit(span=span, value=True)
+        # Build the conjunction of field tests.
+        sub_tests: list[A.Expr] = []
+        for (fname, sub) in pat.fields:
+            # Skip PatBind/PatWildcard (always match).
+            if isinstance(sub, (A.PatWildcard, A.PatBind)):
+                continue
+            field_access = A.Field(
+                span=span,
+                obj=_dup_expr(scrut_expr),
+                name=fname,
+            )
+            t = _pattern_test_expr(sub, field_access, span,
+                                     at_top_level=False)
+            sub_tests.append(t)
+        if not sub_tests:
+            return A.BoolLit(span=span, value=True)
+        full = sub_tests[0]
+        for t in sub_tests[1:]:
+            full = A.Binary(span=span, op="&&", left=full, right=t)
+        return full
     # Cycle 14 C14-3 (conf 78): the prior `return A.BoolLit(True)`
     # catchall silently accepted any future Pattern subclass — exactly
     # the silent-accept anti-pattern the cycle-13 refactor was supposed
@@ -720,6 +749,31 @@ def _collect_binds(pat: A.Pattern, scrut: str, span: A.Span) -> list[A.Let]:
                 alt_names = {b.name for b in _collect_binds(alt, scrut, span)}
                 first_names &= alt_names
             binds.extend(b for b in first_binds if b.name in first_names)
+    elif isinstance(pat, A.PatStruct):
+        # Stage 59 / Tier 4 #15 — struct destructuring pattern.
+        # Each sub-pattern is bound against the corresponding struct
+        # field access `scrut.field_name`. PatBind sub-patterns get
+        # `let bind_name = scrut.field_name`; nested sub-patterns
+        # route through a synthetic temp (mirror of PatVariant/PatTuple).
+        for (fname, sub) in pat.fields:
+            field_access = A.Field(
+                span=span,
+                obj=A.Name(span=span, name=scrut),
+                name=fname,
+            )
+            if isinstance(sub, A.PatBind):
+                binds.append(A.Let(
+                    span=span, name=sub.name, is_mut=False, ty=None,
+                    value=field_access,
+                ))
+            elif isinstance(sub, (A.PatVariant, A.PatTuple, A.PatOr,
+                                    A.PatStruct)):
+                tmp = _fresh_name(prefix="__sub")
+                binds.append(A.Let(
+                    span=span, name=tmp, is_mut=False, ty=None,
+                    value=field_access,
+                ))
+                binds.extend(_collect_binds(sub, tmp, span))
     elif isinstance(pat, (A.PatWildcard, A.PatLit, A.PatRange)):
         # Leaf patterns that introduce no binders. Explicit branches
         # for clarity + to make the dispatch exhaustive — cycle 15

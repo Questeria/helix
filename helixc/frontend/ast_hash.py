@@ -566,6 +566,18 @@ def _hash_pattern(h: "hashlib._Hash", pat: A.Pattern,
         for sub in pat.sub_patterns:
             _hash_pattern(h, sub, binders)
         return
+    if isinstance(pat, A.PatStruct):
+        # Stage 59 / Tier 4 #15: struct destructuring pattern.
+        # Hash by struct name + ordered (field_name, sub_hash) pairs +
+        # ignore_rest flag. Field order matters (the user wrote them
+        # in that order); to canonicalize would require sorting, but
+        # that's a design choice for a future polish increment.
+        _emit(h, "PatStruct", pat.name, len(pat.fields),
+              pat.ignore_rest)
+        for (fname, sub) in pat.fields:
+            _emit(h, "PatStructField", fname)
+            _hash_pattern(h, sub, binders)
+        return
     _emit(h, "PatUnknown", type(pat).__name__)
 
 

@@ -1325,6 +1325,39 @@ class Parser:
             init=method,
         )
 
+    def _peek_struct_pat_start(self) -> bool:
+        """Stage 59 / Tier 4 #15: are we positioned at `{ IDENT [: pat]`
+        or `{ .. }` (the start of a struct destructuring pattern)?
+        Lookahead-only; never advances `self.i`. Accepts:
+          { field }              short-form binding
+          { field: pat }         explicit sub-pattern
+          { field, .. }          short-form + ignore-rest
+          { .. }                 ignore-all
+        Returns False otherwise so the brace can be reinterpreted
+        as a match-body block."""
+        if not self._at(T.LBRACE):
+            return False
+        save_i = self.i
+        try:
+            self.i += 1  # consume '{'
+            if self._at(T.RBRACE):
+                # `{}` is an empty block, not a pattern.
+                return False
+            if self._at(T.DOTDOT):
+                return True
+            if self._at(T.IDENT):
+                save2 = self.i
+                self.i += 1
+                # `IDENT ,` `IDENT :` `IDENT }` all indicate struct pattern.
+                if self._at(T.COMMA) or self._at(T.COLON) or self._at(T.RBRACE):
+                    self.i = save2
+                    return True
+                self.i = save2
+                return False
+            return False
+        finally:
+            self.i = save_i
+
     def _peek_struct_lit_start(self) -> bool:
         """Are we positioned at `{ IDENT :` (the start of a struct literal)?
         Lookahead-only; never advances `self.i`. Also accepts an empty brace
@@ -1476,6 +1509,38 @@ class Parser:
                                           path=path_expr,
                                           sub_patterns=sub_pats)
                 return ast.PatLit(span=self._span_of(t), value=path_expr)
+            # Stage 59 / Tier 4 #15 — struct destructuring pattern.
+            # `StructName { f1, f2: pat, .. }`. Distinguished from
+            # bare IDENT by lookahead of `{`. We use the same struct-
+            # literal start heuristic to avoid ambiguity with match
+            # bodies (which also start with `{`).
+            if self._at(T.LBRACE) and self._peek_struct_pat_start():
+                self._eat(T.LBRACE)
+                fields: list[tuple[str, ast.Pattern]] = []
+                ignore_rest = False
+                while not self._at(T.RBRACE):
+                    if self._at(T.DOTDOT):
+                        self.i += 1
+                        ignore_rest = True
+                        break
+                    fname_tok = self._eat(T.IDENT)
+                    if self._at(T.COLON):
+                        self._eat(T.COLON)
+                        sub_pat = self._parse_pattern()
+                    else:
+                        # Short-form: `field` is sugar for
+                        # `field: <bind by name>`.
+                        sub_pat = ast.PatBind(
+                            span=self._span_of(fname_tok),
+                            name=fname_tok.value, is_mut=False)
+                    fields.append((fname_tok.value, sub_pat))
+                    if not self._at(T.RBRACE):
+                        self._eat(T.COMMA)
+                self._eat(T.RBRACE)
+                return ast.PatStruct(
+                    span=self._span_of(t), name=t.value,
+                    fields=fields, ignore_rest=ignore_rest,
+                )
             return ast.PatBind(span=self._span_of(t), name=t.value, is_mut=False)
         if t.kind in (T.INT, T.FLOAT, T.STRING, T.CHAR, T.KW_TRUE, T.KW_FALSE):
             # Literal pattern, or `lo..hi` / `lo..=hi` range pattern.

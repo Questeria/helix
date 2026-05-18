@@ -15238,6 +15238,55 @@ def test_stage55_inc5_str_from_i32_zero():
     assert code == 1, f"expected len=1 for n=0, got {code}"
 
 
+def test_stage59_pat_struct_basic_destructuring():
+    """Stage 59 / Tier 4 #15: struct destructuring pattern binds
+    fields to local names within match arms."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 17, y: 25 };
+        match p {
+            Point { x, y } => x + y,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 17+25=42, got {code}"
+
+
+def test_stage59_pat_struct_with_literal_match():
+    """Stage 59 / Tier 4 #15: struct destructuring with literal
+    field test (matches only when field value equals literal)."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 7, y: 99 };
+        match p {
+            Point { x: 7, y } => y - 57,
+            Point { .. } => 0,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 99-57=42, got {code}"
+
+
+def test_stage59_pat_struct_ignore_rest():
+    """Stage 59 / Tier 4 #15: `Point { .. }` matches any struct
+    of type Point regardless of field values."""
+    src = """
+    struct Point { x: i32, y: i32 }
+    fn main() -> i32 {
+        let p = Point { x: 1, y: 2 };
+        match p {
+            Point { .. } => 42,
+        }
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42, got {code}"
+
+
 def test_stage55_inc2b_string_to_f64_integer():
     """Stage 55 Inc 2b: string_to_f64 parses pure-integer string."""
     src = """

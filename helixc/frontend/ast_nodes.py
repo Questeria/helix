@@ -285,6 +285,28 @@ class PatVariant(Pattern):
 
 
 @dataclass
+class PatStruct(Pattern):
+    """Stage 59 / Tier 4 #15 — struct destructuring pattern.
+
+    `StructName { field1: pat1, field2: pat2, ... }` matches a value
+    of struct type `StructName` by recursively matching each field's
+    pattern. Short-form `field` (no `: pat`) is sugar for
+    `field: <bind to same name>`.
+
+    Examples:
+        Point { x, y }                       // bind x and y by name
+        Point { x: 0, y }                    // x must equal 0; bind y
+        Layer { weight: Tensor { data }, .. }  // nested (.. = ignore rest)
+
+    The `ignore_rest` flag is True when the pattern ends with `..`
+    (Rust syntax) — fields not listed are silently allowed.
+    """
+    name: str
+    fields: list[tuple[str, "Pattern"]]
+    ignore_rest: bool = False
+
+
+@dataclass
 class For(Expr):
     """for x in iter { body }"""
     var_name: str
