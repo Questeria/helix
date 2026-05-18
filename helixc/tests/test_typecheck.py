@@ -4975,6 +4975,46 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage101_is_copy_walks_through_wrappers():
+    """Stage 101 (Stage 99 audit-residual fix) — `_is_copy_struct_ty`
+    now walks through Tier-S/A wrappers to find the inner struct.
+    Pre-Stage-101, `Conf<MyCopyStruct>` returned False because the
+    helper only checked `isinstance(ty, TyStruct)` at the top level.
+    Post-Stage-101, wrapped @copy structs ARE recognized as Copy."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyStruct, TyConf, TyTaint, TyDP,
+    )
+    tc = TypeChecker.__new__(TypeChecker)
+    tc._copy_struct_names = {"Velocity"}
+    # Bare TyStruct
+    assert tc._is_copy_struct_ty(TyStruct("Velocity")) is True
+    assert tc._is_copy_struct_ty(TyStruct("NotCopy")) is False
+    # Wrapped by Tier-S/A wrappers — should still find through the chain.
+    wrapped_conf = TyConf(level="med", inner=TyStruct("Velocity"))
+    assert tc._is_copy_struct_ty(wrapped_conf) is True
+    wrapped_dp = TyDP(epsilon="1.0",
+                     inner=TyTaint(label="confidential",
+                                   inner=TyStruct("Velocity")))
+    assert tc._is_copy_struct_ty(wrapped_dp) is True
+    # Same chain but inner struct isn't Copy → still False.
+    not_copy_wrapped = TyConf(level="med",
+                              inner=TyStruct("NotCopy"))
+    assert tc._is_copy_struct_ty(not_copy_wrapped) is False
+
+
+def test_stage101_is_copy_returns_false_for_non_wrapper_non_struct():
+    """Stage 101 — defensive: non-wrapper non-struct types (TyPrim,
+    TyArray, TyRef) still return False."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyPrim, TyRef,
+    )
+    tc = TypeChecker.__new__(TypeChecker)
+    tc._copy_struct_names = {"Velocity"}
+    assert tc._is_copy_struct_ty(TyPrim("f32")) is False
+    assert tc._is_copy_struct_ty(TyRef(TyPrim("f32"), is_mut=False)) is False
+    assert tc._is_copy_struct_ty(None) is False
+
+
 def test_stage100_wrapper_tables_hoisted_to_class_level():
     """Stage 100 (Stage 99 re-audit residual #7 fix) — the three
     wrapper tables (_WRAPPER_CTOR_TABLE, _WRAPPER_STRIP_TABLE,

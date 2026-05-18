@@ -1547,15 +1547,39 @@ class TypeChecker:
         return self._borrow_check_enabled or self._current_fn_borrow_check
 
     def _is_copy_struct_ty(self, ty: object) -> bool:
-        """Stage 66 Inc 4 — true if `ty` is a nominal struct (possibly
-        wrapped by trivial typedef/generic projections) whose decl was
-        marked `@copy`. Used to suppress move-semantics tracking for
-        Copy types. Conservative: anything we cannot statically pin to
-        a Copy struct returns False (the strict default)."""
-        # Local import to avoid the cyclic dependency on the type alg.
-        if isinstance(ty, TyStruct):
-            return ty.name in self._copy_struct_names
-        return False
+        """Stage 66 Inc 4 — true if `ty` is a nominal @copy struct,
+        possibly wrapped by Tier-S/A metadata wrappers. Used to
+        suppress move-semantics tracking for Copy types.
+
+        Stage 101 (Stage 99 audit-residual fix) — extended to walk
+        through the 13 Tier-S/A wrappers (TyConf/Taint/DP/Quant/
+        Domain/Robust/Energy/Enclave/Counterfactual/Deadline/
+        Attribution + TyDiff/TyLogic) to find the inner struct.
+        Pre-Stage-101, `Conf<MyCopyStruct>` was treated as non-Copy
+        even though the inner MyCopyStruct was @copy — defeating
+        @copy whenever a user added metadata wrappers around a
+        Copy struct (e.g., `let private_pt: Private<Velocity> =
+        __wrap_dp(v);` where `@copy struct Velocity {...}`).
+
+        Conservative: anything that doesn't bottom out in a TyStruct
+        whose name is in `_copy_struct_names` returns False."""
+        # Walk through known wrappers via the Stage 100 hoisted
+        # registry. Each iteration peels one wrapper layer; bottoms
+        # out at TyStruct or a non-wrapper type.
+        cur = ty
+        while True:
+            if isinstance(cur, TyStruct):
+                return cur.name in self._copy_struct_names
+            # Is `cur` an instance of any known wrapper class?
+            peeled = None
+            for cls_str in self._ALL_WRAPPER_CLS_NAMES:
+                cls = globals().get(cls_str)
+                if cls is not None and isinstance(cur, cls):
+                    peeled = getattr(cur, "inner", None)
+                    break
+            if peeled is None:
+                return False
+            cur = peeled
 
     # ---- entry point ----
     def check(self) -> list[TypeError_]:

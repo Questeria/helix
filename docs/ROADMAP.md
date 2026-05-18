@@ -303,6 +303,27 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 101 SHIPPED 2026-05-18** — Stage 99 audit-residual #4
+  fix: `_is_copy_struct_ty` walks through Tier-S/A wrappers:
+  - Pre-Stage-101, `_is_copy_struct_ty` only checked `isinstance(
+    ty, TyStruct)` at the top level. A `@copy struct Velocity {x,
+    y, z}` wrapped as `Private<Velocity>` (e.g. via `__wrap_dp(v)`
+    for DP-private velocity readings) was treated as NON-Copy by
+    the borrow checker — defeating @copy as soon as any metadata
+    wrapper was added.
+  - Post-Stage-101, the helper walks through the 13 known wrapper
+    classes (`_ALL_WRAPPER_CLS_NAMES` from Stage 100) by repeatedly
+    peeling `.inner`. Bottoms out at the first TyStruct (or
+    returns False if no struct ever found).
+  - Uses the Stage 100 class-level `_ALL_WRAPPER_CLS_NAMES`
+    registry — second consumer of Stage 100's hoist (first was
+    `_strip_wrapper_chain` and the `__wrap_X` dispatch).
+  - 2 new tests; 426 typecheck + 494 broader regression GREEN.
+  - 4 of 7 Stage 100+ backlog items now closed. Remaining: typed-
+    hole expected-type context (Stage 102), multi-arg @property
+    typecheck rejection (Stage 103), 5 missing safety.hx @property
+    roundtrips (Stage 104).
+
 - **Stage 100 SHIPPED 2026-05-18** — Stage 99 audit-residual fixes
   (3 items from the Stage 100+ backlog closed in one commit):
   - **Hoist wrapper tables to class scope**: `_WRAPPER_CTOR_TABLE`
