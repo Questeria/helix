@@ -53,6 +53,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all fns with their attribute list (@pure, @trace, etc).
     --fn-callgraph <file.hx> <fn_name>
         Print fn names directly called from inside <fn_name>'s body.
+    --fn-callers <file.hx> <fn_name>
+        Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
     --list-fn-attrs-json <file.hx>
         Same as --list-fn-attrs but machine-readable JSON output.
     --list-fns-by-attr <file.hx> <attr>
@@ -1290,6 +1292,69 @@ def _list_fn_attrs_json(path: str) -> int:
     return 0
 
 
+def _fn_callers(path: str, target_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: inverse call-graph
+    introspection. Print fn names that DIRECTLY call `target_name`
+    (the inverse of --fn-callgraph).
+
+    Walks every fn's body looking for `A.Call` nodes whose callee
+    name matches target_name. One caller per line, sorted alpha,
+    de-duplicated.
+
+    Use case: refactor planning. 'Who calls fn X?' — answers the
+    impact-zone question when contemplating a rename / signature
+    change / deletion.
+
+    Note: target_name itself need not exist in the file (the
+    function might be a builtin or external). No error is raised
+    for an unknown target — empty output simply means no callers.
+    Exit 0 always.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    callers: set[str] = set()
+
+    def _has_target_call(node) -> bool:
+        found = [False]
+
+        def _walk(n) -> None:
+            if found[0] or n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name) and n.callee.name == target_name:
+                    found[0] = True
+                    return
+                if (isinstance(n.callee, A.Path)
+                        and n.callee.segments
+                        and n.callee.segments[-1] == target_name):
+                    found[0] = True
+                    return
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        _walk(node)
+        return found[0]
+
+    for fn in iter_fn_decls(prog):
+        if fn.body is not None and _has_target_call(fn.body):
+            callers.add(fn.name)
+
+    for name in sorted(callers):
+        print(name)
+    return 0
+
+
 def _fn_callgraph(path: str, fn_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: static call-graph
     introspection for one fn. Print fn names called from inside
@@ -1823,6 +1888,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph(args[0], args[1]))
+
+    if "--fn-callers" in flags:
+        if len(args) < 2:
+            print("usage: --fn-callers <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callers(args[0], args[1]))
 
     if "--list-fn-attrs-json" in flags:
         if len(args) < 1:

@@ -5866,7 +5866,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fns-json",
         "--list-structs", "--list-structs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
-        "--list-fns-by-attr", "--fn-callgraph",
+        "--list-fns-by-attr", "--fn-callgraph", "--fn-callers",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7245,6 +7245,66 @@ def test_stage59_list_fns_by_attr_missing_attr(tmp_path):
     proc = subprocess.run(
         [sys.executable, "-m", "helixc.frontend.autodiff_cli",
          "--list-fns-by-attr", str(src), "phantom_attr"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_fn_callers_inverse_lookup(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callers returns
+    fns that directly call the named target. Inverse of --fn-callgraph."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cg.hx"
+    src.write_text(
+        "fn target(x: i32) -> i32 { x }\n"
+        "fn caller_a(x: i32) -> i32 { target(x) + 1 }\n"
+        "fn caller_b(x: i32) -> i32 { target(x) * 2 }\n"
+        "fn no_calls(x: i32) -> i32 { x + 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callers", str(src), "target"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["caller_a", "caller_b"]
+
+
+def test_stage59_fn_callers_no_callers(tmp_path):
+    """Stage 59 follow-on: target with no callers prints empty output;
+    exit 0 (no error)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text(
+        "fn isolated() -> i32 { 0 }\n"
+        "fn other() -> i32 { 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callers", str(src), "isolated"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_fn_callers_unknown_target_no_error(tmp_path):
+    """Stage 59 follow-on: querying callers of an unknown name does
+    NOT error (the target might be a builtin / external); just
+    returns empty output rc=0."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("fn real() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callers", str(src), "phantom_external"],
         cwd=proj_root, capture_output=True, text=True, timeout=30,
     )
     assert proc.returncode == 0
