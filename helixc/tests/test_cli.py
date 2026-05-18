@@ -5835,7 +5835,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
     for flag in (
         "--dump-ast-hashes", "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
-        "--list-fns", "--check-program-hash",
+        "--list-fns", "--list-fn-attrs", "--check-program-hash",
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths", "--validate-pytrees",
@@ -6699,6 +6699,32 @@ def test_stage59_program_signature_hash_sig_change_differs(tmp_path):
         cwd=proj_root, capture_output=True, text=True, timeout=30,
     )
     assert proc_a.stdout.strip() != proc_b.stdout.strip()
+
+
+def test_stage59_list_fn_attrs_basic(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fn-attrs prints
+    '<fn>: <attrs sorted>' lines per fn (or '(no attrs)' if empty)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "a.hx"
+    src.write_text(
+        "@pure\nfn pure_add(x: i32, y: i32) -> i32 { x + y }\n"
+        "@trace\nfn traced_neg(x: i32) -> i32 { 0 - x }\n"
+        "fn plain(x: i32) -> i32 { x }\n"
+        "@pure\n@trace\nfn both(x: i32) -> i32 { x + 1 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fn-attrs", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "pure_add: pure" in out
+    assert "traced_neg: trace" in out
+    assert "plain: (no attrs)" in out
+    assert "both: pure trace" in out  # sorted alphabetically
 
 
 def test_stage59_list_pytrees_inventory(tmp_path):

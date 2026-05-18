@@ -33,6 +33,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print the signature-only hash (ABI-affecting fields only).
     --list-fns <file.hx>
         Enumerate all fns with sig + body hash columns.
+    --list-fn-attrs <file.hx>
+        Enumerate all fns with their attribute list (@pure, @trace, etc).
     --check-program-hash <file.hx> <expected_hex>
         Assertion-style CI gate: exit 0 if matches, 1 if drift.
     --check-program-signature-hash <file.hx> <expected_hex>
@@ -855,6 +857,34 @@ def _module_hash_cli(path: str, mod_name: str) -> int:
     return 0
 
 
+def _list_fn_attrs(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate all fns with
+    their attribute list.
+
+    Output format per fn (one line):
+      `<fn_name>: <attrs sorted, space-separated, or '(no attrs)'>`
+
+    Sorted alphabetically by fn name. Walks ModBlock-nested fns too
+    via iter_fn_decls.
+
+    Use case:
+    - Repo audit: which fns are @pure? Which carry @trace?
+    - Verify a refactor preserved all attributes
+    - Find @inline candidates that aren't tagged
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    fns = sorted(iter_fn_decls(prog), key=lambda f: f.name)
+    for fn in fns:
+        if fn.attrs:
+            attrs_str = " ".join(sorted(fn.attrs))
+        else:
+            attrs_str = "(no attrs)"
+        print(f"{fn.name}: {attrs_str}")
+    return 0
+
+
 def _list_fns(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all FnDecls
     in a source file with their signature + body hashes side by side.
@@ -1100,6 +1130,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fns(args[0]))
+
+    if "--list-fn-attrs" in flags:
+        if len(args) < 1:
+            print("usage: --list-fn-attrs <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fn_attrs(args[0]))
 
     if "--check-program-hash" in flags:
         if len(args) < 2:
