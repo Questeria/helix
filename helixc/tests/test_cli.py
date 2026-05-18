@@ -5867,7 +5867,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-structs", "--list-structs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr",
-        "--fn-callgraph", "--fn-callers", "--fn-callgraph-all",
+        "--fn-callgraph", "--fn-callers",
+        "--fn-callgraph-all", "--fn-callers-all",
         "--fn-leaves", "--fn-roots",
         "--fn-recursive", "--fn-cycles",
         "--check-program-hash",
@@ -7370,6 +7371,35 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_callers_all_whole_program(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callers-all emits
+    whole-program INVERSE callgraph as JSON {fn: [callers]}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cg.hx"
+    src.write_text(
+        "fn util(x: i32) -> i32 { x + 1 }\n"
+        "fn a(n: i32) -> i32 { util(n) }\n"
+        "fn b(n: i32) -> i32 { util(n) * 2 }\n"
+        "fn leaf() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callers-all", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "util": ["a", "b"],
+        "a": [],
+        "b": [],
+        "leaf": [],
+    }
 
 
 def test_stage59_fn_callgraph_all_whole_program(tmp_path):

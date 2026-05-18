@@ -57,6 +57,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
     --fn-callgraph-all <file.hx>
         Whole-program callgraph as JSON {fn: [callees...]} for tooling.
+    --fn-callers-all <file.hx>
+        Whole-program INVERSE callgraph as JSON {fn: [callers...]}.
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1571,6 +1573,66 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_callers_all(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: whole-program inverse
+    callgraph as JSON. Output:
+      {
+        "<fn_name>": ["<caller1>", "<caller2>", ...],  # sorted, deduped
+        ...
+      }
+
+    For every locally-defined fn, lists the fns that DIRECTLY call
+    it. Inverse pair to --fn-callgraph-all.
+
+    Use cases:
+    - Tooling: 'who calls fn X?' answered for all X in one read
+    - Hotspot analysis: high-fan-in fns (many callers) are critical
+      paths — refactoring them needs extra care
+    - Dead-code analysis: fns with empty caller lists are unreachable
+      from any local fn (matches --fn-roots)
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    callers: dict[str, set] = {fn.name: set() for fn in all_fns}
+
+    def _collect_calls(node, from_fn: str) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            tgt = None
+            if isinstance(node.callee, A.Name):
+                tgt = node.callee.name
+            elif (isinstance(node.callee, A.Path)
+                  and node.callee.segments):
+                tgt = node.callee.segments[-1]
+            if tgt is not None and tgt in all_names:
+                callers[tgt].add(from_fn)
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _collect_calls(x, from_fn)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _collect_calls(x, from_fn)
+                else:
+                    _collect_calls(v, from_fn)
+
+    for fn in all_fns:
+        if fn.body is not None:
+            _collect_calls(fn.body, fn.name)
+
+    result = {name: sorted(c) for name, c in callers.items()}
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_callgraph_all(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: whole-program call
     graph as JSON. Output:
@@ -2233,6 +2295,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_all(args[0]))
+
+    if "--fn-callers-all" in flags:
+        if len(args) < 1:
+            print("usage: --fn-callers-all <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callers_all(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
