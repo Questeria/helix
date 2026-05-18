@@ -636,9 +636,18 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
         # the existing If-branch / Block-stmt descent pattern.
         # Note: this only handles helper-call inlining inside loop
         # bodies — the LOOP ITSELF still requires the AD pass to know
-        # how to differentiate iteration, which is a separate concern.
-        # For Helix's current dogfood programs, gradient-bearing
-        # loops are mostly unrolled at compile time by other passes.
+        # how to differentiate iteration, which is NOT implemented.
+        # Stage 54 post-close HIGH-2 docstring honesty fix (prior
+        # version incorrectly claimed "loops are mostly unrolled at
+        # compile time by other passes" — that's only true for the
+        # tile matmul small-loop unroller in ir/lower_ast.py, NOT
+        # for arbitrary helper-fn loops). Reality: a loop reaching
+        # _diff or _propagate is caught by an explicit fail-loud
+        # NotImplementedError arm (post-close CRITICAL-2 fix in
+        # _diff; CRITICAL-1 mirror landed at gate-5 / 9424133 for
+        # _propagate). If you add an iterative-AD arm in the
+        # future, remove the raise arms so the descent here
+        # actually feeds them.
         if isinstance(e, A.For):
             new_iter = go(e.iter_expr)
             new_body = go(e.body)
@@ -792,10 +801,29 @@ def _substitute_names(expr: A.Expr, subs: dict[str, A.Expr]) -> A.Expr:
             new_arms = []
             for arm in e.arms:
                 # Pattern bindings shadow incoming substitutions.
-                # Conservative: pop any name that the arm's pattern
-                # might bind. PatBind has .name; deeper destructure
-                # (PatTuple/PatVariant) is Stage 49+ F5-class — not
-                # in scope for AD inlining today.
+                # Stage 54 post-close HIGH-3 fix: deep destructure
+                # patterns (PatTuple / PatVariant / PatOr containing
+                # PatBind) silently leaked caller-scope substitutions
+                # into bindings that the inner pattern was meant to
+                # shadow — a real wrong-gradient hazard for any
+                # inlined helper whose body matches on Option /
+                # Result / tuple destructure. Hard-fail loudly until
+                # proper recursive binder analysis lands (gate-2
+                # audit option-(b), aligned with the silent-failure-
+                # discipline default). PatBind / PatWildcard / PatLit
+                # cover the AD-inlining safe subset.
+                allowed = (A.PatBind, A.PatWildcard, A.PatLit)
+                if not isinstance(arm.pattern, allowed):
+                    raise NotImplementedError(
+                        f"_substitute_names: pattern kind "
+                        f"{type(arm.pattern).__name__} not supported "
+                        f"inside AD-inlined Match arm; "
+                        f"only PatBind/PatWildcard/PatLit are "
+                        f"covered today. Refactor the helper to "
+                        f"avoid destructuring patterns, or extend "
+                        f"the substituter with recursive binder "
+                        f"collection."
+                    )
                 arm_env = dict(env)
                 if isinstance(arm.pattern, A.PatBind):
                     arm_env.pop(arm.pattern.name, None)
@@ -1390,6 +1418,44 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
     if isinstance(expr, (A.Quote, A.Splice, A.Modify)):
         _ad_warn(expr, f"{type(expr).__name__} is not differentiable")
         return A.FloatLit(span=span, value=0.0)
+    # Stage 54 post-close CRITICAL-2: explicit fail-loud arms for
+    # AST kinds that Inc 3a's loop-body descent now feeds into
+    # _diff. Pre-Inc-3a these were unreachable (helper-call inside
+    # a loop body stayed opaque and hit the loud
+    # NotImplementedError above for opaque calls). Post-Inc-3a the
+    # helper is inlined into the loop body, and the For/While/Loop
+    # node flows straight into _diff. Without explicit arms it
+    # falls through to the warn-and-zero catchall below — that
+    # warning is a soft trap suppressed unless `-Wad=error`, so
+    # the user gets a silent-zero derivative on any loop-containing
+    # differentiable expression. Raise loudly, mirroring the
+    # Stage 35 opaque-call discipline and the reverse-mode
+    # _propagate arms landed at gate-5 / 9424133.
+    if isinstance(expr, (A.For, A.While, A.Loop)):
+        kind = type(expr).__name__
+        raise NotImplementedError(
+            f"forward-mode AD does not differentiate through {kind} "
+            f"bodies; unroll the loop or move the gradient-bearing "
+            f"computation outside"
+        )
+    if isinstance(expr, A.Match):
+        raise NotImplementedError(
+            "forward-mode AD does not differentiate through Match "
+            "expressions; rewrite as If/else over the discriminant "
+            "or inline a differentiable helper"
+        )
+    if isinstance(expr, (A.Assign, A.Return, A.Break, A.Continue)):
+        kind = type(expr).__name__
+        raise NotImplementedError(
+            f"forward-mode AD does not differentiate through {kind} "
+            f"statements; these are control flow, not differentiable "
+            f"expressions"
+        )
+    if isinstance(expr, A.Range):
+        raise NotImplementedError(
+            "forward-mode AD does not differentiate through Range "
+            "expressions; ranges are iterators, not numeric values"
+        )
     # Genuinely-unknown — warn loudly.
     _ad_warn(expr, "unhandled expression kind")
     return A.FloatLit(span=expr.span, value=0.0)
@@ -1481,16 +1547,28 @@ def _stage54_min_max_chain_rule(
     call: "A.Call", var: str, span, name: str,
 ) -> "A.Expr":
     """Stage 54 Inc 1: 2-arg chain rule for __min/__max + _f64
-    variants. Subgradient at equality picks the LEXICALLY-FIRST
-    arg (the asymmetric `<=`/`>=` vs strict `<`/`>` makes the
-    choice deterministic and forward-reverse symmetric).
+    variants. Subgradient at equality is asymmetric and the
+    asymmetry POINTS IN OPPOSITE DIRECTIONS for min vs max
+    (the asymmetric `<=`/`>=` vs strict `<`/`>` makes the
+    choice deterministic and forward-reverse symmetric within
+    each operator):
+      - __min attributes the equality-case gradient to the
+        FIRST (left) arg via `a <= b`.
+      - __max attributes the equality-case gradient to the
+        SECOND (right) arg via `b >= a`.
+    Both choices are valid 1-sided subgradient picks; the
+    operator-pair asymmetry exists to keep each indicator's
+    LHS bound to that arg, which forward/reverse mirroring
+    relies on.
 
     __min(a, b): df/da = 1 if a <= b else 0; df/db = 1 if b < a else 0
     __max(a, b): df/da = 1 if a >  b else 0; df/db = 1 if b >= a else 0
 
     At a==b: __min gives da=1, db=0; __max gives da=0, db=1.
-    (Stage 54 closure gate-1 silent-failure Finding 4 docstring
-    fix — prior docstring claimed "picks 0" which was misleading.)
+    (Stage 54 gate-1 Finding 4 corrected "picks 0" → "picks
+    lexically-first"; post-close HIGH-1 corrected the still-
+    misleading "lexically-first" claim — that's only true for
+    __min, not __max.)
 
     Returns adj_a * da/dvar + adj_b * db/dvar with the two
     indicators inlined as A.If expressions.
@@ -1805,7 +1883,14 @@ def _diff_call_chain_rule(call: A.Call, var: str,
     if name in ("__min_i32", "__max_i32", "__clamp_i32"):
         return A.IntLit(span=span, value=0)
     if name in ("__sign", "__sign_f64"):
-        suffix = "f64"
+        # Stage 54 post-close type-design HIGH-1 fix: bare __sign
+        # is declared `f32 -> f32` in stdlib/transcendentals.hx
+        # :365, so its derivative-zero literal must carry an f32
+        # type (suffix=None, the f32 default in helixc). Only the
+        # _f64 variant gets type_suffix="f64". Pre-fix both
+        # variants stamped f64, which would coerce-or-mismatch
+        # downstream f32 arithmetic contexts.
+        suffix = "f64" if name.endswith("_f64") else None
         return A.FloatLit(span=span, value=0.0, type_suffix=suffix)
     if len(call.args) != 1:
         return None

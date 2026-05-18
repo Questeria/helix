@@ -1521,6 +1521,139 @@ def test_stage54_inc1_min_chain_rule_in_composed_expr():
         f"got opaque-zero: {out}"
 
 
+def test_stage54_postclose_diff_raises_loud_on_loop():
+    """Stage 54 post-close silent-failure CRITICAL-2 fix:
+    forward-mode `_diff` raises NotImplementedError on
+    For/While/Loop. Pre-fix Inc 3a opened the inlining path
+    that fed these nodes into `_diff`, where they fell to the
+    warn-and-zero catchall — silent-zero forward-mode
+    derivative on any loop-containing differentiable
+    expression. Reverse-mode mirror landed at gate-5 (9424133);
+    this pin covers forward-mode."""
+    from helixc.frontend.autodiff import _diff
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    body = A.Block(span=span, stmts=[],
+                   final_expr=A.IntLit(span=span, value=0))
+    iter_e = A.Range(span=span,
+                     start=A.IntLit(span=span, value=0),
+                     end=A.IntLit(span=span, value=3))
+    for_expr = A.For(span=span, var_name="i",
+                     iter_expr=iter_e, body=body)
+
+    try:
+        _diff(for_expr, "x")
+        raise AssertionError(
+            "post-close CRITICAL-2: _diff on For should raise "
+            "NotImplementedError"
+        )
+    except NotImplementedError as e:
+        assert "differentiate through For" in str(e), \
+            f"post-close CRITICAL-2 msg should name For, got: {e}"
+
+
+def test_stage54_postclose_propagate_raises_loud_on_loop():
+    """Stage 54 post-close pin for reverse-mode CRITICAL-1 fix
+    landed at gate-5 (9424133): `_propagate` raises
+    NotImplementedError on For/While/Loop. Load-bearing pin
+    against future regressions of the gate-5 work."""
+    from helixc.frontend.autodiff_reverse import _propagate
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    body = A.Block(span=span, stmts=[],
+                   final_expr=A.FloatLit(span=span, value=0.0))
+    while_expr = A.While(
+        span=span,
+        cond=A.BoolLit(span=span, value=True),
+        body=body,
+    )
+    acc = {"x": []}
+    adj = A.FloatLit(span=span, value=1.0)
+
+    try:
+        _propagate(while_expr, adj, acc)
+        raise AssertionError(
+            "post-close CRITICAL-1 pin: _propagate on While "
+            "should raise NotImplementedError"
+        )
+    except NotImplementedError as e:
+        assert "differentiate through While" in str(e), \
+            f"post-close CRITICAL-1 msg should name While, got: {e}"
+
+
+def test_stage54_postclose_substitute_names_rejects_destructure_patterns():
+    """Stage 54 post-close silent-failure HIGH-3 fix:
+    `_substitute_names` Match arm hard-fails on patterns other
+    than PatBind / PatWildcard / PatLit. Pre-fix deep
+    destructure patterns (PatTuple / PatVariant / PatOr) had
+    their inner PatBind names silently leak through —
+    caller-scope substitutions clobbered inner-pattern
+    bindings, producing wrong gradients in any inlined helper
+    that destructures Option / Result / tuple."""
+    from helixc.frontend.autodiff import _substitute_names
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    p_inner = A.PatBind(span=span, name="p", is_mut=False)
+    q_inner = A.PatBind(span=span, name="q", is_mut=False)
+    pat_tuple = A.PatTuple(span=span, elems=[p_inner, q_inner])
+    arm_body = A.Block(
+        span=span, stmts=[],
+        final_expr=A.Name(span=span, name="p", generics=[]),
+    )
+    arm = A.MatchArm(span=span, pattern=pat_tuple, guard=None,
+                     body=arm_body)
+    scrut = A.Name(span=span, name="tup", generics=[])
+    match_expr = A.Match(span=span, scrutinee=scrut, arms=[arm])
+
+    subs = {"p": A.IntLit(span=span, value=99)}
+    try:
+        _substitute_names(match_expr, subs)
+        raise AssertionError(
+            "post-close HIGH-3: _substitute_names on PatTuple "
+            "should raise NotImplementedError"
+        )
+    except NotImplementedError as e:
+        assert "PatTuple" in str(e), \
+            f"post-close HIGH-3 msg should name PatTuple, got: {e}"
+
+
+def test_stage54_postclose_sign_emits_f32_typed_zero():
+    """Stage 54 post-close type-design HIGH-1 fix: bare __sign
+    is declared `f32 -> f32` in stdlib/transcendentals.hx:365,
+    so its derivative-zero literal must carry an f32 type
+    (suffix=None, the f32 default). Pre-fix both __sign and
+    __sign_f64 stamped type_suffix='f64', which would coerce-
+    or-mismatch downstream f32 arithmetic."""
+    from helixc.frontend.autodiff import _diff
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    call_sign = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__sign", generics=[]),
+        args=[A.Name(span=span, name="x", generics=[])],
+    )
+    deriv_sign = _diff(call_sign, "x")
+    assert isinstance(deriv_sign, A.FloatLit), \
+        f"post-close type-design HIGH-1: __sign derivative " \
+        f"should be FloatLit, got {type(deriv_sign).__name__}"
+    assert deriv_sign.value == 0.0
+    assert deriv_sign.type_suffix is None, \
+        f"post-close type-design HIGH-1: bare __sign " \
+        f"derivative must have type_suffix=None (f32 default), " \
+        f"got {deriv_sign.type_suffix!r}"
+
+    call_sign_f64 = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__sign_f64", generics=[]),
+        args=[A.Name(span=span, name="x", generics=[])],
+    )
+    deriv_f64 = _diff(call_sign_f64, "x")
+    assert isinstance(deriv_f64, A.FloatLit)
+    assert deriv_f64.type_suffix == "f64", \
+        f"post-close type-design HIGH-1: __sign_f64 derivative " \
+        f"must keep type_suffix='f64', got {deriv_f64.type_suffix!r}"
+
+
 # ============================================================================
 # Test runner
 # ============================================================================
