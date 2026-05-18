@@ -90,6 +90,32 @@ def _print_program_hash(path: str) -> int:
     return 0
 
 
+def _diff_program_hash(path_a: str, path_b: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: compare program_hash of
+    two source files. Prints `MATCH` + exits 0 when semantically
+    equivalent (same AST hash modulo span/alpha-equivalence), or
+    `DIFFER\\n  a=...\\n  b=...` + exits 1 when they diverge.
+
+    Use case: CI sanity check that a refactor PR is semantically
+    identical to the baseline (e.g., formatter-only diff, var
+    rename, etc.). Build cache: if hashes match, skip recompile.
+    """
+    from .ast_hash import program_hash, short_hash
+    src_a = _read_source(path_a)
+    src_b = _read_source(path_b)
+    prog_a = _parse_or_exit(src_a, path_a)
+    prog_b = _parse_or_exit(src_b, path_b)
+    ha = program_hash(prog_a)
+    hb = program_hash(prog_b)
+    if ha == hb:
+        print(f"MATCH {short_hash(ha)}")
+        return 0
+    print("DIFFER")
+    print(f"  a={short_hash(ha)} ({path_a})")
+    print(f"  b={short_hash(hb)} ({path_b})")
+    return 1
+
+
 def main():
     # Restart 49 B2: accept -h / --help → print docstring to stdout, exit 0
     # (matches check.py UX convention).
@@ -127,6 +153,13 @@ def main():
             print("usage: --program-hash <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_print_program_hash(args[0]))
+
+    if "--diff-program-hash" in flags:
+        if len(args) < 2:
+            print("usage: --diff-program-hash <a.hx> <b.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_diff_program_hash(args[0], args[1]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
