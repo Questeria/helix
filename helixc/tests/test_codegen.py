@@ -15294,6 +15294,20 @@ def test_stage59_pat_struct_nested_typecheck_passes():
     assert errs == [], f"typecheck errors: {errs}"
 
 
+def test_stage59_dogfood_18_pat_struct_showcase_exits_42():
+    """Stage 59 / Tier 4 #15 dogfood: end-to-end demonstration of
+    PatStruct destructuring (flat, literal-arm, nested, ignore-rest)
+    via the new dogfood_18 program. Exit code 42 iff all four
+    pattern shapes work correctly."""
+    import os as _os
+    proj = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    src = open(_os.path.join(
+        proj, "helixc/examples/dogfood_18_pat_struct_showcase.hx")).read()
+    code = compile_and_run(src)
+    assert code == 42, f"dogfood_18 should exit 42, got {code}"
+
+
 def test_stage59_pat_struct_nested_destructuring():
     """Stage 59 / Tier 4 #15: nested struct destructuring works
     end-to-end. Root cause of the prior xfail was Phase-0 IR's
