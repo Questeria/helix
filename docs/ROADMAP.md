@@ -303,6 +303,26 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 64 DEFERRED to v1.1 2026-05-18 (per user directive)** —
+  Tier 2 #6 tensor codegen split:
+  - Inc 1 SHIPPED (bf16/f16 HBM dtype) + Inc 2 SHIPPED (TILE_ZEROS
+    register-fill in PTX backend) remain in v1.0 as the PTX
+    backend architectural validation.
+  - Inc 3-5 (TILE_ADD/SUB/MUL elementwise, TILE_MATMUL via wmma
+    Tensor Core fragments, tile-IR optimization passes) **moved to
+    v1.1**. Reason: full closure requires GPU CI infrastructure
+    that v1.0 does not have. Per user: "Defer, after v1 will
+    feature GPU."
+  - v1.0 ships with CPU x86_64 codegen only. PTX text emission
+    syntax-validates but is not exercised against real GPU
+    hardware. v1.1 will add GPU CI runner + Inc 3-5 + actual
+    end-to-end NVIDIA GPU validation.
+  - **Speculative parallel work**: a worktree-isolated agent
+    is starting Inc 3 (TILE_ADD/SUB/MUL elementwise) in parallel
+    with the audit work. If the parallel agent lands cleanly + GPU
+    CI gets stood up later, Inc 3 can be folded back into v1.0.
+    If not, it stays a v1.1 deliverable. Speculation, not promise.
+
 - **Stage 92 SHIPPED 2026-05-18** — Inc 5d fixes for Stage 66's 2
   HIGH-severity silent miscompiles (Stage 91 audit closure):
   - **Fix 1 (HIGH-#1)**: loop-body borrow reconciliation. New
