@@ -38,6 +38,76 @@ def run_ptx_cli(src: str, *extra_args: str) -> subprocess.CompletedProcess[str]:
             os.remove(path)
 
 
+def test_stage64_inc2_tile_zeros_emits_f32_register_fills():
+    """Stage 64 Inc 2 — TILE_ZEROS for a length-4 f32 tile emits 4
+    `mov.f32 %fX, 0f00000000;` register-fills and maps the result
+    TileValue to the base %f register."""
+    from helixc.backend.ptx import PtxEmitter
+    out = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "REG"
+    ))
+    op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [out],
+                   attrs={"dtype": "f32", "length": 4})
+    em = PtxEmitter()
+    em.emit_op(op)
+    # Expect 4 lines, each a mov.f32 to zero.
+    text = em.buf.getvalue()
+    fill_lines = [ln for ln in text.splitlines()
+                  if "mov.f32" in ln and "0f00000000" in ln]
+    assert len(fill_lines) == 4, text
+    # Result mapped to base %f register.
+    assert out.id in em.reg_map
+    assert em.reg_map[out.id].startswith("%f"), em.reg_map[out.id]
+
+
+def test_stage64_inc2_tile_zeros_emits_i32_register_fills():
+    """Stage 64 Inc 2 — TILE_ZEROS for length-3 i32 tile emits
+    3 `mov.b32 %rX, 0;` register-fills."""
+    from helixc.backend.ptx import PtxEmitter
+    out = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("i32"), (tir.DimConst(3),), "REG"
+    ))
+    op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [out],
+                   attrs={"dtype": "i32", "length": 3})
+    em = PtxEmitter()
+    em.emit_op(op)
+    text = em.buf.getvalue()
+    fill_lines = [ln for ln in text.splitlines()
+                  if "mov.b32" in ln and " 0;" in ln]
+    assert len(fill_lines) == 3, text
+    assert em.reg_map[out.id].startswith("%r"), em.reg_map[out.id]
+
+
+def test_stage64_inc2_tile_zeros_rejects_invalid_length():
+    """Stage 64 Inc 2 — TILE_ZEROS with missing or non-positive
+    length attr fails closed."""
+    from helixc.backend.ptx import PtxEmitter
+    out = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(0),), "REG"
+    ))
+    op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [out],
+                   attrs={"dtype": "f32", "length": 0})
+    em = PtxEmitter()
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="positive int 'length'"):
+        em.emit_op(op)
+
+
+def test_stage64_inc2_tile_zeros_rejects_unsupported_dtype():
+    """Stage 64 Inc 2 — TILE_ZEROS only supports f32 / i32 in
+    Phase-0; bf16/f16 etc. fail closed with a clear message."""
+    from helixc.backend.ptx import PtxEmitter
+    out = ti.TileValue(0, tir.TIRTileTy(
+        tir.TIRScalar("bf16"), (tir.DimConst(2),), "REG"
+    ))
+    op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [out],
+                   attrs={"dtype": "bf16", "length": 2})
+    em = PtxEmitter()
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="only f32 / i32 supported"):
+        em.emit_op(op)
+
+
 def test_c118_direct_ptx_cli_aborts_on_type_errors():
     proc = run_ptx_cli("@kernel fn k() { let mut b: bool = true; b += false; }\n")
     assert proc.returncode != 0, proc.stdout + proc.stderr

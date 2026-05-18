@@ -303,6 +303,32 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 64 Inc 2 SHIPPED 2026-05-18** — Tier 2 #6 tensor codegen
+  TILE_ZEROS in PTX backend (partial closure progress; Inc 3-5
+  remain multi-week):
+  - PTX backend `emit_op` dispatch now handles `TILE_ZEROS` for
+    f32 and i32 tiles. Emits N consecutive register-fills:
+    `mov.f32 %fX, 0f00000000;` (f32) or `mov.b32 %rX, 0;` (i32).
+  - Result TileValue maps to the BASE register of the fill range;
+    downstream consumers can find the tile's start. Phase-0 uses
+    a register-tile representation (no SMEM allocation yet) —
+    Inc 3 will add SMEM allocation strategy for larger tiles.
+  - Validates attr contract: positive int `length`, dtype in
+    {f32, i32} (bf16/f16 rejected with clear "Inc 3+ will extend"
+    message — fails closed).
+  - Pre-fix: any TileOp not handled by the dispatch hit the
+    catch-all "unsupported PTX op {kind}" error. Post-fix:
+    TILE_ZEROS is the first tile-construction op wired.
+  - **Honest partial-closure note**: Stage 64 full closure (Inc
+    2-5) requires multi-week focused session for TILE_ADD /
+    TILE_SUB / TILE_MUL elementwise (Inc 3), TILE_MATMUL via
+    NVidia wmma Tensor Core instructions (Inc 4), and tile-IR
+    optimization passes (Inc 5). This Inc 2 ship moves Stage 64
+    forward by one TileOp without committing to the full backend
+    buildout.
+  - 4 new tests; 8/8 Stage 64 tests GREEN (Inc 1 + Inc 2 combined);
+    559/559 broader regression GREEN.
+
 - **Stage 90 SHIPPED 2026-05-18 + Stage 89 NOW FULLY CLOSED** —
   Typed-hole expected-type context at call sites (Stage 89 Inc 2):
   - When the call site detects an arg with type

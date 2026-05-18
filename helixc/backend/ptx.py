@@ -589,6 +589,46 @@ class PtxEmitter:
             self._line(f"    add.s64 {addr}, {gen}, {off};")
             self._line(f"    st.global.{self._ptx_load_suffix(dtype)} [{addr}], {val_reg};")
             return
+        # Stage 64 Inc 2 — TILE_ZEROS: emit N consecutive `mov.f32
+        # %fX, 0f00000000;` register-fills to zero a tile of N f32
+        # elements. The result is a register-tile (no SMEM
+        # allocation); subsequent ops on this tile would need to
+        # know the base register + length. Phase-0 minimum-viable
+        # closure of Stage 64 Inc 2 — proves the dispatch path
+        # is wired without committing to a full SMEM allocation
+        # strategy (Inc 3+ work).
+        #
+        # Attrs: dtype (f32/i32 supported in Phase-0); length
+        # (number of elements; must be int). Result: 1 TileValue
+        # representing the base register; downstream consumers
+        # are not yet wired (Inc 3+ will add TILE_ADD / TILE_MUL).
+        if op.kind == ti.TileOpKind.TILE_ZEROS:
+            self._require_operand_count(op, 0, "TILE_ZEROS")
+            self._require_result_count(op, 1, "TILE_ZEROS")
+            dtype = op.attrs.get("dtype", "f32")
+            length = op.attrs.get("length")
+            if not isinstance(length, int) or length <= 0:
+                raise RuntimeError(
+                    f"TILE_ZEROS requires positive int 'length' attr; "
+                    f"got {length!r}")
+            if dtype not in ("f32", "i32"):
+                raise RuntimeError(
+                    f"TILE_ZEROS Phase-0: only f32 / i32 supported; "
+                    f"got {dtype!r} (Inc 3+ will extend)")
+            prefix = "f" if dtype == "f32" else "r"
+            zero_lit = "0f00000000" if dtype == "f32" else "0"
+            mov_op = "mov.b32" if dtype == "i32" else "mov.f32"
+            base_reg = None
+            for i in range(length):
+                reg = self._new_reg(prefix)
+                if base_reg is None:
+                    base_reg = reg
+                self._line(f"    {mov_op} {reg}, {zero_lit};")
+            # Map the result TileValue to the base register so
+            # downstream ops (Inc 3+) can find the tile.
+            if op.results:
+                self.reg_map[op.results[0].id] = base_reg
+            return
         raise RuntimeError(
             f"unsupported PTX op {op.kind.value}; "
             "add lowering before emitting PTX"
