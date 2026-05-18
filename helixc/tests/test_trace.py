@@ -569,6 +569,53 @@ def test_stage59_trace_equiv_modulo_ignores_op_kind():
     assert not trace_equiv_modulo(raw, skeleton)
 
 
+def test_stage59_trace_to_canonical_json_deterministic():
+    """Stage 59 follow-on / Tier 3 #11 polish: trace_to_canonical_json
+    produces stable output for the same input."""
+    from helixc.frontend.trace_pass import trace_to_canonical_json
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", (1, 2)),
+        TraceEvent("exit", "f", (3,)),
+    ])
+    s1 = trace_to_canonical_json(buf)
+    s2 = trace_to_canonical_json(buf)
+    assert s1 == s2
+
+
+def test_stage59_trace_canonical_json_round_trips():
+    """Stage 59 follow-on: round-trip pin —
+    trace_from_canonical_json(trace_to_canonical_json(b)) == b."""
+    from helixc.frontend.trace_pass import (
+        trace_to_canonical_json, trace_from_canonical_json, trace_equiv,
+    )
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "loss", (1.5, 2.5)),
+        TraceEvent("op", "loss", ("add",), result=4.0),
+        TraceEvent("exit", "loss", (4.0,)),
+    ])
+    serialized = trace_to_canonical_json(buf)
+    restored = trace_from_canonical_json(serialized)
+    assert trace_equiv(buf, restored)
+    assert restored.cap == buf.cap
+
+
+def test_stage59_trace_to_canonical_json_empty():
+    """Stage 59 follow-on: empty trace serializes to valid JSON
+    with empty events array."""
+    import json
+    from helixc.frontend.trace_pass import (
+        trace_to_canonical_json, trace_from_canonical_json,
+    )
+    empty = TraceBuffer()
+    s = trace_to_canonical_json(empty)
+    parsed = json.loads(s)
+    assert parsed["events"] == []
+    assert "cap" in parsed
+    # Round-trip empty.
+    restored = trace_from_canonical_json(s)
+    assert len(restored) == 0
+
+
 def test_stage59_trace_fn_counts_histogram():
     """Stage 59 follow-on / Tier 3 #11 polish: trace_fn_counts returns
     a {fn_name: count} histogram across all events."""

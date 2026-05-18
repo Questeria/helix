@@ -265,6 +265,76 @@ def trace_op_counts(buf: TraceBuffer) -> dict:
     return counts
 
 
+def trace_to_canonical_json(buf: TraceBuffer) -> str:
+    """Stage 59 follow-on / Tier 3 #11 polish — serialize a
+    TraceBuffer to a deterministic single-line JSON string.
+
+    Output schema:
+        {"cap": <int>, "events": [{"op_kind": ..., "fn_name": ...,
+         "operands": [...], "result": ...}, ...]}
+
+    Events are in their recorded order (NOT sorted — trace order is
+    semantically meaningful, unlike pytree leaf order which is
+    bag-like).
+
+    Operands and result are converted to JSON-native types where
+    possible (int/float/bool/None/str), else repr() for custom types
+    (lossy round-trip in that case; faithful for primitives).
+
+    Pairs with trace_from_canonical_json for on-disk trace dumps
+    and cross-process trace verification.
+    """
+    import json
+
+    def _value(v):
+        if isinstance(v, (int, float, bool, str)) or v is None:
+            return v
+        # Tuples become lists when JSON-encoded; preserve via list().
+        if isinstance(v, (list, tuple)):
+            return [_value(x) for x in v]
+        return repr(v)
+
+    events_out = [
+        {
+            "op_kind": ev.op_kind,
+            "fn_name": ev.fn_name,
+            "operands": [_value(o) for o in ev.operands],
+            "result": _value(ev.result),
+        }
+        for ev in buf.events
+    ]
+    return json.dumps({"cap": buf.cap, "events": events_out},
+                       sort_keys=True, separators=(",", ":"))
+
+
+def trace_from_canonical_json(s: str) -> TraceBuffer:
+    """Stage 59 follow-on / Tier 3 #11 polish — inverse of
+    trace_to_canonical_json. Parses a JSON string back to a
+    TraceBuffer.
+
+    Round-trip pin (held by test_trace.py):
+        b == trace_from_canonical_json(trace_to_canonical_json(b))
+        for b with only JSON-native operand/result values.
+
+    Operand tuples come back as Python tuples (the JSON intermediate
+    is a list; this function re-tuple-ifies to match the original
+    TraceEvent.operands type).
+    """
+    import json
+    obj = json.loads(s)
+    cap = obj["cap"]
+    events = [
+        TraceEvent(
+            op_kind=e["op_kind"],
+            fn_name=e["fn_name"],
+            operands=tuple(e["operands"]),
+            result=e["result"],
+        )
+        for e in obj["events"]
+    ]
+    return TraceBuffer(cap=cap, events=events)
+
+
 def trace_fn_counts(buf: TraceBuffer) -> dict:
     """Stage 59 follow-on / Tier 3 #11 polish — histogram of fn_name
     counts across the trace.
