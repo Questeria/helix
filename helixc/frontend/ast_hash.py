@@ -589,6 +589,45 @@ def short_hash(h: str) -> str:
 # ============================================================================
 # Stage 58 / Tier 4 #13 — content-addressed modules
 # ============================================================================
+def fn_signature_hash(fn: "A.FnDecl") -> str:
+    """Stage 59 follow-on / Tier 4 #13 polish — hash a function's
+    SIGNATURE only (name + param types + return type), excluding the
+    body. Two fns with the same signature but different bodies hash
+    identically here (whereas `structural_hash(fn)` would differ).
+
+    Use cases:
+    - ABI compat check: did the public signature change between two
+      versions of a fn? If signature_hash differs, callers need
+      recompilation; if only body changed (full hash differs but
+      signature_hash matches), it's an internal refactor.
+    - Overload-set deduplication: two fns with the same signature
+      cannot coexist (Helix has no overloading).
+    - Trait-impl matching: same trait method requires same signature.
+
+    Decisions baked in:
+    - Param names are alpha-equivalent (de Bruijn-style), so renaming
+      `fn f(x: i32)` to `fn f(y: i32)` doesn't change signature_hash
+    - Param mutability IS included (mut differs from immutable)
+    - Effect attributes (@pure, @effect(io)) ARE included since they
+      are observable to callers
+    """
+    h = hashlib.sha256()
+    _emit(h, "FnSig", fn.name)
+    # Param count + per-param type hash.
+    _emit(h, "Params", len(fn.params))
+    for p in fn.params:
+        _emit(h, "ParamMut", p.is_mut)
+        _emit(h, "ParamTy", _ty_repr(p.ty))
+    _emit(h, "RetTy", _ty_repr(fn.return_ty))
+    # Effect attrs that affect callers' purity contracts.
+    relevant_attrs = sorted(
+        a for a in fn.attrs
+        if a.startswith("effect:") or a in ("pure", "is_pure")
+    )
+    _emit(h, "Effects", tuple(relevant_attrs))
+    return h.hexdigest()
+
+
 def module_hash(decl) -> str:
     """Stage 58 / Tier 4 #13 — structural hash of a `mod X { ... }`
     block (`A.ModBlock` in the AST). The hash covers:

@@ -228,6 +228,56 @@ def test_stage58_program_hash_independent_of_span():
     assert h1 == h2, "span/formatting changes affected program_hash"
 
 
+def test_stage59_fn_signature_hash_body_change_unchanged():
+    """Stage 59 follow-on: fn_signature_hash IGNORES body changes.
+    Two fns with same signature but different bodies hash the same."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import fn_signature_hash
+    p1 = parse("fn f(x: i32) -> i32 { x + 1 }")
+    p2 = parse("fn f(x: i32) -> i32 { x * 2 + 99 }")
+    f1 = next(it for it in p1.items if isinstance(it, A.FnDecl))
+    f2 = next(it for it in p2.items if isinstance(it, A.FnDecl))
+    assert fn_signature_hash(f1) == fn_signature_hash(f2)
+
+
+def test_stage59_fn_signature_hash_alpha_equivalent_params():
+    """Stage 59 follow-on: fn_signature_hash treats param-name
+    renames as identical (alpha-equivalence)."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import fn_signature_hash
+    p1 = parse("fn f(x: i32, y: f32) -> i32 { 0 }")
+    p2 = parse("fn f(a: i32, b: f32) -> i32 { 0 }")
+    f1 = next(it for it in p1.items if isinstance(it, A.FnDecl))
+    f2 = next(it for it in p2.items if isinstance(it, A.FnDecl))
+    assert fn_signature_hash(f1) == fn_signature_hash(f2)
+
+
+def test_stage59_fn_signature_hash_param_type_diff_changes():
+    """Stage 59 follow-on: changing a param TYPE changes signature."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import fn_signature_hash
+    p1 = parse("fn f(x: i32) -> i32 { 0 }")
+    p2 = parse("fn f(x: f32) -> i32 { 0 }")
+    f1 = next(it for it in p1.items if isinstance(it, A.FnDecl))
+    f2 = next(it for it in p2.items if isinstance(it, A.FnDecl))
+    assert fn_signature_hash(f1) != fn_signature_hash(f2)
+
+
+def test_stage59_fn_signature_hash_return_type_diff_changes():
+    """Stage 59 follow-on: changing return TYPE changes signature."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend import ast_nodes as A
+    from helixc.frontend.ast_hash import fn_signature_hash
+    p1 = parse("fn f() -> i32 { 0 }")
+    p2 = parse("fn f() -> f32 { 0.0 }")
+    f1 = next(it for it in p1.items if isinstance(it, A.FnDecl))
+    f2 = next(it for it in p2.items if isinstance(it, A.FnDecl))
+    assert fn_signature_hash(f1) != fn_signature_hash(f2)
+
+
 def test_stage58_module_hash_identical_modblocks_match():
     """Stage 58 / Tier 4 #13: identical ModBlocks produce identical
     module_hash. Tests the module-level aggregator (sibling of
