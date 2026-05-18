@@ -4206,17 +4206,17 @@ class TypeChecker:
             r_is_diff = isinstance(r, TyDiff)
 
             # Extract the innermost type beneath any TyDiff/TyLogic/
-            # TyConf wrappers, treating Conf<Logic<D<T>>> and any
-            # subset thereof uniformly.
-            # Stage 68 Inc 2 — TyConf added to the unwrap chain so
-            # propagation through arithmetic doesn't accidentally
-            # drop the confidence tag.
+            # TyConf/TyTaint wrappers, treating any layering uniformly.
+            # Stage 68 Inc 2 — TyConf added to the unwrap chain.
+            # Stage 69 Inc 2 — TyTaint added too.
             def _unwrap(t: Type) -> Type:
                 if isinstance(t, TyDiff):
                     return _unwrap(t.inner)
                 if isinstance(t, TyLogic):
                     return _unwrap(t.inner)
                 if isinstance(t, TyConf):
+                    return _unwrap(t.inner)
+                if isinstance(t, TyTaint):
                     return _unwrap(t.inner)
                 return t
 
@@ -4249,8 +4249,30 @@ class TypeChecker:
             l_is_conf = l_conf_level is not None
             r_is_conf = r_conf_level is not None
 
+            # Stage 69 Inc 2 — detect TyTaint in any layered position.
+            # Supports Confidential<T>, Confidential<D<T>>,
+            # Confidential<Conf<T>>, etc. Mirrors _find_conf_level.
+            # The label propagation rule is MOST-RESTRICTIVE-WINS:
+            # public < internal < confidential < secret.
+            def _find_taint_label(t: Type) -> Optional[str]:
+                if isinstance(t, TyTaint):
+                    return t.label
+                if isinstance(t, TyDiff):
+                    return _find_taint_label(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_taint_label(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_taint_label(t.inner)
+                return None
+
+            l_taint_label = _find_taint_label(l)
+            r_taint_label = _find_taint_label(r)
+            l_is_taint = l_taint_label is not None
+            r_is_taint = r_taint_label is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
-                    or l_is_conf or r_is_conf):
+                    or l_is_conf or r_is_conf
+                    or l_is_taint or r_is_taint):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4420,6 +4442,27 @@ class TypeChecker:
                     chosen = max(
                         levels, key=lambda lv: _level_rank.get(lv, 0))
                     wrapped = TyConf(level=chosen, inner=wrapped)
+                # Stage 69 Inc 2 — TyTaint wraps the absolute outermost
+                # layer (above Conf). Information-flow labels propagate
+                # by MOST-RESTRICTIVE-WINS: public < internal <
+                # confidential < secret. So `Public<T> + Confidential<T>`
+                # yields `Confidential<T>` — the result must be treated
+                # as confidential because part of it was.
+                if l_is_taint or r_is_taint:
+                    _taint_rank = {
+                        "public":       0,
+                        "internal":     1,
+                        "confidential": 2,
+                        "secret":       3,
+                    }
+                    labels = []
+                    if l_taint_label is not None:
+                        labels.append(l_taint_label)
+                    if r_taint_label is not None:
+                        labels.append(r_taint_label)
+                    chosen_label = max(
+                        labels, key=lambda lb: _taint_rank.get(lb, 0))
+                    wrapped = TyTaint(label=chosen_label, inner=wrapped)
                 return wrapped
             # Arithmetic: take the left type (simplified)
             self._check_plain_binary_scalar_compat(l, r, expr.op, expr.span)

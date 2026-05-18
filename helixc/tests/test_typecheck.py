@@ -4689,6 +4689,83 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage69_inc2_taint_propagates_through_binary_add():
+    """Stage 69 Inc 2 — propagation algebra. `Public<f32> + f32`
+    yields `Public<f32>` (most-restrictive-wins; rank: public=0
+    is lowest, but if only one side has a label, that label
+    propagates)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Public<f32>, b: f32) -> Public<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Public" in str(e) or "Taint" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Public<f32> + f32 -> Public<f32>; got: "
+        f"{type_errs}")
+
+
+def test_stage69_inc2_taint_confidential_dominates_public_in_binop():
+    """Stage 69 Inc 2 — most-restrictive-wins. `Public<f32> +
+    Confidential<f32>` yields `Confidential<f32>` (confidential >
+    public per the label rank)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Public<f32>, b: Confidential<f32>) -> Confidential<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Public" in str(e) or "Confidential" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Public + Confidential -> Confidential; got: "
+        f"{type_errs}")
+
+
+def test_stage69_inc2_taint_layers_with_conf():
+    """Stage 69 Inc 2 — TyTaint composes with TyConf via the layering
+    convention (Taint outermost, then Conf, then D, then Logic).
+    `Confidential<Conf<f32>> + Conf<f32>` yields `Confidential<Conf<
+    f32>>` (Conf medium kept; Confidential outer kept)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(
+        a: Confidential<Conf<f32>>,
+        b: Conf<f32>,
+    ) -> Confidential<Conf<f32>> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Confidential" in str(e) or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Conf+Confidential layering preserved; got: "
+        f"{type_errs}")
+
+
 def test_stage69_inc1_information_flow_type_recognition():
     """Stage 69 Inc 1 — TyTaint scaffolding. The 4 type aliases
     Public/Internal/Confidential/Secret parse cleanly and resolve
