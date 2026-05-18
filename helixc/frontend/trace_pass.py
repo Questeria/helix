@@ -1,5 +1,6 @@
 """
 helixc/frontend/trace_pass.py — Stage 25: @trace attribute support.
+                                  Stage 59 polish: introspection API.
 
 A fn declared `@trace fn f(...) { ... }` becomes a traced function:
 the codegen emits a trace-log call into the prologue (op_kind =
@@ -12,9 +13,33 @@ Phase-0 scope:
   * `is_traced(fn)` helper exposed for the typechecker / lowering.
   * Trap 25001 reserved for: trace buffer overflow at runtime.
   * `TraceBuffer` Python-side simulation (used in tests / repl).
-  * `trace_equiv(t1, t2)` predicate over trace buffers (returns True
-    iff the two traces record identical ops in identical order with
-    identical operand-hashes).
+
+Public API (sorted alphabetically):
+  * Equivalence/comparison:
+    - trace_equiv(a, b) — strict sequence-match
+    - trace_equiv_modulo(a, b, ignore_fns, ignore_ops) — with skip-list
+    - trace_diff(a, b) — first divergent event or None
+  * Statistics/histograms:
+    - trace_count(buf, predicate) — count matching events
+    - trace_fn_counts(buf) — {fn_name: count} histogram
+    - trace_op_counts(buf) — {op_kind: count} histogram
+    - trace_size(buf) — number of events
+  * Filtering (returns NEW TraceBuffer):
+    - trace_filter(buf, predicate) — generic predicate filter
+    - trace_filter_by_fn(buf, fn_name) — convenience for fn_name
+    - trace_filter_by_op(buf, op_kind) — convenience for op_kind
+  * Content-addressing/serialization:
+    - trace_hash(buf) — SHA-256 over canonicalized event sequence
+    - trace_to_canonical_json(buf) — JSON string round-trippable via
+    - trace_from_canonical_json(s) — JSON parser
+  * Sanity predicates:
+    - trace_is_balanced(buf) — every entry has a matching exit
+  * Display:
+    - trace_summary(buf, max_events) — human-readable digest
+  * Program-level:
+    - is_traced(fn) — does fn carry @trace?
+    - traced_fn_names(prog) — list of @trace fn names
+    - validate_trace_attrs(prog) — Phase-0 attr sanity diagnostics
 
 Runtime trace buffer wiring (entry/exit emission into the binary
 prologue/epilogue) is bootstrap-side; this module exists so the

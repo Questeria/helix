@@ -1,5 +1,6 @@
 """
 helixc/frontend/pytree.py — Stage 26: JAX-style pytrees.
+                            Stage 59 polish: functional API + I/O.
 
 A "pytree" is a nested struct (or struct-of-structs-of-...) where the
 leaves are differentiable scalar / tensor values. JAX's killer feature
@@ -8,7 +9,7 @@ struct — pytree machinery walks the struct, treats each scalar leaf as
 its own AD input, and zips the gradients back into the same struct
 shape.
 
-This module provides the Python-side spec:
+Core (Stage 26):
   * flatten_pytree(decl, struct_decls, path="") -> list of (path, leaf_ty)
     walks a StructDecl recursively, yielding one entry per scalar leaf.
   * flatten_pytree_param(param, struct_decls) -> list of PytreeLeaf
@@ -24,15 +25,36 @@ This module provides the Python-side spec:
   * is_diff_leaf(ty) — True ONLY when the field is `D<f*>`-wrapped.
     Audit 28.8 B9 (3): passes that only want true differentiable leaves
     should use is_diff_leaf; passes that want any pytree-shaped leaf
-    should use is_pytree_leaf. Pre-fix, both lived under the single
-    is_pytree_leaf predicate so non-D-wrapped floats counted as
-    differentiable, silently allocating gradients that wouldn't
-    propagate.
+    should use is_pytree_leaf.
   * pytree_depth(decl, struct_decls) — recursion depth (cycle-safe).
+  * validate_pytree(decl, struct_decls) — non-raising sanity check
+    returning diagnostics list.
+
+Functional API (Stage 59 polish — sorted alphabetically):
+  * Comparison/queries:
+    - tree_count(d, predicate) — count leaves matching predicate
+    - tree_diff(a, b, eq_fn) — sorted paths where leaves differ
+    - tree_equal(a, b, eq_fn) — True iff trees equal under eq_fn
+    - tree_filter(d, predicate) — subset dict matching predicate
+    - tree_paths_matching(d, predicate) — sorted paths matching
+    - tree_size(d) — leaf count
+  * Reductions/transforms:
+    - tree_leaves(d) — values in canonical (sorted-by-path) order
+    - tree_map(decl, struct_decls, d, fn) — apply fn to each leaf
+    - tree_paths(d) — keys in canonical order
+    - tree_reduce(d, fn, init) — fold over leaves in canonical order
+    - tree_zip(decl, struct_decls, a, b, fn) — leaf-wise binary op
+  * Content-addressing + serialization:
+    - tree_hash(d) — SHA-256 over canonical (path, repr(value)) pairs
+    - tree_to_canonical_json(d) — deterministic single-line JSON
+    - tree_from_canonical_json(s) — JSON parser
+    - tree_to_csv(d) — two-column CSV string
+    - tree_from_csv(s) — CSV parser (via csv + ast.literal_eval)
+
+Traps:
   * Trap 26001 — pytree depth > 4 (Phase-0 cap).
   * Trap 26002 — pytree leaf type not differentiable.
-  * Trap 26003 — cyclic struct reference reached MAX_DEPTH
-    (Audit 28.8 B9 (1)).
+  * Trap 26003 — cyclic struct reference reached MAX_DEPTH.
 
 The runtime emission (grad_rev_all over a struct value) is bootstrap-
 side; this module gives the typechecker + AD pass a static view.
