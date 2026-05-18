@@ -950,6 +950,211 @@ def test_stage54_inc3a_substitute_names_handles_exprstmt_assign():
     assert out_bin.right.value == 99
 
 
+def test_stage54_gate2_substitute_names_handles_remaining_ast_kinds():
+    """Stage 54 gate-2 sweep: `_substitute_names` now substitutes
+    through Cast/Index/Field/TupleLit/ArrayLit/StructLit/
+    UnsafeBlock/Return/Break/Range — same defect class as the
+    gate-1 For/While/Loop/Match gap.
+
+    Pre-fix: a helper containing `arr[p]`, `obj.p`, `(p, 0)`,
+    `[p]`, `Point{x: p}`, `unsafe { p }`, `return p`, `p as f64`,
+    or `0..p` would inline into a caller but leave `p` un-
+    substituted — unbound name or shadowing in the caller scope.
+
+    This pin synthesizes each kind with a Name('p') leaf and
+    verifies substitution went through."""
+    from helixc.frontend.autodiff import _substitute_names
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    def p_name():
+        return A.Name(span=span, name="p", generics=[])
+    def repl():
+        return A.IntLit(span=span, value=77)
+
+    cases = {
+        "Cast.value":
+            (A.Cast(span=span, value=p_name(),
+                    target_ty=A.TyName(span=span, name="f64")),
+             lambda r: r.value),
+        "Index.callee":
+            (A.Index(span=span, callee=p_name(),
+                      indices=[A.IntLit(span=span, value=0)]),
+             lambda r: r.callee),
+        "Field.obj":
+            (A.Field(span=span, obj=p_name(), name="x"),
+             lambda r: r.obj),
+        "TupleLit.elems[0]":
+            (A.TupleLit(span=span, elems=[p_name()]),
+             lambda r: r.elems[0]),
+        "ArrayLit.elems[0]":
+            (A.ArrayLit(span=span, elems=[p_name()]),
+             lambda r: r.elems[0]),
+        "StructLit.fields[0][1]":
+            (A.StructLit(span=span, name="Point",
+                          fields=[("x", p_name())]),
+             lambda r: r.fields[0][1]),
+        "UnsafeBlock.body.final_expr":
+            (A.UnsafeBlock(span=span,
+                            body=A.Block(span=span, stmts=[],
+                                          final_expr=p_name())),
+             lambda r: r.body.final_expr),
+        "Return.value":
+            (A.Return(span=span, value=p_name()),
+             lambda r: r.value),
+        "Break.value":
+            (A.Break(span=span, value=p_name()),
+             lambda r: r.value),
+        "Range.start":
+            (A.Range(span=span, start=p_name(),
+                      end=A.IntLit(span=span, value=10)),
+             lambda r: r.start),
+        "Range.end":
+            (A.Range(span=span,
+                      start=A.IntLit(span=span, value=0),
+                      end=p_name()),
+             lambda r: r.end),
+    }
+
+    for label, (expr, extract) in cases.items():
+        result = _substitute_names(expr, {"p": repl()})
+        target = extract(result)
+        assert isinstance(target, A.IntLit), (
+            f"Stage 54 gate-2: substitution into {label} "
+            f"failed — expected IntLit(77), got "
+            f"{type(target).__name__}. Pre-fix this was a "
+            f"silent substitution dead-zone."
+        )
+        assert target.value == 77, \
+            f"{label}: substituted value wrong"
+
+
+def test_stage54_gate2_inliner_handles_remaining_ast_kinds():
+    """Stage 54 gate-2 sweep: inliner `go()` walker now descends
+    into Cast/Index/Field/TupleLit/ArrayLit/StructLit/UnsafeBlock/
+    Match/Assign/Return/Break/Range. Pre-fix, a pure-helper call
+    wrapped inside any of these forms was never inlined."""
+    from helixc.frontend.autodiff import _inline_user_calls
+
+    span = type("Span", (), {"line": 0, "col": 0})()
+    # Build a Call(pure_double, [Name(x)]) leaf and place it in
+    # each of the new AST positions. Then run the inliner with
+    # a minimal fn_table containing pure_double.
+    src = "fn pure_double(z: f64) -> f64 { z + z }"
+    prog = parse(src)
+    fn_table = {it.name: it for it in prog.items
+                if isinstance(it, A.FnDecl)}
+
+    def call_leaf():
+        return A.Call(span=span,
+                       callee=A.Name(span=span, name="pure_double",
+                                      generics=[]),
+                       args=[A.Name(span=span, name="x",
+                                     generics=[])])
+
+    # Build a TupleLit containing the call, then inline.
+    expr = A.TupleLit(span=span, elems=[call_leaf()])
+    result = _inline_user_calls(expr, fn_table)
+    assert isinstance(result, A.TupleLit)
+    inlined = result.elems[0]
+    assert not (
+        isinstance(inlined, A.Call)
+        and isinstance(inlined.callee, A.Name)
+        and inlined.callee.name == "pure_double"
+    ), (
+        f"Stage 54 gate-2: inliner should descend into "
+        f"TupleLit.elems and inline pure_double; got "
+        f"{type(inlined).__name__}. Pre-fix this was a "
+        f"silent inline dead-zone."
+    )
+
+    # Same check inside Return.value (rep for the trailing arms).
+    expr2 = A.Return(span=span, value=call_leaf())
+    result2 = _inline_user_calls(expr2, fn_table)
+    assert isinstance(result2, A.Return)
+    inlined2 = result2.value
+    assert not (
+        isinstance(inlined2, A.Call)
+        and isinstance(inlined2.callee, A.Name)
+        and inlined2.callee.name == "pure_double"
+    ), (
+        f"Stage 54 gate-2: inliner should descend into "
+        f"Return.value; got {type(inlined2).__name__}"
+    )
+
+
+def test_stage54_gate2_i32_variants_emit_intlit_zero():
+    """Stage 54 gate-2 MEDIUM-4 fix: `__min_i32`/`__max_i32`/
+    `__clamp_i32` gradient zero now emits IntLit instead of
+    FloatLit. Matches the function's return type for downstream
+    typecheck consistency in i32-arithmetic contexts."""
+    from helixc.frontend.autodiff import _diff_call_chain_rule
+    span = type("Span", (), {"line": 0, "col": 0})()
+    for name in ("__min_i32", "__max_i32", "__clamp_i32"):
+        args = [A.Name(span=span, name="x", generics=[]),
+                A.IntLit(span=span, value=0)]
+        if name == "__clamp_i32":
+            args.append(A.IntLit(span=span, value=10))
+        call = A.Call(span=span,
+                       callee=A.Name(span=span, name=name,
+                                      generics=[]),
+                       args=args)
+        result = _diff_call_chain_rule(call, "x", span)
+        assert isinstance(result, A.IntLit), \
+            f"Stage 54 gate-2 MEDIUM-4: {name} gradient should " \
+            f"be IntLit(0), got {type(result).__name__}"
+        assert result.value == 0
+
+
+def test_stage54_gate2_clamp_warns_when_var_in_lo_or_hi():
+    """Stage 54 gate-2 MEDIUM-5 fix: `__clamp(x, lo, hi)` chain
+    rule now emits `_ad_warn` (recorded in the module-level
+    _DIFF_WARNINGS list) when `var` syntactically appears in
+    `lo` or `hi` (whose contributions are silently dropped).
+    Per CLAUDE.md silent-failure ban."""
+    from helixc.frontend.autodiff import (
+        _diff_call_chain_rule, take_diff_warnings,
+    )
+    span = type("Span", (), {"line": 0, "col": 0})()
+    # __clamp(x, w * 0.1, w * 0.9) — gradient w.r.t. w drops
+    # dlo and dhi contributions. Must warn.
+    w = lambda: A.Name(span=span, name="w", generics=[])
+    lo = A.Binary(span=span, op="*", left=w(),
+                   right=A.FloatLit(span=span, value=0.1))
+    hi = A.Binary(span=span, op="*", left=w(),
+                   right=A.FloatLit(span=span, value=0.9))
+    call = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__clamp", generics=[]),
+        args=[A.Name(span=span, name="x", generics=[]), lo, hi],
+    )
+    # Drain any pre-existing warnings to isolate this test
+    take_diff_warnings()
+    _diff_call_chain_rule(call, "w", span)
+    msgs = take_diff_warnings()
+    assert any("clamp" in m.lower() and ("dlo" in m or "dhi" in m
+                                          or "drop" in m.lower())
+               for m in msgs), \
+        f"Stage 54 gate-2 MEDIUM-5: __clamp should warn when " \
+        f"differentiation var appears in lo/hi; got warnings: {msgs}"
+
+    # Negative control: var NOT in lo/hi — no clamp-warn.
+    take_diff_warnings()  # drain
+    call2 = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="__clamp",
+                       generics=[]),
+        args=[A.Name(span=span, name="x", generics=[]),
+              A.FloatLit(span=span, value=0.0),
+              A.FloatLit(span=span, value=1.0)],
+    )
+    _diff_call_chain_rule(call2, "x", span)
+    msgs2 = take_diff_warnings()
+    assert not any("clamp" in m.lower() and ("dlo" in m or "dhi" in m)
+                    for m in msgs2), \
+        f"Stage 54 gate-2 MEDIUM-5: no clamp-warn when var not " \
+        f"in lo/hi; got: {msgs2}"
+
+
 def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
     """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
     descends into A.For/A.While/A.Loop bodies. Pre-fix, loop
