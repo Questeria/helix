@@ -233,3 +233,56 @@ def expand_autotune_kernels(prog: A.Program) -> A.Program:
     new_prog = copy.copy(prog)
     new_prog.items = new_items
     return new_prog
+
+
+def autotune_variant_names_for(fn: A.FnDecl) -> list[str]:
+    """Stage 59 follow-on / Tier 2 #8 polish — return the list of
+    variant names that would be emitted by `expand_autotune_kernels`
+    for this fn, WITHOUT performing the full expansion.
+
+    For a non-@autotune or non-@kernel fn, returns the singleton
+    `[fn.name]` (the fn would pass through unchanged).
+
+    Use cases:
+    - Pre-compute how many variants a fn will generate before
+      committing to the expanded compilation cost.
+    - Inventory the variant namespace for symbol-table reservation.
+    - Drive a downstream pass that needs to know the variant names
+      (e.g., a benchmark harness that iterates them).
+    """
+    if not (has_autotune(fn) and has_kernel(fn)):
+        return [fn.name]
+    params, _diags = parse_autotune_attrs(fn)
+    variants = autotune_variants(params)
+    if not variants:
+        # Defensive: empty params → single original name.
+        return [fn.name]
+    return [mangled_variant_name(fn.name, cfg) for cfg in variants]
+
+
+def autotune_variant_count_for(fn: A.FnDecl) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish — Cartesian-product
+    cardinality for an @autotune @kernel fn. Convenience shortcut
+    for `len(autotune_variant_names_for(fn))`."""
+    return len(autotune_variant_names_for(fn))
+
+
+def autotune_expansion_summary(prog: A.Program) -> dict:
+    """Stage 59 follow-on / Tier 2 #8 polish — summary of the variant
+    expansion that `expand_autotune_kernels(prog)` would produce.
+
+    Returns a dict {fn_name: variant_count} for every @autotune
+    @kernel fn in the program. Non-autotune fns are omitted (they
+    don't get expanded).
+
+    Use case: budget the compilation cost ahead of time. If the sum
+    of variant counts is very large, the caller can prune the
+    autotune-params before invoking expand_autotune_kernels.
+    """
+    summary: dict = {}
+    for it in prog.items:
+        if (isinstance(it, A.FnDecl)
+                and has_autotune(it)
+                and has_kernel(it)):
+            summary[it.name] = autotune_variant_count_for(it)
+    return summary

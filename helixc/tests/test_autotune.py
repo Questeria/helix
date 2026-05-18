@@ -431,5 +431,72 @@ fn k(a: i32) -> i32 { a }
     )
 
 
+def test_stage59_autotune_variant_names_for_returns_all_mangled():
+    """Stage 59 follow-on / Tier 2 #8 polish: autotune_variant_names_for
+    returns the full list of mangled variant names a fn would emit."""
+    from helixc.frontend.autotune_expand import autotune_variant_names_for
+    src = """
+@autotune(BLOCK: [16, 32], WARPS: [2, 4])
+@kernel
+fn k(a: i32) -> i32 { a + BLOCK + WARPS }
+"""
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    names = autotune_variant_names_for(fn)
+    # Cartesian product → 4 variants.
+    assert len(names) == 4
+    # All variant names contain the original "k" prefix.
+    assert all("k" in n for n in names)
+    # Names are unique.
+    assert len(set(names)) == 4
+
+
+def test_stage59_autotune_variant_names_for_non_autotune_passthrough():
+    """Stage 59 follow-on: a fn without @autotune @kernel returns
+    [fn.name] — the singleton (pass-through case)."""
+    from helixc.frontend.autotune_expand import autotune_variant_names_for
+    src = """
+fn plain(x: i32) -> i32 { x + 1 }
+"""
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    assert autotune_variant_names_for(fn) == ["plain"]
+
+
+def test_stage59_autotune_variant_count_for_matches_cartesian():
+    """Stage 59 follow-on: autotune_variant_count_for is the
+    Cartesian-product cardinality."""
+    from helixc.frontend.autotune_expand import autotune_variant_count_for
+    src = """
+@autotune(A: [1, 2, 3], B: [10, 20])
+@kernel
+fn k(x: i32) -> i32 { x + A + B }
+"""
+    prog = parse(src)
+    fn = next(it for it in prog.items if isinstance(it, A.FnDecl))
+    # 3 * 2 = 6 variants.
+    assert autotune_variant_count_for(fn) == 6
+
+
+def test_stage59_autotune_expansion_summary_omits_non_autotune():
+    """Stage 59 follow-on: autotune_expansion_summary returns a
+    {fn_name: variant_count} dict for @autotune @kernel fns only,
+    omitting non-autotune fns."""
+    from helixc.frontend.autotune_expand import autotune_expansion_summary
+    src = """
+fn plain(x: i32) -> i32 { x }
+@autotune(B: [8, 16])
+@kernel
+fn k1(x: i32) -> i32 { x + B }
+@autotune(N: [4, 8, 16])
+@kernel
+fn k2(x: i32) -> i32 { x + N }
+"""
+    prog = parse(src)
+    summary = autotune_expansion_summary(prog)
+    assert summary == {"k1": 2, "k2": 3}
+    assert "plain" not in summary
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
