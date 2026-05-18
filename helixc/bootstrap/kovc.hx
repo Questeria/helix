@@ -1550,7 +1550,7 @@ fn fn_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 1536 {                        // 512 entries * 3 slots
+    while i < 3072 {                        // 1024 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -1558,15 +1558,24 @@ fn fn_table_init() -> i32 {
 }
 
 fn fn_table_add(state: i32, name_start: i32, name_len: i32, code_offset: i32) -> i32 {
-    // Audit fix #10: cap-check before writing. Cap = 512 entries
-    // (Stage 6 bump from 256 to accommodate enum + future stages).
+    // Audit fix #10: cap-check before writing.
+    // Cap history:
+    //   Stage 6:          256 → 512 (accommodate enum + future stages)
+    //   Stage 50 retry:   512 → 1024 (Exp C 2026-05-17 found the
+    //     real Stage 50 ABORTED root cause: Stage 50 Inc 1+2 added
+    //     16 fns to parser.hx, hitting cap 512 exactly. The 513th
+    //     fn declaration trapped via id 10033, but the CRITICAL
+    //     consequence was that `main` itself — being the LAST
+    //     declared fn via the cascade driver — was among the
+    //     overflow casualties. Its CALL site got patched with
+    //     `ud2 + 3 nops` (the unresolved-CALL stub) → entry-point
+    //     SIGILL rc=132. Bumping cap to 1024 unblocks Stage 50.
+    //     Verified: G2..G5 byte-identical sha=b510bc28..., smoke
+    //     4/4 PASS post-fix.)
     // Cycle 110 fix C109-CR-F3 (HIGH conf 82): emit a loud-fail trap
-    // when the cap is exceeded. Pre-fix returned `0 - 1` silently;
-    // callers discarded the return value; the 513th fn declaration
-    // became unresolvable via fn_table_lookup, and subsequent CALL
-    // patches for it failed to resolve. Trap id 10033.
+    // when the cap is exceeded. Trap id 10033.
     let top = __arena_get(state);
-    if top >= 512 {
+    if top >= 1024 {
         emit_trap_with_id(10033);
         0 - 1
     } else {
