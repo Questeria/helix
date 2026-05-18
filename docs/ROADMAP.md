@@ -374,7 +374,13 @@ These are blockers for any real ML training, in priority order.
    shaped gradient. Composes `grad/vmap/jit` over arbitrary tree-
    structured parameter sets. Critical for real model architectures.
    Originally **2 weeks on top of tier-1 #3** — Inc 1 ships the
-   core; Inc 2+ is polish.
+   core; Inc 2+ is polish. JAX-style functional API ✅ SHIPPED
+   2026-05-18 (5 commits): tree_hash / tree_size / tree_diff /
+   tree_count / tree_filter / tree_paths_matching /
+   tree_to_canonical_json / tree_from_canonical_json (round-trip
+   pin holds for JSON-native values) + the previously-shipped
+   tree_map/reduce/zip/equal/leaves/paths. 55/55 test_pytree.py
+   pins.
 
 8. **Triton-style autotune.** ✅ DONE 2026-05-18 (Stage 56 commit
    4827397). `@autotune(KEY: [v1, v2, ...])` for `@kernel` functions
@@ -385,6 +391,11 @@ These are blockers for any real ML training, in priority order.
    pre-existing Stage 27 parse/validation infrastructure
    (autotune.py:autotune_variants + mangled_variant_name) is now
    wired end-to-end via the new `autotune_expand.py` pass.
+   Introspection + CLI polish ✅ SHIPPED 2026-05-18 (2 commits):
+   `autotune_variant_names_for(fn)`, `autotune_variant_count_for(fn)`,
+   `autotune_expansion_summary(prog)` Python API + `--autotune-summary`
+   and `--autotune-budget` CLI flags (CI gate for variant-count
+   drift detection).
 
 9. **Mojo-style parametric structs.** ✅ SUBSTANTIALLY DONE (earlier
    stages — verified 2026-05-18). `helixc/frontend/struct_mono.py`
@@ -414,6 +425,14 @@ These are blockers for any real ML training, in priority order.
     check trace-equivalence on a held-out input set. Aligns with Meta
     CWM's empirical finding that traces are the right substrate for
     AI to reason about its own code. **3-4 weeks.**
+    Python-side introspection API ✅ SHIPPED 2026-05-18 (4 commits):
+    `trace_hash`, `trace_size`, `trace_count`, `trace_op_counts`,
+    `trace_fn_counts`, `trace_is_balanced`, `trace_equiv_modulo`
+    (skip-list equivalence), `trace_to_canonical_json` +
+    `trace_from_canonical_json` (round-trip for on-disk dumps,
+    pinned for JSON-native operand types). 49/49 test_trace.py
+    pins. Runtime wiring of entry/exit emission into binary
+    prologue/epilogue is bootstrap-side and remains deferred.
 
 12. **Lean-4-style proof-carrying terms.** ✅ PARTIALLY DONE
     (Stages 31 + 34, verified 2026-05-18). Verifiers receive a
@@ -439,6 +458,13 @@ These are blockers for any real ML training, in priority order.
     independent + alpha-equivalence-aware. Future wiring into
     compilation cache (helixc/check.py) for build-system-level
     content addressing is a separate stage.
+    CLI polish ✅ SHIPPED 2026-05-18: `--program-hash`,
+    `--diff-program-hash`, `--changed-fns`, `--fn-sig-hash`,
+    `--list-fns`, `--check-program-hash`, `--list-modules`,
+    `--module-hash` (8 flags). Cascading defect found + fixed —
+    `_hash_into` was missing ModBlock/ModuleDecl arms required
+    by recursive module_hash; pinned with
+    test_stage59_module_hash_nested_modblock_works.
 
 14. **Result<T,E> + ? operator.** Error handling beyond panic. **1
     week.**
