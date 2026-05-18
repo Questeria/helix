@@ -5877,6 +5877,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--type-alias-target", "--type-alias-target-json",
         "--list-impls", "--list-impls-json",
         "--impl-methods", "--impl-methods-json",
+        "--fn-signature", "--fn-signature-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7539,6 +7540,101 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_signature_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-signature prints
+    the source-level signature of a fn as a single line."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fns.hx"
+    src.write_text(
+        "pub fn add(a: i32, b: i32) -> i32 { a }\n"
+        "fn noret(x: f32) { }\n",
+        encoding="utf-8",
+    )
+    proc_add = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-signature", str(src), "add"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_add.returncode == 0
+    assert proc_add.stdout.strip() == "pub fn add(a: i32, b: i32) -> i32"
+    proc_noret = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-signature", str(src), "noret"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_noret.returncode == 0
+    assert proc_noret.stdout.strip() == "fn noret(x: f32)"
+
+
+def test_stage59_fn_signature_extern(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-signature handles
+    extern "C" fns."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fns_ext.hx"
+    src.write_text(
+        'extern "C" fn malloc(n: i64) -> i64;\n',
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-signature", str(src), "malloc"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == 'extern "C" fn malloc(n: i64) -> i64'
+
+
+def test_stage59_fn_signature_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-signature-json
+    emits full structured JSON with all FnDecl metadata."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fnsj.hx"
+    src.write_text(
+        "pub fn add(a: i32, b: i32) -> i32 { a }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-signature-json", str(src), "add"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "name": "add",
+        "generics": [],
+        "params": [
+            {"name": "a", "ty": "i32", "is_mut": False},
+            {"name": "b", "ty": "i32", "is_mut": False},
+        ],
+        "return_ty": "i32",
+        "attrs": [],
+        "is_pub": True,
+        "is_extern": False,
+        "extern_abi": None,
+    }
+
+
+def test_stage59_fn_signature_missing_rc1(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-signature exits 1
+    when fn name not found."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fns_miss.hx"
+    src.write_text("fn foo() { }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-signature", str(src), "bar"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_impl_methods_text(tmp_path):

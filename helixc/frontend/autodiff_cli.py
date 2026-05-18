@@ -39,6 +39,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         List fns whose body hash differs between two files.
     --fn-sig-hash <file.hx> <fn_name>
         Print the signature-only hash (ABI-affecting fields only).
+    --fn-signature <file.hx> <fn_name>
+        Print the source-level signature of a fn (one line).
+    --fn-signature-json <file.hx> <fn_name>
+        Same as --fn-signature but full structured JSON (generics,
+        params, return_ty, attrs, is_pub/is_extern/extern_abi).
     --list-fns <file.hx>
         Enumerate all fns with sig + body hash columns.
     --list-fns-json <file.hx>
@@ -4595,6 +4600,134 @@ def _list_fns(path: str) -> int:
     return 0
 
 
+def _fn_signature(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the full source-
+    level signature of a fn as a single line.
+
+    Output format:
+        '[pub ][extern "C" ]fn <name>[<G1, G2>](p1: T1, p2: T2) -> R'
+    or for void-returning fns:
+        '[pub ][extern "C" ]fn <name>[<G1, G2>](p1: T1, p2: T2)'
+
+    Per-item introspection family now spans 7 Item subclasses
+    (struct-fields, const-value, enum-variants, agent-methods,
+    type-alias-target, impl-methods, fn-signature).
+
+    Exit 0 success; 1 if fn_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        if ty is None:
+            return "()"
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            parts = []
+            if it.is_pub:
+                parts.append("pub")
+            if it.is_extern:
+                abi = it.extern_abi or "C"
+                parts.append(f'extern "{abi}"')
+            parts.append("fn")
+            head = f"{' '.join(parts)} {it.name}"
+            if it.generics:
+                gs = ", ".join(g.name for g in it.generics)
+                head += f"<{gs}>"
+            params_str = ", ".join(
+                f"{p.name}: {_format_ty(p.ty)}" for p in it.params
+            )
+            sig = f"{head}({params_str})"
+            if it.return_ty is not None:
+                sig += f" -> {_format_ty(it.return_ty)}"
+            print(sig)
+            return 0
+    print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
+def _fn_signature_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-signature in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<name>",
+       "generics": [{"name": "<g>", "kind": "<kind>"}, ...],
+       "params": [{"name": "<p>", "ty": "<ty>", "is_mut": bool}, ...],
+       "return_ty": "<ty>" | null,
+       "attrs": ["@pure", ...],
+       "is_pub": bool,
+       "is_extern": bool,
+       "extern_abi": "<abi>" | null}
+
+    Exit 0 success; 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        if ty is None:
+            return None
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            result = {
+                "name": it.name,
+                "generics": [
+                    {"name": g.name, "kind": g.kind}
+                    for g in it.generics
+                ],
+                "params": [
+                    {"name": p.name, "ty": _format_ty(p.ty),
+                     "is_mut": p.is_mut}
+                    for p in it.params
+                ],
+                "return_ty": _format_ty(it.return_ty),
+                "attrs": list(it.attrs),
+                "is_pub": it.is_pub,
+                "is_extern": it.is_extern,
+                "extern_abi": it.extern_abi,
+            }
+            print(json.dumps(result, sort_keys=True, indent=2))
+            return 0
+    print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _fn_sig_hash(path: str, fn_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print the signature-only
     hash of a specific fn. Use case: detect whether a fn's PUBLIC
@@ -4828,6 +4961,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_sig_hash(args[0], args[1]))
+
+    if "--fn-signature" in flags:
+        if len(args) < 2:
+            print("usage: --fn-signature <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_signature(args[0], args[1]))
+
+    if "--fn-signature-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-signature-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_signature_json(args[0], args[1]))
 
     if "--list-fns" in flags:
         if len(args) < 1:
