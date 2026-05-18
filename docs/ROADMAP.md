@@ -170,6 +170,21 @@ Re-sequenced after Stage 46-47 closed:
   union (gate-7 HIGH-1+2) deferred to Stage 52 Inc 5 or rolled
   into Stage 53. Helper-fn indirection deferred to Stage 53
   (different defect class — inter-procedural taint).
+- **Stage 54** (next, OPENED 2026-05-17 immediately after STAGE
+  52 CLOSED): Tier 1 #2 — AD across user-defined function calls
+  broader coverage. 3 increments:
+  - Inc 1: chain-rule arms for __min/__max/__clamp/__sign
+    (11 names) — closes the opaque-call catchall for these
+    common arithmetic helpers
+  - Inc 2: forward/reverse asymmetry fix (forward currently
+    silent-warns on unrecognized multi-arg, reverse hard-fails;
+    align both to loud-fail)
+  - Inc 3: `_inline_user_calls` loop-body descent + bounded
+    recursive unrolling
+  See `docs/stage54-plan-2026-05-17.md` for the full plan
+  (blueprint distilled from Tier 1 #2 code-explorer agent
+  during Stage 52 gate-12 wait). Estimated 3 audit gates total.
+
 - **Stage 53** (Inc 1+2 shipped 2026-05-17, commits 179678d +
   2550492): helper-fn indirection taint propagation. **Inc 1
   CLOSED Stage 40 H1 in full** — the LAST modal-launder bypass
