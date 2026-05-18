@@ -8,7 +8,7 @@ reveals which features actually matter.
 ## Current state (Stages 35-59 CLOSED 2026-05-16 to 2026-05-18)
 
 Burst summary (25 stages closed in <72h, all via the
-3-clean-gate protocol; 119-commit autonomous burst):
+3-clean-gate protocol; 125-commit autonomous burst):
 - Stages 35-48 listed below.
 - Stage 49: Tier 4 #14 Inc 3 runtime Ok/Err tag.
 - Stage 50: RESURRECTED (fn_table cap fix unblocked Inc 1+2).
@@ -28,13 +28,15 @@ Burst summary (25 stages closed in <72h, all via the
 - Stage 58: Tier 4 #13 content-addressed modules (program_hash +
   module_hash + fn_signature_hash core).
 - Stage 59: Tier 4 #15 nested pattern destructuring + polish
-  burst (~40 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
-  33 new Python introspection helpers + 20 new CLI flags total
-  (25 enumerated in --help) + 5 cascading defects found+fixed +
-  JSON/CSV round-trip serialization for both pytree and trace +
-  3 validator gates (--validate-pytrees/-autotune/-trace-attrs) +
-  --validate-all + --validate-all-json aggregators for one-shot
-  CI integration).
+  burst (~47 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
+  33 new Python introspection helpers + 30 CLI flags enumerated in
+  --help + 5 cascading defects found+fixed + JSON/CSV round-trip
+  serialization for both pytree and trace + 5 per-system + 2
+  aggregator validator gates (--validate-pytrees/-autotune/-trace-
+  attrs/-all and their *-json variants) for one-shot CI integration).
+  Final test counts: test_pytree.py 64/64, test_trace.py 52/52,
+  test_ast_hash.py 40/40, test_autotune.py 34/34, test_cli.py
+  351/351 — every impacted area GREEN.
 
 - **Stage 35** — AI/ML capability push (restart 65 closure).
 - **Stage 36** — Strategic AGI features: Tier 3 #10
