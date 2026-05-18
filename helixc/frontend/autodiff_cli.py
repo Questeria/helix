@@ -38,6 +38,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --fn-ast-size-all <file.hx>
         Whole-program per-fn AST size profile as JSON dict
         {fn_name: total_node_count}.
+    --fn-ast-node-counts <file.hx> <fn_name>
+        Per-class AST node counts for a single fn's body. Per-fn
+        version of --ast-node-counts (program-wide).
+    --fn-ast-node-counts-json <file.hx> <fn_name>
+        Same as --fn-ast-node-counts but JSON
+        {name, counts, total_nodes, n_classes}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -444,6 +450,113 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_ast_node_counts(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-class AST node
+    counts for a single fn's body. Per-fn version of --ast-node-counts
+    (which is program-wide).
+
+    Output: one line per AST class as '<class_name>: N', sorted
+    descending by count.
+
+    Use case: 'why is fn X so big?' — see exactly which node types
+    dominate it (lots of Call → maybe inline; lots of If → maybe
+    refactor as match; etc.).
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    counts: dict[str, int] = {}
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if hasattr(node, "__dataclass_fields__"):
+            cls = type(node).__name__
+            counts[cls] = counts.get(cls, 0) + 1
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    if target.body is not None:
+        _walk(target.body)
+    for cls in sorted(counts, key=lambda c: (-counts[c], c)):
+        print(f"{cls}: {counts[cls]}")
+    return 0
+
+
+def _fn_ast_node_counts_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-node-counts in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<fn_name>",
+       "counts": {"<class_name>": N, ...},
+       "total_nodes": N,
+       "n_classes": N}
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    counts: dict[str, int] = {}
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if hasattr(node, "__dataclass_fields__"):
+            cls = type(node).__name__
+            counts[cls] = counts.get(cls, 0) + 1
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    if target.body is not None:
+        _walk(target.body)
+    print(json.dumps({
+        "name": fn_name,
+        "counts": counts,
+        "total_nodes": sum(counts.values()),
+        "n_classes": len(counts),
+    }, sort_keys=True, indent=2))
     return 0
 
 
@@ -7695,6 +7808,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_ast_size(args[0], args[1]))
+
+    if "--fn-ast-node-counts" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-node-counts <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_node_counts(args[0], args[1]))
+
+    if "--fn-ast-node-counts-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-node-counts-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_node_counts_json(args[0], args[1]))
 
     if "--fn-ast-size-json" in flags:
         if len(args) < 2:
