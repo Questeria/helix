@@ -39,6 +39,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print the signature-only hash (ABI-affecting fields only).
     --list-fns <file.hx>
         Enumerate all fns with sig + body hash columns.
+    --list-fns-json <file.hx>
+        Same as --list-fns but machine-readable JSON (full 64-hex hashes).
     --list-structs <file.hx>
         Enumerate all structs with field count + content hash.
     --parse-only <file.hx>
@@ -1288,6 +1290,39 @@ def _list_structs(path: str) -> int:
     return 0
 
 
+def _list_fns_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fns in machine-
+    readable JSON form.
+
+    Output schema:
+      {
+        "<fn_name>": {"sig_hash": "<64hex>", "body_hash": "<64hex>"},
+        ...
+      }
+
+    Unlike the human format (--list-fns), this uses FULL 64-hex hashes
+    (not short_hash) — JSON consumers typically want full hashes for
+    storage / comparison; short hashes are a human-display convenience.
+    """
+    import json
+    from .ast_hash import structural_hash, fn_signature_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    fns = sorted(
+        (it for it in prog.items if isinstance(it, A.FnDecl)),
+        key=lambda f: f.name,
+    )
+    result = {
+        fn.name: {
+            "sig_hash": fn_signature_hash(fn),
+            "body_hash": structural_hash(fn),
+        }
+        for fn in fns
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _list_fns(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all FnDecls
     in a source file with their signature + body hashes side by side.
@@ -1552,6 +1587,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fns(args[0]))
+
+    if "--list-fns-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-fns-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fns_json(args[0]))
 
     if "--list-structs" in flags:
         if len(args) < 1:
