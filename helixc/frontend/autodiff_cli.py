@@ -33,7 +33,7 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
     --autotune-budget <file.hx> <max_total>
-        CI gate: exit 0 if total variants ≤ budget, 1 if over.
+        CI gate: exit 0 if total variants <= budget, 1 if over.
 
 Example:
     $ cat loss.hx
