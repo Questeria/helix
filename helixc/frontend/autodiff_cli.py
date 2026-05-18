@@ -81,6 +81,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Whole-program pairwise shortest-path distances as JSON.
     --fn-callgraph-summary <file.hx>
         High-level structural overview JSON (counts/depth/diameter/SCCs).
+    --fn-callgraph-dot <file.hx>
+        Emit callgraph as Graphviz .dot (pipe through `dot -Tpng`).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1592,6 +1594,71 @@ def _fn_roots(path: str) -> int:
     roots = sorted(all_fn_names - called_names)
     for name in roots:
         print(name)
+    return 0
+
+
+def _fn_callgraph_dot(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: emit the local callgraph
+    as a Graphviz .dot format string.
+
+    Output: standard digraph syntax:
+      digraph callgraph {
+          "fn_a" -> "fn_b";
+          "fn_a" -> "fn_c";
+          ...
+      }
+    Edges sorted alphabetically for deterministic output (so diffs
+    across versions are stable).
+
+    Use case: pipe through `dot -Tpng > callgraph.png` for visual
+    inspection. Pairs with --fn-callgraph-all (JSON) and
+    --fn-callgraph-summary (numeric overview) — three formats for
+    three audiences: tooling (JSON), humans (Graphviz), dashboards
+    (summary).
+
+    Pivots the call-graph sub-arc to a new 'output format' axis
+    (text/JSON were already covered; this is visualization).
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = sorted(fn.name for fn in all_fns)
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in set(all_names)}
+
+    print("digraph callgraph {")
+    for src_name in all_names:
+        for dst in sorted(graph.get(src_name, set())):
+            print(f'    "{src_name}" -> "{dst}";')
+    print("}")
     return 0
 
 
@@ -3362,6 +3429,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_summary(args[0]))
+
+    if "--fn-callgraph-dot" in flags:
+        if len(args) < 1:
+            print("usage: --fn-callgraph-dot <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_dot(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
