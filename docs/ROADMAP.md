@@ -303,6 +303,37 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 97 SHIPPED 2026-05-18** — HIGH-#2 fix: `_strip_X` chain
+  completion via single registry-driven helper (Stage 93 audit
+  finding):
+  - Pre-Stage-97: 11 individual `_strip_X` closures, 8 of which
+    walked only a SUBSET of the 13-wrapper chain. Concrete
+    silent-miscompile: `__exit_enclave(x: FromUnknown<InEnclaveSGX
+    <f32>>)` returned the input UNCHANGED (audit-grep compliance
+    contract violated — the user thinks the enclave was exited
+    but the type still carries it).
+  - Post-Stage-97: single `_strip_wrapper_chain(target_cls, t)`
+    helper driven by `_ALL_WRAPPER_REBUILDERS` (13-entry registry
+    of (cls, rebuild_lambda) pairs covering all wrappers) and
+    `_WRAPPER_STRIP_TABLE` (11-entry registry of (opt_out_name,
+    target_cls)). The helper strips the OUTERMOST instance of
+    target_cls and preserves all other wrappers via their
+    rebuilders.
+  - **Net code reduction**: deleted 328 lines of 10 obsolete
+    per-wrapper strip closures (lines 5882-6209 in typecheck.py).
+    Same template-collapse pattern Stage 96 used for constructors.
+    The two registries now collectively replace 6 of the 8
+    parallel hand-maintained tables the Stage 93 type-design
+    audit flagged as drift-prone.
+  - Cascade-defect-class: future wrapper additions need only one
+    new entry in `_ALL_WRAPPER_REBUILDERS` and one in
+    `_WRAPPER_STRIP_TABLE` (plus the typecheck dataclass + parser
+    alias-map). No more 8-touchpoint-per-wrapper drift risk.
+  - 5 new tests including a parametric-style test that asserts
+    all 11 opt-outs strip their target wrapper. 424 typecheck +
+    496 broader regression (incl 6 dogfoods exercising the new
+    helper) GREEN.
+
 - **Stage 96 SHIPPED 2026-05-18** — HIGH-#1 fix: `__wrap_X`
   constructor idempotency rejection (Stage 93 audit finding):
   - Refactored 11 individual `if bn == "__wrap_X"` arms (lines

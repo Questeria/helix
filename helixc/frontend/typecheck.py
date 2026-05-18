@@ -5816,351 +5816,69 @@ class TypeChecker:
                 # TyConf-wrapped, the call is identity (returns x's
                 # type unchanged) so the builtin remains safe at
                 # any call site. Mirrors `unwrap_logic` semantics.
-                if bn == "__lift_conf" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    # Walk the wrapper chain to find the innermost
-                    # TyConf, peel it, and rebuild the wrapper stack
-                    # above it.
-                    def _strip_conf(t):
-                        if isinstance(t, TyConf):
-                            return t.inner
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_conf(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_conf(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_conf(t.inner))
-                        return t
-                    return _strip_conf(arg_ty)
-                # Stage 69 Inc 3 — information-flow opt-out builtin.
-                # `__declassify(x)` strips a TyTaint wrapper,
-                # acknowledging the user is consciously declassifying
-                # the value (and an external audit pass can grep
-                # call sites to enforce the compliance contract).
-                # Identity on non-Taint inputs so the call is safe
-                # to use defensively. Preserves inner Conf/D/Logic.
-                if bn == "__declassify" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_taint(t):
-                        if isinstance(t, TyTaint):
-                            return t.inner
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_taint(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_taint(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_taint(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_taint(t.inner))
-                        return t
-                    return _strip_taint(arg_ty)
-                # Stage 70 Inc 3 — DP-budget opt-out builtin.
-                # `__exhaust_dp(x)` strips the TyDP wrapper, marking
-                # an explicit budget-exhaustion point. An external
-                # audit pass can grep for `__exhaust_dp` to verify
-                # the DP contract is maintained. Identity on non-DP
-                # inputs; preserves Conf/Taint/D/Logic layers.
-                if bn == "__exhaust_dp" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_dp(t):
-                        if isinstance(t, TyDP):
-                            return t.inner
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_dp(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_dp(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_dp(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_dp(t.inner))
-                        return t
-                    return _strip_dp(arg_ty)
-                # Stage 71 Inc 3 — quantization opt-out builtin.
-                # `__upcast_quant(x)` strips the TyQuant wrapper,
-                # marking an explicit precision-restoration point
-                # (e.g. dequantize before a precision-sensitive op).
-                # An external audit pass can grep for `__upcast_quant`
-                # to catch precision regressions. Identity on non-Quant
-                # inputs; preserves other wrappers.
-                if bn == "__upcast_quant" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_quant(t):
-                        if isinstance(t, TyQuant):
-                            return t.inner
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_quant(t.inner))
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_quant(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_quant(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_quant(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_quant(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_quant(t.inner))
-                        return t
-                    return _strip_quant(arg_ty)
-                # Stage 83 Inc 3 — attribution opt-out builtin.
-                # `__attribute_verified(x)` strips TyAttribution,
-                # asserting verified provenance (audit-grep).
-                if bn == "__attribute_verified" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_attr(t):
-                        if isinstance(t, TyAttribution):
-                            return t.inner
-                        if isinstance(t, TyDeadline):
-                            return TyDeadline(deadline_us=t.deadline_us,
-                                              inner=_strip_attr(t.inner))
-                        if isinstance(t, TyCounterfactual):
-                            return TyCounterfactual(mode=t.mode,
-                                                    inner=_strip_attr(t.inner))
-                        if isinstance(t, TyEnclave):
-                            return TyEnclave(enclave=t.enclave,
-                                             inner=_strip_attr(t.inner))
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_attr(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_attr(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_attr(t.inner))
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_attr(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_attr(t.inner))
-                        if isinstance(t, TyRobust):
-                            return TyRobust(eps=t.eps,
-                                            inner=_strip_attr(t.inner))
-                        if isinstance(t, TyEnergy):
-                            return TyEnergy(budget=t.budget,
-                                            inner=_strip_attr(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_attr(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_attr(t.inner))
-                        return t
-                    return _strip_attr(arg_ty)
-                # Stage 81 Inc 3 — deadline opt-out builtin.
-                # `__miss_deadline(x)` strips TyDeadline.
-                if bn == "__miss_deadline" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_deadline(t):
-                        if isinstance(t, TyDeadline):
-                            return t.inner
-                        if isinstance(t, TyCounterfactual):
-                            return TyCounterfactual(mode=t.mode,
-                                                    inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyEnclave):
-                            return TyEnclave(enclave=t.enclave,
-                                             inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyRobust):
-                            return TyRobust(eps=t.eps,
-                                            inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyEnergy):
-                            return TyEnergy(budget=t.budget,
-                                            inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_deadline(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_deadline(t.inner))
-                        return t
-                    return _strip_deadline(arg_ty)
-                # Stage 80 Inc 3 — counterfactual opt-out builtin.
-                # `__as_actual(x)` strips a TyCounterfactual wrapper,
-                # marking an explicit what-if-to-real-world transition.
-                if bn == "__as_actual" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_cfact(t):
-                        if isinstance(t, TyCounterfactual):
-                            return t.inner
-                        if isinstance(t, TyEnclave):
-                            return TyEnclave(enclave=t.enclave,
-                                             inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyRobust):
-                            return TyRobust(eps=t.eps,
-                                            inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyEnergy):
-                            return TyEnergy(budget=t.budget,
-                                            inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_cfact(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_cfact(t.inner))
-                        return t
-                    return _strip_cfact(arg_ty)
-                # Stage 79 Inc 3 — enclave opt-out builtin.
-                # `__exit_enclave(x)` strips the TyEnclave wrapper.
-                # An external audit pass can grep for `__exit_enclave`
-                # call sites to enforce the TEE-boundary contract.
-                # Identity on non-Enclave inputs; preserves all other
-                # wrappers in the chain.
-                if bn == "__exit_enclave" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_enclave(t):
-                        if isinstance(t, TyEnclave):
-                            return t.inner
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyRobust):
-                            return TyRobust(eps=t.eps,
-                                            inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyEnergy):
-                            return TyEnergy(budget=t.budget,
-                                            inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_enclave(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_enclave(t.inner))
-                        return t
-                    return _strip_enclave(arg_ty)
-                # Stage 76 Inc 3 — energy opt-out builtin.
-                # `__exhaust_energy(x)` strips the TyEnergy wrapper.
-                if bn == "__exhaust_energy" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_energy(t):
-                        if isinstance(t, TyEnergy):
-                            return t.inner
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_energy(t.inner))
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_energy(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_energy(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_energy(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_energy(t.inner))
-                        if isinstance(t, TyRobust):
-                            return TyRobust(eps=t.eps,
-                                            inner=_strip_energy(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_energy(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_energy(t.inner))
-                        return t
-                    return _strip_energy(arg_ty)
-                # Stage 73 Inc 3 — robustness opt-out builtin.
-                # `__widen_robustness(x)` strips the TyRobust wrapper,
-                # acknowledging the user has accepted the perturbation
-                # budget is no longer tracked (audit-trail point).
-                # Identity on non-Robust inputs; preserves other wrappers.
-                if bn == "__widen_robustness" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_robust(t):
-                        if isinstance(t, TyRobust):
-                            return t.inner
-                        if isinstance(t, TyDomain):
-                            return TyDomain(status=t.status,
-                                            inner=_strip_robust(t.inner))
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_robust(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_robust(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_robust(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_robust(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_robust(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_robust(t.inner))
-                        return t
-                    return _strip_robust(arg_ty)
-                # Stage 72 Inc 3 — domain-status opt-out builtin.
-                # `__assert_in_dist(x)` strips the TyDomain wrapper,
-                # marking an explicit in-distribution assertion. An
-                # external audit pass can grep for `__assert_in_dist`
-                # to verify the OOD contract. Identity on non-Domain
-                # inputs; preserves other wrappers.
-                if bn == "__assert_in_dist" and len(arg_tys) == 1:
-                    arg_ty = arg_tys[0]
-                    def _strip_domain(t):
-                        if isinstance(t, TyDomain):
-                            return t.inner
-                        if isinstance(t, TyTaint):
-                            return TyTaint(label=t.label,
-                                           inner=_strip_domain(t.inner))
-                        if isinstance(t, TyDP):
-                            return TyDP(epsilon=t.epsilon,
-                                        inner=_strip_domain(t.inner))
-                        if isinstance(t, TyConf):
-                            return TyConf(level=t.level,
-                                          inner=_strip_domain(t.inner))
-                        if isinstance(t, TyQuant):
-                            return TyQuant(bits=t.bits,
-                                           inner=_strip_domain(t.inner))
-                        if isinstance(t, TyDiff):
-                            return TyDiff(inner=_strip_domain(t.inner))
-                        if isinstance(t, TyLogic):
-                            return TyLogic(inner=_strip_domain(t.inner))
-                        return t
-                    return _strip_domain(arg_ty)
+                # Stage 97 (Stage 93 audit HIGH-#2 fix) — single
+                # table-driven strip helper. Pre-Stage-97, 11
+                # individual `_strip_X` closures each walked a
+                # different SUBSET of the 13-wrapper chain — 8 of
+                # 11 were incomplete (e.g. `_strip_conf` missed 9
+                # wrappers), so `__exit_enclave(x: FromUnknown<
+                # InEnclaveSGX<f32>>)` silently returned the input
+                # unchanged. Stage 97 collapses to one helper that
+                # walks the COMPLETE chain via a single registry.
+                #
+                # _ALL_WRAPPER_REBUILDERS: (cls, rebuild_lambda) per
+                # wrapper. Each rebuild_lambda takes (old_t, new_inner)
+                # and returns a new wrapper of the same cls with the
+                # same discriminating fields + the new inner.
+                _ALL_WRAPPER_REBUILDERS = [
+                    (TyConf,           lambda t, ni: TyConf(level=t.level, inner=ni)),
+                    (TyTaint,          lambda t, ni: TyTaint(label=t.label, inner=ni)),
+                    (TyDP,             lambda t, ni: TyDP(epsilon=t.epsilon, inner=ni)),
+                    (TyQuant,          lambda t, ni: TyQuant(bits=t.bits, inner=ni)),
+                    (TyDomain,         lambda t, ni: TyDomain(status=t.status, inner=ni)),
+                    (TyRobust,         lambda t, ni: TyRobust(eps=t.eps, inner=ni)),
+                    (TyEnergy,         lambda t, ni: TyEnergy(budget=t.budget, inner=ni)),
+                    (TyEnclave,        lambda t, ni: TyEnclave(enclave=t.enclave, inner=ni)),
+                    (TyCounterfactual, lambda t, ni: TyCounterfactual(mode=t.mode, inner=ni)),
+                    (TyDeadline,       lambda t, ni: TyDeadline(deadline_us=t.deadline_us, inner=ni)),
+                    (TyAttribution,    lambda t, ni: TyAttribution(source=t.source, inner=ni)),
+                    (TyDiff,           lambda t, ni: TyDiff(inner=ni)),
+                    (TyLogic,          lambda t, ni: TyLogic(inner=ni)),
+                ]
+                def _strip_wrapper_chain(target_cls, t):
+                    """Strip the OUTERMOST instance of target_cls
+                    from t's wrapper chain. Preserves all other
+                    wrappers via their rebuild lambdas. Identity if
+                    target_cls isn't in the chain."""
+                    if isinstance(t, target_cls):
+                        return t.inner
+                    for (cls, rebuild) in _ALL_WRAPPER_REBUILDERS:
+                        if isinstance(t, cls):
+                            return rebuild(
+                                t,
+                                _strip_wrapper_chain(target_cls, t.inner))
+                    return t
+
+                # _WRAPPER_STRIP_TABLE drives the per-builtin dispatch.
+                # Single source of truth: opt-out builtin name → target
+                # wrapper class to strip.
+                _WRAPPER_STRIP_TABLE = [
+                    ("__lift_conf",           TyConf),
+                    ("__declassify",          TyTaint),
+                    ("__exhaust_dp",          TyDP),
+                    ("__upcast_quant",        TyQuant),
+                    ("__assert_in_dist",      TyDomain),
+                    ("__widen_robustness",    TyRobust),
+                    ("__exhaust_energy",      TyEnergy),
+                    ("__exit_enclave",        TyEnclave),
+                    ("__as_actual",           TyCounterfactual),
+                    ("__miss_deadline",       TyDeadline),
+                    ("__attribute_verified",  TyAttribution),
+                ]
+                for (opt_out_name, target_cls) in _WRAPPER_STRIP_TABLE:
+                    if bn == opt_out_name and len(arg_tys) == 1:
+                        return _strip_wrapper_chain(
+                            target_cls, arg_tys[0])
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():

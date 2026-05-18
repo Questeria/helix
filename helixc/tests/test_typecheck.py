@@ -4974,6 +4974,129 @@ def test_stage83_wrap_attr_constructor():
     assert len(type_errs) == 0, type_errs
 
 
+def test_stage97_strip_enclave_inside_attribution_now_strips_correctly():
+    """Stage 97 (Stage 93 audit HIGH-#2 fix) — pre-Stage-97,
+    `__exit_enclave(x: FromUnknown<InEnclaveSGX<f32>>)` returned the
+    input UNCHANGED because `_strip_enclave` didn't walk through
+    TyAttribution. Post-Stage-97, the table-driven helper strips
+    Enclave from anywhere in the chain, preserving the outer Attr."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: FromUnknown<InEnclaveSGX<f32>>) -> FromUnknown<f32> {
+        __exit_enclave(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    # No return-type mismatch — the strip now produces FromUnknown<f32>.
+    return_errs = [str(e) for e in errors
+                   if "return type" in str(e).lower()
+                   and ("FromUnknown" in str(e) or "InEnclaveSGX" in str(e))]
+    assert len(return_errs) == 0, return_errs
+
+
+def test_stage97_strip_dp_deep_chain_works():
+    """Stage 97 — `__exhaust_dp(x: Deadline<Private<f32>>)` now
+    correctly strips DP from the middle of the chain, producing
+    Deadline<f32>. Pre-Stage-97, this silently returned the input
+    unchanged because `_strip_dp` didn't walk through TyDeadline."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Deadline<Private<f32>>) -> Deadline<f32> {
+        __exhaust_dp(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    return_errs = [str(e) for e in errors
+                   if "return type" in str(e).lower()
+                   and ("Deadline" in str(e) or "Private" in str(e))]
+    assert len(return_errs) == 0, return_errs
+
+
+def test_stage97_strip_quant_inside_robust_works():
+    """Stage 97 — `__upcast_quant(x: Robust<Q8<f32>>)` now produces
+    Robust<f32>. Pre-Stage-97, _strip_quant missed TyRobust."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Robust<Q8<f32>>) -> Robust<f32> {
+        __upcast_quant(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    return_errs = [str(e) for e in errors
+                   if "return type" in str(e).lower()
+                   and ("Robust" in str(e) or "Q8" in str(e))]
+    assert len(return_errs) == 0, return_errs
+
+
+def test_stage97_strip_target_not_in_chain_is_identity():
+    """Stage 97 — when the target wrapper isn't in the chain, the
+    strip helper returns input unchanged. `__exit_enclave(x: f32)`
+    must return f32 (not produce a diagnostic)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __exit_enclave(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    return_errs = [str(e) for e in errors
+                   if "return type" in str(e).lower()
+                   or "Enclave" in str(e)]
+    assert len(return_errs) == 0, return_errs
+
+
+def test_stage97_all_eleven_opt_outs_strip_outermost_correctly():
+    """Stage 97 — table-driven dispatch covers all 11 opt-out
+    builtins symmetrically. Smoke-test each by wrapping then
+    stripping via the safety.hx helper convention."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    # Each (builtin, alias) — strip should remove the alias's wrapper.
+    pairs = [
+        ("__lift_conf",          "Conf"),
+        ("__declassify",         "Confidential"),
+        ("__exhaust_dp",         "Private"),
+        ("__upcast_quant",       "Q8"),
+        ("__assert_in_dist",     "InDist"),
+        ("__widen_robustness",   "Robust"),
+        ("__exhaust_energy",     "Energy"),
+        ("__exit_enclave",       "InEnclaveSGX"),
+        ("__as_actual",          "Counterfactual"),
+        ("__miss_deadline",      "Deadline"),
+        ("__attribute_verified", "FromUnknown"),
+    ]
+    for (opt_out, alias) in pairs:
+        src = f"""
+        fn user(x: {alias}<f32>) -> f32 {{
+            {opt_out}(x)
+        }}
+        fn main() -> i32 {{ 0 }}
+        """
+        prog = parse(src, include_stdlib=False)
+        errors = typecheck(prog)
+        return_errs = [str(e) for e in errors
+                       if "return type" in str(e).lower()]
+        assert len(return_errs) == 0, (
+            f"{opt_out} should strip {alias} cleanly; got: {errors}")
+
+
 def test_stage96_wrap_dp_double_wrap_now_rejected():
     """Stage 96 (Stage 93 audit HIGH-#1 fix) — __wrap_dp(__wrap_dp(x))
     now produces an idempotency diagnostic instead of silently
