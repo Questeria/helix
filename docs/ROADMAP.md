@@ -269,21 +269,34 @@ These are blockers for any real ML training, in priority order.
 1. **Transcendentals** ✅ DONE — Taylor series approximations for
    exp/log/sin/cos/sqrt + their AD chain rules. Stdlib auto-included.
 
-2. **AD across user-defined function calls.** `grad(loss)` and
-   `grad_rev(loss)` inline supported pure helper calls before
-   differentiation. Opaque/bodyless calls now fail closed instead of
-   producing a zero-gradient surrogate. Remaining work is broader
-   chain-rule registration and richer helper coverage. **In progress.**
+2. **AD across user-defined function calls.** ✅ SUBSTANTIALLY
+   DONE 2026-05-17 (Stage 54 CLOSED via 3-clean-gate protocol).
+   `grad(loss)` and `grad_rev(loss)` inline supported pure
+   helper calls before differentiation; opaque/bodyless calls
+   fail closed; loop-body descent works for pure helpers;
+   chain-rule arms cover 11 builtins (__min/__max/__clamp/
+   __sign + _i32/_f64 variants) in both forward + reverse
+   modes with subgradient warnings on kink-crossing + clamp
+   lo/hi dependency. _name_appears_in covers all AST kinds
+   incl Modify/Quote/Splice/TileLit/StructLit/Match. Inc 3b
+   (bounded recursive unrolling) deferred to fresh session
+   per cache-key correctness hazard. ~80% of original
+   blueprint shipped.
 
-3. **Multi-output reverse-mode AD.** ✅ DONE (Python-side) —
+3. **Multi-output reverse-mode AD.** ✅ DONE (Python-side) +
+   bootstrap-side IN PROGRESS (Stage 51).
    `differentiate_reverse(expr, param_names)` in
    `helixc/frontend/autodiff_reverse.py` produces a
    `dict[param_name -> gradient_expr]` in ONE walk via per-param
    bucket accumulation. `grad_rev_all(f)(p1, p2, base)` is wired
    end-to-end and used by `dogfood_05_binary_classifier.hx` etc.
-   **Bootstrap-side TODO**: `helixc/bootstrap/parser.hx:5402`
-   still does N-walks (one per param). A future stage will
-   port the single-walk algorithm to the in-Helix compiler.
+   **Bootstrap-side**: Stage 50 (RESURRECTED 2026-05-17)
+   restored multi-bucket infrastructure (kovc.hx fn_table cap
+   bumped 512→1024). Stage 51 Inc 1 (SHIPPED 9927361) shipped
+   run-detection scaffold in grad_rev_pass. Stage 51 Inc 2
+   (deferred to fresh session) will activate true single-walk
+   via `differentiate_reverse_all`. Closing this finalizes
+   the bootstrap-side equivalent.
 
 4. **Richer strings + file I/O** with capability-typed
    `@effect(io.read_file)`. Basic literal/string diagnostic IO (`print_str`,
