@@ -303,6 +303,47 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 107 SHIPPED 2026-05-18** — Stage 64 Inc 5: tile-IR
+  optimization passes (v1.0 minimum-viable scaffold). **Stage 64
+  Inc 5 now in v1.0; Stage 64 FULLY CLOSED.**
+  - New module: `helixc/ir/passes/tile_opt.py` with 3 focused
+    passes that establish the tile-IR optimization scaffold:
+    1. **`dead_tile_elim(fn)`** — drops TileOps whose results have
+       no users AND are not side-effecting. Mirrors `dce.py` for
+       the tile-IR analog. Side-effect set: TILE_STORE_GLOBAL,
+       TILE_STORE_SHARED, TILE_INDEX_STORE_HBM, TMA_STORE,
+       BARRIER_WAIT, RETURN, CALL. Iterates to fixpoint so
+       transitively-dead chains collapse in one call.
+    2. **`redundant_zero_coalesce(fn)`** — dedups same-dtype +
+       same-shape + same-memspace TILE_ZEROS within a block;
+       rewires operand uses of dropped tiles to the canonical
+       earlier tile. Frees register pressure for downstream ops
+       (e.g., wmma fragments need contiguous register bursts).
+    3. **`register_reuse_hints(fn)`** — analysis pass returning
+       `{tile_id: (block_idx, op_idx)}` for the LAST use of each
+       tile. Prerequisite for v2.0 Phase A's register-coloring
+       rewrite; PTX backend doesn't yet consume the hints.
+  - Composition helper `run_all_passes()` runs DCE → coalesce →
+    DCE so coalesce-exposed dead ops also drop in the same call.
+  - v1.0 ships the SCAFFOLD; full pass-suite breadth (instruction
+    selection, register coloring, layout-aware scheduling) is
+    v2.0 Phase A polish per the v2.0 GPU Complete scope.
+  - 9 new Stage 107 tests (DCE drops unused, DCE keeps used,
+    DCE keeps side-effecting, DCE cascades transitively, DCE
+    idempotent, coalesce dedups same shape, coalesce rewires
+    uses, coalesce preserves distinct shapes, reuse-hints last-
+    use map, run_all_passes composition). **557 combined typecheck
+    + ptx + tile_ir + tile_opt pins GREEN** (was 540 + 9 new +
+    8 tile_ir = 557).
+  - **v1.0 critical path now 1 stage out**: Stage 108 (v1.0
+    release stop — final regression + release commit + ROADMAP
+    cleanup).
+  - **Stage 64 is now FULLY CLOSED for v1.0**. All 5 Incs shipped:
+    Inc 1 (bf16/f16 HBM dtype, earlier), Inc 2 (TILE_ZEROS
+    register-fill, earlier), Inc 3 (TILE_ADD/SUB/MUL elementwise,
+    cherry-picked in Stage 105), Inc 4 (TILE_MATMUL via wmma,
+    Stage 106), Inc 5 (tile-IR opt passes scaffold, Stage 107).
+
 - **Stage 106 SHIPPED 2026-05-18** — Stage 64 Inc 4: TILE_MATMUL
   via NVIDIA wmma Tensor Core fragments (canonical m16n16k16
   shape). **Stage 64 Inc 4 now in v1.0.**
