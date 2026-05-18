@@ -362,6 +362,13 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
                 if grad_fn.name not in fn_by_name:
                     new_fns.append(grad_fn)
                     fn_by_name[grad_fn.name] = grad_fn
+                    # Stage 62 Inc 1 — also register the per-leaf
+                    # accessor fns generated alongside.
+                    accessors = getattr(grad_fn, "_helix_accessor_fns", [])
+                    for acc in accessors:
+                        if acc.name not in fn_by_name:
+                            new_fns.append(acc)
+                            fn_by_name[acc.name] = acc
                 return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
 
         # Now check if the (possibly-rewritten) call is grad(f) / grad(f, n)
@@ -712,7 +719,7 @@ def _generate_grad_rev_all_fn(
         ty=A.TyName(span=span, name="i32"),
     ))
 
-    return A.FnDecl(
+    rgrad_fn = A.FnDecl(
         span=span,
         name=f"{fn.name}__rgrad_all",
         generics=[],
@@ -723,6 +730,81 @@ def _generate_grad_rev_all_fn(
         attrs=[],   # not @pure: it has modify_self effect
         is_pub=fn.is_pub,
     )
+    # Stage 62 Inc 1 — named per-leaf gradient accessor fns
+    # alongside the rgrad_all writer. Each accessor reads splice_f
+    # (or splice_f64) for one leaf path; together they give users the
+    # "pytree-shaped" gradient access pattern without requiring the
+    # Phase-0 struct-return ABI rewrite (that's deferred to a future
+    # stage).
+    #
+    # Generated names follow `{orig_fn}__grad_{path_sanitized}` where
+    # path_sanitized replaces '.' with '_' (so "model.w1" -> "model_w1").
+    # Signature: `(base: i32) -> <leaf_ty>`.
+    accessor_fns = _generate_grad_leaf_accessors(
+        fn, leaves, span,
+    )
+    # Return rgrad_fn first; callers that append in order will pick
+    # up the accessors too. We return a list so caller can decide.
+    rgrad_fn._helix_accessor_fns = accessor_fns  # attach for caller
+    return rgrad_fn
+
+
+def _generate_grad_leaf_accessors(
+    fn: A.FnDecl,
+    leaves: list[tuple[str, str]],
+    span: A.Span,
+) -> list[A.FnDecl]:
+    """Stage 62 Inc 1 — generate named per-leaf gradient accessor fns.
+
+    For each (path, ty_name) leaf, emit a fn:
+        @pure
+        fn {orig_fn}__grad_{sanitized_path}(base: i32) -> {ty_name} {
+            splice_f(base + i)   // or splice_f64 for f64 leaves
+        }
+
+    The leaf index `i` matches the order used by grad_rev_all when
+    writing modify_f(base + i, g_i, ...), so the accessors return the
+    correct gradient for the named leaf.
+
+    Sanitization rule: '.' -> '_' (so "model.inner.w1" -> "model_inner_w1").
+    """
+    out: list[A.FnDecl] = []
+    for i, (path, ty_name) in enumerate(leaves):
+        sanitized = path.replace(".", "_")
+        accessor_name = f"{fn.name}__grad_{sanitized}"
+        splice_name = "splice_f64" if ty_name == "f64" else "splice_f"
+        # base + i
+        idx_expr = (A.Name(span=span, name="base") if i == 0
+                    else A.Binary(span=span, op="+",
+                                   left=A.Name(span=span, name="base"),
+                                   right=A.IntLit(span=span, value=i)))
+        body = A.Block(
+            span=span, stmts=[],
+            final_expr=A.Call(
+                span=span,
+                callee=A.Name(span=span, name=splice_name),
+                args=[idx_expr],
+            ),
+        )
+        accessor = A.FnDecl(
+            span=span,
+            name=accessor_name,
+            generics=[],
+            params=[A.FnParam(
+                span=span, name="base",
+                ty=A.TyName(span=span, name="i32"),
+            )],
+            return_ty=A.TyName(
+                span=span,
+                name=ty_name if ty_name in ("f32", "f64") else "f32",
+            ),
+            where_clauses=[],
+            body=body,
+            attrs=["pure"],
+            is_pub=fn.is_pub,
+        )
+        out.append(accessor)
+    return out
 
 
 def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,

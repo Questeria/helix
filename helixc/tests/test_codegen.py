@@ -15456,6 +15456,67 @@ def test_stage55_inc6_csv_parse_field_i32():
     assert code == 42, f"expected 42, got {code}"
 
 
+def test_stage62_inc1_grad_struct_emits_named_leaf_accessors():
+    """Stage 62 Inc 1 — Tier 2 #7 Inc 2 (narrowed scope):
+    grad_rev_all on a struct param now ALSO auto-generates named
+    per-leaf gradient accessor fns like `loss__grad_m_w1(base) -> f32`
+    that wrap splice_f(base+i) — gives users pytree-shaped gradient
+    access without requiring the Phase-0 struct-return ABI rewrite
+    (which is months of work and deferred to a future stage).
+    """
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.grad_pass import grad_pass as _grad_pass
+
+    src = """
+    struct Model { w1: f32, w2: f32 }
+    fn loss(m: Model) -> f32 { m.w1 * m.w1 + m.w2 }
+    fn caller() -> i32 {
+        grad_rev_all(loss);
+        0
+    }
+    """
+    prog = _parse(src, include_stdlib=False)
+    _grad_pass(prog)
+    fn_names = {it.name for it in prog.items
+                if hasattr(it, "name") and hasattr(it, "params")}
+    # The rgrad_all fn is generated as before.
+    assert "loss__rgrad_all" in fn_names
+    # Stage 62 Inc 1: per-leaf accessors are also generated.
+    # Leaf paths are "m.w1" and "m.w2" → sanitized "m_w1" / "m_w2".
+    assert "loss__grad_m_w1" in fn_names, (
+        f"expected per-leaf accessor loss__grad_m_w1; got {sorted(fn_names)}")
+    assert "loss__grad_m_w2" in fn_names, (
+        f"expected per-leaf accessor loss__grad_m_w2; got {sorted(fn_names)}")
+    # Accessor signature: (base: i32) -> f32, @pure.
+    acc = next(it for it in prog.items
+               if hasattr(it, "name") and it.name == "loss__grad_m_w1")
+    assert len(acc.params) == 1
+    assert acc.params[0].name == "base"
+    assert "pure" in acc.attrs
+
+
+def test_stage62_inc1_grad_struct_scalar_params_still_work():
+    """Stage 62 Inc 1: per-leaf accessors also generated for plain
+    scalar params (leaf path == param name)."""
+    from helixc.frontend.parser import parse as _parse
+    from helixc.frontend.grad_pass import grad_pass as _grad_pass
+
+    src = """
+    fn loss(x: f32, y: f32) -> f32 { x * x + y }
+    fn caller() -> i32 {
+        grad_rev_all(loss);
+        0
+    }
+    """
+    prog = _parse(src, include_stdlib=False)
+    _grad_pass(prog)
+    fn_names = {it.name for it in prog.items
+                if hasattr(it, "name") and hasattr(it, "params")}
+    assert "loss__rgrad_all" in fn_names
+    assert "loss__grad_x" in fn_names
+    assert "loss__grad_y" in fn_names
+
+
 def test_stage57_inc1_grad_rev_all_struct_param_no_rejection():
     """Stage 57 Inc 1 — Tier 2 #7 pytrees: grad_rev_all on a struct
     parameter no longer hard-rejects at the signature check. The

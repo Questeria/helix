@@ -303,6 +303,23 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 62** ✅ **CLOSED 2026-05-18** (NARROWED SCOPE) — Tier 2
+  #7 Inc 2 named per-leaf gradient accessors (see
+  `docs/stage62-progress-2026-05-18.md`):
+  - `grad_pass.py` now auto-generates `{fn}__grad_{sanitized_path}`
+    accessor fns alongside every `{fn}__rgrad_all` generated.
+  - Sanitization: `.` → `_` (so leaf "model.w1" → `model_w1`).
+  - User experience: pytree-shaped gradient access by NAME
+    (e.g. `loss__grad_m_w1(base)`) without flat-index bookkeeping.
+  - Equivalent to JAX's `jax.grad(loss)(params)` returning a
+    pytree-shaped object — at the source level — but achieved via
+    multiple named accessor fns rather than struct-shaped return.
+  - **Full struct-return ABI deferred to Stage 80+**: requires
+    Phase-0 x86_64 sret + multi-register split (3-5 weeks of
+    backend work). The narrowed scope ships the same user value
+    in 1 commit without ABI changes.
+  - 2 new tests; self-host gate 223/223 GREEN.
+
 - **Stage 61** ✅ **CLOSED 2026-05-18** — Tier 1 #4 Inc 7
   checkpoint stdlib (see `docs/stage61-progress-2026-05-18.md`):
   - `helixc/stdlib/checkpoint.hx` shipped with 4 @pure helpers
