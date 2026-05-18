@@ -443,3 +443,62 @@ Per the 3-clean-gate protocol:
 
 If gate-15 or gate-16 find new defects, the cascade resumes;
 otherwise this is the final stretch.
+
+## STAGE 52 CLOSED — gate-16 3-clean satisfied (2026-05-17 late evening)
+
+After 3 fresh consecutive clean gates (14, 15, 16) the closure
+protocol is satisfied. Both gate-16 silent-failure and code-
+review auditors explicitly recommended/declared "STAGE 52 is
+CLOSED."
+
+**Final state:**
+- 18 commits this closure cycle
+- 22+ distinct modal-launder paths caught
+- 11 wrapper-AST kinds in recursive `_modal_origin_of_expr`:
+  Name, Call (builtin from_X + user-fn modal-return), Block,
+  UnsafeBlock, Cast, Unary, Binary, If, Match, Return, Break
+- 116/116 modal tests PASS
+- Self-host cascade green throughout (sha=a6f1ee44 G2..G11
+  byte-identical, smoke 4/4 PASS)
+- Stage 40 H1 ("let-binding bypass of F1 syntactic guard")
+  FULLY CLOSED — original Phase-0 known-limit from Stage 40
+  now resolved end-to-end through Stage 53 Inc 1 (helper-fn
+  indirection)
+
+**Cascading-defect rhythm summary:**
+
+Stage 52 found the next cascading defect at each of gates 2-15.
+The cascade officially exhausted at gate-16 (both lanes CLEAN
+with no findings ≥80 confidence). Pattern from the audits:
+
+- Gates 2-3: A.If/A.Match union semantics + scope-stack
+- Gates 4-5: PatBind taint propagation + guard ordering
+- Gates 6-7: unified `_modal_origin_of_expr` helper + kept_somewhere
+- Gates 8-9: Stage 53 helper-fn indirection
+- Gates 10-12: cascading wrapper-AST omissions
+  (Cast/UnsafeBlock/Unary/Binary)
+- Gate 13: deeper defect — scope-lifetime mismatch (cache fix)
+- Gates 14-16: cascade broken, all CLEAN
+
+**Total: 18+ hours of cumulative work, 60+ regression pins,
+3-clean-gate closure protocol satisfied.**
+
+**Deferred to future stages:**
+- Stage 53 Inc 3+: inter-procedural taint when helper body has
+  internal launder patterns (currently caught by intra-fn
+  Stage 52 closures within each fn body individually)
+- F5 pattern-destructure provenance (Stage 49+ known-limit)
+- Multi-kind divergence diagnostic (Inc 4 polish, deferred —
+  current drop-on-conflict is safe-conservative)
+- Stage 50 retry per `stage50-root-cause-diagnostic-plan-
+  2026-05-17.md` (H4+H1 ruled out, Exp C/D for arena-corruption
+  hypotheses)
+
+**Next stage:** Stage 54 (Tier 1 #2 — AD across user-defined
+function calls broader coverage). Blueprint at
+`docs/stage53-inc1-blueprint-2026-05-17.md` — wait no, the
+Stage 54 blueprint was delivered by the Tier 1 #2 exploration
+agent during gate-12 wait time. Inc 1 = chain-rule arms for
+__min/__max/__clamp/__sign (11 names); Inc 2 = forward/reverse
+asymmetry fix; Inc 3 = loop-body descent + bounded recursive
+unrolling. Estimated 3 increments.

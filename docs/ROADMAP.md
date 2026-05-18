@@ -130,10 +130,12 @@ Re-sequenced after Stage 46-47 closed:
   algorithm together once the cascade can tolerate source
   changes. Estimated 2-3 stages depending on how the
   fragility's root cause splits.
-- **Stage 52** (in flight 2026-05-17, gates 1-15 + Inc 1-13
-  shipped, 22+ launder paths caught via 11 wrapper-AST kinds,
-  gate-14+15 CLEAN = 2 of 3 fresh consecutive clean gates;
-  STAGE 52 CLOSES on gate-16 CLEAN): modal-origin
+- **Stage 52** ✅ **CLOSED 2026-05-17** (gates 1-16 + Inc 1-13
+  + Stage 53 Inc 1+2 shipped, 22+ launder paths caught via 11
+  wrapper-AST kinds, 3-clean-gate closure protocol satisfied
+  via gates 14/15/16 all CLEAN — both gate-16 silent-failure
+  and code-review auditors explicitly declared "STAGE 52 is
+  CLOSED"): modal-origin
   taint-tracking pass closing the Stage 40 closure gate-1 H1
   known limitation ("let-binding bypass of F1 syntactic guard").
   Inc 8 (e9d3d6d) UnsafeBlock arm; Inc 9 (006df58) F2 Literal
