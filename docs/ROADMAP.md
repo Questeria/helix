@@ -303,6 +303,35 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 66 DOWNGRADED to SUBSTANTIALLY COMPLETE 2026-05-18** —
+  formal 3-clean-gate audit batch (Stage 91 closure-audit pass)
+  surfaced 2 HIGH-severity silent miscompiles that the regression
+  tests don't catch:
+  - **Loop-body silent miscompile**: `for i in 0..10 { let _ =
+    consume(s); }` and `for i in 0..10 { let _ = __move(s); }`
+    produce ZERO Stage 66 diagnostics despite being runtime
+    double-moves on iteration 2+. The borrow checker's stated
+    job is to catch double-move; it doesn't on loops. The
+    `_check_loop_body_with_modal_union` handler tracks modal
+    taint but NOT borrow state.
+  - **Unknown-attribute silent failure**: typo `@borrowcheck`
+    (missing underscore) silently leaves `_current_fn_borrow_check
+    = False`. Developer believes their fn is checked; it isn't.
+    Same risk for `@Copy` vs `@copy`, `@borrowed_check`, etc.
+    No whitelist + Levenshtein suggest.
+  - Plus 6 MEDIUM/LOW Phase-0 deferrals (match-arm reconciliation
+    missing, release_* never called, @copy field validation
+    absent, field-place move-tracking absent, stale comment at
+    typecheck.py:4663, `__move(expr)` silent no-op when expr
+    isn't a Name, Place repr leaked in divergence diagnostic).
+  - **Action**: Inc 5d ships fixes for the 2 HIGH issues before
+    re-marking Stage 66 CLOSED. MEDIUM/LOW issues tracked in a
+    Stage 92 polish backlog (not blocking re-closure).
+  - **Lesson for the burst**: regression-test-clean ≠ formal
+    3-clean-gate. Stages 68-83 (the 11 wrappers) and 89/90/64
+    Inc 2 still need their own formal audit batches before any
+    of them can claim CLOSED status without the same caveat.
+
 - **Stage 64 Inc 2 SHIPPED 2026-05-18** — Tier 2 #6 tensor codegen
   TILE_ZEROS in PTX backend (partial closure progress; Inc 3-5
   remain multi-week):
