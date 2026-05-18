@@ -401,10 +401,18 @@ These are blockers for any real ML training, in priority order.
     CWM's empirical finding that traces are the right substrate for
     AI to reason about its own code. **3-4 weeks.**
 
-12. **Lean-4-style proof-carrying terms.** Verifiers receive a Proof
-    object, not a bool. The compiler validates the proof. The
-    difference between sandboxing and provable safety. **Large**
-    (months) but bounded — the kernel is a few thousand lines.
+12. **Lean-4-style proof-carrying terms.** ✅ PARTIALLY DONE
+    (Stages 31 + 34, verified 2026-05-18). Verifiers receive a
+    machine-readable proof artifact (`ProofObligation` +
+    `ProofCarry` dataclasses in typecheck.py:62-100). The
+    `--emit-proof-obligations` CLI flag dumps JSON with kind,
+    context, refinement, predicate, status, span, value, trap
+    for each obligation. 87 CLI test references exercise the
+    proof-emission path. Remaining for "true" Lean-4-style
+    proof-carrying terms: extending the Proof type to carry
+    actual proof terms (not just obligations) + a kernel-level
+    proof-checker pass. Months for that full capability; the
+    obligation-emission scaffolding is shipped.
 
 ## Tier 4 — table-stakes infrastructure
 
