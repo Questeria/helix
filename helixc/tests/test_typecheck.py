@@ -4790,6 +4790,117 @@ def test_stage66_inc3_shared_then_mutable_rejected_with_opt_in():
     assert len(borrow_errs) >= 1
 
 
+def test_stage66_inc5b_implicit_move_at_pass_by_value_then_borrow_rejected():
+    """Stage 66 Inc 5b — passing a non-Copy struct by value is an
+    implicit move. Subsequent `&s` is rejected."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Heavy { x: i32, y: i32 }
+    fn consume(s: Heavy) -> i32 { s.x }
+
+    @borrow_check
+    fn user() -> i32 {
+        let s = Heavy { x: 1, y: 2 };
+        let _a = consume(s);
+        let _b = &s;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    # We expect at least one diagnostic from the post-move &s read.
+    assert any("moved" in e.lower() for e in borrow_errs), (
+        f"expected use-after-implicit-move diagnostic; got: "
+        f"{borrow_errs}")
+
+
+def test_stage66_inc5b_copy_struct_arg_does_not_move():
+    """Stage 66 Inc 5b — a `@copy` struct passed by value duplicates
+    instead of moving. The subsequent `&s` is allowed."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    @copy
+    struct Light { x: i32, y: i32 }
+    fn consume(s: Light) -> i32 { s.x }
+
+    @borrow_check
+    fn user() -> i32 {
+        let s = Light { x: 1, y: 2 };
+        let _a = consume(s);
+        let _b = &s;
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    assert len(borrow_errs) == 0, (
+        f"expected NO Stage 66 diagnostic for @copy struct; got: "
+        f"{borrow_errs}")
+
+
+def test_stage66_inc5b_double_pass_by_value_rejected():
+    """Stage 66 Inc 5b — passing the same non-Copy struct by value
+    twice is rejected: first call moves, second call sees MOVED."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    struct Heavy { x: i32, y: i32 }
+    fn consume(s: Heavy) -> i32 { s.x }
+
+    @borrow_check
+    fn user() -> i32 {
+        let s = Heavy { x: 1, y: 2 };
+        let _a = consume(s);
+        let _b = consume(s);
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors
+                   if "Stage 66" in str(e)
+                   and "implicit move" in str(e)]
+    assert len(borrow_errs) >= 1, (
+        f"expected Stage 66 implicit-move diagnostic on second "
+        f"consume(s); got: {[str(e) for e in errors]}")
+
+
+def test_stage66_inc5b_scalar_pass_by_value_does_not_move():
+    """Stage 66 Inc 5b — scalar primitives (i32, f32) are NOT
+    structs, so they don't trigger implicit move under @borrow_check.
+    Pass-by-value of a scalar twice is fine."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn consume(n: i32) -> i32 { n }
+
+    @borrow_check
+    fn user() -> i32 {
+        let n: i32 = 7;
+        let _a = consume(n);
+        let _b = consume(n);
+        0
+    }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    borrow_errs = [str(e) for e in errors if "Stage 66" in str(e)]
+    assert len(borrow_errs) == 0, (
+        f"scalars should not move; got: {borrow_errs}")
+
+
 def test_stage66_inc5a_move_then_shared_borrow_rejected():
     """Stage 66 Inc 5a — `__move(x)` transitions x to MOVED, and a
     subsequent `&x` is rejected by the Inc 3 wiring (which calls

@@ -2350,6 +2350,34 @@ class TypeChecker:
             self._emit_logic_provenance_grouped(
                 sig.name, prov_violations, call.span,
             )
+        # Stage 66 Inc 5b — implicit move detection at pass-by-value
+        # call sites. Under @borrow_check (or the global flag), each
+        # Name arg with a non-Copy struct type is treated as a move:
+        # the call consumes the binding, so subsequent reads via
+        # &/&mut are rejected by the Inc 3 wiring. Scalars + Copy
+        # structs + reference args (& / &mut) are NOT moved. The
+        # check fires regardless of whether the arg is currently FREE
+        # — if it's already SHARED / MUTABLE / MOVED, we emit a
+        # diagnostic; if FREE, we transition to MOVED.
+        if self._borrow_enforcement_enabled():
+            for ((pname, pty), aty, arg_expr) in zip(
+                    sig.params, arg_tys, call.args):
+                if (isinstance(arg_expr, A.Name)
+                        and isinstance(aty, TyStruct)
+                        and not self._is_copy_struct_ty(aty)):
+                    place = Place.local(arg_expr.name)
+                    ok = scope.borrows.check_move(place)
+                    if not ok:
+                        cur_state = scope.borrows.status(place)
+                        self.errors.append(TypeError_(
+                            f"cannot pass {arg_expr.name!r} by value to "
+                            f"{sig.name!r}: it is currently {cur_state} "
+                            f"(Stage 66 borrow checker — implicit move)",
+                            call.span,
+                            hint="pass `&` or `&mut` instead, or mark "
+                                 "the struct `@copy` if it should "
+                                 "duplicate on assignment",
+                        ))
 
     # ------------------------------------------------------------------
     # Compile-time shape checking for function calls
