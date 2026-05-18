@@ -305,6 +305,36 @@ def test_c2_2_early_return_void():
     assert len(exits) == 2
 
 
+def test_stage59_trace_filter_by_fn_convenience():
+    """Stage 59 follow-on: trace_filter_by_fn shortcut isolates one fn."""
+    from helixc.frontend.trace_pass import trace_filter_by_fn
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "loss", (1,)),
+        TraceEvent("entry", "helper", (2,)),
+        TraceEvent("exit", "helper", (), result=3),
+        TraceEvent("exit", "loss", (), result=4),
+    ])
+    loss_only = trace_filter_by_fn(buf, "loss")
+    assert len(loss_only) == 2
+    assert all(e.fn_name == "loss" for e in loss_only.events)
+
+
+def test_stage59_trace_filter_by_op_convenience():
+    """Stage 59 follow-on: trace_filter_by_op shortcut isolates one
+    op_kind (entry-only or exit-only typically)."""
+    from helixc.frontend.trace_pass import trace_filter_by_op
+    buf = TraceBuffer(events=[
+        TraceEvent("entry", "f", ()),
+        TraceEvent("exit", "f", (), result=1),
+        TraceEvent("entry", "g", ()),
+        TraceEvent("op", "g", ("op_payload",)),
+        TraceEvent("exit", "g", (), result=2),
+    ])
+    exits = trace_filter_by_op(buf, "exit")
+    assert len(exits) == 2
+    assert all(e.op_kind == "exit" for e in exits.events)
+
+
 def test_stage59_trace_filter_by_op_kind():
     """Stage 59 follow-on: trace_filter keeps only entry events."""
     from helixc.frontend.trace_pass import trace_filter

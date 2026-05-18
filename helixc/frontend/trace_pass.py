@@ -94,6 +94,20 @@ def trace_equiv(a: TraceBuffer, b: TraceBuffer) -> bool:
     return True
 
 
+def trace_filter_by_fn(buf: TraceBuffer, fn_name: str) -> TraceBuffer:
+    """Stage 59 follow-on / Tier 3 #11 polish — convenience shortcut for
+    `trace_filter(buf, lambda e: e.fn_name == fn_name)`. Common case
+    when verifying a specific function's behavior in isolation."""
+    return trace_filter(buf, lambda e: e.fn_name == fn_name)
+
+
+def trace_filter_by_op(buf: TraceBuffer, op_kind: str) -> TraceBuffer:
+    """Stage 59 follow-on / Tier 3 #11 polish — convenience shortcut for
+    `trace_filter(buf, lambda e: e.op_kind == op_kind)`. Common when
+    filtering to entry/exit pairs only, or to side-effecting ops."""
+    return trace_filter(buf, lambda e: e.op_kind == op_kind)
+
+
 def trace_filter(buf: TraceBuffer, predicate) -> TraceBuffer:
     """Stage 59 follow-on / Tier 3 #11 polish — filter trace events
     by a caller-supplied predicate. Returns a NEW TraceBuffer
