@@ -5909,6 +5909,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--validate-json-parity-json",
         "--ast-node-counts", "--ast-node-counts-json",
         "--fn-ast-depth", "--fn-ast-depth-json",
+        "--fn-ast-depth-all",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7571,6 +7572,31 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_ast_depth_all(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-depth-all
+    emits {fn_name: depth_int, ...} for every fn."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fada.hx"
+    src.write_text(
+        "fn shallow(x: i32) -> i32 { x + 1 }\n"
+        "fn deeper(x: i32) -> i32 {\n"
+        "    if x > 0 { if x > 10 { x * 2 } else { x } } else { 0 }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-depth-all", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {"shallow", "deeper"}
+    assert result["deeper"] > result["shallow"]
 
 
 def test_stage59_fn_ast_depth_text(tmp_path):

@@ -27,6 +27,9 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         deeply-nested code = often harder to reason about.
     --fn-ast-depth-json <file.hx> <fn_name>
         Same as --fn-ast-depth but JSON {name, depth}.
+    --fn-ast-depth-all <file.hx>
+        Whole-program per-fn AST nesting depth as JSON dict
+        {fn_name: depth_int}. Companion to --fn-ast-depth (single).
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -433,6 +436,56 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_ast_depth_all(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: whole-program AST
+    nesting-depth profile. For every fn, compute the max body
+    nesting depth. Sorted descending by depth — deepest first.
+
+    Output: '<fn_name> depth=<int>' one per line. Already in JSON-
+    native form (dict). Use --fn-ast-depth for single-fn query.
+
+    Use case:
+    - Find the deepest fns to refactor first (complexity audit)
+    - Track depth distribution across releases
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _depth(node) -> int:
+        if node is None:
+            return 0
+        if not hasattr(node, "__dataclass_fields__"):
+            return 0
+        max_child = 0
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    d = _depth(x)
+                    if d > max_child:
+                        max_child = d
+            elif isinstance(v, tuple):
+                for x in v:
+                    d = _depth(x)
+                    if d > max_child:
+                        max_child = d
+            else:
+                d = _depth(v)
+                if d > max_child:
+                    max_child = d
+        return 1 + max_child
+
+    profile: dict[str, int] = {}
+    for fn in iter_fn_decls(prog):
+        profile[fn.name] = (
+            _depth(fn.body) if fn.body is not None else 0
+        )
+    print(json.dumps(profile, sort_keys=True, indent=2))
     return 0
 
 
@@ -7488,6 +7541,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_ast_depth_json(args[0], args[1]))
+
+    if "--fn-ast-depth-all" in flags:
+        if len(args) < 1:
+            print("usage: --fn-ast-depth-all <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_depth_all(args[0]))
 
     if "--ast-stats-json" in flags:
         if len(args) < 1:
