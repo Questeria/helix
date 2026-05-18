@@ -67,6 +67,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Per-fn body-stats for every fn in the file as JSON profile.
     --fn-body-stats-summary <file.hx>
         Aggregate body-stats summary (total/max/min/avg per metric).
+    --fn-body-stats-rank <file.hx> <metric> <top_n>
+        Top-N fns by a metric (hotspot ranking).
     --fn-callers <file.hx> <fn_name>
         Inverse: print fns that DIRECTLY call <fn_name> (refactor planning).
     --fn-callgraph-all <file.hx>
@@ -3045,6 +3047,83 @@ def _fn_callers(path: str, target_name: str) -> int:
     return 0
 
 
+def _fn_body_stats_rank(path: str, metric: str, top_n_str: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: rank top-N fns by a
+    specific body-stat metric.
+
+    Args:
+        metric: one of ast_nodes, calls, binops, ifs, loops, matches
+        top_n: integer count (e.g., '5' for top 5)
+
+    Output: one line per fn, sorted descending by metric value:
+        '<fn_name> <metric>=<value>'
+    Ties broken alphabetically by fn name. If top_n > #fns, output
+    is just #fns lines.
+
+    Use case: 'show me the 5 fns with the most calls' — quick
+    hotspot ranking without parsing --fn-body-stats-all JSON.
+
+    Exit 0 on success, 2 on bad metric name or non-int top_n.
+    """
+    metrics = {"ast_nodes", "calls", "binops", "ifs", "loops", "matches"}
+    if metric not in metrics:
+        print(f"error: autodiff_cli: unknown metric {metric!r} "
+              f"(valid: {sorted(metrics)})", file=sys.stderr)
+        return 2
+    try:
+        top_n = int(top_n_str)
+    except ValueError:
+        print(f"error: autodiff_cli: top_n {top_n_str!r} not an int",
+              file=sys.stderr)
+        return 2
+
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    per_fn: list[tuple[str, int]] = []
+    for fn in iter_fn_decls(prog):
+        count = 0
+
+        def _walk(node) -> None:
+            nonlocal count
+            if node is None:
+                return
+            if hasattr(node, "__dataclass_fields__"):
+                if metric == "ast_nodes":
+                    count += 1
+                elif metric == "calls" and isinstance(node, A.Call):
+                    count += 1
+                elif metric == "binops" and isinstance(node, A.Binary):
+                    count += 1
+                elif metric == "ifs" and isinstance(node, A.If):
+                    count += 1
+                elif metric == "loops" and isinstance(node, (A.For, A.While, A.Loop)):
+                    count += 1
+                elif metric == "matches" and isinstance(node, A.Match):
+                    count += 1
+                for f in node.__dataclass_fields__:
+                    v = getattr(node, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        per_fn.append((fn.name, count))
+
+    # Sort descending by metric value; ties broken alphabetically.
+    per_fn.sort(key=lambda x: (-x[1], x[0]))
+    for name, value in per_fn[:top_n]:
+        print(f"{name} {metric}={value}")
+    return 0
+
+
 def _fn_body_stats_summary(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: aggregate body-stats
     summary across all fns. For each metric, computes total/max/min/
@@ -3987,6 +4066,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_body_stats_summary(args[0]))
+
+    if "--fn-body-stats-rank" in flags:
+        if len(args) < 3:
+            print("usage: --fn-body-stats-rank <file.hx> <metric> <top_n>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_body_stats_rank(args[0], args[1], args[2]))
 
     if "--fn-callers" in flags:
         if len(args) < 2:

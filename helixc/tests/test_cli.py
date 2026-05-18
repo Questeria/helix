@@ -5871,6 +5871,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-callgraph", "--fn-callers",
         "--fn-body-stats", "--fn-body-stats-json",
         "--fn-body-stats-all", "--fn-body-stats-summary",
+        "--fn-body-stats-rank",
         "--fn-callgraph-all", "--fn-callers-all",
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
@@ -8241,6 +8242,47 @@ def test_stage59_fn_callers_unknown_target_no_error(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_body_stats_rank_top_n(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats-rank
+    ranks top-N fns by metric, descending value (ties alphabetical)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "r.hx"
+    src.write_text(
+        "fn a() -> i32 { 1 }\n"
+        "fn b(n: i32) -> i32 { a() + n * 2 }\n"
+        "fn c(n: i32) -> i32 { if n > 0 { b(n - 1) } else { 0 } }\n",
+        encoding="utf-8",
+    )
+    # ast_nodes ranking: c > b > a
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats-rank", str(src), "ast_nodes", "5"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # c has most ast_nodes (has if-else), b is middle, a is smallest
+    assert lines[0].startswith("c ")
+    assert lines[-1].startswith("a ")
+
+
+def test_stage59_fn_body_stats_rank_invalid_metric(tmp_path):
+    """Stage 59 follow-on: --fn-body-stats-rank rejects unknown
+    metric with rc=2."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("fn f() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats-rank", str(src), "phantom_metric", "5"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 2
+    assert "unknown metric" in proc.stderr
 
 
 def test_stage59_fn_body_stats_summary(tmp_path):
