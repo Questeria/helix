@@ -317,6 +317,228 @@ def test_stage64_inc3_tile_add_rejects_mismatched_lengths():
         em.emit_op(ti.TileOp(ti.TileOpKind.TILE_ADD, [lhs, rhs], [out]))
 
 
+# ============================================================================
+# Stage 64 Inc 4 / Stage 106 — TILE_MATMUL via NVIDIA wmma Tensor Core
+# fragments (canonical m16n16k16 shape). Backend-only — no frontend
+# trigger path yet; tests synthesize fragment-shaped operand tiles
+# directly and pre-populate reg_map to avoid needing a TILE_HBM_TO_REG
+# wmma-layout op (that's Inc 5 / SMEM-staging work).
+# ============================================================================
+def _build_wmma_operand_tiles(em, ab_dtype: str):
+    """Helper for Stage 106 — synthesize a (A, B, C) operand triple
+    of the canonical wmma m16n16k16 fragment shape:
+        A: 4 packed .b32 regs (holding f16/bf16 pairs)
+        B: 4 packed .b32 regs
+        C: 8 .f32 regs (accumulator)
+    Pre-populates em.reg_map with contiguous %r0..%r3, %r4..%r7,
+    %f0..%f7 so the wmma dispatch sees lowered operands. Returns
+    (A, B, C) TileValues."""
+    a = ti.TileValue(100, tir.TIRTileTy(
+        tir.TIRScalar(ab_dtype), (tir.DimConst(4),), "REG"
+    ))
+    b = ti.TileValue(101, tir.TIRTileTy(
+        tir.TIRScalar(ab_dtype), (tir.DimConst(4),), "REG"
+    ))
+    c = ti.TileValue(102, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    # Pre-allocate via _new_reg so the counters track correctly.
+    a_base = None
+    for _ in range(4):
+        r = em._new_reg("r")
+        if a_base is None:
+            a_base = r
+    em.reg_map[a.id] = a_base
+    b_base = None
+    for _ in range(4):
+        r = em._new_reg("r")
+        if b_base is None:
+            b_base = r
+    em.reg_map[b.id] = b_base
+    c_base = None
+    for _ in range(8):
+        r = em._new_reg("f")
+        if c_base is None:
+            c_base = r
+    em.reg_map[c.id] = c_base
+    return a, b, c
+
+
+def test_stage106_tile_matmul_emits_wmma_mma_sync_f16():
+    """Stage 106 (Stage 64 Inc 4) — TILE_MATMUL with f16 A/B and f32
+    C/D emits a single `wmma.mma.sync.aligned.m16n16k16.row.col.
+    f32.f16.f16.f32` line with the expected 4+4+8+8 register-list
+    layout. D is mapped to a fresh %f base register."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    a, b, c = _build_wmma_operand_tiles(em, "f16")
+    d = ti.TileValue(103, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_MATMUL, [a, b, c], [d]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    wmma_lines = [ln for ln in new_lines if "wmma.mma.sync" in ln]
+    assert len(wmma_lines) == 1, em.buf.getvalue()
+    line = wmma_lines[0]
+    assert "m16n16k16.row.col.f32.f16.f16.f32" in line, line
+    # 4 A regs + 4 B regs + 8 C regs + 8 D regs = 24 %-prefixed refs.
+    assert line.count("%r") == 8, line   # 4 A + 4 B in %r pool
+    assert line.count("%f") == 16, line  # 8 C + 8 D in %f pool
+    # D should be mapped to a fresh %f base register.
+    assert d.id in em.reg_map
+    assert em.reg_map[d.id].startswith("%f"), em.reg_map[d.id]
+
+
+def test_stage106_tile_matmul_emits_wmma_mma_sync_bf16():
+    """Stage 106 — TILE_MATMUL with bf16 A/B emits the bf16 wmma
+    variant (`f32.bf16.bf16.f32`). Parity check with the f16
+    variant above."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    a, b, c = _build_wmma_operand_tiles(em, "bf16")
+    d = ti.TileValue(103, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    pre_text_len = len(em.buf.getvalue().splitlines())
+    em.emit_op(ti.TileOp(ti.TileOpKind.TILE_MATMUL, [a, b, c], [d]))
+    new_lines = em.buf.getvalue().splitlines()[pre_text_len:]
+    wmma_lines = [ln for ln in new_lines if "wmma.mma.sync" in ln]
+    assert len(wmma_lines) == 1, em.buf.getvalue()
+    assert ("m16n16k16.row.col.f32.bf16.bf16.f32"
+            in wmma_lines[0]), wmma_lines[0]
+
+
+def test_stage106_tile_matmul_rejects_mismatched_ab_dtype():
+    """Stage 106 — A and B fragments must have matching dtype. Mixed
+    f16/bf16 wmma exists in hardware but isn't supported in Phase-0."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    a, _b_unused, c = _build_wmma_operand_tiles(em, "f16")
+    # Build a fresh B as bf16.
+    b = ti.TileValue(200, tir.TIRTileTy(
+        tir.TIRScalar("bf16"), (tir.DimConst(4),), "REG"
+    ))
+    b_base = None
+    for _ in range(4):
+        r = em._new_reg("r")
+        if b_base is None:
+            b_base = r
+    em.reg_map[b.id] = b_base
+    d = ti.TileValue(103, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="A/B dtypes must match"):
+        em.emit_op(ti.TileOp(
+            ti.TileOpKind.TILE_MATMUL, [a, b, c], [d]))
+
+
+def test_stage106_tile_matmul_rejects_non_f32_c():
+    """Stage 106 — C accumulator dtype must be f32 in Phase-0
+    (Inc 5+ adds f16-accumulator wmma variants)."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    a, b, _c_unused = _build_wmma_operand_tiles(em, "f16")
+    # Build a fresh C as f16 (illegal accumulator in Phase-0).
+    c = ti.TileValue(300, tir.TIRTileTy(
+        tir.TIRScalar("f16"), (tir.DimConst(8),), "REG"
+    ))
+    c_base = None
+    for _ in range(8):
+        r = em._new_reg("h")
+        if c_base is None:
+            c_base = r
+    em.reg_map[c.id] = c_base
+    d = ti.TileValue(103, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError,
+                    match="C accumulator dtype must be f32"):
+        em.emit_op(ti.TileOp(
+            ti.TileOpKind.TILE_MATMUL, [a, b, c], [d]))
+
+
+def test_stage106_tile_matmul_rejects_unsupported_dtype():
+    """Stage 106 — Phase-0 only supports f16 / bf16 for A/B. f32×f32
+    wmma (via Tensor Core f32 variants), tf32, int8, fp8 all reject
+    cleanly with a clear Inc 5+ message."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    a, _b_unused, c = _build_wmma_operand_tiles(em, "f16")
+    # Build A as f32 (unsupported).
+    a32 = ti.TileValue(400, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "REG"
+    ))
+    a_base = None
+    for _ in range(4):
+        r = em._new_reg("r")
+        if a_base is None:
+            a_base = r
+    em.reg_map[a32.id] = a_base
+    b32 = ti.TileValue(401, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(4),), "REG"
+    ))
+    b_base = None
+    for _ in range(4):
+        r = em._new_reg("r")
+        if b_base is None:
+            b_base = r
+    em.reg_map[b32.id] = b_base
+    d = ti.TileValue(103, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError,
+                    match="dtype must be f16 or bf16"):
+        em.emit_op(ti.TileOp(
+            ti.TileOpKind.TILE_MATMUL, [a32, b32, c], [d]))
+
+
+def test_stage106_tile_matmul_rejects_wrong_fragment_length():
+    """Stage 106 — A must be length 4 (canonical packed-pair
+    fragment). Other lengths reject before reaching the wmma emit."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    # Build A of length 3 (illegal).
+    a = ti.TileValue(500, tir.TIRTileTy(
+        tir.TIRScalar("f16"), (tir.DimConst(3),), "REG"
+    ))
+    a_base = None
+    for _ in range(3):
+        r = em._new_reg("r")
+        if a_base is None:
+            a_base = r
+    em.reg_map[a.id] = a_base
+    # Build B, C as well-formed.
+    b = ti.TileValue(501, tir.TIRTileTy(
+        tir.TIRScalar("f16"), (tir.DimConst(4),), "REG"
+    ))
+    b_base = None
+    for _ in range(4):
+        r = em._new_reg("r")
+        if b_base is None:
+            b_base = r
+    em.reg_map[b.id] = b_base
+    c = ti.TileValue(502, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    c_base = None
+    for _ in range(8):
+        r = em._new_reg("f")
+        if c_base is None:
+            c_base = r
+    em.reg_map[c.id] = c_base
+    d = ti.TileValue(503, tir.TIRTileTy(
+        tir.TIRScalar("f32"), (tir.DimConst(8),), "REG"
+    ))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="A must have length 4"):
+        em.emit_op(ti.TileOp(
+            ti.TileOpKind.TILE_MATMUL, [a, b, c], [d]))
+
+
 def test_c118_direct_ptx_cli_aborts_on_type_errors():
     proc = run_ptx_cli("@kernel fn k() { let mut b: bool = true; b += false; }\n")
     assert proc.returncode != 0, proc.stdout + proc.stderr

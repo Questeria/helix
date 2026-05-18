@@ -303,6 +303,40 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 106 SHIPPED 2026-05-18** — Stage 64 Inc 4: TILE_MATMUL
+  via NVIDIA wmma Tensor Core fragments (canonical m16n16k16
+  shape). **Stage 64 Inc 4 now in v1.0.**
+  - Single PTX dispatch branch in `helixc/backend/ptx.py` handles
+    TILE_MATMUL emit. Validates:
+    - 3 operands (A, B, C accumulator) + 1 result (D)
+    - All operands are 1-D register-tiles with statically-known
+      DimConst lengths matching the canonical m16n16k16 packed
+      fragment shape (A: 4, B: 4, C: 8, D: 8)
+    - A/B dtypes match and are f16 OR bf16
+    - C/D dtypes are f32
+    - All operand tiles already lowered (registers in reg_map)
+    - Register-class assignments correct (%r pool for A/B
+      packed .b32; %f pool for C/D .f32)
+  - Emits a single line:
+    `wmma.mma.sync.aligned.m16n16k16.row.col.f32.{f16|bf16}.{f16|
+    bf16}.f32 {d0..d7}, {a0..a3}, {b0..b3}, {c0..c7};`
+    The 4+4+8+8 register-list layout matches the NVIDIA wmma
+    ISA spec for m16n16k16 with packed-pair input fragments and
+    f32 accumulator/result fragments.
+  - **Backend-only — Inc 4 ships the CORE matmul instruction**;
+    fragment-loading lifecycle (wmma.load.a/b/c.sync from SMEM)
+    is Inc 5 / SMEM-staging work. Tests synthesize fragment-
+    shaped operand tiles directly and pre-populate reg_map.
+  - Other dtype combinations (f32×f32 via f32 Tensor Cores, tf32,
+    int8, fp8) fail closed with a clear "Inc 5+ will extend"
+    message — same fail-fast pattern as Inc 3 used for bf16.
+  - 6 new tests (f16 emit, bf16 emit, mismatched A/B dtype reject,
+    non-f32 C reject, unsupported f32 dtype reject, wrong
+    fragment length reject); **102 PTX pins GREEN** (was 96).
+    Combined: 438 typecheck + 102 PTX = 540 pins GREEN.
+  - **v1.0 critical path now 2 stages out**: Stage 107 (Stage 64
+    Inc 5 tile-IR opt passes), Stage 108 (v1.0 release stop).
+
 - **Stage 105 SHIPPED 2026-05-18** — Stage 64 Inc 3 (TILE_ADD/SUB/
   MUL elementwise in PTX backend) cherry-picked from speculative
   parallel worktree into main. **Stage 64 Inc 3 now in v1.0.**

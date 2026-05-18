@@ -765,6 +765,138 @@ class PtxEmitter:
             if op.results:
                 self.reg_map[op.results[0].id] = result_base
             return
+        # Stage 64 Inc 4 (Stage 106) — TILE_MATMUL via NVIDIA wmma
+        # Tensor Core fragments. Canonical m16n16k16 shape:
+        #   A: 16x16 of f16/bf16 -> 4 .b32 packed-pair regs per thread
+        #   B: 16x16 of f16/bf16 -> 4 .b32 packed-pair regs per thread
+        #   C: 16x16 of f32      -> 8 .f32 regs per thread (accumulator)
+        #   D: 16x16 of f32      -> 8 .f32 regs per thread (result)
+        # Emits a single `wmma.mma.sync.aligned.m16n16k16.row.col.f32.
+        # {f16|bf16}.{f16|bf16}.f32 {d0..d7},{a0..a3},{b0..b3},{c0..c7};`
+        # line. The operand fragment-loading lifecycle (wmma.load.a/b/c.
+        # sync from SMEM) is Inc 5 / SMEM staging work; Inc 4 ships the
+        # CORE matmul instruction so user-code path can validate the
+        # fragment-tile shape contract.
+        #
+        # Phase-0 scope: m16n16k16 only (other shapes require new
+        # opcode variants); A=B dtype f16 or bf16; C=D dtype f32.
+        # Other dtype combinations (f32×f32 via f32 Tensor Cores,
+        # tf32, int8, fp8) fail closed with a clear "Inc 5+ will
+        # extend" message.
+        if op.kind == ti.TileOpKind.TILE_MATMUL:
+            self._require_operand_count(op, 3, "TILE_MATMUL")
+            self._require_result_count(op, 1, "TILE_MATMUL")
+            a_val, b_val, c_val = op.operands
+            d_val = op.results[0]
+            # Operand shape gate: all 4 must be 1-D register-tiles
+            # with statically-known DimConst lengths matching the
+            # m16n16k16 packed-fragment layout.
+            def _frag_len(val: ti.TileValue, role: str,
+                          expected: int) -> int:
+                if not isinstance(val.ty, tir.TIRTileTy):
+                    raise RuntimeError(
+                        f"TILE_MATMUL {role} is not a tile type")
+                shape = val.ty.shape
+                if len(shape) != 1:
+                    raise RuntimeError(
+                        f"TILE_MATMUL {role} must be 1-D fragment "
+                        f"tile; got {len(shape)}-D")
+                dim = shape[0]
+                if not isinstance(dim, tir.DimConst):
+                    raise RuntimeError(
+                        f"TILE_MATMUL {role} requires static "
+                        f"DimConst length; got {dim!r}")
+                if dim.value != expected:
+                    raise RuntimeError(
+                        f"TILE_MATMUL {role} must have length "
+                        f"{expected} for canonical m16n16k16 "
+                        f"fragment; got {dim.value}")
+                return dim.value
+            _frag_len(a_val, "A", 4)
+            _frag_len(b_val, "B", 4)
+            _frag_len(c_val, "C", 8)
+            _frag_len(d_val, "D", 8)
+            # Dtype gate.
+            ab_dtype = a_val.ty.dtype.name
+            if ab_dtype != b_val.ty.dtype.name:
+                raise RuntimeError(
+                    f"TILE_MATMUL A/B dtypes must match; got "
+                    f"A={ab_dtype} B={b_val.ty.dtype.name}")
+            if ab_dtype not in ("f16", "bf16"):
+                raise RuntimeError(
+                    f"TILE_MATMUL Phase-0: A/B dtype must be f16 or "
+                    f"bf16; got {ab_dtype!r} (Inc 5+ will add f32/"
+                    f"tf32/int8/fp8 Tensor Core variants)")
+            if c_val.ty.dtype.name != "f32":
+                raise RuntimeError(
+                    f"TILE_MATMUL Phase-0: C accumulator dtype must "
+                    f"be f32; got {c_val.ty.dtype.name!r}")
+            if d_val.ty.dtype.name != "f32":
+                raise RuntimeError(
+                    f"TILE_MATMUL Phase-0: D result dtype must be "
+                    f"f32; got {d_val.ty.dtype.name!r}")
+            # Resolve base registers for A/B/C. A and B fragments
+            # are .b32 packed (each holds 2 × f16 / bf16); use the
+            # `%r` pool for them since .b32 == 32-bit untyped.
+            # C is .f32, so use the `%f` pool.
+            a_base = self.reg_map.get(a_val.id)
+            b_base = self.reg_map.get(b_val.id)
+            c_base = self.reg_map.get(c_val.id)
+            if a_base is None:
+                raise RuntimeError(
+                    "TILE_MATMUL A has no PTX register; operand "
+                    "must be a lowered register-tile (consider "
+                    "wmma.load.a.sync to populate)")
+            if b_base is None:
+                raise RuntimeError(
+                    "TILE_MATMUL B has no PTX register; operand "
+                    "must be a lowered register-tile (consider "
+                    "wmma.load.b.sync to populate)")
+            if c_base is None:
+                raise RuntimeError(
+                    "TILE_MATMUL C has no PTX register; operand "
+                    "must be a lowered register-tile (consider "
+                    "wmma.load.c.sync to populate)")
+            # Parse fragment base indices.
+            def _base_idx_for_matmul(reg: str, role: str) -> int:
+                stripped = reg.lstrip("%")
+                i = 0
+                while i < len(stripped) and not stripped[i].isdigit():
+                    i += 1
+                try:
+                    return int(stripped[i:])
+                except ValueError:
+                    raise RuntimeError(
+                        f"TILE_MATMUL {role} register {reg!r} has "
+                        f"no parseable numeric index")
+            a_idx0 = _base_idx_for_matmul(a_base, "A")
+            b_idx0 = _base_idx_for_matmul(b_base, "B")
+            c_idx0 = _base_idx_for_matmul(c_base, "C")
+            # Validate register-class assignments. A/B are .b32
+            # packed (treat as %r); C is .f32 (%f). Diagnose pool
+            # mismatches up-front rather than letting ptxas reject.
+            self._require_reg_class(a_base, "%r", "TILE_MATMUL A")
+            self._require_reg_class(b_base, "%r", "TILE_MATMUL B")
+            self._require_reg_class(c_base, "%f", "TILE_MATMUL C")
+            # Allocate D as 8 fresh contiguous %f registers.
+            d_base = None
+            for i in range(8):
+                rd = self._new_reg("f")
+                if d_base is None:
+                    d_base = rd
+            d_idx0 = _base_idx_for_matmul(d_base, "D")
+            # Build the operand register lists.
+            a_regs = ",".join(f"%r{a_idx0 + i}" for i in range(4))
+            b_regs = ",".join(f"%r{b_idx0 + i}" for i in range(4))
+            c_regs = ",".join(f"%f{c_idx0 + i}" for i in range(8))
+            d_regs = ",".join(f"%f{d_idx0 + i}" for i in range(8))
+            self._line(
+                f"    wmma.mma.sync.aligned.m16n16k16.row.col."
+                f"f32.{ab_dtype}.{ab_dtype}.f32 "
+                f"{{{d_regs}}}, {{{a_regs}}}, {{{b_regs}}}, "
+                f"{{{c_regs}}};")
+            self.reg_map[d_val.id] = d_base
+            return
         raise RuntimeError(
             f"unsupported PTX op {op.kind.value}; "
             "add lowering before emitting PTX"
