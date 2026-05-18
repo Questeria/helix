@@ -850,6 +850,75 @@ def test_stage54_inc1_clamp_i32_zero_derivative_forward():
         f"d/dx clamp_i32(x, 0, 1) should be 0, got: {out}"
 
 
+def test_stage54_inc3a_loop_body_descent_inlines_pure_helper():
+    """Stage 54 Inc 3a: `_inline_user_calls.go()` walker now
+    descends into A.For/A.While/A.Loop bodies. Pre-fix, loop
+    bodies were returned as-is, so any pure-helper calls inside
+    were never inlined — AD passes saw them as opaque.
+
+    Verifies: a pure helper called inside a while-loop body
+    survives the walker's descent (inlined or left-as-call,
+    not crashed). The actual inlining behavior is the same
+    as in non-loop contexts.
+
+    Note: this DOES NOT teach AD how to differentiate loops
+    themselves — that's separate. Inc 3a only fixes the
+    walker's omission of loop-body descent."""
+    from helixc.frontend.autodiff import _inline_user_calls
+
+    src = '''
+fn pure_double(z: f64) -> f64 { z + z }
+fn caller(x: f64) -> f64 {
+    let mut acc: f64 = 0.0;
+    let mut i: i32 = 0;
+    while i < 3 {
+        acc = acc + pure_double(x);
+        i = i + 1;
+    };
+    acc
+}
+'''
+    prog = parse(src)
+    fn_table = {it.name: it for it in prog.items
+                if isinstance(it, A.FnDecl)}
+    caller_fn = fn_table["caller"]
+    body_expr = caller_fn.body
+
+    # Inline. Walker should descend the while-body and replace
+    # pure_double(x) with its substituted body (x + x).
+    inlined = _inline_user_calls(body_expr, fn_table)
+
+    # Walk the result and verify there's no remaining call to
+    # pure_double (the inliner should have substituted).
+    found_pure_double_call = []
+
+    def walk(e):
+        if isinstance(e, A.Call) and isinstance(e.callee, A.Name):
+            if e.callee.name == "pure_double":
+                found_pure_double_call.append(e)
+        for attr in ("left", "right", "operand", "value", "iter_expr",
+                     "body", "then", "else_", "cond", "callee",
+                     "final_expr"):
+            sub = getattr(e, attr, None)
+            if isinstance(sub, A.Expr):
+                walk(sub)
+        for attr in ("args", "stmts"):
+            sublist = getattr(e, attr, None)
+            if isinstance(sublist, list):
+                for s in sublist:
+                    if isinstance(s, A.Expr):
+                        walk(s)
+                    elif hasattr(s, "value") and isinstance(s.value, A.Expr):
+                        walk(s.value)
+
+    walk(inlined)
+    assert not found_pure_double_call, \
+        f"Stage 54 Inc 3a: walker should have descended into the " \
+        f"while-body and inlined pure_double, but it remained as a " \
+        f"call. Pre-fix this was the silent omission. Got: " \
+        f"{len(found_pure_double_call)} unresolved pure_double calls"
+
+
 def test_stage54_inc2_forward_reverse_asymmetry_already_fixed():
     """Stage 54 Inc 2 CONFIRMED no-op: the forward/reverse
     asymmetry on unrecognized opaque multi-arg calls that the

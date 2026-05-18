@@ -615,6 +615,35 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
             new_else = go(e.else_) if e.else_ is not None else None
             return A.If(span=e.span, cond=go(e.cond),
                         then=new_then, else_=new_else)
+        # Stage 54 Inc 3a: loop-body descent. Pre-fix, A.For/A.While/
+        # A.Loop were returned as-is, so any pure-helper calls inside
+        # the loop body were never inlined — subsequent AD passes saw
+        # them as opaque calls and failed closed (or returned zero
+        # silently). Descending the walker into loop bodies matches
+        # the existing If-branch / Block-stmt descent pattern.
+        # Note: this only handles helper-call inlining inside loop
+        # bodies — the LOOP ITSELF still requires the AD pass to know
+        # how to differentiate iteration, which is a separate concern.
+        # For Helix's current dogfood programs, gradient-bearing
+        # loops are mostly unrolled at compile time by other passes.
+        if isinstance(e, A.For):
+            new_iter = go(e.iter_expr)
+            new_body = go(e.body)
+            assert isinstance(new_body, A.Block), \
+                "loop body must remain a Block after walker"
+            return A.For(span=e.span, var_name=e.var_name,
+                         iter_expr=new_iter, body=new_body)
+        if isinstance(e, A.While):
+            new_cond = go(e.cond)
+            new_body = go(e.body)
+            assert isinstance(new_body, A.Block), \
+                "while body must remain a Block after walker"
+            return A.While(span=e.span, cond=new_cond, body=new_body)
+        if isinstance(e, A.Loop):
+            new_body = go(e.body)
+            assert isinstance(new_body, A.Block), \
+                "loop body must remain a Block after walker"
+            return A.Loop(span=e.span, body=new_body)
         return e
 
     return go(expr)
