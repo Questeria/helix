@@ -4689,6 +4689,138 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage73_inc1_robust_type_recognition():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Robust<f32>, b: TinyRobust<f32>) -> f32 { 0.0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    arity_errs = [str(e) for e in errors
+                  if "takes 1 type argument" in str(e)
+                  and ("Robust" in str(e) or "TinyRobust" in str(e))]
+    assert len(arity_errs) == 0, arity_errs
+
+
+def test_stage73_inc1_three_robust_aliases_resolve():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a(x: TinyRobust<i32>) -> i32 { 0 }
+    fn b(x: Robust<i32>) -> i32 { 0 }
+    fn c(x: LooseRobust<i32>) -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    name_errs = [str(e) for e in errors
+                 if any(n in str(e)
+                        for n in ["TinyRobust", "Robust", "LooseRobust"])
+                 and ("takes 1 type argument" in str(e)
+                      or "unbound" in str(e))]
+    assert len(name_errs) == 0, name_errs
+
+
+def test_stage73_inc1_robust_takes_exactly_one_arg():
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn bad(x: Robust<f32, i32>) -> i32 { 0 }
+    fn main() -> i32 { 42 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    arity_errors = [e for e in errors if "Robust" in str(e)
+                    and "takes 1 type argument" in str(e)]
+    assert len(arity_errors) > 0
+
+
+def test_stage73_inc2_robust_eps_propagates_when_only_one_side_tagged():
+    """Stage 73 Inc 2 — `Robust<f32> + f32` yields Robust<f32>."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Robust<f32>, b: f32) -> Robust<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Robust" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage73_inc2_robust_eps_sum_exceeds_declared_diagnosed():
+    """Stage 73 Inc 2 — `Robust + Robust` sums eps (0.06) which
+    won't match declared Robust (0.03)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(a: Robust<f32>, b: Robust<f32>) -> Robust<f32> {
+        a + b
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # Expect a return-type mismatch (eps=0.06 vs declared 0.03).
+    budget_errs = [str(e) for e in errors
+                   if "TyRobust" in str(e) or "eps=" in str(e)]
+    assert len(budget_errs) >= 1, errors
+
+
+def test_stage73_inc3_widen_robustness_strips_outer():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Robust<f32>) -> f32 {
+        __widen_robustness(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Robust" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
+def test_stage73_inc3_widen_robustness_identity_on_non_robust():
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __widen_robustness(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower()
+                 or "Robust" in str(e) or "robustness" in str(e)]
+    assert len(type_errs) == 0, type_errs
+
+
 def test_stage72_inc1_domain_type_recognition():
     """Stage 72 Inc 1 — TyDomain scaffolding. InDist/OutDist/UnkDist
     parse cleanly."""

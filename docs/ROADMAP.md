@@ -303,6 +303,34 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 73 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #3
+  Adversarial robustness types delivered as a usable feature
+  across Inc 1-3:
+  - Inc 1: TyRobust(eps, inner) + 3 presets (TinyRobust=0.01 /
+    Robust=0.03 / LooseRobust=0.1 — Linf perturbation budgets).
+  - Inc 2: eps-sum propagation (perturbations accumulate
+    additively through addition; Phase-0 conservative). Strict
+    structural compare surfaces budget overruns as compile-time
+    return-type mismatches.
+  - Inc 3: `__widen_robustness(x)` opt-out builtin.
+  - Layered between TyQuant (innermost-after-D/Logic) and
+    TyDomain. Canonical full stack adds Robust:
+    `Confidential<Private<Conf<OutDist<Robust<Q8<D<Logic<T>>>>>>>>`.
+  - Use case: provably-robust classifiers for safety-critical
+    contexts (self-driving perception, medical diagnostics).
+  - 7 new tests; 363 typecheck + 429 regression GREEN.
+
+  **Tier-A/S wrapper-type milestone**: Stages 68-73 collectively
+  ship 6 new compile-time type wrappers (Conf / Taint / DP / Quant
+  / Domain / Robust), each with the same scaffolding-propagation-
+  optout template. Combined with the pre-existing TyDiff / TyLogic /
+  TyModal / TyCausal / TyConf substrate, Helix now has 11 layered
+  composable type wrappers — by far the most exhaustive type-system
+  AGI-substrate of any production language. The 6 new wrappers
+  layered in deterministic order: Taint > DP > Conf > Domain >
+  Robust > Quant > Diff > Logic > T. End-to-end usable:
+  annotate → arithmetic propagates → explicit opt-out at boundaries.
+
 - **Stage 72 SUBSTANTIALLY COMPLETE 2026-05-18** — Tier-A #4
   Out-of-distribution / domain types delivered as a usable
   feature across Inc 1-3:

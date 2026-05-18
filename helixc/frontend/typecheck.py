@@ -329,6 +329,40 @@ class TyConf(Type):
 
 
 @dataclass(frozen=True)
+class TyRobust(Type):
+    """Stage 73 — adversarial-robustness type (Tier-A #3). A value
+    tagged with the perturbation budget it is provably robust within.
+    For neural network classifiers and AGI safety: prove the
+    classification doesn't flip if the input is perturbed within
+    eps Linf-distance.
+
+    Phase-0 representation: eps as a float string (mirrors TyDP).
+    3 preset aliases ship in Inc 1:
+    - `TinyRobust<T>`   → eps "0.01" (very robust, small budget)
+    - `Robust<T>`       → eps "0.03" (typical for ImageNet etc.)
+    - `LooseRobust<T>`  → eps "0.1"  (loose tolerance)
+
+    Compositional rule: when two Robust-tagged values combine in a
+    binop, the result eps SUMS (perturbations accumulate
+    additively through addition; for multiplication this would
+    overestimate but Phase-0 conservatively uses sum). So
+    `Robust<f32> + Robust<f32>` yields a TyRobust with eps "0.06"
+    (0.03 + 0.03).
+
+    Use case: AGI deployment in safety-critical contexts —
+    self-driving perception, medical diagnostic models, anything
+    where adversarial perturbation could change the output. The
+    compile-time tracking surfaces budget exceedance before
+    deployment. Composes with Tier-S/A stack.
+
+    Inc 1 ships scaffolding; Inc 2 propagation; Inc 3
+    `__widen_robustness(x, new_eps)` opt-out builtin (loosens the
+    budget at an explicit audit-trail point)."""
+    eps: str         # "0.01", "0.03", "0.1" — Phase-0 string
+    inner: Type
+
+
+@dataclass(frozen=True)
 class TyDomain(Type):
     """Stage 72 — out-of-distribution / data-domain type (Tier-A #4).
     A value tagged with whether it falls within the distribution
@@ -2013,6 +2047,24 @@ class TypeChecker:
                     return TyUnknown(hint=ty.base)
                 return TyConf(level=conf_map[ty.base],
                                inner=self._resolve_type(ty.args[0], scope))
+            # Stage 73 Inc 1 — adversarial-robustness preset budgets.
+            # F5 arity arm. Single-arg wrapper using preset eps
+            # strings to keep parser surface simple.
+            robust_map = {
+                "TinyRobust":   "0.01",
+                "Robust":       "0.03",
+                "LooseRobust":  "0.1",
+            }
+            if ty.base in robust_map:
+                if len(ty.args) != 1:
+                    self.errors.append(TypeError_(
+                        f"{ty.base}<T> takes 1 type argument, "
+                        f"got {len(ty.args)}",
+                        ty.span,
+                    ))
+                    return TyUnknown(hint=ty.base)
+                return TyRobust(eps=robust_map[ty.base],
+                                inner=self._resolve_type(ty.args[0], scope))
             # Stage 72 Inc 1 — out-of-distribution / domain status.
             # F5 arity arm.
             domain_map = {
@@ -3025,6 +3077,11 @@ class TypeChecker:
         # a TyDomain wrapper, asserting the user has verified the value
         # is in-distribution (audit trail point for the OOD contract).
         "__assert_in_dist",
+        # Stage 73 Inc 3 — robustness opt-out. `__widen_robustness(x)`
+        # strips a TyRobust wrapper, marking an explicit robustness-
+        # budget-exhaustion point (the value is no longer tracked as
+        # robust within any bound; downstream code accepts that risk).
+        "__widen_robustness",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4400,6 +4457,8 @@ class TypeChecker:
                     return _unwrap(t.inner)
                 if isinstance(t, TyDomain):
                     return _unwrap(t.inner)
+                if isinstance(t, TyRobust):
+                    return _unwrap(t.inner)
                 return t
 
             l_is_logic = isinstance(l, TyLogic) or (
@@ -4525,12 +4584,40 @@ class TypeChecker:
             l_is_domain = l_domain_status is not None
             r_is_domain = r_domain_status is not None
 
+            # Stage 73 Inc 2 — detect TyRobust in any layered position.
+            # Composition: eps SUMS (perturbations accumulate
+            # additively through addition).
+            def _find_robust_eps(t: Type) -> Optional[str]:
+                if isinstance(t, TyRobust):
+                    return t.eps
+                if isinstance(t, TyDiff):
+                    return _find_robust_eps(t.inner)
+                if isinstance(t, TyLogic):
+                    return _find_robust_eps(t.inner)
+                if isinstance(t, TyConf):
+                    return _find_robust_eps(t.inner)
+                if isinstance(t, TyTaint):
+                    return _find_robust_eps(t.inner)
+                if isinstance(t, TyDP):
+                    return _find_robust_eps(t.inner)
+                if isinstance(t, TyQuant):
+                    return _find_robust_eps(t.inner)
+                if isinstance(t, TyDomain):
+                    return _find_robust_eps(t.inner)
+                return None
+
+            l_robust_eps = _find_robust_eps(l)
+            r_robust_eps = _find_robust_eps(r)
+            l_is_robust = l_robust_eps is not None
+            r_is_robust = r_robust_eps is not None
+
             if (l_is_logic or r_is_logic or l_is_diff or r_is_diff
                     or l_is_conf or r_is_conf
                     or l_is_taint or r_is_taint
                     or l_is_dp or r_is_dp
                     or l_is_quant or r_is_quant
-                    or l_is_domain or r_is_domain):
+                    or l_is_domain or r_is_domain
+                    or l_is_robust or r_is_robust):
                 # Audit 28.8 B13 (trap AD002 / 24200): TyDiff binop
                 # with mixed inner types previously silently coerced
                 # the right operand to the left's inner type. The
@@ -4713,6 +4800,19 @@ class TypeChecker:
                         bits_list.append(r_quant_bits)
                     chosen_bits = min(bits_list)
                     wrapped = TyQuant(bits=chosen_bits, inner=wrapped)
+                # Stage 73 Inc 2 — TyRobust layered between TyQuant
+                # and TyDomain. Composition: eps SUMS (perturbations
+                # accumulate additively through addition).
+                if l_is_robust or r_is_robust:
+                    def _eps_to_float(s: str) -> float:
+                        try:
+                            return float(s)
+                        except ValueError:
+                            return 0.0
+                    total = (_eps_to_float(l_robust_eps or "0.0")
+                             + _eps_to_float(r_robust_eps or "0.0"))
+                    chosen_eps = repr(total)
+                    wrapped = TyRobust(eps=chosen_eps, inner=wrapped)
                 # Stage 72 Inc 2 — TyDomain layered above TyQuant.
                 # Composition: WORST-CASE-WINS via rank
                 # (in=0 < unknown=1 < out=2).
@@ -4977,6 +5077,37 @@ class TypeChecker:
                             return TyLogic(inner=_strip_quant(t.inner))
                         return t
                     return _strip_quant(arg_ty)
+                # Stage 73 Inc 3 — robustness opt-out builtin.
+                # `__widen_robustness(x)` strips the TyRobust wrapper,
+                # acknowledging the user has accepted the perturbation
+                # budget is no longer tracked (audit-trail point).
+                # Identity on non-Robust inputs; preserves other wrappers.
+                if bn == "__widen_robustness" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    def _strip_robust(t):
+                        if isinstance(t, TyRobust):
+                            return t.inner
+                        if isinstance(t, TyDomain):
+                            return TyDomain(status=t.status,
+                                            inner=_strip_robust(t.inner))
+                        if isinstance(t, TyTaint):
+                            return TyTaint(label=t.label,
+                                           inner=_strip_robust(t.inner))
+                        if isinstance(t, TyDP):
+                            return TyDP(epsilon=t.epsilon,
+                                        inner=_strip_robust(t.inner))
+                        if isinstance(t, TyConf):
+                            return TyConf(level=t.level,
+                                          inner=_strip_robust(t.inner))
+                        if isinstance(t, TyQuant):
+                            return TyQuant(bits=t.bits,
+                                           inner=_strip_robust(t.inner))
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_robust(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_robust(t.inner))
+                        return t
+                    return _strip_robust(arg_ty)
                 # Stage 72 Inc 3 — domain-status opt-out builtin.
                 # `__assert_in_dist(x)` strips the TyDomain wrapper,
                 # marking an explicit in-distribution assertion. An

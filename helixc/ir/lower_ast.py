@@ -1917,6 +1917,12 @@ class Lowerer:
                     and expr.callee.name == "__assert_in_dist"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 73 Inc 3 — robustness opt-out builtin.
+            # `__widen_robustness(x)` strips TyRobust. Identity at IR.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__widen_robustness"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely
