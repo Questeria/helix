@@ -45,6 +45,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-fns but machine-readable JSON (full 64-hex hashes).
     --list-structs <file.hx>
         Enumerate all structs with field count + content hash.
+    --struct-fields <file.hx> <struct_name>
+        Print '<name>: <ty>' per field (declaration order, not sorted).
     --list-structs-json <file.hx>
         Same as --list-structs but machine-readable JSON output.
     --list-modules-json <file.hx>
@@ -3171,6 +3173,53 @@ def _list_modules_json(path: str) -> int:
     return 0
 
 
+def _struct_fields(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print field name + type
+    for each field of a struct.
+
+    Output: one field per line, formatted '<name>: <ty>'.
+    Order matches struct-declaration order (NOT sorted — declaration
+    order matters for ABI / layout).
+
+    Use cases:
+    - Quick lookup of struct shape without opening source
+    - Pre-flight check for pytree-eligibility audit (verify only
+      diff-eligible types)
+    - Documentation generation: 'what's in this struct?'
+
+    Exit 0 success, 1 if struct_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.StructDecl) and it.name == struct_name:
+            for f in it.fields:
+                # Resolve type to a human-readable string. TyName has
+                # a .name; TyGeneric has a string .base + list .args.
+                ty_str = getattr(f.ty, "name", None)
+                if ty_str is None:
+                    base = getattr(f.ty, "base", None)
+                    args = getattr(f.ty, "args", None)
+                    # base may itself be either a string (D<f32>) or
+                    # a TyName (rare path).
+                    base_str = base if isinstance(base, str) else (
+                        getattr(base, "name", None) if base else None
+                    )
+                    if base_str and args:
+                        args_strs = []
+                        for a in args:
+                            an = getattr(a, "name", None)
+                            args_strs.append(an if an else repr(a))
+                        ty_str = f"{base_str}<{', '.join(args_strs)}>"
+                if ty_str is None:
+                    ty_str = repr(f.ty)
+                print(f"{f.name}: {ty_str}")
+            return 0
+    print(f"error: autodiff_cli: struct {struct_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _list_structs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all top-level
     StructDecls in a source file with their structural-hash + field
@@ -3516,6 +3565,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_structs(args[0]))
+
+    if "--struct-fields" in flags:
+        if len(args) < 2:
+            print("usage: --struct-fields <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_struct_fields(args[0], args[1]))
 
     if "--list-structs-json" in flags:
         if len(args) < 1:

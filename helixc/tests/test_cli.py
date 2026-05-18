@@ -5864,7 +5864,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--list-fns-json",
-        "--list-structs", "--list-structs-json",
+        "--list-structs", "--list-structs-json", "--struct-fields",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr",
         "--fn-callgraph", "--fn-callers",
@@ -7265,6 +7265,63 @@ def test_stage59_list_modules_json(tmp_path):
     assert "other" in result
     for h in result.values():
         assert len(h) == 64
+
+
+def test_stage59_struct_fields_simple(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --struct-fields prints
+    '<name>: <ty>' per field in declaration order."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "sf.hx"
+    src.write_text(
+        "struct Point { x: i32, y: i32, z: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--struct-fields", str(src), "Point"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.splitlines() if l]
+    # Declaration order x, y, z
+    assert lines == ["x: i32", "y: i32", "z: i32"]
+
+
+def test_stage59_struct_fields_generic_type(tmp_path):
+    """Stage 59 follow-on: --struct-fields formats TyGeneric (e.g.,
+    D<f32>) as 'base<args>' for human-readable output."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "g.hx"
+    src.write_text(
+        "struct M { w: D<f32>, b: D<f64> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--struct-fields", str(src), "M"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert "w: D<f32>" in out
+    assert "b: D<f64>" in out
+
+
+def test_stage59_struct_fields_not_found(tmp_path):
+    """Stage 59 follow-on: unknown struct exits 1 with stderr."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("struct R { a: i32 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--struct-fields", str(src), "Phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_list_structs_basic(tmp_path):
