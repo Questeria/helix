@@ -5867,7 +5867,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-structs", "--list-structs-json",
         "--struct-fields", "--struct-fields-json",
         "--list-uses", "--list-uses-json",
-        "--list-consts", "--list-consts-json", "--const-value",
+        "--list-consts", "--list-consts-json",
+        "--const-value", "--const-value-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7379,6 +7380,36 @@ def test_stage59_list_uses_json(tmp_path):
         {"path": "foo.bar.baz", "segments": ["foo", "bar", "baz"]},
         {"path": "std.result", "segments": ["std", "result"]},
     ]}
+
+
+def test_stage59_const_value_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --const-value-json emits
+    typed {name, ty, value} JSON (IntLit as number, BoolLit as bool)."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cvj.hx"
+    src.write_text(
+        "const N: i32 = 42;\n"
+        "const F: bool = true;\n",
+        encoding="utf-8",
+    )
+    proc_n = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--const-value-json", str(src), "N"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_n.returncode == 0
+    result_n = json.loads(proc_n.stdout)
+    assert result_n == {"name": "N", "ty": "i32", "value": 42}
+    proc_f = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--const-value-json", str(src), "F"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_f.returncode == 0
+    result_f = json.loads(proc_f.stdout)
+    assert result_f == {"name": "F", "ty": "bool", "value": True}
 
 
 def test_stage59_const_value(tmp_path):

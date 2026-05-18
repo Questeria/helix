@@ -55,6 +55,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --list-consts but machine-readable JSON output.
     --const-value <file.hx> <const_name>
         Print the literal value of a top-level ConstDecl.
+    --const-value-json <file.hx> <const_name>
+        Same as --const-value but JSON {name, ty, value} (typed).
     --struct-fields <file.hx> <struct_name>
         Print '<name>: <ty>' per field (declaration order, not sorted).
     --struct-fields-json <file.hx> <struct_name>
@@ -3720,6 +3722,67 @@ def _list_consts_json(path: str) -> int:
     return 0
 
 
+def _const_value_json(path: str, const_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --const-value in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<name>", "ty": "<ty_string>", "value": <typed_value>}
+
+    Value typing in JSON:
+      - IntLit/FloatLit → number
+      - BoolLit         → bool
+      - StrLit/CharLit  → string
+      - Other Expr      → repr() string
+
+    Exit 0 success; 1 if const_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.ConstDecl) and it.name == const_name:
+            v = it.value
+            if isinstance(v, A.IntLit):
+                json_value = v.value
+            elif isinstance(v, A.FloatLit):
+                json_value = v.value
+            elif isinstance(v, A.BoolLit):
+                json_value = v.value
+            elif isinstance(v, (A.StrLit, A.CharLit)):
+                json_value = v.value
+            else:
+                json_value = repr(v)
+            result = {
+                "name": it.name,
+                "ty": _format_ty(it.ty),
+                "value": json_value,
+            }
+            print(json.dumps(result, sort_keys=True, indent=2))
+            return 0
+    print(f"error: autodiff_cli: const {const_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _const_value(path: str, const_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print the value
     expression of a specific top-level ConstDecl.
@@ -4189,6 +4252,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_const_value(args[0], args[1]))
+
+    if "--const-value-json" in flags:
+        if len(args) < 2:
+            print("usage: --const-value-json <file.hx> <const_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_const_value_json(args[0], args[1]))
 
     if "--list-uses-json" in flags:
         if len(args) < 1:
