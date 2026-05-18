@@ -19,6 +19,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         / modules / signatures) for CI artifact diff-comparison.
     --diff-hash-dump <a.hx> <b.hx>
         Granular per-item drift report (added/removed/changed body/sig).
+    --hash-dump-short <file.hx>
+        Same as --hash-dump but with 12-hex short hashes (compact logs).
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
@@ -188,6 +190,24 @@ def _hash_dump(path: str) -> int:
     src = _read_source(path)
     prog = _parse_or_exit(src, path)
     dump = program_hash_dump(prog)
+    print(json.dumps(dump, sort_keys=True, indent=2))
+    return 0
+
+
+def _hash_dump_short(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the compact (12-hex)
+    program_hash_dump_short as pretty-printed JSON. Same shape as
+    --hash-dump but every hash truncated to 12 hex chars for compact
+    log/changelog artifacts.
+
+    Use case: human-readable build-info snippets, daily-rotated
+    CI logs where 48-bit collision resistance is sufficient.
+    """
+    import json
+    from .ast_hash import program_hash_dump_short
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    dump = program_hash_dump_short(prog)
     print(json.dumps(dump, sort_keys=True, indent=2))
     return 0
 
@@ -688,6 +708,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_diff_hash_dump(args[0], args[1]))
+
+    if "--hash-dump-short" in flags:
+        if len(args) < 1:
+            print("usage: --hash-dump-short <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_hash_dump_short(args[0]))
 
     if "--diff-program-hash" in flags:
         if len(args) < 2:

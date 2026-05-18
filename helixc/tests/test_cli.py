@@ -5838,7 +5838,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--check-program-hash", "--list-modules",
         "--module-hash", "--pytree-shape", "--list-pytrees",
         "--autotune-summary", "--autotune-budget",
-        "--hash-dump", "--diff-hash-dump",
+        "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
     ):
         assert flag in out, (
             f"help text missing {flag!r}: docstring needs to be "
@@ -5996,6 +5996,33 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_hash_dump_short_uses_12_hex(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --hash-dump-short
+    outputs the same structure as --hash-dump but every hash is
+    truncated to 12 hex chars."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text(
+        "fn f(x: i32) -> i32 { x + 1 }\n"
+        "struct S { a: i32 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--hash-dump-short", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    dump = json.loads(proc.stdout)
+    assert len(dump["program_hash"]) == 12
+    assert len(dump["program_signature_hash"]) == 12
+    assert len(dump["fns"]["f"]["body_hash"]) == 12
+    assert len(dump["fns"]["f"]["sig_hash"]) == 12
+    assert len(dump["structs"]["S"]) == 12
 
 
 def test_stage59_diff_hash_dump_match_exits_0(tmp_path):
