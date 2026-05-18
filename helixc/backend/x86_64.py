@@ -3597,22 +3597,179 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
-            # Stage 60 Inc 1 — dynamic-path file I/O surface. Inc 1
-            # establishes the lowering surface; Inc 2 wires the
-            # x86_64 assembly (arena→stack scratch copy +
-            # null-terminate + syscall + reuse the existing read/write
-            # body). For now, emit a clear "not yet implemented"
-            # error so downstream gates can opt into the surface
-            # without surprising silent miscompiles.
-            if kind in ("read_file_to_arena_dyn",
-                         "write_file_to_arena_dyn",
+            # Stage 60 Inc 2 — dynamic-path file I/O codegen.
+            # read_file_to_arena_dyn(path_start, path_len) -> i32.
+            # The path bytes live in arena[path_start..path_start+path_len)
+            # (one byte per i32 slot, low 8 bits). We copy them onto a
+            # stack scratch buffer (PATH_MAX = 4096 bytes), null-
+            # terminate, and proceed with the same sys_open + sys_read +
+            # arena-push loop as the static-path variant.
+            if kind == "read_file_to_arena_dyn":
+                BUF_SIZE = 0x100000   # 1 MB read buffer
+                PATH_MAX = 0x1000     # 4 KB path scratch
+                FRAME = BUF_SIZE + PATH_MAX + 8  # buf + path + fd
+
+                path_start_slot = self._slot_of(op.operands[0])
+                path_len_slot = self._slot_of(op.operands[1])
+
+                buf = self.asm.b
+                # Allocate frame.
+                buf.emit(0x48, 0x81, 0xEC)
+                buf.emit_bytes(struct.pack("<I", FRAME))
+
+                # ---- Copy path bytes from arena to stack scratch ----
+                # path_scratch = rsp + BUF_SIZE
+                # rcx = path_len (counter limit + loop index)
+                # rdx = path_start (arena index base)
+                # r10 = i (0..path_len)
+                self.asm.mov_eax_mem_rbp(path_len_slot)
+                buf.emit(0x49, 0x89, 0xC1)              # mov r9, rax (path_len)
+                # Trap if path_len > PATH_MAX - 1 (need null terminator).
+                buf.emit(0x49, 0x81, 0xF9)              # cmp r9, imm32
+                buf.emit_bytes(struct.pack("<I", PATH_MAX - 1))
+                buf.emit(0x76, 0x02)                    # jbe +2 (ok)
+                buf.emit(0x0F, 0x0B)                    # ud2 (overflow trap)
+
+                self.asm.mov_eax_mem_rbp(path_start_slot)
+                buf.emit(0x49, 0x89, 0xC2)              # mov r10, rax (path_start)
+                buf.emit(0x4D, 0x31, 0xDB)              # xor r11, r11 (i = 0)
+
+                # path_copy_loop:
+                path_loop_start = buf.offset()
+                buf.emit(0x4D, 0x39, 0xCB)              # cmp r11, r9
+                buf.emit(0x7D, 0x00)                    # jge done (placeholder)
+                path_jge_off = buf.offset() - 1
+                path_jge_after = buf.offset()
+                # ecx = path_start + i (arena slot index)
+                buf.emit(0x44, 0x89, 0xD1)              # mov ecx, r10d
+                buf.emit(0x44, 0x01, 0xD9)              # add ecx, r11d
+                # rdi = arena_base; eax = arena[ecx]
+                self.asm.lea_rax_rip_rel("__helix_arena_base")
+                buf.emit(0x48, 0x89, 0xC7)              # mov rdi, rax
+                # eax = [rdi + rcx*4 + 4]  (skip 4-byte length header)
+                buf.emit(0x8B, 0x44, 0x8F, 0x04)        # mov eax, [rdi+rcx*4+4]
+                # path_scratch[i] = al
+                # lea rdx, [rsp + BUF_SIZE]
+                buf.emit(0x48, 0x8D, 0x94, 0x24)
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
+                # mov [rdx + r11], al
+                buf.emit(0x42, 0x88, 0x04, 0x1A)        # mov [rdx+r11], al
+                # inc r11
+                buf.emit(0x49, 0xFF, 0xC3)
+                buf.emit(0xEB, 0x00)                    # jmp loop start (placeholder)
+                path_jmp_off = buf.offset() - 1
+                path_jmp_after = buf.offset()
+                back = path_loop_start - path_jmp_after
+                if not (-128 <= back <= 127):
+                    raise ValueError("dyn path-copy loop disp out of rel8")
+                buf.bytes_[path_jmp_off] = back & 0xFF
+                # done:
+                path_done = buf.offset()
+                fwd = path_done - path_jge_after
+                if not (-128 <= fwd <= 127):
+                    raise ValueError("dyn path-copy jge disp out of rel8")
+                buf.bytes_[path_jge_off] = fwd & 0xFF
+
+                # path_scratch[r9] = 0  (null terminator at end of path_len)
+                buf.emit(0x48, 0x8D, 0x94, 0x24)        # lea rdx, [rsp+BUF_SIZE]
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
+                buf.emit(0x42, 0xC6, 0x04, 0x0A, 0x00)  # mov byte [rdx+r9], 0
+
+                # ---- sys_open(scratch, O_RDONLY) ----
+                # rdi = lea [rsp + BUF_SIZE]
+                buf.emit(0x48, 0x8D, 0xBC, 0x24)
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
+                self.asm.mov_esi_imm32(0)               # O_RDONLY
+                self.asm.mov_edx_imm32(0)
+                self.asm.mov_eax_imm32(2)               # sys_open
+                self.asm.syscall()
+                # Save fd at [rsp + BUF_SIZE + PATH_MAX]
+                buf.emit(0x48, 0x89, 0x84, 0x24)        # mov [rsp+disp32], rax
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE + PATH_MAX))
+
+                # ---- sys_read(fd, rsp, BUF_SIZE) ----
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)        # mov rdi, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE + PATH_MAX))
+                buf.emit(0x48, 0x89, 0xE6)              # mov rsi, rsp
+                self.asm.mov_edx_imm32(BUF_SIZE)
+                self.asm.mov_eax_imm32(0)               # sys_read
+                self.asm.syscall()
+                buf.emit(0x49, 0x89, 0xC2)              # mov r10, rax (bytes_read)
+
+                # Truncation sentinel (same as static variant).
+                buf.emit(0x49, 0x81, 0xFA)              # cmp r10, BUF_SIZE
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE))
+                buf.emit(0x75, 0x02)                    # jne +2
+                buf.emit(0x0F, 0x0B)                    # ud2
+
+                # ---- sys_close(fd) ----
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)
+                buf.emit_bytes(struct.pack("<I", BUF_SIZE + PATH_MAX))
+                self.asm.mov_eax_imm32(3)               # sys_close
+                self.asm.syscall()
+
+                # If r10 < 0, set r10 = 0.
+                buf.emit(0x4D, 0x85, 0xD2)              # test r10, r10
+                buf.emit(0x7D, 0x03)
+                buf.emit(0x4D, 0x31, 0xD2)
+
+                # Push each byte of the read buffer to the arena.
+                # rcx = byte counter, r10 = bytes_read (limit).
+                buf.emit(0x31, 0xC9)                    # xor ecx, ecx
+                push_loop_start = buf.offset()
+                buf.emit(0x4C, 0x39, 0xD1)              # cmp rcx, r10
+                buf.emit(0x7D, 0x00)
+                push_jge_off = buf.offset() - 1
+                push_jge_after = buf.offset()
+                # movzx eax, byte [rsp+rcx]
+                buf.emit(0x0F, 0xB6, 0x04, 0x0C)
+                buf.emit(0x89, 0xC2)                    # mov edx, eax
+                # arena_push inline.
+                self.asm.lea_rax_rip_rel("__helix_arena_base")
+                buf.emit(0x44, 0x8B, 0x18)              # mov r11d, [rax]
+                buf.emit(0x41, 0x81, 0xFB)
+                buf.emit_bytes(struct.pack("<I", HELIX_ARENA_CAP))
+                buf.emit(0x72, 0x02)
+                buf.emit(0xEB, 0x0B)
+                buf.emit(0x42, 0x89, 0x54, 0x98, 0x04)
+                buf.emit(0x41, 0xFF, 0xC3)
+                buf.emit(0x44, 0x89, 0x18)
+                buf.emit(0x48, 0xFF, 0xC1)              # inc rcx
+                buf.emit(0xEB, 0x00)
+                push_jmp_off = buf.offset() - 1
+                push_jmp_after = buf.offset()
+                push_back = push_loop_start - push_jmp_after
+                if not (-128 <= push_back <= 127):
+                    raise ValueError(
+                        "dyn read push loop disp out of rel8")
+                buf.bytes_[push_jmp_off] = push_back & 0xFF
+                push_done = buf.offset()
+                push_fwd = push_done - push_jge_after
+                if not (-128 <= push_fwd <= 127):
+                    raise ValueError(
+                        "dyn read push jge disp out of rel8")
+                buf.bytes_[push_jge_off] = push_fwd & 0xFF
+
+                # Restore stack.
+                buf.emit(0x48, 0x81, 0xC4)              # add rsp, FRAME
+                buf.emit_bytes(struct.pack("<I", FRAME))
+
+                # Return r10 (bytes pushed) in eax.
+                buf.emit(0x4C, 0x89, 0xD0)              # mov rax, r10
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
+
+            # The remaining 3 dyn variants are deferred to Inc 3
+            # (still erroring deterministically for fail-closed safety).
+            if kind in ("write_file_to_arena_dyn",
                          "read_file_int_dyn",
                          "write_file_dyn"):
                 raise NotImplementedError(
-                    f"Stage 60 Inc 1: {kind} lowering surface "
-                    f"shipped; Inc 2 will wire x86_64 codegen "
-                    f"(arena→stack path copy + sys_open). Use the "
-                    f"static-path variant for now.")
+                    f"Stage 60 Inc 3+: {kind} backend pending; "
+                    f"surface lowers cleanly. Use static variant "
+                    f"or wait for next Inc.")
 
             if kind == "print_int":
                 # Convert i32 -> ASCII decimal and write(1, buf, len).

@@ -186,30 +186,31 @@ def test_hello_world_example_runs():
     assert "Hello from Helix!" in out
 
 
-def test_stage60_inc1_read_file_to_arena_dyn_lowers_then_codegen_stub_errors():
-    """Stage 60 Inc 1: --read-file-to-arena-dyn lowers cleanly through
-    parser + typecheck + lower_ast, but codegen raises NotImplementedError
-    with a clear "Inc 2 will wire x86_64" message. Establishes the
-    surface contract; Inc 2 will implement the assembly."""
-    src = """
-    fn main() -> i32 {
-        let path_start = __strlit_to_arena("/tmp/dyn_path_test.bin");
-        let path_len = __strlen("/tmp/dyn_path_test.bin");
+def test_stage60_inc2_read_file_to_arena_dyn_round_trips():
+    """Stage 60 Inc 2: read_file_to_arena_dyn opens a path built at
+    runtime (via __strlit_to_arena), reads the file content into the
+    arena, and returns the byte count. End-to-end round-trip via WSL."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    test_file = os.path.join(out_dir, "stage60_inc2_dyn_read.txt")
+    with open(test_file, "wb") as f:
+        f.write(b"hello dyn\n")
+    wsl_path = _win_to_wsl(test_file)
+    # The path is built at runtime by __strlit_to_arena; the same
+    # name could be assembled via __str_concat_arena in real code.
+    src = f"""
+    fn main() -> i32 {{
+        let path_start = __strlit_to_arena("{wsl_path}");
+        let path_len = __strlen("{wsl_path}");
         let n_read = read_file_to_arena_dyn(path_start, path_len);
-        42
-    }
+        n_read
+    }}
     """
-    prog = parse(src, include_stdlib=True)
-    grad_pass(prog)
-    mod = lower(prog)
-    fdce_module(mod)
-    try:
-        compile_module_to_elf(mod)
-        assert False, "expected NotImplementedError from Inc 1 stub"
-    except NotImplementedError as e:
-        msg = str(e)
-        assert "read_file_to_arena_dyn" in msg
-        assert "Inc 2 will wire" in msg
+    rc, out, err = _build_and_run(src)
+    # File is 10 bytes ("hello dyn\n").
+    assert rc == 10, f"expected rc=10 (bytes read), got rc={rc} err={err!r}"
 
 
 def test_stage60_inc1_write_file_to_arena_dyn_surface_lowers():
