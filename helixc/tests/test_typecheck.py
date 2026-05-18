@@ -4689,6 +4689,75 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
         assert t.level == lvl
 
 
+def test_stage68_inc3_lift_conf_strips_outer_wrapper():
+    """Stage 68 Inc 3 — `__lift_conf(x)` opts out of the confidence
+    regime: a `Conf<f32>` becomes `f32`."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Conf<f32>) -> f32 {
+        __lift_conf(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    # Return type matches — no diagnostic.
+    type_errs = [str(e) for e in errors if "return" in str(e).lower()
+                 or "Conf" in str(e) or "f32" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Conf<f32> -> f32 via __lift_conf; got: {type_errs}")
+
+
+def test_stage68_inc3_lift_conf_preserves_inner_wrappers():
+    """Stage 68 Inc 3 — `__lift_conf(Conf<D<f32>>)` strips ONLY the
+    outer Conf and keeps D<f32> intact. Mirrors the layering
+    convention (Conf wraps the outermost; D wraps Logic; Logic
+    innermost)."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: Conf<D<f32>>) -> D<f32> {
+        __lift_conf(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected Conf<D<f32>> -> D<f32> via __lift_conf; got: "
+        f"{type_errs}")
+
+
+def test_stage68_inc3_lift_conf_identity_on_non_conf():
+    """Stage 68 Inc 3 — `__lift_conf(f32)` is identity (returns f32).
+    Safe to use at any call site even if the input isn't actually
+    Conf-tagged."""
+    from helixc.frontend.typecheck import TypeChecker
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn user(x: f32) -> f32 {
+        __lift_conf(x)
+    }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    type_errs = [str(e) for e in errors
+                 if "return" in str(e).lower() or "Conf" in str(e)]
+    assert len(type_errs) == 0, (
+        f"expected f32 -> f32 identity via __lift_conf; got: "
+        f"{type_errs}")
+
+
 def test_stage68_inc2_conf_propagates_through_binary_add():
     """Stage 68 Inc 2 — propagation algebra. `Conf<f32> + f32`
     yields `Conf<f32>` (low conf wins; Phase-0 default level is

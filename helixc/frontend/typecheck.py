@@ -2796,6 +2796,11 @@ class TypeChecker:
         "__trace_event_count",
         # Stage 66 Inc 5a — Tier 4 #16 explicit move builtin.
         "__move",
+        # Stage 68 Inc 3 — confidence-tag opt-out. `__lift_conf(x)`
+        # takes a Conf-wrapped value and returns the inner T,
+        # acknowledging the user has exited the uncertainty regime
+        # at that point. Mirrors `unwrap_logic`'s discard contract.
+        "__lift_conf",
         "__strlen", "__strbyte", "__streq", "__strlit_to_arena",
         "__hash_i32",
         # Stage 55 Inc 1 — runtime string builtins. Operate on
@@ -4466,6 +4471,27 @@ class TypeChecker:
                 # subsequent `&x` or `&mut x` is rejected by the Inc 3
                 # &/&mut wiring (check_borrow_* refuse from MOVED).
                 # Skipped if x's type is a `@copy` struct (Inc 4).
+                # Stage 68 Inc 3 — confidence-tag opt-out builtin.
+                # `__lift_conf(x)` returns the inner type of a TyConf
+                # value, acknowledging the user is exiting the
+                # uncertainty regime at this point. If x is not
+                # TyConf-wrapped, the call is identity (returns x's
+                # type unchanged) so the builtin remains safe at
+                # any call site. Mirrors `unwrap_logic` semantics.
+                if bn == "__lift_conf" and len(arg_tys) == 1:
+                    arg_ty = arg_tys[0]
+                    # Walk the wrapper chain to find the innermost
+                    # TyConf, peel it, and rebuild the wrapper stack
+                    # above it.
+                    def _strip_conf(t):
+                        if isinstance(t, TyConf):
+                            return t.inner
+                        if isinstance(t, TyDiff):
+                            return TyDiff(inner=_strip_conf(t.inner))
+                        if isinstance(t, TyLogic):
+                            return TyLogic(inner=_strip_conf(t.inner))
+                        return t
+                    return _strip_conf(arg_ty)
                 if (bn == "__move" and len(arg_tys) == 1
                         and isinstance(expr.args[0], A.Name)):
                     if self._borrow_enforcement_enabled():

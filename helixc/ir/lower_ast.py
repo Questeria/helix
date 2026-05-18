@@ -1880,6 +1880,15 @@ class Lowerer:
                     and expr.callee.name == "__move"
                     and len(expr.args) == 1):
                 return self._lower_expr(expr.args[0])
+            # Stage 68 Inc 3 — confidence-tag opt-out builtin.
+            # `__lift_conf(x)` is a typecheck-only marker that
+            # strips the TyConf wrapper. At IR / codegen level it
+            # is identity — just lower x. Phase-0 representation
+            # of TyConf is identity-erased to the inner type.
+            if (isinstance(expr.callee, A.Name)
+                    and expr.callee.name == "__lift_conf"
+                    and len(expr.args) == 1):
+                return self._lower_expr(expr.args[0])
             # Stage 36 Increment 1: provenance-typed primitives.
             # prove(value, source) lowers to value (Phase-0: the Logic<T>
             # wrapper has zero runtime overhead; provenance lives purely
