@@ -584,6 +584,38 @@ _MODAL_ELIM_TO_KIND: dict[str, str] = {
     "from_uncertain": "uncertain",
 }
 
+# Stage 53 Inc 1: hoist the modal upgrade hint table to module
+# level so the launder check at the Stage 53 user-fn call site
+# (helper-fn indirection) can share the same hint copy with the
+# existing Stage 40 F1 into_X consult. Pre-Stage-53 this was a
+# 3x-duplicated local dict — same gate-2 F3 hoisting pattern that
+# kicked off _MODAL_ELIM_TO_KIND single-source-of-truth.
+_MODAL_UPGRADE_HINT: dict[tuple[str, str], str] = {
+    ("believed", "known"):
+        "use `confirm(b)` — the audited "
+        "Believed -> Known epistemic upgrade",
+    ("goal", "known"):
+        "use `act_on(g)` — the audited "
+        "Goal -> Known epistemic upgrade",
+    ("uncertain", "known"):
+        "resolve uncertainty via outside "
+        "observation BEFORE the value enters "
+        "the type system as Known; an unwrap-"
+        "rewrap is not an observation and "
+        "cannot manufacture epistemic "
+        "certainty",
+    ("uncertain", "believed"):
+        "form the belief via inference from "
+        "non-Uncertain facts; Uncertain values "
+        "gate info-gathering actions, they do "
+        "not seed beliefs by themselves",
+    ("uncertain", "goal"):
+        "the planner sets a Goal independently "
+        "of any Uncertain<T>; an unwrap-rewrap "
+        "implies the goal came from uncertainty, "
+        "which is a category mistake",
+}
+
 
 class TypeChecker:
     def __init__(self, prog: A.Program):
@@ -731,6 +763,15 @@ class TypeChecker:
         # DROPS on inner-Assign (because the assign invalidates
         # the static Ok/Err claim).
         self._modal_origin_provenance: dict[str, str] = {}
+        # Stage 53 Inc 1: map user-defined function names → the modal
+        # kind of their declared return type (e.g. 'known', 'uncertain').
+        # Read-only after Pass 1 (_register_fn). Populated from sig.ret
+        # for any user fn whose return is TyModal. Used by
+        # _modal_origin_of_expr to propagate taint through helper-fn
+        # calls — closes the LAST modal-launder bypass (helper-fn
+        # indirection), which was the Stage 40 H1 "different defect
+        # class" deferred from Stage 52.
+        self._fn_modal_return_kind: dict[str, str] = {}
         # Stage 52 gate-1 F1e / Inc 2: parallel stack tracking
         # names introduced via let in each open block. Used at
         # block-exit restore to distinguish inner-shadow lets
@@ -819,6 +860,9 @@ class TypeChecker:
         # Stage 52 closure gate-7 type-design HIGH-1: also clear
         # the covert-return-channel slot (defense-in-depth).
         self._last_modal_assigns_popped = set()
+        # Stage 53 Inc 1: parallel clear for re-entrancy safety
+        # (LSP/REPL). Repopulated by _register_fn during Pass 1.
+        self._fn_modal_return_kind = {}
         self._recursive_enum_names: set[str] = set()
         self._type_alias_cache = {}
         self._local_const_scalar_scopes = []
@@ -1260,6 +1304,13 @@ class TypeChecker:
         if fn.name in self.functions:
             raise TypeError_(f"duplicate function {fn.name!r}", fn.span)
         self.functions[fn.name] = sig
+        # Stage 53 Inc 1: if the declared return type is a modal
+        # wrapper, record the kind so _modal_origin_of_expr can
+        # propagate taint through user-defined helper functions
+        # (closes the helper-fn indirection laundering vector).
+        # Read-only after Pass 1; no per-fn clear needed.
+        if isinstance(sig.ret, TyModal):
+            self._fn_modal_return_kind[fn.name] = sig.ret.kind
 
     def _compute_recursive_enum_names(self) -> set[str]:
         recursive: set[str] = set()
@@ -2428,11 +2479,16 @@ class TypeChecker:
 
         Cases handled:
         - Name lookup in `_modal_origin_provenance` (covers let-alias
-          `let s = r;` where r is tainted — CRITICAL-2).
+          `let s = r;` where r is tainted — Stage 52 gate-6 CRITICAL-2).
         - Direct `Call(Name(from_X), ...)` for any modal eliminator
           (covers `match from_uncertain(u) { x => ... }` scrutinee
-          — CRITICAL-1, and reuses the same map as Let/Assign
-          populate sites for invariant unity).
+          — Stage 52 gate-6 CRITICAL-1, and reuses the same map as
+          Let/Assign populate sites for invariant unity).
+        - Stage 53 Inc 1: `Call(Name(user_fn), ...)` where user_fn's
+          declared return type is a modal wrapper (TyModal). Closes
+          the helper-fn indirection laundering vector — `fn launder(
+          x: i32) -> Known<i32> { into_known(x) }` now propagates
+          'known' at every call site, just like into_known() itself.
 
         Returning None means "no static modal-origin claim" — the
         F1 launder consult falls through to the Phase-0 dynamic
@@ -2449,13 +2505,24 @@ class TypeChecker:
         - Match scrutinee for PatBind/PatOr taint propagation:
           the `scrut_kind` propagation in `_check_expr`'s A.Match
           branch.
+
+        Shadowed builtin safety: if a user defines a fn shadowing
+        a builtin modal eliminator (e.g. `fn from_uncertain(...)`),
+        `_MODAL_ELIM_TO_KIND` wins because it's checked FIRST. The
+        shadow error fires separately at fn-decl site; this helper's
+        order ensures no incidental modal-origin inconsistency.
         """
         if isinstance(expr, A.Name):
             return self._modal_origin_provenance.get(expr.name)
-        if (isinstance(expr, A.Call)
-                and isinstance(expr.callee, A.Name)
-                and expr.callee.name in _MODAL_ELIM_TO_KIND):
-            return _MODAL_ELIM_TO_KIND[expr.callee.name]
+        if isinstance(expr, A.Call) and isinstance(expr.callee, A.Name):
+            callee = expr.callee.name
+            # Stage 52: builtin modal eliminators (from_known, etc.).
+            if callee in _MODAL_ELIM_TO_KIND:
+                return _MODAL_ELIM_TO_KIND[callee]
+            # Stage 53 Inc 1: user-defined helpers whose declared
+            # return type is a modal wrapper.
+            if callee in self._fn_modal_return_kind:
+                return self._fn_modal_return_kind[callee]
         return None
 
     def _check_fn(self, fn: A.FnDecl) -> None:
@@ -4433,43 +4500,11 @@ class TypeChecker:
                     # F3 fix was meant to prevent. Use the module-level
                     # _MODAL_ELIM_TO_KIND (the gate-2 F3 single source
                     # of truth) instead.
-                    _modal_upgrade_hint = {
-                        ("believed", "known"):
-                            "use `confirm(b)` — the audited "
-                            "Believed -> Known epistemic upgrade",
-                        ("goal", "known"):
-                            "use `act_on(g)` — the audited "
-                            "Goal -> Known epistemic upgrade",
-                        # Stage 40 closure gate-3 silent-failure LOW
-                        # fix: restore the sharper Uncertain-source
-                        # framing the gate-1 F1 had — Uncertain
-                        # upgrades are not just "no transition yet",
-                        # they're "the AI-safety property of Stage 40
-                        # says you cannot do this without an outside
-                        # observation". The generic "request a
-                        # future-stage spec" fallback misled
-                        # contributors about Stage 40's actual
-                        # semantics. Phase-0 deliberately ships NO
-                        # Uncertain -> X transitions; this is by
-                        # design, not a product limitation.
-                        ("uncertain", "known"):
-                            "resolve uncertainty via outside "
-                            "observation BEFORE the value enters "
-                            "the type system as Known; an unwrap-"
-                            "rewrap is not an observation and "
-                            "cannot manufacture epistemic "
-                            "certainty",
-                        ("uncertain", "believed"):
-                            "form the belief via inference from "
-                            "non-Uncertain facts; Uncertain values "
-                            "gate info-gathering actions, they do "
-                            "not seed beliefs by themselves",
-                        ("uncertain", "goal"):
-                            "the planner sets a Goal independently "
-                            "of any Uncertain<T>; an unwrap-rewrap "
-                            "implies the goal came from uncertainty, "
-                            "which is a category mistake",
-                    }
+                    # Stage 53 Inc 1 hoist: use the module-level
+                    # _MODAL_UPGRADE_HINT instead of duplicating the
+                    # dict locally. The hint table is now shared with
+                    # the Stage 53 helper-fn-indirection launder check
+                    # (gate-2 F3 single-source-of-truth pattern).
                     # Stage 40 closure gate-2 M1 fix (MEDIUM conf
                     # 85): only fire the laundering diagnostic when
                     # the inner from_X(...) actually returned a
@@ -4509,7 +4544,7 @@ class TypeChecker:
                         source_kind = _MODAL_ELIM_TO_KIND[
                             expr.args[0].callee.name]
                         if source_kind != target_kind:
-                            upgrade_hint = _modal_upgrade_hint.get(
+                            upgrade_hint = _MODAL_UPGRADE_HINT.get(
                                 (source_kind, target_kind))
                             if upgrade_hint:
                                 hint = upgrade_hint
@@ -4550,7 +4585,7 @@ class TypeChecker:
                         source_kind = self._modal_origin_provenance[
                             expr.args[0].name]
                         if source_kind != target_kind:
-                            upgrade_hint = _modal_upgrade_hint.get(
+                            upgrade_hint = _MODAL_UPGRADE_HINT.get(
                                 (source_kind, target_kind))
                             if upgrade_hint:
                                 hint = upgrade_hint
@@ -5282,6 +5317,65 @@ class TypeChecker:
                 self._check_call_basic(expr, sig, arg_tys, scope)
                 self._check_call_shapes(expr, sig, arg_tys, scope)
                 self._check_call_effects(expr, sig)
+                # Stage 53 Inc 1: helper-fn indirection launder check.
+                # If the user-fn returns a modal kind AND any arg is a
+                # Name carrying a DIFFERENT tracked modal-origin, the
+                # call is effectively `into_RETKIND(from_ARGKIND(...))`
+                # — a category-error launder. Mirrors the F1 launder
+                # check pattern for builtin into_X calls.
+                #
+                # Reproducer (was silent pre-Stage-53):
+                #   fn launder(x: i32) -> Known<i32> { into_known(x) }
+                #   let r = from_uncertain(u);
+                #   let k = launder(r);  // <-- fires here
+                #
+                # This is the LAST modal-laundering bypass — closes
+                # the Stage 40 H1 "different defect class" deferred
+                # from Stage 52.
+                fn_ret_kind = self._fn_modal_return_kind.get(
+                    expr.callee.name)
+                if fn_ret_kind is not None:
+                    for arg_expr in expr.args:
+                        arg_kind = self._modal_origin_of_expr(arg_expr)
+                        if (arg_kind is not None
+                                and arg_kind != fn_ret_kind):
+                            arg_name_repr = (
+                                f"'{arg_expr.name}'"
+                                if isinstance(arg_expr, A.Name)
+                                else "argument"
+                            )
+                            upgrade_hint = _MODAL_UPGRADE_HINT.get(
+                                (arg_kind, fn_ret_kind))
+                            if upgrade_hint:
+                                hint = upgrade_hint
+                            else:
+                                hint = (
+                                    "Phase-0 has no "
+                                    f"{arg_kind.capitalize()} -> "
+                                    f"{fn_ret_kind.capitalize()} "
+                                    "transition; if this direction "
+                                    "is semantically meaningful, "
+                                    "request a future-stage spec "
+                                    "and keep the value in its "
+                                    "current modal kind until then"
+                                )
+                            self.errors.append(TypeError_(
+                                f"{expr.callee.name}({arg_name_repr}) "
+                                f"launders a "
+                                f"{arg_kind.capitalize()}<T> "
+                                f"into "
+                                f"{fn_ret_kind.capitalize()}<T> "
+                                f"via helper-fn indirection — "
+                                f"the helper's declared return "
+                                f"type asserts {fn_ret_kind.capitalize()}, "
+                                f"but the argument carries a "
+                                f"tracked from_{arg_kind}(...) "
+                                f"origin. Same launder semantics "
+                                f"as `into_{fn_ret_kind}(from_"
+                                f"{arg_kind}(v))`.",
+                                expr.span,
+                                hint=hint,
+                            ))
                 if expr.callee.name in getattr(
                         self, "_invalid_refined_return_functions", set()):
                     return self._erase_refinement(sig.ret)

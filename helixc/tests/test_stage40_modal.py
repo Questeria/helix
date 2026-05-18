@@ -1793,6 +1793,130 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
         f"Gate-7 type-design HIGH-1 fix regressed."
 
 
+# ============================================================
+# Stage 53 Inc 1 regression pins (helper-fn indirection — the
+# LAST modal-launder bypass closed)
+# ============================================================
+
+
+def test_stage53_inc1_helper_fn_indirection_fires():
+    """Stage 53 Inc 1: `fn launder(x: i32) -> Known<i32> {
+    into_known(x) }` called with from_X-tainted arg MUST FIRE.
+    Closes the Stage 40 H1 "different defect class" deferred
+    from Stage 52. Uses the unified `_modal_origin_of_expr` +
+    `_fn_modal_return_kind` + user-fn launder check at the
+    call site (mirror of F1 into_X consult pattern)."""
+    src = """
+fn launder(x: i32) -> Known<i32> { into_known(x) }
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let r: i32 = from_uncertain(u);
+    let k: Known<i32> = launder(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e)
+               and "helper-fn indirection" in str(e)
+               for e in errs), \
+        f"Helper-fn indirection launder must fire " \
+        f"(Stage 53 Inc 1 reproducer regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage53_inc1_two_hop_chain_fires():
+    """Stage 53 Inc 1: 2-hop chain where step1 returns Uncertain
+    and step2 returns Known. The from_uncertain unwrap creates a
+    tainted r; passing r through step2 (which returns Known) is
+    a launder."""
+    src = """
+fn step1(x: i32) -> Uncertain<i32> { into_uncertain(x) }
+fn step2(x: i32) -> Known<i32> { into_known(x) }
+fn main() -> i32 {
+    let u: Uncertain<i32> = step1(42);
+    let r: i32 = from_uncertain(u);
+    let k: Known<i32> = step2(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "step2" in str(e)
+               for e in errs), \
+        f"2-hop helper chain must fire at the kind-mismatched " \
+        f"hop (Stage 53 Inc 1 regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage53_inc1_negative_same_kind_untainted_arg():
+    """Stage 53 Inc 1 negative: same-kind helper with untainted
+    argument must NOT fire. `wrap_known(99)` is legitimate — the
+    literal 99 has no tracked modal-origin, so the helper's
+    Known return is unambiguous."""
+    src = """
+fn wrap_known(x: i32) -> Known<i32> { into_known(x) }
+fn main() -> i32 {
+    let k: Known<i32> = wrap_known(99);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"Untainted argument must not trigger helper-fn " \
+        f"launder (Stage 53 Inc 1 negative regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage53_inc1_negative_pass_through_known_only():
+    """Stage 53 Inc 1 negative: helper that takes Known and
+    returns Known (pure pass-through). The arg k1 is legitimately
+    Known via into_known; rewrap returns Known. No launder."""
+    src = """
+fn rewrap(k: Known<i32>) -> Known<i32> { k }
+fn main() -> i32 {
+    let k1: Known<i32> = into_known(5);
+    let k2: Known<i32> = rewrap(k1);
+    from_known(k2)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert not any("launder" in str(e) for e in errs), \
+        f"Same-kind pass-through must not fire " \
+        f"(Stage 53 Inc 1 negative regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage53_inc1_mutual_recursion_via_modal_fns():
+    """Stage 53 Inc 1 edge case: mutual recursion across modal-
+    typed fns. even_wrap and odd_wrap both return Known<i32> and
+    call each other. Pass 1 (_register_fn) populates
+    _fn_modal_return_kind for both before any body is checked,
+    so the call-site launder consult works for mutual calls."""
+    src = """
+fn even_wrap(x: i32) -> Known<i32> { if x == 0 { into_known(0) } else { odd_wrap(x - 1) } }
+fn odd_wrap(x: i32) -> Known<i32>  { if x == 0 { into_known(1) } else { even_wrap(x - 1) } }
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(3);
+    let r: i32 = from_uncertain(u);
+    let k: Known<i32> = even_wrap(r);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) and "even_wrap" in str(e)
+               for e in errs), \
+        f"Mutual-recursion modal-fn launder must fire " \
+        f"(Stage 53 Inc 1 edge case regression), got: " \
+        f"{[str(e) for e in errs]}"
+
+
 def test_stage52_gate5_high_1_patbind_taint_propagation_in_guard():
     """Gate-5 HIGH-1: PatBind taint propagation MUST run BEFORE
     the guard expression, not after. Pre-gate-5 the order was:
