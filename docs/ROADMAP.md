@@ -303,6 +303,20 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 60** ✅ **CLOSED 2026-05-18** — Tier 1 #4 Inc 3
+  dynamic-path file I/O (see `docs/stage60-progress-2026-05-18.md`):
+  - 4 dyn builtins shipped end-to-end (read_file_to_arena_dyn,
+    write_file_to_arena_dyn, read_file_int_dyn, write_file_dyn)
+  - All compose with __strlit_to_arena + __str_concat_arena for
+    runtime-built paths
+  - 4 commits: Inc 1 surface, Inc 2 read, Inc 3 write,
+    Inc 4 read_int + write_dyn alias
+  - 1 cascade defect found+fixed (Inc 4 je-displacement off-by-2;
+    regression-pinned)
+  - test_strings_io.py 15/15 + self-host gate 223/223 GREEN
+  - Stage 55 Inc 3 deferral closed. Inc 7 (checkpoint stdlib)
+    → Stage 61.
+
 - **Stage 59** ✅ **CLOSED 2026-05-18** — Tier 4 #15 nested
   pattern destructuring + 232-commit autonomous polish-burst
   (see `docs/stage59-progress-2026-05-18.md`):
