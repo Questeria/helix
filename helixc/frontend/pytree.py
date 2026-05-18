@@ -339,6 +339,38 @@ def tree_zip(decl, struct_decls: dict, a_leaves: dict, b_leaves: dict,
     return unflatten_pytree(decl, struct_decls, zipped, default=default)
 
 
+def tree_hash(leaves_by_path: dict) -> str:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style content hash
+    of a pytree's leaves.
+
+    Computes SHA-256 over the sorted-by-path (path, repr(value)) pairs
+    of the pytree. Stable across Python dict ordering (sorted-by-path).
+    Two pytrees with identical leaf paths + identical leaf values
+    (per Python `repr`) hash identically.
+
+    Use cases:
+    - Cache key for memoized gradient computations: same params →
+      same hash → reuse cached gradient
+    - Detect when training params have actually changed (compare
+      hash across steps for warm-restart logic)
+    - Reproducibility: log tree_hash(params) per epoch to
+      audit-trail the exact parameter snapshot
+
+    Note: uses `repr(value)` for serialization. For float values
+    this is exact (Python's repr is round-trippable for floats).
+    For custom types pass via `tree_map` first to project to a
+    hashable shape.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    for path in sorted(leaves_by_path.keys()):
+        h.update(path.encode("utf-8"))
+        h.update(b"=")
+        h.update(repr(leaves_by_path[path]).encode("utf-8"))
+        h.update(b";")
+    return h.hexdigest()
+
+
 def tree_leaves(leaves_by_path: dict) -> list:
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_leaves.
 

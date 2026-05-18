@@ -605,5 +605,43 @@ def test_tree_reduce_deterministic_order():
     assert seq == "123"
 
 
+def test_tree_hash_deterministic():
+    """Stage 59 follow-on / Tier 2 #7 polish: tree_hash returns the
+    same SHA-256 for the same leaves dict, across calls."""
+    from helixc.frontend.pytree import tree_hash
+    leaves = {"w1": 1.5, "w2": -2.25, "b": 0.0}
+    h1 = tree_hash(leaves)
+    h2 = tree_hash(leaves)
+    assert h1 == h2
+    # SHA-256 hex is 64 chars
+    assert len(h1) == 64
+    assert all(c in "0123456789abcdef" for c in h1)
+
+
+def test_tree_hash_sort_order_independent():
+    """Stage 59 follow-on: tree_hash sorts by path so dict insertion
+    order doesn't change the hash. Two dicts with identical key→value
+    mappings hash identically regardless of how they were built."""
+    from helixc.frontend.pytree import tree_hash
+    a = {"w1": 1.0, "w2": 2.0, "b": 0.5}
+    b = {"b": 0.5, "w2": 2.0, "w1": 1.0}  # different insertion order
+    assert tree_hash(a) == tree_hash(b)
+
+
+def test_tree_hash_different_values_differ():
+    """Stage 59 follow-on: changing any leaf value produces a
+    different hash — the basic invariant of content addressing."""
+    from helixc.frontend.pytree import tree_hash
+    base = {"w": 1.0, "b": 0.0}
+    diff_value = {"w": 1.0 + 1e-9, "b": 0.0}
+    diff_key = {"w": 1.0, "c": 0.0}
+    empty = {}
+    assert tree_hash(base) != tree_hash(diff_value)
+    assert tree_hash(base) != tree_hash(diff_key)
+    assert tree_hash(base) != tree_hash(empty)
+    # Empty dict still produces valid SHA-256
+    assert len(tree_hash(empty)) == 64
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
