@@ -5839,7 +5839,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--check-program-signature-hash",
         "--list-modules", "--module-hash", "--pytree-shape",
         "--list-pytrees", "--pytree-leaf-paths", "--validate-pytrees",
-        "--autotune-summary", "--autotune-budget",
+        "--autotune-summary", "--autotune-budget", "--validate-autotune",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace",
     ):
@@ -5999,6 +5999,49 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_validate_autotune_clean_exits_0(tmp_path):
+    """Stage 59 follow-on / Tier 2 #8 polish: --validate-autotune
+    exits 0 silently on a clean @autotune fn."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "good.hx"
+    src.write_text(
+        "@autotune(BLOCK: [16, 32])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + BLOCK }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-autotune", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_validate_autotune_empty_list_exits_1(tmp_path):
+    """Stage 59 follow-on: --validate-autotune surfaces a malformed
+    @autotune attr (empty value list) as a diagnostic + exit 1."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "bad.hx"
+    src.write_text(
+        "@autotune(BLOCK: [])\n"
+        "@kernel\n"
+        "fn k(x: i32) -> i32 { x + BLOCK }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-autotune", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "BLOCK" in proc.stdout
+    assert "empty" in proc.stdout
 
 
 def test_stage59_validate_pytrees_all_ok_exits_0(tmp_path):

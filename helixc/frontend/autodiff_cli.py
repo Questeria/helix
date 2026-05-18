@@ -49,6 +49,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         CI gate: validate every struct as a pytree; exit 1 if any fail.
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
+    --validate-autotune <file.hx>
+        CI gate: validate every @autotune attr; exit 1 if any malformed.
     --autotune-budget <file.hx> <max_total>
         CI gate: exit 0 if total variants <= budget, 1 if over.
 
@@ -551,6 +553,29 @@ def _pytree_shape(path: str, struct_name: str) -> int:
     return 0
 
 
+def _validate_autotune(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish: run validate_autotune_prog
+    over a file and print all diagnostics. Exit 0 if clean, 1 if any.
+
+    Pre-existing validate_autotune_prog (Audit 28.8 A12) was exposed
+    via helixc.check; this surfaces it at the CLI for standalone
+    autotune-policy assertions.
+
+    Use case: pre-commit hook asserting no @autotune attribute has
+    drifted into a malformed state (e.g., empty value list, non-int
+    values, oversized Cartesian product per trap 27001).
+    """
+    from .autotune import validate_autotune_prog
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    diags = validate_autotune_prog(prog)
+    if not diags:
+        return 0
+    for d in diags:
+        print(d)
+    return 1
+
+
 def _autotune_summary(path: str) -> int:
     """Stage 59 follow-on / Tier 2 #8 polish: print the autotune
     variant-count summary for a source file.
@@ -928,6 +953,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_autotune_summary(args[0]))
+
+    if "--validate-autotune" in flags:
+        if len(args) < 1:
+            print("usage: --validate-autotune <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_autotune(args[0]))
 
     if "--autotune-budget" in flags:
         if len(args) < 2:
