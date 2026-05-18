@@ -1800,6 +1800,29 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 # ============================================================
 
 
+def test_stage52_inc8_unsafe_block_yield_in_into_known_fires():
+    """Stage 52 Inc 8 / gate-11 silent-failure HIGH-1: `into_X(
+    unsafe { from_Y(u) })` MUST FIRE. Pre-fix, the Inc 6 recursive
+    `_modal_origin_of_expr` handled A.Block/A.If/A.Match but missed
+    A.UnsafeBlock — silently bypassing all category-error launder
+    audits when the eliminator was wrapped in `unsafe { ... }`.
+    Cascading-defect rhythm: gate-10 caught Inc 6 missed wiring;
+    gate-11 catches Inc 7 missed AST coverage."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let k: Known<i32> = into_known(unsafe { from_uncertain(u) });
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"unsafe-block-yield into_X MUST FIRE (Stage 52 Inc 8 / " \
+        f"gate-11 HIGH-1), got: {[str(e) for e in errs]}"
+
+
 def test_stage52_inc7_inline_match_in_into_known_fires():
     """Stage 52 Inc 7 / gate-10 HIGH-1: inline
     `into_known(match scrut { x => from_uncertain(u) })` MUST

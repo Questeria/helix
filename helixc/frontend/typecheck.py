@@ -21,7 +21,15 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
+
+# Stage 52 closure gate-11 type-design F2 fix (was LOW, promoted to
+# MEDIUM after Inc 7 expanded the surface to 5 consult sites + 3
+# install sites + 4 module-level dicts). Single-line Literal alias
+# gives mypy/pyright a chance to catch typos like "goal" vs "goals"
+# at type-check time instead of silently bypassing the launder check.
+# Zero runtime cost.
+ModalKind = Literal["known", "believed", "goal", "uncertain"]
 
 from . import ast_nodes as A
 from . import presburger as P
@@ -577,7 +585,7 @@ _INT_PRIM_NAMES = frozenset({
 # (e.g. a hypothetical `Suspected<T>` between Believed and Uncertain)
 # would have required touching all 3 sites. Hoisting kills the
 # divergence risk.
-_MODAL_ELIM_TO_KIND: dict[str, str] = {
+_MODAL_ELIM_TO_KIND: dict[str, ModalKind] = {
     "from_known":     "known",
     "from_believed":  "believed",
     "from_goal":      "goal",
@@ -2505,6 +2513,13 @@ class TypeChecker:
         - Match scrutinee for PatBind/PatOr taint propagation:
           the `scrut_kind` propagation in `_check_expr`'s A.Match
           branch.
+        - Stage 52 Inc 7 / gate-10 HIGH-1 fix: the `source_kind`
+          consult at the BUILTIN into_X launder check in
+          `_check_expr`'s A.Call into_X arm (replaces the prior
+          2 narrow syntactic guards — A.Call inner-from-X and
+          A.Name taint-tracking).
+        - Stage 53 Inc 1: the `arg_kind` consult at the user-fn
+          launder check in `_check_expr`'s A.Call user-fn arm.
 
         Shadowed builtin safety: if a user defines a fn shadowing
         a builtin modal eliminator (e.g. `fn from_uncertain(...)`),
@@ -2538,6 +2553,15 @@ class TypeChecker:
             if expr.final_expr is not None:
                 return self._modal_origin_of_expr(expr.final_expr)
             return None
+        # Stage 52 Inc 8 / gate-11 silent-failure HIGH-1 fix:
+        # `unsafe { ... }` wraps a Block; the inner Block's tail
+        # is exactly the same modal source as Block tail. Without
+        # this arm, `into_known(unsafe { from_uncertain(u) })`
+        # silently passed — cascading-defect: gate-10 caught
+        # Inc 6's missed wiring on builtin into_X; gate-11 catches
+        # Inc 7's missed AST coverage on UnsafeBlock.
+        if isinstance(expr, A.UnsafeBlock):
+            return self._modal_origin_of_expr(expr.body)
         if isinstance(expr, A.If):
             then_kind = self._modal_origin_of_expr_block_tail(expr.then)
             if expr.else_ is None:

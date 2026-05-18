@@ -139,7 +139,7 @@ Re-sequenced after Stage 46-47 closed:
   match-arm). Inc 5 (1fbebe2) shipped loop body union. Inc 6
   (0d133c9) shipped recursive yield-from-modal detection. Inc 7
   (this gate-10 fix) unified the builtin into_X consult through
-  `_modal_origin_of_expr`, closing 14+ launder paths total via:
+  `_modal_origin_of_expr`, closing 17+ distinct launder paths via:
   - PatBind taint propagation (gate-4 HIGH-1, ccca046)
   - PatBind hoisted above guard check (gate-5 HIGH-1, fb9ad42)
   - Call-form match scrutinee (gate-6 CRITICAL-1, fb9ad42)
