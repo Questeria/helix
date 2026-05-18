@@ -600,12 +600,14 @@ Re-sequenced after Stage 46-47 closed:
     HIGH-#3 + HIGH-#4.
 
   **Closure markers that STAND**:
-  - Stage 64 (DEFERRED to v1.1) — Stage 64 Inc 3 speculative
-    parallel agent SHIPPED in isolated worktree
+  - Stage 64 (BACK IN v1.0 per user 2026-05-18 directive
+    reversal) — Stage 64 Inc 3 speculative parallel agent
+    SHIPPED in isolated worktree
     `C:\Projects\Kovostov-Native-stage64-inc3` (commit
     `c90c4150`, 96 PTX + 477 regression GREEN, 9 new Stage 64
-    Inc 3 tests for TILE_ADD/SUB/MUL f32+i32). Available for
-    cherry-pick if v1.1 GPU CI lands ahead of schedule.
+    Inc 3 tests for TILE_ADD/SUB/MUL f32+i32). To be cherry-
+    picked into main as Stage 105. Inc 4 (Stage 106) + Inc 5
+    (Stage 107) follow before Stage 108 v1.0 release stop.
   - Stages 89-90 (typed holes) — partial closure stands; expected-
     type plumbing for other contexts is Inc 3+ enhancement, not
     Stage 89 unfinished.
@@ -617,25 +619,107 @@ Re-sequenced after Stage 46-47 closed:
   fix bundle next (whitelist + chain-walk + constructor idempotency
   + strip-chain completion + safety.hx TyAttribution + test fix).
 
-- **Stage 64 DEFERRED to v1.1 2026-05-18 (per user directive)** —
-  Tier 2 #6 tensor codegen split:
+- **Stage 64 SCOPE UPDATE 2026-05-18 (REVERSAL — back in v1.0)** —
+  Tier 2 #6 tensor codegen now ships fully in v1.0; v2.0 becomes
+  the "GPU Complete" milestone (everything past PTX text emission).
   - Inc 1 SHIPPED (bf16/f16 HBM dtype) + Inc 2 SHIPPED (TILE_ZEROS
-    register-fill in PTX backend) remain in v1.0 as the PTX
-    backend architectural validation.
-  - Inc 3-5 (TILE_ADD/SUB/MUL elementwise, TILE_MATMUL via wmma
-    Tensor Core fragments, tile-IR optimization passes) **moved to
-    v1.1**. Reason: full closure requires GPU CI infrastructure
-    that v1.0 does not have. Per user: "Defer, after v1 will
-    feature GPU."
-  - v1.0 ships with CPU x86_64 codegen only. PTX text emission
-    syntax-validates but is not exercised against real GPU
-    hardware. v1.1 will add GPU CI runner + Inc 3-5 + actual
-    end-to-end NVIDIA GPU validation.
-  - **Speculative parallel work**: a worktree-isolated agent
-    is starting Inc 3 (TILE_ADD/SUB/MUL elementwise) in parallel
-    with the audit work. If the parallel agent lands cleanly + GPU
-    CI gets stood up later, Inc 3 can be folded back into v1.0.
-    If not, it stays a v1.1 deliverable. Speculation, not promise.
+    register-fill in PTX backend) shipped earlier in v1.0.
+  - Inc 3 (TILE_ADD/SUB/MUL elementwise f32+i32) **shipped in
+    parallel worktree** at `C:\Projects\Kovostov-Native-stage64-
+    inc3` commit `c90c4150`. Stage 105 cherry-picks it into main.
+  - Inc 4 (TILE_MATMUL via NVIDIA wmma Tensor Core fragments) =
+    Stage 106 (~1-2 days focused).
+  - Inc 5 (tile-IR optimization passes) = Stage 107 (~3-5 days).
+  - v1.0 release stop becomes Stage 108 (was Stage 105).
+  - PTX text emission validates syntactically but **does not run
+    on real hardware in v1.0** — that's a v2.0 Phase A
+    prerequisite, not a v1.0 feature.
+
+- **v2.0 SCOPE — "GPU Complete" milestone (planned 2026-05-18)** —
+  v2.0 = when GPU integration and all GPU features are done.
+  Three phases organized by ambition tier:
+  - **Phase A — GPU substrate completion (table-stakes, 2-3
+    months)**: real GPU CI runner, end-to-end GPU dogfood
+    programs on real NVIDIA hardware, SMEM tile instantiation
+    patterns beyond load_global, bf16/fp16/fp8 across full tile
+    op surface (v1.0 only does HBM dtype), multi-block grid
+    scheduling, CUDA Graphs equivalent, NCCL-equivalent
+    collectives, PTX→SASS pipeline tuning.
+  - **Phase B — Helix differentiators (the bet, 3-4 months)** —
+    where v2.0 beats existing systems. Each is a type-system ×
+    GPU integration nobody else has done:
+    - **GPU borrow checker** (extend Stage 66 to SMEM/HBM) —
+      `let a = &smem; let b = &mut smem;` → compile error.
+      Eliminates a whole class of CUDA race bugs.
+    - **Effect-typed barriers** — `@effect(gpu.warp_sync)` /
+      `@effect(gpu.barrier)` make "forgot __syncthreads" a
+      compile error.
+    - **Memory-space type-safety** — `tile<f32, [128], smem>`
+      vs `tile<f32, [128], hbm>` are different types. Bank-
+      conflict patterns become type errors.
+    - **AD through @kernel fns** — source-level reverse AD
+      descends INTO kernels. Differentiable GPU kernels
+      without manual VJP rules. JAX has nothing comparable.
+    - **DP-typed GPU kernels** — `@kernel fn reduce_sum(x:
+      Private<tile<f32, [N], hbm>>) -> Private<f32>`. Static
+      DP budget tracking on GPU.
+    - **Quantized-typed kernels** — `tile<Q8<f32>, [N], hbm>`
+      mixed-precision GEMM with type-system-tracked precision
+      boundaries. PyTorch quant is runtime; Helix is static.
+    - **Deadline-typed kernels** — `WithinDeadline<f32, "16ms">`
+      static WCET on GPU code for AR/VR/robotics.
+    - **Attribution-typed gradients** — `FromUnknown<f32>` vs
+      `Trusted<f32>` — track which gradient came from which
+      loss term for interpretability.
+    - **Multiple dispatch on tile types** (Stage 65 extension)
+      — compile-time `@dispatch` over `(tile<bf16,smem>,
+      tile<f32,reg>)` pairs.
+    - **Content-addressed PTX cache** (Stage 58 extension) —
+      `module_hash` → cached PTX. Identical kernels don't
+      recompile.
+  - **Phase C — Frontier features (moonshots, 6-12 months,
+    optional for v2.0; may slip to v3.0)**:
+    - **Enclave-typed GPU kernels** for H100 Confidential
+      Computing. First language where compiler statically
+      proves GPU code stays in CC enclave.
+    - **Proof-carrying GPU kernels** (Tier 3 #12 extension).
+      Kernel ships with proof obligations the runtime verifies.
+    - **ROCm/HIP backend** — second backend validates tile-IR
+      portability.
+    - **Apple Metal backend** — Mac inference market.
+    - **WebGPU/WGSL backend** — browser-deployed type-safe ML.
+    - **TMEM lit up on Blackwell** — IR already has the opcodes;
+      v2.0 wires them to hardware.
+    - **Multi-GPU graph partitioner** — type-system tracks
+      tensor sharding across GPUs; ZeRO-style optimizer state.
+  - **Differentiator positioning**: Helix's v2.0 bet is "**the
+    type system IS the GPU safety story**." Every existing GPU
+    stack treats safety as runtime (PyTorch dynamic shape
+    checks, CUDA cuda-memcheck) or library convention (CUTLASS
+    templates). Helix moves it to compile time via the Tier-S/A
+    wrapper substrate + borrow checker + effect system. That's
+    the differentiator nobody else can copy quickly because none
+    of them have the wrapper substrate.
+  - **Two markets v2.0 specifically targets**:
+    1. **Confidential ML** — H100 CC + Enclave-typed kernels =
+       "regulator-auditable GPU code."
+    2. **Real-time ML** — Deadline-typed kernels + WCET = "AR/
+       VR/robotics-grade GPU code."
+    Both are billion-dollar adjacencies that CUDA/Triton/JAX
+    don't address.
+  - **Vs. existing systems**:
+    - **Triton**: Helix adds type-level memory spaces, AD
+      through kernels, borrow check, effect-typed barriers.
+    - **JAX/XLA**: Helix adds source-level AD (no VJP plumbing),
+      no Python runtime, content-addressed kernel cache.
+    - **Mojo**: Helix adds 11 Tier-S/A wrappers, neuro-symbolic
+      primitives, honest portability claims (Mojo overpromises).
+    - **CUDA C++**: everything (type safety, borrow check, AD,
+      effect system, capability typing).
+    - **CUTLASS**: higher-level DSL (not C++ templates), AD,
+      autotune introspection.
+    - **PyTorch**: compile-time errors, no runtime overhead,
+      proof-carrying terms, DP-typed kernels.
 
 - **Stage 92 SHIPPED 2026-05-18** — Inc 5d fixes for Stage 66's 2
   HIGH-severity silent miscompiles (Stage 91 audit closure):
