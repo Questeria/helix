@@ -5771,6 +5771,33 @@ def test_stage59_module_hash_not_found_exits_1(tmp_path):
     assert "not found" in proc.stderr
 
 
+def test_stage59_autotune_summary_json(tmp_path):
+    """Stage 59 follow-on / Tier 2 #8 polish: --autotune-summary-json
+    outputs JSON {fns: {name: count}, total: N}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "at.hx"
+    src.write_text(
+        "@autotune(BLOCK: [16, 32])\n"
+        "@kernel\n"
+        "fn k1(x: i32) -> i32 { x + BLOCK }\n"
+        "@autotune(N: [4, 8, 16])\n"
+        "@kernel\n"
+        "fn k2(x: i32) -> i32 { x + N }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-summary-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["fns"] == {"k1": 2, "k2": 3}
+    assert result["total"] == 5
+
+
 def test_stage59_autotune_summary_basic(tmp_path):
     """Stage 59 follow-on / Tier 2 #8 polish: --autotune-summary
     prints {fn variants=N} lines for @autotune @kernel fns plus
@@ -5849,7 +5876,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-pytrees", "--list-pytrees-json",
         "--pytree-leaf-paths",
         "--validate-pytrees", "--validate-pytrees-json",
-        "--autotune-summary", "--autotune-budget",
+        "--autotune-summary", "--autotune-summary-json",
+        "--autotune-budget",
         "--validate-autotune", "--validate-autotune-json",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace", "--trace-dump-summary",

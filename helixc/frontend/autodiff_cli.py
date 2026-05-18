@@ -81,6 +81,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Same as --validate-pytrees but machine-readable JSON output.
     --autotune-summary <file.hx>
         Print {fn variants=N} for @autotune @kernel fns + total.
+    --autotune-summary-json <file.hx>
+        Same as --autotune-summary but machine-readable JSON output.
     --validate-autotune <file.hx>
         CI gate: validate every @autotune attr; exit 1 if any malformed.
     --validate-autotune-json <file.hx>
@@ -1110,6 +1112,29 @@ def _validate_autotune(path: str) -> int:
     return 1
 
 
+def _autotune_summary_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish: --autotune-summary in
+    machine-readable JSON form.
+
+    Output schema:
+      {
+        "fns": {"<fn_name>": <variant_count>, ...},
+        "total": <int>
+      }
+    """
+    import json
+    from .autotune_expand import autotune_expansion_summary
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    summary = autotune_expansion_summary(prog)
+    result = {
+        "fns": dict(sorted(summary.items())),
+        "total": sum(summary.values()),
+    }
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _autotune_summary(path: str) -> int:
     """Stage 59 follow-on / Tier 2 #8 polish: print the autotune
     variant-count summary for a source file.
@@ -1791,6 +1816,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_autotune_summary(args[0]))
+
+    if "--autotune-summary-json" in flags:
+        if len(args) < 1:
+            print("usage: --autotune-summary-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_autotune_summary_json(args[0]))
 
     if "--validate-autotune" in flags:
         if len(args) < 1:
