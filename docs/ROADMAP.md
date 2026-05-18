@@ -347,10 +347,18 @@ These are blockers for any real ML training, in priority order.
    subset. Broader tensor/tile codegen, SMEM/REG tiles, `bf16`, matmul,
    and performance-oriented GPU lowering remain future work. **2-3 months.**
 
-7. **JAX-style pytrees.** `grad(loss)(model)` where `model` is a nested
-   struct. Composes `grad/vmap/jit` over arbitrary tree-structured
-   parameter sets. Critical for real model architectures. **2 weeks
-   on top of tier-1 #3.**
+7. **JAX-style pytrees.** Inc 1 ✅ SHIPPED 2026-05-18 (Stage 57
+   commit 80f659b): rejection-lift for struct params in
+   `grad_rev_all` — `pytree.flatten_pytree_param` (Stage 26
+   infrastructure) now wires into `grad_pass`, expanding struct
+   params into per-leaf gradient writes via existing field-path
+   AD machinery. Inc 2 (struct-shaped return from `grad`/`grad_rev`)
+   deferred — needs Phase-0 struct-return ABI hardening.
+   `grad(loss)(model)` where `model` is a nested struct → `Model`-
+   shaped gradient. Composes `grad/vmap/jit` over arbitrary tree-
+   structured parameter sets. Critical for real model architectures.
+   Originally **2 weeks on top of tier-1 #3** — Inc 1 ships the
+   core; Inc 2+ is polish.
 
 8. **Triton-style autotune.** ✅ DONE 2026-05-18 (Stage 56 commit
    4827397). `@autotune(KEY: [v1, v2, ...])` for `@kernel` functions
