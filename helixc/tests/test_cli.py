@@ -5915,6 +5915,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-ast-node-counts", "--fn-ast-node-counts-json",
         "--fn-ast-summary-json",
         "--fn-loc", "--fn-loc-json",
+        "--list-fn-locs", "--list-fn-locs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7577,6 +7578,55 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_list_fn_locs_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fn-locs prints
+    every fn as '<name>:<line>:<col>' in declaration order."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "lflocs.hx"
+    src.write_text(
+        "fn first() -> i32 { 1 }\n"
+        "fn second() -> i32 { 2 }\n"
+        "fn third() -> i32 { 3 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fn-locs", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.strip().splitlines() if l]
+    assert lines == ["first:1:1", "second:2:1", "third:3:1"]
+
+
+def test_stage59_list_fn_locs_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fn-locs-json
+    emits {file, fns, n_fns}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "lflocsj.hx"
+    src.write_text(
+        "fn a() -> i32 { 1 }\n"
+        "fn b() -> i32 { 2 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fn-locs-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["n_fns"] == 2
+    assert result["file"] == str(src)
+    names = [f["name"] for f in result["fns"]]
+    assert names == ["a", "b"]
+    assert result["fns"][0]["line"] == 1
+    assert result["fns"][1]["line"] == 2
 
 
 def test_stage59_fn_loc_text(tmp_path):

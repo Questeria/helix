@@ -54,6 +54,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --fn-loc-json <file.hx> <fn_name>
         Same as --fn-loc but JSON
         {name, file, line, col, found}.
+    --list-fn-locs <file.hx>
+        Whole-program companion to --fn-loc: list every fn's source
+        location as '<name>:<line>:<col>' (declaration order).
+    --list-fn-locs-json <file.hx>
+        Same as --list-fn-locs but JSON
+        {file, fns: [{name, line, col}, ...], n_fns}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -460,6 +466,62 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _list_fn_locs(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate every fn's
+    source location. Whole-program companion to --fn-loc.
+
+    Output: one line per fn as '<fn_name>:<line>:<col>' (sorted by
+    line — declaration order with column as tiebreaker).
+
+    Use case: editor symbol table generation, jump-to-definition
+    index, cross-reference report.
+
+    Exit 0 always (no failure mode beyond parse).
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    rows: list[tuple[int, int, str]] = []
+    for fn in iter_fn_decls(prog):
+        sp = getattr(fn, "span", None)
+        line = getattr(sp, "line", 0) if sp else 0
+        col = getattr(sp, "col", 0) if sp else 0
+        rows.append((line, col, fn.name))
+    rows.sort()
+    for line, col, name in rows:
+        print(f"{name}:{line}:{col}")
+    return 0
+
+
+def _list_fn_locs_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --list-fn-locs in
+    machine-readable JSON form.
+
+    Output schema:
+      {"file": "<path>",
+       "fns": [{"name": "<name>", "line": N, "col": N}, ...],
+       "n_fns": N}
+    Sorted by line (declaration order) with column as tiebreaker.
+    """
+    import json
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    fns: list[dict] = []
+    for fn in iter_fn_decls(prog):
+        sp = getattr(fn, "span", None)
+        line = getattr(sp, "line", 0) if sp else 0
+        col = getattr(sp, "col", 0) if sp else 0
+        fns.append({"name": fn.name, "line": line, "col": col})
+    fns.sort(key=lambda d: (d["line"], d["col"], d["name"]))
+    print(json.dumps({
+        "file": path,
+        "fns": fns,
+        "n_fns": len(fns),
+    }, sort_keys=True, indent=2))
     return 0
 
 
@@ -8002,6 +8064,19 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_loc_json(args[0], args[1]))
+
+    if "--list-fn-locs" in flags:
+        if len(args) < 1:
+            print("usage: --list-fn-locs <file.hx>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fn_locs(args[0]))
+
+    if "--list-fn-locs-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-fn-locs-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fn_locs_json(args[0]))
 
     if "--fn-ast-size-json" in flags:
         if len(args) < 2:
