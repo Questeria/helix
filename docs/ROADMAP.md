@@ -155,11 +155,21 @@ Re-sequenced after Stage 46-47 closed:
   union (gate-7 HIGH-1+2) deferred to Stage 52 Inc 5 or rolled
   into Stage 53. Helper-fn indirection deferred to Stage 53
   (different defect class — inter-procedural taint).
-- **Stage 53** (next): helper-fn indirection taint propagation.
-  The LAST remaining laundering bypass — `fn launder(x: i32)
-  -> Known<i32> { into_known(x) }` called with a from_X(...)
-  result. Requires inter-procedural analysis (taint flows
-  through fn boundaries). Closes Stage 40 H1 in full.
+- **Stage 53** (Inc 1+2 shipped 2026-05-17, commits 179678d +
+  2550492): helper-fn indirection taint propagation. **Inc 1
+  CLOSED Stage 40 H1 in full** — the LAST modal-launder bypass
+  is now caught. Implementation: `_fn_modal_return_kind` dict
+  populated in Pass 1 (`_register_fn`) + `_modal_origin_of_expr`
+  extension + call-site launder check (mirror of F1 into_X
+  pattern) + `_MODAL_UPGRADE_HINT` hoist. All 3 install sites
+  (Let-RHS, Assign-RHS, match-scrutinee) get Stage 53 coverage
+  automatically via the unified helper. Inc 2 added regression
+  pins for Assign + match-scrutinee paths. Diagnostic message:
+  "launders Uncertain<T> into Known<T> via helper-fn indirection".
+  Stage 53 Inc 3+ deferred: inter-procedural taint flow when
+  helper body itself contains laundering patterns (currently
+  caught by intra-fn Stage 52 closures within each fn body
+  individually).
 (Gate-2 code-review M2: stale `(proposed)` entries for Stages 50,
 51, 52 removed — they were superseded by the SHIPPED / ABORTED
 entries above. Stages 50, 51, 52 now live under their actual

@@ -227,3 +227,130 @@ Gate-5 audit returned 1 HIGH + 1 MEDIUM:
   to prevent a future contributor from "fixing" it incorrectly.
 
 Stage 40 sweep 73→74 passing post-gate-5-pin.
+
+### Gate-6 closure (2026-05-17 evening)
+
+Triple-parallel audit (silent-failure + type-design + code-review)
+returned 3 NEW CRITICAL + 1 HIGH + 1 doc-drift:
+
+- **silent-failure CRITICAL-1**: Call-form match scrutinee bypassed
+  PatBind taint (Name-only check). Fixed: unified `_modal_origin_
+  of_expr` helper handles A.Call too.
+- **silent-failure CRITICAL-2**: let-alias `let s = r;` (and Assign-
+  alias `s = r;`) dropped taint when r was tainted. Fixed: helper
+  handles A.Name with provenance lookup.
+- **silent-failure CRITICAL-3**: PatOr-of-same-PatBind bypassed
+  taint copy. Fixed: detect PatOr where every alt is PatBind of
+  same name, treat as top-level PatBind for copy.
+- **type-design HIGH F1**: residual `_modal_elim_kind` local dict
+  at line 4357 violated gate-2 F3 hoisting invariant. Fixed:
+  deleted; replaced with module-level `_MODAL_ELIM_TO_KIND`.
+- **code-review MEDIUM**: progress doc had stale Inc 4 section
+  + "Verification (post-Inc-3)" claimed 57/57 tests. Fixed:
+  rewrote with gate-N pointer + refreshed test count.
+
+Plus LATENT bug surfaced by the gate-6 let-alias fix: double-pop
+in `_check_expr_in_block_scope` clobbered `_last_modal_assigns_
+popped` when arm body was a Block. Fixed: UNION semantics preserve
+inner-block contribution. Plus cleared-vs-installed refinement:
+only mark a name cleared if NO arm installed taint.
+
+Stage 40 sweep 74→80 passing post-gate-6 (6 new pins: 4 positives
+for 3 CRITICAL + 1 bonus Assign-alias variant, 1 negative for
+same-kind round-trip, 1 grep-pin for F1 invariant).
+
+### Gate-7 closure (2026-05-17 evening)
+
+Triple-parallel returned 3 HIGH (silent-failure) + 1 HIGH (type-
+design) + 1 IMPORTANT (code-review):
+
+- **silent-failure HIGH-3**: if-no-else / match-arm where the
+  identity arm preserves pre-state taint and another arm clears.
+  At runtime the 0-iter / identity path leaks the launder.
+  Fixed via `kept_somewhere` / `kept_somewhere_match` sets: any
+  name preserved in any arm's result overrides cleared.
+  SEMANTIC FLIP: NEW-HIGH-3 + NEW-HIGH-4 prior tests asserted
+  DROP (gate-3 drop-on-conflict design); gate-7 audit correctly
+  identified these as silently missing real-runtime launders.
+  Aligned with the stage's AI-safety property "category-error
+  launders MUST be caught".
+- **silent-failure HIGH-1+2** (loops): A.For/A.While/A.Loop
+  body opaque-clear with pre-loop preserved taint. DEFERRED to
+  Stage 52 Inc 5 (requires new union helper for loops).
+- **type-design HIGH-1**: `_last_modal_assigns_popped` not cleared
+  at `_check_fn` entry — masked by always-precedes-read ordering
+  but fragile. Fixed: defensive clear added.
+- **code-review IMPORTANT**: stale primary docstring on NEW-HIGH-3
+  test (still claimed DROP) — fixed.
+
+5 new pins (gate-7 standalone HIGH-3 + 3 negatives + type-design
+grep-pin). Stage 40 sweep 80→85.
+
+### Gate-8 closure (2026-05-17 evening) — FIRST CLEAN
+
+Triple-parallel returned ALL 3 LANES CLEAN:
+- silent-failure: 0 CRITICAL, 0 HIGH, 0 MEDIUM. Cascade has
+  converged after 7 rounds.
+- type-design: 0 HIGH+; 1 MEDIUM polish (redundant
+  `installed_names` check — strict subset of `kept_somewhere`,
+  dropped); 2 LOW deferred (F2 Literal type alias, F3 dataclass
+  refactor).
+- code-review: 0 HIGH+; 1 IMPORTANT docstring drift (NEW-HIGH-3
+  primary docstring) — fixed inline.
+
+Polish landed: dropped redundant installed_names guard in both
+A.If and A.Match unions; flipped NEW-HIGH-3 + NEW-HIGH-4 docstrings.
+
+This was the 1st of 3 consecutive clean gates required by the
+3-clean-gate closure protocol.
+
+### Stage 52 Inc 5 (2026-05-17 evening): loop body union
+
+Closes the gate-7 HIGH-1+2 deferred work. New helper
+`_check_loop_body_with_modal_union` applies the kept_somewhere
+union semantics to A.For/A.While/A.Loop body checking. Same
+defect class as A.If no-else identity arm — the 0-iter case
+preserves pre-loop taint, so into_X after loop fires if pre-
+loop kind mismatches target. 3 new pins (while-body, for-body,
+negative same-kind round-trip). Phase-0 multi-kind divergence
+(gate-4 CRITICAL-1) still drops as documented.
+
+### Gate-9 closure (2026-05-17 evening) — partial verdict
+
+Triple-parallel:
+- silent-failure: pending
+- type-design: pending
+- code-review: 0 CRITICAL, 0 HIGH on code surface. 3 IMPORTANT
+  doc-drift items (this progress doc missing gate-6+ sections;
+  ROADMAP Stage 53 entry stale; Stage 53 blueprint doc stale
+  post-implementation). All 3 fixed inline.
+
+## Stage 53 Inc 1 follow-on landing (2026-05-17 evening, commit 179678d)
+
+Closes the LAST remaining modal-launder bypass — helper-function
+indirection. This is the Stage 40 H1 "different defect class"
+deferred from Stage 52.
+
+Implementation (4 surgical edits + 1 hoist):
+1. New `_fn_modal_return_kind: dict[str, str]` populated in
+   `_register_fn` from `sig.ret` when TyModal.
+2. `_modal_origin_of_expr` extended with `Call(user_fn, ...)`
+   case → all 3 install sites inherit Stage 53 automatically.
+3. Launder check at user-fn call site (analog of F1 into_X
+   check): if fn returns modal kind AND any arg has DIFFERENT
+   modal-origin → fire.
+4. `_modal_upgrade_hint` hoisted to module-level
+   `_MODAL_UPGRADE_HINT` (gate-2 F3 single-source-of-truth).
+
+7 regression pins (5 Inc 1 + 2 Inc 2 verifying Assign + match-
+scrutinee paths). Stage 40 sweep 90→95. Diagnostic message:
+"launders Uncertain<T> into Known<T> via helper-fn indirection".
+
+## Stage 50 retry: Exp A executed (2026-05-17 evening, commit 10cab73)
+
+Per diagnostic plan, Exp A measured combined bootstrap source:
+732,396 bytes. Well under 1 MB BUF_SIZE. H4 (SIGILL buffer
+overflow recurrence) DEFINITIVELY RULED OUT. Top hypothesis
+H1 (stack overflow from fixed 1024-byte Helix codegen prologue)
+remains; Exp B (`ulimit -s unlimited`) is the next step for the
+Stage 50 retry attempt.

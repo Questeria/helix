@@ -1,9 +1,19 @@
 # Stage 53 Inc 1 — Implementation Blueprint
 
+**Status (2026-05-17 post-implementation): Inc 1 SHIPPED in
+commit `179678d`. Inc 2 SHIPPED in commit `2550492`. This doc is
+retained as post-implementation reference; live implementation
+in `helixc/frontend/typecheck.py` (token-pin
+`_fn_modal_return_kind`). Per gate-7 code-review F3, prefer
+token-pinning over line-number references when navigating.**
+
 **Date:** 2026-05-17
-**Status:** Ready to execute (pending Stage 52 closure)
 **Source:** code-architect agent during Stage 52 gate-8 wait
-**Estimated complexity:** 2 increments (Inc 1 here; Inc 2 = Assign-stmt verification)
+**Actual complexity:** 2 increments (Inc 1 + Inc 2 = pin Assign +
+match-scrutinee paths). Plus 1 unanticipated `_MODAL_UPGRADE_HINT`
+hoist + call-site launder check (the blueprint's `_modal_origin_
+of_expr` extension alone doesn't fire; needs the launder check at
+the user-fn call site too, analogous to the F1 into_X pattern).
 
 ## Goal
 
