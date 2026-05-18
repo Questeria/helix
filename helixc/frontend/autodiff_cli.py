@@ -57,6 +57,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         CI gate: validate every @autotune attr; exit 1 if any malformed.
     --validate-trace-attrs <file.hx>
         CI gate: validate @trace usage; rejects @trace on extern fns.
+    --list-traced-fns <file.hx>
+        Enumerate fns carrying @trace (one per line, sorted).
     --validate-all <file.hx>
         Run all 3 validators (pytrees + autotune + trace-attrs) in one shot.
     --validate-all-json <file.hx>
@@ -711,6 +713,24 @@ def _validate_all(path: str) -> int:
     return 1 if fail_count else 0
 
 
+def _list_traced_fns(path: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: list fns carrying
+    @trace, one per line. Sorted alphabetically. Walks ModBlock-
+    nested fns via iter_fn_decls (no nested-scope blind spot).
+
+    Use case:
+    - Audit which fns are getting trace-logged
+    - Verify a refactor preserved @trace coverage
+    - Drive a per-fn benchmark harness for traced functions only
+    """
+    from .trace_pass import traced_fn_names
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for name in sorted(traced_fn_names(prog)):
+        print(name)
+    return 0
+
+
 def _validate_trace_attrs(path: str) -> int:
     """Stage 59 follow-on / Tier 3 #11 polish: run validate_trace_attrs
     over a file. Phase-0 rules:
@@ -1186,6 +1206,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_trace_attrs(args[0]))
+
+    if "--list-traced-fns" in flags:
+        if len(args) < 1:
+            print("usage: --list-traced-fns <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_traced_fns(args[0]))
 
     if "--validate-all" in flags:
         if len(args) < 1:
