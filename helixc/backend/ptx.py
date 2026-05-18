@@ -1010,6 +1010,14 @@ if __name__ == "__main__":
             print(f"error: ptx: validation: {e}", file=sys.stderr)
             sys.exit(1)
         kernel_prog = _kernel_reachable_program(prog)
+        # Stage 56 / Tier 2 #8 — expand @autotune @kernel fns into
+        # N specialized variants (one per cross-product config) BEFORE
+        # grad_pass + lower. Each variant is a deep-copied FnDecl with
+        # its body's Name(KEY) refs replaced by IntLit(VAL). The
+        # original `@autotune` fn is replaced by its expansion.
+        # Pre-Stage-56, only one un-specialized variant was emitted.
+        from ..frontend.autotune_expand import expand_autotune_kernels
+        kernel_prog = expand_autotune_kernels(kernel_prog)
         grad_pass(kernel_prog)
         tir_mod = lower(kernel_prog)
         pre_effect_scope = None

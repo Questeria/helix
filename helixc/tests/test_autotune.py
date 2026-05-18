@@ -40,6 +40,85 @@ fn matmul(a: i32) -> i32 { a }
     assert diags == []
 
 
+def test_stage56_autotune_expand_single_key():
+    """Stage 56 Inc 1: expand_autotune_kernels emits N FnDecl
+    variants from one @autotune @kernel fn. Single key with 2
+    values → 2 variants."""
+    from helixc.frontend.autotune_expand import expand_autotune_kernels
+    src = """
+@autotune(BLOCK_SIZE: [16, 32])
+@kernel
+fn vec_add(a: i32) -> i32 { BLOCK_SIZE + a }
+"""
+    prog = parse(src)
+    expanded = expand_autotune_kernels(prog)
+    fns = [it for it in expanded.items if isinstance(it, A.FnDecl)]
+    # Should have 2 variants of vec_add (original replaced).
+    vec_fns = [f for f in fns if f.name.startswith("vec_add")]
+    assert len(vec_fns) == 2, \
+        f"expected 2 variants, got {len(vec_fns)}: {[f.name for f in vec_fns]}"
+    names = sorted(f.name for f in vec_fns)
+    assert names == [
+        "vec_add__autotune_BLOCK_SIZE_16",
+        "vec_add__autotune_BLOCK_SIZE_32",
+    ], f"unexpected names: {names}"
+    # Each variant must still be @kernel.
+    for f in vec_fns:
+        assert "kernel" in f.attrs
+        assert "autotune" not in f.attrs
+
+
+def test_stage56_autotune_expand_two_keys_product():
+    """Stage 56 Inc 1: 2 keys × 2 values each → 4 variants."""
+    from helixc.frontend.autotune_expand import expand_autotune_kernels
+    src = """
+@autotune(BLOCK_SIZE: [16, 32], NUM_WARPS: [4, 8])
+@kernel
+fn mm(a: i32) -> i32 { BLOCK_SIZE * NUM_WARPS + a }
+"""
+    prog = parse(src)
+    expanded = expand_autotune_kernels(prog)
+    fns = [it for it in expanded.items if isinstance(it, A.FnDecl)]
+    mm_fns = [f for f in fns if f.name.startswith("mm")]
+    assert len(mm_fns) == 4, \
+        f"expected 4 variants (2x2), got {len(mm_fns)}"
+
+
+def test_stage56_autotune_expand_constant_substitution():
+    """Stage 56 Inc 1: Name(KEY) refs in the body are replaced
+    by IntLit(VAL) for each variant's config."""
+    from helixc.frontend.autotune_expand import expand_autotune_kernels
+    src = """
+@autotune(BLOCK_SIZE: [16, 32])
+@kernel
+fn k(a: i32) -> i32 { BLOCK_SIZE + a }
+"""
+    prog = parse(src)
+    expanded = expand_autotune_kernels(prog)
+    fns = [it for it in expanded.items if isinstance(it, A.FnDecl)]
+    v16 = next(f for f in fns if "16" in f.name)
+    # Body should have BLOCK_SIZE replaced with IntLit(16).
+    # Final expr is Binary(BLOCK_SIZE + a) → Binary(IntLit(16) + Name(a))
+    body = v16.body.final_expr
+    assert isinstance(body, A.Binary)
+    assert isinstance(body.left, A.IntLit), \
+        f"expected IntLit, got {type(body.left).__name__}"
+    assert body.left.value == 16
+
+
+def test_stage56_autotune_expand_non_autotune_passthrough():
+    """Stage 56 Inc 1: non-@autotune fns pass through unchanged."""
+    from helixc.frontend.autotune_expand import expand_autotune_kernels
+    src = """
+fn plain(a: i32) -> i32 { a + 1 }
+"""
+    prog = parse(src)
+    expanded = expand_autotune_kernels(prog)
+    fns = [it for it in expanded.items if isinstance(it, A.FnDecl)]
+    assert len(fns) == 1
+    assert fns[0].name == "plain"
+
+
 def test_parse_two_key_autotune():
     src = """
 @autotune(BLOCK_SIZE: [16, 32, 64], NUM_WARPS: [4, 8])
