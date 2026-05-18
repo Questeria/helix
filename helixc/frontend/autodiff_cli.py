@@ -83,6 +83,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         High-level structural overview JSON (counts/depth/diameter/SCCs).
     --fn-callgraph-dot <file.hx>
         Emit callgraph as Graphviz .dot (pipe through `dot -Tpng`).
+    --fn-callgraph-mermaid <file.hx>
+        Emit callgraph as Mermaid flowchart (markdown-embeddable).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1594,6 +1596,67 @@ def _fn_roots(path: str) -> int:
     roots = sorted(all_fn_names - called_names)
     for name in roots:
         print(name)
+    return 0
+
+
+def _fn_callgraph_mermaid(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: emit the local callgraph
+    as Mermaid flowchart syntax. Drop-in for markdown docs (GitHub
+    auto-renders Mermaid in .md files).
+
+    Output:
+      ```
+      flowchart LR
+          fn_a --> fn_b
+          fn_a --> fn_c
+          ...
+      ```
+    Edges sorted alphabetically for deterministic output.
+
+    Pair with --fn-callgraph-dot (Graphviz). Together they cover
+    the two dominant text-based graph-viz formats. Use case:
+    embed in README to auto-display the callgraph on the project
+    homepage.
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = sorted(fn.name for fn in all_fns)
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in set(all_names)}
+
+    print("flowchart LR")
+    for src_name in all_names:
+        for dst in sorted(graph.get(src_name, set())):
+            print(f"    {src_name} --> {dst}")
     return 0
 
 
@@ -3436,6 +3499,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph_dot(args[0]))
+
+    if "--fn-callgraph-mermaid" in flags:
+        if len(args) < 1:
+            print("usage: --fn-callgraph-mermaid <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_mermaid(args[0]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:

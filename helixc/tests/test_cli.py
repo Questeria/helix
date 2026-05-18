@@ -5876,7 +5876,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-callgraph-depth-all", "--fn-topo-sort",
         "--fn-isolated", "--fn-call-path",
         "--fn-distance", "--fn-distance-matrix",
-        "--fn-callgraph-summary", "--fn-callgraph-dot",
+        "--fn-callgraph-summary",
+        "--fn-callgraph-dot", "--fn-callgraph-mermaid",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7377,6 +7378,30 @@ def test_stage59_fn_roots(tmp_path):
     # util has 2 callers → not root; entry_a, entry_b, truly_dead
     # never called locally → roots.
     assert lines == ["entry_a", "entry_b", "truly_dead"]
+
+
+def test_stage59_fn_callgraph_mermaid(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph-mermaid
+    emits Mermaid flowchart syntax (sorted edges, deterministic)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "m.hx"
+    src.write_text(
+        "fn a() -> i32 { b() }\n"
+        "fn b() -> i32 { c() }\n"
+        "fn c() -> i32 { 0 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph-mermaid", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    out = proc.stdout
+    assert out.startswith("flowchart LR")
+    assert "a --> b" in out
+    assert "b --> c" in out
 
 
 def test_stage59_fn_callgraph_dot(tmp_path):
