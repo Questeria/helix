@@ -339,6 +339,36 @@ def tree_zip(decl, struct_decls: dict, a_leaves: dict, b_leaves: dict,
     return unflatten_pytree(decl, struct_decls, zipped, default=default)
 
 
+def tree_leaves(leaves_by_path: dict) -> list:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_leaves.
+
+    Extract just the leaf values from `leaves_by_path` in canonical
+    (sorted-by-path) order. Strips the path keys, returns a flat
+    list of values.
+
+    Use case: serialize a pytree to a flat array for storage,
+    transmission, or feeding into a non-pytree-aware API.
+    The companion `unflatten_pytree(decl, struct_decls, dict(zip(paths,
+    leaves)))` reconstructs the nested structure.
+
+    Determinism: same dict → same list (sorted-by-path iteration).
+    """
+    return [leaves_by_path[path] for path in sorted(leaves_by_path.keys())]
+
+
+def tree_paths(leaves_by_path: dict) -> list[str]:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_paths.
+
+    Companion to `tree_leaves`. Returns the leaf paths in the SAME
+    canonical (sorted) order. Together: `zip(tree_paths(d),
+    tree_leaves(d))` reconstructs the dict ordering deterministically.
+
+    Use case: serialize keys + values together for round-trip
+    storage, or build a custom (path, value) iteration order.
+    """
+    return sorted(leaves_by_path.keys())
+
+
 def tree_equal(a_leaves: dict, b_leaves: dict, eq_fn=None) -> bool:
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_equal.
 

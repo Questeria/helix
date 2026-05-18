@@ -406,6 +406,31 @@ def test_tree_map_preserves_nested_shape():
     assert out["inner"]["v"] == 6.0
 
 
+def test_tree_leaves_canonical_order():
+    """Stage 59 follow-on: tree_leaves returns leaf values in
+    sorted-by-path order (deterministic)."""
+    from helixc.frontend.pytree import tree_leaves
+    leaves = {"c": 3.0, "a": 1.0, "b": 2.0}
+    assert tree_leaves(leaves) == [1.0, 2.0, 3.0]
+
+
+def test_tree_paths_canonical_order():
+    """Stage 59 follow-on: tree_paths returns paths in same sorted
+    order as tree_leaves. zip(paths, leaves) round-trips the dict."""
+    from helixc.frontend.pytree import tree_leaves, tree_paths
+    leaves = {"a.x": 1.0, "a.y": 2.0, "b": 3.0}
+    paths = tree_paths(leaves)
+    values = tree_leaves(leaves)
+    assert paths == ["a.x", "a.y", "b"]
+    assert dict(zip(paths, values)) == leaves
+
+
+def test_tree_leaves_empty():
+    """Stage 59 follow-on: tree_leaves on empty dict returns []."""
+    from helixc.frontend.pytree import tree_leaves
+    assert tree_leaves({}) == []
+
+
 def test_tree_pytree_sgd_step_integration():
     """Stage 59 follow-on / Tier 2 #7: integration test composing all
     4 pytree functional primitives in a realistic SGD step.
