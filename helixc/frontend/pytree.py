@@ -299,6 +299,46 @@ def unflatten_pytree(decl, struct_decls: dict,
                       default=default, _visited=set(), depth=0)
 
 
+def tree_zip(decl, struct_decls: dict, a_leaves: dict, b_leaves: dict,
+              zip_fn, default=_RAISE_ON_MISSING) -> dict:
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_zip.
+
+    Combine two pytrees with the same shape by applying
+    `zip_fn(a_leaf, b_leaf)` to each path-aligned pair. Returns a
+    nested dict in `decl`'s shape with each leaf transformed.
+
+    Both inputs must have the SAME keys (path strings). Missing keys
+    in either map are treated per `default`:
+      - default=_RAISE_ON_MISSING (default): raise ValueError
+      - default=<value>: use <value> as fallback for missing leaves
+
+    Use case (THE canonical gradient-update step):
+        new_params = tree_zip(model_decl, struct_decls,
+                              params, grads,
+                              lambda p, g: p - 0.01 * g)
+
+    Other use cases: per-leaf max (clip), per-leaf comparison
+    (parameter-wise convergence check), etc. Composes
+    `unflatten_pytree` over the per-path zip_fn output.
+    """
+    all_paths = set(a_leaves.keys()) | set(b_leaves.keys())
+    zipped: dict = {}
+    for path in all_paths:
+        if path in a_leaves and path in b_leaves:
+            zipped[path] = zip_fn(a_leaves[path], b_leaves[path])
+        elif default is _RAISE_ON_MISSING:
+            missing_in = "b" if path in a_leaves else "a"
+            raise ValueError(
+                f"tree_zip: path {path!r} missing in {missing_in}; "
+                f"pass `default=<value>` to opt into permissive zip"
+            )
+        elif path in a_leaves:
+            zipped[path] = zip_fn(a_leaves[path], default)
+        else:
+            zipped[path] = zip_fn(default, b_leaves[path])
+    return unflatten_pytree(decl, struct_decls, zipped, default=default)
+
+
 def tree_reduce(leaves_by_path: dict, reduce_fn, init):
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_reduce.
 

@@ -406,6 +406,45 @@ def test_tree_map_preserves_nested_shape():
     assert out["inner"]["v"] == 6.0
 
 
+def test_tree_zip_gradient_update():
+    """Stage 59 follow-on: tree_zip combines params + grads via
+    SGD-style update `p - 0.01 * g`. Canonical use case."""
+    from helixc.frontend.pytree import tree_zip
+    span = A.Span(0, 0)
+    model = A.StructDecl(
+        span=span, name="Model", generics=[], is_pub=False,
+        fields=[
+            A.FnParam(span=span, name="w",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+            A.FnParam(span=span, name="b",
+                       ty=A.TyName(span=span, name="f64"),
+                       is_mut=False),
+        ],
+    )
+    params = {"w": 1.0, "b": 2.0}
+    grads = {"w": 0.5, "b": 0.25}
+    updated = tree_zip(model, {"Model": model}, params, grads,
+                       lambda p, g: p - 0.01 * g)
+    assert updated == {"w": 0.995, "b": 1.9975}
+
+
+def test_tree_zip_missing_key_raises():
+    """Stage 59 follow-on: tree_zip raises on missing path by default."""
+    from helixc.frontend.pytree import tree_zip
+    span = A.Span(0, 0)
+    pt = A.StructDecl(
+        span=span, name="P", generics=[], is_pub=False,
+        fields=[A.FnParam(span=span, name="x",
+                          ty=A.TyName(span=span, name="f64"),
+                          is_mut=False)],
+    )
+    a = {"x": 1.0}
+    b = {}  # missing 'x'
+    with pytest.raises(ValueError, match="missing in b"):
+        tree_zip(pt, {"P": pt}, a, b, lambda p, q: p + q)
+
+
 def test_tree_reduce_sum():
     """Stage 59 follow-on: tree_reduce sums all leaf values."""
     from helixc.frontend.pytree import tree_reduce
