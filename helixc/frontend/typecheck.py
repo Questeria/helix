@@ -2564,7 +2564,7 @@ class TypeChecker:
         Block-with-inner-Let-tail reproducers would silently pass.
 
         Cases handled (gate-13 type-design F-Inc11-2 fix: enumerate
-        all 9 wrapper-AST arms; was stale through Inc 6/8/10/11):
+        all 11 wrapper-AST arms; was stale through Inc 6/8/10/11/13):
         - A.Name lookup in `_modal_origin_provenance` (covers let-alias
           `let s = r;` where r is tainted — Stage 52 gate-6 CRITICAL-2).
         - A.Call(Name(from_X), ...) for any modal eliminator (Stage 52
@@ -2588,6 +2588,12 @@ class TypeChecker:
           propagation INTENTIONALLY differs from If/Match drop — see
           long comment at the Binary arm explaining the value-merge
           vs control-flow-merge distinction.
+        - Stage 52 Inc 13 / gate-15 silent-failure CRITICAL-1 fix
+          (defensive, theoretical-only — type-checker blocks the
+          audit's reproducer before launder runs): A.Return and
+          A.Break (recurse on .value if present). Future-proof
+          against any code path that routes a tainted value through
+          Return-as-tail-expr that doesn't fail type-check first.
 
         Returning None means "no static modal-origin claim" — the
         F1 launder consult falls through to the Phase-0 dynamic
