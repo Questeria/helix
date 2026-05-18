@@ -5833,10 +5833,10 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
     assert proc.returncode == 2
     out = proc.stderr
     for flag in (
-        "--dump-ast-hashes", "--program-hash", "--diff-program-hash",
-        "--changed-fns", "--fn-sig-hash", "--list-fns",
-        "--check-program-hash", "--list-modules", "--module-hash",
-        "--pytree-shape", "--list-pytrees",
+        "--dump-ast-hashes", "--program-hash", "--program-signature-hash",
+        "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
+        "--list-fns", "--check-program-hash", "--list-modules",
+        "--module-hash", "--pytree-shape", "--list-pytrees",
         "--autotune-summary", "--autotune-budget",
     ):
         assert flag in out, (
@@ -5995,6 +5995,57 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_program_signature_hash_body_invariant(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --program-signature-hash
+    returns identical hashes for two programs differing only in fn
+    bodies (signatures unchanged)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                  encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn add(p: i32, q: i32) -> i32 { p + q + 0 }\n",
+                  encoding="utf-8")
+    proc_a = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(a)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc_b = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_a.returncode == 0
+    assert proc_b.returncode == 0
+    assert proc_a.stdout.strip() == proc_b.stdout.strip(), (
+        "body-only change should leave signature hash unchanged")
+
+
+def test_stage59_program_signature_hash_sig_change_differs(tmp_path):
+    """Stage 59 follow-on: --program-signature-hash differs when a
+    fn's signature changes (param type)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    a = tmp_path / "a.hx"
+    a.write_text("fn neg(x: i32) -> i32 { 0 - x }\n", encoding="utf-8")
+    b = tmp_path / "b.hx"
+    b.write_text("fn neg(x: f32) -> i32 { 0 - (x as i32) }\n",
+                  encoding="utf-8")
+    proc_a = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(a)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc_b = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(b)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc_a.stdout.strip() != proc_b.stdout.strip()
 
 
 def test_stage59_list_pytrees_inventory(tmp_path):

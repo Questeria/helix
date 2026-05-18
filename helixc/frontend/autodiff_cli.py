@@ -12,6 +12,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Print `<fn_name> : <12-char hex hash>` for every fn.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
+    --program-signature-hash <file.hx>
+        ABI-level hash: covers fn signatures + struct defs, NOT bodies.
     --diff-program-hash <a.hx> <b.hx>
         Compare two programs: prints SAME or DIFFER + per-fn breakdown.
     --changed-fns <a.hx> <b.hx>
@@ -98,6 +100,25 @@ def _dump_ast_hashes(path: str) -> int:
     for it in prog.items:
         if isinstance(it, A.FnDecl):
             print(f"{it.name} : {short_hash(structural_hash(it))}")
+    return 0
+
+
+def _print_program_signature_hash(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the ABI-level
+    signature hash of a program. Wraps program_signature_hash() as a
+    script-friendly entry point.
+
+    Companion to --program-hash (full structural) and --fn-sig-hash
+    (single fn). This one is at the whole-program granularity: same
+    hash => ABI-equivalent.
+
+    Use case: CI gate asserting that an internal refactor didn't
+    accidentally change the public surface.
+    """
+    from .ast_hash import program_signature_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    print(program_signature_hash(prog))
     return 0
 
 
@@ -545,6 +566,13 @@ def main():
             print("usage: --program-hash <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_print_program_hash(args[0]))
+
+    if "--program-signature-hash" in flags:
+        if len(args) < 1:
+            print("usage: --program-signature-hash <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_print_program_signature_hash(args[0]))
 
     if "--diff-program-hash" in flags:
         if len(args) < 2:
