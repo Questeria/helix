@@ -127,6 +127,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all fns with their attribute list (@pure, @trace, etc).
     --fn-callgraph <file.hx> <fn_name>
         Print fn names directly called from inside <fn_name>'s body.
+    --fn-callgraph-json <file.hx> <fn_name>
+        Same as --fn-callgraph but JSON {caller, callees: [...]}.
     --fn-body-stats <file.hx> <fn_name>
         Per-fn body AST-node counts (calls/binops/ifs/loops/matches).
     --fn-body-stats-json <file.hx> <fn_name>
@@ -3655,6 +3657,59 @@ def _fn_body_stats(path: str, fn_name: str) -> int:
     return 0
 
 
+def _fn_callgraph_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph in
+    machine-readable JSON form.
+
+    Output schema:
+      {"caller": "<fn_name>", "callees": ["<f1>", "<f2>", ...]}
+    Callees alphabetically sorted (matches text form).
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    callees: set[str] = set()
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            if isinstance(node.callee, A.Name):
+                callees.add(node.callee.name)
+            elif isinstance(node.callee, A.Path):
+                if node.callee.segments:
+                    callees.add(node.callee.segments[-1])
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    if target.body is not None:
+        _walk(target.body)
+    result = {"caller": fn_name, "callees": sorted(callees)}
+    print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
 def _fn_callgraph(path: str, fn_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: static call-graph
     introspection for one fn. Print fn names called from inside
@@ -5518,6 +5573,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_callgraph(args[0], args[1]))
+
+    if "--fn-callgraph-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-callgraph-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph_json(args[0], args[1]))
 
     if "--fn-body-stats" in flags:
         if len(args) < 2:
