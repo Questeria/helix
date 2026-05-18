@@ -75,6 +75,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         List orphan fns: no callers AND no callees (strongest dead-code).
     --fn-call-path <file.hx> <from_fn> <to_fn>
         Shortest call chain from <from_fn> to <to_fn> via BFS.
+    --fn-distance <file.hx> <from_fn> <to_fn>
+        Edge-count distance from <from_fn> to <to_fn> (-1 if no path).
     --fn-leaves <file.hx>
         List 'leaf' fns (those that call no other fn) — sorted, one per line.
     --fn-roots <file.hx>
@@ -1589,6 +1591,86 @@ def _fn_roots(path: str) -> int:
     return 0
 
 
+def _fn_distance(path: str, from_fn: str, to_fn: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: shortest-path distance
+    (edge count) from from_fn to to_fn in the local callgraph. -1
+    if no path. 0 if from_fn == to_fn.
+
+    Output: a single integer. Tooling-friendly: pipe into shell
+    arithmetic or sort.
+
+    Use case: 'how far is X from main?' — pair with --fn-callgraph-
+    depth-all to rank fns by max depth they're called at.
+
+    Exit codes:
+      0 — success (distance printed, possibly -1)
+      1 — either from_fn or to_fn not found in source
+    """
+    from .ast_walker import iter_fn_decls
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    all_fns = list(iter_fn_decls(prog))
+    all_names = {fn.name for fn in all_fns}
+    for needed in (from_fn, to_fn):
+        if needed not in all_names:
+            print(f"error: autodiff_cli: fn {needed!r} not found in {path}",
+                  file=sys.stderr)
+            return 1
+
+    if from_fn == to_fn:
+        print(0)
+        return 0
+
+    graph: dict[str, set] = {}
+    for fn in all_fns:
+        callees: set = set()
+
+        def _walk(n) -> None:
+            if n is None:
+                return
+            if isinstance(n, A.Call):
+                if isinstance(n.callee, A.Name):
+                    callees.add(n.callee.name)
+                elif (isinstance(n.callee, A.Path)
+                      and n.callee.segments):
+                    callees.add(n.callee.segments[-1])
+            if hasattr(n, "__dataclass_fields__"):
+                for f in n.__dataclass_fields__:
+                    v = getattr(n, f)
+                    if isinstance(v, list):
+                        for x in v:
+                            _walk(x)
+                    elif isinstance(v, tuple):
+                        for x in v:
+                            _walk(x)
+                    else:
+                        _walk(v)
+
+        if fn.body is not None:
+            _walk(fn.body)
+        graph[fn.name] = {c for c in callees if c in all_names}
+
+    # BFS layered distance.
+    visited: set = {from_fn}
+    layer: list = [from_fn]
+    distance = 0
+    while layer:
+        distance += 1
+        next_layer: list = []
+        for v in layer:
+            for w in graph.get(v, set()):
+                if w == to_fn:
+                    print(distance)
+                    return 0
+                if w not in visited:
+                    visited.add(w)
+                    next_layer.append(w)
+        layer = next_layer
+    print(-1)
+    return 0
+
+
 def _fn_call_path(path: str, from_fn: str, to_fn: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: shortest call chain
     from `from_fn` to `to_fn` via BFS through the local callgraph.
@@ -3010,6 +3092,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_call_path(args[0], args[1], args[2]))
+
+    if "--fn-distance" in flags:
+        if len(args) < 3:
+            print("usage: --fn-distance <file.hx> <from_fn> <to_fn>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_distance(args[0], args[1], args[2]))
 
     if "--fn-leaves" in flags:
         if len(args) < 1:
