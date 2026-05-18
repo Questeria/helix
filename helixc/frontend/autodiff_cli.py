@@ -90,6 +90,37 @@ def _print_program_hash(path: str) -> int:
     return 0
 
 
+def _list_fns(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: enumerate all FnDecls
+    in a source file with their signature + body hashes side by side.
+
+    Output format per fn (one line):
+      `<name> sig=<12hex> body=<12hex>`
+    Sorted alphabetically by fn name for stable diff-friendly output.
+
+    Use case:
+    - Repository exploration / inventory
+    - Pre-compute hash table for a build cache without subprocess
+      cost per fn
+    - Quick visual scan for fns whose body changed (sig matches but
+      body differs)
+
+    Exit 0 always (no failure mode beyond parse error).
+    """
+    from .ast_hash import structural_hash, fn_signature_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    fns = sorted(
+        (it for it in prog.items if isinstance(it, A.FnDecl)),
+        key=lambda f: f.name,
+    )
+    for fn in fns:
+        sig = short_hash(fn_signature_hash(fn))
+        body = short_hash(structural_hash(fn))
+        print(f"{fn.name} sig={sig} body={body}")
+    return 0
+
+
 def _fn_sig_hash(path: str, fn_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print the signature-only
     hash of a specific fn. Use case: detect whether a fn's PUBLIC
@@ -243,6 +274,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_sig_hash(args[0], args[1]))
+
+    if "--list-fns" in flags:
+        if len(args) < 1:
+            print("usage: --list-fns <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_fns(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)
