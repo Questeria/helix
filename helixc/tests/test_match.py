@@ -915,13 +915,15 @@ def test_c25_7_pattern_test_expr_call_count_matches_docstring_porting_note():
         if isinstance(n, ast.FunctionDef)
         and n.name == "_pattern_test_expr"
     )
-    # Baseline: exactly 1 def, exactly 4 callsites:
+    # Baseline: exactly 1 def, exactly 5 callsites:
     #   * _pattern_test wrapper (at_top_level=True)
     #   * PatOr recursion (forwards at_top_level)
     #   * PatTuple sub-elem recursion (at_top_level=False)
     #   * PatVariant sub_patterns recursion (at_top_level=False)
+    #   * PatStruct field sub-pattern recursion (at_top_level=False)
+    #     — Stage 59 / Tier 4 #15 addition
     EXPECTED_DEFS = 1
-    EXPECTED_CALLS = 4
+    EXPECTED_CALLS = 5
     assert n_defs == EXPECTED_DEFS, (
         f"Expected exactly {EXPECTED_DEFS} `def _pattern_test_expr` "
         f"in match_lower.py; got {n_defs}. The Stage 28.10 porting "

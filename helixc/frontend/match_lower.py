@@ -539,6 +539,10 @@ def _pattern_test_expr(pat: A.Pattern, scrut_expr: A.Expr,
              value (forward the caller's flag).
            - PatTuple sub-element recursive call → pass 0 (FALSE).
            - PatVariant sub_patterns recursive call → pass 0 (FALSE).
+           - PatStruct field sub-pattern recursive call → pass 0
+             (FALSE). (Stage 59 / Tier 4 #15 addition — struct
+             destructuring; field_access is itself a sub-expression
+             so the recursive test must NOT re-index at the top.)
       4. A misclassified TRUE at a sub-position call site causes
          double-indexing (the slot_load result is indexed again at
          slot 0), producing a load-of-load miscompile. A misclassified
