@@ -81,6 +81,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         CI gate: validate @trace usage; rejects @trace on extern fns.
     --list-traced-fns <file.hx>
         Enumerate fns carrying @trace (one per line, sorted).
+    --list-traced-fns-json <file.hx>
+        Same as --list-traced-fns but machine-readable JSON output.
     --validate-all <file.hx>
         Run all 3 validators (pytrees + autotune + trace-attrs) in one shot.
     --validate-all-json <file.hx>
@@ -960,6 +962,21 @@ def _validate_all(path: str) -> int:
     return 1 if fail_count else 0
 
 
+def _list_traced_fns_json(path: str) -> int:
+    """Stage 59 follow-on / Tier 3 #11 polish: --list-traced-fns in
+    machine-readable JSON form.
+
+    Output: {"traced_fns": ["fn1", "fn2", ...]} sorted alphabetically.
+    """
+    import json
+    from .trace_pass import traced_fn_names
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    print(json.dumps({"traced_fns": sorted(traced_fn_names(prog))},
+                       sort_keys=True, indent=2))
+    return 0
+
+
 def _list_traced_fns(path: str) -> int:
     """Stage 59 follow-on / Tier 3 #11 polish: list fns carrying
     @trace, one per line. Sorted alphabetically. Walks ModBlock-
@@ -1647,6 +1664,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_traced_fns(args[0]))
+
+    if "--list-traced-fns-json" in flags:
+        if len(args) < 1:
+            print("usage: --list-traced-fns-json <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_list_traced_fns_json(args[0]))
 
     if "--validate-all" in flags:
         if len(args) < 1:

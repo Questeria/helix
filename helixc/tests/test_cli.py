@@ -5851,7 +5851,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace", "--trace-dump-summary",
         "--trace-dump-summary-json",
-        "--validate-trace-attrs", "--list-traced-fns",
+        "--validate-trace-attrs",
+        "--list-traced-fns", "--list-traced-fns-json",
         "--validate-all", "--validate-all-json",
         "--parse-only",
     ):
@@ -6120,6 +6121,29 @@ def test_stage59_validate_all_aggregates_failures(tmp_path):
     assert "[autotune] FAIL" in out
     assert "[trace-attrs] OK" in out
     assert "total validators=3 OK=1 FAIL=2" in out
+
+
+def test_stage59_list_traced_fns_json(tmp_path):
+    """Stage 59 follow-on / Tier 3 #11 polish: --list-traced-fns-json
+    outputs JSON {"traced_fns": ["fn1", ...]} sorted alphabetically."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "t.hx"
+    src.write_text(
+        "@trace\nfn b(x: i32) -> i32 { x }\n"
+        "@trace\nfn a(x: i32) -> i32 { x }\n"
+        "fn plain(x: i32) -> i32 { x }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-traced-fns-json", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"traced_fns": ["a", "b"]}
 
 
 def test_stage59_list_traced_fns(tmp_path):
