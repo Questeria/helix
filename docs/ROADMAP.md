@@ -8,7 +8,7 @@ reveals which features actually matter.
 ## Current state (Stages 35-59 CLOSED 2026-05-16 to 2026-05-18)
 
 Burst summary (25 stages closed in <72h, all via the
-3-clean-gate protocol; 162-commit autonomous burst):
+3-clean-gate protocol; **193-commit autonomous burst** as of refresh):
 - Stages 35-48 listed below.
 - Stage 49: Tier 4 #14 Inc 3 runtime Ok/Err tag.
 - Stage 50: RESURRECTED (fn_table cap fix unblocked Inc 1+2).
@@ -28,18 +28,25 @@ Burst summary (25 stages closed in <72h, all via the
 - Stage 58: Tier 4 #13 content-addressed modules (program_hash +
   module_hash + fn_signature_hash core).
 - Stage 59: Tier 4 #15 nested pattern destructuring + polish
-  burst (~84 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
-  33 new Python introspection helpers + 66 CLI flags enumerated in
+  burst (193 commits across Tier 2 #7/#8, Tier 3 #11, Tier 4 #13:
+  ~50 new Python introspection helpers + **99 CLI flags** enumerated in
   --help + 6 cascading defects found+fixed + JSON/CSV round-trip
   serialization for both pytree and trace + 5 per-system + 2
-  aggregator validator gates + 4 *-json machine-readable variants
+  aggregator validator gates + JSON-parity for every shipped flag
   + 21-flag call-graph analysis suite across 8 axes (forward/inverse/
   topology/recursion/metrics/pathfinding/summary/output-format with
   Graphviz+Mermaid) for refactor planning, dead-code detection,
-  stack-overflow audit, hotspot identification, and visualization).
+  stack-overflow audit, hotspot identification, and visualization
+  + **top-level enumeration nonet** (fns/structs/modules/uses/consts/
+  enums/type-aliases/agents/impls × {text, JSON} = 18 list flags)
+  + **per-item introspection sextet** (struct-fields/const-value/
+  enum-variants/agent-methods/type-alias-target/impl-methods × {text,
+  JSON} = 12 inspect flags) for fine-grained per-Item introspection
+  covering 9 of the Item subclasses end-to-end).
   Final test counts: test_pytree.py 64/64, test_trace.py 52/52,
-  test_ast_hash.py 40/40, test_autotune.py 34/34, test_cli.py 380+
-  — every impacted area GREEN.
+  test_ast_hash.py 40/40, test_autotune.py 34/34, test_match.py 33/33,
+  test_cli.py 410+ — every impacted area GREEN (self-host gate
+  223/223 across the 5 introspection files at every commit).
 
 - **Stage 35** — AI/ML capability push (restart 65 closure).
 - **Stage 36** — Strategic AGI features: Tier 3 #10
