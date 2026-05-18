@@ -123,3 +123,31 @@ localize then patch.
 - 2026-05-17 (evening): parallel exploration during Stage 52
   gate-7 closure produced this diagnostic plan. Stage 50 retry
   unblocks on Exp A+B execution.
+
+## Exp B EXECUTED — H1 NOT CONFIRMED (2026-05-17 late evening)
+
+A parallel Stage 50 retry agent (during Stage 52 gate-10 wait)
+attempted Exp B in an isolated worktree:
+1. Re-applied Stage 50 Inc 1+2 via revert-of-revert
+2. Reproduced the SIGSEGV in the unmodified cascade
+3. Ran cascade with `ulimit -s unlimited` in WSL
+
+**Result: ulimit -s unlimited DID NOT fix the SIGSEGV.**
+
+H1 (stack overflow from fixed 1024-byte Helix codegen prologue)
+is **RULED OUT**. The cascade still segfaults even with unlimited
+stack.
+
+This shifts probability mass to H2 (uninitialized scratch region
+sb+88..sb+121) and H3 (n=1 bridge swap reads zero-initialized
+multi-bucket head slot → corrupts arena). Both are arena-corruption
+hypotheses, not stack-based.
+
+**Next step**: Exp C (instrument `bucket_array_sum` and
+`param_idx_of` returns with `ud2/exit 99` assertions checking
+the returned index is > 0). If a trap fires instead of segfault,
+the exact callsite is localized.
+
+Exp B was killed mid-experiment (worktree-isolation leak
+required main-repo recovery); the report is partial. Future
+Stage 50 retry should re-attempt Exp C cleanly.
