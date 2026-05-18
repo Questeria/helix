@@ -4777,11 +4777,11 @@ def test_stage78_safety_stdlib_loads_with_property_fns():
     assert "safety_taint_roundtrip_is_identity" in tc._property_fn_names
 
 
-def test_stage78_safety_stdlib_exposes_all_seven_wrapper_helpers():
-    """Stage 78 — each of the 7 Tier-S/A wrappers (Stages 68-76)
-    has a corresponding `as_*`/`wrap_*` and `strip_*`/`exhaust_*`/
-    `declassify_*` helper in safety.hx. Smoke check by parsing
-    and confirming each helper's name appears in the fn list."""
+def test_stage78_safety_stdlib_exposes_all_ten_wrapper_helpers():
+    """Stage 78 + 82 — each of the 10 Tier-S/A wrappers (Stages
+    68-81) has a corresponding constructor + opt-out helper in
+    safety.hx. Smoke check by parsing and confirming each helper's
+    name appears in the fn list."""
     from helixc.frontend.parser import parse
 
     src = """
@@ -4790,8 +4790,6 @@ def test_stage78_safety_stdlib_exposes_all_seven_wrapper_helpers():
     prog = parse(src, include_stdlib=True)
     fn_names = {item.name for item in prog.items
                 if hasattr(item, "name")}
-    # All 7 wrappers have an "as/wrap" + "strip/exhaust/declassify/
-    # assert/widen" helper in safety.hx.
     expected = {
         # Conf
         "as_conf", "strip_conf_f32",
@@ -4807,6 +4805,12 @@ def test_stage78_safety_stdlib_exposes_all_seven_wrapper_helpers():
         "assert_robust_f32", "widen_robust_f32",
         # Energy
         "measure_energy_f32", "exhaust_energy_f32",
+        # Enclave (Stage 79)
+        "enter_sgx_f32", "exit_sgx_f32",
+        # Cfact (Stage 80)
+        "as_counterfactual_f32", "realize_counterfactual_f32",
+        # Deadline (Stage 81)
+        "within_deadline_f32", "miss_deadline_f32",
     }
     missing = expected - fn_names
     assert not missing, (
@@ -4875,6 +4879,34 @@ def test_stage77_plain_fn_not_registered_as_property():
     tc = TypeChecker(prog)
     tc.check()
     assert "returns_bool" not in tc._property_fn_names
+
+
+def test_stage82_safety_stdlib_all_five_property_fns_registered():
+    """Stage 82 — safety.hx now ships 5 @property fns (2 from
+    Stage 78 + 3 new for Stages 79-81 wrappers). All should
+    register cleanly in `_property_fn_names`."""
+    from helixc.frontend.parser import parse
+    from helixc.frontend.typecheck import TypeChecker
+
+    src = """
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=True)
+    tc = TypeChecker(prog)
+    errors = tc.check()
+    assert errors == [], (
+        f"safety.hx + stdlib should typecheck clean; got: "
+        f"{[str(e) for e in errors[:5]]}")
+    expected = {
+        "safety_conf_roundtrip_is_identity",   # Stage 78
+        "safety_taint_roundtrip_is_identity",  # Stage 78
+        "safety_enclave_roundtrip_is_identity",   # Stage 82
+        "safety_cfact_roundtrip_is_identity",     # Stage 82
+        "safety_deadline_roundtrip_is_identity",  # Stage 82
+    }
+    missing = expected - tc._property_fn_names
+    assert not missing, (
+        f"safety.hx missing @property fns: {missing}")
 
 
 def test_stage81_inc1_deadline_type_recognition():

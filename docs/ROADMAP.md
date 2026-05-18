@@ -303,6 +303,23 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 82 SHIPPED 2026-05-18** — Extend `helixc/stdlib/
+  safety.hx` with helpers + property fns for the 3 newest
+  wrappers (Stages 79-81):
+  - 6 new `@pure` helper fns (constructor + opt-out per wrapper):
+    `enter_sgx_f32` / `exit_sgx_f32` (Enclave),
+    `as_counterfactual_f32` / `realize_counterfactual_f32`
+    (Counterfactual),
+    `within_deadline_f32` / `miss_deadline_f32` (Deadline).
+  - 3 new `@property` round-trip fns
+    (`safety_enclave_roundtrip_is_identity`,
+    `safety_cfact_roundtrip_is_identity`,
+    `safety_deadline_roundtrip_is_identity`).
+  - safety.hx now ships 20 helper fns covering all 10 Tier-S/A
+    wrappers + 5 property fns total.
+  - 1 new test + 1 updated test (Stage 78 helper count expanded
+    from 14 to 20); 391 typecheck + 457 regression GREEN.
+
 - **Stage 81 SUBSTANTIALLY COMPLETE 2026-05-18** — Real-time
   deadline / WCET types (V1_FINAL_FEATURES Part 2.4, revived
   as a Tier-A wrapper):

@@ -111,6 +111,48 @@ fn exhaust_energy_f32(x: Energy<f32>) -> f32 {
 }
 
 // ============================================================
+// Trusted execution environment (Enclave, Stage 79).
+// ============================================================
+
+@pure
+fn enter_sgx_f32(x: f32) -> InEnclaveSGX<f32> {
+    __wrap_enclave(x)
+}
+
+@pure
+fn exit_sgx_f32(x: InEnclaveSGX<f32>) -> f32 {
+    __exit_enclave(x)
+}
+
+// ============================================================
+// Counterfactual reasoning (Cfact, Stage 80).
+// ============================================================
+
+@pure
+fn as_counterfactual_f32(x: f32) -> Counterfactual<f32> {
+    __wrap_cfact(x)
+}
+
+@pure
+fn realize_counterfactual_f32(x: Counterfactual<f32>) -> f32 {
+    __as_actual(x)
+}
+
+// ============================================================
+// Real-time deadline / WCET budget (Deadline, Stage 81).
+// ============================================================
+
+@pure
+fn within_deadline_f32(x: f32) -> Deadline<f32> {
+    __wrap_deadline(x)
+}
+
+@pure
+fn miss_deadline_f32(x: Deadline<f32>) -> f32 {
+    __miss_deadline(x)
+}
+
+// ============================================================
 // Property-based test (Stage 77 @property scaffolding).
 // ============================================================
 
@@ -129,5 +171,30 @@ fn safety_conf_roundtrip_is_identity(x: f32) -> bool {
 fn safety_taint_roundtrip_is_identity(x: f32) -> bool {
     let wrapped = classify_f32(x);
     let unwrapped = declassify_f32(wrapped);
+    unwrapped == x
+}
+
+// Stage 82 — round-trip tests for the new wrappers (Stages 79-81).
+@property
+@pure
+fn safety_enclave_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = enter_sgx_f32(x);
+    let unwrapped = exit_sgx_f32(wrapped);
+    unwrapped == x
+}
+
+@property
+@pure
+fn safety_cfact_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = as_counterfactual_f32(x);
+    let unwrapped = realize_counterfactual_f32(wrapped);
+    unwrapped == x
+}
+
+@property
+@pure
+fn safety_deadline_roundtrip_is_identity(x: f32) -> bool {
+    let wrapped = within_deadline_f32(x);
+    let unwrapped = miss_deadline_f32(wrapped);
     unwrapped == x
 }
