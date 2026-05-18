@@ -248,6 +248,61 @@ def test_stage60_inc3_write_file_to_arena_dyn_round_trips():
     assert content == b"hello\n", f"got {content!r}"
 
 
+def test_stage60_inc4_read_file_int_dyn_round_trips():
+    """Stage 60 Inc 4: read_file_int_dyn opens a runtime-built path,
+    reads the first 4 bytes as i32 little-endian, returns the value.
+    Returns 0 on any error / short read."""
+    import struct as _struct
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    test_file = os.path.join(out_dir, "stage60_inc4_dyn_read_int.bin")
+    # Write i32=42 little-endian.
+    with open(test_file, "wb") as f:
+        f.write(_struct.pack("<i", 42))
+    wsl_path = _win_to_wsl(test_file)
+    src = f"""
+    fn main() -> i32 {{
+        let path_start = __strlit_to_arena("{wsl_path}");
+        let path_len = __strlen("{wsl_path}");
+        let v = read_file_int_dyn(path_start, path_len);
+        v
+    }}
+    """
+    rc, out, err = _build_and_run(src)
+    assert rc == 42, f"expected rc=42, got rc={rc} err={err!r}"
+
+
+def test_stage60_inc4_write_file_dyn_round_trips():
+    """Stage 60 Inc 4: write_file_dyn aliases to the same backend
+    as write_file_to_arena_dyn (both write arena bytes to a runtime
+    path). Verifies the alias works end-to-end."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    test_file = os.path.join(out_dir, "stage60_inc4_dyn_write_alias.txt")
+    if os.path.exists(test_file):
+        os.remove(test_file)
+    wsl_path = _win_to_wsl(test_file)
+    src = f"""
+    fn main() -> i32 {{
+        let p = __strlit_to_arena("{wsl_path}");
+        let pl = __strlen("{wsl_path}");
+        let d = __strlit_to_arena("aliased");
+        let dl = __strlen("aliased");
+        let n = write_file_dyn(p, pl, d, dl);
+        n
+    }}
+    """
+    rc, out, err = _build_and_run(src)
+    assert rc == 7, f"expected rc=7 (bytes written), got rc={rc} err={err!r}"
+    with open(test_file, "rb") as f:
+        content = f.read()
+    assert content == b"aliased", f"got {content!r}"
+
+
 def test_stage60_inc1_all_four_dyn_builtins_typecheck():
     """Stage 60 Inc 1: all 4 dyn variants (read_file_to_arena_dyn,
     write_file_to_arena_dyn, read_file_int_dyn, write_file_dyn)

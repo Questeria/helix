@@ -3761,11 +3761,13 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
-            # Stage 60 Inc 3 — write_file_to_arena_dyn(path_start,
-            # path_len, data_start, n_bytes) -> i32.
-            # Mirrors Inc 2's path-copy preamble; reuses static
-            # variant's sys_write per-byte loop body.
-            if kind == "write_file_to_arena_dyn":
+            # Stage 60 Inc 3+4 — write_file_to_arena_dyn /
+            # write_file_dyn (path_start, path_len, data_start,
+            # n_bytes) -> i32. Both names map to the same backend
+            # (write arena bytes to a runtime-resolved path); the
+            # distinction is conceptual (named for symmetry with
+            # static write_file vs write_file_to_arena).
+            if kind in ("write_file_to_arena_dyn", "write_file_dyn"):
                 PATH_MAX = 0x1000  # 4 KB path scratch
 
                 path_start_slot = self._slot_of(op.operands[0])
@@ -3955,13 +3957,141 @@ class FnCompiler:
                     self.asm.mov_mem_rbp_eax(res_slot)
                 return
 
-            # Remaining 2 dyn variants deferred to Inc 4
-            # (still fail-closed).
-            if kind in ("read_file_int_dyn", "write_file_dyn"):
-                raise NotImplementedError(
-                    f"Stage 60 Inc 4+: {kind} backend pending; "
-                    f"surface lowers cleanly. Use static variant "
-                    f"or wait for next Inc.")
+            # Stage 60 Inc 4 — read_file_int_dyn(path_start, path_len)
+            # -> i32. Opens runtime-resolved path read-only, reads
+            # first 4 bytes into stack scratch, interprets as i32
+            # little-endian, closes. Returns 0 on any error / short
+            # read. Mirrors Inc 2's path-copy preamble.
+            if kind == "read_file_int_dyn":
+                PATH_MAX = 0x1000  # 4 KB path scratch
+
+                path_start_slot = self._slot_of(op.operands[0])
+                path_len_slot = self._slot_of(op.operands[1])
+
+                buf = self.asm.b
+                # Frame: PATH_MAX path scratch + 8 bytes read buf +
+                # 8 bytes fd save = PATH_MAX + 16.
+                FRAME = PATH_MAX + 16
+                buf.emit(0x48, 0x81, 0xEC)
+                buf.emit_bytes(struct.pack("<I", FRAME))
+
+                # ---- Copy path bytes from arena to path_scratch ----
+                self.asm.mov_eax_mem_rbp(path_len_slot)
+                buf.emit(0x49, 0x89, 0xC1)                # mov r9, rax
+                buf.emit(0x49, 0x81, 0xF9)
+                buf.emit_bytes(struct.pack("<I", PATH_MAX - 1))
+                buf.emit(0x76, 0x02)
+                buf.emit(0x0F, 0x0B)                      # ud2
+
+                self.asm.mov_eax_mem_rbp(path_start_slot)
+                buf.emit(0x49, 0x89, 0xC2)                # mov r10, rax
+                buf.emit(0x4D, 0x31, 0xDB)                # xor r11, r11
+
+                pcl_start = buf.offset()
+                buf.emit(0x4D, 0x39, 0xCB)                # cmp r11, r9
+                buf.emit(0x7D, 0x00)
+                pcl_jge_off = buf.offset() - 1
+                pcl_jge_after = buf.offset()
+                buf.emit(0x44, 0x89, 0xD1)                # mov ecx, r10d
+                buf.emit(0x44, 0x01, 0xD9)                # add ecx, r11d
+                self.asm.lea_rax_rip_rel("__helix_arena_base")
+                buf.emit(0x8B, 0x44, 0x88, 0x04)
+                buf.emit(0x42, 0x88, 0x04, 0x1C)          # mov [rsp+r11], al
+                buf.emit(0x49, 0xFF, 0xC3)
+                buf.emit(0xEB, 0x00)
+                pcl_jmp_off = buf.offset() - 1
+                pcl_jmp_after = buf.offset()
+                pcl_back = pcl_start - pcl_jmp_after
+                if not (-128 <= pcl_back <= 127):
+                    raise ValueError(
+                        "read_int_dyn path-copy loop disp out of rel8")
+                buf.bytes_[pcl_jmp_off] = pcl_back & 0xFF
+                pcl_done = buf.offset()
+                pcl_fwd = pcl_done - pcl_jge_after
+                if not (-128 <= pcl_fwd <= 127):
+                    raise ValueError(
+                        "read_int_dyn path-copy jge disp out of rel8")
+                buf.bytes_[pcl_jge_off] = pcl_fwd & 0xFF
+
+                # Null-terminate.
+                buf.emit(0x42, 0xC6, 0x04, 0x0C, 0x00)    # mov byte [rsp+r9], 0
+
+                # ---- sys_open(path, O_RDONLY) ----
+                buf.emit(0x48, 0x89, 0xE7)                # mov rdi, rsp
+                self.asm.mov_esi_imm32(0)                 # O_RDONLY
+                self.asm.mov_edx_imm32(0)
+                self.asm.mov_eax_imm32(2)
+                self.asm.syscall()
+                # fd at [rsp+PATH_MAX+8]
+                buf.emit(0x48, 0x89, 0x84, 0x24)
+                buf.emit_bytes(struct.pack("<I", PATH_MAX + 8))
+
+                # If fd < 0, set return 0 and skip.
+                buf.emit(0x48, 0x85, 0xC0)                # test rax, rax
+                buf.emit(0x7C, 0x00)                      # jl err
+                err_jmp_off = buf.offset() - 1
+
+                # ---- sys_read(fd, &read_buf, 4) ----
+                # read_buf at [rsp+PATH_MAX]
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)          # mov rdi, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", PATH_MAX + 8))
+                buf.emit(0x48, 0x8D, 0xB4, 0x24)          # lea rsi, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", PATH_MAX))
+                self.asm.mov_edx_imm32(4)
+                self.asm.mov_eax_imm32(0)                 # sys_read
+                self.asm.syscall()
+                # Save bytes_read in r10.
+                buf.emit(0x49, 0x89, 0xC2)                # mov r10, rax
+
+                # ---- sys_close(fd) ----
+                buf.emit(0x48, 0x8B, 0xBC, 0x24)
+                buf.emit_bytes(struct.pack("<I", PATH_MAX + 8))
+                self.asm.mov_eax_imm32(3)
+                self.asm.syscall()
+
+                # If r10 != 4, return 0.
+                buf.emit(0x49, 0x83, 0xFA, 0x04)          # cmp r10, 4
+                buf.emit(0x74, 0x00)                      # je load_val (ph)
+                je_load_off = buf.offset() - 1
+                je_load_after = buf.offset()
+                # Fall-through path: mov eax, 0; jmp epilogue
+                buf.emit(0xB8, 0x00, 0x00, 0x00, 0x00)    # mov eax, 0
+                buf.emit(0xEB, 0x00)                      # jmp epilogue (ph)
+                skip_load_off = buf.offset() - 1
+                skip_load_after = buf.offset()
+
+                # load_val: read 4 bytes from read_buf as i32.
+                load_val_addr = buf.offset()
+                je_load_disp = load_val_addr - je_load_after
+                if not (-128 <= je_load_disp <= 127):
+                    raise ValueError(
+                        "read_int_dyn je-load disp out of rel8")
+                buf.bytes_[je_load_off] = je_load_disp & 0xFF
+                buf.emit(0x8B, 0x84, 0x24)                # mov eax, [rsp+disp32]
+                buf.emit_bytes(struct.pack("<I", PATH_MAX))
+
+                # epilogue:
+                ep_addr = buf.offset()
+                skip_disp = ep_addr - skip_load_after
+                if not (-128 <= skip_disp <= 127):
+                    raise ValueError(
+                        "read_int_dyn skip-load disp out of rel8")
+                buf.bytes_[skip_load_off] = skip_disp & 0xFF
+                # Patch err to jump here (return 0).
+                err_disp = ep_addr - (err_jmp_off + 1)
+                if not (-128 <= err_disp <= 127):
+                    raise ValueError(
+                        "read_int_dyn err jmp disp out of rel8")
+                buf.bytes_[err_jmp_off] = err_disp & 0xFF
+
+                # Tear down.
+                buf.emit(0x48, 0x81, 0xC4)
+                buf.emit_bytes(struct.pack("<I", FRAME))
+
+                if op.results:
+                    res_slot = self._slot_of(op.results[0])
+                    self.asm.mov_mem_rbp_eax(res_slot)
+                return
 
             if kind == "print_int":
                 # Convert i32 -> ASCII decimal and write(1, buf, len).
