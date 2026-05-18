@@ -5868,7 +5868,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--struct-fields", "--struct-fields-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
-        "--fn-callgraph", "--fn-callers", "--fn-body-stats",
+        "--fn-callgraph", "--fn-callers",
+        "--fn-body-stats", "--fn-body-stats-json",
         "--fn-callgraph-all", "--fn-callers-all",
         "--fn-reachable-from", "--fn-reachable-to",
         "--fn-leaves", "--fn-roots",
@@ -8239,6 +8240,35 @@ def test_stage59_fn_callers_unknown_target_no_error(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_body_stats_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-body-stats-json
+    emits all 6 stat keys as JSON."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "bs.hx"
+    src.write_text(
+        "fn fib(n: i32) -> i32 {\n"
+        "    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-body-stats-json", str(src), "fib"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert set(result.keys()) == {
+        "ast_nodes", "calls", "binops", "ifs", "loops", "matches",
+    }
+    assert result["calls"] == 2
+    assert result["ifs"] == 1
+    assert result["loops"] == 0
+    assert result["matches"] == 0
 
 
 def test_stage59_fn_body_stats(tmp_path):
