@@ -4706,6 +4706,52 @@ def test_stage59_fn_sig_hash_param_type_change_differs(tmp_path):
         "param type change should flip signature hash"
 
 
+def test_stage59_list_fns_enumerates_alphabetically(tmp_path):
+    """Stage 59 follow-on: --list-fns enumerates all FnDecls
+    alphabetically with sig+body hashes side by side."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "s.hx"
+    src.write_text(
+        "fn zebra() -> i32 { 1 }\n"
+        "fn alpha() -> i32 { 2 }\n"
+        "fn mike() -> i32 { 3 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fns", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = proc.stdout.strip().split("\n")
+    # Alphabetical: alpha < mike < zebra
+    assert lines[0].startswith("alpha "), \
+        f"first line should be alpha, got: {lines[0]!r}"
+    assert lines[1].startswith("mike "), lines[1]
+    assert lines[2].startswith("zebra "), lines[2]
+    # Each line has sig= and body= fields
+    for line in lines:
+        assert "sig=" in line and "body=" in line, \
+            f"missing sig=/body= in: {line!r}"
+
+
+def test_stage59_list_fns_empty_file(tmp_path):
+    """Stage 59 follow-on: --list-fns on a file with no fns produces
+    empty output + exit 0."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "empty.hx"
+    src.write_text("struct Foo { x: i32 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--list-fns", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+
+
 def test_stage59_fn_sig_hash_missing_fn_exits_1(tmp_path):
     """Stage 59 follow-on: --fn-sig-hash on a missing fn name exits
     1 with a clean error (no traceback)."""
