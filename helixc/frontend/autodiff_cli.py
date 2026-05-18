@@ -48,6 +48,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Single-query consolidated per-fn AST metrics. JSON with
         {name, size, depth, counts, n_classes, found} — tooling
         gets the full complexity profile in one fetch.
+    --fn-loc <file.hx> <fn_name>
+        Print the source location of a fn as canonical
+        '<path>:<line>:<col>'. Editor jump-to-definition input.
+    --fn-loc-json <file.hx> <fn_name>
+        Same as --fn-loc but JSON
+        {name, file, line, col, found}.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -455,6 +461,72 @@ def _ast_stats_json(path: str) -> int:
     }
     print(json.dumps(result, sort_keys=True, indent=2))
     return 0
+
+
+def _fn_loc(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: print the source
+    location of a fn (line + col). Uses the FnDecl's own span (start
+    of the `fn` keyword) — phase-0 Span carries line+col but no end-
+    position info, so this reports only the start.
+
+    Output: '<file_path>:<line>:<col>' (canonical compiler-style loc).
+
+    Use case: editor jump-to-definition tooling; CI failure
+    annotations that need a line number for log emission.
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            sp = getattr(it, "span", None)
+            line = getattr(sp, "line", 0) if sp else 0
+            col = getattr(sp, "col", 0) if sp else 0
+            print(f"{path}:{line}:{col}")
+            return 0
+    print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
+def _fn_loc_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-loc in
+    machine-readable JSON form.
+
+    Output schema:
+      {"name": "<fn_name>",
+       "file": "<path>",
+       "line": N,
+       "col": N,
+       "found": bool}
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            sp = getattr(it, "span", None)
+            line = getattr(sp, "line", 0) if sp else 0
+            col = getattr(sp, "col", 0) if sp else 0
+            print(json.dumps({
+                "name": fn_name,
+                "file": path,
+                "line": line,
+                "col": col,
+                "found": True,
+            }, sort_keys=True, indent=2))
+            return 0
+    print(json.dumps({
+        "name": fn_name,
+        "file": path,
+        "line": 0,
+        "col": 0,
+        "found": False,
+    }, sort_keys=True, indent=2))
+    return 1
 
 
 def _fn_ast_summary_json(path: str, fn_name: str) -> int:
@@ -7916,6 +7988,20 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_ast_summary_json(args[0], args[1]))
+
+    if "--fn-loc" in flags:
+        if len(args) < 2:
+            print("usage: --fn-loc <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_loc(args[0], args[1]))
+
+    if "--fn-loc-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-loc-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_loc_json(args[0], args[1]))
 
     if "--fn-ast-size-json" in flags:
         if len(args) < 2:

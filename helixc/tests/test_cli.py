@@ -5914,6 +5914,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-ast-size-all",
         "--fn-ast-node-counts", "--fn-ast-node-counts-json",
         "--fn-ast-summary-json",
+        "--fn-loc", "--fn-loc-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7576,6 +7577,73 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_loc_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-loc prints
+    '<path>:<line>:<col>' for a known fn."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "floc.hx"
+    src.write_text(
+        "fn first() -> i32 { 1 }\n"
+        "\n"
+        "fn second() -> i32 { 2 }\n",
+        encoding="utf-8",
+    )
+    proc1 = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-loc", str(src), "first"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    proc2 = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-loc", str(src), "second"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc1.returncode == 0
+    assert proc2.returncode == 0
+    # 'first' on line 1, 'second' on line 3.
+    assert proc1.stdout.strip().endswith(":1:1")
+    assert proc2.stdout.strip().endswith(":3:1")
+
+
+def test_stage59_fn_loc_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-loc-json emits
+    {name, file, line, col, found}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "flocj.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-loc-json", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["name"] == "foo"
+    assert result["found"] is True
+    assert result["line"] == 1
+    assert result["col"] == 1
+    assert result["file"] == str(src)
+
+
+def test_stage59_fn_loc_missing(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-loc rc=1 for
+    unknown fn."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "flocm.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-loc", str(src), "nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_fn_ast_summary_json_found(tmp_path):
