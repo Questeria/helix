@@ -406,5 +406,33 @@ def test_tree_map_preserves_nested_shape():
     assert out["inner"]["v"] == 6.0
 
 
+def test_tree_reduce_sum():
+    """Stage 59 follow-on: tree_reduce sums all leaf values."""
+    from helixc.frontend.pytree import tree_reduce
+    leaves = {"x": 1.0, "y": 2.0, "z": 3.0}
+    total = tree_reduce(leaves, lambda acc, v: acc + v, 0.0)
+    assert total == 6.0
+
+
+def test_tree_reduce_count():
+    """Stage 59 follow-on: tree_reduce counts leaves."""
+    from helixc.frontend.pytree import tree_reduce
+    leaves = {"a.b.c": 1, "a.b.d": 2, "e": 3, "f.g": 4}
+    n = tree_reduce(leaves, lambda acc, _: acc + 1, 0)
+    assert n == 4
+
+
+def test_tree_reduce_deterministic_order():
+    """Stage 59 follow-on: tree_reduce iterates leaves in sorted-by-
+    path order for determinism (matters when reduce_fn is non-
+    commutative)."""
+    from helixc.frontend.pytree import tree_reduce
+    leaves = {"c": 3, "a": 1, "b": 2}
+    # Concatenate values as a string in iteration order.
+    seq = tree_reduce(leaves, lambda acc, v: acc + str(v), "")
+    # Sorted keys: a, b, c → "1" + "2" + "3" = "123"
+    assert seq == "123"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

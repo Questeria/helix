@@ -299,6 +299,28 @@ def unflatten_pytree(decl, struct_decls: dict,
                       default=default, _visited=set(), depth=0)
 
 
+def tree_reduce(leaves_by_path: dict, reduce_fn, init):
+    """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_reduce.
+
+    Reduce all leaf values to a single value via `reduce_fn(acc, leaf)`
+    starting from `init`. Iterates leaves in sorted-by-path order for
+    determinism (matters when reduce_fn is non-commutative).
+
+    Use cases:
+    - Compute gradient L1 norm: `tree_reduce(grads, lambda a, g: a + abs(g), 0.0)`
+    - Count parameters: `tree_reduce(params, lambda a, _: a + 1, 0)`
+    - Find max gradient: `tree_reduce(grads, max, float("-inf"))`
+    - Check all positive: `tree_reduce(vals, lambda a, v: a and v > 0, True)`
+
+    Pure functional — does not need the struct decl since values are
+    already flat (keyed by path).
+    """
+    acc = init
+    for path in sorted(leaves_by_path.keys()):
+        acc = reduce_fn(acc, leaves_by_path[path])
+    return acc
+
+
 def tree_map(decl, struct_decls: dict, leaves_by_path: dict,
               leaf_fn, default=_RAISE_ON_MISSING) -> dict:
     """Stage 59 follow-on / Tier 2 #7 polish — JAX-style tree_map.
