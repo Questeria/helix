@@ -303,6 +303,30 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 68 Inc 3 SHIPPED 2026-05-18** — Confidence-tag opt-out
+  builtin (`__lift_conf`):
+  - typecheck: `__lift_conf(x)` returns the inner type of a
+    TyConf-wrapped x via `_strip_conf` helper that walks the
+    wrapper chain (Conf<D<f32>> → D<f32>, not f32). Identity on
+    non-Conf inputs (safe to use anywhere).
+  - lower_ast: identity lowering — Phase-0 representation of
+    TyConf is identity-erased; no runtime work.
+  - `__lift_conf` added to `_BUILTIN_NAMES`.
+  - 3 new tests; 324 typecheck + 390 selfhost+IR GREEN.
+  - Inc 4-5 deferred (confidence-aware AD; Conf-aware diagnostics).
+
+- **Stage 68 Inc 2 SHIPPED 2026-05-18** — Confidence propagation
+  algebra through binary ops:
+  - `_unwrap` ascends through TyConf alongside TyDiff/TyLogic.
+  - New `_find_conf_level(ty)` walks the wrapper chain to find
+    the innermost TyConf level.
+  - Wrapped-binop gate extended to fire when either side carries
+    Conf. Level resolution: max-rank wins (low > med > high >
+    precise).
+  - Layering convention preserved: TyLogic innermost, TyDiff in
+    the middle, TyConf outermost. Conf<D<Logic<T>>> is canonical.
+  - 3 new tests; 321 typecheck + 324 regression GREEN.
+
 - **Stage 68 Inc 1 SHIPPED 2026-05-18** — Confidence types
   scaffolding (V1_FINAL_FEATURES Tier-S #1, Layer-0):
   - New `TyConf(level, inner)` frozen dataclass in typecheck.py.
