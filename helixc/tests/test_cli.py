@@ -5903,6 +5903,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--flag-doc", "--flag-doc-json",
         "--cli-summary-json",
         "--flag-arity", "--flag-arity-json",
+        "--validate-help-docstring",
+        "--validate-help-docstring-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7565,6 +7567,45 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_validate_help_docstring_text():
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-help-docstring
+    reports OK on a consistent codebase (every dispatched flag is
+    documented). rc=0."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-help-docstring"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    # Must be clean (every dispatched flag has a help-doc entry).
+    assert proc.returncode == 0, (
+        f"help docstring out of sync with dispatch:\n{proc.stdout}")
+    assert proc.stdout.strip() == "OK"
+
+
+def test_stage59_validate_help_docstring_json():
+    """Stage 59 follow-on / Tier 4 #13 polish:
+    --validate-help-docstring-json emits {ok, n_dispatched,
+    n_documented, missing}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--validate-help-docstring-json"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["ok"] is True
+    assert result["missing"] == []
+    # Sanity: documented count should be >= dispatched count
+    # (docstring may include some prefix/utility flags not in
+    # dispatch table, but never less than dispatched).
+    assert result["n_documented"] >= result["n_dispatched"]
 
 
 def test_stage59_flag_arity_text():

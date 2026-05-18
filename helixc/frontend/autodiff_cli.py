@@ -81,6 +81,12 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --flag-arity-json <flag_name>
         Same as --flag-arity but JSON
         {flag, arity, placeholders, found}.
+    --validate-help-docstring
+        Consistency-check: every dispatched flag must have a usage
+        line in the help docstring. Exits 0 on clean, 1 on missing.
+    --validate-help-docstring-json
+        Same as --validate-help-docstring but JSON
+        {ok, n_dispatched, n_documented, missing}.
     --autotune-budget-json <file.hx> <max_total>
         Same as --autotune-budget but JSON
         {within_budget, total_variants, budget, per_fn}.
@@ -6516,6 +6522,81 @@ def _diff_program_hash(path_a: str, path_b: str) -> int:
     return 1
 
 
+def _validate_help_docstring() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: consistency-check the
+    help docstring against the dispatch table. Every flag that has
+    a dispatch branch in main() must have a corresponding usage line
+    in the module docstring.
+
+    Output: 'OK' on clean; per-missing diagnostic + 'FAIL' otherwise.
+
+    Companion to --validate-* gates: same rc semantics (0=clean,
+    1=violations).
+    """
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    dispatch_flags = set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE))
+    doc = __doc__ or ""
+    doc_lines = doc.splitlines()
+    documented_flags: set[str] = set()
+    for line in doc_lines:
+        # Match `    --flag-name` at 4-indent.
+        m = re.match(r'^    (--[a-z-]+)(?:\s|$)', line)
+        if m:
+            documented_flags.add(m.group(1))
+    missing = sorted(dispatch_flags - documented_flags)
+    if not missing:
+        print("OK")
+        return 0
+    for f in missing:
+        print(f"missing help entry: {f}")
+    print(f"FAIL ({len(missing)} undocumented)")
+    return 1
+
+
+def _validate_help_docstring_json() -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --validate-help-docstring
+    in machine-readable JSON form.
+
+    Output schema:
+      {"ok": bool,
+       "n_dispatched": N,
+       "n_documented": N,
+       "missing": ["<flag>", ...]}
+
+    rc=0 on ok=true; 1 on ok=false (matches validator pattern).
+    """
+    import json
+    import re
+    import os
+    here = os.path.abspath(__file__)
+    with open(here, "r", encoding="utf-8") as f:
+        src = f.read()
+    dispatch_flags = set(re.findall(
+        r'^    if "(--[a-z-]+)" in (?:flags|sys\.argv\[1:\]):',
+        src, re.MULTILINE))
+    doc = __doc__ or ""
+    documented_flags: set[str] = set()
+    for line in doc.splitlines():
+        m = re.match(r'^    (--[a-z-]+)(?:\s|$)', line)
+        if m:
+            documented_flags.add(m.group(1))
+    missing = sorted(dispatch_flags - documented_flags)
+    ok = not missing
+    print(json.dumps({
+        "ok": ok,
+        "n_dispatched": len(dispatch_flags),
+        "n_documented": len(documented_flags),
+        "missing": missing,
+    }, sort_keys=True, indent=2))
+    return 0 if ok else 1
+
+
 def _flag_arity(flag_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: report how many
     positional arguments a CLI flag takes. Reads the help docstring's
@@ -7041,6 +7122,12 @@ def main():
 
     if "--cli-summary-json" in flags:
         sys.exit(_cli_summary_json())
+
+    if "--validate-help-docstring" in flags:
+        sys.exit(_validate_help_docstring())
+
+    if "--validate-help-docstring-json" in flags:
+        sys.exit(_validate_help_docstring_json())
 
     if "--dump-ast-hashes" in flags:
         if len(args) < 1:
