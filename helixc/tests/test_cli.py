@@ -5864,7 +5864,8 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
         "--list-fns", "--list-fns-json",
-        "--list-structs", "--list-structs-json", "--struct-fields",
+        "--list-structs", "--list-structs-json",
+        "--struct-fields", "--struct-fields-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr",
         "--fn-callgraph", "--fn-callers",
@@ -7265,6 +7266,31 @@ def test_stage59_list_modules_json(tmp_path):
     assert "other" in result
     for h in result.values():
         assert len(h) == 64
+
+
+def test_stage59_struct_fields_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --struct-fields-json
+    emits {fields: [{name, ty}, ...]} in declaration order."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "g.hx"
+    src.write_text(
+        "struct M { w1: D<f32>, w2: D<f32>, b: D<f64> }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--struct-fields-json", str(src), "M"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {"fields": [
+        {"name": "w1", "ty": "D<f32>"},
+        {"name": "w2", "ty": "D<f32>"},
+        {"name": "b", "ty": "D<f64>"},
+    ]}
 
 
 def test_stage59_struct_fields_simple(tmp_path):

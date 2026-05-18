@@ -47,6 +47,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all structs with field count + content hash.
     --struct-fields <file.hx> <struct_name>
         Print '<name>: <ty>' per field (declaration order, not sorted).
+    --struct-fields-json <file.hx> <struct_name>
+        Same as --struct-fields but machine-readable JSON output.
     --list-structs-json <file.hx>
         Same as --list-structs but machine-readable JSON output.
     --list-modules-json <file.hx>
@@ -3173,6 +3175,53 @@ def _list_modules_json(path: str) -> int:
     return 0
 
 
+def _struct_fields_json(path: str, struct_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --struct-fields in
+    machine-readable JSON form.
+
+    Output schema:
+      {
+        "fields": [{"name": "<name>", "ty": "<ty_string>"}, ...]
+      }
+    Order matches declaration order. TyGeneric formatted as
+    'base<args>' (e.g., 'D<f32>').
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    for it in prog.items:
+        if isinstance(it, A.StructDecl) and it.name == struct_name:
+            result = {
+                "fields": [
+                    {"name": f.name, "ty": _format_ty(f.ty)}
+                    for f in it.fields
+                ]
+            }
+            print(json.dumps(result, sort_keys=True, indent=2))
+            return 0
+    print(f"error: autodiff_cli: struct {struct_name!r} not found in {path}",
+          file=sys.stderr)
+    return 1
+
+
 def _struct_fields(path: str, struct_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print field name + type
     for each field of a struct.
@@ -3572,6 +3621,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_struct_fields(args[0], args[1]))
+
+    if "--struct-fields-json" in flags:
+        if len(args) < 2:
+            print("usage: --struct-fields-json <file.hx> <struct_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_struct_fields_json(args[0], args[1]))
 
     if "--list-structs-json" in flags:
         if len(args) < 1:
