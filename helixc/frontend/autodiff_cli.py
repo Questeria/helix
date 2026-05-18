@@ -51,6 +51,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Lightest CI gate: exit 0 if source parses cleanly, 1 on error.
     --list-fn-attrs <file.hx>
         Enumerate all fns with their attribute list (@pure, @trace, etc).
+    --fn-callgraph <file.hx> <fn_name>
+        Print fn names directly called from inside <fn_name>'s body.
     --list-fn-attrs-json <file.hx>
         Same as --list-fn-attrs but machine-readable JSON output.
     --list-fns-by-attr <file.hx> <attr>
@@ -1288,6 +1290,68 @@ def _list_fn_attrs_json(path: str) -> int:
     return 0
 
 
+def _fn_callgraph(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: static call-graph
+    introspection for one fn. Print fn names called from inside
+    `fn_name`'s body, sorted alphabetically. One per line.
+
+    Walks the body AST collecting `A.Call` expressions whose callee
+    resolves to a `Name`. Only direct fn-name calls captured —
+    method calls, builtin dispatch, and indirect calls via fn
+    pointers are not enumerated (Phase-0 limitation; could be
+    extended).
+
+    Use case: refactor planning. 'If I rename fn X, who do I need
+    to update?' is the inverse question (callers of X); this one
+    is 'what does fn X depend on?' (callees of X). Together they
+    bracket the impact zone of a refactor.
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(f"error: autodiff_cli: fn {fn_name!r} not found in {path}",
+              file=sys.stderr)
+        return 1
+
+    callees: set[str] = set()
+
+    def _walk(node) -> None:
+        if node is None:
+            return
+        if isinstance(node, A.Call):
+            if isinstance(node.callee, A.Name):
+                callees.add(node.callee.name)
+            elif isinstance(node.callee, A.Path):
+                # Dotted path; record last segment as callee name.
+                if node.callee.segments:
+                    callees.add(node.callee.segments[-1])
+        # Walk all dataclass fields generically.
+        if hasattr(node, "__dataclass_fields__"):
+            for f in node.__dataclass_fields__:
+                v = getattr(node, f)
+                if isinstance(v, list):
+                    for x in v:
+                        _walk(x)
+                elif isinstance(v, tuple):
+                    for x in v:
+                        _walk(x)
+                else:
+                    _walk(v)
+
+    if target.body is not None:
+        _walk(target.body)
+    for name in sorted(callees):
+        print(name)
+    return 0
+
+
 def _list_fn_attrs(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate all fns with
     their attribute list.
@@ -1752,6 +1816,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_fn_attrs(args[0]))
+
+    if "--fn-callgraph" in flags:
+        if len(args) < 2:
+            print("usage: --fn-callgraph <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_callgraph(args[0], args[1]))
 
     if "--list-fn-attrs-json" in flags:
         if len(args) < 1:

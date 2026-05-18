@@ -5866,7 +5866,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--list-fns", "--list-fns-json",
         "--list-structs", "--list-structs-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
-        "--list-fns-by-attr",
+        "--list-fns-by-attr", "--fn-callgraph",
         "--check-program-hash",
         "--check-program-hash-from-file",
         "--check-program-signature-hash",
@@ -7249,6 +7249,63 @@ def test_stage59_list_fns_by_attr_missing_attr(tmp_path):
     )
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+def test_stage59_fn_callgraph_direct_callees(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-callgraph prints
+    direct callees from inside a fn body, sorted + de-duplicated."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "cg.hx"
+    src.write_text(
+        "fn h1(x: i32) -> i32 { x + 1 }\n"
+        "fn h2(y: i32) -> i32 { y * 2 }\n"
+        "fn main_fn(n: i32) -> i32 {\n"
+        "    let a = h1(n);\n"
+        "    let b = h2(a);\n"
+        "    h1(b)\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph", str(src), "main_fn"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    # Sorted alphabetically, de-duplicated (h1 called twice → appears once)
+    lines = [l for l in proc.stdout.splitlines() if l]
+    assert lines == ["h1", "h2"]
+
+
+def test_stage59_fn_callgraph_empty_body(tmp_path):
+    """Stage 59 follow-on: fn with no calls prints empty output."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "empty.hx"
+    src.write_text("fn leaf() -> i32 { 42 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph", str(src), "leaf"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_fn_callgraph_not_found(tmp_path):
+    """Stage 59 follow-on: unknown fn name exits 1 with diagnostic."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "x.hx"
+    src.write_text("fn real() -> i32 { 0 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-callgraph", str(src), "phantom"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "not found" in proc.stderr
 
 
 def test_stage59_list_fn_attrs_basic(tmp_path):
