@@ -1794,6 +1794,121 @@ def test_stage52_gate7_type_design_high_1_last_assigns_cleared_per_fn():
 
 
 # ============================================================
+# Stage 52 Inc 6 regression pins (gate-2 HIGH-2 / gate-9 O1
+# recursive yield-from-modal detection)
+# ============================================================
+
+
+def test_stage52_inc6_match_arm_yields_from_x_fires():
+    """Stage 52 Inc 6 / gate-9 silent-failure O1: match-arm
+    body whose tail yields a from_X(...) value propagates the
+    modal kind to the let-binding. Pre-fix the binding had no
+    static modal-origin claim — the inner from_X result's
+    Uncertain origin was invisible to the downstream into_X
+    consult, silently passing the launder."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let scrut: i32 = 7;
+    let v: i32 = match scrut { x => from_uncertain(u) };
+    let k: Known<i32> = into_known(v);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"match-arm yields from_X MUST FIRE (Stage 52 Inc 6 / " \
+        f"gate-9 O1), got: {[str(e) for e in errs]}"
+
+
+def test_stage52_inc6_if_branches_yield_same_from_x_fires():
+    """Stage 52 Inc 6 / gate-2 HIGH-2 (was deferred to Inc 4):
+    if-else where BOTH branches yield from_X of same kind
+    propagates that kind. All-branches-agree → propagate;
+    any disagreement → drop (handled by separate negative pin)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let v: i32 = if true { from_uncertain(u) } else { from_uncertain(u) };
+    let k: Known<i32> = into_known(v);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"if both branches yield same from_X MUST FIRE " \
+        f"(Stage 52 Inc 6 / gate-2 HIGH-2), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc6_block_yields_from_x_fires():
+    """Stage 52 Inc 6: block expression that yields from_X
+    propagates the kind. `let v: i32 = { from_uncertain(u) }`."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let v: i32 = { from_uncertain(u) };
+    let k: Known<i32> = into_known(v);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    assert any("launder" in str(e) and "Uncertain" in str(e)
+               and "Known" in str(e) for e in errs), \
+        f"block yields from_X MUST FIRE (Stage 52 Inc 6), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc6_negative_if_branches_yield_different_kinds():
+    """Stage 52 Inc 6 negative: when branches yield DIFFERENT
+    modal kinds, drop the static claim (consistent with the
+    gate-3 multi-kind divergence drop semantics)."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let kw: Known<i32> = into_known(1);
+    let v: i32 = if true { from_uncertain(u) } else { from_known(kw) };
+    let k: Known<i32> = into_known(v);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder = [e for e in errs if "launder" in str(e)]
+    assert launder == [], \
+        f"if branches yielding different kinds must DROP " \
+        f"(Stage 52 Inc 6 negative), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+def test_stage52_inc6_negative_no_else_drops():
+    """Stage 52 Inc 6 negative: if-no-else can't guarantee
+    static kind (the no-else implicit identity arm has no
+    yield), so drop. Same conservative semantics as the
+    A.If union site."""
+    src = """
+fn main() -> i32 {
+    let u: Uncertain<i32> = into_uncertain(1);
+    let v: i32 = if true { from_uncertain(u) } else { 0 };
+    let k: Known<i32> = into_known(v);
+    from_known(k)
+}
+"""
+    prog = parse(src, include_stdlib=True)
+    errs = typecheck(prog)
+    launder = [e for e in errs if "launder" in str(e)]
+    assert launder == [], \
+        f"if-with-mixed-yield (non-modal else) must DROP " \
+        f"(Stage 52 Inc 6 negative), got: " \
+        f"{[str(e) for e in errs]}"
+
+
+# ============================================================
 # Stage 53 Inc 1 regression pins (helper-fn indirection — the
 # LAST modal-launder bypass closed)
 # ============================================================

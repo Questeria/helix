@@ -2523,6 +2523,55 @@ class TypeChecker:
             # return type is a modal wrapper.
             if callee in self._fn_modal_return_kind:
                 return self._fn_modal_return_kind[callee]
+        # Stage 52 Inc 6 / gate-2 HIGH-2 (originally deferred) /
+        # gate-9 silent-failure O1 fix: recursive yield-from-modal
+        # detection. A.Block / A.If / A.Match arms whose terminal
+        # expression yields a modal-origin value propagate that kind.
+        # Reproducer (was silent):
+        #   let v: i32 = match scrut { x => from_uncertain(u) };
+        #   into_known(v);  // v inherits 'uncertain' from arm tail
+        # All branches must agree on the kind for the recursion to
+        # return a kind; mixed/missing → None (drop to dynamic
+        # territory, same conservative semantics as gate-3 multi-
+        # kind divergence drop).
+        if isinstance(expr, A.Block):
+            if expr.final_expr is not None:
+                return self._modal_origin_of_expr(expr.final_expr)
+            return None
+        if isinstance(expr, A.If):
+            then_kind = self._modal_origin_of_expr_block_tail(expr.then)
+            if expr.else_ is None:
+                return None  # no-else can't guarantee kind
+            if isinstance(expr.else_, A.Block):
+                else_kind = self._modal_origin_of_expr_block_tail(expr.else_)
+            else:
+                else_kind = self._modal_origin_of_expr(expr.else_)
+            if then_kind is not None and then_kind == else_kind:
+                return then_kind
+            return None
+        if isinstance(expr, A.Match):
+            kinds: set[str] = set()
+            for arm in expr.arms:
+                if isinstance(arm.body, A.Block):
+                    k = self._modal_origin_of_expr_block_tail(arm.body)
+                else:
+                    k = self._modal_origin_of_expr(arm.body)
+                if k is None:
+                    return None
+                kinds.add(k)
+            if len(kinds) == 1:
+                return next(iter(kinds))
+            return None
+        return None
+
+    def _modal_origin_of_expr_block_tail(
+        self, block: A.Block
+    ) -> Optional[str]:
+        """Helper for the recursive yield-from-modal detection in
+        `_modal_origin_of_expr`. Returns the modal kind of a block's
+        tail expression if statically determinable."""
+        if block.final_expr is not None:
+            return self._modal_origin_of_expr(block.final_expr)
         return None
 
     def _check_fn(self, fn: A.FnDecl) -> None:
