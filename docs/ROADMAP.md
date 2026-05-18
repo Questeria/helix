@@ -372,9 +372,18 @@ These are blockers for any real ML training, in priority order.
    (autotune.py:autotune_variants + mangled_variant_name) is now
    wired end-to-end via the new `autotune_expand.py` pass.
 
-9. **Mojo-style parametric structs.** `Linear[In: size, Out: size, T:
-   type]` monomorphized at compile time per shape and dtype. Required
-   for dtype-flexible code (f32/bf16/fp8 specialized). **3 weeks.**
+9. **Mojo-style parametric structs.** ✅ SUBSTANTIALLY DONE (earlier
+   stages — verified 2026-05-18). `helixc/frontend/struct_mono.py`
+   ships `monomorphize_structs(prog)` + `collect_generic_structs`
+   + `mangle_struct(name, ty_args)` + `instantiate(decl, ty_args)`.
+   Generic struct decls (`StructDecl.generics: list[GenericParam]`)
+   are collected, concrete uses are walked, instantiations are
+   AST-cloned with type-arg substitution + name mangling. 40
+   regression pins in `test_struct_mono.py`. Trap 28001 fires
+   for uninstantiated generics. Composes with the existing
+   monomorphize.py for fn-level generics. Dtype-flexible code
+   (f32/bf16/fp8 specialized via TyGeneric base + args) is
+   reachable today.
 
 ## Tier 3 — strategic differentiator
 
