@@ -5835,9 +5835,10 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
     for flag in (
         "--dump-ast-hashes", "--program-hash", "--program-signature-hash",
         "--diff-program-hash", "--changed-fns", "--fn-sig-hash",
-        "--list-fns", "--check-program-hash", "--list-modules",
-        "--module-hash", "--pytree-shape", "--list-pytrees",
-        "--autotune-summary", "--autotune-budget",
+        "--list-fns", "--check-program-hash",
+        "--check-program-signature-hash",
+        "--list-modules", "--module-hash", "--pytree-shape",
+        "--list-pytrees", "--autotune-summary", "--autotune-budget",
         "--hash-dump", "--diff-hash-dump", "--hash-dump-short",
         "--diff-trace",
     ):
@@ -5997,6 +5998,86 @@ def test_stage59_pytree_shape_non_diff_field_rejected(tmp_path):
     assert "non-differentiable" in proc.stderr or "26002" in proc.stderr
     # Verify no traceback leaked.
     assert "Traceback" not in proc.stderr
+
+
+def test_stage59_check_program_signature_hash_match_exits_0(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --check-program-
+    signature-hash exits 0 silent on signature match."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "p.hx"
+    src.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                    encoding="utf-8")
+    # Get the expected hash first
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    expected = h_proc.stdout.strip()
+    # Check should pass.
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-signature-hash", str(src), expected],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_stage59_check_program_signature_hash_body_change_passes(tmp_path):
+    """Stage 59 follow-on: body-only refactor doesn't trip the
+    signature-hash gate (the key invariant — internal cleanups
+    don't break ABI gates)."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    original = tmp_path / "v1.hx"
+    original.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                         encoding="utf-8")
+    refactored = tmp_path / "v2.hx"
+    refactored.write_text("fn add(p: i32, q: i32) -> i32 { p + q + 0 }\n",
+                          encoding="utf-8")
+    # Pin v1's signature hash.
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(original)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    expected = h_proc.stdout.strip()
+    # v2 (body-only refactor) should still match v1's pin.
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-signature-hash", str(refactored), expected],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+
+
+def test_stage59_check_program_signature_hash_sig_change_fails(tmp_path):
+    """Stage 59 follow-on: actual signature change DOES trip the gate."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    original = tmp_path / "v1.hx"
+    original.write_text("fn add(x: i32, y: i32) -> i32 { x + y }\n",
+                         encoding="utf-8")
+    sig_change = tmp_path / "v2.hx"
+    sig_change.write_text(
+        "fn add(x: f32, y: f32) -> f32 { x + y }\n",
+        encoding="utf-8",
+    )
+    h_proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--program-signature-hash", str(original)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    expected = h_proc.stdout.strip()
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--check-program-signature-hash", str(sig_change), expected],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "mismatch" in proc.stdout
 
 
 def test_stage59_diff_trace_match(tmp_path):

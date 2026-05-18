@@ -33,6 +33,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         Enumerate all fns with sig + body hash columns.
     --check-program-hash <file.hx> <expected_hex>
         Assertion-style CI gate: exit 0 if matches, 1 if drift.
+    --check-program-signature-hash <file.hx> <expected_hex>
+        ABI-level CI gate (body-only refactors don't trip it).
     --list-modules <file.hx>
         Enumerate ModBlock/ModuleDecl entries (incl. nested) with hashes.
     --module-hash <file.hx> <module_name>
@@ -282,6 +284,36 @@ def _print_program_hash(path: str) -> int:
     prog = _parse_or_exit(src, path)
     print(program_hash(prog))
     return 0
+
+
+def _check_program_signature_hash(path: str, expected: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: ABI-level CI gate.
+    Exits 0 if the program_signature_hash matches `expected`; 1 if
+    drift; 2 if bad args.
+
+    Accepts full 64-hex OR 12-hex short form (prefix match).
+
+    Use case: 'don't accidentally break the public API' gate.
+    Pre-commit hook example:
+      python -m helixc.frontend.autodiff_cli \\
+          --check-program-signature-hash mylib.hx 1760319d55b8
+      || { echo 'mylib.hx ABI drifted; bump version'; exit 1; }
+
+    Body-only refactors don't trip the gate (program_signature_hash
+    is invariant to body changes); only true API-surface changes do.
+    """
+    from .ast_hash import program_signature_hash, short_hash
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    actual = program_signature_hash(prog)
+    if actual == expected:
+        return 0
+    if len(expected) == 12 and short_hash(actual) == expected:
+        return 0
+    print(f"signature hash mismatch")
+    print(f"  expected: {expected}")
+    print(f"  actual:   {short_hash(actual)} ({actual})")
+    return 1
 
 
 def _check_program_hash(path: str, expected: str) -> int:
@@ -797,6 +829,13 @@ def main():
                   "<expected_hex_hash>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_check_program_hash(args[0], args[1]))
+
+    if "--check-program-signature-hash" in flags:
+        if len(args) < 2:
+            print("usage: --check-program-signature-hash <file.hx> "
+                  "<expected_hex_hash>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_check_program_signature_hash(args[0], args[1]))
 
     if "--list-modules" in flags:
         if len(args) < 1:
