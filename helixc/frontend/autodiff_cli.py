@@ -44,6 +44,10 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
     --fn-ast-node-counts-json <file.hx> <fn_name>
         Same as --fn-ast-node-counts but JSON
         {name, counts, total_nodes, n_classes}.
+    --fn-ast-summary-json <file.hx> <fn_name>
+        Single-query consolidated per-fn AST metrics. JSON with
+        {name, size, depth, counts, n_classes, found} — tooling
+        gets the full complexity profile in one fetch.
     --program-hash <file.hx>
         Print the whole-program structural hash (64 hex).
     --program-signature-hash <file.hx>
@@ -450,6 +454,89 @@ def _ast_stats_json(path: str) -> int:
         "total_attrs": sum(len(f.attrs) for f in fns),
     }
     print(json.dumps(result, sort_keys=True, indent=2))
+    return 0
+
+
+def _fn_ast_summary_json(path: str, fn_name: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: single-query
+    consolidated per-fn AST metrics. Combines size + depth + per-
+    class node counts in one fetch — tooling can build a complete
+    complexity profile of a fn without 3 separate invocations.
+
+    Output schema:
+      {"name": "<fn_name>",
+       "size": N,           # total node count
+       "depth": N,          # max nesting depth
+       "counts": {...},     # per-class node counts
+       "n_classes": N,
+       "found": bool}
+
+    Companion to --cli-summary-json (which is for CLI surface) —
+    this is the equivalent for fn-internals.
+
+    Exit 0 on success, 1 if fn_name not found.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    target = None
+    for it in prog.items:
+        if isinstance(it, A.FnDecl) and it.name == fn_name:
+            target = it
+            break
+    if target is None:
+        print(json.dumps({
+            "name": fn_name,
+            "size": 0,
+            "depth": 0,
+            "counts": {},
+            "n_classes": 0,
+            "found": False,
+        }, sort_keys=True, indent=2))
+        return 1
+
+    counts: dict[str, int] = {}
+
+    def _walk(node, depth_so_far: int) -> int:
+        """Returns max depth reached from this node."""
+        if node is None:
+            return depth_so_far
+        if not hasattr(node, "__dataclass_fields__"):
+            return depth_so_far
+        cls = type(node).__name__
+        counts[cls] = counts.get(cls, 0) + 1
+        max_d = depth_so_far + 1
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            if isinstance(v, list):
+                for x in v:
+                    d = _walk(x, depth_so_far + 1)
+                    if d > max_d:
+                        max_d = d
+            elif isinstance(v, tuple):
+                for x in v:
+                    d = _walk(x, depth_so_far + 1)
+                    if d > max_d:
+                        max_d = d
+            else:
+                d = _walk(v, depth_so_far + 1)
+                if d > max_d:
+                    max_d = d
+        return max_d
+
+    if target.body is not None:
+        depth = _walk(target.body, 0)
+    else:
+        depth = 0
+    total = sum(counts.values())
+    print(json.dumps({
+        "name": fn_name,
+        "size": total,
+        "depth": depth,
+        "counts": counts,
+        "n_classes": len(counts),
+        "found": True,
+    }, sort_keys=True, indent=2))
     return 0
 
 
@@ -7822,6 +7909,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_fn_ast_node_counts_json(args[0], args[1]))
+
+    if "--fn-ast-summary-json" in flags:
+        if len(args) < 2:
+            print("usage: --fn-ast-summary-json <file.hx> <fn_name>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_fn_ast_summary_json(args[0], args[1]))
 
     if "--fn-ast-size-json" in flags:
         if len(args) < 2:

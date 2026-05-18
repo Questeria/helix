@@ -5913,6 +5913,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--fn-ast-size", "--fn-ast-size-json",
         "--fn-ast-size-all",
         "--fn-ast-node-counts", "--fn-ast-node-counts-json",
+        "--fn-ast-summary-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7575,6 +7576,54 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_fn_ast_summary_json_found(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-summary-json
+    consolidates size + depth + counts in one fetch."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fas_sj.hx"
+    src.write_text(
+        "fn foo() -> i32 { 1 + 2 + 3 }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-summary-json", str(src), "foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result["found"] is True
+    assert result["name"] == "foo"
+    # Consistency: size == sum(counts).
+    assert result["size"] == sum(result["counts"].values())
+    assert result["n_classes"] == len(result["counts"])
+    # Sanity: depth > 0 and size > 0.
+    assert result["depth"] > 0
+    assert result["size"] > 0
+
+
+def test_stage59_fn_ast_summary_json_missing(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --fn-ast-summary-json
+    emits found=false + rc=1 for unknown fn."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "fas_sjm.hx"
+    src.write_text("fn foo() -> i32 { 1 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--fn-ast-summary-json", str(src), "nope"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    result = json.loads(proc.stdout)
+    assert result["found"] is False
+    assert result["size"] == 0
+    assert result["depth"] == 0
 
 
 def test_stage59_fn_ast_node_counts_text(tmp_path):
