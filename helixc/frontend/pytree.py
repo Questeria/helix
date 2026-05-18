@@ -425,6 +425,43 @@ def tree_to_canonical_json(leaves_by_path: dict) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
+def tree_to_csv(leaves_by_path: dict) -> str:
+    """Stage 59 follow-on / Tier 2 #7 polish — export a pytree to a
+    two-column CSV string (path,value).
+
+    Sorted by path (deterministic). Header row `path,value`. Values
+    formatted via Python `repr()` (round-trippable for floats; OK for
+    int/bool/None/str — strings will have repr quotes around them).
+
+    For values that contain commas or quotes, repr() handles escaping
+    correctly (Python repr always quotes strings + escapes embedded
+    quotes via backslash).
+
+    Use cases:
+    - Parameter snapshot for spreadsheet inspection / monitoring
+    - Quick diff-friendly format (git diff over CSV is readable)
+    - Feed into a non-pytree-aware analytics pipeline
+
+    Returns the CSV as a single string (caller writes to file or
+    streams). For very large pytrees, prefer a streaming variant
+    (not yet shipped — current scale is fine for model param sets
+    under ~1M leaves).
+    """
+    lines = ["path,value"]
+    for path in sorted(leaves_by_path.keys()):
+        v = leaves_by_path[path]
+        # CSV escaping: if path has a comma or quote, quote+escape it.
+        if "," in path or '"' in path or "\n" in path:
+            path_csv = '"' + path.replace('"', '""') + '"'
+        else:
+            path_csv = path
+        val_str = repr(v)
+        if "," in val_str or '"' in val_str:
+            val_str = '"' + val_str.replace('"', '""') + '"'
+        lines.append(f"{path_csv},{val_str}")
+    return "\n".join(lines)
+
+
 def tree_from_canonical_json(s: str) -> dict:
     """Stage 59 follow-on / Tier 2 #7 polish — inverse of
     tree_to_canonical_json. Parses a JSON object string back to a

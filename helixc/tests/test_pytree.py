@@ -637,6 +637,42 @@ def test_tree_to_canonical_json_valid_json():
     assert parsed == {"w": 1.5, "b": 0.0}
 
 
+def test_tree_to_csv_basic_format():
+    """Stage 59 follow-on / Tier 2 #7 polish: tree_to_csv exports
+    a pytree as a two-column CSV with 'path,value' header and one
+    row per leaf sorted by path."""
+    from helixc.frontend.pytree import tree_to_csv
+    leaves = {"w2": -2.0, "w1": 1.0, "b": 0.5}
+    csv = tree_to_csv(leaves)
+    lines = csv.split("\n")
+    assert lines[0] == "path,value"
+    # Sorted: b, w1, w2
+    assert lines[1] == "b,0.5"
+    assert lines[2] == "w1,1.0"
+    assert lines[3] == "w2,-2.0"
+
+
+def test_tree_to_csv_handles_commas_in_values():
+    """Stage 59 follow-on: values with commas (e.g., tuple reprs)
+    are CSV-quoted with embedded-quote escaping."""
+    from helixc.frontend.pytree import tree_to_csv
+    leaves = {"w": (1.0, 2.0)}  # repr → "(1.0, 2.0)" has comma
+    csv = tree_to_csv(leaves)
+    # The line should be quoted because the value contains commas.
+    rows = csv.split("\n")[1:]
+    assert len(rows) == 1
+    assert rows[0].startswith("w,")
+    # The value portion is the quoted repr.
+    val_portion = rows[0].split(",", 1)[1]
+    assert val_portion.startswith('"')
+
+
+def test_tree_to_csv_empty():
+    """Stage 59 follow-on: empty pytree → header only."""
+    from helixc.frontend.pytree import tree_to_csv
+    assert tree_to_csv({}) == "path,value"
+
+
 def test_tree_canonical_json_round_trips():
     """Stage 59 follow-on / Tier 2 #7 polish: round-trip pin.
     tree_from_canonical_json(tree_to_canonical_json(d)) == d for
