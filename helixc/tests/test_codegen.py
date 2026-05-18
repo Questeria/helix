@@ -15294,6 +15294,21 @@ def test_stage59_pat_struct_nested_typecheck_passes():
     assert errs == [], f"typecheck errors: {errs}"
 
 
+def test_stage59_dogfood_19_pat_struct_guards_exits_42():
+    """Stage 59 follow-on dogfood: PatStruct destructuring composed
+    with guards. Verifies the typecheck path where guard expressions
+    see PatStruct-bound names in scope (so `Point { x, y } if x > 0`
+    references `x` bound by the pattern). 5 classifier inputs map
+    to 5 different region tags via PatStruct+guard arms; sum + 26 = 42."""
+    import os as _os
+    proj = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    src = open(_os.path.join(
+        proj, "helixc/examples/dogfood_19_pat_struct_guards.hx")).read()
+    code = compile_and_run(src)
+    assert code == 42, f"dogfood_19 should exit 42, got {code}"
+
+
 def test_stage59_dogfood_18_pat_struct_showcase_exits_42():
     """Stage 59 / Tier 4 #15 dogfood: end-to-end demonstration of
     PatStruct destructuring (flat, literal-arm, nested, ignore-rest)
