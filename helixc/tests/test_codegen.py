@@ -15319,6 +15319,22 @@ def test_stage67_dogfood_20_e2e_train_checkpoint_exits_42():
     assert code == 42, f"dogfood_20 should exit 42, got {code}"
 
 
+def test_stage84_dogfood_22_full_wrapper_stack_exits_42():
+    """Stage 84 end-to-end: exercises ALL 11 Tier-S/A wrappers
+    (Stages 68-83) in a single compileable Helix program. Each
+    constructor + opt-out round-trip preserves the runtime value
+    (wrappers are identity-erased at IR). Total exit code:
+    11 * 1.0 (each round-trip) + 10 (layered round-trip) + 21
+    sentinel = 42."""
+    import os as _os
+    proj = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    src = open(_os.path.join(
+        proj, "helixc/examples/dogfood_22_full_wrapper_stack.hx")).read()
+    code = compile_and_run(src)
+    assert code == 42, f"dogfood_22 should exit 42, got {code}"
+
+
 def test_stage75_dogfood_21_typed_security_stack_exits_42():
     """Stage 75 end-to-end demo: exercises the Tier-S/A wrapper
     stack shipped in Stages 68-73 + the Stage 75 wrapper

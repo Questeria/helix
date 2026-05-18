@@ -303,6 +303,27 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 84 SHIPPED 2026-05-18** — End-to-end full-wrapper-stack
+  dogfood (`dogfood_22_full_wrapper_stack.hx`):
+  - First Helix program to compile + run using ALL 11 Tier-S/A
+    wrappers (Stages 68-83) in one .hx file.
+  - Pattern: for each wrapper, build a `__wrap_X(1.0_f32)` →
+    `__opt_out_X(...)` round-trip and accumulate the f32 result.
+    11 round-trips each yield 1.0 → total 11.0 → 11 as i32.
+  - Plus a layered round-trip exercising the Stage 75 strip-
+    preserving-inner-wrappers contract: `__wrap_taint(__wrap_conf(
+    10.0_f32))` parses as `Confidential<Conf<f32>>`, then
+    `__declassify(...)` strips only the outer Taint leaving
+    `Conf<f32>`, then `__lift_conf(...)` returns to f32 = 10.0.
+  - Sum: 11 + 10 + 21 sentinel = **42** exit code.
+  - Validates that:
+    (a) Each `__wrap_*` constructor identity-erases at IR
+    (b) Each opt-out builtin's strip helper preserves inner
+        wrappers correctly across all 11 wrappers
+    (c) Layered wrappers parse + lower cleanly with the Stage 75
+        IR-alias whitelist of 33 alias names
+  - 1 new codegen test; 1030 codegen + 396 typecheck GREEN.
+
 - **Stage 83 SUBSTANTIALLY COMPLETE 2026-05-18** — Model/data
   attribution types for AGI accountability:
   - Inc 1: TyAttribution(source, inner) + 3 presets
