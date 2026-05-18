@@ -68,6 +68,11 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         '<trait> for <target> methods=N' for trait impls) lines.
     --list-impls-json <file.hx>
         Same as --list-impls but JSON with method names included.
+    --impl-methods <file.hx> <target>
+        Print method signatures of every impl block for <target>
+        (params + return ty). Merges multiple impl blocks.
+    --impl-methods-json <file.hx> <target>
+        Same as --impl-methods but JSON with trait field included.
     --agent-methods <file.hx> <agent_name>
         Print method signatures of an agent (params + return ty).
     --agent-methods-json <file.hx> <agent_name>
@@ -4079,6 +4084,117 @@ def _agent_methods_json(path: str, agent_name: str) -> int:
     return 1
 
 
+def _impl_methods(path: str, target: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: per-ImplBlock method
+    signature inspection.
+
+    Output: one line per method as
+        '<name>(<p1_ty>, <p2_ty>, ...) -> <ret_ty>'
+    Declaration order preserved. If multiple impl blocks target the
+    same type, methods from all of them are concatenated in
+    declaration order.
+
+    Per-item introspection family now spans 6 Item subclasses
+    (struct-fields, const-value, enum-variants, agent-methods,
+    type-alias-target, impl-methods).
+
+    Exit 0 success; 1 if no impl block targets `target`.
+    """
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        if ty is None:
+            return "()"
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    found = False
+    for it in prog.items:
+        if isinstance(it, A.ImplBlock) and it.target == target:
+            found = True
+            for m in it.methods:
+                params_str = ", ".join(_format_ty(p.ty) for p in m.params)
+                ret_str = _format_ty(m.return_ty)
+                print(f"{m.name}({params_str}) -> {ret_str}")
+    if not found:
+        print(f"error: autodiff_cli: no impl block found for "
+              f"target {target!r} in {path}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _impl_methods_json(path: str, target: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: --impl-methods in
+    machine-readable JSON form.
+
+    Output schema:
+      {"target": "<name>",
+       "methods": [{"name": "<name>",
+                     "params": ["<p1_ty>", ...],
+                     "return_ty": "<ty>",
+                     "trait": "<trait>" | null}, ...]}
+    Declaration order preserved across multiple impl blocks for the
+    same target. `trait` is populated when the method comes from a
+    trait impl block.
+    """
+    import json
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    def _format_ty(ty) -> str:
+        if ty is None:
+            return "()"
+        name = getattr(ty, "name", None)
+        if name:
+            return name
+        base = getattr(ty, "base", None)
+        args = getattr(ty, "args", None)
+        base_str = base if isinstance(base, str) else (
+            getattr(base, "name", None) if base else None
+        )
+        if base_str and args:
+            args_strs = []
+            for a in args:
+                an = getattr(a, "name", None)
+                args_strs.append(an if an else repr(a))
+            return f"{base_str}<{', '.join(args_strs)}>"
+        return repr(ty)
+
+    methods: list[dict] = []
+    found = False
+    for it in prog.items:
+        if isinstance(it, A.ImplBlock) and it.target == target:
+            found = True
+            for m in it.methods:
+                methods.append({
+                    "name": m.name,
+                    "params": [_format_ty(p.ty) for p in m.params],
+                    "return_ty": _format_ty(m.return_ty),
+                    "trait": it.trait_name,
+                })
+    if not found:
+        print(f"error: autodiff_cli: no impl block found for "
+              f"target {target!r} in {path}", file=sys.stderr)
+        return 1
+    print(json.dumps({"target": target, "methods": methods},
+                      sort_keys=True, indent=2))
+    return 0
+
+
 def _list_impls(path: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: enumerate top-level
     ImplBlock decls (inherent or trait impls) in a file.
@@ -4797,6 +4913,20 @@ def main():
             print("usage: --list-impls-json <file.hx>", file=sys.stderr)
             sys.exit(2)
         sys.exit(_list_impls_json(args[0]))
+
+    if "--impl-methods" in flags:
+        if len(args) < 2:
+            print("usage: --impl-methods <file.hx> <target>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_impl_methods(args[0], args[1]))
+
+    if "--impl-methods-json" in flags:
+        if len(args) < 2:
+            print("usage: --impl-methods-json <file.hx> <target>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_impl_methods_json(args[0], args[1]))
 
     if "--type-alias-target" in flags:
         if len(args) < 2:

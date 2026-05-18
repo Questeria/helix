@@ -5876,6 +5876,7 @@ def test_stage59_autodiff_cli_help_mentions_polish_flags():
         "--agent-methods", "--agent-methods-json",
         "--type-alias-target", "--type-alias-target-json",
         "--list-impls", "--list-impls-json",
+        "--impl-methods", "--impl-methods-json",
         "--list-fn-attrs", "--list-fn-attrs-json",
         "--list-fns-by-attr", "--list-fns-by-attr-json",
         "--fn-callgraph", "--fn-callers",
@@ -7538,6 +7539,77 @@ def test_stage59_agent_methods_json(tmp_path):
         {"name": "propose", "params": ["i32"], "return_ty": "i32"},
         {"name": "evaluate", "params": ["i32", "i32"], "return_ty": "i32"},
     ]}
+
+
+def test_stage59_impl_methods_text(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --impl-methods prints
+    one line per method as '<name>(<params>) -> <ret>'."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "im.hx"
+    src.write_text(
+        "struct Foo { x: i32 }\n"
+        "impl Foo {\n"
+        "    fn area(self: Foo) -> i32 { self.x }\n"
+        "    fn dbl(self: Foo, n: i32) -> i32 { self.x }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--impl-methods", str(src), "Foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    lines = [l for l in proc.stdout.strip().splitlines() if l]
+    assert lines == [
+        "area(Foo) -> i32",
+        "dbl(Foo, i32) -> i32",
+    ]
+
+
+def test_stage59_impl_methods_json(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --impl-methods-json
+    emits {target, methods: [{name, params, return_ty, trait}, ...]}."""
+    import json
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "imj.hx"
+    src.write_text(
+        "struct Foo { x: i32 }\n"
+        "impl Foo { fn area(self: Foo) -> i32 { self.x } }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--impl-methods-json", str(src), "Foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0
+    result = json.loads(proc.stdout)
+    assert result == {
+        "target": "Foo",
+        "methods": [
+            {"name": "area", "params": ["Foo"],
+             "return_ty": "i32", "trait": None},
+        ],
+    }
+
+
+def test_stage59_impl_methods_missing_target_rc1(tmp_path):
+    """Stage 59 follow-on / Tier 4 #13 polish: --impl-methods exits 1
+    when target has no impl block."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "im_miss.hx"
+    src.write_text("struct Foo { x: i32 }\n", encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--impl-methods", str(src), "Foo"],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1
+    assert "no impl block" in proc.stderr
 
 
 def test_stage59_list_impls_text(tmp_path):
