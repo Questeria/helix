@@ -3174,6 +3174,185 @@ class Lowerer:
                             tir.OpKind.SELECT, in_range, sel_lo, acc,
                             result_ty=i32)
                     return acc
+                # Stage 55 Inc 5 — __str_from_i32(n, dest_start) →
+                # bytes_written. Writes decimal representation of n
+                # starting at arena[dest_start..]. Returns the number
+                # of bytes written. Phase-0 limitation: handles only
+                # non-negative n; if n is negative, writes nothing
+                # (returns 0). Caller can prepend a '-' separately.
+                #
+                # Algorithm: extract digits least-significant first
+                # via repeated modulo+divide, BUT we need most-
+                # significant first for ASCII. Compile-time-unroll
+                # for MAX_DIGITS=10 (max i32 = 2147483647, 10 digits).
+                #
+                # Implementation: for each digit position from most
+                # significant down, compute (n / 10^pos) % 10. Skip
+                # leading zeros (write only when digit > 0 OR we've
+                # already written something OR we're at the last
+                # position — to ensure n=0 writes "0").
+                if bn == "__str_from_i32" and len(expr.args) == 2:
+                    n_val = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    dest = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    i32 = tir.TIRScalar("i32")
+                    bool_ty = tir.TIRScalar("bool")
+                    digit_zero = self.builder.const_int(48)  # '0'
+                    ten = self.builder.const_int(10)
+                    MAX_DIGITS = 10
+                    # Precompute powers of 10 as compile-time consts.
+                    powers = [self.builder.const_int(10 ** i)
+                              for i in range(MAX_DIGITS)]
+                    written = self.builder.const_int(0)
+                    for pos in range(MAX_DIGITS - 1, -1, -1):
+                        # digit = (n / 10^pos) % 10
+                        div = self.builder.emit(
+                            tir.OpKind.DIV, n_val, powers[pos],
+                            result_ty=i32)
+                        digit = self.builder.emit(
+                            tir.OpKind.MOD, div, ten,
+                            result_ty=i32)
+                        # Is this leading zero? leading if digit==0
+                        # AND written==0 AND pos>0 (last pos always
+                        # writes to handle n=0 case).
+                        is_zero = self.builder.emit(
+                            tir.OpKind.CMP_EQ, digit,
+                            self.builder.const_int(0),
+                            result_ty=bool_ty)
+                        not_written_yet = self.builder.emit(
+                            tir.OpKind.CMP_EQ, written,
+                            self.builder.const_int(0),
+                            result_ty=bool_ty)
+                        if pos > 0:
+                            # skip_this = is_zero AND not_written_yet
+                            skip_this = self.builder.emit(
+                                tir.OpKind.SELECT, is_zero,
+                                self.builder.emit(
+                                    tir.OpKind.SELECT, not_written_yet,
+                                    self.builder.const_int(1),
+                                    self.builder.const_int(0),
+                                    result_ty=i32),
+                                self.builder.const_int(0),
+                                result_ty=i32)
+                            # do_write = NOT skip_this
+                            do_write = self.builder.emit(
+                                tir.OpKind.CMP_EQ, skip_this,
+                                self.builder.const_int(0),
+                                result_ty=bool_ty)
+                        else:
+                            # Always write at pos=0 (handles n=0).
+                            do_write = self.builder.emit(
+                                tir.OpKind.CMP_EQ,
+                                self.builder.const_int(1),
+                                self.builder.const_int(1),
+                                result_ty=bool_ty)
+                        # Compute write position + byte value
+                        ascii_byte = self.builder.emit(
+                            tir.OpKind.ADD, digit, digit_zero,
+                            result_ty=i32)
+                        write_idx = self.builder.emit(
+                            tir.OpKind.ADD, dest, written,
+                            result_ty=i32)
+                        # Conditional ARENA_SET via SELECT-of-noop:
+                        # if do_write, set arena[write_idx]=ascii_byte
+                        # and increment written. Otherwise leave as-is.
+                        # We can't conditionally NOT emit a side-effect,
+                        # so we always set but conditionally on the
+                        # value (set to existing if not writing).
+                        existing = self.builder.emit(
+                            tir.OpKind.ARENA_GET, write_idx,
+                            result_ty=i32)
+                        new_val = self.builder.emit(
+                            tir.OpKind.SELECT, do_write, ascii_byte,
+                            existing, result_ty=i32)
+                        self.builder.emit(
+                            tir.OpKind.ARENA_SET, write_idx, new_val,
+                            result_ty=i32)
+                        # Increment written if do_write
+                        one = self.builder.const_int(1)
+                        zero = self.builder.const_int(0)
+                        inc = self.builder.emit(
+                            tir.OpKind.SELECT, do_write, one, zero,
+                            result_ty=i32)
+                        written = self.builder.emit(
+                            tir.OpKind.ADD, written, inc,
+                            result_ty=i32)
+                    return written
+                # Stage 55 Inc 5 — __str_concat_arena(a_start, a_len,
+                # b_start, b_len, dest_start) → bytes_written. Copies
+                # bytes from arena[a_start..a_start+a_len) followed by
+                # arena[b_start..b_start+b_len) to arena[dest_start..].
+                # Returns total bytes (a_len + b_len).
+                # Compile-time unrolled to MAX_COPY=256 bytes per side.
+                if bn == "__str_concat_arena" and len(expr.args) == 5:
+                    a_start = self._lower_expr(expr.args[0]) \
+                        or self.builder.const_int(0)
+                    a_len = self._lower_expr(expr.args[1]) \
+                        or self.builder.const_int(0)
+                    b_start = self._lower_expr(expr.args[2]) \
+                        or self.builder.const_int(0)
+                    b_len = self._lower_expr(expr.args[3]) \
+                        or self.builder.const_int(0)
+                    dest = self._lower_expr(expr.args[4]) \
+                        or self.builder.const_int(0)
+                    i32 = tir.TIRScalar("i32")
+                    bool_ty = tir.TIRScalar("bool")
+                    MAX_COPY = 256
+                    # Copy a then b. For each byte: if in_range, copy;
+                    # else leave existing (no-op via SELECT).
+                    for i in range(MAX_COPY):
+                        i_const = self.builder.const_int(i)
+                        in_range = self.builder.emit(
+                            tir.OpKind.CMP_LT, i_const, a_len,
+                            result_ty=bool_ty)
+                        src_idx = self.builder.emit(
+                            tir.OpKind.ADD, a_start, i_const,
+                            result_ty=i32)
+                        dst_idx = self.builder.emit(
+                            tir.OpKind.ADD, dest, i_const,
+                            result_ty=i32)
+                        src_val = self.builder.emit(
+                            tir.OpKind.ARENA_GET, src_idx,
+                            result_ty=i32)
+                        existing = self.builder.emit(
+                            tir.OpKind.ARENA_GET, dst_idx,
+                            result_ty=i32)
+                        new_val = self.builder.emit(
+                            tir.OpKind.SELECT, in_range, src_val,
+                            existing, result_ty=i32)
+                        self.builder.emit(
+                            tir.OpKind.ARENA_SET, dst_idx, new_val,
+                            result_ty=i32)
+                    # Now copy b starting at dest + a_len
+                    b_dest = self.builder.emit(
+                        tir.OpKind.ADD, dest, a_len, result_ty=i32)
+                    for i in range(MAX_COPY):
+                        i_const = self.builder.const_int(i)
+                        in_range = self.builder.emit(
+                            tir.OpKind.CMP_LT, i_const, b_len,
+                            result_ty=bool_ty)
+                        src_idx = self.builder.emit(
+                            tir.OpKind.ADD, b_start, i_const,
+                            result_ty=i32)
+                        dst_idx = self.builder.emit(
+                            tir.OpKind.ADD, b_dest, i_const,
+                            result_ty=i32)
+                        src_val = self.builder.emit(
+                            tir.OpKind.ARENA_GET, src_idx,
+                            result_ty=i32)
+                        existing = self.builder.emit(
+                            tir.OpKind.ARENA_GET, dst_idx,
+                            result_ty=i32)
+                        new_val = self.builder.emit(
+                            tir.OpKind.SELECT, in_range, src_val,
+                            existing, result_ty=i32)
+                        self.builder.emit(
+                            tir.OpKind.ARENA_SET, dst_idx, new_val,
+                            result_ty=i32)
+                    # Return total bytes = a_len + b_len
+                    return self.builder.emit(
+                        tir.OpKind.ADD, a_len, b_len, result_ty=i32)
                 # String builtins on literals.
                 # __strlen("literal") → compile-time const_int(len).
                 if (bn == "__strlen" and len(expr.args) == 1

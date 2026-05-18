@@ -2476,6 +2476,15 @@ class TypeChecker:
         # contribute 0 (caller validates input shape via Inc 1
         # primitives). parse_f64 deferred to future inc.
         "__parse_i32",
+        # Stage 55 Inc 5 — runtime string formatting.
+        # __str_from_i32(n, dest_start) → bytes_written. Writes
+        # decimal representation of n into arena starting at
+        # dest_start, returns length (callers track end with
+        # dest_start + bytes_written).
+        # __str_concat(a_start, a_len, b_start, b_len, dest_start)
+        # → total bytes_written. Copies a then b into arena
+        # starting at dest_start.
+        "__str_from_i32", "__str_concat_arena",
         # Phase 2.2 step 2 — float-bit reinterpret intrinsics.
         "__bits_of_f32", "__f32_from_bits",
         "__bits_of_f64", "__f64_from_bits",

@@ -15207,6 +15207,59 @@ def test_stage55_inc2_parse_i32_empty():
     assert code == 0, f"expected 0 for empty range, got {code}"
 
 
+def test_stage55_inc5_str_from_i32_basic():
+    """Stage 55 Inc 5: __str_from_i32(n, dest) writes decimal
+    digits, returns bytes_written."""
+    src = """
+    fn main() -> i32 {
+        let dest = __arena_push(0);
+        let n = __arena_push(0);
+        let n2 = __arena_push(0);
+        let n3 = __arena_push(0);
+        let len = __str_from_i32(42, dest);
+        // Round-trip: parse back the bytes we wrote.
+        __parse_i32(dest, len)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 42, f"expected 42 after round-trip, got {code}"
+
+
+def test_stage55_inc5_str_from_i32_zero():
+    """Stage 55 Inc 5: __str_from_i32(0, dest) writes "0", len=1."""
+    src = """
+    fn main() -> i32 {
+        let dest = __arena_push(0);
+        let n = __arena_push(0);
+        __str_from_i32(0, dest)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 1, f"expected len=1 for n=0, got {code}"
+
+
+def test_stage55_inc5_str_concat_arena_basic():
+    """Stage 55 Inc 5: __str_concat_arena concatenates two
+    arena-backed strings into dest, returns total bytes."""
+    src = """
+    fn main() -> i32 {
+        let a = __strlit_to_arena("ab");
+        let b = __strlit_to_arena("cd");
+        // Reserve space for concatenation
+        let dest = __arena_push(0);
+        let p1 = __arena_push(0);
+        let p2 = __arena_push(0);
+        let p3 = __arena_push(0);
+        let p4 = __arena_push(0);
+        let total = __str_concat_arena(a, 2, b, 2, dest);
+        // Verify: dest now contains "abcd" → __str_byte_at(dest, 2) == 'c'=99
+        __str_byte_at(dest, 2)
+    }
+    """
+    code = compile_and_run(src)
+    assert code == 99, f"expected 'c'=99 at concat[2], got {code}"
+
+
 def test_strbyte_out_of_range_returns_zero():
     """__strbyte('abc', 10) is out of range → 0."""
     src = """
