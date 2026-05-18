@@ -53,6 +53,8 @@ Introspection (Stage 28.9 + Stage 58 + Stage 59 polish):
         CI gate: validate every @autotune attr; exit 1 if any malformed.
     --validate-trace-attrs <file.hx>
         CI gate: validate @trace usage; rejects @trace on extern fns.
+    --validate-all <file.hx>
+        Run all 3 validators (pytrees + autotune + trace-attrs) in one shot.
     --autotune-budget <file.hx> <max_total>
         CI gate: exit 0 if total variants <= budget, 1 if over.
 
@@ -555,6 +557,65 @@ def _pytree_shape(path: str, struct_name: str) -> int:
     return 0
 
 
+def _validate_all(path: str) -> int:
+    """Stage 59 follow-on / Tier 4 #13 polish: run every Phase-0
+    validator in one shot.
+
+    Aggregates:
+      - validate_pytree (every struct)
+      - validate_autotune_prog (every @autotune fn)
+      - validate_trace_attrs (every @trace fn)
+
+    Output: per-validator status header + diagnostics if any.
+      `[pytrees] OK` or `[pytrees] FAIL (<count>)` + list
+      `[autotune] OK` or `[autotune] FAIL (<count>)` + list
+      `[trace-attrs] OK` or `[trace-attrs] FAIL (<count>)` + list
+
+    Trailing: `total validators=3 OK=K FAIL=M`.
+
+    Exit 0 if all validators clean, 1 if any fail.
+
+    Use case: one-shot pre-commit gate. Faster than 3 separate CLI
+    invocations.
+    """
+    from .pytree import validate_pytree
+    from .autotune import validate_autotune_prog
+    from .trace_pass import validate_trace_attrs
+
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+
+    struct_decls = {it.name: it for it in prog.items
+                    if isinstance(it, A.StructDecl)}
+    pytree_diags: list[str] = []
+    for name in sorted(struct_decls.keys()):
+        d = validate_pytree(struct_decls[name], struct_decls)
+        for msg in d:
+            pytree_diags.append(f"{name}: {msg}")
+
+    autotune_diags = validate_autotune_prog(prog)
+    trace_diags = validate_trace_attrs(prog)
+
+    fail_count = 0
+
+    def _emit(tag: str, diags: list[str]) -> None:
+        nonlocal fail_count
+        if not diags:
+            print(f"[{tag}] OK")
+        else:
+            print(f"[{tag}] FAIL ({len(diags)})")
+            for d in diags:
+                print(f"  {d}")
+            fail_count += 1
+
+    _emit("pytrees", pytree_diags)
+    _emit("autotune", autotune_diags)
+    _emit("trace-attrs", trace_diags)
+
+    print(f"total validators=3 OK={3 - fail_count} FAIL={fail_count}")
+    return 1 if fail_count else 0
+
+
 def _validate_trace_attrs(path: str) -> int:
     """Stage 59 follow-on / Tier 3 #11 polish: run validate_trace_attrs
     over a file. Phase-0 rules:
@@ -988,6 +1049,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_validate_trace_attrs(args[0]))
+
+    if "--validate-all" in flags:
+        if len(args) < 1:
+            print("usage: --validate-all <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_validate_all(args[0]))
 
     if "--autotune-budget" in flags:
         if len(args) < 2:
