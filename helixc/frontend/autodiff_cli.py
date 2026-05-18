@@ -171,6 +171,35 @@ def _list_modules(path: str) -> int:
     return 0
 
 
+def _autotune_summary(path: str) -> int:
+    """Stage 59 follow-on / Tier 2 #8 polish: print the autotune
+    variant-count summary for a source file.
+
+    Output format per fn (one line):
+      `<fn_name> variants=<count>`
+    Sorted alphabetically by fn name. Total line at the end.
+
+    Use case:
+    - CI guard: assert no single fn explodes past a budget threshold
+    - Pre-commit hook: detect when a kernel's variant count drifts
+      unexpectedly (e.g., from an accidentally-doubled autotune list)
+    - Quick repository inventory of autotune surface area
+
+    Exit 0 always (no failure mode beyond parse error).
+    """
+    from .autotune_expand import autotune_expansion_summary
+    src = _read_source(path)
+    prog = _parse_or_exit(src, path)
+    summary = autotune_expansion_summary(prog)
+    total = 0
+    for fn_name in sorted(summary.keys()):
+        count = summary[fn_name]
+        print(f"{fn_name} variants={count}")
+        total += count
+    print(f"total variants={total}")
+    return 0
+
+
 def _module_hash_cli(path: str, mod_name: str) -> int:
     """Stage 59 follow-on / Tier 4 #13 polish: print the module_hash
     of a specific module by name. For nested modules, accept dotted
@@ -421,6 +450,13 @@ def main():
                   file=sys.stderr)
             sys.exit(2)
         sys.exit(_module_hash_cli(args[0], args[1]))
+
+    if "--autotune-summary" in flags:
+        if len(args) < 1:
+            print("usage: --autotune-summary <file.hx>",
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(_autotune_summary(args[0]))
 
     if len(sys.argv) < 3 or len(args) < 2:
         print(__doc__.strip(), file=sys.stderr)

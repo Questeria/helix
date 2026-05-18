@@ -5771,6 +5771,53 @@ def test_stage59_module_hash_not_found_exits_1(tmp_path):
     assert "not found" in proc.stderr
 
 
+def test_stage59_autotune_summary_basic(tmp_path):
+    """Stage 59 follow-on / Tier 2 #8 polish: --autotune-summary
+    prints {fn variants=N} lines for @autotune @kernel fns plus
+    a total."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "at.hx"
+    src.write_text(
+        "@autotune(BLOCK: [16, 32])\n"
+        "@kernel\n"
+        "fn k1(x: i32) -> i32 { x + BLOCK }\n"
+        "@autotune(N: [4, 8, 16])\n"
+        "@kernel\n"
+        "fn k2(x: i32) -> i32 { x + N }\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-summary", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert "k1 variants=2" in out
+    assert "k2 variants=3" in out
+    assert "total variants=5" in out
+
+
+def test_stage59_autotune_summary_empty_program(tmp_path):
+    """Stage 59 follow-on: --autotune-summary on a program with no
+    @autotune fns prints only the total=0 line."""
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    src = tmp_path / "plain.hx"
+    src.write_text("fn plain(x: i32) -> i32 { x + 1 }\n",
+                    encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.frontend.autodiff_cli",
+         "--autotune-summary", str(src)],
+        cwd=proj_root, capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    # Only the total line; no per-fn entries (plain is skipped).
+    lines = [l for l in proc.stdout.splitlines() if l.strip()]
+    assert lines == ["total variants=0"]
+
+
 def test_stage59_module_hash_dotted_nested_name(tmp_path):
     """Stage 59 follow-on: --module-hash accepts dotted names for
     nested modules."""
