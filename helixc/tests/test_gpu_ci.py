@@ -13,6 +13,7 @@ import pytest
 
 from helixc.backend.gpu_ci import (
     BackendKind,
+    OverallStatus,
     ValidationResult,
     GPU_TOOLS,
     detect_tools,
@@ -168,8 +169,13 @@ def test_stage129_validate_emit_rejects_unknown_backend():
 # ============================================================================
 def test_stage129_validation_result_overall_passed_logic():
     """Stage 129 — overall_passed() returns True iff mock passed AND
-    (real-HW not attempted OR real-HW passed). Stage 129 audit-fix:
-    findings are now tuple[str, ...] (immutable)."""
+    real-HW either not attempted OR explicitly returned True.
+
+    v2.2 polish (end-of-v2.1 audit BE LOW-2): overall_passed() is now
+    STRICT — it returns False when real-HW dispatch was attempted but
+    deferred (real_hw_passed=None). Callers that want deferred-tolerant
+    behavior should branch on overall_status() / overall_deferred()
+    explicitly. See test_stage129_overall_status_tri_state below."""
     # Mock passed, no real-HW attempted → True.
     r = ValidationResult(
         backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
@@ -194,13 +200,80 @@ def test_stage129_validation_result_overall_passed_logic():
     )
     assert not r3.overall_passed()
 
-    # Mock passed, real-HW deferred (passed=None) → True (Stage 129 substrate).
+    # Mock passed, real-HW deferred (passed=None) → False under v2.2
+    # tightening (was True under Stage 129 substrate semantics, which
+    # silently equated DEFERRED with PASSED). DEFERRED is its own state;
+    # callers must opt into deferred-tolerance via overall_status().
     r4 = ValidationResult(
         backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
         real_hw_attempted=True, real_hw_passed=None,
         real_hw_tool="ptxas", real_hw_findings=("deferred",),
     )
-    assert r4.overall_passed()
+    assert not r4.overall_passed()
+    assert r4.overall_deferred()
+    assert r4.overall_status() == OverallStatus.DEFERRED
+
+
+def test_stage129_overall_status_tri_state():
+    """v2.2 polish (BE LOW-2): overall_status() is a tri-state
+    PASSED / FAILED / DEFERRED, distinguishing real-HW-deferred from
+    real-HW-actually-passed so callers cannot mistake "we didn't check"
+    for "we checked and it's fine"."""
+    # PASSED: mock OK, real-HW not attempted
+    r_passed_no_hw = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+        real_hw_attempted=False, real_hw_passed=None,
+        real_hw_tool=None, real_hw_findings=(),
+    )
+    assert r_passed_no_hw.overall_status() == OverallStatus.PASSED
+    assert r_passed_no_hw.overall_passed()
+    assert not r_passed_no_hw.overall_deferred()
+
+    # PASSED: mock OK, real-HW attempted + explicitly True
+    r_passed_hw = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+        real_hw_attempted=True, real_hw_passed=True,
+        real_hw_tool="ptxas", real_hw_findings=(),
+    )
+    assert r_passed_hw.overall_status() == OverallStatus.PASSED
+    assert r_passed_hw.overall_passed()
+
+    # FAILED: mock failed
+    r_failed_mock = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=False, mock_findings=("x",),
+        real_hw_attempted=False, real_hw_passed=None,
+        real_hw_tool=None, real_hw_findings=(),
+    )
+    assert r_failed_mock.overall_status() == OverallStatus.FAILED
+    assert not r_failed_mock.overall_passed()
+    assert not r_failed_mock.overall_deferred()
+
+    # FAILED: mock OK, real-HW attempted + False
+    r_failed_hw = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+        real_hw_attempted=True, real_hw_passed=False,
+        real_hw_tool="ptxas", real_hw_findings=("bad ptx",),
+    )
+    assert r_failed_hw.overall_status() == OverallStatus.FAILED
+    assert not r_failed_hw.overall_passed()
+    assert not r_failed_hw.overall_deferred()
+
+    # DEFERRED: mock OK, real-HW attempted but real_hw_passed=None
+    r_deferred = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+        real_hw_attempted=True, real_hw_passed=None,
+        real_hw_tool="ptxas", real_hw_findings=("Stage 130 deferred",),
+    )
+    assert r_deferred.overall_status() == OverallStatus.DEFERRED
+    assert not r_deferred.overall_passed()
+    assert r_deferred.overall_deferred()
+
+
+def test_stage129_overall_status_enum_members():
+    """v2.2 polish: OverallStatus is a closed enum with exactly three
+    members so dispatch / match statements over it are exhaustive."""
+    values = {s.value for s in OverallStatus}
+    assert values == {"passed", "failed", "deferred"}
 
 
 # ============================================================================

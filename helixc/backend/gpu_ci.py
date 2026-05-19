@@ -43,6 +43,22 @@ class BackendKind(Enum):
     WEBGPU_WGSL = "webgpu_wgsl"  # browser — helixc/backend/webgpu.py
 
 
+class OverallStatus(Enum):
+    """Tri-state outcome — v2.2 polish (end-of-v2.1 audit BE LOW-2):
+    distinguishes 'real-HW dispatch returned PASS' from 'real-HW
+    dispatch was deferred to Stage 130+ so we don't actually know'.
+
+    Stage 129 originally collapsed DEFERRED into PASSED in
+    `overall_passed()`, which the v2.1 5-clean-gate flagged as a
+    silent-failure surface (a caller acting on overall_passed=True
+    after `attempt_real_hw=True` could not tell whether real-HW
+    actually validated the emit or whether it punted).
+    """
+    PASSED = "passed"
+    FAILED = "failed"
+    DEFERRED = "deferred"
+
+
 @dataclass(frozen=True)
 class ValidationResult:
     """Outcome of a mock or real-HW validation pass.
@@ -89,15 +105,42 @@ class ValidationResult:
                     f"real_hw_passed={self.real_hw_passed!r} — illegal"
                 )
 
-    def overall_passed(self) -> bool:
-        """True if mock passed AND (real-HW not attempted OR real-HW
-        passed). Real-HW absent does NOT fail the result — that's the
-        CI vs developer-laptop distinction the scaffolding enables."""
+    def overall_status(self) -> OverallStatus:
+        """v2.2 polish: tri-state outcome distinguishing PASSED from
+        DEFERRED (real-HW dispatch present but punted to Stage 130+).
+
+        - FAILED if mock failed, or real-HW attempted + returned False
+        - DEFERRED if mock passed + real-HW attempted + real_hw_passed is None
+          (the Stage 129 substrate ships the harness but actual tool
+          dispatch is wired in Stage 130+, so real-HW results are
+          honestly None rather than spuriously True)
+        - PASSED otherwise (mock passed AND either real-HW not
+          attempted OR real-HW attempted + explicitly True)
+        """
         if not self.mock_passed:
-            return False
-        if self.real_hw_attempted and self.real_hw_passed is False:
-            return False
-        return True
+            return OverallStatus.FAILED
+        if self.real_hw_attempted:
+            if self.real_hw_passed is False:
+                return OverallStatus.FAILED
+            if self.real_hw_passed is None:
+                return OverallStatus.DEFERRED
+        return OverallStatus.PASSED
+
+    def overall_passed(self) -> bool:
+        """True ONLY if overall_status() is PASSED. v2.2 polish (end-of-
+        v2.1 audit BE LOW-2): tightened from the Stage 129 substrate
+        semantic, which silently equated DEFERRED with PASSED. Callers
+        that explicitly want deferred-tolerant behavior should test
+        `overall_status() != OverallStatus.FAILED` instead, making the
+        deferred-acceptance choice visible at the call site."""
+        return self.overall_status() == OverallStatus.PASSED
+
+    def overall_deferred(self) -> bool:
+        """True if mock passed but real-HW dispatch is deferred (Stage
+        129 substrate behavior — real_hw_passed is None despite
+        real_hw_attempted=True). v2.2 polish predicate so callers can
+        branch on DEFERRED without re-deriving the condition."""
+        return self.overall_status() == OverallStatus.DEFERRED
 
 
 # ============================================================================
