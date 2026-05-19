@@ -294,3 +294,52 @@ Updated v2.1 backlog state:
 - Stage 124/126/128 explicit audits: still 0/3 dispatched each
   (next-up work for the next fire)
 - End-of-v2.1 5-clean-gate: pending only Stage 124/126/128 audits
+
+### 2026-05-19T19:07Z — Stage 120 R3 audit (CORRECTION to 18:57Z premature close)
+
+Fire dispatched a fresh 3-clean-audit pass on the R2 + R2-polish
+state (HEAD at `fd2258d`/`348593d` when this fire's audits started).
+Verdicts:
+
+- silent-failure-hunter (R3): CLEAN. R2 + R2-polish fixes hold;
+  no new silent-failure surfaces introduced. One non-blocking
+  observation: reduce_kind value-validation (whitelist sum/max/min)
+  is appropriate for the stage that formalizes the enum, not R3.
+- type-design-analyzer (R3): FAIL on working-tree WIP (incomplete
+  R3-in-progress: `Literal` referenced without import). For the
+  committed state alone (348593d), PASS-with-observations. F1/F2/F3
+  flagged: missing Literal import in WIP, asymmetric runtime-keyed
+  guard regression risk, duplicate Literal/frozenset declarations.
+- code-reviewer (R3): FAIL on committed state. HIGH Finding 1:
+  AdjointRecord.__post_init__ asymmetric guard — typo dispatch
+  (`"reducekind"`, `"Identity"`, etc.) paired with `ops=()` slips
+  through both __post_init__ AND emit_adjoint_kernel's implicit
+  explicit-branch, silently emitting zero backward ops with
+  `complete=True`. Same failure mode R2 closed, one branch over.
+
+Net: 18:57Z's "Stage 120 3-clean ACHIEVED" was premature. The R2
+audit-fix sealed half the dispatch-discriminator surface but left
+the empty-ops-half open. R3 explicit audit re-opened the stage.
+
+Concurrent fire shipped R3 audit-fix at `f5a3f7d` (closed-set
+DispatchKind Literal + VALID_DISPATCH_KINDS frozenset + exhaustive
+if/elif/elif/else in emit_adjoint_kernel + 4 new tests). This
+addresses Finding 1 and Finding 2 from the R3 audit results above,
+plus the WIP issues type-design flagged are resolved because the
+WIP became the R3 commit.
+
+43 tile_adjoint+tile_ir tests pass on f5a3f7d (was 39 at R2-polish;
++4 from R3 typo-rejection + DispatchKind-exposure tests).
+
+Updated v2.1 backlog state:
+- Stage 120: R3 audit-fix landed at f5a3f7d. Needs R4 audit
+  (next fire) to verify R3 fixes hold without introducing new
+  silent-failure surfaces. NOT YET CLOSED — premature close at
+  18:57Z is retracted.
+- Stage 129: CLOSED (unchanged)
+- Stage 122: still implicit; explicit audit deferred per a012ba1
+- Stage 124/126/128 explicit audits: still 0/3 dispatched each
+- End-of-v2.1 5-clean-gate: pending Stage 120 R4 + 124/126/128 audits
+
+Per-fire commit: this V2_PLAN.md note documenting the R3 audit
+verdicts and the premature-close retraction.
