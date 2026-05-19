@@ -205,6 +205,42 @@ fn sequence_match(a_start: i32, b_start: i32, n: i32) -> i32 {
     }}}
 }
 
+// Cycle 3 R4 fix batch 29 (RT R4 NEW-MEDIUM-1): _strict variants of
+// the bag_*/sequence_match family. Pre-fix all returned 0 on slice
+// corruption, indistinguishable from legit zero-result.
+@pure
+fn bag_similarity_strict(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
+    if a_n < 0 { (0 - 2147483647) - 1 }
+    else { if b_n < 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(a_start, a_n) == 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(b_start, b_n) == 0 { (0 - 2147483647) - 1 }
+    else { bag_similarity(a_start, a_n, b_start, b_n) }}}}
+}
+
+@pure
+fn bag_difference_strict(a_start: i32, a_n: i32, b_start: i32, b_n: i32) -> i32 {
+    if a_n < 0 { (0 - 2147483647) - 1 }
+    else { if b_n < 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(a_start, a_n) == 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(b_start, b_n) == 0 { (0 - 2147483647) - 1 }
+    else { bag_difference(a_start, a_n, b_start, b_n) }}}}
+}
+
+@pure
+fn bag_count_unique_strict(a_start: i32, a_n: i32) -> i32 {
+    if a_n < 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(a_start, a_n) == 0 { (0 - 2147483647) - 1 }
+    else { bag_count_unique(a_start, a_n) }}
+}
+
+@pure
+fn sequence_match_strict(a_start: i32, b_start: i32, n: i32) -> i32 {
+    if n < 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(a_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(b_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { sequence_match(a_start, b_start, n) }}}
+}
+
 // =========================================================================
 // Phase 4 perfection: unification with variables.
 // =========================================================================

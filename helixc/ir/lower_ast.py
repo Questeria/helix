@@ -1496,13 +1496,24 @@ class Lowerer:
                 # value to resolve the leaf expression. If the walk hits a
                 # Name (existing struct binding) before consuming the full
                 # path, dereference the remaining path against the Name's
-                # array binding via LOAD_ELEM. Missing fields fall back
-                # to const_int(0).
+                # array binding via LOAD_ELEM.
+                #
+                # Cycle 3 R4 fix batch 29 (IR R4 NEW-HIGH-4): pre-fix
+                # missing fields silently fell back to const_int(0),
+                # masking typos in struct field names. Typecheck should
+                # have rejected the typo'd field. Loud-fail surfaces it.
                 elem_vals = []
                 for path in flat_paths:
                     v = self._resolve_path_value(slit, path)
                     if v is None:
-                        v = self.builder.const_int(0)
+                        raise NotImplementedError(
+                            f"lower_ast: struct literal path "
+                            f"{path!r} for struct {slit.name!r} at "
+                            f"{getattr(stmt, 'span', None)!r} did not "
+                            f"resolve; typecheck should have rejected "
+                            f"missing/typo'd fields — Cycle 3 R4 IR "
+                            f"NEW-HIGH-4"
+                        )
                     elem_vals.append(v)
                 if not elem_vals:
                     self._bind(stmt.name, self.builder.const_int(0))
@@ -4556,9 +4567,12 @@ class Lowerer:
                 arr = self._lookup_array(arr_name)
                 if arr is not None and len(expr.target.indices) == 1:
                     elem_ty, _ = arr
-                    idx_v = self._lower_expr(expr.target.indices[0])
-                    if idx_v is None:
-                        idx_v = self.builder.const_int(0)
+                    # Cycle 3 R4 fix batch 29 (IR R4 NEW-HIGH-1):
+                    # array write index silently became 0 → STORE_ELEM
+                    # wrote slot 0 instead of user index. Loud-fail.
+                    idx_v = self._lower_required(
+                        expr.target.indices[0],
+                        ctx="A.Assign array index")
                     if expr.op == "=":
                         self.builder.emit(tir.OpKind.STORE_ELEM, idx_v, v,
                                           attrs={"name": arr_name})
@@ -4637,9 +4651,13 @@ class Lowerer:
                 if rec_enum is not None and len(expr.indices) == 1:
                     base_idx = self._lookup(expr.callee.name)
                     if base_idx is not None:
-                        offset_v = self._lower_expr(expr.indices[0])
-                        if offset_v is None:
-                            offset_v = self.builder.const_int(0)
+                        # Cycle 3 R4 fix batch 29 (IR R4 NEW-HIGH-2):
+                        # rec-enum Index offset silently became 0 →
+                        # ARENA_GET returned slot 0 of the payload
+                        # instead of user's k.
+                        offset_v = self._lower_required(
+                            expr.indices[0],
+                            ctx="A.Index rec-enum offset")
                         # Compute idx + offset.
                         if (isinstance(expr.indices[0], A.IntLit)
                                 and expr.indices[0].value == 0):
@@ -4660,9 +4678,12 @@ class Lowerer:
                 arr = self._lookup_array(expr.callee.name)
                 if arr is not None and len(expr.indices) == 1:
                     elem_ty, _length = arr
-                    idx_v = self._lower_expr(expr.indices[0])
-                    if idx_v is None:
-                        idx_v = self.builder.const_int(0)
+                    # Cycle 3 R4 fix batch 29 (IR R4 NEW-HIGH-3):
+                    # array read index silently became 0 → LOAD_ELEM
+                    # returned slot 0 instead of user's k.
+                    idx_v = self._lower_required(
+                        expr.indices[0],
+                        ctx="A.Index array load")
                     return self.builder.emit(tir.OpKind.LOAD_ELEM, idx_v,
                                              result_ty=elem_ty,
                                              attrs={"name": expr.callee.name})

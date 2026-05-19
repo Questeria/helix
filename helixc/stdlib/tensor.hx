@@ -1995,3 +1995,63 @@ fn ti1d_clone_alloc(start: i32, n: i32) -> i32 {
     s
     }}
 }
+
+// Cycle 3 R4 fix batch 29 (RT R4 NEW-MEDIUM-2): _strict variants of
+// the count_* family. Pre-fix all returned 0 on corruption (n<=0 or
+// !t1d_slice_ok), colliding with legit "no matches" result. Sibling
+// of the batch-28 vec_max_in_range_strict template.
+@pure
+fn tf1d_count_above_strict(start: i32, n: i32, threshold: f32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { tf1d_count_above(start, n, threshold) }}
+}
+
+@pure
+fn tf1d_count_below_strict(start: i32, n: i32, threshold: f32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { tf1d_count_below(start, n, threshold) }}
+}
+
+@pure
+fn tf1d_count_eq_zero_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { tf1d_count_eq_zero(start, n) }}
+}
+
+@pure
+fn ti1d_count_above_strict(start: i32, n: i32, threshold: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_count_above(start, n, threshold) }}
+}
+
+@pure
+fn ti1d_count_below_strict(start: i32, n: i32, threshold: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_count_below(start, n, threshold) }}
+}
+
+@pure
+fn ti1d_count_eq_strict(start: i32, n: i32, target: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_count_eq(start, n, target) }}
+}
+
+@pure
+fn ti1d_count_pos_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_count_pos(start, n) }}
+}
+
+@pure
+fn ti1d_count_neg_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_count_neg(start, n) }}
+}
