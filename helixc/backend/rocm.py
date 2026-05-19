@@ -85,11 +85,17 @@ ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "status": "supported",  # Stage 124
     },
     ti.TileOpKind.TILE_LOAD_SHARED: {
-        "lowering": "ds_load_b32 / ds_load_b64 / ds_load_b128 (LDS = SMEM analog)",
+        # v2.1 R1 audit-fix Finding H1 (code-reviewer): the AMDGPU LDS
+        # mnemonics are ds_read_b32 / ds_read_b64 / ds_read_b128 — NOT
+        # ds_load_*. llvm-mc would reject ds_load_b128 outright. The
+        # pre-R1 text passed tests only because the asserts matched
+        # the (wrong) emitted token. Fixed both the table doc + emit
+        # text + test asserts in this audit-fix.
+        "lowering": "ds_read_b32 / ds_read_b64 / ds_read_b128 (LDS = SMEM analog)",
         "status": "supported",  # Stage 124
     },
     ti.TileOpKind.TILE_STORE_SHARED: {
-        "lowering": "ds_store_b32 / ds_store_b64 / ds_store_b128",
+        "lowering": "ds_write_b32 / ds_write_b64 / ds_write_b128",
         "status": "supported",  # Stage 124
     },
     ti.TileOpKind.TMA_LOAD: {
@@ -104,17 +110,25 @@ ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "lowering": "s_waitcnt vmcnt(0) lgkmcnt(0)",
         "status": "supported",
     },
+    # v2.1 R1 audit-fix Finding H3 (silent-failure-hunter): the
+    # following 3 ops were marked status="supported" but had no
+    # emit branch in `_emit_op`, so a kernel using +/-/* would
+    # compile to an empty stub kernel with no error. The honest
+    # state is "stub": the emit pattern is documented in the
+    # lowering string but not yet wired. Demoted accordingly;
+    # the exhaustiveness guard at the end of `_emit_op` now
+    # forces future re-promotion to include a concrete branch.
     ti.TileOpKind.TILE_ADD: {
         "lowering": "v_add_f32 / v_add_u32",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_SUB: {
         "lowering": "v_sub_f32 / v_sub_u32",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_MUL: {
         "lowering": "v_mul_f32 / v_mul_lo_u32",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_MATMUL: {
         "lowering": "v_mfma_f32_16x16x16_f16 (MI300 MFMA tile-matmul)",
@@ -176,13 +190,17 @@ ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "lowering": "v_mov_b32 v0 (workitem.idx.x = thread_id baseline)",
         "status": "supported",
     },
+    # v2.1 R1 audit-fix Finding H3 (silent-failure-hunter): same
+    # phantom-supported bug as TILE_ADD/SUB/MUL — these were marked
+    # "supported" but had no _emit_op branch. Demoted to "stub" so
+    # the .error directive at line 294 fires loudly.
     ti.TileOpKind.TILE_INDEX_LOAD_HBM: {
         "lowering": "global_load_<dtype> (HBM = global memory on AMD)",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_INDEX_STORE_HBM: {
         "lowering": "global_store_<dtype>",
-        "status": "supported",
+        "status": "stub",
     },
 }
 
@@ -277,19 +295,21 @@ class HipEmitter:
 
     def _emit_op(self, op: ti.TileOp) -> None:
         """Stage 124 (v2.0 Phase C ROCm wmma) — emit one tile-IR op as
-        AMDGPU instructions. v2.1 R1 audit-fix: emitted text is
-        HELIX-STUB-prefixed; every operand placeholder is wrapped in
-        a `/* HELIX-STUB-OPERAND: ... */` marker so a downstream
-        hipcc compile fails LOUDLY rather than silently producing a
-        no-op kernel.
+        AMDGPU instructions.
 
-        v2.1 R1 audit-fix Finding 1: ops with status="stub" / "deferred"
-        in ROCM_OP_LOWERING now emit a `.error` directive that aborts
-        hipcc — module-load coverage check only verifies table
-        membership, not codegen completeness.
+        Status-to-emit policy (v2.1 R1 audit-fix):
+          * status in {"stub", "deferred"} → emit `.error "HELIX-STUB: …"`
+            so hipcc aborts loudly. Pre-R1 silently fell through.
+          * status == "skipped" → emit
+            `.error "HELIX-SKIPPED: …"`. Pre-R1 fell through to the
+            catch-all comment (silent miscompile, e.g. TMA_LOAD on AMD).
+          * status == "supported" → MUST have a concrete `if kind is …`
+            branch below. The exhaustiveness guard at the end of this
+            function fires AssertionError if a "supported" op reaches
+            it; that catches the Stage-120 R2/R3 lesson at the codegen
+            layer (table-claims-supported but codegen has no branch).
         """
         kind = op.kind
-        # v2.1 R1 audit-fix: forward stub-status to the assembler.
         status = ROCM_OP_LOWERING[kind]["status"]
         if status in ("stub", "deferred"):
             self._line(
@@ -297,51 +317,66 @@ class HipEmitter:
                 f"status={status!r}; codegen not wired in this backend.\""
             )
             return
+        if status == "skipped":
+            # v2.1 R1 audit-fix Finding H2 (silent-failure-hunter):
+            # pre-R1 the "skipped" status fell through to a silent
+            # comment because only "stub"/"deferred" hit the .error
+            # branch. TMA_LOAD/TMA_STORE on the ROCm path would
+            # produce a benign-looking AMDGPU kernel with no error,
+            # the exact failure class Stage 120 R3 closed for grad.
+            # "skipped" means "no analog on this target" — must be
+            # LOUDER than a stub, not quieter.
+            self._line(
+                f"    .error \"HELIX-SKIPPED: TileOpKind.{kind.name} "
+                f"has no AMD analog (NVIDIA-only); routing to ROCm "
+                f"backend is a bug.\""
+            )
+            return
         if kind is ti.TileOpKind.BARRIER_WAIT:
             # bar.sync 0 (CUDA) maps to s_waitcnt + s_barrier on AMDGPU.
-            # s_waitcnt drains the memory queue; s_barrier blocks at
-            # workgroup level (parity with __syncthreads).
             self._line("    s_waitcnt vmcnt(0) lgkmcnt(0)")
             self._line("    s_barrier")
             return
         if kind is ti.TileOpKind.TILE_MATMUL:
-            # Stage 124 — wmma analog via MFMA. Emit the canonical
-            # MI300 16x16x16 fp32 accumulate with fp16 inputs:
-            #   v_mfma_f32_16x16x16_f16 dst, src_A, src_B, src_C
-            # Concrete operand binding requires register allocation
-            # (Stage 124+ extension); for now we emit the instruction
-            # as a comment-annotated stub so the lowering shape is
-            # visible in audit / diff.
+            # Stage 124 — MFMA wmma analog. Canonical MI300 16x16x16
+            # fp32-accumulate with fp16 inputs.
             self._line("    v_mfma_f32_16x16x16_f16 ; tile-matmul A @ B + C")
             return
         if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
-            # global_load_b128 for 16-byte tile loads (4 floats per
-            # lane); placeholder operand binding.
             self._line("    global_load_b128 ; HBM tile load")
             return
         if kind is ti.TileOpKind.TILE_STORE_GLOBAL:
             self._line("    global_store_b128 ; HBM tile store")
             return
         if kind is ti.TileOpKind.TILE_LOAD_SHARED:
-            self._line("    ds_load_b128 ; LDS (SMEM) tile load")
+            # v2.1 R1 audit-fix Finding H1: ds_read_b*, not ds_load_b*.
+            # The latter is not a valid AMDGPU mnemonic.
+            self._line("    ds_read_b128 ; LDS (SMEM) tile load")
             return
         if kind is ti.TileOpKind.TILE_STORE_SHARED:
-            self._line("    ds_store_b128 ; LDS (SMEM) tile store")
+            self._line("    ds_write_b128 ; LDS (SMEM) tile store")
             return
         if kind is ti.TileOpKind.THREAD_IDX:
-            # workitem ID is implicit in VGPR v0 on AMDGPU. Comment-
-            # annotate the read so the audit matrix sees coverage.
             self._line("    ; v0 = workitem ID (thread_idx)")
             return
         if kind is ti.TileOpKind.RETURN:
             # Falls through to the s_endpgm terminator emitted by
             # emit_kernel_stub; no per-op output needed.
             return
-        # Default: leave a comment so emitted text shows which ops
-        # are still substrate. The module-load coverage check at
-        # _check_rocm_lowering_coverage already enforced that every
-        # TileOpKind has a documented entry.
-        self._line(f"    ; tile-IR op {kind.name} (stub)")
+        # v2.1 R1 audit-fix Finding H3/M1 (silent-failure-hunter):
+        # exhaustiveness guard. status == "supported" reaching here
+        # means the table claims supported but no branch exists.
+        # Pre-R1 such ops silently emitted `; tile-IR op KIND (stub)`,
+        # and the audit confirmed 5 such phantom-supported entries
+        # (TILE_ADD/SUB/MUL/INDEX_LOAD_HBM/INDEX_STORE_HBM); those
+        # are now demoted to status="stub" in ROCM_OP_LOWERING. The
+        # guard remains so future drift fires loudly.
+        raise AssertionError(
+            f"ROCm._emit_op: TileOpKind.{kind.name} has "
+            f"status='supported' in ROCM_OP_LOWERING but no codegen "
+            f"branch in `_emit_op`. Either add a branch or demote "
+            f"the table entry to status='stub'."
+        )
 
 
 def lowering_status(kind: ti.TileOpKind) -> str:

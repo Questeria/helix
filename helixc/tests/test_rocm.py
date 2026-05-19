@@ -216,7 +216,16 @@ def test_stage124_global_load_store_emits():
 
 def test_stage124_lds_load_store_emits():
     """Stage 124 — TILE_LOAD_SHARED / TILE_STORE_SHARED emit
-    ds_load_b128 / ds_store_b128 (LDS is the AMD analog of CUDA SMEM)."""
+    ds_read_b128 / ds_write_b128 (LDS is the AMD analog of CUDA SMEM).
+
+    v2.1 R1 audit-fix Finding H1 (code-reviewer): pre-R1 the emitter
+    produced `ds_load_b128` / `ds_store_b128` which are NOT valid
+    AMDGPU mnemonics — llvm-mc / hipcc would reject them. The actual
+    LDS instructions are `ds_read_b{32,64,128}` / `ds_write_b{...}`.
+    Tests passed pre-R1 only because the asserts matched the (wrong)
+    emitted token. R1 fixes both sides + asserts the wrong tokens
+    do NOT appear (regression-pin).
+    """
     from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
     fn = TileFn(
         name="ldsk", params=[], return_ty=None,
@@ -229,16 +238,22 @@ def test_stage124_lds_load_store_emits():
     tile_mod = TileModule()
     tile_mod.functions["ldsk"] = fn
     text = HipEmitter().emit_module(tile_mod)
-    assert "ds_load_b128" in text
-    assert "ds_store_b128" in text
+    assert "ds_read_b128" in text
+    assert "ds_write_b128" in text
+    # Regression-pin: the invalid pre-R1 tokens must NOT appear.
+    assert "ds_load_b" not in text
+    assert "ds_store_b" not in text
 
 
-def test_stage124_unmapped_op_falls_through_to_comment():
-    """Stage 124 — ops without a concrete emit pattern fall through to
-    a `; tile-IR op KIND (stub)` comment. The module-load coverage
-    check at _check_rocm_lowering_coverage already enforced that
-    every kind has a documented entry, so this is the SECOND-LINE
-    defense against silent codegen."""
+def test_stage124_stub_status_emits_helix_stub_error():
+    """v2.1 R1 audit-fix — ops with status="stub" emit a `.error`
+    HELIX-STUB directive so hipcc aborts loudly.
+
+    Pre-R1 this test was named `test_stage124_unmapped_op_falls_through_to_comment`
+    and claimed to exercise the `; tile-IR op KIND (stub)` fallback
+    comment. In reality it exercised the `.error` branch — the test
+    name lied. R1 renames + asserts the .error directive explicitly.
+    """
     from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
     fn = TileFn(
         name="stubk", params=[], return_ty=None,
@@ -250,4 +265,152 @@ def test_stage124_unmapped_op_falls_through_to_comment():
     tile_mod = TileModule()
     tile_mod.functions["stubk"] = fn
     text = HipEmitter().emit_module(tile_mod)
-    assert "HELIX-STUB" in text and "TILE_REDUCE" in text
+    assert ".error" in text
+    assert "HELIX-STUB" in text
+    assert "TILE_REDUCE" in text
+
+
+# ============================================================================
+# Stage 124 R1 audit-fix tests (added 2026-05-19 after the explicit
+# 3-clean-audit returned FAIL with 3 HIGH findings):
+#   H1 (code-reviewer): ds_load_*/ds_store_* are not valid AMDGPU mnemonics
+#   H2 (silent-failure-hunter): status="skipped" silently fell through to
+#       a benign comment; TMA on ROCm path produced a no-op kernel
+#   H3 (silent-failure-hunter): 5 ops marked status="supported" had no
+#       _emit_op branch (phantom-supported); same Stage-120 R2/R3 pattern
+# ============================================================================
+def test_stage124_r1_skipped_status_emits_helix_skipped_error():
+    """R1 H2 — status="skipped" ops (TMA_LOAD, TMA_STORE on the ROCm
+    path) must emit a `.error "HELIX-SKIPPED: ..."` directive so a
+    miscompile-routing bug is loud, not silent."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    for skipped_kind in (TileOpKind.TMA_LOAD, TileOpKind.TMA_STORE):
+        fn = TileFn(
+            name="tma_k", params=[], return_ty=None,
+            blocks=[TileBlock(id=0, ops=[TileOp(kind=skipped_kind)])],
+            attrs={"kernel": True},
+        )
+        tile_mod = TileModule()
+        tile_mod.functions["tma_k"] = fn
+        text = HipEmitter().emit_module(tile_mod)
+        assert ".error" in text, f"{skipped_kind.name}: expected .error directive"
+        assert "HELIX-SKIPPED" in text, (
+            f"{skipped_kind.name}: expected HELIX-SKIPPED, "
+            f"pre-R1 fell through to benign comment"
+        )
+        assert skipped_kind.name in text
+        # Regression-pin: must NOT silently emit the substrate comment.
+        assert f"; tile-IR op {skipped_kind.name} (stub)" not in text
+
+
+def test_stage124_r1_demoted_ops_emit_helix_stub_error():
+    """R1 H3 — TILE_ADD / TILE_SUB / TILE_MUL / TILE_INDEX_LOAD_HBM /
+    TILE_INDEX_STORE_HBM were claimed status="supported" pre-R1 but
+    had no _emit_op branch (phantom-supported). R1 demotes them to
+    status="stub" so the `.error` directive fires.
+
+    This test pins the demoted set: if any of these is later promoted
+    back to "supported" without adding an _emit_op branch, the
+    exhaustiveness guard's AssertionError will fire and this test
+    will explode (which is the intended fail-loudly outcome).
+    """
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    demoted = (
+        TileOpKind.TILE_ADD,
+        TileOpKind.TILE_SUB,
+        TileOpKind.TILE_MUL,
+        TileOpKind.TILE_INDEX_LOAD_HBM,
+        TileOpKind.TILE_INDEX_STORE_HBM,
+    )
+    for kind in demoted:
+        assert lowering_status(kind) == "stub", (
+            f"{kind.name}: must be 'stub' after R1 demote, got "
+            f"{lowering_status(kind)!r}"
+        )
+        fn = TileFn(
+            name="demok", params=[], return_ty=None,
+            blocks=[TileBlock(id=0, ops=[TileOp(kind=kind)])],
+            attrs={"kernel": True},
+        )
+        tile_mod = TileModule()
+        tile_mod.functions["demok"] = fn
+        text = HipEmitter().emit_module(tile_mod)
+        assert ".error" in text and "HELIX-STUB" in text and kind.name in text
+
+
+def test_stage124_r1_supported_ops_emit_real_instruction():
+    """R1 H3 — every status="supported" op must emit a line that is
+    neither a comment (`;`) nor a `.error` directive. This is the
+    "status-vs-emission consistency" invariant: if the table says
+    supported, the emit must produce real AMDGPU instructions.
+
+    RETURN is the documented exception (falls through to the kernel-
+    level `s_endpgm` terminator emitted by `emit_kernel_stub`, no
+    per-op output). THREAD_IDX is also a documented exception (workitem
+    ID is implicit in v0, only an annotation comment is emitted).
+    """
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    # Documented per-op no-output / annotation-only exceptions.
+    EXCEPTIONS = {TileOpKind.RETURN, TileOpKind.THREAD_IDX}
+    for kind, entry in ROCM_OP_LOWERING.items():
+        if entry["status"] != "supported":
+            continue
+        if kind in EXCEPTIONS:
+            continue
+        fn = TileFn(
+            name="supk", params=[], return_ty=None,
+            blocks=[TileBlock(id=0, ops=[TileOp(kind=kind)])],
+            attrs={"kernel": True},
+        )
+        tile_mod = TileModule()
+        tile_mod.functions["supk"] = fn
+        text = HipEmitter().emit_module(tile_mod)
+        # The emit MUST contain a real AMDGPU mnemonic line for this
+        # supported op — not a `.error` directive (would mean stub
+        # leaked into the supported set) and not just kernel framing.
+        assert ".error" not in text, (
+            f"{kind.name}: status='supported' but emitted .error; "
+            f"phantom-supported regression"
+        )
+        # Strip the kernel-framing lines (.amdgcn_target, .text, .globl,
+        # .p2align, .type, label, s_endpgm) — what remains must be the
+        # op's emit.
+        FRAMING_PREFIXES = (
+            ".amdgcn_target", ".text", ".globl", ".p2align", ".type",
+            "supk:", "    s_endpgm",
+        )
+        body_lines = [
+            line for line in text.splitlines()
+            if line.strip()
+            and not any(line.startswith(p) for p in FRAMING_PREFIXES)
+        ]
+        assert body_lines, f"{kind.name}: no emitted body lines"
+
+
+def test_stage124_r1_exhaustiveness_guard_fires_on_phantom_supported(monkeypatch):
+    """R1 M1 — the exhaustiveness guard at the end of `_emit_op` must
+    raise AssertionError if a status="supported" op reaches it (i.e.,
+    no `if kind is …` branch matched). This is the second-line defense
+    against future re-introduction of the phantom-supported bug."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    import helixc.backend.rocm as rocm_mod
+
+    # Patch a stub op to claim "supported" without adding a branch.
+    # TILE_RESHAPE is documented as no-op-at-codegen + status="stub";
+    # bumping it to "supported" in the table fakes the phantom case.
+    patched = dict(rocm_mod.ROCM_OP_LOWERING)
+    patched[TileOpKind.TILE_RESHAPE] = {
+        "lowering": "(no-op)",
+        "status": "supported",
+    }
+    monkeypatch.setattr(rocm_mod, "ROCM_OP_LOWERING", patched)
+
+    fn = TileFn(
+        name="phantk", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[TileOp(kind=TileOpKind.TILE_RESHAPE)])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["phantk"] = fn
+    with pytest.raises(AssertionError, match="no codegen branch"):
+        rocm_mod.HipEmitter().emit_module(tile_mod)
