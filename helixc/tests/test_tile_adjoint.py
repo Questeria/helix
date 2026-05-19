@@ -408,10 +408,26 @@ def test_stage120_r3_valid_dispatch_kinds_exposed():
     """Stage 120 R3 audit-fix — VALID_DISPATCH_KINDS is the canonical
     closed set; the emitter's match arms must stay in lockstep with it.
     This test asserts the set is exactly {explicit, identity,
-    reduce_kind} so adding a new family without updating BOTH this set
-    AND the emitter trips a test."""
+    reduce_kind} so adding a new family without updating BOTH the
+    Literal AND the emitter trips a test."""
     assert ti.VALID_DISPATCH_KINDS == frozenset(
         {"explicit", "identity", "reduce_kind"}
+    )
+
+
+def test_stage120_r4_valid_dispatch_kinds_derived_from_literal():
+    """Stage 120 R4 polish — VALID_DISPATCH_KINDS is derived from
+    DispatchKind via get_args(). This eliminates the R4-identified
+    dual-source-of-truth drift hazard: changing the Literal
+    automatically updates the frozenset. The test asserts the
+    invariant so a future refactor that introduces a manual
+    frozenset literal trips this guard."""
+    from typing import get_args
+    derived = frozenset(get_args(ti.DispatchKind))
+    assert ti.VALID_DISPATCH_KINDS == derived, (
+        f"VALID_DISPATCH_KINDS ({ti.VALID_DISPATCH_KINDS!r}) "
+        f"diverged from get_args(DispatchKind) ({derived!r}); "
+        "the get_args-derivation invariant has regressed."
     )
 
 

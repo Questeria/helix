@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, Mapping, Optional
+from typing import Final, Literal, Mapping, Optional, get_args
 
 from . import tir
 
@@ -271,16 +271,16 @@ def lower_to_tile(tir_module: tir.Module) -> TileModule:
 #                  attrs["reduce_kind"] from the forward op and
 #                  synthesizes the backward op from that.
 #
-# Adding a new dispatch family requires three coordinated edits
-# (the test suite trips if any are missed):
-#   1. Append the value to VALID_DISPATCH_KINDS.
-#   2. Extend the DispatchKind Literal annotation.
-#   3. Handle the new family in emit_adjoint_kernel — the emitter's
+# Adding a new dispatch family requires two coordinated edits
+# (the test suite trips if either is missed):
+#   1. Extend the DispatchKind Literal annotation below.
+#   2. Add an emitter branch in emit_adjoint_kernel — the emitter's
 #      final `else: raise` will fail the suite until done.
+# VALID_DISPATCH_KINDS is derived from DispatchKind via get_args() so
+# the two sources of truth stay in lockstep automatically. R4 audits
+# (all 3) converged on this simplification.
 DispatchKind = Literal["explicit", "identity", "reduce_kind"]
-VALID_DISPATCH_KINDS: Final[frozenset[str]] = frozenset(
-    {"explicit", "identity", "reduce_kind"}
-)
+VALID_DISPATCH_KINDS: Final[frozenset[str]] = frozenset(get_args(DispatchKind))
 
 
 @dataclass(frozen=True)
