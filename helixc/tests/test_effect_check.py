@@ -574,6 +574,52 @@ def test_stage31_stdlib_marker_is_not_declared_effect():
     assert declared_effects(fn) == frozenset()
 
 
+# ============================================================================
+# v2.2 polish item 4 — _check_effect_kind_coverage hard-fail upgrade.
+# Was a soft `warnings.warn` through v2.1; v2.2 escalates to
+# AssertionError so a missing OpKind classification breaks module
+# import instead of leaking past CI runs that didn't promote
+# UserWarning → error.
+# ============================================================================
+def test_v22_effect_kind_coverage_is_complete_at_module_load():
+    """v2.2 polish item 4 — current OP_EFFECTS + _KNOWN_NONEFFECT_OPKINDS
+    cover every tir.OpKind. If this test fails, a new OpKind landed
+    without an effect classification and the module-load AssertionError
+    should have fired first (so we never actually reach this assertion
+    on a broken state — but keep it as a defensive guard for the case
+    where someone disables the module-load check)."""
+    from helixc.ir.passes.effect_check import (
+        OP_EFFECTS, _KNOWN_NONEFFECT_OPKINDS,
+    )
+    all_kinds = set(tir.OpKind)
+    classified = set(OP_EFFECTS.keys()) | _KNOWN_NONEFFECT_OPKINDS
+    unclassified = all_kinds - classified
+    assert not unclassified, (
+        f"effect_check exhaustiveness: unclassified OpKinds "
+        f"{sorted(k.name for k in unclassified)}"
+    )
+
+
+def test_v22_check_effect_kind_coverage_raises_on_drift():
+    """v2.2 polish item 4 — confirm the drift detector raises
+    AssertionError (not warnings.warn) when the classification is
+    incomplete. We monkey-patch _KNOWN_NONEFFECT_OPKINDS to remove a
+    known-pure kind (creating an unclassified surface) and re-invoke
+    the check function. The monkey-patch is restored regardless of
+    outcome."""
+    import pytest
+    from helixc.ir.passes import effect_check as ec
+    original_known = ec._KNOWN_NONEFFECT_OPKINDS
+    victim = tir.OpKind.CONST_INT
+    assert victim in original_known, "test setup: CONST_INT must be in known-pure set"
+    try:
+        ec._KNOWN_NONEFFECT_OPKINDS = original_known - {victim}
+        with pytest.raises(AssertionError, match="effect_check.py exhaustiveness"):
+            ec._check_effect_kind_coverage()
+    finally:
+        ec._KNOWN_NONEFFECT_OPKINDS = original_known
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

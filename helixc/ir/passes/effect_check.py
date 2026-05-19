@@ -137,10 +137,17 @@ PURITY_OBSERVER_EFFECTS: frozenset[str] = frozenset({"trace", "reflect"})
 # 19001 check. This is the sibling defect class to dce.py HIGH-5
 # (same drift pattern caught FFI_CALL once already at Stage 16.5).
 #
-# Currently soft (warning only) so missing entries surface without
-# breaking existing callers; the explicit allowlist of "pure or
-# non-effect" opcodes documents the intentional exemptions. To
-# upgrade to hard-fail, replace warning with `raise AssertionError`.
+# v2.2 polish item 4 (FE MED): hard-fail at module load. The soft-
+# warning version that shipped through v2.1 silently allowed missing
+# entries to leak past CI runs that didn't promote UserWarning →
+# error. Since the v2.1 5-clean-gate confirmed the classification is
+# complete (181 v2-scope + 466 typecheck + 108 parser tests pass),
+# there is no remaining benefit to the soft mode and the drift risk
+# (FFI_CALL-style silent @pure bypass at Stage 16.5) outweighs the
+# cost of forcing a contributor to classify each new OpKind. Future
+# additions to tir.OpKind must land in OP_EFFECTS (side-effecting)
+# or _KNOWN_NONEFFECT_OPKINDS (pure) in the same commit, or import
+# fails loudly.
 _KNOWN_NONEFFECT_OPKINDS = {
     tir.OpKind.CONST_INT, tir.OpKind.CONST_FLOAT, tir.OpKind.CONST_BOOL,
     tir.OpKind.CONST_TENSOR,
@@ -177,21 +184,22 @@ _KNOWN_NONEFFECT_OPKINDS = {
 
 
 def _check_effect_kind_coverage() -> None:
-    """Module-load coverage check: surface OpKinds not in OP_EFFECTS
-    or _KNOWN_NONEFFECT_OPKINDS. Currently soft (warning only)."""
+    """Module-load coverage check: every tir.OpKind must be classified
+    either in OP_EFFECTS (side-effecting) or _KNOWN_NONEFFECT_OPKINDS
+    (pure). Raises AssertionError on drift (v2.2 polish item 4 — was
+    soft-warning through v2.1)."""
     all_kinds = set(tir.OpKind)
     classified = set(OP_EFFECTS.keys()) | _KNOWN_NONEFFECT_OPKINDS
     unclassified = all_kinds - classified
     if unclassified:
-        import warnings
         names = sorted(k.name for k in unclassified)
-        warnings.warn(
+        raise AssertionError(
             f"effect_check.py exhaustiveness: opcode(s) not in "
             f"OP_EFFECTS or _KNOWN_NONEFFECT_OPKINDS: {names}. "
             f"Add each to OP_EFFECTS (if side-effecting) or "
-            f"_KNOWN_NONEFFECT_OPKINDS (if pure). Risk of silent "
-            f"@pure bypass if any are effectful.",
-            stacklevel=2,
+            f"_KNOWN_NONEFFECT_OPKINDS (if pure). Silent @pure "
+            f"bypass risk; module-load drift detector hard-fails "
+            f"per v2.2 polish item 4."
         )
 
 
