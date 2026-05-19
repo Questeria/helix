@@ -120,6 +120,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Quieter logs: print briefly to stderr.
         sys.stderr.write(f"[{self.address_string()}] {fmt % args}\n")
 
+    def _send_400(self, msg: str) -> None:
+        """v2.2 polish item 7: emit HTTP 400 with diagnostic body so
+        malformed query-strings surface visibly to the client instead
+        of silently coercing to defaults."""
+        body = msg.encode("utf-8", errors="replace")
+        self.send_response(400)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -134,17 +145,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/run":
             qs = urllib.parse.parse_qs(parsed.query)
+            # v2.2 polish item 7 (RT M1 from v2.1 5-clean-gate): the
+            # prior parsing silently coerced typo'd query keys to
+            # default values — `?kihd=foo` would run hillclimb, and
+            # `?seed=abc` would run seed=None, with no signal to the
+            # client that their request was malformed. R1 fix:
+            # reject (a) unknown query keys, (b) invalid int-coercion
+            # for `seed`/`size` with HTTP 400 + diagnostic body. The
+            # default-when-absent semantics still hold (no key →
+            # default value, present-but-malformed → 400).
+            ALLOWED_KEYS = {"kind", "seed", "maze", "size"}
+            unknown_keys = set(qs.keys()) - ALLOWED_KEYS
+            if unknown_keys:
+                self._send_400(
+                    f"unknown query key(s): {sorted(unknown_keys)}. "
+                    f"allowed: {sorted(ALLOWED_KEYS)}"
+                )
+                return
             kind = qs.get("kind", ["hillclimb"])[0]
             seed = qs.get("seed", [None])[0]
-            try:
-                seed_i = int(seed) if seed else None
-            except ValueError:
+            if seed is not None and seed != "":
+                try:
+                    seed_i = int(seed)
+                except ValueError:
+                    self._send_400(
+                        f"invalid `seed` value: {seed!r} (expected "
+                        f"integer or absent)"
+                    )
+                    return
+            else:
                 seed_i = None
             maze = qs.get("maze", ["0"])[0] == "1"
+            size_str = qs.get("size", ["10"])[0]
             try:
-                grid_n = int(qs.get("size", ["10"])[0])
+                grid_n = int(size_str)
             except ValueError:
-                grid_n = 10
+                self._send_400(
+                    f"invalid `size` value: {size_str!r} (expected "
+                    f"integer)"
+                )
+                return
             grid_n = max(5, min(20, grid_n))
             sys.stderr.write(f"Compiling helix agent ({kind}, seed={seed_i}, maze={maze}, grid={grid_n})...\n")
             bin_path, err = compile_helix(kind, seed=seed_i, maze=maze, grid_size=grid_n)
