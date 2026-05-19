@@ -98,6 +98,23 @@ fn mse_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
     }}}
 }
 
+// Cycle 2 Batch RT fix batch 17 (silent-failure HIGH-3):
+// Pre-fix: mse_loss returned 0 on corruption (n<=0 or t1d_slice_ok
+// failure). 0 collides with "perfect prediction, training converged."
+// A loss-monitor watching mse_loss for "lower is better" saw
+// converged-state when slices were actually corrupt. Training loops
+// declared success despite broken data.
+// Post-fix: mse_loss_strict returns INT32_MAX on corruption (max loss).
+// Any "converged" check fails loudly; any "is decreasing" trips
+// immediately. Original mse_loss preserved for backward compat.
+@pure
+fn mse_loss_strict(y_start: i32, t_start: i32, n: i32) -> i32 {
+    if n <= 0 { 2147483647 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 2147483647 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 2147483647 }
+    else { mse_loss(y_start, t_start, n) } } }
+}
+
 // Composed NN layers should be called by the user — Phase 0 SysV ABI
 // caps at 6 int args, so multi-layer wrappers exceed that. To compose:
 //   dense_layer_forward(w1, w1_rows, w1_cols, x, b1, h_pre);

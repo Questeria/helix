@@ -410,6 +410,20 @@ fn __always_accept_f64(h: i32, v: f64) -> i32 {
     }}
 }
 
+// Cycle 2 Batch RT fix batch 17 (silent-failure MEDIUM-5):
+// Pre-fix: __powi returned 1.0 for BOTH n<=0 (mathematically correct,
+// x^0 = 1) AND n>16 (out-of-range error). Polynomial-feature generator
+// computing x^k for k in [0..32] silently got all-ones for k > 16,
+// breaking downstream regression with NO error path.
+// Post-fix: __powi_checked takes a caller-supplied sentinel for the
+// out-of-range case. Caller distinguishes by passing e.g. -1.0e30_f32
+// or any domain-impossible value. Original __powi preserved for
+// backward compat with the existing "cap at 16" contract.
+@pure fn __powi_checked(x: f32, n: i32, sentinel: f32) -> f32 {
+    if n > 16 { sentinel }
+    else { __powi(x, n) }
+}
+
 // =========================================================================
 // Modern activation functions.
 // =========================================================================

@@ -200,3 +200,33 @@ fn mnist_idx_image_pixel(blob: i32, blob_len: i32,
     let off = img_idx * (h * w) + row * w + col;
     __str_byte_at(blob, body + off)
 }
+
+// Cycle 2 Batch RT fix batch 17 (silent-failure HIGH-2):
+// Pre-fix: mnist_idx_u8_at and mnist_idx_image_pixel had ZERO
+// bounds-check; OOB returned whatever arena byte was at body+i
+// (tensor magic, freed memory, another image's pixels). Training
+// loops iterating past body silently consumed adjacent garbage as
+// valid pixel input. Same defect class as pre-fix string_get OOB.
+// Post-fix: _checked variants return -1 sentinel on OOB. Originals
+// preserved for backward compat with existing hot-loop callers.
+
+@pure
+fn mnist_idx_u8_at_checked(blob: i32, blob_len: i32, body_len: i32, i: i32) -> i32 {
+    if i < 0 { 0 - 1 }
+    else { if i >= body_len { 0 - 1 }
+    else { mnist_idx_u8_at(blob, blob_len, i) } }
+}
+
+@pure
+fn mnist_idx_image_pixel_checked(blob: i32, blob_len: i32, n_images: i32,
+                                  img_idx: i32, row: i32, col: i32) -> i32 {
+    let h = mnist_idx_dim(blob, blob_len, 1);
+    let w = mnist_idx_dim(blob, blob_len, 2);
+    if img_idx < 0 { 0 - 1 }
+    else { if img_idx >= n_images { 0 - 1 }
+    else { if row < 0 { 0 - 1 }
+    else { if row >= h { 0 - 1 }
+    else { if col < 0 { 0 - 1 }
+    else { if col >= w { 0 - 1 }
+    else { mnist_idx_image_pixel(blob, blob_len, img_idx, row, col) } } } } } }
+}

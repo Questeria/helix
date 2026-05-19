@@ -101,6 +101,29 @@ fn csv_line_len(blob: i32, blob_len: i32, off: i32) -> i32 {
     }
 }
 
+// Cycle 2 Batch RT fix batch 17 (silent-failure MEDIUM-6):
+// csv_line_len silently truncates lines > 1024 bytes to exactly 1024,
+// indistinguishable from "line is exactly 1024 bytes." Caller can't
+// detect truncation; csv_next_line_offset then advances by truncated
+// length without consuming the actual newline, misaligning the
+// iterator and emitting garbage "lines" sliced from the remainder.
+// Post-fix: csv_line_was_truncated() reports whether the LAST
+// csv_line_len call would have truncated (caller passes the result
+// + the same blob/off; if line_len == 1024 AND no newline was found
+// in the 1024-byte window, it was truncated). Best-effort
+// disambiguation without changing csv_line_len's signature.
+@pure
+fn csv_line_was_truncated(blob: i32, blob_len: i32, off: i32, returned_len: i32) -> i32 {
+    if returned_len != 1024 { 0 }
+    else {
+        if off + 1024 > blob_len { 0 }
+        else {
+            let byte_at_1024 = __str_byte_at(blob, off + 1024);
+            if byte_at_1024 == 10 { 0 } else { 1 }
+        }
+    }
+}
+
 // csv_next_line_offset: skip the current line + its '\n' terminator.
 // If the current line is the last (no trailing newline), returns
 // blob_len so that csv_has_next_line returns 0 on the next iteration.

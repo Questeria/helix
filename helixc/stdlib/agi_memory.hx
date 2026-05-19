@@ -371,6 +371,59 @@ fn wm_peek(start: i32, key: i32) -> i32 {
     }
 }
 
+// Cycle 2 Batch RT fix batch 17 (silent-failure HIGH-1):
+// Pre-fix: wm_load + wm_peek + ep_payload_at + ep_kind_at + ep_recent_kind
+// all returned -1 for BOTH "key absent / index OOB" AND "arena corrupt".
+// Same defect class Cycle 1 batch 12 closed for hashmap (added
+// hashmap_status + hashmap_get_strict). Cycle 1's pattern didn't
+// propagate to agi_memory.hx — this batch closes that gap.
+//
+// AGI agent reasoning over memory cannot distinguish "I never knew this
+// fact" from "my memory storage is broken" without these helpers.
+
+@pure fn wm_status(start: i32) -> i32 {
+    if wm_ok(start) == 0 { 1 } else { 0 }
+}
+
+@pure fn ep_status(start: i32) -> i32 {
+    if ep_ok(start) == 0 { 1 } else { 0 }
+}
+
+// _strict variants: return INT32_MIN sentinel on corruption (distinct
+// from -1 absent / OOB sentinel). Caller can distinguish 3 outcomes:
+//   value >= 0 (or any non-INT32_MIN): real value
+//   -1: absent / OOB
+//   INT32_MIN: corruption / wrong handle
+@pure
+fn wm_load_strict(start: i32, key: i32) -> i32 {
+    if wm_ok(start) == 0 { (0_i32 - 2147483647_i32) - 1_i32 }
+    else { wm_load(start, key) }
+}
+
+@pure
+fn wm_peek_strict(start: i32, key: i32) -> i32 {
+    if wm_ok(start) == 0 { (0_i32 - 2147483647_i32) - 1_i32 }
+    else { wm_peek(start, key) }
+}
+
+@pure
+fn ep_payload_at_strict(start: i32, i: i32) -> i32 {
+    if ep_ok(start) == 0 { (0_i32 - 2147483647_i32) - 1_i32 }
+    else { ep_payload_at(start, i) }
+}
+
+@pure
+fn ep_kind_at_strict(start: i32, i: i32) -> i32 {
+    if ep_ok(start) == 0 { (0_i32 - 2147483647_i32) - 1_i32 }
+    else { ep_kind_at(start, i) }
+}
+
+@pure
+fn ep_recent_kind_strict(start: i32, kind: i32) -> i32 {
+    if ep_ok(start) == 0 { (0_i32 - 2147483647_i32) - 1_i32 }
+    else { ep_recent_kind(start, kind) }
+}
+
 // Sibling of ep_payload_at: read i'th event kind in chronological order
 // (0 = oldest still in buffer). Returns -1 if i >= count.
 @pure
