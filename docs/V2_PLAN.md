@@ -261,3 +261,36 @@ Updated v2.1 backlog state:
 - Stage 129 audit: 3/3 CLEAN per a012ba1 commit. CLOSED.
 - Stage 124/126/128 explicit audits: still 0/3 dispatched each
 - End-of-v2.1 5-clean-gate: pending Stage 120 R2 + Stage 124/126/128 audits
+
+### 2026-05-19T18:57Z — Stage 120 R2 3-clean CLOSED + M2 polish
+
+Stage 120 R2 audit verdicts:
+- silent-failure-hunter (R2): FAIL with 2 findings (HIGH reduce_kind
+  None propagation, MEDIUM partial __post_init__ partition). Both
+  fixed in commit fd2258d (Stage 120 R2 audit-fix).
+- type-design-analyzer (R2): PASS with 2 non-blocking observations
+  (AdjointModule partition not type-enforced, dispatch could be
+  Literal). Both addressed in fd2258d (AdjointModule.__post_init__
+  disjointness check + AdjointRecord __post_init__ runtime-keyed
+  validation).
+- code-reviewer (R2): PASS. Evaluated against R1 (3613bce); M1
+  was the same finding as silent-failure-hunter R2 Finding 1
+  (already closed in fd2258d). M2 (attr schema asymmetry) is
+  non-blocking but cheap — fixed in this commit: all backward
+  ops now carry `adjoint_of` + `dispatch` + `comment` uniformly.
+
+Stage 120 3-clean status: ACHIEVED.
+- 39 tile_adjoint + tile_ir tests pass (was 26 at R0; +13 net)
+- R1 commit: 3613bce
+- R2 commit: fd2258d
+- R2 polish (M2): this commit
+
+Updated v2.1 backlog state:
+- Stage 120: CLOSED (R0 → R1 → R2 → R2-polish, 3-clean ACHIEVED)
+- Stage 122: implicitly covered by 5-clean-gate pass per V2_PLAN
+  note above; explicit silent-failure-hunter from prior fire
+  returned CLEAN per a012ba1.
+- Stage 129: CLOSED
+- Stage 124/126/128 explicit audits: still 0/3 dispatched each
+  (next-up work for the next fire)
+- End-of-v2.1 5-clean-gate: pending only Stage 124/126/128 audits

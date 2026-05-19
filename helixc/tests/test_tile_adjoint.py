@@ -345,6 +345,32 @@ def test_stage120_r2_adjointrecord_rejects_runtime_keyed_with_ops():
         )
 
 
+def test_stage120_r2_backward_op_attrs_uniform_schema():
+    """Stage 120 R2 audit-fix M2 — every emitted backward op carries
+    the same attr schema regardless of dispatch branch: `adjoint_of`,
+    `dispatch`, and `comment`. Downstream consumers can walk backward
+    ops without branch-specific attr lookups."""
+    # Explicit dispatch (TILE_MATMUL -> 2 TRANSPOSE + 2 MATMUL).
+    fwd_explicit = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_MATMUL)])
+    result = emit_adjoint_kernel(fwd_explicit)
+    required = {"adjoint_of", "dispatch", "comment"}
+    for bwd_op in result.bwd_fn.blocks[0].ops:
+        assert required <= set(bwd_op.attrs.keys()), (
+            f"explicit branch missing attrs: "
+            f"{required - set(bwd_op.attrs.keys())}"
+        )
+        assert bwd_op.attrs["dispatch"] == "explicit"
+
+    # Reduce_kind dispatch.
+    fwd_reduce = _make_kernel("k", [
+        TileOp(kind=TileOpKind.TILE_REDUCE, attrs={"reduce_kind": "sum"}),
+    ])
+    result = emit_adjoint_kernel(fwd_reduce)
+    bwd_op = result.bwd_fn.blocks[0].ops[0]
+    assert required <= set(bwd_op.attrs.keys())
+    assert bwd_op.attrs["dispatch"] == "reduce_kind"
+
+
 def test_stage120_r2_adjointmodule_rejects_overlap():
     """Stage 120 R2 audit-fix — AdjointModule.__post_init__ enforces
     the partition the docstring promises: a fn name cannot appear in

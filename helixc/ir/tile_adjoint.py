@@ -212,6 +212,10 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
                     "adjoint_of": op.kind.name,
                     "dispatch": "reduce_kind",
                     "reduce_kind": rk,
+                    # R2 audit-fix M2: normalize attr schema across
+                    # branches so downstream consumers don't need
+                    # branch-specific knowledge to read backward ops.
+                    "comment": "reduce_kind gradient (resolved at lowering)",
                 },
             ))
             continue
@@ -223,6 +227,10 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
             bwd_ops.append(ti.TileOp(
                 kind=adj_kind,
                 attrs={"adjoint_of": op.kind.name,
+                       # R2 audit-fix M2: uniform attr schema across
+                       # dispatch branches — every backward op carries
+                       # adjoint_of + dispatch + comment.
+                       "dispatch": "explicit",
                        "comment": comment},
             ))
 
