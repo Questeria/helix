@@ -43,14 +43,34 @@ def test_stage122_extract_enclave_tag_innermost():
     assert extract_enclave_tag(TyPrim("i32")) is None
 
 
-def test_stage122_extract_enclave_tag_bounded_recursion():
-    """extract_enclave_tag terminates even on pathological deep nesting
-    (defensive: cycle/very-deep guards at seen<32)."""
+def test_stage122_extract_enclave_tag_bounded_recursion_raises():
+    """v2.2 polish item 12 (BE LOW-1 from v2.1 5-clean-gate) — prior
+    behavior was to silently return None on type-chains exceeding the
+    32-depth cap. That collapsed two distinct outcomes:
+      (a) chain terminates with no enclave tag → None
+      (b) chain exceeds depth-32 → None
+    R1 fix distinguishes them: case (b) now raises ValueError with
+    full diagnostic so a producer with a cyclic / pathologically deep
+    type chain surfaces as a bug instead of a silent miscategorization."""
     # Construct 64-deep nesting (exceeds the 32-iter cap).
     t = TyPrim("i32")
     for _ in range(64):
         t = TyConf(level="med", inner=t)
-    # Should not loop forever — returns None safely.
+    with pytest.raises(ValueError, match="depth exceeded"):
+        extract_enclave_tag(t)
+
+
+def test_stage122_extract_enclave_tag_at_depth_cap():
+    """v2.2 polish item 12 — exactly-at-cap (depth 32) succeeds; the
+    raise happens at depth 33 (strict overflow, not boundary-strict)."""
+    # Construct 32-deep nesting — bare-primitive at innermost.
+    # Loop walks 32 times finding TyConf.inner=...; the 33rd iteration
+    # finds a TyPrim and returns None cleanly.
+    t = TyPrim("i32")
+    for _ in range(32):
+        t = TyConf(level="med", inner=t)
+    # At depth exactly 32: the loop terminates naturally on the TyPrim
+    # at the bottom (no `inner` attr) without hitting the depth cap.
     assert extract_enclave_tag(t) is None
 
 

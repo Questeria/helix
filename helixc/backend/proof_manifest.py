@@ -61,11 +61,31 @@ def extract_enclave_tag(ty: Any) -> Optional[str]:
     # Avoid the import cycle: typecheck imports backend (via grad_pass
     # cascading) so backend cannot import typecheck. Walk via duck-
     # typing on the `enclave` attribute pattern.
+    #
+    # v2.2 polish item 12 (BE LOW-1 from v2.1 5-clean-gate): the prior
+    # `seen < 32` loop bound silently returned None on pathological
+    # type chains exceeding depth 32 — manifest would then say "no
+    # enclave tag" when one existed deep in the chain. Phase-0 wouldn't
+    # hit this in practice but the silent miscategorization was a
+    # latent bug. R1 fix: raise ValueError with full path-trace info
+    # when depth exhausted, so an untagged-vs-too-deep return is
+    # distinguishable from the deferred path.
+    MAX_DEPTH = 32
     seen = 0
-    while ty is not None and seen < 32:
+    while ty is not None:
         if hasattr(ty, "enclave") and hasattr(ty, "inner"):
             return ty.enclave
         if hasattr(ty, "inner"):
+            if seen >= MAX_DEPTH:
+                raise ValueError(
+                    f"extract_enclave_tag: type-chain depth exceeded "
+                    f"{MAX_DEPTH} levels without finding an enclave-"
+                    f"typed or terminal node. Type at depth-cap: "
+                    f"{type(ty).__name__}. This likely indicates a "
+                    f"cyclic .inner chain or a pathologically deep "
+                    f"nested type — please file a bug with the "
+                    f"producing function name."
+                )
             ty = ty.inner
             seen += 1
         else:
