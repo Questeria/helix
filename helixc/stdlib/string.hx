@@ -47,6 +47,24 @@ fn string_get(start: i32, i: i32) -> i32 {
     __arena_get(start + i)
 }
 
+// Cycle 1 Batch RT fix batch 11 (silent-failure HIGH-1):
+// Bounds-checked variant of string_get. Pre-fix `string_get` had ZERO
+// bounds checking — OOB indices returned whatever arena bytes were
+// there (possibly another string's data, a tensor footer magic,
+// freed-but-overwritten state). Tier-S users (security/AGI safety)
+// treated the return as authoritative when iterating beyond len.
+// Post-fix: this new variant takes the length explicitly + returns
+// -1 sentinel on OOB. Callers that want safety pass the len; existing
+// callers of `string_get` are unchanged (preserves backward compat).
+@pure
+fn string_get_checked(start: i32, len: i32, i: i32) -> i32 {
+    if i < 0 { 0 - 1 }
+    else {
+        if i >= len { 0 - 1 }
+        else { __arena_get(start + i) }
+    }
+}
+
 @pure
 fn string_eq(a: i32, an: i32, b: i32, bn: i32) -> i32 {
     if an != bn { 0 }

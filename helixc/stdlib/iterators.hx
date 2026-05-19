@@ -623,12 +623,21 @@ fn vec_max_abs(start: i32, count: i32) -> i32 {
 // element squared. Allocating mirror of the implicit pattern in
 // vec_sum_squares; useful when the caller needs the squared values
 // retained (e.g. variance computation, L2 element-wise norms).
+// Cycle 1 Batch RT fix batch 11 (fresh-eyes RT-C3, conf 88):
+// vec_map_square was the SOLE surviving unsaturated product in the
+// stdlib. Sibling fns (vec_sum_squares, vec_l2_squared_distance,
+// ti1d_mul, ti2d_matmul) all use i64 intermediate + INT32 saturation.
+// Pre-fix: |v| >= 46341 silently wrapped (46341*46341 = 2147485481
+// → -2081815 i32). Variance/L2-norm consumers got negative squared
+// values. Post-fix: i64 promote + INT32 saturation matching siblings.
 fn vec_map_square(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
-        let v = __arena_get(start + i);
-        __arena_push(v * v);
+        let v: i64 = __arena_get(start + i) as i64;
+        let mut sq: i64 = v * v;
+        if sq > 2147483647_i64 { sq = 2147483647_i64; };
+        __arena_push(sq as i32);
         i = i + 1;
     }
     s
@@ -660,13 +669,27 @@ fn vec_cumsum(start: i32, count: i32) -> i32 {
 // first-order differences out[i] = in[i+1] - in[i]. Output length is
 // count - 1 (returns the start of the new slice). For count <= 1 the
 // output is empty (length 0). Useful for discrete derivatives.
+// Cycle 1 Batch RT fix batch 11 (fresh-eyes RT-I1, conf 82):
+// vec_diff used raw i32 subtraction. INT32_MAX - (-1) wraps to
+// INT32_MIN silently. Sibling vec_zip_sub uses i64 saturation;
+// vec_diff was missed in the restart-54 sweep. Post-fix: i64
+// saturation matching vec_zip_sub pattern.
 fn vec_diff(start: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     if count > 1 {
         let mut i: i32 = 0;
         let n_minus_1 = count - 1;
         while i < n_minus_1 {
-            __arena_push(__arena_get(start + i + 1) - __arena_get(start + i));
+            let d: i64 = (__arena_get(start + i + 1) as i64)
+                       - (__arena_get(start + i) as i64);
+            let mut sd: i64 = d;
+            if sd > 2147483647_i64 { sd = 2147483647_i64; }
+            else {
+                if sd < ((0_i64 - 2147483647_i64) - 1_i64) {
+                    sd = (0_i64 - 2147483647_i64) - 1_i64;
+                };
+            };
+            __arena_push(sd as i32);
             i = i + 1;
         }
     };
@@ -718,16 +741,20 @@ fn vec_repeat(value: i32, count: i32) -> i32 {
 }
 
 // vec_zip_mod(a, b, count): element-wise modulo a[i] % b[i].
-// Returns a new slice. Restart 51 A4: fail-closed on b[i] == 0 (pushes 0)
-// rather than trapping. Matches the fail-closed discipline of hashmap_hash,
-// ti1d_mean, etc. — in an arena runtime without OS exception recovery, a
-// hardware trap is a process crash.
+// Returns a new slice. Restart 51 A4: fail-closed on b[i] == 0.
+// Cycle 1 Batch RT fix batch 11 (silent-failure HIGH-4): pre-fix
+// pushed 0 on divide-by-zero, which collides with the legitimate
+// result `0 % x = 0`. Caller couldn't distinguish "I divided by
+// zero" from "I correctly got zero", contaminating downstream
+// reducers (vec_count_eq(result, n, 0) inflated). Post-fix:
+// INT32_MIN sentinel on b[i] == 0 — distinct from any legitimate
+// modulo result (a % b is always in [-(|b|-1), +(|b|-1)]).
 fn vec_zip_mod(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
         let bv = __arena_get(b + i);
-        if bv == 0 { __arena_push(0); }
+        if bv == 0 { __arena_push((0_i32 - 2147483647_i32) - 1_i32); }
         else { __arena_push(__arena_get(a + i) % bv); }
         i = i + 1;
     }
@@ -785,12 +812,15 @@ fn vec_concat(a: i32, na: i32, b: i32, nb: i32) -> i32 {
 // vec_zip_div(a, b, count): element-wise division a[i] / b[i].
 // Returns a new slice. Restart 51 A4: fail-closed on b[i] == 0 (pushes 0)
 // rather than trapping. Sibling of vec_zip_mod's fail-closed pattern.
+// Cycle 1 Batch RT fix batch 11 (silent-failure HIGH-4): same
+// sentinel-collision fix as vec_zip_mod above. Pre-fix 0 collided
+// with legitimate `0/x = 0`. Post-fix: INT32_MIN sentinel.
 fn vec_zip_div(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
         let bv = __arena_get(b + i);
-        if bv == 0 { __arena_push(0); }
+        if bv == 0 { __arena_push((0_i32 - 2147483647_i32) - 1_i32); }
         else { __arena_push(__arena_get(a + i) / bv); }
         i = i + 1;
     }

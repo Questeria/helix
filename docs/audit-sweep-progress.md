@@ -365,7 +365,9 @@ counter can advance to 1/5.
 | Batch | Round 1 | Round 2 | Round 3 | Round 4 | Verdict |
 |-------|---------|---------|---------|---------|---------|
 | FE    | 11H+9M  | 3H+3M+1OBJECT | 1MUST_FIX+1debt | ✅ CLEAN | ✅ **CLEAN** after 7 fix batches |
-| IR    | Round 1: 3+3+3 findings | Round 2: silent-failure ✅ CLEAN, fresh-eyes ✅ CLEAN, type-design OBJECT on HIGH-2 downgrade (was right — silent miscompile via `or "?"` fallback + case-insensitive string compare); batch 9 ships raise on unknown memspace | - | - | IN PROGRESS — 2 of 3 round-2 CLEAN; type-design demands batch-9 fix |
+| IR    | Round 1: 3+3+3 findings | Round 2: silent-failure ✅, fresh-eyes ✅, type-design OBJECT→batch 9 | Round 3 type-design: ✅ CLEAN | - | ✅ **CLEAN** after 2 fix batches (8 + 9) |
+| BE    | Round 1: silent-failure NOT_CLEAN, type-design NOT_CLEAN, fresh-eyes ✅ CLEAN | Round 2: silent-failure ✅, fresh-eyes ✅, type-design ✅ CLEAN (HIGH-2 cmp_map downgrade ACCEPTABLE; all MEDIUMs ACCEPT-DEBT; 2 new LOW findings noted not gate-blocking) | - | - | ✅ **CLEAN** after 1 fix batch (10) |
+| RT    | Round 1: silent-failure 5H+6M, fresh-eyes 3CRIT+1IMP, type-design 1H+3M = 7 consolidated must-fix HIGH | Fix batch 11: 4 of 7 shipped (vec_map_square + vec_diff i32-overflow, string_get_checked variant, vec_zip_div + vec_zip_mod sentinels). 3 HIGH remain for batch 12 (hashmap_get status, ti2d/tf2d OOB bounds, vec/string magic-footer invariant) | - | - | IN PROGRESS — 4/7 HIGH fixed |
 | BE    | TBD     | -       | -       | -       | TBD     |
 | RT    | TBD     | -       | -       | -       | TBD     |
 | TEST  | TBD     | -       | -       | -       | TBD     |
