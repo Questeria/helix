@@ -1044,9 +1044,19 @@ class BorrowState:
     """Stage 66 Inc 1 — per-scope borrow tracker. Inc 1 ships the
     container only; Inc 2 will wire the `check_borrow_shared`,
     `check_borrow_mutable`, and `check_move` enforcement APIs.
-    Inc 3 will wire block-exit reconciliation across branches."""
+    Inc 3 will wire block-exit reconciliation across branches.
+
+    Stage 114 (v2.0 Phase B.2.b): `place_scopes` tracks the
+    execution scope at which each Place was borrowed. Default
+    scope is BORROW_SCOPE_THREAD (Rust-equivalent). Wider scopes
+    apply when a borrow originates inside @kernel context.
+    The scope-aware check_borrow_scoped() API enforces
+    `required_rank <= provided_rank` for cross-scope borrow
+    requests.
+    """
     state: dict[Place, str] = field(default_factory=dict)
     shared_counts: dict[Place, int] = field(default_factory=dict)
+    place_scopes: dict[Place, str] = field(default_factory=dict)
 
     def define(self, place: Place) -> None:
         """Stage 66 Inc 1 — initialize a place as Free (no borrows)."""
@@ -1116,6 +1126,106 @@ class BorrowState:
         """
         if self.state.get(place) == BORROW_MUTABLE:
             self.state[place] = BORROW_FREE
+
+    # ----- Stage 114 (v2.0 Phase B.2.b) scope-aware borrow API -----
+    #
+    # Helix MVP discipline: every borrow has a SCOPE recording the
+    # execution context (thread / warp / block / grid) at which it
+    # was acquired. Cross-scope use requires the requested scope
+    # to fit within the providing scope's reach:
+    #   required_rank <= provided_rank  (covariant on width)
+    #
+    # Stage 114 ships the API in isolation; Stage 115+ wires it into
+    # the actual borrow-check flow once _current_kernel_scope is
+    # tracked per fn (currently only is_kernel bool exists).
+
+    def define_with_scope(self, place: Place, scope: str) -> None:
+        """Stage 114 — define a place with its borrow scope.
+
+        Equivalent to `define()` plus recording the scope tag.
+        Default scope (when define() is used) is BORROW_SCOPE_THREAD.
+        """
+        if scope not in BORROW_SCOPES:
+            raise ValueError(
+                f"unknown borrow scope {scope!r}; expected one of "
+                f"{sorted(BORROW_SCOPES)}"
+            )
+        self.state[place] = BORROW_FREE
+        self.shared_counts.pop(place, None)
+        self.place_scopes[place] = scope
+
+    def scope_of(self, place: Place) -> str:
+        """Stage 114 — query the scope at which `place` was borrowed.
+
+        Returns BORROW_SCOPE_THREAD if the place has no recorded
+        scope (i.e., it was define()-ed without scope, the legacy
+        path; covers Phase-0 host-side code that doesn't know
+        about GPU scopes).
+        """
+        return self.place_scopes.get(place, BORROW_SCOPE_THREAD)
+
+    def check_borrow_scoped(self, place: Place, kind: str,
+                            required_scope: str) -> bool:
+        """Stage 114 — scope-aware borrow check.
+
+        Combines the existing kind-check (shared/mutable/move) with
+        a scope-subsumption check: the place's provided scope
+        (where it was originally borrowed) must be wider-or-equal
+        to the required scope at the use site.
+
+        kind ∈ {"shared", "mutable", "move"}
+        required_scope ∈ BORROW_SCOPES
+
+        Returns True on success (and applies the kind transition);
+        returns False on either scope violation OR kind violation.
+
+        Caller is expected to surface the specific reason via the
+        diagnostic emitted at the call site (use scope_of() and
+        status() to disambiguate).
+        """
+        if required_scope not in BORROW_SCOPES:
+            raise ValueError(
+                f"unknown required scope {required_scope!r}; "
+                f"expected one of {sorted(BORROW_SCOPES)}"
+            )
+        # Scope check FIRST (cheaper, and we want to reject scope
+        # violations before mutating kind state).
+        provided_scope = self.scope_of(place)
+        if BORROW_SCOPE_RANK[required_scope] > BORROW_SCOPE_RANK[provided_scope]:
+            # Provided scope is narrower than required — needs a
+            # barrier-discharge to widen. Reject.
+            return False
+        # Scope OK; delegate to existing kind-specific checker.
+        if kind == "shared":
+            return self.check_borrow_shared(place)
+        if kind == "mutable":
+            return self.check_borrow_mutable(place)
+        if kind == "move":
+            return self.check_move(place)
+        raise ValueError(
+            f"unknown borrow kind {kind!r}; "
+            f"expected 'shared', 'mutable', or 'move'"
+        )
+
+    def widen_scope(self, place: Place, new_scope: str) -> bool:
+        """Stage 114 — widen a place's scope (e.g., after a barrier
+        discharge). Allowed only when new_scope is strictly wider
+        than the current scope. Returns False if the widen would
+        narrow or no-op.
+
+        Models the barrier-discharge join point: post-__block_sync,
+        a thread-scope borrow becomes visible at block scope.
+        """
+        if new_scope not in BORROW_SCOPES:
+            raise ValueError(
+                f"unknown new scope {new_scope!r}; "
+                f"expected one of {sorted(BORROW_SCOPES)}"
+            )
+        cur_scope = self.scope_of(place)
+        if BORROW_SCOPE_RANK[new_scope] <= BORROW_SCOPE_RANK[cur_scope]:
+            return False
+        self.place_scopes[place] = new_scope
+        return True
 
 
 @dataclass

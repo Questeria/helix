@@ -6150,6 +6150,114 @@ def test_stage112_pure_cannot_call_gpu_effect():
     assert len(pure_errs) >= 1, errors
 
 
+def test_stage114_borrow_state_scope_api_basic():
+    """Stage 114 (v2.0 Phase B.2.b) — BorrowState scope-aware API.
+
+    Verifies the new methods exposed for scope-tagged borrows:
+    - define_with_scope: defines a place with explicit scope
+    - scope_of: queries the recorded scope (default thread)
+    - check_borrow_scoped: enforces both kind + scope subsumption
+    - widen_scope: barrier-discharge that widens a place's scope
+    """
+    from helixc.frontend.typecheck import (
+        BorrowState, Place,
+        BORROW_SCOPE_THREAD, BORROW_SCOPE_WARP,
+        BORROW_SCOPE_BLOCK, BORROW_SCOPE_GRID,
+    )
+
+    bs = BorrowState()
+    p_thread = Place.local("x_thread")
+    p_block = Place.local("x_block")
+
+    # Default scope is thread.
+    bs.define(p_thread)
+    assert bs.scope_of(p_thread) == BORROW_SCOPE_THREAD
+
+    # Explicit scope via define_with_scope.
+    bs.define_with_scope(p_block, BORROW_SCOPE_BLOCK)
+    assert bs.scope_of(p_block) == BORROW_SCOPE_BLOCK
+
+
+def test_stage114_check_borrow_scoped_rank_subsumption():
+    """Stage 114 — scope subsumption: required_rank <= provided_rank.
+
+    A block-scope place can be borrowed at thread scope (narrower
+    consumer, wider provider — covariant). A thread-scope place
+    CANNOT be borrowed at block scope without barrier-discharge.
+    """
+    from helixc.frontend.typecheck import (
+        BorrowState, Place,
+        BORROW_SCOPE_THREAD, BORROW_SCOPE_BLOCK, BORROW_SCOPE_GRID,
+    )
+
+    bs = BorrowState()
+    p_block = Place.local("p_block")
+    bs.define_with_scope(p_block, BORROW_SCOPE_BLOCK)
+
+    # Narrower consumer (thread) of wider provider (block) → OK.
+    assert bs.check_borrow_scoped(p_block, "shared", BORROW_SCOPE_THREAD)
+    bs.release_shared(p_block)
+    assert bs.check_borrow_scoped(p_block, "shared", BORROW_SCOPE_BLOCK)
+    bs.release_shared(p_block)
+    # Block-scope provider CANNOT satisfy grid-scope consumer.
+    assert not bs.check_borrow_scoped(p_block, "shared", BORROW_SCOPE_GRID)
+
+    # Thread-scope provider cannot satisfy block-scope consumer.
+    p_thread = Place.local("p_thread")
+    bs.define_with_scope(p_thread, BORROW_SCOPE_THREAD)
+    assert not bs.check_borrow_scoped(p_thread, "shared", BORROW_SCOPE_BLOCK)
+
+
+def test_stage114_widen_scope_barrier_discharge():
+    """Stage 114 — widen_scope models barrier-discharge widening.
+
+    Pre-barrier: borrow is thread-scope. Post-barrier (after a
+    __block_sync), the borrow's effective scope widens to block.
+    Narrowing widen is rejected (use a new place if you want to
+    rescope downward).
+    """
+    from helixc.frontend.typecheck import (
+        BorrowState, Place,
+        BORROW_SCOPE_THREAD, BORROW_SCOPE_BLOCK, BORROW_SCOPE_GRID,
+    )
+
+    bs = BorrowState()
+    p = Place.local("p")
+    bs.define_with_scope(p, BORROW_SCOPE_THREAD)
+    assert bs.scope_of(p) == BORROW_SCOPE_THREAD
+
+    # Widen to block (simulates __block_sync discharge).
+    assert bs.widen_scope(p, BORROW_SCOPE_BLOCK)
+    assert bs.scope_of(p) == BORROW_SCOPE_BLOCK
+
+    # Widen to grid.
+    assert bs.widen_scope(p, BORROW_SCOPE_GRID)
+    assert bs.scope_of(p) == BORROW_SCOPE_GRID
+
+    # Narrowing widen is rejected.
+    assert not bs.widen_scope(p, BORROW_SCOPE_THREAD)
+    # Scope unchanged.
+    assert bs.scope_of(p) == BORROW_SCOPE_GRID
+
+    # Same-scope widen is rejected (no-op).
+    assert not bs.widen_scope(p, BORROW_SCOPE_GRID)
+
+
+def test_stage114_invalid_scope_raises():
+    """Stage 114 — invalid scope strings raise ValueError, not silent."""
+    from helixc.frontend.typecheck import BorrowState, Place
+
+    bs = BorrowState()
+    p = Place.local("p")
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        bs.define_with_scope(p, "warp_garbage")
+    with _pt.raises(ValueError):
+        bs.check_borrow_scoped(p, "shared", "block_garbage")
+    with _pt.raises(ValueError):
+        bs.widen_scope(p, "thread_garbage")
+
+
 def test_stage110_smem_borrow_excluded_from_gpu_wildcard():
     """Stage 110 type-design audit fix — `gpu.smem_borrow` is a linear
     capability, NOT an effect obligation. The `gpu` wildcard MUST NOT
