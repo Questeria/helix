@@ -160,18 +160,26 @@ def test_match_lower_fresh_counter_state_visible():
     reset to 0 at the start of lower_matches and incremented from
     there. This guards against accidental refactors that drop the
     reset."""
-    # Pollute the counter from an unrelated call sequence.
-    _FRESH_COUNTER[0] = 1000
-    src = "fn main() -> i32 { match 0 { _ => 1 } }"
-    prog = parse(src, include_stdlib=False)
-    lower_matches(prog)
-    # After lower_matches, the counter should be small (started at 0,
-    # incremented once per fresh name). Specifically the pre-fix
-    # 1000+ ceiling no longer applies.
-    assert _FRESH_COUNTER[0] < 100, (
-        f"_FRESH_COUNTER not reset; observed value {_FRESH_COUNTER[0]} "
-        f"after a single match lowering"
-    )
+    # Cycle 1 Batch TEST fix batch 16 (fresh-eyes IMPORTANT 3):
+    # pre-fix mutated _FRESH_COUNTER[0] without cleanup, leaving
+    # cross-test pollution risk under parallel pytest-xdist. Now
+    # save/restore via try/finally so any failure path also restores.
+    saved = _FRESH_COUNTER[0]
+    try:
+        # Pollute the counter from an unrelated call sequence.
+        _FRESH_COUNTER[0] = 1000
+        src = "fn main() -> i32 { match 0 { _ => 1 } }"
+        prog = parse(src, include_stdlib=False)
+        lower_matches(prog)
+        # After lower_matches, the counter should be small (started at 0,
+        # incremented once per fresh name). Specifically the pre-fix
+        # 1000+ ceiling no longer applies.
+        assert _FRESH_COUNTER[0] < 100, (
+            f"_FRESH_COUNTER not reset; observed value {_FRESH_COUNTER[0]} "
+            f"after a single match lowering"
+        )
+    finally:
+        _FRESH_COUNTER[0] = saved
 
 
 # ---------------------------------------------------------------------------

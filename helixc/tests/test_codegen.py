@@ -16492,17 +16492,23 @@ def test_struct_passed_to_helper():
         read_x(c)
     }
     """
-    # Function-call passing of structs is more involved; skip this case if
-    # the codegen doesn't yet support it. Otherwise we verify it returns 42.
+    # Cycle 1 Batch TEST fix batch 16 (silent-failure HIGH-2):
+    # pre-fix wrapped `assert code in (42, 0)` in `except Exception: pass`
+    # which made the test UNFALSIFIABLE — even AssertionError was
+    # swallowed. Test reported PASS regardless of what codegen produced.
+    #
+    # Post-fix: pytest.mark.xfail honestly captures "struct-by-value
+    # codegen pending" intent. Test now FAILS LOUDLY if codegen evolves
+    # to produce a wrong answer (99 wrong-arm, segfault, etc.) while
+    # still gracefully tolerating "feature not yet implemented" via
+    # the xfail marker (strict=False so it passes if codegen starts
+    # working).
+    import pytest
     try:
         code = compile_and_run(src)
-        # If we got here, the codegen handled it. The expected value is 42
-        # but the actual current codegen passes the struct's first slot, so
-        # it MIGHT work. Allow both 42 (works) and 0 (struct not passed).
-        assert code in (42, 0), f"expected 42 or 0, got {code}"
-    except Exception:
-        # Codegen for struct-by-value isn't expected to work yet.
-        pass
+    except Exception as exc:
+        pytest.xfail(f"struct-by-value codegen pending: {type(exc).__name__}")
+    assert code in (42, 0), f"expected 42 or 0, got {code}"
 
 
 def test_stdlib_int_min_max_clamp():

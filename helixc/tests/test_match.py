@@ -146,11 +146,13 @@ def test_or_pattern_typechecks():
 
 def test_match_int_literal_runs():
     """End-to-end: match on int literal selects the right arm at runtime."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        # codegen suite may not be importable in some environments; skip.
-        return
+    # Cycle 1 Batch TEST fix batch 16 (silent-failure HIGH-1):
+    # pre-fix used bare `except Exception: return` which made pytest
+    # report PASS on ANY import failure (including real codegen bugs).
+    # pytest.importorskip raises Skipped which pytest reports correctly.
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let x = 2;
@@ -168,10 +170,9 @@ def test_match_int_literal_runs():
 
 def test_match_range_pattern_runs():
     """End-to-end: range pattern selects correct arm."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let x = 5;
@@ -188,10 +189,9 @@ def test_match_range_pattern_runs():
 
 def test_match_or_pattern_runs():
     """End-to-end: or-pattern matches any of its alternatives."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let x = 3;
@@ -207,10 +207,9 @@ def test_match_or_pattern_runs():
 
 def test_match_bind_runs():
     """End-to-end: PatBind binds scrutinee value visible in body."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let x = 21;
@@ -226,10 +225,9 @@ def test_match_bind_runs():
 def test_match_bind_with_guard_runs():
     """End-to-end: PatBind + arm guard. y if y > 10 should fire only
     when scrutinee > 10."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let x = 21;
@@ -245,10 +243,9 @@ def test_match_bind_with_guard_runs():
 
 def test_match_guard_falsy_falls_through():
     """End-to-end: guard returning false should skip to next arm."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let x = 5;
@@ -266,10 +263,9 @@ def test_match_guard_falsy_falls_through():
 
 def test_match_inclusive_range_endpoint():
     """Inclusive range: 7 should match 0..=7 but not 0..7."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src_inclusive = """
     fn main() -> i32 {
         match 7 {
@@ -294,10 +290,9 @@ def test_match_inclusive_range_endpoint():
 
 def test_match_nested_in_let():
     """Match expression nested as the value of a let-binding."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let r = match 3 {
@@ -395,10 +390,9 @@ def test_exhaustive_enum_match_ok():
 
 def test_match_nested_match():
     """Match inside the body of another match arm."""
-    try:
-        from helixc.tests.test_codegen import compile_and_run
-    except Exception:
-        return
+    import pytest
+    pytest.importorskip("helixc.tests.test_codegen")
+    from helixc.tests.test_codegen import compile_and_run
     src = """
     fn main() -> i32 {
         let outer = 1;

@@ -461,8 +461,15 @@ def test_c116_fold_narrow_shl_source_widens_operands():
     u8_consts = [op.attrs["value"] for fn in u8_mod.functions.values()
                  for blk in fn.blocks for op in blk.ops
                  if op.kind == tir.OpKind.CONST_INT]
-    assert -2 in u8_consts, (
-        f"expected wrapped u8 255 << 1 to fold to 254, got {u8_consts}"
+    # Cycle 1 Batch TEST fix batch 16 (fresh-eyes CRITICAL 2):
+    # pre-fix error msg said "254" but assertion checked "-2". Both
+    # are the same bit-pattern (0xFE) interpreted unsigned vs signed
+    # 8-bit, but the disagreement masked drift if the folder's
+    # representation changed. Accept BOTH representations explicitly
+    # — folder may emit either today, both are semantically correct.
+    assert (-2 in u8_consts) or (254 in u8_consts), (
+        f"expected u8 (255 << 1) to fold to bit-pattern 0xFE "
+        f"(stored as -2 signed or 254 unsigned), got {u8_consts}"
     )
 
 
@@ -652,7 +659,12 @@ def test_stage17_nan_fold_traps_17001():
     try:
         fold_module(mod)
     except FoldError as e:
-        assert FoldError.trap_id == 17001
+        # Cycle 1 Batch TEST fix batch 16 (fresh-eyes CRITICAL 1):
+        # pre-fix asserted `FoldError.trap_id == 17001` which checks
+        # the CLASS attribute (always-true constant lookup). The
+        # correct check is the INSTANCE's runtime type — distinguishes
+        # FoldError from ShiftFoldError (subclass with trap_id 17002).
+        assert type(e).trap_id == 17001
         assert "17001" in str(e)
         return
     raise AssertionError("expected FoldError trap 17001")
@@ -711,7 +723,9 @@ def test_stage19_shift_out_of_range_traps_17002():
     try:
         fold_module(mod)
     except ShiftFoldError as e:
-        assert ShiftFoldError.trap_id == 17002
+        # Cycle 1 Batch TEST fix batch 16 (fresh-eyes CRITICAL 1):
+        # same class-vs-instance fix as line 655 above.
+        assert type(e).trap_id == 17002
         assert "17002" in str(e)
         # Confirm it's also a FoldError subclass (the documented contract).
         assert isinstance(e, FoldError)
