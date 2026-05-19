@@ -238,6 +238,25 @@ def test_c117_emit_ptx_uses_kernel_attrs(capsys):
     assert "no @kernel fns" not in captured.out
 
 
+def test_v22_emit_adjoint_basic(capsys):
+    """v2.2 polish item 14 — `--emit-adjoint` flag emits Stage 120's
+    AdjointModule report for a minimal kernel. The flag triggers
+    `emit_adjoint_module(lower_to_tile(kernel_only_module(mod)))` and
+    prints a structured report showing forward kernels, adjoint
+    kernels generated, skipped kernels with reasons, and per-kernel
+    completeness + op counts. Substrate-only inspection wedge; does
+    NOT yet wire adjoints back into the compile pipeline."""
+    src = write_src("@kernel fn k() { }\nfn main() -> i32 { 42 }\n")
+    rc = main([src, "--emit-adjoint"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    assert "Adjoint module report" in captured.out
+    assert "Forward kernels: ['k']" in captured.out
+    assert "Adjoint kernels generated: ['k']" in captured.out
+    assert "k__bwd" in captured.out
+    assert "COMPLETE" in captured.out
+
+
 def test_stage35_emit_ptx_stdout_starts_with_ptx_module(tmp_path):
     src_path = tmp_path / "kernel.hx"
     src_path.write_text("@kernel fn k() { let i = thread_idx(); }\n", encoding="utf-8")

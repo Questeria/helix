@@ -207,7 +207,8 @@ class CliArgs:
 _KNOWN_LONG_FLAGS = frozenset({
     "--stdlib", "--no-stdlib", "--hash", "--hash-cons", "--strict",
     "--check-only", "--emit-ast", "--emit-ir", "--emit-asm",
-    "--emit-ptx", "--emit-proof-obligations", "--doc", "--help",
+    "--emit-ptx", "--emit-adjoint", "--emit-proof-obligations",
+    "--doc", "--help",
     "--no-color", "--color", "-h",
     # Restart 48 B1: --no-opt is documented in HELIX_REFERENCE.md and
     # QUICKSTART.md as a synonym for -O0 and is accepted by both backends
@@ -421,6 +422,7 @@ def _drain_ad_warnings_to_records(
     artifact_stdout = (
         "--emit-proof-obligations" in a.flags
         or "--emit-ptx" in a.flags
+        or "--emit-adjoint" in a.flags
         or "--emit-ir" in a.flags
         or "--emit-asm" in a.flags
         or "--emit-ast" in a.flags
@@ -1645,7 +1647,12 @@ def _main_inner(argv: list[str] | None,
         return 0
 
     # 5. Lower + (optional) optimization passes
-    if any(f in a.flags for f in ("--emit-ir", "--emit-asm", "--emit-ptx")) \
+    # v2.2 polish item 14: --emit-adjoint is added to the gate so the
+    # `mod` local gets assigned for the tile_adjoint integration entry
+    # point. Without this, --emit-adjoint hits an UnboundLocalError on
+    # `mod` before reaching the adjoint emit handler at line ~1905.
+    if any(f in a.flags for f in ("--emit-ir", "--emit-asm",
+                                  "--emit-ptx", "--emit-adjoint")) \
             or "--strict" in a.flags \
             or a.output is not None:
         from .ir.lower_ast import lower
@@ -1899,6 +1906,54 @@ def _main_inner(argv: list[str] | None,
             raise
         except Exception as e:
             print(f"   ptx: backend error: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if "--emit-adjoint" in a.flags:
+        # v2.2 polish item 14: grad_pass ↔ tile_adjoint integration
+        # (minimum-viable inspection wedge). Generates the adjoint
+        # module from the lowered tile-IR + reports completeness +
+        # skipped reasons + backward op counts. Does NOT yet wire the
+        # adjoint kernels back into the compile pipeline (that lands
+        # when grad_pass produces forward-and-backward in one shot).
+        # For now, this is the integration entry point users can hit
+        # to verify Stage 120's emit_adjoint_module works on their
+        # source.
+        from .ir.tile_ir import lower_to_tile
+        from .ir.tile_adjoint import emit_adjoint_module
+        from .backend.ptx import kernel_only_module
+        try:
+            kernel_mod = kernel_only_module(mod)
+            tile_mod = lower_to_tile(kernel_mod)
+            adj_mod = emit_adjoint_module(tile_mod)
+            ad_rc = _drain_ad_warnings(a)
+            if ad_rc != 0:
+                return ad_rc
+            # Report
+            print("# Adjoint module report (Stage 120 + v2.2 item 14)")
+            print(f"# Forward kernels: {list(tile_mod.functions.keys())}")
+            print(f"# Adjoint kernels generated: "
+                  f"{list(adj_mod.kernels.keys())}")
+            print(f"# Skipped kernels: {len(adj_mod.skipped)}")
+            for name, reason in adj_mod.skipped.items():
+                print(f"#   - {name}: {reason}")
+            print()
+            for name, adj_kern in adj_mod.kernels.items():
+                marker = ("COMPLETE" if adj_kern.complete
+                          else "PARTIAL (fallthrough: "
+                          f"{[k.name for k in adj_kern.fallthrough_kinds]})")
+                print(f"# adjoint kernel `{adj_kern.bwd_fn.name}` "
+                      f"[{marker}, fwd_ops={adj_kern.op_count_fwd}, "
+                      f"bwd_ops={adj_kern.op_count_bwd}]")
+                for blk in adj_kern.bwd_fn.blocks:
+                    for op in blk.ops:
+                        print(f"#   {op.kind.name}: {op.attrs}")
+                print()
+        except (NotImplementedError, AssertionError, KeyboardInterrupt,
+                SystemExit, MemoryError):
+            raise
+        except Exception as e:
+            print(f"   adjoint: backend error: {e}", file=sys.stderr)
             return 1
         return 0
 
