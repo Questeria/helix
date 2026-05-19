@@ -6243,6 +6243,32 @@ def test_stage114_widen_scope_barrier_discharge():
     assert not bs.widen_scope(p, BORROW_SCOPE_GRID)
 
 
+def test_stage115_smem_phase_substrate():
+    """Stage 115 (v2.0 Phase B.2.c) substrate — Smem phase typestate.
+
+    Verifies the SMEM phase constants + smem_phase_flip helper.
+    Stage 116 will wire actual typestate enforcement on Smem<T,P>
+    types; Stage 115 only ships the substrate.
+    """
+    from helixc.frontend.typecheck import (
+        SMEM_PHASE_PRODUCER, SMEM_PHASE_CONSUMER, SMEM_PHASES,
+        smem_phase_flip,
+    )
+
+    assert SMEM_PHASE_PRODUCER in SMEM_PHASES
+    assert SMEM_PHASE_CONSUMER in SMEM_PHASES
+    assert len(SMEM_PHASES) == 2
+
+    # Phase flip toggles cleanly.
+    assert smem_phase_flip(SMEM_PHASE_PRODUCER) == SMEM_PHASE_CONSUMER
+    assert smem_phase_flip(SMEM_PHASE_CONSUMER) == SMEM_PHASE_PRODUCER
+
+    # Invalid phase raises.
+    import pytest as _pt
+    with _pt.raises(ValueError):
+        smem_phase_flip("invalid_phase")
+
+
 def test_stage121_enclave_mixing_diagnostic():
     """Stage 121 (v2.0 Phase C.1, TyEnclave Inc 4) — mixing-different-
     enclaves diagnostic. Pre-Stage-121 was first-wins which broke

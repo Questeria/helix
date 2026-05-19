@@ -1038,6 +1038,40 @@ BORROW_SCOPE_RANK: dict[str, int] = {
     BORROW_SCOPE_GRID: 3,
 }
 
+# Stage 115 (v2.0 Phase B.2.c) substrate: phase-typed SMEM typestate.
+# Models Descend PLDI 2024's producer/consumer phase typing for SMEM
+# tiles. A `Smem<T, Producer>` allows exclusive writes (single-thread
+# fill or per-thread disjoint stores); a `Smem<T, Consumer>` allows
+# shared reads. The barrier_flip!() primitive (deferred to Stage 116)
+# is the ONLY way to toggle phase, and lowers to bar.sync 0 at the
+# corresponding scope.
+#
+# Stages 115 ships the type substrate (constants + Smem phase enum);
+# Stage 116 will wire actual typestate enforcement on Smem<T, P> types.
+SMEM_PHASE_PRODUCER = "producer"
+SMEM_PHASE_CONSUMER = "consumer"
+SMEM_PHASES = frozenset({
+    SMEM_PHASE_PRODUCER,
+    SMEM_PHASE_CONSUMER,
+})
+
+
+def smem_phase_flip(phase: str) -> str:
+    """Stage 115 — barrier_flip! semantics at the type level.
+
+    Producer → Consumer (after fill, threads can read).
+    Consumer → Producer (after consumption, threads can refill).
+    Anything else → raise (loud-fail discipline).
+    """
+    if phase == SMEM_PHASE_PRODUCER:
+        return SMEM_PHASE_CONSUMER
+    if phase == SMEM_PHASE_CONSUMER:
+        return SMEM_PHASE_PRODUCER
+    raise ValueError(
+        f"unknown SMEM phase {phase!r}; "
+        f"expected one of {sorted(SMEM_PHASES)}"
+    )
+
 
 @dataclass
 class BorrowState:
