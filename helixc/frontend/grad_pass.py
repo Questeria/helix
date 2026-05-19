@@ -645,8 +645,28 @@ def _generate_grad_rev_all_fn(
                     f"path — struct field gradients will be zero. "
                     f"Cycle 1 Auditor 4 HIGH-4 fix.",
                 )
-            except ImportError:
-                pass
+            # v2.2 polish item 5 (FE LOW from v2.1 5-clean-gate): the
+            # prior bare `except ImportError: pass` swallowed the
+            # warning emission silently. If `_ad_warn` is ever removed
+            # / renamed during a refactor (the autodiff module has
+            # been refactored four times already per the cycle
+            # comments), every pytree-flattening failure would fall
+            # back to scalar-only with ZERO user notice — re-
+            # introducing the exact HIGH-4 silently-zero-gradient
+            # defect the surrounding code was written to close.
+            # R1 fix: surface the import failure via stderr so the
+            # visibility-of-failure invariant is robust to refactors.
+            except ImportError as imp_exc:
+                import sys as _sys
+                print(
+                    f"warning: grad_pass: cannot import _ad_warn "
+                    f"({imp_exc}); pytree flattening failed silently "
+                    f"(original: {type(exc).__name__}: {exc}) — "
+                    f"struct gradients will be zero. Cycle 1 Auditor "
+                    f"4 HIGH-4 fix's visibility path was itself "
+                    f"silenced; v2.2 polish item 5 restores it.",
+                    file=_sys.stderr,
+                )
             leaves = [(p.name, _ty_name(p.ty) or "f32")
                       for p in fn.params]
     else:
