@@ -762,6 +762,23 @@ fn tf2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
     }}
 }
 
+// Cycle 3 R6 fix batch 33 (RT R6 NEW-MED-1): _strict variants of
+// ti1d_min/max. Pre-fix both returned 0 on corruption, colliding
+// with "min/max is 0." Sibling of vec_min_pure_strict (batch 20).
+@pure
+fn ti1d_min_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_min(start, n) }}
+}
+
+@pure
+fn ti1d_max_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_max(start, n) }}
+}
+
 // Integer-tensor argmin (returns index of smallest element).
 // Companion to ti1d_argmax. n == 0 returns -1.
 @pure fn ti1d_argmin(start: i32, n: i32) -> i32 {
@@ -958,6 +975,31 @@ fn ti1d_mul_scalar(x_start: i32, scalar: i32, y_start: i32, n: i32) -> i32 {
         }
         best
     }}
+}
+
+// Cycle 3 R6 fix batch 33 (RT R6 NEW-MED-2): _strict variants of
+// tf1d_max/min/max_abs. Pre-fix all returned 0.0_f32 on corruption /
+// empty / all-NaN, colliding with legit 0.0 result. NaN sentinel
+// distinguishes corruption from valid zero.
+@pure
+fn tf1d_max_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_max(start, n) }}
+}
+
+@pure
+fn tf1d_min_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_min(start, n) }}
+}
+
+@pure
+fn tf1d_max_abs_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_max_abs(start, n) }}
 }
 
 @pure fn tf1d_argmax(start: i32, n: i32) -> i32 {

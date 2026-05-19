@@ -864,6 +864,34 @@ fn string_last_byte(start: i32, len: i32) -> i32 {
     if len == 0 { 0 } else { __arena_get(start + len - 1) }
 }
 
+// Cycle 3 R6 fix batch 33 (RT R6 NEW-MED-3): _strict variants of the
+// string byte family. Pre-fix all returned 0 (NUL byte) on empty len,
+// indistinguishable from a legit NUL byte at the location. INT32_MIN
+// sentinel disambiguates.
+@pure
+fn string_min_byte_strict(start: i32, len: i32) -> i32 {
+    if len <= 0 { (0 - 2147483647) - 1 }
+    else { string_min_byte(start, len) }
+}
+
+@pure
+fn string_max_byte_strict(start: i32, len: i32) -> i32 {
+    if len <= 0 { (0 - 2147483647) - 1 }
+    else { string_max_byte(start, len) }
+}
+
+@pure
+fn string_first_byte_strict(start: i32, len: i32) -> i32 {
+    if len <= 0 { (0 - 2147483647) - 1 }
+    else { string_first_byte(start, len) }
+}
+
+@pure
+fn string_last_byte_strict(start: i32, len: i32) -> i32 {
+    if len <= 0 { (0 - 2147483647) - 1 }
+    else { string_last_byte(start, len) }
+}
+
 // string_len_after_trim_left(start, len, byte): @pure. Length remaining
 // after trimming leading occurrences of byte. Pair with trim_left_byte
 // for offset+remaining-length pattern.
@@ -1043,4 +1071,41 @@ fn string_to_f64(start: i32, len: i32) -> f64 {
         }
         if neg == 1 { 0.0_f64 - value } else { value }
     }
+}
+
+// Cycle 3 R6 fix batch 33 (RT R6 NEW-MED-4): string_is_f64 predicate +
+// string_to_f64_strict variant. Pre-fix string_to_f64 returned 0.0 on
+// empty AND malformed input ("abc" -> 0.0, "" -> 0.0), indistinguishable
+// from a legit 0.0 parse. Sibling of string_to_int_strict / string_is_int
+// from batch 20.
+@pure
+fn string_is_f64(start: i32, len: i32) -> i32 {
+    if len <= 0 { 0 }
+    else {
+        let first = __arena_get(start);
+        let mut i: i32 = 0;
+        if first == 45 { i = 1; }
+        if i >= len { 0 }
+        else {
+            let mut ok: i32 = 1;
+            let mut dot_seen: i32 = 0;
+            while i < len {
+                let b: i32 = __arena_get(start + i);
+                if b == 46 {
+                    if dot_seen == 1 { ok = 0; }
+                    else { dot_seen = 1; }
+                }
+                else { if b < 48 { ok = 0; }
+                else { if b > 57 { ok = 0; } } }
+                i = i + 1;
+            }
+            ok
+        }
+    }
+}
+
+@pure
+fn string_to_f64_strict(start: i32, len: i32) -> f64 {
+    if string_is_f64(start, len) == 0 { 0.0_f64 / 0.0_f64 }
+    else { string_to_f64(start, len) }
 }
