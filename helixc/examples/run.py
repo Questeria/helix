@@ -128,9 +128,11 @@ def _project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, int]:
+def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, str, int]:
     """Compile a Helix source file and run the resulting ELF via WSL.
-    Returns (stdout, exit_code)."""
+    Returns (stdout, stderr, exit_code). v2.2 polish item 8 (RT M2):
+    stderr was previously discarded; now propagated so runtime panics
+    and WSL diagnostics are visible."""
     src = open(src_path).read()
     prog = parse(src, include_stdlib=True)
     grad_pass(prog)
@@ -177,11 +179,23 @@ def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, int]:
         capture_output=True,
         timeout=timeout,
     )
-    return result.stdout.decode("utf-8", "replace"), result.returncode
+    # v2.2 polish item 8 (RT M2 from v2.1 5-clean-gate): the WSL
+    # subprocess's stderr buffer was previously discarded entirely;
+    # if wsl was missing, the binary segfaulted, or runtime panicked,
+    # the user saw an empty body / "exit code 139" with zero
+    # diagnostic. Stderr contains the real failure — surface it.
+    stdout = result.stdout.decode("utf-8", "replace")
+    stderr = result.stderr.decode("utf-8", "replace")
+    return stdout, stderr, result.returncode
 
 
 def _run_one(key: str) -> bool:
-    """Run a single demo by short name. Return True on success."""
+    """Run a single demo by short name. Return True on success
+    (i.e., compile+run returned exit code 0). v2.2 polish item 8
+    (RT M3 from v2.1 5-clean-gate): the prior implementation always
+    returned True, so CI smoke tests of `python -m helixc.examples.run`
+    would pass even when every demo segfaulted/panicked/build-failed.
+    R1 fix: propagate `code == 0` to the caller."""
     if key not in DEMOS:
         print(f"unknown demo {key!r}; use --list to see available demos")
         return False
@@ -194,12 +208,17 @@ def _run_one(key: str) -> bool:
     print(f"  source: helixc/examples/{info['file']}")
     print(f"  expect: {info['expects']}")
     print(bar)
-    out, code = _build_and_run(src_path)
+    out, err, code = _build_and_run(src_path)
     if out:
         print(out, end="" if out.endswith("\n") else "\n")
+    if err:
+        # v2.2 polish item 8: print stderr to the host stderr so the
+        # user sees runtime panics + WSL diagnostics, not just stdout.
+        import sys as _sys
+        print(err, end="" if err.endswith("\n") else "\n", file=_sys.stderr)
     print(f"  -> exit code {code}")
     print()
-    return True
+    return code == 0
 
 
 def _list() -> None:
