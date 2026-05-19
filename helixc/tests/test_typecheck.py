@@ -5035,8 +5035,63 @@ def test_stage100_wrapper_tables_hoisted_to_class_level():
     # 11 Tier-S/A wrappers shipped in Stages 68-83.
     assert len(TypeChecker._WRAPPER_CTOR_TABLE) == 11
     assert len(TypeChecker._WRAPPER_STRIP_TABLE) == 11
-    # _ALL_WRAPPER_CLS_NAMES adds TyDiff + TyLogic.
-    assert len(TypeChecker._ALL_WRAPPER_CLS_NAMES) == 13
+    # _ALL_WRAPPER_CLS_NAMES adds TyDiff + TyLogic (13 total post-
+    # Stage-100) PLUS the 5 AGI-quartet wrappers (TyMemTier / TyFrame
+    # / TyTemporal / TyModal / TyCausal) added in the Cycle 1 audit
+    # fix when Auditor 2 caught the under-count in _is_copy_struct_ty
+    # + _strip_wrapper_chain. 18 total post-Cycle-1.
+    assert len(TypeChecker._ALL_WRAPPER_CLS_NAMES) == 18
+
+
+def test_cycle1_high1_is_copy_walks_through_agi_quartet_wrappers():
+    """Cycle 1 audit fix (Auditor 2 HIGH-1) — _is_copy_struct_ty now
+    walks through TyModal / TyTemporal / TyFrame / TyCausal /
+    TyMemTier (the 5 AGI-quartet wrappers from Stages 37-41). Pre-
+    fix, `Known<@copy Velocity>` was treated as NON-Copy because
+    those 5 wrapper classes were absent from _ALL_WRAPPER_CLS_NAMES
+    — defeating @copy for any AGI-tagged value."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyModal, TyTemporal, TyFrame, TyCausal,
+        TyMemTier, TyStruct,
+    )
+
+    class _StubProg:
+        items = []
+
+    tc = TypeChecker(_StubProg())
+    tc._copy_struct_names = {"Velocity"}
+    velocity = TyStruct(name="Velocity")
+    # Each of the 5 AGI-quartet wrappers should preserve Copy-ness.
+    # Field order: (kind/tier/frame/when, inner) positional.
+    wrapped_modal = TyModal("known", velocity)
+    wrapped_temporal = TyTemporal("past", velocity)
+    wrapped_frame = TyFrame("world", velocity)
+    wrapped_causal = TyCausal("cause", velocity)
+    wrapped_memtier = TyMemTier("semantic", velocity)
+    assert tc._is_copy_struct_ty(wrapped_modal) is True
+    assert tc._is_copy_struct_ty(wrapped_temporal) is True
+    assert tc._is_copy_struct_ty(wrapped_frame) is True
+    assert tc._is_copy_struct_ty(wrapped_causal) is True
+    assert tc._is_copy_struct_ty(wrapped_memtier) is True
+
+
+def test_cycle1_high1_parser_trait_swallow_now_raises():
+    """Cycle 1 audit fix (Auditor 1 HIGH-1) — `trait { ... }` body
+    containing non-fn content now raises ParseError instead of
+    silently swallowing the tokens and returning an empty-methods
+    ImplBlock."""
+    from helixc.frontend.parser import parse, ParseError
+    import pytest as _pt
+
+    # const inside trait body — should now raise.
+    src = """
+    trait Foo {
+        const X: i32 = 0;
+    }
+    fn main() -> i32 { 0 }
+    """
+    with _pt.raises(ParseError, match="expected fn signature"):
+        parse(src, include_stdlib=False)
 
 
 def test_stage103_multi_arg_property_rejected_at_typecheck():

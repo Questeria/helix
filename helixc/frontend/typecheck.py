@@ -11890,9 +11890,22 @@ class TypeChecker:
     # helper (avoids forward-reference issues since the class is
     # below this method block).
     _ALL_WRAPPER_CLS_NAMES = (
+        # 11 Tier-S/A wrappers (Stages 68-83)
         "TyConf", "TyTaint", "TyDP", "TyQuant", "TyDomain",
         "TyRobust", "TyEnergy", "TyEnclave", "TyCounterfactual",
-        "TyDeadline", "TyAttribution", "TyDiff", "TyLogic",
+        "TyDeadline", "TyAttribution",
+        # 2 pre-Stage-68 semantic wrappers
+        "TyDiff", "TyLogic",
+        # 5 AGI-quartet semantic wrappers (Stages 37-41) — Cycle 1
+        # audit fix: pre-fix these were OMITTED, causing _is_copy_
+        # struct_ty to under-count Copy-ness through them (e.g.,
+        # Known<MyCopyStruct> was treated as non-Copy, defeating
+        # @copy semantics for any AGI-tagged value) and causing
+        # _strip_wrapper_chain to fail to peel TyTemporal/TyModal/
+        # TyCausal layers when stripping a Tier-S/A target inside
+        # them (e.g., __lift_conf(Known<Conf<i32>>) returned
+        # Known<Conf<i32>> unchanged).
+        "TyMemTier", "TyFrame", "TyTemporal", "TyModal", "TyCausal",
     )
 
     def _wrapper_default_for(self, ctor_name: str):

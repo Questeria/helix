@@ -235,8 +235,21 @@ class Parser:
                 else:
                     self._match(T.SEMI)
             else:
-                # Skip unknown tokens up to the closing brace.
-                self.i += 1
+                # Cycle 1 audit fix (Auditor 1 HIGH-1): pre-fix, this
+                # branch silently swallowed ANY token inside a `trait
+                # { ... }` body. A trait that accidentally contained a
+                # `const X: i32 = 0;`, `type Alias = i32;`, an `impl`
+                # block, or a typo like `pub fnn` was consumed without
+                # diagnostic and produced an empty-methods ImplBlock —
+                # the user's content vanished silently. Now raises
+                # loudly so the trait body's actual content is
+                # surfaced. RBRACE and attribute-leaders are already
+                # handled above; any other token is malformed.
+                tok = self._peek()
+                raise ParseError(
+                    "expected fn signature inside trait body",
+                    tok,
+                )
         self._eat(T.RBRACE)
         return ast.ImplBlock(span=self._span_of(kw), target=name,
                              methods=[], trait_name=None, is_pub=is_pub)

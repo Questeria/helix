@@ -484,6 +484,21 @@ def _walk_subst_expr(e: A.Expr, subst: dict[str, A.TyNode]) -> A.Expr:
     if isinstance(e, A.UnsafeBlock):
         return A.UnsafeBlock(span=e.span,
                              body=_walk_subst_expr(e.body, subst))
+    # Cycle 1 audit fix (Auditor 5 HIGH-1): TileLit was missing from
+    # the expression-body walker. A generic fn like `fn alloc<T>() {
+    # tile<T, [128], REG>::zeros() }` mono'd against T=f32 left both
+    # the dtype (Name("T")) and the memspace expression unsubstituted
+    # in the cloned body. Downstream `lower_ast` then resolved T to
+    # TyUnknown and silently defaulted the element width — the same
+    # class of defect Audit 28.8 B12 already fixed for UnsafeBlock.
+    if isinstance(e, A.TileLit):
+        return A.TileLit(
+            span=e.span,
+            dtype=substitute_ty(e.dtype, subst),
+            shape=[_walk_subst_expr(s, subst) for s in e.shape],
+            memspace=_walk_subst_expr(e.memspace, subst),
+            init=e.init,
+        )
     return e
 
 
