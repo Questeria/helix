@@ -2984,6 +2984,20 @@ class TypeChecker:
             looked = scope.lookup(expr.name)
             if looked is not None:
                 return self._size_type_to_lin(looked)
+            # Cycle 3 R2 fix batch 27 (FE R2 NEW-MEDIUM-1): pre-fix
+            # silently coerced unbound names to fresh Presburger vars
+            # in where-clauses, so a typo'd identifier silently shifted
+            # the constraint. Now also emit a typecheck error so the
+            # user sees the typo. Still return a fresh var so the
+            # solver doesn't trivially reject and obscure the diagnostic.
+            if expr.name not in self._const_scalar_values:
+                self.errors.append(TypeError_(
+                    f"unbound size identifier {expr.name!r} in size "
+                    f"expression (where-clause or binary composition); "
+                    f"silently treating as fresh variable — "
+                    f"Cycle 3 R2 FE NEW-MEDIUM-1",
+                    getattr(expr, "span", None),
+                ))
             return P.var(expr.name)  # treat unbound as fresh var
         if isinstance(expr, A.Binary):
             l = self._size_expr_to_lin(expr.left, scope)

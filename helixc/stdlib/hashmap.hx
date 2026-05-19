@@ -817,6 +817,62 @@ fn hashmap_max_value_with_key(start: i32, cap: i32, key_target: i32) -> i32 {
     hashmap_get(start, cap, key_target, 0)
 }
 
+// Cycle 3 R2 fix batch 27 (RT R2 NEW-MED-2): _with_* family strict
+// companions. Pre-fix all three returned raw 0 for both "corrupt map"
+// AND "no match found", indistinguishable from "0 is the answer."
+// Post-fix: _strict variants return INT32_MIN sentinel on corruption,
+// -1 on no-match. Caller can disambiguate.
+@pure
+fn hashmap_max_key_with_value_strict(start: i32, cap: i32, target: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut best: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 2) == target {
+                let k = __arena_get(base + 1);
+                if found == 0 { best = k; found = 1; }
+                else { if k > best { best = k; }; };
+            };
+        };
+        i = i + 1;
+    }
+    if found == 0 { 0 - 1 } else { best }
+    }
+}
+
+@pure
+fn hashmap_min_key_with_value_strict(start: i32, cap: i32, target: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else {
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    let mut best: i32 = 0;
+    while i < cap {
+        let base = start + i * 3;
+        if __arena_get(base) == 1 {
+            if __arena_get(base + 2) == target {
+                let k = __arena_get(base + 1);
+                if found == 0 { best = k; found = 1; }
+                else { if k < best { best = k; }; };
+            };
+        };
+        i = i + 1;
+    }
+    if found == 0 { 0 - 1 } else { best }
+    }
+}
+
+@pure
+fn hashmap_max_value_with_key_strict(start: i32, cap: i32, key_target: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_has(start, cap, key_target) == 0 { 0 - 1 }
+    else { hashmap_get(start, cap, key_target, 0) }}
+}
+
 // Cycle 3 R1 fix batch 20 (RT MEDIUM-14): strict variants of the
 // min/max/argmin/argmax family. All originals return 0 for both
 // "empty map" and "corrupted map" — 0 is a valid key/value. The _strict

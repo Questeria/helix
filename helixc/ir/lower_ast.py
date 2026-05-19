@@ -4490,8 +4490,18 @@ class Lowerer:
                 f"{expr.span.line}:{expr.span.col}")
         if isinstance(expr, A.Assign):
             v = self._lower_expr(expr.value)
+            # Cycle 3 R2 fix batch 27 (IR R2 NEW-HIGH-4): pre-fix
+            # silently defaulted Assign RHS to const_int(0) on failed
+            # lowering, masking typecheck-miss bugs. Same defect class
+            # as R1 HIGH-1 (struct binding) and R2 NEW-HIGH-2 (Cast).
             if v is None:
-                v = self.builder.const_int(0)
+                raise NotImplementedError(
+                    f"lower_ast: A.Assign RHS at "
+                    f"{getattr(expr, 'span', None)!r} of type "
+                    f"{type(expr.value).__name__} lowered to no "
+                    f"value; typecheck should have rejected this "
+                    f"— Cycle 3 R2 IR NEW-HIGH-4"
+                )
             # Stage 16 — HBM tile param indexed store: `name[i] = expr` where
             # `name` is a kernel tile<dtype, [N], HBM> param. Lowers to
             # TILE_INDEX_STORE which PTX backend turns into `st.global.<dtype>`.
