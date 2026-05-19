@@ -242,9 +242,12 @@ def test_adjoint_record_is_immutable():
     with pytest.raises((AttributeError, TypeError)):
         entry.ops = ((TileOpKind.SCALAR_NEG, "corrupted"),)
     # MappingProxy: cannot rebind canonical entries.
+    # Stage 120 R1 audit-fix: AdjointRecord __post_init__ requires
+    # ops to be non-empty when dispatch defaults to "explicit"; use
+    # a valid identity-dispatch record for the immutability probe.
     with pytest.raises(TypeError):
         TILE_OP_ADJOINTS[TileOpKind.TILE_ADD] = AdjointRecord(
-            inputs=(), outputs=(), ops=()
+            inputs=(), outputs=(), ops=(), dispatch="identity",
         )
 
 

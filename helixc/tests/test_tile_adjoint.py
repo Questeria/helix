@@ -1,6 +1,6 @@
-"""Tests for helixc.ir.tile_adjoint — Stage 120 (v2.1 Phase B.3.d).
+"""Tests for helixc.ir.tile_adjoint — Stage 120 (v2.1 Phase B.3.d) + R1 audit-fix.
 
-End-to-end forward→backward kernel generation using the
+End-to-end forward→backward kernel-shell generation using the
 Stage 117-119 TILE_OP_ADJOINTS table.
 """
 
@@ -10,11 +10,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import pytest
 
+from helixc.ir import tile_ir as ti
 from helixc.ir.tile_ir import (
-    TileOp, TileBlock, TileFn, TileModule, TileOpKind,
+    TileOp, TileBlock, TileFn, TileModule, TileOpKind, AdjointRecord,
 )
 from helixc.ir.tile_adjoint import (
     AdjointKernel,
+    AdjointModule,
     emit_adjoint_kernel,
     emit_adjoint_module,
 )
@@ -29,9 +31,10 @@ def _make_kernel(name: str, ops: list[TileOp]) -> TileFn:
 
 
 def test_stage120_emit_adjoint_basic_add():
-    """Stage 120 — TILE_ADD adjoint is identity (dz flows through to
-    both dx and dy). emit_adjoint_kernel produces a backward kernel
-    with one TILE_ADD placeholder op marked dispatch='identity'."""
+    """Stage 120 R1 — TILE_ADD adjoint is identity (gradient flows
+    through). dispatch='identity' is encoded as ops=() in the
+    canonical table, so the dispatcher emits ZERO backward ops for
+    a kernel whose only differentiable forward op is a TILE_ADD."""
     fwd = _make_kernel("add_k", [
         TileOp(kind=TileOpKind.TILE_ADD),
         TileOp(kind=TileOpKind.RETURN),
@@ -40,17 +43,18 @@ def test_stage120_emit_adjoint_basic_add():
     assert isinstance(result, AdjointKernel)
     assert result.bwd_fn.name == "add_k__bwd"
     assert result.op_count_fwd == 2
-    # 1 TILE_ADD placeholder (identity dispatch); RETURN is non-diff,
-    # skipped.
-    assert result.op_count_bwd == 1
-    assert result.bwd_fn.blocks[0].ops[0].kind is TileOpKind.TILE_ADD
-    assert result.bwd_fn.blocks[0].ops[0].attrs["dispatch"] == "identity"
+    # TILE_ADD identity dispatch emits zero ops; RETURN is non-diff,
+    # also zero ops. Total backward: 0.
+    assert result.op_count_bwd == 0
+    assert result.bwd_fn.blocks[0].ops == []
     assert result.fallthrough_kinds == []
+    assert result.complete is True
 
 
-def test_stage120_emit_adjoint_matmul_3wmma_pattern():
-    """Stage 120 — TILE_MATMUL adjoint emits the 3-wmma reverse pattern
-    documented in Stage 117 (2 TILE_TRANSPOSE + 2 TILE_MATMUL)."""
+def test_stage120_emit_adjoint_matmul_reverse_pattern():
+    """Stage 120 — TILE_MATMUL adjoint emits the reverse pattern from
+    the canonical table: 2 TILE_TRANSPOSE + 2 TILE_MATMUL for the
+    D = A @ B + C / dA = dD @ B^T / dB = A^T @ dD lowering."""
     fwd = _make_kernel("matmul_k", [
         TileOp(kind=TileOpKind.TILE_MATMUL),
     ])
@@ -68,10 +72,11 @@ def test_stage120_emit_adjoint_matmul_3wmma_pattern():
 
 
 def test_stage120_emit_adjoint_reverse_order():
-    """Stage 120 — forward ops are differentiated in REVERSE order.
+    """Stage 120 R1 — forward ops are differentiated in REVERSE order.
 
     Forward: TILE_TRANSPOSE → TILE_ADD → TILE_MUL
-    Backward (reversed): TILE_MUL adjoint → TILE_ADD adjoint → TILE_TRANSPOSE adjoint
+    Backward (reversed): TILE_MUL adjoint (2 ops) → TILE_ADD adjoint
+    (0 ops, identity) → TILE_TRANSPOSE adjoint (1 op).
     """
     fwd = _make_kernel("k", [
         TileOp(kind=TileOpKind.TILE_TRANSPOSE),
@@ -80,16 +85,34 @@ def test_stage120_emit_adjoint_reverse_order():
     ])
     result = emit_adjoint_kernel(fwd)
     op_kinds = [op.kind for op in result.bwd_fn.blocks[0].ops]
-    # TILE_MUL adjoint: 2 TILE_MULs.
-    # TILE_ADD adjoint: 1 TILE_ADD identity placeholder.
+    # TILE_MUL adjoint: 2 TILE_MULs (dx = dz*y, dy = dz*x).
+    # TILE_ADD adjoint: identity → 0 ops.
     # TILE_TRANSPOSE adjoint: 1 TILE_TRANSPOSE.
-    # Total: 4 ops; order respects reverse forward-walk.
     assert op_kinds == [
         TileOpKind.TILE_MUL,
         TileOpKind.TILE_MUL,
-        TileOpKind.TILE_ADD,
         TileOpKind.TILE_TRANSPOSE,
     ]
+
+
+def test_stage120_emit_adjoint_reduce_kind_propagates_attr():
+    """Stage 120 R1 audit-fix C3 — TILE_REDUCE adjoint dispatch must
+    copy the forward op's `reduce_kind` attr into the backward shell
+    so downstream lowering can pick broadcast (sum) vs scatter (max).
+    Previously this attr was dropped, making the backward op
+    indistinguishable across reduce kinds."""
+    for kind in ("sum", "max", "min"):
+        fwd = _make_kernel("reduce_k", [
+            TileOp(kind=TileOpKind.TILE_REDUCE, attrs={"reduce_kind": kind}),
+        ])
+        result = emit_adjoint_kernel(fwd)
+        assert result.op_count_bwd == 1
+        bwd_op = result.bwd_fn.blocks[0].ops[0]
+        assert bwd_op.kind is TileOpKind.TILE_REDUCE
+        assert bwd_op.attrs["dispatch"] == "reduce_kind"
+        assert bwd_op.attrs["adjoint_of"] == "TILE_REDUCE"
+        # The audit-fix: forward's reduce_kind survives to the backward.
+        assert bwd_op.attrs["reduce_kind"] == kind
 
 
 def test_stage120_emit_adjoint_skips_non_differentiable():
@@ -99,19 +122,19 @@ def test_stage120_emit_adjoint_skips_non_differentiable():
     fwd = _make_kernel("k", [
         TileOp(kind=TileOpKind.THREAD_IDX),
         TileOp(kind=TileOpKind.TILE_LOAD_GLOBAL),
-        TileOp(kind=TileOpKind.TILE_ADD),
+        TileOp(kind=TileOpKind.TILE_TRANSPOSE),  # one diff op for signal
         TileOp(kind=TileOpKind.TILE_STORE_GLOBAL),
         TileOp(kind=TileOpKind.RETURN),
     ])
     result = emit_adjoint_kernel(fwd)
-    # Only TILE_ADD has an adjoint; the rest are TILE_OP_NON_DIFFERENTIABLE.
+    # Only TILE_TRANSPOSE has an adjoint (1 op); the rest are non-diff.
     assert result.op_count_bwd == 1
-    assert result.bwd_fn.blocks[0].ops[0].kind is TileOpKind.TILE_ADD
+    assert result.bwd_fn.blocks[0].ops[0].kind is TileOpKind.TILE_TRANSPOSE
+    assert result.complete is True
 
 
 def test_stage120_emit_adjoint_rejects_non_kernel():
-    """Stage 120 — host-only fns (no @kernel attr) are rejected.
-    Reverse-mode AD only makes sense for kernels."""
+    """Stage 120 — host-only fns (no @kernel attr) are rejected."""
     fwd = TileFn(
         name="host_fn", params=[], return_ty=None,
         blocks=[TileBlock(id=0, ops=[TileOp(kind=TileOpKind.TILE_ADD)])],
@@ -122,8 +145,8 @@ def test_stage120_emit_adjoint_rejects_non_kernel():
 
 
 def test_stage120_emit_adjoint_rejects_multi_block_control_flow():
-    """Stage 120 — kernels with >1 block (CFG with branches) need
-    tape-style intermediate storage; substrate rejects."""
+    """Stage 120 — kernels with >1 block need tape-style intermediate
+    storage; substrate rejects."""
     fwd = TileFn(
         name="k", params=[], return_ty=None,
         blocks=[
@@ -150,63 +173,129 @@ def test_stage120_emit_adjoint_rejects_empty_kernel():
 def test_stage120_adjoint_inherits_kernel_attrs():
     """Stage 120 — backward kernel inherits forward's attrs + adds
     is_adjoint_of=<fwd_name> for round-trip provenance."""
-    fwd = _make_kernel("loss_k", [TileOp(kind=TileOpKind.TILE_ADD)])
+    fwd = _make_kernel("loss_k", [TileOp(kind=TileOpKind.TILE_TRANSPOSE)])
     result = emit_adjoint_kernel(fwd)
     assert result.bwd_fn.attrs["kernel"] is True
     assert result.bwd_fn.attrs["is_adjoint_of"] == "loss_k"
 
 
-def test_stage120_emit_adjoint_module_skips_non_kernel():
-    """Stage 120 — emit_adjoint_module produces a dict mapping
-    forward-fn-name → AdjointKernel for every @kernel fn (skipping
-    host-only fns + extern + already-adjoint fns)."""
+def test_stage120_emit_adjoint_module_returns_adjointmodule():
+    """Stage 120 R1 audit-fix — emit_adjoint_module returns
+    AdjointModule with kernels + skipped dicts. Non-kernel, extern,
+    and already-adjoint fns appear in skipped with explicit reasons."""
     mod = TileModule()
-    mod.functions["k"] = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_ADD)])
-    # Host-only fn — should be skipped.
+    mod.functions["k"] = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_TRANSPOSE)])
     mod.functions["host"] = TileFn(
         name="host", params=[], return_ty=None,
         blocks=[TileBlock(id=0, ops=[TileOp(kind=TileOpKind.TILE_ADD)])],
         attrs={},
     )
-    # Already an adjoint — should be skipped (don't double-differentiate).
+    mod.functions["ext"] = TileFn(
+        name="ext", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[])],
+        attrs={"kernel": True, "is_extern": True},
+    )
     mod.functions["k__bwd"] = TileFn(
         name="k__bwd", params=[], return_ty=None,
         blocks=[TileBlock(id=0, ops=[TileOp(kind=TileOpKind.TILE_ADD)])],
         attrs={"kernel": True, "is_adjoint_of": "k"},
     )
-    out = emit_adjoint_module(mod)
-    assert "k" in out
-    assert "host" not in out
-    assert "k__bwd" not in out
+    result = emit_adjoint_module(mod)
+    assert isinstance(result, AdjointModule)
+    assert "k" in result.kernels
+    assert "host" in result.skipped
+    assert result.skipped["host"] == "non-kernel"
+    assert result.skipped["ext"] == "extern"
+    assert result.skipped["k__bwd"] == "already-adjoint"
+    assert result.total_seen == 4
 
 
-def test_stage120_emit_adjoint_module_skips_uncovered():
-    """Stage 120 — emit_adjoint_module silently skips kernels that
-    raise (e.g., multi-block control flow or empty body) rather than
-    propagating the exception. Caller can detect by checking which
-    forward fns produced no entry."""
+def test_stage120_emit_adjoint_module_skipped_records_exception_reasons():
+    """Stage 120 R1 audit-fix — kernels that raise during diff
+    (NotImplementedError for control flow, ValueError for empty)
+    land in skipped with the exception class + message, not
+    silently dropped."""
     mod = TileModule()
-    mod.functions["good"] = _make_kernel("good", [TileOp(kind=TileOpKind.TILE_ADD)])
+    mod.functions["good"] = _make_kernel("good", [TileOp(kind=TileOpKind.TILE_TRANSPOSE)])
     mod.functions["bad_empty"] = TileFn(
         name="bad_empty", params=[], return_ty=None,
         blocks=[TileBlock(id=0, ops=[])],
         attrs={"kernel": True},
     )
-    out = emit_adjoint_module(mod)
-    assert "good" in out
-    assert "bad_empty" not in out
+    mod.functions["bad_cfg"] = TileFn(
+        name="bad_cfg", params=[], return_ty=None,
+        blocks=[
+            TileBlock(id=0, ops=[TileOp(kind=TileOpKind.TILE_ADD)]),
+            TileBlock(id=1, ops=[TileOp(kind=TileOpKind.RETURN)]),
+        ],
+        attrs={"kernel": True},
+    )
+    result = emit_adjoint_module(mod)
+    assert "good" in result.kernels
+    assert result.skipped["bad_empty"].startswith("ValueError")
+    assert "no ops" in result.skipped["bad_empty"]
+    assert result.skipped["bad_cfg"].startswith("NotImplementedError")
+    assert "control flow" in result.skipped["bad_cfg"]
 
 
-def test_stage120_fallthrough_tracking():
-    """Stage 120 — kinds not in TILE_OP_ADJOINTS AND not in
-    TILE_OP_NON_DIFFERENTIABLE land in result.fallthrough_kinds.
+def test_stage120_fallthrough_marks_kernel_incomplete():
+    """Stage 120 R1 audit-fix — when a forward op-kind is missing
+    from BOTH TILE_OP_ADJOINTS and TILE_OP_NON_DIFFERENTIABLE, it
+    lands in fallthrough_kinds and the kernel reports `complete=False`.
 
-    With the v2.1 audit-fix table this list should be empty for all
-    documented kinds. We test by injecting a synthetic non-enum-member
-    (None) — actually we can't easily without breaking the dataclass,
-    so this is a structural test: verify the field exists and starts
-    empty for a covered kernel.
+    Exercises the fallthrough branch by temporarily removing TILE_ADD
+    from both the adjoint table and the non-diff set.
     """
-    fwd = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_ADD)])
+    # Snapshot.
+    saved_adj = ti.TILE_OP_ADJOINTS.get(TileOpKind.TILE_ADD)
+    saved_inner = dict(ti._TILE_OP_ADJOINTS_INNER)
+    try:
+        # Remove TILE_ADD entirely so it's neither diff nor non-diff.
+        # (TILE_ADD is not in TILE_OP_NON_DIFFERENTIABLE — verified at
+        # module load via the partitioning test in test_tile_ir.)
+        del ti._TILE_OP_ADJOINTS_INNER[TileOpKind.TILE_ADD]
+        fwd = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_ADD)])
+        result = emit_adjoint_kernel(fwd)
+        assert TileOpKind.TILE_ADD in result.fallthrough_kinds
+        assert result.complete is False
+        # No backward op was synthesized for the uncovered kind.
+        assert result.op_count_bwd == 0
+    finally:
+        ti._TILE_OP_ADJOINTS_INNER.clear()
+        ti._TILE_OP_ADJOINTS_INNER.update(saved_inner)
+        # Sanity: TILE_ADD restored.
+        assert ti.TILE_OP_ADJOINTS.get(TileOpKind.TILE_ADD) is saved_adj
+
+
+def test_stage120_complete_property_on_clean_kernel():
+    """Stage 120 R1 audit-fix — happy path: fully-covered kernel has
+    complete=True and fallthrough_kinds=[]."""
+    fwd = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_TRANSPOSE)])
     result = emit_adjoint_kernel(fwd)
     assert result.fallthrough_kinds == []
+    assert result.complete is True
+
+
+def test_stage120_adjointrecord_rejects_explicit_with_empty_ops():
+    """Stage 120 R1 audit-fix SF2 — AdjointRecord.__post_init__
+    rejects dispatch='explicit' with ops=() at construction time.
+    Previously such a record would silently emit zero backward ops
+    and look like a successful adjoint."""
+    with pytest.raises(ValueError, match="dispatch='explicit' requires"):
+        AdjointRecord(
+            inputs=("x",), outputs=("dx",),
+            ops=(), dispatch="explicit",
+        )
+
+
+def test_stage120_adjointrecord_rejects_identity_with_nonempty_ops():
+    """Stage 120 R1 audit-fix SF2 — AdjointRecord.__post_init__
+    rejects dispatch='identity' with non-empty ops; the recorded ops
+    would never be emitted and the inconsistency would mislead
+    readers about the actual gradient computation."""
+    with pytest.raises(ValueError, match="dispatch='identity' must have"):
+        AdjointRecord(
+            inputs=("x",), outputs=("dx",),
+            ops=((TileOpKind.TILE_ADD, "stray"),),
+            dispatch="identity",
+        )

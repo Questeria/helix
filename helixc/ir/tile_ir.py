@@ -282,6 +282,23 @@ class AdjointRecord:
     ops: tuple[tuple[TileOpKind, str], ...]
     dispatch: str = "explicit"
 
+    def __post_init__(self) -> None:
+        # Stage 120 R1 audit-fix: catch malformed records at construction.
+        # dispatch="explicit" with empty ops would silently emit no
+        # backward steps and look indistinguishable from a successful
+        # adjoint — guard the invariant here, not in the consumer.
+        if self.dispatch == "explicit" and not self.ops:
+            raise ValueError(
+                "AdjointRecord: dispatch='explicit' requires at least one "
+                "entry in ops. Use dispatch='identity' for pass-through "
+                "gradients or a named dispatch-attr for runtime-keyed cases."
+            )
+        if self.dispatch == "identity" and self.ops:
+            raise ValueError(
+                "AdjointRecord: dispatch='identity' must have ops=(); the "
+                f"recorded ops {self.ops!r} would never be emitted."
+            )
+
 
 # Stage 117-119 ships the substrate (table + lookup); Stage 120 wires
 # this into grad_pass for end-to-end MLP forward→backward generation.

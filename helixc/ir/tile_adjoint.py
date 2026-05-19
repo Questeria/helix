@@ -1,32 +1,32 @@
 """
-helixc/ir/tile_adjoint.py — Stage 120 (v2.1 Phase B.3.d).
+helixc/ir/tile_adjoint.py — Stage 120 (v2.1 Phase B.3.d) + R1 audit-fix.
 
-End-to-end forward→backward kernel generation. Consumes the
+End-to-end forward→backward kernel-shell generation. Consumes the
 Stage 117-119 `TILE_OP_ADJOINTS` table to produce a reverse-mode
-kernel from a forward kernel.
+kernel-shell from a forward kernel.
 
 This is the wedge that fills in v2.0's deferred Stage 120 work:
 "end-to-end MLP forward → backward generated test."
 
-Algorithm (reverse-mode AD on tile-IR):
-1. Walk forward block ops in REVERSE order
-2. For each forward op `z = f(x, y)`, look up its `AdjointRecord`
-3. Emit the recorded adjoint sequence with proper operand bindings:
-     dx = (recorded ops applied to dz and the forward operands)
-4. Accumulate gradients into per-Place adjoint slots
-
-v2.1 scope: ships the wiring + a simple "linear chain" path that
-generates correct adjoint kernels for kernels whose forward body
-is a straight-line tile-IR program (no control flow, no aliasing).
-Branching forward kernels are explicitly NotImplementedError.
+Substrate scope (R1 audit-fix honest disclosure):
+- Walks forward block ops in REVERSE order.
+- For each forward op `z = f(x, y)`, looks up its `AdjointRecord` and
+  emits the recorded adjoint OP-KIND SHELLS with provenance attrs
+  (`adjoint_of`, `comment`, `dispatch`, runtime-attr passthroughs).
+- The emitted ops carry NO `operands` and NO `results` — this stage
+  ships the dispatcher and op-kind sequencing only. Full SSA value
+  wiring (binding gradient values to forward operands and accumulating
+  into adjoint slots) is deferred to a later stage that will also
+  introduce tape storage for control-flow kernels.
+- Branching/looping forward kernels (multi-block) are explicitly
+  NotImplementedError.
 
 License: Apache 2.0
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 from . import tile_ir as ti
 
@@ -36,19 +36,58 @@ class AdjointKernel:
     """Result of running emit_adjoint_kernel on a forward TileFn.
 
     fwd_fn: the original forward kernel (unchanged)
-    bwd_fn: the synthesized backward kernel
+    bwd_fn: the synthesized backward kernel-shell
     op_count_fwd: number of forward ops walked
-    op_count_bwd: number of backward ops emitted
-    fallthrough_kinds: TileOpKinds the adjoint emit didn't cover
-                      (e.g., stub TILE_REDUCE). Caller can decide
-                      to error or to wrap them with a "treat as
-                      identity" approximation.
+    op_count_bwd: number of backward op-shells emitted
+    fallthrough_kinds: TileOpKinds neither in TILE_OP_ADJOINTS nor in
+                      TILE_OP_NON_DIFFERENTIABLE — these are genuine
+                      gaps in the canonical table. A non-empty list
+                      means the backward kernel is INCOMPLETE; callers
+                      should consult `complete` and decide whether to
+                      reject or proceed with a partial gradient.
     """
     fwd_fn: ti.TileFn
     bwd_fn: ti.TileFn
     op_count_fwd: int
     op_count_bwd: int
     fallthrough_kinds: list[ti.TileOpKind]
+
+    @property
+    def complete(self) -> bool:
+        """Stage 120 R1 audit-fix: structural completeness flag.
+
+        True iff every forward op had a known adjoint declaration
+        (either differentiable via TILE_OP_ADJOINTS or explicitly
+        non-differentiable). False if any forward op-kind landed in
+        `fallthrough_kinds` — the backward kernel is missing gradient
+        contributions for those ops and must not be treated as a
+        faithful adjoint.
+        """
+        return not self.fallthrough_kinds
+
+
+@dataclass
+class AdjointModule:
+    """Result of running emit_adjoint_module on a TileModule — R1 audit-fix.
+
+    Splits "successfully differentiated" from "skipped, with reason"
+    so callers can distinguish:
+      - non-kernel host fn (intentional)
+      - extern fn (intentional)
+      - already-an-adjoint fn (intentional, prevents double-diff)
+      - empty kernel (caller bug, surfaced explicitly)
+      - multi-block control flow (substrate limitation)
+
+    Without this split the four+ skip reasons would be indistinguishable
+    from "differentiated successfully but absent from output" — a real
+    silent-failure trap.
+    """
+    kernels: dict[str, AdjointKernel]
+    skipped: dict[str, str]  # fn_name -> reason
+
+    @property
+    def total_seen(self) -> int:
+        return len(self.kernels) + len(self.skipped)
 
 
 def _bwd_name(fn_name: str) -> str:
@@ -62,19 +101,16 @@ def _bwd_name(fn_name: str) -> str:
 
 
 def _has_control_flow(fn: ti.TileFn) -> bool:
-    """Stage 120 — detect non-straight-line tile-IR. We reject these
-    in the v2.1 substrate because correct reverse-mode AD on
-    branching/loop tile-IR requires tape-style intermediate storage
-    that this stage doesn't yet allocate.
+    """Stage 120 — multi-block kernels indicate CFG branches.
+
+    Correct reverse-mode AD on branching tile-IR requires tape-style
+    intermediate storage that this stage doesn't yet allocate.
     """
-    # More than one block = CFG with branches.
-    if len(fn.blocks) > 1:
-        return True
-    return False
+    return len(fn.blocks) > 1
 
 
 def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
-    """Stage 120 (v2.1 Phase B.3.d) — produce a backward kernel
+    """Stage 120 (v2.1 Phase B.3.d) — produce a backward kernel-shell
     from a forward kernel by walking ops in reverse and emitting
     each op's declared adjoint sequence.
 
@@ -83,6 +119,9 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
     - Forward kernel must be @kernel-attributed.
     - Forward kernel must have at least one op (otherwise nothing
       to differentiate — caller error).
+
+    The emitted backward ops carry no operands/results — this is
+    a kernel-shell synthesis stage, not a full SSA-wiring pass.
 
     Raises NotImplementedError on control flow (multi-block fn).
     Raises ValueError on non-kernel inputs / empty kernels.
@@ -123,29 +162,35 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
             fallthrough.append(op.kind)
             continue
 
-        # Adjoint sequence — emit one TileOp per recorded (kind, comment).
-        # For dispatch="identity" the recorded ops list is empty; the
-        # gradient flows through unchanged. We emit a single TILE_ADD
-        # placeholder so the kernel has a syntactic step per forward op.
+        # R1 audit-fix C2: dispatch="identity" means the gradient
+        # flows through unchanged with no intermediate ops. The
+        # canonical table encodes this as ops=(); the dispatcher
+        # honors that and emits zero backward ops. A previous
+        # version invented a fake TILE_ADD placeholder which was
+        # an un-wired no-op pretending to be a backward step.
         if adj.dispatch == "identity":
-            bwd_ops.append(ti.TileOp(
-                kind=ti.TileOpKind.TILE_ADD,
-                attrs={"adjoint_of": op.kind.name, "dispatch": "identity"},
-            ))
             continue
 
-        # For dispatch="reduce_kind" the gradient depends on a runtime
-        # attribute. Substrate placeholder: emit a comment-tagged
-        # TILE_REDUCE with attrs documenting the dispatch.
+        # R1 audit-fix C3: dispatch="reduce_kind" must propagate the
+        # forward op's runtime-keyed attr (e.g. "sum" vs "max") into
+        # the backward shell so the downstream lowering can pick
+        # broadcast vs scatter. Previously the attr was dropped on
+        # the floor, leaving the backward indistinguishable across
+        # reduce kinds.
         if adj.dispatch == "reduce_kind":
             bwd_ops.append(ti.TileOp(
                 kind=ti.TileOpKind.TILE_REDUCE,
-                attrs={"adjoint_of": op.kind.name,
-                       "dispatch": "reduce_kind"},
+                attrs={
+                    "adjoint_of": op.kind.name,
+                    "dispatch": "reduce_kind",
+                    "reduce_kind": op.attrs.get("reduce_kind"),
+                },
             ))
             continue
 
-        # dispatch="explicit": emit each recorded op in order.
+        # dispatch="explicit": emit each recorded op-shell in order.
+        # AdjointRecord.__post_init__ guarantees ops is non-empty
+        # when dispatch=="explicit" (validated at table construction).
         for (adj_kind, comment) in adj.ops:
             bwd_ops.append(ti.TileOp(
                 kind=adj_kind,
@@ -171,28 +216,28 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
     )
 
 
-def emit_adjoint_module(mod: ti.TileModule) -> dict[str, AdjointKernel]:
+def emit_adjoint_module(mod: ti.TileModule) -> AdjointModule:
     """Stage 120 — produce adjoint kernels for every @kernel fn in the
-    module. Skips non-kernel + extern fns.
-
-    Returns a dict mapping forward-fn-name → AdjointKernel. Empty
-    dict if no kernels found (caller decides whether that's an
-    error or just a no-op).
+    module. R1 audit-fix: returns AdjointModule with `kernels` +
+    `skipped` so non-kernel / extern / already-adjoint / control-flow /
+    empty-body skips are visible to callers (no silent absence).
     """
-    out: dict[str, AdjointKernel] = {}
+    kernels: dict[str, AdjointKernel] = {}
+    skipped: dict[str, str] = {}
     for name, fn in mod.functions.items():
         if not fn.attrs.get("kernel"):
+            skipped[name] = "non-kernel"
             continue
         if fn.attrs.get("is_extern"):
+            skipped[name] = "extern"
             continue
         if fn.attrs.get("is_adjoint_of"):
-            # Don't re-differentiate a backward kernel.
+            skipped[name] = "already-adjoint"
             continue
         try:
-            out[name] = emit_adjoint_kernel(fn)
-        except (NotImplementedError, ValueError):
-            # Forward had control flow or was empty — skip with no
-            # entry. Caller can re-iterate the module to find
-            # missing names if that's a hard error.
-            continue
-    return out
+            kernels[name] = emit_adjoint_kernel(fn)
+        except NotImplementedError as e:
+            skipped[name] = f"NotImplementedError: {e}"
+        except ValueError as e:
+            skipped[name] = f"ValueError: {e}"
+    return AdjointModule(kernels=kernels, skipped=skipped)
