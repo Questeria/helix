@@ -61,19 +61,28 @@ fn checkpoint_load_raw(path_s: i32, path_l: i32) -> i32 {
 // from save failure. Subsequent resume reads zero bytes and thinks
 // state was wiped, when actually save failed.
 //
-// Post-fix: _strict variants distinguish via the data_n==0 invariant.
-// If caller knows data_n > 0 and the write returns 0, that's a failure.
-// If data_n == 0 (empty save) it returns 0 trivially (success-via-noop).
-// For load: if file is missing OR open fails, returns INT32_MIN sentinel.
-// If file is empty (0 bytes), returns 0 (success-but-empty).
+// Post-fix:
+//   - checkpoint_save_raw_strict: FULL fix. Returns -1 if data_n > 0
+//     and the write returns 0 bytes (open or write failure). Returns 0
+//     trivially for data_n == 0 (success-via-noop). Caller pattern:
+//       let bytes_written = checkpoint_save_raw_strict(...);
+//       if bytes_written < 0 { /* save failed */ }
 //
-// Caller pattern:
-//   let bytes_written = checkpoint_save_raw_strict(path, plen, data, n);
-//   if bytes_written < 0 { /* save failed */ }
+//   - checkpoint_load_raw_strict: PARTIAL fix only. The underlying
+//     `read_file_to_arena_dyn` builtin returns the byte count and has
+//     NO out-of-band signal for "open failure" vs "empty file". This
+//     function currently inherits that limitation — it returns the
+//     result unchanged. Stage 110+ deferral: extend the builtin ABI
+//     so open-fail returns -1 (distinguishable from 0-byte file).
+//     UNTIL THEN: callers cannot distinguish "file is empty" from
+//     "open failed" via this API. Use a separate file-stat check
+//     (not yet in stdlib) for full disambiguation.
 //
-//   let bytes_read = checkpoint_load_raw_strict(path, plen);
-//   if bytes_read == INT32_MIN { /* open failed */ }
-//   else { /* bytes_read may be 0 for empty checkpoint */ }
+// Cycle 2 batch 19 doc-drift fix: removed misleading INT32_MIN
+// promise from the load-side docstring. Previous wording would have
+// led callers to write `if bytes_read == INT32_MIN { handle_error }`
+// based on the contract, with a handler that NEVER fires — silent
+// failure restored via doc drift. Audit caught it.
 @pure
 fn checkpoint_save_raw_strict(path_s: i32, path_l: i32,
                                data_s: i32, data_n: i32) -> i32 {
