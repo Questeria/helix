@@ -830,7 +830,33 @@ class Lowerer:
             dtype = self._lower_type(ty.dtype)
             assert isinstance(dtype, tir.TIRScalar)
             shape = tuple(self._lower_dim(s) for s in ty.shape)
-            mem = self._stringify_marker(ty.memspace) or "?"
+            # Cycle 1 Batch IR re-audit type-design HIGH-2 fix:
+            # pre-fix, `_stringify_marker(ty.memspace) or "?"` silently
+            # routed any unrecognized A.Expr subclass (BinOp, Index,
+            # Path) into TIRTileTy.memspace as the sentinel "?".
+            # Downstream PTX backend then string-compared
+            # `p.ty.memspace.lower() == "hbm"` — a "?" memspace
+            # silently bypassed the HBM-specific parameter codegen
+            # path, producing WRONG PTX (not just suboptimal). This
+            # was the exact silent-fallthrough class batch 8 was
+            # supposed to eliminate; auditor caught my downgrade.
+            # Post-fix: validate against the known MemSpace values
+            # at construction time; raise on unknown marker rather
+            # than silently routing to a sentinel.
+            mem_raw = self._stringify_marker(ty.memspace)
+            from . import tile_ir as _ti
+            _known_memspaces = {m.value for m in _ti.MemSpace}  # {"hbm","smem","reg","tmem","cpu"}
+            # Case-normalize so user-facing "HBM" / "Smem" / etc.
+            # all resolve to the canonical lowercase MemSpace value.
+            mem = mem_raw.lower() if isinstance(mem_raw, str) else None
+            if mem is None or mem not in _known_memspaces:
+                raise ValueError(
+                    f"unsupported tile memspace marker "
+                    f"{ty.memspace!r} (resolved to {mem_raw!r}); "
+                    f"must be one of {sorted(_known_memspaces)} "
+                    f"(Cycle 1 Batch IR re-audit type-design HIGH-2 "
+                    f"fix)"
+                )
             return tir.TIRTileTy(dtype=dtype, shape=shape, memspace=mem)
         if isinstance(ty, A.TyArray):
             return tir.TIRTuple(elems=(self._lower_type(ty.elem),))  # simplified

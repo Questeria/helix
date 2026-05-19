@@ -365,7 +365,7 @@ counter can advance to 1/5.
 | Batch | Round 1 | Round 2 | Round 3 | Round 4 | Verdict |
 |-------|---------|---------|---------|---------|---------|
 | FE    | 11H+9M  | 3H+3M+1OBJECT | 1MUST_FIX+1debt | ✅ CLEAN | ✅ **CLEAN** after 7 fix batches |
-| IR    | IN PROGRESS — type-design 3H+5M (1H FP, 2H→MED, 5M); silent-failure 3H+3M (all REAL); fresh-eyes pending | - | - | - | NOT_CLEAN — fix batch 8 needed |
+| IR    | Round 1: 3+3+3 findings | Round 2: silent-failure ✅ CLEAN, fresh-eyes ✅ CLEAN, type-design OBJECT on HIGH-2 downgrade (was right — silent miscompile via `or "?"` fallback + case-insensitive string compare); batch 9 ships raise on unknown memspace | - | - | IN PROGRESS — 2 of 3 round-2 CLEAN; type-design demands batch-9 fix |
 | BE    | TBD     | -       | -       | -       | TBD     |
 | RT    | TBD     | -       | -       | -       | TBD     |
 | TEST  | TBD     | -       | -       | -       | TBD     |
