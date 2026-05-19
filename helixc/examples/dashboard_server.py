@@ -104,7 +104,24 @@ def compile_helix(kind, seed=None, maze=False, grid_size=None):
 
 
 def run_helix(kind):
-    """Run the compiled binary via WSL, capture stdout."""
+    """Run the compiled binary via WSL.
+
+    v2.2 5-clean-gate RT MED-1 audit-fix: this is the parallel codepath
+    to `examples/run.py::_build_and_run` which was fixed in item 8 to
+    surface WSL stderr + propagate exit code. Pre-fix this function
+    silently discarded `proc.stderr` and `proc.returncode` — a
+    segfaulting binary (exit 139), WSL initialization error, or
+    runtime panic returned an empty/partial NDJSON body with HTTP 200,
+    rendering "no events" in the browser with no signal that the
+    agent crashed.
+
+    R1 fix: return `(stdout, stderr, returncode)`. The HTTP handler
+    at `Handler.do_GET` consumes the tuple and surfaces non-zero
+    returncodes via HTTP 500 with stderr in the body.
+
+    Raises:
+        subprocess.TimeoutExpired: WSL binary exceeded the 60s budget.
+    """
     _, bin_name = AGENTS[kind]
     wsl_path = f"/mnt/c/Projects/Kovostov-Native/{bin_name}"
     cmd = [
@@ -112,7 +129,11 @@ def run_helix(kind):
         f"chmod +x {wsl_path} && {wsl_path}",
     ]
     proc = subprocess.run(cmd, capture_output=True, timeout=60)
-    return proc.stdout.decode("utf-8", errors="replace")
+    return (
+        proc.stdout.decode("utf-8", errors="replace"),
+        proc.stderr.decode("utf-8", errors="replace"),
+        proc.returncode,
+    )
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -196,12 +217,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             sys.stderr.write("Running helix agent via WSL...\n")
             try:
-                out = run_helix(kind)
+                out, err_stream, rc = run_helix(kind)
             except subprocess.TimeoutExpired:
                 self.send_response(504)
                 self.end_headers()
                 self.wfile.write(b"helix run timed out")
                 return
+            # v2.2 5-clean-gate RT MED-1 audit-fix: surface WSL failure
+            # via HTTP 500 + stderr body instead of silently shipping
+            # empty/partial NDJSON with HTTP 200. Mirrors examples/
+            # run.py item 8 fix.
+            if rc != 0:
+                self.send_response(500)
+                self.send_header("Content-Type",
+                                 "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    f"helix exit {rc}\nstderr:\n{err_stream}".encode("utf-8")
+                )
+                return
+            if err_stream:
+                # Non-zero stderr on success path: log server-side, do
+                # not block the response. (NDJSON-mode dashboards may
+                # render this as a debug pane in the future.)
+                sys.stderr.write(f"[helix-stderr] {err_stream}\n")
             body = out.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
