@@ -80,8 +80,14 @@ PTX_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     ti.TileOpKind.SCALAR_MUL:           {"lowering": "mul.{lo.s32,f32}",                          "status": "supported"},
     ti.TileOpKind.SCALAR_NEG:           {"lowering": "neg.{s32,f32}",                             "status": "supported"},
     ti.TileOpKind.SCALAR_CMP:           {"lowering": "setp.{eq,ne,lt,le,gt,ge}.{s32,f32}",       "status": "supported"},
-    ti.TileOpKind.SCALAR_SELECT:        {"lowering": "selp.{b32,f32}",                            "status": "supported"},
-    ti.TileOpKind.CALL:                 {"lowering": "call.uni / call",                           "status": "supported"},
+    # v2.2 polish item 1 R1 audit-fix CRIT-1: SCALAR_SELECT and CALL
+    # were phantom-supported — they had no emit branch in PtxEmitter
+    # but the hand-maintained PTX_BASELINE_STATUS dict claimed
+    # "supported". Demoted to "stub" to match reality. The parity
+    # guard at the bottom of emit_op now raises AssertionError if
+    # a kind tagged "supported" reaches the dispatcher unbranched.
+    ti.TileOpKind.SCALAR_SELECT:        {"lowering": "selp.{b32,f32}",                            "status": "stub"},
+    ti.TileOpKind.CALL:                 {"lowering": "call.uni / call",                           "status": "stub"},
     ti.TileOpKind.RETURN:               {"lowering": "ret (.uni for kernels)",                    "status": "supported"},
     ti.TileOpKind.THREAD_IDX:           {"lowering": "%tid.x / %tid.y / %tid.z",                  "status": "supported"},
     ti.TileOpKind.TILE_INDEX_LOAD_HBM:  {"lowering": "ld.global.<dtype> via base+index",          "status": "supported"},
@@ -1013,6 +1019,22 @@ class PtxEmitter:
                 f"{{{c_regs}}};")
             self.reg_map[d_val.id] = d_base
             return
+        # v2.2 polish item 1 R1 audit-fix CRIT-1: parity exhaustiveness
+        # guard. If we fell through and the table claims this kind is
+        # "supported", that's drift between the canonical table and
+        # the dispatcher — caller will see a misleading RuntimeError
+        # ("unsupported") for something the table swore was supported.
+        # Raise AssertionError instead so the drift surfaces as a
+        # framework-internal bug, not a user-facing capability claim.
+        # Matches rocm/metal/webgpu's phantom-supported defense.
+        declared = PTX_OP_LOWERING.get(op.kind, {}).get("status")
+        if declared == "supported":
+            raise AssertionError(
+                f"PTX_OP_LOWERING declares {op.kind.name} status="
+                f"'supported' but PtxEmitter.emit_op has no matching "
+                f"branch — table/dispatcher drift. Either add an emit "
+                f"branch or demote the table entry to status='stub'."
+            )
         raise RuntimeError(
             f"unsupported PTX op {op.kind.value}; "
             "add lowering before emitting PTX"

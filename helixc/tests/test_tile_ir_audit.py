@@ -122,6 +122,11 @@ def test_stage130_supported_ops_match_known_set():
     """Stage 130 — the PTX baseline's 'supported' set covers exactly
     the scalar + control-flow ops Helix has been shipping via Phase-0
     PTX (Stage 16+). Catches accidental status downgrades.
+
+    v2.2 polish item 1 R1 audit-fix CRIT-1: SCALAR_SELECT and CALL
+    were over-claimed as 'supported' but had no emit branch in
+    PtxEmitter — demoted to 'stub' and removed from this expected
+    set. Add them back ONLY after a real selp/call emit branch lands.
     """
     supported_ptx = {k for k, v in PTX_BASELINE_STATUS.items() if v == "supported"}
     expected_supported = {
@@ -132,8 +137,7 @@ def test_stage130_supported_ops_match_known_set():
         TileOpKind.SCALAR_MUL,
         TileOpKind.SCALAR_NEG,
         TileOpKind.SCALAR_CMP,
-        TileOpKind.SCALAR_SELECT,
-        TileOpKind.CALL,
+        # SCALAR_SELECT and CALL intentionally omitted — no emit branch.
         TileOpKind.RETURN,
         TileOpKind.THREAD_IDX,
         TileOpKind.TILE_INDEX_LOAD_HBM,
@@ -220,3 +224,28 @@ def test_v22_ptx_module_load_coverage_check():
     # The check is module-level; if it failed, import would have failed.
     # Confirm the function exists and runs cleanly on the current table.
     ptx._check_ptx_lowering_coverage()  # must not raise on current state
+
+
+def test_v22_ptx_emit_op_parity_guard_phantom_supported():
+    """v2.2 polish item 1 R1 audit-fix CRIT-1 — if PTX_OP_LOWERING claims
+    a kind is 'supported' but PtxEmitter.emit_op has no matching branch,
+    the bottom-of-dispatcher guard raises AssertionError (table/dispatcher
+    drift), not a misleading RuntimeError that lies about capability.
+
+    Exercises by monkey-patching SCALAR_SELECT (currently demoted to
+    'stub') back to 'supported' and feeding it to emit_op.
+    """
+    from helixc.backend import ptx
+    from helixc.ir.tile_ir import TileOp
+
+    saved = ptx.PTX_OP_LOWERING[TileOpKind.SCALAR_SELECT]
+    ptx.PTX_OP_LOWERING[TileOpKind.SCALAR_SELECT] = {  # type: ignore[index]
+        "lowering": saved["lowering"], "status": "supported",
+    }
+    try:
+        emitter = ptx.PtxEmitter()
+        op = TileOp(kind=TileOpKind.SCALAR_SELECT)
+        with pytest.raises(AssertionError, match="table/dispatcher drift"):
+            emitter.emit_op(op)
+    finally:
+        ptx.PTX_OP_LOWERING[TileOpKind.SCALAR_SELECT] = saved  # type: ignore[index]
