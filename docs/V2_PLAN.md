@@ -343,3 +343,111 @@ Updated v2.1 backlog state:
 
 Per-fire commit: this V2_PLAN.md note documenting the R3 audit
 verdicts and the premature-close retraction.
+
+### 2026-05-19T19:15Z — Stage 124 R1 corroborative audit (parallel-fire convergence)
+
+**Provenance note:** while this fire's 3-clean audit was in flight,
+a concurrent scheduled-task fire shipped the Stage 124 R1 audit-fix
+at commit **`d56347d`** (Stage 124 R1 audit-fix), the Stage 120 R4
+CLOSE at **`cf25d6b`**, and the Stages 126+128 R5 audit-fix at
+**`788ecd1`** (same phantom-supported pattern + Metal MSL
+correctness). This fire's diff against HEAD (`788ecd1`) shows
+**zero changes** to rocm.py / test_rocm.py — independent audit
+work converged byte-for-byte on the same fix. The two audit
+dispatches independently identified all 3 HIGH findings, providing
+strong corroboration.
+
+This fire's audit verdicts on `helixc/backend/rocm.py` +
+`helixc/tests/test_rocm.py` (silent-failure-hunter +
+type-design-analyzer + code-reviewer in parallel):
+
+- **silent-failure-hunter: FAIL.** Two HIGH findings:
+  H2 — `status="skipped"` ops (TMA_LOAD, TMA_STORE) fell through
+  to a benign comment instead of `.error` because the early-exit
+  branch only matched `"stub"` and `"deferred"`. TMA-on-AMD would
+  silently produce a no-op AMDGPU kernel — exact failure class
+  Stage 120 R3 closed at the IR layer, recurring at the backend.
+  H3 — 5 ops (TILE_ADD, TILE_SUB, TILE_MUL, TILE_INDEX_LOAD_HBM,
+  TILE_INDEX_STORE_HBM) were marked `status="supported"` in
+  `ROCM_OP_LOWERING` but had NO codegen branch in `_emit_op`,
+  so they silently fell through to `; tile-IR op KIND (stub)`.
+  Phantom-supported — the table claimed a contract codegen
+  did not honor. Same Stage-120 R2/R3 pattern at a new layer.
+
+- **type-design-analyzer: PASS-with-observations.** 2 MEDIUM
+  (dict→frozen-dataclass + Literal status; `_emit_op` →
+  structured `EmitResult`). Deferred to v2.2 polish per
+  Stage 120 R1 pattern (focus R1 on HIGH; observations next cycle).
+
+- **code-reviewer: FAIL.** One HIGH (95% confidence):
+  H1 — `ds_load_b{32,64,128}` and `ds_store_b{...}` are NOT valid
+  AMDGPU mnemonics. The actual gfx940/gfx942 LDS instructions are
+  `ds_read_b{32,64,128}` and `ds_write_b{...}` (verified against
+  AMDGPU ISA reference + LLVM AMDGPU backend). The emitter
+  produced text llvm-mc / hipcc would reject. Tests passed pre-R1
+  only because the asserts matched the (wrong) emitted token —
+  shallow coverage hid the miscompile.
+
+R1 audit-fix already shipped at `d56347d` (parallel fire). The 5
+fixes that landed there match what this fire's audit would have
+required:
+
+1. **H1 fix**: rename `ds_load_*`/`ds_store_*` → `ds_read_*`/
+   `ds_write_*` in (a) `ROCM_OP_LOWERING` table doc strings,
+   (b) `_emit_op` emit strings, (c) `test_stage124_lds_load_store_emits`
+   asserts + regression-pin assertions that the wrong tokens do
+   NOT appear.
+
+2. **H2 fix**: add `status == "skipped"` branch to `_emit_op` that
+   emits `.error "HELIX-SKIPPED: ... has no AMD analog ... routing
+   to ROCm backend is a bug."` Loud, not silent. New test
+   `test_stage124_r1_skipped_status_emits_helix_skipped_error`
+   pins it for TMA_LOAD + TMA_STORE.
+
+3. **H3 fix**: demote the 5 phantom-supported ops to
+   `status="stub"` in `ROCM_OP_LOWERING`. They now hit the existing
+   `.error "HELIX-STUB: ..."` branch. New test
+   `test_stage124_r1_demoted_ops_emit_helix_stub_error` pins the
+   demoted set.
+
+4. **M1 fix (exhaustiveness guard)**: at end of `_emit_op`, if
+   `status=="supported"` reaches the bottom (no `if kind is …`
+   branch matched) it now raises `AssertionError` with a self-
+   describing message. Second-line defense against future drift.
+   New test `test_stage124_r1_exhaustiveness_guard_fires_on_phantom_supported`
+   monkeypatches a phantom-supported entry and asserts the guard
+   fires.
+
+5. **Test coverage gap (M2 from code-reviewer)**: new test
+   `test_stage124_r1_supported_ops_emit_real_instruction` iterates
+   every `status="supported"` op in `ROCM_OP_LOWERING` and asserts
+   the emit produces a non-`.error` body line (RETURN + THREAD_IDX
+   are documented annotation-only exceptions). Also rename
+   `test_stage124_unmapped_op_falls_through_to_comment` →
+   `test_stage124_stub_status_emits_helix_stub_error` because the
+   old name lied about what the test exercised.
+
+Test count: 20 tests pass on test_rocm.py (was 16 pre-R1; +4 new
+R1 tests + 1 rename + 1 regression-pin). 18 tests pass on
+test_gpu_ci.py (the only other rocm consumer; unchanged).
+tile_adjoint (25) + ir (63) verified unchanged.
+
+Type-design observations + `_emit_op` → `EmitResult` deferred to
+v2.2 polish. Stage 124 still needs R2 audit (next fire) to verify
+R1 fixes hold + no new silent-failure surfaces.
+
+Updated v2.1 backlog state (per parallel fires, corrected):
+- Stage 120: R4 CLEAN + CLOSED at `cf25d6b` (collapsed DispatchKind
+  dual source of truth via get_args). Stage 120 done.
+- Stage 124: R1 audit-fix at `d56347d`. Needs R2 audit (next fire).
+- Stage 126 + Stage 128: R5 audit-fix at `788ecd1` (Metal+WebGPU
+  phantom-supported + Metal MSL correctness). Need R6 audit (next
+  fire) — same R2-verification pattern as Stage 124.
+- Stage 129: CLOSED (unchanged)
+- Stage 122: implicit close (unchanged)
+- End-of-v2.1 5-clean-gate: pending Stage 124 R2 + Stage 126/128 R6
+
+Per-fire commit: this V2_PLAN.md note documents the corroborative
+audit verdicts for Stage 124 R1 and corrects the v2.1 backlog state
+to reflect the three parallel-fire commits (`cf25d6b`, `d56347d`,
+`788ecd1`) that landed during this fire's audit-dispatch window.
