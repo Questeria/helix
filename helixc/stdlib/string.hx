@@ -65,6 +65,47 @@ fn string_get_checked(start: i32, len: i32, i: i32) -> i32 {
     }
 }
 
+// ============================================================
+// Cycle 1 Batch RT fix batch 13 (type-design HIGH-1):
+// Sibling-container magic+footer+ok invariant for String.
+// Same defect class + fix as vec.hx — original string_new() /
+// string_push() / string_get() unchanged for backward compat;
+// safety-critical callers migrate to *_checked variants.
+// ============================================================
+
+@pure fn string_magic() -> i32 { 7007003 }
+@pure fn string_footer(cap: i32) -> i32 { 0 - string_magic() - cap }
+
+fn string_new_checked(cap: i32) -> i32 {
+    if cap <= 0 { 0 - 1 }
+    else { if cap > 2147483647 - 3 { 0 - 1 }
+    else {
+        __arena_push(string_magic());
+        __arena_push(cap);
+        let start = __arena_len();
+        let mut i: i32 = 0;
+        while i < cap {
+            __arena_push(0);
+            i = i + 1;
+        }
+        __arena_push(string_footer(cap));
+        start
+    } }
+}
+
+@pure
+fn string_ok(start: i32, cap: i32, len: i32) -> i32 {
+    if cap <= 0 { 0 }
+    else { if len < 0 { 0 }
+    else { if len > cap { 0 }
+    else { if start < 2 { 0 }
+    else { if __arena_get(start - 2) != string_magic() { 0 }
+    else { if __arena_get(start - 1) != cap { 0 }
+    else { if start + cap >= __arena_len() { 0 }
+    else { if __arena_get(start + cap) != string_footer(cap) { 0 }
+    else { 1 } } } } } } } }
+}
+
 @pure
 fn string_eq(a: i32, an: i32, b: i32, bn: i32) -> i32 {
     if an != bn { 0 }

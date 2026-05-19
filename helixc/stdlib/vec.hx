@@ -42,6 +42,81 @@ fn vec_get(start: i32, i: i32) -> i32 {
     __arena_get(start + i)
 }
 
+// ============================================================
+// Cycle 1 Batch RT fix batch 13 (type-design HIGH-1):
+// Sibling-container magic+footer+ok invariant for Vec<i32>.
+// Pre-fix, vec.hx had ZERO header/footer/ok discipline while
+// sibling containers (hashmap.hx, tensor.hx, autodiff_reverse.hx)
+// all have full magic+footer+ok-check gates on every reader/
+// mutator. A caller violating the "build one vec at a time"
+// docstring invariant could silently corrupt other containers
+// built after the vec — with no runtime detection.
+//
+// Post-fix: ADDITIVE pattern matching hashmap_magic/footer/ok.
+// New `vec_new_checked(cap)` constructor pushes header+footer
+// around a known-capacity vec; new `vec_ok(start, cap, count)`
+// validates the bracketing. Original `vec_new()` / `vec_push()`
+// / `vec_get()` unchanged for backward compat — safety-critical
+// callers migrate to the checked APIs.
+// ============================================================
+
+@pure fn vec_magic() -> i32 { 7007002 }
+@pure fn vec_footer(cap: i32) -> i32 { 0 - vec_magic() - cap }
+
+// vec_new_checked(cap): allocates a vec with magic+cap header
+// and a footer at `start + cap`. Returns start of element slots.
+// cap is the MAX capacity; count starts at 0 and grows via push.
+fn vec_new_checked(cap: i32) -> i32 {
+    if cap <= 0 { 0 - 1 }
+    else { if cap > 2147483647 - 3 { 0 - 1 }
+    else {
+        __arena_push(vec_magic());
+        __arena_push(cap);
+        let start = __arena_len();
+        let mut i: i32 = 0;
+        while i < cap {
+            __arena_push(0);
+            i = i + 1;
+        }
+        __arena_push(vec_footer(cap));
+        start
+    } }
+}
+
+// vec_ok(start, cap, count): validates the header magic + cap +
+// footer match. Returns 0=bad, 1=ok. Cheap — O(1).
+@pure
+fn vec_ok(start: i32, cap: i32, count: i32) -> i32 {
+    if cap <= 0 { 0 }
+    else { if count < 0 { 0 }
+    else { if count > cap { 0 }
+    else { if start < 2 { 0 }
+    else { if __arena_get(start - 2) != vec_magic() { 0 }
+    else { if __arena_get(start - 1) != cap { 0 }
+    else { if start + cap >= __arena_len() { 0 }
+    else { if __arena_get(start + cap) != vec_footer(cap) { 0 }
+    else { 1 } } } } } } } }
+}
+
+// vec_set_checked(start, cap, count, i, x): bounds-checked set.
+// Returns 0=ok, -1=corrupt (vec_ok failed), -2=index OOB.
+fn vec_set_checked(start: i32, cap: i32, count: i32, i: i32, x: i32) -> i32 {
+    if vec_ok(start, cap, count) == 0 { 0 - 1 }
+    else { if i < 0 { 0 - 2 }
+    else { if i >= count { 0 - 2 }
+    else { __arena_set(start + i, x); 0 } } }
+}
+
+// vec_get_checked(start, cap, count, i, sentinel): bounds-checked
+// get with caller-supplied sentinel for corruption + OOB.
+@pure
+fn vec_get_checked(start: i32, cap: i32, count: i32, i: i32, sentinel: i32) -> i32 {
+    if vec_ok(start, cap, count) == 0 { sentinel }
+    else { if i < 0 { sentinel }
+    else { if i >= count { sentinel }
+    else { __arena_get(start + i) } } }
+}
+
 fn vec_set(start: i32, i: i32, x: i32) -> i32 {
     __arena_set(start + i, x);
     x
