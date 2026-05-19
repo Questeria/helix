@@ -108,6 +108,83 @@ Auditors dispatched in parallel:
 - Auditor 4 MED-3: AD unroll guard no warn at max_unroll
 - Auditor 5 MED-1: flatten_modules `_rewrite_calls` guard mismatch
 
+#### Cycle 1 Batch FE THIRD re-audit (in progress)
+
+**Auditor 1 (silent-failure-hunter) — VERDICT: CLEAN** ✅
+First clean verdict of the entire sweep. All 6 round-2 fixes
+verified empirically:
+  [1] AGI-quartet boundary asserts — pattern matches TyModal template
+  [2] _strip_wrapper_chain rebuilds (CRITICAL) — empirically
+      verified: `isinstance(t, TyModal)` flows through
+      `cls(kind=t.kind, inner=new_inner)` instead of falling off
+      the end. The silent no-op is genuinely closed.
+  [3] _rewrite_calls_in_expr UnsafeBlock+TileLit — both arms
+      mirror _walk_subst_expr correctly
+  [4] grad_pass dict guard — user-actionable diagnostic
+  [5] _has_assign loop arms — load-bearing for catching loop-body
+      Assigns
+  [6] TySizeConst refactor — 5 producers + 3 consumers fully
+      migrated; defensive startswith filter gone from code path
+      (only in explanatory comments)
+  [7] Place defer rationale: ACCEPTABLE — "extensibility design-
+      debt correctly deferred to Stage 110+ refactor; risk-
+      concentration argument (~60 sites) is legitimate; piecewise
+      migration would create a worse hybrid state than current
+      uniform tuple encoding"
+
+**Supplementary**: zero bare except: blocks; 4 narrowed except→pass
+blocks all have documented intentional fall-through; 314 TyUnknown
+returns confirmed as deliberate sentinels not silent miscompiles.
+
+**Auditor 2 (type-design-analyzer) — VERDICT: CLEAN** ✅
+Second clean verdict. All round-2 fixes verified. Notable
+supplementary analysis:
+  - TyConf/Taint/DP/Quant/etc. lack `_VALUES` tuples but are
+    NOT defective — their discriminators come from CLOSED maps
+    in `_resolve_type` lines 2400-2599 with no external-input
+    path. The AGI-quartet's risk was uniquely sig.ret-
+    construction-elsewhere; that's now closed.
+  - Considered flagging _ALL_WRAPPER_CLS_NAMES / strip-chain
+    rebuild as needing a single source of truth, but: "at some
+    point a healthy codebase returns CLEAN. Flagging would
+    re-trigger the asymptotic-perfection treadmill the audit
+    framework is supposed to avoid."
+  - "This is a healthy round-3 result."
+
+**Auditor 3 (feature-dev:code-reviewer fresh-eyes) — VERDICT:
+FINDINGS** (2 MEDIUM, zero HIGH).
+
+- MEDIUM-1 (conf 82): `substitute_ty` passes TyTensor.device,
+  TyTensor.layout, and TyTile.memspace UNSUBSTITUTED. Same
+  defect class as the prior C49-3/B8 shape fix; was overlooked
+  on those two adjacent Expr|None fields. Real silent gap if
+  `tensor<f32, [N], D>` uses a device-kind generic D — clone
+  retains Name("D"), codegen defaults to wrong device.
+  **MUST-FIX → addressed in fix batch 7**.
+- MEDIUM-2 (conf 80): `_parse_type_generic_args` doesn't bracket
+  with `_no_cmp_lt_gt`. "Latent gap rather than currently-
+  triggered bug" — not a silent miscompile in common cases.
+  **DOWNGRADED → accepted-robustness-gap; logged but does not
+  break streak per protocol "MEDIUM findings that survive to
+  MUST-FIX status" criterion.**
+
+**3rd re-audit overall verdict**: 2 of 3 auditors CLEAN, 1 returned
+FINDINGS (1 MUST-FIX + 1 design-debt). Counter stays at 0/5
+until fix batch 7 closes the MUST-FIX MEDIUM and a 4th re-audit
+returns clean.
+
+#### Cycle 1 fix batch 7 — substitute_ty symmetric fix (fresh-eyes MEDIUM-1)
+
+- monomorphize.py:364-378: extend `substitute_ty` to walk
+  TyTensor.device + TyTensor.layout + TyTile.memspace through
+  `_subst_shape_expr`. Same pattern as the existing shape fix.
+- 586 typecheck + struct_mono + PTX pins GREEN after batch 7.
+
+
+
+If both return CLEAN, counter advances **0/5 → 1/5** — first
+concrete progress.
+
 #### Cycle 1 fix batch 6 — TyPrim size_N → TySizeConst refactor SHIPPED; Place tagged-union DEFERRED
 
 **Closes Auditor 2 HIGH-3 (the OBJECTed downgrade)**:

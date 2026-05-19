@@ -363,14 +363,32 @@ def substitute_ty(t: A.TyNode, subst: dict[str, A.TyNode]) -> A.TyNode:
                       ret=substitute_ty(t.ret, subst))
     if isinstance(t, A.TyTensor):
         # Audit 28.8 B8: substitute size-kind generics in shape exprs.
+        # Cycle 1 Batch FE 3rd re-audit fresh-eyes MEDIUM-1 fix:
+        # extend to TyTensor.device and TyTensor.layout fields. Both
+        # are `Expr | None` and can carry Name nodes referencing
+        # device-kind / layout-kind generic parameters. Pre-fix, a
+        # generic `fn alloc<D>() -> tensor<f32, [N], D> { ... }`
+        # mono'd against D=Gpu(0) left the device expression as
+        # Name("D") in the clone — codegen then defaulted to the
+        # wrong device. Same defect class as the shape fix above and
+        # as the TileLit-arm fix from batch 1.
         new_shape = [_subst_shape_expr(s, subst) for s in t.shape]
+        new_device = (_subst_shape_expr(t.device, subst)
+                      if t.device is not None else None)
+        new_layout = (_subst_shape_expr(t.layout, subst)
+                      if t.layout is not None else None)
         return A.TyTensor(span=t.span, dtype=substitute_ty(t.dtype, subst),
-                          shape=new_shape, device=t.device, layout=t.layout)
+                          shape=new_shape, device=new_device,
+                          layout=new_layout)
     if isinstance(t, A.TyTile):
         # Audit 28.8 B8: same for TyTile.
+        # Cycle 1 Batch FE 3rd re-audit fresh-eyes MEDIUM-1 fix:
+        # extend to TyTile.memspace field for the same reason.
         new_shape = [_subst_shape_expr(s, subst) for s in t.shape]
+        new_memspace = (_subst_shape_expr(t.memspace, subst)
+                        if t.memspace is not None else None)
         return A.TyTile(span=t.span, dtype=substitute_ty(t.dtype, subst),
-                        shape=new_shape, memspace=t.memspace)
+                        shape=new_shape, memspace=new_memspace)
     if isinstance(t, A.TyGeneric):
         return A.TyGeneric(span=t.span, base=t.base,
                            args=[substitute_ty(a, subst) for a in t.args])
