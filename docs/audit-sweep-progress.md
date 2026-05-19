@@ -108,6 +108,66 @@ Auditors dispatched in parallel:
 - Auditor 4 MED-3: AD unroll guard no warn at max_unroll
 - Auditor 5 MED-1: flatten_modules `_rewrite_calls` guard mismatch
 
+#### Cycle 1 fix batch 5 — Re-audit-driven HIGH fixes + 3 MEDIUMs
+
+Re-audit returned NOT_CLEAN with 4 NEW findings across 3 auditors:
+
+**Auditor 1 (silent-failure-hunter) re-audit verdict**: NOT_CLEAN.
+Verified my 7 batch-1/2/3 fixes BUT flagged 2 NEW HIGHs caused by
+INCOMPLETE batch 4 fixes:
+
+- HIGH-1 — `_strip_wrapper_chain` rebuild table OUT-OF-SYNC with
+  `_ALL_WRAPPER_CLS_NAMES`. My batch 4 added 5 wrappers to the
+  tuple but FORGOT the per-class rebuild branches at lines
+  ~12006-12029. CRITICAL: result was that the bug my batch 4
+  commit message claimed to close (`__lift_conf(Known<Conf<i32>>)`
+  returning unchanged) was STILL THE POST-FIX BEHAVIOR for all 11
+  opt-out builtins. My test only exercised `_is_copy_struct_ty`
+  (generic getattr — worked); did NOT exercise `_strip_wrapper_chain`
+  (explicit per-class rebuilds — broken). **FIXED in batch 5** —
+  added 5 rebuild arms + new fix-verification test
+  `cycle1_re_audit_high1_strip_wrapper_chain_walks_agi_quartet`
+  that actually exercises the strip path.
+- HIGH-2 — `_rewrite_calls_in_expr` in monomorphize.py missing
+  UnsafeBlock + TileLit arms. Same defect class as my Auditor 5
+  HIGH-1 fix (which added them to `_walk_subst_expr`) but the
+  SIBLING walker was missed. Generic call inside `unsafe {}` or
+  inside TileLit shape silently kept unmangled callee → link error
+  or silent type-default to i32. **FIXED in batch 5** — added both
+  arms before the `return e` catchall.
+
+**Auditor 2 (type-design-analyzer) re-audit verdict**: NOT_CLEAN.
+Verified my 2 fixes; OBJECTed the TyPrim size_N downgrade; flagged
+1 NEW HIGH for AGI-quartet sibling wrappers (FIXED in batch 4
+template) + 1 NEW HIGH for Place tagged-union (deferred to batch 6).
+
+**Auditor 3 (feature-dev:code-reviewer fresh-eyes) re-audit
+verdict**: FINDINGS (3 NEW MEDIUMs):
+
+- MEDIUM-1 — `_rewrite_calls_in_expr` symmetric TileLit gap
+  (mono — overlap with Auditor 1 HIGH-2; same fix closes both).
+- MEDIUM-2 — `_generate_grad_rev_all_fn` `all_grads[p_name]`
+  unguarded dict access. Multi-level dotted paths → KeyError →
+  Python traceback. **FIXED in batch 5** — structured
+  NotImplementedError with diagnostic.
+- MEDIUM-3 — `_has_assign` missing arms for A.For / A.While /
+  A.Loop body nodes. Could cause wrong gradient if mutable acc
+  reassigned inside loop. **FIXED in batch 5** — explicit arm
+  added.
+
+**Batch 5 verdict**: 2 NEW HIGH (Auditor 1) + 3 MEDIUM (Auditor 3)
+all fixed. **651 typecheck + AD + struct_mono + pytree pins GREEN**.
+
+#### Cycle 1 fix batch 4 — AGI-quartet sibling boundary asserts (incomplete)
+
+Added 4 `_*_VALUES` tuples + 4 Literal aliases + 4 boundary asserts
+at _register_fn for TyMemTier / TyFrame / TyTemporal / TyCausal.
+Closes the divergence-risk pattern that ModalKind unify closed for
+TyModal. **442 typecheck pins GREEN.** Re-audit revealed this
+batch was INCOMPLETE — the per-class rebuilds in
+`_strip_wrapper_chain` were missed, exposing the critical Auditor 1
+HIGH-1. Batch 5 closes that follow-on.
+
 #### Cycle 1 fix batch 3 — ModalKind unify SHIPPED + TyPrim size_N downgraded
 
 - **HIGH-2 (Auditor 2) — ModalKind divergent source of truth**:

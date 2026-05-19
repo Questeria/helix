@@ -12027,6 +12027,29 @@ class TypeChecker:
                     return cls(source=t.source, inner=new_inner)
                 if cls_str in ("TyDiff", "TyLogic"):
                     return cls(inner=new_inner)
+                # Cycle 1 Batch FE re-audit Auditor 1 HIGH-1 fix:
+                # rebuild arms for the 5 AGI-quartet wrappers added
+                # to _ALL_WRAPPER_CLS_NAMES. CRITICAL — without these,
+                # the strip walker matches isinstance(t, TyModal) etc.,
+                # recurses to get new_inner, then falls through every
+                # rebuild branch and returns the ORIGINAL `t` unchanged
+                # at line 12030 — silently discarding new_inner. The
+                # bug my Cycle 1 batch 4 commit message claimed to
+                # close (`__lift_conf(Known<Conf<i32>>)` returning
+                # unchanged) WAS STILL THE POST-FIX BEHAVIOR until
+                # this commit. All 11 opt-out builtins silently
+                # no-op'd when the value had an outer TyModal/Temporal/
+                # Frame/Causal/MemTier layer.
+                if cls_str == "TyMemTier":
+                    return cls(tier=t.tier, inner=new_inner)
+                if cls_str == "TyFrame":
+                    return cls(frame=t.frame, inner=new_inner)
+                if cls_str == "TyTemporal":
+                    return cls(kind=t.kind, inner=new_inner)
+                if cls_str == "TyModal":
+                    return cls(kind=t.kind, inner=new_inner)
+                if cls_str == "TyCausal":
+                    return cls(kind=t.kind, inner=new_inner)
         return t
 
     # Stage 92 (Inc 5d, fix HIGH-#2 from Stage 91 audit batch 1) —

@@ -677,6 +677,23 @@ def _generate_grad_rev_all_fn(
     for i, (p_name, ty_name) in enumerate(leaves):
         g_var = f"__g_{i}"
         ok_var = f"__ok_{i}"
+        # Cycle 1 Batch FE re-audit Auditor 3 (fresh-eyes) MEDIUM-2
+        # fix: guard the dict access. differentiate_reverse may return
+        # a dict missing keys for paths it doesn't support (e.g.,
+        # multi-level dotted paths like "model.inner.w1" if the
+        # reverse engine only handles one level). Without this guard,
+        # the missing key raises a raw Python KeyError that crashes
+        # the entire compilation pass with no user-facing diagnostic.
+        # Post-fix: structured NotImplementedError surfaces the
+        # unsupported leaf path so the user knows what to fix.
+        if p_name not in all_grads:
+            raise NotImplementedError(
+                f"grad_rev_all: differentiate_reverse did not return "
+                f"gradient for leaf {p_name!r} in {fn.name!r}; check "
+                f"that the leaf path is a simple dotted-field access "
+                f"the reverse engine supports (Cycle 1 fresh-eyes "
+                f"MEDIUM-2 fix)"
+            )
         grad_expr = all_grads[p_name]
         if ty_name in ("f32", "f64"):
             grad_expr = _with_float_literal_suffix(grad_expr, ty_name)

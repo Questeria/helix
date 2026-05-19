@@ -785,6 +785,37 @@ class Monomorphizer:
             if new_t is e.target and new_tr is e.transformation and new_v is e.verifier:
                 return e
             return A.Modify(span=e.span, target=new_t, transformation=new_tr, verifier=new_v)
+        # Cycle 1 Batch FE re-audit Auditor 1 HIGH-2 fix: symmetric
+        # UnsafeBlock arm in the call-site rewriter. _walk_subst_expr
+        # got the UnsafeBlock arm in Stage 28.8 B12, but the matching
+        # call-site rewriter was missed. Without this arm, a generic
+        # call inside `unsafe { helper::<i32>(x) }` falls through to
+        # `return e` and the mangled callee is never emitted — link
+        # error at best, silent type-default to i32 at worst.
+        if isinstance(e, A.UnsafeBlock):
+            new_body = self._rewrite_calls_in_expr(e.body, owner)
+            if new_body is e.body:
+                return e
+            return A.UnsafeBlock(span=e.span, body=new_body)
+        # Cycle 1 Batch FE re-audit Auditor 3 (fresh-eyes) MEDIUM-1
+        # fix: symmetric TileLit arm in the call-site rewriter. The
+        # _walk_subst_expr fix at line 494 added a TileLit arm for the
+        # type-substitution walker; this matching arm closes the gap
+        # in the CALL-SITE rewriter so a generic call inside a
+        # TileLit's .shape or .memspace (e.g., `tile<f32,
+        # [compute_size::<N>()], REG>::zeros()`) gets discovered and
+        # the mangled callee emitted. Pre-fix: silent skip → missing
+        # callee at link time.
+        if isinstance(e, A.TileLit):
+            new_shape = [self._rewrite_calls_in_expr(s, owner) for s in e.shape]
+            new_memspace = self._rewrite_calls_in_expr(e.memspace, owner)
+            if (all(a is b for a, b in zip(new_shape, e.shape))
+                    and new_memspace is e.memspace):
+                return e
+            return A.TileLit(
+                span=e.span, dtype=e.dtype, shape=new_shape,
+                memspace=new_memspace, init=e.init,
+            )
         return e
 
     def _instantiate(self, fn: A.FnDecl, mangled: str, subst: dict[str, A.TyNode]) -> A.FnDecl:

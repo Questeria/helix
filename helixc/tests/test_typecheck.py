@@ -5075,6 +5075,59 @@ def test_cycle1_high1_is_copy_walks_through_agi_quartet_wrappers():
     assert tc._is_copy_struct_ty(wrapped_memtier) is True
 
 
+def test_cycle1_re_audit_high1_strip_wrapper_chain_walks_agi_quartet():
+    """Cycle 1 Batch FE re-audit Auditor 1 HIGH-1 fix — verify the
+    rebuild arms cover all 5 AGI-quartet wrappers. CRITICAL:
+    pre-fix, my batch 4 commit added the 5 wrappers to
+    _ALL_WRAPPER_CLS_NAMES but FORGOT the per-class rebuild branches
+    in _strip_wrapper_chain. Result: `__lift_conf(Known<Conf<i32>>)`
+    silently returned `Known<Conf<i32>>` unchanged — the bug my
+    batch 4 commit message claimed to close was STILL PRESENT.
+
+    My original batch-4 test only exercised `_is_copy_struct_ty`
+    (which uses generic `getattr("inner")` and worked fine) — it
+    did NOT exercise `_strip_wrapper_chain` (which has explicit
+    per-class rebuild logic). This test closes the verification
+    coverage gap the re-audit identified."""
+    from helixc.frontend.typecheck import (
+        TypeChecker, TyModal, TyTemporal, TyFrame, TyCausal,
+        TyMemTier, TyConf, TyPrim,
+    )
+
+    class _StubProg:
+        items = []
+
+    tc = TypeChecker(_StubProg())
+    inner = TyPrim("i32")
+    conf_i32 = TyConf(level="high", inner=inner)
+
+    # __lift_conf(Known<Conf<i32>>) should strip TyConf, preserving
+    # the outer TyModal. Pre-fix: returned Known<Conf<i32>> unchanged.
+    wrapped = TyModal("known", conf_i32)
+    stripped = tc._strip_wrapper_chain(TyConf, wrapped)
+    assert isinstance(stripped, TyModal), (
+        f"outer TyModal must survive strip; got {type(stripped).__name__}")
+    assert isinstance(stripped.inner, TyPrim), (
+        f"TyConf must be peeled; got inner={type(stripped.inner).__name__}")
+    assert stripped.inner.name == "i32"
+
+    # Same for each of the other 4 AGI-quartet siblings.
+    for outer_cls, outer_kwargs in [
+        (TyTemporal, {"kind": "past"}),
+        (TyFrame, {"frame": "world"}),
+        (TyCausal, {"kind": "cause"}),
+        (TyMemTier, {"tier": "semantic"}),
+    ]:
+        wrapped = outer_cls(inner=conf_i32, **outer_kwargs)
+        stripped = tc._strip_wrapper_chain(TyConf, wrapped)
+        assert isinstance(stripped, outer_cls), (
+            f"outer {outer_cls.__name__} must survive strip; got "
+            f"{type(stripped).__name__}")
+        assert isinstance(stripped.inner, TyPrim), (
+            f"TyConf must be peeled inside {outer_cls.__name__}; got "
+            f"inner={type(stripped.inner).__name__}")
+
+
 def test_cycle1_high2_modal_kind_values_unified():
     """Cycle 1 Auditor 2 HIGH-2 fix — `_MODAL_KIND_VALUES` is now
     the single source of truth for the 4 modal kinds. Pre-fix, the

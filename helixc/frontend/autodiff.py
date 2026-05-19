@@ -1090,6 +1090,19 @@ def _is_reassigned_after(stmts: list, name: str, start_idx: int) -> bool:
                     return True
             if node.final_expr is not None and _has_assign(node.final_expr):
                 return True
+        # Cycle 1 Batch FE re-audit Auditor 3 (fresh-eyes) MEDIUM-3
+        # fix: explicitly recurse into For/While/Loop bodies. Pre-fix,
+        # the attribute-name list at line ~1078 doesn't include `body`,
+        # so a For/While/Loop with an Assign nested inside its body
+        # would NOT be detected as reassigning. _inline_lets could
+        # then incorrectly inline a `let mut acc = 0` that gets
+        # reassigned inside a nested loop, producing wrong gradients.
+        # Block-recursion below catches the body if it's reached via
+        # an explicit body-field walk; this loop-arm makes that walk
+        # happen.
+        if isinstance(node, (A.For, A.While, A.Loop)):
+            if _has_assign(node.body):
+                return True
         if isinstance(node, A.If):
             if _has_assign(node.then) or _has_assign(node.else_):
                 return True
