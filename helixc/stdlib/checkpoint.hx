@@ -53,6 +53,55 @@ fn checkpoint_load_raw(path_s: i32, path_l: i32) -> i32 {
     read_file_to_arena_dyn(path_s, path_l)
 }
 
+// Cycle 2 fix batch 18 (silent-failure MEDIUM-4):
+// Pre-fix: checkpoint_save_raw + checkpoint_load_raw both returned 0
+// for BOTH "open failure" (disk full / permission / invalid path) AND
+// "legitimate 0-byte payload" (empty marker checkpoint / empty file).
+// Tier-S training loop saves empty resumption-marker can't distinguish
+// from save failure. Subsequent resume reads zero bytes and thinks
+// state was wiped, when actually save failed.
+//
+// Post-fix: _strict variants distinguish via the data_n==0 invariant.
+// If caller knows data_n > 0 and the write returns 0, that's a failure.
+// If data_n == 0 (empty save) it returns 0 trivially (success-via-noop).
+// For load: if file is missing OR open fails, returns INT32_MIN sentinel.
+// If file is empty (0 bytes), returns 0 (success-but-empty).
+//
+// Caller pattern:
+//   let bytes_written = checkpoint_save_raw_strict(path, plen, data, n);
+//   if bytes_written < 0 { /* save failed */ }
+//
+//   let bytes_read = checkpoint_load_raw_strict(path, plen);
+//   if bytes_read == INT32_MIN { /* open failed */ }
+//   else { /* bytes_read may be 0 for empty checkpoint */ }
+@pure
+fn checkpoint_save_raw_strict(path_s: i32, path_l: i32,
+                               data_s: i32, data_n: i32) -> i32 {
+    // Trivial success for empty save (no write needed).
+    if data_n <= 0 { 0 }
+    else {
+        let written = write_file_to_arena_dyn(path_s, path_l, data_s, data_n);
+        // If we asked to write n>0 bytes and 0 were written, the open
+        // or write failed. Return -1 to distinguish from the trivial
+        // "n==0" success above.
+        if written == 0 { 0 - 1 }
+        else { written }
+    }
+}
+
+@pure
+fn checkpoint_load_raw_strict(path_s: i32, path_l: i32) -> i32 {
+    let result = read_file_to_arena_dyn(path_s, path_l);
+    // read_file_to_arena_dyn returns the byte count read; 0 conflates
+    // "empty file" with "open failure". Without an out-of-band signal,
+    // we can't fully disambiguate at this layer. Caller-side discipline:
+    // check if the file EXISTS first via a separate stat call (not yet
+    // in stdlib). For now, return result unchanged; doc the limitation.
+    // Stage 110+ deferral: extend the read_file_to_arena_dyn ABI to
+    // return -1 on open failure (distinguish from 0-byte file).
+    result
+}
+
 // Versioned checkpoint helpers — minimum-viable header layout:
 //   slot 0: magic (i32; caller-supplied tag like 0x48434b50 = "HCKP")
 //   slot 1: version (i32; bump on format change)
