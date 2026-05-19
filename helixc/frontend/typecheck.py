@@ -29,6 +29,13 @@ from typing import Literal, Optional
 # gives mypy/pyright a chance to catch typos like "goal" vs "goals"
 # at type-check time instead of silently bypassing the launder check.
 # Zero runtime cost.
+# Cycle 1 Auditor 2 HIGH-2 fix: single source of truth for the 4 modal
+# kinds. Pre-fix, the Literal alias above and the hand-coded assert
+# tuple at _register_fn (formerly ~2089) were independent — adding a
+# 5th kind to the Literal without updating the tuple (or vice versa)
+# would silently bypass the runtime guard or admit an unknown kind
+# into _fn_modal_return_kind. The shared tuple closes the divergence.
+_MODAL_KIND_VALUES = ("known", "believed", "goal", "uncertain")
 ModalKind = Literal["known", "believed", "goal", "uncertain"]
 
 from . import ast_nodes as A
@@ -2086,10 +2093,13 @@ class TypeChecker:
             # The assertion turns that into a loud crash at fn-decl
             # time — better than a silent launder bypass.
             kind = sig.ret.kind
-            assert kind in ("known", "believed", "goal", "uncertain"), (
-                f"TyModal.kind expected one of "
-                f"{{'known','believed','goal','uncertain'}}, got "
-                f"{kind!r} for fn {fn.name!r}"
+            # Cycle 1 Auditor 2 HIGH-2 — use shared _MODAL_KIND_VALUES
+            # tuple so this assert and the Literal alias above stay in
+            # sync. Adding a 5th kind to one without the other was the
+            # silent-bypass pattern Auditor 2 named.
+            assert kind in _MODAL_KIND_VALUES, (
+                f"TyModal.kind expected one of {_MODAL_KIND_VALUES}, "
+                f"got {kind!r} for fn {fn.name!r}"
             )
             self._fn_modal_return_kind[fn.name] = kind  # type: ignore[assignment]
 

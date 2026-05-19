@@ -5075,6 +5075,29 @@ def test_cycle1_high1_is_copy_walks_through_agi_quartet_wrappers():
     assert tc._is_copy_struct_ty(wrapped_memtier) is True
 
 
+def test_cycle1_high2_modal_kind_values_unified():
+    """Cycle 1 Auditor 2 HIGH-2 fix — `_MODAL_KIND_VALUES` is now
+    the single source of truth for the 4 modal kinds. Pre-fix, the
+    Literal alias and the hand-coded assert tuple in _register_fn
+    could diverge silently (add a 5th kind to one without the
+    other = silent bypass of the runtime guard).
+
+    Verifies: (a) tuple has exactly the 4 expected kinds, (b) the
+    Literal arg types match the tuple values."""
+    from helixc.frontend.typecheck import _MODAL_KIND_VALUES, ModalKind
+    import typing as _typing
+
+    expected = ("known", "believed", "goal", "uncertain")
+    assert _MODAL_KIND_VALUES == expected, (
+        f"_MODAL_KIND_VALUES drift: expected {expected}, got "
+        f"{_MODAL_KIND_VALUES}")
+    # Literal args extraction — uses typing.get_args.
+    literal_args = _typing.get_args(ModalKind)
+    assert set(literal_args) == set(_MODAL_KIND_VALUES), (
+        f"ModalKind Literal args {literal_args} drifted from "
+        f"_MODAL_KIND_VALUES {_MODAL_KIND_VALUES}")
+
+
 def test_cycle1_high2_inline_user_calls_descends_through_modify_quote_splice():
     """Cycle 1 Auditor 4 HIGH-2 fix — `_inline_user_calls` now
     descends into A.Modify, A.Quote, A.Splice, A.TileLit, A.Path.

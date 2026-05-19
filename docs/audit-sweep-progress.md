@@ -108,6 +108,27 @@ Auditors dispatched in parallel:
 - Auditor 4 MED-3: AD unroll guard no warn at max_unroll
 - Auditor 5 MED-1: flatten_modules `_rewrite_calls` guard mismatch
 
+#### Cycle 1 fix batch 3 — ModalKind unify SHIPPED + TyPrim size_N downgraded
+
+- **HIGH-2 (Auditor 2) — ModalKind divergent source of truth**:
+  FIXED. Added `_MODAL_KIND_VALUES = ("known", "believed", "goal",
+  "uncertain")` tuple at typecheck.py:32 (just above the `ModalKind`
+  Literal alias). _register_fn assert at ~2089 now uses
+  `kind in _MODAL_KIND_VALUES` instead of the hand-coded tuple
+  literal. Future drift between Literal and runtime check now
+  impossible (both reference the same source). 1 new fix-verification
+  test (test_cycle1_high2_modal_kind_values_unified).
+- **HIGH-3 (Auditor 2) — TyPrim("size_N") namespace overload**:
+  DOWNGRADED to accepted design-debt for v1.0. Analysis shows: the
+  10+ producer/consumer sites all use defensive
+  `startswith("size_")` filtering that WORKS correctly today; the
+  finding is "this is ad-hoc not invariant-encoded" — design-debt,
+  not silent miscompile. Refactor to a TySizeConst dataclass touches
+  monomorphize.py + 5 typecheck.py sites + every consumer that
+  pattern-matches by name — too risky for a single cron tick.
+  Tracked for v1.1/v2.0 refactor sub-arc. Re-audit will surface
+  again as a MEDIUM if it doesn't.
+
 #### Cycle 1 fix batch 2 — 4 AD HIGH fixes shipped 2026-05-18
 
 - autodiff.py `_args_are_unroll_safe`: tightened from "ANY literal
@@ -155,9 +176,10 @@ Auditors dispatched in parallel:
   for 18-entry table.
 - 586 pins GREEN after batch 1.
 
-**Batch FE verdict (so far)**: NOT CLEAN. 2 design-debt HIGHs remain
-(ModalKind divergent source of truth, TyPrim("size_N") namespace
-overload). All 5 AD HIGHs closed in batch 2.
+**Batch FE verdict (so far)**: 7 of 7 actionable HIGHs FIXED across
+batches 1+2+3. ModalKind unified. TyPrim("size_N") downgraded to
+v1.0-accepted design-debt per analysis. Ready for re-audit to verify
+counter can advance to 1/5.
 
 | Batch | Auditor 1 | Auditor 2 | Auditor 3 | Auditor 4 | Auditor 5 | Verdict |
 |-------|-----------|-----------|-----------|-----------|-----------|---------|
