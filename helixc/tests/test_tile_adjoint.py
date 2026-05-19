@@ -326,22 +326,19 @@ def test_stage120_r2_emit_rejects_reduce_with_misspelled_kind_attr():
 
 def test_stage120_r2_adjointrecord_rejects_runtime_keyed_with_ops():
     """Stage 120 R2 audit-fix Finding 2 — AdjointRecord.__post_init__
-    must reject runtime-keyed dispatch (anything not 'explicit' or
-    'identity') paired with non-empty `ops`. The consumer reads the
-    forward op's attr and ignores `ops` entirely, so the recorded
-    ops would be silently dropped."""
+    must reject runtime-keyed dispatch paired with non-empty `ops`.
+    The consumer reads the forward op's attr and ignores `ops`
+    entirely, so the recorded ops would be silently dropped.
+
+    Note: under R3's closed-set DispatchKind, only "reduce_kind"
+    currently qualifies as runtime-keyed (other unknown strings are
+    rejected by the closed-set guard earlier — covered by
+    test_stage120_r3_adjointrecord_rejects_typo_dispatch)."""
     with pytest.raises(ValueError, match="runtime-keyed"):
         AdjointRecord(
             inputs=("x",), outputs=("dx",),
             ops=((TileOpKind.TILE_ADD, "stray"),),
             dispatch="reduce_kind",
-        )
-    # Also catches future named-attr dispatches a maintainer might add.
-    with pytest.raises(ValueError, match="runtime-keyed"):
-        AdjointRecord(
-            inputs=("x",), outputs=("dx",),
-            ops=((TileOpKind.TILE_MUL, "stray"),),
-            dispatch="future_keyed_dispatch",
         )
 
 
@@ -384,3 +381,79 @@ def test_stage120_r2_adjointmodule_rejects_overlap():
             kernels={"k": good},
             skipped={"k": "non-kernel"},
         )
+
+
+# ============================================================================
+# Stage 120 R3 audit-fix tests — DispatchKind closed set + exhaustive emit
+# ============================================================================
+def test_stage120_r3_adjointrecord_rejects_typo_dispatch():
+    """Stage 120 R3 audit-fix — silent-failure-hunter + type-design
+    audits converged on this: dispatch="reducekind" (no underscore),
+    "reduce-kind" (hyphen), or "Identity" (wrong case) previously
+    passed __post_init__ as "runtime-keyed" (since they are not
+    literally "explicit" or "identity"), landed in the canonical
+    table, then silently emitted zero ops at emit time. R3 closes
+    this by validating dispatch against VALID_DISPATCH_KINDS at
+    construction."""
+    for typo in ("reducekind", "reduce-kind", "Identity", "EXPLICIT",
+                 "future_keyed_dispatch", "", "rk"):
+        with pytest.raises(ValueError, match="not a valid DispatchKind"):
+            AdjointRecord(
+                inputs=("x",), outputs=("dx",), ops=(),
+                dispatch=typo,  # type: ignore[arg-type]
+            )
+
+
+def test_stage120_r3_valid_dispatch_kinds_exposed():
+    """Stage 120 R3 audit-fix — VALID_DISPATCH_KINDS is the canonical
+    closed set; the emitter's match arms must stay in lockstep with it.
+    This test asserts the set is exactly {explicit, identity,
+    reduce_kind} so adding a new family without updating BOTH this set
+    AND the emitter trips a test."""
+    assert ti.VALID_DISPATCH_KINDS == frozenset(
+        {"explicit", "identity", "reduce_kind"}
+    )
+
+
+def test_stage120_r3_emit_raises_on_unhandled_dispatch():
+    """Stage 120 R3 audit-fix — the emitter's defensive `else: raise`
+    must fire if a record with an unhandled dispatch string somehow
+    reaches emit_adjoint_kernel (e.g., bypassing __post_init__ via
+    dict.__setitem__ or a future stage that grows VALID_DISPATCH_KINDS
+    but forgets the emitter branch). We simulate this by monkey-
+    patching one entry in the canonical table to a bypass-constructed
+    record with an unknown dispatch."""
+    from dataclasses import replace
+
+    # Build a record that bypasses __post_init__ by using object.__setattr__
+    # on the frozen dataclass (the same trick frozen-dataclass-mutators use).
+    bypass = AdjointRecord(
+        inputs=("x", "y"), outputs=("dx", "dy"),
+        ops=((TileOpKind.TILE_MUL, "c"), (TileOpKind.TILE_MUL, "c")),
+        dispatch="explicit",
+    )
+    object.__setattr__(bypass, "dispatch", "future_keyed_dispatch")
+    assert bypass.dispatch == "future_keyed_dispatch"
+
+    # Get an entry in the canonical table and swap. We need write
+    # access via the inner dict (MappingProxyType is read-only from
+    # the public name).
+    import helixc.ir.tile_ir as tile_ir_mod
+    inner = tile_ir_mod._TILE_OP_ADJOINTS_INNER
+    saved = inner[TileOpKind.TILE_MUL]
+    inner[TileOpKind.TILE_MUL] = bypass
+    try:
+        fwd = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_MUL)])
+        with pytest.raises(ValueError, match="unhandled dispatch="):
+            emit_adjoint_kernel(fwd)
+    finally:
+        inner[TileOpKind.TILE_MUL] = saved
+
+
+def test_stage120_r3_dispatchkind_type_alias_exists():
+    """Stage 120 R3 audit-fix — DispatchKind is exported as a Literal
+    type alias so static checkers (mypy/pyright) catch
+    dispatch="reducekind" at canonical-table construction sites."""
+    from helixc.ir.tile_ir import DispatchKind  # noqa: F401
+    # The alias itself isn't introspectable at runtime in a robust
+    # cross-version way; the assertion is that the name resolves.

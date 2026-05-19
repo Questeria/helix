@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Mapping, Optional
+from typing import Final, Literal, Mapping, Optional
 
 from . import tir
 
@@ -257,6 +257,32 @@ def lower_to_tile(tir_module: tir.Module) -> TileModule:
 # matmul lowering."
 # ============================================================================
 
+# Stage 120 R3 audit-fix — closed-set DispatchKind. Both producers
+# (AdjointRecord.__post_init__) and the consumer (emit_adjoint_kernel)
+# pivot on these values. Replacing the previous free-form `str` with a
+# Literal lets static checkers catch typos at the canonical-table site
+# (`dispatch="reducekind"` no longer passes mypy), and the matching
+# runtime guard in __post_init__ catches dynamic constructions.
+#
+# Semantics:
+#   "explicit":    `ops` is the full computation.
+#   "identity":    gradient flows through unchanged; ops must be empty.
+#   "reduce_kind": ops empty; emit_adjoint_kernel reads
+#                  attrs["reduce_kind"] from the forward op and
+#                  synthesizes the backward op from that.
+#
+# Adding a new dispatch family requires three coordinated edits
+# (the test suite trips if any are missed):
+#   1. Append the value to VALID_DISPATCH_KINDS.
+#   2. Extend the DispatchKind Literal annotation.
+#   3. Handle the new family in emit_adjoint_kernel — the emitter's
+#      final `else: raise` will fail the suite until done.
+DispatchKind = Literal["explicit", "identity", "reduce_kind"]
+VALID_DISPATCH_KINDS: Final[frozenset[str]] = frozenset(
+    {"explicit", "identity", "reduce_kind"}
+)
+
+
 @dataclass(frozen=True)
 class AdjointRecord:
     """Declared reverse-mode adjoint for one forward TileOpKind.
@@ -270,23 +296,32 @@ class AdjointRecord:
         ops:     (TileOpKind, comment) pairs sequenced to compute the
                  gradients. Substrate-only; operand wiring lands in
                  Stage 120's grad_pass.
-        dispatch: disambiguator for empty `ops`:
-            - "explicit": `ops` is the full computation (default).
-            - "identity": gradient flows through unchanged (e.g. TILE_ADD).
-            - any other string: name of an attr key on the forward op
-              that the backend dispatches on (e.g. TILE_REDUCE →
-              "reduce_kind" selects sum-broadcast vs max-scatter).
+        dispatch: closed-set DispatchKind (see above) discriminating
+                 explicit / identity / runtime-keyed adjoint emission.
     """
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     ops: tuple[tuple[TileOpKind, str], ...]
-    dispatch: str = "explicit"
+    dispatch: DispatchKind = "explicit"
 
     def __post_init__(self) -> None:
-        # Stage 120 R1 audit-fix: catch malformed records at construction.
-        # dispatch="explicit" with empty ops would silently emit no
-        # backward steps and look indistinguishable from a successful
-        # adjoint — guard the invariant here, not in the consumer.
+        # Stage 120 R3 audit-fix: validate dispatch against the closed
+        # set at construction. The Literal type pins this statically;
+        # the runtime guard catches dynamic constructions (records
+        # built from JSON / config / programmatic table extension).
+        # Without this, dispatch="reducekind" (typo) would slip past
+        # __post_init__ as "runtime-keyed", land in the canonical
+        # table, then silently emit zero ops at emit time — exactly
+        # the R3 silent-failure-hunter + type-design HIGH finding.
+        if self.dispatch not in VALID_DISPATCH_KINDS:
+            raise ValueError(
+                f"AdjointRecord: dispatch={self.dispatch!r} is not a valid "
+                f"DispatchKind. Valid values: {sorted(VALID_DISPATCH_KINDS)!r}. "
+                "Adding a new family requires updating "
+                "tile_ir.VALID_DISPATCH_KINDS AND extending the emitter."
+            )
+        # Stage 120 R1 audit-fix: dispatch="explicit" with empty ops
+        # would silently emit no backward steps.
         if self.dispatch == "explicit" and not self.ops:
             raise ValueError(
                 "AdjointRecord: dispatch='explicit' requires at least one "
@@ -298,11 +333,9 @@ class AdjointRecord:
                 "AdjointRecord: dispatch='identity' must have ops=(); the "
                 f"recorded ops {self.ops!r} would never be emitted."
             )
-        # Stage 120 R2 audit-fix: runtime-keyed dispatch (anything other
-        # than "explicit" or "identity") synthesizes the backward op
-        # from the forward attr; ops must be empty or they would be
-        # silently dropped at emit time. Catch the inconsistency here.
-        if self.dispatch not in ("explicit", "identity") and self.ops:
+        # Stage 120 R2 audit-fix: runtime-keyed dispatch synthesizes
+        # the backward op from the forward attr; ops must be empty.
+        if self.dispatch == "reduce_kind" and self.ops:
             raise ValueError(
                 f"AdjointRecord: dispatch={self.dispatch!r} is runtime-keyed; "
                 f"ops must be empty (got {self.ops!r}). The consumer reads "

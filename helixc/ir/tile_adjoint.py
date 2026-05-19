@@ -175,28 +175,31 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
             fallthrough.append(op.kind)
             continue
 
-        # R1 audit-fix C2: dispatch="identity" means the gradient
-        # flows through unchanged with no intermediate ops. The
-        # canonical table encodes this as ops=(); the dispatcher
-        # honors that and emits zero backward ops. A previous
-        # version invented a fake TILE_ADD placeholder which was
-        # an un-wired no-op pretending to be a backward step.
+        # R3 audit-fix: exhaustive dispatch over the closed DispatchKind
+        # set. Previously the "explicit" branch was an implicit
+        # fall-through after "identity"/"reduce_kind"; any future
+        # dispatch family that slipped past __post_init__ (e.g. a
+        # producer that bypasses validation) would hit the explicit
+        # loop with ops=() and silently emit zero backward steps. The
+        # final `else: raise` closes that surface and also fails loudly
+        # if VALID_DISPATCH_KINDS gains a new value without an emitter
+        # branch.
         if adj.dispatch == "identity":
+            # R1 audit-fix C2: gradient flows through unchanged with
+            # no intermediate ops. The canonical table encodes this
+            # as ops=(); emit zero backward ops. A previous version
+            # invented a fake TILE_ADD placeholder which was an
+            # un-wired no-op pretending to be a backward step.
             continue
-
-        # R1 audit-fix C3: dispatch="reduce_kind" must propagate the
-        # forward op's runtime-keyed attr (e.g. "sum" vs "max") into
-        # the backward shell so the downstream lowering can pick
-        # broadcast vs scatter. Previously the attr was dropped on
-        # the floor, leaving the backward indistinguishable across
-        # reduce kinds.
-        if adj.dispatch == "reduce_kind":
+        elif adj.dispatch == "reduce_kind":
+            # R1 audit-fix C3: propagate the forward op's runtime-keyed
+            # attr (e.g. "sum" vs "max") into the backward shell so the
+            # downstream lowering can pick broadcast vs scatter.
             # R2 audit-fix Finding 1: a forward op missing the
             # `reduce_kind` discriminator would silently propagate
-            # `None` into the backward attrs, defeating R1 C3's whole
-            # point (backend can no longer pick broadcast vs scatter).
-            # Reject the malformed forward IR at the emitter boundary
-            # rather than letting it surface deep in the backend.
+            # `None` into the backward attrs. Reject malformed forward
+            # IR at the emitter boundary rather than letting it surface
+            # deep in the backend.
             rk = op.attrs.get("reduce_kind")
             if rk is None:
                 raise ValueError(
@@ -218,21 +221,29 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
                     "comment": "reduce_kind gradient (resolved at lowering)",
                 },
             ))
-            continue
-
-        # dispatch="explicit": emit each recorded op-shell in order.
-        # AdjointRecord.__post_init__ guarantees ops is non-empty
-        # when dispatch=="explicit" (validated at table construction).
-        for (adj_kind, comment) in adj.ops:
-            bwd_ops.append(ti.TileOp(
-                kind=adj_kind,
-                attrs={"adjoint_of": op.kind.name,
-                       # R2 audit-fix M2: uniform attr schema across
-                       # dispatch branches — every backward op carries
-                       # adjoint_of + dispatch + comment.
-                       "dispatch": "explicit",
-                       "comment": comment},
-            ))
+        elif adj.dispatch == "explicit":
+            # AdjointRecord.__post_init__ guarantees ops is non-empty
+            # when dispatch=="explicit".
+            for (adj_kind, comment) in adj.ops:
+                bwd_ops.append(ti.TileOp(
+                    kind=adj_kind,
+                    attrs={"adjoint_of": op.kind.name,
+                           # R2 audit-fix M2: uniform attr schema across
+                           # dispatch branches.
+                           "dispatch": "explicit",
+                           "comment": comment},
+                ))
+        else:
+            # R3 audit-fix: defensive raise on any DispatchKind the
+            # emitter doesn't know how to handle. Statically unreachable
+            # if VALID_DISPATCH_KINDS and this match are kept in sync;
+            # the runtime raise catches the desync.
+            raise ValueError(
+                f"emit_adjoint_kernel: unhandled dispatch="
+                f"{adj.dispatch!r} for forward {op.kind.name}. The "
+                "emitter must grow a branch when a new DispatchKind "
+                "is added to tile_ir.VALID_DISPATCH_KINDS."
+            )
 
     bwd_block = ti.TileBlock(id=0, ops=bwd_ops)
     bwd_fn = ti.TileFn(
