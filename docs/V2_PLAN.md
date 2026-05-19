@@ -701,3 +701,58 @@ End-of-v2.2 5-clean-gate dispatched 5 parallel silent-failure-hunters
 
 User authority "go as far as v3.0 without my approval" continues.
 v2.3 backlog rolls forward.
+
+### 2026-05-19T22:30Z — v2.3 backlog progress checkpoint
+
+15 v2.2 polish items closed at v2.2.0. v2.3 work picks up the
+substantial-but-not-major-version items deferred from v2.2:
+
+**Shipped (8 commits since v2.2.0 at `1a4e371`):**
+- v2.3 polish RT LOW-2: examples/run.py file-handle leak — `c6a91fe`
+- v2.3 BE MED: metal+webgpu skipped-status emit parity with rocm — `5f2bf38`
+- v2.3 polish item 2: shared lowering-schema module
+  (LoweringStatus + OpLowering + BackendEmitter Protocol) — `55fb6b0`
+- v2.3 polish item 2 wrap-up: all 4 backends migrated to OpLowering
+  TypedDict annotation — `4e15587`
+- v2.3 FE LOW-1: regression tests for v2.2 items 5+6
+  (grad_pass + effect_check verifier_fn) — `0d104b7`
+- v2.3 TEST MED: anchor pytest.raises(TypeError) on lowering_status
+  guards with match= — `b96486b`
+
+Each closes a v2.1 + v2.2 5-clean-gate carryover. v2.3.0 release
+candidate scope:
+- ✅ Item 2: Multi-backend type-design polish (TypedDict + Literal
+  + Protocol)
+- ⏸️ Item 3 (remainder): frozen ProofManifest dataclass + Sha256Hex
+  NewType + signature_format Enum — IN PROGRESS; substantial public
+  API change; v2.3.1 or v2.4 candidate
+- ⏸️ Item 13: Real-HW dispatch wiring (needs HW)
+- ⏸️ Item 15: RegAlloc for emitted backend kernels (substantial
+  codegen work; cross-cutting all 4 backends; v2.4 candidate)
+
+Pre-existing test regression at Stage 35 (`test_stage35_wmt_predictors
+_reject_invalid_and_corrupt_states` returns 7 instead of 42) flagged
+as spawned task; not blocking v2.3.
+
+**Stage closure status as of this checkpoint:**
+
+| Stage | Title | 3-Clean Audit | Status |
+|-------|-------|---------------|--------|
+| 110-115 | Effect labels, borrow scope, smem phase | inline + b32b8ab | CLOSED |
+| 116 | TyTile phase field | R2 audit | CLOSED |
+| 117-119 | Tile-IR adjoint table | inline | CLOSED |
+| 120 | Forward→backward AD wedge | R1-R4 cycles | CLOSED |
+| 121 | TyEnclave info-flow typing | inline | CLOSED |
+| 122 | ProofManifest emit | v2.2 R1 fix | CLOSED |
+| 123 | ROCm substrate | inline | CLOSED |
+| 124 | ROCm wmma + memory + barrier | R1 + R5 corroborative | CLOSED |
+| 125 | Metal substrate | inline | CLOSED |
+| 126 | Metal NA matmul | R5 + R6 arity-fix | CLOSED |
+| 127 | WebGPU substrate | inline | CLOSED |
+| 128 | WebGPU tile-loop matmul | R5 + R6 HELIX-STUB-OPERANDS | CLOSED |
+| 129 | GPU CI scaffolding | type-design + tri-state | CLOSED |
+| 130 | Cross-backend audit matrix | self-pass + v2.0 5-gate | CLOSED |
+| 131 | PTX backend symmetry (v2.2 item 1) | R1 phantom-supported | CLOSED |
+
+All 22 v2.x stages CLOSED. Outstanding work is backlog-shaped (v2.3
+polish), not stage-shaped.
