@@ -4200,8 +4200,20 @@ class Lowerer:
             # both branches end with br merge_block(value). Result is the
             # merge block's parameter.
             cond = self._lower_expr(expr.cond)
+            # Cycle 3 R2 fix batch 26 (IR R2 NEW-HIGH-3, partial):
+            # cond must lower to a bool value. Pre-fix silently
+            # const_int(0) fallback would emit a CFG branch on a
+            # synthesized always-false value. Note: then/else val
+            # fallbacks are LEGITIMATE unit-typed placeholders
+            # (e.g., for A.Return-tailed blocks) and are kept.
             if cond is None:
-                cond = self.builder.const_int(0)
+                raise NotImplementedError(
+                    f"lower_ast: A.If condition at "
+                    f"{getattr(expr.cond, 'span', None)!r} of type "
+                    f"{type(expr.cond).__name__} lowered to no "
+                    f"value; typecheck should have rejected this "
+                    f"— Cycle 3 R2 IR NEW-HIGH-3"
+                )
             then_blk = self.builder.append_block()
             else_blk = self.builder.append_block()
             merge_blk = self.builder.append_block()
@@ -4363,8 +4375,18 @@ class Lowerer:
             # Header
             self.builder.switch_to(header_blk)
             cond = self._lower_expr(expr.cond)
+            # Cycle 3 R2 fix batch 26 (IR R2 NEW-HIGH-3, partial):
+            # cond must lower to a bool value. Pre-fix silently
+            # const_int(0) fallback would create a synthesized
+            # always-false loop guard.
             if cond is None:
-                cond = self.builder.const_int(0)
+                raise NotImplementedError(
+                    f"lower_ast: A.While condition at "
+                    f"{getattr(expr.cond, 'span', None)!r} of type "
+                    f"{type(expr.cond).__name__} lowered to no "
+                    f"value; typecheck should have rejected this "
+                    f"— Cycle 3 R2 IR NEW-HIGH-3"
+                )
             self.builder.emit(tir.OpKind.COND_BR, cond,
                               attrs={"true_block": body_blk.id,
                                      "false_block": exit_blk.id})
@@ -4723,8 +4745,18 @@ class Lowerer:
             )
         if isinstance(expr, A.Cast):
             inner = self._lower_expr(expr.value)
+            # Cycle 3 R2 fix batch 26 (IR R2 NEW-HIGH-2): pre-fix
+            # silently substituted const_int(0) for failed inner
+            # lowering — `(broken_expr) as i64` compiled to 0 cast
+            # to i64. Same silent-zero defect class as R1 HIGH-1.
             if inner is None:
-                inner = self.builder.const_int(0)
+                raise NotImplementedError(
+                    f"lower_ast: A.Cast inner at "
+                    f"{getattr(expr, 'span', None)!r} of type "
+                    f"{type(expr.value).__name__} lowered to no "
+                    f"value; typecheck should have rejected this "
+                    f"— Cycle 3 R2 IR NEW-HIGH-2"
+                )
             target = self._lower_type(expr.target_ty)
             return self.builder.emit(tir.OpKind.CAST, inner,
                                      result_ty=target,
