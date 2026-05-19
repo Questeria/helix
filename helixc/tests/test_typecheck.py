@@ -6020,6 +6020,33 @@ def test_stage110_gpu_wildcard_expands_to_sub_labels():
     assert len(missing_errs) == 0, missing_errs
 
 
+def test_stage111_gpu_sync_builtins_recognized():
+    """Stage 111 (v2.0 Phase B.1.b) — GPU sync builtins are recognized
+    by name and don't trigger unbound-name diagnostics.
+
+    The four builtins (`__warp_sync`, `__warp_sync_mask`,
+    `__block_sync`, `__grid_sync`) are recognized in _BUILTIN_NAMES
+    and mapped to their effect labels via _GPU_SYNC_BUILTINS.
+    Backend lowering to bar.sync / __syncwarp PTX deferred to a
+    later stage.
+    """
+    from helixc.frontend.typecheck import (
+        typecheck, TypeChecker, _expand_effect_wildcards,
+    )
+
+    # The four sync builtins exist in the registries.
+    assert "__warp_sync" in TypeChecker._BUILTIN_NAMES
+    assert "__warp_sync_mask" in TypeChecker._BUILTIN_NAMES
+    assert "__block_sync" in TypeChecker._BUILTIN_NAMES
+    assert "__grid_sync" in TypeChecker._BUILTIN_NAMES
+
+    # And map to their respective effect labels.
+    assert TypeChecker._GPU_SYNC_BUILTINS["__warp_sync"] == "gpu.warp_sync"
+    assert TypeChecker._GPU_SYNC_BUILTINS["__warp_sync_mask"] == "gpu.warp_sync"
+    assert TypeChecker._GPU_SYNC_BUILTINS["__block_sync"] == "gpu.block_sync"
+    assert TypeChecker._GPU_SYNC_BUILTINS["__grid_sync"] == "gpu.grid_sync"
+
+
 def test_stage110_smem_borrow_excluded_from_gpu_wildcard():
     """Stage 110 type-design audit fix — `gpu.smem_borrow` is a linear
     capability, NOT an effect obligation. The `gpu` wildcard MUST NOT

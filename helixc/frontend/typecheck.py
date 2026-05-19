@@ -3758,12 +3758,36 @@ class TypeChecker:
         "thread_idx", "thread_idx_x", "thread_idx_y", "thread_idx_z",
         "block_idx", "block_idx_x", "block_idx_y", "block_idx_z",
         "block_dim", "block_dim_x", "block_dim_y", "block_dim_z",
+        # Stage 111 (v2.0 Phase B.1.b): GPU sync builtins.
+        # Recognized in @kernel context; each carries an implicit
+        # @effect(gpu.X_sync) declaration consulted by the borrow
+        # checker (Stage 113-114) to discharge scoped SMEM borrows.
+        "__warp_sync", "__warp_sync_mask",
+        "__block_sync", "__grid_sync",
     })
     _GPU_INDEX_BUILTINS = frozenset({
         "thread_idx", "thread_idx_x", "thread_idx_y", "thread_idx_z",
         "block_idx", "block_idx_x", "block_idx_y", "block_idx_z",
         "block_dim", "block_dim_x", "block_dim_y", "block_dim_z",
     })
+
+    # Stage 111 (v2.0 Phase B.1.b): GPU sync builtins. Each carries an
+    # implicit effect declaration corresponding to its sync scope.
+    # When a kernel function calls one of these, the caller acquires
+    # the corresponding sync obligation (Stage 113-114 will use this
+    # to discharge SMEM borrows at the matching scope).
+    #
+    # Mapping (builtin name → effect label):
+    #   __warp_sync       → gpu.warp_sync   (lowers to bar.warp.sync or __syncwarp)
+    #   __warp_sync_mask  → gpu.warp_sync   (subset warp sync; mask arg required)
+    #   __block_sync      → gpu.block_sync  (lowers to bar.sync 0)
+    #   __grid_sync       → gpu.grid_sync   (cooperative grid sync; requires cg launch)
+    _GPU_SYNC_BUILTINS: dict[str, str] = {
+        "__warp_sync": "gpu.warp_sync",
+        "__warp_sync_mask": "gpu.warp_sync",
+        "__block_sync": "gpu.block_sync",
+        "__grid_sync": "gpu.grid_sync",
+    }
 
     # Names of well-known stdlib functions that are surfaced as
     # did-you-mean candidates even when the stdlib hasn't been parsed in
