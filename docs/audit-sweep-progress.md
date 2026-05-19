@@ -380,7 +380,14 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 2 / 5** 🎉🎉 (Cycle 4 CLOSED R1 FIRST TRY across all 5 batches!)
+**Current: 2 / 5** 🎉 (Cycle 5 CLOSED after R1 1H fix + R2 clean; counter recovered)
+
+### Cycle 5 closure summary (2026-05-19)
+- R1: 4 of 5 CLEAN (TEST/IR/FE/BE); RT NOT_CLEAN (1 NEW HIGH)
+- Fix batch 35: `__sqrt_strict` + `__sqrt_f64_strict` NaN sentinel for x<0
+- RT R2: CLEAN — closure verified
+- Counter transient reset 2/5 → 0/5 → recovered to 2/5 (R1 finding disqualifies advance)
+- 3 more cycles needed passing R1 first try for v2.0 unblock
 
 ### Cycle 4 closure summary (2026-05-19)
 - **R1 verdicts all CLEAN on first attempt** (TEST/IR/FE/BE/RT)
