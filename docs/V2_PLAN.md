@@ -144,15 +144,34 @@ Stage 130's audit was implicitly covered by the BE+TEST final-gate
 audits (its module + test file were in scope and returned CLEAN).
 Stages 122 and 129 likewise covered by the same final-gate sweep.
 
-**v2.0.0 tag**: stamped at commit (forthcoming) — first Helix release
-with effect-typed GPU barriers, scope-tagged borrows, Smem phase
-typestate, tile-IR adjoint table, info-flow-typed enclaves,
-attestation manifest, and ROCm/Metal/WebGPU backend substrates.
+**v2.0.0 tag**: stamped on commit `930d601` (2026-05-19T17:57Z) —
+first Helix release with effect-typed GPU barriers, scope-tagged
+borrows, Smem phase typestate, tile-IR adjoint table, info-flow-
+typed enclaves, attestation manifest, and ROCm/Metal/WebGPU backend
+substrates. 614 tests pass on the v2.0 surface.
 
 **Deferred to v2.1**: Stages 120 (MLP forward→backward), 124 (ROCm
 MFMA wmma), 126 (Metal Neural Accelerators M5+), 128 (WebGPU tile-
 loop matmul). All explicitly documented in the Stage 130 cross-
 backend audit matrix.
+
+### 2026-05-19T18:00Z — `helix-approach-a-loop` bounded purpose complete
+
+The cron loop's authorizing directive was "work until v2.0 is fully
+finished." That condition is now satisfied: stages 110-130 shipped +
+audited, 5-clean-gate passed first-attempt, `v2.0.0` tag landed on
+`930d601`. Future fires of this scheduled task have **no actionable
+stage work** — Phase A.1/A.2 + Phase B.1/B.2/B.3 substrate + Phase
+C wedges/backends are all closed. The v2.1 deferred stages (120,
+124, 126, 128) require a new authorizing directive (real hardware
+access for 124/126/128; design discussion for 120's MLP demo).
+
+**Recommended action**: user pauses or removes the
+`helix-approach-a-loop` scheduled task. Until then, fires will
+land in this branch documenting the no-op state (per honest-state
+policy: "Always commit *something* per fire"). The post-release
+no-op pattern is: read HEAD, observe tag `v2.0.0` present,
+append a one-line dated status entry below, commit, TG, exit.
 
 ### 2026-05-19T18:02Z — post-v2.0 cron idle confirmation
 
