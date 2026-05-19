@@ -362,13 +362,13 @@ batches 1+2+3. ModalKind unified. TyPrim("size_N") downgraded to
 v1.0-accepted design-debt per analysis. Ready for re-audit to verify
 counter can advance to 1/5.
 
-| Batch | Auditor 1 | Auditor 2 | Auditor 3 | Auditor 4 | Auditor 5 | Verdict |
-|-------|-----------|-----------|-----------|-----------|-----------|---------|
-| FE    | 1H+1M     | 3H+3M     | 0H+4M     | 5H+3M     | 1H+1M     | NOT CLEAN (7H remain) |
-| IR    | TBD       | TBD       | TBD       | TBD       | TBD       | TBD     |
-| BE    | TBD       | TBD       | TBD       | TBD       | TBD       | TBD     |
-| RT    | TBD       | TBD       | TBD       | TBD       | TBD       | TBD     |
-| TEST  | TBD       | TBD       | TBD       | TBD       | TBD       | TBD     |
+| Batch | Round 1 | Round 2 | Round 3 | Round 4 | Verdict |
+|-------|---------|---------|---------|---------|---------|
+| FE    | 11H+9M  | 3H+3M+1OBJECT | 1MUST_FIX+1debt | ✅ CLEAN | ✅ **CLEAN** after 7 fix batches |
+| IR    | IN PROGRESS — type-design 3H+5M (1H FP, 2H→MED, 5M); silent-failure 3H+3M (all REAL); fresh-eyes pending | - | - | - | NOT_CLEAN — fix batch 8 needed |
+| BE    | TBD     | -       | -       | -       | TBD     |
+| RT    | TBD     | -       | -       | -       | TBD     |
+| TEST  | TBD     | -       | -       | -       | TBD     |
 
 ### Cycle 2: pending
 ### Cycle 3: pending
@@ -377,8 +377,17 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 0 / 5** (Batch FE has 7 HIGH remaining; counter cannot
-advance until ALL HIGH fixed AND re-audit returns clean.)
+**Current: 0 / 5** (still 0 — counter only advances when ALL 5
+batches in a single Cycle pass clean. Cycle 1 Batch FE is now
+clean; need IR, BE, RT, TEST also clean to complete Cycle 1 and
+advance to 1/5. Then Cycles 2-5 must each return clean across all
+5 batches consecutively.)
+
+**Cycle 1 Batch FE: FULLY CLEAN as of round 4 (commit 80ed8df).**
+3 of 3 auditors returned CLEAN. 11 HIGH + 4 MUST-FIX MEDIUM fixed
+across 7 fix batches (commits 7898a28, d854a6e, 51d2925, 00a2532,
+84b8797, d50ff24, 80ed8df). 2 design-debt items deferred with
+documented rationale.
 
 ## Findings log (cumulative)
 
