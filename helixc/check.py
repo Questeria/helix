@@ -1098,6 +1098,13 @@ def _main_inner(argv: list[str] | None,
 
     stdout_modes = {
         "--emit-ast", "--emit-ir", "--emit-asm", "--emit-ptx",
+        # v2.2 5-clean-gate FE HIGH-2 audit-fix: --emit-adjoint was
+        # missing here, so `--emit-adjoint --emit-ptx` silently emitted
+        # PTX only (the if-block at line ~1891 hit PTX first and
+        # returned at ~1910). User's --emit-adjoint request was
+        # dropped without diagnostic. Same loud-fail-discipline drift
+        # the surrounding mutex was built to prevent.
+        "--emit-adjoint",
         "--emit-proof-obligations", "--doc",
     }
     selected_stdout_modes = sorted(a.flags & stdout_modes)
@@ -1232,6 +1239,12 @@ def _main_inner(argv: list[str] | None,
 
     artifact_stdout_mode = (
         "--emit-ptx" in a.flags
+        # v2.2 5-clean-gate FE HIGH-1 audit-fix: --emit-adjoint was
+        # missing here, so the preflight diagnostics (-- helixc-check:,
+        # parse:, typecheck:, totality:) emitted on stdout, contaminating
+        # the `# Adjoint module report` output for downstream pipes.
+        # Same intent as the --emit-ptx engineering (test_cli.py:273-275).
+        or "--emit-adjoint" in a.flags
         or "--emit-ir" in a.flags
         or "--emit-asm" in a.flags
         or "--emit-ast" in a.flags
@@ -1949,6 +1962,26 @@ def _main_inner(argv: list[str] | None,
                     for op in blk.ops:
                         print(f"#   {op.kind.name}: {op.attrs}")
                 print()
+            # v2.2 5-clean-gate IR LOW audit-fix: signal incomplete
+            # coverage via non-zero exit code so CI consumers can
+            # distinguish "fully complete adjoints" from "every kernel
+            # was a PARTIAL fallthrough." Intentional skips
+            # (non-kernel, extern, already-adjoint) still exit 0; only
+            # NotImplementedError / ValueError surfaces in skipped
+            # plus any PARTIAL fallthrough kernels trigger exit 2.
+            any_partial = any(not k.complete
+                              for k in adj_mod.kernels.values())
+            had_errors = any(
+                r.startswith(("NotImplementedError:", "ValueError:"))
+                for r in adj_mod.skipped.values()
+            )
+            if any_partial or had_errors:
+                print(
+                    f"   adjoint: incomplete coverage "
+                    f"(partial={any_partial}, errors={had_errors})",
+                    file=sys.stderr,
+                )
+                return 2
         except (NotImplementedError, AssertionError, KeyboardInterrupt,
                 SystemExit, MemoryError):
             raise
