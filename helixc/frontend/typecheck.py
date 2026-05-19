@@ -12715,8 +12715,16 @@ class TypeChecker:
             return f"tensor<{self._fmt(t.dtype)}, [{shp}]" + (f", {t.device}" if t.device else "") + ">"
         if isinstance(t, TyTile):
             # Audit 28.8 cycle 5 F7: ditto for tile shape elements.
+            # Stage 116 Inc 2 round-2 audit-fix: include phase in
+            # diagnostic when non-None, otherwise mismatched-phase
+            # rejects from _compatible print indistinguishable
+            # "expected X, got X" messages with no phase hint.
             shp = ",".join(self._fmt_size(s) for s in t.shape)
-            return f"tile<{self._fmt(t.dtype)}, [{shp}], {t.memspace}>"
+            phase_str = f" @{t.phase}" if t.phase is not None else ""
+            return (
+                f"tile<{self._fmt(t.dtype)}, [{shp}], "
+                f"{t.memspace}{phase_str}>"
+            )
         if isinstance(t, TyTuple):
             return "(" + ", ".join(self._fmt(e) for e in t.elems) + ")"
         if isinstance(t, TyArray):

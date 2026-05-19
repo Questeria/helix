@@ -6407,6 +6407,25 @@ def test_stage116_tytile_phase_top_bridge_in_compatible():
     assert not tc._compatible(a_cons, a_prod)
 
 
+def test_stage116_tytile_phase_renders_in_diagnostic():
+    """Stage 116 Inc 2 round-2 audit-fix — _fmt(TyTile) now emits
+    `@<phase>` suffix when phase is set. Pre-fix, phase-mismatch
+    rejects from _compatible would print indistinguishable
+    'expected tile<f32,[],smem>, got tile<f32,[],smem>' messages."""
+    from helixc.frontend.typecheck import TyTile, TyPrim, TypeChecker
+    from helixc.frontend.parser import parse
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    base = (TyPrim("f32"), (), "smem")
+    # phase=None — unchanged format (backward compat).
+    assert tc._fmt(TyTile(*base)) == "tile<f32, [], smem>"
+    # phase=producer — appends @producer.
+    assert tc._fmt(TyTile(*base, "producer")) == \
+        "tile<f32, [], smem @producer>"
+    # phase=consumer — appends @consumer (distinguishable).
+    assert tc._fmt(TyTile(*base, "consumer")) == \
+        "tile<f32, [], smem @consumer>"
+
+
 def test_stage121_enclave_mixing_diagnostic():
     """Stage 121 (v2.0 Phase C.1, TyEnclave Inc 4) — mixing-different-
     enclaves diagnostic. Pre-Stage-121 was first-wins which broke
