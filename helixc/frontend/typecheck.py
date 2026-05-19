@@ -182,6 +182,19 @@ class TyTile(Type):
     dtype: Type
     shape: tuple[Type, ...]
     memspace: str
+    # Stage 116 (v2.0 Phase B.2.c, Inc 2): optional SMEM phase typestate.
+    # None = legacy/non-smem tile (preserves all pre-Stage-116 behavior).
+    # "producer" / "consumer" = explicit phase per Descend PLDI 2024
+    # producer/consumer model; barrier_flip!() will toggle in Stage 117.
+    # __post_init__ rejects any other value (loud-fail discipline).
+    phase: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.phase is not None and self.phase not in SMEM_PHASES:
+            raise ValueError(
+                f"TyTile phase must be None or one of "
+                f"{sorted(SMEM_PHASES)}; got {self.phase!r}"
+            )
 
 
 @dataclass(frozen=True)

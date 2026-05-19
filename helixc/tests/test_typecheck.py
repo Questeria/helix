@@ -6269,6 +6269,76 @@ def test_stage115_smem_phase_substrate():
         smem_phase_flip("invalid_phase")
 
 
+def test_stage116_tytile_phase_field_default_none():
+    """Stage 116 (v2.0 Phase B.2.c Inc 2) — TyTile gains optional phase
+    field. Default None preserves all pre-Stage-116 construction sites."""
+    from helixc.frontend.typecheck import TyTile, TyPrim
+    t = TyTile(TyPrim("f32"), (TyPrim("i32"),), "smem")
+    assert t.phase is None
+    # Field is reachable positionally too (Inc 2 substrate exposure).
+    t2 = TyTile(TyPrim("f32"), (TyPrim("i32"),), "smem", "producer")
+    assert t2.phase == "producer"
+
+
+def test_stage116_tytile_phase_validates_at_construction():
+    """Stage 116 Inc 2 — __post_init__ loud-fails on unknown phase
+    values. Only None / SMEM_PHASE_PRODUCER / SMEM_PHASE_CONSUMER
+    are accepted."""
+    import pytest as _pt
+    from helixc.frontend.typecheck import (
+        TyTile, TyPrim, SMEM_PHASE_PRODUCER, SMEM_PHASE_CONSUMER,
+    )
+    # Explicit valid phases.
+    TyTile(TyPrim("f32"), (), "smem", SMEM_PHASE_PRODUCER)
+    TyTile(TyPrim("f32"), (), "smem", SMEM_PHASE_CONSUMER)
+    # Invalid phase rejected.
+    with _pt.raises(ValueError, match="TyTile phase"):
+        TyTile(TyPrim("f32"), (), "smem", "halfway")
+    with _pt.raises(ValueError, match="TyTile phase"):
+        TyTile(TyPrim("f32"), (), "smem", "PRODUCER")  # case-sensitive
+
+
+def test_stage116_tytile_phase_threads_through_equality():
+    """Stage 116 Inc 2 — frozen-dataclass equality distinguishes
+    tiles by phase. Substrate for Inc 3 enforcement: phase mismatch
+    must surface at type-equality sites (e.g., assignment / call)."""
+    from helixc.frontend.typecheck import TyTile, TyPrim
+    base = (TyPrim("f32"), (TyPrim("i32"),), "smem")
+    a_none = TyTile(*base)
+    b_none = TyTile(*base)
+    a_prod = TyTile(*base, "producer")
+    b_prod = TyTile(*base, "producer")
+    a_cons = TyTile(*base, "consumer")
+    # Same phase => equal.
+    assert a_none == b_none
+    assert a_prod == b_prod
+    # Different phase => unequal (this is the substrate for enforcement).
+    assert a_prod != a_cons
+    assert a_prod != a_none
+    # Hashable (frozen) — required for use as dict keys / set members.
+    assert {a_prod, b_prod} == {a_prod}
+
+
+def test_stage116_tytile_phase_composes_with_flip_helper():
+    """Stage 116 Inc 2 — Stage 115 smem_phase_flip helper composes
+    cleanly with TyTile construction. This is the call-graph shape
+    Stage 117 barrier_flip! lowering will use: read tile's phase,
+    flip, construct new tile."""
+    from helixc.frontend.typecheck import (
+        TyTile, TyPrim, smem_phase_flip,
+        SMEM_PHASE_PRODUCER, SMEM_PHASE_CONSUMER,
+    )
+    t0 = TyTile(TyPrim("f32"), (), "smem", SMEM_PHASE_PRODUCER)
+    flipped_phase = smem_phase_flip(t0.phase)
+    t1 = TyTile(t0.dtype, t0.shape, t0.memspace, flipped_phase)
+    assert t1.phase == SMEM_PHASE_CONSUMER
+    # Double-flip returns to producer.
+    t2 = TyTile(
+        t1.dtype, t1.shape, t1.memspace, smem_phase_flip(t1.phase))
+    assert t2.phase == SMEM_PHASE_PRODUCER
+    assert t2 == t0
+
+
 def test_stage121_enclave_mixing_diagnostic():
     """Stage 121 (v2.0 Phase C.1, TyEnclave Inc 4) — mixing-different-
     enclaves diagnostic. Pre-Stage-121 was first-wins which broke
