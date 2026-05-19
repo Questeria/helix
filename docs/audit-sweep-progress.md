@@ -108,6 +108,37 @@ Auditors dispatched in parallel:
 - Auditor 4 MED-3: AD unroll guard no warn at max_unroll
 - Auditor 5 MED-1: flatten_modules `_rewrite_calls` guard mismatch
 
+#### Cycle 1 fix batch 2 — 4 AD HIGH fixes shipped 2026-05-18
+
+- autodiff.py `_args_are_unroll_safe`: tightened from "ANY literal
+  arg" to "at least one IntLit (or Cast(IntLit)) arg". Float / bool /
+  str literals no longer count as recursion bounds. Eliminates the
+  `loop_ish(x+1, 0)` false positive Auditor 4 named while still
+  unrolling `power(x, 3)` (IntLit 3 still qualifies). New helper
+  `_has_int_literal_leaf` checks the literal recursively.
+- autodiff.py `_inline_user_calls.go()`: added 5 missing AST arms
+  (A.Modify, A.Quote, A.Splice, A.TileLit, A.Path). Pre-fix, a pure
+  helper called inside any of these fell through to `return e` and
+  was left opaque — AD then either failed closed or silently
+  returned zero gradient. A.Path is documented as no-op (it has no
+  expression children).
+- grad_pass.py `_generate_grad_rev_all_fn`: narrowed blanket
+  `except Exception` to `except (KeyError, ValueError, TypeError)`.
+  Added `_ad_warn` on the fallback so users see the silently-zero
+  gradient defect Auditor 4 named is at least visible. Anything
+  outside the narrowed exception set now propagates so real bugs
+  surface.
+- grad_pass.py `_reject_unsupported_grad_signature`: same parity
+  fix — was `except (ValueError, Exception)` (identical to bare
+  `except Exception`), narrowed to `except (KeyError, ValueError,
+  TypeError)` to match the generation path. The asymmetric-except
+  bug Auditor 4 named (rejection accepts what generation then
+  silently zeros) is now closed by symmetry.
+- 1 new fix-verification test
+  (test_cycle1_high2_inline_user_calls_descends_through_modify_quote_splice).
+- 715 pins GREEN across typecheck + parser + struct_mono + AD
+  suites after batch 2.
+
 #### Cycle 1 fix batch 1 — 3 HIGH fixes shipped 2026-05-18
 
 - typecheck.py: extend `_ALL_WRAPPER_CLS_NAMES` from 13 → 18 (add
@@ -124,8 +155,9 @@ Auditors dispatched in parallel:
   for 18-entry table.
 - 586 pins GREEN after batch 1.
 
-**Batch FE verdict (so far)**: NOT CLEAN. 7 HIGH remaining (5 AD-
-specific, 2 design-debt). Will continue in subsequent ticks.
+**Batch FE verdict (so far)**: NOT CLEAN. 2 design-debt HIGHs remain
+(ModalKind divergent source of truth, TyPrim("size_N") namespace
+overload). All 5 AD HIGHs closed in batch 2.
 
 | Batch | Auditor 1 | Auditor 2 | Auditor 3 | Auditor 4 | Auditor 5 | Verdict |
 |-------|-----------|-----------|-----------|-----------|-----------|---------|

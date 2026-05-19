@@ -590,16 +590,43 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
         return False
 
     def _args_are_unroll_safe(args: list[A.Expr]) -> bool:
-        """Stage 54 Inc 3b: a recursive call is unroll-safe if AT LEAST
-        ONE arg is literal-only (constant-folds with no Name leaves) —
-        the assumption being that one of the literal-args drives
-        recursion termination (e.g., the counter in `power(x, 3)`).
-        Conservative: false positives only mean we unroll a non-
-        terminating recursion up to max_unroll levels (bounded
-        anyway), then leave opaque."""
+        """Stage 54 Inc 3b + Cycle 1 Auditor 4 HIGH-1 tightening:
+        a recursive call is unroll-safe if AT LEAST ONE arg is a
+        literal INTEGER (constant-folds with no Name leaves AND is
+        an integer-typed literal) — the assumption being that
+        integer literals are the canonical recursion-bounding
+        pattern (`power(x, 3)`, `factorial(n: 5)`, etc.).
+
+        Pre-Cycle-1: ANY literal counted, including float padding
+        and the `0` in `loop_ish(x+1, 0)` where the literal arg
+        doesn't actually drive recursion — silently unrolling a
+        non-terminating recursion 3 levels deep produced a
+        partially-unrolled gradient that compiled and returned a
+        wrong-but-plausible value. Auditor 4 flagged this as HIGH.
+
+        Post-Cycle-1: require at least one IntLit (or Cast(IntLit)).
+        Float / bool / str literals don't count as recursion-bounds.
+        This eliminates the `_unused=0` false positive while still
+        catching `power(x, 3)` (where 3 is IntLit) and the existing
+        Stage 54 Inc 3b regression test cases."""
         for a in args:
-            if _is_literal_only(a):
+            if _is_literal_only(a) and _has_int_literal_leaf(a):
                 return True
+        return False
+
+    def _has_int_literal_leaf(e: A.Expr) -> bool:
+        """Helper for Cycle 1 HIGH-1 tightening: True iff `e` is or
+        recursively contains an A.IntLit leaf. Used to gate unroll
+        on integer-typed literals only."""
+        if isinstance(e, A.IntLit):
+            return True
+        if isinstance(e, A.Binary):
+            return (_has_int_literal_leaf(e.left)
+                    or _has_int_literal_leaf(e.right))
+        if isinstance(e, A.Unary):
+            return _has_int_literal_leaf(e.operand)
+        if isinstance(e, A.Cast):
+            return _has_int_literal_leaf(e.value)
         return False
 
     def go(e: A.Expr) -> A.Expr:
@@ -788,6 +815,41 @@ def _inline_user_calls(expr: A.Expr, fn_table: dict[str, "A.FnDecl"],
             new_start = (go(e.start) if e.start is not None else None)
             new_end = (go(e.end) if e.end is not None else None)
             return A.Range(span=e.span, start=new_start, end=new_end)
+        # Cycle 1 Auditor 4 HIGH-2 fix: pre-fix, A.Modify / A.Quote /
+        # A.Splice / A.TileLit / A.Path all fell to `return e`, so any
+        # pure-helper call wrapped inside one of these forms was left
+        # opaque (e.g., `modify(target=h(x), ...)` or `tile<f32, [h(x)]>`
+        # or `quote { h(x) }`). The AD pass then saw the inner call
+        # as opaque and either failed closed (loud, acceptable) OR
+        # silently returned zero gradient (the gradient defect Auditor
+        # 4 flagged). Mirrors the gate-4 fix for `_name_appears_in`
+        # that closed the same AST-kind gap one analysis layer over.
+        if isinstance(e, A.Modify):
+            return A.Modify(
+                span=e.span,
+                target=go(e.target),
+                transformation=go(e.transformation),
+                verifier=go(e.verifier),
+            )
+        if isinstance(e, A.Quote):
+            return A.Quote(span=e.span, inner=go(e.inner))
+        if isinstance(e, A.Splice):
+            return A.Splice(span=e.span, inner=go(e.inner))
+        if isinstance(e, A.TileLit):
+            return A.TileLit(
+                span=e.span,
+                dtype=e.dtype,
+                shape=[go(s) for s in e.shape],
+                memspace=go(e.memspace),
+                init=e.init,
+            )
+        if isinstance(e, A.Path):
+            # Path is a dotted identifier reference (segments: list[str])
+            # with no expression-shaped children, so there's nothing to
+            # walk. Return unchanged. Listed here explicitly to document
+            # that we considered + dismissed the case rather than
+            # falling through silently.
+            return e
         return e
 
     return go(expr)

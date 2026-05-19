@@ -5075,6 +5075,62 @@ def test_cycle1_high1_is_copy_walks_through_agi_quartet_wrappers():
     assert tc._is_copy_struct_ty(wrapped_memtier) is True
 
 
+def test_cycle1_high2_inline_user_calls_descends_through_modify_quote_splice():
+    """Cycle 1 Auditor 4 HIGH-2 fix — `_inline_user_calls` now
+    descends into A.Modify, A.Quote, A.Splice, A.TileLit, A.Path.
+    Pre-fix, a pure helper called inside `modify(target=h(x), ...)`,
+    `quote { h(x) }`, etc. was left opaque and the AD pass either
+    failed closed or silently returned zero gradient."""
+    from helixc.frontend.autodiff import _inline_user_calls
+    from helixc.frontend import ast_nodes as A
+
+    # Build: quote { helper(42) } where helper is in fn_table.
+    span = (0, 0)
+    helper_body = A.IntLit(span=span, value=7, type_suffix=None)
+    helper_param = A.FnParam(
+        span=span, name="n",
+        ty=A.TyName(span=span, name="i32"),
+    )
+    # FnDecl.attrs is a list[str], not a dict — and the body must be
+    # an A.Block, not a bare Expr.
+    helper_block = A.Block(span=span, stmts=[], final_expr=helper_body)
+    helper_decl = A.FnDecl(
+        span=span, name="helper",
+        generics=[],
+        params=[helper_param],
+        return_ty=A.TyName(span=span, name="i32"),
+        where_clauses=[],
+        body=helper_block,
+        attrs=["pure"],
+    )
+    fn_table = {"helper": helper_decl}
+
+    # quote { helper(42) }
+    inner_call = A.Call(
+        span=span,
+        callee=A.Name(span=span, name="helper"),
+        args=[A.IntLit(span=span, value=42, type_suffix=None)],
+    )
+    quote_expr = A.Quote(span=span, inner=inner_call)
+    out = _inline_user_calls(quote_expr, fn_table)
+    # The Call inside the Quote should now be inlined. Helper body
+    # is a Block(final_expr=IntLit(7)) since FnDecl bodies are always
+    # Blocks — so Quote.inner becomes the inlined Block.
+    assert isinstance(out, A.Quote), (
+        f"top-level must remain Quote; got {type(out).__name__}")
+    inlined = out.inner
+    assert not isinstance(inlined, A.Call), (
+        f"Quote.inner should be inlined (not a Call anymore); "
+        f"got {type(inlined).__name__}")
+    # Inlined body should be the helper's body (a Block wrapping
+    # IntLit(7)).
+    assert isinstance(inlined, A.Block), (
+        f"Quote.inner should be the inlined Block body; "
+        f"got {type(inlined).__name__}")
+    assert isinstance(inlined.final_expr, A.IntLit)
+    assert inlined.final_expr.value == 7
+
+
 def test_cycle1_high1_parser_trait_swallow_now_raises():
     """Cycle 1 audit fix (Auditor 1 HIGH-1) — `trait { ... }` body
     containing non-fn content now raises ParseError instead of

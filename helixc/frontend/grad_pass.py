@@ -606,16 +606,47 @@ def _generate_grad_rev_all_fn(
     # with paths like "model.w1".
     leaves: list[tuple[str, str]] = []
     if struct_decls is not None:
+        # Cycle 1 Auditor 4 HIGH-4 fix: pre-fix, this used a blanket
+        # `except Exception` that silently fell back to scalar-only
+        # leaves when pytree flattening raised — for ANY exception
+        # type, including KeyboardInterrupt-shaped errors. For a
+        # struct param `my_struct` whose body references
+        # `my_struct.field`, the scalar fallback would have set
+        # `var_names = ["my_struct"]` which differentiate_reverse
+        # then doesn't find in the body — every gradient comes back
+        # as 0.0, silently. The audit-claimed "defensive — rejection
+        # check should have caught this" is exactly wrong: the
+        # rejection at line 600 runs FIRST and CAN miss the same
+        # failure shape that generation hits here.
+        #
+        # Post-fix: narrow except to the specific exceptions
+        # flatten_pytree_param documents (KeyError on missing struct
+        # decl, ValueError on malformed pytree). Anything else
+        # propagates so a real bug surfaces instead of producing
+        # silently-zero gradients. AD-warn on the fallback so the
+        # user knows the codegen path degraded.
         try:
             from .pytree import flatten_pytree_param
             for p in fn.params:
                 p_leaves = flatten_pytree_param(p, struct_decls)
                 for leaf in p_leaves:
                     leaves.append((leaf.path, leaf.ty_name))
-        except Exception:
-            # Fallback to legacy scalar-only path if pytree flattening
-            # fails (defensive; the rejection check above should have
-            # caught this).
+        except (KeyError, ValueError, TypeError) as exc:
+            # Documented-failure shapes from flatten_pytree_param.
+            # Fall back to scalar-only and EMIT a warning so the
+            # silently-zero gradient defect Auditor 4 flagged is
+            # at least visible to the user.
+            try:
+                from .autodiff import _ad_warn
+                _ad_warn(
+                    fn,
+                    f"pytree flattening failed ({type(exc).__name__}: "
+                    f"{exc}); falling back to scalar-only param "
+                    f"path — struct field gradients will be zero. "
+                    f"Cycle 1 Auditor 4 HIGH-4 fix.",
+                )
+            except ImportError:
+                pass
             leaves = [(p.name, _ty_name(p.ty) or "f32")
                       for p in fn.params]
     else:
@@ -900,6 +931,15 @@ def _reject_unsupported_grad_signature(
         if isinstance(ty, A.TyName) and ty.name in _SCALAR_GRAD_TYPES:
             continue
         # Stage 57 Inc 1: try pytree flattening for struct params.
+        # Cycle 1 Auditor 4 HIGH-5 fix: pre-fix used `except
+        # (ValueError, Exception)` which is identical to `except
+        # Exception` and catches everything including BaseException
+        # subclasses we shouldn't swallow. Mirrors the HIGH-4 fix in
+        # _generate_grad_rev_all_fn: narrow to documented exception
+        # shapes so a real bug surfaces. The two functions must
+        # accept/reject the SAME shapes or the rejection check can
+        # accept a param that generation then silently zeros — the
+        # asymmetric-except bug Auditor 4 specifically named.
         if struct_decls is not None:
             try:
                 from .pytree import flatten_pytree_param
@@ -908,8 +948,9 @@ def _reject_unsupported_grad_signature(
                 if all(leaf.ty_name in _SCALAR_GRAD_TYPES
                        for leaf in leaves):
                     continue
-            except (ValueError, Exception):
-                # flatten failed — falls through to rejection below.
+            except (KeyError, ValueError, TypeError):
+                # Same narrowed except as the matched generation
+                # path; falls through to rejection below.
                 pass
         unsupported.append(p.name)
     if unsupported:
