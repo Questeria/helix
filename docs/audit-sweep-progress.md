@@ -380,7 +380,19 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 0 / 5** (Cycle 3 R1 RESET — large finding set surfaced)
+**Current: 1 / 5** 🎉 (Cycle 3 CLOSED after 8 R-rounds + 15 fix batches)
+
+### Cycle 3 closure summary (2026-05-19)
+- **8 R-rounds** to converge (vs C1's 14, C2's 3)
+- **15 fix batches** shipped (20-34): 28 HIGH + 39 MEDIUM closed
+- **R-round HIGH count trajectory**: 27→6→5→4→2→0→0→0
+- **R-round MED count trajectory**: 16→5→6→2→2→5→17→0
+- **Final round (R8)**: CLEAN across all 5 batches (TEST/BE/FE/IR/RT)
+- **84 stdlib _strict variants now exist** (was ~67 before; +17 from batch 34 alone)
+- **Systemic IR refactor**: added `_lower_required` helper + bulk-replaced ~45 silent-zero sites in lower_ast.py
+- **3 BE/FE/IR items DEFERRED** as Stage 110+ design-debt: LOAD_ELEM bounds, ptx broad-except, FE A.Path 2-seg
+
+**Was: 0 / 5** (transient — Cycle 3 R1-R7 reset)
 
 Cycle 3 R1 totals (2026-05-18):
   - FE: 3 HIGH + 4 MEDIUM MUST-FIX + 8 nice-to-have
