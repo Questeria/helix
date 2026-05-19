@@ -132,6 +132,36 @@ fn hashmap_get(start: i32, cap: i32, k: i32, default: i32) -> i32 {
     }
 }
 
+// Cycle 1 Batch RT fix batch 12 (silent-failure HIGH-3):
+// Pre-fix: hashmap_get returned `default` for BOTH "key absent" AND
+// "hashmap corrupt / wrong start handle". Caller couldn't tell whether
+// their key was missing or whether they pointed at a stale arena
+// offset post-`hashmap_clear` (= silently empty map).
+//
+// Post-fix: hashmap_status(start, cap) returns:
+//   0 = ok (hashmap_ok passes)
+//   1 = corrupt (magic mismatch / footer mismatch / bounds bad)
+//
+// Callers can now distinguish by calling hashmap_status BEFORE
+// hashmap_get, asserting status == 0. Preserves the existing
+// hashmap_get API for backward compat (additive, non-breaking).
+@pure
+fn hashmap_status(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { 1 } else { 0 }
+}
+
+// hashmap_get_strict: returns INT32_MIN if the hashmap is corrupt
+// (distinct from any legitimate value the user might have stored
+// as default). For callers that want the corruption-vs-missing
+// distinction without two separate calls.
+@pure
+fn hashmap_get_strict(start: i32, cap: i32, k: i32, default: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 {
+        (0_i32 - 2147483647_i32) - 1_i32
+    }
+    else { hashmap_get(start, cap, k, default) }
+}
+
 @pure
 fn hashmap_has(start: i32, cap: i32, k: i32) -> i32 {
     if hashmap_ok(start, cap) == 0 { 0 }

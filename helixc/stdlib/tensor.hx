@@ -386,6 +386,23 @@ fn ti2d_set(start: i32, cols: i32, i: i32, j: i32, x: i32) -> i32 {
     if off < 0 { 0 } else { __arena_get(off) }
 }
 
+// Cycle 1 Batch RT fix batch 12 (silent-failure HIGH-5):
+// Pre-fix: ti2d_get OOB silently returned 0 — indistinguishable
+// from a legitimate sparse zero. Heavily used by ti2d_matmul,
+// nn.argmax_rows, etc. Caller had no way to detect OOB.
+// Post-fix: ti2d_in_bounds + ti2d_get_strict (INT32_MIN on OOB).
+// Original ti2d_get unchanged for backward compat.
+@pure fn ti2d_in_bounds(start: i32, cols: i32, i: i32, j: i32) -> i32 {
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { 0 } else { 1 }
+}
+
+@pure fn ti2d_get_strict(start: i32, cols: i32, i: i32, j: i32) -> i32 {
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { (0_i32 - 2147483647_i32) - 1_i32 }
+    else { __arena_get(off) }
+}
+
 // y = W @ x. W is rows*cols, x is cols, y is rows.
 fn ti2d_matvec(w_start: i32, w_rows: i32, w_cols: i32,
                x_start: i32, y_start: i32) -> i32 {
@@ -613,6 +630,22 @@ fn tf1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
 fn tf2d_get(start: i32, cols: i32, i: i32, j: i32) -> f32 {
     let off = t2d_offset(start, cols, i, j);
     if off < 0 { 0.0_f32 } else { __f32_from_bits(__arena_get(off)) }
+}
+
+// Cycle 1 Batch RT fix batch 12 (silent-failure HIGH-5):
+// f32 analog of ti2d_get_strict — caller passes an explicit sentinel
+// (typically a value impossible-by-domain, e.g. -1.0e30_f32 for
+// non-negative tensors). Original tf2d_get unchanged.
+@pure
+fn tf2d_get_or(start: i32, cols: i32, i: i32, j: i32, sentinel: f32) -> f32 {
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { sentinel }
+    else { __f32_from_bits(__arena_get(off)) }
+}
+
+@pure fn tf2d_in_bounds(start: i32, cols: i32, i: i32, j: i32) -> i32 {
+    let off = t2d_offset(start, cols, i, j);
+    if off < 0 { 0 } else { 1 }
 }
 
 fn tf2d_set(start: i32, cols: i32, i: i32, j: i32, x: f32) -> i32 {
