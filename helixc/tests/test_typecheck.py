@@ -5955,6 +5955,71 @@ def test_stage92_known_fn_attrs_accepted_silently():
     assert len(unknown_errs) == 0, unknown_errs
 
 
+def test_stage110_gpu_effect_labels_accepted():
+    """Stage 110 (v2.0 Phase B.1) — gpu sync effect labels accepted.
+
+    `@gpu` bare form, `@effect(gpu)` wildcard, and each of
+    `@effect(gpu.warp_sync)`, `@effect(gpu.block_sync)`,
+    `@effect(gpu.grid_sync)`, `@effect(gpu.smem_borrow)` must all
+    parse and typecheck without an unknown-attribute diagnostic.
+    """
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @gpu
+    fn warp_op() -> i32 { 0 }
+
+    @effect(gpu)
+    fn block_op() -> i32 { 0 }
+
+    @effect(gpu.warp_sync)
+    fn warp_sync_op() -> i32 { 0 }
+
+    @effect(gpu.block_sync)
+    fn block_sync_op() -> i32 { 0 }
+
+    @effect(gpu.grid_sync)
+    fn grid_sync_op() -> i32 { 0 }
+
+    @effect(gpu.smem_borrow)
+    fn smem_op() -> i32 { 0 }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    unknown_errs = [e for e in errors
+                    if "unknown attribute" in str(e)]
+    assert len(unknown_errs) == 0, unknown_errs
+
+
+def test_stage110_gpu_wildcard_expands_to_sub_labels():
+    """Stage 110 — `@effect(gpu)` covers all four gpu.* sub-labels via
+    _SUB_LABELS expansion at effect-comparison time.
+
+    A caller declaring `@effect(gpu)` should not get a missing-effect
+    diagnostic when invoking a callee declaring `@effect(gpu.warp_sync)`.
+    """
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @effect(gpu.warp_sync)
+    fn warp_op() -> i32 { 0 }
+
+    @effect(gpu)
+    fn caller() -> i32 { warp_op() }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    missing_errs = [e for e in errors
+                    if "missing" in str(e).lower() and "effect" in str(e).lower()]
+    assert len(missing_errs) == 0, missing_errs
+
+
 def test_stage92_loop_body_double_move_now_diagnosed():
     """Stage 92 (Inc 5d / Stage 91 audit HIGH-#1 fix) — `for { let _
     = __move(s); }` now emits "loop body ends with ... in state

@@ -1303,8 +1303,20 @@ def _expand_effect_wildcards(effects: frozenset[str]) -> frozenset[str]:
     """
     # Known sub-label families. To add a new wildcard parent, add an
     # entry here. Format: parent_label -> tuple of sub-labels.
+    #
+    # Stage 110 (v2.0 Phase B.1): GPU sync effect labels. Each
+    # `gpu.*_sync` is an OBLIGATION, not a capability — a fn that
+    # produces an unsynchronized SMEM borrow at warp/block/grid
+    # scope must call a function declaring the matching sync label
+    # before kernel exit. Discharged in Stage 113-114 by extending
+    # the borrow checker with scope-tagged borrows.
+    #
+    # `gpu.smem_borrow` is a token capability (acquired on tile
+    # load/store), distinct from the *_sync obligations.
     _SUB_LABELS: dict[str, tuple[str, ...]] = {
         "io": ("io.read_file", "io.write_file", "io.print"),
+        "gpu": ("gpu.warp_sync", "gpu.block_sync",
+                "gpu.grid_sync", "gpu.smem_borrow"),
     }
     expanded = set(effects)
     for e in effects:
@@ -2104,7 +2116,12 @@ class TypeChecker:
                 effects.add("unknown_effect")
             elif a.startswith("effect:"):
                 effects.add(a[len("effect:"):])
-            elif a in ("io", "network", "modify_self", "rng", "time", "fs"):
+            elif a in ("io", "network", "modify_self", "rng", "time", "fs",
+                       "gpu"):
+                # Stage 110 (v2.0 Phase B.1): bare `@gpu` attribute is
+                # the wildcard-parent effect; expands to gpu.warp_sync
+                # + gpu.block_sync + gpu.grid_sync + gpu.smem_borrow
+                # via _SUB_LABELS at effect-comparison time.
                 effects.add(a)
         if is_pure and effects:
             self.errors.append(TypeError_(
@@ -12241,6 +12258,14 @@ class TypeChecker:
         "dispatch",
         "unwind",
         "trace",
+        # Stage 110 (v2.0 Phase B.1): GPU sync effect labels. Used as
+        # `@effect(gpu.warp_sync)`, `@effect(gpu.block_sync)`,
+        # `@effect(gpu.grid_sync)`, `@effect(gpu.smem_borrow)`. The
+        # parent `gpu` wildcard expands to all four via _SUB_LABELS.
+        # Functions declaring these labels discharge sync obligations
+        # on caller-side SMEM borrows; see Stage 113-114 for the
+        # borrow-checker integration.
+        "gpu",
     })
     _KNOWN_STRUCT_ATTRS: frozenset = frozenset({
         # Stage 66 Inc 4 Copy marker.
