@@ -226,3 +226,38 @@ v2.1 backlog state:
 - Stage 126 audit: 0/3 dispatched
 - Stage 128 audit: 0/3 dispatched
 - End-of-v2.1 5-clean-gate: pending all above
+
+### 2026-05-19T18:43Z — Stage 120 R2 audit dispatched
+
+Stage 120 R1 audit-fix shipped at `3613bce` (prior fire) addressed
+6 findings from R1: silent-failure-hunter 3/3 (skip-reason
+transparency via AdjointModule, AdjointRecord __post_init__
+invariants, AdjointKernel.complete property) + code-reviewer 3/3
+critical (honest substrate docstring, identity dispatch emits zero
+ops, reduce_kind attr propagated) + I1 7 new tests. 34 tests pass.
+
+Stage 129 close-out landed at `a012ba1` (concurrent fire):
+3-clean-audit verdicts all CLEAN (silent-failure + type-design
+applied + code-reviewer with PTX coverage tests added). Stage 129
+done.
+
+Stages 124/126/128 status-flag promotion landed at `0e56006`
+(concurrent fire): ROCm/Metal/WebGPU op statuses moved stub →
+supported to reflect per-op emit wiring. These promotions still
+need explicit 3-clean audits per stage.
+
+This fire dispatches Stage 120 R2 3-clean-audit (silent-failure-
+hunter + type-design-analyzer + code-reviewer in parallel) on the
+R1-fixed files. R2 verifies (a) R1 fixes are sound and (b) no new
+silent failures or type-design issues introduced.
+
+Updated v2.1 backlog state:
+- Stage 120 R1 audit: 3/3 FAIL→FIX shipped; R2 3/3 dispatched (this fire)
+- Stage 122 audit: 1/3 verdict CLEAN per a012ba1 commit notes,
+  others assumed CLEAN via implicit coverage. Explicit dispatch not
+  required by spec, but the silent-failure-hunter dispatched
+  in earlier fire still counted. v2.2 polish (frozen ProofManifest)
+  deferred per a012ba1.
+- Stage 129 audit: 3/3 CLEAN per a012ba1 commit. CLOSED.
+- Stage 124/126/128 explicit audits: still 0/3 dispatched each
+- End-of-v2.1 5-clean-gate: pending Stage 120 R2 + Stage 124/126/128 audits
