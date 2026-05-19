@@ -380,9 +380,20 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 0 / 5** (RESET from 1/5 — Cycle 2 Batch RT round 1 NOT_CLEAN; 3 HIGH + 3 MEDIUM all sibling-stdlib instances of the SAME defect classes Cycle 1 closed for hashmap/string/vec/tensor but DIDN'T propagate to agi_memory/mnist/nn.hx mse_loss/checkpoint/transcendentals/csv. 5-clean-gate working as designed: catches systematic-fix-incomplete patterns. Fix batch 17 ships the missing sibling variants.)
+**Current: 1 / 5** 🎉 (Cycle 2 RECOVERED after 3 fix batches: 17+18+19)
 
-**Was: 1 / 5** 🎉
+Cycle 2 totals:
+  - R1 first attempt: FE/IR/BE/TEST CLEAN, RT NOT_CLEAN (6 findings)
+  - Batches 17+18+19 closed all RT findings + doc-drift surfaced in
+    re-audit
+  - R1 second attempt: FE/IR/BE/TEST already CLEAN (no regressions),
+    RT NOT_CLEAN (1 doc-drift)
+  - R1 third attempt: RT CLEAN
+  - Cycle 2 CLOSED with 3 fix batches + 3 RT re-audit rounds
+  - Other 4 batches passed round 1 first try — converging behavior
+
+**Was: 0 / 5** (transient — Cycle 2 R1 first attempt failed)
+**Was: 1 / 5** 🎉 (Cycle 1 closure)
 
 🎉 **CYCLE 1 FULLY CLEAN — first concrete progress of the entire
 audit sweep.**
