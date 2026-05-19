@@ -5995,8 +5995,8 @@ def test_stage110_gpu_effect_labels_accepted():
 
 
 def test_stage110_gpu_wildcard_expands_to_sub_labels():
-    """Stage 110 — `@effect(gpu)` covers all four gpu.* sub-labels via
-    _SUB_LABELS expansion at effect-comparison time.
+    """Stage 110 — `@effect(gpu)` covers the three gpu.*_sync
+    obligations via _SUB_LABELS expansion at effect-comparison time.
 
     A caller declaring `@effect(gpu)` should not get a missing-effect
     diagnostic when invoking a callee declaring `@effect(gpu.warp_sync)`.
@@ -6018,6 +6018,27 @@ def test_stage110_gpu_wildcard_expands_to_sub_labels():
     missing_errs = [e for e in errors
                     if "missing" in str(e).lower() and "effect" in str(e).lower()]
     assert len(missing_errs) == 0, missing_errs
+
+
+def test_stage110_smem_borrow_excluded_from_gpu_wildcard():
+    """Stage 110 type-design audit fix — `gpu.smem_borrow` is a linear
+    capability, NOT an effect obligation. The `gpu` wildcard MUST NOT
+    cover smem_borrow; otherwise a caller with @gpu would silently
+    satisfy a callee requiring acquire/release-paired smem_borrow
+    without the actual pair (unsound once Stage 113-114 lands).
+
+    Caller `@effect(gpu)` should NOT cover callee
+    `@effect(gpu.smem_borrow)` requirement.
+    """
+    from helixc.frontend.typecheck import typecheck, _expand_effect_wildcards
+    expanded = _expand_effect_wildcards(frozenset({"gpu"}))
+    assert "gpu.warp_sync" in expanded
+    assert "gpu.block_sync" in expanded
+    assert "gpu.grid_sync" in expanded
+    assert "gpu.smem_borrow" not in expanded, (
+        "type-design audit fix: smem_borrow must be a capability, "
+        "not covered by the gpu wildcard"
+    )
 
 
 def test_stage92_loop_body_double_move_now_diagnosed():

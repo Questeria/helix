@@ -993,6 +993,44 @@ BORROW_SHARED = "shared"
 BORROW_MUTABLE = "mutable"
 BORROW_MOVED = "moved"
 
+# Stage 113 (v2.0 Phase B.2.a): execution-scope-tagged borrows.
+# Borrows on GPU memory acquire a SCOPE — the set of execution
+# threads that share visibility. Default is "thread" (Rust-Rust);
+# `@kernel` functions may issue wider-scope borrows on shared
+# tiles. SMEM / HBM borrows in @kernel context default to "block"
+# / "grid" respectively.
+#
+# Rules:
+# - "thread": Rust-equivalent rules (one &mut OR many &; never both)
+# - "warp" (32 lanes): 32 shared OR 1 mut; never mix
+# - "block" (CTA-wide): all threads see same view; ends at __syncthreads
+# - "grid" (cooperative grid): every block's threads; ends at cooperative sync
+#
+# Stages 114-116 wire enforcement via `BorrowState.check_borrow_scoped`
+# and the borrow-checker scope-aware reconcile at barrier-discharge
+# join points. Stage 113 ships the type substrate only — pure additive,
+# does not yet reject any existing programs.
+BORROW_SCOPE_THREAD = "thread"
+BORROW_SCOPE_WARP = "warp"
+BORROW_SCOPE_BLOCK = "block"
+BORROW_SCOPE_GRID = "grid"
+BORROW_SCOPES = frozenset({
+    BORROW_SCOPE_THREAD,
+    BORROW_SCOPE_WARP,
+    BORROW_SCOPE_BLOCK,
+    BORROW_SCOPE_GRID,
+})
+
+# Scope-ordering lattice: thread < warp < block < grid.
+# A wider-scope borrow subsumes narrower scopes — moving from
+# block-scope to thread-scope requires a barrier-discharge.
+BORROW_SCOPE_RANK: dict[str, int] = {
+    BORROW_SCOPE_THREAD: 0,
+    BORROW_SCOPE_WARP: 1,
+    BORROW_SCOPE_BLOCK: 2,
+    BORROW_SCOPE_GRID: 3,
+}
+
 
 @dataclass
 class BorrowState:
@@ -1289,6 +1327,22 @@ _MODAL_UPGRADE_HINT: dict[tuple[str, str], str] = {
 }
 
 
+# Stage 110 (v2.0 Phase B.1 type-design audit fix): single source of
+# truth for the GPU sync obligation set. Referenced from both
+# _SUB_LABELS["gpu"] and the bare-attribute effect elif so a future
+# 5th *_sync label can be added in one place. NOTE: does NOT include
+# gpu.smem_borrow — that label is a linear capability handled via
+# _KNOWN_FN_ATTRS only; conflating it into the wildcard would let a
+# caller with @gpu satisfy a callee requiring acquire/release-paired
+# smem_borrow without the actual pair, which is unsound once Stage
+# 113-114 wires borrow-checker enforcement.
+GPU_SYNC_LABELS: tuple[str, ...] = (
+    "gpu.warp_sync",
+    "gpu.block_sync",
+    "gpu.grid_sync",
+)
+
+
 def _expand_effect_wildcards(effects: frozenset[str]) -> frozenset[str]:
     """Stage 55 Inc 4 — expand parent effect labels to cover all their
     sub-labels for the call-site subsumption check.
@@ -1311,12 +1365,18 @@ def _expand_effect_wildcards(effects: frozenset[str]) -> frozenset[str]:
     # before kernel exit. Discharged in Stage 113-114 by extending
     # the borrow checker with scope-tagged borrows.
     #
-    # `gpu.smem_borrow` is a token capability (acquired on tile
-    # load/store), distinct from the *_sync obligations.
+    # Stage 110 type-design audit fix: `gpu.smem_borrow` is a linear
+    # CAPABILITY (acquire/release-paired), NOT an effect. Conflating
+    # it into the `gpu` wildcard would let a caller with `@gpu`
+    # satisfy a callee requiring smem_borrow without actually
+    # acquiring/releasing — silent miscompile once Stage 113-114
+    # ships borrow-checker integration. Per auditor recommendation:
+    # `gpu.smem_borrow` lives in _KNOWN_FN_ATTRS for surface
+    # acceptance, but the `gpu` wildcard ONLY covers the 3 *_sync
+    # obligations.
     _SUB_LABELS: dict[str, tuple[str, ...]] = {
         "io": ("io.read_file", "io.write_file", "io.print"),
-        "gpu": ("gpu.warp_sync", "gpu.block_sync",
-                "gpu.grid_sync", "gpu.smem_borrow"),
+        "gpu": GPU_SYNC_LABELS,
     }
     expanded = set(effects)
     for e in effects:
