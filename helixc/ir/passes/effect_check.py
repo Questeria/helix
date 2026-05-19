@@ -359,9 +359,25 @@ def callees(fn: tir.FnIR) -> set[str]:
             elif op.kind == tir.OpKind.MODIFY:
                 # Verifier functions called via MODIFY's verifier_fn attr
                 # contribute to this function's effect closure.
+                # v2.2 polish item 6 (FE LOW from v2.1 5-clean-gate):
+                # the prior code only harvested string verifiers. A
+                # non-string verifier (indirect function pointer) was
+                # silently dropped from the callee set — its effects
+                # never propagated into the caller's closure, and
+                # `compute_closure` would not assume `unknown`. So a
+                # @pure caller using `modify(target, xform,
+                # <indirect verifier>)` where the indirect verifier
+                # had effects would pass silently. R1 fix: emit
+                # `<indirect-verifier>` sentinel for non-string
+                # verifier_fn, mirrors CALL `<indirect>` and FFI_CALL
+                # `<indirect-ffi>` handling — `compute_closure` then
+                # contributes `unknown` for the unresolved name,
+                # forcing the caller to declare the effect.
                 vfn = op.attrs.get("verifier_fn")
                 if isinstance(vfn, str):
                     out.add(vfn)
+                elif vfn is not None:
+                    out.add("<indirect-verifier>")
     return out
 
 
