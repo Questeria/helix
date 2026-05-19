@@ -1913,6 +1913,46 @@ fn ti1d_last(start: i32, n: i32) -> i32 {
     else { __arena_get(start + n - 1) } }
 }
 
+// Cycle 3 R3 fix batch 28 (RT R3 NEW-MEDIUM-3): _strict variants of the
+// ti1d_first/last + tf1d_first/last + ti1d_max_abs family. Pre-fix all
+// returned 0 / 0.0 for empty (n<=0) AND corrupt slice (t1d_slice_ok==0),
+// indistinguishable from "first element is 0." Sibling of batch-20
+// vec_first_strict / vec_last_strict template.
+@pure
+fn ti1d_first_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_first(start, n) }}
+}
+
+@pure
+fn ti1d_last_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_last(start, n) }}
+}
+
+@pure
+fn ti1d_max_abs_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_max_abs(start, n) }}
+}
+
+@pure
+fn tf1d_first_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_first(start, n) }}
+}
+
+@pure
+fn tf1d_last_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_last(start, n) }}
+}
+
 // ti1d_count_eq(start, n, target): @pure. Count of v[i] == target.
 @pure
 fn ti1d_count_eq(start: i32, n: i32, target: i32) -> i32 {

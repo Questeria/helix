@@ -1742,6 +1742,32 @@ class Lowerer:
             self._bind(stmt.name, v)
             return
 
+    def _lower_required(
+        self, expr: A.Expr, *, ctx: str = "",
+        expected_rec_enum: Optional[str] = None,
+    ) -> tir.Value:
+        """Cycle 3 R3 fix batch 28 (IR R3 systemic): replaces the
+        `self._lower_required(x, ctx="silent-zero R3")` silent-zero
+        pattern that affected ~45 sites (builtin args, AGI primitive
+        args, index expressions, range bounds). Raises loudly when
+        lowering fails — typecheck should have rejected unlowereable
+        expressions before IR-build.
+
+        Use this everywhere except where None is a LEGITIMATE return
+        (A.If/A.While then/else val placeholders for early-return
+        blocks).
+        """
+        v = self._lower_expr(expr, expected_rec_enum=expected_rec_enum)
+        if v is None:
+            raise NotImplementedError(
+                f"lower_ast: required expression at "
+                f"{getattr(expr, 'span', None)!r} of type "
+                f"{type(expr).__name__} lowered to no value; "
+                f"ctx={ctx!r}; typecheck should have rejected this "
+                f"— Cycle 3 R3 IR systemic"
+            )
+        return v
+
     def _lower_expr(
         self, expr: A.Expr, expected_rec_enum: Optional[str] = None,
     ) -> Optional[tir.Value]:
@@ -2990,8 +3016,8 @@ class Lowerer:
                         idx_val = a0.value * cols + a1.value
                         idx_v = self.builder.const_int(idx_val)
                     else:
-                        row_v = self._lower_expr(a0) or self.builder.const_int(0)
-                        col_v = self._lower_expr(a1) or self.builder.const_int(0)
+                        row_v = self._lower_required(a0, ctx="silent-zero R3")
+                        col_v = self._lower_required(a1, ctx="silent-zero R3")
                         cols_v = self.builder.const_int(cols)
                         prod = self.builder.emit(tir.OpKind.MUL, row_v, cols_v,
                                                  result_ty=tir.TIRScalar("i32"))
@@ -3107,22 +3133,18 @@ class Lowerer:
             if isinstance(expr.callee, A.Name):
                 bn = expr.callee.name
                 if bn == "__arena_push" and len(expr.args) == 1:
-                    v = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
+                    v = self._lower_required(expr.args[0], ctx="silent-zero R3")
                     return self.builder.emit(
                         tir.OpKind.ARENA_PUSH, v,
                         result_ty=tir.TIRScalar("i32"))
                 if bn == "__arena_get" and len(expr.args) == 1:
-                    i = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
+                    i = self._lower_required(expr.args[0], ctx="silent-zero R3")
                     return self.builder.emit(
                         tir.OpKind.ARENA_GET, i,
                         result_ty=tir.TIRScalar("i32"))
                 if bn == "__arena_set" and len(expr.args) == 2:
-                    i = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    v = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
+                    i = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    v = self._lower_required(expr.args[1], ctx="silent-zero R3")
                     return self.builder.emit(
                         tir.OpKind.ARENA_SET, i, v,
                         result_ty=tir.TIRScalar("i32"))
@@ -3169,8 +3191,7 @@ class Lowerer:
                 # Used for symbol-table bucketing. Lowers to inline
                 # arithmetic — pure operation, no IR op needed.
                 if bn == "__hash_i32" and len(expr.args) == 1:
-                    x = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
+                    x = self._lower_required(expr.args[0], ctx="silent-zero R3")
                     # Quadratic mixer: h = x*x*c1 + x*c2 + c3 (mod 2^32 via
                     # signed wraparound). Without bitwise XOR/SHR in TIR,
                     # we can't do a real murmur3 finalizer; the previous
@@ -3199,10 +3220,8 @@ class Lowerer:
                     # No bounds-check (caller's responsibility — matches
                     # __arena_get policy). Returns the byte value in
                     # the low 8 bits of an i32.
-                    start = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    pos = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
+                    start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    pos = self._lower_required(expr.args[1], ctx="silent-zero R3")
                     i32 = tir.TIRScalar("i32")
                     idx = self.builder.emit(tir.OpKind.ADD, start, pos,
                                               result_ty=i32)
@@ -3224,12 +3243,9 @@ class Lowerer:
                     # Implementation: nested SELECTs from the inside
                     # out — for each i, result = if i<len then (if
                     # arena[start+i]==target then i else acc) else acc.
-                    start = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    length = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
-                    target = self._lower_expr(expr.args[2]) \
-                        or self.builder.const_int(0)
+                    start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    length = self._lower_required(expr.args[1], ctx="silent-zero R3")
+                    target = self._lower_required(expr.args[2], ctx="silent-zero R3")
                     i32 = tir.TIRScalar("i32")
                     bool_ty = tir.TIRScalar("bool")
                     MAX_SCAN = 256
@@ -3265,14 +3281,10 @@ class Lowerer:
                     # Algorithm: accumulator is an i32 counter of
                     # equal-bytes-where-in-range. Final check: len_eq
                     # AND counter == a_len.
-                    a_start = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    a_len = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
-                    b_start = self._lower_expr(expr.args[2]) \
-                        or self.builder.const_int(0)
-                    b_len = self._lower_expr(expr.args[3]) \
-                        or self.builder.const_int(0)
+                    a_start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    a_len = self._lower_required(expr.args[1], ctx="silent-zero R3")
+                    b_start = self._lower_required(expr.args[2], ctx="silent-zero R3")
+                    b_len = self._lower_required(expr.args[3], ctx="silent-zero R3")
                     i32 = tir.TIRScalar("i32")
                     bool_ty = tir.TIRScalar("bool")
                     MAX_SCAN = 256
@@ -3339,10 +3351,8 @@ class Lowerer:
                 # should slice to a clean digit-only region using
                 # Inc 1's __str_find_byte before calling.
                 if bn == "__parse_i32" and len(expr.args) == 2:
-                    start = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    length = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
+                    start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    length = self._lower_required(expr.args[1], ctx="silent-zero R3")
                     i32 = tir.TIRScalar("i32")
                     bool_ty = tir.TIRScalar("bool")
                     MAX_PARSE = 20
@@ -3416,10 +3426,8 @@ class Lowerer:
                 # already written something OR we're at the last
                 # position — to ensure n=0 writes "0").
                 if bn == "__str_from_i32" and len(expr.args) == 2:
-                    n_val = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    dest = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
+                    n_val = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    dest = self._lower_required(expr.args[1], ctx="silent-zero R3")
                     i32 = tir.TIRScalar("i32")
                     bool_ty = tir.TIRScalar("bool")
                     digit_zero = self.builder.const_int(48)  # '0'
@@ -3510,16 +3518,11 @@ class Lowerer:
                 # Returns total bytes (a_len + b_len).
                 # Compile-time unrolled to MAX_COPY=256 bytes per side.
                 if bn == "__str_concat_arena" and len(expr.args) == 5:
-                    a_start = self._lower_expr(expr.args[0]) \
-                        or self.builder.const_int(0)
-                    a_len = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
-                    b_start = self._lower_expr(expr.args[2]) \
-                        or self.builder.const_int(0)
-                    b_len = self._lower_expr(expr.args[3]) \
-                        or self.builder.const_int(0)
-                    dest = self._lower_expr(expr.args[4]) \
-                        or self.builder.const_int(0)
+                    a_start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                    a_len = self._lower_required(expr.args[1], ctx="silent-zero R3")
+                    b_start = self._lower_required(expr.args[2], ctx="silent-zero R3")
+                    b_len = self._lower_required(expr.args[3], ctx="silent-zero R3")
+                    dest = self._lower_required(expr.args[4], ctx="silent-zero R3")
                     i32 = tir.TIRScalar("i32")
                     bool_ty = tir.TIRScalar("bool")
                     MAX_COPY = 256
@@ -3587,8 +3590,7 @@ class Lowerer:
                 if (bn == "__strbyte" and len(expr.args) == 2
                         and isinstance(expr.args[0], A.StrLit)):
                     s = expr.args[0].value
-                    i = self._lower_expr(expr.args[1]) \
-                        or self.builder.const_int(0)
+                    i = self._lower_required(expr.args[1], ctx="silent-zero R3")
                     return self.builder.emit(
                         tir.OpKind.STR_BYTE, i,
                         result_ty=tir.TIRScalar("i32"),
@@ -3657,10 +3659,8 @@ class Lowerer:
                     and expr.callee.name == "write_file_to_arena"
                     and len(expr.args) == 3
                     and isinstance(expr.args[0], A.StrLit)):
-                arena_start = self._lower_expr(expr.args[1]) \
-                    or self.builder.const_int(0)
-                n_bytes = self._lower_expr(expr.args[2]) \
-                    or self.builder.const_int(0)
+                arena_start = self._lower_required(expr.args[1], ctx="silent-zero R3")
+                n_bytes = self._lower_required(expr.args[2], ctx="silent-zero R3")
                 return self.builder.emit(
                     tir.OpKind.PRINT, arena_start, n_bytes,
                     result_ty=tir.TIRScalar("i32"),
@@ -3687,10 +3687,8 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "read_file_to_arena_dyn"
                     and len(expr.args) == 2):
-                path_start = self._lower_expr(expr.args[0]) \
-                    or self.builder.const_int(0)
-                path_len = self._lower_expr(expr.args[1]) \
-                    or self.builder.const_int(0)
+                path_start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                path_len = self._lower_required(expr.args[1], ctx="silent-zero R3")
                 return self.builder.emit(
                     tir.OpKind.PRINT, path_start, path_len,
                     result_ty=tir.TIRScalar("i32"),
@@ -3700,14 +3698,10 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "write_file_to_arena_dyn"
                     and len(expr.args) == 4):
-                path_start = self._lower_expr(expr.args[0]) \
-                    or self.builder.const_int(0)
-                path_len = self._lower_expr(expr.args[1]) \
-                    or self.builder.const_int(0)
-                data_start = self._lower_expr(expr.args[2]) \
-                    or self.builder.const_int(0)
-                n_bytes = self._lower_expr(expr.args[3]) \
-                    or self.builder.const_int(0)
+                path_start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                path_len = self._lower_required(expr.args[1], ctx="silent-zero R3")
+                data_start = self._lower_required(expr.args[2], ctx="silent-zero R3")
+                n_bytes = self._lower_required(expr.args[3], ctx="silent-zero R3")
                 return self.builder.emit(
                     tir.OpKind.PRINT, path_start, path_len,
                     data_start, n_bytes,
@@ -3717,10 +3711,8 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "read_file_int_dyn"
                     and len(expr.args) == 2):
-                path_start = self._lower_expr(expr.args[0]) \
-                    or self.builder.const_int(0)
-                path_len = self._lower_expr(expr.args[1]) \
-                    or self.builder.const_int(0)
+                path_start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                path_len = self._lower_required(expr.args[1], ctx="silent-zero R3")
                 return self.builder.emit(
                     tir.OpKind.PRINT, path_start, path_len,
                     result_ty=tir.TIRScalar("i32"),
@@ -3730,14 +3722,10 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "write_file_dyn"
                     and len(expr.args) == 4):
-                path_start = self._lower_expr(expr.args[0]) \
-                    or self.builder.const_int(0)
-                path_len = self._lower_expr(expr.args[1]) \
-                    or self.builder.const_int(0)
-                content_start = self._lower_expr(expr.args[2]) \
-                    or self.builder.const_int(0)
-                content_len = self._lower_expr(expr.args[3]) \
-                    or self.builder.const_int(0)
+                path_start = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                path_len = self._lower_required(expr.args[1], ctx="silent-zero R3")
+                content_start = self._lower_required(expr.args[2], ctx="silent-zero R3")
+                content_len = self._lower_required(expr.args[3], ctx="silent-zero R3")
                 return self.builder.emit(
                     tir.OpKind.PRINT, path_start, path_len,
                     content_start, content_len,
@@ -3748,7 +3736,7 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "splice_f"
                     and len(expr.args) == 1):
-                handle = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
+                handle = self._lower_required(expr.args[0], ctx="silent-zero R3")
                 # Emit a SPLICE op tagged with f32 result type. Codegen looks
                 # at the result type to decide whether to use mov vs movss
                 # for the cell read; the bit pattern in the cell is
@@ -3759,15 +3747,15 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "splice_f64"
                     and len(expr.args) == 1):
-                handle = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
+                handle = self._lower_required(expr.args[0], ctx="silent-zero R3")
                 return self.builder.emit(tir.OpKind.SPLICE, handle,
                                          result_ty=tir.TIRScalar("f64"),
                                          attrs={"value_kind": "f64"})
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "modify_f"
                     and len(expr.args) == 3):
-                target_v = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
-                xform_v = self._lower_expr(expr.args[1]) or self.builder.const_int(0)
+                target_v = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                xform_v = self._lower_required(expr.args[1], ctx="silent-zero R3")
                 attrs: dict[str, object] = {"value_kind": "f32"}
                 v_arg = expr.args[2]
                 if (isinstance(v_arg, A.Name)
@@ -3785,7 +3773,7 @@ class Lowerer:
                 # Drop the f32 hint so the backend doesn't emit movss from an
                 # operand slot whose actual type wasn't validated as float.
                 attrs.pop("value_kind", None)
-                vrt = self._lower_expr(v_arg) or self.builder.const_int(0)
+                vrt = self._lower_required(v_arg, ctx="silent-zero R3")
                 return self.builder.emit(tir.OpKind.MODIFY,
                                          target_v, xform_v, vrt,
                                          result_ty=tir.TIRScalar("i32"),
@@ -3793,8 +3781,8 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "modify_f64"
                     and len(expr.args) == 3):
-                target_v = self._lower_expr(expr.args[0]) or self.builder.const_int(0)
-                xform_v = self._lower_expr(expr.args[1]) or self.builder.const_int(0)
+                target_v = self._lower_required(expr.args[0], ctx="silent-zero R3")
+                xform_v = self._lower_required(expr.args[1], ctx="silent-zero R3")
                 attrs: dict[str, object] = {"value_kind": "f64"}
                 v_arg = expr.args[2]
                 if (isinstance(v_arg, A.Name)
@@ -3809,7 +3797,7 @@ class Lowerer:
                                              result_ty=tir.TIRScalar("i32"),
                                              attrs=attrs)
                 attrs.pop("value_kind", None)
-                vrt = self._lower_expr(v_arg) or self.builder.const_int(0)
+                vrt = self._lower_required(v_arg, ctx="silent-zero R3")
                 return self.builder.emit(tir.OpKind.MODIFY,
                                          target_v, xform_v, vrt,
                                          result_ty=tir.TIRScalar("i32"),
@@ -3876,7 +3864,18 @@ class Lowerer:
                                         )
                                     v = self._lower_expr(
                                         a, expected_rec_enum=p_ty.name)
-                                    args.append(v or self.builder.const_int(0))
+                                    # Cycle 3 R3 fix batch 28 (IR R3 MED):
+                                    # rec-enum arg lowered to None silently
+                                    # became const_int(0) (arena index 0).
+                                    if v is None:
+                                        raise NotImplementedError(
+                                            f"lower_ast: rec-enum call arg "
+                                            f"at {getattr(a, 'span', None)!r} "
+                                            f"of type {type(a).__name__} "
+                                            f"lowered to no value — "
+                                            f"Cycle 3 R3 IR systemic"
+                                        )
+                                    args.append(v)
                                     expanded = True
                         else:
                             name_is_bound = (
@@ -3913,7 +3912,16 @@ class Lowerer:
                                     and self._lookup_rec_enum(a.name)
                                     == p_ty.name):
                                 v = self._lower_expr(a)
-                                args.append(v or self.builder.const_int(0))
+                                # Cycle 3 R3 fix batch 28 (IR R3 MED):
+                                # existing rec-enum name binding lowered
+                                # to None silently became const_int(0).
+                                if v is None:
+                                    raise NotImplementedError(
+                                        f"lower_ast: rec-enum name binding "
+                                        f"{a.name!r} lowered to no value "
+                                        f"— Cycle 3 R3 IR systemic"
+                                    )
+                                args.append(v)
                                 expanded = True
                             else:
                                 got = type(a).__name__
@@ -4241,6 +4249,8 @@ class Lowerer:
                     expr.else_, expected_rec_enum=expected_rec_enum,
                 ) or self.builder.const_int(0)
             else:
+                # Cycle 3 R3 fix batch 28: else-block legitimate
+                # unit-typed placeholder for early-return — kept.
                 e_val = self._lower_expr(
                     expr.else_, expected_rec_enum=expected_rec_enum,
                 ) or self.builder.const_int(0)
@@ -4290,13 +4300,13 @@ class Lowerer:
             iter_var = tag + expr.var_name
             end_var = tag + "end"
 
-            start_v = self._lower_expr(expr.iter_expr.start) or self.builder.const_int(0)
+            start_v = self._lower_required(expr.iter_expr.start, ctx="silent-zero R3")
             self.builder.emit(tir.OpKind.ALLOC_VAR,
                               attrs={"name": iter_var, "dtype": start_v.ty})
             self.builder.emit(tir.OpKind.STORE_VAR, start_v,
                               attrs={"name": iter_var})
 
-            end_v = self._lower_expr(expr.iter_expr.end) or self.builder.const_int(0)
+            end_v = self._lower_required(expr.iter_expr.end, ctx="silent-zero R3")
             self.builder.emit(tir.OpKind.ALLOC_VAR,
                               attrs={"name": end_var, "dtype": end_v.ty})
             self.builder.emit(tir.OpKind.STORE_VAR, end_v,
@@ -4511,8 +4521,7 @@ class Lowerer:
                 hbm = self._lookup_hbm_tile(expr.target.callee.name)
                 if hbm is not None:
                     dtype_name, _length, _param_pos = hbm
-                    idx_v = self._lower_expr(expr.target.indices[0]) \
-                            or self.builder.const_int(0)
+                    idx_v = self._lower_required(expr.target.indices[0], ctx="silent-zero R3")
                     if expr.op != "=":
                         # Phase-0: only plain assign on HBM tiles.
                         raise NotImplementedError(
@@ -4606,8 +4615,7 @@ class Lowerer:
                 hbm = self._lookup_hbm_tile(expr.callee.name)
                 if hbm is not None:
                     dtype_name, _length, _param_pos = hbm
-                    idx_v = self._lower_expr(expr.indices[0]) \
-                            or self.builder.const_int(0)
+                    idx_v = self._lower_required(expr.indices[0], ctx="silent-zero R3")
                     return self.builder.emit(
                         tir.OpKind.TILE_INDEX_LOAD, idx_v,
                         result_ty=tir.TIRScalar(dtype_name),
@@ -4815,14 +4823,18 @@ class Lowerer:
                                      attrs={"ast_handle": ast_handle,
                                             "ast_pretty": _pretty(expr.inner)})
         if isinstance(expr, A.Splice):
-            inner = self._lower_expr(expr.inner)
-            if inner is None:
-                inner = self.builder.const_int(0)
+            # Cycle 3 R3 fix batch 28 (IR R3 NEW-HIGH-A sibling):
+            # use _lower_required to raise on None instead of silent
+            # const_int(0). Also set value_kind="i64" so the backend
+            # routes the result through 8-byte store (was silently
+            # 32-bit-truncated per BE R3 NEW-HIGH-1).
+            inner = self._lower_required(expr.inner, ctx="A.Splice inner")
             return self.builder.emit(tir.OpKind.SPLICE, inner,
-                                     result_ty=tir.TIRScalar("i64"))
+                                     result_ty=tir.TIRScalar("i64"),
+                                     attrs={"value_kind": "i64"})
         if isinstance(expr, A.Modify):
-            target = self._lower_expr(expr.target) or self.builder.const_int(0)
-            xform = self._lower_expr(expr.transformation) or self.builder.const_int(0)
+            target = self._lower_required(expr.target, ctx="silent-zero R3")
+            xform = self._lower_required(expr.transformation, ctx="silent-zero R3")
             attrs: dict[str, object] = {}
             # If the verifier expression is a Name pointing at a known function
             # (NOT a local variable), resolve it to a compile-time call: the
@@ -4840,7 +4852,7 @@ class Lowerer:
                                          verifier_v,
                                          result_ty=tir.TIRScalar("i32"),
                                          attrs=attrs)
-            verifier = self._lower_expr(expr.verifier) or self.builder.const_int(0)
+            verifier = self._lower_required(expr.verifier, ctx="silent-zero R3")
             return self.builder.emit(tir.OpKind.MODIFY, target, xform, verifier,
                                      result_ty=tir.TIRScalar("i32"))
         # Cycle 1 Batch IR silent-failure HIGH-1 fix: explicit A.StrLit

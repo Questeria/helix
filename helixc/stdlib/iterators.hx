@@ -1866,6 +1866,23 @@ fn vec_min_in_range(start: i32, lo: i32, hi: i32) -> i32 {
     }
 }
 
+// Cycle 3 R3 fix batch 28 (RT R3 NEW-MEDIUM-2): _strict variants of
+// the vec_max_in_range / vec_min_in_range family. Pre-fix both
+// returned 0 on hi<=lo (empty range), indistinguishable from "0 is
+// the answer." Direct sibling of vec_max_pure_strict / vec_min_pure_strict
+// from batch 20.
+@pure
+fn vec_max_in_range_strict(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { (0 - 2147483647) - 1 }
+    else { vec_max_in_range(start, lo, hi) }
+}
+
+@pure
+fn vec_min_in_range_strict(start: i32, lo: i32, hi: i32) -> i32 {
+    if hi <= lo { (0 - 2147483647) - 1 }
+    else { vec_min_in_range(start, lo, hi) }
+}
+
 // vec_count_eq_in_range(start, lo, hi, target): @pure. Count of matches in slice.
 @pure
 fn vec_count_eq_in_range(start: i32, lo: i32, hi: i32, target: i32) -> i32 {

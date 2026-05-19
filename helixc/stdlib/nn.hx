@@ -350,6 +350,18 @@ fn mse_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     }}}
 }
 
+// Cycle 3 R3 fix batch 28 (RT R3 NEW-MEDIUM-1): _strict variant of
+// mse_loss_f32 returning NaN on corruption (was 0.0 which collides
+// with "perfect convergence"). Sibling of mae_loss_f32_strict from
+// batch 20.
+@pure
+fn mse_loss_f32_strict(y_start: i32, t_start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { mse_loss_f32(y_start, t_start, n) }}}
+}
+
 // Gradient of mean squared error with respect to y:
 //   d/dy[i] mean((y - t)^2) = 2 * (y[i] - t[i]) / n
 fn mse_loss_f32_grad(y_start: i32, t_start: i32,
