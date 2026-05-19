@@ -153,3 +153,17 @@ attestation manifest, and ROCm/Metal/WebGPU backend substrates.
 MFMA wmma), 126 (Metal Neural Accelerators M5+), 128 (WebGPU tile-
 loop matmul). All explicitly documented in the Stage 130 cross-
 backend audit matrix.
+
+### 2026-05-19T18:02Z — post-v2.0 cron idle confirmation
+
+CronCreate backup fire landed on HEAD `930d601` (v2.0.0 release
+commit). SKILL.md updated to add an "Idle mode" section: cron loop
+recognizes v2.0.0 completion + 5-clean-gate achievement and idles
+quietly rather than spinning on already-done work. Each fire writes
+a one-line note here and exits. v2.1 work requires explicit user
+"go" signal.
+
+This honors the user's "this problem can never happen again"
+directive in two directions: (a) the loop will never stall when
+work remains, but also (b) the loop will not over-engineer
+phantom work when the gate is achieved.
