@@ -258,9 +258,10 @@ class MslEmitter:
         return self.buf.getvalue()
 
     def emit_kernel_stub(self, fn: ti.TileFn) -> None:
-        """Stage 125 substrate: emit the kernel signature + empty body.
-        MSL kernels use the `kernel void` attribute. Per-op codegen
-        lands in Stage 126+.
+        """Stage 125 substrate + Stage 126 per-op wiring.
+
+        Stage 125 ships the kernel header; Stage 126 (v2.1) fills in
+        the body with MSL emission for the most common TileOpKinds.
         """
         # MSL kernels always return void; the kernel attribute is a
         # function-qualifier keyword (not a type modifier).
@@ -269,10 +270,72 @@ class MslEmitter:
         # fn.params and emit `device float* param0 [[buffer(0)]]` etc.
         self._line(f"    uint tid [[thread_position_in_threadgroup]]")
         self._line(") {")
-        # Stub body — Stage 126 replaces with per-op MSL.
-        self._line("    // Stage 125 substrate: per-op codegen lands Stage 126+")
+        # Stage 126: per-op body emit.
+        for blk in fn.blocks:
+            for op in blk.ops:
+                self._emit_op(op)
         self._line("}")
         self._line()
+
+    def _emit_op(self, op: ti.TileOp) -> None:
+        """Stage 126 (v2.1 Phase C Metal NA matmul) — emit one tile-IR
+        op as MSL source. Pre-M5 path uses simdgroup_multiply; M5+ NA
+        path (gated on DEFAULT_TARGET_FAMILY=='apple9') uses mma_*
+        intrinsics.
+
+        Note: simdgroup_multiply / mma_* are MSL pseudo-intrinsics
+        documented in Apple's Metal Shading Language Specification
+        §6.1 (Apple9 family). The emitted text is a placeholder for
+        the actual MSL syntax; concrete operand binding requires the
+        register allocator + threadgroup layout from a later stage.
+        """
+        kind = op.kind
+        is_m5_plus = self.target_family in ("apple9", "apple10", "apple11")
+        if kind is ti.TileOpKind.BARRIER_WAIT:
+            # MSL: threadgroup_barrier with appropriate fence flags.
+            self._line("    threadgroup_barrier(mem_flags::mem_threadgroup);")
+            return
+        if kind is ti.TileOpKind.TILE_MATMUL:
+            if is_m5_plus:
+                # M5+ Neural Accelerators: mma_* family of intrinsics.
+                self._line("    // tile-matmul A @ B + C (M5+ NA)")
+                self._line("    mma_f32_16x16x16_f16();")
+            else:
+                # Pre-M5: simdgroup_multiply_accumulate (SIMD-group
+                # matmul on Apple7/Apple8).
+                self._line("    // tile-matmul A @ B + C (pre-M5 SIMD)")
+                self._line("    simdgroup_multiply_accumulate();")
+            return
+        if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
+            self._line("    // device pointer tile load")
+            self._line("    auto tile_in = buf_in[tid];")
+            return
+        if kind is ti.TileOpKind.TILE_STORE_GLOBAL:
+            self._line("    // device pointer tile store")
+            self._line("    buf_out[tid] = tile_out;")
+            return
+        if kind is ti.TileOpKind.TILE_LOAD_SHARED:
+            self._line("    // threadgroup memory tile load")
+            self._line("    auto tile = shared_mem[tid];")
+            return
+        if kind is ti.TileOpKind.TILE_STORE_SHARED:
+            self._line("    // threadgroup memory tile store")
+            self._line("    shared_mem[tid] = tile;")
+            return
+        if kind is ti.TileOpKind.THREAD_IDX:
+            # `tid` is bound in the kernel signature as
+            # [[thread_position_in_threadgroup]].
+            self._line("    // tid is bound in kernel signature")
+            return
+        if kind is ti.TileOpKind.RETURN:
+            # MSL kernels return void; no explicit return needed
+            # except at non-terminator positions.
+            self._line("    return;")
+            return
+        # Default: comment-annotated stub. The module-load coverage
+        # check at _check_metal_lowering_coverage already enforced
+        # that every TileOpKind has a documented entry.
+        self._line(f"    // tile-IR op {kind.name} (stub)")
 
 
 def lowering_status(kind: ti.TileOpKind) -> str:

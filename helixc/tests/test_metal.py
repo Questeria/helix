@@ -131,3 +131,114 @@ def test_stage125_kernel_attribute_is_void_return():
     text = emitter.emit_module(tile_mod)
     # The kernel-declaration line must be `kernel void NAME(`.
     assert "kernel void k(" in text
+
+
+# ============================================================================
+# Stage 126 (v2.1 Phase C Metal NA matmul) — per-op MSL emit
+# ============================================================================
+def test_stage126_barrier_wait_emits_threadgroup_barrier():
+    """Stage 126 — BARRIER_WAIT lowers to threadgroup_barrier with
+    threadgroup memory-flag (parity with __syncthreads)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.BARRIER_WAIT),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = MslEmitter().emit_module(tile_mod)
+    assert "threadgroup_barrier(mem_flags::mem_threadgroup)" in text
+
+
+def test_stage126_tile_matmul_pre_m5_simdgroup():
+    """Stage 126 — TILE_MATMUL on pre-M5 family (apple7) emits the
+    simdgroup_multiply_accumulate path."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_MATMUL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = MslEmitter(target_family="apple7").emit_module(tile_mod)
+    assert "simdgroup_multiply_accumulate" in text
+    assert "pre-M5" in text
+
+
+def test_stage126_tile_matmul_m5_plus_na():
+    """Stage 126 — TILE_MATMUL on apple9+ (M5+ Neural Accelerators)
+    emits the mma_* intrinsic path (not simdgroup)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_MATMUL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = MslEmitter(target_family="apple9").emit_module(tile_mod)
+    assert "mma_f32_16x16x16_f16" in text
+    assert "M5+ NA" in text
+
+
+def test_stage126_global_memory_ops_emit():
+    """Stage 126 — TILE_LOAD_GLOBAL / TILE_STORE_GLOBAL emit device-
+    pointer reads/writes (MSL `device float*` storage class)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_LOAD_GLOBAL),
+            TileOp(kind=TileOpKind.TILE_STORE_GLOBAL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = MslEmitter().emit_module(tile_mod)
+    assert "buf_in[tid]" in text
+    assert "buf_out[tid]" in text
+
+
+def test_stage126_threadgroup_memory_ops_emit():
+    """Stage 126 — TILE_LOAD_SHARED / TILE_STORE_SHARED emit
+    threadgroup-memory references (MSL `threadgroup` storage class)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_LOAD_SHARED),
+            TileOp(kind=TileOpKind.TILE_STORE_SHARED),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = MslEmitter().emit_module(tile_mod)
+    assert "shared_mem[tid]" in text
+
+
+def test_stage126_unmapped_op_falls_through_to_comment():
+    """Stage 126 — ops without a concrete emit pattern fall through
+    to a `// tile-IR op KIND (stub)` comment, parity with rocm.py
+    Stage 124 fallthrough."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_REDUCE),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = MslEmitter().emit_module(tile_mod)
+    assert "TILE_REDUCE (stub)" in text
