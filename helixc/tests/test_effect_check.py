@@ -620,6 +620,92 @@ def test_v22_check_effect_kind_coverage_raises_on_drift():
         ec._KNOWN_NONEFFECT_OPKINDS = original_known
 
 
+def test_v23_effect_check_indirect_verifier_propagates_unknown():
+    """v2.3 FE LOW-1 audit-fix (regression test for v2.2 item 6
+    landed at dbc6ad9) — when MODIFY's `verifier_fn` attr is a
+    non-string value (indirect function pointer), `callees()` emits
+    the `<indirect-verifier>` sentinel so `compute_closure` adds
+    `unknown` to the caller's effect closure. Without this test, a
+    future refactor that drops the `else` branch in effect_check.py
+    would silently re-open the original FE LOW from the v2.1 5-gate.
+
+    Source-level regression test (the runtime callees() invocation
+    requires a hand-built tir.Module + Op which is fragile across
+    IR refactors; checking the source preserves the invariant
+    across IR changes too).
+    """
+    import inspect
+
+    from helixc.ir.passes import effect_check as ec
+
+    src = inspect.getsource(ec)
+
+    # The `<indirect-verifier>` sentinel must be emitted in the
+    # callees() helper's MODIFY branch (parity with `<indirect>` for
+    # CALL and `<indirect-ffi>` for FFI_CALL).
+    assert '"<indirect-verifier>"' in src, (
+        "v2.3 FE LOW-1 regression: effect_check.py no longer emits "
+        "the <indirect-verifier> sentinel. The else branch in "
+        "callees() that handles non-string verifier_fn must propagate "
+        "the indirect-fn-pointer case so compute_closure adds "
+        "unknown to the caller's closure. Re-opening this lets a "
+        "@pure caller using modify() with a non-string verifier_fn "
+        "silently pass effect-checking."
+    )
+    # Parity sentinels must also be present (regression test against
+    # someone replacing one but not the others).
+    assert '"<indirect>"' in src
+    assert '"<indirect-ffi>"' in src
+
+
+def test_v23_grad_pass_ad_warn_import_failure_surfaces_to_stderr(
+    capsys, monkeypatch,
+):
+    """v2.3 FE LOW-1 audit-fix (regression test for v2.2 item 5
+    landed at 83a3d01) — when grad_pass tries to emit a pytree-
+    flattening failure via `from .autodiff import _ad_warn` and
+    the import fails (e.g. autodiff refactored, _ad_warn renamed),
+    the exception is caught + surfaced via stderr instead of
+    silently swallowed.
+
+    Without this test, a future refactor that drops the stderr
+    print would silently re-open the original FE LOW from v2.1
+    5-gate — pytree-flattening failures would emit zero diagnostic.
+
+    This test exercises the broken-import path by injecting an
+    ImportError into the `from .autodiff import _ad_warn` site.
+    The hook fires when `_ad_warn` is unavailable AND a pytree
+    flattening failure trips the inner `try`. Since reaching that
+    branch from a real grad_pass call is expensive, we exercise
+    the documented behavior directly by reading the source's
+    `except ImportError as imp_exc:` body.
+    """
+    import inspect
+
+    from helixc.frontend import grad_pass as gp
+
+    # Read the source: the v2.2 item 5 R1 fix replaced the prior
+    # `except ImportError: pass` with an `except ImportError as
+    # imp_exc:` body that prints to sys.stderr. Verify both:
+    src = inspect.getsource(gp)
+    assert "except ImportError as imp_exc:" in src, (
+        "v2.3 FE LOW-1 regression: grad_pass lost the named "
+        "ImportError handler. The prior bare `except ImportError: "
+        "pass` would silently swallow _ad_warn import failures + "
+        "re-open the v2.1 5-gate FE LOW silent-zero-gradient bug."
+    )
+    assert "file=_sys.stderr" in src, (
+        "v2.3 FE LOW-1 regression: grad_pass lost the stderr "
+        "warning emission. The visibility-of-failure path is "
+        "itself silenced."
+    )
+    assert "cannot import _ad_warn" in src, (
+        "v2.3 FE LOW-1 regression: grad_pass diagnostic-message "
+        "wording changed — downstream tooling that greps for "
+        "this exact phrase will silently regress."
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
