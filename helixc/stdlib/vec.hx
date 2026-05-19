@@ -10,20 +10,33 @@
 // because the arena is global. For AGI work this is fine since most
 // list-building is sequential.
 //
-// API:
+// API (unchecked — legacy; documented behavior is "trust the caller"):
 //   vec_new()                  -> i32           start = current arena length
-//   vec_push(start, count, x)  -> i32           returns new count
-//   vec_get(start, i)          -> i32           read element at index i
-//   vec_set(start, i, x)       -> i32           write; returns x
-//   vec_sum(start, count)      -> i32           sum all elements
+//   vec_push(start, count, x)  -> i32           returns new count (DO NOT mix with vec_new_checked)
+//   vec_get(start, i)          -> i32           read element at index i (NO BOUNDS CHECK)
+//   vec_set(start, i, x)       -> i32           write; returns x (NO BOUNDS CHECK)
+//   vec_sum(start, count)      -> i32           sum all elements (saturated)
 //   vec_max(start, count)      -> i32           largest element (0 if empty)
-//   vec_product(start, count)  -> i32           product of all elements (1 if empty — multiplicative identity)
+//   vec_product(start, count)  -> i32           product (1 if empty — multiplicative identity)
 //   vec_first(start, count)    -> i32           v[0] (0 if empty)
 //   vec_last(start, count)     -> i32           v[count-1] (0 if empty)
 //   vec_index_of(start, count, target) -> i32   first matching index, -1 if none
 //   vec_contains(start, count, target) -> i32   1 if target present, else 0
-//   vec_eq(a_start, b_start, count) -> i32      1 if all elements equal, else 0
+//   vec_eq(a_start, b_start, count) -> i32      1 if all elements equal
 //   vec_reverse_inplace(start, count) -> i32    reverses in place; returns start
+//
+// Cycle 1 Batch RT fix batch 15 (silent-failure NEW-HIGH-1):
+// API (CHECKED — RECOMMENDED for safety-critical / Tier-S code):
+//   vec_new_checked(cap)                            -> i32  start, or -1 on bad cap
+//   vec_ok(start, cap, count)                       -> i32  0=bad, 1=ok
+//   vec_set_checked(start, cap, count, i, x)        -> i32  0=ok, -1=corrupt, -2=OOB
+//   vec_get_checked(start, cap, count, i, sentinel) -> i32  value or sentinel
+//
+// MIGRATION GUIDANCE: new code SHOULD use the checked variants.
+// The unchecked APIs above are retained ONLY for backward
+// compatibility with existing call sites; reading the legacy API
+// without explicit bounds-checking propagates silent corruption
+// downstream (arena bytes, footers, freed-but-overwritten state).
 //
 // License: Apache 2.0
 
@@ -37,6 +50,9 @@ fn vec_push(start: i32, count: i32, x: i32) -> i32 {
     count + 1
 }
 
+// DEPRECATED for new code (batch 15 deprecation sweep):
+// No bounds check. Use vec_get_checked(start, cap, count, i, sentinel)
+// in safety-critical code. Retained for backward compat.
 @pure
 fn vec_get(start: i32, i: i32) -> i32 {
     __arena_get(start + i)

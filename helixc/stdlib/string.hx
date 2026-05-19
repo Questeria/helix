@@ -42,6 +42,9 @@ fn string_push(start: i32, len: i32, b: i32) -> i32 {
     len + 1
 }
 
+// DEPRECATED for new code (batch 15 deprecation sweep):
+// No bounds check. Use string_get_checked(start, len, i) in
+// safety-critical code. Retained for backward compat.
 @pure
 fn string_get(start: i32, i: i32) -> i32 {
     __arena_get(start + i)

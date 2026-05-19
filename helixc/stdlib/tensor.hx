@@ -381,6 +381,10 @@ fn ti2d_set(start: i32, cols: i32, i: i32, j: i32, x: i32) -> i32 {
     }
 }
 
+// DEPRECATED for safety-critical new code (batch 15 deprecation
+// sweep): returns 0 on OOB which collides with legitimate sparse
+// zero. Use ti2d_get_strict (returns INT32_MIN on OOB) or
+// ti2d_in_bounds for explicit bounds check.
 @pure fn ti2d_get(start: i32, cols: i32, i: i32, j: i32) -> i32 {
     let off = t2d_offset(start, cols, i, j);
     if off < 0 { 0 } else { __arena_get(off) }
@@ -626,6 +630,10 @@ fn tf1d_relu(x_start: i32, y_start: i32, n: i32) -> i32 {
     }}}
 }
 
+// DEPRECATED for safety-critical new code (batch 15 deprecation
+// sweep): returns 0.0_f32 on OOB which collides with legitimate
+// sparse zero. Use tf2d_get_or(...sentinel) with a caller-supplied
+// f32 sentinel, or tf2d_in_bounds for explicit bounds check.
 @pure
 fn tf2d_get(start: i32, cols: i32, i: i32, j: i32) -> f32 {
     let off = t2d_offset(start, cols, i, j);

@@ -105,6 +105,13 @@ fn hashmap_put(start: i32, cap: i32, k: i32, v: i32) -> i32 {
     }
 }
 
+// DEPRECATED for safety-critical new code (batch 15 deprecation
+// sweep): returns `default` for BOTH "key absent" AND "hashmap
+// corrupt". Use hashmap_get_strict (returns INT32_MIN on corrupt)
+// or call hashmap_status first if the caller needs to distinguish
+// missing from corrupted. Caveat: hashmap_get_strict with caller-
+// supplied default == INT32_MIN still collides — see batch 14
+// NEW-LOW deferred item.
 @pure
 fn hashmap_get(start: i32, cap: i32, k: i32, default: i32) -> i32 {
     if hashmap_ok(start, cap) == 0 { default }
