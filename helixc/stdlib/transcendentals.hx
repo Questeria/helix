@@ -169,6 +169,17 @@
     }
 }
 
+// Cycle 5 R1 fix batch 35 (RT R1 NEW-HIGH-1): __sqrt_strict returns NaN
+// for x < 0 (genuine domain error) while preserving __sqrt(0)=0
+// (mathematically defined). Pre-fix: bare __sqrt returns 0.0 for any
+// x <= 0, indistinguishable from sqrt(0). adam_step-style callers had
+// to clamp v >= 0 locally to work around this. Sibling of __log_stable
+// NaN closure from batches 20/25.
+@pure fn __sqrt_strict(x: f32) -> f32 {
+    if x < 0.0 { 0.0_f32 / 0.0_f32 }
+    else { __sqrt(x) }
+}
+
 // =========================================================================
 // f64 transcendentals (Phase 1.5). Mirror the f32 versions above with f64
 // arithmetic so callers that pick f64 don't lose precision. Backed by the
@@ -225,6 +236,12 @@
         let y6 = (y5 + x / y5) * 0.5_f64;
         y6
     }
+}
+
+// Cycle 5 R1 fix batch 35 (RT R1 NEW-HIGH-1): f64 sibling.
+@pure fn __sqrt_f64_strict(x: f64) -> f64 {
+    if x < 0.0_f64 { 0.0_f64 / 0.0_f64 }
+    else { __sqrt_f64(x) }
 }
 
 @pure fn __sigmoid_f64(x: f64) -> f64 {
