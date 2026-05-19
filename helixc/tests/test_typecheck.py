@@ -6030,9 +6030,7 @@ def test_stage111_gpu_sync_builtins_recognized():
     Backend lowering to bar.sync / __syncwarp PTX deferred to a
     later stage.
     """
-    from helixc.frontend.typecheck import (
-        typecheck, TypeChecker, _expand_effect_wildcards,
-    )
+    from helixc.frontend.typecheck import TypeChecker
 
     # The four sync builtins exist in the registries.
     assert "__warp_sync" in TypeChecker._BUILTIN_NAMES
@@ -6045,6 +6043,22 @@ def test_stage111_gpu_sync_builtins_recognized():
     assert TypeChecker._GPU_SYNC_BUILTINS["__warp_sync_mask"] == "gpu.warp_sync"
     assert TypeChecker._GPU_SYNC_BUILTINS["__block_sync"] == "gpu.block_sync"
     assert TypeChecker._GPU_SYNC_BUILTINS["__grid_sync"] == "gpu.grid_sync"
+
+    # Stage 111 type-design audit follow-up: drift check.
+    # Every _GPU_SYNC_BUILTINS key must coexist in _BUILTIN_NAMES;
+    # every value must be a member of GPU_SYNC_LABELS (canonical
+    # effect-label tuple). Drift caught at test time.
+    from helixc.frontend.typecheck import GPU_SYNC_LABELS
+    for name in TypeChecker._GPU_SYNC_BUILTINS:
+        assert name in TypeChecker._BUILTIN_NAMES, (
+            f"_GPU_SYNC_BUILTINS key {name!r} missing from "
+            f"_BUILTIN_NAMES — Stage 111 audit drift check"
+        )
+    for label in TypeChecker._GPU_SYNC_BUILTINS.values():
+        assert label in GPU_SYNC_LABELS, (
+            f"_GPU_SYNC_BUILTINS value {label!r} not in "
+            f"canonical GPU_SYNC_LABELS — Stage 111 audit drift check"
+        )
 
 
 def test_stage110_smem_borrow_excluded_from_gpu_wildcard():

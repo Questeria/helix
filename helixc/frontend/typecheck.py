@@ -1022,8 +1022,15 @@ BORROW_SCOPES = frozenset({
 })
 
 # Scope-ordering lattice: thread < warp < block < grid.
-# A wider-scope borrow subsumes narrower scopes — moving from
-# block-scope to thread-scope requires a barrier-discharge.
+#
+# Stage 113 audit-clarification: ranks ascend with scope width.
+# A borrow at rank R satisfies any requirement at rank ≤ R
+# (covariant: wider provider OK for narrower consumer; ⊤ = grid).
+# RAISING the rank (narrower-provider → wider-consumer) requires
+# barrier-discharge: e.g., a thread-scope adjoint can't satisfy a
+# grid-scope reduction without __block_sync / __grid_sync.
+#
+# Subsumption check is the natural `required_rank <= provided_rank`.
 BORROW_SCOPE_RANK: dict[str, int] = {
     BORROW_SCOPE_THREAD: 0,
     BORROW_SCOPE_WARP: 1,
