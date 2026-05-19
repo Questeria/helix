@@ -132,8 +132,11 @@ def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, str, int]:
     """Compile a Helix source file and run the resulting ELF via WSL.
     Returns (stdout, stderr, exit_code). v2.2 polish item 8 (RT M2):
     stderr was previously discarded; now propagated so runtime panics
-    and WSL diagnostics are visible."""
-    src = open(src_path).read()
+    and WSL diagnostics are visible. v2.3 polish (RT LOW-2): file
+    handle for src_path now closed deterministically via with-block
+    instead of relying on CPython refcount-GC of the open()."""
+    with open(src_path, "r", encoding="utf-8") as _src_f:
+        src = _src_f.read()
     prog = parse(src, include_stdlib=True)
     grad_pass(prog)
     mod = lower(prog)
