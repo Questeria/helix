@@ -380,7 +380,13 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 3 / 5** 🎉🎉🎉 (Cycle 6 CLOSED R1 FIRST TRY — counter advances 2/5 → 3/5)
+**Current: 4 / 5** 🎉🎉🎉🎉 (Cycle 7 CLOSED R1 FIRST TRY — counter advances 3/5 → 4/5)
+
+### Cycle 7 closure summary (2026-05-19)
+- All 5 R1 verdicts CLEAN on first attempt (TEST/FE/IR/RT/BE)
+- Zero fix batches needed
+- Second consecutive clean-first-try cycle after Cycle 6
+- **1 more clean-first-try cycle needed for v2.0 unblock** (Cycle 8)
 
 ### Cycle 6 closure summary (2026-05-19)
 - All 5 R1 verdicts CLEAN on first attempt (TEST/FE/RT/IR/BE)
@@ -411,6 +417,7 @@ counter can advance to 1/5.
 - **Systemic IR refactor**: added `_lower_required` helper + bulk-replaced ~45 silent-zero sites in lower_ast.py
 - **3 BE/FE/IR items DEFERRED** as Stage 110+ design-debt: LOAD_ELEM bounds, ptx broad-except, FE A.Path 2-seg
 
+**Was: 3 / 5** 🎉🎉🎉 (Cycle 6 CLOSED R1 FIRST TRY — counter 2/5 → 3/5)
 **Was: 2 / 5** 🎉 (Cycle 5 closed; counter recovered after R1 1H finding fix)
 **Was: 1 / 5** (Cycle 3 CLOSED after 8 R-rounds + 15 fix batches)
 **Was: 0 / 5** (transient — Cycle 3 R1-R7 reset)
