@@ -73,7 +73,10 @@ fn string_get_checked(start: i32, len: i32, i: i32) -> i32 {
 // safety-critical callers migrate to *_checked variants.
 // ============================================================
 
-@pure fn string_magic() -> i32 { 7007003 }
+// Batch 14 (MEDIUM-F): respaced to avoid bit-flip collision with
+// vec_magic (7007012). Adjacent magic values are a one-bit-error
+// silent-corruption hazard.
+@pure fn string_magic() -> i32 { 7007013 }
 @pure fn string_footer(cap: i32) -> i32 { 0 - string_magic() - cap }
 
 fn string_new_checked(cap: i32) -> i32 {
@@ -103,7 +106,8 @@ fn string_ok(start: i32, cap: i32, len: i32) -> i32 {
     else { if __arena_get(start - 1) != cap { 0 }
     else { if start + cap >= __arena_len() { 0 }
     else { if __arena_get(start + cap) != string_footer(cap) { 0 }
-    else { 1 } } } } } } } }
+    else { if arena_span_in_tensor_payload(start - 2, cap + 3) != 0 { 0 }
+    else { 1 } } } } } } } } }
 }
 
 @pure
