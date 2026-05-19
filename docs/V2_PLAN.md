@@ -193,3 +193,36 @@ Scheduled-task fire on HEAD `ad13177` (2 min old, post-`930d601`
 v2.0.0 release). Tag `v2.0.0` confirmed present, tree clean. No
 actionable v2.0 work remains; v2.1 awaits explicit user "go"
 signal. Logging this note + exit per idle-mode protocol.
+
+### 2026-05-19T18:27Z — Stage 120 3-clean audit dispatched
+
+User authorized v2.1→v3.0 autonomous mode 2026-05-19T14:23Z. v2.1
+ship rollup since `930d601`: Stage 124 (ROCm wmma per-op emit,
+`dc62958`), Stage 126 (Metal NA matmul per-op MSL, `3392e16`),
+Stage 128 (WebGPU tile-loop matmul per-op WGSL, `b3897b3`),
+Stage 120 (end-to-end fwd→bwd kernel gen via tile_adjoint.py,
+HEAD `2e45ed4`).
+
+Stage 120 audit dispatched in parallel:
+- silent-failure-hunter on `helixc/ir/tile_adjoint.py` +
+  `helixc/tests/test_tile_adjoint.py`
+- type-design-analyzer on same files
+- code-reviewer on same files (11 tests, all pass — 0.52s)
+
+Prior fire dispatched Stage 122 + Stage 129 silent-failure-hunters
+(still in flight; type-design + code-reviewer per-stage audits
+still pending for both). Stages 124/126/128 audits also still
+pending.
+
+Per-fire commit: this note documents Stage 120 audit dispatch and
+the v2.1 audit-rollup state. Next fire processes verdicts (if
+returned by then) and dispatches the next pending audit.
+
+v2.1 backlog state:
+- Stage 122 audit: 1/3 dispatched (silent-failure-hunter), 2/3 pending
+- Stage 129 audit: 1/3 dispatched (silent-failure-hunter), 2/3 pending
+- Stage 120 audit: 3/3 dispatched (this fire), 0 verdicts yet
+- Stage 124 audit: 0/3 dispatched
+- Stage 126 audit: 0/3 dispatched
+- Stage 128 audit: 0/3 dispatched
+- End-of-v2.1 5-clean-gate: pending all above
