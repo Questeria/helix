@@ -4574,8 +4574,27 @@ class FnCompiler:
             self.asm.b.emit(0x89, 0x84, 0xCD)
             self.asm.b.emit_bytes(struct.pack("<i", base))
             return
-        # Unsupported op — emit nothing (placeholder); v0.2 will lower
-        # tensor ops to runtime calls.
+        # Cycle 1 Batch BE silent-failure HIGH-1 fix: pre-fix, this
+        # method fell off the end with only a comment + implicit
+        # `return None`. Any unhandled OpKind (CONST_TENSOR, MATMUL,
+        # RESHAPE, REDUCE_*, ABS/EXP/LOG/SQRT, RELU/GELU/SILU, etc.)
+        # silently produced empty machine code — the op's result slot
+        # was never written, so consumers read stale bytes from the
+        # prologue or previous spills. Wrong machine code with NO
+        # compile-time signal. Same defect class as the lower_ast
+        # `_lower_expr` catchall closed in batch 8 — and the symmetric
+        # PTX backend ALREADY has `raise RuntimeError` at ptx.py:900-903
+        # for unsupported PTX ops. x86_64 was the lagging backend.
+        #
+        # Post-fix: loud-fail. Any unsupported OpKind reaches lowering
+        # now produces a NotImplementedError naming the op + span.
+        # Either add an explicit emit arm OR reject earlier at typecheck.
+        raise NotImplementedError(
+            f"x86_64 backend: op kind {op.kind.value!r} is not lowered "
+            f"(span={getattr(op, 'span', '?')}). Add an explicit emit "
+            f"arm or a typecheck-side reject before reaching codegen "
+            f"(Cycle 1 Batch BE silent-failure HIGH-1 fix)."
+        )
 
 
 # ============================================================================

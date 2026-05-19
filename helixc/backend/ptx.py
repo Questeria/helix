@@ -172,11 +172,33 @@ class PtxEmitter:
                 "isize": ".b64", "usize": ".b64",
                 "bool": ".pred",
                 "f16": ".f16", "bf16": ".bf16", "f32": ".f32", "f64": ".f64",
+                "char": ".b8",
             }
-            return mapping.get(ty.name, ".b32")
+            # Cycle 1 Batch BE silent-failure HIGH-3 fix: pre-fix,
+            # mapping.get(ty.name, ".b32") silently emitted .b32 for
+            # unknown TIRScalar dtypes — ptxas may accept the wrong
+            # register declaration without parse error, producing
+            # wrong machine code at runtime. Post-fix: KeyError → raise.
+            try:
+                return mapping[ty.name]
+            except KeyError:
+                raise RuntimeError(
+                    f"_ptx_type_str: unsupported TIRScalar dtype "
+                    f"{ty.name!r}; add to mapping (Cycle 1 Batch BE "
+                    f"silent-failure HIGH-3 fix)"
+                )
         if isinstance(ty, tir.TIRUnit):
             return ""
-        return ".b64"
+        # Cycle 1 Batch BE silent-failure HIGH-3 fix: pre-fix, the bare
+        # `return ".b64"` silently emitted .b64 for any non-TIRScalar,
+        # non-TIRUnit type (TIRTensorTy, TIRTileTy, future struct types,
+        # etc.) — wrong PTX with no error. Post-fix: raise on unknown
+        # TIRType to surface the missing dispatch arm.
+        raise RuntimeError(
+            f"_ptx_type_str: unsupported TIRType {type(ty).__name__} "
+            f"({ty!r}); add an explicit dispatch arm (Cycle 1 Batch BE "
+            f"silent-failure HIGH-3 fix)"
+        )
 
     def _validate_kernel_params(self, fn: ti.TileFn) -> None:
         if not isinstance(fn.return_ty, tir.TIRUnit):
@@ -925,10 +947,37 @@ class PtxEmitter:
                         "isize": "s64", "usize": "u64", "bool": "u8"}
 
     def _dtype_size(self, dtype: str) -> int:
-        return self._DTYPE_SIZE.get(dtype, 4)
+        # Cycle 1 Batch BE silent-failure HIGH-2 + type-design HIGH-3 fix:
+        # pre-fix, `dict.get(dtype, 4)` silently defaulted unknown dtypes
+        # to 4 bytes — producing wrong PTX stride for any future dtype
+        # (fp8/int4/etc.) added without updating the table. Cycle 21
+        # C20-1 partially fixed this by adding missing entries
+        # (isize/usize/bool) but preserved the defective default shape.
+        # Post-fix: KeyError → loud RuntimeError naming the missing dtype.
+        try:
+            return self._DTYPE_SIZE[dtype]
+        except KeyError:
+            raise RuntimeError(
+                f"PTX backend: unsupported dtype {dtype!r} for stride "
+                f"computation; add to _DTYPE_SIZE + _DTYPE_PTX_LOAD + "
+                f"_ld_reg_prefix together (Cycle 1 Batch BE silent-"
+                f"failure HIGH-2 fix)"
+            )
 
     def _ptx_load_suffix(self, dtype: str) -> str:
-        return self._DTYPE_PTX_LOAD.get(dtype, "u32")
+        # Cycle 1 Batch BE silent-failure HIGH-2 fix: same pattern as
+        # _dtype_size — pre-fix `.get(dtype, "u32")` silently defaulted
+        # to u32 load suffix for unknown dtypes, picking the wrong PTX
+        # register class. Post-fix: loud raise.
+        try:
+            return self._DTYPE_PTX_LOAD[dtype]
+        except KeyError:
+            raise RuntimeError(
+                f"PTX backend: unsupported dtype {dtype!r} for PTX "
+                f"load/store suffix; add to _DTYPE_PTX_LOAD + "
+                f"_DTYPE_SIZE + _ld_reg_prefix together (Cycle 1 "
+                f"Batch BE silent-failure HIGH-2 fix)"
+            )
 
     def _ld_reg_prefix(self, dtype: str) -> str:
         # Pick a sensible register pool by dtype family.
@@ -937,13 +986,23 @@ class PtxEmitter:
         # Stage 64 Inc 1 — Tier 2 #6: split 16-bit floats (f16/bf16)
         # to the `%h` pool (.b16 register class in PTX); 32/64-bit
         # floats keep `%f`. Pre-Stage-64 conflated all float widths.
+        # Cycle 1 Batch BE silent-failure MEDIUM-5 fix: replace the
+        # bare `return "r"` fallback with a raise so unknown dtypes
+        # surface loudly rather than silently routing 64-bit values
+        # into the 32-bit register pool.
         if dtype in ("f16", "bf16"):
             return "h"
         if dtype in ("f32", "f64"):
             return "f"
         if dtype in ("i64", "u64", "isize", "usize"):
             return "rd"
-        return "r"
+        if dtype in ("i8", "u8", "i16", "u16", "i32", "u32", "bool", "char"):
+            return "r"
+        raise RuntimeError(
+            f"PTX backend: unsupported dtype {dtype!r} for register-pool "
+            f"selection; add to _ld_reg_prefix (Cycle 1 Batch BE silent-"
+            f"failure MEDIUM-5 fix)"
+        )
 
     def _kernel_param_label(self, param_idx: int) -> str:
         # Phase-0 uses the same labels as `_format_param`. Centralized so
