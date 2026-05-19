@@ -482,6 +482,15 @@ def test_c16_1_wide_array_elem_traps_at_codegen():
     errs = type_check(prog)
     # Filter to actual hard errors only — accept any -W warnings.
     hard = [e for e in errs if not (hasattr(e, "is_warning") and e.is_warning)]
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-5): pre-fix `hard` was computed
+    # but never read; the dead filter masked typecheck regressions
+    # (typecheck becoming hard-rejecting on f64 arrays would not be
+    # caught here). Post-fix: assert hard == [] so the test fails
+    # loudly if typecheck stops being permissive.
+    assert hard == [], (
+        f"typecheck must remain permissive on f64 arrays for this "
+        f"test to exercise codegen-trap; got hard errors: {hard}"
+    )
     # The lowering + codegen path is where the trap fires.
     mod = lower(prog)
     try:
@@ -15619,7 +15628,21 @@ def test_stage57_inc1_grad_rev_all_struct_param_no_rejection():
     # Post-Stage 57 Inc 1: struct_decls threaded + struct param
     # flattens via pytree → no rejection, generates the rgrad_all
     # fn with leaf-keyed modify_f cells.
-    _grad_pass(prog)
+    count = _grad_pass(prog)
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-2): pre-fix this test only
+    # checked "did not raise" — but grad_pass returns 0 even when the
+    # rejection-lift produced nothing. Post-fix: assert the count is
+    # nonzero AND assert the synthesized rgrad_all fn appears in the
+    # program. If grad_pass becomes a no-op, this test now fails.
+    assert count > 0, (
+        f"grad_pass returned {count}; the rejection-lift produced no "
+        f"rgrad_all fn. Test name promised behavior, body checks too."
+    )
+    fn_names = {it.name for it in prog.items
+                if hasattr(it, "name") and hasattr(it, "params")}
+    assert "loss__rgrad_all" in fn_names, (
+        f"expected loss__rgrad_all in {sorted(fn_names)}"
+    )
 
 
 def test_stage55_inc5_str_concat_arena_basic():

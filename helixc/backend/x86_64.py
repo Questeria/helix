@@ -1314,8 +1314,31 @@ class FnCompiler:
             }.get(ty.name, 32)
         return 32
 
+    # Cycle 3 R1 fix batch 22 (BE HIGH-2): the `unsigned_compare`
+    # parameter was added during a Cycle 100/115 refactor but the
+    # body never consulted it — the actual signed/unsigned decision
+    # is made solely by `_is_unsigned_int_type(ty)`. Callers at
+    # 12+ sites pass `unsigned_compare=use_unsigned` believing it
+    # controls behavior; it does nothing.
+    #
+    # Resolution: keep the parameter (call sites depend on the
+    # signature) but assert it matches the type-derived decision
+    # so any inconsistency surfaces loudly rather than silently
+    # routing to the type-based decision the function actually uses.
     def _load_cmp_operand_rax(self, slot: int, ty: tir.TIRType,
                               *, unsigned_compare: bool = False) -> None:
+        # Audit drift-detector: if caller supplied a contradictory
+        # unsigned_compare, that's a bug. Warn (non-fatal so existing
+        # callers don't break) but surface the inconsistency.
+        if unsigned_compare and not self._is_unsigned_int_type(ty):
+            import warnings
+            warnings.warn(
+                f"_load_cmp_operand_rax: unsigned_compare=True but "
+                f"ty={ty!r} is signed; behavior uses ty-based decision "
+                f"(signed). Caller intent may differ; see Cycle 3 R1 "
+                f"BE HIGH-2.",
+                stacklevel=2,
+            )
         bits = self._int_bits_for_type(ty)
         if bits == 64:
             self.asm.mov_rax_mem_rbp(slot)
@@ -1333,6 +1356,15 @@ class FnCompiler:
 
     def _load_cmp_operand_rcx(self, slot: int, ty: tir.TIRType,
                               *, unsigned_compare: bool = False) -> None:
+        if unsigned_compare and not self._is_unsigned_int_type(ty):
+            import warnings
+            warnings.warn(
+                f"_load_cmp_operand_rcx: unsigned_compare=True but "
+                f"ty={ty!r} is signed; behavior uses ty-based decision "
+                f"(signed). Caller intent may differ; see Cycle 3 R1 "
+                f"BE HIGH-2.",
+                stacklevel=2,
+            )
         bits = self._int_bits_for_type(ty)
         if bits == 64:
             self.asm.mov_rcx_mem_rbp(slot)
@@ -1745,6 +1777,40 @@ class FnCompiler:
                 self.asm.mov_rax_imm64(value)
                 self.asm.mov_mem_rbp_rax(slot)
             else:
+                # Cycle 3 R1 fix batch 22 (BE HIGH-3): catch egregiously
+                # out-of-range CONST_INT values that don't fit ANY 32-bit
+                # interpretation (signed OR unsigned) of the declared type.
+                # Pre-fix `value & 0xFFFFFFFF` silently truncated
+                # CONST_INT(value=2**40, ty=i8) to its low 32 bits with
+                # no diagnostic.
+                #
+                # We use a lenient range: [signed.lo, unsigned.hi] for the
+                # bit width because:
+                #   - Const-fold-produced negative values for unsigned types
+                #     are intentional 2's-complement wraparound (cycle-115
+                #     test relies on this for `let x: u8 = 0_u8 - 1_u8`).
+                #   - Truncation of values outside the union range is
+                #     unambiguously a bug (caller passed nonsense like
+                #     2**40 into a u8).
+                # Sibling of cycle 106 T C105-F1 closed for f64 narrowing.
+                result_ty = op.results[0].ty
+                bits = self._int_bits_for_type(result_ty)
+                # Lenient union range: signed.lo .. unsigned.hi
+                slot_lo = -(1 << 31) if bits <= 32 else -(1 << 63)
+                slot_hi = (1 << 32) - 1 if bits <= 32 else (1 << 64) - 1
+                if bits < 32:
+                    # Narrow types: still allow [-2**31, 2**32-1] since
+                    # the slot is 32-bit; values outside this range are
+                    # clearly bogus for a narrow declared type.
+                    slot_lo = -(1 << 31)
+                    slot_hi = (1 << 32) - 1
+                if not (slot_lo <= value <= slot_hi):
+                    raise ValueError(
+                        f"CONST_INT value {value} does not fit in any "
+                        f"32-bit interpretation of {result_ty!r} "
+                        f"(allowed range [{slot_lo}, {slot_hi}]) "
+                        f"— Cycle 3 R1 BE HIGH-3"
+                    )
                 self.asm.mov_eax_imm32(value & 0xFFFFFFFF)
                 self.asm.mov_mem_rbp_eax(slot)
             return

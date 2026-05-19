@@ -164,6 +164,11 @@ fn csv_next_field_offset(line_off: i32, line_len: i32, foff: i32) -> i32 {
 
 // csv_count_lines: walk the blob once via csv_next_line_offset to
 // tally lines. A trailing non-newline-terminated line counts as 1.
+//
+// Cycle 3 R1 fix batch 20 (RT HIGH-10): silent truncation at 65536
+// caps was indistinguishable from a legitimate 65536-line file.
+// Companion csv_count_lines_was_capped() reports the truncation;
+// csv_count_lines_strict() returns INT32_MIN sentinel when capped.
 @pure
 fn csv_count_lines(blob: i32, blob_len: i32) -> i32 {
     let mut off: i32 = 0;
@@ -182,8 +187,42 @@ fn csv_count_lines(blob: i32, blob_len: i32) -> i32 {
     n
 }
 
+// Cycle 3 R1 fix batch 20 (RT HIGH-10): caller can check whether
+// the line-count operation hit the 65536 iteration cap. Returns 1
+// if capped, 0 if natural completion. Pattern mirrors csv_line_was_truncated.
+@pure
+fn csv_count_lines_was_capped(blob: i32, blob_len: i32) -> i32 {
+    let n = csv_count_lines(blob, blob_len);
+    if n != 65536 { 0 }
+    else {
+        // Walk to the offset reached by the 65536th line; if blob has
+        // more bytes after that offset, we truncated.
+        let mut off: i32 = 0;
+        let mut k: i32 = 0;
+        while k < 65536 {
+            if off >= blob_len { k = 65536; }
+            else {
+                off = csv_next_line_offset(blob, blob_len, off);
+                k = k + 1;
+            }
+        }
+        if off < blob_len { 1 } else { 0 }
+    }
+}
+
+@pure
+fn csv_count_lines_strict(blob: i32, blob_len: i32) -> i32 {
+    if csv_count_lines_was_capped(blob, blob_len) == 1 {
+        (0 - 2147483647) - 1
+    } else {
+        csv_count_lines(blob, blob_len)
+    }
+}
+
 // csv_count_fields: commas-in-line + 1, with the same 256-byte scan
 // caveat for very wide lines.
+//
+// Cycle 3 R1 fix batch 20 (RT HIGH-10): companion strict variant.
 @pure
 fn csv_count_fields(line_off: i32, line_len: i32) -> i32 {
     if line_len == 0 { 0 }
@@ -200,6 +239,33 @@ fn csv_count_fields(line_off: i32, line_len: i32) -> i32 {
             }
         }
         n
+    }
+}
+
+@pure
+fn csv_count_fields_was_capped(line_off: i32, line_len: i32) -> i32 {
+    let n = csv_count_fields(line_off, line_len);
+    if n != 65536 { 0 }
+    else {
+        let mut foff: i32 = 0;
+        let mut k: i32 = 0;
+        while k < 65536 {
+            if foff >= line_len { k = 65536; }
+            else {
+                foff = csv_next_field_offset(line_off, line_len, foff);
+                k = k + 1;
+            }
+        }
+        if foff < line_len { 1 } else { 0 }
+    }
+}
+
+@pure
+fn csv_count_fields_strict(line_off: i32, line_len: i32) -> i32 {
+    if csv_count_fields_was_capped(line_off, line_len) == 1 {
+        (0 - 2147483647) - 1
+    } else {
+        csv_count_fields(line_off, line_len)
     }
 }
 

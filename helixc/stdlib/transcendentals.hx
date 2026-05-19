@@ -93,14 +93,23 @@
     1.0_f32 - x2 * 0.5_f32 + x4 * 0.04166667_f32 - x6 * 0.00138889_f32
 }
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-10): pre-fix returned garbage Taylor
+// expansion for x <= 0 (y = x-1 < -1, polynomial diverges). Caller passing
+// x=0 got a wildly negative value indistinguishable from a "valid" log.
+// Post-fix: return NaN (0.0/0.0) for x <= 0 as the canonical out-of-band
+// signal. For x near 1 (use case the function was designed for), behavior
+// unchanged.
 @pure fn __log(x: f32) -> f32 {
-    // log(x) for x near 1: log(1+y) = y - y²/2 + y³/3 - y⁴/4 + y⁵/5
-    let y = x - 1.0;
-    let y2 = y * y;
-    let y3 = y2 * y;
-    let y4 = y3 * y;
-    let y5 = y4 * y;
-    y - y2 * 0.5 + y3 * 0.33333333 - y4 * 0.25 + y5 * 0.2
+    if x <= 0.0_f32 { 0.0_f32 / 0.0_f32 }
+    else {
+        // log(x) for x near 1: log(1+y) = y - y²/2 + y³/3 - y⁴/4 + y⁵/5
+        let y = x - 1.0;
+        let y2 = y * y;
+        let y3 = y2 * y;
+        let y4 = y3 * y;
+        let y5 = y4 * y;
+        y - y2 * 0.5 + y3 * 0.33333333 - y4 * 0.25 + y5 * 0.2
+    }
 }
 
 @pure fn __log_stable(x: f32) -> f32 {
@@ -265,20 +274,25 @@
             - x6 * 0.001388888888888889_f64
 }
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-10): f64 sibling of __log; same
+// domain guard added. Returns NaN for x <= 0.
 @pure fn __log_f64(x: f64) -> f64 {
-    let y = x - 1.0_f64;
-    let y2 = y * y;
-    let y3 = y2 * y;
-    let y4 = y3 * y;
-    let y5 = y4 * y;
-    let y6 = y5 * y;
-    let y7 = y6 * y;
-    y - y2 * 0.5_f64
-      + y3 * 0.3333333333333333_f64
-      - y4 * 0.25_f64
-      + y5 * 0.2_f64
-      - y6 * 0.16666666666666666_f64
-      + y7 * 0.14285714285714285_f64
+    if x <= 0.0_f64 { 0.0_f64 / 0.0_f64 }
+    else {
+        let y = x - 1.0_f64;
+        let y2 = y * y;
+        let y3 = y2 * y;
+        let y4 = y3 * y;
+        let y5 = y4 * y;
+        let y6 = y5 * y;
+        let y7 = y6 * y;
+        y - y2 * 0.5_f64
+          + y3 * 0.3333333333333333_f64
+          - y4 * 0.25_f64
+          + y5 * 0.2_f64
+          - y6 * 0.16666666666666666_f64
+          + y7 * 0.14285714285714285_f64
+    }
 }
 
 @pure fn __log_stable_f64(x: f64) -> f64 {

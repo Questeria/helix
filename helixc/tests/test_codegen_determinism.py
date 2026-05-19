@@ -133,6 +133,13 @@ def test_match_lower_fresh_counter_resets_per_call():
     Pre-fix: two calls on the same source produced `__scrut_1` then
     `__scrut_2` (or `__scrut_47` if other tests ran first), polluting
     the IR with order-dependent names.
+
+    Cycle 3 R1 fix batch 24 (TEST HIGH/MEDIUM-6): sibling fix to the
+    batch-16 closure of the same pattern on the
+    `test_match_lower_fresh_counter_state_visible` sibling test.
+    Pre-fix this test mutated the module-level _FRESH_COUNTER[0]
+    without save/restore, polluting subsequent tests that inspect it.
+    Post-fix: try/finally save+restore mirrors the sibling fix.
     """
     src = "fn main() -> i32 { match 3 { 0 => 1, _ => 2 } }"
 
@@ -148,11 +155,15 @@ def test_match_lower_fresh_counter_resets_per_call():
                     out.append(tok)
         return out
 
-    first = _names(src)
-    second = _names(src)
-    assert first == second, (
-        f"_FRESH_COUNTER was not reset: first={first} second={second}"
-    )
+    saved = _FRESH_COUNTER[0]
+    try:
+        first = _names(src)
+        second = _names(src)
+        assert first == second, (
+            f"_FRESH_COUNTER was not reset: first={first} second={second}"
+        )
+    finally:
+        _FRESH_COUNTER[0] = saved
 
 
 def test_match_lower_fresh_counter_state_visible():

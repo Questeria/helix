@@ -816,3 +816,70 @@ fn hashmap_count_key_below(start: i32, cap: i32, threshold: i32) -> i32 {
 fn hashmap_max_value_with_key(start: i32, cap: i32, key_target: i32) -> i32 {
     hashmap_get(start, cap, key_target, 0)
 }
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-14): strict variants of the
+// min/max/argmin/argmax family. All originals return 0 for both
+// "empty map" and "corrupted map" — 0 is a valid key/value. The _strict
+// variants return INT32_MIN sentinel on corruption (matches the
+// batch-12 hashmap_get_strict template). Pattern: check status first
+// or use these strict variants when ambiguity would matter.
+@pure
+fn hashmap_min_value_strict(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_size(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { hashmap_min_value(start, cap) }}
+}
+
+@pure
+fn hashmap_max_value_strict(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_size(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { hashmap_max_value(start, cap) }}
+}
+
+@pure
+fn hashmap_max_key_strict(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_size(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { hashmap_max_key(start, cap) }}
+}
+
+@pure
+fn hashmap_min_key_strict(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_size(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { hashmap_min_key(start, cap) }}
+}
+
+@pure
+fn hashmap_argmax_key_strict(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_size(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { hashmap_argmax_key(start, cap) }}
+}
+
+@pure
+fn hashmap_argmin_key_strict(start: i32, cap: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { if hashmap_size(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else { hashmap_argmin_key(start, cap) }}
+}
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-15): hashmap_swap_strict returns
+// INT32_MIN when the map is full AND the key is absent (legitimate
+// failure mode that the original swap conflated with "previous value
+// was -1").
+@pure
+fn hashmap_swap_strict(start: i32, cap: i32, k: i32, new_v: i32) -> i32 {
+    if hashmap_ok(start, cap) == 0 { (0 - 2147483647) - 1 }
+    else {
+        if hashmap_has(start, cap, k) == 0 {
+            if hashmap_size(start, cap) >= cap {
+                // Full and key absent — true failure (was -1 in original).
+                (0 - 2147483647) - 1
+            }
+            else { hashmap_swap(start, cap, k, new_v) }
+        }
+        else { hashmap_swap(start, cap, k, new_v) }
+    }
+}

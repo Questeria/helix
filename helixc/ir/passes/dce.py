@@ -89,6 +89,97 @@ SIDE_EFFECT_KINDS = {
 }
 
 
+# Cycle 3 R1 fix batch 21 (IR HIGH-5): exhaustiveness guard against
+# silent miscompilation when a new OpKind is added without explicit
+# classification as pure vs effectful. Pre-fix: a new side-effecting
+# opcode (e.g., future ATOMIC_RMW) would default to "pure" (since
+# SIDE_EFFECT_KINDS is a denylist) and DCE would silently drop it
+# when its result was unused. Stage 16.5 already caught FFI_CALL
+# being missing once; this guard makes the same class of drift
+# detectable.
+#
+# Strategy: positive allowlist of side-effecting opcodes (above) +
+# explicit allowlist of pure opcodes (below). Anything in neither
+# triggers an importwarning at module load — surfacing the drift
+# but NOT breaking the build (since the existing denylist behavior
+# is preserved for safety). When new opcodes are added, the warning
+# nudges the author to classify them. To upgrade to hard-fail,
+# replace the warning with `raise AssertionError(...)`.
+_KNOWN_PURE_OPKINDS = {
+    # Constants
+    tir.OpKind.CONST_INT, tir.OpKind.CONST_FLOAT, tir.OpKind.CONST_BOOL,
+    tir.OpKind.CONST_TENSOR,
+    # Tensor creation (pure: shape + dtype -> new tensor value)
+    tir.OpKind.TENSOR_ZEROS, tir.OpKind.TENSOR_ONES,
+    tir.OpKind.TENSOR_FULL, tir.OpKind.TENSOR_RAND,
+    tir.OpKind.TENSOR_LOAD, tir.OpKind.TENSOR_STORE,
+    # Arithmetic
+    tir.OpKind.ADD, tir.OpKind.SUB, tir.OpKind.MUL, tir.OpKind.DIV,
+    tir.OpKind.MOD, tir.OpKind.NEG, tir.OpKind.ABS,
+    tir.OpKind.MAXIMUM, tir.OpKind.MINIMUM, tir.OpKind.POW,
+    # Bitwise
+    tir.OpKind.SHL, tir.OpKind.SHR, tir.OpKind.BIT_AND, tir.OpKind.BIT_OR,
+    tir.OpKind.BIT_XOR, tir.OpKind.BIT_NOT,
+    # Transcendentals
+    tir.OpKind.EXP, tir.OpKind.LOG, tir.OpKind.SQRT, tir.OpKind.RECIP,
+    tir.OpKind.RELU, tir.OpKind.GELU, tir.OpKind.SILU, tir.OpKind.TANH,
+    tir.OpKind.SIGMOID,
+    # Reductions
+    tir.OpKind.REDUCE_SUM, tir.OpKind.REDUCE_MEAN, tir.OpKind.REDUCE_MAX,
+    tir.OpKind.REDUCE_MIN, tir.OpKind.REDUCE_PROD,
+    # Linear algebra
+    tir.OpKind.MATMUL, tir.OpKind.CONV1D, tir.OpKind.CONV2D,
+    # Shape ops
+    tir.OpKind.RESHAPE, tir.OpKind.TRANSPOSE, tir.OpKind.BROADCAST,
+    tir.OpKind.SLICE, tir.OpKind.CONCAT,
+    # Casts
+    tir.OpKind.CAST, tir.OpKind.BITCAST, tir.OpKind.QUANTIZE,
+    tir.OpKind.DEQUANTIZE,
+    # Control flow primitives (pure as values)
+    tir.OpKind.SELECT, tir.OpKind.WHERE,
+    # Comparisons
+    tir.OpKind.CMP_EQ, tir.OpKind.CMP_NE, tir.OpKind.CMP_LT,
+    tir.OpKind.CMP_LE, tir.OpKind.CMP_GT, tir.OpKind.CMP_GE,
+    # Transforms
+    tir.OpKind.GRAD, tir.OpKind.JVP, tir.OpKind.VMAP,
+    # Memory loads (pure reads from typed slots)
+    tir.OpKind.LOAD_VAR, tir.OpKind.LOAD_ELEM,
+    # Arena pure reads
+    tir.OpKind.ARENA_GET, tir.OpKind.ARENA_LEN,
+    # String literal reads
+    tir.OpKind.STR_BYTE, tir.OpKind.STR_PTR,
+    # GPU
+    tir.OpKind.THREAD_IDX, tir.OpKind.TILE_INDEX_LOAD,
+    # Result<T,E> pack / unpack
+    tir.OpKind.RESULT_PACK, tir.OpKind.RESULT_TAG, tir.OpKind.RESULT_PAYLOAD,
+}
+
+
+def _check_dce_kind_coverage() -> None:
+    """Module-load coverage check: surface OpKinds not explicitly
+    classified as pure or side-effecting. Currently soft (warning
+    only) — the existing denylist behavior is preserved so new
+    opcodes default to pure-and-droppable until classified."""
+    all_kinds = set(tir.OpKind)
+    classified = SIDE_EFFECT_KINDS | _KNOWN_PURE_OPKINDS
+    unclassified = all_kinds - classified
+    if unclassified:
+        import warnings
+        names = sorted(k.name for k in unclassified)
+        warnings.warn(
+            f"dce.py exhaustiveness: opcode(s) not classified as pure "
+            f"or side-effecting: {names}. Classify each in dce.py:"
+            f"SIDE_EFFECT_KINDS (if must-execute) or "
+            f"_KNOWN_PURE_OPKINDS (if liveness-droppable). Currently "
+            f"treated as pure-droppable by denylist default — risk "
+            f"of silent miscompile if any are side-effecting.",
+            stacklevel=2,
+        )
+
+
+_check_dce_kind_coverage()
+
+
 def dce_module(module: tir.Module) -> int:
     """Run DCE on every function. Returns total ops removed."""
     if any(fn.attrs.get("kernel") for fn in module.functions.values()) \

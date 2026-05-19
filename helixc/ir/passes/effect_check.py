@@ -129,6 +129,75 @@ OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
 PURITY_OBSERVER_EFFECTS: frozenset[str] = frozenset({"trace", "reflect"})
 
 
+# Cycle 3 R1 fix batch 21 (IR HIGH-6): exhaustiveness guard against
+# the drift class where a new side-effecting OpKind is added without
+# adding an OP_EFFECTS entry. Pre-fix: a missing entry silently
+# contributed no effect to `own_op_effects` in check_module, so a
+# @pure function calling the new effectful op silently passed the
+# 19001 check. This is the sibling defect class to dce.py HIGH-5
+# (same drift pattern caught FFI_CALL once already at Stage 16.5).
+#
+# Currently soft (warning only) so missing entries surface without
+# breaking existing callers; the explicit allowlist of "pure or
+# non-effect" opcodes documents the intentional exemptions. To
+# upgrade to hard-fail, replace warning with `raise AssertionError`.
+_KNOWN_NONEFFECT_OPKINDS = {
+    tir.OpKind.CONST_INT, tir.OpKind.CONST_FLOAT, tir.OpKind.CONST_BOOL,
+    tir.OpKind.CONST_TENSOR,
+    tir.OpKind.TENSOR_ZEROS, tir.OpKind.TENSOR_ONES,
+    tir.OpKind.TENSOR_FULL, tir.OpKind.TENSOR_RAND,
+    tir.OpKind.TENSOR_LOAD, tir.OpKind.TENSOR_STORE,
+    tir.OpKind.ADD, tir.OpKind.SUB, tir.OpKind.MUL, tir.OpKind.DIV,
+    tir.OpKind.MOD, tir.OpKind.NEG, tir.OpKind.ABS,
+    tir.OpKind.MAXIMUM, tir.OpKind.MINIMUM, tir.OpKind.POW,
+    tir.OpKind.BIT_AND, tir.OpKind.BIT_OR, tir.OpKind.BIT_XOR,
+    tir.OpKind.BIT_NOT, tir.OpKind.SHL, tir.OpKind.SHR,
+    tir.OpKind.EXP, tir.OpKind.LOG, tir.OpKind.SQRT, tir.OpKind.RECIP,
+    tir.OpKind.RELU, tir.OpKind.GELU, tir.OpKind.SILU, tir.OpKind.TANH,
+    tir.OpKind.SIGMOID,
+    tir.OpKind.REDUCE_SUM, tir.OpKind.REDUCE_MEAN, tir.OpKind.REDUCE_MAX,
+    tir.OpKind.REDUCE_MIN, tir.OpKind.REDUCE_PROD,
+    tir.OpKind.MATMUL, tir.OpKind.CONV1D, tir.OpKind.CONV2D,
+    tir.OpKind.RESHAPE, tir.OpKind.TRANSPOSE, tir.OpKind.BROADCAST,
+    tir.OpKind.SLICE, tir.OpKind.CONCAT,
+    tir.OpKind.CMP_EQ, tir.OpKind.CMP_NE, tir.OpKind.CMP_LT,
+    tir.OpKind.CMP_LE, tir.OpKind.CMP_GT, tir.OpKind.CMP_GE,
+    tir.OpKind.CAST, tir.OpKind.BITCAST, tir.OpKind.QUANTIZE,
+    tir.OpKind.DEQUANTIZE,
+    tir.OpKind.SELECT, tir.OpKind.WHERE,
+    tir.OpKind.LOAD_VAR, tir.OpKind.STORE_VAR, tir.OpKind.ALLOC_VAR,
+    tir.OpKind.LOAD_ELEM, tir.OpKind.STORE_ELEM, tir.OpKind.ALLOC_ARRAY,
+    tir.OpKind.ARENA_GET, tir.OpKind.ARENA_LEN,
+    tir.OpKind.STR_BYTE, tir.OpKind.STR_PTR,
+    tir.OpKind.CALL, tir.OpKind.RETURN, tir.OpKind.BR, tir.OpKind.COND_BR,
+    tir.OpKind.THREAD_IDX, tir.OpKind.TILE_INDEX_LOAD,
+    tir.OpKind.GRAD, tir.OpKind.JVP, tir.OpKind.VMAP,
+    tir.OpKind.RESULT_PACK, tir.OpKind.RESULT_TAG, tir.OpKind.RESULT_PAYLOAD,
+}
+
+
+def _check_effect_kind_coverage() -> None:
+    """Module-load coverage check: surface OpKinds not in OP_EFFECTS
+    or _KNOWN_NONEFFECT_OPKINDS. Currently soft (warning only)."""
+    all_kinds = set(tir.OpKind)
+    classified = set(OP_EFFECTS.keys()) | _KNOWN_NONEFFECT_OPKINDS
+    unclassified = all_kinds - classified
+    if unclassified:
+        import warnings
+        names = sorted(k.name for k in unclassified)
+        warnings.warn(
+            f"effect_check.py exhaustiveness: opcode(s) not in "
+            f"OP_EFFECTS or _KNOWN_NONEFFECT_OPKINDS: {names}. "
+            f"Add each to OP_EFFECTS (if side-effecting) or "
+            f"_KNOWN_NONEFFECT_OPKINDS (if pure). Risk of silent "
+            f"@pure bypass if any are effectful.",
+            stacklevel=2,
+        )
+
+
+_check_effect_kind_coverage()
+
+
 # Attribute keys that are NOT effect labels. Anything else in fn.attrs is
 # treated as a declared effect.
 META_ATTRS = frozenset({

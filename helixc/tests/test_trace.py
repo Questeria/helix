@@ -222,7 +222,9 @@ def test_a7_backend_emits_trace_ops_as_stubs():
     from helixc.backend.x86_64 import compile_module_to_elf
     src = "@trace fn pong(x: i32) -> i32 { x }\nfn main() -> i32 { pong(7) }"
     prog = parse(src)
-    typecheck(prog)
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-1): typecheck returns list.
+    errs = typecheck(prog)
+    assert errs == [], f"typecheck rejected the input: {errs}"
     mod = lower(prog)
     elf = compile_module_to_elf(mod)
     assert isinstance(elf, (bytes, bytearray)) and len(elf) > 0

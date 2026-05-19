@@ -472,7 +472,11 @@ def test_c105_unit_return_type_compatible():
     from helixc.frontend.typecheck import typecheck
     from helixc.frontend.parser import parse as _parse
     src = "fn foo() -> () { }\nfn main() -> i32 { 0 }\n"
-    typecheck(_parse(src))
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-1): typecheck() returns
+    # list[TypeError_]; "should not raise" was a misreading of the
+    # API. Pre-fix any typecheck error was silently swallowed.
+    errs = typecheck(_parse(src))
+    assert errs == [], f"typecheck rejected the input: {errs}"
 
 
 # Stage 28.9 cycle 108 audit-S regression tests for C107-F1..F8.

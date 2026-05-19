@@ -27,29 +27,62 @@
 //
 // License: Apache 2.0
 
+// Cycle 3 R1 fix batch 20 (RT HIGH-1):
+// Pre-fix: f32_bits_pow10(d) for d>=10 silently wrapped i32 (10^10 ~= 1e10
+// > INT32_MAX ~= 2.15e9). f32_bits_pow2(bit) for bit>=31 silently produced
+// INT32_MIN (the sign bit). Callers received corrupted bit patterns with no
+// out-of-band signal.
+//
+// Post-fix: both functions return INT32_MIN (0 - 2147483648 - 1 via two's
+// complement = -2147483648) for out-of-range inputs. Existing callers that
+// use the safe range (d in [0..9], bit in [0..30]) get identical behavior;
+// new code can check `if result == INT32_MIN { /* range overflow */ }`.
+// Original comment said "bit in [0..30]" but no enforcement — now enforced.
 @pure
 fn f32_bits_pow10(d: i32) -> i32 {
-    let mut p: i32 = 1;
-    let mut i: i32 = 0;
-    while i < d { p = p * 10; i = i + 1; }
-    p
+    // 10^10 = 10000000000 > INT32_MAX (2147483647). Clamp at d=9.
+    if d < 0 { 0 - 2147483647 - 1 }
+    else if d > 9 { 0 - 2147483647 - 1 }
+    else {
+        let mut p: i32 = 1;
+        let mut i: i32 = 0;
+        while i < d { p = p * 10; i = i + 1; }
+        p
+    }
 }
 
 // Compute 2^bit (bit in [0..30]).
 @pure
 fn f32_bits_pow2(bit: i32) -> i32 {
-    let mut v: i32 = 1;
-    let mut i: i32 = 0;
-    while i < bit { v = v * 2; i = i + 1; }
-    v
+    // 2^31 = INT32_MIN (sign bit); 2^30 = 1073741824 fits. Clamp at 30.
+    if bit < 0 { 0 - 2147483647 - 1 }
+    else if bit > 30 { 0 - 2147483647 - 1 }
+    else {
+        let mut v: i32 = 1;
+        let mut i: i32 = 0;
+        while i < bit { v = v * 2; i = i + 1; }
+        v
+    }
 }
 
 // Main conversion function.
 // Returns the unsigned 32-bit IEEE 754 f32 bit pattern as an i32
 // (top bit = 0; caller adds sign separately).
+//
+// Cycle 3 R1 fix batch 20 (RT HIGH-2):
+// integer_part * pow10 + frac_value silently wraps i32 for large literals.
+// Post-fix: detect upstream f32_bits_pow10 sentinel (INT32_MIN) and
+// short-circuit. f32_bits_pos returns INT32_MIN on out-of-range frac_digits.
+// Multiplicative overflow on integer_part * pow10 also detected.
 @pure
 fn f32_bits_pos(integer_part: i32, frac_value: i32, frac_digits: i32) -> i32 {
     let pow10 = f32_bits_pow10(frac_digits);
+    // Detect upstream sentinel: pow10 returned INT32_MIN.
+    if pow10 == 0 - 2147483647 - 1 { 0 - 2147483647 - 1 }
+    else if pow10 > 0 && integer_part != 0 && (integer_part > 2147483647 / pow10 || integer_part < (0 - 2147483647 - 1) / pow10) {
+        // integer_part * pow10 would overflow i32. Return sentinel.
+        0 - 2147483647 - 1
+    } else {
     let v_scaled = integer_part * pow10 + frac_value;
     if v_scaled == 0 {
         0
@@ -84,8 +117,11 @@ fn f32_bits_pos(integer_part: i32, frac_value: i32, frac_digits: i32) -> i32 {
             bit = bit - 1;
         }
         // Pack: exp_field << 23 + mantissa.
+        // Note: f32_bits_pow2(23) = 8388608. exp_field * 8388608 fits in i32
+        // for exp_field in [0..255] (max 255*8388608 = 2138083328 < INT32_MAX).
         let exp_field = k + 127;
         exp_field * f32_bits_pow2(23) + mantissa
+    }
     }
 }
 

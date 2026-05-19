@@ -697,6 +697,36 @@ fn layer_norm_f32(x_start: i32, y_start: i32, n: i32, eps: f32) -> i32 {
     }}}
 }
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-4): pre-fix layer_norm_f32 silently
+// wrote zeros on denom <= 0 or NaN. Caller had zero out-of-band signal.
+// layer_norm_f32_status reports the numerical health BEFORE running the
+// transform: 0 if computation is healthy, 1 if constant-input or NaN
+// would cause fallback to fire.
+@pure
+fn layer_norm_f32_status(x_start: i32, n: i32, eps: f32) -> i32 {
+    if n <= 0 { 1 }
+    else { if t1d_slice_ok(x_start, n) == 0 { 1 }
+    else {
+        let mean = tf1d_mean(x_start, n);
+        if mean != mean { 1 }
+        else {
+            let mut i: i32 = 0;
+            let mut var: f32 = 0.0_f32;
+            while i < n {
+                let x = __f32_from_bits(__arena_get(x_start + i));
+                let d = x - mean;
+                var = var + d * d;
+                i = i + 1;
+            }
+            var = var / (n as f32);
+            let safe_eps = if eps < 0.0_f32 { 0.0_f32 } else { eps };
+            let denom = __sqrt(var + safe_eps);
+            if denom <= 0.0_f32 { 1 }
+            else { if denom != denom { 1 } else { 0 } }
+        }
+    }}
+}
+
 // Inverted dropout for f32 vectors. During training, each element is kept with
 // probability keep_prob and scaled by 1/keep_prob; dropped elements become 0.
 // Returns the final deterministic RNG state.
@@ -786,6 +816,39 @@ fn softmax_layer(x_start: i32, y_start: i32, n: i32) -> i32 {
         };
         0
     }}}}
+}
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-4): pre-fix softmax_layer silently
+// substituted the max-entropy fallback distribution (1/n per slot) on
+// NaN-poisoned input or underflow. Caller had zero out-of-band signal
+// that the fallback fired. softmax_layer_status reports the numerical
+// health BEFORE the fallback would fire:
+//   returns 0 if computation is healthy (sum_e > 0 and finite)
+//   returns 1 if sum_e underflowed to 0 or upstream input contained NaN
+// Caller pattern:
+//   let status = softmax_layer_status(x_start, n);
+//   softmax_layer(x_start, y_start, n);
+//   if status == 1 { /* fallback distribution emitted */ }
+@pure
+fn softmax_layer_status(x_start: i32, n: i32) -> i32 {
+    if n <= 0 { 1 }
+    else { if t1d_slice_ok(x_start, n) == 0 { 1 }
+    else {
+        let max_v = tf1d_max(x_start, n);
+        if max_v != max_v { 1 }  // upstream NaN
+        else {
+            let mut i: i32 = 0;
+            let mut sum_e: f32 = 0.0_f32;
+            while i < n {
+                let xi = __f32_from_bits(__arena_get(x_start + i));
+                let e = __exp(xi - max_v);
+                sum_e = sum_e + e;
+                i = i + 1;
+            }
+            if sum_e <= 0.0_f32 { 1 }
+            else { if sum_e != sum_e { 1 } else { 0 } }
+        }
+    }}
 }
 
 fn softmax_rows_f32(logits_start: i32, probs_start: i32,
@@ -950,11 +1013,17 @@ fn bce_loss_scalar(p: f32, t: f32) -> f32 {
 }
 
 // Cross-entropy.
+//
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-3): pre-fix returned magic 1000000.0_f32
+// as error sentinel — a value that could collide with a legitimate large
+// cross-entropy loss in pathological early-training cases. Post-fix:
+// return NaN (via 0.0/0.0) which is the canonical IEEE 754 out-of-band
+// sentinel and cannot collide with any finite loss value.
 @pure
 fn ce_loss(p_start: i32, target_idx: i32, cols: i32) -> f32 {
-    if target_idx < 0 { 1000000.0_f32 }
-    else { if target_idx >= cols { 1000000.0_f32 }
-    else { if t1d_slice_ok(p_start, cols) == 0 { 1000000.0_f32 }
+    if target_idx < 0 { 0.0_f32 / 0.0_f32 }
+    else { if target_idx >= cols { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(p_start, cols) == 0 { 0.0_f32 / 0.0_f32 }
     else {
         let p = __f32_from_bits(__arena_get(p_start + target_idx));
         let eps = 0.0001_f32;
@@ -1051,14 +1120,17 @@ fn accuracy_count_from_logits_f32(logits_start: i32, target_start: i32,
     }}}}}
 }
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-3): ce_loss_batch_f32 also returned
+// the magic 1000000.0_f32 sentinel. Replaced with NaN to remove the
+// collision risk with legitimate large batch losses.
 @pure
 fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
                      rows: i32, cols: i32) -> f32 {
     if rows <= 0 { 0.0_f32 }
     else { if cols <= 0 { 0.0_f32 }
-    else { if t2d_len(rows, cols) == 0 { 1000000.0_f32 }
-    else { if t2d_shape_ok(probs_start, rows, cols) == 0 { 1000000.0_f32 }
-    else { if t1d_slice_ok(target_start, rows) == 0 { 1000000.0_f32 }
+    else { if t2d_len(rows, cols) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if t2d_shape_ok(probs_start, rows, cols) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(target_start, rows) == 0 { 0.0_f32 / 0.0_f32 }
     else {
         let mut r: i32 = 0;
         let mut total: f32 = 0.0_f32;
@@ -1079,7 +1151,7 @@ fn ce_loss_batch_f32(probs_start: i32, target_start: i32,
             };
             r = r + 1;
         }
-        if invalid == 1 { 1000000.0_f32 }
+        if invalid == 1 { 0.0_f32 / 0.0_f32 }
         else { total / (rows as f32) }
     }}}}}
 }
@@ -1132,6 +1204,17 @@ fn mae_loss(y_start: i32, t_start: i32, n: i32) -> i32 {
     }}}
 }
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-1): mae_loss_strict returns INT32_MAX
+// (max loss sentinel) on corruption to distinguish from "perfect prediction"
+// 0. Matches the mse_loss_strict template from batch 17.
+@pure
+fn mae_loss_strict(y_start: i32, t_start: i32, n: i32) -> i32 {
+    if n <= 0 { 2147483647 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 2147483647 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 2147483647 }
+    else { mae_loss(y_start, t_start, n) }}}
+}
+
 // MAE on f32 tensors (mean absolute error, returns 0.0 on empty).
 // Restart 58 A6 (Increment 77 catch-up sweep): NaN-skip on per-element
 // abs error. Same divisor convention as mse_loss_f32.
@@ -1154,6 +1237,17 @@ fn mae_loss_f32(y_start: i32, t_start: i32, n: i32) -> f32 {
     }}}
 }
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-1): mae_loss_f32_strict returns NaN
+// on corruption (via 0.0/0.0). NaN-propagation through downstream math
+// surfaces the issue without colliding with any legitimate loss value.
+@pure
+fn mae_loss_f32_strict(y_start: i32, t_start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(y_start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(t_start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { mae_loss_f32(y_start, t_start, n) }}}
+}
+
 // Count of positions where prediction matches target. Useful for batch
 // classification accuracy: pred[i] is typically argmax of model output,
 // target[i] is the integer class label.
@@ -1173,4 +1267,16 @@ fn count_correct(pred_start: i32, target_start: i32, n: i32) -> i32 {
     }
     hits
     }}}
+}
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-2): count_correct_strict returns -1
+// on corruption to distinguish from a legitimate "zero correct" count.
+// Pre-fix: corrupted slice with 0 valid matches looked identical to a
+// healthy slice with 0% accuracy.
+@pure
+fn count_correct_strict(pred_start: i32, target_start: i32, n: i32) -> i32 {
+    if n <= 0 { 0 - 1 }
+    else { if t1d_slice_ok(pred_start, n) == 0 { 0 - 1 }
+    else { if t1d_slice_ok(target_start, n) == 0 { 0 - 1 }
+    else { count_correct(pred_start, target_start, n) }}}
 }

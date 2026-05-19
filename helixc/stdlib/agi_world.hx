@@ -218,13 +218,21 @@ fn wmt_rollout(wmt: i32, start_state: i32, action_seq_start: i32, steps: i32) ->
 
 // ---- Table-backed accessors mirroring the option_*/result_* style ----
 
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-5): pre-fix returned -1 for invalid
+// wmt / invalid state / invalid action / corrupted-next-state, but only
+// returned default_v for legitimately-unset slot. Documented as "predict
+// or default_v if unset" but partial-failures bypassed the default.
+// Post-fix: ALL failure modes return default_v, matching Python's
+// dict.get(key, default) semantics.
 @pure
 fn wmt_predict_or(wmt: i32, state: i32, action: i32, default_v: i32) -> i32 {
     let off = wmt_offset(wmt, state, action);
-    let nxt = if off < 0 { 0 - 1 } else { __arena_get(off) };
-    if off < 0 { 0 - 1 }
-    else { if nxt < 0 { default_v }
-    else { if nxt >= __arena_get(wmt) { 0 - 1 } else { nxt } } }
+    if off < 0 { default_v }
+    else {
+        let nxt = __arena_get(off);
+        if nxt < 0 { default_v }
+        else { if nxt >= __arena_get(wmt) { default_v } else { nxt } }
+    }
 }
 
 @pure
@@ -254,5 +262,43 @@ fn wmt_is_self_loop(wmt: i32, state: i32, action: i32) -> i32 {
     else {
         let nxt = wmt_predict(wmt, state, action);
         if nxt == state { 1 } else { 0 }
+    }
+}
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-6): _strict variants that distinguish
+// "corruption" from "valid result." wmt_status returns 0 if wmt is healthy,
+// 1 if corrupted. wmt_predict_strict returns INT32_MIN on corruption
+// (vs -1 for "unlearned but healthy"). Matches the agi_memory.hx wm_status
+// + wm_load_strict template from batch 17.
+@pure
+fn wmt_status(wmt: i32) -> i32 {
+    if wmt_ok(wmt) == 0 { 1 } else { 0 }
+}
+
+@pure
+fn wmt_predict_strict(wmt: i32, state: i32, action: i32) -> i32 {
+    if wmt_ok(wmt) == 0 { (0 - 2147483647) - 1 }
+    else {
+        let off = wmt_offset(wmt, state, action);
+        if off < 0 { (0 - 2147483647) - 1 }
+        else {
+            let nxt = __arena_get(off);
+            if nxt < 0 { 0 - 1 }  // legitimately unset; -1 sentinel preserved
+            else { if nxt >= __arena_get(wmt) { (0 - 2147483647) - 1 } else { nxt } }
+        }
+    }
+}
+
+@pure
+fn wmt_is_self_loop_strict(wmt: i32, state: i32, action: i32) -> i32 {
+    if wmt_ok(wmt) == 0 { (0 - 2147483647) - 1 }
+    else {
+        let off = wmt_offset(wmt, state, action);
+        if off < 0 { (0 - 2147483647) - 1 }
+        else {
+            let nxt = wmt_predict(wmt, state, action);
+            if nxt < 0 { 0 }  // unset != self-loop
+            else { if nxt == state { 1 } else { 0 } }
+        }
     }
 }

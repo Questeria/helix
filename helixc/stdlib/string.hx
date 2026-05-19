@@ -281,6 +281,50 @@ fn string_to_int(start: i32, len: i32) -> i32 {
     }
 }
 
+// Cycle 3 R1 fix batch 20 (RT HIGH-9): string_to_int_strict variants.
+// Pre-fix: string_to_int silently skips non-digit bytes. "abc123" parses
+// to 123. "12.5" parses to 125. "" parses to 0. "-" parses to 0. Caller
+// has zero feedback that the input was malformed.
+//
+// Post-fix:
+//   - string_is_int(start, len) -> i32: returns 1 if ALL non-leading-sign
+//     bytes are digits AND len > 0 (or len > 1 if leading sign); 0
+//     otherwise. Caller pattern:
+//       if string_is_int(s, n) == 1 { let v = string_to_int(s, n); ... }
+//   - string_to_int_strict(start, len) -> i32: returns INT32_MIN sentinel
+//     when input is malformed (non-digit byte found, or empty, or just "-").
+//     Otherwise behaves like string_to_int (saturated).
+//
+// Caller-side discipline still required for negative numbers since the
+// legitimate value INT32_MIN is itself the sentinel. For full
+// disambiguation use string_is_int + string_to_int.
+@pure
+fn string_is_int(start: i32, len: i32) -> i32 {
+    if len <= 0 { 0 }
+    else {
+        let first: i32 = __arena_get(start);
+        let mut i: i32 = 0;
+        if first == 45 { i = 1; }  // leading '-'
+        if i >= len { 0 }  // just "-" or empty
+        else {
+            let mut ok: i32 = 1;
+            while i < len {
+                let b: i32 = __arena_get(start + i);
+                if b < 48 { ok = 0; }
+                else { if b > 57 { ok = 0; } }
+                i = i + 1;
+            }
+            ok
+        }
+    }
+}
+
+@pure
+fn string_to_int_strict(start: i32, len: i32) -> i32 {
+    if string_is_int(start, len) == 0 { (0 - 2147483647) - 1 }
+    else { string_to_int(start, len) }
+}
+
 // string_concat(a, an, b, bn): allocate a new arena-backed string
 // that's a[0..an] followed by b[0..bn]. Returns the new start
 // index; new len is an + bn. Mirrors vec_concat. NOT @pure (arena

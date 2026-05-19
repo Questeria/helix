@@ -447,12 +447,25 @@ fn beam_top_k(candidates_start: i32, n: i32, scoring_start: i32,
 //   astar_path_get(came_from_start, state)     -> i32
 //        Read came_from[state]; -1 if unset.
 
+// Cycle 3 R1 fix batch 20 (RT HIGH-11): pre-fix used raw i32 addition
+// with no saturation. Two near-INT32_MAX values would overflow silently
+// to negative, breaking PQ ordering. Post-fix: i64 intermediate with
+// INT32_MAX saturation (matches restart 53/54 saturation sweep).
 @pure
 fn astar_priority(g_start: i32, h_start: i32, state: i32) -> i32 {
     if state < 0 { 0 - 1 }
     else { if t1d_slice_ok(g_start, state + 1) == 0 { 0 - 1 }
     else { if t1d_slice_ok(h_start, state + 1) == 0 { 0 - 1 }
-    else { __arena_get(g_start + state) + __arena_get(h_start + state) } } }
+    else {
+        let g: i64 = __arena_get(g_start + state) as i64;
+        let h: i64 = __arena_get(h_start + state) as i64;
+        let sum: i64 = g + h;
+        let hi: i64 = 2147483647_i64;
+        let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+        if sum > hi { 2147483647 }
+        else if sum < lo { (0_i32 - 2147483647_i32) - 1_i32 }
+        else { sum as i32 }
+    } } }
 }
 
 fn astar_path_set(came_from_start: i32, child: i32, parent: i32) -> i32 {

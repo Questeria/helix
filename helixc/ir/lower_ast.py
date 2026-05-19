@@ -823,7 +823,26 @@ class Lowerer:
             dtype = self._lower_type(ty.dtype)
             assert isinstance(dtype, tir.TIRScalar), f"tensor dtype must be scalar, got {dtype}"
             shape = tuple(self._lower_dim(s) for s in ty.shape)
-            device = self._stringify_marker(ty.device) or "cpu"
+            # Cycle 3 R1 fix batch 21 (IR HIGH-4): pre-fix
+            # `_stringify_marker(ty.device) or "cpu"` silently routed any
+            # unrecognized A.Expr device marker to "cpu". Same sibling
+            # class as the tile-memspace defect closed at line 833-859,
+            # but the tensor-device arm was missed. Post-fix: validate
+            # against known device set, raise on unknown.
+            _known_devices = {"cpu", "cuda", "tpu", "?"}
+            if ty.device is None:
+                device = "cpu"
+            else:
+                dev_raw = self._stringify_marker(ty.device)
+                dev = dev_raw.lower() if isinstance(dev_raw, str) else None
+                if dev is None or dev not in _known_devices:
+                    raise ValueError(
+                        f"unsupported tensor device marker "
+                        f"{ty.device!r} (resolved to {dev_raw!r}); "
+                        f"must be one of {sorted(_known_devices)} "
+                        f"(Cycle 3 R1 fix batch 21 IR HIGH-4)"
+                    )
+                device = dev
             return tir.TIRTensorTy(dtype=dtype, shape=shape, device=device,
                                    layout=tir.Layout.ROW_MAJOR)
         if isinstance(ty, A.TyTile):
@@ -970,7 +989,19 @@ class Lowerer:
             return tir.DimExpr(op=expr.op,
                                args=(self._lower_dim(expr.left),
                                      self._lower_dim(expr.right)))
-        return tir.DimDyn()
+        # Cycle 3 R1 fix batch 21 (IR HIGH-3): pre-fix silently
+        # lowered any unrecognized A.Expr shape-position node to
+        # DimDyn, losing static shape-checking. A shape like
+        # `[unknown_fn_call(N)]` or `[s.field]` silently passed
+        # through tensor-type validation. Sibling of _lower_type
+        # TyGeneric loud-fail closed at line 960.
+        raise NotImplementedError(
+            f"lower_ast: unsupported A.Expr subclass "
+            f"{type(expr).__name__} in shape position at "
+            f"{getattr(expr, 'span', None)!r}; only IntLit/Name/"
+            f"Binary arithmetic are supported in Phase-0 shape "
+            f"expressions"
+        )
 
     def _stringify_marker(self, expr: Optional[A.Expr]) -> Optional[str]:
         if expr is None: return None
@@ -1449,10 +1480,18 @@ class Lowerer:
                 slit = stmt.value
                 flat_paths = self._struct_flat_paths.get(slit.name)
                 if flat_paths is None:
-                    # Unknown struct (typecheck would have flagged) — fall
-                    # through to default-value binding to avoid crashing.
-                    self._bind(stmt.name, self.builder.const_int(0))
-                    return
+                    # Cycle 3 R1 fix batch 21 (IR HIGH-1):
+                    # Pre-fix: unknown struct silently bound to const_int(0),
+                    # masking a typecheck bug that let an undeclared struct
+                    # slip through. Now raises loudly so the typecheck miss
+                    # surfaces at IR-build time instead of producing wrong
+                    # binary. Sibling of the A.Index/A.Field loud-fail fix
+                    # closed in Cycle 1 Batch IR HIGH-3.
+                    raise NotImplementedError(
+                        f"lower_ast: A.Let initializer references unknown "
+                        f"struct {slit.name!r} at {stmt.span!r}; typecheck "
+                        f"should have rejected this"
+                    )
                 # For each flat path, walk the (possibly nested) StructLit
                 # value to resolve the leaf expression. If the walk hits a
                 # Name (existing struct binding) before consuming the full
@@ -1647,7 +1686,22 @@ class Lowerer:
             v: Optional[tir.Value] = None
             if stmt.value is not None:
                 v = self._lower_expr(stmt.value)
+                # Cycle 3 R1 fix batch 21 (IR HIGH/MEDIUM-10): pre-fix
+                # silently defaulted to const_int(0) when value-position
+                # expression failed to lower. This was the parent
+                # silent-zero defect of the TupleLit/ArrayLit sibling fix
+                # closed in Cycle 1. Post-fix: raise loudly when an
+                # explicit value is present but lowers to None — that's
+                # a typecheck miss or unhandled expr subclass that the
+                # caller silently swallowed as zero.
+                if v is None:
+                    raise NotImplementedError(
+                        f"lower_ast: let-RHS at {stmt.span!r} of type "
+                        f"{type(stmt.value).__name__} lowered to no "
+                        f"value; typecheck should have rejected this"
+                    )
             if v is None:
+                # Legitimate "let x: i32;" with no initializer: zero-init.
                 v = self.builder.const_int(0)
             if stmt.is_mut:
                 # Bind first so we get the unique IR name (mangled if

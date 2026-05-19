@@ -98,8 +98,22 @@ fn mnist_idx_dim(blob: i32, blob_len: i32, i: i32) -> i32 {
             let b1 = __str_byte_at(blob, pos + 1);
             let b2 = __str_byte_at(blob, pos + 2);
             let b3 = __str_byte_at(blob, pos + 3);
+            // Cycle 3 R1 fix batch 20 (RT HIGH-3): big-endian decode of u32
+            // into i32 silently wraps for dims with high byte >= 128 (i.e.
+            // dim > 2^31 / 2^24 = 128 in high byte). b0=128, b1=b2=b3=0
+            // = 2^31 = INT32_MIN. For dims <= 2^31-1 (which covers all
+            // realistic IDX files including ImageNet-scale), this works
+            // correctly. For dims > 2^31-1, returns INT32_MIN sentinel —
+            // since IDX dims are unsigned i32 on disk, the sentinel is
+            // distinguishable from any legitimate small dim.
             // Big-endian: byte 0 is MSB.
-            b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+            if b0 >= 128 {
+                // Top bit set: u32 value > 2^31-1, doesn't fit in i32.
+                // Return INT32_MIN as out-of-band sentinel.
+                0 - 2147483647 - 1
+            } else {
+                b0 * 16777216 + b1 * 65536 + b2 * 256 + b3
+            }
         }
     } }
 }
@@ -132,6 +146,12 @@ fn mnist_idx_dtype_size(dtype: i32) -> i32 {
 // Phase-0 supports up to 4 dims (covers all canonical MNIST + most
 // IDX use cases). Higher-rank tensors saturate to 0 to fail-closed
 // the validate check.
+//
+// Cycle 3 R1 fix batch 20 (RT HIGH-4): every multiplication step now
+// guards against i32 overflow. Returns INT32_MIN sentinel on overflow.
+// Pre-fix: [1000, 1000, 1000, 1000] u8 = 1e12 silently wraps to small
+// positive value, validate() passes a corrupt file. Post-fix: overflow
+// detected → INT32_MIN propagates to validate, which now rejects.
 @pure
 fn mnist_idx_expected_body_len(blob: i32, blob_len: i32) -> i32 {
     let nd = mnist_idx_ndims(blob, blob_len);
@@ -142,19 +162,36 @@ fn mnist_idx_expected_body_len(blob: i32, blob_len: i32) -> i32 {
     else { if nd > 4 { 0 }
     else {
         let d0 = mnist_idx_dim(blob, blob_len, 0);
+        if d0 == 0 - 2147483647 - 1 { 0 - 2147483647 - 1 }
+        else if d0 < 0 { 0 - 2147483647 - 1 }
+        else {
         let prod = if nd >= 2 {
             let d1 = mnist_idx_dim(blob, blob_len, 1);
+            if d1 < 0 { 0 - 2147483647 - 1 }
+            else if d0 != 0 && d1 > 2147483647 / d0 { 0 - 2147483647 - 1 }
+            else {
             let p2 = d0 * d1;
             if nd >= 3 {
                 let d2 = mnist_idx_dim(blob, blob_len, 2);
+                if d2 < 0 { 0 - 2147483647 - 1 }
+                else if p2 != 0 && d2 > 2147483647 / p2 { 0 - 2147483647 - 1 }
+                else {
                 let p3 = p2 * d2;
                 if nd >= 4 {
                     let d3 = mnist_idx_dim(blob, blob_len, 3);
-                    p3 * d3
+                    if d3 < 0 { 0 - 2147483647 - 1 }
+                    else if p3 != 0 && d3 > 2147483647 / p3 { 0 - 2147483647 - 1 }
+                    else { p3 * d3 }
                 } else { p3 }
+                }
             } else { p2 }
+            }
         } else { d0 };
-        prod * elem_size
+        // Final elem_size multiplication overflow guard.
+        if prod == 0 - 2147483647 - 1 { 0 - 2147483647 - 1 }
+        else if prod != 0 && elem_size > 2147483647 / prod { 0 - 2147483647 - 1 }
+        else { prod * elem_size }
+        }
     } } }
 }
 
@@ -169,8 +206,14 @@ fn mnist_idx_validate(blob: i32, blob_len: i32) -> i32 {
             if header > blob_len { 0 }
             else {
                 let expect = mnist_idx_expected_body_len(blob, blob_len);
-                let actual = blob_len - header;
-                if expect == actual { 1 } else { 0 }
+                // Cycle 3 R1 fix batch 20 (RT HIGH-4): honor INT32_MIN
+                // overflow sentinel from expected_body_len — corrupt large
+                // file would have silently passed before this guard.
+                if expect == 0 - 2147483647 - 1 { 0 }
+                else {
+                    let actual = blob_len - header;
+                    if expect == actual { 1 } else { 0 }
+                }
             }
         }
     }

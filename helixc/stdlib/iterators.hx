@@ -588,13 +588,24 @@ fn vec_l1_distance(a: i32, b: i32, count: i32) -> i32 {
 // Restart 54 A5: i64 accumulator + INT32 saturation. A single
 // |d| >= 46341 makes d*d overflow i32; without saturation the
 // accumulator wraps negative and inverts nearest-neighbour ranking.
+//
+// Cycle 3 R1 fix batch 20 (RT HIGH-5): boundary case a=INT32_MAX,
+// b=INT32_MIN gives d = 4294967295 (as i64); d*d ~= 1.8e19 > 9.2e18
+// (i64 max). Pre-fix: i64 silently wraps. Post-fix: clamp d to safe
+// range [-46340, 46340] BEFORE the multiply where d*d <= 2147395600
+// < INT32_MAX. The squared distance is then trivially safe at i32.
 @pure
 fn vec_l2_squared_distance(a: i32, b: i32, count: i32) -> i32 {
     let mut i: i32 = 0;
     let mut acc: i64 = 0_i64;
     let hi: i64 = 2147483647_i64;
+    let d_safe_max: i64 = 46340_i64;
+    let d_safe_min: i64 = 0_i64 - 46340_i64;
     while i < count {
-        let d: i64 = (__arena_get(a + i) as i64) - (__arena_get(b + i) as i64);
+        let mut d: i64 = (__arena_get(a + i) as i64) - (__arena_get(b + i) as i64);
+        // Clamp d to safe range so d*d fits well within i64.
+        if d > d_safe_max { d = d_safe_max; }
+        if d < d_safe_min { d = d_safe_min; }
         acc = acc + d * d;
         if acc > hi { acc = hi; }
         i = i + 1;
@@ -749,13 +760,22 @@ fn vec_repeat(value: i32, count: i32) -> i32 {
 // reducers (vec_count_eq(result, n, 0) inflated). Post-fix:
 // INT32_MIN sentinel on b[i] == 0 — distinct from any legitimate
 // modulo result (a % b is always in [-(|b|-1), +(|b|-1)]).
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-8): also guard INT32_MIN % -1
+// which mathematically is 0 but on x86 raises SIGFPE alongside the
+// SIGFPE-raising div pair. Return 0 (mathematically correct) explicitly.
 fn vec_zip_mod(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
         let bv = __arena_get(b + i);
+        let av = __arena_get(a + i);
         if bv == 0 { __arena_push((0_i32 - 2147483647_i32) - 1_i32); }
-        else { __arena_push(__arena_get(a + i) % bv); }
+        else if av == ((0_i32 - 2147483647_i32) - 1_i32) && bv == 0_i32 - 1_i32 {
+            // INT32_MIN % -1 = 0 mathematically; emit explicit 0 to
+            // avoid SIGFPE on x86 idiv instruction.
+            __arena_push(0_i32);
+        }
+        else { __arena_push(av % bv); }
         i = i + 1;
     }
     s
@@ -815,13 +835,23 @@ fn vec_concat(a: i32, na: i32, b: i32, nb: i32) -> i32 {
 // Cycle 1 Batch RT fix batch 11 (silent-failure HIGH-4): same
 // sentinel-collision fix as vec_zip_mod above. Pre-fix 0 collided
 // with legitimate `0/x = 0`. Post-fix: INT32_MIN sentinel.
+//
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-8): also guard INT32_MIN / -1
+// case which is UB in two's-complement i32 (would mathematically be
+// INT32_MAX + 1 = INT32_MIN by silent wrap, but on x86 raises SIGFPE).
+// Now returns INT32_MIN sentinel to surface the corner case.
 fn vec_zip_div(a: i32, b: i32, count: i32) -> i32 {
     let s: i32 = __arena_len();
     let mut i: i32 = 0;
     while i < count {
         let bv = __arena_get(b + i);
+        let av = __arena_get(a + i);
         if bv == 0 { __arena_push((0_i32 - 2147483647_i32) - 1_i32); }
-        else { __arena_push(__arena_get(a + i) / bv); }
+        else if av == ((0_i32 - 2147483647_i32) - 1_i32) && bv == 0_i32 - 1_i32 {
+            // INT32_MIN / -1 would overflow; surface as sentinel.
+            __arena_push((0_i32 - 2147483647_i32) - 1_i32);
+        }
+        else { __arena_push(av / bv); }
         i = i + 1;
     }
     s
@@ -1656,6 +1686,52 @@ fn vec_eq(a: i32, an: i32, b: i32, bn: i32) -> i32 {
 @pure
 fn vec_min_pure(start: i32, count: i32) -> i32 {
     if count == 0 { 0 }
+    else {
+        let mut i: i32 = 1;
+        let mut best: i32 = __arena_get(start);
+        while i < count {
+            let v = __arena_get(start + i);
+            if v < best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-11): _strict variants of the
+// vec_first/last/max_pure/min_pure family. Pre-fix: all 4 returned 0
+// on empty input, indistinguishable from "first element is 0" or
+// "vec contains only zeros." Post-fix: _strict variants return
+// INT32_MIN sentinel on empty. Matches the ti2d_get_strict template
+// established in batch 12.
+@pure
+fn vec_first_strict(start: i32, count: i32) -> i32 {
+    if count <= 0 { 0 - 2147483647 - 1 } else { __arena_get(start) }
+}
+
+@pure
+fn vec_last_strict(start: i32, count: i32) -> i32 {
+    if count <= 0 { 0 - 2147483647 - 1 } else { __arena_get(start + count - 1) }
+}
+
+@pure
+fn vec_max_pure_strict(start: i32, count: i32) -> i32 {
+    if count <= 0 { 0 - 2147483647 - 1 }
+    else {
+        let mut i: i32 = 1;
+        let mut best: i32 = __arena_get(start);
+        while i < count {
+            let v = __arena_get(start + i);
+            if v > best { best = v; }
+            i = i + 1;
+        }
+        best
+    }
+}
+
+@pure
+fn vec_min_pure_strict(start: i32, count: i32) -> i32 {
+    if count <= 0 { 0 - 2147483647 - 1 }
     else {
         let mut i: i32 = 1;
         let mut best: i32 = __arena_get(start);

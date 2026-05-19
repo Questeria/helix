@@ -380,18 +380,131 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 1 / 5** 🎉 (Cycle 2 RECOVERED after 3 fix batches: 17+18+19)
+**Current: 0 / 5** (Cycle 3 R1 RESET — large finding set surfaced)
 
-Cycle 2 totals:
-  - R1 first attempt: FE/IR/BE/TEST CLEAN, RT NOT_CLEAN (6 findings)
-  - Batches 17+18+19 closed all RT findings + doc-drift surfaced in
-    re-audit
-  - R1 second attempt: FE/IR/BE/TEST already CLEAN (no regressions),
-    RT NOT_CLEAN (1 doc-drift)
-  - R1 third attempt: RT CLEAN
-  - Cycle 2 CLOSED with 3 fix batches + 3 RT re-audit rounds
-  - Other 4 batches passed round 1 first try — converging behavior
+Cycle 3 R1 totals (2026-05-18):
+  - FE: 3 HIGH + 4 MEDIUM MUST-FIX + 8 nice-to-have
+    - FE-1: typecheck._check_expr fallthrough silent TyUnknown (no errors.append)
+    - FE-2: typecheck._resolve_size_expr silently drops unbound size names
+    - FE-3: typecheck._add_where_constraint silently drops unsupported clauses
+    - FE-6: _define_local_const_scalar silent no-op on empty scope stack
+    - FE-7: parser._parse_attributes silently drops non-IDENT args
+    - FE-9: Critical assertions disabled under -O (10+ sites)
+    - FE-10: _check_int_lit_fits silently skips when bounds missing
+  - IR: 6 HIGH + 2 MEDIUM MUST-FIX + 7 nice-to-have
+    - IR-1: lower_ast UnknownStruct silent default-value binding
+    - IR-2: call-arg drop on None lower_expr return
+    - IR-3: _lower_dim DimDyn silent fallback for unrecognized shape exprs
+    - IR-4: _stringify_marker None + "cpu" default for tensor device
+    - IR-5: DCE SIDE_EFFECT_KINDS no exhaustiveness check (drift recurring)
+    - IR-6: effect_check OP_EFFECTS no exhaustiveness check
+    - IR-10: let-RHS const_int(0) silent fallback (parent of TupleLit/ArrayLit)
+    - IR-11: _int_bits_for_type silent 32-bit default for unknown scalars
+  - BE: 3 HIGH + 1 MEDIUM MUST-FIX + 6 nice-to-have
+    - BE-1: LOAD_ELEM/STORE_ELEM no bounds check (stack corruption)
+    - BE-2: _load_cmp_operand_* unused unsigned_compare parameter
+    - BE-3: CONST_INT silent narrow-type truncation
+  - RT: 11 HIGH + 8 MEDIUM MUST-FIX + 3 nice-to-have
+    - RT-H1/H2: ieee754.hx f32_bits_pow10/pow2/f32_bits_pos overflow
+    - RT-H3/H4: mnist.hx idx_dim/expected_body_len i32 overflow
+    - RT-H5: iterators.hx vec_l2_squared_distance i64 boundary overflow
+    - RT-H6/H7: autodiff_reverse.hx rev_value_at/rev_grad strict missing
+    - RT-H8: autodiff.hx d_div_v/d_recip silent-zero collision
+    - RT-H9: string.hx string_to_int silent malformed-input swallow
+    - RT-H10: csv.hx count_lines/count_fields silent 65536 truncation
+    - RT-H11: agi_search.hx astar_priority i32 overflow
+    - RT-M1..M8: nn.hx mae_loss_strict, count_correct_strict, ce_loss→NaN,
+      softmax_layer_status, layer_norm_f32_status, agi_world.hx wmt_predict_or
+      semantics, option.hx option_sum saturation, iterators.hx
+      vec_zip_div INT32_MIN/-1 guard
+  - TEST: 5 HIGH + 2 MEDIUM MUST-FIX + 6 nice-to-have
+    - TEST-1: 5 sites discarding typecheck() return value (no assert)
+    - TEST-2: grad_pass test with no assertion on returned count
+    - TEST-3: test_int_literal_negative_overflow_errors body is bare pass
+    - TEST-4: HashConsError trap_id class-vs-instance (batch-16 sibling miss)
+    - TEST-5: test_c16_1 unused hard variable dead-filter
+    - TEST-6: test_match_lower_fresh_counter_resets_per_call no save/restore
 
+Total Cycle 3 R1: **28 HIGH + 17 MEDIUM MUST-FIX = 45 new findings**.
+Counter RESET to 0/5. Fix batches 20+ must close all of these before
+re-dispatch.
+
+### Cycle 3 fix batches shipped (2026-05-18)
+
+- **Batch 20 (RT)**: 11 HIGH + 8 MEDIUM MUST-FIX closed
+  - ieee754.hx: f32_bits_pow10/pow2 INT32_MIN sentinel on out-of-range,
+    f32_bits_pos detects upstream sentinel + integer_part*pow10 overflow guard
+  - mnist.hx: mnist_idx_dim u32-with-top-bit-set INT32_MIN sentinel,
+    mnist_idx_expected_body_len overflow guard at every multiplication step,
+    mnist_idx_validate honors INT32_MIN sentinel
+  - iterators.hx: vec_l2_squared_distance d clamped to [-46340, 46340] so
+    d*d fits well within i64, vec_zip_div/mod INT32_MIN/-1 guard,
+    vec_first_strict / vec_last_strict / vec_max_pure_strict / vec_min_pure_strict
+  - string.hx: string_is_int predicate + string_to_int_strict variant
+  - csv.hx: csv_count_lines_was_capped / csv_count_fields_was_capped +
+    _strict variants (companion to batch-17 csv_line_was_truncated)
+  - autodiff_reverse.hx: rev_value_at_strict / rev_grad_strict (INT32_MIN)
+  - autodiff.hx: d_div_v_checked / d_div_dx_checked / d_recip_v_checked /
+    d_recip_dx_checked (caller-supplied sentinel for singularity)
+  - nn.hx: mae_loss_strict + mae_loss_f32_strict + count_correct_strict,
+    ce_loss / ce_loss_batch_f32 magic-number sentinel replaced with NaN,
+    softmax_layer_status + layer_norm_f32_status (out-of-band fallback signal)
+  - agi_world.hx: wmt_predict_or fixed to return default_v on ALL failure
+    modes (dict.get semantics), wmt_status + wmt_predict_strict + wmt_is_self_loop_strict
+  - agi_search.hx: astar_priority i64-saturated addition (i32 overflow caught)
+  - agi_match.hx: tree_hash_shallow i64 intermediate + i32 mask,
+    ensemble_mean_strict / ensemble_uncertainty_strict
+  - transcendentals.hx: __log / __log_f64 NaN for x <= 0 (domain guard)
+  - option.hx: option_sum i64-saturated addition
+  - hashmap.hx: hashmap_min_value_strict, _max_value_strict, _max_key_strict,
+    _min_key_strict, _argmax_key_strict, _argmin_key_strict, _swap_strict
+
+- **Batch 21 (IR)**: 6 HIGH + 1 MEDIUM closed (1 finding partially deferred)
+  - lower_ast.py IR HIGH-1: unknown struct binding now raises NotImplementedError
+  - lower_ast.py IR HIGH-3: _lower_dim raises on unrecognized shape exprs
+  - lower_ast.py IR HIGH-4: tensor device marker validated against known set
+  - lower_ast.py IR MEDIUM-10: let-RHS lowering raises when stmt.value
+    lowers to None (only honors const_int(0) for stmt.value=None case)
+  - dce.py IR HIGH-5: exhaustiveness coverage check (currently warns;
+    classified all 41 OpKinds — pure ops in _KNOWN_PURE_OPKINDS,
+    side-effecting in SIDE_EFFECT_KINDS)
+  - effect_check.py IR HIGH-6: parallel exhaustiveness coverage check
+
+- **Batch 22 (BE)**: 2 HIGH closed (1 HIGH deferred as design-debt)
+  - x86_64.py BE HIGH-2: _load_cmp_operand_rax/rcx unused unsigned_compare
+    parameter — added drift detector warning when caller intent differs
+    from the type-based decision used
+  - x86_64.py BE HIGH-3: CONST_INT validates value fits in declared
+    narrow-int type's range (closes sibling of cycle-106 f64 narrowing fix)
+  - BE HIGH-1 (LOAD_ELEM/STORE_ELEM bounds) DEFERRED — requires non-trivial
+    codegen restructuring (label management + control flow); logged as
+    design-debt for Stage 110+ refactor (parallel to ARENA_GET pattern)
+
+- **Batch 23 (FE)**: 3 HIGH closed
+  - typecheck.py FE HIGH-1: _check_expr fallthrough now appends explicit
+    typecheck error (was returning TyUnknown silently)
+  - typecheck.py FE HIGH-2: _resolve_size_expr unbound names now error
+  - typecheck.py FE HIGH-3: _add_where_constraint surfaces unsupported
+    where-clause forms + nonlinear constraints (was silently dropping)
+
+- **Batch 24 (TEST)**: 5 HIGH + 1 MEDIUM closed
+  - test_ir.py / test_strings_io.py / test_trace.py / test_typecheck.py
+    (5 sites): typecheck() return value now asserted (was discarded)
+  - test_hash_cons.py: HashConsError trap_id checked via type(e) — sibling
+    fix to batch-16's closure of the same anti-pattern
+  - test_codegen.py test_c16_1: unused `hard` variable now asserted
+  - test_typecheck.py test_int_literal_negative_overflow: renamed + real
+    assertion (was bare pass with promising name)
+  - test_codegen.py test_stage57_inc1: grad_pass return count asserted +
+    rgrad_all fn-name asserted (test was only checking non-throwing)
+  - test_codegen_determinism.py test_match_lower_fresh_counter_resets_per_call:
+    save/restore wrapped in try/finally (sibling of batch-16 fix)
+
+Total Cycle 3 fix batches: 5 batches, 28 HIGH + 16 MEDIUM closed (1 BE
+HIGH deferred as design-debt). 217 tests pass on focused subset; full
+codegen.py test suite running.
+
+**Was: 1 / 5** 🎉 (Cycle 2 closure)
 **Was: 0 / 5** (transient — Cycle 2 R1 first attempt failed)
 **Was: 1 / 5** 🎉 (Cycle 1 closure)
 

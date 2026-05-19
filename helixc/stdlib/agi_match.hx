@@ -82,16 +82,24 @@ fn tree_eq_shallow(a: i32, b: i32) -> i32 {
 // (Pseudo-random-mixing without bitwise ops; uses arithmetic only.
 // For Phase 4 step 4 a deterministic-but-not-cryptographic hash is
 // sufficient for use as WM keys / dedup probes.)
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-9): pre-fix used raw i32 arithmetic;
+// tag * 29791 silently wrapped for tag > 72074 (29791 * 72074 > INT32_MAX).
+// Hash collisions exploded silently; dedup tables behaved nondeterministically.
+// Post-fix: i64 intermediate then mask to i32 (XOR-fold the high 32 bits
+// to preserve mixing). Result is still i32-shaped and overflow-safe.
 @pure
 fn tree_hash_shallow(off: i32) -> i32 {
     if tree_node_ok(off) == 0 { 0 }
     else {
-    let tag = __arena_get(off);
-    let p1 = __arena_get(off + 1);
-    let p2 = __arena_get(off + 2);
-    let p3 = __arena_get(off + 3);
-    // 4-byte-rotated linear-combination.
-    tag * 31 * 31 * 31 + p1 * 31 * 31 + p2 * 31 + p3
+    let tag: i64 = __arena_get(off) as i64;
+    let p1: i64 = __arena_get(off + 1) as i64;
+    let p2: i64 = __arena_get(off + 2) as i64;
+    let p3: i64 = __arena_get(off + 3) as i64;
+    // 4-byte-rotated linear-combination, computed in i64 to prevent
+    // silent overflow; folded back to i32 by taking the low 31 bits
+    // (avoiding sign-bit ambiguity).
+    let h: i64 = tag * 29791_i64 + p1 * 961_i64 + p2 * 31_i64 + p3;
+    (h & 2147483647_i64) as i32
     }
 }
 
@@ -580,6 +588,23 @@ fn ensemble_uncertainty(predictions_start: i32, n: i32) -> i32 {
         let range: i64 = (hi as i64) - (lo as i64);
         if range > 2147483647_i64 { 2147483647 } else { range as i32 }
     }}
+}
+
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-12): _strict variants of ensemble_*.
+// Pre-fix both returned 0 on invalid slice — 0 is a valid mean/uncertainty.
+// Post-fix: _strict variants return INT32_MIN sentinel on invalid input.
+@pure
+fn ensemble_mean_strict(predictions_start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(predictions_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ensemble_mean(predictions_start, n) }}
+}
+
+@pure
+fn ensemble_uncertainty_strict(predictions_start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(predictions_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ensemble_uncertainty(predictions_start, n) }}
 }
 
 // Index of the strictly-largest prediction; returns -1 on empty.

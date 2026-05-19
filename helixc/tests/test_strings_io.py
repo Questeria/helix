@@ -441,9 +441,11 @@ def test_stage60_inc1_all_four_dyn_builtins_typecheck():
     }
     """
     prog = parse(src, include_stdlib=True)
-    # Should not raise — all 4 dyn names are now in the builtin
-    # whitelist so they typecheck without "unknown name" diagnostics.
-    typecheck(prog)
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-1): typecheck() returns errors
+    # as a list, doesn't raise. Pre-fix this silently swallowed any
+    # typecheck error.
+    errs = typecheck(prog)
+    assert errs == [], f"typecheck rejected the input: {errs}"
 
 
 def main():

@@ -113,11 +113,24 @@ fn option_min(a: Option, b: Option) -> i32 {
 //   Some(x), None    -> x
 //   None, Some(y)    -> y
 //   None, None       -> 0
+//
+// Cycle 3 R1 fix batch 20 (RT MEDIUM-7): Some(av) + Some(bv) was raw i32
+// addition; INT32_MAX + 1 silently wrapped to INT32_MIN. Post-fix: i64
+// intermediate + INT32 saturation, matching the iterators.hx vec_sum_pure
+// template (restart 53 A2). Fold-style accumulator chains over Options
+// now saturate cleanly instead of wrapping.
 @pure
 fn option_sum(a: Option, b: Option) -> i32 {
     match a {
         Option::Some(av) => match b {
-            Option::Some(bv) => av + bv,
+            Option::Some(bv) => {
+                let total: i64 = (av as i64) + (bv as i64);
+                let hi: i64 = 2147483647_i64;
+                let lo: i64 = (0_i64 - 2147483647_i64) - 1_i64;
+                if total > hi { 2147483647 }
+                else if total < lo { (0_i32 - 2147483647_i32) - 1_i32 }
+                else { total as i32 }
+            },
             Option::None => av,
         },
         Option::None => match b {

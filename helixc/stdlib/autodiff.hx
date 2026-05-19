@@ -43,6 +43,27 @@
     else { (a_dx * b_v - a_v * b_dx) / (b_v * b_v) }
 }
 
+// Cycle 3 R1 fix batch 20 (RT HIGH-8): d_div_v and d_recip_v return 0.0
+// on singularity, indistinguishable from a legitimate zero-value or
+// zero-derivative result. Forward-mode autodiff of f(x) = 1/x at x=0
+// silently reported "f(x)=0, f'(x)=0" instead of signaling. Optimizer
+// step continues toward the singularity.
+//
+// Post-fix: _checked variants accept caller-supplied sentinel that returns
+// on singular input. Pattern mirrors __powi_checked from batch 17.
+// Recommended sentinel: NaN (via 0.0_f64 / 0.0_f64) to surface the
+// singularity through any downstream IEEE 754 arithmetic. Caller pattern:
+//   let nan = 0.0_f64 / 0.0_f64;
+//   let f = d_div_v_checked(a, da, b, db, nan);
+//   if f != f { /* singularity hit (NaN != NaN per IEEE 754) */ }
+@pure fn d_div_v_checked(a_v: f64, a_dx: f64, b_v: f64, b_dx: f64, sentinel: f64) -> f64 {
+    if b_v == 0.0_f64 { sentinel } else { a_v / b_v }
+}
+@pure fn d_div_dx_checked(a_v: f64, a_dx: f64, b_v: f64, b_dx: f64, sentinel: f64) -> f64 {
+    if b_v == 0.0_f64 { sentinel }
+    else { (a_dx * b_v - a_v * b_dx) / (b_v * b_v) }
+}
+
 // d/dx (-a) = -a'
 @pure fn d_neg_v(a_v: f64, a_dx: f64) -> f64 { 0.0_f64 - a_v }
 @pure fn d_neg_dx(a_v: f64, a_dx: f64) -> f64 { 0.0_f64 - a_dx }
@@ -94,6 +115,15 @@
 }
 @pure fn d_recip_dx(a_v: f64, a_dx: f64) -> f64 {
     if a_v == 0.0_f64 { 0.0_f64 }
+    else { (0.0_f64 - a_dx) / (a_v * a_v) }
+}
+
+// Cycle 3 R1 fix batch 20 (RT HIGH-8): _checked variants for d_recip_*.
+@pure fn d_recip_v_checked(a_v: f64, a_dx: f64, sentinel: f64) -> f64 {
+    if a_v == 0.0_f64 { sentinel } else { 1.0_f64 / a_v }
+}
+@pure fn d_recip_dx_checked(a_v: f64, a_dx: f64, sentinel: f64) -> f64 {
+    if a_v == 0.0_f64 { sentinel }
     else { (0.0_f64 - a_dx) / (a_v * a_v) }
 }
 

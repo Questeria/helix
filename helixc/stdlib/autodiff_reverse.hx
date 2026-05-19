@@ -264,6 +264,16 @@ fn rev_value_at(tape: i32, idx: i32) -> i32 {
     else { __arena_get(tape + 3 + idx * 4 + 3) }
 }
 
+// Cycle 3 R1 fix batch 20 (RT HIGH-6): rev_value_at returns 0 on invalid
+// index, indistinguishable from "recorded value is zero" on the tape.
+// rev_value_at_strict returns INT32_MIN sentinel on invalid index,
+// matching the wm_load_strict / ti2d_get_strict pattern.
+@pure
+fn rev_value_at_strict(tape: i32, idx: i32) -> i32 {
+    if rev_valid_index(tape, idx) == 0 { (0 - 2147483647) - 1 }
+    else { __arena_get(tape + 3 + idx * 4 + 3) }
+}
+
 @pure
 fn rev_expected_adj_start(tape: i32) -> i32 {
     if rev_tape_valid(tape) == 0 { 0 - 1 }
@@ -389,6 +399,20 @@ fn rev_grad(adj_start: i32, idx: i32) -> i32 {
     if cnt < 0 { 0 }
     else { if idx < 0 { 0 }
     else { if idx >= cnt { 0 }
+    else { __arena_get(adj_start + idx) }}}
+}
+
+// Cycle 3 R1 fix batch 20 (RT HIGH-7): rev_grad returns 0 on bad adj_start
+// or bad idx, indistinguishable from "gradient at idx is zero" (which is
+// a valid gradient meaning "constant w.r.t. this input"). rev_grad_strict
+// returns INT32_MIN sentinel for invalid inputs, matching the agi_memory
+// strict-variant template from batch 17.
+@pure
+fn rev_grad_strict(adj_start: i32, idx: i32) -> i32 {
+    let cnt = rev_adj_count(adj_start);
+    if cnt < 0 { (0 - 2147483647) - 1 }
+    else { if idx < 0 { (0 - 2147483647) - 1 }
+    else { if idx >= cnt { (0 - 2147483647) - 1 }
     else { __arena_get(adj_start + idx) }}}
 }
 

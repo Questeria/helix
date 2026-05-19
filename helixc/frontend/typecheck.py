@@ -2907,6 +2907,19 @@ class TypeChecker:
                         expr.span,
                     ))
                 return TySizeConst(const_value)
+            # Cycle 3 R1 fix batch 23 (FE HIGH-2): pre-fix silently
+            # returned TyUnknown without appending to self.errors.
+            # Size exprs are NOT routed through _check_expr so a typo
+            # like `tensor<f32, [N_typo, 16]>` silently became a
+            # TyUnknown size dim and downstream shape compatibility
+            # "matched anything." Post-fix: append an error so the
+            # unbound name surfaces.
+            self.errors.append(TypeError_(
+                f"unbound size identifier {expr.name!r} (no enclosing "
+                f"generic param or const declaration) — Cycle 3 R1 "
+                f"FE HIGH-2",
+                expr.span,
+            ))
             return TyUnknown(hint=f"unbound size {expr.name}")
         if isinstance(expr, A.Binary) and expr.op in ("+", "-", "*", "/", "%"):
             # Symbolically compose; record as constraint material
@@ -3680,19 +3693,49 @@ class TypeChecker:
 
     def _add_where_constraint(self, solver: P.Solver, expr: A.Expr,
                               scope: Scope) -> None:
-        """Translate a where-clause expression into Presburger constraints."""
+        """Translate a where-clause expression into Presburger constraints.
+
+        Cycle 3 R1 fix batch 23 (FE HIGH-3): pre-fix silently dropped
+        unsupported where-clause forms and also dropped the constraint
+        when `_size_expr_to_lin` returned None (nonlinear). The user-
+        facing where-clause behaved as if accepted, but enforced
+        nothing. Post-fix: append an explicit typecheck error so the
+        user sees that their constraint is not being enforced.
+        """
         if isinstance(expr, A.Binary) and expr.op == "==":
             l = self._size_expr_to_lin(expr.left, scope)
             r = self._size_expr_to_lin(expr.right, scope)
             if l is not None and r is not None:
                 solver.add_eq_pair(l, r)
+            else:
+                self.errors.append(TypeError_(
+                    f"where-clause `{getattr(expr, 'span', None)}`: "
+                    f"left or right side not representable as a linear "
+                    f"size expression; constraint silently dropped — "
+                    f"Cycle 3 R1 FE HIGH-3",
+                    getattr(expr, "span", None),
+                ))
         elif isinstance(expr, A.Binary) and expr.op == "%" and \
              isinstance(expr.right, A.IntLit):
             # `expr % k` — record as Divides
             l = self._size_expr_to_lin(expr.left, scope)
             if l is not None:
                 solver.add_divides(l, expr.right.value)
-        # Other forms: skip for v0.1
+            else:
+                self.errors.append(TypeError_(
+                    f"where-clause modulo: left side not representable "
+                    f"as a linear size expression; constraint silently "
+                    f"dropped — Cycle 3 R1 FE HIGH-3",
+                    getattr(expr, "span", None),
+                ))
+        else:
+            self.errors.append(TypeError_(
+                f"where-clause form not yet supported by the Stage-31 "
+                f"Presburger solver: {type(expr).__name__} {getattr(expr, 'op', '')}; "
+                f"only `==` and `% IntLit` are accepted — Cycle 3 R1 "
+                f"FE HIGH-3",
+                getattr(expr, "span", None),
+            ))
 
     # ---- function body checking ----
 
@@ -8741,6 +8784,19 @@ class TypeChecker:
             self._check_expr(expr.transformation, scope)
             self._check_expr(expr.verifier, scope)
             return TyPrim("i32")
+        # Cycle 3 R1 fix batch 23 (FE HIGH-1): pre-fix the fallthrough
+        # silently returned TyUnknown without appending to self.errors.
+        # Any expr subclass not enumerated (A.Break, A.Continue,
+        # A.TileLit reachable from parser._parse_primary) silently
+        # typechecked-as-unknown; downstream gates passed on TyUnknown.
+        # Post-fix: append an explicit typecheck error so users see
+        # the missing arm. Walker drift surfaces immediately.
+        self.errors.append(TypeError_(
+            f"_check_expr: unhandled expression kind "
+            f"{type(expr).__name__}; this is a typechecker drift "
+            f"(missing arm in _check_expr) — Cycle 3 R1 FE HIGH-1",
+            getattr(expr, "span", None),
+        ))
         return TyUnknown(hint=f"unhandled {type(expr).__name__}")
 
     # ---- bounds checking ----

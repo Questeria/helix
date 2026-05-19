@@ -3782,8 +3782,17 @@ def test_int_literal_in_range_no_error():
     assert errs == [], f"unexpected errors: {errs}"
 
 
-def test_int_literal_negative_overflow_errors():
-    """Negative overflow: -3_000_000_000 doesn't fit in i32."""
+def test_int_literal_negative_overflow_documents_current_behavior():
+    """Negative overflow: -3_000_000_000 doesn't fit in i32.
+
+    Cycle 3 R1 fix batch 24 (TEST HIGH-3): pre-fix this test was named
+    `test_int_literal_negative_overflow_errors` and ended with bare
+    `pass` — it could not fail. The name promised behavior verification
+    that the body did not perform. Post-fix: renamed to honestly
+    describe what the test does (pins current behavior — typecheck
+    does NOT catch this case yet), with a real assertion. A future
+    constant-folding-aware overflow check would flip this assertion.
+    """
     src = """
     fn main() -> i32 {
         let x: i32 = 0 - 3000000000;
@@ -3791,12 +3800,16 @@ def test_int_literal_negative_overflow_errors():
     }
     """
     errs = check(src)
-    # The literal '3000000000' itself is u32-shaped, but the let-stmt's
-    # value is a Binary not an IntLit, so this won't trigger our static
-    # check. We only catch literals at the binding point. Document this.
-    # Test just verifies we don't crash and the program is acceptable.
-    # (A future ticket would do constant-folding-aware overflow.)
-    pass
+    # Current (pre-constant-folding) behavior: this typechecks because
+    # the literal is u32-shaped and the let-stmt's value is a Binary
+    # not an IntLit. The static literal-bounds check fires only at
+    # IntLit-binding sites. When constant-folding-aware overflow
+    # checking lands, flip the assertion to `errs != []`.
+    assert errs == [], (
+        f"current pre-fold behavior should accept this; "
+        f"if errs is non-empty, constant-folding overflow check "
+        f"likely landed — flip the assertion. got: {errs}"
+    )
 
 
 def test_struct_field_returns_correct_type():
@@ -4663,7 +4676,9 @@ def test_stage68_inc1_confidence_type_recognition():
     fn main() -> i32 { 42 }
     """
     prog = parse(src, include_stdlib=False)
-    typecheck(prog)  # should not raise
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-1): typecheck returns list.
+    errs = typecheck(prog)
+    assert errs == [], f"typecheck rejected the input: {errs}"
 
 
 def test_stage68_inc1_confidence_high_low_precise_aliases():
@@ -4681,7 +4696,9 @@ def test_stage68_inc1_confidence_high_low_precise_aliases():
     fn main() -> i32 { 42 }
     """
     prog = parse(src, include_stdlib=False)
-    typecheck(prog)  # all 3 type aliases resolve
+    # Cycle 3 R1 fix batch 24 (TEST HIGH-1): typecheck returns list.
+    errs = typecheck(prog)
+    assert errs == [], f"typecheck rejected the input: {errs}"
 
     # Direct construction with each level.
     for lvl in ("high", "med", "low", "precise"):

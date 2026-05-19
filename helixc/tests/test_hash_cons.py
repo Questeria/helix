@@ -190,7 +190,13 @@ def test_stage20_trap_20001_on_hash_collision():
             sharer._maybe_share(A.IntLit(span=A.Span(1, 1), value=999))
         except HashConsError as e:
             assert "20001" in str(e)
-            assert HashConsError.trap_id == 20001
+            # Cycle 3 R1 fix batch 24 (TEST HIGH-4): instance-level
+            # trap_id check via type(e) — sibling fix to batch-16's
+            # closure of the same anti-pattern in test_const_fold.py.
+            # Pre-fix `HashConsError.trap_id == 20001` was a class
+            # constant lookup, always true regardless of the actual
+            # exception raised.
+            assert type(e).trap_id == 20001
             return
         raise AssertionError("expected HashConsError trap 20001")
     finally:
