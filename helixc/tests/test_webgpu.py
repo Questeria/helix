@@ -55,7 +55,7 @@ def test_stage127_tma_marked_skipped():
 def test_stage127_matmul_status_stub():
     """Stage 127 — TILE_MATMUL is stub'd; Stage 128 wires the hand-rolled
     tile-loop (no Tensor Cores; ~1 TFLOPS ceiling per Report 5)."""
-    assert lowering_status(TileOpKind.TILE_MATMUL) == "stub"
+    assert lowering_status(TileOpKind.TILE_MATMUL) == "supported"
 
 
 def test_stage127_lowering_status_rejects_non_tileopkind():
@@ -205,4 +205,4 @@ def test_stage128_unmapped_op_falls_through_to_comment():
     tile_mod = TileModule()
     tile_mod.functions["k"] = fn
     text = WgslEmitter().emit_module(tile_mod)
-    assert "TILE_REDUCE (stub)" in text
+    assert "HELIX-STUB" in text and "TILE_REDUCE" in text

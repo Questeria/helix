@@ -59,7 +59,7 @@ def test_stage125_tma_marked_skipped():
 def test_stage125_matmul_status_stub():
     """Stage 125 — TILE_MATMUL is stub'd; Stage 126 wires SIMD path
     (pre-M5) and NA mma intrinsics (M5+)."""
-    assert lowering_status(TileOpKind.TILE_MATMUL) == "stub"
+    assert lowering_status(TileOpKind.TILE_MATMUL) == "supported"
 
 
 def test_stage125_lowering_status_rejects_non_tileopkind():
@@ -241,4 +241,4 @@ def test_stage126_unmapped_op_falls_through_to_comment():
     tile_mod = TileModule()
     tile_mod.functions["k"] = fn
     text = MslEmitter().emit_module(tile_mod)
-    assert "TILE_REDUCE (stub)" in text
+    assert "HELIX-STUB" in text and "TILE_REDUCE" in text

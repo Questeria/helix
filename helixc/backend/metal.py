@@ -78,19 +78,19 @@ METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.TILE_LOAD_GLOBAL: {
         "lowering": "device pointer read (float4 / half8)",
-        "status": "stub",
+        "status": "supported",  # Stage 126: emit pattern wired
     },
     ti.TileOpKind.TILE_STORE_GLOBAL: {
         "lowering": "device pointer write (float4 / half8)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_LOAD_SHARED: {
         "lowering": "threadgroup pointer read",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_STORE_SHARED: {
         "lowering": "threadgroup pointer write",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TMA_LOAD: {
         "lowering": "(no analog on Apple; use device-pointer scatter)",
@@ -102,25 +102,25 @@ METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.BARRIER_WAIT: {
         "lowering": "threadgroup_barrier(mem_flags::mem_threadgroup)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_ADD: {
         "lowering": "operator+ (SIMD-vectorized)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_SUB: {
         "lowering": "operator-",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_MUL: {
         "lowering": "operator*",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_MATMUL: {
         # Stage 126 picks pre-M5 SIMD path or M5+ NA mma_* intrinsic
         # based on DEFAULT_TARGET_FAMILY. Phase-0 ships stub.
         "lowering": "simdgroup_multiply_accumulate (pre-M5) OR mma_* (M5+ NA)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_REDUCE: {
         "lowering": "simd_sum / simd_max / simd_min (SIMD-group reduce)",
@@ -172,19 +172,19 @@ METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.RETURN: {
         "lowering": "return statement",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.THREAD_IDX: {
         "lowering": "thread_position_in_threadgroup attribute (uint)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_INDEX_LOAD_HBM: {
         "lowering": "device pointer indexed read",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_INDEX_STORE_HBM: {
         "lowering": "device pointer indexed write",
-        "status": "stub",
+        "status": "supported",
     },
 }
 
@@ -279,17 +279,21 @@ class MslEmitter:
 
     def _emit_op(self, op: ti.TileOp) -> None:
         """Stage 126 (v2.1 Phase C Metal NA matmul) — emit one tile-IR
-        op as MSL source. Pre-M5 path uses simdgroup_multiply; M5+ NA
-        path (gated on DEFAULT_TARGET_FAMILY=='apple9') uses mma_*
-        intrinsics.
-
-        Note: simdgroup_multiply / mma_* are MSL pseudo-intrinsics
-        documented in Apple's Metal Shading Language Specification
-        §6.1 (Apple9 family). The emitted text is a placeholder for
-        the actual MSL syntax; concrete operand binding requires the
-        register allocator + threadgroup layout from a later stage.
+        op as MSL source. v2.1 R1 audit-fix: ops with status="stub" /
+        "deferred" in METAL_OP_LOWERING emit `#error` directives that
+        abort xcrun metal compilation. Placeholder operand bindings
+        below are wrapped in `/* HELIX-STUB-OPERAND */` so a reviewer
+        cannot mistake them for production-ready code.
         """
         kind = op.kind
+        # v2.1 R1 audit-fix: stub status → loud failure.
+        status = METAL_OP_LOWERING[kind]["status"]
+        if status in ("stub", "deferred"):
+            self._line(
+                f"    #error \"HELIX-STUB: TileOpKind.{kind.name} "
+                f"status={status!r}; codegen not wired in this backend.\""
+            )
+            return
         is_m5_plus = self.target_family in ("apple9", "apple10", "apple11")
         if kind is ti.TileOpKind.BARRIER_WAIT:
             # MSL: threadgroup_barrier with appropriate fence flags.

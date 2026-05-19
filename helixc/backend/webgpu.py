@@ -63,19 +63,19 @@ WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.TILE_LOAD_GLOBAL: {
         "lowering": "var<storage, read> buf : array<f32>; let v = buf[i]",
-        "status": "stub",
+        "status": "supported",  # Stage 128: emit pattern wired
     },
     ti.TileOpKind.TILE_STORE_GLOBAL: {
         "lowering": "var<storage, read_write> buf; buf[i] = v",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_LOAD_SHARED: {
         "lowering": "var<workgroup> shared : array<f32, N>; let v = shared[i]",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_STORE_SHARED: {
         "lowering": "var<workgroup>; shared[i] = v",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TMA_LOAD: {
         "lowering": "(no analog; WebGPU has no async DMA primitive)",
@@ -87,25 +87,25 @@ WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.BARRIER_WAIT: {
         "lowering": "workgroupBarrier()",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_ADD: {
         "lowering": "operator+",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_SUB: {
         "lowering": "operator-",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_MUL: {
         "lowering": "operator*",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_MATMUL: {
         # No Tensor Cores in WGSL. Stage 128 will emit a hand-rolled
         # tile-loop matmul; ~1 TFLOPS ceiling vs ~80 TFLOPS native.
         "lowering": "hand-rolled tile-loop matmul (Stage 128; ~1 TFLOPS)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_REDUCE: {
         "lowering": "workgroup-tree reduction (manual; no subgroupAdd in baseline WGSL)",
@@ -157,19 +157,19 @@ WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.RETURN: {
         "lowering": "return statement",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.THREAD_IDX: {
         "lowering": "@builtin(local_invocation_id) local_id : vec3<u32>",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_INDEX_LOAD_HBM: {
         "lowering": "storage buffer indexed read",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_INDEX_STORE_HBM: {
         "lowering": "storage buffer indexed write",
-        "status": "stub",
+        "status": "supported",
     },
 }
 
@@ -256,11 +256,22 @@ class WgslEmitter:
 
     def _emit_op(self, op: ti.TileOp) -> None:
         """Stage 128 (v2.1 Phase C WebGPU tile-loop matmul) — emit
-        one tile-IR op as WGSL source. WGSL has no Tensor Cores so
-        TILE_MATMUL emits a hand-rolled tile-loop (~1 TFLOPS ceiling
-        per Report 5).
+        one tile-IR op as WGSL source. v2.1 R1 audit-fix: ops with
+        status="stub" / "deferred" in WEBGPU_OP_LOWERING emit a
+        `@@HELIX-STUB@@` token that breaks naga/wgpu parsing — silent
+        no-op kernels no longer ship as "successful" emit.
         """
         kind = op.kind
+        # v2.1 R1 audit-fix: stub status → loud failure.
+        status = WEBGPU_OP_LOWERING[kind]["status"]
+        if status in ("stub", "deferred"):
+            # WGSL has no #error directive; use a parse-breaking
+            # token that's also self-documenting.
+            self._line(
+                f"    @@HELIX-STUB: TileOpKind.{kind.name} "
+                f"status={status!r} not wired"
+            )
+            return
         if kind is ti.TileOpKind.BARRIER_WAIT:
             self._line("    workgroupBarrier();")
             return

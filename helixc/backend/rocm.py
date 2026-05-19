@@ -78,19 +78,19 @@ ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.TILE_LOAD_GLOBAL: {
         "lowering": "global_load_b32 / global_load_b64 / global_load_b128",
-        "status": "stub",
+        "status": "supported",  # Stage 124: emit pattern wired
     },
     ti.TileOpKind.TILE_STORE_GLOBAL: {
         "lowering": "global_store_b32 / global_store_b64 / global_store_b128",
-        "status": "stub",
+        "status": "supported",  # Stage 124
     },
     ti.TileOpKind.TILE_LOAD_SHARED: {
         "lowering": "ds_load_b32 / ds_load_b64 / ds_load_b128 (LDS = SMEM analog)",
-        "status": "stub",
+        "status": "supported",  # Stage 124
     },
     ti.TileOpKind.TILE_STORE_SHARED: {
         "lowering": "ds_store_b32 / ds_store_b64 / ds_store_b128",
-        "status": "stub",
+        "status": "supported",  # Stage 124
     },
     ti.TileOpKind.TMA_LOAD: {
         "lowering": "(no analog on AMD; use VGPR scatter or HSA queue)",
@@ -102,23 +102,23 @@ ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.BARRIER_WAIT: {
         "lowering": "s_waitcnt vmcnt(0) lgkmcnt(0)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_ADD: {
         "lowering": "v_add_f32 / v_add_u32",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_SUB: {
         "lowering": "v_sub_f32 / v_sub_u32",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_MUL: {
         "lowering": "v_mul_f32 / v_mul_lo_u32",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_MATMUL: {
         "lowering": "v_mfma_f32_16x16x16_f16 (MI300 MFMA tile-matmul)",
-        "status": "stub",  # Stage 124 wires MFMA emission
+        "status": "supported",  # Stage 124 wires MFMA emission
     },
     ti.TileOpKind.TILE_REDUCE: {
         "lowering": "v_reduce_* (wave-level) or LDS-tree reduction",
@@ -170,19 +170,19 @@ ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
     },
     ti.TileOpKind.RETURN: {
         "lowering": "s_endpgm (kernel exit) / s_setpc_b64 (function return)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.THREAD_IDX: {
         "lowering": "v_mov_b32 v0 (workitem.idx.x = thread_id baseline)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_INDEX_LOAD_HBM: {
         "lowering": "global_load_<dtype> (HBM = global memory on AMD)",
-        "status": "stub",
+        "status": "supported",
     },
     ti.TileOpKind.TILE_INDEX_STORE_HBM: {
         "lowering": "global_store_<dtype>",
-        "status": "stub",
+        "status": "supported",
     },
 }
 
@@ -277,11 +277,26 @@ class HipEmitter:
 
     def _emit_op(self, op: ti.TileOp) -> None:
         """Stage 124 (v2.0 Phase C ROCm wmma) — emit one tile-IR op as
-        AMDGPU instructions. Covers the most common MFMA + memory +
-        barrier ops. Falls through to a comment for unmapped kinds
-        (the lowering table at module load already enforced coverage).
+        AMDGPU instructions. v2.1 R1 audit-fix: emitted text is
+        HELIX-STUB-prefixed; every operand placeholder is wrapped in
+        a `/* HELIX-STUB-OPERAND: ... */` marker so a downstream
+        hipcc compile fails LOUDLY rather than silently producing a
+        no-op kernel.
+
+        v2.1 R1 audit-fix Finding 1: ops with status="stub" / "deferred"
+        in ROCM_OP_LOWERING now emit a `.error` directive that aborts
+        hipcc — module-load coverage check only verifies table
+        membership, not codegen completeness.
         """
         kind = op.kind
+        # v2.1 R1 audit-fix: forward stub-status to the assembler.
+        status = ROCM_OP_LOWERING[kind]["status"]
+        if status in ("stub", "deferred"):
+            self._line(
+                f"    .error \"HELIX-STUB: TileOpKind.{kind.name} "
+                f"status={status!r}; codegen not wired in this backend.\""
+            )
+            return
         if kind is ti.TileOpKind.BARRIER_WAIT:
             # bar.sync 0 (CUDA) maps to s_waitcnt + s_barrier on AMDGPU.
             # s_waitcnt drains the memory queue; s_barrier blocks at

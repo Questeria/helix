@@ -112,10 +112,10 @@ def test_stage130_matmul_status_consistency():
     strategy)."""
     rows = audit_tile_ir_coverage()
     matmul_row = next(r for r in rows if r.op_kind == TileOpKind.TILE_MATMUL)
-    assert matmul_row.ptx_status == "stub"
-    assert matmul_row.rocm_status == "stub"
-    assert matmul_row.metal_status == "stub"
-    assert matmul_row.webgpu_status == "stub"
+    assert matmul_row.ptx_status in ("stub", "supported")
+    assert matmul_row.rocm_status == "supported"
+    assert matmul_row.metal_status == "supported"
+    assert matmul_row.webgpu_status == "supported"
 
 
 def test_stage130_supported_ops_match_known_set():

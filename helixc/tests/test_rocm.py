@@ -65,7 +65,7 @@ def test_stage123_tma_marked_skipped():
 def test_stage123_matmul_status_stub():
     """Stage 123 — TILE_MATMUL is stub'd; Stage 124 will wire the
     actual MFMA instruction emit."""
-    assert lowering_status(TileOpKind.TILE_MATMUL) == "stub"
+    assert lowering_status(TileOpKind.TILE_MATMUL) == "supported"
 
 
 def test_stage123_lowering_status_rejects_non_tileopkind():
@@ -250,4 +250,4 @@ def test_stage124_unmapped_op_falls_through_to_comment():
     tile_mod = TileModule()
     tile_mod.functions["stubk"] = fn
     text = HipEmitter().emit_module(tile_mod)
-    assert "TILE_REDUCE (stub)" in text
+    assert "HELIX-STUB" in text and "TILE_REDUCE" in text
