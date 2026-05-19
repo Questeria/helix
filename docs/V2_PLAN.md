@@ -186,3 +186,10 @@ This honors the user's "this problem can never happen again"
 directive in two directions: (a) the loop will never stall when
 work remains, but also (b) the loop will not over-engineer
 phantom work when the gate is achieved.
+
+### 2026-05-19T18:01Z — idle fire (post-release)
+
+Scheduled-task fire on HEAD `ad13177` (2 min old, post-`930d601`
+v2.0.0 release). Tag `v2.0.0` confirmed present, tree clean. No
+actionable v2.0 work remains; v2.1 awaits explicit user "go"
+signal. Logging this note + exit per idle-mode protocol.
