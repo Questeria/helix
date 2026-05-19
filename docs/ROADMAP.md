@@ -5,6 +5,96 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
+## 🎉 v1.0.0 RELEASED 2026-05-18
+
+**Helix v1.0.0** is the first formal release. Closes Stages 1-108.
+
+**What ships in v1.0**:
+- **Self-hosted CPU x86_64 compiler** (Python-bootstrapped, byte-identical
+  fixpoint G2..G11)
+- **11 Tier-S/A type-system wrappers**: Conf, Taint, DP, Quant, Domain,
+  Robust, Energy, Enclave, Counterfactual, Deadline, Attribution. Each
+  wrapper has constructor + opt-out + roundtrip @property in safety.hx
+  stdlib. Plus 4 pre-existing semantic wrappers (Diff, Logic, Modal,
+  Causal) = **15 composable type-system wrappers** total.
+- **AGI semantic-type quintet** (Stages 37-41): Memory/Spatial/Temporal/
+  Modal/Causal — compose orthogonally (e.g. `Known<Past<WorldFrame<
+  Cause<f32>>>>`). Zero runtime cost (identity-lowered).
+- **Stage 64 — Tensor codegen + PTX backend** (all 5 Incs shipped):
+  bf16/f16 HBM dtype + TILE_ZEROS register-fill + TILE_ADD/SUB/MUL
+  elementwise + TILE_MATMUL via NVIDIA wmma m16n16k16 Tensor Cores +
+  tile-IR optimization scaffold (dead-tile elim + zero coalescing +
+  register-reuse hints). 102 PTX pins GREEN.
+- **Source-level reverse-mode AD** (Tier 1 #2, #3): `grad`/`grad_rev`/
+  `grad_rev_all` end-to-end with multi-output bucket accumulation,
+  cross-function inlining, bounded recursive unrolling, 11-builtin
+  chain rules with kink-warn.
+- **Result<T,E> + ? operator** (Tier 4 #14): full Phase-0 runtime tag
+  with wrong-arm panic protection.
+- **Pattern matching** with guards, or-patterns, nested struct
+  destructuring (Tier 4 #15).
+- **Borrow checker** (Stage 66, Tier 4 #16): per-fn opt-in with
+  scope-chain routing + Stage 95 chain-walk snapshot + Stage 92
+  loop-body reconciliation.
+- **Typed holes** (Stages 89/90/102): `_` placeholders flagged with
+  expected-type plumbing at 4 contexts (call-arg, let-RHS, fn-return,
+  struct-field-init).
+- **@property test runner** (Stages 77, 86, 103, 104): typecheck-time
+  arity validation + Stage 86 input-table runner + 11 safety.hx
+  roundtrip properties (one per Tier-S/A wrapper).
+- **Multiple dispatch** on tile/tensor types (Stage 65, Tier 4 #17).
+- **Content-addressed modules** (Stage 58, Tier 4 #13): program_hash +
+  module_hash + fn_signature_hash with 166-flag CLI introspection.
+- **Triton-style autotune** (Stage 56, Tier 2 #8): @autotune cartesian-
+  product variant expansion with CI-gate introspection.
+- **JAX-style pytrees** (Stage 57, Tier 2 #7 Inc 1).
+- **Parametric structs** (Tier 2 #9): generic struct decls with
+  AST-level monomorphization.
+- **Neuro-symbolic primitives** (Stage 36, Tier 3 #10): provenance-typed
+  Logic<T> with fuzzy_and/or/not/xor/implies + ARENA_PUSH_PAIR/TRIPLE.
+- **Trace introspection** (Stage 63, Tier 3 #11): trace_hash/size/count/
+  op_counts/fn_counts/equiv_modulo + JSON round-trip.
+- **Proof-carrying terms** (Stages 31+34+87, Tier 3 #12 partial):
+  ProofObligation + ProofCarry + `--emit-proof-obligations` JSON.
+- **String/file IO + capability typing** (Stage 55, Tier 1 #4):
+  granular @effect(io.read_file/write_file/print) labels.
+- **Stack-passed overflow args** (Stage 44, Tier 1 #5).
+- **Content-addressed module cache** (Stage 58, Tier 4 #13).
+- **Modal/epistemic taint tracking** (Stages 52, 53): F1 cross-modal
+  laundering guard catches AI-safety category mistakes; helper-fn
+  indirection closure complete.
+
+**Closure-status totals at v1.0 release**:
+- ✅ FULLY AUDIT-CLEAN (3-clean-gate): **34 stages** (8 prior + 17
+  Stage-99-re-closed + 100, 101, 102, 103, 104, 105, 106, 107 + 108
+  release stop)
+- ⏭️ Meta (audit + fix commits): 8 (Stages 91, 93, 94-99)
+- ⚪ Pre-burst (shipped under earlier closure protocols): ~66
+
+**What's next — v1.1 / v2.0**:
+
+The roadmap now organizes post-v1.0 work into **v2.0 = "GPU Complete"
+milestone** with 3 phases:
+- **Phase A** (table-stakes, 2-3 months): real GPU CI runner +
+  end-to-end NVIDIA hardware validation + SMEM tile instantiation +
+  full bf16/fp16/fp8 across tile ops + multi-block grid + CUDA Graphs
+  + NCCL collectives.
+- **Phase B** (Helix differentiators, 3-4 months): GPU borrow checker
+  + effect-typed barriers + AD through @kernel fns + DP/Quant/Deadline-
+  typed kernels + multiple dispatch on tile types + content-addressed
+  PTX cache. The bet: *"the type system IS the GPU safety story."*
+- **Phase C** (moonshots, 6-12 months, may slip to v3.0): Enclave-typed
+  GPU kernels for H100 Confidential Computing + proof-carrying GPU
+  kernels + ROCm/Metal/WebGPU backends + Tensor Memory on Blackwell
+  + multi-GPU graph partitioner.
+
+Two target markets v2.0 specifically pursues: **Confidential ML**
+(H100 CC + Enclave-typed) and **Real-time ML** (Deadline-typed +
+WCET for AR/VR/robotics) — both billion-dollar adjacencies that
+CUDA / Triton / JAX / Mojo don't address.
+
+---
+
 ## Current state (Stages 35-59 CLOSED 2026-05-16 to 2026-05-18)
 
 Burst summary (25 stages closed in <72h, all via the
@@ -303,6 +393,31 @@ Re-sequenced after Stage 46-47 closed:
 - **Stage 58** ✅ **CLOSED 2026-05-18** — Tier 4 #13 content-
   addressed modules (program_hash + module_hash + fn_signature_hash
   core).
+- **Stage 108 SHIPPED 2026-05-18 — 🎉 v1.0.0 RELEASE STOP** —
+  first formal Helix release. Full regression sweep GREEN across
+  the entire test suite (excluding optional slow self-host gates).
+  ROADMAP top-of-file v1.0 banner added documenting the full
+  feature set + v2.0/v2.1/v2.0+ phase structure. Annotated git
+  tag `v1.0.0` placed on the release commit.
+  - **v1.0 critical path complete**: Stages 102 → 103 → 104 →
+    105 → 106 → 107 → 108 = 6 stages from "Stage 100+ backlog
+    open, Stage 64 deferred" to "Stage 100+ backlog fully closed,
+    Stage 64 fully closed, v1.0 shipped" in a single autonomous
+    burst.
+  - **Final v1.0 substrate**: 11 Tier-S/A wrappers + 4 semantic
+    wrappers + AGI quintet + PTX backend with wmma Tensor Cores +
+    tile-IR opt scaffold + borrow checker + typed holes + @property
+    runner + Result<T,E> + ? + pattern matching with nested
+    destructuring + multiple dispatch + content-addressed modules
+    + autotune + pytrees + parametric structs + neuro-symbolic
+    primitives + trace introspection + proof-carrying terms +
+    string/file IO with capability typing + modal/epistemic taint
+    tracking.
+  - **Total closure count**: 34 stages FULLY AUDIT-CLEAN via the
+    3-clean-gate protocol; ~66 pre-burst stages shipped under
+    earlier closure protocols. Combined: ~100 stages closed
+    end-to-end from project inception to v1.0.
+
 - **Stage 107 SHIPPED 2026-05-18** — Stage 64 Inc 5: tile-IR
   optimization passes (v1.0 minimum-viable scaffold). **Stage 64
   Inc 5 now in v1.0; Stage 64 FULLY CLOSED.**
