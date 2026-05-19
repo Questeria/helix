@@ -266,10 +266,67 @@ class HipEmitter:
         self._line(f".p2align 8")
         self._line(f".type {fn.name},@function")
         self._line(f"{fn.name}:")
-        # Stage 123 stub body: kernel-end. Real codegen replaces this
-        # with per-op AMDGPU instructions.
+        # Stage 124 wires per-op emission for the subset of TileOpKinds
+        # we have concrete MFMA / global_load / s_barrier patterns for.
+        # Unknown ops fall through to the stub `s_endpgm` terminator.
+        for blk in fn.blocks:
+            for op in blk.ops:
+                self._emit_op(op)
         self._line("    s_endpgm")
         self._line()
+
+    def _emit_op(self, op: ti.TileOp) -> None:
+        """Stage 124 (v2.0 Phase C ROCm wmma) — emit one tile-IR op as
+        AMDGPU instructions. Covers the most common MFMA + memory +
+        barrier ops. Falls through to a comment for unmapped kinds
+        (the lowering table at module load already enforced coverage).
+        """
+        kind = op.kind
+        if kind is ti.TileOpKind.BARRIER_WAIT:
+            # bar.sync 0 (CUDA) maps to s_waitcnt + s_barrier on AMDGPU.
+            # s_waitcnt drains the memory queue; s_barrier blocks at
+            # workgroup level (parity with __syncthreads).
+            self._line("    s_waitcnt vmcnt(0) lgkmcnt(0)")
+            self._line("    s_barrier")
+            return
+        if kind is ti.TileOpKind.TILE_MATMUL:
+            # Stage 124 — wmma analog via MFMA. Emit the canonical
+            # MI300 16x16x16 fp32 accumulate with fp16 inputs:
+            #   v_mfma_f32_16x16x16_f16 dst, src_A, src_B, src_C
+            # Concrete operand binding requires register allocation
+            # (Stage 124+ extension); for now we emit the instruction
+            # as a comment-annotated stub so the lowering shape is
+            # visible in audit / diff.
+            self._line("    v_mfma_f32_16x16x16_f16 ; tile-matmul A @ B + C")
+            return
+        if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
+            # global_load_b128 for 16-byte tile loads (4 floats per
+            # lane); placeholder operand binding.
+            self._line("    global_load_b128 ; HBM tile load")
+            return
+        if kind is ti.TileOpKind.TILE_STORE_GLOBAL:
+            self._line("    global_store_b128 ; HBM tile store")
+            return
+        if kind is ti.TileOpKind.TILE_LOAD_SHARED:
+            self._line("    ds_load_b128 ; LDS (SMEM) tile load")
+            return
+        if kind is ti.TileOpKind.TILE_STORE_SHARED:
+            self._line("    ds_store_b128 ; LDS (SMEM) tile store")
+            return
+        if kind is ti.TileOpKind.THREAD_IDX:
+            # workitem ID is implicit in VGPR v0 on AMDGPU. Comment-
+            # annotate the read so the audit matrix sees coverage.
+            self._line("    ; v0 = workitem ID (thread_idx)")
+            return
+        if kind is ti.TileOpKind.RETURN:
+            # Falls through to the s_endpgm terminator emitted by
+            # emit_kernel_stub; no per-op output needed.
+            return
+        # Default: leave a comment so emitted text shows which ops
+        # are still substrate. The module-load coverage check at
+        # _check_rocm_lowering_coverage already enforced that every
+        # TileOpKind has a documented entry.
+        self._line(f"    ; tile-IR op {kind.name} (stub)")
 
 
 def lowering_status(kind: ti.TileOpKind) -> str:

@@ -152,3 +152,102 @@ def test_stage123_lowering_status_returns_str():
         status = lowering_status(k)
         assert isinstance(status, str)
         assert len(status) > 0
+
+
+# ============================================================================
+# Stage 124 (v2.0 Phase C ROCm wmma) — MFMA + memory + barrier op emit
+# ============================================================================
+def test_stage124_barrier_wait_emits_swaitcnt_sbarrier():
+    """Stage 124 — BARRIER_WAIT lowers to s_waitcnt + s_barrier (parity
+    with CUDA __syncthreads → bar.sync 0)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.BARRIER_WAIT),
+            TileOp(kind=TileOpKind.RETURN),
+        ])],
+        attrs={"kernel": True},
+    )
+    from helixc.ir.tile_ir import TileModule
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = HipEmitter().emit_module(tile_mod)
+    assert "s_waitcnt vmcnt(0) lgkmcnt(0)" in text
+    assert "s_barrier" in text
+
+
+def test_stage124_tile_matmul_emits_mfma():
+    """Stage 124 — TILE_MATMUL emits v_mfma_f32_16x16x16_f16 (MI300
+    MFMA tile-matmul instruction)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="matmul_k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_MATMUL),
+            TileOp(kind=TileOpKind.RETURN),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["matmul_k"] = fn
+    text = HipEmitter().emit_module(tile_mod)
+    assert "v_mfma_f32_16x16x16_f16" in text
+
+
+def test_stage124_global_load_store_emits():
+    """Stage 124 — TILE_LOAD_GLOBAL / TILE_STORE_GLOBAL emit
+    global_load_b128 / global_store_b128 (16-byte tile granularity)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="memk", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_LOAD_GLOBAL),
+            TileOp(kind=TileOpKind.TILE_STORE_GLOBAL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["memk"] = fn
+    text = HipEmitter().emit_module(tile_mod)
+    assert "global_load_b128" in text
+    assert "global_store_b128" in text
+
+
+def test_stage124_lds_load_store_emits():
+    """Stage 124 — TILE_LOAD_SHARED / TILE_STORE_SHARED emit
+    ds_load_b128 / ds_store_b128 (LDS is the AMD analog of CUDA SMEM)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="ldsk", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_LOAD_SHARED),
+            TileOp(kind=TileOpKind.TILE_STORE_SHARED),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["ldsk"] = fn
+    text = HipEmitter().emit_module(tile_mod)
+    assert "ds_load_b128" in text
+    assert "ds_store_b128" in text
+
+
+def test_stage124_unmapped_op_falls_through_to_comment():
+    """Stage 124 — ops without a concrete emit pattern fall through to
+    a `; tile-IR op KIND (stub)` comment. The module-load coverage
+    check at _check_rocm_lowering_coverage already enforced that
+    every kind has a documented entry, so this is the SECOND-LINE
+    defense against silent codegen."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="stubk", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_REDUCE),  # stub status
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["stubk"] = fn
+    text = HipEmitter().emit_module(tile_mod)
+    assert "TILE_REDUCE (stub)" in text
