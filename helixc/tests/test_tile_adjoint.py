@@ -299,3 +299,62 @@ def test_stage120_adjointrecord_rejects_identity_with_nonempty_ops():
             ops=((TileOpKind.TILE_ADD, "stray"),),
             dispatch="identity",
         )
+
+
+def test_stage120_r2_emit_rejects_reduce_without_kind_attr():
+    """Stage 120 R2 audit-fix Finding 1 — a forward TILE_REDUCE whose
+    `reduce_kind` discriminator attr is missing would silently emit
+    `attrs['reduce_kind'] = None` into the backward shell, defeating
+    R1 C3's whole point. The emitter must raise instead."""
+    fwd = _make_kernel("reduce_k", [
+        TileOp(kind=TileOpKind.TILE_REDUCE),  # no attrs at all
+    ])
+    with pytest.raises(ValueError, match="lacks the 'reduce_kind' attr"):
+        emit_adjoint_kernel(fwd)
+
+
+def test_stage120_r2_emit_rejects_reduce_with_misspelled_kind_attr():
+    """Stage 120 R2 audit-fix Finding 1 — same protection covers the
+    typo case: forward op carries a misspelled discriminator key, so
+    `attrs.get('reduce_kind')` still returns None."""
+    fwd = _make_kernel("reduce_k", [
+        TileOp(kind=TileOpKind.TILE_REDUCE, attrs={"kind": "sum"}),
+    ])
+    with pytest.raises(ValueError, match="lacks the 'reduce_kind' attr"):
+        emit_adjoint_kernel(fwd)
+
+
+def test_stage120_r2_adjointrecord_rejects_runtime_keyed_with_ops():
+    """Stage 120 R2 audit-fix Finding 2 — AdjointRecord.__post_init__
+    must reject runtime-keyed dispatch (anything not 'explicit' or
+    'identity') paired with non-empty `ops`. The consumer reads the
+    forward op's attr and ignores `ops` entirely, so the recorded
+    ops would be silently dropped."""
+    with pytest.raises(ValueError, match="runtime-keyed"):
+        AdjointRecord(
+            inputs=("x",), outputs=("dx",),
+            ops=((TileOpKind.TILE_ADD, "stray"),),
+            dispatch="reduce_kind",
+        )
+    # Also catches future named-attr dispatches a maintainer might add.
+    with pytest.raises(ValueError, match="runtime-keyed"):
+        AdjointRecord(
+            inputs=("x",), outputs=("dx",),
+            ops=((TileOpKind.TILE_MUL, "stray"),),
+            dispatch="future_keyed_dispatch",
+        )
+
+
+def test_stage120_r2_adjointmodule_rejects_overlap():
+    """Stage 120 R2 audit-fix — AdjointModule.__post_init__ enforces
+    the partition the docstring promises: a fn name cannot appear in
+    both `kernels` and `skipped`. Today's producer maintains this by
+    construction; the type-level check defends against a future
+    refactor that introduces a partial-success path."""
+    fn = _make_kernel("k", [TileOp(kind=TileOpKind.TILE_TRANSPOSE)])
+    good = emit_adjoint_kernel(fn)
+    with pytest.raises(ValueError, match="appear in both kernels and skipped"):
+        AdjointModule(
+            kernels={"k": good},
+            skipped={"k": "non-kernel"},
+        )

@@ -85,6 +85,19 @@ class AdjointModule:
     kernels: dict[str, AdjointKernel]
     skipped: dict[str, str]  # fn_name -> reason
 
+    def __post_init__(self) -> None:
+        # R2 audit-fix: enforce the partition the docstring promises.
+        # If a future refactor introduces a code path that writes a fn
+        # name to both dicts (e.g. "differentiated with warnings"),
+        # total_seen would over-count and callers would be misled.
+        overlap = self.kernels.keys() & self.skipped.keys()
+        if overlap:
+            raise ValueError(
+                f"AdjointModule: names appear in both kernels and "
+                f"skipped: {sorted(overlap)!r}. The partition invariant "
+                f"is broken — fix the producer."
+            )
+
     @property
     def total_seen(self) -> int:
         return len(self.kernels) + len(self.skipped)
@@ -178,12 +191,27 @@ def emit_adjoint_kernel(fn: ti.TileFn) -> AdjointKernel:
         # the floor, leaving the backward indistinguishable across
         # reduce kinds.
         if adj.dispatch == "reduce_kind":
+            # R2 audit-fix Finding 1: a forward op missing the
+            # `reduce_kind` discriminator would silently propagate
+            # `None` into the backward attrs, defeating R1 C3's whole
+            # point (backend can no longer pick broadcast vs scatter).
+            # Reject the malformed forward IR at the emitter boundary
+            # rather than letting it surface deep in the backend.
+            rk = op.attrs.get("reduce_kind")
+            if rk is None:
+                raise ValueError(
+                    f"emit_adjoint_kernel: forward {op.kind.name} op "
+                    f"lacks the 'reduce_kind' attr required by "
+                    f"dispatch='reduce_kind'. Got attrs={op.attrs!r}. "
+                    f"The backward cannot pick broadcast (sum) vs "
+                    f"scatter (max/min) without it."
+                )
             bwd_ops.append(ti.TileOp(
                 kind=ti.TileOpKind.TILE_REDUCE,
                 attrs={
                     "adjoint_of": op.kind.name,
                     "dispatch": "reduce_kind",
-                    "reduce_kind": op.attrs.get("reduce_kind"),
+                    "reduce_kind": rk,
                 },
             ))
             continue

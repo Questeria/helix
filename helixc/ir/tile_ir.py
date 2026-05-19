@@ -298,6 +298,16 @@ class AdjointRecord:
                 "AdjointRecord: dispatch='identity' must have ops=(); the "
                 f"recorded ops {self.ops!r} would never be emitted."
             )
+        # Stage 120 R2 audit-fix: runtime-keyed dispatch (anything other
+        # than "explicit" or "identity") synthesizes the backward op
+        # from the forward attr; ops must be empty or they would be
+        # silently dropped at emit time. Catch the inconsistency here.
+        if self.dispatch not in ("explicit", "identity") and self.ops:
+            raise ValueError(
+                f"AdjointRecord: dispatch={self.dispatch!r} is runtime-keyed; "
+                f"ops must be empty (got {self.ops!r}). The consumer reads "
+                f"the dispatch attr from the forward op, not ops."
+            )
 
 
 # Stage 117-119 ships the substrate (table + lookup); Stage 120 wires
