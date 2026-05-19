@@ -1200,11 +1200,17 @@ class Lowerer:
         # the actual return instruction. If the fn returns Unit, pass
         # a synthesized 0 sentinel.
         if is_fn_traced:
+            # Cycle 3 R6 fix batch 32 (IR R6 NEW-MED-1): tag synthesized
+            # operand with attrs["unit_return"]=True so trace-stream
+            # consumers can distinguish synthetic-0 from a real
+            # `return 0`. Sibling of R5 NEW-MED-1 closure at A.Return.
             ret_operand = body_val
+            trace_attrs: dict[str, object] = {"fn_name": fn.name}
             if isinstance(ir_fn.return_ty, tir.TIRUnit) or ret_operand is None:
                 ret_operand = self.builder.const_int(0)
+                trace_attrs["unit_return"] = True
             self.builder.emit(tir.OpKind.TRACE_EXIT, ret_operand,
-                              attrs={"fn_name": fn.name})
+                              attrs=trace_attrs)
         # Emit return
         if isinstance(ir_fn.return_ty, tir.TIRUnit):
             self.builder.ret(None)
