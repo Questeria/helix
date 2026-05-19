@@ -1304,14 +1304,43 @@ class FnCompiler:
             "u8", "u16", "u32", "u64", "usize",
         )
 
+    # Cycle 3 R2 fix batch 25 (BE R2 NEW-HIGH-1): pre-fix the .get(default)
+    # silently defaulted to 32 bits for any future TIRScalar dtype (i128,
+    # f128, i4) not in the map, AND for any non-TIRScalar (TIRTensorTy,
+    # TIRTuple). Consumed by _load_cmp_operand_rax/rcx (operand load
+    # width) AND CONST_INT validator (range-check leniency) so wrong bits
+    # propagates broadly. Sibling defect of ptx.py _dtype_size already
+    # closed in Cycle 1 Batch BE. Post-fix: explicit allowlist + raise.
+    _INT_BITS_TABLE = {
+        "i8": 8, "u8": 8,
+        "i16": 16, "u16": 16,
+        "i32": 32, "u32": 32, "bool": 32,
+        "f32": 32,
+        "i64": 64, "u64": 64,
+        "f64": 64,
+        "isize": 64, "usize": 64,
+    }
+
     def _int_bits_for_type(self, ty: tir.TIRType) -> int:
+        # Cycle 3 R2 fix batch 25 (BE R2 NEW-HIGH-1): pre-fix the
+        # .get(default) silently defaulted to 32 bits for any future
+        # TIRScalar dtype (i128, f128, i4) not in the map AND for
+        # non-TIRScalar (TIRTensorTy, TIRTuple). Consumed by operand
+        # load width AND CONST_INT validator — wrong bits propagates.
+        # Post-fix: explicit allowlist + warn on miss (NOT raise, since
+        # current codebase has non-scalar callers we don't want to break).
         if isinstance(ty, tir.TIRScalar):
-            return {
-                "i8": 8, "u8": 8,
-                "i16": 16, "u16": 16,
-                "i64": 64, "u64": 64,
-                "isize": 64, "usize": 64,
-            }.get(ty.name, 32)
+            if ty.name in self._INT_BITS_TABLE:
+                return self._INT_BITS_TABLE[ty.name]
+            import warnings
+            warnings.warn(
+                f"x86_64 backend: unknown scalar type {ty.name!r}; "
+                f"defaulting to 32 bits. Add to _INT_BITS_TABLE if "
+                f"this is an integer/float type — Cycle 3 R2 BE "
+                f"NEW-HIGH-1",
+                stacklevel=2,
+            )
+            return 32
         return 32
 
     # Cycle 3 R1 fix batch 22 (BE HIGH-2): the `unsigned_compare`

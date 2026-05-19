@@ -145,8 +145,16 @@ fn f32_bits_one() -> i32 {
 // For the (0, 0, 0) input this yields the IEEE 754 -0.0 bit pattern
 // (0x80000000), which is bit-distinct from +0.0 but compares equal
 // numerically — semantically the right answer for IEEE 754.
+//
+// Cycle 3 R2 fix batch 25 (RT R2 NEW-HIGH-1): pre-fix `pos ^ (1<<31)`
+// silently turned the INT32_MIN sentinel (0x80000000) from f32_bits_pos
+// into 0 (the IEEE 754 +0.0 bit pattern), so a caller asking for a
+// large negative literal that overflowed silently received +0.0
+// indistinguishable from a successful zero. Post-fix: propagate the
+// upstream sentinel before the XOR.
 @pure
 fn f32_bits_neg(integer_part: i32, frac_value: i32, frac_digits: i32) -> i32 {
     let pos = f32_bits_pos(integer_part, frac_value, frac_digits);
-    pos ^ (1 << 31)
+    if pos == 0 - 2147483647 - 1 { 0 - 2147483647 - 1 }
+    else { pos ^ (1 << 31) }
 }

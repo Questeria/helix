@@ -2678,6 +2678,15 @@ class TypeChecker:
                     hint="declare this generic type or import it before use",
                 ))
             return TyUnknown(hint=f"generic {ty.base}")
+        # Cycle 3 R2 fix batch 25 (FE R2 NEW-HIGH-2): pre-fix catch-all
+        # silently returned TyUnknown; a new TyNode subclass would slip
+        # through. Sibling of FE HIGH-1's _check_expr walker drift fix.
+        self.errors.append(TypeError_(
+            f"_resolve_type: unhandled TyNode subclass "
+            f"{type(ty).__name__}; typechecker walker drift — "
+            f"Cycle 3 R2 FE NEW-HIGH-2",
+            getattr(ty, "span", None),
+        ))
         return TyUnknown(hint=f"unknown ty node {type(ty).__name__}")
 
     def _resolve_type_alias(self, alias: A.TypeAlias, scope: Scope) -> Type:
@@ -2922,8 +2931,26 @@ class TypeChecker:
             ))
             return TyUnknown(hint=f"unbound size {expr.name}")
         if isinstance(expr, A.Binary) and expr.op in ("+", "-", "*", "/", "%"):
+            # Cycle 3 R2 fix batch 25 (FE R2 NEW-HIGH-1): pre-fix the
+            # Binary arm did NOT recurse into operands, so a typo'd
+            # unbound identifier inside `[N+BadName, 16]` silently
+            # vanished. FE HIGH-2 emitted at the Name arm only fired
+            # for leaf positions. Post-fix: recurse to surface
+            # sub-expression diagnostics.
+            self._resolve_size_expr(expr.left, scope)
+            self._resolve_size_expr(expr.right, scope)
             # Symbolically compose; record as constraint material
             return TyUnknown(hint=f"size expr {expr.op}")
+        # Cycle 3 R2 fix batch 25 (FE R2 NEW-HIGH-1 sibling):
+        # final catch-all now emits diagnostic so a new size-expr
+        # form (e.g., A.Call to a const fn) is surfaced rather than
+        # silently passing as TyUnknown.
+        self.errors.append(TypeError_(
+            f"shape size expression form not supported: "
+            f"{type(expr).__name__}; only IntLit, Name, and Binary "
+            f"arithmetic are accepted — Cycle 3 R2 FE NEW-HIGH-1",
+            getattr(expr, "span", None),
+        ))
         return TyUnknown(hint=f"size expr {type(expr).__name__}")
 
     # ------------------------------------------------------------------

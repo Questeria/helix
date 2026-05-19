@@ -1728,8 +1728,17 @@ class Lowerer:
             return
         if isinstance(stmt, A.ConstStmt):
             v = self._lower_expr(stmt.value)
+            # Cycle 3 R2 fix batch 25 (IR R2 NEW-HIGH-4): pre-fix
+            # silently defaulted to const_int(0) — sibling of the
+            # let-RHS silent-zero defect closed in R1 MEDIUM-10.
             if v is None:
-                v = self.builder.const_int(0)
+                raise NotImplementedError(
+                    f"lower_ast: ConstStmt RHS at "
+                    f"{getattr(stmt, 'span', None)!r} of type "
+                    f"{type(stmt.value).__name__} lowered to no "
+                    f"value; typecheck should have rejected this "
+                    f"— Cycle 3 R2 IR NEW-HIGH-4"
+                )
             self._bind(stmt.name, v)
             return
 
@@ -4131,8 +4140,21 @@ class Lowerer:
                             )
                 if not expanded:
                     v = self._lower_expr(a)
-                    if v is not None:
-                        args.append(v)
+                    # Cycle 3 R2 fix batch 25 (IR R2 NEW-HIGH-1):
+                    # pre-fix silently dropped the arg when v is None,
+                    # producing a CALL with too few operands. Same
+                    # silent-zero defect class as R1 HIGH-1 (struct
+                    # binding) and R1 MEDIUM-10 (let-RHS). Post-fix:
+                    # raise loudly so typecheck-miss surfaces.
+                    if v is None:
+                        raise NotImplementedError(
+                            f"lower_ast: call arg {i} at "
+                            f"{getattr(a, 'span', None)!r} of type "
+                            f"{type(a).__name__} lowered to no value; "
+                            f"typecheck should have rejected this — "
+                            f"Cycle 3 R2 IR NEW-HIGH-1"
+                        )
+                    args.append(v)
             # Determine call target name
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name not in self.functions

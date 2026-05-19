@@ -112,9 +112,15 @@
     }
 }
 
+// Cycle 3 R2 fix batch 25 (RT R2 NEW-MED-1): pre-fix returned magic
+// constant -1000000.0_f32 for x <= 0, which is a finite value that
+// could collide with a legitimate stable-log result (log of very tiny
+// positive number near exp(-1000000)). Same defect class as __log /
+// __log_f64 ce_loss magic-number replacement in batch 20.
+// Post-fix: return NaN as the canonical out-of-band sentinel.
 @pure fn __log_stable(x: f32) -> f32 {
     if x <= 0.0 {
-        0.0 - 1000000.0
+        0.0_f32 / 0.0_f32
     } else {
         let mut m: f32 = x;
         let mut k: i32 = 0;
@@ -295,9 +301,11 @@
     }
 }
 
+// Cycle 3 R2 fix batch 25 (RT R2 NEW-MED-1): f64 sibling of __log_stable
+// magic-number replacement. Return NaN for x <= 0.
 @pure fn __log_stable_f64(x: f64) -> f64 {
     if x <= 0.0_f64 {
-        0.0_f64 - 1000000.0_f64
+        0.0_f64 / 0.0_f64
     } else {
         let mut m: f64 = x;
         let mut k: i32 = 0;
