@@ -198,13 +198,34 @@ def verify_manifest_hash(manifest: dict) -> bool:
     canonical hash of the rest of the manifest. Returns True if the
     hash is consistent (verifier-ready), False otherwise.
 
+    v2.2 polish item 3 (BE MED-3 from v2.1 5-clean-gate): the prior
+    code collapsed two distinct outcomes:
+      (a) `manifest_sha256` field missing → return False
+      (b) field present but doesn't match canonical hash → return False
+    Attestation verifiers downstream couldn't distinguish a malformed
+    manifest from a tampered one. R1 fix: case (a) now raises ValueError
+    with a clear "missing field" diagnostic; False is reserved for
+    case (b) — actual hash mismatch (tamper signal).
+
     A real attestation flow would also verify `manifest["signature"]`
     against a HW-backed public key. Stage 122 substrate ships the
     hash-consistency check; signature verification lands later.
     """
-    claimed = manifest.get("manifest_sha256")
+    if "manifest_sha256" not in manifest:
+        raise ValueError(
+            "verify_manifest_hash: manifest missing required "
+            "`manifest_sha256` field. The manifest is malformed; "
+            "reject before attestation verification (this is NOT a "
+            "hash-mismatch signal — use try/except around this call "
+            "to distinguish 'malformed' from 'tampered')."
+        )
+    claimed = manifest["manifest_sha256"]
     if not claimed:
-        return False
+        raise ValueError(
+            "verify_manifest_hash: `manifest_sha256` field is empty "
+            "or falsy. The manifest is malformed; treat as `not "
+            "tampered, also not verified` and reject."
+        )
     canonical = _canonicalize_sig({
         k: v for k, v in manifest.items()
         if k not in ("signature", "manifest_sha256")

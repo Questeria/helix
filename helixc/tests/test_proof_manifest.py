@@ -199,11 +199,30 @@ def test_stage122_verify_manifest_hash_detects_tampering():
     assert verify_manifest_hash(m) is False
 
 
-def test_stage122_verify_manifest_hash_missing_field():
-    """A manifest without manifest_sha256 fails verification (not
-    silently True)."""
+def test_stage122_verify_manifest_hash_missing_field_raises():
+    """v2.2 polish item 3 (BE MED-3 from v2.1 5-clean-gate) — a
+    manifest without the `manifest_sha256` field raises ValueError
+    (not silently returns False). Prior behavior collapsed
+    'malformed manifest' and 'tampered manifest' into the same
+    False return. Attestation verifiers downstream could not
+    distinguish them. R1 fix: structural absence raises,
+    False is reserved for actual hash mismatch (tamper signal)."""
     m = {"format_version": PROOF_MANIFEST_VERSION, "functions": []}
-    assert verify_manifest_hash(m) is False
+    with pytest.raises(ValueError, match="missing required"):
+        verify_manifest_hash(m)
+
+
+def test_stage122_verify_manifest_hash_empty_field_raises():
+    """v2.2 polish item 3 — same disambiguation: an empty / falsy
+    `manifest_sha256` field also raises (structural defect, not
+    tamper)."""
+    m = {
+        "format_version": PROOF_MANIFEST_VERSION,
+        "functions": [],
+        "manifest_sha256": "",
+    }
+    with pytest.raises(ValueError, match="empty or falsy"):
+        verify_manifest_hash(m)
 
 
 def test_stage122_serialize_manifest_canonical():
