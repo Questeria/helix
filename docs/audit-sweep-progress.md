@@ -368,7 +368,7 @@ counter can advance to 1/5.
 | IR    | Round 1: 3+3+3 findings | Round 2: silent-failure ✅, fresh-eyes ✅, type-design OBJECT→batch 9 | Round 3 type-design: ✅ CLEAN | - | ✅ **CLEAN** after 2 fix batches (8 + 9) |
 | BE    | Round 1: silent-failure NOT_CLEAN, type-design NOT_CLEAN, fresh-eyes ✅ CLEAN | Round 2: silent-failure ✅, fresh-eyes ✅, type-design ✅ CLEAN (HIGH-2 cmp_map downgrade ACCEPTABLE; all MEDIUMs ACCEPT-DEBT; 2 new LOW findings noted not gate-blocking) | - | - | ✅ **CLEAN** after 1 fix batch (10) |
 | RT    | R1: 7 HIGH consolidated | R2: type-design ✅, fresh-eyes ✅, silent-failure NEW-HIGH-1 (docstring) | R3 silent-failure ✅ CLEAN | - | ✅ **CLEAN** after 5 fix batches (11+12+13+14+15) |
-| TEST  | IN PROGRESS — 3 auditors dispatched on helixc/tests/* (60 files, 44k LOC) + scripts/* | - | - | - | PENDING |
+| TEST  | R1: silent-failure 2H+3M, type-design 3M (design-debt accept), fresh-eyes 1CRIT+1CRIT+1IMP | R2 fresh-eyes ✅, silent-failure ✅ CLEAN (both verified all fixes, 38/38 live tests pass, zero new findings) | - | - | ✅ **CLEAN** after 1 fix batch (16) |
 | BE    | TBD     | -       | -       | -       | TBD     |
 | RT    | TBD     | -       | -       | -       | TBD     |
 | TEST  | TBD     | -       | -       | -       | TBD     |
@@ -380,11 +380,24 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 0 / 5** (still 0 — counter only advances when ALL 5
-batches in a single Cycle pass clean. Cycle 1 Batch FE is now
-clean; need IR, BE, RT, TEST also clean to complete Cycle 1 and
-advance to 1/5. Then Cycles 2-5 must each return clean across all
-5 batches consecutively.)
+**Current: 1 / 5** 🎉
+
+🎉 **CYCLE 1 FULLY CLEAN — first concrete progress of the entire
+audit sweep.**
+
+Cycle 1 totals:
+  - 16 fix batches committed (7 FE + 2 IR + 1 BE + 5 RT + 1 TEST)
+  - 14 re-audit rounds dispatched
+  - 40+ subagent dispatches
+  - 23 HIGH findings closed (3+4+1 in FE, 3+2 in IR via batches
+    8+9, 3 in BE via batch 10, 7 in RT via batches 11-15, 2 in
+    TEST via batch 16)
+  - 15+ MEDIUM findings closed, ~25 design-debt MEDIUMs
+    explicitly accepted as Stage 110+ refactor scope
+
+Cycle 2-5 must each return clean across all 5 batches consecutively.
+If ANY batch in any of those cycles surfaces a NEW HIGH or MUST-FIX
+MEDIUM, counter resets to 0 and the streak restarts.
 
 **Cycle 1 Batch FE: FULLY CLEAN as of round 4 (commit 80ed8df).**
 3 of 3 auditors returned CLEAN. 11 HIGH + 4 MUST-FIX MEDIUM fixed
