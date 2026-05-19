@@ -130,11 +130,19 @@ def _project_root() -> str:
 
 def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, str, int]:
     """Compile a Helix source file and run the resulting ELF via WSL.
+
     Returns (stdout, stderr, exit_code). v2.2 polish item 8 (RT M2):
     stderr was previously discarded; now propagated so runtime panics
     and WSL diagnostics are visible. v2.3 polish (RT LOW-2): file
     handle for src_path now closed deterministically via with-block
-    instead of relying on CPython refcount-GC of the open()."""
+    instead of relying on CPython refcount-GC of the open().
+
+    Raises:
+        subprocess.TimeoutExpired: WSL run exceeded `timeout` seconds
+            (default 120). The exception is NOT caught here — callers
+            must decide whether to retry, surface as a 504-equivalent,
+            or abort. v2.3 polish (RT LOW-1) contract clarification.
+    """
     with open(src_path, "r", encoding="utf-8") as _src_f:
         src = _src_f.read()
     prog = parse(src, include_stdlib=True)
@@ -198,7 +206,15 @@ def _run_one(key: str) -> bool:
     (RT M3 from v2.1 5-clean-gate): the prior implementation always
     returned True, so CI smoke tests of `python -m helixc.examples.run`
     would pass even when every demo segfaulted/panicked/build-failed.
-    R1 fix: propagate `code == 0` to the caller."""
+    R1 fix: propagate `code == 0` to the caller.
+
+    Raises:
+        subprocess.TimeoutExpired: propagates from `_build_and_run`
+            when the WSL ELF run exceeds the 120s default budget.
+            NOT caught here or in `main` — the demo CLI exits with a
+            Python traceback so the user sees the budget breach
+            explicitly (v2.3 polish RT LOW-1 contract clarification).
+    """
     if key not in DEMOS:
         print(f"unknown demo {key!r}; use --list to see available demos")
         return False
