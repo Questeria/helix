@@ -380,7 +380,13 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 1 / 5** 🎉 (Cycle 3 CLOSED after 8 R-rounds + 15 fix batches)
+**Current: 2 / 5** 🎉🎉 (Cycle 4 CLOSED R1 FIRST TRY across all 5 batches!)
+
+### Cycle 4 closure summary (2026-05-19)
+- **R1 verdicts all CLEAN on first attempt** (TEST/IR/FE/BE/RT)
+- **0 fix batches needed** — strong convergence signal
+- This validates Cycle 3's systemic IR refactor + comprehensive _strict variant sweep effectively closed the silent-zero pattern at the source
+- 3 more clean cycles needed for v2.0 unblock (Cycle 5, 6, 7)
 
 ### Cycle 3 closure summary (2026-05-19)
 - **8 R-rounds** to converge (vs C1's 14, C2's 3)
@@ -392,6 +398,7 @@ counter can advance to 1/5.
 - **Systemic IR refactor**: added `_lower_required` helper + bulk-replaced ~45 silent-zero sites in lower_ast.py
 - **3 BE/FE/IR items DEFERRED** as Stage 110+ design-debt: LOAD_ELEM bounds, ptx broad-except, FE A.Path 2-seg
 
+**Was: 1 / 5** (Cycle 3 CLOSED after 8 R-rounds + 15 fix batches)
 **Was: 0 / 5** (transient — Cycle 3 R1-R7 reset)
 
 Cycle 3 R1 totals (2026-05-18):
