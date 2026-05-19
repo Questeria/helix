@@ -6243,6 +6243,64 @@ def test_stage114_widen_scope_barrier_discharge():
     assert not bs.widen_scope(p, BORROW_SCOPE_GRID)
 
 
+def test_stage121_enclave_mixing_diagnostic():
+    """Stage 121 (v2.0 Phase C.1, TyEnclave Inc 4) — mixing-different-
+    enclaves diagnostic. Pre-Stage-121 was first-wins which broke
+    information-flow soundness. Post-fix: emit error before composing.
+    """
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn make_sgx() -> InEnclaveSGX<i32> { __wrap_enclave(42) }
+    fn make_tdx() -> InEnclaveTDX<i32> { __wrap_enclave(43) }
+
+    fn mix() -> i32 {
+        let a = make_sgx();
+        let b = make_tdx();
+        // Binary op between SGX-tagged + TDX-tagged → error.
+        let s = a + b;
+        __exit_enclave(s)
+    }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    mixing_errs = [e for e in errors
+                   if "different" in str(e).lower()
+                   and "enclave" in str(e).lower()]
+    assert len(mixing_errs) >= 1, (
+        f"expected enclave-mixing diagnostic; got {errors}"
+    )
+
+
+def test_stage121_enclave_same_enclave_ok():
+    """Stage 121 — same-enclave mixing still works (regression guard)."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    fn a() -> InEnclaveSGX<i32> { __wrap_enclave(1) }
+    fn b() -> InEnclaveSGX<i32> { __wrap_enclave(2) }
+
+    fn caller() -> i32 {
+        let x = a();
+        let y = b();
+        let s = x + y;
+        __exit_enclave(s)
+    }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    mixing_errs = [e for e in errors
+                   if "different" in str(e).lower()
+                   and "enclave" in str(e).lower()]
+    assert len(mixing_errs) == 0, mixing_errs
+
+
 def test_stage114_invalid_scope_raises():
     """Stage 114 — invalid scope strings raise ValueError, not silent."""
     from helixc.frontend.typecheck import BorrowState, Place

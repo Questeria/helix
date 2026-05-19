@@ -6116,6 +6116,32 @@ class TypeChecker:
                 # the layering shift. Enclave-above-everything
                 # invariant is preserved as a hard rule.
                 if l_is_enclave or r_is_enclave:
+                    # Stage 121 (v2.0 Phase C.1, TyEnclave Inc 4):
+                    # mixing-different-enclaves diagnostic. Pre-Stage-121
+                    # behavior was first-wins (take left's tag, silently
+                    # drop right's), which broke information-flow soundness
+                    # — a value tagged @InEnclaveSGX could combine with
+                    # @InEnclaveTDX and emerge tagged only "sgx", losing
+                    # the TDX provenance and enabling cross-enclave leaks.
+                    # Post-fix: if both sides have enclave tags AND they
+                    # differ, emit a typecheck error before composing.
+                    # Caller must use __exit_enclave(x) (audit-grep
+                    # contract) to explicitly opt out of one side's tag
+                    # before mixing.
+                    if (l_is_enclave and r_is_enclave
+                            and l_enclave_name != r_enclave_name):
+                        self.errors.append(TypeError_(
+                            f"cannot mix values from different "
+                            f"enclaves: left is {l_enclave_name!r}, "
+                            f"right is {r_enclave_name!r}; use "
+                            f"__exit_enclave(x) to explicitly opt out "
+                            f"one side first — Stage 121 (v2.0 Phase C.1)",
+                            expr.span,
+                            hint="enclave tags must match across binary "
+                                 "operations to preserve information-flow "
+                                 "soundness; explicit __exit_enclave is "
+                                 "the audit-grep escape hatch",
+                        ))
                     chosen_enclave = (l_enclave_name
                                       if l_enclave_name is not None
                                       else r_enclave_name)
