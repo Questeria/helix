@@ -43,16 +43,51 @@ class BackendKind(Enum):
     WEBGPU_WGSL = "webgpu_wgsl"  # browser — helixc/backend/webgpu.py
 
 
-@dataclass
+@dataclass(frozen=True)
 class ValidationResult:
-    """Outcome of a mock or real-HW validation pass."""
+    """Outcome of a mock or real-HW validation pass.
+
+    Stage 129 type-design audit-fix (2026-05-19): frozen + tuple-backed
+    so results cannot be mutated post-construction (aliasing-bug class
+    eliminated). `__post_init__` enforces cross-field invariants that
+    were previously representable-but-illegal:
+    - mock_passed must agree with len(mock_findings) == 0
+    - real_hw_attempted=False must imply tool is None + findings empty
+    """
     backend: BackendKind
     mock_passed: bool
-    mock_findings: list[str]
+    mock_findings: tuple[str, ...]
     real_hw_attempted: bool
     real_hw_passed: Optional[bool]
     real_hw_tool: Optional[str]
-    real_hw_findings: list[str]
+    real_hw_findings: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        # mock_passed must match the findings list emptiness.
+        if self.mock_passed != (len(self.mock_findings) == 0):
+            raise ValueError(
+                f"ValidationResult: mock_passed={self.mock_passed} "
+                f"disagrees with mock_findings emptiness "
+                f"(len={len(self.mock_findings)}) — Stage 129 audit-fix"
+            )
+        # If real-HW not attempted, tool + findings must be absent.
+        if not self.real_hw_attempted:
+            if self.real_hw_tool is not None:
+                raise ValueError(
+                    f"ValidationResult: real_hw_attempted=False but "
+                    f"real_hw_tool={self.real_hw_tool!r} — illegal "
+                    f"combination"
+                )
+            if len(self.real_hw_findings) != 0:
+                raise ValueError(
+                    f"ValidationResult: real_hw_attempted=False but "
+                    f"real_hw_findings has entries — illegal combination"
+                )
+            if self.real_hw_passed is not None:
+                raise ValueError(
+                    f"ValidationResult: real_hw_attempted=False but "
+                    f"real_hw_passed={self.real_hw_passed!r} — illegal"
+                )
 
     def overall_passed(self) -> bool:
         """True if mock passed AND (real-HW not attempted OR real-HW
@@ -151,6 +186,27 @@ _MOCK_VALIDATORS = {
 }
 
 
+# Stage 129 type-design audit-fix: module-load drift detector.
+# Catches the case where a new BackendKind is added without updating
+# GPU_TOOLS or _MOCK_VALIDATORS. Same pattern as the per-backend
+# coverage checks in rocm/metal/webgpu/tile_ir_audit.
+def _check_gpu_ci_drift() -> None:
+    expected = set(BackendKind)
+    if set(GPU_TOOLS) != expected:
+        raise AssertionError(
+            f"helixc.backend.gpu_ci: GPU_TOOLS keys "
+            f"{set(GPU_TOOLS)} != BackendKind members {expected}"
+        )
+    if set(_MOCK_VALIDATORS) != expected:
+        raise AssertionError(
+            f"helixc.backend.gpu_ci: _MOCK_VALIDATORS keys "
+            f"{set(_MOCK_VALIDATORS)} != BackendKind members {expected}"
+        )
+
+
+_check_gpu_ci_drift()
+
+
 def validate_emit(text: str, backend: BackendKind,
                   attempt_real_hw: bool = False) -> ValidationResult:
     """Stage 129 — validate emitted text against the backend's expected
@@ -198,11 +254,11 @@ def validate_emit(text: str, backend: BackendKind,
     return ValidationResult(
         backend=backend,
         mock_passed=mock_passed,
-        mock_findings=mock_findings,
+        mock_findings=tuple(mock_findings),
         real_hw_attempted=real_hw_attempted,
         real_hw_passed=real_hw_passed,
         real_hw_tool=real_hw_tool,
-        real_hw_findings=real_hw_findings,
+        real_hw_findings=tuple(real_hw_findings),
     )
 
 

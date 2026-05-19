@@ -168,35 +168,113 @@ def test_stage129_validate_emit_rejects_unknown_backend():
 # ============================================================================
 def test_stage129_validation_result_overall_passed_logic():
     """Stage 129 — overall_passed() returns True iff mock passed AND
-    (real-HW not attempted OR real-HW passed)."""
+    (real-HW not attempted OR real-HW passed). Stage 129 audit-fix:
+    findings are now tuple[str, ...] (immutable)."""
     # Mock passed, no real-HW attempted → True.
     r = ValidationResult(
-        backend=BackendKind.PTX, mock_passed=True, mock_findings=[],
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
         real_hw_attempted=False, real_hw_passed=None,
-        real_hw_tool=None, real_hw_findings=[],
+        real_hw_tool=None, real_hw_findings=(),
     )
     assert r.overall_passed()
 
     # Mock failed → False regardless of real-HW.
     r2 = ValidationResult(
-        backend=BackendKind.PTX, mock_passed=False, mock_findings=["x"],
+        backend=BackendKind.PTX, mock_passed=False, mock_findings=("x",),
         real_hw_attempted=False, real_hw_passed=None,
-        real_hw_tool=None, real_hw_findings=[],
+        real_hw_tool=None, real_hw_findings=(),
     )
     assert not r2.overall_passed()
 
     # Mock passed, real-HW attempted + failed → False.
     r3 = ValidationResult(
-        backend=BackendKind.PTX, mock_passed=True, mock_findings=[],
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
         real_hw_attempted=True, real_hw_passed=False,
-        real_hw_tool="ptxas", real_hw_findings=["bad PTX"],
+        real_hw_tool="ptxas", real_hw_findings=("bad PTX",),
     )
     assert not r3.overall_passed()
 
     # Mock passed, real-HW deferred (passed=None) → True (Stage 129 substrate).
     r4 = ValidationResult(
-        backend=BackendKind.PTX, mock_passed=True, mock_findings=[],
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
         real_hw_attempted=True, real_hw_passed=None,
-        real_hw_tool="ptxas", real_hw_findings=["deferred"],
+        real_hw_tool="ptxas", real_hw_findings=("deferred",),
     )
     assert r4.overall_passed()
+
+
+# ============================================================================
+# Stage 129 code-reviewer follow-up: PTX test parity
+# ============================================================================
+def test_stage129_validate_ptx_emit_passes():
+    """Stage 129 — PtxEmitter output passes mock validation.
+
+    Closes the code-reviewer-flagged coverage gap (PTX had _validate_ptx
+    with 4 directives but no positive-path emit-round-trip test, while
+    ROCm/Metal/WebGPU each had one)."""
+    from helixc.backend.ptx import PtxEmitter
+    src = "@kernel fn k() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = PtxEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.PTX)
+    assert result.mock_passed, result.mock_findings
+
+
+def test_stage129_validate_ptx_catches_missing_version():
+    """Stage 129 — mock validator catches missing .version directive."""
+    broken = ".target sm_75\n.address_size 64\n.entry k\n"
+    result = validate_emit(broken, BackendKind.PTX)
+    assert not result.mock_passed
+    assert any(".version" in f for f in result.mock_findings)
+
+
+def test_stage129_validate_ptx_catches_missing_entry():
+    """Stage 129 — mock validator catches missing .entry kernel."""
+    broken = ".version 8.3\n.target sm_75\n.address_size 64\n"
+    result = validate_emit(broken, BackendKind.PTX)
+    assert not result.mock_passed
+    assert any(".entry" in f or "kernel" in f.lower()
+               for f in result.mock_findings)
+
+
+def test_stage129_validation_result_frozen():
+    """Stage 129 audit-fix — ValidationResult is frozen + tuple-backed,
+    so mutation raises FrozenInstanceError (or similar)."""
+    r = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+        real_hw_attempted=False, real_hw_passed=None,
+        real_hw_tool=None, real_hw_findings=(),
+    )
+    import dataclasses
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.mock_passed = False  # type: ignore[misc]
+
+
+def test_stage129_validation_result_post_init_invariants():
+    """Stage 129 audit-fix — __post_init__ rejects representable-but-
+    illegal field combinations."""
+    # mock_passed=True but mock_findings non-empty → illegal.
+    with pytest.raises(ValueError, match="mock_passed"):
+        ValidationResult(
+            backend=BackendKind.PTX, mock_passed=True,
+            mock_findings=("oops",),
+            real_hw_attempted=False, real_hw_passed=None,
+            real_hw_tool=None, real_hw_findings=(),
+        )
+    # mock_passed=False but mock_findings empty → also illegal.
+    with pytest.raises(ValueError, match="mock_passed"):
+        ValidationResult(
+            backend=BackendKind.PTX, mock_passed=False,
+            mock_findings=(),
+            real_hw_attempted=False, real_hw_passed=None,
+            real_hw_tool=None, real_hw_findings=(),
+        )
+    # real_hw_attempted=False but real_hw_tool != None → illegal.
+    with pytest.raises(ValueError, match="real_hw_tool"):
+        ValidationResult(
+            backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+            real_hw_attempted=False, real_hw_passed=None,
+            real_hw_tool="ptxas", real_hw_findings=(),
+        )
