@@ -40,6 +40,7 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
+from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
 
 
 # ============================================================================
@@ -67,7 +68,7 @@ DEFAULT_WAVE_SIZE: int = 64
 #   stub:      placeholder; ready for Stage 124+ implementation
 #   deferred:  blocked on Phase A GPU CI / hardware test substrate
 #   skipped:   no analog (NVIDIA-only); documented for completeness
-ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
+ROCM_OP_LOWERING: Final[Mapping[ti.TileOpKind, OpLowering]] = {
     ti.TileOpKind.TILE_ZEROS: {
         "lowering": "v_mov_b32 / s_mov_b32 (init VGPR/SGPR to 0)",
         "status": "stub",

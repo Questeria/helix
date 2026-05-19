@@ -44,6 +44,7 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
+from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
 
 
 # ============================================================================
@@ -110,7 +111,7 @@ SIMD_WIDTH: int = 32
 # Each tile-IR op kind we expect to support, with its MSL lowering.
 # `status` semantics match rocm.py:
 #   supported / stub / deferred / skipped
-METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
+METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, OpLowering]] = {
     ti.TileOpKind.TILE_ZEROS: {
         "lowering": "float4(0) / half8(0) init in threadgroup memory",
         "status": "stub",

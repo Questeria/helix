@@ -37,6 +37,7 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
+from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
 
 
 # ============================================================================
@@ -52,7 +53,7 @@ DEFAULT_WORKGROUP_SIZE: int = 64
 # ============================================================================
 # Op-mapping table (tile-IR → WGSL)
 # ============================================================================
-WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
+WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, OpLowering]] = {
     ti.TileOpKind.TILE_ZEROS: {
         "lowering": "var<workgroup>/private array<f32, N> = array(0.0, ...)",
         "status": "stub",

@@ -26,6 +26,7 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
+from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
 
 
 # ============================================================================
@@ -56,7 +57,7 @@ ADDRESS_SIZE = 64
 # Status values mirror the v2.1 audit matrix at the v2.1.0 5-clean
 # gate (per docs/V2_PLAN.md, every TILE_* op was "stub" — substrate
 # emit exists but operand binding is incomplete).
-PTX_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
+PTX_OP_LOWERING: Final[Mapping[ti.TileOpKind, OpLowering]] = {
     ti.TileOpKind.TILE_ZEROS:           {"lowering": "mov.u32 / mov.f32 (init VGPR/SGPR to 0)",  "status": "stub"},
     ti.TileOpKind.TILE_CONST:           {"lowering": "mov.u32 / mov.f32 (constant load)",         "status": "stub"},
     ti.TileOpKind.TILE_LOAD_GLOBAL:     {"lowering": "ld.global.{b32,b64,b128}",                  "status": "stub"},
