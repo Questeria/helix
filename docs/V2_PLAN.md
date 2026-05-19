@@ -560,3 +560,24 @@ End-of-v2.1 5-clean-gate dispatched 9 parallel audit subagents:
 User authority: "You can go as far as v3.0 without my approval."
 v2.1.0 ships under that authority. Next fire: v2.2 polish backlog
 item 1 (PTX symmetry + drift detector).
+
+### 2026-05-19T20:54Z — v2.2 polish item 1 audit dispatched
+
+v2.2 polish item 1 (PTX backend lowering_status symmetry + drift
+detector) shipped at `6d1d9b3` by a concurrent fire. Tree was dirty
+at fire start with the in-flight item 1 changes — concurrent fire
+committed them while this fire was orienting. Tree clean at HEAD.
+
+This fire dispatched the explicit 3-clean audit on item 1 in
+parallel: silent-failure-hunter + type-design-analyzer +
+code-reviewer on `helixc/backend/ptx.py` + `tile_ir_audit.py` +
+`test_tile_ir_audit.py`. Verdicts in the next fire.
+
+Item 11 (gpu_ci tri-state OverallStatus) shipped earlier in the
+v2.2 window at `a1817ac`; no explicit audit yet — picks up next
+or the fire after, depending on item 1 verdict ordering.
+
+v2.2 backlog progress:
+- Item 1 (PTX symmetry + drift detector): SHIPPED `6d1d9b3`, audit dispatched
+- Item 11 (gpu_ci tri-state): SHIPPED `a1817ac`, audit pending
+- Items 2-10, 12, 13-15: pending
