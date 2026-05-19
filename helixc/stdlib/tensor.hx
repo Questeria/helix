@@ -2097,3 +2097,139 @@ fn ti1d_count_neg_strict(start: i32, n: i32) -> i32 {
     else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
     else { ti1d_count_neg(start, n) }}
 }
+
+// =========================================================================
+// Cycle 3 R7 fix batch 34 (RT R7 17 NEW MEDIUM): _strict variants of
+// aggregation/reduction primitives. Pre-fix each silently returned 0 / 0.0
+// on slice corruption, colliding with legit zero-result. Mechanical
+// _strict additions returning INT32_MIN (int) or NaN (float) sentinel.
+// =========================================================================
+
+@pure
+fn ti1d_sum_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_sum(start, n) }}
+}
+
+@pure
+fn ti1d_dot_strict(a_start: i32, b_start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(a_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(b_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_dot(a_start, b_start, n) }}}
+}
+
+@pure
+fn ti1d_mean_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_mean(start, n) }}
+}
+
+@pure
+fn ti1d_prod_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_prod(start, n) }}
+}
+
+@pure
+fn ti1d_l1_norm_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_l1_norm(start, n) }}
+}
+
+@pure
+fn ti1d_l2_norm_sq_strict(start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_l2_norm_sq(start, n) }}
+}
+
+@pure
+fn ti1d_eq_count_strict(a_start: i32, b_start: i32, n: i32) -> i32 {
+    if n <= 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(a_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { if t1d_slice_ok(b_start, n) == 0 { (0 - 2147483647) - 1 }
+    else { ti1d_eq_count(a_start, b_start, n) }}}
+}
+
+@pure
+fn tf1d_sum_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_sum(start, n) }}
+}
+
+@pure
+fn tf1d_dot_strict(a_start: i32, b_start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(a_start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(b_start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_dot(a_start, b_start, n) }}}
+}
+
+@pure
+fn tf1d_mean_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_mean(start, n) }}
+}
+
+@pure
+fn tf1d_l1_norm_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_l1_norm(start, n) }}
+}
+
+@pure
+fn tf1d_l2_norm_sq_strict(start: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_l2_norm_sq(start, n) }}
+}
+
+@pure
+fn tf1d_sum_in_range_strict(start: i32, n: i32, lo: i32, hi: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(start, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if lo < 0 { 0.0_f32 / 0.0_f32 }
+    else { if hi > n { 0.0_f32 / 0.0_f32 }
+    else { if hi <= lo { 0.0_f32 / 0.0_f32 }
+    else { tf1d_sum_in_range(start, n, lo, hi) }}}}}
+}
+
+@pure
+fn tf1d_dot_with_offset_strict(a: i32, a_off: i32, b: i32, b_off: i32, n: i32) -> f32 {
+    if n <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(a + a_off, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { if t1d_slice_ok(b + b_off, n) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf1d_dot_with_offset(a, a_off, b, b_off, n) }}}
+}
+
+@pure
+fn tf2d_trace_strict(m: i32, rows: i32, cols: i32) -> f32 {
+    if rows <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if cols <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t2d_shape_ok(m, rows, cols) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf2d_trace(m, rows, cols) }}}
+}
+
+@pure
+fn tf2d_norm_frobenius_sq_strict(start: i32, rows: i32, cols: i32) -> f32 {
+    if rows <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if cols <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t2d_shape_ok(start, rows, cols) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf2d_norm_frobenius_sq(start, rows, cols) }}}
+}
+
+@pure
+fn tf2d_max_abs_strict(start: i32, rows: i32, cols: i32) -> f32 {
+    if rows <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if cols <= 0 { 0.0_f32 / 0.0_f32 }
+    else { if t2d_shape_ok(start, rows, cols) == 0 { 0.0_f32 / 0.0_f32 }
+    else { tf2d_max_abs(start, rows, cols) }}}
+}
