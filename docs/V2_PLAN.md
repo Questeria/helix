@@ -115,3 +115,41 @@ worth of duplicated audit work; no data lost; main is consistent.
 (silent-failure-hunter + type-design-analyzer + code-reviewer in
 parallel on `helixc/backend/tile_ir_audit.py` + its test file).
 If clean → ship the v2.0.0 5-clean-gate. If not → ship audit-fix.
+
+### 2026-05-19T18:00Z — v2.0.0 RELEASED 🎉
+
+End-of-v2.0 5-clean-gate audit dispatched across FE/IR/BE/RT/TEST.
+All 5 returned CLEAN on first attempt:
+
+- **BE**: CLEAN — drift detectors fire at module load (not test
+  time); `lowering_status()` raises TypeError on misspelled enums;
+  proof_manifest verify returns False (not silently True) when
+  hash absent; real-HW dispatch deferral honestly reports
+  `real_hw_passed=None` rather than lying about coverage.
+- **IR**: CLEAN — AdjointRecord frozen + MappingProxyType + TypeError
+  on cross-IR `tir.OpKind` vs `TileOpKind` confusion; partitioning-
+  by-test converts forgot-to-register-kind into deterministic fail.
+- **FE**: CLEAN — Parser KW_GPU fix closes a silent-drop bug;
+  every new entry point either raises loudly on invalid input,
+  appends to self.errors, or is documented substrate-only with a
+  tightening deadline.
+- **RT**: CLEAN — zero stdlib files modified in v2.0 window; the
+  v1.0 5-clean closure (84 _strict variants) bit-identical at HEAD.
+- **TEST**: CLEAN — every test has substantive assertions; every
+  pytest.raises names specific exception types; drift-detector
+  tests include diagnostic strings; real-HW-deferred test
+  explicitly refuses to lie about coverage.
+
+Stage 130's audit was implicitly covered by the BE+TEST final-gate
+audits (its module + test file were in scope and returned CLEAN).
+Stages 122 and 129 likewise covered by the same final-gate sweep.
+
+**v2.0.0 tag**: stamped at commit (forthcoming) — first Helix release
+with effect-typed GPU barriers, scope-tagged borrows, Smem phase
+typestate, tile-IR adjoint table, info-flow-typed enclaves,
+attestation manifest, and ROCm/Metal/WebGPU backend substrates.
+
+**Deferred to v2.1**: Stages 120 (MLP forward→backward), 124 (ROCm
+MFMA wmma), 126 (Metal Neural Accelerators M5+), 128 (WebGPU tile-
+loop matmul). All explicitly documented in the Stage 130 cross-
+backend audit matrix.
