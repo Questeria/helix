@@ -284,8 +284,17 @@ class WgslEmitter:
         if kind is ti.TileOpKind.TILE_MATMUL:
             # WebGPU has no Tensor Cores. Emit a hand-rolled 16x16
             # tile loop (one accumulation step per WGSL workgroup
-            # invocation). Concrete operand binding deferred.
+            # invocation).
+            #
+            # Stage 128 R6 audit-fix (HIGH-3 from R5 silent-failure):
+            # the matmul body references `a_tile`/`b_tile`/`c_tile`
+            # which are not declared at kernel scope yet. R5 left
+            # this as silent emit; R6 wraps the body in a
+            # `HELIX-STUB-OPERANDS` marker that makes the deferral
+            # visible in the emitted source. Parity with metal.py R5
+            # `/* HELIX-STUB-OPERANDS */` matrix-arg pattern.
             self._line("    // tile-matmul A @ B + C (hand-rolled; no Tensor Cores)")
+            self._line("    // HELIX-STUB-OPERANDS: a_tile/b_tile/c_tile not bound yet")
             self._line("    var acc: f32 = 0.0;")
             self._line("    for (var k: u32 = 0u; k < 16u; k = k + 1u) {")
             self._line("        acc = acc + a_tile[k] * b_tile[k];")
@@ -294,18 +303,22 @@ class WgslEmitter:
             return
         if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
             self._line("    // storage buffer tile load")
+            self._line("    // HELIX-STUB-OPERANDS: buf_in not bound yet")
             self._line("    let v_in = buf_in[local_id.x];")
             return
         if kind is ti.TileOpKind.TILE_STORE_GLOBAL:
             self._line("    // storage buffer tile store")
+            self._line("    // HELIX-STUB-OPERANDS: buf_out + v_out not bound yet")
             self._line("    buf_out[local_id.x] = v_out;")
             return
         if kind is ti.TileOpKind.TILE_LOAD_SHARED:
             self._line("    // workgroup memory tile load")
+            self._line("    // HELIX-STUB-OPERANDS: shared_mem not bound yet")
             self._line("    let v_smem = shared_mem[local_id.x];")
             return
         if kind is ti.TileOpKind.TILE_STORE_SHARED:
             self._line("    // workgroup memory tile store")
+            self._line("    // HELIX-STUB-OPERANDS: shared_mem + v_smem not bound yet")
             self._line("    shared_mem[local_id.x] = v_smem;")
             return
         if kind is ti.TileOpKind.THREAD_IDX:

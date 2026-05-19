@@ -52,9 +52,13 @@ def test_stage127_tma_marked_skipped():
     assert lowering_status(TileOpKind.TMA_STORE) == "skipped"
 
 
-def test_stage127_matmul_status_stub():
-    """Stage 127 — TILE_MATMUL is stub'd; Stage 128 wires the hand-rolled
-    tile-loop (no Tensor Cores; ~1 TFLOPS ceiling per Report 5)."""
+def test_stage127_matmul_status_supported():
+    """Stage 128 R6 audit-fix — TILE_MATMUL is supported on WebGPU:
+    Stage 128 wired the hand-rolled tile-loop emit (no Tensor Cores;
+    ~1 TFLOPS ceiling per v2.0 research Report 5). The prior test
+    name was `_status_stub` while the assertion checked `==
+    "supported"` — a docstring-vs-assertion lie the v2.1 TEST
+    5-gate caught."""
     assert lowering_status(TileOpKind.TILE_MATMUL) == "supported"
 
 

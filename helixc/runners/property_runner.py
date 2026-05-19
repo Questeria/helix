@@ -179,6 +179,18 @@ def run_properties(
                 prop_name, arg_ty, value)
             try:
                 code = compile_and_run(runner_src)
+            # v2.1 R6 audit-fix (RT silent-failure H2): re-raise the
+            # standard loud-fail filter classes BEFORE catching
+            # Exception. Prior code masked NotImplementedError
+            # (unsupported codegen path), AssertionError (the loud
+            # signal validate_kernel_tile_lowering uses per
+            # check.py:1745), and MemoryError as "property failed" —
+            # mis-attributing infrastructure bugs to test failures.
+            # Convention matches check.py:570-589, x86_64.py:5491,
+            # autodiff_cli.py:438.
+            except (NotImplementedError, AssertionError,
+                    KeyboardInterrupt, SystemExit, MemoryError):
+                raise
             except Exception as exc:
                 fail_count += 1
                 msg = (f"{prop_name}({_format_input_lit(value, arg_ty)}) "

@@ -56,9 +56,14 @@ def test_stage125_tma_marked_skipped():
     assert lowering_status(TileOpKind.TMA_STORE) == "skipped"
 
 
-def test_stage125_matmul_status_stub():
-    """Stage 125 — TILE_MATMUL is stub'd; Stage 126 wires SIMD path
-    (pre-M5) and NA mma intrinsics (M5+)."""
+def test_stage125_matmul_status_supported():
+    """Stage 126 R6 audit-fix — TILE_MATMUL is supported on Metal:
+    Stage 126 wired the simdgroup_multiply_accumulate path (NA hw is
+    the accelerator behind the same simdgroup intrinsic, NOT a
+    separate mma_* MSL surface — the R5 audit invalidated that
+    claim). The prior test name was `_status_stub` while the
+    assertion checked `== "supported"` — a docstring-vs-assertion
+    lie the v2.1 TEST 5-gate caught."""
     assert lowering_status(TileOpKind.TILE_MATMUL) == "supported"
 
 

@@ -62,9 +62,12 @@ def test_stage123_tma_marked_skipped():
     assert lowering_status(TileOpKind.TMA_STORE) == "skipped"
 
 
-def test_stage123_matmul_status_stub():
-    """Stage 123 — TILE_MATMUL is stub'd; Stage 124 will wire the
-    actual MFMA instruction emit."""
+def test_stage123_matmul_status_supported():
+    """Stage 124 R6 audit-fix — TILE_MATMUL is supported on ROCm:
+    Stage 124 wired MFMA emission (`v_mfma_f32_16x16x16_f16`), see
+    `test_stage124_tile_matmul_emits_mfma`. The prior test name was
+    `_status_stub` but the assertion checked `== "supported"` — a
+    docstring-vs-assertion lie the v2.1 TEST 5-gate caught."""
     assert lowering_status(TileOpKind.TILE_MATMUL) == "supported"
 
 

@@ -1701,7 +1701,24 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
         _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
         "stdlib",
     )
-    strict = _os.environ.get(STDLIB_STRICT_ENV, "").lower() in ("1", "true", "yes")
+    # v2.1 R6 audit-fix (RT silent-failure H1): tolerant env-var parser
+    # silently disabled strict mode on typos. `HELIXC_STDLIB_STRICT=on`
+    # / `=TRUE` (valid) was OK, but `=yess`/`=enabled`/`=enable` all
+    # silently parsed as False — CI runners thought they enabled strict
+    # mode and got a green build that should have been a partial-stdlib
+    # failure. R6 fix: explicit allowlist + ValueError on unknown value.
+    _raw_stdlib_strict = _os.environ.get(STDLIB_STRICT_ENV, "").strip().lower()
+    if _raw_stdlib_strict == "":
+        strict = False
+    elif _raw_stdlib_strict in ("1", "true", "yes"):
+        strict = True
+    elif _raw_stdlib_strict in ("0", "false", "no"):
+        strict = False
+    else:
+        raise ValueError(
+            f"{STDLIB_STRICT_ENV}={_raw_stdlib_strict!r} is not a "
+            f"recognized boolean. Use 1/true/yes or 0/false/no."
+        )
 
     # Index existing user items by (kind_tag, name) for fast conflict checks.
     # Each item-kind goes in its own namespace because the parser allows
