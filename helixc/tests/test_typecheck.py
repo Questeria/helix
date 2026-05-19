@@ -6339,6 +6339,74 @@ def test_stage116_tytile_phase_composes_with_flip_helper():
     assert t2 == t0
 
 
+def test_stage116_tytile_phase_requires_smem_memspace():
+    """Stage 116 Inc 2 audit-fix — `None` overload narrowed.
+    Phase non-None requires memspace == "smem" (cross-checked in
+    __post_init__). Prevents silent "phase on hbm tile" bugs that
+    would break Stage 118 enforcement."""
+    import pytest as _pt
+    from helixc.frontend.typecheck import TyTile, TyPrim
+    # smem + phase is fine.
+    TyTile(TyPrim("f32"), (), "smem", "producer")
+    # hbm + phase rejected (loud-fail).
+    with _pt.raises(ValueError, match="memspace=='smem'"):
+        TyTile(TyPrim("f32"), (), "hbm", "producer")
+    # registers + phase rejected.
+    with _pt.raises(ValueError, match="memspace=='smem'"):
+        TyTile(TyPrim("f32"), (), "registers", "consumer")
+    # No memspace + phase=None is fine for every memspace.
+    TyTile(TyPrim("f32"), (), "hbm")
+    TyTile(TyPrim("f32"), (), "registers", None)
+
+
+def test_stage116_tytile_phase_threads_through_refinement_erase():
+    """Stage 116 Inc 2 audit-fix — _erase_refinement now threads
+    `phase` through. Pre-fix, every refined TyTile silently dropped
+    its phase, which would have bypassed Stage 118 enforcement on
+    any refinement-bearing producer/consumer tile.
+
+    Substrate test: construct phase-tagged tile, run erase, verify
+    phase is preserved on the erased shape.
+    """
+    from helixc.frontend.typecheck import TyTile, TyPrim, TypeChecker
+    from helixc.frontend.parser import parse
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    t_in = TyTile(TyPrim("f32"), (TyPrim("i32"),), "smem", "producer")
+    t_out = tc._erase_refinement(t_in)
+    assert isinstance(t_out, TyTile)
+    assert t_out.phase == "producer"
+    # Consumer survives erase too.
+    t_in2 = TyTile(TyPrim("f32"), (), "smem", "consumer")
+    assert tc._erase_refinement(t_in2).phase == "consumer"
+    # None survives erase (regression guard for default path).
+    t_in3 = TyTile(TyPrim("f32"), (), "smem")
+    assert tc._erase_refinement(t_in3).phase is None
+
+
+def test_stage116_tytile_phase_top_bridge_in_compatible():
+    """Stage 116 Inc 2 audit-fix — _compatible ⊤-bridge for legacy
+    phase=None tiles. During the B.2.c migration window, parser
+    sites still emit phase=None smem tiles; Stage 117+ sites emit
+    phase-tagged tiles. Treat None on EITHER side as compatible;
+    reject only when BOTH sides are explicit and mismatched."""
+    from helixc.frontend.typecheck import TyTile, TyPrim, TypeChecker
+    from helixc.frontend.parser import parse
+    tc = TypeChecker(parse("fn main() -> i32 { 0 }"))
+    base = (TyPrim("f32"), (), "smem")
+    a_none = TyTile(*base)
+    a_prod = TyTile(*base, "producer")
+    a_cons = TyTile(*base, "consumer")
+    # None ⊤ — compatible with everything.
+    assert tc._compatible(a_none, a_prod)
+    assert tc._compatible(a_prod, a_none)
+    assert tc._compatible(a_none, a_cons)
+    # Same explicit phase — compatible.
+    assert tc._compatible(a_prod, TyTile(*base, "producer"))
+    # Mismatched explicit phases — REJECTED.
+    assert not tc._compatible(a_prod, a_cons)
+    assert not tc._compatible(a_cons, a_prod)
+
+
 def test_stage121_enclave_mixing_diagnostic():
     """Stage 121 (v2.0 Phase C.1, TyEnclave Inc 4) — mixing-different-
     enclaves diagnostic. Pre-Stage-121 was first-wins which broke

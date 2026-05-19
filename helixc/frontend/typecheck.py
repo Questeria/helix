@@ -183,17 +183,24 @@ class TyTile(Type):
     shape: tuple[Type, ...]
     memspace: str
     # Stage 116 (v2.0 Phase B.2.c, Inc 2): optional SMEM phase typestate.
-    # None = legacy/non-smem tile (preserves all pre-Stage-116 behavior).
-    # "producer" / "consumer" = explicit phase per Descend PLDI 2024
-    # producer/consumer model; barrier_flip!() will toggle in Stage 117.
-    # __post_init__ rejects any other value (loud-fail discipline).
+    # None = legacy/non-smem tile. Non-None requires memspace == "smem"
+    # (cross-checked in __post_init__) — phase is meaningless on hbm /
+    # registers. Stage 117 will add barrier_flip!(); Stage 118 will
+    # wire read/write enforcement against the existing _compatible path.
     phase: str | None = None
 
     def __post_init__(self) -> None:
-        if self.phase is not None and self.phase not in SMEM_PHASES:
+        if self.phase is None:
+            return
+        if self.phase not in SMEM_PHASES:
             raise ValueError(
                 f"TyTile phase must be None or one of "
                 f"{sorted(SMEM_PHASES)}; got {self.phase!r}"
+            )
+        if self.memspace != "smem":
+            raise ValueError(
+                f"TyTile phase is only valid when memspace=='smem'; "
+                f"got memspace={self.memspace!r} with phase={self.phase!r}"
             )
 
 
@@ -10954,8 +10961,14 @@ class TypeChecker:
                 self._erase_refinement(ty.dtype), ty.shape, ty.device,
                 ty.layout)
         if isinstance(ty, TyTile):
+            # Stage 116 Inc 2 audit-fix: thread `phase` through erase so
+            # refinement-bearing producer/consumer tiles preserve their
+            # typestate. Pre-fix, every TyTile passing through this arm
+            # silently lost phase (Stage 118 enforcement would have been
+            # bypassed for any refined-dtype smem tile).
             return TyTile(
-                self._erase_refinement(ty.dtype), ty.shape, ty.memspace)
+                self._erase_refinement(ty.dtype), ty.shape, ty.memspace,
+                ty.phase)
         if isinstance(ty, TyFn):
             return TyFn(
                 tuple(self._erase_refinement(p) for p in ty.params),
@@ -12285,6 +12298,17 @@ class TypeChecker:
             return False
         if isinstance(a, TyTile) and isinstance(b, TyTile):
             if len(a.shape) != len(b.shape):
+                return False
+            # Stage 116 Inc 2 audit-fix: phase ⊤-bridge. During the
+            # B.2.c migration window legacy parser sites construct
+            # TyTile without phase (phase=None) while Stage 117+
+            # sites construct phase-tagged tiles. Treat phase=None
+            # on EITHER side as compatible with anything (⊤ rule);
+            # reject only when BOTH sides have explicit, mismatched
+            # phases. Stage 118 will tighten this to require exact
+            # match once all parser/lowering paths emit phases.
+            if (a.phase is not None and b.phase is not None
+                    and a.phase != b.phase):
                 return False
             return (self._compatible(a.dtype, b.dtype)
                     and all(self._size_compatible(x, y)
