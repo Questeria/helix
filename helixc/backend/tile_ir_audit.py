@@ -30,52 +30,34 @@ License: Apache 2.0
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
 from ..ir import tile_ir as ti
 
 
 # ============================================================================
 # Backend table imports (lazy where possible to avoid hard coupling)
-# ============================================================================
-# The four lowering tables shipped in Stages 123/125/127 (PTX is the
-# baseline; its "table" is implicit in ptx.py's _lower_op switch).
-# Stage 130 explicitly enumerates PTX coverage via the same status
-# vocabulary so the audit matrix is uniform across all four.
-PTX_BASELINE_STATUS: dict[ti.TileOpKind, str] = {
-    # PTX is the baseline; everything in tile_ir.py is by-definition
-    # supported (or stubbed at the same level as the other backends).
-    # Stages 1-108 shipped PTX-side codegen for these op kinds:
-    ti.TileOpKind.TILE_ZEROS:           "stub",   # zero-init
-    ti.TileOpKind.TILE_CONST:           "stub",
-    ti.TileOpKind.TILE_LOAD_GLOBAL:     "stub",
-    ti.TileOpKind.TILE_STORE_GLOBAL:    "stub",
-    ti.TileOpKind.TILE_LOAD_SHARED:     "stub",
-    ti.TileOpKind.TILE_STORE_SHARED:    "stub",
-    ti.TileOpKind.TMA_LOAD:             "stub",   # Hopper TMA
-    ti.TileOpKind.TMA_STORE:            "stub",
-    ti.TileOpKind.BARRIER_WAIT:         "stub",
-    ti.TileOpKind.TILE_ADD:             "stub",
-    ti.TileOpKind.TILE_SUB:             "stub",
-    ti.TileOpKind.TILE_MUL:             "stub",
-    ti.TileOpKind.TILE_MATMUL:          "stub",   # wmma.*
-    ti.TileOpKind.TILE_REDUCE:          "stub",
-    ti.TileOpKind.TILE_TRANSPOSE:       "stub",
-    ti.TileOpKind.TILE_RESHAPE:         "stub",
-    ti.TileOpKind.SCALAR_CONST_INT:     "supported",
-    ti.TileOpKind.SCALAR_CONST_FLOAT:   "supported",
-    ti.TileOpKind.SCALAR_ADD:           "supported",
-    ti.TileOpKind.SCALAR_SUB:           "supported",
-    ti.TileOpKind.SCALAR_MUL:           "supported",
-    ti.TileOpKind.SCALAR_NEG:           "supported",
-    ti.TileOpKind.SCALAR_CMP:           "supported",
-    ti.TileOpKind.SCALAR_SELECT:        "supported",
-    ti.TileOpKind.CALL:                 "supported",
-    ti.TileOpKind.RETURN:               "supported",
-    ti.TileOpKind.THREAD_IDX:           "supported",  # Stage 16
-    ti.TileOpKind.TILE_INDEX_LOAD_HBM:  "supported",  # Stage 16
-    ti.TileOpKind.TILE_INDEX_STORE_HBM: "supported",  # Stage 16
-}
+# v2.2 polish item 1: PTX_BASELINE_STATUS used to live here as a
+# hand-maintained dict — a drift hazard the v2.1 BE-batch audit (BE
+# MED-1+2) called out. The PTX baseline now lives in ptx.PTX_OP_LOWERING
+# next to the emit code, mirroring rocm.ROCM_OP_LOWERING /
+# metal.METAL_OP_LOWERING / webgpu.WEBGPU_OP_LOWERING. _lookup_ptx
+# below reads from the new home so there is exactly one source of
+# truth per backend.
+#
+# PTX_BASELINE_STATUS is kept as a read-only DERIVED view of the
+# {kind: status} pairs from ptx.PTX_OP_LOWERING for backwards
+# compatibility with existing consumers (test_tile_ir_audit.py).
+# Constructing the view at module-load time guarantees it cannot
+# drift from the canonical table — any update to PTX_OP_LOWERING
+# is reflected here automatically the next time the module loads.
+from types import MappingProxyType as _MappingProxyType
+from . import ptx as _ptx  # noqa: E402 — used for the derivation only.
+
+PTX_BASELINE_STATUS: Mapping[ti.TileOpKind, str] = _MappingProxyType({
+    kind: entry["status"]
+    for kind, entry in _ptx.PTX_OP_LOWERING.items()
+})
 
 
 @dataclass(frozen=True)
@@ -96,6 +78,12 @@ class AuditEntry:
             self.ptx_status, self.rocm_status,
             self.metal_status, self.webgpu_status,
         ))
+
+
+def _lookup_ptx(kind: ti.TileOpKind) -> str:
+    from . import ptx
+    entry = ptx.PTX_OP_LOWERING.get(kind)
+    return entry["status"] if entry else "missing"
 
 
 def _lookup_rocm(kind: ti.TileOpKind) -> str:
@@ -127,7 +115,7 @@ def audit_tile_ir_coverage() -> list[AuditEntry]:
     for kind in ti.TileOpKind:
         rows.append(AuditEntry(
             op_kind=kind,
-            ptx_status=PTX_BASELINE_STATUS.get(kind, "missing"),
+            ptx_status=_lookup_ptx(kind),
             rocm_status=_lookup_rocm(kind),
             metal_status=_lookup_metal(kind),
             webgpu_status=_lookup_webgpu(kind),
@@ -174,16 +162,16 @@ def fmt_audit_matrix(rows: Optional[list[AuditEntry]] = None) -> str:
 # pattern used in each backend module + tile_ir.py adjoint table.
 # ============================================================================
 def _check_audit_coverage_self_test() -> None:
-    """Module-load: verify every TileOpKind has a row in PTX_BASELINE_STATUS.
-    Backend tables are checked at their own module loads (drift detectors
-    in rocm.py / metal.py / webgpu.py). Here we just guard the PTX row."""
-    for kind in ti.TileOpKind:
-        if kind not in PTX_BASELINE_STATUS:
-            raise AssertionError(
-                f"helixc.backend.tile_ir_audit: TileOpKind {kind.name} "
-                f"is missing from PTX_BASELINE_STATUS. Update with the "
-                f"current PTX backend's coverage."
-            )
+    """Module-load: confirm the PTX backend's drift detector ran.
+    Per-backend tables (PTX/ROCm/Metal/WebGPU) each have their own
+    `_check_*_lowering_coverage()` drift detector that fires at
+    their module-load time. v2.2 polish item 1 moved PTX_BASELINE_STATUS
+    out of this file and into ptx.PTX_OP_LOWERING — importing ptx
+    here triggers its own coverage check, which is the actual guard."""
+    from . import ptx
+    # Touch the table to ensure the import has run and the
+    # ptx._check_ptx_lowering_coverage() module-load assertion fired.
+    assert ptx.PTX_OP_LOWERING, "ptx.PTX_OP_LOWERING failed to populate"
 
 
 _check_audit_coverage_self_test()

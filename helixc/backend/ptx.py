@@ -23,7 +23,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 from io import StringIO
-from typing import Optional
+from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
 
@@ -34,6 +34,100 @@ from ..ir import tir, tile_ir as ti
 PTX_VERSION = "8.3"           # corresponds to CUDA 12.3 baseline
 DEFAULT_TARGET = "sm_75"      # Turing+ (RTX 3070 is sm_86; RTX 5090 is sm_120)
 ADDRESS_SIZE = 64
+
+
+# ============================================================================
+# Op-mapping table (tile-IR → PTX). v2.2 polish item 1: hand-maintained
+# PTX_BASELINE_STATUS in tile_ir_audit.py was a drift hazard — the PTX
+# baseline now lives here next to the emit code, mirroring the
+# rocm/metal/webgpu pattern. `tile_ir_audit._lookup_ptx` reads from
+# this table so the audit matrix and the per-backend tables share one
+# source of truth.
+#
+# Each entry:
+#   `lowering`: a short human-readable description of the PTX text we
+#               emit (or expect to emit) for this kind.
+#   `status`: one of {"supported", "stub", "deferred", "skipped"}.
+#     supported: PtxEmitter.emit_op has a concrete branch.
+#     stub:      placeholder emit (no real codegen).
+#     deferred:  blocked on a later stage.
+#     skipped:   no PTX analog; documented for completeness.
+#
+# Status values mirror the v2.1 audit matrix at the v2.1.0 5-clean
+# gate (per docs/V2_PLAN.md, every TILE_* op was "stub" — substrate
+# emit exists but operand binding is incomplete).
+PTX_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
+    ti.TileOpKind.TILE_ZEROS:           {"lowering": "mov.u32 / mov.f32 (init VGPR/SGPR to 0)",  "status": "stub"},
+    ti.TileOpKind.TILE_CONST:           {"lowering": "mov.u32 / mov.f32 (constant load)",         "status": "stub"},
+    ti.TileOpKind.TILE_LOAD_GLOBAL:     {"lowering": "ld.global.{b32,b64,b128}",                  "status": "stub"},
+    ti.TileOpKind.TILE_STORE_GLOBAL:    {"lowering": "st.global.{b32,b64,b128}",                  "status": "stub"},
+    ti.TileOpKind.TILE_LOAD_SHARED:     {"lowering": "ld.shared.{b32,b64,b128}",                  "status": "stub"},
+    ti.TileOpKind.TILE_STORE_SHARED:    {"lowering": "st.shared.{b32,b64,b128}",                  "status": "stub"},
+    ti.TileOpKind.TMA_LOAD:             {"lowering": "cp.async.bulk.tensor (Hopper TMA)",         "status": "stub"},
+    ti.TileOpKind.TMA_STORE:            {"lowering": "cp.async.bulk.tensor.store",                "status": "stub"},
+    ti.TileOpKind.BARRIER_WAIT:         {"lowering": "bar.sync / bar.cta.sync",                   "status": "stub"},
+    ti.TileOpKind.TILE_ADD:             {"lowering": "add.{f32,s32} (tile-level)",                "status": "stub"},
+    ti.TileOpKind.TILE_SUB:             {"lowering": "sub.{f32,s32}",                             "status": "stub"},
+    ti.TileOpKind.TILE_MUL:             {"lowering": "mul.{f32,s32} / mul.lo.s32",                "status": "stub"},
+    ti.TileOpKind.TILE_MATMUL:          {"lowering": "wmma.mma.sync (m16n16k16 Tensor Cores)",   "status": "stub"},
+    ti.TileOpKind.TILE_REDUCE:          {"lowering": "shfl.sync.bfly + ld.shared (warp tree)",   "status": "stub"},
+    ti.TileOpKind.TILE_TRANSPOSE:       {"lowering": "ld.shared / st.shared with index swap",    "status": "stub"},
+    ti.TileOpKind.TILE_RESHAPE:         {"lowering": "noop (reshape is a view-level operation)", "status": "stub"},
+    ti.TileOpKind.SCALAR_CONST_INT:     {"lowering": "mov.s32 / mov.b32",                         "status": "supported"},
+    ti.TileOpKind.SCALAR_CONST_FLOAT:   {"lowering": "mov.f32",                                   "status": "supported"},
+    ti.TileOpKind.SCALAR_ADD:           {"lowering": "add.{s32,f32}",                             "status": "supported"},
+    ti.TileOpKind.SCALAR_SUB:           {"lowering": "sub.{s32,f32}",                             "status": "supported"},
+    ti.TileOpKind.SCALAR_MUL:           {"lowering": "mul.{lo.s32,f32}",                          "status": "supported"},
+    ti.TileOpKind.SCALAR_NEG:           {"lowering": "neg.{s32,f32}",                             "status": "supported"},
+    ti.TileOpKind.SCALAR_CMP:           {"lowering": "setp.{eq,ne,lt,le,gt,ge}.{s32,f32}",       "status": "supported"},
+    ti.TileOpKind.SCALAR_SELECT:        {"lowering": "selp.{b32,f32}",                            "status": "supported"},
+    ti.TileOpKind.CALL:                 {"lowering": "call.uni / call",                           "status": "supported"},
+    ti.TileOpKind.RETURN:               {"lowering": "ret (.uni for kernels)",                    "status": "supported"},
+    ti.TileOpKind.THREAD_IDX:           {"lowering": "%tid.x / %tid.y / %tid.z",                  "status": "supported"},
+    ti.TileOpKind.TILE_INDEX_LOAD_HBM:  {"lowering": "ld.global.<dtype> via base+index",          "status": "supported"},
+    ti.TileOpKind.TILE_INDEX_STORE_HBM: {"lowering": "st.global.<dtype> via base+index",          "status": "supported"},
+}
+
+
+# Status-tag invariant: every TileOpKind must appear in PTX_OP_LOWERING.
+# Same drift-detector pattern as rocm/metal/webgpu — adding a new kind
+# fires loudly at module-load until a conscious port decision is made.
+def _check_ptx_lowering_coverage() -> None:
+    """Module-load: every TileOpKind must be classified for PTX."""
+    for k in ti.TileOpKind:
+        if k not in PTX_OP_LOWERING:
+            raise AssertionError(
+                f"helixc.backend.ptx: TileOpKind {k.name} is missing "
+                f"from PTX_OP_LOWERING. Every kind must have a "
+                f"lowering or be marked status='skipped' with rationale."
+            )
+
+
+_check_ptx_lowering_coverage()
+
+
+def lowering_status(kind: ti.TileOpKind) -> str:
+    """Query the PTX lowering status for one TileOpKind.
+
+    Returns one of: "supported", "stub", "deferred", "skipped".
+
+    Raises TypeError on non-TileOpKind input — silent membership tests
+    on misspelled enums or cross-IR values would otherwise mask the
+    coverage check. Parity with rocm.lowering_status,
+    metal.lowering_status, webgpu.lowering_status.
+    """
+    if not isinstance(kind, ti.TileOpKind):
+        raise TypeError(
+            f"lowering_status expects TileOpKind, got "
+            f"{type(kind).__name__}: {kind!r}"
+        )
+    entry = PTX_OP_LOWERING.get(kind)
+    if entry is None:
+        raise AssertionError(
+            f"TileOpKind {kind.name} missing from PTX_OP_LOWERING "
+            f"(module-load check should have caught this)"
+        )
+    return entry["status"]
 
 
 # ============================================================================
