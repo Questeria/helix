@@ -6061,6 +6061,95 @@ def test_stage111_gpu_sync_builtins_recognized():
         )
 
 
+def test_stage112_gpu_effect_propagation_caller_must_declare():
+    """Stage 112 (v2.0 Phase B.1.c) — end-to-end effect propagation.
+
+    A caller that invokes a function declaring `@effect(gpu.warp_sync)`
+    MUST itself declare a compatible effect (either `gpu.warp_sync`
+    or the `gpu` wildcard). Calling without declaration surfaces
+    a "missing effects" diagnostic.
+
+    Verifies the effect-system substrate from Stages 110-111 actually
+    propagates through call chains.
+    """
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    # Caller LACKS declaration → diagnostic.
+    src_missing = """
+    @effect(gpu.warp_sync)
+    fn warp_op() -> i32 { 0 }
+
+    fn caller() -> i32 { warp_op() }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src_missing, include_stdlib=False)
+    errors = typecheck(prog)
+    relevant = [e for e in errors
+                if "gpu.warp_sync" in str(e) and "caller" in str(e)]
+    assert len(relevant) >= 1, (
+        f"expected missing-effects diagnostic for caller without "
+        f"@effect(gpu.warp_sync); got {errors}"
+    )
+
+
+def test_stage112_gpu_effect_propagation_wildcard_covers():
+    """Stage 112 — caller declaring `@effect(gpu)` covers any callee
+    declaring `gpu.X_sync` (X ∈ {warp, block, grid}) via _SUB_LABELS
+    wildcard expansion."""
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @effect(gpu.warp_sync)
+    fn warp_op() -> i32 { 0 }
+
+    @effect(gpu.block_sync)
+    fn block_op() -> i32 { 0 }
+
+    @effect(gpu.grid_sync)
+    fn grid_op() -> i32 { 0 }
+
+    @effect(gpu)
+    fn caller() -> i32 {
+        let _ = warp_op();
+        let _ = block_op();
+        grid_op()
+    }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    missing_errs = [e for e in errors
+                    if "missing" in str(e).lower() and "gpu." in str(e)]
+    assert len(missing_errs) == 0, missing_errs
+
+
+def test_stage112_pure_cannot_call_gpu_effect():
+    """Stage 112 — @pure function cannot call a function declaring
+    any gpu.* effect. Effect system soundness across the GPU sub-tree.
+    """
+    from helixc.frontend.typecheck import typecheck
+    from helixc.frontend.parser import parse
+
+    src = """
+    @effect(gpu.warp_sync)
+    fn warp_op() -> i32 { 0 }
+
+    @pure
+    fn pure_caller() -> i32 { warp_op() }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    pure_errs = [e for e in errors
+                 if "@pure" in str(e) and "pure_caller" in str(e)]
+    assert len(pure_errs) >= 1, errors
+
+
 def test_stage110_smem_borrow_excluded_from_gpu_wildcard():
     """Stage 110 type-design audit fix — `gpu.smem_borrow` is a linear
     capability, NOT an effect obligation. The `gpu` wildcard MUST NOT

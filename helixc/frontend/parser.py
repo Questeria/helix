@@ -325,19 +325,28 @@ class Parser:
                         self.i += 1
                     elif t.kind == T.COMMA:
                         self.i += 1
-                    elif t.kind == T.IDENT:
+                    elif t.kind == T.IDENT or (t.kind == T.KW_GPU and depth == 1):
                         if depth == 1:
                             # Stage 55 Inc 4 — accumulate dotted idents
                             # so @effect(io.read_file) parses as the
                             # single sub-label `io.read_file`, not as
                             # two separate labels `io` and `read_file`.
+                            #
+                            # Stage 112 (v2.0 Phase B.1.c) fix: `gpu`
+                            # is a pre-existing keyword (T.KW_GPU) used
+                            # in tensor device markers. In attribute-arg
+                            # context, accept it as a dotted-ident
+                            # starter so `@effect(gpu.warp_sync)` parses
+                            # as `effect:gpu.warp_sync` rather than
+                            # silently dropping the `gpu.` prefix.
                             dotted = t.value
                             self.i += 1
                             while (self._peek().kind == T.DOT
-                                    and self._peek(1).kind == T.IDENT):
+                                    and (self._peek(1).kind == T.IDENT
+                                         or self._peek(1).kind == T.KW_GPU)):
                                 self.i += 1  # consume DOT
                                 dotted = dotted + "." + self._peek().value
-                                self.i += 1  # consume next IDENT
+                                self.i += 1  # consume next IDENT/KW_GPU
                             arg_idents.append(dotted)
                         else:
                             self.i += 1
