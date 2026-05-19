@@ -341,6 +341,15 @@ class MslEmitter:
         abort xcrun metal compilation. Placeholder operand bindings
         below are wrapped in `/* HELIX-STUB-OPERAND */` so a reviewer
         cannot mistake them for production-ready code.
+
+        v2.3 BE MED audit-fix: status="skipped" now emits a separate
+        `#error "HELIX-SKIPPED: ..."` directive (parity with rocm.py's
+        v2.1 R1 H2 fix). Pre-v2.3, skipped status fell through to the
+        exhaustiveness AssertionError at the bottom of _emit_op — the
+        guard's error message claimed the table "lies" when in fact
+        the table was correct (op IS skipped); the dispatcher just
+        had no branch for it. A TMA_LOAD on the Metal path now reports
+        "no Apple analog" honestly, not "table/dispatcher drift."
         """
         kind = op.kind
         # v2.1 R1 audit-fix: stub status → loud failure.
@@ -349,6 +358,17 @@ class MslEmitter:
             self._line(
                 f"    #error \"HELIX-STUB: TileOpKind.{kind.name} "
                 f"status={status!r}; codegen not wired in this backend.\""
+            )
+            return
+        if status == "skipped":
+            # v2.3 BE MED audit-fix: parity with rocm.py's HELIX-SKIPPED
+            # branch (rocm.py:320). Skipped ops have no Apple analog
+            # (TMA_LOAD/STORE on the Metal path); routing them here is
+            # a miscompile-routing bug, not a backend deficiency.
+            self._line(
+                f"    #error \"HELIX-SKIPPED: TileOpKind.{kind.name} "
+                f"has no Apple analog (NVIDIA-specific); routing to "
+                f"Metal backend is a bug.\""
             )
             return
         # v2.2 polish item 9: numeric extraction. Apple's M5 introduced
@@ -423,10 +443,12 @@ class MslEmitter:
         # status="supported" in METAL_OP_LOWERING MUST have a concrete
         # branch above. Reaching here means the table declares the op
         # ready but no codegen wires it — a silent-failure surface.
-        # The stub-status guard at the top of _emit_op already handles
-        # status=("stub","deferred","skipped"). If we got here, the
-        # table lies. Raise loudly instead of emitting a silent
-        # // comment that would compile and ship a no-op kernel.
+        # v2.3 BE MED audit-fix: the comment used to claim status=
+        # ("stub","deferred","skipped") were all handled at the top
+        # of _emit_op; that was true for stub/deferred but skipped
+        # silently fell through here. The skipped branch above now
+        # closes that gap; the guard's remaining job is only the
+        # phantom-supported case.
         raise AssertionError(
             f"helixc.backend.metal: TileOpKind.{kind.name} has "
             f"status={status!r} in METAL_OP_LOWERING but no "

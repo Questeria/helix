@@ -398,3 +398,32 @@ def test_v22_msl_emitter_accepts_pre_m5_families():
     for pre_m5 in ("apple7", "apple8", "apple9"):
         e = metal_mod.MslEmitter(target_family=pre_m5)
         assert metal_mod._parse_apple_family(e.target_family) < 10
+
+
+def test_v23_msl_emitter_skipped_status_emits_helix_skipped_error():
+    """v2.3 BE MED audit-fix — status="skipped" ops (TMA_LOAD,
+    TMA_STORE on the Metal path) emit `#error "HELIX-SKIPPED: ..."`
+    instead of falling through to the exhaustiveness AssertionError
+    with a misleading "table/dispatcher drift" message. Parity with
+    rocm.py's v2.1 R1 H2 fix.
+    """
+    from helixc.backend import metal as metal_mod
+    from helixc.ir.tile_ir import TileOp
+    for skipped_kind in (TileOpKind.TMA_LOAD, TileOpKind.TMA_STORE):
+        e = metal_mod.MslEmitter()
+        e._emit_op(TileOp(kind=skipped_kind))
+        out = e.buf.getvalue()
+        assert "#error" in out, (
+            f"{skipped_kind.name}: expected #error directive, got {out!r}"
+        )
+        assert "HELIX-SKIPPED" in out, (
+            f"{skipped_kind.name}: expected HELIX-SKIPPED tag, got {out!r}"
+        )
+        assert "no Apple analog" in out, (
+            f"{skipped_kind.name}: expected Apple-analog rationale, "
+            f"got {out!r}"
+        )
+        assert skipped_kind.name in out, (
+            f"{skipped_kind.name}: expected kind name in message, "
+            f"got {out!r}"
+        )

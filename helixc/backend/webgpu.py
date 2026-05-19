@@ -266,6 +266,13 @@ class WgslEmitter:
         status="stub" / "deferred" in WEBGPU_OP_LOWERING emit a
         `@@HELIX-STUB@@` token that breaks naga/wgpu parsing — silent
         no-op kernels no longer ship as "successful" emit.
+
+        v2.3 BE MED audit-fix: status="skipped" emits a separate
+        `@@HELIX-SKIPPED@@` parse-breaking token (parity with rocm.py
+        v2.1 R1 H2 + metal.py v2.3 BE MED). Pre-v2.3, skipped ops
+        fell through to the exhaustiveness AssertionError with a
+        misleading "table/dispatcher drift" message. The skipped
+        branch below honestly reports "no WebGPU analog."
         """
         kind = op.kind
         # v2.1 R1 audit-fix: stub status → loud failure.
@@ -276,6 +283,17 @@ class WgslEmitter:
             self._line(
                 f"    @@HELIX-STUB: TileOpKind.{kind.name} "
                 f"status={status!r} not wired"
+            )
+            return
+        if status == "skipped":
+            # v2.3 BE MED audit-fix: parity with rocm.py HELIX-SKIPPED
+            # branch + metal.py v2.3 fix. WebGPU has no analog for
+            # NVIDIA-specific TMA ops; routing them to this backend
+            # is a miscompile-routing bug.
+            self._line(
+                f"    @@HELIX-SKIPPED: TileOpKind.{kind.name} has "
+                f"no WebGPU analog (NVIDIA-specific); routing to "
+                f"WebGPU backend is a bug."
             )
             return
         if kind is ti.TileOpKind.BARRIER_WAIT:
@@ -329,13 +347,12 @@ class WgslEmitter:
             return
         # Stage 128 R5 audit-fix: exhaustiveness guard. Any op with
         # status="supported" in WEBGPU_OP_LOWERING MUST have a
-        # concrete branch above. Reaching here means the table
-        # declares the op ready but no codegen wires it — a silent-
-        # failure surface. The stub-status guard at the top of
-        # _emit_op already handles ("stub", "deferred", "skipped").
-        # If we got here, the table lies. Raise loudly instead of
-        # emitting a silent `// (stub)` comment that would compile
-        # and ship a no-op kernel.
+        # concrete branch above. v2.3 BE MED audit-fix: this comment
+        # used to claim ("stub","deferred","skipped") were all
+        # handled at the top of _emit_op; that was true for
+        # stub/deferred but skipped silently fell through here. The
+        # skipped branch above now closes that gap; the guard's
+        # remaining job is only the phantom-supported case.
         raise AssertionError(
             f"helixc.backend.webgpu: TileOpKind.{kind.name} has "
             f"status={status!r} in WEBGPU_OP_LOWERING but no "

@@ -240,3 +240,30 @@ def test_stage128_r5_phantom_supported_raises_assertion():
             wg_mod.WgslEmitter().emit_module(tile_mod)
     finally:
         wg_mod.WEBGPU_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"] = original
+
+
+def test_v23_wgsl_emitter_skipped_status_emits_helix_skipped_token():
+    """v2.3 BE MED audit-fix — status="skipped" ops (TMA_LOAD,
+    TMA_STORE on the WebGPU path) emit `@@HELIX-SKIPPED` parse-
+    breaking token instead of falling through to the exhaustiveness
+    AssertionError with a misleading "table/dispatcher drift"
+    message. Parity with rocm.py's v2.1 R1 H2 + metal.py v2.3 BE MED.
+    """
+    from helixc.backend import webgpu as wg_mod
+    from helixc.ir.tile_ir import TileOp
+    for skipped_kind in (TileOpKind.TMA_LOAD, TileOpKind.TMA_STORE):
+        e = wg_mod.WgslEmitter()
+        e._emit_op(TileOp(kind=skipped_kind))
+        out = e.buf.getvalue()
+        assert "@@HELIX-SKIPPED" in out, (
+            f"{skipped_kind.name}: expected @@HELIX-SKIPPED token, "
+            f"got {out!r}"
+        )
+        assert "no WebGPU analog" in out, (
+            f"{skipped_kind.name}: expected WebGPU-analog rationale, "
+            f"got {out!r}"
+        )
+        assert skipped_kind.name in out, (
+            f"{skipped_kind.name}: expected kind name in message, "
+            f"got {out!r}"
+        )
