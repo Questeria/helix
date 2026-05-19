@@ -236,6 +236,122 @@ def lower_to_tile(tir_module: tir.Module) -> TileModule:
 
 
 # ============================================================================
+# Stage 117-119 (v2.0 Phase B.3) substrate: tile-IR adjoint table.
+#
+# Maps each forward TileOpKind to the sequence of tile-IR ops that
+# compute its reverse-mode gradient contribution. The full Stage
+# 120 implementation will consume this table to generate adjoint
+# kernels from forward kernels.
+#
+# Adjoint sequences are documented as Python tuples of (kind, comment)
+# pairs — the actual code generation lives in a future stage, but
+# the table itself is the type-system substrate that pins the design.
+#
+# Reverse-mode AD pattern: for forward op f(x, y) = z, the adjoint
+# computes (dL/dx, dL/dy) given (x, y, dL/dz).
+#
+# Reference: v2.0 research Report 2 (AD through @kernel functions).
+# Defensible claim: "first open tile-IR-native, tensor-core-aware
+# source-level reverse-mode AD in a systems language with its own
+# matmul lowering."
+# ============================================================================
+
+# Tile-IR ops with a known adjoint sequence. Each entry maps a forward
+# TileOpKind to a tuple describing the adjoint computation:
+#   - "inputs":   list of forward-pass operand kinds we read
+#   - "outputs":  list of gradient outputs (one per differentiable input)
+#   - "ops":      list of (TileOpKind, comment) sequenced to compute the gradients
+#
+# Stage 117-119 ships the substrate (table + lookup); Stage 120 wires
+# this into grad_pass for end-to-end MLP forward→backward generation.
+TILE_OP_ADJOINTS: dict[TileOpKind, dict] = {
+    TileOpKind.TILE_ADD: {
+        # z = x + y    →    dL/dx = dL/dz,  dL/dy = dL/dz
+        # No new ops; gradient flows through identity.
+        "inputs": ["x", "y"],
+        "outputs": ["dx", "dy"],
+        "ops": [
+            # Both adjoints are the upstream gradient unchanged.
+            # Backend may emit a single broadcast-copy.
+        ],
+    },
+    TileOpKind.TILE_SUB: {
+        # z = x - y    →    dL/dx = dL/dz,  dL/dy = -dL/dz
+        "inputs": ["x", "y"],
+        "outputs": ["dx", "dy"],
+        "ops": [
+            # dy = -dz (scalar-neg or sub-from-zero)
+            (TileOpKind.SCALAR_NEG, "negate upstream gradient for dy"),
+        ],
+    },
+    TileOpKind.TILE_MUL: {
+        # z = x * y    →    dL/dx = dL/dz * y,  dL/dy = dL/dz * x
+        # Requires saving x and y on the forward pass (or recomputing).
+        "inputs": ["x", "y"],
+        "outputs": ["dx", "dy"],
+        "ops": [
+            (TileOpKind.TILE_MUL, "dx = dz * y (elementwise)"),
+            (TileOpKind.TILE_MUL, "dy = dz * x (elementwise)"),
+        ],
+    },
+    TileOpKind.TILE_MATMUL: {
+        # Forward: D = A @ B + C  (cuBLAS-style accumulating matmul)
+        # Reverse: dA = dD @ B^T,  dB = A^T @ dD,  dC = dD
+        # Three TILE_MATMUL calls + two TILE_TRANSPOSE.
+        "inputs": ["A", "B", "C"],
+        "outputs": ["dA", "dB", "dC"],
+        "ops": [
+            (TileOpKind.TILE_TRANSPOSE, "Bt = transpose(B)"),
+            (TileOpKind.TILE_MATMUL, "dA = dD @ Bt"),
+            (TileOpKind.TILE_TRANSPOSE, "At = transpose(A)"),
+            (TileOpKind.TILE_MATMUL, "dB = At @ dD"),
+            # dC = dD (identity); backend emits a copy or aliases.
+        ],
+    },
+    TileOpKind.TILE_REDUCE: {
+        # axis-reduce within tile  →  broadcast upstream gradient back
+        # along the reduced axis.
+        "inputs": ["x"],
+        "outputs": ["dx"],
+        "ops": [
+            # The exact op depends on reduction kind (sum vs max/min).
+            # For sum: broadcast(dz, original shape).
+            # For max/min: scatter dz to the argmax/argmin index.
+            # Backend dispatches on attrs["reduce_kind"].
+        ],
+    },
+    TileOpKind.TILE_TRANSPOSE: {
+        # transpose is its own inverse for the gradient.
+        "inputs": ["x"],
+        "outputs": ["dx"],
+        "ops": [
+            (TileOpKind.TILE_TRANSPOSE, "dx = transpose(dz)"),
+        ],
+    },
+}
+
+
+def has_adjoint(kind: TileOpKind) -> bool:
+    """Stage 117-119 substrate — query whether a TileOpKind has a
+    declared adjoint sequence. Used by grad_pass (Stage 120) to
+    decide whether to descend into a kernel body or treat it as
+    opaque (call out to host-side gradient).
+    """
+    return kind in TILE_OP_ADJOINTS
+
+
+def adjoint_outputs(kind: TileOpKind) -> tuple[str, ...]:
+    """Stage 117-119 substrate — list the gradient outputs of a
+    forward op (in operand order). Returns empty tuple for ops
+    without a declared adjoint.
+    """
+    entry = TILE_OP_ADJOINTS.get(kind)
+    if entry is None:
+        return ()
+    return tuple(entry["outputs"])
+
+
+# ============================================================================
 # Pretty print
 # ============================================================================
 def fmt_module(mod: TileModule) -> str:

@@ -76,6 +76,75 @@ def test_function_attrs_carried():
     assert fn.attrs.get("kernel") is True
 
 
+# ============================================================================
+# Stage 117-119 (v2.0 Phase B.3) substrate tests — tile-IR adjoint table
+# ============================================================================
+def test_stage117_tile_matmul_has_adjoint():
+    """Stage 117 — TILE_MATMUL has a declared adjoint sequence (3-wmma
+    reverse pattern: dA = dD @ Bt; dB = At @ dD; dC = dD)."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, has_adjoint, adjoint_outputs,
+    )
+    assert has_adjoint(TileOpKind.TILE_MATMUL)
+    outs = adjoint_outputs(TileOpKind.TILE_MATMUL)
+    assert outs == ("dA", "dB", "dC")
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_MATMUL]
+    # 2 transposes + 2 matmuls (dC = dD is alias/copy, not a separate op).
+    assert len(entry["ops"]) == 4
+    # Verify the wmma-mirror sequence:
+    op_kinds = [k for (k, _comment) in entry["ops"]]
+    assert op_kinds.count(TileOpKind.TILE_TRANSPOSE) == 2
+    assert op_kinds.count(TileOpKind.TILE_MATMUL) == 2
+
+
+def test_stage118_tile_add_adjoint_is_identity():
+    """Stage 118 — TILE_ADD adjoint is identity: dx = dz, dy = dz.
+    No new ops emitted; gradient flows through unchanged."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, has_adjoint, adjoint_outputs,
+    )
+    assert has_adjoint(TileOpKind.TILE_ADD)
+    outs = adjoint_outputs(TileOpKind.TILE_ADD)
+    assert outs == ("dx", "dy")
+    # Identity adjoint emits zero new ops.
+    assert TILE_OP_ADJOINTS[TileOpKind.TILE_ADD]["ops"] == []
+
+
+def test_stage119_tile_reduce_has_adjoint():
+    """Stage 119 — TILE_REDUCE has a declared adjoint (broadcast back
+    along reduced axis for sum; scatter for max/min; backend dispatches
+    on attrs[reduce_kind])."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, has_adjoint, adjoint_outputs,
+    )
+    assert has_adjoint(TileOpKind.TILE_REDUCE)
+    assert adjoint_outputs(TileOpKind.TILE_REDUCE) == ("dx",)
+
+
+def test_stage117_tile_transpose_self_inverse():
+    """Stage 117 — transpose is its own inverse for the gradient:
+    dx = transpose(dz). Single TILE_TRANSPOSE in adjoint sequence."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, has_adjoint,
+    )
+    assert has_adjoint(TileOpKind.TILE_TRANSPOSE)
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_TRANSPOSE]
+    assert len(entry["ops"]) == 1
+    assert entry["ops"][0][0] == TileOpKind.TILE_TRANSPOSE
+
+
+def test_stage117_ops_without_adjoint_return_empty():
+    """Stage 117-119 — querying an op without a declared adjoint
+    returns False / empty tuple. THREAD_IDX and barrier ops have no
+    gradient sense — they are not differentiable."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, has_adjoint, adjoint_outputs,
+    )
+    assert not has_adjoint(TileOpKind.THREAD_IDX)
+    assert not has_adjoint(TileOpKind.BARRIER_WAIT)
+    assert adjoint_outputs(TileOpKind.THREAD_IDX) == ()
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
