@@ -155,7 +155,7 @@ def test_stage126_barrier_wait_emits_threadgroup_barrier():
 
 def test_stage126_tile_matmul_pre_m5_simdgroup():
     """Stage 126 — TILE_MATMUL on pre-M5 family (apple7) emits the
-    simdgroup_multiply_accumulate path."""
+    simdgroup_multiply_accumulate path with simdgroup_matrix args."""
     from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
     fn = TileFn(
         name="k", params=[], return_ty=None,
@@ -168,12 +168,43 @@ def test_stage126_tile_matmul_pre_m5_simdgroup():
     tile_mod.functions["k"] = fn
     text = MslEmitter(target_family="apple7").emit_module(tile_mod)
     assert "simdgroup_multiply_accumulate" in text
+    assert "simdgroup_matrix<float, 8, 8>" in text
     assert "pre-M5" in text
 
 
 def test_stage126_tile_matmul_m5_plus_na():
-    """Stage 126 — TILE_MATMUL on apple9+ (M5+ Neural Accelerators)
-    emits the mma_* intrinsic path (not simdgroup)."""
+    """Stage 126 R5 audit-fix — TILE_MATMUL on apple10+ (M5+ Neural
+    Accelerators) emits the same `simdgroup_*` MSL intrinsics as
+    pre-M5; the M5+ NA is a HARDWARE accelerator behind those same
+    intrinsics, not a separate MSL surface. The previous test asserted
+    a fictional `mma_f32_16x16x16_f16` intrinsic (PTX/CUDA syntax that
+    leaked into the Metal backend) — the audit caught this as
+    NEEDS-CHANGE."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_MATMUL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    # apple10 is the first M5+ family. apple9 is M3/M4 (no NA hw).
+    text = MslEmitter(target_family="apple10").emit_module(tile_mod)
+    assert "simdgroup_multiply_accumulate" in text
+    assert "simdgroup_matrix<float, 8, 8>" in text
+    assert "M5+ NA" in text
+    # Regression-pin: the fictional intrinsic must NOT appear anywhere.
+    assert "mma_f32_16x16x16_f16" not in text
+
+
+def test_stage126_apple9_is_pre_m5_not_na():
+    """Stage 126 R5 audit-fix — `apple9` is the family for M3 and M4
+    (which lack Neural Accelerator hw); the previous gate incorrectly
+    routed apple9 into the M5+ NA path. The R5 fix corrects the
+    family-number list to `apple10+`. apple9 must take the pre-M5
+    SIMD path."""
     from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
     fn = TileFn(
         name="k", params=[], return_ty=None,
@@ -185,8 +216,8 @@ def test_stage126_tile_matmul_m5_plus_na():
     tile_mod = TileModule()
     tile_mod.functions["k"] = fn
     text = MslEmitter(target_family="apple9").emit_module(tile_mod)
-    assert "mma_f32_16x16x16_f16" in text
-    assert "M5+ NA" in text
+    assert "pre-M5" in text
+    assert "M5+ NA" not in text
 
 
 def test_stage126_global_memory_ops_emit():
@@ -226,10 +257,13 @@ def test_stage126_threadgroup_memory_ops_emit():
     assert "shared_mem[tid]" in text
 
 
-def test_stage126_unmapped_op_falls_through_to_comment():
-    """Stage 126 — ops without a concrete emit pattern fall through
-    to a `// tile-IR op KIND (stub)` comment, parity with rocm.py
-    Stage 124 fallthrough."""
+def test_stage126_stub_status_emits_helix_stub_directive():
+    """Stage 126 R5 audit-fix — ops with status='stub'/'deferred' in
+    METAL_OP_LOWERING emit the `#error "HELIX-STUB..."` directive at
+    the TOP of `_emit_op`, which aborts xcrun-metal compilation. This
+    is the substrate's loud-stub guard; it replaces the silent
+    `// (stub)` comment fallthrough that R5 found could ship empty
+    kernels for supported-but-unimplemented ops."""
     from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
     fn = TileFn(
         name="k", params=[], return_ty=None,
@@ -242,3 +276,36 @@ def test_stage126_unmapped_op_falls_through_to_comment():
     tile_mod.functions["k"] = fn
     text = MslEmitter().emit_module(tile_mod)
     assert "HELIX-STUB" in text and "TILE_REDUCE" in text
+    assert "#error" in text
+
+
+def test_stage126_r5_phantom_supported_raises_assertion():
+    """Stage 126 R5 audit-fix — exhaustiveness guard at the bottom of
+    `_emit_op` fires AssertionError if a TileOpKind has status
+    'supported' in METAL_OP_LOWERING but no concrete branch in the
+    if/elif ladder. Parity with rocm.py's R1 exhaustiveness guard.
+    Without this, a future bulk-promotion of a status flag without
+    a matching emit-branch addition would silently ship an empty
+    kernel — exactly the failure mode the R5 audit found."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    from helixc.backend import metal as metal_mod
+    # Synthesize the bug: promote a previously-stub op to "supported"
+    # in the module-level table, then run _emit_op on it. The guard
+    # must fire.
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_REDUCE),  # currently "stub"
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    # Mutate the dict in place to simulate the phantom-supported drift.
+    original = metal_mod.METAL_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"]
+    metal_mod.METAL_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"] = "supported"
+    try:
+        with pytest.raises(AssertionError, match="TILE_REDUCE"):
+            metal_mod.MslEmitter().emit_module(tile_mod)
+    finally:
+        metal_mod.METAL_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"] = original

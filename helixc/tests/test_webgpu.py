@@ -191,9 +191,13 @@ def test_stage128_workgroup_memory_ops_emit():
     assert "shared_mem[local_id.x]" in text
 
 
-def test_stage128_unmapped_op_falls_through_to_comment():
-    """Stage 128 — ops without a concrete emit pattern fall through
-    to a `// tile-IR op KIND (stub)` comment, parity with rocm + metal."""
+def test_stage128_stub_status_emits_helix_stub_directive():
+    """Stage 128 R5 audit-fix — ops with status='stub'/'deferred' in
+    WEBGPU_OP_LOWERING emit the `@@HELIX-STUB...` token at the TOP
+    of `_emit_op`, which is parse-breaking in WGSL (naga rejects
+    `@@`). This is the substrate's loud-stub guard; it replaces the
+    silent `// (stub)` comment fallthrough that R5 found could ship
+    empty kernels."""
     from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
     fn = TileFn(
         name="k", params=[], return_ty=None,
@@ -206,3 +210,29 @@ def test_stage128_unmapped_op_falls_through_to_comment():
     tile_mod.functions["k"] = fn
     text = WgslEmitter().emit_module(tile_mod)
     assert "HELIX-STUB" in text and "TILE_REDUCE" in text
+    assert "@@" in text  # parse-breaking marker
+
+
+def test_stage128_r5_phantom_supported_raises_assertion():
+    """Stage 128 R5 audit-fix — exhaustiveness guard at the bottom of
+    `_emit_op` fires AssertionError if a TileOpKind has status
+    'supported' in WEBGPU_OP_LOWERING but no concrete branch.
+    Parity with rocm.py / metal.py R5 guards."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    from helixc.backend import webgpu as wg_mod
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_REDUCE),  # currently "stub"
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    original = wg_mod.WEBGPU_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"]
+    wg_mod.WEBGPU_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"] = "supported"
+    try:
+        with pytest.raises(AssertionError, match="TILE_REDUCE"):
+            wg_mod.WgslEmitter().emit_module(tile_mod)
+    finally:
+        wg_mod.WEBGPU_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"] = original

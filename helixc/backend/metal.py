@@ -104,17 +104,23 @@ METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "lowering": "threadgroup_barrier(mem_flags::mem_threadgroup)",
         "status": "supported",
     },
+    # Stage 126 R5 audit-fix: TILE_ADD/SUB/MUL have no `_emit_op`
+    # branch yet — demote to "stub" so the stub-status forward guard
+    # at the top of `_emit_op` emits `#error` instead of falling
+    # through to a silent `// (stub)` comment. (Promotion to
+    # "supported" was premature; per-op MSL operator emit lands in
+    # a later stage when operand-binding is wired.)
     ti.TileOpKind.TILE_ADD: {
         "lowering": "operator+ (SIMD-vectorized)",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_SUB: {
         "lowering": "operator-",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_MUL: {
         "lowering": "operator*",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_MATMUL: {
         # Stage 126 picks pre-M5 SIMD path or M5+ NA mma_* intrinsic
@@ -178,13 +184,17 @@ METAL_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "lowering": "thread_position_in_threadgroup attribute (uint)",
         "status": "supported",
     },
+    # Stage 126 R5 audit-fix: indexed-HBM has no `_emit_op` branch yet.
+    # Demoted to "stub" — same reason as TILE_ADD/SUB/MUL above. The
+    # Phase-0 PTX backend supports these; the v2 backends pick them
+    # up when operand-binding lands.
     ti.TileOpKind.TILE_INDEX_LOAD_HBM: {
         "lowering": "device pointer indexed read",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_INDEX_STORE_HBM: {
         "lowering": "device pointer indexed write",
-        "status": "supported",
+        "status": "stub",
     },
 }
 
@@ -294,21 +304,34 @@ class MslEmitter:
                 f"status={status!r}; codegen not wired in this backend.\""
             )
             return
-        is_m5_plus = self.target_family in ("apple9", "apple10", "apple11")
+        # Stage 126 R5 audit-fix: M5+ NA family-number list — Apple's
+        # M5 introduced Neural Accelerators at family `apple10+`.
+        # `apple9` is M3/M4 (no NA hw). The previous list erroneously
+        # included `apple9`. Tests below verify the corrected gate.
+        is_m5_plus = self.target_family in ("apple10", "apple11", "apple12")
         if kind is ti.TileOpKind.BARRIER_WAIT:
             # MSL: threadgroup_barrier with appropriate fence flags.
             self._line("    threadgroup_barrier(mem_flags::mem_threadgroup);")
             return
         if kind is ti.TileOpKind.TILE_MATMUL:
+            # Stage 126 R5 audit-fix: `mma_f32_16x16x16_f16` is NOT real
+            # MSL — it's PTX/CUDA syntax that leaked into the Metal
+            # backend. Apple's M5+ Neural Accelerators are HW
+            # accelerators behind the *same* `simdgroup_matrix`
+            # intrinsics — there is no separate `mma_*` MSL surface.
+            # The pre-M5 vs M5+ split documents the *hardware path*
+            # (SIMD-group ALU vs Neural Accelerator) in the comment;
+            # the emitted call is `simdgroup_multiply_accumulate` on
+            # both paths. Operand bindings are `HELIX-STUB-OPERANDS`
+            # — the substrate emit ships placeholder matrix args; a
+            # later stage wires real operand-binding from tile-IR's
+            # value SSA.
             if is_m5_plus:
-                # M5+ Neural Accelerators: mma_* family of intrinsics.
-                self._line("    // tile-matmul A @ B + C (M5+ NA)")
-                self._line("    mma_f32_16x16x16_f16();")
+                self._line("    // tile-matmul A @ B + C (M5+ NA — Neural Accelerator hw path)")
             else:
-                # Pre-M5: simdgroup_multiply_accumulate (SIMD-group
-                # matmul on Apple7/Apple8).
-                self._line("    // tile-matmul A @ B + C (pre-M5 SIMD)")
-                self._line("    simdgroup_multiply_accumulate();")
+                self._line("    // tile-matmul A @ B + C (pre-M5 SIMD-group path)")
+            self._line("    simdgroup_matrix<float, 8, 8> _A, _B, _C; /* HELIX-STUB-OPERANDS */")
+            self._line("    simdgroup_multiply_accumulate(_C, _A, _B);")
             return
         if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
             self._line("    // device pointer tile load")
@@ -336,10 +359,21 @@ class MslEmitter:
             # except at non-terminator positions.
             self._line("    return;")
             return
-        # Default: comment-annotated stub. The module-load coverage
-        # check at _check_metal_lowering_coverage already enforced
-        # that every TileOpKind has a documented entry.
-        self._line(f"    // tile-IR op {kind.name} (stub)")
+        # Stage 126 R5 audit-fix: exhaustiveness guard. Any op with
+        # status="supported" in METAL_OP_LOWERING MUST have a concrete
+        # branch above. Reaching here means the table declares the op
+        # ready but no codegen wires it — a silent-failure surface.
+        # The stub-status guard at the top of _emit_op already handles
+        # status=("stub","deferred","skipped"). If we got here, the
+        # table lies. Raise loudly instead of emitting a silent
+        # // comment that would compile and ship a no-op kernel.
+        raise AssertionError(
+            f"helixc.backend.metal: TileOpKind.{kind.name} has "
+            f"status={status!r} in METAL_OP_LOWERING but no "
+            f"`_emit_op` branch. Either add a concrete emit or "
+            f"demote the status to 'stub' so the forward guard "
+            f"emits #error."
+        )
 
 
 def lowering_status(kind: ti.TileOpKind) -> str:

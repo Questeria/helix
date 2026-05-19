@@ -89,17 +89,21 @@ WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "lowering": "workgroupBarrier()",
         "status": "supported",
     },
+    # Stage 128 R5 audit-fix: TILE_ADD/SUB/MUL have no `_emit_op`
+    # branch yet — demote to "stub" so the stub-status forward guard
+    # emits `@@HELIX-STUB` instead of falling through to a silent
+    # `// (stub)` comment. Promotion to "supported" was premature.
     ti.TileOpKind.TILE_ADD: {
         "lowering": "operator+",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_SUB: {
         "lowering": "operator-",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_MUL: {
         "lowering": "operator*",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_MATMUL: {
         # No Tensor Cores in WGSL. Stage 128 will emit a hand-rolled
@@ -163,13 +167,15 @@ WEBGPU_OP_LOWERING: Final[Mapping[ti.TileOpKind, dict]] = {
         "lowering": "@builtin(local_invocation_id) local_id : vec3<u32>",
         "status": "supported",
     },
+    # Stage 128 R5 audit-fix: indexed-HBM has no `_emit_op` branch yet.
+    # Demoted to "stub" — parity with metal.py R5 fix.
     ti.TileOpKind.TILE_INDEX_LOAD_HBM: {
         "lowering": "storage buffer indexed read",
-        "status": "supported",
+        "status": "stub",
     },
     ti.TileOpKind.TILE_INDEX_STORE_HBM: {
         "lowering": "storage buffer indexed write",
-        "status": "supported",
+        "status": "stub",
     },
 }
 
@@ -308,8 +314,22 @@ class WgslEmitter:
         if kind is ti.TileOpKind.RETURN:
             self._line("    return;")
             return
-        # Default: comment-annotated stub.
-        self._line(f"    // tile-IR op {kind.name} (stub)")
+        # Stage 128 R5 audit-fix: exhaustiveness guard. Any op with
+        # status="supported" in WEBGPU_OP_LOWERING MUST have a
+        # concrete branch above. Reaching here means the table
+        # declares the op ready but no codegen wires it — a silent-
+        # failure surface. The stub-status guard at the top of
+        # _emit_op already handles ("stub", "deferred", "skipped").
+        # If we got here, the table lies. Raise loudly instead of
+        # emitting a silent `// (stub)` comment that would compile
+        # and ship a no-op kernel.
+        raise AssertionError(
+            f"helixc.backend.webgpu: TileOpKind.{kind.name} has "
+            f"status={status!r} in WEBGPU_OP_LOWERING but no "
+            f"`_emit_op` branch. Either add a concrete emit or "
+            f"demote the status to 'stub' so the forward guard "
+            f"emits @@HELIX-STUB."
+        )
 
 
 def lowering_status(kind: ti.TileOpKind) -> str:
