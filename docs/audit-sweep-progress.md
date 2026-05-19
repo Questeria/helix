@@ -380,7 +380,26 @@ counter can advance to 1/5.
 
 ## Clean-streak counter
 
-**Current: 4 / 5** 🎉🎉🎉🎉 (Cycle 7 CLOSED R1 FIRST TRY — counter advances 3/5 → 4/5)
+**Current: 5 / 5** 🎉🎉🎉🎉🎉 (Cycle 8 CLOSED R1 FIRST TRY — 5-CLEAN-GATE ACHIEVED)
+
+### 🎉 5-CLEAN-GATE ACHIEVED — v2.0 UNBLOCKED (pending user authorization)
+
+After 8 cycles + ~35 fix batches + 28 HIGH + 39 MEDIUM closed:
+- Cycle 1: CLOSED (1/5)
+- Cycle 2: CLOSED with fixes; recovered to 1/5
+- Cycle 3: CLOSED with major systemic refactor (8 R-rounds + 15 fix batches); recovered to 1/5
+- Cycle 4: CLEAN R1 first try → 2/5
+- Cycle 5: 1 HIGH then closed; recovered to 2/5
+- Cycle 6: CLEAN R1 first try → 3/5
+- Cycle 7: CLEAN R1 first try → 4/5
+- **Cycle 8: CLEAN R1 first try → 5/5** ✅
+
+**v2.0 implementation is UNBLOCKED but blocked-pending-user-authorization per user directive.**
+
+### Cycle 8 closure summary (2026-05-19)
+- All 5 R1 verdicts CLEAN on first attempt
+- 4 consecutive clean-first-try cycles (C4, C6, C7, C8)
+- Codebase fully stabilized under strict-bar 5-clean-gate audit protocol
 
 ### Cycle 7 closure summary (2026-05-19)
 - All 5 R1 verdicts CLEAN on first attempt (TEST/FE/IR/RT/BE)
@@ -417,6 +436,7 @@ counter can advance to 1/5.
 - **Systemic IR refactor**: added `_lower_required` helper + bulk-replaced ~45 silent-zero sites in lower_ast.py
 - **3 BE/FE/IR items DEFERRED** as Stage 110+ design-debt: LOAD_ELEM bounds, ptx broad-except, FE A.Path 2-seg
 
+**Was: 4 / 5** 🎉🎉🎉🎉 (Cycle 7 CLOSED R1 FIRST TRY — counter 3/5 → 4/5)
 **Was: 3 / 5** 🎉🎉🎉 (Cycle 6 CLOSED R1 FIRST TRY — counter 2/5 → 3/5)
 **Was: 2 / 5** 🎉 (Cycle 5 closed; counter recovered after R1 1H finding fix)
 **Was: 1 / 5** (Cycle 3 CLOSED after 8 R-rounds + 15 fix batches)
