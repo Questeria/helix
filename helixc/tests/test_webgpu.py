@@ -110,3 +110,99 @@ def test_stage127_custom_workgroup_size():
     tile_mod = lower_to_tile(tir_mod)
     text = emitter.emit_module(tile_mod)
     assert "@workgroup_size(128)" in text
+
+
+# ============================================================================
+# Stage 128 (v2.1 Phase C WebGPU tile-loop matmul) — per-op WGSL emit
+# ============================================================================
+def test_stage128_barrier_wait_emits_workgroup_barrier():
+    """Stage 128 — BARRIER_WAIT lowers to workgroupBarrier() (WGSL's
+    parity with __syncthreads)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.BARRIER_WAIT),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = WgslEmitter().emit_module(tile_mod)
+    assert "workgroupBarrier();" in text
+
+
+def test_stage128_tile_matmul_hand_rolled_loop():
+    """Stage 128 — TILE_MATMUL on WebGPU emits a hand-rolled tile loop
+    (no Tensor Cores). Each invocation accumulates one row*col entry
+    via a for-loop over the inner dimension (16-element chunk)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_MATMUL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = WgslEmitter().emit_module(tile_mod)
+    # The matmul body must contain the inner loop variable + accumulator.
+    assert "var acc: f32" in text
+    assert "for (var k: u32" in text
+    assert "a_tile[k] * b_tile[k]" in text
+    assert "no Tensor Cores" in text
+
+
+def test_stage128_global_memory_ops_emit():
+    """Stage 128 — TILE_LOAD_GLOBAL / TILE_STORE_GLOBAL emit storage-
+    buffer reads/writes (WGSL `var<storage, ...>` storage class)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_LOAD_GLOBAL),
+            TileOp(kind=TileOpKind.TILE_STORE_GLOBAL),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = WgslEmitter().emit_module(tile_mod)
+    assert "buf_in[local_id.x]" in text
+    assert "buf_out[local_id.x]" in text
+
+
+def test_stage128_workgroup_memory_ops_emit():
+    """Stage 128 — TILE_LOAD_SHARED / TILE_STORE_SHARED emit
+    workgroup-memory references (WGSL `var<workgroup>` storage class)."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_LOAD_SHARED),
+            TileOp(kind=TileOpKind.TILE_STORE_SHARED),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = WgslEmitter().emit_module(tile_mod)
+    assert "shared_mem[local_id.x]" in text
+
+
+def test_stage128_unmapped_op_falls_through_to_comment():
+    """Stage 128 — ops without a concrete emit pattern fall through
+    to a `// tile-IR op KIND (stub)` comment, parity with rocm + metal."""
+    from helixc.ir.tile_ir import TileOp, TileBlock, TileFn, TileModule
+    fn = TileFn(
+        name="k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_REDUCE),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["k"] = fn
+    text = WgslEmitter().emit_module(tile_mod)
+    assert "TILE_REDUCE (stub)" in text

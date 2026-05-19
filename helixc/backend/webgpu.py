@@ -238,18 +238,67 @@ class WgslEmitter:
         return self.buf.getvalue()
 
     def emit_kernel_stub(self, fn: ti.TileFn) -> None:
-        """Stage 127 substrate: emit the kernel signature + empty body.
-        WGSL compute kernels use @compute @workgroup_size(N) attribute
-        + fn KERNEL_NAME() block. Per-op codegen lands Stage 128+.
+        """Stage 127 substrate + Stage 128 per-op wiring.
+
+        Stage 127 ships the kernel header; Stage 128 (v2.1) fills the
+        body with WGSL emission for the most common TileOpKinds.
         """
         self._line(f"@compute @workgroup_size({self.workgroup_size})")
         self._line(f"fn {fn.name}(")
         self._line("    @builtin(local_invocation_id) local_id: vec3<u32>")
         self._line(") {")
-        # Stub body — Stage 128 replaces with per-op WGSL.
-        self._line("    // Stage 127 substrate: per-op codegen lands Stage 128+")
+        # Stage 128: per-op body emit.
+        for blk in fn.blocks:
+            for op in blk.ops:
+                self._emit_op(op)
         self._line("}")
         self._line()
+
+    def _emit_op(self, op: ti.TileOp) -> None:
+        """Stage 128 (v2.1 Phase C WebGPU tile-loop matmul) — emit
+        one tile-IR op as WGSL source. WGSL has no Tensor Cores so
+        TILE_MATMUL emits a hand-rolled tile-loop (~1 TFLOPS ceiling
+        per Report 5).
+        """
+        kind = op.kind
+        if kind is ti.TileOpKind.BARRIER_WAIT:
+            self._line("    workgroupBarrier();")
+            return
+        if kind is ti.TileOpKind.TILE_MATMUL:
+            # WebGPU has no Tensor Cores. Emit a hand-rolled 16x16
+            # tile loop (one accumulation step per WGSL workgroup
+            # invocation). Concrete operand binding deferred.
+            self._line("    // tile-matmul A @ B + C (hand-rolled; no Tensor Cores)")
+            self._line("    var acc: f32 = 0.0;")
+            self._line("    for (var k: u32 = 0u; k < 16u; k = k + 1u) {")
+            self._line("        acc = acc + a_tile[k] * b_tile[k];")
+            self._line("    }")
+            self._line("    c_tile[local_id.x] = acc;")
+            return
+        if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
+            self._line("    // storage buffer tile load")
+            self._line("    let v_in = buf_in[local_id.x];")
+            return
+        if kind is ti.TileOpKind.TILE_STORE_GLOBAL:
+            self._line("    // storage buffer tile store")
+            self._line("    buf_out[local_id.x] = v_out;")
+            return
+        if kind is ti.TileOpKind.TILE_LOAD_SHARED:
+            self._line("    // workgroup memory tile load")
+            self._line("    let v_smem = shared_mem[local_id.x];")
+            return
+        if kind is ti.TileOpKind.TILE_STORE_SHARED:
+            self._line("    // workgroup memory tile store")
+            self._line("    shared_mem[local_id.x] = v_smem;")
+            return
+        if kind is ti.TileOpKind.THREAD_IDX:
+            self._line("    // local_id bound in kernel signature")
+            return
+        if kind is ti.TileOpKind.RETURN:
+            self._line("    return;")
+            return
+        # Default: comment-annotated stub.
+        self._line(f"    // tile-IR op {kind.name} (stub)")
 
 
 def lowering_status(kind: ti.TileOpKind) -> str:
