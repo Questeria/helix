@@ -211,6 +211,18 @@ def verify_manifest_hash(manifest: dict) -> bool:
     against a HW-backed public key. Stage 122 substrate ships the
     hash-consistency check; signature verification lands later.
     """
+    # v2.2 5-clean-gate BE LOW-1 audit-fix: non-dict input previously
+    # raised a generic `TypeError: argument of type 'NoneType' is not
+    # iterable` from the `not in` membership test below. Docstring
+    # promises ValueError-with-diagnostic for malformed input —
+    # surface that contract here so non-dict inputs get the same
+    # error class as the other malformed-manifest paths.
+    if not isinstance(manifest, dict):
+        raise ValueError(
+            f"verify_manifest_hash: expected dict, got "
+            f"{type(manifest).__name__}: {manifest!r}. Manifest is "
+            f"malformed; reject before attestation verification."
+        )
     if "manifest_sha256" not in manifest:
         raise ValueError(
             "verify_manifest_hash: manifest missing required "
@@ -220,6 +232,17 @@ def verify_manifest_hash(manifest: dict) -> bool:
             "to distinguish 'malformed' from 'tampered')."
         )
     claimed = manifest["manifest_sha256"]
+    # v2.2 5-clean-gate BE MEDIUM-1 audit-fix: non-string `claimed`
+    # values (int, list, dict) previously fell through to the
+    # `claimed == computed` check at the bottom and returned False —
+    # collapsing "wrong-type manifest_sha256" with "actual hash
+    # mismatch (tamper)". R1 type-guards close that gap.
+    if not isinstance(claimed, str):
+        raise ValueError(
+            f"verify_manifest_hash: `manifest_sha256` must be a str, "
+            f"got {type(claimed).__name__}: {claimed!r}. Manifest is "
+            f"malformed; reject before attestation."
+        )
     if not claimed:
         raise ValueError(
             "verify_manifest_hash: `manifest_sha256` field is empty "

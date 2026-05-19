@@ -225,6 +225,35 @@ def test_stage122_verify_manifest_hash_empty_field_raises():
         verify_manifest_hash(m)
 
 
+def test_stage122_verify_manifest_hash_non_dict_raises():
+    """v2.2 5-clean-gate BE LOW-1 audit-fix — non-dict input (e.g.
+    JSON parser produced wrong shape) previously raised generic
+    TypeError from membership test. R1 fix surfaces ValueError
+    with malformed-manifest diagnostic, parity with other paths."""
+    with pytest.raises(ValueError, match="expected dict"):
+        verify_manifest_hash(None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="expected dict"):
+        verify_manifest_hash([1, 2, 3])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="expected dict"):
+        verify_manifest_hash("not a dict")  # type: ignore[arg-type]
+
+
+def test_stage122_verify_manifest_hash_wrong_type_field_raises():
+    """v2.2 5-clean-gate BE MEDIUM-1 audit-fix — non-string
+    `manifest_sha256` (int, list, dict) previously fell through to
+    `claimed == computed` returning False — collapsing "wrong-type
+    manifest_sha256" with "actual hash mismatch (tamper)". R1
+    fix surfaces ValueError before the comparison."""
+    for bad in (12345, ["x", "y"], {"k": "v"}, 3.14):
+        m = {
+            "format_version": PROOF_MANIFEST_VERSION,
+            "functions": [],
+            "manifest_sha256": bad,
+        }
+        with pytest.raises(ValueError, match="must be a str"):
+            verify_manifest_hash(m)
+
+
 def test_stage122_serialize_manifest_canonical():
     """serialize_manifest produces byte-identical output for the
     same manifest dict (sorted keys + fixed separators)."""
