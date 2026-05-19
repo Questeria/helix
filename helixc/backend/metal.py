@@ -330,8 +330,14 @@ class MslEmitter:
                 self._line("    // tile-matmul A @ B + C (M5+ NA — Neural Accelerator hw path)")
             else:
                 self._line("    // tile-matmul A @ B + C (pre-M5 SIMD-group path)")
-            self._line("    simdgroup_matrix<float, 8, 8> _A, _B, _C; /* HELIX-STUB-OPERANDS */")
-            self._line("    simdgroup_multiply_accumulate(_C, _A, _B);")
+            # Stage 126 R6 audit-fix: simdgroup_multiply_accumulate has
+            # 4-argument signature `simdgroup_multiply_accumulate(D, A, B, C)`
+            # computing `D = A * B + C` (per Apple MSL Spec §6.7.1
+            # simdgroup_matrix API). R5 emitted 3 args, which Apple's
+            # MSL compiler rejects with no-matching-overload. The 4th
+            # operand `_D` is the destination; `_C` accumulates.
+            self._line("    simdgroup_matrix<float, 8, 8> _A, _B, _C, _D; /* HELIX-STUB-OPERANDS */")
+            self._line("    simdgroup_multiply_accumulate(_D, _A, _B, _C);")
             return
         if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
             self._line("    // device pointer tile load")
