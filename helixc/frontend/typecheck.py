@@ -38,6 +38,23 @@ from typing import Literal, Optional
 _MODAL_KIND_VALUES = ("known", "believed", "goal", "uncertain")
 ModalKind = Literal["known", "believed", "goal", "uncertain"]
 
+# Cycle 1 Batch FE re-audit Auditor 2 NEW HIGH-1 fix: AGI-quartet
+# sibling wrappers (TyMemTier / TyFrame / TyTemporal / TyCausal) had
+# the EXACT SAME divergence defect as TyModal — bare `str` discriminator
+# fields with no shared tuple, no Literal alias, no runtime assert at
+# the registration boundary. The re-audit explicitly named this as
+# "half-fixed" because only TyModal got the unification template. Now
+# all 5 AGI-quartet wrappers carry the same pattern: shared tuple +
+# Literal + boundary assert.
+_MEMTIER_VALUES = ("working", "episodic", "semantic", "procedural")
+MemTierKind = Literal["working", "episodic", "semantic", "procedural"]
+_FRAME_VALUES = ("world", "robot", "camera")
+FrameKind = Literal["world", "robot", "camera"]
+_TEMPORAL_KIND_VALUES = ("past", "present", "future", "eternal")
+TemporalKind = Literal["past", "present", "future", "eternal"]
+_CAUSAL_KIND_VALUES = ("cause", "effect", "joint", "independent")
+CausalKind = Literal["cause", "effect", "joint", "independent"]
+
 from . import ast_nodes as A
 from . import presburger as P
 
@@ -2102,6 +2119,38 @@ class TypeChecker:
                 f"got {kind!r} for fn {fn.name!r}"
             )
             self._fn_modal_return_kind[fn.name] = kind  # type: ignore[assignment]
+        # Cycle 1 Batch FE re-audit Auditor 2 NEW HIGH-1 fix: extend
+        # the boundary-assert pattern to the 4 AGI-quartet sibling
+        # wrappers. Same defect class as TyModal's HIGH-2 — bare str
+        # discriminator could silently propagate a malformed value
+        # through future parser changes or hand-constructed ASTs.
+        # The asserts fire loudly at fn-decl time so consult sites
+        # never see an unknown discriminator. Targets:
+        #   TyMemTier.tier  ∈ _MEMTIER_VALUES
+        #   TyFrame.frame   ∈ _FRAME_VALUES
+        #   TyTemporal.kind ∈ _TEMPORAL_KIND_VALUES
+        #   TyCausal.kind   ∈ _CAUSAL_KIND_VALUES
+        if isinstance(sig.ret, TyMemTier):
+            assert sig.ret.tier in _MEMTIER_VALUES, (
+                f"TyMemTier.tier expected one of {_MEMTIER_VALUES}, "
+                f"got {sig.ret.tier!r} for fn {fn.name!r}"
+            )
+        if isinstance(sig.ret, TyFrame):
+            assert sig.ret.frame in _FRAME_VALUES, (
+                f"TyFrame.frame expected one of {_FRAME_VALUES}, "
+                f"got {sig.ret.frame!r} for fn {fn.name!r}"
+            )
+        if isinstance(sig.ret, TyTemporal):
+            assert sig.ret.kind in _TEMPORAL_KIND_VALUES, (
+                f"TyTemporal.kind expected one of "
+                f"{_TEMPORAL_KIND_VALUES}, got {sig.ret.kind!r} for "
+                f"fn {fn.name!r}"
+            )
+        if isinstance(sig.ret, TyCausal):
+            assert sig.ret.kind in _CAUSAL_KIND_VALUES, (
+                f"TyCausal.kind expected one of {_CAUSAL_KIND_VALUES}, "
+                f"got {sig.ret.kind!r} for fn {fn.name!r}"
+            )
 
     def _compute_recursive_enum_names(self) -> set[str]:
         recursive: set[str] = set()
