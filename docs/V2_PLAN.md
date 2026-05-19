@@ -451,3 +451,112 @@ Per-fire commit: this V2_PLAN.md note documents the corroborative
 audit verdicts for Stage 124 R1 and corrects the v2.1 backlog state
 to reflect the three parallel-fire commits (`cf25d6b`, `d56347d`,
 `788ecd1`) that landed during this fire's audit-dispatch window.
+
+### 2026-05-19T20:25Z — 🎉 v2.1.0 RELEASED — end-of-v2.1 5-clean-gate ACHIEVED
+
+**Tag stamped: `v2.1.0` → commit `d9b1dae`.**
+
+End-of-v2.1 5-clean-gate dispatched 9 parallel audit subagents:
+4 R5 re-audits (Stage 126/128 silent-failure + code-review) +
+5 final-sweep silent-failure-hunters (FE/IR/BE/RT/TEST).
+
+#### R5 re-audit verdicts
+- **Stage 126 silent-failure**: R5 closed all 4 prior HIGHs; 2 MED
+  + 2 LOW remained (stale comments + apple12 speculation +
+  target_family validation — all deferred to v2.2 polish).
+- **Stage 126 code-review**: CRITICAL C1 — `simdgroup_multiply_accumulate`
+  was emitted with 3 args (`_C, _A, _B`) but Apple MSL Spec §6.7.1
+  requires 4 (`_D, _A, _B, _C`). R6 fix landed at commit `5e7dd1a`
+  by concurrent fire.
+- **Stage 128 silent-failure**: HIGH-3 — matmul + memory branches
+  emit undeclared symbols (a_tile/b_tile/c_tile/buf_in/buf_out/
+  shared_mem/v_out/v_smem). R6 fix added inline HELIX-STUB-OPERANDS
+  markers parity with metal.py R5's matrix-arg pattern.
+- **Stage 128 code-review**: PASS with MED (same undeclared-symbols
+  observation, closed by HELIX-STUB-OPERANDS markers).
+
+#### 5-clean-gate verdicts
+- **FE**: 1 MED + 2 LOW (effect_check warning-vs-raise + grad_pass
+  ImportError swallow + verifier_fn indirect-fn drop). No HIGH.
+- **IR**: CLEAN. R4 close at `cf25d6b` (Stage 120 DispatchKind
+  Literal + AdjointModule partition) holds; no new silent-failure
+  surfaces in IR layer.
+- **BE**: CLEAN with 3 MED + 2 LOW (PTX_BASELINE_STATUS hand-
+  maintained drift + proof_manifest.verify silent-False on missing
+  hash + extract_enclave_tag depth-32 truncation + gpu_ci
+  overall_passed quietly equates deferred with passed).
+- **RT**: 2 HIGH closed in R6:
+    - H1: parser.py:1704 HELIXC_STDLIB_STRICT env-var tolerant
+      parser silently disabled strict mode on typos. R6 added
+      explicit allowlist + ValueError on unknown value.
+    - H2: property_runner.py:182 broad `except Exception` masked
+      NotImplementedError/AssertionError/MemoryError (the loud-fail
+      signals validate_kernel_tile_lowering uses). R6 added the
+      standard re-raise filter.
+- **TEST**: 3 HIGH closed in R6:
+    - test_stage{123,125,127}_matmul_status_stub all had docstrings
+      claiming TILE_MATMUL was 'stub' but assertions checking
+      '== "supported"'. R6 renamed to `_status_supported` across
+      all three backends + rewrote docstrings to past tense.
+
+#### R6 audit-fix commit: `d9b1dae`
+
+- helixc/backend/webgpu.py: HELIX-STUB-OPERANDS markers for
+  TILE_MATMUL + 4 memory ops
+- helixc/frontend/parser.py: env-var allowlist parser (H1)
+- helixc/runners/property_runner.py: re-raise filter (H2)
+- helixc/tests/test_rocm.py: rename matmul_status_supported (TEST H1)
+- helixc/tests/test_metal.py: rename matmul_status_supported (TEST H2)
+- helixc/tests/test_webgpu.py: rename matmul_status_supported (TEST H3)
+
+#### Tests at v2.1.0
+
+- 181 v2-scope tests pass (rocm + metal + webgpu + tile_ir_audit +
+  tile_adjoint + gpu_ci + proof_manifest + effect_check + tile_ir
+  + tile_opt)
+- 108 parser + lexer tests pass post-R6
+- Full helixc collection: 3865 tests collected
+
+#### v2.2 polish backlog (deferred from v2.1 audit MEDIUMs)
+
+1. PTX backend lowering_status() helper + drift detector parity
+   with rocm/metal/webgpu (BE MED-1+2)
+2. Multi-backend type-design polish: TypedDict + Literal status +
+   AppleFamily enum + WgslVersion Literal (Stage 124/126/128
+   type-design observations)
+3. Stage 122 ProofManifest type-design polish (frozen + Sha256Hex
+   NewType + signature_format Enum + verify silent-False
+   disambiguation, BE MED-3)
+4. effect_check.py: escalate warning to AssertionError for OpKind
+   drift (FE MED)
+5. grad_pass.py: handle ImportError of _ad_warn explicitly (FE LOW)
+6. effect_check.py: verifier_fn indirect-fn path emits
+   `<indirect-verifier>` sentinel (FE LOW)
+7. dashboard_server.py: query-string typo HTTP 400 (RT M1)
+8. examples/run.py: surface WSL stderr + _run_one returns code==0
+   (RT M2+M3)
+9. apple12 speculation: numeric extraction in target_family parsing
+   (Stage 126 LOW-1)
+10. target_family validation: reject "appel10" / "apple_10" etc
+    (Stage 126 LOW-2)
+11. gpu_ci.overall_passed: tri-state for deferred vs passed
+    (BE LOW-2)
+12. proof_manifest extract_enclave_tag: raise on depth-32 vs silent
+    None (BE LOW-1)
+13. Real-HW dispatch wiring (currently mock-validators only,
+    TEST MED-1)
+14. grad_pass ↔ tile_adjoint end-to-end integration (forward kernel
+    → backward kernel wired into pipeline driver)
+15. RegAlloc for emitted backend kernel bodies (operand-less
+    mnemonics → real register allocation)
+
+#### v3.0 horizon (user-authorized 2026-05-19 14:23Z)
+
+- MLIR migration (replace home-grown tile-IR with MLIR dialects)
+- LLVM IR rewrite (substitute current x86_64 backend with LLVM
+  IR + opt+llc tooling)
+- Large architectural shifts per v2.0 research "v3.0 candidates"
+
+User authority: "You can go as far as v3.0 without my approval."
+v2.1.0 ships under that authority. Next fire: v2.2 polish backlog
+item 1 (PTX symmetry + drift detector).
