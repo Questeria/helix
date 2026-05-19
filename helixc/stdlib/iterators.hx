@@ -72,6 +72,15 @@ fn vec_min(start: i32, count: i32) -> i32 {
     }
 }
 
+// Cycle 3 R5 fix batch 30 (RT R5 NEW-MEDIUM-1): _strict variant of
+// vec_min. Sibling of vec_min_pure_strict from batch 20; this older-
+// named twin was missed in the strict-variant sweep.
+@pure
+fn vec_min_strict(start: i32, count: i32) -> i32 {
+    if count <= 0 { (0 - 2147483647) - 1 }
+    else { vec_min(start, count) }
+}
+
 @pure
 fn vec_count_eq(start: i32, count: i32, target: i32) -> i32 {
     let mut i: i32 = 0;
@@ -628,6 +637,15 @@ fn vec_max_abs(start: i32, count: i32) -> i32 {
         i = i + 1;
     }
     best
+}
+
+// Cycle 3 R5 fix batch 30 (RT R5 NEW-MEDIUM-1): _strict variant of
+// vec_max_abs. Sibling of ti1d_max_abs_strict from batch 28; this
+// iterators twin was missed in the strict-variant sweep.
+@pure
+fn vec_max_abs_strict(start: i32, count: i32) -> i32 {
+    if count <= 0 { (0 - 2147483647) - 1 }
+    else { vec_max_abs(start, count) }
 }
 
 // vec_map_square(start, count): allocate a new arena slice with each

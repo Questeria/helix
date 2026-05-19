@@ -501,9 +501,12 @@ class Lowerer:
                     f"{enum_name}::{variant_name} arg {idx}")
             else:
                 expected = self._lower_type(payload_ty)
-                value = self._lower_expr(arg_expr)
-                if value is None:
-                    value = self.builder.const_int(0)
+                # Cycle 3 R5 fix batch 31 (IR R5 NEW-HIGH-1): enum
+                # payload arg silent-zero would emit Some(0) on missing
+                # var ref. Loud-fail.
+                value = self._lower_required(
+                    arg_expr,
+                    ctx=f"enum {enum_name}::{variant_name} arg {idx}")
             if value.ty != expected:
                 raise NotImplementedError(
                     f"enum constructor {enum_name}::{variant_name} arg "
@@ -3084,9 +3087,9 @@ class Lowerer:
             if (isinstance(expr.callee, A.Name)
                     and expr.callee.name == "print_int"
                     and len(expr.args) == 1):
-                v = self._lower_expr(expr.args[0])
-                if v is None:
-                    v = self.builder.const_int(0)
+                # Cycle 3 R5 fix batch 31 (IR R5 NEW-HIGH-2): print_int
+                # arg silent-zero would print '0' on missing var ref.
+                v = self._lower_required(expr.args[0], ctx="print_int arg")
                 return self.builder.emit(tir.OpKind.PRINT, v,
                                           result_ty=tir.TIRScalar("i32"),
                                           attrs={"_kind": "print_int"})
@@ -4485,12 +4488,21 @@ class Lowerer:
             # backend stubs both ops; would corrupt the buffer the
             # moment Stage 30 runtime exists).
             if self._is_fn_traced:
+                # Cycle 3 R5 fix batch 31 (IR R5 NEW-MEDIUM-1): pre-fix
+                # synthesized a const_int(0) operand for unit returns,
+                # recording a fake '0' return-value in the trace stream.
+                # Now mark it with attrs["unit_return"]=True so consumers
+                # can distinguish synthetic-zero from real-zero.
                 ret_operand = v
+                trace_attrs: dict[str, object] = {
+                    "fn_name": self._current_fn_name or "<unknown>",
+                }
                 if ret_operand is None:
                     ret_operand = self.builder.const_int(0)
+                    trace_attrs["unit_return"] = True
                 self.builder.emit(
                     tir.OpKind.TRACE_EXIT, ret_operand,
-                    attrs={"fn_name": self._current_fn_name or "<unknown>"},
+                    attrs=trace_attrs,
                 )
             self.builder.ret(v)
             return None
