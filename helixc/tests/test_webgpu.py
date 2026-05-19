@@ -63,9 +63,18 @@ def test_stage127_matmul_status_supported():
 
 
 def test_stage127_lowering_status_rejects_non_tileopkind():
-    """Stage 127 — lowering_status raises TypeError on bad input."""
-    with pytest.raises(TypeError):
-        lowering_status("TILE_MATMUL")  # type: ignore[arg-type]
+    """Stage 127 — lowering_status raises TypeError on bad input.
+
+    v2.3 TEST MED audit-fix: `match=` clause + broader bad-input
+    coverage. Pre-v2.3 the test only exercised `"TILE_MATMUL"` (str)
+    and didn't assert on the diagnostic message. Parity with
+    rocm/metal lowering_status TypeError tests.
+    """
+    for bad in ("TILE_MATMUL", 42, None, object(), 3.14, ["TILE_MATMUL"]):
+        with pytest.raises(
+            TypeError, match=r"lowering_status expects TileOpKind"
+        ):
+            lowering_status(bad)  # type: ignore[arg-type]
 
 
 def test_stage127_emit_module_header():

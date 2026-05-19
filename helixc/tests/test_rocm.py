@@ -74,11 +74,20 @@ def test_stage123_matmul_status_supported():
 def test_stage123_lowering_status_rejects_non_tileopkind():
     """Stage 123 — lowering_status raises TypeError on non-TileOpKind.
     Mirrors the has_adjoint / adjoint_outputs discipline from
-    Stage 117-119 audit-fix."""
-    with pytest.raises(TypeError):
-        lowering_status("TILE_MATMUL")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        lowering_status(None)  # type: ignore[arg-type]
+    Stage 117-119 audit-fix.
+
+    v2.3 TEST MED audit-fix: each `pytest.raises(TypeError)` now
+    carries a `match=` clause asserting the diagnostic message names
+    the actual type — without it, a bare `pytest.raises(TypeError)`
+    would pass on ANY TypeError (e.g., one from an unrelated
+    `dict.__hash__` call). The match anchors the test to the
+    intended error path.
+    """
+    for bad in ("TILE_MATMUL", 42, None, object(), 3.14, ["TILE_MATMUL"]):
+        with pytest.raises(
+            TypeError, match=r"lowering_status expects TileOpKind"
+        ):
+            lowering_status(bad)  # type: ignore[arg-type]
 
 
 def test_stage123_emit_module_header():

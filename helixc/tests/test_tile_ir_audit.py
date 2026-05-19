@@ -210,8 +210,14 @@ def test_v22_ptx_baseline_status_is_derived_view():
             f"PTX_BASELINE_STATUS[{kind.name}] diverged from "
             f"ptx.PTX_OP_LOWERING — derivation broke."
         )
-    # View is read-only.
-    with pytest.raises(TypeError):
+    # View is read-only. v2.3 TEST MED audit-fix: anchor to the
+    # MappingProxyType's specific "does not support item assignment"
+    # message so a future refactor that drops the MappingProxy wrap
+    # (re-exposing the mutable inner dict) fails this test instead
+    # of silently passing on some other unrelated TypeError.
+    with pytest.raises(
+        TypeError, match=r"does not support item assignment"
+    ):
         PTX_BASELINE_STATUS[TileOpKind.TILE_ADD] = "supported"  # type: ignore[index]
 
 

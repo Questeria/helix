@@ -69,11 +69,19 @@ def test_stage125_matmul_status_supported():
 
 def test_stage125_lowering_status_rejects_non_tileopkind():
     """Stage 125 — lowering_status raises TypeError on non-TileOpKind.
-    Mirrors rocm.lowering_status + has_adjoint discipline."""
-    with pytest.raises(TypeError):
-        lowering_status("TILE_MATMUL")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        lowering_status(42)  # type: ignore[arg-type]
+    Mirrors rocm.lowering_status + has_adjoint discipline.
+
+    v2.3 TEST MED audit-fix: `match=` clause added so the test
+    anchors to the intended error message rather than catching ANY
+    TypeError. Without it, a bare `pytest.raises(TypeError)` is
+    insensitive to which TypeError surfaced — masking message-
+    regression bugs.
+    """
+    for bad in ("TILE_MATMUL", 42, None, object(), 3.14, ["TILE_MATMUL"]):
+        with pytest.raises(
+            TypeError, match=r"lowering_status expects TileOpKind"
+        ):
+            lowering_status(bad)  # type: ignore[arg-type]
 
 
 def test_stage125_emit_module_header():
