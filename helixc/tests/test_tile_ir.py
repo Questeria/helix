@@ -90,35 +90,69 @@ def test_stage117_tile_matmul_has_adjoint():
     assert outs == ("dA", "dB", "dC")
     entry = TILE_OP_ADJOINTS[TileOpKind.TILE_MATMUL]
     # 2 transposes + 2 matmuls (dC = dD is alias/copy, not a separate op).
-    assert len(entry["ops"]) == 4
+    assert len(entry.ops) == 4
     # Verify the wmma-mirror sequence:
-    op_kinds = [k for (k, _comment) in entry["ops"]]
+    op_kinds = [k for (k, _comment) in entry.ops]
     assert op_kinds.count(TileOpKind.TILE_TRANSPOSE) == 2
     assert op_kinds.count(TileOpKind.TILE_MATMUL) == 2
 
 
 def test_stage118_tile_add_adjoint_is_identity():
     """Stage 118 — TILE_ADD adjoint is identity: dx = dz, dy = dz.
-    No new ops emitted; gradient flows through unchanged."""
+    No new ops emitted; gradient flows through unchanged. The empty
+    `ops` is disambiguated from "pending impl" via dispatch=identity."""
     from helixc.ir.tile_ir import (
         TileOpKind, TILE_OP_ADJOINTS, has_adjoint, adjoint_outputs,
     )
     assert has_adjoint(TileOpKind.TILE_ADD)
     outs = adjoint_outputs(TileOpKind.TILE_ADD)
     assert outs == ("dx", "dy")
-    # Identity adjoint emits zero new ops.
-    assert TILE_OP_ADJOINTS[TileOpKind.TILE_ADD]["ops"] == []
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_ADD]
+    assert entry.ops == ()
+    assert entry.dispatch == "identity"
+
+
+def test_stage118_tile_sub_adjoint_negates_dy():
+    """Stage 118 audit-fix — TILE_SUB adjoint must include SCALAR_NEG
+    so dy = -dz. Without it, the gradient sign on the subtrahend is
+    silently wrong."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, has_adjoint, adjoint_outputs,
+    )
+    assert has_adjoint(TileOpKind.TILE_SUB)
+    assert adjoint_outputs(TileOpKind.TILE_SUB) == ("dx", "dy")
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_SUB]
+    op_kinds = [k for (k, _comment) in entry.ops]
+    assert TileOpKind.SCALAR_NEG in op_kinds
+    assert len(entry.ops) == 1
+    assert entry.dispatch == "explicit"
+
+
+def test_stage118_tile_mul_adjoint_two_muls():
+    """Stage 118 audit-fix — TILE_MUL adjoint must emit exactly two
+    TILE_MULs (dx = dz*y, dy = dz*x). Swapping either to TILE_ADD or
+    omitting one would silently corrupt elementwise-product grads."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS,
+    )
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_MUL]
+    op_kinds = [k for (k, _comment) in entry.ops]
+    assert op_kinds == [TileOpKind.TILE_MUL, TileOpKind.TILE_MUL]
 
 
 def test_stage119_tile_reduce_has_adjoint():
     """Stage 119 — TILE_REDUCE has a declared adjoint (broadcast back
-    along reduced axis for sum; scatter for max/min; backend dispatches
-    on attrs[reduce_kind])."""
+    along reduced axis for sum; scatter for max/min). The empty `ops`
+    is disambiguated from "identity" via dispatch="reduce_kind", so a
+    Stage 120 consumer cannot silently treat it as TILE_ADD-style."""
     from helixc.ir.tile_ir import (
-        TileOpKind, has_adjoint, adjoint_outputs,
+        TileOpKind, TILE_OP_ADJOINTS, has_adjoint, adjoint_outputs,
     )
     assert has_adjoint(TileOpKind.TILE_REDUCE)
     assert adjoint_outputs(TileOpKind.TILE_REDUCE) == ("dx",)
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_REDUCE]
+    assert entry.ops == ()
+    assert entry.dispatch == "reduce_kind"
 
 
 def test_stage117_tile_transpose_self_inverse():
@@ -129,8 +163,23 @@ def test_stage117_tile_transpose_self_inverse():
     )
     assert has_adjoint(TileOpKind.TILE_TRANSPOSE)
     entry = TILE_OP_ADJOINTS[TileOpKind.TILE_TRANSPOSE]
-    assert len(entry["ops"]) == 1
-    assert entry["ops"][0][0] == TileOpKind.TILE_TRANSPOSE
+    assert len(entry.ops) == 1
+    assert entry.ops[0][0] == TileOpKind.TILE_TRANSPOSE
+
+
+def test_stage117_tile_reshape_has_adjoint():
+    """Stage 117 audit-fix — TILE_RESHAPE is differentiable; gradient
+    reshapes back. Missing this entry would have silently forced
+    Stage 120 into a host-side autograd fallback for any MLP that
+    flattens between layers."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, has_adjoint, adjoint_outputs,
+    )
+    assert has_adjoint(TileOpKind.TILE_RESHAPE)
+    assert adjoint_outputs(TileOpKind.TILE_RESHAPE) == ("dx",)
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_RESHAPE]
+    assert len(entry.ops) == 1
+    assert entry.ops[0][0] == TileOpKind.TILE_RESHAPE
 
 
 def test_stage117_ops_without_adjoint_return_empty():
@@ -143,6 +192,60 @@ def test_stage117_ops_without_adjoint_return_empty():
     assert not has_adjoint(TileOpKind.THREAD_IDX)
     assert not has_adjoint(TileOpKind.BARRIER_WAIT)
     assert adjoint_outputs(TileOpKind.THREAD_IDX) == ()
+
+
+def test_adjoint_helpers_reject_non_tileopkind():
+    """Stage 117-119 audit-fix — has_adjoint / adjoint_outputs must
+    raise TypeError on non-TileOpKind input. Silent membership tests
+    would otherwise swallow typos and cross-IR `tir.OpKind` confusion
+    and report "not differentiable" instead of failing loudly."""
+    import pytest
+    from helixc.ir.tile_ir import has_adjoint, adjoint_outputs
+    for bad in ("tile.matmul", 42, None, object()):
+        with pytest.raises(TypeError):
+            has_adjoint(bad)
+        with pytest.raises(TypeError):
+            adjoint_outputs(bad)
+
+
+def test_adjoint_table_covers_all_tile_op_kinds():
+    """Stage 117-119 audit-fix — every TileOpKind must declare its
+    diff/non-diff status (in TILE_OP_ADJOINTS or in
+    TILE_OP_NON_DIFFERENTIABLE). Adding a new kind without doing so
+    trips this test — silent non-differentiability is not allowed."""
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, TILE_OP_NON_DIFFERENTIABLE,
+    )
+    diff = set(TILE_OP_ADJOINTS.keys())
+    non_diff = set(TILE_OP_NON_DIFFERENTIABLE)
+    # Partitioning invariant: every kind is in exactly one set.
+    assert diff.isdisjoint(non_diff), (
+        f"TileOpKind(s) in both sets: {diff & non_diff!r}"
+    )
+    missing = set(TileOpKind) - diff - non_diff
+    assert not missing, (
+        f"TileOpKind(s) missing diff/non-diff declaration: {missing!r}"
+    )
+
+
+def test_adjoint_record_is_immutable():
+    """Stage 117-119 audit-fix — AdjointRecord is frozen and the
+    canonical table is wrapped in MappingProxyType. A consumer that
+    tries to mutate either should fail loudly, not silently corrupt
+    the canonical table for the rest of the process."""
+    import pytest
+    from helixc.ir.tile_ir import (
+        TileOpKind, TILE_OP_ADJOINTS, AdjointRecord,
+    )
+    entry = TILE_OP_ADJOINTS[TileOpKind.TILE_ADD]
+    # Frozen dataclass: cannot reassign fields.
+    with pytest.raises((AttributeError, TypeError)):
+        entry.ops = ((TileOpKind.SCALAR_NEG, "corrupted"),)
+    # MappingProxy: cannot rebind canonical entries.
+    with pytest.raises(TypeError):
+        TILE_OP_ADJOINTS[TileOpKind.TILE_ADD] = AdjointRecord(
+            inputs=(), outputs=(), ops=()
+        )
 
 
 def main():

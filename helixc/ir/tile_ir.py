@@ -22,7 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from types import MappingProxyType
+from typing import Final, Mapping, Optional
 
 from . import tir
 
@@ -256,79 +257,149 @@ def lower_to_tile(tir_module: tir.Module) -> TileModule:
 # matmul lowering."
 # ============================================================================
 
-# Tile-IR ops with a known adjoint sequence. Each entry maps a forward
-# TileOpKind to a tuple describing the adjoint computation:
-#   - "inputs":   list of forward-pass operand kinds we read
-#   - "outputs":  list of gradient outputs (one per differentiable input)
-#   - "ops":      list of (TileOpKind, comment) sequenced to compute the gradients
-#
+@dataclass(frozen=True)
+class AdjointRecord:
+    """Declared reverse-mode adjoint for one forward TileOpKind.
+
+    Frozen + tuple-backed so a downstream consumer cannot mutate the
+    canonical table by accident (e.g. `entry.ops.append(...)`).
+
+    Fields:
+        inputs:  forward-pass operand names the adjoint reads.
+        outputs: gradient output names (one per differentiable input).
+        ops:     (TileOpKind, comment) pairs sequenced to compute the
+                 gradients. Substrate-only; operand wiring lands in
+                 Stage 120's grad_pass.
+        dispatch: disambiguator for empty `ops`:
+            - "explicit": `ops` is the full computation (default).
+            - "identity": gradient flows through unchanged (e.g. TILE_ADD).
+            - any other string: name of an attr key on the forward op
+              that the backend dispatches on (e.g. TILE_REDUCE →
+              "reduce_kind" selects sum-broadcast vs max-scatter).
+    """
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    ops: tuple[tuple[TileOpKind, str], ...]
+    dispatch: str = "explicit"
+
+
 # Stage 117-119 ships the substrate (table + lookup); Stage 120 wires
 # this into grad_pass for end-to-end MLP forward→backward generation.
-TILE_OP_ADJOINTS: dict[TileOpKind, dict] = {
-    TileOpKind.TILE_ADD: {
+_TILE_OP_ADJOINTS_INNER: dict[TileOpKind, AdjointRecord] = {
+    TileOpKind.TILE_ADD: AdjointRecord(
         # z = x + y    →    dL/dx = dL/dz,  dL/dy = dL/dz
-        # No new ops; gradient flows through identity.
-        "inputs": ["x", "y"],
-        "outputs": ["dx", "dy"],
-        "ops": [
-            # Both adjoints are the upstream gradient unchanged.
-            # Backend may emit a single broadcast-copy.
-        ],
-    },
-    TileOpKind.TILE_SUB: {
+        inputs=("x", "y"),
+        outputs=("dx", "dy"),
+        ops=(),
+        dispatch="identity",
+    ),
+    TileOpKind.TILE_SUB: AdjointRecord(
         # z = x - y    →    dL/dx = dL/dz,  dL/dy = -dL/dz
-        "inputs": ["x", "y"],
-        "outputs": ["dx", "dy"],
-        "ops": [
-            # dy = -dz (scalar-neg or sub-from-zero)
+        inputs=("x", "y"),
+        outputs=("dx", "dy"),
+        ops=(
             (TileOpKind.SCALAR_NEG, "negate upstream gradient for dy"),
-        ],
-    },
-    TileOpKind.TILE_MUL: {
+        ),
+    ),
+    TileOpKind.TILE_MUL: AdjointRecord(
         # z = x * y    →    dL/dx = dL/dz * y,  dL/dy = dL/dz * x
-        # Requires saving x and y on the forward pass (or recomputing).
-        "inputs": ["x", "y"],
-        "outputs": ["dx", "dy"],
-        "ops": [
+        inputs=("x", "y"),
+        outputs=("dx", "dy"),
+        ops=(
             (TileOpKind.TILE_MUL, "dx = dz * y (elementwise)"),
             (TileOpKind.TILE_MUL, "dy = dz * x (elementwise)"),
-        ],
-    },
-    TileOpKind.TILE_MATMUL: {
-        # Forward: D = A @ B + C  (cuBLAS-style accumulating matmul)
-        # Reverse: dA = dD @ B^T,  dB = A^T @ dD,  dC = dD
-        # Three TILE_MATMUL calls + two TILE_TRANSPOSE.
-        "inputs": ["A", "B", "C"],
-        "outputs": ["dA", "dB", "dC"],
-        "ops": [
+        ),
+    ),
+    TileOpKind.TILE_MATMUL: AdjointRecord(
+        # Forward: D = A @ B + C  (cuBLAS-style accumulating matmul).
+        # Reverse: dA = dD @ B^T,  dB = A^T @ dD,  dC = dD (identity).
+        # NOTE: C is assumed same-shape as D (no broadcast). If a future
+        # bias-add lowering broadcasts C, Stage 120 must reduce dD over
+        # the broadcast axes before binding to dC.
+        inputs=("A", "B", "C"),
+        outputs=("dA", "dB", "dC"),
+        ops=(
             (TileOpKind.TILE_TRANSPOSE, "Bt = transpose(B)"),
             (TileOpKind.TILE_MATMUL, "dA = dD @ Bt"),
             (TileOpKind.TILE_TRANSPOSE, "At = transpose(A)"),
             (TileOpKind.TILE_MATMUL, "dB = At @ dD"),
-            # dC = dD (identity); backend emits a copy or aliases.
-        ],
-    },
-    TileOpKind.TILE_REDUCE: {
-        # axis-reduce within tile  →  broadcast upstream gradient back
-        # along the reduced axis.
-        "inputs": ["x"],
-        "outputs": ["dx"],
-        "ops": [
-            # The exact op depends on reduction kind (sum vs max/min).
-            # For sum: broadcast(dz, original shape).
-            # For max/min: scatter dz to the argmax/argmin index.
-            # Backend dispatches on attrs["reduce_kind"].
-        ],
-    },
-    TileOpKind.TILE_TRANSPOSE: {
+        ),
+    ),
+    TileOpKind.TILE_REDUCE: AdjointRecord(
+        # axis-reduce within tile. Exact gradient op depends on
+        # attrs["reduce_kind"]:
+        #   sum     → broadcast(dz, original shape)
+        #   max/min → scatter dz to the argmax/argmin index
+        # Stage 120 / backend resolves via the dispatch attr below.
+        inputs=("x",),
+        outputs=("dx",),
+        ops=(),
+        dispatch="reduce_kind",
+    ),
+    TileOpKind.TILE_TRANSPOSE: AdjointRecord(
         # transpose is its own inverse for the gradient.
-        "inputs": ["x"],
-        "outputs": ["dx"],
-        "ops": [
+        inputs=("x",),
+        outputs=("dx",),
+        ops=(
             (TileOpKind.TILE_TRANSPOSE, "dx = transpose(dz)"),
-        ],
-    },
+        ),
+    ),
+    TileOpKind.TILE_RESHAPE: AdjointRecord(
+        # reshape is its own inverse: dx = reshape(dz, x.shape).
+        # Needed by any MLP that flattens between layers.
+        inputs=("x",),
+        outputs=("dx",),
+        ops=(
+            (TileOpKind.TILE_RESHAPE, "dx = reshape(dz, x.shape)"),
+        ),
+    ),
 }
+
+# Read-only view of the canonical table. Wrapping in MappingProxyType
+# blocks `TILE_OP_ADJOINTS[k] = ...` at the table level; the inner
+# AdjointRecord is already frozen so per-entry mutation is also blocked.
+TILE_OP_ADJOINTS: Final[Mapping[TileOpKind, AdjointRecord]] = MappingProxyType(
+    _TILE_OP_ADJOINTS_INNER
+)
+
+# TileOpKinds that are intentionally non-differentiable. Adding a new
+# TileOpKind without listing it here OR in TILE_OP_ADJOINTS will trip
+# test_adjoint_table_covers_all_tile_op_kinds — that's the point:
+# every new op must make a conscious diff / non-diff decision.
+TILE_OP_NON_DIFFERENTIABLE: Final[frozenset[TileOpKind]] = frozenset({
+    # Constants — zero gradient.
+    TileOpKind.TILE_ZEROS,
+    TileOpKind.TILE_CONST,
+    # Memory boundary — Stage 120's param-grad path writes dW/db back
+    # to HBM directly, it doesn't invoke a per-op adjoint here.
+    TileOpKind.TILE_LOAD_GLOBAL,
+    TileOpKind.TILE_STORE_GLOBAL,
+    TileOpKind.TILE_LOAD_SHARED,
+    TileOpKind.TILE_STORE_SHARED,
+    TileOpKind.TMA_LOAD,
+    TileOpKind.TMA_STORE,
+    # Async / barrier — no value semantics.
+    TileOpKind.BARRIER_WAIT,
+    # Scalar ops live below the tile-IR autograd surface (Stage 120
+    # differentiates tile-level ops; scalar arithmetic inside reduce
+    # bodies and index math is handled by the per-op rule, not by
+    # generic SCALAR_* adjoints).
+    TileOpKind.SCALAR_CONST_INT,
+    TileOpKind.SCALAR_CONST_FLOAT,
+    TileOpKind.SCALAR_ADD,
+    TileOpKind.SCALAR_SUB,
+    TileOpKind.SCALAR_MUL,
+    TileOpKind.SCALAR_NEG,
+    TileOpKind.SCALAR_CMP,
+    TileOpKind.SCALAR_SELECT,
+    # Control flow — gradient flows through the call graph, not the op.
+    TileOpKind.CALL,
+    TileOpKind.RETURN,
+    # GPU primitives — indices and thread IDs are not differentiable.
+    TileOpKind.THREAD_IDX,
+    TileOpKind.TILE_INDEX_LOAD_HBM,
+    TileOpKind.TILE_INDEX_STORE_HBM,
+})
 
 
 def has_adjoint(kind: TileOpKind) -> bool:
@@ -336,7 +407,16 @@ def has_adjoint(kind: TileOpKind) -> bool:
     declared adjoint sequence. Used by grad_pass (Stage 120) to
     decide whether to descend into a kernel body or treat it as
     opaque (call out to host-side gradient).
+
+    Raises TypeError on non-TileOpKind input — silent membership tests
+    on misspelled enums or cross-IR `tir.OpKind` values would otherwise
+    fall through to "not differentiable" and corrupt gradient flow.
     """
+    if not isinstance(kind, TileOpKind):
+        raise TypeError(
+            f"has_adjoint expects TileOpKind, got "
+            f"{type(kind).__name__}: {kind!r}"
+        )
     return kind in TILE_OP_ADJOINTS
 
 
@@ -344,11 +424,18 @@ def adjoint_outputs(kind: TileOpKind) -> tuple[str, ...]:
     """Stage 117-119 substrate — list the gradient outputs of a
     forward op (in operand order). Returns empty tuple for ops
     without a declared adjoint.
+
+    Raises TypeError on non-TileOpKind input (see has_adjoint).
     """
+    if not isinstance(kind, TileOpKind):
+        raise TypeError(
+            f"adjoint_outputs expects TileOpKind, got "
+            f"{type(kind).__name__}: {kind!r}"
+        )
     entry = TILE_OP_ADJOINTS.get(kind)
     if entry is None:
         return ()
-    return tuple(entry["outputs"])
+    return entry.outputs
 
 
 # ============================================================================
