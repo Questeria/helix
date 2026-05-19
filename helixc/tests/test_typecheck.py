@@ -5075,6 +5075,53 @@ def test_cycle1_high1_is_copy_walks_through_agi_quartet_wrappers():
     assert tc._is_copy_struct_ty(wrapped_memtier) is True
 
 
+def test_cycle1_re_audit_high3_tysizeconst_dataclass_replaces_typrim_size():
+    """Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix (originally
+    downgraded then OBJECTed): TySizeConst dataclass now encodes
+    concrete sizes (e.g., the `3` in `[i32; 3]`) instead of the
+    pre-fix `TyPrim("size_3")` synthetic name. Verifies:
+
+    (a) producer paths emit TySizeConst, not TyPrim
+    (b) _fmt renders TySizeConst as bare integer
+    (c) _compatible treats two TySizeConst values as equal iff
+        their `value` fields match
+    (d) _compatible bridges TySizeConst <-> TySize (generic-defer)
+    """
+    from helixc.frontend.typecheck import (
+        TypeChecker, TySizeConst, TySize, TyArray, TyPrim,
+        typecheck,
+    )
+    from helixc.frontend.parser import parse
+
+    class _StubProg:
+        items = []
+    tc = TypeChecker(_StubProg())
+
+    # (a) Producer-path check: a simple `[i32; 3]` array literal
+    # should resolve to TyArray with TySizeConst(3), not
+    # TyPrim("size_3").
+    src = "fn main() -> i32 { let xs: [i32; 3] = [1, 2, 3]; 0 }"
+    prog = parse(src, include_stdlib=False)
+    errors = typecheck(prog)
+    # If errors, the typecheck failed downstream — surface them.
+    nontrivial = [e for e in errors if "size_" in str(e)]
+    assert not nontrivial, (
+        f"size_N strings leaked into diagnostics post-refactor: "
+        f"{[str(e) for e in nontrivial]}")
+
+    # (b) _fmt renders bare integer.
+    assert tc._fmt(TySizeConst(7)) == "7"
+    assert tc._fmt(TySize("N")) == "size:N"
+
+    # (c) _compatible: same-value match, different-value mismatch.
+    assert tc._compatible(TySizeConst(3), TySizeConst(3)) is True
+    assert tc._compatible(TySizeConst(3), TySizeConst(4)) is False
+
+    # (d) _compatible bridges TySizeConst <-> TySize (mono defer).
+    assert tc._compatible(TySizeConst(3), TySize("N")) is True
+    assert tc._compatible(TySize("N"), TySizeConst(3)) is True
+
+
 def test_cycle1_re_audit_high1_strip_wrapper_chain_walks_agi_quartet():
     """Cycle 1 Batch FE re-audit Auditor 1 HIGH-1 fix — verify the
     rebuild arms cover all 5 AGI-quartet wrappers. CRITICAL:

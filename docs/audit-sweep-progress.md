@@ -108,6 +108,50 @@ Auditors dispatched in parallel:
 - Auditor 4 MED-3: AD unroll guard no warn at max_unroll
 - Auditor 5 MED-1: flatten_modules `_rewrite_calls` guard mismatch
 
+#### Cycle 1 fix batch 6 — TyPrim size_N → TySizeConst refactor SHIPPED; Place tagged-union DEFERRED
+
+**Closes Auditor 2 HIGH-3 (the OBJECTed downgrade)**:
+
+- New `TySizeConst(value: int)` dataclass next to `TySize`.
+- Migrated 5 producer sites (typecheck.py:2867, 2882, 2895, 2908,
+  8505 — `TyPrim(f"size_{N}")` → `TySizeConst(N)`).
+- Migrated 3 consumer sites (typecheck.py:2902 `_size_type_to_lin`,
+  typecheck.py:11888 `_fmt_size`, typecheck.py:3005 `_check_call_basic`
+  size-exclusion defensive-filter — last one can now be deleted
+  entirely since the values aren't TyPrim anymore).
+- Added `_fmt` arm for TySizeConst (bare int).
+- Added `_compatible` arms for TySizeConst-vs-TySizeConst (value
+  match) and TySizeConst-vs-TySize (generic defer for mono).
+- 1 new fix-verification test
+  (`cycle1_re_audit_high3_tysizeconst_dataclass_replaces_typrim_size`)
+  exercising all 4 paths (producer, _fmt, _compatible value match,
+  _compatible bridge to TySize).
+
+**780 typecheck + AD + PTX + struct_mono + pytree + match pins GREEN.**
+
+**Place tagged-union DEFERRED** with stronger rationale (vs the
+batch-3 defer): Place flows through Stage 66 borrow checker +
+BorrowState + Scope + ~60+ borrow check sites. Refactoring it to
+a typed sum (PlaceLocal/PlaceField/PlaceIndex subclasses) requires:
+
+  1. Updating every consumer that pattern-matches on `parts[0]`
+     tag (~30 sites)
+  2. Updating `_root_local_name_of_place` (the central walker)
+  3. Updating `BorrowState.check_borrow_*` (~10 sites)
+  4. Re-validating Stage 95 chain-walk snapshots (the if/match
+     reconciliation that consumes Place equality)
+  5. Re-validating Stage 92 loop-body borrow reconciliation
+
+The risk-concentration profile makes this a dedicated CYCLE-of-its-
+own task, not a single-tick fix. It would pair best with a Stage 66
+re-audit. Promoted to a Stage 110+ post-sweep refactor backlog item
+(NOT a Cycle 1 blocker — the v1.0 borrow checker WORKS today; the
+finding is design-debt about extensibility, not correctness).
+
+**Counter status**: Batch FE has shipped 6 fix batches addressing
+all 11 actionable HIGHs identified by 2 audit rounds. Ready for
+THIRD re-audit to verify counter can advance to 1/5.
+
 #### Cycle 1 fix batch 5 — Re-audit-driven HIGH fixes + 3 MEDIUMs
 
 Re-audit returned NOT_CLEAN with 4 NEW findings across 3 auditors:

@@ -146,6 +146,30 @@ class TySize(Type):
 
 
 @dataclass(frozen=True)
+class TySizeConst(Type):
+    """A statically-known concrete size value (e.g., the `3` in
+    `[i32; 3]`). Sibling of TySize (which carries an opaque symbolic
+    name like `N`) for the case where the size is a concrete integer.
+
+    Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix (originally
+    downgraded then OBJECTed in re-audit): pre-fix, concrete sizes
+    were encoded as TyPrim with a synthetic name like "size_3" —
+    overloading the primitive namespace with synthetic non-user-
+    facing entries. 5 producer sites embedded the int via f-string;
+    3+ consumer sites filtered via `t.name.startswith("size_")`.
+    The ad-hoc defensive filter pattern was a latent silent-
+    miscompile risk every new TyPrim-consuming pass had to
+    remember.
+
+    Post-fix: TySizeConst encodes the int as a structured field;
+    consumers use `isinstance(t, TySizeConst)` for type-safe
+    dispatch. The defensive `startswith("size_")` checks can be
+    deleted as the cases collapse to isinstance branches.
+    """
+    value: int
+
+
+@dataclass(frozen=True)
 class TyTensor(Type):
     dtype: Type
     shape: tuple[Type, ...]   # each element is TySize, TyPrim(int...), or computed expr-type
@@ -2841,7 +2865,7 @@ class TypeChecker:
                     f"array size must be > 0, got 0 (trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                     expr.span,
                 ))
-            return TyPrim(f"size_{expr.value}")
+            return TySizeConst(expr.value)
         if isinstance(expr, A.Unary) and expr.op == "-" \
                 and isinstance(expr.operand, A.IntLit):
             # Source-level `[T; -N]` parses as Unary(-, IntLit(N)).
@@ -2856,7 +2880,7 @@ class TypeChecker:
                     f"array size must be > 0, got 0 (trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                     expr.span,
                 ))
-            return TyPrim(f"size_{v}")
+            return TySizeConst(v)
         if isinstance(expr, A.Name):
             found_local, local_const_value = self._lookup_local_const_scalar(
                 expr.name)
@@ -2869,7 +2893,7 @@ class TypeChecker:
                             f"(trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                             expr.span,
                         ))
-                    return TyPrim(f"size_{local_const_value}")
+                    return TySizeConst(local_const_value)
             looked = scope.lookup(expr.name)
             if looked is not None:
                 return looked
@@ -2882,7 +2906,7 @@ class TypeChecker:
                         f"(trap {TRAP_ARRAY_SIZE_NEGATIVE_OR_ZERO})",
                         expr.span,
                     ))
-                return TyPrim(f"size_{const_value}")
+                return TySizeConst(const_value)
             return TyUnknown(hint=f"unbound size {expr.name}")
         if isinstance(expr, A.Binary) and expr.op in ("+", "-", "*", "/", "%"):
             # Symbolically compose; record as constraint material
@@ -2896,12 +2920,12 @@ class TypeChecker:
     def _size_type_to_lin(self, t: Type) -> Optional[P.LinExpr]:
         if isinstance(t, TySize):
             return P.var(t.name)
-        if isinstance(t, TyPrim) and t.name.startswith("size_"):
-            try:
-                n = int(t.name[len("size_"):])
-                return P.lit(n)
-            except ValueError:
-                return None
+        # Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix: TySizeConst
+        # replaces the old TyPrim("size_N") encoding. Type-safe
+        # isinstance branch replaces the defensive startswith-filter
+        # + name-string-parse pattern.
+        if isinstance(t, TySizeConst):
+            return P.lit(t.value)
         if isinstance(t, TyVar):
             return P.var(t.name)
         return None
@@ -2997,17 +3021,19 @@ class TypeChecker:
                 ))
                 continue
             # For primitives, require an exact name match (i32 vs f32 etc.)
+            # Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix: pre-fix,
+            # this gate checked `startswith("size_")` to exclude
+            # concrete sizes encoded as TyPrim. Post-TySizeConst
+            # refactor, those values are no longer TyPrim at all, so
+            # the gate naturally passes (TyPrim-vs-TyPrim only fires
+            # for actual primitives). Defensive filter deleted.
             if isinstance(pty, TyPrim) and isinstance(aty, TyPrim):
                 if pty.name != aty.name:
-                    # Treat 'size_N' (concrete sizes from shapes) loosely;
-                    # they're not user-facing types.
-                    if not (pty.name.startswith("size_")
-                            or aty.name.startswith("size_")):
-                        self.errors.append(TypeError_(
-                            f"call to {sig.name!r}: arg {pname!r} expects "
-                            f"{pty.name}, got {aty.name}",
-                            call.span,
-                        ))
+                    self.errors.append(TypeError_(
+                        f"call to {sig.name!r}: arg {pname!r} expects "
+                        f"{pty.name}, got {aty.name}",
+                        call.span,
+                    ))
             # Audit 28.8 cycle 3 D1: extend the call boundary check to
             # non-TyPrim parameter types. Pre-fix, only TyPrim-vs-TyPrim
             # was compared, so `fn use_q(q: Quote<i32>); use_q(42)` (i32
@@ -8479,7 +8505,7 @@ class TypeChecker:
                 elif (self._contains_refinement(elem)
                       and not self._refinement_proof_carried(t, elem)):
                     elem = self._erase_refinement(elem)
-            return TyArray(elem, TyPrim(f"size_{len(ts)}"))
+            return TyArray(elem, TySizeConst(len(ts)))
         if isinstance(expr, A.StructLit):
             decl = getattr(self, "_struct_decls", {}).get(expr.name)
             if decl is None:
@@ -11695,6 +11721,16 @@ class TypeChecker:
     def _compatible(self, a: Type, b: Type) -> bool:
         if isinstance(a, TyUnknown) or isinstance(b, TyUnknown):
             return True
+        # Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix: TySizeConst
+        # values are compatible iff their concrete int values match.
+        # TySizeConst-vs-TySize (symbolic) is generic-defer (treat as
+        # compatible — mono will bind the symbol at instantiation).
+        if isinstance(a, TySizeConst) and isinstance(b, TySizeConst):
+            return a.value == b.value
+        if isinstance(a, TySizeConst) and isinstance(b, TySize):
+            return True
+        if isinstance(a, TySize) and isinstance(b, TySizeConst):
+            return True
         if isinstance(a, TyRefined) and isinstance(b, TyRefined):
             return self._compatible(a.base, b.base)
         if isinstance(a, TyRefined):
@@ -11878,8 +11914,12 @@ class TypeChecker:
         got tensor<f32, [3]>` were ambiguous. Now: concrete sizes
         print as their integer value (3); symbolic sizes print as
         their generic-param name (N) without the `size:` prefix."""
-        if isinstance(t, TyPrim) and t.name.startswith("size_"):
-            return t.name[len("size_"):]
+        # Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix: TySizeConst
+        # replaces the TyPrim("size_N") encoding. Render the int
+        # directly; the symbolic-name TySize and any other type fall
+        # through to the generic _fmt.
+        if isinstance(t, TySizeConst):
+            return str(t.value)
         if isinstance(t, TySize):
             return t.name
         return self._fmt(t)
@@ -12242,6 +12282,10 @@ class TypeChecker:
         if isinstance(t, TyEnum): return t.name
         if isinstance(t, TyVar): return t.name
         if isinstance(t, TySize): return f"size:{t.name}"
+        # Cycle 1 Batch FE re-audit Auditor 2 HIGH-3 fix: TySizeConst
+        # renders as the bare integer (no `size:` prefix) since these
+        # are concrete sizes the user wrote literally (e.g., `[i32; 3]`).
+        if isinstance(t, TySizeConst): return str(t.value)
         if isinstance(t, TyTensor):
             # Audit 28.8 cycle 5 F7: use _fmt_size for shape elements
             # so `tensor<f32, [3]>` prints as `tensor<f32, [3]>` (not
