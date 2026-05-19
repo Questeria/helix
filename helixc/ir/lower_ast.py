@@ -4544,7 +4544,18 @@ class Lowerer:
                 )
             for i in expr.indices:
                 self._lower_expr(i)
-            return None
+            # Cycle 1 Batch IR silent-failure HIGH-3 fix: pre-fix,
+            # this fell through to `return None` after walking indices
+            # for their side effects only. Caller's `or const_int(0)`
+            # then substituted 0, so `weird_obj[k]` compiled to 0 if
+            # typecheck failed to reject it. Now: loud fail, surfaces
+            # any typecheck-coverage gap immediately.
+            raise NotImplementedError(
+                f"lower_ast: A.Index on non-tensor/tile callee at "
+                f"{getattr(expr, 'span', '?')!r} reached lowering; "
+                f"typecheck should have rejected this (Cycle 1 Batch "
+                f"IR silent-failure HIGH-3 fix)"
+            )
         if isinstance(expr, A.Field):
             # Inline tuple/struct field access: `(1, 2, 3).1` — no Name
             # base, so _walk_field_chain wouldn't resolve. Lower the
@@ -4594,7 +4605,20 @@ class Lowerer:
                                 result_ty=elem_ty,
                                 attrs={"name": base_name})
             self._lower_expr(expr.obj)
-            return None
+            # Cycle 1 Batch IR silent-failure HIGH-3 fix: pre-fix,
+            # this fell through to `return None` when field-chain
+            # resolution failed (struct_name None, idx_int=-1, agg
+            # None, etc.). Caller's `or const_int(0)` then substituted
+            # 0 — so `instance.unknown_field` compiled to 0 if
+            # typecheck missed it. Loud-fail instead.
+            raise NotImplementedError(
+                f"lower_ast: A.Field resolution failed for "
+                f"{getattr(expr, 'name', '?')!r} at "
+                f"{getattr(expr, 'span', '?')!r}; typecheck should "
+                f"have rejected this OR the struct_flat_paths table "
+                f"needs updating (Cycle 1 Batch IR silent-failure "
+                f"HIGH-3 fix)"
+            )
         if isinstance(expr, A.Cast):
             inner = self._lower_expr(expr.value)
             if inner is None:
@@ -4675,7 +4699,33 @@ class Lowerer:
             verifier = self._lower_expr(expr.verifier) or self.builder.const_int(0)
             return self.builder.emit(tir.OpKind.MODIFY, target, xform, verifier,
                                      result_ty=tir.TIRScalar("i32"))
-        return None
+        # Cycle 1 Batch IR silent-failure HIGH-1 fix: explicit A.StrLit
+        # arm preserves the cycle-101 F1 deferred-known contract
+        # (lowering strings is not yet wired; lowers to const_int(0)
+        # with explicit semantic comment) but converts the BOTTOM
+        # catch-all to a loud-fail raise. Pre-fix, any future expr
+        # subclass added without a dispatch arm silently dropped to
+        # None and caller-side `or const_int(0)` substituted 0.
+        # Auditor's surface symptom: `let s = "hello"; s == 0 -> true`.
+        # The cycle-108 fix added explicit loud-fail arms for CharLit/
+        # StructLit/TileLit; this batch closes the catch-all itself
+        # so future drift is impossible.
+        if isinstance(expr, A.StrLit):
+            # Deferred-known per cycle-101 F1: string lowering is not
+            # yet implemented; preserve historic behavior by emitting
+            # const_int(0) explicitly with documented semantic. This
+            # is NOT a silent miscompile — it's a known-incomplete
+            # feature with documented placeholder semantics. Any
+            # actual use of strings beyond comparison-to-zero will
+            # surface as a logic bug the user can trace to this
+            # explicit placeholder.
+            return self.builder.const_int(0)
+        raise NotImplementedError(
+            f"lower_ast: unhandled expr type {type(expr).__name__} "
+            f"at {getattr(expr, 'span', '?')!r} — add an explicit "
+            f"dispatch arm in _lower_expr or extend the deferred-"
+            f"known list (Cycle 1 Batch IR silent-failure HIGH-1 fix)"
+        )
 
     def _hash_ast(self, node: A.Expr) -> int:
         """Compute a stable hash over an AST structure for QUOTE handles.

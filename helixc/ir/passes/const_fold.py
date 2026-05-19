@@ -11,7 +11,16 @@ with constant results. E.g.:
 Folding is done iteratively until no change. Operations folded:
   CONST_INT, CONST_FLOAT, ADD, SUB, MUL, DIV, MOD, NEG,
   CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE,
-  CAST (between numeric scalars).
+  bitwise + shifts (BIT_AND/OR/XOR/NOT, SHL/SHR), BIT_NOT.
+
+NOT YET folded (despite the surface op existing in tir.OpKind):
+  CAST — `const_int 5 cast-to-f32` is foldable but currently passes
+  through as a live CAST op. Cycle 1 Batch IR fresh-eyes IR-1 fix
+  removes the prior incorrect docstring claim "CAST (between numeric
+  scalars)" — the implementation was never wired and CSE relies on
+  the unfolded CAST being deduplicated. Implementing CAST folding
+  would tighten DCE's ability to kill the upstream CONST_* but is
+  not blocking v1.0. Tracked as a Stage 110+ const_fold improvement.
 
 Conservative: doesn't touch ops with unknown / non-scalar types,
 or ops with side effects (CALL, STORE_*, CONST_TENSOR, etc.).

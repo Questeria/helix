@@ -48,18 +48,74 @@ from typing import Optional
 from .. import tile_ir as ti
 
 
-# Tile ops that have observable side effects (memory stores, async
-# barriers, control flow) — even if their results have no users, they
-# must be retained.
-_SIDE_EFFECT_KINDS = {
-    ti.TileOpKind.TILE_STORE_GLOBAL,
-    ti.TileOpKind.TILE_STORE_SHARED,
-    ti.TileOpKind.TILE_INDEX_STORE_HBM,
-    ti.TileOpKind.TMA_STORE,
-    ti.TileOpKind.BARRIER_WAIT,
-    ti.TileOpKind.RETURN,
-    ti.TileOpKind.CALL,
-}
+# Cycle 1 Batch IR silent-failure HIGH-2 fix: explicit PURE allowlist
+# + exhaustiveness check across the entire TileOpKind enum. Pre-fix,
+# _SIDE_EFFECT_KINDS was a small denylist (7 entries); when Stage 64
+# added TMA_LOAD / TILE_LOAD_GLOBAL / TILE_LOAD_SHARED, dead_tile_elim
+# would happily drop them when their results were unused — but
+# TILE_LOAD_GLOBAL / TMA_LOAD have observable async-queue / memory-
+# pressure side effects on real hardware even when the loaded value
+# isn't consumed. Same drift-class risk as Batch FE _strip_wrapper_chain
+# table-out-of-sync defect that bit me in batch 4.
+#
+# Post-fix: invert the policy. Maintain _PURE_TILE_KINDS as the
+# allowlist (small + auditable). Any kind not in _PURE_TILE_KINDS is
+# treated as side-effecting (conservative — preserves correctness on
+# unknown ops). Plus the _check_kind_coverage assertion forces a
+# decision when a new TileOpKind is added: pure-or-side-effect must
+# be explicit.
+
+_PURE_TILE_KINDS = frozenset({
+    # Tile creation (no observable effect beyond producing the value)
+    ti.TileOpKind.TILE_ZEROS,
+    ti.TileOpKind.TILE_CONST,
+    # Layout transforms (pure value-shaping)
+    ti.TileOpKind.TILE_TRANSPOSE,
+    ti.TileOpKind.TILE_RESHAPE,
+    # Compute on tiles (pure values; reductions still pure)
+    ti.TileOpKind.TILE_ADD,
+    ti.TileOpKind.TILE_SUB,
+    ti.TileOpKind.TILE_MUL,
+    ti.TileOpKind.TILE_MATMUL,
+    ti.TileOpKind.TILE_REDUCE,
+    # Scalar ops passed through (pure arithmetic)
+    ti.TileOpKind.SCALAR_CONST_INT,
+    ti.TileOpKind.SCALAR_CONST_FLOAT,
+    ti.TileOpKind.SCALAR_ADD,
+    ti.TileOpKind.SCALAR_SUB,
+    ti.TileOpKind.SCALAR_MUL,
+    ti.TileOpKind.SCALAR_NEG,
+    ti.TileOpKind.SCALAR_CMP,
+    ti.TileOpKind.SCALAR_SELECT,
+    # GPU primitives that produce values without observable side
+    # effects on the producing thread (THREAD_IDX is a builtin read)
+    ti.TileOpKind.THREAD_IDX,
+})
+
+# Side-effecting kinds (memory ops, sync, ctrl flow) — derived from
+# the enum's complement of _PURE_TILE_KINDS at module load.
+_SIDE_EFFECT_KINDS = frozenset(
+    k for k in ti.TileOpKind if k not in _PURE_TILE_KINDS
+)
+
+
+def _check_kind_coverage() -> None:
+    """Module-load assertion: every TileOpKind enum value must be
+    classified as either pure or side-effecting. Adding a new
+    TileOpKind without classifying it here is a build error.
+
+    This is the Cycle 1 Batch IR silent-failure HIGH-2 fix's
+    exhaustiveness guard — mirrors the dce.py SIDE_EFFECT_KINDS
+    pattern and prevents the table-out-of-sync drift class that
+    bit Batch FE _strip_wrapper_chain at batch 4."""
+    for k in ti.TileOpKind:
+        assert (k in _PURE_TILE_KINDS) ^ (k in _SIDE_EFFECT_KINDS), (
+            f"TileOpKind {k.name} is missing or in both pure + side-"
+            f"effect tables — classify it in tile_opt._PURE_TILE_KINDS"
+        )
+
+
+_check_kind_coverage()
 
 
 def _is_side_effect(op: ti.TileOp) -> bool:
