@@ -314,3 +314,87 @@ def test_stage126_r5_phantom_supported_raises_assertion():
             metal_mod.MslEmitter().emit_module(tile_mod)
     finally:
         metal_mod.METAL_OP_LOWERING[TileOpKind.TILE_REDUCE]["status"] = original
+
+
+# ============================================================================
+# v2.2 polish items 9 + 10 — Metal target_family parsing + validation.
+# Item 9: replace hardcoded apple10/11/12 list with numeric comparison
+#         so apple13+ are M5-plus without code changes.
+# Item 10: reject malformed target_family strings (typos like
+#          "appel10", "Apple10", "apple_10") at construction time.
+# ============================================================================
+def test_v22_parse_apple_family_accepts_valid_names():
+    """v2.2 polish item 9 — _parse_apple_family extracts the family
+    number from canonical `appleN` strings."""
+    from helixc.backend.metal import _parse_apple_family
+    assert _parse_apple_family("apple7") == 7
+    assert _parse_apple_family("apple9") == 9
+    assert _parse_apple_family("apple10") == 10
+    assert _parse_apple_family("apple13") == 13       # future family
+    assert _parse_apple_family("apple100") == 100     # arbitrary digit count
+
+
+def test_v22_parse_apple_family_rejects_typos():
+    """v2.2 polish item 10 — _parse_apple_family returns None for any
+    string that doesn't match `appleN` exactly. The caller uses this
+    to hard-fail malformed target_family at construction."""
+    from helixc.backend.metal import _parse_apple_family
+    for bad in (
+        "appel10",      # typo
+        "Apple10",      # wrong case
+        "apple_10",     # underscore
+        "apple-10",     # hyphen
+        "apple",        # no number
+        "apple10x",     # trailing garbage
+        "xapple10",     # leading garbage
+        "",             # empty
+        " apple10",     # leading whitespace
+    ):
+        assert _parse_apple_family(bad) is None, (
+            f"_parse_apple_family({bad!r}) should be None, "
+            f"got {_parse_apple_family(bad)!r}"
+        )
+
+
+def test_v22_parse_apple_family_handles_non_string_input():
+    """v2.2 polish — _parse_apple_family returns None on non-string
+    input (None, int, etc.) rather than raising. The caller's
+    _validate_target_family raises the typed error."""
+    from helixc.backend.metal import _parse_apple_family
+    for bad in (None, 10, 10.0, ["apple10"], {"apple": 10}):
+        assert _parse_apple_family(bad) is None  # type: ignore[arg-type]
+
+
+def test_v22_msl_emitter_rejects_invalid_target_family():
+    """v2.2 polish item 10 — MslEmitter.__init__ validates
+    target_family. Typos like "appel10" would have previously routed
+    silently to the pre-M5 path (since the typo isn't in the M5+
+    list); they now hard-fail at construction time."""
+    from helixc.backend import metal as metal_mod
+    for bad in ("appel10", "Apple10", "apple_10", "apple"):
+        with pytest.raises(ValueError, match="not a recognized Apple-Silicon family"):
+            metal_mod.MslEmitter(target_family=bad)
+
+
+def test_v22_msl_emitter_accepts_future_apple_families():
+    """v2.2 polish item 9 — MslEmitter accepts apple13/apple14/... as
+    valid families and routes them to the M5+ NA path. Before v2.2 the
+    hardcoded list ("apple10", "apple11", "apple12") would have
+    silently routed apple13 to the pre-M5 path."""
+    from helixc.backend import metal as metal_mod
+    # Construction must succeed.
+    e13 = metal_mod.MslEmitter(target_family="apple13")
+    e20 = metal_mod.MslEmitter(target_family="apple20")
+    # The M5+ gate must consider these family >= 10.
+    assert metal_mod._parse_apple_family(e13.target_family) >= 10
+    assert metal_mod._parse_apple_family(e20.target_family) >= 10
+
+
+def test_v22_msl_emitter_accepts_pre_m5_families():
+    """v2.2 polish — verify the pre-M5 path still works after v2.2
+    item 9's numeric-extraction refactor. apple7 (M2) and apple9
+    (M3/M4) must construct cleanly and route to the SIMD-group path."""
+    from helixc.backend import metal as metal_mod
+    for pre_m5 in ("apple7", "apple8", "apple9"):
+        e = metal_mod.MslEmitter(target_family=pre_m5)
+        assert metal_mod._parse_apple_family(e.target_family) < 10

@@ -53,8 +53,51 @@ from ..ir import tir, tile_ir as ti
 DEFAULT_METAL_VERSION: str = "metal3.2"
 
 # Default GPU target generation. M2-baseline ships pre-NA SIMD matmul.
-# M5+ NA path gates via DEFAULT_TARGET_FAMILY == "apple9" or higher.
-DEFAULT_TARGET_FAMILY: str = "apple7"  # M2 baseline; bump to apple9 for M5+ NA
+# M5+ NA path gates via target family number >= 10 (apple10 == M5; see
+# `_parse_apple_family` for the numeric-extraction logic. Stage 126 R5
+# corrected the gate from apple9+ to apple10+ — apple9 is M3/M4, no NA hw.)
+DEFAULT_TARGET_FAMILY: str = "apple7"  # M2 baseline; bump to apple10+ for M5+ NA
+
+# v2.2 polish items 9 + 10: numeric target_family parsing + validation.
+# Pre-v2.2 the M5+ gate used a hardcoded list ("apple10", "apple11",
+# "apple12") which (a) silently mis-matched future families like
+# apple13/apple14 — item 9, and (b) accepted typos like "appel10" or
+# "apple_10" or "Apple10" by falling through the membership test —
+# item 10. Both are closed by a `re.fullmatch(r"apple(\d+)", s)`
+# parser that returns the family number or None.
+import re as _re
+
+_APPLE_FAMILY_RE = _re.compile(r"apple(\d+)")
+
+
+def _parse_apple_family(target_family: str) -> Optional[int]:
+    """Parse `appleN` into N for any non-negative integer N. Returns
+    None on any value that doesn't match the canonical pattern (e.g.
+    "appel10" typo, "apple_10" with underscore, "Apple10" miscased,
+    "apple" without a number). Callers that need the strict family
+    number (e.g. M5+ gating) should treat None as a hard-fail.
+    """
+    if not isinstance(target_family, str):
+        return None
+    m = _APPLE_FAMILY_RE.fullmatch(target_family)
+    if m is None:
+        return None
+    return int(m.group(1))
+
+
+def _validate_target_family(target_family: str) -> None:
+    """Reject malformed target_family strings at construction time.
+    v2.2 polish item 10: silent fallthrough to the pre-M5 path (because
+    the typo isn't in the M5+ list) would route an apple10-targeting
+    user to apple7-shape codegen. Hard-fail instead so the typo is
+    visible immediately."""
+    if _parse_apple_family(target_family) is None:
+        raise ValueError(
+            f"helixc.backend.metal: target_family={target_family!r} is "
+            f"not a recognized Apple-Silicon family name. Expected "
+            f"`appleN` where N is a non-negative integer (e.g. apple7 "
+            f"for M2, apple10 for M5)."
+        )
 
 # SIMD width on Apple Silicon is 32 lanes per SIMD-group. (Threadgroup
 # can hold multiple SIMD-groups.)
@@ -229,6 +272,10 @@ class MslEmitter:
     def __init__(self,
                  metal_version: str = DEFAULT_METAL_VERSION,
                  target_family: str = DEFAULT_TARGET_FAMILY):
+        # v2.2 polish item 10: validate target_family at construction
+        # so typos like "appel10" / "apple_10" / "Apple10" hard-fail
+        # immediately rather than silently routing to the pre-M5 path.
+        _validate_target_family(target_family)
         self.metal_version = metal_version
         self.target_family = target_family
         self.buf = StringIO()
@@ -304,11 +351,18 @@ class MslEmitter:
                 f"status={status!r}; codegen not wired in this backend.\""
             )
             return
-        # Stage 126 R5 audit-fix: M5+ NA family-number list — Apple's
-        # M5 introduced Neural Accelerators at family `apple10+`.
-        # `apple9` is M3/M4 (no NA hw). The previous list erroneously
-        # included `apple9`. Tests below verify the corrected gate.
-        is_m5_plus = self.target_family in ("apple10", "apple11", "apple12")
+        # v2.2 polish item 9: numeric extraction. Apple's M5 introduced
+        # Neural Accelerators at family `apple10+`. `apple9` is M3/M4
+        # (no NA hw). Stage 126 R5 corrected the hardcoded list; v2.2
+        # replaces the list with `_parse_apple_family(...) >= 10` so
+        # future families (apple13, apple14, ...) are M5-plus without
+        # code changes. _validate_target_family was called at __init__
+        # so the parse cannot return None here.
+        family_num = _parse_apple_family(self.target_family)
+        assert family_num is not None, (
+            "target_family validated at __init__; parse must succeed"
+        )
+        is_m5_plus = family_num >= 10
         if kind is ti.TileOpKind.BARRIER_WAIT:
             # MSL: threadgroup_barrier with appropriate fence flags.
             self._line("    threadgroup_barrier(mem_flags::mem_threadgroup);")
