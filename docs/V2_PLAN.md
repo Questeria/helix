@@ -2324,3 +2324,77 @@ dismissed; BE: M4/M2 fixed, M3 dismissed; RT: M1 fixed; TEST: 5
 weak-assert tests hardened + `_zip_cmp_test`. Remaining: the ~12 LOW
 findings (optional cleanup, do not block v3.0) and the 5-clean-gate
 re-run.
+
+### 2026-05-20 — pre-v3.0 re-audit: GATE RE-RUN verdicts → R3 batch
+
+The 5-clean-gate re-run dispatched 5 parallel silent-failure-hunters
+(FE / IR / BE / RT / TEST). Verdicts:
+
+- **All R1 + R2 fixes verified HOLDING** — every agent confirmed its
+  batch's prior fixes are genuine, not superficial. The FE-M4 and
+  BE-M3 dismissals were re-examined and still stand.
+- **IR batch: CLEAN** — no HIGH/MEDIUM; 4 pre-existing LOW re-confirmed benign.
+- **BE batch: CLEAN** — BE-H1/M2/M4 hold, BE-M3 dismissal stands, no
+  new findings across all 13 backend files.
+- **FE / RT / TEST: 5 NEW MEDIUM findings** (no new HIGH). The gate
+  does NOT close until these are fixed (R3) and a further re-run is clean.
+
+**R3 batch — 5 new MEDIUM findings to fix (each with a test/assertion):**
+
+1. **FE-N1 — `autodiff.py` `_diff` (~line 1651) + `autodiff_reverse.py`
+   `_propagate` (~line 986): silent zero gradient for `Index` /
+   `Field` / `StructLit` / `TupleLit` / `ArrayLit`.** Neither
+   dispatcher has arms for these nodes; they fall to a catchall that
+   calls `_ad_warn` (soft trap 85001, default-SUPPRESSED unless
+   `-Wad=error`) then returns `FloatLit(0.0)` (forward) / deposits
+   nothing (reverse). A function depending on its variable through a
+   field/index/aggregate gets a wrong (zero) gradient, no diagnostic.
+   Reachable: `autodiff_cli.py`'s `differentiate` command runs
+   `differentiate` / `differentiate_reverse` directly with no
+   `_reject_unsupported_grad_signature` gate. (The `@grad` / grad_pass
+   surface IS gated, which is why this is MEDIUM not HIGH.) FIX: add
+   explicit arms in both `_diff` and `_propagate` — implement the
+   derivative, or (minimum) `raise NotImplementedError` loudly,
+   mirroring the existing For/While/Loop arms.
+
+2. **RT-M1 — `examples/dashboard_server.py:59-63`: `maze=1` silently
+   ignored for the `nn` agent.** The maze toggle does `new_src.replace
+   ("@pure fn use_maze() -> i32 { 0 }", "...{ 1 }")`, but that string
+   exists only in `dashboard_qlearn.hx` — for `kind=nn` the `replace`
+   no-ops silently; request accepted + logged `maze=True`, kernel
+   compiled with maze off. FIX: assert the source changed when the
+   knob was requested; else reject (HTTP 400/500).
+
+3. **RT-M2 — `examples/dashboard_server.py:64-68`: `size`/grid
+   silently ignored for the `nn` agent.** The `grid_n()` rewrite is
+   gated `kind == "qlearn"`, but `dashboard_nn_agent.hx` HAS a
+   `grid_n()`; `?kind=nn&size=15` is accepted + logged, compiled at
+   the hardcoded 10×10. FIX: honor `grid_n` for `nn`, or reject
+   `size` for unsupporting kinds.
+
+4. **RT-M3 — `scripts/selfhost_cascade.py:207`: `run_smoke` records a
+   fabricated `actual_exit`.** The smoke result hardwires
+   `"actual_exit": expected` instead of the binary's real exit code,
+   making `selfhost_cascade_validate.py`'s `actual_exit == 42`
+   cross-check tautological. FIX: parse the real `exit=N` line, store
+   that integer.
+
+5. **TEST-MED — `test_codegen.py:16561-16565`
+   `test_stdlib_struct_field_access_in_helper`: `except Exception:
+   pytest.xfail(...)` absorbs ANY exception.** A real codegen
+   regression that throws becomes a non-failing `xfail`. FIX: narrow
+   to `except NotImplementedError` (or `@pytest.mark.xfail(raises=
+   NotImplementedError, strict=False)`); tighten `assert code in
+   (42, 0)` → `== 42`.
+
+**LOW findings (non-blocking — v3.0-era cleanup backlog):** FE-N2
+(`monomorphize._subst_shape_expr` `except ValueError: return expr`,
+test-only-reachable); RT-L1/L2 (`selfhost_cascade.py` fragile `exit=`
+substring match; standalone-cascade PASS on empty sha / crash code);
+TEST-LOW (stale comment in test_property_runner.py); plus the ~12 LOW
+from the first re-audit pass.
+
+**Gate status: OPEN.** Next: ship the R3 batch (5 MEDIUM fixes above),
+then re-run the 5-clean-gate. When it returns no HIGH / must-fix
+MEDIUM and the test suite is green, record "pre-v3.0 re-audit gate
+CLOSED" and v3.0 Stage 200 unpauses.
