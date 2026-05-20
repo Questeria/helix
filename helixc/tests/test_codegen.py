@@ -9991,7 +9991,10 @@ def test_nn_ce_loss_batch_f32_regular_probabilities():
 
 
 def test_nn_ce_loss_batch_f32_rejects_invalid_label():
-    """Invalid labels should return a loud sentinel instead of reading past row."""
+    """Invalid labels return a loud NaN sentinel instead of reading
+    past the row. Cycle 3 R1 fix batch 20 changed the sentinel: an
+    invalid label makes ce_loss_batch_f32 return NaN (0.0/0.0), not a
+    large finite value. NaN != NaN is the canonical NaN test."""
     src = """
     fn main() -> i32 {
         let probs = tf2d_zeros(1, 2);
@@ -10000,7 +10003,7 @@ def test_nn_ce_loss_batch_f32_rejects_invalid_label():
         let target = t1d_new(1);
         __arena_set(target, 2);
         let loss = ce_loss_batch_f32(probs, target, 1, 2);
-        if loss > 999999.0_f32 { 42 } else { 1 }
+        if loss != loss { 42 } else { 1 }
     }
     """
     code = compile_and_run(src)
@@ -10008,7 +10011,10 @@ def test_nn_ce_loss_batch_f32_rejects_invalid_label():
 
 
 def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
-    """Invalid labels stay sentinel-grade even in multi-row batches."""
+    """Invalid labels stay sentinel-grade even in multi-row batches:
+    one bad label makes the whole result NaN (Cycle 3 R1 fix batch 20
+    contract), so it cannot be averaged down by valid rows. NaN != NaN
+    is the canonical NaN test."""
     src = """
     fn main() -> i32 {
         let probs = tf2d_zeros(2, 2);
@@ -10020,7 +10026,7 @@ def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
         __arena_set(target, 0);
         __arena_set(target + 1, 2);
         let loss = ce_loss_batch_f32(probs, target, 2, 2);
-        if loss > 999999.0_f32 { 42 } else { 1 }
+        if loss != loss { 42 } else { 1 }
     }
     """
     code = compile_and_run(src)
@@ -10028,6 +10034,10 @@ def test_nn_ce_loss_batch_f32_invalid_label_not_averaged_down():
 
 
 def test_stage35_nn_classifier_helpers_reject_short_outputs_and_targets():
+    """Classifier helpers reject too-short output / target slices:
+    argmax_rows_f32 and accuracy_count_from_logits_f32 return the
+    t2d_error() sentinel (35001), and ce_loss_batch_f32 returns NaN
+    (Cycle 3 R1 fix batch 20 contract). NaN != NaN tests the latter."""
     src = """
     fn main() -> i32 {
         let logits = tf2d_zeros(2, 2);
@@ -10038,7 +10048,7 @@ def test_stage35_nn_classifier_helpers_reject_short_outputs_and_targets():
         let loss = ce_loss_batch_f32(logits, target, 2, 2);
         if s1 == 35001 {
             if s2 == 35001 {
-                if loss > 999999.0_f32 { 42 } else { 7 }
+                if loss != loss { 42 } else { 7 }
             } else { 7 }
         } else { 7 }
     }
@@ -10544,7 +10554,9 @@ def test_builtin_adam_step_nonzero_m_zero_denom_returns_zero():
 
 
 def test_nn_ce_loss_rejects_negative_scalar_label():
-    """Scalar CE should not read the arena cell before the probability row."""
+    """Scalar CE must not read the arena cell before the probability
+    row. Cycle 3 R1 fix batch 20 contract: ce_loss returns NaN
+    (0.0/0.0) for a negative label. NaN != NaN is the NaN test."""
     src = """
     fn main() -> i32 {
         let guard = t1d_new(1);
@@ -10553,7 +10565,7 @@ def test_nn_ce_loss_rejects_negative_scalar_label():
         tf1d_set(probs, 0, 0.1_f32);
         tf1d_set(probs, 1, 0.9_f32);
         let loss = ce_loss(probs, 0 - 1, 2);
-        if loss > 999999.0_f32 { 42 } else { 7 }
+        if loss != loss { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -10561,7 +10573,9 @@ def test_nn_ce_loss_rejects_negative_scalar_label():
 
 
 def test_nn_ce_loss_rejects_positive_out_of_range_label():
-    """Scalar CE should not read the cell after a probability row."""
+    """Scalar CE must not read the cell after a probability row.
+    Cycle 3 R1 fix batch 20 contract: ce_loss returns NaN (0.0/0.0)
+    for an out-of-range label. NaN != NaN is the NaN test."""
     src = """
     fn main() -> i32 {
         let probs = t1d_new(2);
@@ -10570,7 +10584,7 @@ def test_nn_ce_loss_rejects_positive_out_of_range_label():
         let guard = t1d_new(1);
         tf1d_set(guard, 0, 1.0_f32);
         let loss = ce_loss(probs, 2, 2);
-        if loss > 999999.0_f32 { 42 } else { 7 }
+        if loss != loss { 42 } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -21153,15 +21167,17 @@ def test_stage35_restart51_log_f64_domain_guard():
     """Restart 51 A1: __log_stable_f64 fail-closes on x <= 0.
 
     Previously `__log_f64` (a Taylor series around x=1) returned nonsense
-    finite values for non-positive inputs. d_log_v now delegates to
-    __log_stable_f64 which returns -1e6 sentinel for x <= 0."""
+    finite values for non-positive inputs. Cycle 3 R2 fix batch 25
+    changed the contract: __log_stable_f64 now returns NaN (0.0/0.0)
+    for x <= 0 — a loud non-finite sentinel. NaN != NaN, so `a != a`
+    is true exactly when `a` is NaN."""
     src = """
     fn main() -> i32 {
         let a = __log_stable_f64(0.0_f64);
         let b = __log_stable_f64(0.0_f64 - 1.0_f64);
         let c = __log_stable_f64(1.0_f64);
-        let ok_a = if a < (0.0_f64 - 999999.0_f64) { 1 } else { 0 };
-        let ok_b = if b < (0.0_f64 - 999999.0_f64) { 1 } else { 0 };
+        let ok_a = if a != a { 1 } else { 0 };
+        let ok_b = if b != b { 1 } else { 0 };
         let ok_c = if (c > (0.0_f64 - 0.001_f64)) {
             if (c < 0.001_f64) { 1 } else { 0 }
         } else { 0 };
@@ -21227,7 +21243,10 @@ def test_stage35_restart51_vec_zip_div_zero_divisor_fail_closed():
     """Restart 51 A4: vec_zip_div / vec_zip_mod fail-close on b[i] == 0.
 
     Previously delegated to the integer-div trap. In an arena runtime
-    without OS exception recovery, a trap is a process crash."""
+    without OS exception recovery, a trap is a process crash. Cycle 3
+    R1 fix batch 20 fixed the fail-closed value: a zero divisor now
+    yields the INT32_MIN sentinel (not 0, which would collide with the
+    legitimate 0/x == 0 result)."""
     src = """
     fn main() -> i32 {
         let a = __arena_len();
@@ -21238,7 +21257,7 @@ def test_stage35_restart51_vec_zip_div_zero_divisor_fail_closed():
         let r0 = __arena_get(r);
         let r1 = __arena_get(r + 1);
         let r2 = __arena_get(r + 2);
-        if r0 == 5 { if r1 == 0 { if r2 == 6 { 42 } else { 7 } } else { 7 } } else { 7 }
+        if r0 == 5 { if r1 == ((0 - 2147483647) - 1) { if r2 == 6 { 42 } else { 7 } } else { 7 } } else { 7 }
     }
     """
     code = compile_and_run(src)
@@ -21638,17 +21657,21 @@ def test_stage35_restart54_vec_window_sum_saturates_on_i32_overflow():
 
 
 def test_stage35_restart54_vec_l2_squared_distance_saturates():
-    """Restart 54 A5: iterators.hx vec_l2_squared_distance uses i64
-    accumulator + INT32 saturation. With a=46341, b=0, d*d overflows
-    i32; without saturation the accumulator wraps negative and
-    inverts ranking."""
+    """Restart 54 A5: iterators.hx vec_l2_squared_distance uses an i64
+    accumulator + INT32 saturation. Cycle 3 R1 fix batch 20 also
+    clamps each per-element delta to [-46340, 46340] before squaring,
+    so a single element can no longer overflow i32. Two clamped
+    maxima (46340^2 each) still overflow the accumulator, which then
+    saturates to INT32_MAX instead of wrapping negative."""
     src = """
     fn main() -> i32 {
         let a = __arena_len();
         __arena_push(46341);
+        __arena_push(46341);
         let b = __arena_len();
         __arena_push(0);
-        let r = vec_l2_squared_distance(a, b, 1);
+        __arena_push(0);
+        let r = vec_l2_squared_distance(a, b, 2);
         if r == 2147483647 { 42 } else { 7 }
     }
     """

@@ -1391,3 +1391,40 @@ text; `--note` must be one non-engineer-readable sentence.
 Tests: `helixc/tests/test_helix_status.py` (6) — model consistency,
 percentages-from-model, message has every beginner section, CLI.
 Verification: 6 passed.
+
+### 2026-05-20 — blocker fix: 8 of 9 test_codegen.py failures (Bucket A)
+
+Picked up the `wip-codegen-9-test-failures-blocker.md` blocker
+(filed by a concurrent fire at `6c816f1`). Bucket A — 8 stdlib-guard
+tests all failing "expected 42, got 7/1" — triaged by reading each
+test's stdlib `.hx` function.
+
+Verdict: all 8 are **stale tests** — same class as `e7768f4`. Cycle 3
+audit batches (`5b14ea1` batch 20, `571e924` batch 25) deliberately
+changed the stdlib guard contracts; the tests still encoded the
+pre-Cycle-3 contracts. The stdlib code is correct — every changed
+function carries a comment proving the change was intentional
+(e.g. transcendentals.hx "Return NaN for x <= 0", iterators.hx
+"Post-fix: INT32_MIN sentinel" / "clamp d ... BEFORE the multiply").
+
+Fixes (test-only, zero production-code risk):
+- 5 `ce_loss` / `ce_loss_batch_f32` tests: an invalid label now
+  yields NaN (0.0/0.0), not a >999999 finite value — switched to the
+  `loss != loss` NaN idiom (already used elsewhere in test_codegen).
+- `log_f64_domain_guard`: `__log_stable_f64(x<=0)` returns NaN now,
+  not the -1e6 sentinel — switched to `a != a`.
+- `vec_zip_div_zero_divisor_fail_closed`: a zero divisor yields the
+  INT32_MIN sentinel now, not 0.
+- `vec_l2_squared_distance_saturates`: the function clamps each delta
+  before squaring now, so one element can't overflow — the test uses
+  2 elements to still exercise the accumulator-saturation path.
+
+Verification: all 8 pass (43s). `wip-codegen-...-blocker.md` updated:
+Bucket A RESOLVED; only Bucket B (1 test, `test_hbs_sample_tree_eval_runs`
+— a distinct lowering/typecheck root cause) remains open for a
+follow-up fire.
+
+Process note (carried from the blocker doc): `test_codegen.py` takes
+~1h43m for a full run, so no per-fire run exercises it whole — which
+is how these stale tests sat unseen after the Cycle 3 contract
+changes. A periodic full-suite fire, or sharding, is still wanted.

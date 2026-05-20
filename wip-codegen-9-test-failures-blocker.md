@@ -1,8 +1,32 @@
-# WIP BLOCKER — 9 failing tests in `helixc/tests/test_codegen.py`
+# WIP BLOCKER — test_codegen.py failures (8 of 9 RESOLVED)
 
 **Filed:** 2026-05-20 ~02:05 UTC by helix-approach-a-loop fire.
 **HEAD when found:** `8564e6f` (v2.5 audit-fix line).
-**Status:** OPEN — needs per-test triage; exceeds one fire.
+**Status:** Bucket A (8 tests) **RESOLVED** 2026-05-20 — all 8 were
+pre-Cycle-3-contract stale tests, fixed this fire (test-only edits).
+Only **Bucket B** (1 test, `test_hbs_sample_tree_eval_runs`) remains
+open — a distinct root cause; see that section below.
+
+## Bucket A resolution (2026-05-20)
+
+All 8 Bucket A tests were confirmed STALE — same class as `e7768f4`:
+Cycle 3 audit batches deliberately changed the stdlib guard
+contracts, and these tests still encoded the pre-Cycle-3 contracts.
+Per-test:
+
+- `log_f64_domain_guard` — `__log_stable_f64(x<=0)` returns NaN now
+  (Cycle 3 R2 batch 25), not the old -1e6 sentinel.
+- `vec_zip_div_zero_divisor_fail_closed` — a zero divisor yields the
+  INT32_MIN sentinel now (Cycle 3 R1 batch 20), not 0.
+- `vec_l2_squared_distance_saturates` — the function clamps each
+  delta to [-46340, 46340] before squaring now (Cycle 3 R1 batch 20),
+  so one element can't overflow; the test uses 2 elements to exercise
+  the accumulator-saturation path it was always meant to check.
+- the 5 `ce_loss` / `ce_loss_batch_f32` tests — both return NaN
+  (0.0/0.0) for an invalid label now (Cycle 3 R1 batch 20), not a
+  large finite value; tests switched to the `loss != loss` NaN idiom.
+
+Fix = test-only edits (the stdlib code is correct). Verified: 8 pass.
 
 ## How this was found
 
@@ -31,7 +55,7 @@ python -m pytest \
   --tb=short -q
 ```
 
-## Bucket A — 8 stdlib-guard failures (`expected 42, got 7`/`1`)
+## Bucket A — 8 stdlib-guard failures (`expected 42, got 7`/`1`) — RESOLVED (see top)
 
 All 8 compile a program that calls a **stdlib (.hx) function** whose
 guard / saturation / rejection branch is expected to fire (returns 42)
