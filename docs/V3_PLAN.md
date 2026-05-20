@@ -161,7 +161,7 @@ depend on a clean, unambiguous full-suite run.
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
 | 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
-| 207 | x86_64-vs-LLVM parity gate | — | — | Phase D — next |
+| 207 | x86_64-vs-LLVM parity gate | ~ | A 3-clean ✓ | Phase D — chunk A shipped (mock structural-parity harness); chunk B = real-exec + corpus + full gate |
 | 208 | Phase D — end-of-phase 5-clean-gate | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -627,3 +627,39 @@ depend on a clean, unambiguous full-suite run.
   using one is simply outside the parity gate's covered subset, never
   miscompiled. Stage 206 (the numbered stage) is CLOSED. Next:
   Stage 207 — the x86_64-vs-LLVM parity gate.
+- 2026-05-20 — **Stage 207 chunk A shipped — x86_64-vs-LLVM mock
+  structural-parity harness.** Stage 207 (the parity gate) is chunked,
+  mirroring how `gpu_ci.py` rolled out — Stage 129 shipped mock
+  validation, v2.4 item 13 added real-HW dispatch. Chunk A:
+  `helixc/backend/llvm_parity.py` — `check_parity(module, program)`
+  compiles one `tir.Module` through BOTH backends and classifies the
+  outcome as a `ParityVerdict`: MATCH (both accept; the LLVM IR passes
+  the toolchain-free `mock_validate_ll` shape check), UNCOVERED
+  (x86_64 accepts but the LLVM backend fails closed on a 206-R
+  residual op — designed, not a defect), MISMATCH (LLVM emits
+  shape-malformed IR — a real bug), ERROR (degenerate input, or a
+  backend crashed). It needs no LLVM toolchain and always runs; it
+  proves the load-bearing invariant that the LLVM backend never
+  SILENTLY miscompiles — a 206-R op is rejected loudly (UNCOVERED),
+  never mis-emitted. `ParityResult` is a frozen, derived-verdict
+  dataclass mirroring `gpu_ci.ValidationResult` /
+  `llvm_toolchain.LLVMDispatchResult`, carrying the forward-compatible
+  real-execution fields chunk B fills in. The harness deep-copies the
+  module per backend (side-effect-free) and captures every backend
+  failure — a crash, a fail-closed, a degenerate input — into a
+  verdict, never an escaping traceback. 33 tests
+  (`test_llvm_parity.py`); `x86_64.py` untouched. Per-stage 3-clean
+  audit: round 1 found 1 HIGH (a `mock_validate_ll` crash was
+  misclassified MISMATCH not ERROR) + must-fix MEDIUMs (an
+  empty/no-`main` module misclassified; missing `__post_init__`
+  invariants; the broad-except crash paths untested) — all fixed
+  (try/except/else restructure so `llvm_emitted` is set only after the
+  shape-check completes; an up-front no-`main` guard; explicit
+  invariants for blank `program` / `failed_closed`+`mock_clean` /
+  blank diagnostics; monkeypatch crash-path tests). Round 2: all three
+  audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM — **Stage 207
+  chunk A CLOSED**. Next: Stage 207 chunk B — the real-execution
+  parity path (compile both backends to runnable executables, run
+  them, compare observable behaviour — exit code / stdout / stderr —
+  behind WSL + LLVM-toolchain detection, DEFERRED when absent) + a
+  curated source-program corpus + the full parity-gate test.
