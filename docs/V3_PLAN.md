@@ -155,8 +155,8 @@ depend on a clean, unambiguous full-suite run.
 |-------|-------|------|-------|-------|
 | 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 202 | Control flow (blocks, br, phi) | ✓ | 3-clean (batched w/203) | Phase D |
-| 203 | Scalar op set (cmp, select, neg) | ✓ | 3-clean (batched w/202) | Phase D — see status note |
+| 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
+| 203 | Scalar op set (cmp, select, neg) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -247,3 +247,17 @@ depend on a clean, unambiguous full-suite run.
   open in the "full scalar op set": integer division/remainder and
   the bitwise ops (a Stage 203-continuation chunk). Next after the
   audit: Stage 204 — memory & aggregates.
+- 2026-05-20 — **Stages 202 + 203 — batched 3-clean audit CLOSED.**
+  The batched audit found 1 HIGH + 2 must-fix MEDIUM, fixed in
+  `5bf41b6`: `_emit_phis` now type-checks each phi incoming against
+  the block parameter and guards against duplicate predecessors;
+  `mock_validate_ll` checks "the body's last instruction is a
+  terminator" rather than requiring a `ret`, so a valid `ret`-less
+  infinite loop passes. The round-2 re-run returned 0 HIGH / 0
+  must-fix on all three surfaces — 2 LOW only, both unreachable today
+  (a `mock_validate_ll` label-only-empty-block gap the emitter cannot
+  produce; a `_compute_predecessors` duplicate-block-id collapse the
+  monotonic-id IRBuilder cannot produce) — backlogged. **Stages 202 +
+  203 CLOSED.** Still open in the "full scalar op set": integer
+  division/remainder + bitwise ops. Next: the Stage 203 continuation
+  (div/mod + bitwise), then Stage 204 — memory & aggregates.
