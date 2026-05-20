@@ -8,7 +8,7 @@ consumes the same host IR — a `tir.Module` — that
 `helixc/backend/x86_64.py::compile_module_to_elf` consumes, and
 `x86_64.py` is left completely untouched until the Stage 221 cutover.
 
-Supported so far (Stages 200 + 202):
+Supported so far (Stages 200, 202, 203):
   - module header + target triple
   - a `define` for each function (integer params + integer/void return)
   - integer constants (CONST_INT, materialized as inline literals)
@@ -17,10 +17,13 @@ Supported so far (Stages 200 + 202):
     becomes a labelled LLVM basic block; BR / COND_BR become LLVM
     `br`; a block's tir parameters become LLVM `phi` nodes collecting
     the matching branch argument from each predecessor.
+  - scalar op set (Stage 203): the six integer comparisons (`icmp`,
+    signed or unsigned per operand dtype), SELECT, NEG; plus the
+    unsigned integer dtypes (u8/u16/u32/u64/usize) and isize.
 
-Anything outside that set — memory, calls, floats, comparisons, the
-wider op surface — is REJECTED with a loud `LLVMEmitError`, never
-emitted wrong. Those land in Stages 203-206. A mock-validation path
+Anything outside that set — memory, calls, floats, division, bitwise
+ops, the wider op surface — is REJECTED with a loud `LLVMEmitError`,
+never emitted wrong. Those land in later stages. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
 an LLVM toolchain, mirroring `gpu_ci.py`'s mock path; real
 `llvm-as`/`opt`/`llc` dispatch (`llvm_toolchain.py`) is Stage 201.
@@ -50,17 +53,40 @@ class LLVMEmitError(Exception):
     never produces wrong IR. Stages 202-206 widen the supported set."""
 
 
-# tir scalar-integer dtype name -> LLVM integer type.
+# tir scalar-integer dtype name -> LLVM integer type. LLVM integer
+# types are sign-agnostic — `u32` and `i32` are both the LLVM type
+# `i32`; signedness is per-instruction (icmp slt vs ult). The unsigned
+# dtypes live in `_UNSIGNED_INT_DTYPES`, which carries the sign for
+# that choice.
 _LLVM_INT_TYPES: dict[str, str] = {
     "bool": "i1",
-    "i8": "i8",
-    "i16": "i16",
-    "i32": "i32",
-    "i64": "i64",
+    "i8": "i8", "u8": "i8",
+    "i16": "i16", "u16": "i16",
+    "i32": "i32", "u32": "i32",
+    "i64": "i64", "u64": "i64",
+    "isize": "i64", "usize": "i64",
     # `char` is also a TIRScalar integer dtype, but its bit width is not
     # yet pinned for the LLVM path — consciously deferred. A char-typed
     # function loudly raises LLVMEmitError here until a later stage
     # fixes the width (fail-closed, not a silent miss).
+}
+
+# Helix unsigned integer dtypes — each shares an LLVM integer type with
+# its signed counterpart but selects an unsigned predicate for `icmp`.
+_UNSIGNED_INT_DTYPES: frozenset[str] = frozenset({
+    "u8", "u16", "u32", "u64", "usize",
+})
+
+# tir comparison OpKind -> (signed predicate, unsigned predicate) for
+# LLVM `icmp`. eq / ne are sign-agnostic; the ordered comparisons are
+# not, so the predicate is chosen by the operand dtype's signedness.
+_LLVM_ICMP_PREDS: dict[tir.OpKind, tuple[str, str]] = {
+    tir.OpKind.CMP_EQ: ("eq", "eq"),
+    tir.OpKind.CMP_NE: ("ne", "ne"),
+    tir.OpKind.CMP_LT: ("slt", "ult"),
+    tir.OpKind.CMP_LE: ("sle", "ule"),
+    tir.OpKind.CMP_GT: ("sgt", "ugt"),
+    tir.OpKind.CMP_GE: ("sge", "uge"),
 }
 
 # tir integer binary OpKind -> LLVM instruction mnemonic.
@@ -118,6 +144,13 @@ def _llvm_global_name(name: str) -> str:
         return "@" + name
     escaped = name.replace("\\", "\\5C").replace('"', "\\22")
     return f'@"{escaped}"'
+
+
+def _is_unsigned_int(ty: tir.TIRType) -> bool:
+    """True for a Helix unsigned-integer scalar dtype. Drives the
+    signed-vs-unsigned LLVM `icmp` predicate choice (slt vs ult)."""
+    return (isinstance(ty, tir.TIRScalar)
+            and ty.name in _UNSIGNED_INT_DTYPES)
 
 
 class _FnEmitter:
@@ -405,11 +438,92 @@ class _FnEmitter:
             false_lbl = self._block_label(op.attrs["false_block"])
             return (f"br i1 {self._ref(cond)}, label %{true_lbl}, "
                     f"label %{false_lbl}")
+        if kind in _LLVM_ICMP_PREDS:
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: {kind.value} must have "
+                    f"exactly one result, got {len(op.results)}")
+            if len(op.operands) != 2:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: {kind.value} expects "
+                    f"two operands, got {len(op.operands)}")
+            result = op.results[0]
+            ctx = f"function {self.fn.name!r} {kind.value}"
+            # A comparison's result is a bool — LLVM i1.
+            res_ty = _llvm_int_type(result.ty, ctx=f"{ctx} result")
+            if res_ty != "i1":
+                raise LLVMEmitError(
+                    f"{ctx}: result has LLVM type {res_ty}, but a "
+                    f"comparison produces a bool (i1)")
+            a, b = op.operands
+            a_ty = _llvm_int_type(a.ty, ctx=f"{ctx} operand 0")
+            b_ty = _llvm_int_type(b.ty, ctx=f"{ctx} operand 1")
+            if a_ty != b_ty:
+                raise LLVMEmitError(
+                    f"{ctx}: operands have mismatched LLVM types "
+                    f"{a_ty} and {b_ty} — a comparison's two operands "
+                    f"must share one type")
+            signed_pred, unsigned_pred = _LLVM_ICMP_PREDS[kind]
+            # The icmp predicate's signedness follows the OPERAND dtype
+            # (a Helix u8/u16/u32/u64/usize operand -> unsigned).
+            pred = (unsigned_pred if _is_unsigned_int(a.ty)
+                    else signed_pred)
+            return (f"%v{result.id} = icmp {pred} {a_ty} "
+                    f"{self._ref(a)}, {self._ref(b)}")
+        if kind == tir.OpKind.SELECT:
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SELECT must have exactly "
+                    f"one result, got {len(op.results)}")
+            if len(op.operands) != 3:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SELECT expects three "
+                    f"operands (cond, then, else), got "
+                    f"{len(op.operands)}")
+            result = op.results[0]
+            ctx = f"function {self.fn.name!r} SELECT"
+            cond, t_val, f_val = op.operands
+            cond_ty = _llvm_int_type(cond.ty, ctx=f"{ctx} condition")
+            if cond_ty != "i1":
+                raise LLVMEmitError(
+                    f"{ctx}: condition has LLVM type {cond_ty}, but "
+                    f"LLVM `select` requires an i1 (bool) condition")
+            ty = _llvm_int_type(result.ty, ctx=ctx)
+            for i, arm in ((1, t_val), (2, f_val)):
+                arm_ty = _llvm_int_type(arm.ty, ctx=f"{ctx} operand {i}")
+                if arm_ty != ty:
+                    raise LLVMEmitError(
+                        f"{ctx}: operand {i} has LLVM type {arm_ty} but "
+                        f"the result is {ty} — the two SELECT arms and "
+                        f"the result must share one type")
+            return (f"%v{result.id} = select i1 {self._ref(cond)}, "
+                    f"{ty} {self._ref(t_val)}, {ty} {self._ref(f_val)}")
+        if kind == tir.OpKind.NEG:
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: NEG must have exactly "
+                    f"one result, got {len(op.results)}")
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: NEG expects one "
+                    f"operand, got {len(op.operands)}")
+            result = op.results[0]
+            ctx = f"function {self.fn.name!r} NEG"
+            ty = _llvm_int_type(result.ty, ctx=ctx)
+            operand = op.operands[0]
+            operand_ty = _llvm_int_type(operand.ty, ctx=f"{ctx} operand")
+            if operand_ty != ty:
+                raise LLVMEmitError(
+                    f"{ctx}: operand has LLVM type {operand_ty} but the "
+                    f"result is {ty} — they must share one type")
+            # LLVM has no integer-negate instruction; `sub <ty> 0, x`
+            # is the canonical form (two's-complement, wrapping).
+            return f"%v{result.id} = sub {ty} 0, {self._ref(operand)}"
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT, ADD, SUB, MUL, "
-            f"RETURN, BR, COND_BR; comparisons / select / the wider op "
-            f"set are Stage 203+)"
+            f"the six comparisons, SELECT, NEG, RETURN, BR, COND_BR; "
+            f"division, bitwise ops, memory, and calls are later stages)"
         )
 
 

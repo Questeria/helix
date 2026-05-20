@@ -482,3 +482,148 @@ def test_stage202_rejects_phi_input_from_cond_br():
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="only BR can supply phi inputs"):
         llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 203 — scalar op set (comparisons, select, neg, unsigned dtypes)
+# ==========================================================================
+def test_stage203_emit_signed_comparison():
+    """A comparison of signed integers uses a signed icmp predicate."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("cmp", [("a", _i32()), ("c", _i32())],
+                          tir.TIRScalar("bool"))
+    r = b.emit(tir.OpKind.CMP_LT, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("bool"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = icmp slt i32 %v{fn.params[0].id}, "
+            f"%v{fn.params[1].id}") in ll, ll
+    assert f"ret i1 %v{r.id}" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_unsigned_comparison():
+    """A comparison of unsigned integers uses an unsigned icmp
+    predicate — the signedness follows the operand dtype."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("ucmp", [("a", u32), ("c", u32)],
+                          tir.TIRScalar("bool"))
+    r = b.emit(tir.OpKind.CMP_LT, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("bool"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = icmp ult i32" in ll, ll
+    assert "icmp slt" not in ll, ll  # NOT the signed predicate
+
+
+def test_stage203_emit_eq_comparison_is_sign_agnostic():
+    """`==` lowers to `icmp eq` regardless of operand signedness."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("eq", [("a", u32), ("c", u32)],
+                          tir.TIRScalar("bool"))
+    r = b.emit(tir.OpKind.CMP_EQ, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("bool"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = icmp eq i32" in ll, ll
+
+
+def test_stage203_emit_select():
+    """SELECT lowers to LLVM `select i1`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("sel", [("c", tir.TIRScalar("bool"))], _i32())
+    r = b.emit(tir.OpKind.SELECT, fn.params[0], b.const_int(10),
+               b.const_int(20), result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = select i1 %v{fn.params[0].id}, "
+            f"i32 10, i32 20") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_neg():
+    """NEG lowers to `sub <ty> 0, x` — LLVM has no integer negate."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("neg", [("x", _i32())], _i32())
+    r = b.emit(tir.OpKind.NEG, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = sub i32 0, %v{fn.params[0].id}" in ll, ll
+
+
+def test_stage203_emit_unsigned_arithmetic():
+    """An unsigned dtype shares its signed counterpart's LLVM integer
+    type — `add` on u32 emits `add i32` (LLVM `add` is sign-agnostic)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("uadd", [("a", u32), ("c", u32)], u32)
+    r = b.emit(tir.OpKind.ADD, fn.params[0], fn.params[1], result_ty=u32)
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "define i32 @uadd(i32 %v0, i32 %v1) {" in ll, ll
+    assert f"%v{r.id} = add i32 %v0, %v1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_comparison_feeds_cond_br():
+    """A comparison's i1 result is a valid COND_BR condition — the
+    realistic if-pattern (`icmp` then `br i1`)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    t_blk = b.append_block()
+    f_blk = b.append_block()
+    cmp = b.emit(tir.OpKind.CMP_GT, fn.params[0], b.const_int(0),
+                 result_ty=tir.TIRScalar("bool"))
+    b.emit(tir.OpKind.COND_BR, cmp,
+           attrs={"true_block": t_blk.id, "false_block": f_blk.id})
+    b.switch_to(t_blk)
+    b.ret(b.const_int(1))
+    b.switch_to(f_blk)
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{cmp.id} = icmp sgt i32 %v{fn.params[0].id}, 0" in ll, ll
+    assert (f"br i1 %v{cmp.id}, label %bb{t_blk.id}, "
+            f"label %bb{f_blk.id}") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_rejects_non_bool_comparison_result():
+    """A comparison whose result type is not bool/i1 is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.CMP_EQ, fn.params[0], fn.params[1],
+               result_ty=_i32())  # i32 result, not bool
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="produces a bool"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage203_rejects_non_i1_select_condition():
+    """A SELECT whose condition is not i1 is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.SELECT, fn.params[0], b.const_int(1),
+               b.const_int(2), result_ty=_i32())  # i32 condition
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="i1"):
+        llvm_ir.emit_module(mod)

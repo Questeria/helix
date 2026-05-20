@@ -155,8 +155,9 @@ depend on a clean, unambiguous full-suite run.
 |-------|-------|------|-------|-------|
 | 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 202 | Control flow (blocks, br, phi) | — | — | next |
-| 203–208 | Phase D — LLVM IR backend | — | — | planned |
+| 202 | Control flow (blocks, br, phi) | ✓ | 3-clean (batched w/203) | Phase D |
+| 203 | Scalar op set (cmp, select, neg) | ✓ | 3-clean (batched w/202) | Phase D — see status note |
+| 204–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -230,3 +231,19 @@ depend on a clean, unambiguous full-suite run.
   being drafted in parallel by a background agent. Next: Stages
   202 + 203, batched — control flow + the full scalar op set, one
   3-clean audit for the pair.
+- 2026-05-20 — **Stages 202 + 203 shipped (LLVM control flow + scalar
+  op set).** Stage 202 (`d7e5aad`): `_FnEmitter` rewritten for
+  multi-block — every tir block a labelled LLVM basic block, BR /
+  COND_BR → LLVM `br`, tir block-params → `phi` (a pre-pass registers
+  every value up front so a loop-header phi can forward-reference a
+  back-edge value). Stage 203 (this commit): the six integer
+  comparisons → `icmp` (signed or unsigned predicate chosen per
+  operand dtype), SELECT → `select i1`, NEG → `sub 0, x`; the unsigned
+  integer dtypes (u8/u16/u32/u64/usize) + isize added to the LLVM
+  type map. Fail-closed throughout — entry-block, terminator,
+  i1-condition, and operand/result type-match guards. 34
+  `test_llvm_ir` tests pass; `x86_64.py` untouched. The per-stage
+  3-clean audit is dispatched once, batched across both stages. Still
+  open in the "full scalar op set": integer division/remainder and
+  the bitwise ops (a Stage 203-continuation chunk). Next after the
+  audit: Stage 204 — memory & aggregates.
