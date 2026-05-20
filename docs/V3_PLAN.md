@@ -518,3 +518,18 @@ depend on a clean, unambiguous full-suite run.
   `text` / non-int `trap_id` attr, all raise. 12 new tests; 143
   passed + 2 skipped across the two LLVM test files. `x86_64.py`
   untouched. Per-stage 3-clean audit dispatched.
+- 2026-05-20 — **Stage 206 chunk B — 3-clean audit round 1: 1
+  must-fix MEDIUM, fixed.** The silent-failure-hunter found that
+  TRAP's i32 result (lower_ast gives every TRAP a result, for SSA
+  bookkeeping) was registered as `%vN` by `_prepass` but never
+  defined by the TRAP lowering (which ends in `unreachable`).
+  Currently harmless — the result is never referenced — but a
+  fail-OPEN gap: a future reference would silently emit a dangling
+  `%vN` (mock-validate is shape-only; only real `llvm-as` would catch
+  it). Fixed: `_prepass` now skips TRAP's results (a `pass` branch,
+  like ALLOC_VAR), so a stray reference instead fails closed in
+  `_ref` — consistent with the void-CALL unit-result skip. The
+  type-design and code-review surfaces were clean. 2 new tests (one
+  pins the fail-closed behaviour; one closes the audit's noted
+  non-int `trap_id` coverage gap); 145 passed + 2 skipped. Round-2
+  re-audit dispatched.

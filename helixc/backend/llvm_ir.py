@@ -347,6 +347,13 @@ class _FnEmitter:
                     self._register_alloc_var(op)
                 elif op.kind == tir.OpKind.ALLOC_ARRAY:
                     self._register_alloc_array(op)
+                elif op.kind == tir.OpKind.TRAP:
+                    # TRAP defines no LLVM value — it ends in
+                    # `unreachable`. A result it carries is SSA
+                    # bookkeeping only; leaving it unregistered makes a
+                    # stray reference to it fail closed in `_ref`
+                    # rather than emit a dangling `%vN`.
+                    pass
                 else:
                     for r in op.results:
                         # A unit-typed result (a void CALL) is not a

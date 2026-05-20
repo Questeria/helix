@@ -2207,3 +2207,32 @@ def test_stage206_rejects_trap_non_string_text():
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="string 'text' attr"):
         llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_trap_non_int_trap_id():
+    """TRAP's 'trap_id' attr must be an integer."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "x", "trap_id": "oops"})
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="integer 'trap_id' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_trap_result_not_referenceable():
+    """TRAP defines no LLVM value — a result it carries (SSA
+    bookkeeping only) is not registered, so a stray reference to it
+    fails closed in `_ref` rather than emitting a dangling register."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.TRAP, result_ty=_i32(), attrs={"text": "x"})
+    second = b.append_block()
+    b.switch_to(second)
+    b.ret(r)   # references the TRAP's (undefined) result
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="defined by no op"):
+        llvm_ir.emit_module(mod)
