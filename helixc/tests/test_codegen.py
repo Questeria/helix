@@ -16546,23 +16546,20 @@ def test_struct_passed_to_helper():
         read_x(c)
     }
     """
-    # Cycle 1 Batch TEST fix batch 16 (silent-failure HIGH-2):
-    # pre-fix wrapped `assert code in (42, 0)` in `except Exception: pass`
-    # which made the test UNFALSIFIABLE — even AssertionError was
-    # swallowed. Test reported PASS regardless of what codegen produced.
-    #
-    # Post-fix: pytest.mark.xfail honestly captures "struct-by-value
-    # codegen pending" intent. Test now FAILS LOUDLY if codegen evolves
-    # to produce a wrong answer (99 wrong-arm, segfault, etc.) while
-    # still gracefully tolerating "feature not yet implemented" via
-    # the xfail marker (strict=False so it passes if codegen starts
-    # working).
+    # v2.x re-audit R3 (TEST-MED): the prior `except Exception` here
+    # absorbed ANY exception into a non-failing xfail — a real codegen
+    # regression that threw (not just "feature pending") was silently
+    # downgraded to xfail rather than failing the suite. And the
+    # `assert code in (42, 0)` accepted 0 as a pass. Both are now
+    # tight: only NotImplementedError ("feature not yet implemented")
+    # xfails; every other exception propagates and fails loudly; and
+    # the answer must be exactly 42 (Coord.x).
     import pytest
     try:
         code = compile_and_run(src)
-    except Exception as exc:
-        pytest.xfail(f"struct-by-value codegen pending: {type(exc).__name__}")
-    assert code in (42, 0), f"expected 42 or 0, got {code}"
+    except NotImplementedError as exc:
+        pytest.xfail(f"struct-by-value codegen pending: {exc}")
+    assert code == 42, f"expected 42 (Coord.x), got {code}"
 
 
 def test_stdlib_int_min_max_clamp():

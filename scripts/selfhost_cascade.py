@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -158,6 +159,19 @@ def build_next(generation: int, compiler_path: str, next_path: str,
     return fields
 
 
+def _parse_smoke_exit_code(stdout: str) -> int | None:
+    """Extract the exit code from the trailing `echo exit=$?` line of a
+    smoke run's stdout.
+
+    Takes the LAST full-line `exit=N` match so a binary that prints its
+    own `exit=...` text cannot shadow the appended echo, and requires a
+    whole-line match so `exit=420` parses as 420 rather than being
+    mistaken for `exit=42` (the defect of the prior substring test).
+    Returns None when no `exit=N` line is present."""
+    matches = re.findall(r"(?m)^exit=(\d+)[ \t]*\r?$", stdout)
+    return int(matches[-1]) if matches else None
+
+
 def run_smoke(final_compiler: str, input_path: str, output_path: str) -> list[dict[str, int | str]]:
     cases = [
         ("literal", "fn main() -> i32 { 42 }", 42),
@@ -198,13 +212,23 @@ def run_smoke(final_compiler: str, input_path: str, output_path: str) -> list[di
         )
         proc = run_wsl(cmd, timeout=60)
         stdout = proc.stdout.decode("utf-8", errors="replace")
-        if proc.returncode != 0 or f"exit={expected}" not in stdout:
+        # v2.x re-audit R3 (RT-M3): parse the binary's REAL exit code
+        # from the trailing `echo exit=$?` line. Pre-fix `actual_exit`
+        # was hardwired to `expected` — a copy, not a measurement —
+        # which made selfhost_cascade_validate.py's `actual_exit == 42`
+        # cross-check tautological. The pass guard also used a fragile
+        # `f"exit={expected}"` substring test (`exit=42` is a substring
+        # of `exit=420`); both now use the parsed integer.
+        actual_exit = _parse_smoke_exit_code(stdout)
+        if proc.returncode != 0 or actual_exit != expected:
             raise RuntimeError(
-                f"smoke case {name!r} failed: stdout={stdout!r} "
+                f"smoke case {name!r} failed: actual_exit={actual_exit} "
+                f"expected={expected} stdout={stdout!r} "
                 f"stderr={proc.stderr!r}"
             )
-        print(f"smoke {name}: exit={expected}")
-        results.append({"name": name, "expected_exit": expected, "actual_exit": expected})
+        print(f"smoke {name}: exit={actual_exit}")
+        results.append({"name": name, "expected_exit": expected,
+                        "actual_exit": actual_exit})
     return results
 
 

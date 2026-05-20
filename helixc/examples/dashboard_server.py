@@ -36,6 +36,45 @@ AGENTS = {
 }
 
 
+def _rewrite_knobs(src, hx, kind, seed, maze, grid_size):
+    """Apply the requested compile-time knobs to an agent's source.
+
+    Each knob substitutes a `@pure fn` constant. A knob whose target
+    function is absent from this agent's source is REJECTED rather than
+    silently dropped (v2.x re-audit R3 RT-M1/M2): pre-fix `maze` for the
+    `nn` agent (dashboard_nn_agent.hx has no use_maze()) and `size` for
+    `nn` (the grid_n rewrite was gated `kind == "qlearn"` even though
+    dashboard_nn_agent.hx HAS a grid_n()) no-op'd silently — the request
+    was accepted and logged maze=True / size=N, but the binary compiled
+    with the knob ignored.
+
+    Returns (new_src, None) on success, or (None, error_message) when a
+    requested knob is unsupported by this agent's source."""
+    new_src = src
+    if seed is not None:
+        target = "@pure fn map_seed() -> i32 { 12345 }"
+        if target not in new_src:
+            return None, (f"agent kind {kind!r} does not support the "
+                          f"'seed' knob (no map_seed() in {hx})")
+        new_src = new_src.replace(
+            target, f"@pure fn map_seed() -> i32 {{ {int(seed)} }}")
+    if maze:
+        target = "@pure fn use_maze() -> i32 { 0 }"
+        if target not in new_src:
+            return None, (f"agent kind {kind!r} does not support the "
+                          f"'maze' knob (no use_maze() in {hx})")
+        new_src = new_src.replace(
+            target, "@pure fn use_maze() -> i32 { 1 }")
+    if grid_size is not None:
+        target = "@pure fn grid_n() -> i32 { 10 }"
+        if target not in new_src:
+            return None, (f"agent kind {kind!r} does not support the "
+                          f"'size' knob (no grid_n() in {hx})")
+        new_src = new_src.replace(
+            target, f"@pure fn grid_n() -> i32 {{ {int(grid_size)} }}")
+    return new_src, None
+
+
 def compile_helix(kind, seed=None, maze=False, grid_size=None):
     """Compile the chosen agent .hx -> ELF binary.
 
@@ -50,22 +89,10 @@ def compile_helix(kind, seed=None, maze=False, grid_size=None):
     if (seed is not None or maze or grid_size is not None) and kind in ("qlearn", "nn"):
         with open(src_path, "r", encoding="utf-8") as f:
             src = f.read()
-        new_src = src
-        if seed is not None:
-            new_src = new_src.replace(
-                "@pure fn map_seed() -> i32 { 12345 }",
-                f"@pure fn map_seed() -> i32 {{ {int(seed)} }}",
-            )
-        if maze:
-            new_src = new_src.replace(
-                "@pure fn use_maze() -> i32 { 0 }",
-                "@pure fn use_maze() -> i32 { 1 }",
-            )
-        if grid_size is not None and kind == "qlearn":
-            new_src = new_src.replace(
-                "@pure fn grid_n() -> i32 { 10 }",
-                f"@pure fn grid_n() -> i32 {{ {int(grid_size)} }}",
-            )
+        new_src, knob_err = _rewrite_knobs(
+            src, hx, kind, seed, maze, grid_size)
+        if knob_err is not None:
+            return None, knob_err
         compile_path = os.path.join(EXAMPLES, f"_{kind}_compiled.hx")
         # Restart 47 B2: atomic-write so a Ctrl-C / OOM mid-write does not
         # leave a truncated source at compile_path for the next backend

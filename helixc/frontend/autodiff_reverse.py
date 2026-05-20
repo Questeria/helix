@@ -983,6 +983,28 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
             "reverse-mode AD does not differentiate through Range "
             "expressions; ranges are iterators, not numeric values"
         )
+    # v2.x re-audit R3 (FE-N1): aggregate construction / element access.
+    # The empty TupleLit `()` is Helix's unit value — it carries no
+    # numeric value, so there is no adjoint to deposit (match_lower
+    # emits it as the unreachable exhaustiveness-fallthrough arm).
+    # Non-empty Index / StructLit / TupleLit / ArrayLit had no arm and
+    # fell through to the warn-and-return catchall below — `_ad_warn` is
+    # a soft trap (85001) suppressed unless `-Wad=error`, so a function
+    # depending on a parameter through an index/aggregate silently
+    # deposited no adjoint (zero gradient) with no diagnostic. Fail
+    # loudly for those, mirroring the For/While/Loop arms. (A.Field is
+    # NOT listed — it has a real field-path arm above at the A.Field
+    # branch.)
+    if isinstance(node, A.TupleLit) and not node.elems:
+        return
+    if isinstance(node, (A.Index, A.StructLit, A.TupleLit, A.ArrayLit)):
+        kind = type(node).__name__
+        raise NotImplementedError(
+            f"reverse-mode AD does not differentiate through {kind} "
+            f"(aggregate construction / element access); Phase-0 AD is "
+            f"scalar-valued — extract the scalar component before "
+            f"differentiating"
+        )
     # Audit 28.8 B5: Any other unhandled node — warn loudly. Pre-fix
     # this returned silently and the gradient was 0 with no diagnostic.
     _ad_warn(node, "unhandled expression kind in reverse-mode AD")

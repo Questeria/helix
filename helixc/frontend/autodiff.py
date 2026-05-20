@@ -1648,6 +1648,32 @@ def _diff(expr: A.Expr, var: str) -> A.Expr:
             "forward-mode AD does not differentiate through Range "
             "expressions; ranges are iterators, not numeric values"
         )
+    # v2.x re-audit R3 (FE-N1): aggregate construction / element access.
+    # The empty TupleLit `()` is Helix's unit value — match_lower emits
+    # it as the unreachable exhaustiveness-fallthrough arm of a lowered
+    # `match`, and unit carries no numeric value, so its derivative is
+    # structurally 0 (handled here like a literal). Non-empty aggregates
+    # and element/field access (Index / Field / StructLit / non-empty
+    # TupleLit / ArrayLit) had no arm and fell through to the
+    # warn-and-zero catchall below — `_ad_warn` is a soft trap (85001)
+    # suppressed unless `-Wad=error`, so a function depending on its
+    # variable through one silently got a zero derivative with no
+    # diagnostic. The autodiff_cli `differentiate` path has no
+    # `_reject_unsupported_grad_signature` gate, so this is
+    # user-reachable. Fail loudly for those, mirroring the
+    # For/While/Loop arms — real aggregate derivatives are a v3.0+
+    # language feature, not an audit-fix.
+    if isinstance(expr, A.TupleLit) and not expr.elems:
+        return A.FloatLit(span=span, value=0.0)
+    if isinstance(expr, (A.Index, A.Field, A.StructLit, A.TupleLit,
+                         A.ArrayLit)):
+        kind = type(expr).__name__
+        raise NotImplementedError(
+            f"forward-mode AD does not differentiate through {kind} "
+            f"(aggregate construction / element access); Phase-0 AD is "
+            f"scalar-valued — extract the scalar component before "
+            f"differentiating"
+        )
     # Genuinely-unknown — warn loudly.
     _ad_warn(expr, "unhandled expression kind")
     return A.FloatLit(span=expr.span, value=0.0)
