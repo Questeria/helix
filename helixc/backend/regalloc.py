@@ -237,12 +237,125 @@ def compute_live_intervals(fn: ti.TileFn) -> list[LiveInterval]:
 
 
 def allocate_fn(fn: ti.TileFn, num_registers: int) -> RegAllocResult:
-    """v2.4 item 15 — end-to-end register allocation for one tile-IR
-    function: liveness analysis followed by linear-scan.
+    """v2.4 item 15 — single-register-class register allocation for one
+    tile-IR function: liveness analysis followed by linear-scan.
 
     Convenience composition of `compute_live_intervals` +
-    `linear_scan`. Per-backend slices wrap this with a register-class
-    model (dtype -> class + pool size) and thread the resulting
-    `assignment` into operand emission.
+    `linear_scan`, for a backend (or test) with a single uniform
+    register file. Backends with multiple register classes (int vs
+    float vs predicate) use `allocate_by_class` instead.
     """
     return linear_scan(compute_live_intervals(fn), num_registers)
+
+
+# ============================================================================
+# Multi-class allocation (v2.4 item 15, slice 3)
+# ============================================================================
+@dataclass
+class MultiClassResult:
+    """Outcome of a multi-register-class allocation pass.
+
+    `assignment` — vreg -> (class_key, register_index). Two vregs in
+                   DIFFERENT classes may share a register index — they
+                   name distinct physical files (e.g. PTX `%r0` vs
+                   `%f0`), so that is correct, not a collision.
+    `spilled`    — vregs that did not fit their class's register file.
+    `per_class`  — the underlying single-class RegAllocResult for each
+                   class key, so a backend can read each class's
+                   `register_high_water` to size its `.reg` decls.
+
+    Invariant: `assignment.keys()` and `spilled` are disjoint and
+    together cover every vreg with a live interval exactly once.
+    """
+    assignment: dict[int, tuple[str, int]] = field(default_factory=dict)
+    spilled: set[int] = field(default_factory=set)
+    per_class: dict[str, RegAllocResult] = field(default_factory=dict)
+
+    @property
+    def spill_count(self) -> int:
+        return len(self.spilled)
+
+
+def _value_map(fn: ti.TileFn) -> dict[int, ti.TileValue]:
+    """Build a vreg-id -> TileValue map over every value a function
+    mentions (params, block params, op results + operands)."""
+    vmap: dict[int, ti.TileValue] = {}
+    for p in fn.params:
+        vmap[p.id] = p
+    for blk in fn.blocks:
+        for p in blk.params:
+            vmap[p.id] = p
+        for op in blk.ops:
+            for v in op.results:
+                vmap[v.id] = v
+            for v in op.operands:
+                vmap[v.id] = v
+    return vmap
+
+
+def allocate_by_class(
+    fn: ti.TileFn,
+    classify: "Callable[[ti.TileValue], str]",
+    class_pools: dict[str, int],
+) -> MultiClassResult:
+    """v2.4 item 15 (slice 3) — multi-register-class allocation.
+
+    Real backends have several register files that values cannot
+    share across: PTX has `%r` (b32 int) / `%rd` (b64) / `%f` (f32) /
+    `%p` (predicate); AMDGCN has VGPR vs SGPR. A b32-int value and an
+    f32 value are simultaneously live without contending — they live
+    in different files. Running one linear-scan over a single pool
+    would wrongly serialize them.
+
+    This runs liveness once, partitions the live intervals by
+    register class (via `classify` on each value), then runs an
+    independent `linear_scan` per class against that class's pool
+    size. Per-class register indices are namespaced by the class key
+    in the merged `assignment`, so equal indices in different classes
+    are not collisions.
+
+    Args:
+        fn: the tile-IR kernel function.
+        classify: maps a TileValue to its register-class key. The
+            per-backend dtype -> class mapping (slice 4+).
+        class_pools: class key -> register-file size for that class.
+
+    Raises:
+        ValueError: if `classify` returns a key absent from
+            `class_pools` — a backend that forgot to size a class
+            fails loudly here, not with a silent mis-allocation.
+    """
+    vmap = _value_map(fn)
+    intervals = compute_live_intervals(fn)
+
+    # Partition intervals by register class.
+    by_class: dict[str, list[LiveInterval]] = {}
+    for iv in intervals:
+        value = vmap.get(iv.vreg)
+        if value is None:
+            # compute_live_intervals only produces vregs drawn from
+            # the same walk _value_map does — this is unreachable, but
+            # raise rather than silently drop a value from allocation.
+            raise ValueError(
+                f"allocate_by_class: vreg {iv.vreg} has a live "
+                f"interval but no TileValue — liveness/value-map drift"
+            )
+        cls = classify(value)
+        if cls not in class_pools:
+            raise ValueError(
+                f"allocate_by_class: classify() returned register "
+                f"class {cls!r} for vreg {iv.vreg}, but class_pools "
+                f"has no pool size for it. Known classes: "
+                f"{sorted(class_pools)}."
+            )
+        by_class.setdefault(cls, []).append(iv)
+
+    result = MultiClassResult()
+    # Iterate class keys in sorted order for deterministic merge.
+    for cls in sorted(by_class):
+        class_result = linear_scan(by_class[cls], class_pools[cls])
+        result.per_class[cls] = class_result
+        for vreg, reg_idx in class_result.assignment.items():
+            result.assignment[vreg] = (cls, reg_idx)
+        result.spilled |= class_result.spilled
+    return result

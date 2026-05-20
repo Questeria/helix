@@ -11,7 +11,9 @@ import pytest
 
 from helixc.backend.regalloc import (
     LiveInterval,
+    MultiClassResult,
     RegAllocResult,
+    allocate_by_class,
     allocate_fn,
     compute_live_intervals,
     linear_scan,
@@ -280,3 +282,119 @@ def test_v24_allocate_fn_end_to_end():
     assert set(r.assignment) == {0, 1, 2}
     # v0 ends at op1, v2 starts at op2 — disjoint, so they reuse.
     assert r.register_high_water == 2
+
+
+# ============================================================================
+# Multi-class allocation (v2.4 item 15 slice 3)
+# ============================================================================
+def _classify_by_even_odd(value: TileValue) -> str:
+    """Test classifier: even-id values -> class 'A', odd -> class 'B'.
+    Stands in for a real dtype -> register-class mapping."""
+    return "A" if value.id % 2 == 0 else "B"
+
+
+def test_v24_allocate_by_class_partitions_into_separate_files():
+    """v2.4 item 15 slice 3 — values in different register classes do
+    not contend. v0 (class A) and v1 (class B) are FULLY overlapping
+    (both live the whole kernel), yet with only 1 register per class
+    NEITHER spills — they name distinct physical files. Both land at
+    register index 0; equal indices in different classes are not a
+    collision."""
+    v0, v1 = _val(0), _val(1)  # v0 even -> A, v1 odd -> B
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v1]),
+        # CALL uses both, no result — keeps v0 + v1 live to op2
+        # without minting a third value.
+        TileOp(kind=TileOpKind.CALL, operands=[v0, v1]),
+    ])
+    r = allocate_by_class(
+        _fn([blk]), _classify_by_even_odd,
+        class_pools={"A": 1, "B": 1},
+    )
+    assert isinstance(r, MultiClassResult)
+    assert r.spilled == set()          # fully overlapping, yet no spill
+    assert r.assignment[0] == ("A", 0)  # v0 -> class A register 0
+    assert r.assignment[1] == ("B", 0)  # v1 -> class B register 0
+    # Equal index, different class — distinct physical registers.
+    assert r.assignment[0][1] == r.assignment[1][1]
+    assert r.assignment[0][0] != r.assignment[1][0]
+    # per_class results are exposed for backend .reg sizing.
+    assert set(r.per_class) == {"A", "B"}
+
+
+def test_v24_allocate_by_class_per_class_spill():
+    """v2.4 item 15 slice 3 — spilling is per-class: class A overflows
+    its 1-register pool while class B (also 1 register) fits, because
+    the classes are allocated independently."""
+    # 2 overlapping A-class values (ids 0, 2) — pool A holds 1.
+    # 1 B-class value (id 1) — pool B holds 1, fits.
+    v0, v1, v2 = _val(0), _val(1), _val(2)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v1]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v2]),
+        TileOp(kind=TileOpKind.SCALAR_ADD, operands=[v0, v2], results=[v1]),
+    ])
+    r = allocate_by_class(
+        _fn([blk]), _classify_by_even_odd,
+        class_pools={"A": 1, "B": 1},
+    )
+    # Class A (v0, v2) overlap -> exactly 1 spills. Class B (v1) fits.
+    assert r.spill_count == 1
+    assert r.spilled <= {0, 2}            # the spill is an A-class vreg
+    assert 1 in r.assignment              # B-class value placed
+    assert r.assignment[1][0] == "B"
+
+
+def test_v24_allocate_by_class_rejects_unknown_class():
+    """v2.4 item 15 slice 3 — if classify() returns a class key with
+    no pool size, allocate_by_class raises (a backend that forgot to
+    size a class fails loudly, not with a silent mis-allocation)."""
+    v0 = _val(0)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+    ])
+    with pytest.raises(ValueError, match="no pool size"):
+        allocate_by_class(
+            _fn([blk]), lambda v: "UNSIZED_CLASS",
+            class_pools={"A": 4},
+        )
+
+
+def test_v24_allocate_by_class_deterministic():
+    """v2.4 item 15 slice 3 — multi-class allocation is deterministic;
+    two runs produce identical assignment + spill sets."""
+    vals = [_val(i) for i in range(6)]
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vals[i]])
+        for i in range(6)
+    ] + [
+        TileOp(kind=TileOpKind.SCALAR_ADD,
+               operands=[vals[0], vals[1]], results=[vals[2]]),
+    ])
+    fn = _fn([blk])
+    a = allocate_by_class(fn, _classify_by_even_odd,
+                          class_pools={"A": 2, "B": 2})
+    b = allocate_by_class(fn, _classify_by_even_odd,
+                          class_pools={"A": 2, "B": 2})
+    assert a.assignment == b.assignment
+    assert a.spilled == b.spilled
+
+
+def test_v24_allocate_by_class_partition_invariant():
+    """v2.4 item 15 slice 3 — assignment.keys() and spilled partition
+    every vreg with a live interval: disjoint, together exhaustive."""
+    vals = [_val(i) for i in range(8)]
+    # all 8 live simultaneously; classes A/B get 4 each; pools too
+    # small -> some spill.
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v]) for v in vals
+    ] + [
+        TileOp(kind=TileOpKind.CALL, operands=list(vals)),  # keeps all live
+    ])
+    r = allocate_by_class(_fn([blk]), _classify_by_even_odd,
+                          class_pools={"A": 2, "B": 2})
+    all_vregs = {v.id for v in vals}
+    assert set(r.assignment) | r.spilled == all_vregs
+    assert set(r.assignment) & r.spilled == set()
