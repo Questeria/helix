@@ -537,3 +537,54 @@ def test_v24_verify_manifest_hash_accepts_dataclass_and_dict():
     m = emit_manifest(tc.functions)
     assert verify_manifest_hash(m) is True            # dataclass path
     assert verify_manifest_hash(m.to_dict()) is True  # dict path
+
+
+def test_v25_verify_manifest_hash_dataclass_rich_manifest():
+    """v2.5 polish (BE LOW-2 from the end-of-v2.4 5-clean-gate) — pin
+    the `isinstance(.., ProofManifest)` branch of verify_manifest_hash
+    on a *rich* manifest: multiple functions, a non-empty `effects`
+    tuple, and an enclave-tagged return.
+
+    The existing dataclass-path tests
+    (`test_v24_verify_manifest_hash_accepts_dataclass_and_dict`,
+    `test_stage122_verify_manifest_hash_self_consistency`) use a
+    trivial single-`main` module, which barely exercises the deep
+    `to_dict()` conversion the dataclass branch relies on — the
+    per-function `FunctionObligation.to_dict()` rows and the
+    `effects` tuple->list demotion. This feeds the producer dataclass
+    straight into verify and asserts the canonical hash survives that
+    conversion end-to-end, agreeing byte-for-byte with the dict path
+    a real attestation verifier holds."""
+    src = """
+    @pure
+    fn add(x: i32, y: i32) -> i32 { x + y }
+
+    @effect(io)
+    fn log(x: i32) -> i32 { x }
+
+    fn make_secret() -> InEnclaveSGX<i32> { __wrap_enclave(42) }
+
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+
+    m = emit_manifest(tc.functions)
+    # Rich-manifest precondition: the dataclass really carries the
+    # variety the trivial dataclass-path tests don't.
+    assert isinstance(m, ProofManifest)
+    assert m.function_count == 4
+    assert any(f.effects for f in m.functions)      # @effect(io) -> ("io",)
+    assert any(f.enclave_tag for f in m.functions)  # InEnclaveSGX return
+
+    # The branch under test: a ProofManifest dataclass passed directly
+    # (producer self-check) — not the json.loads dict a verifier holds.
+    assert verify_manifest_hash(m) is True
+
+    # `to_dict()` is the only bridge from the dataclass branch into the
+    # canonical-hash path; BE LOW-2 is about trusting it on a manifest
+    # with real per-function content. Dataclass and dict paths must
+    # agree byte-for-byte.
+    assert verify_manifest_hash(m.to_dict()) is True
+    assert verify_manifest_hash(m) == verify_manifest_hash(m.to_dict())

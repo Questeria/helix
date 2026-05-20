@@ -1302,3 +1302,28 @@ v2.5 polish backlog now fully drained: BE LOW-1 ✅ · BE LOW-2 ✅ ·
 IR LOW-1 ✅ · IR LOW-2 ✅. Remaining v2.5: item 1 emitter wiring
 (the operand-threading rewrite — focused block) + end-of-v2.5
 5-clean-gate.
+
+### 2026-05-20 — v2.5 polish fire: BE LOW-2 dataclass-path coverage hardened
+
+Per-fire pick: **BE LOW-2 test hardening**. The prior fire (`ace2eb6`)
+correctly closed BE LOW-2 as already-covered by
+`test_v24_verify_manifest_hash_accepts_dataclass_and_dict`, but that
+test (and the other dataclass-path verify tests) feeds a *trivial*
+single-`main` manifest — zero effects, zero enclave tags, one
+function. That barely exercises the deep `to_dict()` conversion the
+`isinstance(.., ProofManifest)` branch of `verify_manifest_hash`
+depends on: the per-function `FunctionObligation.to_dict()` rows and
+the `effects` tuple->list demotion.
+
+This fire adds `test_v25_verify_manifest_hash_dataclass_rich_manifest`:
+emits a manifest with 4 functions, an `@effect(io)` function, and an
+`InEnclaveSGX<i32>` return, then feeds the `ProofManifest` dataclass
+straight into `verify_manifest_hash` — asserting the canonical hash
+survives the deep conversion end-to-end and agrees byte-for-byte with
+the dict path a real attestation verifier holds. Genuinely additive
+(no existing test verifies a non-trivial manifest via the dataclass
+branch), not a duplicate of `test_v24_*`.
+
+Verification: `pytest test_proof_manifest.py -q` → 32 passed (was 31).
+Scoped commit: `test_proof_manifest.py` + this note only;
+concurrent-fire dirty files (regalloc) deliberately untouched.
