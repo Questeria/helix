@@ -11,6 +11,8 @@ import pytest
 
 from helixc.backend.proof_manifest import (
     PROOF_MANIFEST_VERSION,
+    Sha256Hex,
+    as_sha256_hex,
     extract_enclave_tag,
     fn_proof_obligations,
     emit_manifest,
@@ -286,6 +288,82 @@ def test_stage122_serialize_manifest_compact_form():
     assert len(compact) < len(pretty)
     # Both should parse to the same dict.
     assert json.loads(compact) == json.loads(pretty)
+
+
+def test_v23_as_sha256_hex_accepts_canonical_digest():
+    """v2.3 polish item 3 (slice 1) — `as_sha256_hex` accepts a
+    canonical 64-char lowercase hex digest (the output shape of
+    `hashlib.sha256(...).hexdigest()`) and returns the value typed
+    as `Sha256Hex` (runtime-equivalent to str)."""
+    import hashlib
+    digest = hashlib.sha256(b"helix").hexdigest()
+    assert len(digest) == 64
+    tagged = as_sha256_hex(digest)
+    # NewType is runtime-equivalent to str.
+    assert tagged == digest
+    assert isinstance(tagged, str)
+
+
+def test_v23_as_sha256_hex_rejects_non_string():
+    """v2.3 polish item 3 — non-string input raises ValueError with
+    a clear diagnostic. Mirrors the verify_manifest_hash type-guard
+    parity established in the v2.2 5-clean-gate."""
+    for bad in (None, 12345, b"\x00" * 32, ["aa"] * 32, {"hex": "aa"}):
+        with pytest.raises(ValueError, match="expected str"):
+            as_sha256_hex(bad)  # type: ignore[arg-type]
+
+
+def test_v23_as_sha256_hex_rejects_wrong_length():
+    """v2.3 polish item 3 — strings shorter or longer than 64 chars
+    are rejected. Catches the common producer mistake of passing
+    a md5 (32) or sha1 (40) digest into a sha256 slot."""
+    for bad in ("aa", "aa" * 16, "aa" * 20, "aa" * 33, ""):
+        with pytest.raises(ValueError, match="not a 64-char lowercase hex"):
+            as_sha256_hex(bad)
+
+
+def test_v23_as_sha256_hex_rejects_non_hex_chars():
+    """v2.3 polish item 3 — exactly-64-char strings with non-hex
+    characters are rejected."""
+    bad = "g" * 64  # 'g' is outside [0-9a-f]
+    with pytest.raises(ValueError, match="not a 64-char lowercase hex"):
+        as_sha256_hex(bad)
+    bad2 = "z" + "a" * 63
+    with pytest.raises(ValueError, match="not a 64-char lowercase hex"):
+        as_sha256_hex(bad2)
+
+
+def test_v23_as_sha256_hex_rejects_uppercase():
+    """v2.3 polish item 3 — uppercase / mixed-case hex strings are
+    rejected even though they would parse identically. Reason:
+    `hashlib.sha256(...).hexdigest()` is always lowercase, so a
+    regulator re-canonicalizing a manifest for hash comparison
+    would see two distinct byte sequences for the same logical
+    digest. Force the producer to .lower() at the boundary."""
+    upper = "AA" * 32
+    with pytest.raises(ValueError, match="not a 64-char lowercase hex"):
+        as_sha256_hex(upper)
+    mixed = "Aa" * 32
+    with pytest.raises(ValueError, match="not a 64-char lowercase hex"):
+        as_sha256_hex(mixed)
+
+
+def test_v23_emit_manifest_accepts_validated_sha256():
+    """v2.3 polish item 3 — emit_manifest's `artifact_sha256`
+    parameter is annotated `Optional[Sha256Hex]`. The NewType is
+    runtime-equivalent to str so existing plain-str callers still
+    work, but going through `as_sha256_hex` is the typed path."""
+    import hashlib
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+
+    artifact_digest = as_sha256_hex(hashlib.sha256(b"binary").hexdigest())
+    m = emit_manifest(tc.functions, artifact_sha256=artifact_digest)
+    assert m["artifact_sha256"] == artifact_digest
+    # Manifest is self-consistent.
+    assert verify_manifest_hash(m) is True
 
 
 def test_stage122_enclave_param_flagged():

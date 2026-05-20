@@ -32,12 +32,54 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Optional
+import re
+from typing import Any, NewType, Optional, cast
 
 
 # Manifest format version. Bump when fields are added/removed in a
 # non-backward-compatible way.
 PROOF_MANIFEST_VERSION = "v2.0-stage122-substrate"
+
+
+# v2.3 polish item 3 (slice 1 of 3): typed marker for sha256 hex
+# digests. NewType is runtime-equivalent to str, so existing callers
+# passing plain str continue to work — this tightens static-typing
+# annotations and gives the validator (`as_sha256_hex`) a distinct
+# return type. Downstream attestation code that wants to enforce
+# "this str was checked" at the type level can require Sha256Hex.
+Sha256Hex = NewType("Sha256Hex", str)
+
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def as_sha256_hex(value: Any) -> Sha256Hex:
+    """v2.3 polish item 3 — validate-and-tag a sha256 hex digest.
+
+    Returns the input typed as `Sha256Hex` if it is exactly 64
+    lowercase hex characters. Raises ValueError otherwise so a
+    producer that hands manifest emitters a malformed digest fails
+    at the boundary, not deep inside attestation verification.
+
+    Accepts only lowercase to match `hashlib.sha256().hexdigest()`
+    output — mixed-case inputs are rejected (regulators that
+    re-canonicalize manifests for hash comparison would otherwise
+    see two distinct byte sequences for the same digest).
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"as_sha256_hex: expected str, got {type(value).__name__}: "
+            f"{value!r}. sha256 hex digests must be strings."
+        )
+    if not _SHA256_HEX_RE.match(value):
+        raise ValueError(
+            f"as_sha256_hex: {value!r} is not a 64-char lowercase hex "
+            f"sha256 digest. Expected exactly 64 chars matching "
+            f"[0-9a-f]; got len={len(value)}. Mixed-case digests are "
+            f"rejected (canonicalization compatibility); lowercase "
+            f"the input via .lower() if you trust the source."
+        )
+    return cast(Sha256Hex, value)
 
 
 def _canonicalize_sig(sig_dict: dict) -> str:
@@ -123,7 +165,7 @@ def fn_proof_obligations(sig: Any) -> dict:
 def emit_manifest(
     functions: dict[str, Any],
     artifact_path: Optional[str] = None,
-    artifact_sha256: Optional[str] = None,
+    artifact_sha256: Optional[Sha256Hex] = None,
     helix_version: str = "v2.0-substrate",
 ) -> dict:
     """Stage 122 — emit a ProofObligation manifest dict.
