@@ -25,14 +25,14 @@ Supported so far (Stages 200, 202-204):
     operand dtype), the sign-agnostic AND / OR / XOR and left shift
     SHL, the right shift SHR (arithmetic `ashr` or logical `lshr` per
     operand dtype), and the unary bitwise NOT.
-  - mutable local variables (Stage 204): ALLOC_VAR / LOAD_VAR /
-    STORE_VAR become LLVM `alloca` / `load` / `store` — every
-    variable's `alloca` is hoisted to the entry block; loads and
-    stores use opaque pointers (`ptr`).
+  - mutable local variables and stack arrays (Stage 204): ALLOC_VAR /
+    LOAD_VAR / STORE_VAR and ALLOC_ARRAY / LOAD_ELEM / STORE_ELEM
+    become LLVM `alloca` / `load` / `store` (plus `getelementptr` for
+    an array element's address) — every `alloca` is hoisted to the
+    entry block; loads, stores and GEPs use opaque pointers (`ptr`).
 
-Anything outside that set — aggregates (arrays, structs), calls,
-floats, the wider op surface — is REJECTED with a loud
-`LLVMEmitError`,
+Anything outside that set — structs, calls, floats, the wider op
+surface — is REJECTED with a loud `LLVMEmitError`,
 never emitted wrong. Those land in later stages. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
 an LLVM toolchain, mirroring `gpu_ci.py`'s mock path; real
@@ -253,9 +253,9 @@ class _FnEmitter:
     loop-header phi can reference a value defined later on the
     back-edge (LLVM textual IR permits the forward reference).
 
-    `var_slots` maps each mutable local's name to its `alloca` pointer
-    register and LLVM cell type (also populated by `_prepass`); the
-    allocas are hoisted to the entry block."""
+    `var_slots` / `array_slots` map each mutable local / stack array's
+    name to its `alloca` pointer register and type (also populated by
+    `_prepass`); the allocas are hoisted to the entry block."""
 
     def __init__(self, fn: tir.FnIR):
         self.fn = fn
@@ -264,6 +264,12 @@ class _FnEmitter:
         # mutable-local name -> (alloca register, LLVM cell type),
         # populated by `_prepass`; see `_register_alloc_var`.
         self.var_slots: dict[str, tuple[str, str]] = {}
+        # stack-array name -> (alloca register, LLVM element type,
+        # length), populated by `_prepass`; see `_register_alloc_array`.
+        self.array_slots: dict[str, tuple[str, str, int]] = {}
+        # counter for the `%gep.N` element-address registers that a
+        # LOAD_ELEM / STORE_ELEM emits.
+        self.gep_count: int = 0
 
     @staticmethod
     def _block_label(block_id: int) -> str:
@@ -298,6 +304,8 @@ class _FnEmitter:
                     self._register_const_int(op)
                 elif op.kind == tir.OpKind.ALLOC_VAR:
                     self._register_alloc_var(op)
+                elif op.kind == tir.OpKind.ALLOC_ARRAY:
+                    self._register_alloc_array(op)
                 else:
                     for r in op.results:
                         self.operand[r.id] = f"%v{r.id}"
@@ -324,53 +332,83 @@ class _FnEmitter:
             result.ty, ctx=f"function {self.fn.name!r} CONST_INT")
         self.operand[result.id] = str(value)
 
-    def _register_alloc_var(self, op: tir.Op) -> None:
-        """Validate an ALLOC_VAR and register its stack slot — a
-        counter-named `alloca` pointer plus the cell's LLVM type. The
-        `alloca` itself is emitted, hoisted to the entry block, by
-        `_emit_allocas`; LOAD_VAR / STORE_VAR resolve the slot by name
-        via `_lookup_var_slot`."""
+    def _alloc_op_name(self, op: tir.Op, op_label: str) -> str:
+        """Validate the shape shared by ALLOC_VAR / ALLOC_ARRAY — no
+        result, no operands, a non-empty string `name` attr that is
+        not already declared (in either slot table) in this function —
+        and return that name. lower_ast mangles shadowed locals to
+        unique names, so a duplicate slot name is malformed IR."""
         if op.results:
             raise LLVMEmitError(
-                f"function {self.fn.name!r}: ALLOC_VAR produces no "
+                f"function {self.fn.name!r}: {op_label} produces no "
                 f"result, got {len(op.results)}")
         if op.operands:
             raise LLVMEmitError(
-                f"function {self.fn.name!r}: ALLOC_VAR takes no "
+                f"function {self.fn.name!r}: {op_label} takes no "
                 f"operands, got {len(op.operands)}")
         name = op.attrs.get("name")
         if not isinstance(name, str) or not name:
             raise LLVMEmitError(
-                f"function {self.fn.name!r}: ALLOC_VAR needs a "
+                f"function {self.fn.name!r}: {op_label} needs a "
                 f"non-empty string 'name' attr (got {name!r})")
-        if name in self.var_slots:
+        if name in self.var_slots or name in self.array_slots:
             raise LLVMEmitError(
-                f"function {self.fn.name!r}: mutable local {name!r} is "
-                f"declared by more than one ALLOC_VAR — lower_ast "
-                f"mangles shadowed locals to unique names, so a "
-                f"duplicate is malformed IR")
+                f"function {self.fn.name!r}: slot name {name!r} is "
+                f"declared more than once — every ALLOC_VAR / "
+                f"ALLOC_ARRAY name must be unique within a function")
+        return name
+
+    def _register_alloc_var(self, op: tir.Op) -> None:
+        """Validate an ALLOC_VAR and register its stack slot — a
+        counter-named `%slot.N` `alloca` pointer plus the cell's LLVM
+        type. The `alloca` itself is emitted, hoisted to the entry
+        block, by `_emit_allocas`; LOAD_VAR / STORE_VAR resolve the
+        slot by name via `_lookup_slot`."""
+        name = self._alloc_op_name(op, "ALLOC_VAR")
         llvm_ty = _llvm_int_type(
             op.attrs.get("dtype"),
             ctx=f"function {self.fn.name!r} ALLOC_VAR {name!r} dtype")
         register = f"%slot.{len(self.var_slots)}"
         self.var_slots[name] = (register, llvm_ty)
 
-    def _lookup_var_slot(self, op: tir.Op,
-                         label: str) -> "tuple[str, str]":
-        """Resolve a LOAD_VAR / STORE_VAR `name` attr to the (alloca
-        register, LLVM cell type) registered for that mutable local.
-        Raises `LLVMEmitError` if the name is missing / not a string,
-        or names no ALLOC_VAR-declared variable in this function."""
+    def _register_alloc_array(self, op: tir.Op) -> None:
+        """Validate an ALLOC_ARRAY and register its stack slot — a
+        counter-named `%arr.N` `alloca` pointer, the LLVM element
+        type, and the length. The array-typed `alloca` is emitted,
+        hoisted to the entry block, by `_emit_allocas`; LOAD_ELEM /
+        STORE_ELEM resolve the slot by name via `_lookup_slot` and
+        index it with a `getelementptr`."""
+        name = self._alloc_op_name(op, "ALLOC_ARRAY")
+        elem_ty = _llvm_int_type(
+            op.attrs.get("dtype"),
+            ctx=f"function {self.fn.name!r} ALLOC_ARRAY {name!r} dtype")
+        length = op.attrs.get("length")
+        # `type(...) is int`, not isinstance — a Python bool is an int
+        # subclass and `[True x i32]` is malformed IR.
+        if type(length) is not int or length < 1:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: ALLOC_ARRAY {name!r} needs "
+                f"a positive integer 'length' attr (got {length!r})")
+        register = f"%arr.{len(self.array_slots)}"
+        self.array_slots[name] = (register, elem_ty, length)
+
+    def _lookup_slot(self, op: tir.Op, label: str, table: dict,
+                     declarer: str) -> tuple:
+        """Resolve a memory op's `name` attr against `table` —
+        `var_slots` for LOAD_VAR / STORE_VAR, `array_slots` for
+        LOAD_ELEM / STORE_ELEM. Raises `LLVMEmitError` if the name is
+        missing / not a string, or names no `declarer`-declared
+        variable in this function. Returns the slot tuple."""
         name = op.attrs.get("name")
         if not isinstance(name, str) or not name:
             raise LLVMEmitError(
                 f"function {self.fn.name!r}: {label} needs a non-empty "
                 f"string 'name' attr (got {name!r})")
-        slot = self.var_slots.get(name)
+        slot = table.get(name)
         if slot is None:
             raise LLVMEmitError(
                 f"function {self.fn.name!r}: {label} references "
-                f"variable {name!r}, which no ALLOC_VAR in this "
+                f"variable {name!r}, which no {declarer} in this "
                 f"function declares")
         return slot
 
@@ -440,13 +478,16 @@ class _FnEmitter:
         return "\n".join(lines)
 
     def _emit_allocas(self) -> list[str]:
-        """The `alloca` instruction for every mutable local, in
-        ALLOC_VAR-encounter order (deterministic — a Stage 207 parity
-        prerequisite). `align` is omitted, so LLVM uses each type's
-        ABI-natural alignment — correct for every scalar integer cell
-        this stage allocates."""
-        return [f"  {register} = alloca {llvm_ty}"
-                for register, llvm_ty in self.var_slots.values()]
+        """The `alloca` instruction for every mutable local and stack
+        array, in ALLOC_VAR / ALLOC_ARRAY encounter order
+        (deterministic — a Stage 207 parity prerequisite). `align` is
+        omitted, so LLVM uses each type's ABI-natural alignment."""
+        lines = [f"  {register} = alloca {llvm_ty}"
+                 for register, llvm_ty in self.var_slots.values()]
+        lines += [
+            f"  {register} = alloca [{length} x {elem_ty}]"
+            for register, elem_ty, length in self.array_slots.values()]
+        return lines
 
     def _emit_block(
             self, block: tir.Block,
@@ -469,7 +510,10 @@ class _FnEmitter:
                     f"unreachable code")
             text = self._emit_op(op)
             if text is not None:
-                lines.append(f"  {text}")
+                # `_emit_op` may return several newline-joined
+                # instruction lines (a LOAD_ELEM / STORE_ELEM lowers to
+                # a GEP plus a load / store); indent each.
+                lines.extend(f"  {ln}" for ln in text.split("\n"))
             if op.kind in (tir.OpKind.RETURN, tir.OpKind.BR,
                            tir.OpKind.COND_BR):
                 saw_terminator = True
@@ -551,10 +595,32 @@ class _FnEmitter:
                 f"  %v{param.id} = phi {pty} {', '.join(incomings)}")
         return lines
 
+    def _emit_gep(self, index: tir.Value, array_reg: str,
+                  elem_ty: str, length: int) -> tuple[str, str]:
+        """Emit a `getelementptr` for the address of one stack-array
+        element. Returns `(gep_instruction, address_register)`.
+
+        The element index may be any integer-typed value — LLVM
+        permits a mixed-width GEP index. `inbounds` is deliberately
+        omitted: the LLVM backend does not assume the index is
+        bounds-checked (whether Helix bounds-checks array access is a
+        Stage 207 parity decision), and a plain `getelementptr` is
+        well-defined pointer arithmetic regardless."""
+        idx_ty = _llvm_int_type(
+            index.ty, ctx=f"function {self.fn.name!r} array index")
+        addr = f"%gep.{self.gep_count}"
+        self.gep_count += 1
+        gep = (f"{addr} = getelementptr [{length} x {elem_ty}], "
+               f"ptr {array_reg}, i64 0, {idx_ty} {self._ref(index)}")
+        return gep, addr
+
     def _emit_op(self, op: tir.Op) -> Optional[str]:
-        """Emit one op's instruction text, or None when it materializes
-        no instruction (a CONST_INT — recorded as an inline literal by
-        `_prepass`)."""
+        """Emit one op's LLVM instruction text — `None` when the op
+        materializes no instruction (CONST_INT, ALLOC_VAR,
+        ALLOC_ARRAY), otherwise the instruction line. An op that lowers
+        to several LLVM instructions (LOAD_ELEM, STORE_ELEM) returns
+        them as a newline-joined block, un-indented — `_emit_block`
+        indents each line."""
         kind = op.kind
         if kind == tir.OpKind.CONST_INT:
             return None  # registered as an inline literal by _prepass
@@ -777,7 +843,8 @@ class _FnEmitter:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: LOAD_VAR takes no "
                     f"operands, got {len(op.operands)}")
-            register, slot_ty = self._lookup_var_slot(op, "LOAD_VAR")
+            register, slot_ty = self._lookup_slot(
+                op, "LOAD_VAR", self.var_slots, "ALLOC_VAR")
             result = op.results[0]
             res_ty = _llvm_int_type(
                 result.ty,
@@ -799,7 +866,8 @@ class _FnEmitter:
                     f"function {self.fn.name!r}: STORE_VAR expects "
                     f"exactly one operand (the value), got "
                     f"{len(op.operands)}")
-            register, slot_ty = self._lookup_var_slot(op, "STORE_VAR")
+            register, slot_ty = self._lookup_slot(
+                op, "STORE_VAR", self.var_slots, "ALLOC_VAR")
             value = op.operands[0]
             val_ty = _llvm_int_type(
                 value.ty,
@@ -811,14 +879,68 @@ class _FnEmitter:
                     f"allocated as {slot_ty} — a store must write the "
                     f"type the cell holds")
             return f"store {slot_ty} {self._ref(value)}, ptr {register}"
+        if kind == tir.OpKind.ALLOC_ARRAY:
+            # The array-typed `alloca` was hoisted to the entry block
+            # by `_emit_allocas` (registered in `_prepass`). Like
+            # ALLOC_VAR, the op materializes no instruction here.
+            return None
+        if kind == tir.OpKind.LOAD_ELEM:
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: LOAD_ELEM must have "
+                    f"exactly one result, got {len(op.results)}")
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: LOAD_ELEM expects "
+                    f"exactly one operand (the index), got "
+                    f"{len(op.operands)}")
+            register, elem_ty, length = self._lookup_slot(
+                op, "LOAD_ELEM", self.array_slots, "ALLOC_ARRAY")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} LOAD_ELEM result")
+            if res_ty != elem_ty:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: LOAD_ELEM result has "
+                    f"LLVM type {res_ty} but the array's elements are "
+                    f"{elem_ty} — a load must read the element type")
+            gep, addr = self._emit_gep(
+                op.operands[0], register, elem_ty, length)
+            return f"{gep}\n%v{result.id} = load {elem_ty}, ptr {addr}"
+        if kind == tir.OpKind.STORE_ELEM:
+            if op.results:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STORE_ELEM produces no "
+                    f"result, got {len(op.results)}")
+            if len(op.operands) != 2:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STORE_ELEM expects "
+                    f"exactly two operands (index, value), got "
+                    f"{len(op.operands)}")
+            register, elem_ty, length = self._lookup_slot(
+                op, "STORE_ELEM", self.array_slots, "ALLOC_ARRAY")
+            value = op.operands[1]
+            val_ty = _llvm_int_type(
+                value.ty,
+                ctx=f"function {self.fn.name!r} STORE_ELEM value")
+            if val_ty != elem_ty:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STORE_ELEM value has "
+                    f"LLVM type {val_ty} but the array's elements are "
+                    f"{elem_ty} — a store must write the element type")
+            gep, addr = self._emit_gep(
+                op.operands[0], register, elem_ty, length)
+            return (f"{gep}\nstore {elem_ty} {self._ref(value)}, "
+                    f"ptr {addr}")
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
             f"arithmetic ADD/SUB/MUL/DIV/MOD; the bitwise AND/OR/XOR/NOT "
             f"and shifts SHL/SHR; the six comparisons; SELECT; NEG; "
-            f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; "
-            f"RETURN; BR; COND_BR — aggregates, calls, and floats are "
-            f"later stages)"
+            f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
+            f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; RETURN; BR; "
+            f"COND_BR — structs, calls, and floats are later stages)"
         )
 
 

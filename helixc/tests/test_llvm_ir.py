@@ -1191,7 +1191,7 @@ def test_stage204_rejects_duplicate_alloc_var():
     b.ret(b.const_int(0))
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
-                       match="more than one ALLOC_VAR"):
+                       match="declared more than once"):
         llvm_ir.emit_module(mod)
 
 
@@ -1250,6 +1250,258 @@ def test_stage204_rejects_non_scalar_alloc_var():
     b.begin_function("f", [], _i32())
     b.emit(tir.OpKind.ALLOC_VAR,
            attrs={"name": "x", "dtype": tir.TIRScalar("f32")})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="f32"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 204 sub-stage B — stack arrays (alloca [N x T] / getelementptr)
+# ==========================================================================
+def test_stage204_emit_alloc_array_store_load_elem():
+    """A stack array: ALLOC_ARRAY -> array-typed `alloca`, STORE_ELEM /
+    LOAD_ELEM -> `getelementptr` + `store` / `load`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 4})
+    b.emit(tir.OpKind.STORE_ELEM, b.const_int(0), b.const_int(42),
+           attrs={"name": "xs"})
+    ld = b.emit(tir.OpKind.LOAD_ELEM, b.const_int(0), result_ty=_i32(),
+                attrs={"name": "xs"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%arr.0 = alloca [4 x i32]" in ll, ll
+    assert ("%gep.0 = getelementptr [4 x i32], ptr %arr.0, "
+            "i64 0, i32 0") in ll, ll
+    assert "store i32 42, ptr %gep.0" in ll, ll
+    assert "%gep.1 = getelementptr [4 x i32], ptr %arr.0, i64 0" in ll, ll
+    assert f"%v{ld.id} = load i32, ptr %gep.1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_array_alloca_hoisted_to_entry():
+    """An ALLOC_ARRAY in a non-entry block still has its array-typed
+    `alloca` emitted in the entry block; LOAD_ELEM / STORE_ELEM work
+    from a non-entry block too."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [], _i32())
+    second = b.append_block()
+    b.emit(tir.OpKind.BR, attrs={"target_block": second.id})
+    b.switch_to(second)
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 3})
+    b.emit(tir.OpKind.STORE_ELEM, b.const_int(0), b.const_int(5),
+           attrs={"name": "xs"})
+    ld = b.emit(tir.OpKind.LOAD_ELEM, b.const_int(0), result_ty=_i32(),
+                attrs={"name": "xs"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    entry_id = fn.blocks[0].id
+    entry_seg = ll[ll.index(f"bb{entry_id}:"):ll.index(f"bb{second.id}:")]
+    assert "%arr.0 = alloca [3 x i32]" in entry_seg, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_load_elem_runtime_index():
+    """LOAD_ELEM with a runtime (non-constant) index emits a GEP whose
+    element index is the SSA register of the index value."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 8})
+    ld = b.emit(tir.OpKind.LOAD_ELEM, fn.params[0], result_ty=_i32(),
+                attrs={"name": "xs"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"getelementptr [8 x i32], ptr %arr.0, i64 0, "
+            f"i32 %v{fn.params[0].id}") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_array_and_scalar_var_coexist():
+    """A function with both a mutable local and a stack array gets a
+    %slot.N alloca and a %arr.N alloca — distinct register namespaces."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "n", "dtype": _i32()})
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 2})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(1), attrs={"name": "n"})
+    ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                attrs={"name": "n"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%slot.0 = alloca i32" in ll, ll
+    assert "%arr.0 = alloca [2 x i32]" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_multiple_arrays_distinct_slots():
+    """Two stack arrays get two allocas with distinct counter-named
+    registers (%arr.0, %arr.1) and their own element types."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "a", "dtype": _i32(), "length": 2})
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "c", "dtype": tir.TIRScalar("i64"),
+                  "length": 3})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%arr.0 = alloca [2 x i32]" in ll, ll
+    assert "%arr.1 = alloca [3 x i64]" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_array_emit_is_deterministic():
+    """Two emits of a module with a stack array are byte-identical —
+    the alloca and %gep.N numbering are deterministic."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        b.emit(tir.OpKind.ALLOC_ARRAY,
+               attrs={"name": "xs", "dtype": _i32(), "length": 3})
+        b.emit(tir.OpKind.STORE_ELEM, b.const_int(0), b.const_int(7),
+               attrs={"name": "xs"})
+        ld = b.emit(tir.OpKind.LOAD_ELEM, b.const_int(1),
+                    result_ty=_i32(), attrs={"name": "xs"})
+        b.ret(ld)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage204_rejects_load_elem_undeclared_array():
+    """A LOAD_ELEM naming an array that no ALLOC_ARRAY declares is
+    rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    ld = b.emit(tir.OpKind.LOAD_ELEM, b.const_int(0), result_ty=_i32(),
+                attrs={"name": "ghost"})
+    b.ret(ld)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="no ALLOC_ARRAY"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_store_elem_undeclared_array():
+    """A STORE_ELEM naming an array that no ALLOC_ARRAY declares is
+    rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.STORE_ELEM, b.const_int(0), b.const_int(1),
+           attrs={"name": "ghost"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="no ALLOC_ARRAY"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_load_elem_type_mismatch():
+    """A LOAD_ELEM whose result type differs from the array's element
+    type is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 4})
+    ld = b.emit(tir.OpKind.LOAD_ELEM, b.const_int(0),
+                result_ty=tir.TIRScalar("i64"), attrs={"name": "xs"})
+    b.ret(ld)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="must read the element type"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_store_elem_type_mismatch():
+    """A STORE_ELEM whose value type differs from the array's element
+    type is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 4})
+    b.emit(tir.OpKind.STORE_ELEM, b.const_int(0),
+           b.const_int(1, dtype="i64"), attrs={"name": "xs"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="must write the element type"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_duplicate_alloc_array():
+    """Two ALLOC_ARRAY ops with the same name are rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 2})
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 2})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="declared more than once"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_var_array_name_collision():
+    """A name declared by both an ALLOC_VAR and an ALLOC_ARRAY is
+    rejected — slot names must be unique across both tables."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "x", "dtype": _i32(), "length": 2})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="declared more than once"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_alloc_array_zero_length():
+    """An ALLOC_ARRAY with a non-positive length is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": _i32(), "length": 0})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="positive integer 'length'"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_non_scalar_array_element():
+    """An ALLOC_ARRAY whose element dtype is not a scalar integer
+    (here f32) is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_ARRAY,
+           attrs={"name": "xs", "dtype": tir.TIRScalar("f32"),
+                  "length": 3})
     b.ret(b.const_int(0))
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError, match="f32"):

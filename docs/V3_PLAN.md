@@ -157,7 +157,7 @@ depend on a clean, unambiguous full-suite run.
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 204 | Memory & aggregates (sub-staged) | sub-A ✓ | sub-A 3-clean ✓ | Phase D — mutable locals CLOSED; arrays next |
+| 204 | Memory & aggregates (sub-staged) | sub-A,B ✓ | A 3-clean ✓ · B audit pending | Phase D — locals + arrays shipped |
 | 205–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -358,3 +358,21 @@ depend on a clean, unambiguous full-suite run.
   the drift cannot recur). Sub-stage A (mutable locals) is CLOSED.
   Next: Stage 204 sub-stage B — stack arrays (ALLOC_ARRAY /
   LOAD_ELEM / STORE_ELEM).
+- 2026-05-20 — **Stage 204 sub-stage B shipped — LLVM stack arrays.**
+  The stack-array ops ALLOC_ARRAY / LOAD_ELEM / STORE_ELEM lower to an
+  array-typed `alloca` (`[N x T]`, hoisted to the entry block like the
+  scalar slots, counter-named `%arr.N`) plus a `getelementptr` for
+  each element address — LOAD_ELEM = GEP + `load`, STORE_ELEM = GEP +
+  `store`. `_emit_op` now returns a newline-joined block when an op
+  lowers to several instructions; `_emit_block` indents each line. The
+  GEP omits `inbounds` (the backend does not assume the index is
+  bounds-checked — a Stage 207 parity decision) and accepts any
+  integer index width. The slot machinery from sub-stage A was
+  generalised: a shared `_alloc_op_name` validates ALLOC_VAR /
+  ALLOC_ARRAY (with a cross-table duplicate-name check), and a generic
+  `_lookup_slot` resolves both var and array references. Fail-closed
+  throughout — undeclared array, duplicate / colliding names, wrong
+  operand counts, element-type mismatch, non-positive length and
+  non-scalar element dtype all raise `LLVMEmitError`. 14 new tests; 99
+  passed + 2 skipped across the two LLVM test files. `x86_64.py`
+  untouched. Per-stage 3-clean audit dispatched.
