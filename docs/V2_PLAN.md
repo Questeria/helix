@@ -756,3 +756,65 @@ as spawned task; not blocking v2.3.
 
 All 22 v2.x stages CLOSED. Outstanding work is backlog-shaped (v2.3
 polish), not stage-shaped.
+
+### 2026-05-19T20:30Z — 🎉 v2.3.0 RELEASED — end-of-v2.3 5-clean-gate ACHIEVED
+
+**Tag stamped: `v2.3.0` → commit `095c492`.**
+
+v2.3 is the type-design polish cycle. End-of-v2.3 5-clean-gate
+dispatched 5 parallel silent-failure-hunters (FE/IR/BE/RT/TEST):
+
+- FE: CLEAN
+- IR: CLEAN
+- RT: CLEAN
+- TEST: 2 LOW (over-tolerant disjunctive matches in pre-existing
+  test_ptx.py) — fixed in R1 `095c492`.
+- BE: 1 HIGH + 1 MEDIUM.
+  - HIGH-1: PTX lacked the loud-stub forward guard the other 3
+    backends have, AND PTX_OP_LOWERING (added v2.2) mislabeled
+    TILE_ZEROS/ADD/SUB/MUL/MATMUL as "stub" despite real Stage-64
+    codegen. Fixed `14a0c47`.
+  - MEDIUM-1: _lowering_schema.py was "80% dead code". Fixed
+    `095c492` — is_loud_stub_status + VALID_STATUSES wired into
+    all 4 backends.
+  - BE re-audit on the R1-fixed state: CLEAN. Both closed.
+
+All HIGH + MEDIUM closed; 2 TEST LOWs fixed. Gate PASS.
+
+318 v2.3-scope tests pass. 165/165 backend tests green on re-audit.
+
+v2.3 commit set (since v2.2.0 `1a4e371`):
+- c6a91fe RT LOW-2 file-handle leak
+- 5f2bf38 BE MED metal+webgpu skipped-status parity
+- 55fb6b0 + 4e15587 item 2 shared schema + 4-backend TypedDict
+- 0d104b7 FE LOW-1 regression tests
+- b96486b TEST MED match anchors
+- 320eeef RT LOW-1 TimeoutExpired docstrings
+- 3176447 V2_PLAN checkpoint
+- c625407 item 3 slice 1/3 Sha256Hex
+- f560834 item 3 slice 3/3 SignatureFormat Enum
+- 14a0c47 5-gate BE HIGH-1 audit-fix
+- 095c492 5-gate R1 (BE MED-1 + TEST 2 LOW + FE dead import)
+
+### v2.4 backlog (substantive — deferred from v2.3 polish)
+
+1. Item 3 slice 2/3: frozen ProofManifest dataclass + migrate
+   emit_manifest/serialize_manifest/verify_manifest_hash callers
+   (public-API change).
+2. Item 13: real-HW dispatch wiring — detect CUDA/hipcc/xcrun-metal/
+   naga at runtime, dispatch per-backend, propagate compile failures
+   into gpu_ci findings.
+3. Item 15: RegAlloc for emitted backend kernel bodies — operand-less
+   mnemonics → real register allocation, cross-cutting all 4 backends.
+4. Stage 35 wmt_predict_or test regression (pre-existing, spawned
+   task) — fix before v2.4 release if not already closed.
+
+### v3.0 horizon
+
+- MLIR migration (replace home-grown tile-IR with MLIR dialects)
+- LLVM IR rewrite (replace x86_64 backend with LLVM IR + opt+llc)
+- Per v2.0 research "v3.0 candidates" — defer until an anchor
+  customer or a perf ceiling forces it.
+
+All 22 v2.x stages (110-131) CLOSED. v2.0/v2.1/v2.2/v2.3 all
+released with full 5-clean-gates. Next: v2.4 substantive cycle.
