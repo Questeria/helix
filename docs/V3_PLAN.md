@@ -158,7 +158,7 @@ depend on a clean, unambiguous full-suite run.
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
-| 205 | Calls & ABI (chunked) | chunk A ✓ | chunk A audit pending | Phase D — direct calls shipped |
+| 205 | Calls & ABI (chunked) | chunk A ✓ | chunk A 3-clean ✓ | Phase D — direct calls CLOSED; FFI next |
 | 206–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -414,3 +414,14 @@ depend on a clean, unambiguous full-suite run.
   `declare`) are a later chunk. 10 new tests; 109 passed + 2 skipped
   across the two LLVM test files. `x86_64.py` untouched. Per-stage
   3-clean audit dispatched.
+- 2026-05-20 — **Stage 205 chunk A — 3-clean audit CLEAN (round 1).**
+  All three audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM on the
+  first round: the void-vs-value `call` branch, the `_prepass`
+  unit-skip, the no-`declare` forward-reference design, and the
+  fail-closed guards were all verified sound; the emitted `call` IR
+  was confirmed valid against the LLVM Language Reference. The
+  silent-failure-hunter's one non-blocking note — no test for the
+  `>1 results` guard (unreachable via `IRBuilder.emit`) — is addressed
+  in the closure commit with a raw-`Op` test (110 passed + 2 skipped).
+  Chunk A (direct calls) is CLOSED. Next: Stage 205 chunk B — FFI
+  calls (FFI_CALL → an LLVM `call` to a `declare`d extern target).

@@ -1665,3 +1665,23 @@ def test_stage205_rejects_call_non_int_result():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError, match="f32"):
         llvm_ir.emit_module(mod)
+
+
+def test_stage205_rejects_call_multiple_results():
+    """A CALL with more than one result is rejected — an LLVM call
+    yields at most one value. Not constructible via `IRBuilder.emit`
+    (which makes <=1 result), so the op is built directly to pin the
+    fail-closed guard."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r1 = tir.Value(id=900, ty=_i32())
+    r2 = tir.Value(id=901, ty=_i32())
+    b.current_block.ops.append(
+        tir.Op(kind=tir.OpKind.CALL, operands=[], results=[r1, r2],
+               attrs={"target": "g"}))
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="at most one value"):
+        llvm_ir.emit_module(mod)
