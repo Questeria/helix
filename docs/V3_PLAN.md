@@ -157,7 +157,7 @@ depend on a clean, unambiguous full-suite run.
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 204 | Memory & aggregates (sub-staged) | sub-A ✓ | sub-A audit pending | Phase D — mutable locals shipped |
+| 204 | Memory & aggregates (sub-staged) | sub-A ✓ | sub-A 3-clean ✓ | Phase D — mutable locals CLOSED; arrays next |
 | 205–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -344,3 +344,17 @@ depend on a clean, unambiguous full-suite run.
   LLVM test files. `x86_64.py` untouched. Per-stage 3-clean audit
   dispatched. Next sub-stage: stack arrays (ALLOC_ARRAY / LOAD_ELEM /
   STORE_ELEM → an array-typed `alloca` + GEP).
+- 2026-05-20 — **Stage 204 sub-stage A — 3-clean audit CLEAN (round
+  1).** All three audit surfaces (silent-failure-hunter /
+  type-design-analyzer / code-reviewer) returned 0 HIGH / 0
+  must-fix-MEDIUM on the first round: the fail-closed memory-op
+  handling, the entry-block `alloca` hoist, the opaque-pointer
+  `load`/`store`, and the slot type-checking were all verified sound;
+  the type design was rated consistent with the file's conventions.
+  The one shared LOW — stale `emit_function` / `emit_module`
+  docstrings and the emitted IR header comment still citing old stage
+  numbers — is fixed in the closure commit (the supported-op list now
+  lives only in the module docstring, the single source of truth, so
+  the drift cannot recur). Sub-stage A (mutable locals) is CLOSED.
+  Next: Stage 204 sub-stage B — stack arrays (ALLOC_ARRAY /
+  LOAD_ELEM / STORE_ELEM).

@@ -825,20 +825,20 @@ class _FnEmitter:
 def emit_function(fn: tir.FnIR) -> str:
     """Emit the textual LLVM IR `define` for one host-IR function.
     Raises `LLVMEmitError` for any construct outside the supported set
-    (Stages 200 + 202 — the scalar core plus control flow)."""
+    (see this module's docstring for the current supported op set)."""
     return _FnEmitter(fn).emit()
 
 
 def emit_module(module: tir.Module) -> str:
     """Emit a complete textual LLVM IR module from a host `tir.Module`.
 
-    Additive Stage 200 substrate — consumes the same IR that
+    Additive v3.0 Phase-D backend — consumes the same IR that
     `x86_64.py::compile_module_to_elf` consumes and emits LLVM IR the
-    toolchain accepts (real `opt`/`llc` dispatch is Stage 201).
+    toolchain accepts (real `opt`/`llc` dispatch is `llvm_toolchain`).
     Functions are emitted in `module.functions` insertion order so the
     output is deterministic (a Stage 207 parity prerequisite)."""
     lines: list[str] = [
-        "; helixc LLVM IR backend — v3.0 Phase D (Stages 200-203)",
+        "; helixc LLVM IR backend — v3.0 Phase D",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
         "",
     ]
