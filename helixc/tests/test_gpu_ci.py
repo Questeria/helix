@@ -340,6 +340,63 @@ def test_v24_validate_emit_rocm_real_hw_dispatch_runs_llvm_mc():
     assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
 
 
+def test_v24_dispatch_xcrun_metal_tool_not_found():
+    """v2.4 item 13 slice 4 — _dispatch_xcrun_metal surfaces a
+    missing/non-executable tool loudly as (False, [diagnostic])
+    rather than swallowing the FileNotFoundError into a silent pass.
+    On non-macOS this is the only reachable path (xcrun is mac-only),
+    so the test exercises it directly with a guaranteed-absent name."""
+    from helixc.backend.gpu_ci import _dispatch_xcrun_metal
+    passed, findings = _dispatch_xcrun_metal(
+        "#include <metal_stdlib>\nkernel void k() {}\n",
+        "helix_no_such_xcrun_xyz123")
+    assert passed is False
+    assert len(findings) == 1
+    assert "not found" in findings[0]
+
+
+def test_v24_validate_emit_metal_real_hw_tool_absent_is_deterministic():
+    """v2.4 item 13 slice 4 — when xcrun is not on PATH (any non-macOS
+    machine), Metal real-HW dispatch does not run: validate_emit
+    returns real_hw_attempted=False with post-init invariants intact."""
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = MslEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.METAL_MSL, attempt_real_hw=True)
+    if not requires_backend_tool(BackendKind.METAL_MSL):
+        assert result.real_hw_attempted is False
+        assert result.real_hw_tool is None
+        assert result.real_hw_passed is None
+        assert result.real_hw_findings == ()
+    else:
+        assert result.real_hw_attempted is True
+
+
+@pytest.mark.skipif(
+    "xcrun" not in detect_tools(BackendKind.METAL_MSL),
+    reason="xcrun not on PATH (non-macOS) — Metal real-HW dispatch "
+           "cannot be exercised",
+)
+def test_v24_validate_emit_metal_real_hw_dispatch_runs_xcrun():
+    """v2.4 item 13 slice 4 — when xcrun IS available (macOS), Metal
+    real-HW dispatch actually invokes the metal compiler. Substrate
+    MSL may or may not compile cleanly (HELIX-STUB-OPERANDS markers
+    until item 15), so we assert only that dispatch RAN:
+    real_hw_attempted=True, real_hw_tool='xcrun', real_hw_passed is
+    a concrete bool."""
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = MslEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.METAL_MSL, attempt_real_hw=True)
+    assert result.real_hw_attempted is True
+    assert result.real_hw_tool == "xcrun"
+    assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
+
+
 def test_stage129_validate_emit_rejects_unknown_backend():
     """Stage 129 — validate_emit raises ValueError on a backend we don't
     have a validator for. Defends against silent acceptance of garbage."""

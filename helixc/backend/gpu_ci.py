@@ -428,6 +428,65 @@ def _dispatch_llvm_mc(text: str, tool: str,
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _dispatch_xcrun_metal(text: str, tool: str,
+                          timeout_s: int = REAL_HW_TIMEOUT_S) -> tuple[bool, list[str]]:
+    """v2.4 item 13 (slice 4) — real-HW dispatch for the Metal backend.
+
+    Writes the emitted MSL to a temp `.metal` file and compiles it
+    with `xcrun -sdk macosx metal -c`. The Metal front-end compiles
+    MSL to AIR (Apple IR) and exits non-zero with a stderr diagnostic
+    on any compile error — a genuine MSL syntax+semantics gate,
+    parity with the ptxas/naga/llvm-mc dispatchers.
+
+    macOS-only: `xcrun` exists only on macOS with Xcode installed.
+    On any other platform detect_tools() returns [] and this is never
+    called — so a Linux/Windows CI run sees the deterministic
+    tool-absent path, not a failure.
+
+    Returns (passed, findings): passed=True iff the metal compiler
+    exited 0; findings carries the truncated diagnostic on failure,
+    the timeout message on a hang, or a tool-not-found message if
+    `tool` vanished between detect_tools() and dispatch.
+
+    NOTE: Helix's MSL emit is substrate-level — TILE_MATMUL +
+    memory ops carry `HELIX-STUB-OPERANDS` markers (matrix args /
+    buffers not bound; real binding is v2.4 item 15 RegAlloc). The
+    metal compiler will legitimately reject such kernels — the
+    honest outcome this gate surfaces. An empty `kernel void`
+    compiles cleanly.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="helix_xcrun_metal_")
+    in_path = os.path.join(tmpdir, "kernel.metal")
+    out_path = os.path.join(tmpdir, "kernel.air")
+    try:
+        with open(in_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        cmd = [tool, "-sdk", "macosx", "metal", "-c", in_path,
+               "-o", out_path]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return False, [
+                f"xcrun metal dispatch timed out after {timeout_s}s "
+                f"(tool={tool!r})"
+            ]
+        except FileNotFoundError:
+            return False, [
+                f"xcrun metal dispatch: tool {tool!r} not found / not "
+                f"executable at invocation time"
+            ]
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            return False, [
+                f"xcrun metal exit {proc.returncode}: {diag[:500]}"
+            ]
+        return True, []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 # Stage 129 type-design audit-fix: module-load drift detector.
 # Catches the case where a new BackendKind is added without updating
 # GPU_TOOLS or _MOCK_VALIDATORS. Same pattern as the per-backend
@@ -459,9 +518,13 @@ def validate_emit(text: str, backend: BackendKind,
        - Returns a list of findings (empty = pass)
 
     2. Real-HW validation (only if attempt_real_hw=True AND tools detected):
-       - Runs ptxas / hipcc / xcrun metal / naga on the text
-       - Stage 129 ships the harness only; actual tool-invocation
-         shells are wired in Stage 130+
+       - v2.4 item 13: dispatch is wired for all 4 backends —
+         ptxas (PTX), naga (WebGPU), llvm-mc (ROCm), xcrun metal
+         (Metal). Each tool assembles/validates the emitted text and
+         a non-zero exit becomes real_hw_passed=False + findings.
+       - A detected-but-non-canonical tool (PTX via nvcc, WebGPU via
+         wgpu/dawn_node) still takes the deferred path —
+         real_hw_passed=None, overall_status()=DEFERRED.
 
     Returns a ValidationResult capturing both outcomes.
     """
@@ -483,11 +546,13 @@ def validate_emit(text: str, backend: BackendKind,
         if available:
             real_hw_attempted = True
             real_hw_tool = available[0]
-            # v2.4 item 13 — real-HW dispatch. PTX via ptxas (slice 1),
-            # WebGPU via naga (slice 2), ROCm via llvm-mc (slice 3) are
-            # wired — each tool validates/assembles its target text
-            # directly. Metal remains deferred: MSL needs `xcrun -sdk
-            # macosx metal` (mac-only) — its slice lands next.
+            # v2.4 item 13 — real-HW dispatch, all 4 backends wired:
+            # PTX via ptxas (slice 1), WebGPU via naga (slice 2),
+            # ROCm via llvm-mc (slice 3), Metal via xcrun metal
+            # (slice 4). Each tool validates/assembles/compiles its
+            # target text directly. The `else` deferred branch now
+            # only fires for a detected-but-non-canonical tool
+            # (e.g. PTX via nvcc, WebGPU via wgpu/dawn_node).
             if backend is BackendKind.PTX and real_hw_tool == "ptxas":
                 passed, dispatch_findings = _dispatch_ptxas(
                     text, real_hw_tool)
@@ -502,6 +567,12 @@ def validate_emit(text: str, backend: BackendKind,
             elif (backend is BackendKind.ROCM_HIP
                   and real_hw_tool == "llvm-mc"):
                 passed, dispatch_findings = _dispatch_llvm_mc(
+                    text, real_hw_tool)
+                real_hw_passed = passed
+                real_hw_findings.extend(dispatch_findings)
+            elif (backend is BackendKind.METAL_MSL
+                  and real_hw_tool == "xcrun"):
+                passed, dispatch_findings = _dispatch_xcrun_metal(
                     text, real_hw_tool)
                 real_hw_passed = passed
                 real_hw_findings.extend(dispatch_findings)
