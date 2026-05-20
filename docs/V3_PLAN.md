@@ -158,7 +158,7 @@ depend on a clean, unambiguous full-suite run.
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
-| 205 | Calls & ABI (chunked) | chunk A ✓ | chunk A 3-clean ✓ | Phase D — direct calls CLOSED; FFI next |
+| 205 | Calls & ABI (chunked) | chunk A,B ✓ | A 3-clean ✓ · B audit pending | Phase D — direct + FFI calls shipped |
 | 206–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -425,3 +425,19 @@ depend on a clean, unambiguous full-suite run.
   in the closure commit with a raw-`Op` test (110 passed + 2 skipped).
   Chunk A (direct calls) is CLOSED. Next: Stage 205 chunk B — FFI
   calls (FFI_CALL → an LLVM `call` to a `declare`d extern target).
+- 2026-05-20 — **Stage 205 chunk B shipped — LLVM FFI calls.** The
+  FFI_CALL op (a call to an extern "C" symbol) lowers to the same
+  LLVM `call` as a direct CALL, plus a module-scope `declare` for the
+  extern target. CALL and FFI_CALL now share one `_emit_call` helper
+  (they differ only in the declare); an FFI_CALL additionally calls
+  `_register_ffi_declare`, which records `declare <ret> @sym(<args>)`
+  and fails closed if the same symbol is called with two different
+  signatures. `emit_module` was reworked to construct the
+  `_FnEmitter`s directly, collect every function's `ffi_declares`,
+  dedup them, and emit the deduped `declare`s at module scope before
+  the `define`s — it also rejects an FFI symbol that collides with a
+  defined function name (a `declare`/`define` clash `llvm-as` would
+  reject). Output is byte-identical to before for any FFI-free
+  module. 11 new tests; 121 passed + 2 skipped across the two LLVM
+  test files. `x86_64.py` untouched. Per-stage 3-clean audit
+  dispatched.

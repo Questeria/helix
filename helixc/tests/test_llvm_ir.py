@@ -8,9 +8,10 @@ constants, add/sub/mul, `ret`); control flow (multi-block, `br`,
 `phi`); the scalar op set (the six comparisons, `select`, `neg`,
 div/mod, bitwise ops, unsigned integer dtypes); mutable local
 variables and stack arrays (`alloca`/`load`/`store`/`getelementptr`);
-and direct function calls (`call`). Everything else must be REJECTED
-loudly with `LLVMEmitError` — a partial backend fails closed, it
-never emits wrong IR.
+and direct + FFI function calls (`call`, with a module-scope
+`declare` for FFI targets). Everything else must be REJECTED loudly
+with `LLVMEmitError` — a partial backend fails closed, it never emits
+wrong IR.
 """
 
 from __future__ import annotations
@@ -1684,4 +1685,190 @@ def test_stage205_rejects_call_multiple_results():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="at most one value"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 205 chunk B — FFI calls (FFI_CALL -> `call` + module `declare`)
+# ==========================================================================
+def test_stage205_emit_ffi_call_emits_declare():
+    """An FFI_CALL emits the LLVM `call` plus a module-scope `declare`
+    for the extern target."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.FFI_CALL, b.const_int(65), result_ty=_i32(),
+               attrs={"target": "putchar"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "declare i32 @putchar(i32)" in ll, ll
+    assert f"%v{r.id} = call i32 @putchar(i32 65)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_ffi_call_void():
+    """An FFI_CALL with no result emits a `declare void` and a
+    `call void`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.FFI_CALL, attrs={"target": "abort"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "declare void @abort()" in ll, ll
+    assert "call void @abort()" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_ffi_call_with_args():
+    """An FFI_CALL's `declare` lists each argument's LLVM type."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("c", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.FFI_CALL, fn.params[0], fn.params[1],
+               result_ty=_i32(), attrs={"target": "ext2"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "declare i32 @ext2(i32, i64)" in ll, ll
+    assert (f"%v{r.id} = call i32 @ext2(i32 %v{fn.params[0].id}, "
+            f"i64 %v{fn.params[1].id})") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_ffi_declare_deduped():
+    """Two FFI_CALLs to the same extern symbol emit exactly one
+    `declare`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.FFI_CALL, b.const_int(1), result_ty=_i32(),
+           attrs={"target": "ext"})
+    r = b.emit(tir.OpKind.FFI_CALL, b.const_int(2), result_ty=_i32(),
+               attrs={"target": "ext"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("declare i32 @ext(i32)") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_ffi_declare_precedes_defines():
+    """The FFI `declare`s are emitted at module scope, before the
+    function `define`s."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.FFI_CALL, result_ty=_i32(),
+               attrs={"target": "ext"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.index("declare i32 @ext()") < ll.index(
+        "define i32 @f("), ll
+
+
+def test_stage205_ffi_call_result_feeds_op():
+    """An FFI_CALL's result is a normal SSA value — it can feed a
+    later op."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    c = b.emit(tir.OpKind.FFI_CALL, result_ty=_i32(),
+               attrs={"target": "ext"})
+    s = b.add(c, b.const_int(10))
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{c.id} = call i32 @ext()" in ll, ll
+    assert f"%v{s.id} = add i32 %v{c.id}, 10" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_ffi_and_direct_call_coexist():
+    """A function may mix a direct CALL and an FFI_CALL; only the FFI
+    target gets a `declare`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("helper", [], _i32())
+    b.ret(b.const_int(1))
+    b.end_function()
+    b.begin_function("f", [], _i32())
+    d = b.emit(tir.OpKind.CALL, result_ty=_i32(),
+               attrs={"target": "helper"})
+    e = b.emit(tir.OpKind.FFI_CALL, result_ty=_i32(),
+               attrs={"target": "ext"})
+    b.ret(b.add(d, e))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "declare i32 @ext()" in ll, ll
+    assert "declare i32 @helper" not in ll, ll  # direct call: no declare
+    assert f"%v{d.id} = call i32 @helper()" in ll, ll
+    assert f"%v{e.id} = call i32 @ext()" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_ffi_call_emit_is_deterministic():
+    """Two emits of a module with an FFI_CALL are byte-identical."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        r = b.emit(tir.OpKind.FFI_CALL, b.const_int(3),
+                   result_ty=_i32(), attrs={"target": "ext"})
+        b.ret(r)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage205_rejects_ffi_call_missing_target():
+    """An FFI_CALL with no 'target' attr is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.FFI_CALL, result_ty=_i32(), attrs={})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="non-empty string 'target'"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage205_rejects_ffi_inconsistent_signature():
+    """The same extern symbol called with two different signatures is
+    rejected — an extern has exactly one signature."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.FFI_CALL, b.const_int(1), result_ty=_i32(),
+           attrs={"target": "ext"})           # ext(i32)
+    r = b.emit(tir.OpKind.FFI_CALL, result_ty=_i32(),
+               attrs={"target": "ext"})       # ext() — differs
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="two different signatures"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage205_rejects_ffi_symbol_collides_with_defined_fn():
+    """An FFI symbol that is also a defined function name is rejected
+    — a `declare` cannot share a name with a `define`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("helper", [], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.FFI_CALL, result_ty=_i32(),
+               attrs={"target": "helper"})    # collides with the define
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="also a defined function"):
         llvm_ir.emit_module(mod)

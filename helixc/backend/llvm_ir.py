@@ -30,12 +30,14 @@ Supported so far (Stages 200, 202-204):
     become LLVM `alloca` / `load` / `store` (plus `getelementptr` for
     an array element's address) — every `alloca` is hoisted to the
     entry block; loads, stores and GEPs use opaque pointers (`ptr`).
-  - direct function calls (Stage 205): CALL becomes an LLVM `call` —
-    a value call (`%vN = call <ty> @callee(...)`) or a void call;
-    arguments are passed positionally as typed operands.
+  - direct + FFI function calls (Stage 205): CALL and FFI_CALL become
+    an LLVM `call` — a value call (`%vN = call <ty> @callee(...)`) or
+    a void call, arguments passed positionally as typed operands. An
+    FFI_CALL additionally emits a module-scope `declare` for its
+    extern target.
 
-Anything outside that set — structs, FFI calls, floats, the wider op
-surface — is REJECTED with a loud `LLVMEmitError`,
+Anything outside that set — structs, floats, the wider op surface —
+is REJECTED with a loud `LLVMEmitError`,
 never emitted wrong. Those land in later stages. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
 an LLVM toolchain, mirroring `gpu_ci.py`'s mock path; real
@@ -258,7 +260,11 @@ class _FnEmitter:
 
     `var_slots` / `array_slots` map each mutable local / stack array's
     name to its `alloca` pointer register and type (also populated by
-    `_prepass`); the allocas are hoisted to the entry block."""
+    `_prepass`); the allocas are hoisted to the entry block.
+
+    `ffi_declares` collects, during emission, the module-scope
+    `declare` each FFI_CALL needs; `emit_module` emits the deduped
+    set."""
 
     def __init__(self, fn: tir.FnIR):
         self.fn = fn
@@ -273,6 +279,9 @@ class _FnEmitter:
         # counter for the `%gep.N` element-address registers that a
         # LOAD_ELEM / STORE_ELEM emits.
         self.gep_count: int = 0
+        # extern symbol -> its module-scope `declare` line, filled as
+        # FFI_CALLs are emitted; `emit_module` collects + dedups these.
+        self.ffi_declares: dict[str, str] = {}
 
     @staticmethod
     def _block_label(block_id: int) -> str:
@@ -620,6 +629,70 @@ class _FnEmitter:
                f"ptr {array_reg}, i64 0, {idx_ty} {self._ref(index)}")
         return gep, addr
 
+    def _emit_call(self, op: tir.Op) -> str:
+        """Lower a CALL or FFI_CALL to an LLVM `call`. The two share
+        every emission detail — a value call `%vN = call <ty> @t(...)`
+        or a void call — and differ only in that an FFI_CALL targets
+        an extern symbol, so it ALSO registers a module-scope
+        `declare` (collected by `emit_module`) via
+        `_register_ffi_declare`."""
+        is_ffi = op.kind == tir.OpKind.FFI_CALL
+        label = "FFI_CALL" if is_ffi else "CALL"
+        target = op.attrs.get("target")
+        if not isinstance(target, str) or not target:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} needs a non-empty "
+                f"string 'target' attr (got {target!r})")
+        if len(op.results) > 1:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} to {target!r} has "
+                f"{len(op.results)} results — an LLVM call produces at "
+                f"most one value")
+        arg_tys: list[str] = []
+        args: list[str] = []
+        for i, arg in enumerate(op.operands):
+            arg_ty = _llvm_int_type(
+                arg.ty,
+                ctx=f"function {self.fn.name!r} {label} {target!r} "
+                    f"argument {i}")
+            arg_tys.append(arg_ty)
+            args.append(f"{arg_ty} {self._ref(arg)}")
+        callee = _llvm_global_name(target)
+        arglist = ", ".join(args)
+        # A call with no result, or a unit-typed result, is a void
+        # call — `()` is not a materialized LLVM value.
+        if not op.results or isinstance(op.results[0].ty, tir.TIRUnit):
+            ret_ty = "void"
+            call_line = f"call void {callee}({arglist})"
+        else:
+            result = op.results[0]
+            ret_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} {label} {target!r} "
+                    f"result")
+            call_line = (f"%v{result.id} = call {ret_ty} "
+                         f"{callee}({arglist})")
+        if is_ffi:
+            self._register_ffi_declare(target, callee, ret_ty, arg_tys)
+        return call_line
+
+    def _register_ffi_declare(self, target: str, callee: str,
+                              ret_ty: str,
+                              arg_tys: list[str]) -> None:
+        """Record the module-scope `declare` an FFI_CALL needs. An
+        extern symbol called more than once must agree on its
+        signature — a mismatch is malformed IR, so fail closed.
+        `emit_module` collects these across functions and emits the
+        deduped declares."""
+        decl = f"declare {ret_ty} {callee}({', '.join(arg_tys)})"
+        existing = self.ffi_declares.get(target)
+        if existing is not None and existing != decl:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: FFI symbol {target!r} is "
+                f"called with two different signatures — {existing!r} "
+                f"vs {decl!r}")
+        self.ffi_declares[target] = decl
+
     def _emit_op(self, op: tir.Op) -> Optional[str]:
         """Emit one op's LLVM instruction text — `None` when the op
         materializes no instruction (CONST_INT, ALLOC_VAR,
@@ -939,46 +1012,17 @@ class _FnEmitter:
                 op.operands[0], register, elem_ty, length)
             return (f"{gep}\nstore {elem_ty} {self._ref(value)}, "
                     f"ptr {addr}")
-        if kind == tir.OpKind.CALL:
-            target = op.attrs.get("target")
-            if not isinstance(target, str) or not target:
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: CALL needs a non-empty "
-                    f"string 'target' attr (got {target!r})")
-            if len(op.results) > 1:
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: CALL to {target!r} has "
-                    f"{len(op.results)} results — an LLVM call produces "
-                    f"at most one value")
-            args: list[str] = []
-            for i, arg in enumerate(op.operands):
-                arg_ty = _llvm_int_type(
-                    arg.ty,
-                    ctx=f"function {self.fn.name!r} CALL {target!r} "
-                        f"argument {i}")
-                args.append(f"{arg_ty} {self._ref(arg)}")
-            callee = _llvm_global_name(target)
-            arglist = ", ".join(args)
-            # A CALL with no result, or a unit-typed result, is a void
-            # call — `()` is not a materialized LLVM value.
-            if not op.results or isinstance(
-                    op.results[0].ty, tir.TIRUnit):
-                return f"call void {callee}({arglist})"
-            result = op.results[0]
-            ret_ty = _llvm_int_type(
-                result.ty,
-                ctx=f"function {self.fn.name!r} CALL {target!r} result")
-            return (f"%v{result.id} = call {ret_ty} "
-                    f"{callee}({arglist})")
+        if kind in (tir.OpKind.CALL, tir.OpKind.FFI_CALL):
+            return self._emit_call(op)
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
             f"arithmetic ADD/SUB/MUL/DIV/MOD; the bitwise AND/OR/XOR/NOT "
             f"and shifts SHL/SHR; the six comparisons; SELECT; NEG; "
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
-            f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct CALL; "
-            f"RETURN; BR; COND_BR — FFI calls, floats and structs are "
-            f"later stages)"
+            f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
+            f"calls; RETURN; BR; COND_BR — floats and structs are later "
+            f"stages)"
         )
 
 
@@ -996,14 +1040,41 @@ def emit_module(module: tir.Module) -> str:
     `x86_64.py::compile_module_to_elf` consumes and emits LLVM IR the
     toolchain accepts (real `opt`/`llc` dispatch is `llvm_toolchain`).
     Functions are emitted in `module.functions` insertion order so the
-    output is deterministic (a Stage 207 parity prerequisite)."""
+    output is deterministic (a Stage 207 parity prerequisite). A
+    module-scope `declare` is emitted for each extern symbol an
+    FFI_CALL targets."""
+    emitters = [_FnEmitter(fn) for fn in module.functions.values()]
+    bodies = [emitter.emit() for emitter in emitters]
+    # Collect the FFI `declare`s every function accumulated during
+    # emission. A symbol declared with two different signatures, or
+    # one that collides with a defined function name, is malformed —
+    # fail closed on both rather than emit a module `llvm-as` rejects.
+    defined = set(module.functions)
+    declares: dict[str, str] = {}
+    for emitter in emitters:
+        for symbol, decl in emitter.ffi_declares.items():
+            if symbol in defined:
+                raise LLVMEmitError(
+                    f"module: FFI symbol {symbol!r} is also a defined "
+                    f"function — an extern `declare` cannot share a "
+                    f"name with a `define`")
+            existing = declares.get(symbol)
+            if existing is not None and existing != decl:
+                raise LLVMEmitError(
+                    f"module: FFI symbol {symbol!r} is declared with "
+                    f"two different signatures — {existing!r} vs "
+                    f"{decl!r}")
+            declares[symbol] = decl
     lines: list[str] = [
         "; helixc LLVM IR backend — v3.0 Phase D",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
         "",
     ]
-    for fn in module.functions.values():
-        lines.append(emit_function(fn))
+    lines.extend(declares.values())
+    if declares:
+        lines.append("")
+    for body in bodies:
+        lines.append(body)
         lines.append("")
     return "\n".join(lines)
 
