@@ -23,6 +23,7 @@ from helixc.backend.regalloc_classes import (
     RocmRegClass,
     plan_ptx_registers,
     ptx_register_class,
+    ptx_register_class_op_aware,
     ptx_register_names,
     rocm_register_class,
 )
@@ -237,30 +238,98 @@ def test_v25_plan_ptx_registers_propagates_unknown_dtype():
         plan_ptx_registers(fn)
 
 
-def test_v25_plan_ptx_registers_skips_bool_values():
-    """v2.5 item 1 — plan_ptx_registers excludes bool values from the
-    linear-scan plan. A bool's PTX register class is op-dependent — a
-    SCALAR_CMP result is a `%p` predicate, a SCALAR_CONST_INT bool
-    constant is 0/1 in a `%r` (b32) register — which the dtype-based
-    `ptx_register_class` (bool -> %p) cannot express. So bool lands in
-    `MultiClassResult.skipped` (left on PtxEmitter's class-agnostic
-    bump allocator); non-bool scalars are still planned normally.
-    This is what unblocks the emit_kernel wiring: a trial of it caught
-    exactly this bool %p-vs-%r disagreement (V2_PLAN.md 2026-05-20)."""
-    vi = _val(0, "i32")    # planned -> %r
-    vb = _val(1, "bool")   # skipped — op-dependent class
+def test_v25_plan_ptx_registers_classifies_bool_by_defining_op():
+    """v2.5 item 1 (op-aware bool — V2_PLAN.md "option (b)") —
+    plan_ptx_registers classifies a bool by its DEFINING op, not its
+    dtype. A `SCALAR_CONST_INT` bool constant is materialised as 0/1 in
+    a `%r` b32 register; a `SCALAR_CMP` result is a `%p` predicate.
+    Both coexist in one kernel, each planned into the file its
+    PtxEmitter emit branch writes — the exact gap that blocked the
+    emit_kernel wiring trial (V2_PLAN.md 2026-05-20)."""
+    a = _val(0, "i32")
+    b = _val(1, "i32")
+    vcmp = _val(2, "bool")     # SCALAR_CMP result    -> %p predicate
+    vconst = _val(3, "bool")   # SCALAR_CONST_INT     -> %r b32
     blk = TileBlock(id=0, ops=[
-        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vi]),
-        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vb]),
-        TileOp(kind=TileOpKind.CALL, operands=[vi, vb]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[a]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[b]),
+        TileOp(kind=TileOpKind.SCALAR_CMP, operands=[a, b], results=[vcmp]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vconst]),
+        TileOp(kind=TileOpKind.CALL, operands=[vcmp, vconst]),
     ])
     fn = TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
                 blocks=[blk], attrs={"kernel": True})
     r = plan_ptx_registers(fn)
     assert r.spill_count == 0
-    assert 1 in r.skipped            # the bool value — not linear-scanned
-    assert 1 not in r.assignment     # so it has no RegAssignment
-    assert r.assignment[0].reg_class == "%r"   # the i32 is still planned
+    assert r.skipped == set()                  # no bool op result is skipped
+    assert r.assignment[2].reg_class == "%p"   # SCALAR_CMP bool predicate
+    assert r.assignment[3].reg_class == "%r"   # SCALAR_CONST_INT bool b32
+    assert r.assignment[0].reg_class == "%r"   # the i32 operands
+    assert r.assignment[1].reg_class == "%r"
+
+
+def test_v25_plan_ptx_registers_skips_bool_param():
+    """v2.5 item 1 — a bool that is NOT an op result (a kernel param)
+    has no defining op, so its op-dependent PTX register class is
+    undeterminable. plan_ptx_registers skips it onto PtxEmitter's bump
+    allocator rather than raising — only bool OP RESULTS are
+    op-classified. A non-bool param (i32 here) is still planned."""
+    pbool = _val(0, "bool")   # kernel param — no defining op -> skipped
+    pi = _val(1, "i32")       # kernel param — classified normally
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.CALL, operands=[pbool, pi]),
+    ])
+    fn = TileFn(name="k", params=[pbool, pi], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    r = plan_ptx_registers(fn)
+    assert 0 in r.skipped            # the bool param — not linear-scanned
+    assert 0 not in r.assignment
+    assert r.assignment[1].reg_class == "%r"   # the i32 param is planned
+
+
+def test_v25_ptx_register_class_op_aware_bool_const_int_to_r():
+    """v2.5 item 1 — a bool whose defining op is SCALAR_CONST_INT
+    classifies to %r: the PTX emitter materialises it as a b32
+    `mov.b32 %r<n>, 0/1`, not a predicate."""
+    vb = _val(0, "bool")
+    op = TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vb])
+    assert ptx_register_class_op_aware(vb, op) == "%r"
+
+
+def test_v25_ptx_register_class_op_aware_bool_cmp_to_p():
+    """v2.5 item 1 — a bool whose defining op is SCALAR_CMP classifies
+    to %p: the PTX emitter materialises it as a `setp` predicate."""
+    vb = _val(0, "bool")
+    op = TileOp(kind=TileOpKind.SCALAR_CMP, results=[vb])
+    assert ptx_register_class_op_aware(vb, op) == "%p"
+
+
+def test_v25_ptx_register_class_op_aware_bool_no_defining_op_raises():
+    """v2.5 item 1 — a bool with no defining op has no determinable
+    PTX register class (bool's class is op-dependent). The op-aware
+    classifier raises rather than guess. plan_ptx_registers skips such
+    values before classifying; this pins the direct-call contract."""
+    with pytest.raises(RuntimeError, match="no defining op"):
+        ptx_register_class_op_aware(_val(0, "bool"), None)
+
+
+def test_v25_ptx_register_class_op_aware_bool_unmapped_op_raises():
+    """v2.5 item 1 — a bool produced by an op with no PTX
+    register-class mapping (SCALAR_SELECT) raises rather than being
+    mis-filed — parity with the unknown-dtype discipline."""
+    vb = _val(0, "bool")
+    op = TileOp(kind=TileOpKind.SCALAR_SELECT, results=[vb])
+    with pytest.raises(RuntimeError, match="no PTX register-class mapping"):
+        ptx_register_class_op_aware(vb, op)
+
+
+def test_v25_ptx_register_class_op_aware_delegates_nonbool():
+    """v2.5 item 1 — non-bool values are not op-dependent: the op-aware
+    classifier delegates to the dtype-only ptx_register_class and
+    ignores defining_op (None is accepted for a non-bool value)."""
+    assert ptx_register_class_op_aware(_val(0, "i32"), None) == "%r"
+    assert ptx_register_class_op_aware(_val(1, "f32"), None) == "%f"
+    assert ptx_register_class_op_aware(_val(2, "i64"), None) == "%rd"
 
 
 # ============================================================================

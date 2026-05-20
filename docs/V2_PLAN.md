@@ -1938,3 +1938,29 @@ The body flip, `_result_reg` seam, bool exclusion, and the planner
 remain sound — they are not the bug. The blocker is the unfinished
 `_new_reg` -> `_result_reg` conversion + the plan/scratch register
 partition. The `emit_kernel` comment is corrected to match.
+
+### 2026-05-20 — op-aware bool classification landed (supersedes "skip all bool")
+
+A concurrent fire shipped `ptx_register_class_op_aware` — V2_PLAN.md
+"option (b)" for the bool register-class gap. This fire verified it
+(`test_regalloc_classes` + `test_regalloc` -> 65 passed; the
+load_register_plan / `_result_reg` `test_ptx` subset -> 8 passed) and
+committed the finished tree per the per-fire protocol.
+
+What it does: bool's PTX register class is op-dependent — `SCALAR_CMP`
+-> `setp` -> `%p` predicate; `SCALAR_CONST_INT` -> `mov.b32` -> `%r`
+b32. `ptx_register_class_op_aware(value, defining_op)` classifies a
+bool op result by its defining op (`_PTX_BOOL_OP_CLASS` table),
+delegating every non-bool value to the dtype-only `ptx_register_class`
+unchanged. `plan_ptx_registers` now builds a vreg -> defining-op map
+(`_ptx_defining_ops`) and passes the op-aware classifier; only a bool
+with NO defining op (a kernel / block param) is skipped. This
+supersedes the earlier blanket "exclude all bool" unblock (`093aa7d`)
+— bool op results now join the linear-scan reuse like every other
+scalar.
+
+Net: the bool register-class gap is RESOLVED. The remaining Edit B
+blocker is the one from the corrected diagnosis above — the
+unfinished `_new_reg` -> `_result_reg` conversion for the memory ops
++ the plan/scratch register partition (seed `_new_reg` above the
+plan's per-class high-water).
