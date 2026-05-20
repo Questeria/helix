@@ -66,6 +66,19 @@ def _rewrite_knobs(src, hx, kind, seed, maze, grid_size):
         new_src = new_src.replace(
             target, "@pure fn use_maze() -> i32 { 1 }")
     if grid_size is not None:
+        # v2.x re-audit R4 (RT HIGH-1): the 'size' knob is sound ONLY
+        # for the qlearn agent — its grid_total() / goal_id() derive
+        # from grid_n(). dashboard_nn_agent.hx hardcodes those
+        # (grid_total -> 100, goal_id -> 99), so rewriting grid_n()
+        # alone yields an INCONSISTENT binary (a resized world with a
+        # stale grid_total / goal_id). The R3 fix checked only that
+        # grid_n() is present — true for nn too — turning a silent
+        # no-op into a silent miscompile. Restrict to qlearn; reject
+        # loudly otherwise.
+        if kind != "qlearn":
+            return None, (f"agent kind {kind!r} does not support the "
+                          f"'size' knob: only the qlearn agent derives "
+                          f"its grid constants from grid_n()")
         target = "@pure fn grid_n() -> i32 { 10 }"
         if target not in new_src:
             return None, (f"agent kind {kind!r} does not support the "
@@ -86,7 +99,11 @@ def compile_helix(kind, seed=None, maze=False, grid_size=None):
     hx, bin_name = AGENTS[kind]
     src_path = os.path.join(EXAMPLES, hx)
     compile_path = src_path
-    if (seed is not None or maze or grid_size is not None) and kind in ("qlearn", "nn"):
+    if seed is not None or maze or grid_size is not None:
+        # v2.x re-audit R4 (RT MEDIUM-1): _rewrite_knobs is the single
+        # authority — it rejects every knob unsupported by THIS agent.
+        # The prior `and kind in ("qlearn","nn")` gate skipped it for
+        # `hillclimb`, silently dropping a seed/maze knob there.
         with open(src_path, "r", encoding="utf-8") as f:
             src = f.read()
         new_src, knob_err = _rewrite_knobs(

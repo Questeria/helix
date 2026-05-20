@@ -84,3 +84,66 @@ def test_item7_unknown_key_diagnostic_lists_allowed():
     assert status == 400
     for key in (b"kind", b"seed", b"maze", b"size"):
         assert key in body, f"allowed-key {key!r} missing from body: {body!r}"
+
+
+# ============================================================================
+# v2.x re-audit R3 (RT-M1/M2): a compile-time knob whose target @pure fn
+# is absent from the chosen agent's source must be REJECTED, not silently
+# dropped. Pre-fix, `maze` for the `nn` agent (no use_maze()) and `size`
+# for `nn` (grid_n rewrite was gated to qlearn) no-op'd silently — the
+# request was accepted and logged but the binary ignored the knob.
+# ============================================================================
+def _read_agent_src(hx: str) -> str:
+    from helixc.examples.dashboard_server import EXAMPLES
+    with open(os.path.join(EXAMPLES, hx), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def test_v2x_reaudit_r3_nn_maze_knob_rejected():
+    """RT-M1: the `maze` knob must be REJECTED for the `nn` agent —
+    dashboard_nn_agent.hx has no use_maze() to flip."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    src = _read_agent_src("dashboard_nn_agent.hx")
+    new_src, err = _rewrite_knobs(
+        src, "dashboard_nn_agent.hx", "nn", None, True, None)
+    assert new_src is None, "maze on nn must not silently rewrite"
+    assert err is not None and "maze" in err and "nn" in err, err
+
+
+def test_v2x_reaudit_r4_nn_size_knob_rejected():
+    """RT HIGH-1 (R4): the `size` knob must be REJECTED for the `nn`
+    agent. dashboard_nn_agent.hx HAS a grid_n(), but its grid_total()
+    / goal_id() are HARDCODED, not derived from grid_n() — rewriting
+    grid_n() alone would silently miscompile (a resized world with
+    stale grid constants). The R3 fix wrongly honored it; R4
+    restricts the knob to qlearn, whose constants derive from
+    grid_n()."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    src = _read_agent_src("dashboard_nn_agent.hx")
+    new_src, err = _rewrite_knobs(
+        src, "dashboard_nn_agent.hx", "nn", None, False, 15)
+    assert new_src is None, "size on nn must not silently rewrite"
+    assert err is not None and "size" in err and "nn" in err, err
+
+
+def test_v2x_reaudit_r4_qlearn_size_knob_honored():
+    """RT HIGH-1 control: the `size` knob IS honored for the `qlearn`
+    agent, whose grid_total() / goal_id() derive from grid_n()."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    src = _read_agent_src("dashboard_qlearn.hx")
+    new_src, err = _rewrite_knobs(
+        src, "dashboard_qlearn.hx", "qlearn", None, False, 15)
+    assert err is None, f"size on qlearn must be honored, got: {err}"
+    assert "@pure fn grid_n() -> i32 { 15 }" in new_src
+    assert "@pure fn grid_n() -> i32 { 10 }" not in new_src
+
+
+def test_v2x_reaudit_r3_qlearn_maze_knob_honored():
+    """RT-M1 control: the `maze` knob still works for the `qlearn`
+    agent — dashboard_qlearn.hx HAS a use_maze()."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    src = _read_agent_src("dashboard_qlearn.hx")
+    new_src, err = _rewrite_knobs(
+        src, "dashboard_qlearn.hx", "qlearn", None, True, None)
+    assert err is None, f"maze on qlearn must be honored, got: {err}"
+    assert "@pure fn use_maze() -> i32 { 1 }" in new_src
