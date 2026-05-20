@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NewType, Optional, cast
 
@@ -166,31 +167,114 @@ def extract_enclave_tag(ty: Any) -> Optional[str]:
     return None
 
 
-def fn_proof_obligations(sig: Any) -> dict:
+@dataclass(frozen=True)
+class FunctionObligation:
+    """v2.4 item 3 slice 2/3 — frozen per-function proof-obligation row.
+
+    Stage 122 emitted these as plain mutable dicts. An attestation
+    manifest is an integrity artifact, so the obligation rows are now
+    immutable too: `manifest.functions[i].is_pure = ...` (an in-memory
+    tamper the Stage-122 dict allowed silently) raises
+    FrozenInstanceError.
+
+    `effects` is a tuple (not a list) so the record is hashable and
+    deeply immutable. `to_dict()` reproduces the exact Stage-122 wire
+    dict (effects back to a sorted list) so the canonical manifest
+    hash stays byte-identical to pre-dataclass manifests.
+
+    `has_enclave_param` tracks whether any parameter carries an
+    enclave tag — downstream audit tooling treats enclave-typed
+    params separately from enclave-typed returns (`enclave_tag`).
+    """
+    name: str
+    is_pure: bool
+    effects: tuple[str, ...]
+    enclave_tag: Optional[str]
+    param_count: int
+    has_enclave_param: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        """Stage-122-compatible wire dict (effects as a list)."""
+        return {
+            "name": self.name,
+            "is_pure": self.is_pure,
+            "effects": list(self.effects),
+            "enclave_tag": self.enclave_tag,
+            "param_count": self.param_count,
+            "has_enclave_param": self.has_enclave_param,
+        }
+
+
+def fn_proof_obligations(sig: Any) -> FunctionObligation:
     """Stage 122 — extract proof obligations for one function signature.
 
     Reads from FunctionSig (typecheck.py FunctionSig dataclass).
-    Returns a JSON-serializable dict with:
-      name, is_pure, effects (sorted list), enclave_tag (or null),
-      param_count, has_enclave_param (bool — for downstream audit
-      tooling that wants to track enclave-typed params separately
-      from enclave-typed returns).
+
+    v2.4 item 3 slice 2/3: returns a frozen `FunctionObligation`
+    dataclass (was a plain dict). Callers use attribute access
+    (`o.is_pure`) not item access (`o["is_pure"]`); `o.to_dict()`
+    recovers the Stage-122 wire form.
     """
-    obligations: dict[str, Any] = {
-        "name": sig.name,
-        "is_pure": bool(sig.is_pure),
-        "effects": sorted(sig.effects),
-        "enclave_tag": extract_enclave_tag(sig.ret),
-        "param_count": len(sig.params),
-    }
     # Check params for enclave tags.
     has_enclave_param = False
     for (_pname, pty) in sig.params:
         if extract_enclave_tag(pty) is not None:
             has_enclave_param = True
             break
-    obligations["has_enclave_param"] = has_enclave_param
-    return obligations
+    return FunctionObligation(
+        name=sig.name,
+        is_pure=bool(sig.is_pure),
+        effects=tuple(sorted(sig.effects)),
+        enclave_tag=extract_enclave_tag(sig.ret),
+        param_count=len(sig.params),
+        has_enclave_param=has_enclave_param,
+    )
+
+
+@dataclass(frozen=True)
+class ProofManifest:
+    """v2.4 item 3 slice 2/3 — frozen attestation-binding manifest.
+
+    Stage 122 emitted the manifest as a plain mutable dict. An
+    attestation manifest's whole job is to be tamper-evident, yet a
+    mutable dict let any code path silently rewrite a proof
+    obligation between emit and verify. The producer side now gets a
+    frozen dataclass: attribute rebinding raises FrozenInstanceError,
+    and `functions` is a tuple of frozen `FunctionObligation` rows so
+    the freeze is deep.
+
+    The consumer side is deliberately unchanged: `verify_manifest_hash`
+    and `serialize_manifest` still accept the plain dict an attestation
+    verifier gets from `json.loads` — untrusted JSON never arrives as a
+    dataclass. `to_dict()` bridges producer dataclass → wire dict; the
+    canonical `manifest_sha256` is byte-identical to pre-dataclass
+    manifests (same field set, `functions`/`effects` back to lists).
+    """
+    format_version: str
+    helix_version: str
+    artifact_path: Optional[str]
+    artifact_sha256: Optional[Sha256Hex]
+    function_count: int
+    functions: tuple[FunctionObligation, ...]
+    signature_format: str
+    signature: Optional[str]
+    manifest_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Stage-122-compatible wire dict — the form an attestation
+        verifier re-canonicalizes. Field set + values are byte-
+        identical to the pre-dataclass manifest dict."""
+        return {
+            "format_version": self.format_version,
+            "helix_version": self.helix_version,
+            "artifact_path": self.artifact_path,
+            "artifact_sha256": self.artifact_sha256,
+            "function_count": self.function_count,
+            "functions": [f.to_dict() for f in self.functions],
+            "signature_format": self.signature_format,
+            "signature": self.signature,
+            "manifest_sha256": self.manifest_sha256,
+        }
 
 
 def emit_manifest(
@@ -199,8 +283,8 @@ def emit_manifest(
     artifact_sha256: Optional[Sha256Hex] = None,
     helix_version: str = "v2.0-substrate",
     signature_format: SignatureFormat = SignatureFormat.DEFERRED,
-) -> dict:
-    """Stage 122 — emit a ProofObligation manifest dict.
+) -> ProofManifest:
+    """Stage 122 — emit a ProofObligation manifest.
 
     Args:
         functions: typecheck.TypeChecker.functions dict
@@ -220,12 +304,14 @@ def emit_manifest(
                           which rejects unknown schemes loudly.
 
     Returns:
-        A dict containing the manifest. Caller serializes via
-        json.dumps + signs externally (HW-backed key or TEE quote).
+        A frozen `ProofManifest` dataclass (v2.4 item 3 slice 2/3 —
+        was a plain dict). Caller serializes via `serialize_manifest`
+        + signs externally (HW-backed key or TEE quote).
 
-    The returned dict includes a `manifest_sha256` field over the
-    sorted-keys canonical form of every other field — this is the
-    hash an attestation verifier challenges.
+    The manifest's `manifest_sha256` field is computed over the
+    sorted-keys canonical form of every other field except
+    `signature` — this is the hash an attestation verifier
+    challenges.
 
     Raises:
         ValueError: if `signature_format` is a str that is not a
@@ -246,42 +332,52 @@ def emit_manifest(
                 f"scheme. Valid values: {valid}."
             ) from exc
 
-    fn_obligations = []
-    for name in sorted(functions.keys()):
-        sig = functions[name]
-        fn_obligations.append(fn_proof_obligations(sig))
+    fn_obligations = tuple(
+        fn_proof_obligations(functions[name])
+        for name in sorted(functions.keys())
+    )
 
-    manifest: dict[str, Any] = {
+    # Canonical-hash input: the wire form minus `signature` (Stage 122
+    # excludes it) and minus `manifest_sha256` (which doesn't exist
+    # yet). Field set + values are byte-identical to the Stage-122
+    # dict the hash was first defined over — `to_dict()` on each
+    # FunctionObligation reproduces the original per-function dict.
+    # Signature plumbing — Stage 122 ships unsigned + format
+    # declaration. Stage 123+ may add HW-backed signing once the GPU
+    # CI substrate (Stage 129) provides attestation endpoints. v2.3
+    # item 3 slice 3: `signature_format` stores the Enum's `.value`
+    # (plain str) so the wire form + hash are byte-identical to
+    # pre-Enum manifests.
+    hash_body: dict[str, Any] = {
         "format_version": PROOF_MANIFEST_VERSION,
         "helix_version": helix_version,
         "artifact_path": artifact_path,
         "artifact_sha256": artifact_sha256,
         "function_count": len(fn_obligations),
-        "functions": fn_obligations,
-        # Signature plumbing — Stage 122 ships unsigned + format
-        # declaration. Stage 123+ may add HW-backed signing once
-        # the GPU CI substrate (Stage 129) provides attestation
-        # endpoints. v2.3 item 3 slice 3: the field stores the Enum's
-        # `.value` (plain str) so the JSON wire form + canonical
-        # hash are byte-identical to pre-Enum manifests.
+        "functions": [f.to_dict() for f in fn_obligations],
         "signature_format": signature_format.value,
-        "signature": None,
     }
-
-    # Compute the canonical hash over everything-except-signature.
-    # Verifier re-canonicalizes and compares.
-    canonical = _canonicalize_sig({
-        k: v for k, v in manifest.items()
-        if k not in ("signature", "manifest_sha256")
-    })
-    manifest["manifest_sha256"] = hashlib.sha256(
-        canonical.encode("utf-8")
+    manifest_sha256 = hashlib.sha256(
+        _canonicalize_sig(hash_body).encode("utf-8")
     ).hexdigest()
-    return manifest
+
+    return ProofManifest(
+        format_version=PROOF_MANIFEST_VERSION,
+        helix_version=helix_version,
+        artifact_path=artifact_path,
+        artifact_sha256=artifact_sha256,
+        function_count=len(fn_obligations),
+        functions=fn_obligations,
+        signature_format=signature_format.value,
+        signature=None,
+        manifest_sha256=manifest_sha256,
+    )
 
 
-def serialize_manifest(manifest: dict, indent: Optional[int] = 2) -> str:
-    """Stage 122 — serialize a manifest dict to canonical JSON.
+def serialize_manifest(
+    manifest: ProofManifest | dict, indent: Optional[int] = 2
+) -> str:
+    """Stage 122 — serialize a manifest to canonical JSON.
 
     `indent=2` (default) produces human-readable output suitable for
     audit/HIPAA-EU-AI-Act inspection. Pass `indent=None` for the
@@ -289,15 +385,28 @@ def serialize_manifest(manifest: dict, indent: Optional[int] = 2) -> str:
 
     Keys are sorted so two emitters running in parallel on the same
     module produce byte-identical output (regression-test friendly).
+
+    v2.4 item 3 slice 2/3: accepts a `ProofManifest` dataclass
+    (producer side) or a plain dict (a verifier re-serializing a
+    deserialized manifest). The dataclass is converted to its wire
+    dict first; output bytes are identical either way.
     """
+    if isinstance(manifest, ProofManifest):
+        manifest = manifest.to_dict()
     return json.dumps(manifest, sort_keys=True, indent=indent,
                       separators=(",", ": ") if indent else (",", ":"))
 
 
-def verify_manifest_hash(manifest: dict) -> bool:
+def verify_manifest_hash(manifest: ProofManifest | dict) -> bool:
     """Stage 122 — verify that `manifest["manifest_sha256"]` matches the
     canonical hash of the rest of the manifest. Returns True if the
     hash is consistent (verifier-ready), False otherwise.
+
+    v2.4 item 3 slice 2/3: also accepts a `ProofManifest` dataclass
+    (producer-side self-check) — it is converted to its wire dict
+    first. The dict path is unchanged: a real attestation verifier
+    deserializes untrusted JSON into a dict, never a dataclass, so
+    all the malformed-input guards below still apply to that dict.
 
     v2.2 polish item 3 (BE MED-3 from v2.1 5-clean-gate): the prior
     code collapsed two distinct outcomes:
@@ -318,9 +427,11 @@ def verify_manifest_hash(manifest: dict) -> bool:
     # promises ValueError-with-diagnostic for malformed input —
     # surface that contract here so non-dict inputs get the same
     # error class as the other malformed-manifest paths.
+    if isinstance(manifest, ProofManifest):
+        manifest = manifest.to_dict()
     if not isinstance(manifest, dict):
         raise ValueError(
-            f"verify_manifest_hash: expected dict, got "
+            f"verify_manifest_hash: expected dict or ProofManifest, got "
             f"{type(manifest).__name__}: {manifest!r}. Manifest is "
             f"malformed; reject before attestation verification."
         )

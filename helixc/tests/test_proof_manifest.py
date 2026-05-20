@@ -11,6 +11,8 @@ import pytest
 
 from helixc.backend.proof_manifest import (
     PROOF_MANIFEST_VERSION,
+    FunctionObligation,
+    ProofManifest,
     Sha256Hex,
     SignatureFormat,
     as_sha256_hex,
@@ -97,19 +99,19 @@ def test_stage122_fn_obligations_basic():
 
     # Pure adder.
     o_add = fn_proof_obligations(tc.functions["add"])
-    assert o_add["is_pure"] is True
-    assert o_add["effects"] == []
-    assert o_add["enclave_tag"] is None
-    assert o_add["param_count"] == 2
+    assert o_add.is_pure is True
+    assert o_add.effects == ()
+    assert o_add.enclave_tag is None
+    assert o_add.param_count == 2
 
     # IO-effecting log.
     o_log = fn_proof_obligations(tc.functions["log"])
-    assert o_log["is_pure"] is False
-    assert "io" in o_log["effects"]
+    assert o_log.is_pure is False
+    assert "io" in o_log.effects
 
     # Enclave-returning fn.
     o_secret = fn_proof_obligations(tc.functions["make_secret"])
-    assert o_secret["enclave_tag"] == "sgx"
+    assert o_secret.enclave_tag == "sgx"
 
 
 def test_stage122_emit_manifest_structure():
@@ -127,17 +129,17 @@ def test_stage122_emit_manifest_structure():
 
     m = emit_manifest(tc.functions, helix_version="v2.0-test")
 
-    # Schema check.
-    assert m["format_version"] == PROOF_MANIFEST_VERSION
-    assert m["helix_version"] == "v2.0-test"
-    assert m["function_count"] == 2
-    assert isinstance(m["functions"], list)
-    assert m["signature"] is None  # substrate; signing deferred
-    assert "manifest_sha256" in m
-    assert len(m["manifest_sha256"]) == 64  # sha256 hex digest
+    # Schema check (v2.4 item 3 slice 2/3 — frozen ProofManifest).
+    assert isinstance(m, ProofManifest)
+    assert m.format_version == PROOF_MANIFEST_VERSION
+    assert m.helix_version == "v2.0-test"
+    assert m.function_count == 2
+    assert isinstance(m.functions, tuple)
+    assert m.signature is None  # substrate; signing deferred
+    assert len(m.manifest_sha256) == 64  # sha256 hex digest
 
     # Functions are sorted by name.
-    names = [f["name"] for f in m["functions"]]
+    names = [f.name for f in m.functions]
     assert names == sorted(names)
 
 
@@ -151,11 +153,11 @@ def test_v23_signature_format_enum_default_is_deferred():
     tc = TypeChecker(prog)
     tc.check()
     m = emit_manifest(tc.functions)
-    assert m["signature_format"] == "ed25519-or-rsa-pss-sha256-DEFERRED"
-    assert m["signature_format"] == SignatureFormat.DEFERRED.value
+    assert m.signature_format == "ed25519-or-rsa-pss-sha256-DEFERRED"
+    assert m.signature_format == SignatureFormat.DEFERRED.value
     # The stored value must be a plain str (JSON-serializable, hash-
     # stable) — not an Enum member repr.
-    assert type(m["signature_format"]) is str
+    assert type(m.signature_format) is str
 
 
 def test_v23_signature_format_enum_accepts_member_and_str():
@@ -168,11 +170,11 @@ def test_v23_signature_format_enum_accepts_member_and_str():
     # Enum member.
     m1 = emit_manifest(tc.functions,
                        signature_format=SignatureFormat.ED25519)
-    assert m1["signature_format"] == "ed25519"
+    assert m1.signature_format == "ed25519"
     # Plain str (coerced through the Enum).
     m2 = emit_manifest(tc.functions, signature_format="ed25519")
-    assert m2["signature_format"] == "ed25519"
-    assert m1["signature_format"] == m2["signature_format"]
+    assert m2.signature_format == "ed25519"
+    assert m1.signature_format == m2.signature_format
 
 
 def test_v23_signature_format_enum_rejects_unknown_scheme():
@@ -228,7 +230,7 @@ def test_stage122_manifest_hash_is_deterministic():
 
     m1 = emit_manifest(tc.functions, helix_version="v2.0-test")
     m2 = emit_manifest(tc.functions, helix_version="v2.0-test")
-    assert m1["manifest_sha256"] == m2["manifest_sha256"]
+    assert m1.manifest_sha256 == m2.manifest_sha256
 
 
 def test_stage122_manifest_hash_changes_with_artifact():
@@ -242,7 +244,7 @@ def test_stage122_manifest_hash_changes_with_artifact():
 
     m1 = emit_manifest(tc.functions, artifact_sha256="aa" * 32)
     m2 = emit_manifest(tc.functions, artifact_sha256="bb" * 32)
-    assert m1["manifest_sha256"] != m2["manifest_sha256"]
+    assert m1.manifest_sha256 != m2.manifest_sha256
 
 
 def test_stage122_verify_manifest_hash_self_consistency():
@@ -260,7 +262,12 @@ def test_stage122_verify_manifest_hash_self_consistency():
 
 
 def test_stage122_verify_manifest_hash_detects_tampering():
-    """Tampering with manifest body invalidates verify_manifest_hash."""
+    """Tampering with manifest body invalidates verify_manifest_hash.
+
+    v2.4 item 3 slice 2/3: the producer-side ProofManifest is frozen,
+    so the tamper is applied to the wire dict (`to_dict()`) — which is
+    exactly what an attestation verifier holds: a dict deserialized
+    from untrusted JSON, not the producer's frozen dataclass."""
     src = "fn main() -> i32 { 0 }"
     prog = parse(src, include_stdlib=False)
     tc = TypeChecker(prog)
@@ -269,9 +276,10 @@ def test_stage122_verify_manifest_hash_detects_tampering():
     m = emit_manifest(tc.functions)
     assert verify_manifest_hash(m)
 
-    # Mutate a field (an attacker editing the proof obligations).
-    m["functions"][0]["is_pure"] = not m["functions"][0]["is_pure"]
-    assert verify_manifest_hash(m) is False
+    # An attacker editing the proof obligations in the wire dict.
+    d = m.to_dict()
+    d["functions"][0]["is_pure"] = not d["functions"][0]["is_pure"]
+    assert verify_manifest_hash(d) is False
 
 
 def test_stage122_verify_manifest_hash_missing_field_raises():
@@ -344,7 +352,7 @@ def test_stage122_serialize_manifest_canonical():
 
     # Round-trip via json.
     parsed = json.loads(s1)
-    assert parsed["manifest_sha256"] == m["manifest_sha256"]
+    assert parsed["manifest_sha256"] == m.manifest_sha256
 
 
 def test_stage122_serialize_manifest_compact_form():
@@ -434,7 +442,7 @@ def test_v23_emit_manifest_accepts_validated_sha256():
 
     artifact_digest = as_sha256_hex(hashlib.sha256(b"binary").hexdigest())
     m = emit_manifest(tc.functions, artifact_sha256=artifact_digest)
-    assert m["artifact_sha256"] == artifact_digest
+    assert m.artifact_sha256 == artifact_digest
     # Manifest is self-consistent.
     assert verify_manifest_hash(m) is True
 
@@ -452,6 +460,80 @@ def test_stage122_enclave_param_flagged():
     tc.check()
 
     o = fn_proof_obligations(tc.functions["consume_secret"])
-    assert o["has_enclave_param"] is True
+    assert o.has_enclave_param is True
     # Return is i32 (bare), so enclave_tag is None.
-    assert o["enclave_tag"] is None
+    assert o.enclave_tag is None
+
+
+def test_v24_proof_manifest_is_frozen():
+    """v2.4 item 3 slice 2/3 — emit_manifest returns a frozen
+    ProofManifest dataclass; rebinding any attribute raises
+    FrozenInstanceError. An attestation manifest must be tamper-
+    evident — the producer-side object can no longer be silently
+    rewritten between emit and verify."""
+    import dataclasses
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    m = emit_manifest(tc.functions)
+    assert isinstance(m, ProofManifest)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        m.manifest_sha256 = "0" * 64  # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        m.helix_version = "tampered"  # type: ignore[misc]
+
+
+def test_v24_function_obligation_is_frozen():
+    """v2.4 item 3 slice 2/3 — the per-function obligation rows are
+    frozen too (deep freeze): `m.functions[i].is_pure = ...` — the
+    in-memory tamper the Stage-122 plain dict allowed silently — now
+    raises FrozenInstanceError."""
+    import dataclasses
+    src = "@pure fn p() -> i32 { 0 }\nfn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    m = emit_manifest(tc.functions)
+    assert isinstance(m.functions, tuple)
+    assert all(isinstance(f, FunctionObligation) for f in m.functions)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        m.functions[0].is_pure = True  # type: ignore[misc]
+
+
+def test_v24_proof_manifest_to_dict_wire_form():
+    """v2.4 item 3 slice 2/3 — `ProofManifest.to_dict()` reproduces
+    the Stage-122 wire dict: same keys, `functions` as a list of
+    dicts, `effects` as lists. A verifier that re-canonicalizes the
+    dict gets the same digest the dataclass stores, and JSON of the
+    dataclass equals JSON of its dict (byte-identical)."""
+    src = """
+    @effect(io)
+    fn w() -> i32 { 0 }
+    fn main() -> i32 { 0 }
+    """
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    m = emit_manifest(tc.functions)
+    d = m.to_dict()
+    assert isinstance(d, dict)
+    assert isinstance(d["functions"], list)
+    assert all(isinstance(f, dict) for f in d["functions"])
+    assert all(isinstance(f["effects"], list) for f in d["functions"])
+    assert d["manifest_sha256"] == m.manifest_sha256
+    assert verify_manifest_hash(d) is True
+    assert serialize_manifest(m) == serialize_manifest(d)
+
+
+def test_v24_verify_manifest_hash_accepts_dataclass_and_dict():
+    """v2.4 item 3 slice 2/3 — verify_manifest_hash accepts both the
+    ProofManifest dataclass (producer self-check) and the wire dict
+    (the form a verifier gets from json.loads)."""
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    m = emit_manifest(tc.functions)
+    assert verify_manifest_hash(m) is True            # dataclass path
+    assert verify_manifest_hash(m.to_dict()) is True  # dict path
