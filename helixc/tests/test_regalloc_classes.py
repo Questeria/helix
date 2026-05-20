@@ -195,6 +195,43 @@ def test_v25_plan_ptx_registers_raises_loudly_on_spill(monkeypatch):
         plan_ptx_registers(fn)
 
 
+def test_v25_plan_ptx_registers_propagates_f64_not_implemented():
+    """v2.5 item 1 — plan_ptx_registers' documented raise contract,
+    pinned end-to-end: an f64 scalar value has no PTX register file,
+    so `ptx_register_class` raises NotImplementedError. That must
+    propagate cleanly through `allocate_by_class` (which calls
+    classify() bare — nothing swallows it) out of plan_ptx_registers.
+    The existing classifier tests pin the raise on ptx_register_class
+    alone; this pins that the new public function honours it too —
+    a guard against a future defensive try/except quietly swallowing
+    the gap."""
+    vf64 = _val(0, "f64")
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_FLOAT, results=[vf64]),
+    ])
+    fn = TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    with pytest.raises(NotImplementedError, match="f64 has no PTX"):
+        plan_ptx_registers(fn)
+
+
+def test_v25_plan_ptx_registers_propagates_unknown_dtype():
+    """v2.5 item 1 — plan_ptx_registers' documented raise contract:
+    an unrecognised scalar dtype makes `ptx_register_class` raise
+    RuntimeError; it must propagate out of plan_ptx_registers rather
+    than be mis-filed. Parity with ptx_register_class's own
+    unknown-dtype discipline, pinned end-to-end through the new
+    function."""
+    vbad = _val(0, "ternary")   # parser/typecheck-only quantized dtype
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vbad]),
+    ])
+    fn = TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    with pytest.raises(RuntimeError, match="unrecognised TIRScalar"):
+        plan_ptx_registers(fn)
+
+
 # ============================================================================
 # ROCm / AMDGCN register-class model (v2.4 item 15 slice 5)
 # ============================================================================

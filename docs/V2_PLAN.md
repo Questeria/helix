@@ -1327,3 +1327,30 @@ branch), not a duplicate of `test_v24_*`.
 Verification: `pytest test_proof_manifest.py -q` → 32 passed (was 31).
 Scoped commit: `test_proof_manifest.py` + this note only;
 concurrent-fire dirty files (regalloc) deliberately untouched.
+
+### 2026-05-20 — v2.5 audit-fix: plan_ptx_registers raise contract pinned end-to-end
+
+Audit-fix iteration. The v2.5 polish backlog is fully drained and
+the emitter-wiring operand-threading rewrite is reserved for a
+focused block, so this fire audits recently-shipped code instead of
+opening a feature. Review target: `plan_ptx_registers` (shipped last
+fire, `ace2eb6`). Finding: its docstring documents two raise paths —
+`NotImplementedError` for an f64 scalar (no PTX f64 register file)
+and `RuntimeError` for an unrecognised scalar dtype — but those were
+tested only on `ptx_register_class` in isolation, never end-to-end
+through the new public function.
+
+That is a real gap: `allocate_by_class` calls `classify()` bare (no
+try/except), so the classifier's exceptions propagate through it and
+out of `plan_ptx_registers` uncaught — the documented behaviour. A
+future defensive `try/except` around that `classify()` call would
+silently swallow it, and no test would catch the regression.
+
+Fix (test-only, zero code risk): two regression tests —
+`test_v25_plan_ptx_registers_propagates_f64_not_implemented` and
+`test_v25_plan_ptx_registers_propagates_unknown_dtype` — pin the
+raise contract at the `plan_ptx_registers` level. Verification:
+`pytest test_regalloc_classes.py -q` → 21 passed (was 19).
+
+v2.5 remaining: item 1 emitter-wiring operand-threading rewrite
+(focused block) + end-of-v2.5 5-clean-gate. Polish backlog drained.
