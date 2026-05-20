@@ -1735,3 +1735,37 @@ Verdict: **CLEAN.** The seam is behavior-preserving (`test_ptx.py`
 -> `_result_reg`) is now audited end-to-end and ready for the
 body-flip slice — this verdict is recorded as input to the
 end-of-v2.5 5-clean-gate.
+
+### 2026-05-20 — v2.5 item 1: the `_result_reg` body flip
+
+The operand rewrite's body-flip slice. `_result_reg` (the
+result-naming chokepoint from `30abbff`, audited clean in `01e0110`)
+now consults the reuse-aware linear-scan plan: if
+`planned_reg_map` holds the SSA result's vreg, it returns that
+planned register; otherwise it bump-allocates as before.
+
+This is SAFE to land alone — behaviour-preserving — because
+`planned_reg_map` stays empty until `emit_kernel` calls
+`load_register_plan`, which is the ONE remaining operand-rewrite
+slice (Edit B). Verified: `test_ptx.py` -> 111 passed (the 109
+pre-existing tests unchanged — the bump-allocator path is still
+taken — plus 2 new).
+
+The flip also adds a defensive class-match check: a planned register
+whose file (`%r` / `%f` / `%p`, parsed as the name minus its index
+digits) disagrees with the `prefix` the emit branch requires raises
+RuntimeError rather than emitting wrong PTX (`add.s32 %f3, ...`).
+`ptx_register_class` and the branch `prefix` both derive from the
+result dtype, so the check should never fire — it guards a future
+register-model regression.
+
+Tests: `test_v25_result_reg_uses_loaded_plan_else_bump_allocates`
+(plan-aware path + bump fallback) and
+`test_v25_result_reg_rejects_planned_class_mismatch`.
+
+**v2.5 item 1 is now one slice from done:** Edit B — `emit_kernel`
+calling `load_register_plan(fn)` to populate `planned_reg_map`. That
+slice is the genuinely behaviour-changing one (it activates register
+reuse in emitted PTX) and must decide how to handle a kernel with an
+f64 scalar, for which `plan_ptx_registers` raises NotImplementedError
+(PTX has no f64 register file). See the 4-step plan above.
