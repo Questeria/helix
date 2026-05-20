@@ -2077,3 +2077,88 @@ registers in a loop). The one scalar result still on `_new_reg` —
 Verification: `test_ptx.py` 112 passed, `test_codegen.py` PTX subset
 6 passed, `test_regalloc` + `test_regalloc_classes` 65 passed — 183
 total. v2.5 item 1 (PTX register-allocation emitter wiring) is COMPLETE.
+
+### 2026-05-20 — end-of-v2.5 5-clean-gate + R1 audit-fix batch
+
+v2.5 item 1 (the PTX register-allocation emitter wiring, Edit B) was
+the last v2.5 feature; the polish backlog was already drained. This
+closes the cycle with the **end-of-v2.5 5-clean-gate** — five
+parallel audit agents (silent-failure-hunter + code-reviewer across
+the FE / IR / BE / RT / TEST batches), same protocol as the v1.0 and
+v2.0 closure gates.
+
+**Gate verdict: no real HIGH.** Two findings were raised and
+dismissed with reasoning rather than fixed:
+
+- *Agent 4 — "skipped-bool vreg collides on %r0" (HIGH)*: internally
+  contradictory. It claimed a bool dropped into `MultiClassResult
+  .skipped` would bump-allocate `%r0` and collide with a planned
+  `%r0`. But Edit B's high-water seeding sets `next_reg_by_prefix`
+  to each class's plan high-water *before* any scratch bump-allocates,
+  so a skipped value bump-allocates strictly ABOVE the plan. Not real.
+- *Agent 1 — "compute_live_intervals drops unused values" (MEDIUM)*:
+  cannot happen. An op result with no later use still gets a
+  point-interval `[def, def]`; it is allocated a register and appears
+  in the plan. Verified against the regalloc source. Not real.
+
+**Four genuine MEDIUM/LOW items** were found and are fixed in this
+R1 batch:
+
+1. **`regalloc_classes.py` — bool-op RuntimeError escape (MEDIUM).**
+   `plan_ptx_registers`' `_skip` predicate skipped only a bool with
+   NO defining op (kernel / block param). A bool produced by an op
+   OUTSIDE `_PTX_BOOL_OP_CLASS` (only `SCALAR_CMP` / `SCALAR_CONST_INT`
+   are mapped) was handed to `ptx_register_class_op_aware`, which
+   raises `RuntimeError` — and `emit_kernel` guards
+   `load_register_plan` only against `NotImplementedError`, so that
+   `RuntimeError` would escape and abort the emit. Fix: `_skip` now
+   also skips a bool whose defining op is absent from
+   `_PTX_BOOL_OP_CLASS` (it bump-allocates instead). The overclaiming
+   `plan_ptx_registers` docstring ("bool op results now join the
+   linear-scan reuse like every other scalar") was corrected to state
+   only `SCALAR_CMP` / `SCALAR_CONST_INT` bools join the plan.
+
+2. **`gpu_ci.py` — real-HW dispatch artifact check (MEDIUM).** The
+   `_dispatch_ptxas` / `_dispatch_llvm_mc` / `_dispatch_xcrun_metal`
+   dispatchers treated `proc.returncode == 0` as a real-HW PASS
+   without confirming the tool actually produced its output artifact.
+   A tool that exits 0 without writing the cubin / object / AIR file
+   (a no-op invocation, a silently skipped target) was reported as a
+   pass for a kernel that never assembled. Fix: each of the three now
+   checks `os.path.getsize(out_path) > 0` before returning a pass.
+   (`_dispatch_naga` validates WGSL in place — no `out_path`, no
+   check needed.)
+
+3. **`test_ptx.py` — misleading test docstring + missing reuse test
+   (LOW).** `test_v25_emit_kernel_loads_the_register_plan`'s docstring
+   claimed it pinned "the plan actually DRIVES emission", but its
+   kernel has three simultaneously-live values, so the linear-scan
+   plan and the never-reuse bump allocator emit identical registers —
+   the test would pass even if `_result_reg` ignored the plan. Fix:
+   docstring corrected to its true (narrower) scope, and a new test
+   `test_v25_emit_kernel_register_plan_drives_reuse` added — a kernel
+   whose values have disjoint live ranges, so linear-scan reuses
+   registers (five SSA values → three registers) where bump
+   allocation would not. Asserting the emitted registers equal that
+   reuse-bearing plan is the genuine proof of plan-driven emission.
+
+4. **`ptx.py` — register-pool drift check pinned depth only (LOW).**
+   The module-load drift check pinned the pool DEPTHS
+   (`PTX_REGISTER_POOLS.values()` vs `_REG_POOL_CAP`) but not the
+   class KEY SET. A register class added to the planner without a
+   matching emitter `.reg` directive would let the planner hand back
+   a register the kernel header never declared — invalid PTX, missed
+   by the depth-only check. Fix: the emitter's five `.reg` directives
+   are now generated from one ordered `_REG_FILES` constant (class →
+   PTX register type), and a second drift check pins
+   `set(_REG_FILES) == set(PTX_REGISTER_POOLS)`. Companion test
+   `test_v25_reg_files_pinned_to_planner_pool_classes` re-pins it.
+
+**Verification.** `test_ptx.py` + `test_regalloc_classes.py` +
+`test_gpu_ci.py` → 185 passed, 3 skipped (includes the two new
+tests). `test_codegen.py` → passed within the full 1215-passed run —
+the `_REG_FILES`-driven `.reg` block emits byte-identical text, so
+no golden regression. `test_regalloc.py` → 33 passed. All three
+backend modules import clean (both ptx.py drift checks pass).
+
+**v2.5 is feature-complete and audit-clean. Tagging `v2.5.0`.**
