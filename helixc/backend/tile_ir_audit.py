@@ -9,7 +9,6 @@ all 4 v2.0 backend lowering tables and produces a matrix report:
   TILE_LOAD_GLOBAL [ok] [stub] [stub]  [stub]
   ...
   TMA_LOAD        [ok]  [skip] [skip]  [skip]
-  TMEM            [ok]   N/A    N/A     N/A
   ...
 
 Status conventions (matches the backend tables):
@@ -23,6 +22,10 @@ Per v2.0 research Report 5 final synthesis: "Tile-IR audit per Report 5
 confirming 40 TileOpKind ops decompose cleanly per backend; the 7
 NVIDIA-specific ops (TMA, TMEM, etc.) need explicit fallback semantics
 in tile-IR before any port begins."
+
+Note: the shipped `TileOpKind` enum has 28 members — Report 5's "40"
+was a pre-implementation estimate. This audit iterates the live enum,
+so the count drift is cosmetic. `TMEM` is a `MemSpace`, not an op kind.
 
 License: Apache 2.0
 """

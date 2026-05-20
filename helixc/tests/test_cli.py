@@ -5587,6 +5587,37 @@ def test_stage35_restart61_examples_run_help_flag_works():
         )
 
 
+def test_v23_examples_run_main_no_args_propagates_demo_failure(monkeypatch):
+    """v2.3 5-clean-gate R2 RT-HIGH audit-fix: `python -m helixc.examples.run`
+    with no args previously ignored every _run_one() return value and
+    unconditionally returned 0 — a CI smoke test would report green even
+    if every demo segfaulted/panicked/build-failed. main() now aggregates
+    per-demo success into the process exit code."""
+    from helixc.examples import run as _run
+
+    ran: list[str] = []
+
+    def fail_all(key):
+        ran.append(key)
+        return False
+
+    monkeypatch.setattr(_run, "_run_one", fail_all)
+    rc = _run.main([])
+    assert rc != 0, f"main([]) must exit non-zero when demos fail, got {rc}"
+    assert len(ran) == len(_run.DEMOS), (
+        "every demo must still run even after one fails — no short-circuit"
+    )
+
+    ran.clear()
+
+    def pass_all(key):
+        ran.append(key)
+        return True
+
+    monkeypatch.setattr(_run, "_run_one", pass_all)
+    assert _run.main([]) == 0, "main([]) must exit 0 when all demos pass"
+
+
 def test_stage35_restart61_diagnostics_isatty_narrowed_to_stream_failures():
     """Restart 61 B1 (Family 4 — loud-fail discipline):
     diagnostics._should_color's isatty() guard must narrow to

@@ -269,10 +269,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         _list()
         return 0
     if not args:
-        # Run all in stable order.
+        # Run all in stable order. Aggregate per-demo success: a
+        # failing demo (segfault/panic/build-fail) must yield a
+        # non-zero exit, else a bare `python -m helixc.examples.run`
+        # reports green even when every demo fails.
+        ok = True
         for key in DEMOS:
-            _run_one(key)
-        return 0
+            ok &= _run_one(key)
+        return 0 if ok else 1
     for key in args:
         if not _run_one(key):
             return 1

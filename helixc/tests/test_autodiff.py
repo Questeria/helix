@@ -448,6 +448,25 @@ def test_c2_4_grad_in_array_lit_rewritten():
     )
 
 
+def test_v23_grad_on_zero_param_fn_raises_loudly():
+    """v2.3 5-clean-gate R2 FE-MED audit-fix: grad/grad_rev/grad_rev_all
+    on a zero-parameter function previously made the `_generate_grad*`
+    helper return None, so the call site fell through and left a raw
+    `grad(...)` Call in the AST — surfacing far later as an opaque
+    unbound-name `grad` error at lowering. The empty-params case now
+    raises NotImplementedError loudly at grad_pass time."""
+    import pytest
+    from helixc.frontend.grad_pass import grad_pass
+    for surface in ("grad", "grad_rev", "grad_rev_all"):
+        src = (
+            "@pure fn loss() -> f32 { 1.0 }\n"
+            f"fn use_it() -> f32 {{ {surface}(loss)(0.0) }}\n"
+        )
+        prog = parse(src)
+        with pytest.raises(NotImplementedError, match="no parameters"):
+            grad_pass(prog)
+
+
 def test_c2_4_grad_in_struct_lit_rewritten():
     """C2-4: `Optim { lr: 0.01, gfn: grad(loss) }` (StructLit) — the
     field value must be rewritten. Pre-fix StructLit was untouched."""

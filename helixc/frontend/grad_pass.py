@@ -358,18 +358,17 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             grad_fn = _generate_grad_rev_all_fn(
                 target, fn_by_name,
                 struct_decls=_CURRENT_STRUCT_DECLS)
-            if grad_fn is not None:
-                if grad_fn.name not in fn_by_name:
-                    new_fns.append(grad_fn)
-                    fn_by_name[grad_fn.name] = grad_fn
-                    # Stage 62 Inc 1 — also register the per-leaf
-                    # accessor fns generated alongside.
-                    accessors = getattr(grad_fn, "_helix_accessor_fns", [])
-                    for acc in accessors:
-                        if acc.name not in fn_by_name:
-                            new_fns.append(acc)
-                            fn_by_name[acc.name] = acc
-                return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
+            if grad_fn.name not in fn_by_name:
+                new_fns.append(grad_fn)
+                fn_by_name[grad_fn.name] = grad_fn
+                # Stage 62 Inc 1 — also register the per-leaf
+                # accessor fns generated alongside.
+                accessors = getattr(grad_fn, "_helix_accessor_fns", [])
+                for acc in accessors:
+                    if acc.name not in fn_by_name:
+                        new_fns.append(acc)
+                        fn_by_name[acc.name] = acc
+            return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
 
         # Now check if the (possibly-rewritten) call is grad(f) / grad(f, n)
         # or grad_rev(f) / grad_rev(f, n).
@@ -384,12 +383,11 @@ def _rewrite_in_expr(expr: A.Expr, fn_by_name: dict[str, A.FnDecl],
             mode = "reverse" if new_callee.name == "grad_rev" else "forward"
             grad_fn = _generate_grad_fn(target, param_idx, mode=mode,
                                          fn_table=fn_by_name)
-            if grad_fn is not None:
-                # Don't add duplicates if grad(f, n) is called multiple times
-                if grad_fn.name not in fn_by_name:
-                    new_fns.append(grad_fn)
-                    fn_by_name[grad_fn.name] = grad_fn
-                return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
+            # Don't add duplicates if grad(f, n) is called multiple times
+            if grad_fn.name not in fn_by_name:
+                new_fns.append(grad_fn)
+                fn_by_name[grad_fn.name] = grad_fn
+            return (A.Name(span=expr.span, name=grad_fn.name), c1 + c2 + 1)
         return (A.Call(span=expr.span, callee=new_callee, args=new_args),
                 c1 + c2)
     if isinstance(expr, A.Binary):
@@ -575,7 +573,7 @@ def _generate_grad_rev_all_fn(
     fn: A.FnDecl,
     fn_table: dict[str, A.FnDecl],
     struct_decls: dict | None = None,
-) -> A.FnDecl | None:
+) -> A.FnDecl:
     """Build `<fn.name>__rgrad_all` — a single function that computes all
     parameter gradients via reverse-mode AD in one source-level pass and
     writes each into a reflection cell.
@@ -596,7 +594,11 @@ def _generate_grad_rev_all_fn(
     original param index).
     """
     if not fn.params:
-        return None
+        raise NotImplementedError(
+            f"grad_rev_all({fn.name}): cannot differentiate a function "
+            "with no parameters — the gradient of a zero-argument "
+            "function is empty"
+        )
     _reject_unsupported_grad_signature(fn, "grad_rev_all", struct_decls)
     span = fn.span
 
@@ -878,7 +880,7 @@ def _generate_grad_leaf_accessors(
 def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
                        mode: str = "forward",
                        fn_table: dict[str, A.FnDecl] | None = None
-                       ) -> A.FnDecl | None:
+                       ) -> A.FnDecl:
     """Build a `<fn.name>__grad_<n>` (or `__rgrad_<n>`) FnDecl whose body is
     the derivative of `fn`'s body w.r.t. parameter `param_idx`.
 
@@ -889,12 +891,19 @@ def _generate_grad_fn(fn: A.FnDecl, param_idx: int = 0,
     grad_rev(f, n) for several values of n.
     """
     import copy as _copy
+    surface = "grad_rev" if mode == "reverse" else "grad"
     if not fn.params:
-        return None
+        raise NotImplementedError(
+            f"{surface}({fn.name}): cannot differentiate a function with "
+            "no parameters — the gradient of a zero-argument function "
+            "is empty"
+        )
     if param_idx < 0 or param_idx >= len(fn.params):
-        return None
-    _reject_unsupported_grad_signature(
-        fn, "grad_rev" if mode == "reverse" else "grad")
+        raise ValueError(
+            f"{surface}({fn.name}): parameter index {param_idx} is out "
+            f"of range for a function with {len(fn.params)} parameter(s)"
+        )
+    _reject_unsupported_grad_signature(fn, surface)
     var = fn.params[param_idx].name
 
     # Lazy per-FnDecl cache. Keyed by (mode, all-param-names tuple) so we
