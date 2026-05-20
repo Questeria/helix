@@ -206,12 +206,48 @@ def run_properties(
                           f"({_format_input_lit(value, arg_ty)})")
             else:
                 fail_count += 1
+                # v2.x re-audit R2b (RT 5-clean-gate MEDIUM): annotate
+                # a likely-crash exit code so a crashed test binary is
+                # not misread as a property-logic failure (see
+                # _exit_code_note).
                 msg = (f"{prop_name}({_format_input_lit(value, arg_ty)}) "
-                       f": exit={code}")
+                       f": exit={code}{_exit_code_note(code)}")
                 fail_log.append(msg)
                 if verbose:
                     print(f"  FAIL {msg}")
     return pass_count, fail_count, fail_log
+
+
+def _exit_code_note(code: int) -> str:
+    """v2.x re-audit R2b (RT 5-clean-gate MEDIUM): classify a
+    non-success exit code so a crashed test binary is not misreported
+    as a property-logic failure.
+
+    `run_properties` runs each property's compiled binary via WSL and
+    treats `exit == 42` as pass, anything else as a property failure.
+    But a binary that CRASHES (segfault, abort, ...) exits with a
+    128+signal code — reported as a bare "exit=139" it reads as "the
+    property returned 139", misdirecting the debugger at the property
+    logic instead of the codegen / runtime. This returns an
+    annotation for the failure message ("" for an ordinary non-42
+    result, so a real property mismatch is left unannotated).
+
+    SIGILL (exit 132) is deliberately NOT flagged: it is Helix's own
+    trap / panic mechanism, so a 132 from a property binary is a
+    genuine property result (the property panicked), not an
+    infrastructure crash. This only ANNOTATES — it does not raise:
+    `compile_and_run` faithfully returns the exit code and callers
+    (many test_codegen tests assert a specific trap code) must keep
+    seeing it unchanged.
+    """
+    if code in (126, 127):
+        return ("  [infrastructure: binary not executable or not "
+                "found — likely a WSL/build issue]")
+    if 129 <= code <= 159 and code != 132:
+        return (f"  [likely a crash — killed by signal {code - 128} "
+                f"— investigate codegen / runtime, not the property "
+                f"logic]")
+    return ""
 
 
 def _strip_main(src: str) -> str:

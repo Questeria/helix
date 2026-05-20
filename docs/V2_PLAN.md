@@ -2304,4 +2304,23 @@ the 8-bit process exit-code range); the `factor`/`addend` params are
 dropped and the five `vec_zip_{lt,gt,le,ge,ne}` tests assert the
 exact mask. Verified: `test_codegen.py -k vec_zip` 14 pass.
 
-Still open: the RT MEDIUM — then the gate re-run.
+**RT MEDIUM — FIXED (diagnostic improvement).** `property_runner`'s
+`run_properties` runs each property's compiled binary via WSL and
+treats any non-42 exit code as a property failure — so a binary that
+CRASHES (segfault 139, abort 134, ...) was reported as a bare
+"exit=139", misdirecting the debugger at the property logic instead
+of the codegen / runtime. Added `_exit_code_note(code)`: the failure
+message now annotates a likely crash (128+signal range) or an
+infrastructure failure (126/127); regression test added. NOTE: the
+agent's broader suggestion — make `compile_and_run` RAISE on crash
+codes — was REJECTED with reasoning: exit 132 (SIGILL) is Helix's own
+trap/panic mechanism and many `test_codegen` tests assert it, so a
+blanket raise would break them; `compile_and_run` must faithfully
+return the exit code. The annotation is the safe, proportionate fix
+(and is why 132 is excluded from the crash classification).
+
+**All R2b MEDIUM findings are now resolved** — FE: M2/M3 fixed, M4
+dismissed; BE: M4/M2 fixed, M3 dismissed; RT: M1 fixed; TEST: 5
+weak-assert tests hardened + `_zip_cmp_test`. Remaining: the ~12 LOW
+findings (optional cleanup, do not block v3.0) and the 5-clean-gate
+re-run.

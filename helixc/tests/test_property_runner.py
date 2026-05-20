@@ -154,3 +154,25 @@ def test_stage86_runner_end_to_end_on_trivial_property():
     assert f == 0, f"trivial property should have 0 failures; log={log}"
     # The i32 input table has 7 entries; runner should hit all 7.
     assert p == 7, f"expected 7 passes (i32 table size); got {p}"
+
+
+def test_v2x_reaudit_exit_code_note_classifies_crashes():
+    """v2.x re-audit R2b (RT 5-clean-gate MEDIUM): _exit_code_note
+    must flag a crashed test binary so property_runner does not
+    misreport a codegen/runtime crash as a property-logic failure —
+    while NOT flagging SIGILL (132), which is Helix's own trap/panic
+    and so a genuine property result."""
+    from helixc.runners.property_runner import _exit_code_note
+    # SIGSEGV (128+11) and SIGABRT (128+6): crashes — annotated.
+    assert "crash" in _exit_code_note(139)
+    assert "signal 11" in _exit_code_note(139)
+    assert "crash" in _exit_code_note(134)
+    # SIGILL (132) is Helix's trap/panic — NOT a crash annotation.
+    assert _exit_code_note(132) == ""
+    # 126 / 127: an infrastructure failure (binary not exec / found).
+    assert "infrastructure" in _exit_code_note(126)
+    assert "infrastructure" in _exit_code_note(127)
+    # An ordinary non-42 property result gets no annotation.
+    assert _exit_code_note(0) == ""
+    assert _exit_code_note(7) == ""
+    assert _exit_code_note(200) == ""
