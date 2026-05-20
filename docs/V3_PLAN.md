@@ -156,7 +156,7 @@ depend on a clean, unambiguous full-suite run.
 | 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ · cont. audit pending | Phase D — cont. chunk shipped |
+| 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -312,3 +312,16 @@ depend on a clean, unambiguous full-suite run.
   replaced with an explicit `_check_binop_table_disjoint()` raise,
   mirroring `llvm_toolchain.py`. 1 new test; 72 passed + 2 skipped
   across the two LLVM test files. Round-3 re-audit dispatched.
+- 2026-05-20 — **Stage 203 continuation — 3-clean audit round 3:
+  CLEAN. Stage 203 fully CLOSED.** All three audit surfaces
+  (silent-failure-hunter / type-design-analyzer / code-reviewer)
+  returned 0 HIGH / 0 must-fix-MEDIUM on the re-confirm of the full
+  continuation diff. The round-1 mixed-sign DIV/MOD/ordered-comparison
+  fix and the round-2 SHR value/result fix are both verified genuinely
+  closed; the explicit `_check_binop_table_disjoint()` module-load
+  guard runs at import and raises correctly. The signed-vs-unsigned
+  mnemonic choice is now provably equal to `x86_64.py`'s for every TIR
+  the LLVM backend accepts. 72 passed + 2 skipped across the two LLVM
+  test files. The "full scalar op set" is complete — **Stage 203
+  CLOSED**. Next: Stage 204 — memory & aggregates (loads/stores,
+  structs, arrays).
