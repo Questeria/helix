@@ -27,10 +27,19 @@ License: Apache 2.0
 """
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal, get_args
 
 from ..ir import tile_ir as ti
 from ..ir import tir
+
+
+# v2.5 polish (item-15 type-design audit Finding 5): closed-set
+# register-class keys per backend. Typing the classifier RETURN as
+# the Literal makes a typo'd `return "%rr"` a mypy error; the
+# module-load checks below pin each pool dict's keys to its Literal
+# so a pool/classifier key-set drift fails loudly at import.
+PtxRegClass = Literal["%p", "%r", "%rd", "%f", "%h"]
+RocmRegClass = Literal["vgpr", "sgpr"]
 
 
 # ============================================================================
@@ -54,10 +63,21 @@ PTX_REGISTER_POOLS: Final[dict[str, int]] = {
     "%h": 256,
 }
 
+# v2.5 polish (Finding 5): pin PTX_REGISTER_POOLS' keys to the
+# PtxRegClass Literal at module load — a key typo or a missing/extra
+# pool entry fails loudly here, not as a vacuous allocation later.
+if set(PTX_REGISTER_POOLS) != set(get_args(PtxRegClass)):
+    raise AssertionError(
+        f"helixc.backend.regalloc_classes: PTX_REGISTER_POOLS keys "
+        f"{sorted(PTX_REGISTER_POOLS)} != PtxRegClass members "
+        f"{sorted(get_args(PtxRegClass))}."
+    )
+
+
 # dtype -> PTX register-class key. Mirrors PtxEmitter._ptx_type_str's
 # dtype set; the *class* is coarser than the type suffix (many dtypes
 # share a register file).
-_PTX_DTYPE_TO_CLASS: Final[dict[str, str]] = {
+_PTX_DTYPE_TO_CLASS: Final[dict[str, PtxRegClass]] = {
     "bool": "%p",
     # 16-bit file: narrow ints + half floats. 8-bit dtypes promote here.
     "i8": "%h", "u8": "%h", "char": "%h",
@@ -105,7 +125,7 @@ if set(_PTX_DTYPE_TO_CLASS) != _RECOGNISED_SCALAR_DTYPES:
     )
 
 
-def ptx_register_class(value: ti.TileValue) -> str:
+def ptx_register_class(value: ti.TileValue) -> PtxRegClass:
     """v2.4 item 15 slice 4 — map a tile-IR scalar value to its PTX
     register-class key (one of `%p` / `%r` / `%rd` / `%f` / `%h`).
 
@@ -176,6 +196,15 @@ ROCM_REGISTER_POOLS: Final[dict[str, int]] = {
     "sgpr": 104,
 }
 
+# v2.5 polish (Finding 5): pin ROCM_REGISTER_POOLS' keys to the
+# RocmRegClass Literal at module load (parity with the PTX check).
+if set(ROCM_REGISTER_POOLS) != set(get_args(RocmRegClass)):
+    raise AssertionError(
+        f"helixc.backend.regalloc_classes: ROCM_REGISTER_POOLS keys "
+        f"{sorted(ROCM_REGISTER_POOLS)} != RocmRegClass members "
+        f"{sorted(get_args(RocmRegClass))}."
+    )
+
 # A boolean / predicate is a wavefront condition — it lives in the
 # scalar file (sgpr). Every other scalar dtype is a per-thread value
 # in the vector file (vgpr); 64-bit dtypes are vgpr register pairs
@@ -183,7 +212,7 @@ ROCM_REGISTER_POOLS: Final[dict[str, int]] = {
 _ROCM_SGPR_DTYPES: Final[frozenset[str]] = frozenset({"bool"})
 
 
-def rocm_register_class(value: ti.TileValue) -> str:
+def rocm_register_class(value: ti.TileValue) -> RocmRegClass:
     """v2.4 item 15 slice 5 — map a tile-IR scalar value to its
     AMDGCN register-class key (`vgpr` or `sgpr`).
 

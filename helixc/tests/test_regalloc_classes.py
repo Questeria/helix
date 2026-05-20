@@ -10,14 +10,34 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import pytest
 
 from helixc.backend.regalloc import allocate_by_class
+from typing import get_args
+
 from helixc.backend.regalloc_classes import (
     PTX_REGISTER_POOLS,
+    PtxRegClass,
     ROCM_REGISTER_POOLS,
+    RocmRegClass,
     ptx_register_class,
     rocm_register_class,
 )
 from helixc.ir import tir
 from helixc.ir.tile_ir import TileBlock, TileFn, TileOp, TileOpKind, TileValue
+
+
+def test_v25_register_class_literals_pin_pool_keys():
+    """v2.5 polish (item-15 type-design Finding 5) — the PtxRegClass /
+    RocmRegClass Literals are the closed set of register-class keys.
+    Each pool dict's keys must equal its Literal's members (the
+    module-load drift checks enforce this; this test documents +
+    re-pins it). Typing the classifier return as the Literal also
+    makes a typo'd `return` a static mypy error."""
+    assert set(get_args(PtxRegClass)) == set(PTX_REGISTER_POOLS)
+    assert set(get_args(RocmRegClass)) == set(ROCM_REGISTER_POOLS)
+    # The classifier outputs are members of their backend's Literal.
+    assert ptx_register_class(
+        TileValue(id=0, ty=tir.TIRScalar("i32"))) in get_args(PtxRegClass)
+    assert rocm_register_class(
+        TileValue(id=0, ty=tir.TIRScalar("bool"))) in get_args(RocmRegClass)
 
 
 def _val(vid: int, dtype: str) -> TileValue:
