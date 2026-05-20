@@ -120,13 +120,21 @@ def test_stage130_matmul_status_consistency():
 
 def test_stage130_supported_ops_match_known_set():
     """Stage 130 — the PTX baseline's 'supported' set covers exactly
-    the scalar + control-flow ops Helix has been shipping via Phase-0
-    PTX (Stage 16+). Catches accidental status downgrades.
+    the scalar + control-flow ops PLUS the Stage-64 tile ops Helix
+    has been shipping via Phase-0 PTX (Stage 16+ / Stage 64).
+    Catches accidental status downgrades.
 
     v2.2 polish item 1 R1 audit-fix CRIT-1: SCALAR_SELECT and CALL
     were over-claimed as 'supported' but had no emit branch in
     PtxEmitter — demoted to 'stub' and removed from this expected
     set. Add them back ONLY after a real selp/call emit branch lands.
+
+    v2.3 5-clean-gate BE HIGH-1 audit-fix: the v2.2-added
+    PTX_OP_LOWERING table mislabeled TILE_ZEROS / TILE_ADD /
+    TILE_SUB / TILE_MUL / TILE_MATMUL as 'stub' even though PtxEmitter
+    has shipped real Stage-64 codegen for them since v1.0 (the
+    "102 PTX pins green" — register-fill, elementwise, wmma.mma.sync
+    Tensor-Core matmul). Corrected to 'supported'; added here.
     """
     supported_ptx = {k for k, v in PTX_BASELINE_STATUS.items() if v == "supported"}
     expected_supported = {
@@ -142,6 +150,13 @@ def test_stage130_supported_ops_match_known_set():
         TileOpKind.THREAD_IDX,
         TileOpKind.TILE_INDEX_LOAD_HBM,
         TileOpKind.TILE_INDEX_STORE_HBM,
+        # Stage-64 tile ops with real PtxEmitter.emit_op branches
+        # (v2.3 BE HIGH-1 corrected the table mislabel).
+        TileOpKind.TILE_ZEROS,
+        TileOpKind.TILE_ADD,
+        TileOpKind.TILE_SUB,
+        TileOpKind.TILE_MUL,
+        TileOpKind.TILE_MATMUL,
     }
     assert supported_ptx == expected_supported
 
@@ -189,10 +204,15 @@ def test_v22_ptx_op_lowering_table_exists():
 
 def test_v22_ptx_lowering_status_helper():
     """v2.2 polish — ptx.lowering_status(kind) helper parity with
-    rocm.lowering_status / metal.lowering_status / webgpu.lowering_status."""
+    rocm.lowering_status / metal.lowering_status / webgpu.lowering_status.
+
+    v2.3 5-clean-gate BE HIGH-1 audit-fix: TILE_MATMUL was asserted
+    "stub" here, but PTX has a real Stage-64 wmma.mma.sync codegen
+    branch — the assertion encoded the table's mislabel. Corrected
+    to "supported" alongside the PTX_OP_LOWERING table fix."""
     from helixc.backend import ptx
     assert ptx.lowering_status(TileOpKind.SCALAR_ADD) == "supported"
-    assert ptx.lowering_status(TileOpKind.TILE_MATMUL) == "stub"
+    assert ptx.lowering_status(TileOpKind.TILE_MATMUL) == "supported"
     # TypeError guard on non-TileOpKind input.
     for bad in ("SCALAR_ADD", 42, None, object()):
         with pytest.raises(TypeError, match="lowering_status expects TileOpKind"):

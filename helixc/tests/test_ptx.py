@@ -827,13 +827,26 @@ def test_c119_scalar_arithmetic_result_type_must_match_operands():
 
 
 def test_c119_direct_ptx_cli_rejects_kernel_helper_calls():
+    """v2.3 5-clean-gate BE HIGH-1 audit-fix: a CALL op in a kernel
+    (helper not inlined away) has status='stub' in PTX_OP_LOWERING.
+    Pre-fix the dispatcher fell through to a raw RuntimeError
+    ('unsupported PTX op call'). Post-fix the loud-stub forward
+    guard emits a `.error "HELIX-STUB...CALL..."` directive into the
+    PTX text (parity with rocm/metal/webgpu), and the CLI detects
+    that directive and exits non-zero with a diagnostic. Either way
+    the kernel is rejected — the test still pins rejection, now via
+    the HELIX-STUB path."""
     src = """
     fn helper(x: i32) -> i32 { x + 1 }
     @kernel fn k() { let y = helper(41); }
     """
     proc = run_ptx_cli(src)
     assert proc.returncode != 0, proc.stdout + proc.stderr
-    assert "unsupported PTX op call" in proc.stderr
+    # The CLI diagnostic names the HELIX-STUB directive cause.
+    assert "HELIX-STUB" in proc.stderr
+    # The emitted PTX carries the loud `.error` directive naming the
+    # offending op — ptxas would abort on it.
+    assert '.error "HELIX-STUB: TileOpKind.CALL' in proc.stdout
     assert "// TODO:" not in proc.stdout
 
 

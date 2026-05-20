@@ -58,7 +58,17 @@ ADDRESS_SIZE = 64
 # gate (per docs/V2_PLAN.md, every TILE_* op was "stub" — substrate
 # emit exists but operand binding is incomplete).
 PTX_OP_LOWERING: Final[Mapping[ti.TileOpKind, OpLowering]] = {
-    ti.TileOpKind.TILE_ZEROS:           {"lowering": "mov.u32 / mov.f32 (init VGPR/SGPR to 0)",  "status": "stub"},
+    # v2.3 5-clean-gate BE HIGH-1 audit-fix: TILE_ZEROS / TILE_ADD /
+    # TILE_SUB / TILE_MUL / TILE_MATMUL have REAL Stage 64 emit
+    # branches in PtxEmitter.emit_op (the "102 PTX pins green" from
+    # v1.0 — register-fill, elementwise add/sub/mul, wmma.mma.sync
+    # Tensor-Core matmul). The v2.2-added PTX_OP_LOWERING table
+    # blanket-marked every TILE_* op "stub" by mirroring the v2.1
+    # audit matrix, which was wrong for PTX specifically — PTX
+    # predates the v2 backends and shipped this codegen in Stage 64.
+    # Status corrected to "supported" to match the dispatcher; the
+    # forward guard at the top of emit_op now keys on these values.
+    ti.TileOpKind.TILE_ZEROS:           {"lowering": "mov.u32 / mov.f32 (init VGPR/SGPR to 0)",  "status": "supported"},
     ti.TileOpKind.TILE_CONST:           {"lowering": "mov.u32 / mov.f32 (constant load)",         "status": "stub"},
     ti.TileOpKind.TILE_LOAD_GLOBAL:     {"lowering": "ld.global.{b32,b64,b128}",                  "status": "stub"},
     ti.TileOpKind.TILE_STORE_GLOBAL:    {"lowering": "st.global.{b32,b64,b128}",                  "status": "stub"},
@@ -67,10 +77,10 @@ PTX_OP_LOWERING: Final[Mapping[ti.TileOpKind, OpLowering]] = {
     ti.TileOpKind.TMA_LOAD:             {"lowering": "cp.async.bulk.tensor (Hopper TMA)",         "status": "stub"},
     ti.TileOpKind.TMA_STORE:            {"lowering": "cp.async.bulk.tensor.store",                "status": "stub"},
     ti.TileOpKind.BARRIER_WAIT:         {"lowering": "bar.sync / bar.cta.sync",                   "status": "stub"},
-    ti.TileOpKind.TILE_ADD:             {"lowering": "add.{f32,s32} (tile-level)",                "status": "stub"},
-    ti.TileOpKind.TILE_SUB:             {"lowering": "sub.{f32,s32}",                             "status": "stub"},
-    ti.TileOpKind.TILE_MUL:             {"lowering": "mul.{f32,s32} / mul.lo.s32",                "status": "stub"},
-    ti.TileOpKind.TILE_MATMUL:          {"lowering": "wmma.mma.sync (m16n16k16 Tensor Cores)",   "status": "stub"},
+    ti.TileOpKind.TILE_ADD:             {"lowering": "add.{f32,s32} (tile-level)",                "status": "supported"},
+    ti.TileOpKind.TILE_SUB:             {"lowering": "sub.{f32,s32}",                             "status": "supported"},
+    ti.TileOpKind.TILE_MUL:             {"lowering": "mul.{f32,s32} / mul.lo.s32",                "status": "supported"},
+    ti.TileOpKind.TILE_MATMUL:          {"lowering": "wmma.mma.sync (m16n16k16 Tensor Cores)",   "status": "supported"},
     ti.TileOpKind.TILE_REDUCE:          {"lowering": "shfl.sync.bfly + ld.shared (warp tree)",   "status": "stub"},
     ti.TileOpKind.TILE_TRANSPOSE:       {"lowering": "ld.shared / st.shared with index swap",    "status": "stub"},
     ti.TileOpKind.TILE_RESHAPE:         {"lowering": "noop (reshape is a view-level operation)", "status": "stub"},
@@ -434,6 +444,31 @@ class PtxEmitter:
 
     # ---- ops ----
     def emit_op(self, op: ti.TileOp) -> None:
+        # v2.3 5-clean-gate BE HIGH-1 audit-fix: loud-stub forward
+        # guard. PTX was the one backend missing this — rocm/metal/
+        # webgpu all open `_emit_op` with a status check that emits a
+        # loud target-language directive for stub/deferred/skipped
+        # ops. Without it, PTX could (a) emit phantom-functional
+        # assembly for a table-declared stub, or (b) abort with a
+        # raw Python RuntimeError instead of a `HELIX-STUB`-tokened
+        # `.error` directive that downstream tooling (which
+        # string-matches HELIX_STUB_TOKEN) can detect. `.error` is a
+        # real PTX directive — ptxas aborts on it, so the failure is
+        # loud at assemble time, parity with rocm's `.error`.
+        status = PTX_OP_LOWERING[op.kind]["status"]
+        if status in ("stub", "deferred"):
+            self._line(
+                f'    .error "HELIX-STUB: TileOpKind.{op.kind.name} '
+                f'status={status!r}; codegen not wired in the PTX '
+                f'backend."'
+            )
+            return
+        if status == "skipped":
+            self._line(
+                f'    .error "HELIX-SKIPPED: TileOpKind.{op.kind.name} '
+                f'has no PTX analog; routing it here is a bug."'
+            )
+            return
         # v0.1: only handle a tiny scalar subset for sanity testing
         if op.kind == ti.TileOpKind.SCALAR_CONST_INT:
             self._require_operand_count(op, 0, "SCALAR_CONST_INT")
@@ -1564,6 +1599,25 @@ if __name__ == "__main__":
         if ad_rc != 0:
             sys.exit(ad_rc)
         print(ptx)
+        # v2.3 5-clean-gate BE HIGH-1 audit-fix: emit_op's loud-stub
+        # forward guard writes a `.error "HELIX-STUB..."` / `.error
+        # "HELIX-SKIPPED..."` directive into the PTX text when a
+        # stub/deferred/skipped op reaches codegen (e.g. a CALL in a
+        # kernel that upstream inlining did not eliminate). `.error`
+        # makes ptxas abort — but a caller checking *helixc's own*
+        # exit code (not piping to ptxas) would otherwise see 0.
+        # Surface the non-functional-kernel signal at the CLI exit
+        # code too. The PTX text is already printed above so the
+        # directive + the offending op are visible to the user.
+        if '.error "HELIX-' in ptx:
+            print(
+                "error: ptx: emitted kernel contains a HELIX-STUB / "
+                "HELIX-SKIPPED directive — an unsupported tile-IR op "
+                "reached PTX codegen; the kernel is non-functional "
+                "and ptxas would reject it.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     # Restart 48 B2: preserve loud-fail discipline at the outermost handler
     # too; only convert domain errors into one-line diagnostics.
     except (NotImplementedError, AssertionError, KeyboardInterrupt,
