@@ -178,17 +178,17 @@ def test_stage200_quotes_out_of_grammar_function_name():
 # scalar core — loud rejection of out-of-scope constructs
 # --------------------------------------------------------------------------
 def test_stage200_rejects_unsupported_op():
-    """An op outside the scalar core (here DIV) is rejected with
+    """An op outside the supported set (here MAXIMUM) is rejected with
     LLVMEmitError naming the op — never silently dropped."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     b.begin_function("f", [], _i32())
-    r = b.emit(tir.OpKind.DIV, b.const_int(8), b.const_int(2),
+    r = b.emit(tir.OpKind.MAXIMUM, b.const_int(8), b.const_int(2),
                result_ty=_i32())
     b.ret(r)
     b.end_function()
 
-    with pytest.raises(llvm_ir.LLVMEmitError, match="elem.div"):
+    with pytest.raises(llvm_ir.LLVMEmitError, match="elem.maximum"):
         llvm_ir.emit_module(mod)
 
 
@@ -672,3 +672,212 @@ def test_stage202_mock_validate_accepts_retless_infinite_loop():
     ll = llvm_ir.emit_module(mod)
     assert "ret " not in ll, ll  # genuinely no `ret` instruction
     assert llvm_ir.mock_validate_ll(ll) == [], llvm_ir.mock_validate_ll(ll)
+
+
+# ==========================================================================
+# Stage 203 (cont.) — division / remainder, bitwise ops, shifts
+# ==========================================================================
+def test_stage203_emit_signed_division():
+    """DIV on signed integers lowers to LLVM `sdiv`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("d", [("a", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.DIV, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = sdiv i32 %v{fn.params[0].id}, "
+            f"%v{fn.params[1].id}") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_unsigned_division():
+    """DIV on unsigned integers lowers to `udiv` — the signedness
+    follows the operand dtype, never the signed `sdiv`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("ud", [("a", u32), ("c", u32)], u32)
+    r = b.emit(tir.OpKind.DIV, fn.params[0], fn.params[1], result_ty=u32)
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = udiv i32" in ll, ll
+    assert "sdiv" not in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_signed_remainder():
+    """MOD on signed integers lowers to LLVM `srem`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("m", [("a", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.MOD, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = srem i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_unsigned_remainder():
+    """MOD on unsigned integers lowers to `urem`, never the signed
+    `srem`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("um", [("a", u32), ("c", u32)], u32)
+    r = b.emit(tir.OpKind.MOD, fn.params[0], fn.params[1], result_ty=u32)
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = urem i32" in ll, ll
+    assert "srem" not in ll, ll
+
+
+def test_stage203_emit_bitwise_and_or_xor():
+    """BIT_AND / BIT_OR / BIT_XOR lower to the sign-agnostic LLVM
+    `and` / `or` / `xor`."""
+    for kind, mnemonic in ((tir.OpKind.BIT_AND, "and"),
+                           (tir.OpKind.BIT_OR, "or"),
+                           (tir.OpKind.BIT_XOR, "xor")):
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        fn = b.begin_function(
+            "bw", [("a", _i32()), ("c", _i32())], _i32())
+        r = b.emit(kind, fn.params[0], fn.params[1], result_ty=_i32())
+        b.ret(r)
+        b.end_function()
+        ll = llvm_ir.emit_module(mod)
+        assert (f"%v{r.id} = {mnemonic} i32 %v{fn.params[0].id}, "
+                f"%v{fn.params[1].id}") in ll, (mnemonic, ll)
+        assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_bitwise_is_sign_agnostic():
+    """A bitwise op on unsigned operands emits the same mnemonic as on
+    signed ones — `and`/`or`/`xor` have no signed/unsigned variants."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("uand", [("a", u32), ("c", u32)], u32)
+    r = b.emit(tir.OpKind.BIT_AND, fn.params[0], fn.params[1],
+               result_ty=u32)
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = and i32" in ll, ll
+
+
+def test_stage203_emit_shift_left():
+    """SHL lowers to LLVM `shl` (sign-agnostic — it stays in the
+    sign-agnostic binop table)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("sl", [("x", _i32()), ("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.SHL, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = shl i32 %v{fn.params[0].id}, "
+            f"%v{fn.params[1].id}") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_signed_shift_right():
+    """SHR on a signed value lowers to the arithmetic `ashr` — the
+    vacated high bits take the sign bit."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("sr", [("x", _i32()), ("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.SHR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = ashr i32" in ll, ll
+    assert "lshr" not in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_emit_unsigned_shift_right():
+    """SHR on an unsigned value lowers to the logical `lshr` — the
+    vacated high bits are zero-filled. The signedness follows the
+    shifted value's dtype."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("usr", [("x", u32), ("n", u32)], u32)
+    r = b.emit(tir.OpKind.SHR, fn.params[0], fn.params[1], result_ty=u32)
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = lshr i32" in ll, ll
+    assert "ashr" not in ll, ll
+
+
+def test_stage203_emit_bitwise_not():
+    """BIT_NOT lowers to `xor <ty> x, -1` — LLVM has no bitwise-NOT
+    instruction; xor against all-ones flips every bit."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("bn", [("x", _i32())], _i32())
+    r = b.emit(tir.OpKind.BIT_NOT, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = xor i32 %v{fn.params[0].id}, -1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_division_operand_type_mismatch_rejected():
+    """DIV shares the binop type guard — operands and result must share
+    one LLVM type, else the emit raises rather than producing malformed
+    IR (an `sdiv i64` over i32 registers)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    a = b.const_int(8, dtype="i32")
+    c = b.const_int(2, dtype="i32")
+    bad = b.emit(tir.OpKind.DIV, a, c, result_ty=tir.TIRScalar("i64"))
+    b.ret(bad)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="matching operand and result types"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage203_bit_not_operand_type_mismatch_rejected():
+    """BIT_NOT's operand and result must share one type — the unified
+    unary branch's type guard covers the new op too."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    x = b.const_int(5, dtype="i64")
+    bad = b.emit(tir.OpKind.BIT_NOT, x, result_ty=_i32())
+    b.ret(bad)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="must share one type"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage203_div_then_mod_share_a_block():
+    """A realistic mixed expression — `(a / b) % c` — emits an `sdiv`
+    feeding an `srem` in one straight-line block."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "divmod", [("a", _i32()), ("c", _i32()), ("d", _i32())], _i32())
+    q = b.emit(tir.OpKind.DIV, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    r = b.emit(tir.OpKind.MOD, q, fn.params[2], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{q.id} = sdiv i32" in ll, ll
+    assert f"%v{r.id} = srem i32 %v{q.id}, %v{fn.params[2].id}" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []

@@ -156,7 +156,7 @@ depend on a clean, unambiguous full-suite run.
 | 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 203 | Scalar op set (cmp, select, neg) | ✓ | 3-clean ✓ | Phase D — CLOSED |
+| 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ · cont. audit pending | Phase D — cont. chunk shipped |
 | 204–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -261,3 +261,20 @@ depend on a clean, unambiguous full-suite run.
   203 CLOSED.** Still open in the "full scalar op set": integer
   division/remainder + bitwise ops. Next: the Stage 203 continuation
   (div/mod + bitwise), then Stage 204 — memory & aggregates.
+- 2026-05-20 — **Stage 203 continuation shipped — LLVM integer
+  division/remainder + bitwise ops.** Completes the "full scalar op
+  set". DIV / MOD lower to `sdiv`/`srem` (signed) or `udiv`/`urem`
+  (unsigned), the form chosen per operand dtype; BIT_AND / BIT_OR /
+  BIT_XOR and the left shift SHL lower to the sign-agnostic LLVM
+  `and`/`or`/`xor`/`shl`; the right shift SHR lowers to arithmetic
+  `ashr` (signed) or logical `lshr` (unsigned); the unary BIT_NOT
+  lowers to `xor x, -1`. The DIV/MOD/SHR sign-dependent set lives in a
+  new `_LLVM_SIGNED_BINOPS` table; the sign-agnostic set extends
+  `_LLVM_SCALAR_BINOPS` and reuses the existing binop branch (one
+  arity / type-match guard for all). NEG and BIT_NOT now share one
+  unary branch. A Stage-207-parity NOTE records the three deferred UB
+  questions (no `nsw`/`nuw`; div-by-zero and `sdiv INT_MIN,-1`;
+  over-width shift → poison). 13 new tests; 65 passed + 2 skipped
+  across the two LLVM test files; `x86_64.py` untouched. Per-stage
+  3-clean audit dispatched. Next after the audit: Stage 204 — memory &
+  aggregates.

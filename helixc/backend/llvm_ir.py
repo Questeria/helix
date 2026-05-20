@@ -20,9 +20,14 @@ Supported so far (Stages 200, 202, 203):
   - scalar op set (Stage 203): the six integer comparisons (`icmp`,
     signed or unsigned per operand dtype), SELECT, NEG; plus the
     unsigned integer dtypes (u8/u16/u32/u64/usize) and isize.
+  - division / remainder and the bitwise op set (Stage 203 cont.):
+    DIV / MOD (signed `sdiv`/`srem` or unsigned `udiv`/`urem` per
+    operand dtype), the sign-agnostic AND / OR / XOR and left shift
+    SHL, the right shift SHR (arithmetic `ashr` or logical `lshr` per
+    operand dtype), and the unary bitwise NOT.
 
-Anything outside that set — memory, calls, floats, division, bitwise
-ops, the wider op surface — is REJECTED with a loud `LLVMEmitError`,
+Anything outside that set — memory, calls, floats, the wider op
+surface — is REJECTED with a loud `LLVMEmitError`,
 never emitted wrong. Those land in later stages. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
 an LLVM toolchain, mirroring `gpu_ci.py`'s mock path; real
@@ -89,11 +94,34 @@ _LLVM_ICMP_PREDS: dict[tir.OpKind, tuple[str, str]] = {
     tir.OpKind.CMP_GE: ("sge", "uge"),
 }
 
-# tir integer binary OpKind -> LLVM instruction mnemonic.
+# tir integer binary OpKind -> LLVM instruction mnemonic, for the
+# SIGN-AGNOSTIC binary ops: LLVM's `add`/`and`/`shl`/... are a single
+# instruction whose result does not depend on whether the Helix
+# operands are signed or unsigned. The shift-RIGHT and the division /
+# remainder ops are NOT sign-agnostic — they live in
+# `_LLVM_SIGNED_BINOPS`.
 _LLVM_SCALAR_BINOPS: dict[tir.OpKind, str] = {
     tir.OpKind.ADD: "add",
     tir.OpKind.SUB: "sub",
     tir.OpKind.MUL: "mul",
+    tir.OpKind.BIT_AND: "and",
+    tir.OpKind.BIT_OR: "or",
+    tir.OpKind.BIT_XOR: "xor",
+    tir.OpKind.SHL: "shl",
+}
+
+# tir integer binary OpKind -> (signed mnemonic, unsigned mnemonic).
+# Unlike `_LLVM_SCALAR_BINOPS`, each of these LLVM instructions comes
+# in a signed and an unsigned form, chosen by the signedness of the
+# Helix operand dtype:
+#   - DIV -> `sdiv` / `udiv`, MOD -> `srem` / `urem`;
+#   - SHR (shift right) -> arithmetic `ashr` (sign-extends the vacated
+#     high bits) / logical `lshr` (zero-fills them).
+# SHL (shift left) is sign-agnostic and stays in `_LLVM_SCALAR_BINOPS`.
+_LLVM_SIGNED_BINOPS: dict[tir.OpKind, tuple[str, str]] = {
+    tir.OpKind.DIV: ("sdiv", "udiv"),
+    tir.OpKind.MOD: ("srem", "urem"),
+    tir.OpKind.SHR: ("ashr", "lshr"),
 }
 
 # LLVM's unquoted global/local identifier grammar.
@@ -398,7 +426,7 @@ class _FnEmitter:
         kind = op.kind
         if kind == tir.OpKind.CONST_INT:
             return None  # registered as an inline literal by _prepass
-        if kind in _LLVM_SCALAR_BINOPS:
+        if kind in _LLVM_SCALAR_BINOPS or kind in _LLVM_SIGNED_BINOPS:
             if len(op.results) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: {kind.value} must have "
@@ -416,7 +444,8 @@ class _FnEmitter:
             # share one type. The host IR does not structurally
             # guarantee that, so verify it — a mismatch would otherwise
             # silently emit malformed IR (an `add i32` referencing an
-            # i64 register).
+            # i64 register). This also covers the shifts: LLVM requires
+            # a shift's value and shift-amount operands to share a type.
             for i, operand in enumerate(op.operands):
                 operand_ty = _llvm_int_type(
                     operand.ty, ctx=f"{ctx} operand {i}")
@@ -428,11 +457,33 @@ class _FnEmitter:
                     )
             lhs = self._ref(op.operands[0])
             rhs = self._ref(op.operands[1])
-            # NOTE (Stage 207 parity): plain wrapping `add`/`sub`/`mul`,
-            # no `nsw`/`nuw` — whether that matches x86_64.py's
-            # overflow behaviour is a Stage 207 parity decision.
-            return (f"%v{result.id} = {_LLVM_SCALAR_BINOPS[kind]} "
-                    f"{ty} {lhs}, {rhs}")
+            if kind in _LLVM_SCALAR_BINOPS:
+                mnemonic = _LLVM_SCALAR_BINOPS[kind]
+            else:
+                # DIV / MOD / SHR each have a signed and an unsigned
+                # LLVM form. The form follows the operand dtype's
+                # signedness: DIV / MOD share a dtype across both
+                # operands, and for SHR the operand that carries the
+                # sign is the value being shifted (operand 0). Picking
+                # by operand 0 is uniform across all three and matches
+                # how the `icmp` branch chooses its predicate.
+                signed_mn, unsigned_mn = _LLVM_SIGNED_BINOPS[kind]
+                mnemonic = (unsigned_mn
+                            if _is_unsigned_int(op.operands[0].ty)
+                            else signed_mn)
+            # NOTE (Stage 207 parity): the integer binops are emitted in
+            # their plain LLVM form, leaving three UB questions to the
+            # Stage 207 parity gate against x86_64.py:
+            #   - add/sub/mul carry no `nsw`/`nuw` (they wrap, two's-
+            #     complement);
+            #   - sdiv/udiv/srem/urem are UB on a zero divisor, and
+            #     `sdiv INT_MIN, -1` overflows — x86_64.py's hardware
+            #     `div` faults (#DE) on those, so the paths may diverge;
+            #   - shl/lshr/ashr yield `poison` when the shift amount is
+            #     >= the type width, where x86 masks the count.
+            # Emitting the plain ops is correct for in-range inputs; the
+            # parity gate decides whether explicit guards are needed.
+            return f"%v{result.id} = {mnemonic} {ty} {lhs}, {rhs}"
         if kind == tir.OpKind.RETURN:
             if not op.operands:
                 return "ret void"
@@ -530,17 +581,21 @@ class _FnEmitter:
                         f"the result must share one type")
             return (f"%v{result.id} = select i1 {self._ref(cond)}, "
                     f"{ty} {self._ref(t_val)}, {ty} {self._ref(f_val)}")
-        if kind == tir.OpKind.NEG:
+        if kind in (tir.OpKind.NEG, tir.OpKind.BIT_NOT):
+            # The two unary integer ops. LLVM has a dedicated
+            # instruction for neither, so each is emitted in its
+            # canonical two-operand form; the arity / type checks are
+            # identical, so they share one branch.
             if len(op.results) != 1:
                 raise LLVMEmitError(
-                    f"function {self.fn.name!r}: NEG must have exactly "
-                    f"one result, got {len(op.results)}")
+                    f"function {self.fn.name!r}: {kind.value} must have "
+                    f"exactly one result, got {len(op.results)}")
             if len(op.operands) != 1:
                 raise LLVMEmitError(
-                    f"function {self.fn.name!r}: NEG expects one "
-                    f"operand, got {len(op.operands)}")
+                    f"function {self.fn.name!r}: {kind.value} expects "
+                    f"one operand, got {len(op.operands)}")
             result = op.results[0]
-            ctx = f"function {self.fn.name!r} NEG"
+            ctx = f"function {self.fn.name!r} {kind.value}"
             ty = _llvm_int_type(result.ty, ctx=ctx)
             operand = op.operands[0]
             operand_ty = _llvm_int_type(operand.ty, ctx=f"{ctx} operand")
@@ -548,14 +603,22 @@ class _FnEmitter:
                 raise LLVMEmitError(
                     f"{ctx}: operand has LLVM type {operand_ty} but the "
                     f"result is {ty} — they must share one type")
-            # LLVM has no integer-negate instruction; `sub <ty> 0, x`
-            # is the canonical form (two's-complement, wrapping).
-            return f"%v{result.id} = sub {ty} 0, {self._ref(operand)}"
+            operand_ref = self._ref(operand)
+            if kind == tir.OpKind.NEG:
+                # LLVM has no integer-negate instruction; `sub <ty> 0,
+                # x` is the canonical form (two's-complement, wrapping).
+                return f"%v{result.id} = sub {ty} 0, {operand_ref}"
+            # BIT_NOT: LLVM has no bitwise-NOT instruction either;
+            # `xor <ty> x, -1` is the canonical form — `-1` is all-ones
+            # at every integer width, so the xor flips every bit.
+            return f"%v{result.id} = xor {ty} {operand_ref}, -1"
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
-            f"emit op {kind.value} (supported: CONST_INT, ADD, SUB, MUL, "
-            f"the six comparisons, SELECT, NEG, RETURN, BR, COND_BR; "
-            f"division, bitwise ops, memory, and calls are later stages)"
+            f"emit op {kind.value} (supported: CONST_INT; the integer "
+            f"arithmetic ADD/SUB/MUL/DIV/MOD; the bitwise AND/OR/XOR/NOT "
+            f"and shifts SHL/SHR; the six comparisons; SELECT; NEG; "
+            f"RETURN; BR; COND_BR — memory, calls, and floats are later "
+            f"stages)"
         )
 
 
