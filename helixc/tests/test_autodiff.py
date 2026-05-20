@@ -117,8 +117,10 @@ def test_diff_neg_x():
 def test_diff_neg_neg_x():
     # d(-(-x))/dx = 1
     out = diff_expr("-(-x)", "x")
-    # Simplifies double-negation
-    assert "1" in out
+    # v2.x re-audit R4b: pin the exact form — `"1" in out` passed for
+    # "(-1)" (a dropped double-negation) or any form merely containing
+    # a 1 digit.
+    assert out == "1", f"d(-(-x))/dx should be 1, got {out}"
 
 
 # ============================================================================
@@ -824,26 +826,31 @@ def test_stage54_inc1_min_f64_chain_rule_forward():
     """d/dx __min_f64(x, 5.0) = if x <= 5.0 then 1.0 else 0.0
     (b is a constant so db/dx = 0; second term drops to 0)."""
     out = diff_expr("__min_f64(x, 5.0)", "x")
-    # Forward dispatcher returns indicator_a * dx + indicator_b * db
-    # where db = 0. fmt() may simplify or leave the structure.
-    assert "if" in out and "<=" in out, \
-        f"d/dx min(x, 5) should yield indicator-If, got: {out}"
+    # v2.x re-audit R4b: pin the exact indicator-If — `"if" in out and
+    # "<=" in out` passed for a swapped/wrong branch (arms 0/1 flipped,
+    # or `>=` instead of `<=`).
+    assert out == "if (x <= 5) { 1 } else { 0 }", \
+        f"d/dx min(x, 5) indicator-If mismatch, got: {out}"
 
 
 def test_stage54_inc1_max_f64_chain_rule_forward():
     """d/dx __max_f64(x, 5.0) = if x > 5.0 then 1.0 else 0.0
     (subgradient at equality picks 0 — strict > for left arg)."""
     out = diff_expr("__max_f64(x, 5.0)", "x")
-    assert "if" in out and ">" in out, \
-        f"d/dx max(x, 5) should yield indicator-If, got: {out}"
+    # v2.x re-audit R4b: pin the exact indicator-If — `"if" in out and
+    # ">" in out` passed for a swapped/wrong branch.
+    assert out == "if (x > 5) { 1 } else { 0 }", \
+        f"d/dx max(x, 5) indicator-If mismatch, got: {out}"
 
 
 def test_stage54_inc1_clamp_f64_chain_rule_forward():
     """d/dx __clamp_f64(x, 0.0, 1.0) = if (0.0 <= x AND x <= 1.0)
     then 1.0 else 0.0. lo/hi are non-differentiable constants."""
     out = diff_expr("__clamp_f64(x, 0.0, 1.0)", "x")
-    assert "if" in out and "&&" in out, \
-        f"d/dx clamp(x, 0, 1) should yield AND-indicator, got: {out}"
+    # v2.x re-audit R4b: pin the exact AND-indicator — `"if" in out and
+    # "&&" in out` passed for wrong bounds or a flipped comparison.
+    assert out == "if ((0 <= x) && (x <= 1)) { 1 } else { 0 }", \
+        f"d/dx clamp(x, 0, 1) AND-indicator mismatch, got: {out}"
 
 
 def test_stage54_inc1_sign_chain_rule_forward():
@@ -1688,11 +1695,11 @@ def test_stage54_inc2_forward_reverse_asymmetry_already_fixed():
 def test_stage54_inc1_min_chain_rule_in_composed_expr():
     """d/dx (__min_f64(x, 5.0) + x) = (if x<=5 then 1 else 0) + 1."""
     out = diff_expr("__min_f64(x, 5.0) + x", "x")
-    # Just verify it doesn't return zero (which would be the
-    # pre-Stage-54 opaque-call behavior).
-    assert out not in ("0", "0.0"), \
-        f"composed __min should propagate non-zero derivative, " \
-        f"got opaque-zero: {out}"
+    # v2.x re-audit R4b: pin the exact form — `out not in ("0","0.0")`
+    # only caught a total opaque-zero collapse; a wrong indicator or a
+    # dropped `+ 1` term still passed.
+    assert out == "(if (x <= 5) { 1 } else { 0 } + 1)", \
+        f"composed __min derivative mismatch, got: {out}"
 
 
 def test_stage54_postclose_diff_raises_loud_on_loop():

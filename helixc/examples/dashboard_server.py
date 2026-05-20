@@ -39,7 +39,13 @@ AGENTS = {
 def _rewrite_knobs(src, hx, kind, seed, maze, grid_size):
     """Apply the requested compile-time knobs to an agent's source.
 
-    Each knob substitutes a `@pure fn` constant. A knob whose target
+    Each knob substitutes a `@pure fn` constant. The target must occur
+    EXACTLY once: `str.replace` rewrites every match, so a knob whose
+    target appears more than once is REJECTED rather than silently
+    rewritten in multiple places (v2.x re-audit R4b RT-M2 — latent risk
+    if a future agent .hx duplicates a constant line).
+
+    A knob whose target
     function is absent from this agent's source is REJECTED rather than
     silently dropped (v2.x re-audit R3 RT-M1/M2): pre-fix `maze` for the
     `nn` agent (dashboard_nn_agent.hx has no use_maze()) and `size` for
@@ -53,16 +59,24 @@ def _rewrite_knobs(src, hx, kind, seed, maze, grid_size):
     new_src = src
     if seed is not None:
         target = "@pure fn map_seed() -> i32 { 12345 }"
-        if target not in new_src:
+        occ = new_src.count(target)
+        if occ == 0:
             return None, (f"agent kind {kind!r} does not support the "
                           f"'seed' knob (no map_seed() in {hx})")
+        if occ > 1:
+            return None, (f"agent kind {kind!r}: the 'seed' knob target "
+                          f"occurs {occ}x in {hx} — ambiguous rewrite")
         new_src = new_src.replace(
             target, f"@pure fn map_seed() -> i32 {{ {int(seed)} }}")
     if maze:
         target = "@pure fn use_maze() -> i32 { 0 }"
-        if target not in new_src:
+        occ = new_src.count(target)
+        if occ == 0:
             return None, (f"agent kind {kind!r} does not support the "
                           f"'maze' knob (no use_maze() in {hx})")
+        if occ > 1:
+            return None, (f"agent kind {kind!r}: the 'maze' knob target "
+                          f"occurs {occ}x in {hx} — ambiguous rewrite")
         new_src = new_src.replace(
             target, "@pure fn use_maze() -> i32 { 1 }")
     if grid_size is not None:
@@ -80,9 +94,13 @@ def _rewrite_knobs(src, hx, kind, seed, maze, grid_size):
                           f"'size' knob: only the qlearn agent derives "
                           f"its grid constants from grid_n()")
         target = "@pure fn grid_n() -> i32 { 10 }"
-        if target not in new_src:
+        occ = new_src.count(target)
+        if occ == 0:
             return None, (f"agent kind {kind!r} does not support the "
                           f"'size' knob (no grid_n() in {hx})")
+        if occ > 1:
+            return None, (f"agent kind {kind!r}: the 'size' knob target "
+                          f"occurs {occ}x in {hx} — ambiguous rewrite")
         new_src = new_src.replace(
             target, f"@pure fn grid_n() -> i32 {{ {int(grid_size)} }}")
     return new_src, None

@@ -66,9 +66,10 @@ def test_subtraction():
     grads = differentiate_reverse(body, ["x", "y"])
     # ∂f/∂x = 1, ∂f/∂y = -1.
     assert fmt(grads["x"]) == "1", f"got {fmt(grads['x'])}"
-    # -1 may render as "-1" or "(-1)"
+    # v2.x re-audit R4b: pin the exact form — `"1" in out_y and "-" in
+    # out_y` passed for a wrong adjoint like `(x - 1)` or `(-x)`.
     out_y = fmt(grads["y"])
-    assert "1" in out_y and "-" in out_y, f"got {out_y}"
+    assert out_y == "(-1)", f"expected (-1), got {out_y}"
 
 
 def test_v2x_reaudit_reverse_zero_arg_provenance_builtin_raises():
@@ -87,12 +88,15 @@ def test_v2x_reaudit_reverse_zero_arg_provenance_builtin_raises():
 def test_division_quotient_rule():
     body = _body_of("fn f(x: f32, y: f32) -> f32 { x / y }")
     grads = differentiate_reverse(body, ["x", "y"])
-    # ∂f/∂x = 1/y. After simplify: (1/y).
+    # v2.x re-audit R4b: pin the exact forms — `"/" in out_x and "y" in
+    # out_x` / `"-" in out_y` passed for a swapped numerator or a wrong
+    # power in the quotient rule.
+    # ∂f/∂x = 1/y.
     out_x = fmt(grads["x"])
-    assert "/" in out_x and "y" in out_x
+    assert out_x == "(1 / y)", f"expected (1 / y), got {out_x}"
     # ∂f/∂y = -x/(y*y).
     out_y = fmt(grads["y"])
-    assert "-" in out_y, f"expected negative, got {out_y}"
+    assert out_y == "(-(x / (y * y)))", f"expected -x/(y*y), got {out_y}"
 
 
 def test_chain_via_letbinding():
@@ -108,8 +112,10 @@ def test_chain_via_letbinding():
     # After inlining: (x+1)*(x+2). Reverse: adj_l = 1*(x+2), adj_r = 1*(x+1).
     # x appears twice, so summed contributions = (x+2) + (x+1) symbolically.
     out = fmt(grads["x"])
-    # The expression should reference x (positive count).
-    assert out.count("x") >= 2, f"expected x referenced multiple times, got {out}"
+    # v2.x re-audit R4b: pin the exact form — `out.count("x") >= 2`
+    # passed for any expression mentioning x twice, including a wrong
+    # constant offset.
+    assert out == "((x + 2) + (x + 1))", f"expected (x+2)+(x+1), got {out}"
 
 
 def test_unary_negation():
@@ -117,7 +123,8 @@ def test_unary_negation():
     grads = differentiate_reverse(body, ["x"])
     # ∂(-x)/∂x = -1.
     out = fmt(grads["x"])
-    assert "-1" in out or out == "(-1)", f"got {out}"
+    # v2.x re-audit R4b: pin the exact form.
+    assert out == "(-1)", f"expected (-1), got {out}"
 
 
 def test_param_not_in_expr():
@@ -149,8 +156,10 @@ def test_match_bool_propagates_per_arm():
     """)
     grads = differentiate_reverse(body, ["x"])
     out = fmt(grads["x"])
-    assert "match" in out, f"expected match in gradient, got {out}"
-    assert "2" in out and "1" in out, f"expected per-arm derivatives, got {out}"
+    # v2.x re-audit R4b: pin the exact per-arm form — `"2" in out and
+    # "1" in out` passed for swapped arms or a wrong per-arm derivative.
+    assert out == "match true { true => (1 * 2), false => 1 }", \
+        f"per-arm derivative mismatch, got {out}"
 
 
 def test_match_int_with_wildcard():
@@ -165,8 +174,10 @@ def test_match_int_with_wildcard():
     """)
     grads = differentiate_reverse(body, ["x"])
     out = fmt(grads["x"])
-    assert "match" in out, f"expected match wrapper, got {out}"
-    assert "3" in out and "5" in out, f"expected per-arm derivatives 3 and 5, got {out}"
+    # v2.x re-audit R4b: pin the exact per-arm form — `"3" in out and
+    # "5" in out` passed for swapped arms.
+    assert out == "match k { 0 => (1 * 3), 1 => (1 * 5), _ => 0 }", \
+        f"per-arm derivative mismatch, got {out}"
 
 
 def test_match_with_pattern_shadow_is_zero():
@@ -268,7 +279,15 @@ def test_match_chain_rule():
     """)
     grads = differentiate_reverse(body, ["x"])
     out = fmt(grads["x"])
-    assert "match" in out and "x" in out, f"got {out}"
+    # v2.x re-audit R4b: pin the exact form — `"match" in out and "x"
+    # in out` passed for swapped arms or a wrong chain-rule factor. y
+    # appears twice in y*y, so two identical adjoint contributions are
+    # summed; each arm carries its inner-match derivative * the arm's
+    # constant factor (2 / 3).
+    inner = "match true { true => (x * 2), false => (x * 3) }"
+    contrib = (f"match true {{ true => ((1 * {inner}) * 2), "
+               f"false => ((1 * {inner}) * 3) }}")
+    assert out == f"({contrib} + {contrib})", f"got {out}"
 
 
 def test_two_param_if_zero_literals_distinct_objects():

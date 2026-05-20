@@ -147,3 +147,53 @@ def test_v2x_reaudit_r3_qlearn_maze_knob_honored():
         src, "dashboard_qlearn.hx", "qlearn", None, True, None)
     assert err is None, f"maze on qlearn must be honored, got: {err}"
     assert "@pure fn use_maze() -> i32 { 1 }" in new_src
+
+
+# v2.x re-audit R4b (RT-M2): a knob target that occurs MORE THAN ONCE is
+# rejected. `str.replace` rewrites every match; the pre-R4b presence-only
+# check (`if target not in new_src`) would let a duplicated constant line
+# be double-rewritten silently. Latent today (the real .hx files each
+# define the constants once) — the guard catches a future regression.
+
+
+def test_v2x_reaudit_r4b_duplicate_seed_target_rejected():
+    """RT-M2: a source with two map_seed() definitions must be REJECTED,
+    not have both definitions rewritten by str.replace."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    dup_src = (
+        "@pure fn map_seed() -> i32 { 12345 }\n"
+        "@pure fn map_seed() -> i32 { 12345 }\n"
+        "fn main() -> i32 { 0 }\n"
+    )
+    new_src, err = _rewrite_knobs(
+        dup_src, "dup_agent.hx", "qlearn", 99, False, None)
+    assert new_src is None, "a duplicated knob target must not be rewritten"
+    assert err is not None and "ambiguous" in err and "seed" in err, err
+
+
+def test_v2x_reaudit_r4b_duplicate_maze_target_rejected():
+    """RT-M2: same guard for the `maze` knob."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    dup_src = (
+        "@pure fn use_maze() -> i32 { 0 }\n"
+        "@pure fn use_maze() -> i32 { 0 }\n"
+        "fn main() -> i32 { 0 }\n"
+    )
+    new_src, err = _rewrite_knobs(
+        dup_src, "dup_agent.hx", "qlearn", None, True, None)
+    assert new_src is None, "a duplicated knob target must not be rewritten"
+    assert err is not None and "ambiguous" in err and "maze" in err, err
+
+
+def test_v2x_reaudit_r4b_duplicate_grid_target_rejected():
+    """RT-M2: same guard for the `size` knob."""
+    from helixc.examples.dashboard_server import _rewrite_knobs
+    dup_src = (
+        "@pure fn grid_n() -> i32 { 10 }\n"
+        "@pure fn grid_n() -> i32 { 10 }\n"
+        "fn main() -> i32 { 0 }\n"
+    )
+    new_src, err = _rewrite_knobs(
+        dup_src, "dup_agent.hx", "qlearn", None, False, 15)
+    assert new_src is None, "a duplicated knob target must not be rewritten"
+    assert err is not None and "ambiguous" in err and "size" in err, err

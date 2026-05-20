@@ -2445,3 +2445,39 @@ items.
 
 **Gate status: OPEN.** Both HIGH fixed. Next: ship R4b (TEST
 weak-assertion hardening + RT MEDIUM-2), then re-run the gate.
+
+### 2026-05-20 — R4b SHIPPED
+
+R4b is complete. Two batches:
+
+- **TEST weak-assertion hardening — 12 AD tests pinned to exact
+  forms.** The gate re-run flagged ~9 autodiff tests with weak
+  substring/membership assertions; a full sweep of `test_autodiff.py`
+  + `test_autodiff_reverse.py` found 12. Each now asserts the exact
+  emitted derivative string (verified mathematically correct against
+  the AD engine's actual output), so a swapped-arm / wrong-numerator
+  / wrong-indicator regression fails instead of passing. Forward
+  (`test_autodiff.py`): `test_diff_neg_neg_x` (`"1" in out` →
+  `== "1"`); the three Stage-54 chain-rule tests min/max/clamp_f64
+  (`"if" in out and "<=" in out` etc. → exact indicator-If); the
+  composed-min test (`out not in ("0","0.0")` → exact form). Reverse
+  (`test_autodiff_reverse.py`): `test_subtraction`,
+  `test_division_quotient_rule` (both ∂), `test_unary_negation`,
+  `test_chain_via_letbinding` (`count("x") >= 2` → exact),
+  `test_match_bool_propagates_per_arm`, `test_match_int_with_wildcard`,
+  `test_match_chain_rule` (`"match" in out` → exact nested form).
+- **RT MEDIUM-2 — `str.replace` non-unique-target guard.**
+  `dashboard_server._rewrite_knobs` checked only knob-target presence
+  before `str.replace`, which rewrites EVERY match. A future agent
+  `.hx` duplicating a `@pure fn` constant line would be silently
+  double-rewritten. Each of the 3 knob sites (seed/maze/size) now
+  requires the target to occur EXACTLY once — `occ > 1` is rejected
+  loudly as an ambiguous rewrite. 3 regression tests added.
+
+Verification: test_autodiff + test_autodiff_reverse +
+test_dashboard_server 114 pass.
+
+**Gate status: OPEN — final step.** R1–R4b all shipped. Next: re-run
+the 5-clean-gate (silent-failure-hunters on FE/IR/BE/RT/TEST). If it
+returns no HIGH / must-fix MEDIUM and the suite is green, record
+"pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.
