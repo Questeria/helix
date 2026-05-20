@@ -1,22 +1,25 @@
 """
 helixc/backend/gpu_ci.py — Stage 129 (v2.0 Phase A.1).
 
-GPU CI scaffolding for v2.0 — mock-GPU validation infrastructure that
-runs WITHOUT real GPU hardware. Validates emitted text is syntactically
-plausible (header present, kernel attribute, terminator) and that
-the per-backend op-mapping tables stay in sync with the tile-IR.
+GPU CI scaffolding for v2.0 — GPU validation infrastructure with two
+phases behind one `validate_emit()` interface:
 
-Real-HW validation (running emitted PTX/HIP/MSL/WGSL on actual GPUs)
-is deferred to Stage 130+, which requires:
-- nvcc/ptxas (NVIDIA)
-- hipcc (AMD)
-- xcrun metal (Apple, mac-only)
-- A WebGPU runtime (deno-webgpu, dawn, browser playground)
+1. Mock validation (always runs, no hardware/toolchain needed):
+   shape-checks the emitted text (header, kernel attribute, terminator)
+   and confirms the per-backend op-mapping tables stay in sync with
+   the tile-IR.
 
-The scaffolding shipped here is the harness that wraps mock and real
-validation behind the same `validate_emit()` interface so v2.0
-real-HW gates can be added in a later stage without test surface
-churn.
+2. Real-HW dispatch (v2.4 item 13 — wired for all 4 backends): runs
+   the real toolchain on the emitted text —
+   - ptxas       (PTX,    NVIDIA)
+   - llvm-mc     (ROCm,   AMDGCN assembly)
+   - xcrun metal (Metal,  Apple, mac-only)
+   - naga        (WebGPU, WGSL)
+   A non-zero tool exit becomes real_hw_passed=False + a finding.
+   When the canonical tool is absent, mock validation still runs and
+   real_hw_attempted=False.
+
+Stage 129 shipped phase 1 + the harness; v2.4 item 13 wired phase 2.
 
 Per v2.0 research Report 1 + Report 5: "GPU CI is the prerequisite
 before any real-HW validation; mock validation catches 80% of
@@ -34,7 +37,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
 
 class BackendKind(Enum):
@@ -239,13 +242,22 @@ _MOCK_VALIDATORS = {
 # ============================================================================
 # Real-HW dispatch (v2.4 item 13)
 # ============================================================================
-# Default NVIDIA arch for ptxas. Matches helixc.backend.ptx.DEFAULT_TARGET
-# (sm_75 Turing baseline). A caller targeting a newer GPU can override.
-DEFAULT_PTXAS_ARCH = "sm_75"
+# v2.4 item 13 R1 audit-fix (type-design Finding 1): the ptxas arch
+# and AMDGCN mcpu were physical string copies of ptx.DEFAULT_TARGET /
+# rocm.DEFAULT_TARGET, kept in sync only by a comment. If a backend
+# bumped its baseline (ptx.py already anticipates sm_120) the CI
+# dispatcher would silently assemble against a stale arch — a green
+# gate not reflecting emitted code. R1 fix: import the backend
+# constants so there is one source of truth. (ptx.py / rocm.py do
+# not import gpu_ci — no circular-import risk.)
+from .ptx import DEFAULT_TARGET as _PTX_DEFAULT_TARGET  # noqa: E402
+from .rocm import DEFAULT_TARGET as _ROCM_DEFAULT_TARGET  # noqa: E402
 
-# Default AMDGCN target for llvm-mc. Matches helixc.backend.rocm.
-# DEFAULT_TARGET (gfx942 = MI300 baseline).
-DEFAULT_AMDGCN_MCPU = "gfx942"
+# Default NVIDIA arch for ptxas — single source of truth: ptx.py.
+DEFAULT_PTXAS_ARCH = _PTX_DEFAULT_TARGET
+
+# Default AMDGCN target for llvm-mc — single source of truth: rocm.py.
+DEFAULT_AMDGCN_MCPU = _ROCM_DEFAULT_TARGET
 
 # Hard cap on a single real-HW tool invocation. A hung assembler must
 # not stall a CI run — TimeoutExpired is caught and surfaced as a
@@ -274,9 +286,8 @@ def _dispatch_ptxas(text: str, tool: str,
     correct outcome and exactly what this gate exists to surface.
     Once item 15 lands, the same dispatch starts reporting passes.
 
-    This slice wires PTX only; ROCm/Metal/WebGPU real-HW dispatch
-    land in subsequent item-13 slices (their tool<->text-format
-    matchups need llvm-mc / xcrun-metal / naga respectively).
+    One of four real-HW dispatchers (ptxas / naga / llvm-mc /
+    xcrun-metal) — all wired as of v2.4 item 13.
     """
     tmpdir = tempfile.mkdtemp(prefix="helix_ptxas_")
     in_path = os.path.join(tmpdir, "kernel.ptx")
@@ -294,13 +305,18 @@ def _dispatch_ptxas(text: str, tool: str,
                 f"ptxas dispatch timed out after {timeout_s}s "
                 f"(tool={tool!r}, arch={gpu_arch})"
             ]
-        except FileNotFoundError:
-            # detect_tools() saw the tool on PATH but it vanished (or
-            # is not executable) by dispatch time. Surface loudly —
-            # do not silently fall back to a mock pass.
+        except OSError as e:
+            # v2.4 item 13 R1 audit-fix (silent-failure MEDIUM): catch
+            # OSError, not just FileNotFoundError. detect_tools() saw
+            # the tool on PATH but it vanished, is not executable
+            # (PermissionError), or the OS refused to spawn it
+            # (ENOEXEC / E2BIG — all OSError) by dispatch time. All of
+            # these must surface as a loud structured finding, not an
+            # uncaught traceback out of validate_emit, and never a
+            # silent fall-back to a mock pass.
             return False, [
-                f"ptxas dispatch: tool {tool!r} not found / not "
-                f"executable at invocation time"
+                f"ptxas dispatch: tool {tool!r} unusable at "
+                f"invocation time ({type(e).__name__}: {e})"
             ]
         if proc.returncode != 0:
             diag = (proc.stderr or proc.stdout or "").strip()
@@ -349,10 +365,12 @@ def _dispatch_naga(text: str, tool: str,
                 f"naga dispatch timed out after {timeout_s}s "
                 f"(tool={tool!r})"
             ]
-        except FileNotFoundError:
+        except OSError as e:
+            # v2.4 item 13 R1 audit-fix: catch OSError (covers
+            # FileNotFoundError + PermissionError + spawn failures).
             return False, [
-                f"naga dispatch: tool {tool!r} not found / not "
-                f"executable at invocation time"
+                f"naga dispatch: tool {tool!r} unusable at "
+                f"invocation time ({type(e).__name__}: {e})"
             ]
         if proc.returncode != 0:
             diag = (proc.stderr or proc.stdout or "").strip()
@@ -413,10 +431,12 @@ def _dispatch_llvm_mc(text: str, tool: str,
                 f"llvm-mc dispatch timed out after {timeout_s}s "
                 f"(tool={tool!r}, mcpu={mcpu})"
             ]
-        except FileNotFoundError:
+        except OSError as e:
+            # v2.4 item 13 R1 audit-fix: catch OSError (covers
+            # FileNotFoundError + PermissionError + spawn failures).
             return False, [
-                f"llvm-mc dispatch: tool {tool!r} not found / not "
-                f"executable at invocation time"
+                f"llvm-mc dispatch: tool {tool!r} unusable at "
+                f"invocation time ({type(e).__name__}: {e})"
             ]
         if proc.returncode != 0:
             diag = (proc.stderr or proc.stdout or "").strip()
@@ -472,10 +492,12 @@ def _dispatch_xcrun_metal(text: str, tool: str,
                 f"xcrun metal dispatch timed out after {timeout_s}s "
                 f"(tool={tool!r})"
             ]
-        except FileNotFoundError:
+        except OSError as e:
+            # v2.4 item 13 R1 audit-fix: catch OSError (covers
+            # FileNotFoundError + PermissionError + spawn failures).
             return False, [
-                f"xcrun metal dispatch: tool {tool!r} not found / not "
-                f"executable at invocation time"
+                f"xcrun metal dispatch: tool {tool!r} unusable at "
+                f"invocation time ({type(e).__name__}: {e})"
             ]
         if proc.returncode != 0:
             diag = (proc.stderr or proc.stdout or "").strip()
@@ -487,10 +509,32 @@ def _dispatch_xcrun_metal(text: str, tool: str,
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# v2.4 item 13 R1 audit-fix (type-design Finding 2): real-HW dispatch
+# table — restores parity with the _MOCK_VALIDATORS table. Maps each
+# BackendKind to its (canonical_tool, dispatch_fn) pair. validate_emit
+# looks this up instead of a hardcoded if/elif chain, and
+# _check_gpu_ci_drift() asserts the keyset matches BackendKind — so a
+# 5th backend that updates GPU_TOOLS + _MOCK_VALIDATORS but forgets
+# real-HW dispatch now fails loudly at module load instead of always
+# silently taking the deferred path.
+#
+# `canonical_tool` is the ONE tool name (of possibly several in
+# GPU_TOOLS[backend]) for which real-HW dispatch is wired. A detected-
+# but-non-canonical tool (PTX via nvcc, WebGPU via wgpu/dawn_node)
+# still takes the deferred branch in validate_emit.
+_DispatchFn = Callable[[str, str], "tuple[bool, list[str]]"]
+_REAL_HW_DISPATCH: dict[BackendKind, tuple[str, _DispatchFn]] = {
+    BackendKind.PTX:         ("ptxas",   _dispatch_ptxas),
+    BackendKind.WEBGPU_WGSL: ("naga",    _dispatch_naga),
+    BackendKind.ROCM_HIP:    ("llvm-mc", _dispatch_llvm_mc),
+    BackendKind.METAL_MSL:   ("xcrun",   _dispatch_xcrun_metal),
+}
+
+
 # Stage 129 type-design audit-fix: module-load drift detector.
 # Catches the case where a new BackendKind is added without updating
-# GPU_TOOLS or _MOCK_VALIDATORS. Same pattern as the per-backend
-# coverage checks in rocm/metal/webgpu/tile_ir_audit.
+# GPU_TOOLS / _MOCK_VALIDATORS / _REAL_HW_DISPATCH. Same pattern as
+# the per-backend coverage checks in rocm/metal/webgpu/tile_ir_audit.
 def _check_gpu_ci_drift() -> None:
     expected = set(BackendKind)
     if set(GPU_TOOLS) != expected:
@@ -502,6 +546,13 @@ def _check_gpu_ci_drift() -> None:
         raise AssertionError(
             f"helixc.backend.gpu_ci: _MOCK_VALIDATORS keys "
             f"{set(_MOCK_VALIDATORS)} != BackendKind members {expected}"
+        )
+    # v2.4 item 13 R1 audit-fix: real-HW dispatch table must also
+    # cover every backend (type-design Finding 2).
+    if set(_REAL_HW_DISPATCH) != expected:
+        raise AssertionError(
+            f"helixc.backend.gpu_ci: _REAL_HW_DISPATCH keys "
+            f"{set(_REAL_HW_DISPATCH)} != BackendKind members {expected}"
         )
 
 
@@ -546,46 +597,27 @@ def validate_emit(text: str, backend: BackendKind,
         if available:
             real_hw_attempted = True
             real_hw_tool = available[0]
-            # v2.4 item 13 — real-HW dispatch, all 4 backends wired:
-            # PTX via ptxas (slice 1), WebGPU via naga (slice 2),
-            # ROCm via llvm-mc (slice 3), Metal via xcrun metal
-            # (slice 4). Each tool validates/assembles/compiles its
-            # target text directly. The `else` deferred branch now
-            # only fires for a detected-but-non-canonical tool
-            # (e.g. PTX via nvcc, WebGPU via wgpu/dawn_node).
-            if backend is BackendKind.PTX and real_hw_tool == "ptxas":
-                passed, dispatch_findings = _dispatch_ptxas(
-                    text, real_hw_tool)
-                real_hw_passed = passed
-                real_hw_findings.extend(dispatch_findings)
-            elif (backend is BackendKind.WEBGPU_WGSL
-                  and real_hw_tool == "naga"):
-                passed, dispatch_findings = _dispatch_naga(
-                    text, real_hw_tool)
-                real_hw_passed = passed
-                real_hw_findings.extend(dispatch_findings)
-            elif (backend is BackendKind.ROCM_HIP
-                  and real_hw_tool == "llvm-mc"):
-                passed, dispatch_findings = _dispatch_llvm_mc(
-                    text, real_hw_tool)
-                real_hw_passed = passed
-                real_hw_findings.extend(dispatch_findings)
-            elif (backend is BackendKind.METAL_MSL
-                  and real_hw_tool == "xcrun"):
-                passed, dispatch_findings = _dispatch_xcrun_metal(
+            # v2.4 item 13 — real-HW dispatch via the _REAL_HW_DISPATCH
+            # table (R1 audit-fix Finding 2: was a hardcoded if/elif
+            # chain). All 4 backends wired: PTX/ptxas, WebGPU/naga,
+            # ROCm/llvm-mc, Metal/xcrun. The deferred branch fires only
+            # for a detected-but-non-canonical tool (PTX via nvcc,
+            # WebGPU via wgpu/dawn_node) — `real_hw_passed=None` rather
+            # than True so the result doesn't lie about coverage;
+            # `overall_status()` maps it to DEFERRED.
+            canonical_tool, dispatch_fn = _REAL_HW_DISPATCH[backend]
+            if real_hw_tool == canonical_tool:
+                passed, dispatch_findings = dispatch_fn(
                     text, real_hw_tool)
                 real_hw_passed = passed
                 real_hw_findings.extend(dispatch_findings)
             else:
-                # Deferred: tool detected but dispatch not yet wired
-                # for this backend. `real_hw_passed = None` (deferred)
-                # rather than True so the result doesn't lie about
-                # coverage — `overall_status()` maps this to DEFERRED.
                 real_hw_passed = None
                 real_hw_findings.append(
                     f"v2.4 item 13: real-HW tool '{real_hw_tool}' "
-                    f"detected but dispatch for backend "
-                    f"{backend.name} not yet wired"
+                    f"detected for backend {backend.name} but it is "
+                    f"not the canonical dispatch tool "
+                    f"'{canonical_tool}' — dispatch deferred"
                 )
 
     return ValidationResult(

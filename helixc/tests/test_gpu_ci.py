@@ -135,25 +135,41 @@ def test_stage129_requires_backend_tool_returns_bool():
         assert isinstance(requires_backend_tool(b), bool)
 
 
-def test_stage129_real_hw_deferred_to_stage_130():
-    """Stage 129 / v2.4 item 13 — real-HW dispatch for ROCm is still
-    deferred (only PTX+ptxas is wired so far); the validation result
-    honestly reports `real_hw_passed=None` when a tool is detected but
-    not actually invoked, NOT True (which would lie about coverage)."""
-    src = "@kernel fn k() {}"
+def test_v24_real_hw_deferred_on_non_canonical_tool(monkeypatch):
+    """v2.4 item 13 R1 audit-fix (code-review MEDIUM-1) — when a
+    real-HW tool IS detected but it is not the backend's canonical
+    dispatch tool (e.g. PTX via nvcc rather than ptxas, WebGPU via
+    wgpu rather than naga), validate_emit takes the DEFERRED path:
+    real_hw_passed=None + a 'dispatch deferred' finding +
+    overall_status()==DEFERRED — it must NOT claim a pass.
+
+    This replaces the old test_stage129_real_hw_deferred_to_stage_130,
+    which became self-masking once ROCm/Metal/WebGPU dispatch was
+    wired in v2.4 item 13 — that test asserted ROCm was 'still
+    deferred' and only passed because llvm-mc happened to be absent
+    on CI; on a machine WITH llvm-mc it would have failed.
+
+    Deterministic via monkeypatch — does not depend on which tools
+    are actually on PATH."""
+    import helixc.backend.gpu_ci as gc
+    # Force detect_tools to report a non-canonical tool for PTX
+    # (nvcc — a real GPU_TOOLS[PTX] entry, but not the canonical
+    # ptxas the dispatch table is keyed on).
+    monkeypatch.setattr(gc, "detect_tools", lambda backend: ["nvcc"])
+
+    from helixc.backend.ptx import PtxEmitter
+    src = "@kernel fn empty_kernel() {}"
     prog = parse(src)
     tile_mod = lower_to_tile(lower(prog))
-    text = HipEmitter().emit_module(tile_mod)
+    text = PtxEmitter().emit_module(tile_mod)
 
-    result = validate_emit(text, BackendKind.ROCM_HIP, attempt_real_hw=True)
-    if result.real_hw_attempted:
-        # hipcc detected — ROCm dispatch not yet wired, so the result
-        # must be DEFERRED (real_hw_passed=None), not a lie.
-        assert result.real_hw_passed is None
-        assert any("not yet wired" in f for f in result.real_hw_findings)
-    else:
-        # Tool not available — that's also a valid outcome.
-        assert result.real_hw_passed is None
+    result = validate_emit(text, BackendKind.PTX, attempt_real_hw=True)
+    assert result.real_hw_attempted is True
+    assert result.real_hw_tool == "nvcc"
+    # DEFERRED — real_hw_passed is None, not a lying True.
+    assert result.real_hw_passed is None
+    assert result.overall_status() == OverallStatus.DEFERRED
+    assert any("dispatch deferred" in f for f in result.real_hw_findings)
 
 
 def test_v24_dispatch_ptxas_tool_not_found():
@@ -166,7 +182,12 @@ def test_v24_dispatch_ptxas_tool_not_found():
         ".version 8.3\n", "helix_no_such_ptxas_xyz123")
     assert passed is False
     assert len(findings) == 1
-    assert "not found" in findings[0]
+    # v2.4 item 13 R1 audit-fix: dispatchers now catch OSError (not
+    # just FileNotFoundError) and report "unusable at invocation
+    # time (<ExcType>: ...)" — covers tool-not-found + not-executable
+    # + OS spawn-refusal uniformly.
+    assert "unusable at invocation time" in findings[0]
+    assert "FileNotFoundError" in findings[0]
 
 
 def test_v24_validate_emit_ptx_real_hw_tool_absent_is_deterministic():
@@ -227,7 +248,12 @@ def test_v24_dispatch_naga_tool_not_found():
         "helix_no_such_naga_xyz123")
     assert passed is False
     assert len(findings) == 1
-    assert "not found" in findings[0]
+    # v2.4 item 13 R1 audit-fix: dispatchers now catch OSError (not
+    # just FileNotFoundError) and report "unusable at invocation
+    # time (<ExcType>: ...)" — covers tool-not-found + not-executable
+    # + OS spawn-refusal uniformly.
+    assert "unusable at invocation time" in findings[0]
+    assert "FileNotFoundError" in findings[0]
 
 
 def test_v24_validate_emit_webgpu_real_hw_tool_absent_is_deterministic():
@@ -297,7 +323,12 @@ def test_v24_dispatch_llvm_mc_tool_not_found():
         "helix_no_such_llvmmc_xyz123")
     assert passed is False
     assert len(findings) == 1
-    assert "not found" in findings[0]
+    # v2.4 item 13 R1 audit-fix: dispatchers now catch OSError (not
+    # just FileNotFoundError) and report "unusable at invocation
+    # time (<ExcType>: ...)" — covers tool-not-found + not-executable
+    # + OS spawn-refusal uniformly.
+    assert "unusable at invocation time" in findings[0]
+    assert "FileNotFoundError" in findings[0]
 
 
 def test_v24_validate_emit_rocm_real_hw_tool_absent_is_deterministic():
@@ -352,7 +383,12 @@ def test_v24_dispatch_xcrun_metal_tool_not_found():
         "helix_no_such_xcrun_xyz123")
     assert passed is False
     assert len(findings) == 1
-    assert "not found" in findings[0]
+    # v2.4 item 13 R1 audit-fix: dispatchers now catch OSError (not
+    # just FileNotFoundError) and report "unusable at invocation
+    # time (<ExcType>: ...)" — covers tool-not-found + not-executable
+    # + OS spawn-refusal uniformly.
+    assert "unusable at invocation time" in findings[0]
+    assert "FileNotFoundError" in findings[0]
 
 
 def test_v24_validate_emit_metal_real_hw_tool_absent_is_deterministic():
