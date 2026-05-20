@@ -818,3 +818,56 @@ v2.3 commit set (since v2.2.0 `1a4e371`):
 
 All 22 v2.x stages (110-131) CLOSED. v2.0/v2.1/v2.2/v2.3 all
 released with full 5-clean-gates. Next: v2.4 substantive cycle.
+
+### 2026-05-19T20:42Z — v2.4 item 13 COMPLETE + 3-clean-audit dispatched
+
+**v2.4 item 13 (real-HW dispatch wiring) — all 4 backends shipped:**
+- slice 1 `517b632`: PTX via ptxas
+- slice 2 `7d02831`: WebGPU via naga
+- slice 3 `e85288d`: ROCm via llvm-mc (GPU_TOOLS[ROCM_HIP] corrected
+  from ["hipcc"] to ["llvm-mc","hipcc"] — hipcc compiles HIP C++,
+  not the AMDGCN assembly rocm.py emits)
+- slice 4 `4701cc2`: Metal via xcrun metal
+
+`validate_emit` went from mock-string-grep-only to genuine toolchain
+dispatch for every backend. Each `_dispatch_*` follows one shape:
+temp file -> real tool via subprocess.run -> (passed, findings) with
+uniform loud-fail discipline (TimeoutExpired + FileNotFoundError
+surface as findings + passed=False, never swallowed; 30s timeout cap;
+temp dir cleaned in finally).
+
+Honest-substrate caveat: emitted substrate kernels (operand-less
+mnemonics + HELIX-STUB-OPERANDS markers) will be legitimately
+rejected by these real tools until item 15 (RegAlloc) wires real
+operand binding — that rejection is the gate working, not a bug.
+An empty @kernel assembles/validates cleanly on every backend today.
+
+**Concurrent v2.4 audit-fix batch landed `2c00233`:**
+- grad_pass.py: `_generate_grad_rev_all_fn` / `_generate_grad_fn`
+  converted from silent `return None` (0-param / out-of-range index)
+  to raising NotImplementedError / ValueError — the callers' `if
+  grad_fn is not None` guards were silently dropping the grad()
+  rewrite.
+- examples/run.py: main() now aggregates per-demo exit status
+  (closes RT M3 from the v2.2 5-clean-gate — a failing demo no
+  longer reports green).
+- tile_ir_audit.py: docstring cleanup (stale TMEM row; 28-member
+  enum note).
+
+This fire dispatches the item-13 3-clean-audit (silent-failure-hunter
++ type-design-analyzer + code-reviewer in parallel) on gpu_ci.py +
+test_gpu_ci.py. Verdicts processed next fire — if CLEAN, item 13
+closes; if findings, an R1 audit-fix lands first.
+
+**v2.4 backlog state:**
+- Item 13 (real-HW dispatch): SHIPPED 4/4 slices; 3-clean-audit
+  dispatched this fire.
+- Item 15 (RegAlloc for emitted backend kernel bodies): pending —
+  the other half of the substrate->hardware-real gap. Once it lands,
+  the item-13 dispatchers start reporting passes for non-trivial
+  kernels.
+- Item 3 slice 2/3 (frozen ProofManifest dataclass): pending —
+  substantial public-API change.
+- Stage 35 wmt_predict_or regression (pre-existing, spawned task):
+  open.
+- End-of-v2.4 5-clean-gate: pending all the above.
