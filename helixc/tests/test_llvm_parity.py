@@ -1,20 +1,23 @@
 """Tests for helixc.backend.llvm_parity — v3.0 Phase D, Stage 207
-chunk A: the x86_64-vs-LLVM mock structural-parity harness.
+chunks A+B: the x86_64-vs-LLVM mock structural-parity harness and the
+curated source-program corpus + parity gate.
 
 The harness compiles a `tir.Module` through BOTH backends and
 classifies the outcome (MATCH / UNCOVERED / MISMATCH / ERROR). It is
-the chunk-A MOCK path — toolchain-free, always runs; it proves the
-LLVM backend either emits structurally shaped IR or fails closed
-LOUDLY on an op outside its covered subset, never silently
-miscompiles. Real-execution (observable-behaviour) parity is chunk B.
+the MOCK path — toolchain-free, always runs; it proves the LLVM
+backend either emits structurally shaped IR or fails closed LOUDLY on
+an op outside its covered subset, never silently miscompiles.
+Real-execution (observable-behaviour) parity is chunk C.
 
-These tests pin: the `ParityResult` type rejects every silent-failure
-field shape; `verdict()` derives the classification correctly from the
-facts; and `check_parity` classifies real modules (a covered program →
-MATCH, a Stage 206-R op → UNCOVERED) and CAPTURES every backend
-failure — a crash, a fail-closed, a degenerate input — into a verdict
-rather than letting it escape, all without mutating the caller's
-module.
+These tests pin: (chunk A) the `ParityResult` type rejects every
+silent-failure field shape, `verdict()` derives the classification
+correctly from the facts, and `check_parity` classifies real modules
+and CAPTURES every backend failure into a verdict rather than letting
+it escape, without mutating the caller's module; (chunk B)
+`check_parity_source` compiles a Helix source string through the
+frontend pipeline, and the Stage 207 mock-path GATE asserts every
+program in the curated corpus structurally MATCHes across both
+backends.
 """
 from __future__ import annotations
 
@@ -467,3 +470,83 @@ def test_check_parity_smoke_corpus():
         verdicts.add(r.verdict())
     assert ParityVerdict.MATCH in verdicts
     assert ParityVerdict.UNCOVERED in verdicts
+
+
+# --------------------------------------------------------------------------
+# check_parity_source + the curated parity corpus (chunk B)
+# --------------------------------------------------------------------------
+def test_check_parity_source_match():
+    """A minimal integer Helix source program parity-checks to MATCH
+    through the full frontend pipeline (parse -> lower -> both
+    backends)."""
+    r = llvm_parity.check_parity_source(
+        "fn main() -> i32 { 17 + 25 }", "src_add")
+    assert r.verdict() is ParityVerdict.MATCH
+    assert not r.is_parity_defect()
+
+
+def test_check_parity_source_uncovered_on_float():
+    """A float-typed source -> UNCOVERED: the x86_64 backend handles
+    f64, the LLVM backend fails closed (floats are outside its covered
+    subset). check_parity_source carries the UNCOVERED verdict through
+    from check_parity unchanged."""
+    r = llvm_parity.check_parity_source(
+        "fn main() -> f64 { 1.5 }", "src_float")
+    assert r.verdict() is ParityVerdict.UNCOVERED
+    assert not r.is_parity_defect()
+
+
+def test_check_parity_source_error_on_bad_source():
+    """A source the frontend cannot compile is CAPTURED as an ERROR
+    (not re-raised) — a degenerate corpus entry, surfaced loudly with
+    the pipeline diagnostic."""
+    r = llvm_parity.check_parity_source("fn main((", "bad_src")
+    assert r.verdict() is ParityVerdict.ERROR
+    assert not r.x86_compiled
+    assert any("frontend pipeline failed" in d for d in r.detail), r.detail
+
+
+def test_check_parity_source_include_stdlib_uncovered():
+    """`include_stdlib=True` pulls in the float-typed stdlib the LLVM
+    backend does not yet cover, so even a trivial program builds to
+    UNCOVERED — pinning the corpus's `include_stdlib=False` rationale
+    and exercising the keyword flag."""
+    r = llvm_parity.check_parity_source(
+        "fn main() -> i32 { 42 }", "stdlib_on", include_stdlib=True)
+    assert r.verdict() is ParityVerdict.UNCOVERED
+    assert not r.is_parity_defect()
+
+
+def test_parity_corpus_is_substantial_and_well_formed():
+    """The curated corpus is non-trivial and every entry has a unique
+    non-blank name and a non-blank source (the module-load guard
+    enforces this; pin it explicitly too)."""
+    assert len(llvm_parity.PARITY_CORPUS) >= 20
+    names = [name for name, _ in llvm_parity.PARITY_CORPUS]
+    assert len(names) == len(set(names)), "corpus names must be unique"
+    for name, source in llvm_parity.PARITY_CORPUS:
+        assert name.strip() and source.strip()
+    llvm_parity._check_parity_corpus()
+
+
+def test_run_parity_corpus_returns_one_result_per_entry():
+    """`run_parity_corpus` returns one ParityResult per corpus entry,
+    in corpus order, each naming its program."""
+    results = llvm_parity.run_parity_corpus()
+    assert len(results) == len(llvm_parity.PARITY_CORPUS)
+    for result, (name, _src) in zip(results, llvm_parity.PARITY_CORPUS):
+        assert result.program == name
+
+
+def test_parity_corpus_gate():
+    """THE STAGE 207 MOCK-PATH PARITY GATE. Every program in the
+    curated corpus — real Helix source exercising the LLVM backend's
+    covered op surface — must structurally MATCH across the x86_64 and
+    LLVM backends. A covered op regressing to UNCOVERED, or the LLVM
+    backend emitting malformed IR (MISMATCH) or crashing (ERROR),
+    breaks this gate."""
+    results = llvm_parity.run_parity_corpus()
+    non_match = [(r.program, r.verdict().name, r.detail)
+                 for r in results
+                 if r.verdict() is not ParityVerdict.MATCH]
+    assert not non_match, f"corpus programs not MATCH: {non_match}"

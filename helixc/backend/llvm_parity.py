@@ -10,32 +10,42 @@ the incumbent `helixc/backend/x86_64.py`. The v3.0 migration strategy
 produces output observably identical to the incumbent across the
 test-program corpus.
 
-This module is that harness. It is built in two chunks, mirroring how
-`gpu_ci.py` rolled out its validation (Stage 129 shipped mock
+This module is that harness. It is built in three chunks, mirroring
+how `gpu_ci.py` rolled out its validation (Stage 129 shipped mock
 validation; v2.4 item 13 added real-HW dispatch):
 
-  - Chunk A (this chunk) — the MOCK STRUCTURAL parity path. Given a
-    `tir.Module`, compile it through BOTH backends and classify the
-    outcome (see `ParityVerdict`). It needs no LLVM toolchain and
-    always runs. It does NOT claim observable-behaviour parity — nor
-    even a full LLVM verify: `MATCH` means the LLVM backend's IR
-    passed the toolchain-free `mock_validate_ll` SHAPE check (target
-    triple, >=1 `define`, balanced braces, terminated blocks), not
-    that the IR is semantically valid. What chunk A proves is the
-    weaker but still load-bearing invariant that the LLVM backend, on
-    every program the corpus contains, either emits structurally
-    shaped IR OR fails closed LOUDLY (`LLVMEmitError`) on an op
-    outside its covered subset (a Stage 206-R residual op) — it NEVER
-    silently miscompiles.
+  - Chunk A — the MOCK STRUCTURAL parity path. Given a `tir.Module`,
+    compile it through BOTH backends and classify the outcome (see
+    `ParityVerdict`). It needs no LLVM toolchain and always runs. It
+    does NOT claim observable-behaviour parity — nor even a full LLVM
+    verify: `MATCH` means the LLVM backend's IR passed the
+    toolchain-free `mock_validate_ll` SHAPE check (target triple,
+    >=1 `define`, balanced braces, terminated blocks), not that the IR
+    is semantically valid. What chunk A proves is the weaker but still
+    load-bearing invariant that the LLVM backend, on every program the
+    corpus contains, either emits structurally shaped IR OR fails
+    closed LOUDLY (`LLVMEmitError`) on an op outside its covered
+    subset (a Stage 206-R residual op) — it NEVER silently
+    miscompiles.
 
-  - Chunk B — the REAL-EXECUTION parity path. Behind toolchain + WSL
+  - Chunk B — the curated source-program CORPUS + the mock-path
+    parity GATE. `check_parity_source` runs a Helix source string
+    through the frontend pipeline (parse -> lower) to a `tir.Module`
+    and hands it to `check_parity`; `PARITY_CORPUS` is a curated set
+    of small deterministic Helix programs exercising the LLVM
+    backend's covered op surface; `run_parity_corpus` walks them. The
+    Stage 207 mock-path gate (in test_llvm_parity.py) asserts every
+    corpus program is MATCH — real Helix programs structurally agree
+    across both backends.
+
+  - Chunk C — the REAL-EXECUTION parity path. Behind toolchain + WSL
     detection, compile both backends to runnable executables, run
     them, and compare observable behaviour (exit code, stdout,
     stderr); real `llvm-as` (via `llvm_toolchain.dispatch_validate_ll`)
     supersedes the chunk-A shape check. DEFERRED — never FAILED — when
     no toolchain is present, so CI on a tool-less runner stays green
     (the `gpu_ci` discipline). The `ParityResult` type already carries
-    the real-execution fields chunk B fills in, so chunk B needs no
+    the real-execution fields chunk C fills in, so chunk C needs no
     type change.
 
 License: Apache 2.0
@@ -66,14 +76,14 @@ class ParityVerdict(Enum):
 
     Chunk A is a STRUCTURAL check — it compares whether the two
     backends accept a module, not (yet) what the compiled programs do
-    when run; observable-behaviour parity is chunk B's real-execution
+    when run; observable-behaviour parity is chunk C's real-execution
     path. The four outcomes:
 
     - MATCH — both backends accept the module and the LLVM backend's
       emitted IR passes the toolchain-free `mock_validate_ll` SHAPE
       check (a structural sanity check — target triple, >=1 `define`,
       balanced braces, terminated blocks — NOT a full LLVM verify;
-      real `llvm-as` validation is chunk B). The program is inside the
+      real `llvm-as` validation is chunk C). The program is inside the
       LLVM backend's covered op subset and structural parity holds at
       the shape level.
     - UNCOVERED — the x86_64 backend accepts the module but the LLVM
@@ -174,7 +184,7 @@ class ParityResult:
       presence of a reason, not its wording — the verdict is derived
       from the facts, not from the detail text.
 
-    Real-execution fields — filled by chunk B's toolchain-gated path;
+    Real-execution fields — filled by chunk C's toolchain-gated path;
     chunk A always leaves them at their defaults (not attempted):
     - `real_attempted` — a real run-and-compare was dispatched.
     - `real_passed` — its verdict (None when not attempted).
@@ -302,7 +312,7 @@ def check_parity(module: tir.Module, program: str) -> ParityResult:
     LLVM toolchain and always runs. It compiles `module` through BOTH
     backends and classifies the outcome (see `ParityVerdict`); it does
     NOT run the compiled programs — observable-behaviour parity is
-    chunk B's real-execution path, and the returned `ParityResult`
+    chunk C's real-execution path, and the returned `ParityResult`
     leaves its real-execution fields not-attempted.
 
     `module` must define `main` (the program entry the x86_64 backend
@@ -426,3 +436,154 @@ def check_parity(module: tir.Module, program: str) -> ParityResult:
         llvm_mock_clean=llvm_mock_clean,
         detail=tuple(detail),
     )
+
+
+# ==========================================================================
+# Chunk B — the source-program corpus + the mock-path parity gate
+# ==========================================================================
+
+# A curated corpus of small, deterministic Helix programs exercising the
+# LLVM backend's covered op surface (Phase D Stages 200-206): integer
+# arithmetic, the bitwise ops, comparisons / select, control flow
+# (if / nested if / while), local + mutable variables, stack arrays,
+# direct calls (incl. recursion), the unsigned dtypes (incl. the
+# signedness-sensitive udiv / unsigned-icmp paths), and bool. Every
+# entry is checked with `include_stdlib=False` and is curated to be
+# MATCH — the Stage 207 mock-path gate (test_llvm_parity.py) asserts
+# exactly that, so a covered op regressing to UNCOVERED / MISMATCH
+# breaks the gate. (The stdlib pulls in float-typed transcendentals the
+# LLVM backend does not yet cover, so an `include_stdlib=True` build of
+# any program is UNCOVERED — outside this gate's covered subset.)
+PARITY_CORPUS: tuple[tuple[str, str], ...] = (
+    ("const_return", "fn main() -> i32 { 42 }"),
+    ("add", "fn main() -> i32 { 17 + 25 }"),
+    ("sub", "fn main() -> i32 { 100 - 58 }"),
+    ("mul", "fn main() -> i32 { 6 * 7 }"),
+    ("div", "fn main() -> i32 { 84 / 2 }"),
+    ("mod", "fn main() -> i32 { 142 % 100 }"),
+    ("neg", "fn main() -> i32 { let x: i32 = 42; 0 - x }"),
+    ("arith_mixed", "fn main() -> i32 { 2 * 10 + 22 }"),
+    ("bitwise_and_or", "fn main() -> i32 { (240 | 10) & 255 }"),
+    ("bitwise_xor", "fn main() -> i32 { 255 ^ 213 }"),
+    ("shift_left", "fn main() -> i32 { 21 << 1 }"),
+    ("shift_right", "fn main() -> i32 { 168 >> 2 }"),
+    ("compare_eq", "fn main() -> i32 { if 3 == 3 { 42 } else { 0 } }"),
+    ("compare_ne", "fn main() -> i32 { if 3 != 4 { 42 } else { 0 } }"),
+    ("compare_le", "fn main() -> i32 { if 3 <= 3 { 42 } else { 0 } }"),
+    ("if_else", "fn main() -> i32 { if 5 > 3 { 42 } else { 0 } }"),
+    ("nested_if",
+     "fn main() -> i32 { let x: i32 = 7; "
+     "if x > 10 { 1 } else { if x > 5 { 42 } else { 0 } } }"),
+    ("local_bindings",
+     "fn main() -> i32 { let x: i32 = 10; let y: i32 = 32; x + y }"),
+    ("mutable_local",
+     "fn main() -> i32 { let mut a: i32 = 0; a = 42; a }"),
+    ("while_loop",
+     "fn main() -> i32 { let mut s: i32 = 0; let mut i: i32 = 0; "
+     "while i < 7 { s = s + 6; i = i + 1; } s }"),
+    ("direct_call",
+     "fn helper() -> i32 { 42 } fn main() -> i32 { helper() }"),
+    ("call_with_args",
+     "fn add2(a: i32, b: i32) -> i32 { a + b } "
+     "fn main() -> i32 { add2(20, 22) }"),
+    ("recursion",
+     "fn fact(n: i32) -> i32 { if n <= 1 { 1 } "
+     "else { n * fact(n - 1) } } fn main() -> i32 { fact(5) }"),
+    ("array_index",
+     "fn main() -> i32 { let a: [i32; 3] = [10, 20, 12]; "
+     "a[0] + a[1] + a[2] }"),
+    ("unsigned_type", "fn main() -> u32 { let x: u32 = 42; x }"),
+    ("unsigned_div",
+     "fn main() -> u32 { let a: u32 = 200; let b: u32 = 4; a / b }"),
+    ("unsigned_compare",
+     "fn main() -> i32 { let a: u32 = 9; let b: u32 = 3; "
+     "if a > b { 42 } else { 0 } }"),
+    ("bool_function",
+     "fn is_pos(n: i32) -> bool { n > 0 } "
+     "fn main() -> i32 { if is_pos(5) { 42 } else { 0 } }"),
+)
+
+
+def _check_parity_corpus() -> None:
+    """Module-load guard: every PARITY_CORPUS entry has a unique,
+    non-blank name and a non-blank source. A duplicate name would make
+    a corpus-walk diagnostic ambiguous about which program it
+    describes. Mirrors gpu_ci._check_gpu_ci_drift."""
+    names = [name for name, _ in PARITY_CORPUS]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise AssertionError(
+            f"helixc.backend.llvm_parity: PARITY_CORPUS has duplicate "
+            f"program name(s): {duplicates}")
+    for name, source in PARITY_CORPUS:
+        if not name.strip() or not source.strip():
+            raise AssertionError(
+                f"helixc.backend.llvm_parity: PARITY_CORPUS entry "
+                f"{name!r} has a blank name or source")
+
+
+_check_parity_corpus()
+
+
+def check_parity_source(source: str, program: str, *,
+                        include_stdlib: bool = False) -> ParityResult:
+    """Structurally parity-check one Helix SOURCE program.
+
+    Runs `source` through the frontend pipeline — parse, flatten
+    modules / impls, monomorphize, grad-pass, lower — to a `tir.Module`,
+    then hands it to `check_parity` (see there for the verdict model).
+    The pipeline mirrors the one `helixc/tests/test_codegen.py`'s
+    `compile_and_run` uses for the x86_64 path, minus the optional
+    optimizer passes — the parity check is on the unoptimized module.
+
+    `include_stdlib` defaults to False: a minimal program needs no
+    stdlib, and an `include_stdlib=True` build pulls in float-typed
+    stdlib functions the LLVM backend does not yet cover, which would
+    make the whole module UNCOVERED.
+
+    A frontend failure (a parse / type / lower error) means the source
+    never became a `tir.Module` — a degenerate corpus entry, not a
+    parity question. It is captured as an ERROR `ParityResult`, never
+    re-raised, consistent with `check_parity`'s contract that no
+    failure escapes the harness as a traceback."""
+    # Lazy frontend import: keeps the module-load import graph of this
+    # backend module free of a backend->frontend dependency — the
+    # frontend is pulled in only when a source program is actually
+    # checked (check_parity itself, the chunk-A core, needs none of it).
+    try:
+        from ..frontend.parser import parse
+        from ..frontend.flatten_modules import flatten_modules
+        from ..frontend.flatten_impls import flatten_impls
+        from ..frontend.monomorphize import monomorphize
+        from ..frontend.grad_pass import grad_pass
+        from ..ir.lower_ast import lower
+
+        prog = parse(source, include_stdlib=include_stdlib)
+        flatten_modules(prog)
+        flatten_impls(prog)
+        monomorphize(prog)
+        grad_pass(prog)
+        module = lower(prog)
+    except Exception as exc:
+        # The frontend could not produce a tir.Module. A broad catch is
+        # correct (cf. check_parity): the harness converts the failure
+        # into a verdict — a loud ERROR with the diagnostic — never an
+        # escaping traceback. (KeyboardInterrupt / SystemExit, being
+        # BaseException, still propagate.)
+        return ParityResult(
+            program=program, x86_compiled=False, llvm_emitted=False,
+            llvm_failed_closed=False, llvm_mock_clean=False,
+            detail=(f"frontend pipeline failed for {program!r}: "
+                    f"{type(exc).__name__}: {exc}",))
+    return check_parity(module, program)
+
+
+def run_parity_corpus() -> list[ParityResult]:
+    """Run every program in `PARITY_CORPUS` through `check_parity_source`
+    and return the results in corpus order — one `ParityResult` per
+    entry. The Stage 207 mock-path parity gate (test_llvm_parity.py)
+    asserts every result is MATCH: the corpus is curated to the LLVM
+    backend's covered op surface, so a covered op regressing to
+    UNCOVERED or MISMATCH breaks the gate."""
+    return [check_parity_source(source, name)
+            for name, source in PARITY_CORPUS]

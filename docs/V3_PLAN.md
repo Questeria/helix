@@ -161,7 +161,7 @@ depend on a clean, unambiguous full-suite run.
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
 | 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
-| 207 | x86_64-vs-LLVM parity gate | ~ | A 3-clean ✓ | Phase D — chunk A shipped (mock structural-parity harness); chunk B = real-exec + corpus + full gate |
+| 207 | x86_64-vs-LLVM parity gate | ~ | A,B 3-clean ✓ | Phase D — chunks A+B shipped (mock harness + curated corpus + mock-path gate); chunk C = real-execution path |
 | 208 | Phase D — end-of-phase 5-clean-gate | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -663,3 +663,28 @@ depend on a clean, unambiguous full-suite run.
   them, compare observable behaviour — exit code / stdout / stderr —
   behind WSL + LLVM-toolchain detection, DEFERRED when absent) + a
   curated source-program corpus + the full parity-gate test.
+- 2026-05-20 — **Stage 207 chunk B shipped — the parity corpus + the
+  mock-path gate.** Chunk B builds on chunk A's `check_parity`:
+  `check_parity_source` runs a Helix SOURCE string through the frontend
+  pipeline (parse -> flatten -> monomorphize -> grad-pass -> lower) to
+  a `tir.Module` and hands it to `check_parity` — a frontend failure is
+  captured as an ERROR result, never re-raised. `PARITY_CORPUS` is a
+  curated 28-program corpus of small deterministic Helix programs
+  exercising the LLVM backend's covered op surface (integer arithmetic,
+  bitwise ops, comparisons / select, control flow, locals, stack
+  arrays, calls + recursion, the unsigned dtypes incl. the
+  signedness-sensitive udiv / unsigned-icmp paths, bool); a module-load
+  guard pins unique non-blank entries. `run_parity_corpus` walks it.
+  The **Stage 207 mock-path parity GATE** (`test_parity_corpus_gate`)
+  asserts every corpus program is MATCH — real Helix programs
+  structurally agree across the x86_64 and LLVM backends, and a covered
+  op regressing to UNCOVERED / MISMATCH / ERROR breaks the gate. 40
+  tests (`test_llvm_parity.py`); `x86_64.py` untouched. Per-stage
+  3-clean audit: round 1 returned 0 HIGH / 0 must-fix-MEDIUM on all
+  three surfaces — **Stage 207 chunk B CLOSED**; the cheap LOWs
+  (chunk-renumber docstring drift, two unsigned-op corpus entries, an
+  `include_stdlib` test) were folded into the closure. Next: Stage 207
+  chunk C — the real-execution parity path (compile both backends to
+  runnable executables, run them, compare exit code / stdout / stderr
+  behind WSL + LLVM-toolchain detection, DEFERRED when absent), which
+  closes Stage 207.
