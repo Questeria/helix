@@ -1806,6 +1806,42 @@ def test_v25_result_reg_seam_binds_through_emit_op():
     assert "add.s32 %r2, %r0, %r1;" in em.buf.getvalue()
 
 
+def test_v25_result_reg_uses_loaded_plan_else_bump_allocates():
+    """v2.5 item 1 (operand-rewrite body flip) — _result_reg returns
+    the linear-scan plan's register for an SSA result when a plan has
+    been loaded (planned_reg_map), and falls back to the bump
+    allocator when the value is not planned. planned_reg_map is empty
+    until emit_kernel wires load_register_plan, so a plan-less emitter
+    stays behaviour-identical to the pre-flip bump allocator."""
+    from helixc.backend.ptx import PtxEmitter
+    op = ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT,
+                   results=[ti.TileValue(id=7, ty=tir.TIRScalar("i32"))])
+    # No plan loaded -> bump allocator (first %r is %r0).
+    em = PtxEmitter()
+    assert em._result_reg(op, "r") == "%r0"
+    assert em.reg_map[7] == "%r0"
+    # A plan loaded for vreg 7 -> the planned register is used verbatim.
+    em2 = PtxEmitter()
+    em2.planned_reg_map = {7: "%r5"}
+    assert em2._result_reg(op, "r") == "%r5"
+    assert em2.reg_map[7] == "%r5"
+
+
+def test_v25_result_reg_rejects_planned_class_mismatch():
+    """v2.5 item 1 — _result_reg raises if the planned register's
+    class disagrees with the class the emit branch requires (its
+    `prefix`). ptx_register_class and the emitter both derive the
+    class from the result dtype, so a mismatch is a register-model
+    bug — it must fail loudly, not emit wrong PTX."""
+    from helixc.backend.ptx import PtxEmitter
+    op = ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_FLOAT,
+                   results=[ti.TileValue(id=3, ty=tir.TIRScalar("f32"))])
+    em = PtxEmitter()
+    em.planned_reg_map = {3: "%f2"}   # plan: %f file
+    with pytest.raises(RuntimeError, match="register file"):
+        em._result_reg(op, "r")       # branch asks for %r — mismatch
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

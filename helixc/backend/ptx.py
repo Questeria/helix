@@ -224,21 +224,44 @@ class PtxEmitter:
         into one chokepoint — the *only* place a scalar SSA result gets
         a register name.
 
-        That single seam is the substrate for the operand-emission
-        flip. The final item-1 slice swaps this body to return
-        `self.planned_reg_map[op.results[0].id]` (the reuse-aware
-        linear-scan assignment `load_register_plan` validated) when a
-        plan is loaded — reaching one method, not every branch. Today
-        the body is still the bump allocator, so emitted PTX is
-        byte-identical to the pre-seam code.
+        That single seam is where the operand-emission flip happens.
+        BODY FLIP (this slice): when a reuse-aware linear-scan plan has
+        been loaded for the kernel — `load_register_plan` populating
+        `planned_reg_map` — this method returns the planned register
+        for the result; otherwise it bump-allocates. `planned_reg_map`
+        is empty until `emit_kernel` calls `load_register_plan` (the
+        remaining wiring slice), so until that lands this method is
+        still behaviour-identical to the bump allocator and the PTX
+        golden pins are untouched.
 
         Every caller runs `_require_result_count(op, 1, ...)` first, so
         `op.results[0]` is the one and only result — the prior
         `if op.results:` guard on the bind was dead defensiveness and
         is dropped here.
         """
+        vid = op.results[0].id
+        planned = self.planned_reg_map.get(vid)
+        if planned is not None:
+            # The planned register's class must match the class the
+            # emit branch is about to write into. `ptx_register_class`
+            # (which produced the plan) and the branch's `prefix` both
+            # derive from the result's dtype, so a mismatch is a
+            # register-model bug — surfaced loudly here, not as wrong
+            # PTX like `add.s32 %f3, ...`. The class is the planned
+            # name minus its trailing index digits.
+            planned_class = planned.rstrip("0123456789")
+            if planned_class != f"%{prefix}":
+                raise RuntimeError(
+                    f"_result_reg: planned register {planned!r} for "
+                    f"vreg {vid} is class {planned_class!r}, but the "
+                    f"emit branch requires class '%{prefix}' — "
+                    f"ptx_register_class and the emitter disagree on "
+                    f"this result's register file."
+                )
+            self.reg_map[vid] = planned
+            return planned
         name = self._new_reg(prefix)
-        self.reg_map[op.results[0].id] = name
+        self.reg_map[vid] = name
         return name
 
     def load_register_plan(self, fn: ti.TileFn) -> dict[int, str]:
