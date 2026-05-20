@@ -313,8 +313,21 @@ def _dispatch_ptxas(text: str, tool: str,
     in_path = os.path.join(tmpdir, "kernel.ptx")
     out_path = os.path.join(tmpdir, "kernel.cubin")
     try:
-        with open(in_path, "w", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            # v2.5 polish (end-of-v2.4 5-clean-gate BE LOW-1): the
+            # kernel-file write sits in the outer try, which has only
+            # a `finally`. An OSError from open()/write() — disk full,
+            # quota, a read-only or vanished tmpdir — would escape
+            # uncaught as a traceback out of validate_emit. Surface it
+            # as a structured finding, parity with the subprocess
+            # OSError catch below.
+            return False, [
+                f"ptxas dispatch: could not write kernel temp file "
+                f"{in_path!r} ({type(e).__name__}: {e})"
+            ]
         cmd = [tool, in_path, "-o", out_path, f"--gpu-name={gpu_arch}"]
         try:
             proc = subprocess.run(
@@ -373,8 +386,17 @@ def _dispatch_naga(text: str, tool: str,
     tmpdir = tempfile.mkdtemp(prefix="helix_naga_")
     in_path = os.path.join(tmpdir, "kernel.wgsl")
     try:
-        with open(in_path, "w", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            # v2.5 polish (end-of-v2.4 5-clean-gate BE LOW-1): see
+            # _dispatch_ptxas — a temp-file-write OSError must surface
+            # as a structured finding, not an uncaught traceback.
+            return False, [
+                f"naga dispatch: could not write kernel temp file "
+                f"{in_path!r} ({type(e).__name__}: {e})"
+            ]
         cmd = [tool, in_path]
         try:
             proc = subprocess.run(
@@ -432,8 +454,17 @@ def _dispatch_llvm_mc(text: str, tool: str,
     in_path = os.path.join(tmpdir, "kernel.s")
     out_path = os.path.join(tmpdir, "kernel.o")
     try:
-        with open(in_path, "w", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            # v2.5 polish (end-of-v2.4 5-clean-gate BE LOW-1): see
+            # _dispatch_ptxas — a temp-file-write OSError must surface
+            # as a structured finding, not an uncaught traceback.
+            return False, [
+                f"llvm-mc dispatch: could not write kernel temp file "
+                f"{in_path!r} ({type(e).__name__}: {e})"
+            ]
         cmd = [
             tool,
             "-triple=amdgcn-amd-amdhsa",
@@ -499,8 +530,17 @@ def _dispatch_xcrun_metal(text: str, tool: str,
     in_path = os.path.join(tmpdir, "kernel.metal")
     out_path = os.path.join(tmpdir, "kernel.air")
     try:
-        with open(in_path, "w", encoding="utf-8") as f:
-            f.write(text)
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as e:
+            # v2.5 polish (end-of-v2.4 5-clean-gate BE LOW-1): see
+            # _dispatch_ptxas — a temp-file-write OSError must surface
+            # as a structured finding, not an uncaught traceback.
+            return False, [
+                f"xcrun metal dispatch: could not write kernel temp "
+                f"file {in_path!r} ({type(e).__name__}: {e})"
+            ]
         cmd = [tool, "-sdk", "macosx", "metal", "-c", in_path,
                "-o", out_path]
         try:

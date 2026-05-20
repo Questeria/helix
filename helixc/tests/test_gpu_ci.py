@@ -6,7 +6,7 @@ without requiring real hardware. Real-HW dispatch is Stage 130+.
 """
 
 from __future__ import annotations
-import os, sys
+import os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import pytest
@@ -388,6 +388,49 @@ def test_v24_dispatch_xcrun_metal_tool_not_found():
     # time (<ExcType>: ...)" — covers tool-not-found + not-executable
     # + OS spawn-refusal uniformly.
     assert "unusable at invocation time" in findings[0]
+    assert "FileNotFoundError" in findings[0]
+
+
+@pytest.mark.parametrize("dispatch_name", [
+    "_dispatch_ptxas",
+    "_dispatch_naga",
+    "_dispatch_llvm_mc",
+    "_dispatch_xcrun_metal",
+])
+def test_v25_dispatch_tempfile_write_oserror_is_a_finding(
+        monkeypatch, dispatch_name):
+    """v2.5 polish (end-of-v2.4 5-clean-gate BE LOW-1) — all 4 real-HW
+    dispatchers write the emitted kernel to a temp file inside the
+    outer `try`, which carries only a `finally`. Pre-fix, an OSError
+    from open()/write() (disk full, quota, a read-only or vanished
+    tmpdir) escaped uncaught — an unhandled traceback out of
+    validate_emit instead of a structured real-HW finding. The fix
+    wraps the write in its own `try/except OSError`, parity with the
+    existing subprocess OSError catch.
+
+    Deterministic: monkeypatch tempfile.mkdtemp to hand back a
+    non-existent directory path, so the kernel-file open() raises
+    FileNotFoundError (an OSError subclass) — no real toolchain or
+    disk-fault injection needed. The dispatcher must return
+    (False, [one structured finding]), never raise."""
+    import helixc.backend.gpu_ci as gc
+    dispatch_fn = getattr(gc, dispatch_name)
+
+    # A directory path whose parent does not exist. mkdtemp normally
+    # creates the dir; the fake skips that, so open() inside it fails.
+    bogus_dir = os.path.join(
+        tempfile.gettempdir(), "helix_be_low1_absent_parent_zzz",
+        "kernel_dir")
+
+    def _fake_mkdtemp(*args, **kwargs):
+        return bogus_dir
+    monkeypatch.setattr(gc.tempfile, "mkdtemp", _fake_mkdtemp)
+
+    passed, findings = dispatch_fn("kernel text", "any_tool_name")
+    assert passed is False
+    assert len(findings) == 1
+    assert "could not write kernel temp file" in findings[0]
+    # The OSError subclass name is surfaced (FileNotFoundError here).
     assert "FileNotFoundError" in findings[0]
 
 

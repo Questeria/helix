@@ -1108,14 +1108,18 @@ test_proof_manifest + 2 new); 94 (autodiff + regalloc) + 27 (CLI
 emit-ptx/grad) regression — all green, no regressions.
 
 **v2.5 polish backlog (LOWs deferred from this gate — non-blocking):**
-- BE LOW-1: the 4 `_dispatch_*` temp-file write sits in the outer
-  `try` (only `finally`), so an `OSError` from `open()`/`f.write()`
-  escapes uncaught — wrap it with a structured finding.
+- BE LOW-1 ✅ DONE: the 4 `_dispatch_*` temp-file write sat in the
+  outer `try` (only `finally`), so an `OSError` from
+  `open()`/`f.write()` escaped uncaught — now wrapped in a
+  per-dispatcher `try/except OSError` returning a structured finding,
+  parity with the subprocess OSError catch. Parametrized regression
+  `test_v25_dispatch_tempfile_write_oserror_is_a_finding`.
 - BE LOW-2: add a `verify_manifest_hash(emit_manifest(...))`
   dataclass-input test to pin the `isinstance(.., ProofManifest)`
   branch.
-- IR LOW-1: optional `if not class_pools: raise` guard in
-  `allocate_by_class` against a misconfigured backend.
+- IR LOW-1 ✅ DONE: the `if not class_pools: raise ValueError` guard
+  is in shipped `allocate_by_class` — an empty pool table is a
+  backend-configuration error surfaced up front.
 - IR LOW-2: the v2.5 emitter-wiring slice MUST assert
   `result.spill_count == 0` (or handle spills) before trusting
   `RegAllocResult.assignment`.
@@ -1230,3 +1234,30 @@ This fire committed only this note (`git add docs/V2_PLAN.md` —
 scoped); `gpu_ci.py` was left dirty by a concurrent fire and is
 deliberately untouched, as committing a peer fire's partial work
 could break its build.
+
+### 2026-05-20 — v2.5 polish fire: BE LOW-1 closed (dispatch temp-file OSError)
+
+Per-fire pick: **BE LOW-1**. The four `gpu_ci._dispatch_*` real-HW
+dispatchers wrote the emitted kernel to a temp file inside the outer
+`try`, which carried only a `finally` (the `shutil.rmtree` cleanup),
+no `except`. An `OSError` from `open()`/`f.write()` — full disk,
+quota, read-only or vanished tmpdir — escaped uncaught as a traceback
+out of `validate_emit`, instead of becoming a structured real-HW
+finding the way every other failure mode (non-zero exit, timeout,
+tool-not-found) already does.
+
+Fix: each dispatcher wraps the temp-file write in its own
+`try/except OSError`, returning `(False, ["<tool> dispatch: could
+not write kernel temp file ..."])` — parity with the existing
+subprocess `except OSError`. Regression test
+`test_v25_dispatch_tempfile_write_oserror_is_a_finding`, parametrized
+over all 4 dispatchers, monkeypatches `tempfile.mkdtemp` to a
+non-existent dir so the kernel-file `open()` deterministically raises
+`FileNotFoundError`. Verification: `pytest test_gpu_ci.py -q` →
+38 passed, 3 skipped (real-HW dispatch — no toolchain on this box).
+
+This fire committed `gpu_ci.py` + `test_gpu_ci.py` + this note.
+v2.5 polish backlog now: BE LOW-1 ✅ · IR LOW-1 ✅ · BE LOW-2 open ·
+IR LOW-2 is an emitter-wiring constraint, not a standalone task.
+Remaining v2.5: item 1 (emitter wiring — focused block), BE LOW-2,
+end-of-v2.5 5-clean-gate.
