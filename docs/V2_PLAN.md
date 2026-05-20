@@ -960,3 +960,53 @@ process this session.
   open.
 - End-of-v2.4 5-clean-gate: pending the item-15 emitter wiring +
   the item-15 audit verdicts.
+
+### 2026-05-19T21:16Z — v2.4 scope finalized + emitter wiring reclassified to v2.5
+
+**v2.4 substantive items — all COMPLETE + audited:**
+- Item 13 (real-HW dispatch wiring): 4 slices + R1 audit-fix +
+  BE-HIGH-1-regression fix. 3-clean ACHIEVED.
+- Item 3 (ProofManifest type-design): 3 slices (Sha256Hex NewType,
+  SignatureFormat Enum, frozen ProofManifest dataclass). COMPLETE.
+- Item 15 (RegAlloc) — the ALLOCATOR subsystem: 5 build slices
+  (linear-scan core, liveness, multi-class framework, PTX + ROCm
+  register-class models) + R1 audit-fix. 3-clean ACHIEVED. The
+  allocator is a complete, pure, audited library: `allocate_by_class`
+  produces a value -> (register-file, index) assignment with
+  per-class spill detection.
+
+**Emitter wiring reclassified: v2.4 item 15 (deferred) -> v2.5 item 1.**
+
+The remaining item-15 piece — threading the allocator's assignment
+into PtxEmitter + HipEmitter operand emission — is NOT a cron-fire-
+sized task and is being reclassified to v2.5:
+
+- It is a substantive REWRITE of PtxEmitter's register assignment.
+  PtxEmitter today uses a bump-allocator (`next_reg_by_prefix`
+  per-prefix counters, `_new_reg` — never reuses a register, errors
+  past `_REG_POOL_CAP = 256`). Wiring the linear-scan allocator
+  replaces that with reuse-aware allocation: a liveness pass before
+  emit, the assignment threaded through every `_emit_op` operand.
+- It changes LIVE codegen and must keep the 102 PTX pins green —
+  high-risk for a 3-min cron increment, especially given the
+  concurrent-fire collision history on backend files this cycle.
+- It is genuinely v2.5-headline-sized: the v2.4 cycle delivered the
+  allocator *library*; v2.5 delivers its *use* (reuse-aware register
+  allocation in shipped PTX/AMDGCN kernels), which is the actual
+  "RegAlloc for emitted backend kernel bodies" payoff.
+
+This is a clean release decomposition — v2.4 = real-HW dispatch +
+ProofManifest hardening + the register-allocator library; v2.5 =
+emitter wiring (the allocator's consumer side) + the v2.5 polish
+backlog (the 3 type-design LOWs deferred from the item-15 audit:
+frozen result dataclasses, NamedTuple assignment pair, Literal
+classifier return types).
+
+**v2.4 is now feature-complete. Next milestone: end-of-v2.4
+5-clean-gate (FE/IR/BE/RT/TEST silent-failure-hunters), then the
+v2.4.0 tag.**
+
+v2.4 backlog residual:
+- Stage 35 wmt_predict_or regression (pre-existing, spawned task):
+  still open — investigate before v2.4.0 if the spawned task has
+  not closed it.
