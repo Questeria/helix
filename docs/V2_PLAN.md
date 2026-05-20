@@ -1354,3 +1354,40 @@ raise contract at the `plan_ptx_registers` level. Verification:
 
 v2.5 remaining: item 1 emitter-wiring operand-threading rewrite
 (focused block) + end-of-v2.5 5-clean-gate. Polish backlog drained.
+
+### 2026-05-20 — user request: beginner-friendly Telegram status messages
+
+User directive (mid-fire): "Improve the telegram messages to be much
+more beginner friendly, state what stages we have done are fully
+closed with audits and what is still left, and also percent progress
+for stages and tiers and all of Helix."
+
+The autonomous worker sends a Telegram update at the end of every
+fire (SKILL.md "Telegram dispatch"). Those updates were terse and
+developer-facing — "Stage 117, commit abc1234, 21 tests pass" —
+unreadable to a non-engineer.
+
+Shipped `scripts/helix_status.py` — the single source of truth for
+release-journey status. It holds the v2.0 -> v3.0 version model
+(`released` / `in_progress` / `planned` + a one-line theme each) plus
+the v2.x stage counts, and renders a plain-language update that:
+  - explains the jargon (stages, versions) in one sentence;
+  - lists what is DONE & FULLY AUDITED, IN PROGRESS, STILL AHEAD;
+  - reports three computed percentages — build stages (100%),
+    versions released (71%), overall toward v3.0 (~79%).
+
+Percentages are computed from the model, never hand-typed: flipping
+one version's `status` recomputes them all. The test-coverage line
+states the suite SIZE only, not a live "all passing" claim — a
+hardcoded pass claim would read false during any transient
+regression (e.g. the 9 `test_codegen` failures a concurrent fire
+flagged in `6c816f1`).
+
+SKILL.md's "Telegram dispatch" section was rewritten: the worker now
+runs `helix_status.py --note "<plain-English summary>" --commit ...`
+and pipes the result to the telegram sender — no hand-written status
+text; `--note` must be one non-engineer-readable sentence.
+
+Tests: `helixc/tests/test_helix_status.py` (6) — model consistency,
+percentages-from-model, message has every beginner section, CLI.
+Verification: 6 passed.
