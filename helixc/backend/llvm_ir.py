@@ -1029,7 +1029,13 @@ class _FnEmitter:
 def emit_function(fn: tir.FnIR) -> str:
     """Emit the textual LLVM IR `define` for one host-IR function.
     Raises `LLVMEmitError` for any construct outside the supported set
-    (see this module's docstring for the current supported op set)."""
+    (see this module's docstring for the current supported op set).
+
+    This is a single-function FRAGMENT for inspecting one function in
+    isolation — it carries no module `target triple`, and an
+    FFI_CALL's module-scope `declare` is emitted only by
+    `emit_module`. Use `emit_module` for a complete,
+    standalone-valid module."""
     return _FnEmitter(fn).emit()
 
 

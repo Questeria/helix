@@ -158,7 +158,7 @@ depend on a clean, unambiguous full-suite run.
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
-| 205 | Calls & ABI (chunked) | chunk A,B ✓ | A 3-clean ✓ · B audit pending | Phase D — direct + FFI calls shipped |
+| 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
 | 206–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -441,3 +441,20 @@ depend on a clean, unambiguous full-suite run.
   module. 11 new tests; 121 passed + 2 skipped across the two LLVM
   test files. `x86_64.py` untouched. Per-stage 3-clean audit
   dispatched.
+- 2026-05-20 — **Stage 205 chunk B — 3-clean audit CLEAN; Stage 205
+  CLOSED.** All three audit surfaces returned 0 HIGH / 0
+  must-fix-MEDIUM on the first round: the FFI `declare` collection /
+  dedup / conflict-detection, the `_emit_call` CALL+FFI unification
+  (CALL behaviour verified unchanged from chunk A), and the
+  `emit_module` rework (output verified byte-identical for any
+  FFI-free module) were all sound; the `declare` syntax was confirmed
+  against the LLVM Language Reference. The two shared LOWs — both
+  about `emit_function` now being a single-function fragment that
+  `emit_module` no longer routes through — are addressed in the
+  closure commit by documenting `emit_function` as a deliberate
+  fragment-inspection entry point (no triple, no FFI `declare`; use
+  `emit_module` for a complete module). Stage 205's op surface
+  (CALL + FFI_CALL) is complete; the scalar-int calling convention is
+  LLVM's default `ccc` = System V on the host triple, automatically
+  matching `x86_64.py` — **Stage 205 CLOSED**. Next: Stage 206 —
+  runtime & intrinsics.
