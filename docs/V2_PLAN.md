@@ -1703,3 +1703,35 @@ appear; otherwise delete it.
 
 This fire is the planning + de-risking step; the rewrite itself is
 the next focused fire.
+
+### 2026-05-20 — audit: the `_result_reg` operand-rewrite seam is CLEAN
+
+The `30abbff` slice introduced `PtxEmitter._result_reg(op, prefix)` —
+the result-naming chokepoint that collapses the ~8 scalar-arith
+`emit_op` branches' `r = _new_reg(P); reg_map[res.id] = r` pair into
+one method; the seam the operand-emission body-flip will swap.
+
+This fire independently audited that slice — read-only: the operand
+rewrite is being executed competently by concurrent fires, so this
+fire deliberately stayed out of `ptx.py` to avoid a collision and
+verified the just-landed slice instead. `_result_reg` drops the old
+`if op.results:` guard and binds `reg_map[op.results[0].id]`
+unconditionally, justified in its docstring by "every caller runs
+`_require_result_count(op, 1, ...)` first." Verified that claim:
+
+- All 8 `_result_reg` call sites — SCALAR_CONST_INT (l.590),
+  SCALAR_ADD (626/631), SCALAR_MUL (649/654), SCALAR_SUB (672/677),
+  SCALAR_NEG (689/693), SCALAR_CONST_FLOAT (711), SCALAR_CMP (736),
+  THREAD_IDX (767) — sit in a branch that first calls
+  `_require_result_count(op, 1, "<KIND>")`.
+- `_require_result_count(op, 1, role)` (l.489) raises RuntimeError
+  unless `len(op.results) == 1` exactly. So `op.results[0]` inside
+  `_result_reg` is provably safe; the dropped guard was genuinely
+  dead code, not a regression.
+
+Verdict: **CLEAN.** The seam is behavior-preserving (`test_ptx.py`
+107 passed) and correct. The operand-rewrite prep chain
+(`plan_ptx_registers` -> `ptx_register_names` -> `load_register_plan`
+-> `_result_reg`) is now audited end-to-end and ready for the
+body-flip slice — this verdict is recorded as input to the
+end-of-v2.5 5-clean-gate.
