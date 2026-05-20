@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A ✓ | chunk A audit pending | Phase D — Result intrinsics shipped |
+| 206 | Runtime & intrinsics (chunked) | chunk A ✓ | chunk A 3-clean ✓ | Phase D — Result intrinsics CLOSED; TRAP next |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -490,3 +490,15 @@ depend on a clean, unambiguous full-suite run.
   tests; 131 passed + 2 skipped across the two LLVM test files.
   `x86_64.py` untouched. Per-stage 3-clean audit dispatched. Next
   chunk: TRAP (panic) — needs string globals + a runtime exit.
+- 2026-05-20 — **Stage 206 chunk A — 3-clean audit CLEAN (round 1).**
+  All three audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM with no
+  LOWs: the bit math was verified correct (`zext`/`shl`/`or` and
+  `lshr`+`trunc` / `trunc` faithfully implement the packed-tag
+  convention; `zext` not `sext`, `lshr` not `ashr` — both confirmed
+  the principled choice), the `%vN.tK` temp naming is collision-free
+  and deterministic, the type validation is fail-closed, and the
+  lowering was checked to compute the same values as `x86_64.py`'s
+  RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD (parity holds). Chunk A
+  (Result<T,E> intrinsics) is CLOSED. Next: Stage 206 chunk B — TRAP
+  (panic), which needs string-literal globals and a runtime exit
+  path.
