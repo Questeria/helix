@@ -2293,5 +2293,15 @@ The FE-batch MEDIUMs are now resolved.
   comment already documents it; an assert across six bitwise arms is
   disproportionate hardening of a dead path.
 
-Still open: the RT MEDIUM, the TEST `_zip_cmp_test` finding — then
-the gate re-run.
+**TEST `_zip_cmp_test` — FIXED.** The `_zip_cmp_test` helper in
+test_codegen.py checked only `sum(mask) * factor + addend == 42` — a
+wrong comparison mask with the same element-sum (a swapped-position
+result, the classic off-by-one / swapped-operand comparison bug)
+passed unnoticed. The emitted Helix program now folds the mask into a
+positional binary encoding (`dst[i] * 2^i` via `vec_get`), so every
+distinct 5-element mask maps to a distinct exit code (0..31, within
+the 8-bit process exit-code range); the `factor`/`addend` params are
+dropped and the five `vec_zip_{lt,gt,le,ge,ne}` tests assert the
+exact mask. Verified: `test_codegen.py -k vec_zip` 14 pass.
+
+Still open: the RT MEDIUM — then the gate re-run.

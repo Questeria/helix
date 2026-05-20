@@ -17180,9 +17180,19 @@ def test_stdlib_vec_argsort():
     assert code == 42, f"expected 42, got {code}"
 
 
-def _zip_cmp_test(fn_name: str, expected_mask: list, factor: int, addend: int):
+def _zip_cmp_test(fn_name: str, expected_mask: list):
     """Helper: assert vec_zip_<cmp>([10,5,7,5,9], [5,5,7,9,5]) produces
-    the given expected 0/1 mask, where sum * factor + addend == 42."""
+    exactly `expected_mask` (a 5-element 0/1 list).
+
+    v2.x re-audit R2b (TEST 5-clean-gate MEDIUM): the prior version
+    checked only `sum(mask) * factor + addend == 42` — a wrong mask
+    with the same element-sum (e.g. a swapped-position result, the
+    classic off-by-one / swapped-operand comparison bug) passed
+    unnoticed. The emitted program now folds the mask into a
+    positional BINARY encoding (`dst[i] * 2^i`), so every distinct
+    mask maps to a distinct exit code (0..31 for a 5-element mask —
+    within the 8-bit process exit-code range) and any positional
+    error changes the encoded value."""
     a_pushes = "\n        ".join(
         f"let a{i+1} = vec_push(a, a{i}, {v});"
         for i, v in enumerate([10, 5, 7, 5, 9])
@@ -17198,45 +17208,49 @@ def _zip_cmp_test(fn_name: str, expected_mask: list, factor: int, addend: int):
         let b = __arena_len();
         {b_pushes}
         let dst = {fn_name}(a, b, a5);
-        vec_sum(dst, a5) * {factor} + {addend}
+        vec_get(dst, 0) + vec_get(dst, 1) * 2 + vec_get(dst, 2) * 4 + vec_get(dst, 3) * 8 + vec_get(dst, 4) * 16
     }}
     """
     code = compile_and_run(src)
-    expected_sum = sum(expected_mask)
-    assert expected_sum * factor + addend == 42, (
-        f"test design error: sum={expected_sum} factor={factor} addend={addend}"
+    expected = sum(bit * (1 << i) for i, bit in enumerate(expected_mask))
+    assert 0 <= expected <= 255, (
+        f"test design error: encoded value {expected} exceeds the "
+        f"8-bit exit-code range"
     )
-    assert code == 42, f"{fn_name}: expected 42, got {code}"
+    assert code == expected, (
+        f"{fn_name}: mask mismatch — exit code {code} decodes to "
+        f"{[(code >> i) & 1 for i in range(5)]}, expected {expected_mask}"
+    )
 
 
 def test_stdlib_vec_zip_lt():
-    """zip_lt([10,5,7,5,9], [5,5,7,9,5]) -> [0,0,0,1,0]. Sum=1.
-    Encoded: 1*40+2 = 42."""
-    _zip_cmp_test("vec_zip_lt", [0, 0, 0, 1, 0], 40, 2)
+    """zip_lt([10,5,7,5,9], [5,5,7,9,5]) -> [0,0,0,1,0]
+    (positional binary encoding -> exit 8)."""
+    _zip_cmp_test("vec_zip_lt", [0, 0, 0, 1, 0])
 
 
 def test_stdlib_vec_zip_gt():
-    """zip_gt([10,5,7,5,9], [5,5,7,9,5]) -> [1,0,0,0,1]. Sum=2.
-    Encoded: 2*20+2 = 42."""
-    _zip_cmp_test("vec_zip_gt", [1, 0, 0, 0, 1], 20, 2)
+    """zip_gt([10,5,7,5,9], [5,5,7,9,5]) -> [1,0,0,0,1]
+    (positional binary encoding -> exit 17)."""
+    _zip_cmp_test("vec_zip_gt", [1, 0, 0, 0, 1])
 
 
 def test_stdlib_vec_zip_le():
-    """zip_le([10,5,7,5,9], [5,5,7,9,5]) -> [0,1,1,1,0]. Sum=3.
-    Encoded: 3*14+0 = 42."""
-    _zip_cmp_test("vec_zip_le", [0, 1, 1, 1, 0], 14, 0)
+    """zip_le([10,5,7,5,9], [5,5,7,9,5]) -> [0,1,1,1,0]
+    (positional binary encoding -> exit 14)."""
+    _zip_cmp_test("vec_zip_le", [0, 1, 1, 1, 0])
 
 
 def test_stdlib_vec_zip_ge():
-    """zip_ge([10,5,7,5,9], [5,5,7,9,5]) -> [1,1,1,0,1]. Sum=4.
-    Encoded: 4*10+2 = 42."""
-    _zip_cmp_test("vec_zip_ge", [1, 1, 1, 0, 1], 10, 2)
+    """zip_ge([10,5,7,5,9], [5,5,7,9,5]) -> [1,1,1,0,1]
+    (positional binary encoding -> exit 23)."""
+    _zip_cmp_test("vec_zip_ge", [1, 1, 1, 0, 1])
 
 
 def test_stdlib_vec_zip_ne():
-    """zip_ne([10,5,7,5,9], [5,5,7,9,5]) -> [1,0,0,1,1]. Sum=3.
-    Encoded: 3*14+0 = 42."""
-    _zip_cmp_test("vec_zip_ne", [1, 0, 0, 1, 1], 14, 0)
+    """zip_ne([10,5,7,5,9], [5,5,7,9,5]) -> [1,0,0,1,1]
+    (positional binary encoding -> exit 25)."""
+    _zip_cmp_test("vec_zip_ne", [1, 0, 0, 1, 1])
 
 
 def test_stdlib_ti1d_sub():
