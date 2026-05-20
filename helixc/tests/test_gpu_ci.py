@@ -216,6 +216,67 @@ def test_v24_validate_emit_ptx_real_hw_dispatch_runs_ptxas():
     assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
 
 
+def test_v24_dispatch_naga_tool_not_found():
+    """v2.4 item 13 slice 2 — _dispatch_naga surfaces a missing/non-
+    executable tool loudly as (False, [diagnostic]) rather than
+    swallowing the FileNotFoundError into a silent pass. Deterministic
+    — exercises the error path with a tool name guaranteed absent."""
+    from helixc.backend.gpu_ci import _dispatch_naga
+    passed, findings = _dispatch_naga(
+        "@compute @workgroup_size(64) fn k() {}\n",
+        "helix_no_such_naga_xyz123")
+    assert passed is False
+    assert len(findings) == 1
+    assert "not found" in findings[0]
+
+
+def test_v24_validate_emit_webgpu_real_hw_tool_absent_is_deterministic():
+    """v2.4 item 13 slice 2 — when naga is not on PATH, WebGPU real-HW
+    dispatch does not run: validate_emit returns real_hw_attempted=
+    False with the post-init invariants intact. Regression-pin:
+    wiring the naga dispatch must not change behavior on a tool-less
+    machine."""
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = WgslEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.WEBGPU_WGSL,
+                           attempt_real_hw=True)
+    if not requires_backend_tool(BackendKind.WEBGPU_WGSL):
+        # No naga/wgpu/dawn_node on PATH — dispatch must not run.
+        assert result.real_hw_attempted is False
+        assert result.real_hw_tool is None
+        assert result.real_hw_passed is None
+        assert result.real_hw_findings == ()
+    else:
+        # A toolchain IS present — dispatch (naga) or deferred
+        # (wgpu/dawn_node) ran.
+        assert result.real_hw_attempted is True
+
+
+@pytest.mark.skipif(
+    "naga" not in detect_tools(BackendKind.WEBGPU_WGSL),
+    reason="naga not on PATH — WGSL real-HW dispatch cannot be exercised",
+)
+def test_v24_validate_emit_webgpu_real_hw_dispatch_runs_naga():
+    """v2.4 item 13 slice 2 — when naga IS available, WebGPU real-HW
+    dispatch actually invokes it. The emitted substrate WGSL may or
+    may not validate cleanly (HELIX-STUB-OPERANDS markers until item
+    15), so we assert only that dispatch RAN: real_hw_attempted=True,
+    real_hw_tool='naga', real_hw_passed is a concrete bool."""
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = WgslEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.WEBGPU_WGSL,
+                           attempt_real_hw=True)
+    assert result.real_hw_attempted is True
+    assert result.real_hw_tool == "naga"
+    assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
+
+
 def test_stage129_validate_emit_rejects_unknown_backend():
     """Stage 129 — validate_emit raises ValueError on a backend we don't
     have a validator for. Defends against silent acceptance of garbage."""

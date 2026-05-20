@@ -304,6 +304,58 @@ def _dispatch_ptxas(text: str, tool: str,
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _dispatch_naga(text: str, tool: str,
+                   timeout_s: int = REAL_HW_TIMEOUT_S) -> tuple[bool, list[str]]:
+    """v2.4 item 13 (slice 2) — real-HW dispatch for the WebGPU backend.
+
+    Writes the emitted WGSL to a temp file and runs `naga` on it.
+    Given a single `.wgsl` input, naga parses + validates the module
+    and exits non-zero with a stderr diagnostic on any parse or
+    validation error — a genuine WGSL syntax+semantics gate, parity
+    with `_dispatch_ptxas` for PTX.
+
+    Returns (passed, findings): passed=True iff naga exited 0;
+    findings carries the truncated naga diagnostic on failure, the
+    timeout message on a hang, or a tool-not-found message if `tool`
+    vanished between detect_tools() and dispatch.
+
+    NOTE: Helix's WGSL emit is substrate-level — TILE_MATMUL and the
+    memory ops carry `HELIX-STUB-OPERANDS` markers (a_tile/buf_in/...
+    not bound; real binding is v2.4 item 15). naga will legitimately
+    reject such kernels with "unresolved identifier"; that is the
+    honest, correct outcome this gate exists to surface. An empty
+    `@compute` kernel validates cleanly today.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="helix_naga_")
+    in_path = os.path.join(tmpdir, "kernel.wgsl")
+    try:
+        with open(in_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        cmd = [tool, in_path]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return False, [
+                f"naga dispatch timed out after {timeout_s}s "
+                f"(tool={tool!r})"
+            ]
+        except FileNotFoundError:
+            return False, [
+                f"naga dispatch: tool {tool!r} not found / not "
+                f"executable at invocation time"
+            ]
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            return False, [
+                f"naga exit {proc.returncode}: {diag[:500]}"
+            ]
+        return True, []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 # Stage 129 type-design audit-fix: module-load drift detector.
 # Catches the case where a new BackendKind is added without updating
 # GPU_TOOLS or _MOCK_VALIDATORS. Same pattern as the per-backend
@@ -359,14 +411,21 @@ def validate_emit(text: str, backend: BackendKind,
         if available:
             real_hw_attempted = True
             real_hw_tool = available[0]
-            # v2.4 item 13 — real-HW dispatch. PTX via ptxas is wired
-            # (ptxas assembles PTX text directly). The other 3 backends
-            # remain deferred until their item-13 slices land — their
-            # tool<->text-format matchups need llvm-mc / xcrun-metal /
-            # naga rather than the hipcc / xcrun / naga|wgpu|dawn_node
-            # entries currently in GPU_TOOLS.
+            # v2.4 item 13 — real-HW dispatch. PTX via ptxas (slice 1)
+            # and WebGPU via naga (slice 2) are wired — both tools
+            # validate their target text directly. ROCm/Metal remain
+            # deferred until their slices land: ROCm AMDGCN assembly
+            # needs llvm-mc (not the `hipcc` GPU_TOOLS entry, which
+            # compiles HIP C++), and Metal MSL needs `xcrun -sdk
+            # macosx metal` (mac-only).
             if backend is BackendKind.PTX and real_hw_tool == "ptxas":
                 passed, dispatch_findings = _dispatch_ptxas(
+                    text, real_hw_tool)
+                real_hw_passed = passed
+                real_hw_findings.extend(dispatch_findings)
+            elif (backend is BackendKind.WEBGPU_WGSL
+                  and real_hw_tool == "naga"):
+                passed, dispatch_findings = _dispatch_naga(
                     text, real_hw_tool)
                 real_hw_passed = passed
                 real_hw_findings.extend(dispatch_findings)
