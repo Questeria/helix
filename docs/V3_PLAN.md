@@ -157,7 +157,7 @@ depend on a clean, unambiguous full-suite run.
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 204 | Memory & aggregates (sub-staged) | sub-A,B ✓ | A 3-clean ✓ · B audit pending | Phase D — locals + arrays shipped |
+| 204 | Memory & aggregates (sub-staged) | sub-A,B ✓ | A,B 3-clean ✓ | Phase D — locals + arrays CLOSED; structs TBD |
 | 205–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -376,3 +376,18 @@ depend on a clean, unambiguous full-suite run.
   non-scalar element dtype all raise `LLVMEmitError`. 14 new tests; 99
   passed + 2 skipped across the two LLVM test files. `x86_64.py`
   untouched. Per-stage 3-clean audit dispatched.
+- 2026-05-20 — **Stage 204 sub-stage B — 3-clean audit CLEAN (round
+  1).** All three audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM
+  on the first round, with no LOWs to carry: the `getelementptr`
+  semantics (the `[N x T]` / `ptr` / `i64 0` + element-index form,
+  mixed index widths, the `inbounds` omission), the newline-joined
+  multi-instruction return contract, the slot-machinery refactor and
+  the array type-checking were all verified sound; the type-design
+  surface was rated correct as-is (the 3-tuple, the generic
+  `_lookup_slot`, and the `Optional[str]` multi-line contract all
+  endorsed over heavier alternatives). Sub-stage B (stack arrays) is
+  CLOSED. Next: assess whether heterogeneous structs need a Stage 204
+  sub-stage C — Helix lowers homogeneous aggregates (incl. homogeneous
+  structs, whose field access is a LOAD_ELEM at the field index) via
+  ALLOC_ARRAY / LOAD_ELEM / STORE_ELEM, already covered — or whether
+  Stage 204 closes here; then Stage 205 — calls & ABI.
