@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A,B,C ✓ | A,B 3-clean ✓ · C audit pending | Phase D — + string-literal access shipped |
+| 206 | Runtime & intrinsics (chunked) | chunk A,B,C ✓ | A,B,C 3-clean ✓ | Phase D — Result/panic/string CLOSED |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -558,3 +558,19 @@ depend on a clean, unambiguous full-suite run.
   operand count / a non-i32 result, a non-string `text`, all raise.
   10 new tests; 155 passed + 2 skipped across the two LLVM test
   files. `x86_64.py` untouched. Per-stage 3-clean audit dispatched.
+- 2026-05-20 — **Stage 206 chunk C — 3-clean audit CLEAN (round 1).**
+  All three audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM on the
+  first round. The silent-failure-hunter walked every STR_BYTE
+  bounds-check case (empty literal, negative index, huge index) and
+  confirmed no out-of-bounds read is ever emitted; the code-reviewer
+  confirmed exact parity with `x86_64.py`'s STR_BYTE (out-of-range
+  yields 0). The one actionable LOW — `_register_string`'s docstring
+  still naming only TRAP though STR_PTR / STR_BYTE now also call it —
+  is fixed in the closure commit. (A noted `idx_ty`-width edge — a
+  narrow non-i32 index with a long literal — is unreachable: string
+  indices are always i32 from the frontend, and trusting operand
+  types is the file-wide pattern; left as-is.) Chunk C
+  (string-literal access) is CLOSED. Next: assess the remaining
+  Stage 206 surface — TRACE_ENTRY/EXIT, PRINT, the arena ops, the
+  QUOTE/SPLICE/MODIFY family — which need LLVM lowering in Phase D
+  vs. deferral, then Stage 207 (the parity gate).

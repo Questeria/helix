@@ -734,12 +734,13 @@ class _FnEmitter:
         self.ffi_declares[target] = decl
 
     def _register_string(self, data: bytes) -> tuple[str, int]:
-        """Register a read-only string constant (a TRAP panic
-        message). Returns `(global_name, byte_length)`. The global is
-        content-addressed — its name is a hash of the bytes — so two
-        identical strings dedup to one module global and the name is
-        stable across functions (`emit_module` collects + dedups the
-        per-function `string_globals`)."""
+        """Register a read-only string constant — a TRAP panic
+        message, or a STR_PTR / STR_BYTE string literal. Returns
+        `(global_name, byte_length)`. The global is content-addressed
+        — its name is a hash of the bytes — so two identical strings
+        dedup to one module global and the name is stable across
+        functions (`emit_module` collects + dedups the per-function
+        `string_globals`)."""
         name = f"@.helix.str.{hashlib.sha256(data).hexdigest()[:16]}"
         if name not in self.string_globals:
             self.string_globals[name] = (
