@@ -371,17 +371,16 @@ class PtxEmitter:
         self.planned_reg_map = {}
         self.planned_high_water = {}
         # v2.5 item 1 — the operand-rewrite wiring (emit_kernel calling
-        # load_register_plan) is NOT enabled. A trial emitted WRONG
-        # PTX: the thread-index register %r0 was reused for a loaded
-        # value while the index was still live. Root cause (traced —
-        # NOT a liveness bug): `compute_live_intervals` is correct;
-        # the index IS a tile-IR operand of every indexed load/store.
-        # The operand rewrite is INCOMPLETE — only the scalar-arith
-        # branches name results via the plan-aware `_result_reg`; the
-        # memory ops (TILE_INDEX_LOAD/STORE_HBM) still bump-allocate
-        # via `_new_reg`. The plan path and the bump path share no
-        # state, so both hand out %r0. See V2_PLAN.md 2026-05-20
-        # "Edit B root cause corrected".
+        # load_register_plan) is NOT enabled. Three trials each caught
+        # a real issue before it could ship: (1) bool register class,
+        # (2) plan/scratch register collision, (3) most recent —
+        # seeding scratch above the plan is necessary but NOT
+        # sufficient: a memory-op result is IN the plan yet still
+        # `_new_reg`-named, so it wastes its planned register and
+        # shifts (broke test_per_prefix_register_counters — %f1 instead
+        # of %f0). The full wiring must FIRST convert every
+        # result-naming `_new_reg` to `_result_reg`. Complete recipe in
+        # V2_PLAN.md 2026-05-20 "Edit B: full recipe".
         # Stage 16 — build the HBM tile param map. The TileValue.ty for an
         # HBM tile param is a TIRTileTy; its name_hint matches the source
         # parameter name (so `TILE_INDEX_LOAD attrs={'name':'a'}` can find

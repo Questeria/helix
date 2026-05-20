@@ -1987,3 +1987,50 @@ only by `load_register_plan`, which `emit_kernel` does not yet call
 (Edit B remains unwired). Test:
 `test_v25_load_register_plan_exposes_per_class_high_water` (the count
 + the per-kernel reset). Targeted `test_ptx` subset -> 10 passed.
+
+### 2026-05-20 — Edit B 3rd trial: Part-2-alone insufficient; the full recipe
+
+The 3rd Edit B trial wired `emit_kernel` -> `load_register_plan` +
+the `planned_high_water` seeding (the "Part 2" register partition).
+`test_ptx.py`: 111 passed, 1 failed —
+`test_per_prefix_register_counters`. NOT a correctness bug: the
+kernel `let x = a[i]` (x is f32) emitted `ld.global.f32 %f1, ...` —
+x at %f1, while the test expects %f0.
+
+Why: x is a `TILE_INDEX_LOAD_HBM` result and a scalar — so it IS in
+the plan (planned %f0). But `TILE_INDEX_LOAD_HBM` still names its
+result via `_new_reg` (unconverted), and Part 2 seeded
+`next_reg_by_prefix["f"]` to the plan's %f high-water (1 — because x
+IS counted in the plan). So `_new_reg("f")` returned %f1: x wasted
+its planned %f0 and landed at %f1. Correct (no collision) but
+wasteful, and it shifts exact-register golden tests.
+
+Conclusion: the "Part 2" register partition (seed scratch above the
+plan) is NECESSARY but NOT SUFFICIENT. Edit B must ALSO do Part 1 —
+convert EVERY result-naming `_new_reg` to `_result_reg` — so a
+planned value uses ITS planned register and `_new_reg` names ONLY
+genuine scratch (address-math `%rd` temporaries, never in the plan).
+
+**Edit B — full recipe (one focused block):**
+1. Convert the memory/tile-op RESULT `_new_reg` calls to
+   `_result_reg(op, prefix)` — the `TILE_INDEX_LOAD_HBM` loaded value
+   and the other `_new_reg`-named op results (`rdst` / `rd` sites).
+   Each such op already calls `_require_result_count(op, 1, ...)`,
+   `_result_reg`'s precondition. Leave the address-math scratch
+   (`base`/`gen`/`off`/`addr`) on `_new_reg` — not tile-IR results.
+2. `emit_kernel`: call `load_register_plan(fn)` (f64 try/except),
+   then seed `next_reg_by_prefix[cls.lstrip("%")] = hw` from
+   `planned_high_water` — the only `_new_reg` users left (genuine
+   scratch) then bump-allocate above the plan.
+3. Run `test_ptx.py` + the 6 `test_codegen` PTX tests; regenerate
+   the handful of exact-register golden assertions (the planned
+   registers are correct-by-construction — the linear-scan allocator
+   + the `_result_reg` class-check guarantee it).
+
+All prep is in place: `plan_ptx_registers`, `ptx_register_names`,
+the op-aware bool classifier, `load_register_plan`,
+`planned_high_water`, the `_result_reg` chokepoint + body flip. Steps
+1+2+3 are the remaining focused block — genuinely ONE coherent change
+(Part 1 + Part 2 + golden regen must land together or tests are
+inconsistent), not a cron-fire slice. Edit B reverted; `test_ptx.py`
+back to 112 passed.
