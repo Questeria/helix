@@ -1769,3 +1769,44 @@ slice is the genuinely behaviour-changing one (it activates register
 reuse in emitted PTX) and must decide how to handle a kernel with an
 f64 scalar, for which `plan_ptx_registers` raises NotImplementedError
 (PTX has no f64 register file). See the 4-step plan above.
+
+### 2026-05-20 — Edit B (emit_kernel wiring) trialled; BLOCKED on a bool register-class gap
+
+This fire trialled Edit B — `emit_kernel` calling `load_register_plan`
+to populate `planned_reg_map` (with the planned f64 try/except
+fallback). Running `test_ptx.py` against it surfaced **2 failures** —
+and they are a genuine, valuable find, not a flaw in the wiring:
+
+`_result_reg`'s body-flip class-check (committed `1438e00`) fired:
+
+    _result_reg: planned register '%p0' for vreg 1 is class '%p',
+    but the emit branch requires class '%r'
+
+Root cause: **bool's PTX register class is op-dependent, and the
+dtype-based model can't express that.** `ptx_register_class` maps
+`bool -> %p` (predicate file) — correct for a `SCALAR_CMP` result
+(`setp` -> a real predicate). But `SCALAR_CONST_INT` materialises a
+bool *constant* as `mov.b32 %r<n>, 0/1` — a 0/1 value in a `%r`
+(b32) register, NOT a predicate. So for a bool `SCALAR_CONST_INT`
+result the planner assigns `%p`, the emit branch wants `%r`, and the
+class-check (correctly) refused to emit `mov.b32 %p0, ...` — invalid
+PTX. Failing tests: `test_c119_scalar_constant_values_are_not_coerced_in_direct_ptx`,
+`test_c119_hbm_store_value_must_match_tile_dtype`.
+
+This is exactly what the careful, audited slicing is FOR: the wiring
+slice surfaced a real latent inconsistency SAFELY (the class-check
+caught it instead of shipping wrong PTX), and Edit B was reverted —
+`test_ptx.py` back to 111 passed. The `_result_reg` body flip stays
+in place (inert while `planned_reg_map` is empty).
+
+**Edit B is BLOCKED** until bool's register class is reconciled.
+Resolution is a real design task (not a cron-fire fix), one of:
+- (a) make the PTX emitter uniform — bool constants also go to `%p`
+  (needs a predicate-materialisation path, since PTX has no direct
+  `mov.pred %p, imm`); or
+- (b) make the register-class model op-aware for bool — a bool that
+  is a `SCALAR_CONST_INT` result is a `%r` b32, a `SCALAR_CMP` result
+  is a `%p` predicate; `plan_ptx_registers` would classify by the
+  defining op, not the dtype alone.
+Option (b) is likely smaller and matches reality. Either way it is
+the next v2.5 item-1 task — and it must land before Edit B can.

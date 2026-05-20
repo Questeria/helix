@@ -353,6 +353,14 @@ class PtxEmitter:
         self.next_reg_by_prefix = {}
         self.reg_map = {}
         self.planned_reg_map = {}
+        # v2.5 item 1 — the operand-rewrite wiring (emit_kernel calling
+        # load_register_plan) is NOT yet enabled: a trial of it
+        # surfaced a register-class model gap (see V2_PLAN.md
+        # 2026-05-20 "Edit B blocked"). `ptx_register_class` maps bool
+        # -> %p, but SCALAR_CONST_INT materialises a bool *constant*
+        # as 0/1 in a %r (b32) register. bool's register class is
+        # op-dependent in this emitter; the dtype-based model cannot
+        # express that. Wiring resumes once that is reconciled.
         # Stage 16 — build the HBM tile param map. The TileValue.ty for an
         # HBM tile param is a TIRTileTy; its name_hint matches the source
         # parameter name (so `TILE_INDEX_LOAD attrs={'name':'a'}` can find
