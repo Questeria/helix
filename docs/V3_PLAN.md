@@ -157,8 +157,9 @@ depend on a clean, unambiguous full-suite run.
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 204 | Memory & aggregates (sub-staged) | sub-A,B ✓ | A,B 3-clean ✓ | Phase D — locals + arrays CLOSED; structs TBD |
-| 205–208 | Phase D — LLVM IR backend | — | — | planned |
+| 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
+| 205 | Calls & ABI (chunked) | chunk A ✓ | chunk A audit pending | Phase D — direct calls shipped |
+| 206–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -391,3 +392,25 @@ depend on a clean, unambiguous full-suite run.
   structs, whose field access is a LOAD_ELEM at the field index) via
   ALLOC_ARRAY / LOAD_ELEM / STORE_ELEM, already covered — or whether
   Stage 204 closes here; then Stage 205 — calls & ABI.
+- 2026-05-20 — **Stage 204 CLOSED + Stage 205 chunk A shipped (LLVM
+  direct calls).** Stage 204 assessment: heterogeneous structs need no
+  sub-stage C — `lower_ast` binds a heterogeneous aggregate's fields
+  as typed SSA values directly (`_bind_aggregate`), emitting no memory
+  op; only homogeneous aggregates (incl. homogeneous structs) use
+  ALLOC_ARRAY / LOAD_ELEM / STORE_ELEM, already covered by sub-stage
+  B. The memory-op surface (ALLOC_VAR/LOAD_VAR/STORE_VAR +
+  ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM) is complete — **Stage 204 CLOSED**.
+  Stage 205 chunk A: the CALL op lowers to an LLVM `call` — a value
+  call `%vN = call <ty> @callee(args)` or a void `call` (a CALL with
+  no result, or a unit-typed result, is void — `()` is not a
+  materialized LLVM value). Arguments are passed positionally as typed
+  operands; the callee name goes through `_llvm_global_name` (quoting
+  out-of-grammar names). Direct calls need no `declare` — every Helix
+  callee has a `define` in the same module and LLVM textual IR permits
+  forward references. `_prepass` now skips registering a unit-typed
+  result (no spurious `%vN`). Fail-closed — a missing/empty `target`,
+  more than one result, and a non-int result/arg all raise
+  `LLVMEmitError`. FFI calls to extern targets (FFI_CALL, which need a
+  `declare`) are a later chunk. 10 new tests; 109 passed + 2 skipped
+  across the two LLVM test files. `x86_64.py` untouched. Per-stage
+  3-clean audit dispatched.

@@ -1,4 +1,4 @@
-"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-204):
+"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-205):
 the additive LLVM IR emitter.
 
 The emitter consumes the same host IR (`tir.Module`) that
@@ -6,10 +6,11 @@ The emitter consumes the same host IR (`tir.Module`) that
 scalar core (module header / target triple, `define`, integer
 constants, add/sub/mul, `ret`); control flow (multi-block, `br`,
 `phi`); the scalar op set (the six comparisons, `select`, `neg`,
-div/mod, bitwise ops, unsigned integer dtypes); and mutable local
-variables (`alloca`/`load`/`store`). Everything else must be
-REJECTED loudly with `LLVMEmitError` — a partial backend fails
-closed, it never emits wrong IR.
+div/mod, bitwise ops, unsigned integer dtypes); mutable local
+variables and stack arrays (`alloca`/`load`/`store`/`getelementptr`);
+and direct function calls (`call`). Everything else must be REJECTED
+loudly with `LLVMEmitError` — a partial backend fails closed, it
+never emits wrong IR.
 """
 
 from __future__ import annotations
@@ -1502,6 +1503,164 @@ def test_stage204_rejects_non_scalar_array_element():
     b.emit(tir.OpKind.ALLOC_ARRAY,
            attrs={"name": "xs", "dtype": tir.TIRScalar("f32"),
                   "length": 3})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="f32"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 205 chunk A — direct function calls (CALL -> LLVM `call`)
+# ==========================================================================
+def test_stage205_emit_call_with_result():
+    """A CALL with a scalar result lowers to
+    `%vN = call <ty> @target(...)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.CALL, b.const_int(7), result_ty=_i32(),
+               attrs={"target": "callee"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = call i32 @callee(i32 7)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_emit_call_void():
+    """A CALL with no result lowers to `call void @target(...)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.CALL, attrs={"target": "side_effect"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "call void @side_effect()" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_emit_call_unit_result():
+    """A CALL whose single result is the unit type lowers to a void
+    `call` — `()` is not a materialized LLVM value, so no register."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.CALL, result_ty=tir.TIRUnit(),
+           attrs={"target": "p"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "call void @p()" in ll, ll
+    assert "= call" not in ll, ll  # no result register for a unit call
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_emit_call_with_args():
+    """A CALL passes each operand as a positional typed LLVM
+    argument."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.CALL, fn.params[0], fn.params[1],
+               result_ty=_i32(), attrs={"target": "g"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @g(i32 %v{fn.params[0].id}, "
+            f"i32 %v{fn.params[1].id})") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_call_result_feeds_op():
+    """A CALL's result is a normal SSA value — it can feed a later
+    op."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    c = b.emit(tir.OpKind.CALL, result_ty=_i32(), attrs={"target": "g"})
+    s = b.add(c, b.const_int(1))
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{c.id} = call i32 @g()" in ll, ll
+    assert f"%v{s.id} = add i32 %v{c.id}, 1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_call_quotes_out_of_grammar_target():
+    """A callee name outside LLVM's bare-identifier grammar (here a
+    monomorphized-style name) is emitted in quoted `@"..."` form."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.CALL, result_ty=_i32(),
+               attrs={"target": "gen<i32>"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert '@"gen<i32>"' in ll, ll
+    assert "@gen<i32>" not in ll, ll  # never the raw unquoted form
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_emit_caller_callee_module():
+    """A two-function module: one function calls the other; both
+    `define`s are emitted and the call resolves by name."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("callee", [("x", _i32())], _i32())
+    b.ret(b.add(b.const_int(1), b.const_int(2)))
+    b.end_function()
+    b.begin_function("caller", [], _i32())
+    r = b.emit(tir.OpKind.CALL, b.const_int(5), result_ty=_i32(),
+               attrs={"target": "callee"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "define i32 @callee(" in ll, ll
+    assert "define i32 @caller(" in ll, ll
+    assert f"%v{r.id} = call i32 @callee(i32 5)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage205_call_emit_is_deterministic():
+    """Two emits of a module with a CALL are byte-identical."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        r = b.emit(tir.OpKind.CALL, b.const_int(3), result_ty=_i32(),
+                   attrs={"target": "g"})
+        b.ret(r)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage205_rejects_call_missing_target():
+    """A CALL with no 'target' attr is rejected — never an anonymous
+    `call`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.CALL, result_ty=_i32(), attrs={})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="non-empty string 'target'"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage205_rejects_call_non_int_result():
+    """A CALL whose result type is not a scalar integer (here f32) is
+    rejected — floats are a later stage."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.CALL, result_ty=tir.TIRScalar("f32"),
+           attrs={"target": "g"})
     b.ret(b.const_int(0))
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError, match="f32"):

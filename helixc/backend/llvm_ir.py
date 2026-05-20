@@ -30,8 +30,11 @@ Supported so far (Stages 200, 202-204):
     become LLVM `alloca` / `load` / `store` (plus `getelementptr` for
     an array element's address) — every `alloca` is hoisted to the
     entry block; loads, stores and GEPs use opaque pointers (`ptr`).
+  - direct function calls (Stage 205): CALL becomes an LLVM `call` —
+    a value call (`%vN = call <ty> @callee(...)`) or a void call;
+    arguments are passed positionally as typed operands.
 
-Anything outside that set — structs, calls, floats, the wider op
+Anything outside that set — structs, FFI calls, floats, the wider op
 surface — is REJECTED with a loud `LLVMEmitError`,
 never emitted wrong. Those land in later stages. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
@@ -308,7 +311,10 @@ class _FnEmitter:
                     self._register_alloc_array(op)
                 else:
                     for r in op.results:
-                        self.operand[r.id] = f"%v{r.id}"
+                        # A unit-typed result (a void CALL) is not a
+                        # materialized LLVM value — it gets no register.
+                        if not isinstance(r.ty, tir.TIRUnit):
+                            self.operand[r.id] = f"%v{r.id}"
 
     def _register_const_int(self, op: tir.Op) -> None:
         """Validate a CONST_INT and record its inline-literal operand."""
@@ -933,14 +939,46 @@ class _FnEmitter:
                 op.operands[0], register, elem_ty, length)
             return (f"{gep}\nstore {elem_ty} {self._ref(value)}, "
                     f"ptr {addr}")
+        if kind == tir.OpKind.CALL:
+            target = op.attrs.get("target")
+            if not isinstance(target, str) or not target:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: CALL needs a non-empty "
+                    f"string 'target' attr (got {target!r})")
+            if len(op.results) > 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: CALL to {target!r} has "
+                    f"{len(op.results)} results — an LLVM call produces "
+                    f"at most one value")
+            args: list[str] = []
+            for i, arg in enumerate(op.operands):
+                arg_ty = _llvm_int_type(
+                    arg.ty,
+                    ctx=f"function {self.fn.name!r} CALL {target!r} "
+                        f"argument {i}")
+                args.append(f"{arg_ty} {self._ref(arg)}")
+            callee = _llvm_global_name(target)
+            arglist = ", ".join(args)
+            # A CALL with no result, or a unit-typed result, is a void
+            # call — `()` is not a materialized LLVM value.
+            if not op.results or isinstance(
+                    op.results[0].ty, tir.TIRUnit):
+                return f"call void {callee}({arglist})"
+            result = op.results[0]
+            ret_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} CALL {target!r} result")
+            return (f"%v{result.id} = call {ret_ty} "
+                    f"{callee}({arglist})")
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
             f"arithmetic ADD/SUB/MUL/DIV/MOD; the bitwise AND/OR/XOR/NOT "
             f"and shifts SHL/SHR; the six comparisons; SELECT; NEG; "
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
-            f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; RETURN; BR; "
-            f"COND_BR — structs, calls, and floats are later stages)"
+            f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct CALL; "
+            f"RETURN; BR; COND_BR — FFI calls, floats and structs are "
+            f"later stages)"
         )
 
 
