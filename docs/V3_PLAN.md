@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A ✓ | chunk A 3-clean ✓ | Phase D — Result intrinsics CLOSED; TRAP next |
+| 206 | Runtime & intrinsics (chunked) | chunk A,B ✓ | A 3-clean ✓ · B audit pending | Phase D — Result intrinsics + panic shipped |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -502,3 +502,19 @@ depend on a clean, unambiguous full-suite run.
   (Result<T,E> intrinsics) is CLOSED. Next: Stage 206 chunk B — TRAP
   (panic), which needs string-literal globals and a runtime exit
   path.
+- 2026-05-20 — **Stage 206 chunk B shipped — LLVM TRAP (panic).**
+  `panic("msg")` (the TRAP op) lowers to: a `write(2, msg, len)` of
+  the `panic[<id>]: <text>` message (newline-terminated) to stderr, a
+  `call exit(<id> & 0xFF)`, and `unreachable` — rendered
+  byte-identically to x86_64.py's panic so the Stage 207 parity gate
+  sees the same stderr + exit code. The message becomes a
+  content-addressed private module-scope string constant
+  (`@.helix.str.<hash>` — identical messages dedup; a new
+  `_llvm_cstring` hex-escapes non-printable / `"` / `\` bytes);
+  `write` / `exit` are registered as module-scope `declare`s.
+  `emit_module` now also collects + emits the deduped string globals.
+  TRAP is registered as a block terminator (it ends in
+  `unreachable`). Fail-closed — TRAP with operands, or a non-string
+  `text` / non-int `trap_id` attr, all raise. 12 new tests; 143
+  passed + 2 skipped across the two LLVM test files. `x86_64.py`
+  untouched. Per-stage 3-clean audit dispatched.

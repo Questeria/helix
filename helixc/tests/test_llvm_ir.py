@@ -10,9 +10,9 @@ div/mod, bitwise ops, unsigned integer dtypes); mutable local
 variables and stack arrays (`alloca`/`load`/`store`/`getelementptr`);
 direct + FFI function calls (`call`, with a module-scope `declare`
 for FFI targets); and the Result<T,E> packed-tag intrinsics
-(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD). Everything else must be
-REJECTED loudly with `LLVMEmitError` — a partial backend fails closed,
-it never emits
+(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD); and panic (TRAP).
+Everything else must be REJECTED loudly with `LLVMEmitError` — a
+partial backend fails closed, it never emits
 wrong IR.
 """
 
@@ -2038,4 +2038,172 @@ def test_stage206_rejects_result_payload_non_i32_result():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="tag/payload is an i32"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 206 chunk B — TRAP (panic)
+# ==========================================================================
+def test_stage206_emit_trap():
+    """TRAP lowers to a `write(2, msg, len)` of the panic message, a
+    `call exit`, and `unreachable` — plus a private string global for
+    the message."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "oh no", "trap_id": 28501})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "call i64 @write(i32 2, ptr @.helix.str." in ll, ll
+    assert "call void @exit(i32 " in ll, ll
+    assert "unreachable" in ll, ll
+    assert "private unnamed_addr constant" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_trap_message_format():
+    """The panic message is `panic[<trap_id>]: <text>\\n`,
+    byte-identical to x86_64.py — the parity gate compares stderr."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "boom", "trap_id": 12345})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # "panic[12345]: boom\n" — 19 bytes, the \n hex-escaped \0A.
+    assert '[19 x i8] c"panic[12345]: boom\\0A"' in ll, ll
+
+
+def test_stage206_trap_default_trap_id():
+    """A TRAP with no 'trap_id' attr uses the default 28501; the exit
+    status is its low byte (28501 & 0xFF == 85)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "x"})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "panic[28501]: x" in ll, ll
+    assert "call void @exit(i32 85)" in ll, ll
+
+
+def test_stage206_trap_exit_status_is_low_byte():
+    """exit() receives the low 8 bits of the trap id — matching
+    x86_64.py (the kernel truncates the exit status to a byte)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "x", "trap_id": 0x12AB})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"call void @exit(i32 {0x12AB & 0xFF})" in ll, ll  # 171
+
+
+def test_stage206_trap_string_escaping():
+    """A message byte that is not printable ASCII, or is `\"` / `\\`,
+    is hex-escaped `\\XX` in the LLVM string constant."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": 'a"b\\c', "trap_id": 1})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "\\22" in ll and "\\5C" in ll and "\\0A" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_trap_string_deduped():
+    """Two TRAPs with the same message share one string global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("c", tir.TIRScalar("bool"))], _i32())
+    t_blk = b.append_block()
+    f_blk = b.append_block()
+    b.emit(tir.OpKind.COND_BR, fn.params[0],
+           attrs={"true_block": t_blk.id, "false_block": f_blk.id})
+    b.switch_to(t_blk)
+    b.emit(tir.OpKind.TRAP, attrs={"text": "same", "trap_id": 1})
+    b.switch_to(f_blk)
+    b.emit(tir.OpKind.TRAP, attrs={"text": "same", "trap_id": 1})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("private unnamed_addr constant") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_trap_declares_write_and_exit():
+    """A module with a TRAP declares the externs `write` and `exit`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "x"})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "declare i64 @write(i32, ptr, i64)" in ll, ll
+    assert "declare void @exit(i32)" in ll, ll
+
+
+def test_stage206_trap_is_a_terminator():
+    """TRAP terminates its block (it ends in `unreachable`) — a block
+    consisting of just a TRAP is valid, with no separate RETURN."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "x"})
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "unreachable" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_trap_emit_is_deterministic():
+    """Two emits of a module with a TRAP are byte-identical (the
+    content-addressed string-global name is stable)."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        b.emit(tir.OpKind.TRAP, attrs={"text": "msg", "trap_id": 7})
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206_rejects_op_after_trap():
+    """An op after a TRAP in the same block is rejected — TRAP is a
+    terminator, so anything following it is unreachable."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": "x"})
+    b.ret(b.const_int(0))   # an op after the terminator
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="follows the block terminator"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_trap_with_operands():
+    """TRAP takes no operands — the message is an attr, not an
+    operand."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, b.const_int(0), attrs={"text": "x"})
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="TRAP takes no operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_trap_non_string_text():
+    """TRAP's 'text' attr must be a string."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRAP, attrs={"text": 123})
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'text' attr"):
         llvm_ir.emit_module(mod)

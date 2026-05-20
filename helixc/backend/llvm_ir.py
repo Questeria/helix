@@ -39,6 +39,10 @@ Supported so far (Stages 200, 202-204):
     RESULT_TAG / RESULT_PAYLOAD become integer `zext`/`shl`/`or`,
     `lshr`+`trunc`, and `trunc` — a Result is one i64 with the tag in
     the high 32 bits and the payload in the low 32.
+  - panic (Stage 206): TRAP lowers to `write(2, msg, len)` of the
+    `panic[<id>]: <text>` message to stderr, `exit(<id> & 0xFF)`, and
+    `unreachable` — the message is a private module-scope string
+    constant; `write` / `exit` are declared externs.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -52,6 +56,7 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Optional
 
@@ -207,6 +212,20 @@ def _llvm_global_name(name: str) -> str:
     return f'@"{escaped}"'
 
 
+def _llvm_cstring(data: bytes) -> str:
+    """Render raw bytes as an LLVM `c"..."` string-constant body. A
+    printable-ASCII byte passes through literally — except `"` and
+    `\\`, which would end / escape the literal — and every other byte
+    becomes `\\XX`, LLVM's two-hex-digit (uppercase) escape."""
+    out: list[str] = []
+    for byte in data:
+        if 0x20 <= byte <= 0x7E and byte not in (0x22, 0x5C):
+            out.append(chr(byte))
+        else:
+            out.append(f"\\{byte:02X}")
+    return 'c"' + "".join(out) + '"'
+
+
 def _is_unsigned_int(ty: tir.TIRType) -> bool:
     """True for a Helix unsigned-integer scalar dtype. Drives the
     signed-vs-unsigned LLVM instruction choice (`icmp slt` vs `ult`,
@@ -267,8 +286,9 @@ class _FnEmitter:
     `_prepass`); the allocas are hoisted to the entry block.
 
     `ffi_declares` collects, during emission, the module-scope
-    `declare` each FFI_CALL needs; `emit_module` emits the deduped
-    set."""
+    `declare` each FFI_CALL needs; `string_globals` likewise collects
+    the read-only string constants a TRAP needs; `emit_module` emits
+    both deduped sets."""
 
     def __init__(self, fn: tir.FnIR):
         self.fn = fn
@@ -284,8 +304,13 @@ class _FnEmitter:
         # LOAD_ELEM / STORE_ELEM emits.
         self.gep_count: int = 0
         # extern symbol -> its module-scope `declare` line, filled as
-        # FFI_CALLs are emitted; `emit_module` collects + dedups these.
+        # FFI_CALLs (and TRAP's write/exit) are emitted; `emit_module`
+        # collects + dedups these.
         self.ffi_declares: dict[str, str] = {}
+        # content-addressed global name -> its `... = constant ...`
+        # line, filled as TRAP panic messages are emitted; collected +
+        # deduped by `emit_module`.
+        self.string_globals: dict[str, str] = {}
 
     @staticmethod
     def _block_label(block_id: int) -> str:
@@ -534,13 +559,13 @@ class _FnEmitter:
                 # a GEP plus a load / store); indent each.
                 lines.extend(f"  {ln}" for ln in text.split("\n"))
             if op.kind in (tir.OpKind.RETURN, tir.OpKind.BR,
-                           tir.OpKind.COND_BR):
+                           tir.OpKind.COND_BR, tir.OpKind.TRAP):
                 saw_terminator = True
         if not saw_terminator:
             raise LLVMEmitError(
                 f"function {self.fn.name!r}: block bb{block.id} has no "
                 f"terminator — every LLVM basic block must end with "
-                f"RETURN, BR, or COND_BR")
+                f"RETURN, BR, COND_BR, or TRAP")
         return lines
 
     def _emit_phis(
@@ -696,6 +721,20 @@ class _FnEmitter:
                 f"called with two different signatures — {existing!r} "
                 f"vs {decl!r}")
         self.ffi_declares[target] = decl
+
+    def _register_string(self, data: bytes) -> tuple[str, int]:
+        """Register a read-only string constant (a TRAP panic
+        message). Returns `(global_name, byte_length)`. The global is
+        content-addressed — its name is a hash of the bytes — so two
+        identical strings dedup to one module global and the name is
+        stable across functions (`emit_module` collects + dedups the
+        per-function `string_globals`)."""
+        name = f"@.helix.str.{hashlib.sha256(data).hexdigest()[:16]}"
+        if name not in self.string_globals:
+            self.string_globals[name] = (
+                f"{name} = private unnamed_addr constant "
+                f"[{len(data)} x i8] {_llvm_cstring(data)}")
+        return name, len(data)
 
     def _result_unpack(self, op: tir.Op, label: str) -> tuple[str, int]:
         """Validate a RESULT_TAG / RESULT_PAYLOAD op — exactly one i64
@@ -1098,6 +1137,40 @@ class _FnEmitter:
             packed_ref, rid = self._result_unpack(op, "RESULT_PAYLOAD")
             # payload = the low 32 bits of the packed i64.
             return f"%v{rid} = trunc i64 {packed_ref} to i32"
+        if kind == tir.OpKind.TRAP:
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: TRAP takes no "
+                    f"operands, got {len(op.operands)}")
+            text = op.attrs.get("text", "")
+            if not isinstance(text, str):
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: TRAP needs a string "
+                    f"'text' attr (got {type(text).__name__})")
+            trap_id = op.attrs.get("trap_id", 28501)
+            if type(trap_id) is not int:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: TRAP needs an integer "
+                    f"'trap_id' attr (got {trap_id!r})")
+            # The panic message — rendered byte-identically to
+            # x86_64.py so the Stage 207 parity gate sees the same
+            # stderr: `panic[<id>]: <text>` followed by a newline.
+            message = f"panic[{trap_id}]: {text}\n".encode("utf-8")
+            str_name, str_len = self._register_string(message)
+            self._register_ffi_declare(
+                "write", "@write", "i64", ["i32", "ptr", "i64"])
+            self._register_ffi_declare(
+                "exit", "@exit", "void", ["i32"])
+            # write(2, msg, len); exit(trap_id & 0xFF); unreachable —
+            # the exit status is the low byte of the trap id, matching
+            # x86_64.py. `unreachable` is the block terminator: a TRAP
+            # never returns. A TRAP may carry a result for SSA
+            # bookkeeping; it is unreachable and unreferenced, so
+            # nothing defines it (its `%vN` never reaches the output).
+            return (f"call i64 @write(i32 2, ptr {str_name}, "
+                    f"i64 {str_len})\n"
+                    f"call void @exit(i32 {trap_id & 0xFF})\n"
+                    f"unreachable")
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
@@ -1106,7 +1179,7 @@ class _FnEmitter:
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
-            f"RETURN; BR; COND_BR — floats and structs are later "
+            f"TRAP; RETURN; BR; COND_BR — floats and structs are later "
             f"stages)"
         )
 
@@ -1136,12 +1209,14 @@ def emit_module(module: tir.Module) -> str:
     FFI_CALL targets."""
     emitters = [_FnEmitter(fn) for fn in module.functions.values()]
     bodies = [emitter.emit() for emitter in emitters]
-    # Collect the FFI `declare`s every function accumulated during
-    # emission. A symbol declared with two different signatures, or
-    # one that collides with a defined function name, is malformed —
-    # fail closed on both rather than emit a module `llvm-as` rejects.
+    # Collect the module-scope `declare`s and string constants every
+    # function accumulated during emission. A symbol declared with two
+    # different signatures, or one that collides with a defined
+    # function name, is malformed — fail closed on both rather than
+    # emit a module `llvm-as` rejects.
     defined = set(module.functions)
     declares: dict[str, str] = {}
+    strings: dict[str, str] = {}
     for emitter in emitters:
         for symbol, decl in emitter.ffi_declares.items():
             if symbol in defined:
@@ -1156,13 +1231,18 @@ def emit_module(module: tir.Module) -> str:
                     f"two different signatures — {existing!r} vs "
                     f"{decl!r}")
             declares[symbol] = decl
+        # String constants are content-addressed — the same text maps
+        # to the same global name from every function, so a plain
+        # `update` deduplicates them.
+        strings.update(emitter.string_globals)
     lines: list[str] = [
         "; helixc LLVM IR backend — v3.0 Phase D",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
         "",
     ]
+    lines.extend(strings.values())
     lines.extend(declares.values())
-    if declares:
+    if strings or declares:
         lines.append("")
     for body in bodies:
         lines.append(body)
