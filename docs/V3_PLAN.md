@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A-D ✓ | A,B,C 3-clean ✓ · D audit pending | Phase D — + string output shipped |
+| 206 | Runtime & intrinsics (chunked) | chunk A-D ✓ | A-D 3-clean ✓ | Phase D — Result/panic/string/output CLOSED |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -587,3 +587,17 @@ depend on a clean, unambiguous full-suite run.
   operands, a non-i32 result, a non-string `text`. 8 new tests; 163
   passed + 2 skipped across the two LLVM test files. `x86_64.py`
   untouched. Per-stage 3-clean audit dispatched.
+- 2026-05-20 — **Stage 206 chunk D — 3-clean audit CLEAN (round 1).**
+  All three audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM on the
+  first round: the `_kind` allowlist gate (`!= "print_str"` rejects
+  every other kind, including any unknown one), the `write` + `trunc`
+  lowering, and exact parity with x86_64.py's print_str (fd 1, the
+  byte count i32-truncated) were all verified sound. The one cosmetic
+  LOW — the unsupported-kind error message listed only 3 of the 5
+  kinds — is fixed in the closure commit (now honestly illustrative).
+  Chunk D (string output) is CLOSED. The remaining Stage 206 ops
+  (print_int, write_file / read_file_to_arena, TRACE_ENTRY/EXIT, the
+  arena ops, the QUOTE/SPLICE/MODIFY family) are deeper runtime
+  machinery — each a later chunk before the Stage 221 cutover. Next:
+  continue the remaining Stage 206 chunks, then Stage 207 (the
+  x86_64-vs-LLVM parity gate).

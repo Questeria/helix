@@ -1270,8 +1270,8 @@ class _FnEmitter:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT _kind "
                     f"{print_kind!r} is not yet emitted by the LLVM "
-                    f"backend (only 'print_str' — print_int / "
-                    f"write_file / read_file_to_arena are later "
+                    f"backend (only 'print_str' so far — the other "
+                    f"kinds, e.g. print_int / write_file, are later "
                     f"chunks)")
             if op.operands:
                 raise LLVMEmitError(
