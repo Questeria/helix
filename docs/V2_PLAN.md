@@ -1010,3 +1010,26 @@ v2.4 backlog residual:
 - Stage 35 wmt_predict_or regression (pre-existing, spawned task):
   still open — investigate before v2.4.0 if the spawned task has
   not closed it.
+
+### 2026-05-20T01:17Z — fire note: item 3 re-verified green; concurrency overlap + dirty tree flagged
+
+A cron fire dispatched for item 3 slice 2/3 found the work already
+shipped (`0db380d`). It had independently re-implemented the frozen
+`ProofManifest` / `FunctionObligation` dataclasses + caller
+migration; a concurrent fire swept this fire's working-tree edits
+into `0db380d` (the committed `proof_manifest.py` carries this
+fire's distinctive docstrings). Independent re-verification of the
+committed state: `pytest helixc/tests/test_proof_manifest.py -q` ->
+**31 passed** (27 migrated to attribute access + 4 new frozen-
+dataclass tests). Item 3 is genuinely COMPLETE; no further action.
+
+**Process risk for the end-of-v2.4 5-clean-gate.** Fires are
+running concurrently — 6 commits landed in ~18 min, well under the
+12-min cron spacing the per-fire protocol assumes serial. The
+working tree is currently DIRTY: `regalloc.py`, `regalloc_classes.py`,
+`test_regalloc.py` modified by a live concurrent fire. The
+end-of-v2.4 5-clean-gate must NOT start until the tree is clean, or
+it will audit half-finished code. This fire committed only this
+note (`git add docs/V2_PLAN.md` — scoped); it deliberately left the
+dirty regalloc files untouched, as committing a concurrent fire's
+partial work could break its build.
