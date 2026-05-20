@@ -1891,3 +1891,50 @@ trial surfaced a correctness bug, `test_codegen.py` caught it,
 nothing wrong shipped. But the operand rewrite is NOT one slice from
 done — it is blocked on a genuine liveness-accuracy fix, which is a
 focused IR/lowering task, not a cron-fire slice.
+
+### 2026-05-20 — Edit B root cause CORRECTED (the prior note misdiagnosed it)
+
+**The note above is wrong.** It blamed a "liveness/emitter mismatch"
+— that `compute_live_intervals` misses where the emitter reads the
+index register. This fire traced the actual bug; that diagnosis does
+NOT hold.
+
+Evidence: lowered `c[i] = a[i] + b[i]` to tile-IR and dumped the ops.
+The index value `i` (vreg 3) IS an operand of every indexed op:
+`TILE_INDEX_LOAD_HBM operands=[3]` (x2) and `TILE_INDEX_STORE_HBM
+operands=[3,6]`. So `compute_live_intervals` sees `i` at op-indices
+0/1/2/4 -> interval [0,4], spanning the kernel. `linear_scan` then
+correctly assigns vreg3->%r0, vreg4->%r1, vreg5->%r2, vreg6->%r3 —
+**no collision in the plan.**
+
+**The real bug: the operand rewrite is INCOMPLETE.** Only the
+scalar-arith `_emit_op` branches name their result via the
+plan-aware `_result_reg` (which, with a plan loaded, returns the
+planned register WITHOUT calling `_new_reg`, so the bump counter
+`next_reg_by_prefix` is never advanced). The memory ops —
+`TILE_INDEX_LOAD_HBM` / `TILE_INDEX_STORE_HBM` — still name their
+result via `_new_reg` directly. So in `c[i] = a[i] + b[i]`:
+`i` (THREAD_IDX, a converted branch) takes planned `%r0` and leaves
+`next_reg_by_prefix["r"] == 0`; then `a[i]` (TILE_INDEX_LOAD_HBM, an
+UNconverted branch) calls `_new_reg("r")` which returns `%r0` —
+collision. The plan path and the bump path share no state.
+
+**Correct fix scope** (a focused block, not a cron-fire slice):
+1. Route EVERY SSA-result register name through `_result_reg` —
+   convert the memory-op branches too (their result is a scalar in
+   the plan); `_new_reg` then names only emitter-internal scratch
+   (address-math `%rd` temporaries), never an SSA result.
+2. Solve plan/scratch coexistence: scratch temporaries are NOT
+   tile-IR values, so they are not in the plan, yet they draw from
+   the same register files. After `emit_kernel` loads the plan, seed
+   `next_reg_by_prefix[prefix] = per_class[class].register_high_water`
+   so `_new_reg` scratch starts ABOVE the plan's registers and the
+   two regions stay disjoint. (`load_register_plan` must expose the
+   per-class high-water for this.)
+3. Then re-trial Edit B + regenerate the handful of exact-register
+   golden assertions.
+
+The body flip, `_result_reg` seam, bool exclusion, and the planner
+remain sound — they are not the bug. The blocker is the unfinished
+`_new_reg` -> `_result_reg` conversion + the plan/scratch register
+partition. The `emit_kernel` comment is corrected to match.

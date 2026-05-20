@@ -355,17 +355,16 @@ class PtxEmitter:
         self.planned_reg_map = {}
         # v2.5 item 1 — the operand-rewrite wiring (emit_kernel calling
         # load_register_plan) is NOT enabled. A trial emitted WRONG
-        # PTX: the linear-scan allocator reused the thread-index
-        # register %r0 for a loaded value (`ld.global.s32 %r0, ...`)
-        # while the index was still live — subsequent `mul.wide.s32
-        # ..., %r0, 4` address computations then read the clobbered
-        # register. Root cause: `compute_live_intervals` does not see
-        # every place the emitter reads a value's register (the
-        # emitter reads the index register for address math at ops
-        # where the index is not a tile-IR operand). Liveness and the
-        # emitter's register reads must be reconciled before wiring
-        # resumes. See V2_PLAN.md 2026-05-20 "Edit B blocked on a
-        # liveness/emitter mismatch".
+        # PTX: the thread-index register %r0 was reused for a loaded
+        # value while the index was still live. Root cause (traced —
+        # NOT a liveness bug): `compute_live_intervals` is correct;
+        # the index IS a tile-IR operand of every indexed load/store.
+        # The operand rewrite is INCOMPLETE — only the scalar-arith
+        # branches name results via the plan-aware `_result_reg`; the
+        # memory ops (TILE_INDEX_LOAD/STORE_HBM) still bump-allocate
+        # via `_new_reg`. The plan path and the bump path share no
+        # state, so both hand out %r0. See V2_PLAN.md 2026-05-20
+        # "Edit B root cause corrected".
         # Stage 16 — build the HBM tile param map. The TileValue.ty for an
         # HBM tile param is a TIRTileTy; its name_hint matches the source
         # parameter name (so `TILE_INDEX_LOAD attrs={'name':'a'}` can find
