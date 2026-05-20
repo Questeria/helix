@@ -8,7 +8,7 @@ v1.0 minimum-viable scaffold coverage:
   - redundant_zero_coalesce rewires operand uses
   - redundant_zero_coalesce preserves different-shape TILE_ZEROS
   - register_reuse_hints reports last-use positions
-  - run_all_passes composition order works (coalesce exposes dead)
+  - run_all_passes composition order works (DCE + coalesce both fire)
 
 Tests use the same TileFn / TileBlock / TileOp / TileValue / TIRTileTy
 shape that helixc/backend/ptx.py consumes — so passes that succeed
@@ -183,24 +183,37 @@ def test_stage107_register_reuse_hints_reports_last_use():
         f"s.id={s.id} last-use expected (0, 3); got {hints[s.id]}")
 
 
-def test_stage107_run_all_passes_composes_correctly():
-    """Stage 107 — `run_all_passes` runs DCE → coalesce → DCE so
-    that coalesce-exposed dead ops also drop. Test: 2 redundant
-    TILE_ZEROS feeding ADD; coalesce drops one ZEROS; second DCE
-    drops the truly-dead ADD (it was the only user of the dropped
-    zero, but after operand rewire it has 2 uses of the same
-    canonical zero — still its result must be USED to survive)."""
+def test_stage107_run_all_passes_composes_dce_and_coalesce():
+    """Stage 107 — `run_all_passes` composes dead-tile-elim with
+    redundant-zero coalescing. The input has BOTH a genuinely dead op
+    (DCE must drop it) and two redundant *live* TILE_ZEROS (coalesce
+    must dedup them and rewire the second tile's store onto the
+    first). Both passes are independently load-bearing here: drop DCE
+    from the pipeline and the dead ADD survives; drop coalesce and a
+    second TILE_ZEROS survives — either way the assertions fail."""
     a, a_op = _make_zeros(0, "f32", 4)
-    b, b_op = _make_zeros(1, "f32", 4)
-    s = ti.TileValue(2, tir.TIRTileTy(
+    b, b_op = _make_zeros(1, "f32", 4)  # redundant with a (same shape)
+    # Stores keep BOTH zeros alive past the first DCE, so coalesce has
+    # real work to do.
+    store_a = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [a], [])
+    store_b = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [b], [])
+    # A genuinely dead op: its ADD result has no consumer.
+    dead = ti.TileValue(2, tir.TIRTileTy(
         tir.TIRScalar("f32"), (tir.DimConst(4),), "REG"
     ))
-    add_op = ti.TileOp(ti.TileOpKind.TILE_ADD, [a, b], [s])
-    # s is UNUSED — the ADD's result has no consumer.
-    fn = _make_fn([a_op, b_op, add_op])
+    dead_add = ti.TileOp(ti.TileOpKind.TILE_ADD, [a, a], [dead])
+    fn = _make_fn([a_op, b_op, dead_add, store_a, store_b])
     out = tile_opt.run_all_passes(fn)
-    # Final: everything should be dropped (add is dead, both zeros
-    # become unused after coalesce + add removal).
-    assert len(out.blocks[0].ops) == 0, (
-        f"run_all_passes should drop the full chain; got "
-        f"{[o.kind for o in out.blocks[0].ops]}")
+    ops = out.blocks[0].ops
+    # DCE drops dead_add; coalesce drops b_op -> one ZEROS + two stores.
+    kinds = [o.kind for o in ops]
+    assert kinds == [
+        ti.TileOpKind.TILE_ZEROS,
+        ti.TileOpKind.TILE_STORE_GLOBAL,
+        ti.TileOpKind.TILE_STORE_GLOBAL,
+    ], f"expected DCE+coalesce composition; got {kinds}"
+    # Coalesce must rewire BOTH stores onto the surviving canonical `a`.
+    stores = [o for o in ops if o.kind == ti.TileOpKind.TILE_STORE_GLOBAL]
+    assert all(s.operands[0].id == a.id for s in stores), (
+        f"coalesce should rewire both stores to a.id={a.id}; got "
+        f"{[s.operands[0].id for s in stores]}")

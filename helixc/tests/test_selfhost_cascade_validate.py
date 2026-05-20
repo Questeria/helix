@@ -67,6 +67,24 @@ def test_selfhost_cascade_validate_rejects_generation_drift():
     )
 
 
+def test_selfhost_cascade_validate_rejects_generation_size_drift():
+    report = valid_report()
+    report["self_host_generations"][1]["size"] = 999999
+
+    errors = selfhost_cascade_validate.validate_report(report)
+
+    assert "self_host_generations[1].size does not match stable_size" in errors
+
+
+def test_selfhost_cascade_validate_rejects_wrong_smoke_actual_exit():
+    report = valid_report()
+    report["smoke"][0]["actual_exit"] = 7
+
+    errors = selfhost_cascade_validate.validate_report(report)
+
+    assert "smoke literal.actual_exit must be 42" in errors
+
+
 def test_selfhost_cascade_validate_rejects_missing_smoke():
     report = valid_report()
     report["smoke"] = report["smoke"][:2]

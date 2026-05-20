@@ -2554,3 +2554,74 @@ consumer.
 TEST-G1/G2 must-fix bootstrap-self-host-loop assertions, TEST-G3/G5
 residual weak-assertion misses from the R4b autodiff sweep, TEST-G4
 opt-level intent decision), then re-run the 5-clean-gate.
+
+### 2026-05-20 — R5 TEST SHIPPED
+
+The detailed gate-re-run-#3 TEST verdicts were not preserved (only the
+summary survived), so a fresh silent-failure-hunter was re-dispatched
+on the TEST surface; it reproduced the same ~5 MEDIUM profile (2
+must-fix). All 5 fixed:
+
+1. **TEST-G1 (MEDIUM-must-fix) — `selfhost_cascade_validate` happy
+   path was a tautology.** The only test of `validate_report`'s accept
+   path ran against a fixture engineered to be self-consistent; two
+   validator check-arms (`smoke.actual_exit != 42`,
+   `self_host_generations[i].size` mismatch) had NO negative-mutation
+   coverage, so silently dropping either arm would not fail a test.
+   FIXED: added `test_..._rejects_generation_size_drift` and
+   `test_..._rejects_wrong_smoke_actual_exit`, each mutating one field
+   and asserting the exact emitted error string.
+
+2. **TEST-G2 (MEDIUM-must-fix) — Stage 33 gate's validator-failure
+   path was untested.** `stage33_selfhost_gate.gate()` runs cascade
+   then validator and must return non-zero if EITHER fails; only the
+   cascade-fails path was covered. A regression swallowing the
+   validator's exit code (invalid self-host report reported as PASS)
+   would pass every test. FIXED: added
+   `test_..._fails_when_validator_rejects` — cascade rc 0, validator
+   rc 1, asserts `gate()` returns 1 and both commands ran.
+
+3. **TEST-G3 (MEDIUM) — `test_abs_subgrad_at_zero_is_zero` weak.** The
+   R4b autodiff sweep missed it: it walked the deriv AST and only
+   checked the digits `0.0` and `1.0` occur *somewhere*, so a
+   swapped-arm / flipped-comparison `__abs` subgradient regression
+   passed. FIXED: pinned to the exact emitted string
+   `if (x > 0) { 1 } else { if (x < 0) { -1 } else { 0 } }`.
+
+4. **TEST-G5 (MEDIUM) — `test_grad_through_match` weak.** Same class:
+   checked only that `2` and `3` occur somewhere in the match
+   derivative; swapped arms slipped through (the exact defect R4b
+   killed in the reverse-mode `test_match_*` tests). FIXED: pinned to
+   the exact per-arm form `if (<Index> == true) { 2 } else { if
+   (<Index> == false) { 3 } else { 0 } }`.
+
+5. **TEST-G4 (MEDIUM) — opt-level intent decision + tile-IR
+   composition test.** DECISION: the opt-level CLI tests
+   (`test_cli.py` `-O0`..`-O3`) are SOUND — they monkeypatch the pass
+   functions with counters and assert exact invocation count/order, so
+   they verify the optimization actually fired, not merely that the
+   program still runs. No change needed there. The real gap was
+   `test_stage107_run_all_passes_composes_correctly`: its input was
+   already fully dead under a single DCE, so the test passed even with
+   the coalesce pass deleted from the pipeline. FIXED: replaced with
+   `test_stage107_run_all_passes_composes_dce_and_coalesce` — input
+   has both a genuinely dead op AND two *live* redundant TILE_ZEROS,
+   so DCE and coalesce are each independently load-bearing and the
+   assertions fail if either pass is dropped.
+
+Note (non-blocking LOW, IR surface) — auditing finding 5 showed the
+`tile_opt.run_all_passes` docstring overclaims: it says the trailing
+DCE "catches coalesce-exposed dead ops", but `redundant_zero_coalesce`
+removes redundant TILE_ZEROS itself and only rewires operands, so it
+cannot orphan a non-ZEROS op — the trailing DCE is provably never
+load-bearing today. Added to the LOW cleanup backlog (docstring
+accuracy; the pass itself is harmless and idempotent).
+
+Verification: test_selfhost_cascade_validate + test_stage33_selfhost_
+gate + test_tile_opt + test_autodiff + test_autodiff_reverse +
+test_selfhost_cascade 136 pass (incl. 3 new regression tests).
+
+**Gate status: OPEN — final step.** R1–R5 all shipped. Next: re-run
+the 5-clean-gate (silent-failure-hunters on FE/IR/BE/RT/TEST). If it
+returns no HIGH / must-fix MEDIUM and the suite is green, record
+"pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.

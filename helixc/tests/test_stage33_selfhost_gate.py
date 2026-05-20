@@ -65,6 +65,32 @@ def test_stage33_selfhost_gate_stops_when_cascade_fails(monkeypatch, tmp_path):
     assert len(calls) == 1
 
 
+def test_stage33_selfhost_gate_fails_when_validator_rejects(monkeypatch, tmp_path):
+    """Cascade succeeds but the validator rejects the report — the gate
+    must run BOTH steps and propagate the validator's non-zero exit.
+    Guards against a regression where gate() swallows the validator's
+    return code and reports an invalid self-host report as a PASS."""
+    rcs = iter([0, 1])  # cascade ok, validator rejects
+    calls = []
+
+    def fake_run_command(cmd):
+        calls.append(cmd)
+        return next(rcs)
+
+    monkeypatch.setattr(stage33_selfhost_gate, "run_command", fake_run_command)
+
+    rc = stage33_selfhost_gate.gate(
+        generations=3,
+        json_out=tmp_path / "report.json",
+        prefix="/tmp/test_gate",
+        keep=False,
+        expect_stable_sha=None,
+    )
+
+    assert rc == 1, "gate must propagate a non-zero validator exit code"
+    assert len(calls) == 2, "validator must still have been invoked"
+
+
 def test_stage33_selfhost_gate_rejects_too_few_generations(capsys):
     rc = stage33_selfhost_gate.main(["--generations", "1"])
     captured = capsys.readouterr()

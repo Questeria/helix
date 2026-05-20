@@ -176,38 +176,18 @@ def test_diff_const_let_unaffected():
 
 
 def test_abs_subgrad_at_zero_is_zero():
-    """At u=0 the subgradient of |u| is 0 (a documented choice).
-    The forward-mode chain rule emits an If chain that yields 0 there."""
+    """At u=0 the subgradient of |u| is 0 (a documented choice). The
+    forward-mode chain rule emits a three-way indicator-If: +1 for
+    x>0, -1 for x<0, 0 at x==0. Pinned to the exact emitted string so
+    a swapped arm or a flipped comparison fails instead of passing."""
     from helixc.frontend.autodiff import differentiate as _diff
     full = "fn _f(x: f32) -> f32 { __abs(x) }"
     body = parse(full).items[0].body.final_expr
     deriv = _diff(body, "x")
 
-    # Walk the deriv AST and find the FloatLit(0.0) used for the u==0 case.
-    # We just verify there's a literal 0.0 somewhere in the deriv (the rule
-    # emits the three-way if/else with cond_pos and cond_neg).
-    seen: list[float] = []
-    def walk(n):
-        if isinstance(n, A.FloatLit):
-            seen.append(float(n.value))
-        for attr in ("left", "right", "cond", "then", "else_",
-                     "operand", "value", "expr", "final_expr"):
-            if hasattr(n, attr):
-                v = getattr(n, attr)
-                if v is not None:
-                    walk(v)
-        if hasattr(n, "stmts"):
-            for s in n.stmts:
-                walk(s)
-        if hasattr(n, "args"):
-            for a in n.args:
-                walk(a)
-    walk(deriv)
-    assert 0.0 in seen, f"expected 0.0 (subgrad-at-0) in deriv, got {seen}"
-    assert 1.0 in seen, f"expected 1.0 (positive branch) in deriv, got {seen}"
-    # The negative branch produces -1 via Unary("-", FloatLit(1.0)), so 1.0
-    # being present is sufficient — checking for -1 directly would over-fit
-    # the simplification path.
+    out = fmt(deriv)
+    assert out == "if (x > 0) { 1 } else { if (x < 0) { -1 } else { 0 } }", (
+        f"__abs subgradient indicator-If mismatch, got: {out}")
 
 
 def test_diff_memo_hits():
@@ -257,27 +237,14 @@ def test_grad_through_match():
     fn = prog.items[0]
     deriv = differentiate(fn.body, "x")
 
-    # Collect all numeric literals in the derivative.
-    seen: list[float] = []
-    def walk(n):
-        if isinstance(n, (A.FloatLit, A.IntLit)):
-            seen.append(float(n.value))
-        for attr in ("left", "right", "cond", "then", "else_",
-                     "operand", "value", "expr", "final_expr"):
-            if hasattr(n, attr):
-                v = getattr(n, attr)
-                if v is not None:
-                    walk(v)
-        if hasattr(n, "stmts"):
-            for s in n.stmts:
-                walk(s)
-        if hasattr(n, "args"):
-            for a in n.args:
-                walk(a)
-    walk(deriv)
-    # Both 2 and 3 should appear as constants somewhere in the deriv.
-    assert 2.0 in seen, f"expected 2 in derivative literals, got {seen}"
-    assert 3.0 in seen, f"expected 3 in derivative literals, got {seen}"
+    # Pinned to the exact per-arm derivative: 2 for the true arm, 3 for
+    # the false arm, 0 for the (unreachable) fallthrough. A swapped-arm
+    # regression in match-lowering + AD now fails instead of passing.
+    out = fmt(deriv)
+    assert out == (
+        "if (<Index> == true) { 2 } else { "
+        "if (<Index> == false) { 3 } else { 0 } }"
+    ), f"match per-arm derivative mismatch, got: {out}"
 
 
 # ============================================================================
