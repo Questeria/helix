@@ -498,6 +498,39 @@ def test_c3_5_inline_lets_recurses_through_cast():
     )
 
 
+def test_v2x_reaudit_r3_reverse_ad_raises_loud_on_aggregate_nodes():
+    """v2.x re-audit R3 (FE-N1): reverse-mode AD must fail loud on
+    Index / StructLit / non-empty TupleLit / ArrayLit rather than
+    silently depositing no adjoint via the suppressed `_ad_warn`
+    catchall. (A.Field is excluded — `_propagate` has a real
+    field-path arm for it.)"""
+    sp = A.Span(0, 0)
+    x = A.Name(span=sp, name="x")
+    cases = [
+        A.Index(span=sp, callee=x, indices=[A.IntLit(span=sp, value=0)]),
+        A.StructLit(span=sp, name="P", fields=[("v", x)]),
+        A.TupleLit(span=sp, elems=[x]),
+        A.ArrayLit(span=sp, elems=[x]),
+    ]
+    for node in cases:
+        body = A.Block(span=sp, stmts=[], final_expr=node)
+        with pytest.raises(NotImplementedError, match="aggregate"):
+            differentiate_reverse(body, ["x"])
+
+
+def test_v2x_reaudit_r3_reverse_ad_unit_tuple_no_adjoint():
+    """v2.x re-audit R3 (FE-N1): the empty TupleLit `()` is Helix's
+    unit value — it carries no numeric value, so `_propagate` must
+    deposit no adjoint and NOT raise; the resulting gradient is 0."""
+    sp = A.Span(0, 0)
+    body = A.Block(span=sp, stmts=[],
+                   final_expr=A.TupleLit(span=sp, elems=[]))
+    grads = differentiate_reverse(body, ["x"])
+    assert fmt(grads["x"]) == "0", (
+        f"unit () gradient should be 0, got {fmt(grads['x'])}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

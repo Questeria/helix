@@ -1829,6 +1829,50 @@ def test_stage54_postclose_sign_emits_f32_typed_zero():
 
 
 # ============================================================================
+# v2.x re-audit R3 (FE-N1): forward-mode AD must fail loud on aggregate
+# construction / element access rather than silently returning a zero
+# derivative via the suppressed `_ad_warn` catchall. The empty TupleLit
+# `()` (unit) is the one exception — match_lower emits it and its
+# derivative is structurally 0.
+# ============================================================================
+def test_v2x_reaudit_r3_diff_raises_loud_on_aggregate_nodes():
+    """FE-N1: Field / Index / StructLit / non-empty TupleLit / ArrayLit
+    have no derivative arm — pre-fix they hit the warn-and-zero catchall
+    (a soft trap suppressed unless -Wad=error), silently zeroing the
+    gradient of any function depending on its variable through one."""
+    import pytest
+    from helixc.frontend.autodiff import _diff
+
+    sp = A.Span(0, 0)
+    x = A.Name(span=sp, name="x")
+    cases = [
+        A.Field(span=sp, obj=x, name="re"),
+        A.Index(span=sp, callee=x, indices=[A.IntLit(span=sp, value=0)]),
+        A.StructLit(span=sp, name="P", fields=[("v", x)]),
+        A.TupleLit(span=sp, elems=[x]),
+        A.ArrayLit(span=sp, elems=[x]),
+    ]
+    for node in cases:
+        with pytest.raises(NotImplementedError, match="aggregate"):
+            _diff(node, "x")
+
+
+def test_v2x_reaudit_r3_diff_unit_tuple_is_zero_not_raise():
+    """FE-N1: the empty TupleLit `()` is Helix's unit value —
+    match_lower emits it as the unreachable exhaustiveness-fallthrough
+    arm of a lowered `match`. Its derivative must be 0, NOT a
+    NotImplementedError, so differentiating through a `match` keeps
+    working (regression guard for test_grad_through_match)."""
+    from helixc.frontend.autodiff import _diff
+
+    sp = A.Span(0, 0)
+    deriv = _diff(A.TupleLit(span=sp, elems=[]), "x")
+    assert isinstance(deriv, A.FloatLit) and deriv.value == 0.0, (
+        f"unit () derivative should be FloatLit 0.0, got {deriv!r}"
+    )
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 def main():
