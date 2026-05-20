@@ -688,3 +688,24 @@ def test_stage129_validation_result_post_init_invariants():
             real_hw_attempted=False, real_hw_passed=None,
             real_hw_tool="ptxas", real_hw_findings=(),
         )
+
+
+def test_v24_5clean_real_hw_failure_must_carry_a_diagnostic():
+    """v2.4 end-of-cycle 5-clean-gate BE audit-fix — a real-HW
+    FAILURE with no findings is a silent failure (a failure with no
+    explanation). __post_init__ rejects it, mirroring the existing
+    mock_passed/mock_findings invariant on the real-HW side."""
+    # real_hw_attempted=True, real_hw_passed=False, but no findings → illegal.
+    with pytest.raises(ValueError, match="real_hw_findings is empty"):
+        ValidationResult(
+            backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+            real_hw_attempted=True, real_hw_passed=False,
+            real_hw_tool="ptxas", real_hw_findings=(),
+        )
+    # A real-HW failure that DOES carry a diagnostic is legal.
+    ok = ValidationResult(
+        backend=BackendKind.PTX, mock_passed=True, mock_findings=(),
+        real_hw_attempted=True, real_hw_passed=False,
+        real_hw_tool="ptxas", real_hw_findings=("ptxas exit 1: bad op",),
+    )
+    assert ok.overall_status() == OverallStatus.FAILED

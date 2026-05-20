@@ -379,6 +379,34 @@ def test_stage35_emit_ptx_allows_valid_host_grad_call(tmp_path):
     assert "PTX validation error" not in proc.stderr
 
 
+def test_v24_5clean_emit_ptx_grad_index_error_not_mislabeled_ptx(tmp_path):
+    """v2.4 end-of-cycle 5-clean-gate FE audit-fix — an out-of-range
+    grad() parameter index is a source-level user error. On the
+    --emit-ptx path it must surface as a 'grad() error', not be
+    mislabeled 'PTX validation error' (which would point the user at
+    the GPU backend instead of their source)."""
+    src_path = tmp_path / "host_grad_bad_index.hx"
+    src_path.write_text(
+        "fn loss(x: f32) -> f32 { x * x }\n"
+        "fn main() -> i32 { grad(loss, 9)(2.0) as i32 }\n"
+        "@kernel fn k() { let i = thread_idx(); }\n",
+        encoding="utf-8",
+    )
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    proc = subprocess.run(
+        [sys.executable, "-m", "helixc.check", str(src_path),
+         "--emit-ptx", "--no-stdlib"],
+        cwd=proj_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "grad() error" in proc.stderr, proc.stderr
+    assert "PTX validation error" not in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_stage35_emit_ptx_wad_error_does_not_emit_artifact(tmp_path):
     src_path = tmp_path / "host_ad_kernel_error.hx"
     src_path.write_text(

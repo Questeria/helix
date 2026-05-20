@@ -1054,6 +1054,77 @@ Verdicts process this session. If all CLEAN (or only LOW/MED),
 stamp v2.4.0; if any HIGH or must-fix MEDIUM, ship an R1 audit-fix
 first then re-audit the affected stream.
 
+### 2026-05-20T01:27Z — end-of-v2.4 5-clean-gate verdicts + R1 audit-fix
+
+The prior fire committed an "audits dispatched" marker; subagent
+verdicts do not survive a fire boundary, so this fire re-ran the
+full end-of-v2.4 5-clean-gate (5 parallel silent-failure-hunters
+over FE/IR/BE/RT/TEST) and processed the results.
+
+**Verdicts:**
+- **RT: CLEAN.** run.py exit aggregation sound (`ok &= _run_one`,
+  `sys.exit(main())`); WSL stderr + returncode surfaced; the new
+  `regalloc_classes.py` module-load drift detector fires; gpu_ci
+  drift detectors still fire post-v2.4.
+- **TEST: CLEAN.** All v2.4 tests substantive; the self-masking
+  `test_stage129_real_hw_deferred` was deleted + replaced with a
+  `monkeypatch`-deterministic test; all `pytest.raises` carry `match=`.
+- **FE: 1 MEDIUM** (no HIGH). grad_pass.py's v2.4 raise paths are
+  sound, but the new `ValueError` it raises for an out-of-range
+  grad() index is not in `check.py`'s `--emit-ptx` re-raise allowlist
+  — so a source-level `grad(f, 9)` mistake was mislabeled
+  "PTX validation error", pointing the user at the GPU backend.
+- **IR: 1 MEDIUM** (no HIGH). The register allocator is silent-
+  failure-clean (classifiers raise on every off-nominal input). The
+  MEDIUM was a stale `tir.py` `TIRScalar` docstring listing
+  `"fp8_e4m3"` (not even a real Helix dtype name) + `"ternary"` as
+  casual examples — implying a regalloc gap. Investigation: `fp8` /
+  `mxfp4` / `nvfp4` / `ternary` are parser/typecheck-only quantized
+  dtypes with no backend codegen; they never reach regalloc, and the
+  classifiers already reject them loudly (pinned by existing tests).
+- **BE: 1 MEDIUM** (no HIGH). No swallowed subprocess failures, no
+  stale dict access after the frozen-dataclass migration. The MEDIUM:
+  `ValidationResult.__post_init__` enforced `mock_passed` ↔
+  `mock_findings` emptiness but had no symmetric invariant on the
+  real-HW side — the type admitted `(real_hw_passed=False,
+  real_hw_findings=())`, a failure with no diagnostic.
+
+**R1 audit-fix shipped this fire** (3 MEDIUMs, no HIGH):
+- FE: `check.py` — scoped `try/except ValueError` around the
+  `--emit-ptx` `grad_pass` call; prints `helixc: grad() error: ...`
+  + returns 1 instead of mislabeling it a PTX fault. Regression test
+  `test_v24_5clean_emit_ptx_grad_index_error_not_mislabeled_ptx`.
+- BE: `gpu_ci.py` — `__post_init__` now raises when
+  `real_hw_attempted and real_hw_passed is False and not
+  real_hw_findings`. Regression test
+  `test_v24_5clean_real_hw_failure_must_carry_a_diagnostic`.
+- IR: `tir.py` `TIRScalar` docstring corrected (real dtype names +
+  quantized-types-are-front-end-only note); explanatory comment
+  added to `regalloc_classes._RECOGNISED_SCALAR_DTYPES`. Doc-only —
+  the loud-rejection behavior was already correct + test-pinned.
+
+Verification: 83 tests pass (test_gpu_ci + test_regalloc_classes +
+test_proof_manifest + 2 new); 94 (autodiff + regalloc) + 27 (CLI
+emit-ptx/grad) regression — all green, no regressions.
+
+**v2.5 polish backlog (LOWs deferred from this gate — non-blocking):**
+- BE LOW-1: the 4 `_dispatch_*` temp-file write sits in the outer
+  `try` (only `finally`), so an `OSError` from `open()`/`f.write()`
+  escapes uncaught — wrap it with a structured finding.
+- BE LOW-2: add a `verify_manifest_hash(emit_manifest(...))`
+  dataclass-input test to pin the `isinstance(.., ProofManifest)`
+  branch.
+- IR LOW-1: optional `if not class_pools: raise` guard in
+  `allocate_by_class` against a misconfigured backend.
+- IR LOW-2: the v2.5 emitter-wiring slice MUST assert
+  `result.spill_count == 0` (or handle spills) before trusting
+  `RegAllocResult.assignment`.
+
+**Next fire:** re-audit the FE / IR / BE streams on the R1-fixed
+state (silent-failure-hunter per stream). If CLEAN → stamp `v2.4.0`
+on the re-audit-clean commit + write the v2.4.0 release note. If
+findings → ship R2 first.
+
 ### 2026-05-19T21:24Z — 🎉 v2.4.0 RELEASED — end-of-v2.4 5-clean-gate ACHIEVED
 
 **Tag stamped: `v2.4.0` → commit `1a7ac95`.**
