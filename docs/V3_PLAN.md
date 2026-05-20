@@ -154,8 +154,9 @@ depend on a clean, unambiguous full-suite run.
 | Stage | Title | Ship | Audit | Notes |
 |-------|-------|------|-------|-------|
 | 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
-| 201 | LLVM toolchain detection + dispatch | — | — | next |
-| 202–208 | Phase D — LLVM IR backend | — | — | planned |
+| 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean (pending) | Phase D — see status note |
+| 202 | Control flow (blocks, br, phi) | — | — | next |
+| 203–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -198,3 +199,20 @@ depend on a clean, unambiguous full-suite run.
   plus the round-1 deferrals (Operand tagged-union refactor, CONST_INT
   range check, `char` dtype width, `nsw`/`nuw` overflow parity). Next:
   Stage 201 — LLVM toolchain detection + dispatch.
+- 2026-05-20 — **Stage 201 shipped — LLVM toolchain detection +
+  dispatch.** New `helixc/backend/llvm_toolchain.py` (a separate
+  module, mirroring how `gpu_ci.py` separates dispatch from the
+  emitters): `detect_llvm_tools()` finds `llvm-as`/`opt`/`llc`/`clang`
+  via `shutil.which`; `dispatch_validate_ll()` always runs the
+  toolchain-free `mock_validate_ll`, and when `llvm-as` is present
+  assembles the IR for real (`llvm-as` → bitcode, then `llc` → native
+  object). gpu_ci dispatch discipline throughout — subprocess timeout
+  + OSError captured as findings, a 0-exit-with-no-artifact treated as
+  a failure, a frozen tri-state `LLVMDispatchResult`
+  (PASSED/FAILED/DEFERRED) whose `__post_init__` makes "fail without a
+  diagnostic" unrepresentable. A tool-less machine yields DEFERRED,
+  never FAILED, so CI stays green. 13 tests (`test_llvm_toolchain.py`)
+  — dispatch orchestration verified deterministically via a
+  monkeypatched `subprocess.run`, plus 2 skipif-guarded real-`llvm-as`
+  tests. Per-stage 3-clean audit dispatched. Next: Stage 202 — control
+  flow.
