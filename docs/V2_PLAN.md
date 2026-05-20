@@ -1529,3 +1529,25 @@ Verification: `pytest test_regalloc_classes.py test_regalloc.py -q`
 v2.5 remaining: item 1 operand-threading rewrite (focused block —
 `plan_ptx_registers` + `ptx_register_names` are now both ready for it
 to consume) + end-of-v2.5 5-clean-gate.
+
+### 2026-05-20 — v2.x fast-suite health checkpoint + helix_status count refresh
+
+The v2.5 cron-fire-sized backlog is drained — the emitter-wiring prep
+(`plan_ptx_registers`, `ptx_register_names`) is complete + tested, the
+polish LOWs are closed, and the test_codegen.py blocker is resolved.
+The remaining v2.5 work is the item-1 operand-threading rewrite
+(reserved focused block) + the end-of-v2.5 5-clean-gate. So this fire
+is a verification + maintenance pass:
+
+- Health checkpoint: ran the 7 v2.x fast suites (test_ir,
+  test_regalloc, test_regalloc_classes, test_gpu_ci,
+  test_proof_manifest, test_helix_status, test_ptx) — **298 passed,
+  3 skipped** (real-HW dispatch, no toolchain) at HEAD `99a20be`. The
+  recent v2.5 churn has not regressed the IR / regalloc / backend
+  surface. (test_codegen.py — the ~1h43m suite — is deliberately not
+  in this set; see the standing process note on its per-fire
+  un-runnability.)
+- `scripts/helix_status.py`: refreshed `TESTS_TOTAL` 3998 -> 4009
+  (the helixc/tests/ suite has grown +11 tests across recent fires).
+  Keeps the beginner-friendly Telegram message's "~N automated tests"
+  line accurate — a maintained constant, bumped as the suite grows.
