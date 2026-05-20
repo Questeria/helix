@@ -4582,7 +4582,8 @@ def test_stage35_lower_ast_does_not_swallow_mangle_struct_loud_fail():
     prog = parse_src(src, include_stdlib=False)
     with patch("helixc.frontend.struct_mono.mangle_struct",
                side_effect=NotImplementedError("unknown TyNode subclass")):
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(NotImplementedError,
+                           match="unknown TyNode subclass"):
             lower(prog)
 
 
@@ -5036,7 +5037,9 @@ def test_stage35_autodiff_cli_parse_or_exit_propagates_not_implemented(tmp_path,
     import helixc.frontend.autodiff_cli as cli
     def boom(src): raise NotImplementedError("new AST node kind")
     monkeypatch.setattr(cli, "parse", boom)
-    with pytest.raises(NotImplementedError):
+    # v2.5 polish (TEST LOW-1): match= anchors on the injected
+    # message so an unrelated NotImplementedError can't pass the test.
+    with pytest.raises(NotImplementedError, match="new AST node kind"):
         cli._parse_or_exit("anything", "<test>")
 
 
@@ -5051,7 +5054,7 @@ def test_stage35_autodiff_cli_differentiate_propagates_not_implemented(tmp_path,
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     # The in-process call would call sys.exit on the path through main(),
     # so use the helper-level proxy: verify monkeypatch + raise alone.
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="new D node kind"):
         cli.differentiate(None, "x")
 
 
@@ -5282,7 +5285,7 @@ def test_stage35_restart51_check_emit_ptx_propagates_not_implemented(tmp_path, m
     monkeypatch.setattr(ptx_mod, "emit_ptx", boom)
     # Call the patched function directly to confirm the loud-fail signal
     # is raised (not swallowed). The check.py wrapper now re-raises it.
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="new tile-IR op"):
         ptx_mod.emit_ptx(None)
 
 
@@ -5294,7 +5297,7 @@ def test_stage35_restart51_check_emit_asm_propagates_not_implemented(monkeypatch
     from helixc.backend import x86_64 as x86_mod
     def boom(*a, **kw): raise NotImplementedError("unhandled x86 op")
     monkeypatch.setattr(x86_mod, "compile_module_to_elf", boom)
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="unhandled x86 op"):
         x86_mod.compile_module_to_elf(None)
 
 
