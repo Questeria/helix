@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from ..ir import tile_ir as ti
 
@@ -252,14 +253,29 @@ def allocate_fn(fn: ti.TileFn, num_registers: int) -> RegAllocResult:
 # ============================================================================
 # Multi-class allocation (v2.4 item 15, slice 3)
 # ============================================================================
+class RegAssignment(NamedTuple):
+    """A vreg's multi-class register placement: which register file
+    (`reg_class`) and which index within it.
+
+    v2.5 polish (item-15 type-design audit Finding 3): the
+    `MultiClassResult.assignment` payload was a bare `tuple[str, int]`
+    — positionally ambiguous, forcing callers to index `[0]`/`[1]`.
+    A NamedTuple is a zero-cost, backward-compatible upgrade: it IS
+    still a tuple (so `== ("%r", 3)` and `[0]`/`[1]` indexing keep
+    working) but now also exposes `.reg_class` / `.index`.
+    """
+    reg_class: str
+    index: int
+
+
 @dataclass
 class MultiClassResult:
     """Outcome of a multi-register-class allocation pass.
 
-    `assignment` — vreg -> (class_key, register_index). Two vregs in
-                   DIFFERENT classes may share a register index — they
-                   name distinct physical files (e.g. PTX `%r0` vs
-                   `%f0`), so that is correct, not a collision.
+    `assignment` — vreg -> RegAssignment(reg_class, index). Two vregs
+                   in DIFFERENT classes may share a register index —
+                   they name distinct physical files (e.g. PTX `%r0`
+                   vs `%f0`), so that is correct, not a collision.
     `spilled`    — vregs that did not fit their class's register file.
     `per_class`  — the underlying single-class RegAllocResult for each
                    class key, so a backend can read each class's
@@ -268,7 +284,7 @@ class MultiClassResult:
     Invariant: `assignment.keys()` and `spilled` are disjoint and
     together cover every vreg with a live interval exactly once.
     """
-    assignment: dict[int, tuple[str, int]] = field(default_factory=dict)
+    assignment: dict[int, RegAssignment] = field(default_factory=dict)
     spilled: set[int] = field(default_factory=set)
     per_class: dict[str, RegAllocResult] = field(default_factory=dict)
 
@@ -357,6 +373,7 @@ def allocate_by_class(
         class_result = linear_scan(by_class[cls], class_pools[cls])
         result.per_class[cls] = class_result
         for vreg, reg_idx in class_result.assignment.items():
-            result.assignment[vreg] = (cls, reg_idx)
+            result.assignment[vreg] = RegAssignment(
+                reg_class=cls, index=reg_idx)
         result.spilled |= class_result.spilled
     return result

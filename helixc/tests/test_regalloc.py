@@ -13,6 +13,7 @@ from helixc.backend.regalloc import (
     LiveInterval,
     MultiClassResult,
     RegAllocResult,
+    RegAssignment,
     allocate_by_class,
     allocate_fn,
     compute_live_intervals,
@@ -438,3 +439,26 @@ def test_v24_allocate_by_class_partition_invariant():
     all_vregs = {v.id for v in vals}
     assert set(r.assignment) | r.spilled == all_vregs
     assert set(r.assignment) & r.spilled == set()
+
+
+def test_v25_reg_assignment_namedtuple_fields():
+    """v2.5 polish (item-15 type-design Finding 3) — MultiClassResult
+    .assignment values are RegAssignment NamedTuples exposing
+    `.reg_class` and `.index`, while remaining fully tuple-compatible
+    (== a plain tuple, [0]/[1] indexing) so no existing caller breaks."""
+    v0, v1 = _val(0), _val(1)  # even -> A, odd -> B
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v1]),
+        TileOp(kind=TileOpKind.CALL, operands=[v0, v1]),
+    ])
+    r = allocate_by_class(_fn([blk]), _classify_by_even_odd,
+                          class_pools={"A": 1, "B": 1})
+    a0 = r.assignment[0]
+    assert isinstance(a0, RegAssignment)
+    # Named-field access — the v2.5 ergonomic upgrade.
+    assert a0.reg_class == "A"
+    assert a0.index == 0
+    # Backward-compat: still a tuple — equality + index access work.
+    assert a0 == ("A", 0)
+    assert a0[0] == "A" and a0[1] == 0
