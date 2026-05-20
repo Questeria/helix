@@ -296,3 +296,19 @@ depend on a clean, unambiguous full-suite run.
   SHR is no longer "logical-right unreachable" now that the unsigned
   dtypes exist). 6 new tests; 71 passed + 2 skipped across the two
   LLVM test files. Round-2 re-audit dispatched.
+- 2026-05-20 — **Stage 203 continuation — 3-clean audit round 2:
+  1 HIGH + 1 MEDIUM, fixed.** The silent-failure-hunter flagged that
+  SHR's `ashr`/`lshr` choice keys off the shifted value (operand 0)
+  while `x86_64.py` keys off the result type — so a SHR whose value
+  and result disagree on signedness would silently diverge. (That
+  combination is unreachable from real Helix source — lowering ties a
+  shift's result type to its value — but the round-1 discipline says
+  fail closed on it regardless.) Fixed: SHR now also calls
+  `_require_same_signedness(value, result)`; together with the round-1
+  operand-vs-operand checks this makes the signedness-dependent
+  mnemonic choice provably equal to `x86_64.py`'s for every TIR the
+  LLVM backend accepts. MEDIUM (also a type-design LOW): the
+  binop-table disjointness `assert` is `python -O`-strippable —
+  replaced with an explicit `_check_binop_table_disjoint()` raise,
+  mirroring `llvm_toolchain.py`. 1 new test; 72 passed + 2 skipped
+  across the two LLVM test files. Round-3 re-audit dispatched.

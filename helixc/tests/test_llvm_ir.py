@@ -989,3 +989,23 @@ def test_stage203_allows_mixed_sign_shift():
     ll = llvm_ir.emit_module(mod)
     assert f"%v{r.id} = ashr i32" in ll, ll
     assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_rejects_shift_value_result_signedness_mismatch():
+    """A SHR whose shifted value and result disagree on signedness is
+    rejected. `ashr` vs `lshr` is chosen by the value's sign, so a
+    value/result signedness mismatch is ill-specified; failing closed
+    keeps the LLVM backend's shift choice provably equal to
+    x86_64.py's (which keys the choice off the result type) for every
+    SHR the LLVM backend accepts."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    u32 = tir.TIRScalar("u32")
+    fn = b.begin_function("svr", [("x", u32), ("n", u32)], _i32())
+    r = b.emit(tir.OpKind.SHR, fn.params[0], fn.params[1],
+               result_ty=_i32())  # u32 value shifted, i32 result
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="disagree on signedness"):
+        llvm_ir.emit_module(mod)

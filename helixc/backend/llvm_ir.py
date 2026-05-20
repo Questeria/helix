@@ -124,14 +124,24 @@ _LLVM_SIGNED_BINOPS: dict[tir.OpKind, tuple[str, str]] = {
     tir.OpKind.SHR: ("ashr", "lshr"),
 }
 
-# A binary OpKind must live in exactly one of the two tables above —
-# an op in both would silently take the `_LLVM_SCALAR_BINOPS`
-# (sign-agnostic) form and lose its signed/unsigned distinction.
-# Caught at import, not at emit time.
-assert not (_LLVM_SCALAR_BINOPS.keys() & _LLVM_SIGNED_BINOPS.keys()), (
-    "llvm_ir: a tir.OpKind appears in both _LLVM_SCALAR_BINOPS and "
-    "_LLVM_SIGNED_BINOPS"
-)
+def _check_binop_table_disjoint() -> None:
+    """A binary OpKind must live in exactly one of `_LLVM_SCALAR_BINOPS`
+    / `_LLVM_SIGNED_BINOPS` — an op in both would silently take the
+    sign-agnostic form and lose its signed/unsigned distinction. This
+    is a module-load guard: an explicit `raise`, not a bare `assert`
+    (which `python -O` would strip, silently disabling the check).
+    Mirrors `llvm_toolchain.py`'s `_check_llvm_toolchain_drift`."""
+    overlap = _LLVM_SCALAR_BINOPS.keys() & _LLVM_SIGNED_BINOPS.keys()
+    if overlap:
+        raise AssertionError(
+            f"helixc.backend.llvm_ir: tir.OpKind(s) "
+            f"{sorted(k.name for k in overlap)} appear in both "
+            f"_LLVM_SCALAR_BINOPS and _LLVM_SIGNED_BINOPS — an op in "
+            f"both silently loses its signed/unsigned distinction"
+        )
+
+
+_check_binop_table_disjoint()
 
 # LLVM's unquoted global/local identifier grammar.
 _LLVM_BARE_IDENT = re.compile(r"[-a-zA-Z$._][-a-zA-Z$._0-9]*\Z")
@@ -193,30 +203,34 @@ def _is_unsigned_int(ty: tir.TIRType) -> bool:
 
 def _require_same_signedness(a: tir.Value, b: tir.Value, *,
                              ctx: str) -> None:
-    """Raise `LLVMEmitError` when two integer operands disagree on
-    Helix signedness.
+    """Raise `LLVMEmitError` when two integer values disagree on Helix
+    signedness.
 
     The LLVM-type equality check (`_llvm_int_type(a) ==
     _llvm_int_type(b)`) cannot catch this: `i32` and `u32` are the
     SAME LLVM type. But for an op whose LLVM instruction is *chosen
-    by* signedness — `sdiv` vs `udiv`, `srem` vs `urem`, the ordered
-    `icmp` predicates — a mixed signed/unsigned operand pair makes
-    that choice ambiguous. Silently picking one operand's
+    by* signedness — `sdiv` vs `udiv`, `srem` vs `urem`, `ashr` vs
+    `lshr`, the ordered `icmp` predicates — a mixed signed/unsigned
+    combination makes that choice ambiguous. Silently picking one
     interpretation would emit IR that can disagree with the x86_64
     backend on the same program. Failing closed here keeps the v3.0
     'additive, parity-gated' discipline: the LLVM backend never
-    silently resolves an ill-specified construct. (Shifts are exempt —
-    a shift COUNT's signedness never affects the result — and
-    `eq`/`ne` are sign-agnostic; neither calls this.)"""
+    silently resolves an ill-specified construct.
+
+    `a` and `b` are the two values that must agree — for DIV / MOD the
+    two operands, for SHR the shifted value and the result. (A shift
+    COUNT is never passed here — a count's signedness never affects
+    the result — and `eq` / `ne` are sign-agnostic, so neither
+    reaches this guard.)"""
     if _is_unsigned_int(a.ty) != _is_unsigned_int(b.ty):
         a_name = a.ty.name if isinstance(a.ty, tir.TIRScalar) else a.ty
         b_name = b.ty.name if isinstance(b.ty, tir.TIRScalar) else b.ty
         raise LLVMEmitError(
-            f"{ctx}: operands disagree on signedness ({a_name} vs "
+            f"{ctx}: values disagree on signedness ({a_name} vs "
             f"{b_name}) — this op's LLVM instruction is selected by "
-            f"operand signedness, so a mixed signed/unsigned pair is "
-            f"ambiguous; insert an explicit cast so both operands "
-            f"share one Helix integer dtype")
+            f"signedness, so a mixed signed/unsigned combination is "
+            f"ambiguous; insert an explicit cast so the integer "
+            f"dtypes agree")
 
 
 class _FnEmitter:
@@ -499,18 +513,23 @@ class _FnEmitter:
                 mnemonic = _LLVM_SCALAR_BINOPS[kind]
             else:
                 # DIV / MOD / SHR each have a signed and an unsigned
-                # LLVM form, chosen by the operand dtype's signedness.
-                # For DIV / MOD the two operands must agree on
-                # signedness — a mixed signed/unsigned pair makes
-                # `sdiv` vs `udiv` ambiguous, so fail closed. SHR is
-                # exempt: its operand 1 is a shift COUNT whose
-                # signedness never affects the result, and the
-                # arithmetic-vs-logical choice follows the value being
-                # shifted (operand 0). Picking by operand 0 then
-                # matches how the `icmp` branch chooses its predicate.
+                # LLVM form, chosen by signedness. Fail closed when the
+                # signedness-relevant values disagree — a mixed
+                # signed/unsigned combination makes the choice
+                # ambiguous and, left unchecked, could silently diverge
+                # from x86_64.py:
+                #   - DIV / MOD: the two operands must agree (`sdiv` vs
+                #     `udiv`, `srem` vs `urem`);
+                #   - SHR: the shifted VALUE (operand 0) and the result
+                #     must agree (`ashr` vs `lshr`). The shift COUNT
+                #     (operand 1) is exempt — a count's signedness
+                #     never affects the result.
                 if kind in (tir.OpKind.DIV, tir.OpKind.MOD):
                     _require_same_signedness(
                         op.operands[0], op.operands[1], ctx=ctx)
+                elif kind == tir.OpKind.SHR:
+                    _require_same_signedness(
+                        op.operands[0], result, ctx=ctx)
                 signed_mn, unsigned_mn = _LLVM_SIGNED_BINOPS[kind]
                 mnemonic = (unsigned_mn
                             if _is_unsigned_int(op.operands[0].ty)
