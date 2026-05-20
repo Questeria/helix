@@ -159,7 +159,8 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206–208 | Phase D — LLVM IR backend | — | — | planned |
+| 206 | Runtime & intrinsics (chunked) | chunk A ✓ | chunk A audit pending | Phase D — Result intrinsics shipped |
+| 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -473,3 +474,19 @@ depend on a clean, unambiguous full-suite run.
   stage-closure commit also bumps `V3_STAGES_DONE`. 7
   `test_helix_status` tests pass — one new test pins that the overall
   % moves with progress (not frozen).
+- 2026-05-20 — **Stage 206 chunk A shipped — LLVM Result<T,E>
+  packed-tag intrinsics.** Stage 206 (runtime & intrinsics — panic,
+  traces, packed representations) is chunked. Chunk A: the
+  Result<T,E> ops. A Result is one i64 — tag in the high 32 bits,
+  payload in the low 32 (the Stage 49 convention). RESULT_PACK lowers
+  to `zext` tag -> `shl 32` -> `or` with the `zext`ed payload (zext
+  zero-fills the high half, so it already masks the payload to its
+  low 32 bits — no explicit `and`). RESULT_TAG lowers to `lshr 32` +
+  `trunc to i32`; RESULT_PAYLOAD to a single `trunc i64 ... to i32`.
+  The multi-instruction lowerings use `%vN.tK` temp registers derived
+  from the result id (deterministic, collision-free). Fail-closed —
+  RESULT_PACK requires i32/i32 operands + an i64 result, RESULT_TAG /
+  RESULT_PAYLOAD an i64 operand + an i32 result, all enforced. 10 new
+  tests; 131 passed + 2 skipped across the two LLVM test files.
+  `x86_64.py` untouched. Per-stage 3-clean audit dispatched. Next
+  chunk: TRAP (panic) — needs string globals + a runtime exit.

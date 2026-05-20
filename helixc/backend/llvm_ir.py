@@ -35,6 +35,10 @@ Supported so far (Stages 200, 202-204):
     a void call, arguments passed positionally as typed operands. An
     FFI_CALL additionally emits a module-scope `declare` for its
     extern target.
+  - Result<T,E> packed-tag intrinsics (Stage 206): RESULT_PACK /
+    RESULT_TAG / RESULT_PAYLOAD become integer `zext`/`shl`/`or`,
+    `lshr`+`trunc`, and `trunc` — a Result is one i64 with the tag in
+    the high 32 bits and the payload in the low 32.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -693,6 +697,37 @@ class _FnEmitter:
                 f"vs {decl!r}")
         self.ffi_declares[target] = decl
 
+    def _result_unpack(self, op: tir.Op, label: str) -> tuple[str, int]:
+        """Validate a RESULT_TAG / RESULT_PAYLOAD op — exactly one i64
+        operand (the packed Result) and one i32 result — and return
+        `(packed_operand_ref, result_id)`. A packed Result is one i64;
+        its tag and payload are each i32 (the Stage 49 convention)."""
+        if len(op.results) != 1:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} must have exactly "
+                f"one result, got {len(op.results)}")
+        if len(op.operands) != 1:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} expects exactly "
+                f"one operand (the packed Result), got "
+                f"{len(op.operands)}")
+        packed = op.operands[0]
+        packed_ty = _llvm_int_type(
+            packed.ty,
+            ctx=f"function {self.fn.name!r} {label} operand")
+        if packed_ty != "i64":
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} operand has LLVM "
+                f"type {packed_ty}, but a packed Result is an i64")
+        result = op.results[0]
+        res_ty = _llvm_int_type(
+            result.ty, ctx=f"function {self.fn.name!r} {label} result")
+        if res_ty != "i32":
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} result has LLVM "
+                f"type {res_ty}, but a Result tag/payload is an i32")
+        return self._ref(packed), result.id
+
     def _emit_op(self, op: tir.Op) -> Optional[str]:
         """Emit one op's LLVM instruction text — `None` when the op
         materializes no instruction (CONST_INT, ALLOC_VAR,
@@ -1014,6 +1049,55 @@ class _FnEmitter:
                     f"ptr {addr}")
         if kind in (tir.OpKind.CALL, tir.OpKind.FFI_CALL):
             return self._emit_call(op)
+        if kind == tir.OpKind.RESULT_PACK:
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: RESULT_PACK must have "
+                    f"exactly one result, got {len(op.results)}")
+            if len(op.operands) != 2:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: RESULT_PACK expects "
+                    f"exactly two operands (tag, payload), got "
+                    f"{len(op.operands)}")
+            tag, payload = op.operands
+            tag_ty = _llvm_int_type(
+                tag.ty,
+                ctx=f"function {self.fn.name!r} RESULT_PACK tag")
+            payload_ty = _llvm_int_type(
+                payload.ty,
+                ctx=f"function {self.fn.name!r} RESULT_PACK payload")
+            if tag_ty != "i32" or payload_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: RESULT_PACK tag/payload "
+                    f"have LLVM types {tag_ty}/{payload_ty}, but both "
+                    f"must be i32")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} RESULT_PACK result")
+            if res_ty != "i64":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: RESULT_PACK result has "
+                    f"LLVM type {res_ty}, but a packed Result is an i64")
+            rid = result.id
+            # packed = (zext tag) << 32 | (zext payload). `zext`
+            # zero-fills the high half, so a zext'd i32 payload already
+            # equals `payload & 0xFFFFFFFF` as an i64 — no mask needed.
+            t0, t1, t2 = f"%v{rid}.t0", f"%v{rid}.t1", f"%v{rid}.t2"
+            return (f"{t0} = zext i32 {self._ref(tag)} to i64\n"
+                    f"{t1} = shl i64 {t0}, 32\n"
+                    f"{t2} = zext i32 {self._ref(payload)} to i64\n"
+                    f"%v{rid} = or i64 {t1}, {t2}")
+        if kind == tir.OpKind.RESULT_TAG:
+            packed_ref, rid = self._result_unpack(op, "RESULT_TAG")
+            # tag = packed >> 32 (logical shift), narrowed to i32.
+            tmp = f"%v{rid}.t0"
+            return (f"{tmp} = lshr i64 {packed_ref}, 32\n"
+                    f"%v{rid} = trunc i64 {tmp} to i32")
+        if kind == tir.OpKind.RESULT_PAYLOAD:
+            packed_ref, rid = self._result_unpack(op, "RESULT_PAYLOAD")
+            # payload = the low 32 bits of the packed i64.
+            return f"%v{rid} = trunc i64 {packed_ref} to i32"
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
@@ -1021,7 +1105,8 @@ class _FnEmitter:
             f"and shifts SHL/SHR; the six comparisons; SELECT; NEG; "
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
-            f"calls; RETURN; BR; COND_BR — floats and structs are later "
+            f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
+            f"RETURN; BR; COND_BR — floats and structs are later "
             f"stages)"
         )
 

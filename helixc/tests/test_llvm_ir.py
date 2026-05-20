@@ -1,4 +1,4 @@
-"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-205):
+"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-206):
 the additive LLVM IR emitter.
 
 The emitter consumes the same host IR (`tir.Module`) that
@@ -8,9 +8,11 @@ constants, add/sub/mul, `ret`); control flow (multi-block, `br`,
 `phi`); the scalar op set (the six comparisons, `select`, `neg`,
 div/mod, bitwise ops, unsigned integer dtypes); mutable local
 variables and stack arrays (`alloca`/`load`/`store`/`getelementptr`);
-and direct + FFI function calls (`call`, with a module-scope
-`declare` for FFI targets). Everything else must be REJECTED loudly
-with `LLVMEmitError` — a partial backend fails closed, it never emits
+direct + FFI function calls (`call`, with a module-scope `declare`
+for FFI targets); and the Result<T,E> packed-tag intrinsics
+(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD). Everything else must be
+REJECTED loudly with `LLVMEmitError` — a partial backend fails closed,
+it never emits
 wrong IR.
 """
 
@@ -1871,4 +1873,169 @@ def test_stage205_rejects_ffi_symbol_collides_with_defined_fn():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="also a defined function"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 206 chunk A — Result<T,E> packed-tag intrinsics
+# ==========================================================================
+def test_stage206_emit_result_pack():
+    """RESULT_PACK lowers to zext/shl + zext + or — a Result is one
+    i64 with the tag in the high 32 bits and the payload in the low
+    32."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.RESULT_PACK, b.const_int(0), b.const_int(42),
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id}.t0 = zext i32 0 to i64" in ll, ll
+    assert f"%v{r.id}.t1 = shl i64 %v{r.id}.t0, 32" in ll, ll
+    assert f"%v{r.id}.t2 = zext i32 42 to i64" in ll, ll
+    assert f"%v{r.id} = or i64 %v{r.id}.t1, %v{r.id}.t2" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_emit_result_tag():
+    """RESULT_TAG lowers to `lshr i64 ..., 32` then `trunc to i32` —
+    the tag occupies the high 32 bits of the packed Result."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("p", tir.TIRScalar("i64"))],
+                          tir.TIRScalar("i32"))
+    r = b.emit(tir.OpKind.RESULT_TAG, fn.params[0],
+               result_ty=tir.TIRScalar("i32"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id}.t0 = lshr i64 %v{fn.params[0].id}, 32" in ll, ll
+    assert f"%v{r.id} = trunc i64 %v{r.id}.t0 to i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_emit_result_payload():
+    """RESULT_PAYLOAD lowers to a single `trunc i64 ... to i32` — the
+    payload is the low 32 bits of the packed Result."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("p", tir.TIRScalar("i64"))],
+                          tir.TIRScalar("i32"))
+    r = b.emit(tir.OpKind.RESULT_PAYLOAD, fn.params[0],
+               result_ty=tir.TIRScalar("i32"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = trunc i64 %v{fn.params[0].id} to i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_result_pack_then_tag():
+    """A realistic pattern — pack a Result, then read its tag back."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i32"))
+    packed = b.emit(tir.OpKind.RESULT_PACK, b.const_int(1),
+                    b.const_int(7), result_ty=tir.TIRScalar("i64"))
+    tag = b.emit(tir.OpKind.RESULT_TAG, packed,
+                 result_ty=tir.TIRScalar("i32"))
+    b.ret(tag)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{packed.id} = or i64" in ll, ll
+    assert f"%v{tag.id}.t0 = lshr i64 %v{packed.id}, 32" in ll, ll
+    assert f"%v{tag.id} = trunc i64 %v{tag.id}.t0 to i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_result_pack_then_payload():
+    """Pack a Result, then read its payload back."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i32"))
+    packed = b.emit(tir.OpKind.RESULT_PACK, b.const_int(0),
+                    b.const_int(99), result_ty=tir.TIRScalar("i64"))
+    pay = b.emit(tir.OpKind.RESULT_PAYLOAD, packed,
+                 result_ty=tir.TIRScalar("i32"))
+    b.ret(pay)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{pay.id} = trunc i64 %v{packed.id} to i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_result_ops_emit_is_deterministic():
+    """Two emits of a module with the Result intrinsics are
+    byte-identical (the `%vN.tK` temp names derive from the result
+    id)."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], tir.TIRScalar("i32"))
+        packed = b.emit(tir.OpKind.RESULT_PACK, b.const_int(1),
+                        b.const_int(5), result_ty=tir.TIRScalar("i64"))
+        r = b.emit(tir.OpKind.RESULT_PAYLOAD, packed,
+                   result_ty=tir.TIRScalar("i32"))
+        b.ret(r)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206_rejects_result_pack_non_i64_result():
+    """RESULT_PACK must produce an i64 — a packed Result is an i64."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.RESULT_PACK, b.const_int(0), b.const_int(1),
+               result_ty=_i32())   # i32 result, must be i64
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="packed Result is an i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_result_pack_non_i32_operand():
+    """RESULT_PACK's tag and payload must both be i32."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    bad = b.const_int(1, dtype="i64")   # payload i64, must be i32
+    r = b.emit(tir.OpKind.RESULT_PACK, b.const_int(0), bad,
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="must be i32"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_result_tag_non_i64_operand():
+    """RESULT_TAG's operand must be the i64 packed Result."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("p", _i32())], tir.TIRScalar("i32"))
+    r = b.emit(tir.OpKind.RESULT_TAG, fn.params[0],
+               result_ty=tir.TIRScalar("i32"))   # operand i32, must be i64
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="packed Result is an i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_result_payload_non_i32_result():
+    """RESULT_PAYLOAD must produce an i32."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("p", tir.TIRScalar("i64"))],
+                          tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.RESULT_PAYLOAD, fn.params[0],
+               result_ty=tir.TIRScalar("i64"))   # i64 result, must be i32
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="tag/payload is an i32"):
         llvm_ir.emit_module(mod)
