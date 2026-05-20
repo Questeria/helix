@@ -72,6 +72,31 @@ _PTX_DTYPE_TO_CLASS: Final[dict[str, str]] = {
 }
 
 
+# v2.4 item 15 R1 audit-fix (silent-failure + type-design MEDIUM —
+# two-auditor consensus): the shared scalar-dtype vocabulary both
+# the PTX and ROCm register-class models accept. f64 is deliberately
+# NOT in this set — PTX has no f64 register file (ptx_register_class
+# raises NotImplementedError) and ROCm accepts f64 separately (vgpr
+# pair). Before R1, `rocm_register_class` borrowed _PTX_DTYPE_TO_CLASS
+# as its recognised-dtype gate — a directional coupling: a future
+# PTX-only dtype added to that dict would be silently accepted by
+# ROCm unreviewed. Both backends now reference this shared constant;
+# the module-load check below pins _PTX_DTYPE_TO_CLASS to it so the
+# two cannot drift.
+_RECOGNISED_SCALAR_DTYPES: Final[frozenset[str]] = frozenset({
+    "bool", "i8", "u8", "char", "i16", "u16", "f16", "bf16",
+    "i32", "u32", "i64", "u64", "isize", "usize", "f32",
+})
+
+if set(_PTX_DTYPE_TO_CLASS) != _RECOGNISED_SCALAR_DTYPES:
+    raise AssertionError(
+        f"helixc.backend.regalloc_classes: _PTX_DTYPE_TO_CLASS keys "
+        f"{sorted(_PTX_DTYPE_TO_CLASS)} != _RECOGNISED_SCALAR_DTYPES "
+        f"{sorted(_RECOGNISED_SCALAR_DTYPES)}. Adding a PTX dtype "
+        f"requires a conscious decision about the shared vocabulary."
+    )
+
+
 def ptx_register_class(value: ti.TileValue) -> str:
     """v2.4 item 15 slice 4 — map a tile-IR scalar value to its PTX
     register-class key (one of `%p` / `%r` / `%rd` / `%f` / `%h`).
@@ -174,10 +199,12 @@ def rocm_register_class(value: ti.TileValue) -> str:
             f"scalar values before allocate_by_class."
         )
     dtype = ty.name
-    # Reuse the PTX dtype set as the recognised-dtype gate — both
-    # backends accept the same TIRScalar dtype vocabulary; only the
-    # file partition differs.
-    if dtype != "f64" and dtype not in _PTX_DTYPE_TO_CLASS:
+    # v2.4 item 15 R1 audit-fix: gate on the shared
+    # _RECOGNISED_SCALAR_DTYPES constant (plus f64, which ROCm accepts
+    # but PTX does not) — NOT on _PTX_DTYPE_TO_CLASS. This removes the
+    # directional coupling the 3-clean-audit flagged: ROCm's dtype
+    # vocabulary is now an independent, reviewed decision.
+    if dtype != "f64" and dtype not in _RECOGNISED_SCALAR_DTYPES:
         raise RuntimeError(
             f"rocm_register_class: unrecognised TIRScalar dtype "
             f"{dtype!r}."

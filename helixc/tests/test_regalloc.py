@@ -148,6 +148,46 @@ def test_v24_spill_heuristic_keeps_register_when_new_interval_longer():
     assert r.spilled == {1}
 
 
+def test_v24_closed_interval_shared_endpoint_overlaps():
+    """v2.4 item 15 R1 audit-fix (code-review MED-1) — LiveInterval is
+    a CLOSED interval [start, end]. Two intervals [0,2] and [2,5]
+    both occupy index 2, so they OVERLAP — a value defined at the
+    same instruction where another's last use lands is conservatively
+    live-together. With 1 register exactly one must spill.
+
+    Regression-pin: ExpireOldIntervals uses `act_iv.end < iv.start`
+    (strict <). If a future refactor weakened it to `<=`, [0,2] would
+    wrongly expire before [2,5] is placed — both would fit in 1
+    register and this test would catch the silent miscompile."""
+    r = linear_scan(
+        [LiveInterval(0, 0, 2), LiveInterval(1, 2, 5)],
+        num_registers=1,
+    )
+    # Shared endpoint at index 2 -> overlapping -> exactly one spills.
+    assert r.spill_count == 1
+    assert len(r.assignment) == 1
+    assert set(r.assignment) | r.spilled == {0, 1}
+
+
+def test_v24_spill_eviction_frees_register_for_later_interval():
+    """v2.4 item 15 R1 audit-fix (code-review MED-2) — when a long
+    interval is evicted (its register handed to a shorter newcomer),
+    that register must become reusable once the newcomer's range
+    ends. 3 intervals, 1 register:
+      A [0,10] long  — allocated, then EVICTED by B
+      B [1,2]  short — takes A's register, then expires at index 2
+      C [5,8]        — arrives after B ended; must reuse the register
+    Result: A spilled; B and C both placed in register 0."""
+    r = linear_scan(
+        [LiveInterval(0, 0, 10),   # A — long
+         LiveInterval(1, 1, 2),    # B — short, evicts A
+         LiveInterval(2, 5, 8)],   # C — after B, reuses freed reg
+        num_registers=1,
+    )
+    assert r.spilled == {0}              # A evicted
+    assert r.assignment == {1: 0, 2: 0}  # B and C both reuse register 0
+
+
 def test_v24_linear_scan_is_deterministic():
     """v2.4 item 15 — two runs on the same input produce byte-
     identical results. Required for the codegen-determinism the

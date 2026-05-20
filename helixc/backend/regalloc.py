@@ -28,6 +28,7 @@ License: Apache 2.0
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..ir import tile_ir as ti
@@ -295,7 +296,7 @@ def _value_map(fn: ti.TileFn) -> dict[int, ti.TileValue]:
 
 def allocate_by_class(
     fn: ti.TileFn,
-    classify: "Callable[[ti.TileValue], str]",
+    classify: Callable[[ti.TileValue], str],
     class_pools: dict[str, int],
 ) -> MultiClassResult:
     """v2.4 item 15 (slice 3) — multi-register-class allocation.
