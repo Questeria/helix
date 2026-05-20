@@ -1053,3 +1053,58 @@ parallel silent-failure-hunters across FE/IR/BE/RT/TEST:
 Verdicts process this session. If all CLEAN (or only LOW/MED),
 stamp v2.4.0; if any HIGH or must-fix MEDIUM, ship an R1 audit-fix
 first then re-audit the affected stream.
+
+### 2026-05-19T21:24Z — 🎉 v2.4.0 RELEASED — end-of-v2.4 5-clean-gate ACHIEVED
+
+**Tag stamped: `v2.4.0` → commit `1a7ac95`.**
+
+End-of-v2.4 5-clean-gate — 5 parallel silent-failure-hunters:
+- FE: CLEAN
+- IR: CLEAN
+- RT: CLEAN
+- TEST: CLEAN + 2 LOW (1 fixed in R1, 1 — test_cli.py match=
+  anchors — deferred to v2.5)
+- BE: 1 MEDIUM + 1 LOW. The MEDIUM was an INTERACTION bug the
+  per-item audits could not see — validate_emit's mock validators
+  missed HELIX-STUB/HELIX-SKIPPED directives, green-lighting a
+  non-functional stub-laden kernel. R1 audit-fix `1a7ac95` +
+  BE re-audit returned CLEAN.
+
+All HIGH + MEDIUM closed. Gate PASS. 245 v2.4-scope tests pass.
+
+v2.4 commit set (since v2.3.0 `095c492`) — 30+ commits across:
+- Item 13 real-HW dispatch: 517b632 / 7d02831 / e85288d / 4701cc2
+  + R1 85526c0 + regression 4385dcf
+- Item 3 ProofManifest: c625407 / f560834 / 0db380d
+- Item 15 allocator: 8e4f110 / 767b592 / d1bebc4 / eb1dbbd /
+  0345a41 + R1 f443eaf
+- 5-gate R1: 1a7ac95
+- grad_pass/run.py/tile_ir_audit audit-fix: 2c00233
+
+### Release ledger
+
+| Tag    | Commit  | Cycle theme |
+|--------|---------|-------------|
+| v2.0.0 | 930d601 | Substrate (Stages 110-130) |
+| v2.1.0 | d9b1dae | Per-op codegen + reverse-mode AD wedge |
+| v2.2.0 | 1a4e371 | Polish — v2.1 5-gate carryovers |
+| v2.3.0 | 095c492 | Type-design polish — shared backend schema |
+| v2.4.0 | 1a7ac95 | Real-HW dispatch + ProofManifest + RegAlloc library |
+
+### v2.5 backlog (opens now)
+
+1. Item 15 emitter wiring — thread the register assignment into
+   PtxEmitter + HipEmitter operand emission. The allocator's
+   consumer side; the actual "RegAlloc for emitted kernel bodies"
+   payoff. Substantive — needs a focused block, must keep the 102
+   PTX pins green.
+2. v2.5 polish: 3 type-design LOWs (frozen result dataclasses,
+   NamedTuple assignment pair, Literal classifier returns) +
+   TEST LOW-1 (4 test_cli.py match= anchors).
+3. Stage 35 wmt_predict_or regression (pre-existing, spawned task).
+4. End-of-v2.5 5-clean-gate.
+
+### v3.0 horizon
+
+MLIR migration + LLVM IR rewrite, per v2.0 research "v3.0
+candidates". User authority covers through v3.0.
