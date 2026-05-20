@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A,B,C ✓ | A,B,C 3-clean ✓ | Phase D — Result/panic/string CLOSED |
+| 206 | Runtime & intrinsics (chunked) | chunk A-D ✓ | A,B,C 3-clean ✓ · D audit pending | Phase D — + string output shipped |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -574,3 +574,16 @@ depend on a clean, unambiguous full-suite run.
   Stage 206 surface — TRACE_ENTRY/EXIT, PRINT, the arena ops, the
   QUOTE/SPLICE/MODIFY family — which need LLVM lowering in Phase D
   vs. deferral, then Stage 207 (the parity gate).
+- 2026-05-20 — **Stage 206 chunk D shipped — LLVM string output
+  (print_str PRINT).** A PRINT op with the default `print_str` kind
+  lowers to `call i64 @write(i32 1, ptr @str, i64 len)` (fd 1 =
+  stdout) followed by `trunc i64 ... to i32` — the byte count,
+  i32-truncated to PRINT's result, matching x86_64.py (which stores
+  `eax`). It reuses chunk B/C's content-addressed string globals and
+  the `write` declare. The other PRINT kinds — print_int, write_file,
+  read_file_to_arena, trace_event_count — are fail-closed (raise
+  `LLVMEmitError`): print_int needs an int-to-ASCII digit loop, the
+  file kinds need open/close, all later chunks. Fail-closed also on
+  operands, a non-i32 result, a non-string `text`. 8 new tests; 163
+  passed + 2 skipped across the two LLVM test files. `x86_64.py`
+  untouched. Per-stage 3-clean audit dispatched.

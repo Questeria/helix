@@ -47,6 +47,10 @@ Supported so far (Stages 200, 202-204):
     of the literal's module-scope constant; STR_BYTE to a
     bounds-checked indexed `load i8` (an out-of-range index yields 0,
     with no out-of-bounds read — see the TRAP-shared string globals).
+  - string output (Stage 206): a `print_str` PRINT lowers to
+    `write(1, msg, len)` of a module-scope string constant — the i64
+    byte count truncated to the op's i32 result. Other PRINT kinds
+    (print_int, write_file, ...) are later chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -1260,6 +1264,49 @@ class _FnEmitter:
                 f"{t3} = load i8, ptr {t2}\n"
                 f"{t4} = zext i8 {t3} to i32\n"
                 f"%v{rid} = select i1 {t0}, i32 {t4}, i32 0")
+        if kind == tir.OpKind.PRINT:
+            print_kind = op.attrs.get("_kind", "print_str")
+            if print_kind != "print_str":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: PRINT _kind "
+                    f"{print_kind!r} is not yet emitted by the LLVM "
+                    f"backend (only 'print_str' — print_int / "
+                    f"write_file / read_file_to_arena are later "
+                    f"chunks)")
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: a print_str PRINT "
+                    f"takes no operands, got {len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: PRINT must have "
+                    f"exactly one result, got {len(op.results)}")
+            text = op.attrs.get("text", "")
+            if not isinstance(text, str):
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: a print_str PRINT "
+                    f"needs a string 'text' attr (got "
+                    f"{type(text).__name__})")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} PRINT result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: PRINT result has LLVM "
+                    f"type {res_ty}, but a PRINT yields an i32 (the "
+                    f"byte count)")
+            str_name, str_len = self._register_string(
+                text.encode("utf-8"))
+            self._register_ffi_declare(
+                "write", "@write", "i64", ["i32", "ptr", "i64"])
+            # write(1, msg, len) — fd 1 is stdout. `write` returns an
+            # i64 byte count; PRINT's result is that count truncated
+            # to i32, matching x86_64.py (which stores `eax`).
+            rid = result.id
+            return (f"%v{rid}.t0 = call i64 @write(i32 1, ptr "
+                    f"{str_name}, i64 {str_len})\n"
+                    f"%v{rid} = trunc i64 %v{rid}.t0 to i32")
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
@@ -1268,8 +1315,8 @@ class _FnEmitter:
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
-            f"TRAP; STR_PTR; STR_BYTE; RETURN; BR; COND_BR — floats and "
-            f"structs are later stages)"
+            f"TRAP; STR_PTR; STR_BYTE; print_str PRINT; RETURN; BR; "
+            f"COND_BR — floats and structs are later stages)"
         )
 
 

@@ -10,10 +10,10 @@ div/mod, bitwise ops, unsigned integer dtypes); mutable local
 variables and stack arrays (`alloca`/`load`/`store`/`getelementptr`);
 direct + FFI function calls (`call`, with a module-scope `declare`
 for FFI targets); and the Result<T,E> packed-tag intrinsics
-(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD); panic (TRAP); and
-string-literal access (STR_PTR / STR_BYTE). Everything else must be
-REJECTED loudly with `LLVMEmitError` — a partial backend fails
-closed, it never emits
+(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD); panic (TRAP);
+string-literal access (STR_PTR / STR_BYTE); and string output
+(print_str PRINT). Everything else must be REJECTED loudly with
+`LLVMEmitError` — a partial backend fails closed, it never emits
 wrong IR.
 """
 
@@ -2404,4 +2404,131 @@ def test_stage206_rejects_str_byte_non_string_text():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="string 'text' attr"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 206 chunk D — string output (print_str PRINT)
+# ==========================================================================
+def test_stage206_emit_print_str():
+    """A print_str PRINT lowers to `write(1, msg, len)` of a
+    module-scope string constant, the i64 byte count truncated to the
+    i32 result."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"text": "hi\n"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id}.t0 = call i64 @write(i32 1, ptr @.helix.str."
+            in ll), ll
+    assert f"%v{r.id} = trunc i64 %v{r.id}.t0 to i32" in ll, ll
+    assert "private unnamed_addr constant" in ll, ll
+    assert "declare i64 @write(i32, ptr, i64)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_print_str_result_feeds_op():
+    """A print_str PRINT's result (the i32 byte count) is a normal
+    SSA value — it can feed a later op."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    n = b.emit(tir.OpKind.PRINT, result_ty=_i32(), attrs={"text": "x"})
+    s = b.add(n, b.const_int(1))
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{s.id} = add i32 %v{n.id}, 1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_print_str_deduped():
+    """Two print_str PRINTs of the same text share one string
+    global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(), attrs={"text": "msg"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"text": "msg"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("private unnamed_addr constant") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_print_emit_is_deterministic():
+    """Two emits of a module with a print_str PRINT are
+    byte-identical."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+                   attrs={"text": "out"})
+        b.ret(r)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206_rejects_print_int_kind():
+    """A print_int PRINT is not yet emitted by the LLVM backend —
+    fail closed (it needs an int-to-ASCII conversion, a later
+    chunk)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="print_int"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_print_write_file_kind():
+    """A write_file PRINT is not yet emitted by the LLVM backend."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": "data"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="write_file"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_print_str_with_operands():
+    """A print_str PRINT takes no operands — the text is an attr."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, b.const_int(0), result_ty=_i32(),
+               attrs={"text": "x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="print_str PRINT takes no operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_print_non_i32_result():
+    """A print_str PRINT must yield an i32 byte count."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.PRINT, result_ty=tir.TIRScalar("i64"),
+               attrs={"text": "x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="PRINT yields an i32"):
         llvm_ir.emit_module(mod)
