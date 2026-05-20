@@ -235,6 +235,70 @@ def test_c57_1_recursion_inside_impl_method_detected():
     )
 
 
+def test_feg3_mutual_recursion_rejected():
+    """v2.x re-audit R5 FE-G3: two functions that call each other but
+    neither directly calls itself form a non-terminating cycle. Pre-fix
+    only DIRECT self-calls were collected, so both collected zero
+    recursive calls and were silently certified total. Both must now be
+    flagged."""
+    src = """
+    fn ping(n: i32) -> i32 { pong(n) }
+    fn pong(n: i32) -> i32 { ping(n) }
+    """
+    fails = check_totality(parse(src))
+    names = [name for name, _ in fails]
+    assert "ping" in names and "pong" in names, (
+        f"expected both ping and pong flagged for mutual recursion, "
+        f"got fails={fails}"
+    )
+
+
+def test_feg3_mutual_recursion_with_partial_accepted():
+    """v2.x re-audit R5 FE-G3: an explicit `@partial` on any cycle
+    participant acknowledges the whole cycle's potential
+    non-termination — neither function is flagged."""
+    src = """
+    @partial
+    fn ping(n: i32) -> i32 { pong(n) }
+    fn pong(n: i32) -> i32 { ping(n) }
+    """
+    fails = check_totality(parse(src))
+    assert fails == [], (
+        f"expected @partial to exempt the whole cycle, got {fails}"
+    )
+
+
+def test_feg3_three_function_cycle_rejected():
+    """v2.x re-audit R5 FE-G3: a longer cycle a -> b -> c -> a is still
+    a multi-function cycle — every participant flagged."""
+    src = """
+    fn a(n: i32) -> i32 { b(n) }
+    fn b(n: i32) -> i32 { c(n) }
+    fn c(n: i32) -> i32 { a(n) }
+    """
+    fails = check_totality(parse(src))
+    names = [name for name, _ in fails]
+    assert {"a", "b", "c"} <= set(names), (
+        f"expected a, b, c all flagged, got fails={fails}"
+    )
+
+
+def test_feg3_direct_recursion_not_misreported_as_mutual():
+    """v2.x re-audit R5 FE-G3 guard: a purely directly-recursive
+    function with a strict-decrease measure stays accepted — the
+    mutual-recursion check must not flag a single-function self-loop."""
+    src = """
+    fn countdown(n: i32) -> i32 {
+        if n <= 0 { 0 } else { countdown(n - 1) }
+    }
+    """
+    fails = check_totality(parse(src))
+    assert fails == [], (
+        f"expected directly-recursive countdown accepted (n-1 strictly "
+        f"decreases), got {fails}"
+    )
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

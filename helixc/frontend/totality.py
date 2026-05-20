@@ -9,8 +9,11 @@ require a positive proof (not done here — this stub only rejects the
 obviously-bad cases).
 
 Status:
-- Direct recursion only (mutual recursion: pessimistically rejects
-  unless any participant has @partial).
+- Direct recursion: a measure check — accepted only if some parameter
+  strictly decreases on every self-call (else flagged).
+- Mutual recursion (call-graph cycles spanning 2+ functions):
+  pessimistically flagged — termination of a multi-function cycle is
+  not provable here — unless any cycle participant has @partial.
 - "Strictly decreases" means: for some parameter `p`, every recursive
   call passes either `p - <const>`, `p / <const>`, or a strictly
   smaller component of `p` (e.g. `xs.tail` for a list — not yet wired
@@ -76,13 +79,62 @@ class _SelfCallCollector(ASTVisitor):
         # same auto-descent pattern.
 
 
+class _CallNameCollector(ASTVisitor):
+    """Collect the callee name of every `Call(callee=Name(...))` in the
+    visited node — the call-graph out-edges of a function body. v2.x
+    re-audit R5 FE-G3 (mutual-recursion detection). Like
+    `_SelfCallCollector` this relies on ASTVisitor auto-descent: do NOT
+    call `generic_visit` here (the cycle-73 double-descent fix — though
+    here the names are deduped into a set, so double-counting would be
+    harmless, the discipline is kept uniform)."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    def visit_Call(self, node: A.Call) -> None:
+        callee = node.callee
+        if isinstance(callee, A.Name):
+            self.names.append(callee.name)
+
+
+def _build_call_graph(fns: dict[str, A.FnDecl]) -> dict[str, set[str]]:
+    """Map each function name to the set of in-program functions it
+    calls. Bare-`Name` callees only — matching the call-shape coverage
+    of the direct-recursion checker (`_SelfCallCollector`), so the two
+    checks stay consistent. v2.x re-audit R5 FE-G3."""
+    graph: dict[str, set[str]] = {}
+    for name, fn in fns.items():
+        collector = _CallNameCollector()
+        collector.visit(fn.body)
+        graph[name] = {c for c in collector.names if c in fns}
+    return graph
+
+
+def _reachable(graph: dict[str, set[str]], start: str) -> set[str]:
+    """Every function transitively reachable FROM `start` in the call
+    graph. `start` itself appears in the result only when it lies on a
+    cycle (reachable from one of its own callees). v2.x re-audit R5
+    FE-G3."""
+    seen: set[str] = set()
+    stack: list[str] = list(graph.get(start, ()))
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend(graph.get(n, ()))
+    return seen
+
+
 def check_totality(prog: A.Program) -> list[tuple[str, str]]:
     """Walk every fn in `prog`. For non-`@partial` fns that recurse,
     require at least one parameter that strictly decreases on every
     self-call. Returns [(fn_name, reason)] for failures.
 
-    Mutual recursion is detected and pessimistically reported (each
-    cycle participant flagged unless one is @partial).
+    Mutual recursion is detected and pessimistically reported: a
+    function in a call-graph cycle spanning 2+ functions is flagged
+    (termination of a multi-function cycle is not provable here)
+    unless any cycle participant carries @partial.
 
     Stage 28.9 cycle 58 audit-R C57-1: pre-fix the walker iterated
     only `prog.items` filtered for `A.FnDecl` and missed ImplBlock /
@@ -94,8 +146,43 @@ def check_totality(prog: A.Program) -> list[tuple[str, str]]:
         fns[fn.name] = fn
 
     failures: list[tuple[str, str]] = []
+
+    # v2.x re-audit R5 FE-G3: mutual-recursion (call-graph cycle) check.
+    # The module's conservative-design contract is to flag any
+    # recursion whose termination is not provable here. Pre-fix only
+    # DIRECT self-calls were collected, so a mutually-recursive group
+    # (`f -> g -> f`, neither function calling itself directly)
+    # collected zero recursive calls and was silently certified
+    # "trivially total" — a non-terminating program passing the
+    # totality soundness check. Build the call graph, find every
+    # function on a 2+-function cycle, and pessimistically flag it
+    # unless a cycle participant is @partial.
+    call_graph = _build_call_graph(fns)
+    reach = {name: _reachable(call_graph, name) for name in fns}
+    mutually_flagged: set[str] = set()
     for name, fn in fns.items():
         if "partial" in fn.attrs:
+            continue
+        cycle = {m for m in reach[name] if m != name and name in reach[m]}
+        if not cycle:
+            continue  # not on a multi-function cycle
+        participants = cycle | {name}
+        if any("partial" in fns[m].attrs for m in participants):
+            continue  # an explicit @partial acknowledges the whole cycle
+        others = ", ".join(sorted(participants - {name}))
+        failures.append((
+            name,
+            f"mutually recursive with {{{others}}} — totality of a "
+            f"multi-function call cycle is not provable here. Annotate "
+            f"any participant with @partial to acknowledge potential "
+            f"non-termination.",
+        ))
+        mutually_flagged.add(name)
+
+    # Direct-recursion measure check. A function already flagged for
+    # mutual recursion is not re-checked — one reason per function.
+    for name, fn in fns.items():
+        if "partial" in fn.attrs or name in mutually_flagged:
             continue
         # Find direct recursive calls in fn's body.
         collector = _SelfCallCollector(name)

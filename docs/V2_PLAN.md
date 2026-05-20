@@ -2481,3 +2481,76 @@ test_dashboard_server 114 pass.
 the 5-clean-gate (silent-failure-hunters on FE/IR/BE/RT/TEST). If it
 returns no HIGH / must-fix MEDIUM and the suite is green, record
 "pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.
+
+### 2026-05-20 — gate re-run #3 verdicts → R5 FE batch
+
+The post-R4b 5-clean-gate re-run dispatched 5 parallel
+silent-failure-hunters (FE / IR / BE / RT / TEST). Verdicts:
+
+- **IR: CLEAN** — third consecutive clean re-run; the 4 known LOW
+  re-confirmed benign, no regressions, no new silent-failure surfaces.
+- **BE: CLEAN** — third consecutive clean re-run; BE-H1/M2/M4 hold,
+  the BE-M3 dismissal stands. One LOW (BE-G1: a stale comment at
+  `rocm.py:304` — the code's exhaustiveness guard is correct, the
+  comment predates the v2.1 R1 fix). Non-blocking — added to the LOW
+  backlog.
+- **RT: CLEAN** — all prior fixes verified in place (RT-M1/M2/M3,
+  RT HIGH-1, RT MEDIUM-1/2, the `_exit_code_note` annotation). One
+  LOW (RT-G1: `dashboard_server` silently clamps an out-of-range
+  `size` to [5,20] — a deliberate dev-dashboard rendering bound).
+  Non-blocking.
+- **FE: FINDINGS** — 1 HIGH + 2 MEDIUM (R5 FE, below — SHIPPED).
+- **TEST: FINDINGS** — 5 MEDIUM, 2 of them must-fix (R5 TEST,
+  below — PENDING).
+
+**R5 FE batch — SHIPPED. 1 HIGH + 2 MEDIUM:**
+
+1. **FE-G1 (HIGH) — `flatten_modules._rewrite_pattern` crashed on
+   `PatStruct`.** `_rewrite_pattern` had arms for 7 of the 8 `Pattern`
+   subclasses; a `PatStruct` (struct-destructuring `match` pattern)
+   fell through to `raise NotImplementedError`. flatten_modules runs
+   before typecheck and before match_lower, so ANY module-organized
+   program (`mod` block or multi-segment `use`) that matched a struct
+   pattern crashed the compiler. FIXED: added a `PatStruct` arm — the
+   struct name is remapped via the alias dict (same treatment
+   `StructLit.name` gets) and field sub-patterns recurse. The sibling
+   `_pattern_bindings` had the SAME gap — a `PatStruct` arm's field
+   bindings were not collected, so `_rewrite_expr` could mis-rewrite a
+   use of a struct-pattern-bound name as a module reference; fixed too.
+
+2. **FE-G2 (MEDIUM, must-fix) — `struct_mono._shape_key` /
+   `_marker_key` catchall collapsed distinct shape exprs.** Both fell
+   through to `("?", type(expr).__name__)` for any expr kind that
+   wasn't IntLit/Name/Binary/Unary (resp. Name / Call) — so two
+   structurally-distinct shapes of the same node kind (`[dim(0)]` vs
+   `[dim(1)]`, both `Call`) produced an IDENTICAL key, silently
+   deduping two generic-struct instantiations into one mono'd struct
+   with no diagnostic. FIXED: the catchall now delegates to
+   `ast_hash.structural_hash` (the span-stripped canonicalizer
+   `monomorphize._mangle_shape_expr` already uses) — distinct shapes
+   get distinct keys, and a genuinely unknown Expr subclass raises
+   loudly there rather than collapsing.
+
+3. **FE-G3 (MEDIUM) — `totality.check_totality` did not detect mutual
+   recursion although both docstrings claimed it did.** Only DIRECT
+   self-calls were collected, so a mutually-recursive group
+   (`f -> g -> f`, neither function calling itself directly) collected
+   zero recursive calls and was silently certified "trivially total"
+   — a non-terminating program passing the totality soundness check,
+   contradicting the module's conservative-design contract. FIXED:
+   added call-graph construction (`_CallNameCollector` +
+   `_build_call_graph` + `_reachable`) and a mutual-recursion pass — a
+   function on a 2+-function call cycle is pessimistically flagged
+   unless a cycle participant carries `@partial`. Both docstrings
+   corrected to match.
+
+Verification: test_totality + test_struct_mono 61 pass (incl. 6 new
+R5 regression tests); test_typecheck + test_match + test_deprecated +
+test_codegen_determinism 535 pass (incl. the FE-G1 typecheck
+regression). No regressions in any flatten / struct-mono / totality
+consumer.
+
+**Gate status: OPEN.** FE batch fixed. Next: ship R5 TEST (5 MEDIUM —
+TEST-G1/G2 must-fix bootstrap-self-host-loop assertions, TEST-G3/G5
+residual weak-assertion misses from the R4b autodiff sweep, TEST-G4
+opt-level intent decision), then re-run the 5-clean-gate.

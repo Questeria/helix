@@ -407,6 +407,17 @@ def _pattern_bindings(pat: A.Pattern) -> set[str]:
         for sub in pat.sub_patterns:
             names.update(_pattern_bindings(sub))
         return names
+    if isinstance(pat, A.PatStruct):
+        # v2.x re-audit R5 FE-G1 (HIGH, sibling gap): struct-pattern
+        # field sub-patterns introduce bindings too. Pre-fix a
+        # `Point { x, y }` arm fell through to the empty set, so `x`/`y`
+        # were not recognized as pattern-bound — `_rewrite_expr` could
+        # then mis-rewrite a use of `x` in the arm body as a module
+        # reference.
+        names: set[str] = set()
+        for _fname, sub in pat.fields:
+            names.update(_pattern_bindings(sub))
+        return names
     return set()
 
 
@@ -996,6 +1007,22 @@ def _rewrite_pattern(pat: A.Pattern, aliases: dict[str, str]) -> A.Pattern:
             lo=_rewrite_expr(pat.lo, aliases),
             hi=_rewrite_expr(pat.hi, aliases),
             inclusive=pat.inclusive,
+        )
+    if isinstance(pat, A.PatStruct):
+        # v2.x re-audit R5 FE-G1 (HIGH): a struct-destructuring pattern
+        # in a module-organized program. `PatStruct.name` is a
+        # struct-type reference that mod-flattening must remap — same
+        # treatment `_rewrite_expr` gives `StructLit.name`. Each field's
+        # sub-pattern recurses. Pre-fix this fell through to the
+        # NotImplementedError below, crashing the compiler on any `mod`-
+        # or multi-segment-`use`-bearing program that matched a struct
+        # pattern (flatten_modules runs before match_lower).
+        return A.PatStruct(
+            span=pat.span,
+            name=aliases.get(pat.name, pat.name),
+            fields=[(fname, _rewrite_pattern(fpat, aliases))
+                    for (fname, fpat) in pat.fields],
+            ignore_rest=pat.ignore_rest,
         )
     if isinstance(pat, (A.PatBind, A.PatWildcard)):
         return pat

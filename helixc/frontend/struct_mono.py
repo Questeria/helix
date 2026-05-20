@@ -32,6 +32,7 @@ from copy import deepcopy
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_hash import structural_hash
 from .ast_walker import ASTVisitor
 from .monomorphize import _mangle_ty, substitute_ty, ShapeFoldError
 
@@ -214,9 +215,16 @@ def _shape_key(expr) -> tuple:
     Name or simple Binary) to a hashable key so TyTensor / TyTile
     shapes don't collapse to one entry.
 
-    Conservative: unknown expr kinds collapse to their type name +
-    span — which preserves identity for the common case of distinct
-    AST nodes while not promising exact-structure equality."""
+    v2.x re-audit R5 FE-G2: the prior catchall returned
+    `("?", type(expr).__name__)` for any other expr kind — so two
+    structurally-distinct shapes of the same node kind (`[dim(0)]` vs
+    `[dim(1)]`, both `Call`; or two distinct `Field`/`Cast`/`Index`
+    shapes) produced an IDENTICAL key, silently collapsing two
+    generic-struct instantiations into one mono'd struct with no
+    diagnostic. Unknown kinds now delegate to `structural_hash` (the
+    span-stripped canonicalizer `monomorphize._mangle_shape_expr`
+    already uses) — distinct shapes get distinct keys, and a genuinely
+    unknown Expr subclass raises loudly there rather than collapsing."""
     if expr is None:
         return ("none",)
     if isinstance(expr, A.IntLit):
@@ -228,19 +236,22 @@ def _shape_key(expr) -> tuple:
                 _shape_key(expr.left), _shape_key(expr.right))
     if isinstance(expr, A.Unary):
         return ("un", expr.op, _shape_key(expr.operand))
-    return ("?", type(expr).__name__)
+    return ("hash", structural_hash(expr))
 
 
 def _marker_key(expr) -> tuple:
-    """Conservative key for device / memspace / layout markers (which
-    are Expr-shaped in the AST). Same convention as _shape_key."""
+    """Key for device / memspace / layout markers (which are
+    Expr-shaped in the AST). Same convention as _shape_key — including
+    the v2.x re-audit R5 FE-G2 fix: unknown kinds delegate to
+    `structural_hash` rather than the prior identity-collapsing
+    `("?", type(expr).__name__)` catchall."""
     if expr is None:
         return ("none",)
     if isinstance(expr, A.Name):
         return ("name", expr.name)
     if isinstance(expr, A.Call) and isinstance(expr.callee, A.Name):
         return ("call", expr.callee.name, tuple(_shape_key(a) for a in expr.args))
-    return ("?", type(expr).__name__)
+    return ("hash", structural_hash(expr))
 
 
 def _ty_key(t: A.TyNode):

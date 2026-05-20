@@ -870,5 +870,47 @@ def test_c4_4_nested_turbofish_end_to_end_no_unresolved_generic_param():
     )
 
 
+def test_feg2_shape_key_distinguishes_call_exprs():
+    """v2.x re-audit R5 FE-G2: two structurally-distinct Call shape
+    exprs must NOT collapse to one key. Pre-fix the `_shape_key`
+    catchall returned ('?', 'Call') for both `dim(0)` and `dim(1)`, so
+    a generic struct over `Tensor<f32,[dim(0)]>` and one over
+    `Tensor<f32,[dim(1)]>` deduped to a single mono'd struct with no
+    diagnostic. Post-fix the catchall delegates to structural_hash."""
+    from helixc.frontend.struct_mono import _shape_key
+    sp = A.Span(line=1, col=1)
+
+    def call(arg_val):
+        return A.Call(
+            span=sp,
+            callee=A.Name(span=sp, name="dim", generics=[]),
+            args=[A.IntLit(span=sp, value=arg_val)],
+        )
+
+    assert _shape_key(call(0)) != _shape_key(call(1)), (
+        "distinct Call shape exprs collapsed to one key"
+    )
+    # Identical shapes must STILL share a key — dedup must keep working.
+    assert _shape_key(call(7)) == _shape_key(call(7))
+
+
+def test_feg2_marker_key_distinguishes_field_exprs():
+    """v2.x re-audit R5 FE-G2: distinct marker exprs that fall to the
+    `_marker_key` catchall (e.g. `cfg.dev_a` vs `cfg.dev_b` field
+    access) must get distinct keys, not the identity-collapsing
+    ('?', 'Field') tuple."""
+    from helixc.frontend.struct_mono import _marker_key
+    sp = A.Span(line=1, col=1)
+    base = A.Name(span=sp, name="cfg", generics=[])
+    f_a = A.Field(span=sp, obj=base, name="dev_a")
+    f_b = A.Field(span=sp, obj=base, name="dev_b")
+    assert _marker_key(f_a) != _marker_key(f_b), (
+        "distinct Field marker exprs collapsed to one key"
+    )
+    assert _marker_key(f_a) == _marker_key(
+        A.Field(span=A.Span(line=9, col=9), obj=base, name="dev_a")
+    ), "span-only difference must NOT change the key"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -9931,6 +9931,32 @@ def test_c92_f1_valid_intlit_int_suffix_accepted():
     )
 
 
+def test_feg1_struct_pattern_in_module_flattens_and_typechecks():
+    """v2.x re-audit R5 FE-G1 (HIGH): a struct-destructuring `match`
+    pattern inside a `mod` block. Pre-fix `flatten_modules._rewrite_
+    pattern` had no `PatStruct` arm — flatten (which runs before
+    typecheck and before match_lower) hit a `raise NotImplementedError`
+    and crashed the compiler on any module-organized program that
+    matched a struct pattern. Post-fix flatten rewrites the PatStruct
+    (struct name remapped via the intra-module sibling alias, field
+    sub-patterns recursed) and the program typechecks clean."""
+    src = """
+    mod geo {
+        struct Point { x: i32, y: i32 }
+        fn sum(p: Point) -> i32 {
+            match p {
+                Point { x, y } => x + y,
+                _ => 0,
+            }
+        }
+    }
+    fn main() -> i32 { 0 }
+    """
+    # Pre-fix this raised NotImplementedError from flatten_modules.
+    errs = check_after_flatten(src)
+    assert errs == [], f"expected clean typecheck, got {errs}"
+
+
 def main():
     # Tests requiring pytest fixtures (tmp_path / monkeypatch / capsys /
     # etc.) are skipped here — the manual runner can't synthesize
