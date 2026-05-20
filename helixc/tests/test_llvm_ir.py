@@ -190,18 +190,23 @@ def test_stage200_rejects_unsupported_op():
         llvm_ir.emit_module(mod)
 
 
-def test_stage200_rejects_multi_block_function():
-    """A function with more than one block is rejected — control flow
-    is Stage 202, not Stage 200."""
+def test_stage202_emit_straight_multiblock():
+    """Stage 202 — a two-block function (entry unconditionally branches
+    to a second block which returns) emits both blocks with labels and
+    a `br`. Multi-block is now supported, not rejected."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     b.begin_function("f", [], _i32())
-    b.append_block()  # second block -> out of scalar-core scope
-    b.ret(b.const_int(0))
+    second = b.append_block()
+    b.emit(tir.OpKind.BR, attrs={"target_block": second.id})
+    b.switch_to(second)
+    b.ret(b.const_int(7))
     b.end_function()
 
-    with pytest.raises(llvm_ir.LLVMEmitError, match="single-block"):
-        llvm_ir.emit_module(mod)
+    ll = llvm_ir.emit_module(mod)
+    assert f"br label %bb{second.id}" in ll, ll
+    assert "ret i32 7" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
 
 
 def test_stage200_rejects_non_integer_return_type():
@@ -226,7 +231,7 @@ def test_stage200_rejects_missing_terminator():
     b.const_int(1)  # a value, but no RETURN
     b.end_function()
 
-    with pytest.raises(llvm_ir.LLVMEmitError, match="no RETURN"):
+    with pytest.raises(llvm_ir.LLVMEmitError, match="no terminator"):
         llvm_ir.emit_module(mod)
 
 
@@ -240,7 +245,7 @@ def test_stage200_rejects_value_used_before_definition():
     b.ret(stray)
     b.end_function()
 
-    with pytest.raises(llvm_ir.LLVMEmitError, match="before it is defined"):
+    with pytest.raises(llvm_ir.LLVMEmitError, match="defined by no op"):
         llvm_ir.emit_module(mod)
 
 
@@ -346,4 +351,134 @@ def test_stage200_rejects_const_int_bool_value():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="integer 'value' attr"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 202 — control flow (multi-block, br, phi)
+# ==========================================================================
+def test_stage202_emit_if_else_with_phi():
+    """An if/else: the entry COND_BRs to two arms, each BRs to a merge
+    block whose parameter becomes a `phi` collecting both arms'
+    values."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("pick", [("c", tir.TIRScalar("bool"))], _i32())
+    then_blk = b.append_block()
+    else_blk = b.append_block()
+    merge = b.append_block()
+    b.emit(tir.OpKind.COND_BR, fn.params[0],
+           attrs={"true_block": then_blk.id, "false_block": else_blk.id})
+    b.switch_to(then_blk)
+    b.emit(tir.OpKind.BR, b.const_int(10),
+           attrs={"target_block": merge.id})
+    b.switch_to(else_blk)
+    b.emit(tir.OpKind.BR, b.const_int(20),
+           attrs={"target_block": merge.id})
+    b.switch_to(merge)
+    p = b.new_block_param(_i32())
+    b.ret(p)
+    b.end_function()
+
+    ll = llvm_ir.emit_module(mod)
+    assert (f"br i1 %v{fn.params[0].id}, label %bb{then_blk.id}, "
+            f"label %bb{else_blk.id}") in ll, ll
+    assert (f"%v{p.id} = phi i32 [ 10, %bb{then_blk.id} ], "
+            f"[ 20, %bb{else_blk.id} ]") in ll, ll
+    assert f"ret i32 %v{p.id}" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage202_emit_loop_phi_forward_reference():
+    """A loop header's `phi` references a value defined LATER on the
+    back-edge — the pre-pass registers every value up front so the
+    forward reference resolves (LLVM textual IR permits it)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "loop", [("start", _i32()), ("again", tir.TIRScalar("bool"))],
+        _i32())
+    header = b.append_block()
+    body = b.append_block()
+    exit_blk = b.append_block()
+    b.emit(tir.OpKind.BR, fn.params[0],
+           attrs={"target_block": header.id})
+    b.switch_to(header)
+    acc = b.new_block_param(_i32())
+    b.emit(tir.OpKind.COND_BR, fn.params[1],
+           attrs={"true_block": body.id, "false_block": exit_blk.id})
+    b.switch_to(body)
+    acc2 = b.add(acc, acc)
+    b.emit(tir.OpKind.BR, acc2, attrs={"target_block": header.id})
+    b.switch_to(exit_blk)
+    b.ret(acc)
+    b.end_function()
+
+    ll = llvm_ir.emit_module(mod)
+    entry_id = fn.blocks[0].id
+    assert f"%v{acc.id} = phi i32" in ll, ll
+    # entry edge + the body back-edge; acc2 is defined later, in `body`.
+    assert f"[ %v{fn.params[0].id}, %bb{entry_id} ]" in ll, ll
+    assert f"[ %v{acc2.id}, %bb{body.id} ]" in ll, ll
+    assert f"%v{acc2.id} = add i32 %v{acc.id}, %v{acc.id}" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage202_rejects_branch_to_entry_block():
+    """LLVM forbids branching to a function's entry block — a BR that
+    targets block 0 is rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [], _i32())
+    entry_id = fn.blocks[0].id
+    second = b.append_block()
+    b.emit(tir.OpKind.BR, attrs={"target_block": second.id})
+    b.switch_to(second)
+    b.emit(tir.OpKind.BR, attrs={"target_block": entry_id})  # -> entry
+    b.end_function()
+
+    with pytest.raises(llvm_ir.LLVMEmitError, match="entry block"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage202_rejects_non_i1_cond_br_condition():
+    """A COND_BR whose condition is not i1 (here an i32 parameter) is
+    rejected — LLVM `br` requires an i1 condition."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    t_blk = b.append_block()
+    f_blk = b.append_block()
+    b.emit(tir.OpKind.COND_BR, fn.params[0],
+           attrs={"true_block": t_blk.id, "false_block": f_blk.id})
+    b.switch_to(t_blk)
+    b.ret(b.const_int(1))
+    b.switch_to(f_blk)
+    b.ret(b.const_int(0))
+    b.end_function()
+
+    with pytest.raises(llvm_ir.LLVMEmitError, match="i1"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage202_rejects_phi_input_from_cond_br():
+    """A block with parameters reached via a COND_BR is rejected — a
+    COND_BR carries no branch arguments, so it cannot supply phi
+    inputs."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("c", tir.TIRScalar("bool"))], _i32())
+    target = b.append_block()
+    other = b.append_block()
+    b.emit(tir.OpKind.COND_BR, fn.params[0],
+           attrs={"true_block": target.id, "false_block": other.id})
+    b.switch_to(target)
+    p = b.new_block_param(_i32())   # a param, but COND_BR supplies no arg
+    b.ret(p)
+    b.switch_to(other)
+    b.ret(b.const_int(0))
+    b.end_function()
+
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="only BR can supply phi inputs"):
         llvm_ir.emit_module(mod)

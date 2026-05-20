@@ -8,19 +8,22 @@ consumes the same host IR — a `tir.Module` — that
 `helixc/backend/x86_64.py::compile_module_to_elf` consumes, and
 `x86_64.py` is left completely untouched until the Stage 221 cutover.
 
-Stage 200 scope — the SCALAR CORE substrate only:
+Supported so far (Stages 200 + 202):
   - module header + target triple
   - a `define` for each function (integer params + integer/void return)
   - integer constants (CONST_INT, materialized as inline literals)
-  - integer add / sub / mul
-  - `ret`
+  - integer add / sub / mul; `ret`
+  - control flow (Stage 202): multi-block functions — every tir block
+    becomes a labelled LLVM basic block; BR / COND_BR become LLVM
+    `br`; a block's tir parameters become LLVM `phi` nodes collecting
+    the matching branch argument from each predecessor.
 
-Anything outside that set — control flow, memory, calls, floats, the
+Anything outside that set — memory, calls, floats, comparisons, the
 wider op surface — is REJECTED with a loud `LLVMEmitError`, never
-emitted wrong. Those land in Stages 202-206. A mock-validation path
+emitted wrong. Those land in Stages 203-206. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
 an LLVM toolchain, mirroring `gpu_ci.py`'s mock path; real
-`llvm-as`/`opt`/`llc` dispatch behind tool-detection is Stage 201.
+`llvm-as`/`opt`/`llc` dispatch (`llvm_toolchain.py`) is Stage 201.
 
 License: Apache 2.0
 """
@@ -118,106 +121,220 @@ def _llvm_global_name(name: str) -> str:
 
 
 class _FnEmitter:
-    """Emits the LLVM IR for one `tir.FnIR`. Holds the per-function map
-    from a TIR SSA value id to its LLVM operand text — either an `%vN`
-    register or, for a CONST_INT, an inline integer literal."""
+    """Emits the LLVM IR for one `tir.FnIR`.
+
+    Stage 200 handled a single straight-line block; Stage 202 adds
+    control flow — every tir block becomes a labelled LLVM basic
+    block, tir BR / COND_BR become LLVM `br`, and a block's tir
+    parameters become LLVM `phi` nodes collecting the matching branch
+    argument from each predecessor.
+
+    `operand` maps a tir SSA value id to its LLVM operand text — an
+    inline integer literal (a CONST_INT) or an `%vN` register. It is
+    fully populated by `_prepass` BEFORE any block is emitted, so a
+    loop-header phi can reference a value defined later on the
+    back-edge (LLVM textual IR permits the forward reference)."""
 
     def __init__(self, fn: tir.FnIR):
         self.fn = fn
         # tir.Value.id -> LLVM operand text
         self.operand: dict[int, str] = {}
 
+    @staticmethod
+    def _block_label(block_id: int) -> str:
+        return f"bb{block_id}"
+
     def _ref(self, v: tir.Value) -> str:
-        """The LLVM operand text for an already-defined TIR value (a
-        parameter, or the result of an earlier op in this block)."""
+        """LLVM operand text for a tir value. Every value the function
+        defines is registered by `_prepass`; a missing one is genuinely
+        undefined (defined by no op, parameter, or block parameter)."""
         text = self.operand.get(v.id)
         if text is None:
             raise LLVMEmitError(
-                f"function {self.fn.name!r}: value v{v.id} is used "
-                f"before it is defined — Stage 200 emits straight-line "
-                f"scalar code only (block parameters / phi nodes are "
-                f"Stage 202)"
+                f"function {self.fn.name!r}: value v{v.id} is referenced "
+                f"but is defined by no op, function parameter, or block "
+                f"parameter"
             )
         return text
 
+    def _prepass(self) -> None:
+        """Register the LLVM operand text of every value the function
+        defines — function params, block params, op results — before
+        emission, so a forward reference (a loop-header phi citing a
+        back-edge value) resolves. CONST_INT results become inline
+        literals; everything else becomes an `%vN` register."""
+        for p in self.fn.params:
+            self.operand[p.id] = f"%v{p.id}"
+        for block in self.fn.blocks:
+            for p in block.params:
+                self.operand[p.id] = f"%v{p.id}"
+            for op in block.ops:
+                if op.kind == tir.OpKind.CONST_INT:
+                    self._register_const_int(op)
+                else:
+                    for r in op.results:
+                        self.operand[r.id] = f"%v{r.id}"
+
+    def _register_const_int(self, op: tir.Op) -> None:
+        """Validate a CONST_INT and record its inline-literal operand."""
+        if len(op.results) != 1:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: CONST_INT must have exactly "
+                f"one result, got {len(op.results)}"
+            )
+        result = op.results[0]
+        value = op.attrs.get("value")
+        # `type(value) is int`, NOT isinstance — a Python `bool` is an
+        # int subclass and would `str()` to "True"/"False", emitting
+        # malformed IR. A real boolean constant is a CONST_BOOL op.
+        if type(value) is not int:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: CONST_INT op needs an "
+                f"integer 'value' attr (got {value!r}: "
+                f"{type(value).__name__})"
+            )
+        _llvm_int_type(
+            result.ty, ctx=f"function {self.fn.name!r} CONST_INT")
+        self.operand[result.id] = str(value)
+
+    def _compute_predecessors(
+            self) -> "dict[int, list[tuple[tir.Block, tir.Op]]]":
+        """Map each block id -> the list of (predecessor block, branch
+        op) edges into it. A BR is one edge (carrying its branch args);
+        a COND_BR is one edge per DISTINCT target (carrying no args)."""
+        block_ids = {b.id for b in self.fn.blocks}
+        preds: "dict[int, list[tuple[tir.Block, tir.Op]]]" = {
+            b.id: [] for b in self.fn.blocks}
+        for block in self.fn.blocks:
+            for op in block.ops:
+                if op.kind == tir.OpKind.BR:
+                    tgt = op.attrs.get("target_block")
+                    if tgt not in block_ids:
+                        raise LLVMEmitError(
+                            f"function {self.fn.name!r}: BR in bb"
+                            f"{block.id} targets unknown block {tgt!r}")
+                    preds[tgt].append((block, op))
+                elif op.kind == tir.OpKind.COND_BR:
+                    seen: set = set()
+                    for key in ("true_block", "false_block"):
+                        tgt = op.attrs.get(key)
+                        if tgt not in block_ids:
+                            raise LLVMEmitError(
+                                f"function {self.fn.name!r}: COND_BR in "
+                                f"bb{block.id} {key} is unknown block "
+                                f"{tgt!r}")
+                        if tgt not in seen:
+                            seen.add(tgt)
+                            preds[tgt].append((block, op))
+        return preds
+
     def emit(self) -> str:
         fn = self.fn
-        if len(fn.blocks) != 1:
-            raise LLVMEmitError(
-                f"function {fn.name!r}: Stage 200 scalar core emits "
-                f"single-block functions only (got {len(fn.blocks)} "
-                f"blocks — control flow is Stage 202)"
-            )
+        if not fn.blocks:
+            raise LLVMEmitError(f"function {fn.name!r} has no blocks")
         ret_ty = _llvm_return_type(
             fn.return_ty, ctx=f"function {fn.name!r} return type")
-        # Parameters become %v<id> registers.
         param_decls: list[str] = []
         for p in fn.params:
             p_ty = _llvm_int_type(
                 p.ty, ctx=f"function {fn.name!r} parameter")
-            reg = f"%v{p.id}"
-            self.operand[p.id] = reg
-            param_decls.append(f"{p_ty} {reg}")
+            param_decls.append(f"{p_ty} %v{p.id}")
+        self._prepass()
+        preds = self._compute_predecessors()
+        entry = fn.blocks[0]
+        if preds.get(entry.id):
+            raise LLVMEmitError(
+                f"function {fn.name!r}: the entry block bb{entry.id} is "
+                f"a branch target — LLVM forbids branching to a "
+                f"function's entry block")
+        if entry.params:
+            raise LLVMEmitError(
+                f"function {fn.name!r}: the entry block bb{entry.id} "
+                f"carries block parameters — the entry block receives "
+                f"the function parameters, not phi inputs")
         lines: list[str] = [
             f"define {ret_ty} {_llvm_global_name(fn.name)}"
             f"({', '.join(param_decls)}) {{"
         ]
-        block = fn.blocks[0]
-        if block.params:
-            raise LLVMEmitError(
-                f"function {fn.name!r}: entry block carries block "
-                f"parameters — Stage 200 emits single-block scalar "
-                f"functions with no phis (Stage 202)"
-            )
+        for block in fn.blocks:
+            lines.extend(self._emit_block(block, preds))
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _emit_block(
+            self, block: tir.Block,
+            preds: "dict[int, list[tuple[tir.Block, tir.Op]]]"
+            ) -> list[str]:
+        lines = [f"{self._block_label(block.id)}:"]
+        lines.extend(self._emit_phis(block, preds.get(block.id, [])))
         saw_terminator = False
         for op in block.ops:
             if saw_terminator:
                 raise LLVMEmitError(
-                    f"function {fn.name!r}: op {op.kind.value} follows "
-                    f"the RETURN terminator — unreachable code"
-                )
+                    f"function {self.fn.name!r}: op {op.kind.value} in "
+                    f"bb{block.id} follows the block terminator — "
+                    f"unreachable code")
             text = self._emit_op(op)
             if text is not None:
                 lines.append(f"  {text}")
-            if op.kind == tir.OpKind.RETURN:
+            if op.kind in (tir.OpKind.RETURN, tir.OpKind.BR,
+                           tir.OpKind.COND_BR):
                 saw_terminator = True
         if not saw_terminator:
             raise LLVMEmitError(
-                f"function {fn.name!r}: no RETURN op — every LLVM basic "
-                f"block must end with a terminator"
-            )
-        lines.append("}")
-        return "\n".join(lines)
+                f"function {self.fn.name!r}: block bb{block.id} has no "
+                f"terminator — every LLVM basic block must end with "
+                f"RETURN, BR, or COND_BR")
+        return lines
+
+    def _emit_phis(
+            self, block: tir.Block,
+            block_preds: "list[tuple[tir.Block, tir.Op]]") -> list[str]:
+        """Emit a `phi` for each tir block parameter, collecting the
+        matching branch argument from every predecessor."""
+        if not block.params:
+            return []
+        if not block_preds:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: block bb{block.id} has "
+                f"{len(block.params)} block parameter(s) but no "
+                f"predecessors — a phi node needs at least one incoming "
+                f"edge")
+        lines: list[str] = []
+        for i, param in enumerate(block.params):
+            pty = _llvm_int_type(
+                param.ty,
+                ctx=f"function {self.fn.name!r} bb{block.id} param {i}")
+            incomings: list[str] = []
+            for pred_block, br_op in block_preds:
+                if br_op.kind != tir.OpKind.BR:
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: block bb{block.id} "
+                        f"has block parameters, but predecessor bb"
+                        f"{pred_block.id} reaches it via "
+                        f"{br_op.kind.value}, which carries no branch "
+                        f"arguments — only BR can supply phi inputs")
+                if len(br_op.operands) != len(block.params):
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: BR from bb"
+                        f"{pred_block.id} to bb{block.id} passes "
+                        f"{len(br_op.operands)} argument(s) but the "
+                        f"target block has {len(block.params)} "
+                        f"parameter(s)")
+                incomings.append(
+                    f"[ {self._ref(br_op.operands[i])}, "
+                    f"%{self._block_label(pred_block.id)} ]")
+            lines.append(
+                f"  %v{param.id} = phi {pty} {', '.join(incomings)}")
+        return lines
 
     def _emit_op(self, op: tir.Op) -> Optional[str]:
-        """Emit one op. Returns the instruction text, or None when the
-        op materializes no instruction (a CONST_INT is recorded as an
-        inline literal and used directly at every use site)."""
+        """Emit one op's instruction text, or None when it materializes
+        no instruction (a CONST_INT — recorded as an inline literal by
+        `_prepass`)."""
         kind = op.kind
         if kind == tir.OpKind.CONST_INT:
-            if len(op.results) != 1:
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: CONST_INT must have "
-                    f"exactly one result, got {len(op.results)}"
-                )
-            result = op.results[0]
-            value = op.attrs.get("value")
-            # `type(value) is int`, NOT isinstance — a Python `bool` is
-            # an int subclass; a bool would `str()` to "True"/"False"
-            # and emit malformed IR (`ret i32 True`). A real boolean
-            # constant is a CONST_BOOL op, not CONST_INT.
-            if type(value) is not int:
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: CONST_INT op needs an "
-                    f"integer 'value' attr (got {value!r}: "
-                    f"{type(value).__name__})"
-                )
-            # Validate the result type is emittable; the literal is
-            # then used inline at every use site.
-            _llvm_int_type(
-                result.ty, ctx=f"function {self.fn.name!r} CONST_INT")
-            self.operand[result.id] = str(value)
-            return None
+            return None  # registered as an inline literal by _prepass
         if kind in _LLVM_SCALAR_BINOPS:
             if len(op.results) != 1:
                 raise LLVMEmitError(
@@ -234,11 +351,9 @@ class _FnEmitter:
             ty = _llvm_int_type(result.ty, ctx=ctx)
             # LLVM requires a binary op's two operands and its result to
             # share one type. The host IR does not structurally
-            # guarantee that (IRBuilder.add copies the lhs type;
-            # IRBuilder.emit accepts an arbitrary result_ty), so verify
-            # it here — a mismatch would otherwise silently emit
-            # malformed LLVM IR (an `add i32` referencing an i64
-            # register).
+            # guarantee that, so verify it — a mismatch would otherwise
+            # silently emit malformed IR (an `add i32` referencing an
+            # i64 register).
             for i, operand in enumerate(op.operands):
                 operand_ty = _llvm_int_type(
                     operand.ty, ctx=f"{ctx} operand {i}")
@@ -250,13 +365,11 @@ class _FnEmitter:
                     )
             lhs = self._ref(op.operands[0])
             rhs = self._ref(op.operands[1])
-            reg = f"%v{result.id}"
-            self.operand[result.id] = reg
-            # NOTE (Stage 207 parity): emitted as a plain wrapping LLVM
-            # `add`/`sub`/`mul` — no `nsw`/`nuw`. Whether that matches
-            # x86_64.py's integer-overflow behaviour is a parity-gate
-            # (Stage 207) decision, not a Stage 200 one.
-            return f"{reg} = {_LLVM_SCALAR_BINOPS[kind]} {ty} {lhs}, {rhs}"
+            # NOTE (Stage 207 parity): plain wrapping `add`/`sub`/`mul`,
+            # no `nsw`/`nuw` — whether that matches x86_64.py's
+            # overflow behaviour is a Stage 207 parity decision.
+            return (f"%v{result.id} = {_LLVM_SCALAR_BINOPS[kind]} "
+                    f"{ty} {lhs}, {rhs}")
         if kind == tir.OpKind.RETURN:
             if not op.operands:
                 return "ret void"
@@ -269,17 +382,41 @@ class _FnEmitter:
             ty = _llvm_int_type(
                 v.ty, ctx=f"function {self.fn.name!r} RETURN value")
             return f"ret {ty} {self._ref(v)}"
+        if kind == tir.OpKind.BR:
+            # target validity already checked by _compute_predecessors.
+            tgt = op.attrs.get("target_block")
+            return f"br label %{self._block_label(tgt)}"
+        if kind == tir.OpKind.COND_BR:
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: COND_BR expects exactly "
+                    f"one operand (the condition), got "
+                    f"{len(op.operands)}")
+            cond = op.operands[0]
+            cond_ty = _llvm_int_type(
+                cond.ty,
+                ctx=f"function {self.fn.name!r} COND_BR condition")
+            if cond_ty != "i1":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: COND_BR condition has "
+                    f"LLVM type {cond_ty}, but LLVM `br` requires an i1 "
+                    f"(bool) condition")
+            true_lbl = self._block_label(op.attrs["true_block"])
+            false_lbl = self._block_label(op.attrs["false_block"])
+            return (f"br i1 {self._ref(cond)}, label %{true_lbl}, "
+                    f"label %{false_lbl}")
         raise LLVMEmitError(
-            f"function {self.fn.name!r}: Stage 200 scalar core does not "
+            f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT, ADD, SUB, MUL, "
-            f"RETURN; the wider op set is Stages 202-206)"
+            f"RETURN, BR, COND_BR; comparisons / select / the wider op "
+            f"set are Stage 203+)"
         )
 
 
 def emit_function(fn: tir.FnIR) -> str:
     """Emit the textual LLVM IR `define` for one host-IR function.
-    Raises `LLVMEmitError` for any construct outside the Stage 200
-    scalar core."""
+    Raises `LLVMEmitError` for any construct outside the supported set
+    (Stages 200 + 202 — the scalar core plus control flow)."""
     return _FnEmitter(fn).emit()
 
 
@@ -292,7 +429,7 @@ def emit_module(module: tir.Module) -> str:
     Functions are emitted in `module.functions` insertion order so the
     output is deterministic (a Stage 207 parity prerequisite)."""
     lines: list[str] = [
-        "; helixc LLVM IR backend — v3.0 Phase D Stage 200 (scalar core)",
+        "; helixc LLVM IR backend — v3.0 Phase D (Stages 200-202)",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
         "",
     ]
