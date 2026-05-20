@@ -1,5 +1,5 @@
 """
-helixc/backend/llvm_ir.py — textual LLVM IR backend (v3.0 Phase D, Stage 200).
+helixc/backend/llvm_ir.py — textual LLVM IR backend (v3.0 Phase D).
 
 v3.0 replaces the hand-rolled x86_64 ELF emitter with a backend that
 emits textual LLVM IR for the LLVM toolchain (`opt` + `llc`) to consume.
@@ -333,6 +333,18 @@ class _FnEmitter:
                 f"{len(block.params)} block parameter(s) but no "
                 f"predecessors — a phi node needs at least one incoming "
                 f"edge")
+        # An LLVM phi requires exactly one incoming edge per DISTINCT
+        # predecessor block — a duplicate predecessor label is malformed
+        # IR. Unreachable today (a block has one terminator, so it
+        # cannot branch to one target twice), but the guard keeps the
+        # phi emitter sound if a future multi-edge construct lands.
+        pred_ids = [pb.id for pb, _ in block_preds]
+        if len(pred_ids) != len(set(pred_ids)):
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: block bb{block.id} has a "
+                f"duplicate predecessor (block ids {sorted(pred_ids)}) — "
+                f"a phi node needs exactly one incoming edge per "
+                f"predecessor block")
         lines: list[str] = []
         for i, param in enumerate(block.params):
             pty = _llvm_int_type(
@@ -354,8 +366,26 @@ class _FnEmitter:
                         f"{len(br_op.operands)} argument(s) but the "
                         f"target block has {len(block.params)} "
                         f"parameter(s)")
+                arg = br_op.operands[i]
+                # The incoming value's LLVM type must equal the phi
+                # node's (the block parameter's) type — otherwise the
+                # emitted `phi {pty} [ %v..., ... ]` references a
+                # wrong-width register: malformed IR. Every other
+                # operand-consuming op type-checks; the phi path must
+                # too.
+                arg_ty = _llvm_int_type(
+                    arg.ty,
+                    ctx=(f"function {self.fn.name!r} bb{block.id} param "
+                         f"{i} incoming from bb{pred_block.id}"))
+                if arg_ty != pty:
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: BR from bb"
+                        f"{pred_block.id} to bb{block.id} passes an "
+                        f"argument of LLVM type {arg_ty} for block "
+                        f"parameter {i} (type {pty}) — a phi incoming "
+                        f"must match the parameter type")
                 incomings.append(
-                    f"[ {self._ref(br_op.operands[i])}, "
+                    f"[ {self._ref(arg)}, "
                     f"%{self._block_label(pred_block.id)} ]")
             lines.append(
                 f"  %v{param.id} = phi {pty} {', '.join(incomings)}")
@@ -434,8 +464,10 @@ class _FnEmitter:
                     f"function {self.fn.name!r}: COND_BR condition has "
                     f"LLVM type {cond_ty}, but LLVM `br` requires an i1 "
                     f"(bool) condition")
-            true_lbl = self._block_label(op.attrs["true_block"])
-            false_lbl = self._block_label(op.attrs["false_block"])
+            # Both keys were validated present by _compute_predecessors;
+            # `.get` keeps this consistent with the BR path above.
+            true_lbl = self._block_label(op.attrs.get("true_block"))
+            false_lbl = self._block_label(op.attrs.get("false_block"))
             return (f"br i1 {self._ref(cond)}, label %{true_lbl}, "
                     f"label %{false_lbl}")
         if kind in _LLVM_ICMP_PREDS:
@@ -543,7 +575,7 @@ def emit_module(module: tir.Module) -> str:
     Functions are emitted in `module.functions` insertion order so the
     output is deterministic (a Stage 207 parity prerequisite)."""
     lines: list[str] = [
-        "; helixc LLVM IR backend — v3.0 Phase D (Stages 200-202)",
+        "; helixc LLVM IR backend — v3.0 Phase D (Stages 200-203)",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
         "",
     ]
@@ -553,19 +585,28 @@ def emit_module(module: tir.Module) -> str:
     return "\n".join(lines)
 
 
+# Line-leading tokens of an LLVM basic-block terminator instruction.
+_LL_TERMINATOR_PREFIXES: tuple[str, ...] = (
+    "ret ", "ret\t", "br ", "switch ", "indirectbr ",
+    "unreachable", "resume ", "callbr ",
+)
+
+
 def mock_validate_ll(ll_text: str) -> list[str]:
     """Toolchain-free shape check on emitted LLVM IR — returns a list of
     problem strings (empty == OK). Mirrors `gpu_ci.py`'s mock-validation
     path: a structural sanity check on this emitter's `.ll` output that
     runs in CI on a machine with no LLVM installed. It is NOT a full
-    LLVM parser — real `llvm-as`/`opt`/`llc` validation lands in Stage
-    201 behind tool-detection.
+    LLVM parser — real `llvm-as`/`opt`/`llc` validation is Stage 201.
 
-    Checks (line-leading tokens are matched after stripping indentation,
-    so an indented `.ll` is handled too): a `target triple` line is
-    present; at least one `define`; braces balance; every `define` body
-    contains a `ret` terminator (Stage 200 functions are single-block,
-    so a per-define `ret` scan is sufficient)."""
+    Checks (line-leading tokens matched after stripping indentation, so
+    an indented `.ll` is handled too): a `target triple` line is
+    present; at least one `define`; braces balance (quoted spans
+    masked); and each `define` body ENDS with a basic-block terminator
+    (`ret` / `br` / ...). A multi-block function need not contain a
+    `ret` at all — an infinite loop ends every block with `br` — so the
+    check is "the body's last instruction is a terminator", not "the
+    body contains a ret"."""
     problems: list[str] = []
     stripped = [ln.strip() for ln in ll_text.splitlines()]
     if not any(s.startswith("target triple =") for s in stripped):
@@ -581,26 +622,33 @@ def mock_validate_ll(ll_text: str) -> list[str]:
     if opens != closes:
         problems.append(
             f"unbalanced braces: {opens} '{{' vs {closes} '}}'")
-    # Each `define ... {` ... `}` body must contain a `ret` terminator.
+    # Each `define ... {` ... `}` body must END with a terminator
+    # instruction — the emitter guarantees every block is terminated;
+    # this catches a grossly-broken emit (a body whose last line is a
+    # non-terminator instruction, or an empty body).
     in_body = False
-    body_has_ret = False
+    last_instr = ""
     cur_fn = ""
+
+    def _check_body_end() -> None:
+        if not last_instr.startswith(_LL_TERMINATOR_PREFIXES):
+            problems.append(
+                f"function body does not end with a terminator "
+                f"(last line {last_instr!r}): {cur_fn}")
+
     for s in stripped:
         if s.startswith("define "):
-            if in_body and not body_has_ret:
-                problems.append(
-                    f"function body has no `ret` terminator: {cur_fn}")
+            if in_body:
+                _check_body_end()
             in_body = True
-            body_has_ret = False
+            last_instr = ""
             cur_fn = s
         elif in_body and s == "}":
-            if not body_has_ret:
-                problems.append(
-                    f"function body has no `ret` terminator: {cur_fn}")
+            _check_body_end()
             in_body = False
-        elif in_body and s.startswith("ret "):
-            body_has_ret = True
-    if in_body and not body_has_ret:
-        problems.append(
-            f"function body has no `ret` terminator: {cur_fn}")
+        elif in_body and s and not s.endswith(":"):
+            # A non-blank, non-label body line.
+            last_instr = s
+    if in_body:
+        _check_body_end()
     return problems

@@ -1,12 +1,14 @@
-"""Tests for helixc.backend.llvm_ir — v3.0 Phase D Stage 200
-(the additive LLVM IR emitter substrate; scalar core only).
+"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-203):
+the additive LLVM IR emitter.
 
 The emitter consumes the same host IR (`tir.Module`) that
-`x86_64.py::compile_module_to_elf` consumes. Stage 200 covers the
-scalar core: module header / target triple, `define`, integer
-constants, integer add/sub/mul, `ret`. Everything else must be
-REJECTED loudly with `LLVMEmitError` — a partial backend fails
-closed, it never emits wrong IR.
+`x86_64.py::compile_module_to_elf` consumes. Covered so far: the
+scalar core (module header / target triple, `define`, integer
+constants, add/sub/mul, `ret`); control flow (multi-block, `br`,
+`phi`); and the scalar op set (the six comparisons, `select`, `neg`,
+unsigned integer dtypes). Everything else must be REJECTED loudly
+with `LLVMEmitError` — a partial backend fails closed, it never emits
+wrong IR.
 """
 
 from __future__ import annotations
@@ -271,7 +273,8 @@ def test_stage200_rejects_binop_operand_type_mismatch():
 # mock validation
 # --------------------------------------------------------------------------
 def test_stage200_mock_validate_flags_missing_terminator():
-    """mock_validate_ll catches a `define` body with no `ret`."""
+    """mock_validate_ll catches a `define` body whose last instruction
+    is not a basic-block terminator."""
     bad = (
         'target triple = "x86_64-unknown-linux-gnu"\n'
         "\n"
@@ -280,7 +283,8 @@ def test_stage200_mock_validate_flags_missing_terminator():
         "}\n"
     )
     problems = llvm_ir.mock_validate_ll(bad)
-    assert any("no `ret` terminator" in p for p in problems), problems
+    assert any("does not end with a terminator" in p
+               for p in problems), problems
 
 
 def test_stage200_mock_validate_flags_unbalanced_braces():
@@ -627,3 +631,44 @@ def test_stage203_rejects_non_i1_select_condition():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError, match="i1"):
         llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 202+203 audit-fix regression tests
+# ==========================================================================
+def test_stage202_rejects_phi_arg_type_mismatch():
+    """A BR whose argument type differs from the target block's
+    parameter type is rejected — a phi incoming must match the
+    parameter type (else the emitted phi references a wrong-width
+    register)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    merge = b.append_block()
+    # entry: br [an i64 constant] -> merge, whose parameter is i32.
+    b.emit(tir.OpKind.BR, b.const_int(5, dtype="i64"),
+           attrs={"target_block": merge.id})
+    b.switch_to(merge)
+    b.new_block_param(_i32())   # i32 param, but the BR arg is i64
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="must match the parameter type"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage202_mock_validate_accepts_retless_infinite_loop():
+    """A valid multi-block function with no `ret` at all — an infinite
+    loop where every block ends in `br` — passes mock validation. The
+    check is 'the body ends with a terminator', not 'has a ret'."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("spin", [], _i32())
+    loop = b.append_block()
+    b.emit(tir.OpKind.BR, attrs={"target_block": loop.id})
+    b.switch_to(loop)
+    b.emit(tir.OpKind.BR, attrs={"target_block": loop.id})  # br to self
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "ret " not in ll, ll  # genuinely no `ret` instruction
+    assert llvm_ir.mock_validate_ll(ll) == [], llvm_ir.mock_validate_ll(ll)
