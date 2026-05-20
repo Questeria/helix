@@ -34,26 +34,47 @@ def test_helix_status_version_model_is_consistent():
 
 
 def test_helix_status_percentages_are_computed_from_the_model():
-    """The three progress numbers are derived from VERSIONS / the stage
+    """The progress numbers are derived from VERSIONS / the v3.0 stage
     counts — never hand-typed — so they cannot drift from the model."""
     released = sum(1 for v in hs.VERSIONS if v["status"] == "released")
     total = len(hs.VERSIONS)
     assert hs.versions_percent() == round(100 * released / total)
-    assert hs.stages_percent() == round(
-        100 * hs.STAGES_DONE / hs.STAGES_TOTAL)
-    weight = {"released": 1.0, "in_progress": 0.5, "planned": 0.0}
-    score = sum(weight[v["status"]] for v in hs.VERSIONS)
+    assert hs.v3_stages_percent() == round(
+        100 * hs.V3_STAGES_DONE / hs.V3_STAGES_TOTAL)
+    # overall: a released version counts 1.0, a planned version 0.0,
+    # the in-progress version its live v3.0-stage fraction.
+    credit = {"released": 1.0, "planned": 0.0,
+              "in_progress": hs.V3_STAGES_DONE / hs.V3_STAGES_TOTAL}
+    score = sum(credit[v["status"]] for v in hs.VERSIONS)
     assert hs.overall_percent() == round(100 * score / total)
     # All three must be valid percentages.
-    for p in (hs.stages_percent(), hs.versions_percent(),
+    for p in (hs.v3_stages_percent(), hs.versions_percent(),
               hs.overall_percent()):
         assert 0 <= p <= 100
 
 
+def test_helix_status_overall_tracks_v3_stage_progress():
+    """The overall % MOVES with v3.0 stage progress — it is not frozen
+    while v3.0 is in progress. (The bug this reporter was fixed for: a
+    flat 0.5 in-progress weight pinned 'about 93%' constant for the
+    whole of v3.0, so the Telegram update never reflected real
+    progress.)"""
+    base = hs.overall_percent()
+    original = hs.V3_STAGES_DONE
+    try:
+        hs.V3_STAGES_DONE = hs.V3_STAGES_TOTAL      # v3.0 fully done
+        assert hs.overall_percent() > base
+        assert hs.overall_percent() == 100          # whole journey done
+        hs.V3_STAGES_DONE = 0                       # v3.0 not started
+        assert hs.overall_percent() < base
+    finally:
+        hs.V3_STAGES_DONE = original
+
+
 def test_helix_status_counts_are_sane():
-    """STAGES_DONE never exceeds STAGES_TOTAL; the test-suite size is a
-    positive integer (a beginner-facing scale-of-testing signal)."""
-    assert 0 <= hs.STAGES_DONE <= hs.STAGES_TOTAL
+    """V3_STAGES_DONE never exceeds V3_STAGES_TOTAL; the test-suite
+    size is a positive integer (a beginner-facing scale signal)."""
+    assert 0 <= hs.V3_STAGES_DONE <= hs.V3_STAGES_TOTAL
     assert isinstance(hs.TESTS_TOTAL, int) and hs.TESTS_TOTAL > 0
 
 
@@ -77,7 +98,7 @@ def test_helix_status_telegram_message_is_beginner_friendly():
         assert "STILL AHEAD" in msg
     # The progress numbers the user asked for.
     assert "PROGRESS" in msg
-    assert f"{hs.stages_percent()}%" in msg
+    assert f"{hs.v3_stages_percent()}%" in msg
     assert f"{hs.versions_percent()}%" in msg
     assert f"{hs.overall_percent()}%" in msg
     # The first released and the final planned version both appear.

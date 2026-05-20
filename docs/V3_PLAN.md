@@ -458,3 +458,18 @@ depend on a clean, unambiguous full-suite run.
   LLVM's default `ccc` = System V on the host triple, automatically
   matching `x86_64.py` — **Stage 205 CLOSED**. Next: Stage 206 —
   runtime & intrinsics.
+- 2026-05-20 — **Telegram status reporter fixed — `helix_status.py`
+  now tracks v3.0 stage progress.** User-reported: every Telegram
+  update showed a frozen "Overall toward v3.0: about 93%" and a stale
+  "~4013 tests" — only the per-fire note changed. Root cause: the
+  reporter tracked the long-finished v2.x build stages (22/22) and
+  weighted the in-progress v3.0 version at a flat 0.5, so no
+  percentage could move during all of v3.0. Fix: `helix_status.py`
+  now carries `V3_STAGES_DONE` / `V3_STAGES_TOTAL` (6/19), a
+  `v3_stages_percent()`, and an `overall_percent()` that credits the
+  in-progress version its ACTUAL v3.0-stage fraction — overall is now
+  an honest 90% that climbs to 100% as stages close; `TESTS_TOTAL`
+  refreshed to the real 4194. **Process:** from here, every
+  stage-closure commit also bumps `V3_STAGES_DONE`. 7
+  `test_helix_status` tests pass — one new test pins that the overall
+  % moves with progress (not frozen).
