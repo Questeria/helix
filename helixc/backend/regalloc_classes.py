@@ -83,6 +83,14 @@ _PTX_DTYPE_TO_CLASS: Final[dict[str, str]] = {
 # ROCm unreviewed. Both backends now reference this shared constant;
 # the module-load check below pins _PTX_DTYPE_TO_CLASS to it so the
 # two cannot drift.
+#
+# v2.4 end-of-cycle 5-clean-gate IR audit-fix: Helix's quantized
+# dtypes ("fp8", "mxfp4", "nvfp4", "ternary") are deliberately ABSENT.
+# They are parser/typecheck-only front-end types with no backend
+# codegen, so no value of those dtypes ever reaches register
+# allocation. If one ever did, ptx_register_class / rocm_register_class
+# raise RuntimeError loudly rather than mis-filing it — pinned by
+# test_regalloc_classes' *_classify_unknown_dtype_raises tests.
 _RECOGNISED_SCALAR_DTYPES: Final[frozenset[str]] = frozenset({
     "bool", "i8", "u8", "char", "i16", "u16", "f16", "bf16",
     "i32", "u32", "i64", "u64", "isize", "usize", "f32",

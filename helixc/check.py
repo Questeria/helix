@@ -1697,7 +1697,22 @@ def _main_inner(argv: list[str] | None,
         if "--emit-ptx" in a.flags:
             try:
                 ptx_full_prog = _drop_unreachable_diff_signature_fns(prog)
-                grad_pass(ptx_full_prog)
+                try:
+                    grad_pass(ptx_full_prog)
+                except ValueError as e:
+                    # v2.4 end-of-cycle 5-clean-gate FE audit-fix:
+                    # grad_pass raises ValueError for a source-level
+                    # grad() mistake (e.g. an out-of-range parameter
+                    # index). That is a user source error, not a PTX
+                    # backend fault — surface it as a grad() error so
+                    # the generic handler below does not mislabel it
+                    # "PTX validation error" and point the user at the
+                    # GPU lowering path.
+                    print(
+                        f"helixc: grad() error: {type(e).__name__}: {e}",
+                        file=sys.stderr,
+                    )
+                    return 1
                 ptx_full_mod = lower(ptx_full_prog)
                 ptx_full_scope = None
                 if include_stdlib:

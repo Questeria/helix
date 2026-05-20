@@ -115,6 +115,21 @@ class ValidationResult:
                     f"ValidationResult: real_hw_attempted=False but "
                     f"real_hw_passed={self.real_hw_passed!r} — illegal"
                 )
+        # v2.4 end-of-cycle 5-clean-gate BE audit-fix: a real-HW
+        # FAILURE must carry a diagnostic. Without this the type
+        # admits (real_hw_passed=False, real_hw_findings=()) — a
+        # failure with no explanation, exactly the silent-failure
+        # shape the mock_passed/mock_findings invariant above already
+        # forbids on the mock side. This mirrors that invariant for
+        # the real-HW side so "fail without a reason" is unrepresentable.
+        if (self.real_hw_attempted
+                and self.real_hw_passed is False
+                and len(self.real_hw_findings) == 0):
+            raise ValueError(
+                "ValidationResult: real_hw_passed=False but "
+                "real_hw_findings is empty — a real-HW failure must "
+                "carry a diagnostic"
+            )
 
     def overall_status(self) -> OverallStatus:
         """v2.2 polish: tri-state outcome distinguishing PASSED from

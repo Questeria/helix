@@ -37,8 +37,16 @@ class TIRType:
 
 @dataclass(frozen=True)
 class TIRScalar(TIRType):
-    """A scalar element type."""
-    name: str   # "f32", "bf16", "i32", "ternary", "fp8_e4m3", etc.
+    """A scalar element type.
+
+    `name` is a Helix scalar dtype string — e.g. "f32", "bf16",
+    "f64", "i16", "i32", "i64", "bool", "char". The quantized dtypes
+    the lexer/typecheck also accept ("fp8", "mxfp4", "nvfp4",
+    "ternary") are valid names too, but they are front-end-only: no
+    backend has codegen or a register-class model for them (see
+    `regalloc_classes._RECOGNISED_SCALAR_DTYPES`).
+    """
+    name: str
 
 
 @dataclass(frozen=True)
