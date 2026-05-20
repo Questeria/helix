@@ -2162,3 +2162,64 @@ no golden regression. `test_regalloc.py` → 33 passed. All three
 backend modules import clean (both ptx.py drift checks pass).
 
 **v2.5 is feature-complete and audit-clean. Tagging `v2.5.0`.**
+
+### 2026-05-20 — fresh pre-v3.0 re-audit of the v2.x foundation: 3 HIGH found, R1 ships them
+
+Before v3.0 work goes deep, the user asked for a FRESH, independent
+re-audit of the entire v2.x foundation — explicitly NOT trusting the
+prior per-version audit logs. Dispatched a full 5-clean-gate: five
+parallel silent-failure-hunters, one per batch (FE / IR / BE / RT /
+TEST), each auditing the code as it stands today.
+
+**The gate did NOT pass clean.** It found 3 HIGH, ~9 MEDIUM, ~12 LOW
+— silent-failure surfaces the prior v2.0–v2.4 gates missed. Per-batch:
+
+| Batch | Verdict |
+|-------|---------|
+| FE   | 1 HIGH, 3 MEDIUM, 4 LOW |
+| IR   | CLEAN (4 LOW only) |
+| BE   | 1 HIGH, 3 MEDIUM, 2 LOW |
+| RT   | 1 HIGH, 1 MEDIUM, 2 LOW |
+| TEST | 5 MEDIUM, 2 LOW |
+
+**R1 — the 3 HIGH findings, all fixed (this commit):**
+
+1. **FE — `autotune_expand.py`: autotune param survives un-substituted.**
+   `_substitute_autotune_consts` had no isinstance arm for `A.TileLit`
+   / `Quote` / `Splice` / `Modify` (4 of the 32 `A.Expr` subclasses)
+   and fell through a silent `return expr`. An autotuned GPU kernel
+   using a tile literal — `tile<f32,[BLOCK_SIZE,BLOCK_SIZE],REG>::
+   zeros()`, the module's own documented use case — kept `BLOCK_SIZE`
+   un-substituted into the specialized variant: a live miscompile.
+   Fix: added the 4 arms; the leaf fallthrough is now a loud
+   `NotImplementedError` (all 32 subclasses handled), matching the
+   catchalls in `match_lower` / `flatten_impls`.
+
+2. **BE — `rocm.py`: non-functional kernel passes GPU CI.** Six
+   `status="supported"` ops (`TILE_MATMUL`, the four global/shared
+   memory ops, `THREAD_IDX`) emitted operand-less substrate text with
+   no `HELIX-STUB` marker. `gpu_ci.validate_emit` detects
+   non-functional kernels by scanning for that token — `metal.py` and
+   `webgpu.py` carry it; `rocm.py` did not. So an operand-less ROCm
+   kernel passed mock validation as `mock_passed=True`. Fix: added the
+   `HELIX-STUB-OPERANDS` marker to the six emit branches.
+
+3. **RT — `examples/run.py`: demo-runner CI signal permanently false.**
+   `_run_one` checked success as `code == 0`, but Helix Phase-0 demos
+   signal success via distinctive NON-zero exit codes (metacircular
+   40, symbolic 77, sat 1, the dogfood demos 42, graddescent 43-44) —
+   only mandelbrot exits 0. So 18 of 19 demos were scored
+   failed-on-success and the aggregate CI exit code was permanently,
+   falsely red — a real segfault indistinguishable from the everyday
+   false-red. Fix: a per-demo `_DEMO_EXIT_OK` table (drift-guarded
+   against `DEMOS`); `_run_one` checks the actual exit code against it.
+
+Verification: `test_autotune` + `test_rocm` + `test_gpu_ci` 92 pass /
+3 skip; all touched modules import clean; FE-H1 substitution
+smoke-checked; `run.py --list` + the `_DEMO_EXIT_OK`/`DEMOS` drift
+assert pass.
+
+**Remaining (R2+):** the ~9 MEDIUM + ~12 LOW findings, per-fix
+regression tests, and the gate re-run on the touched batches. The IR
+batch is already clean. Until the gate re-runs clean, the v2.x
+foundation is "re-audit in progress" — v3.0 Stage 200 stays paused.

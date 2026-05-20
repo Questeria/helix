@@ -36,7 +36,11 @@ def _substitute_autotune_consts(expr: A.Expr, cfg: dict[str, int]) -> A.Expr:
     """Recursively replace `Name(KEY)` with `IntLit(cfg[KEY])` for each
     KEY in cfg. Returns a NEW AST tree (deepcopy-safe). Used to
     specialize an autotune variant's body to its compile-time config
-    values."""
+    values.
+
+    Raises NotImplementedError on any AST node type without an explicit
+    arm — a silent passthrough would let an autotune param survive
+    un-substituted (v2.x re-audit R1, FE 5-clean-gate HIGH)."""
     if expr is None:
         return expr
     if isinstance(expr, A.Name):
@@ -174,7 +178,45 @@ def _substitute_autotune_consts(expr: A.Expr, cfg: dict[str, int]) -> A.Expr:
             span=expr.span,
             scrutinee=_substitute_autotune_consts(expr.scrutinee, cfg),
             arms=new_arms)
-    return expr
+    if isinstance(expr, A.TileLit):
+        # An autotune param rides in a tile literal's `shape` — e.g.
+        # `tile<f32, [BLOCK_SIZE, BLOCK_SIZE], REG>::zeros()` — and
+        # possibly its `memspace`. `dtype` is a TyNode (a type, not a
+        # substitutable Expr) and `init` is a plain str.
+        return A.TileLit(
+            span=expr.span, dtype=expr.dtype,
+            shape=[_substitute_autotune_consts(d, cfg)
+                   for d in expr.shape],
+            memspace=_substitute_autotune_consts(expr.memspace, cfg),
+            init=expr.init)
+    if isinstance(expr, A.Quote):
+        return A.Quote(
+            span=expr.span,
+            inner=_substitute_autotune_consts(expr.inner, cfg))
+    if isinstance(expr, A.Splice):
+        return A.Splice(
+            span=expr.span,
+            inner=_substitute_autotune_consts(expr.inner, cfg))
+    if isinstance(expr, A.Modify):
+        return A.Modify(
+            span=expr.span,
+            target=_substitute_autotune_consts(expr.target, cfg),
+            transformation=_substitute_autotune_consts(
+                expr.transformation, cfg),
+            verifier=_substitute_autotune_consts(expr.verifier, cfg))
+    # v2.x re-audit R1 (FE 5-clean-gate HIGH): loud catchall. Every
+    # A.Expr subclass is handled above. Pre-fix, an unhandled node —
+    # A.TileLit / Quote / Splice / Modify, the four arms just added —
+    # fell through a silent `return expr`, so an autotune param inside
+    # it (e.g. BLOCK_SIZE in a `tile<f32,[BLOCK_SIZE,BLOCK_SIZE],REG>`
+    # literal) survived UN-substituted into the specialized variant: a
+    # live miscompile of the module's own documented use case. Raising
+    # mirrors the loud catchalls in match_lower._rewrite_expr /
+    # flatten_impls._rewrite_expr.
+    raise NotImplementedError(
+        f"_substitute_autotune_consts: unhandled AST node "
+        f"{type(expr).__name__} — add an explicit arm so an autotune "
+        f"param inside it cannot survive un-substituted.")
 
 
 def _expand_one_fn(fn: A.FnDecl) -> list[A.FnDecl]:

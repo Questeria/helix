@@ -124,6 +124,41 @@ DEMOS: dict[str, dict] = {
 }
 
 
+# v2.x re-audit R1 (RT 5-clean-gate HIGH): per-demo success exit
+# code(s). Helix Phase-0 demos signal success via distinctive
+# NON-zero exit codes (the `main()` return value becomes the process
+# exit code); only `mandelbrot`, a stdout-rendering demo, exits 0.
+# `_run_one` checks the actual exit code against this — the prior
+# `code == 0` check reported 18 of 19 demos as failed-on-success.
+_DEMO_EXIT_OK: dict[str, tuple[int, ...]] = {
+    "mandelbrot": (0,),
+    "metacircular": (40,),
+    "symbolic": (77,),
+    "sat": (1,),
+    "graddescent": (43, 44),
+    "provenance": (42,),
+    "fuzzysgd": (42,),
+    "twoparam": (42,),
+    "kgraph": (42,),
+    "memtiers": (42,),
+    "frames": (42,),
+    "temporal": (42,),
+    "modal": (42,),
+    "causal": (42,),
+    "planning": (42,),
+    "result": (42,),
+    "try": (42,),
+}
+
+# Drift guard: _DEMO_EXIT_OK and DEMOS must stay in lockstep — a demo
+# added to one but not the other would KeyError at run time (or lose
+# its exit-code check). Same module-load discipline as the backends.
+assert set(_DEMO_EXIT_OK) == set(DEMOS), (
+    f"helixc.examples.run: _DEMO_EXIT_OK keys {sorted(_DEMO_EXIT_OK)} "
+    f"!= DEMOS keys {sorted(DEMOS)} — keep them in sync"
+)
+
+
 def _project_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -201,12 +236,20 @@ def _build_and_run(src_path: str, timeout: int = 120) -> tuple[str, str, int]:
 
 
 def _run_one(key: str) -> bool:
-    """Run a single demo by short name. Return True on success
-    (i.e., compile+run returned exit code 0). v2.2 polish item 8
-    (RT M3 from v2.1 5-clean-gate): the prior implementation always
-    returned True, so CI smoke tests of `python -m helixc.examples.run`
-    would pass even when every demo segfaulted/panicked/build-failed.
-    R1 fix: propagate `code == 0` to the caller.
+    """Run a single demo by short name. Return True iff the demo's
+    process exit code matches its documented success code(s) in
+    `_DEMO_EXIT_OK[key]`.
+
+    v2.x re-audit R1 (RT 5-clean-gate HIGH): the prior implementation
+    returned `code == 0`. But Helix Phase-0 demos signal success via
+    distinctive NON-zero exit codes (metacircular 40, symbolic 77,
+    sat 1, graddescent 43-44, the dogfood demos 42) — only mandelbrot,
+    a stdout-rendering demo, exits 0. So `code == 0` reported FAILURE
+    for 18 of the 19 demos on a perfectly correct run, making
+    `main()`'s aggregate exit code permanently red and the CI smoke
+    signal worthless (a real segfault was indistinguishable from the
+    everyday false-red). Each demo is now checked against its own
+    `_DEMO_EXIT_OK` tuple.
 
     Raises:
         subprocess.TimeoutExpired: propagates from `_build_and_run`
@@ -235,9 +278,13 @@ def _run_one(key: str) -> bool:
         # user sees runtime panics + WSL diagnostics, not just stdout.
         import sys as _sys
         print(err, end="" if err.endswith("\n") else "\n", file=_sys.stderr)
-    print(f"  -> exit code {code}")
+    expected = _DEMO_EXIT_OK[key]
+    ok = code in expected
+    verdict = ("OK" if ok
+               else f"FAIL — expected exit {'/'.join(map(str, expected))}")
+    print(f"  -> exit code {code}   [{verdict}]")
     print()
-    return code == 0
+    return ok
 
 
 def _list() -> None:

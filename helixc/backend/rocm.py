@@ -360,25 +360,38 @@ class HipEmitter:
             return
         if kind is ti.TileOpKind.TILE_MATMUL:
             # Stage 124 — MFMA wmma analog. Canonical MI300 16x16x16
-            # fp32-accumulate with fp16 inputs.
-            self._line("    v_mfma_f32_16x16x16_f16 ; tile-matmul A @ B + C")
+            # fp32-accumulate with fp16 inputs. v2.x re-audit R1 (BE
+            # 5-clean-gate HIGH): this and the five memory / index ops
+            # below emit substrate-level text with operands NOT bound.
+            # The `HELIX-STUB-OPERANDS` marker (parity with metal.py /
+            # webgpu.py) makes gpu_ci.validate_emit flag the kernel as
+            # non-functional. Pre-fix rocm omitted the marker its
+            # sibling backends carry, so an operand-less ROCm kernel
+            # passed gpu_ci mock validation as if it were functional.
+            self._line("    v_mfma_f32_16x16x16_f16 ; tile-matmul "
+                       "A @ B + C HELIX-STUB-OPERANDS")
             return
         if kind is ti.TileOpKind.TILE_LOAD_GLOBAL:
-            self._line("    global_load_b128 ; HBM tile load")
+            self._line("    global_load_b128 ; HBM tile load "
+                       "HELIX-STUB-OPERANDS")
             return
         if kind is ti.TileOpKind.TILE_STORE_GLOBAL:
-            self._line("    global_store_b128 ; HBM tile store")
+            self._line("    global_store_b128 ; HBM tile store "
+                       "HELIX-STUB-OPERANDS")
             return
         if kind is ti.TileOpKind.TILE_LOAD_SHARED:
             # v2.1 R1 audit-fix Finding H1: ds_read_b*, not ds_load_b*.
             # The latter is not a valid AMDGPU mnemonic.
-            self._line("    ds_read_b128 ; LDS (SMEM) tile load")
+            self._line("    ds_read_b128 ; LDS (SMEM) tile load "
+                       "HELIX-STUB-OPERANDS")
             return
         if kind is ti.TileOpKind.TILE_STORE_SHARED:
-            self._line("    ds_write_b128 ; LDS (SMEM) tile store")
+            self._line("    ds_write_b128 ; LDS (SMEM) tile store "
+                       "HELIX-STUB-OPERANDS")
             return
         if kind is ti.TileOpKind.THREAD_IDX:
-            self._line("    ; v0 = workitem ID (thread_idx)")
+            self._line("    ; v0 = workitem ID (thread_idx) "
+                       "HELIX-STUB-OPERANDS")
             return
         if kind is ti.TileOpKind.RETURN:
             # Falls through to the s_endpgm terminator emitted by
