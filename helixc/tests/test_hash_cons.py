@@ -232,6 +232,7 @@ def test_stage20_hash_cons_does_not_break_existing_codegen():
 def test_stage20_check_cli_supports_hash_cons_flag():
     """`python -m helixc.check --hash-cons <file>` runs hash_cons and
     reports the count of de-duplicated nodes."""
+    import re
     import subprocess
     proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src_dir = os.path.join(proj_root, "helixc", "tests", "_tmp")
@@ -249,9 +250,14 @@ fn main() -> i32 {
     r = subprocess.run(cmd, capture_output=True, cwd=proj_root, text=True)
     assert r.returncode == 0, r.stderr
     assert "hash-cons:" in r.stdout, f"stdout missing report: {r.stdout}"
-    # Should have deduped at least one node ((1+2) appears twice).
-    assert "0 AST node" not in r.stdout, \
-        f"expected non-zero dedupe count: {r.stdout}"
+    # Should have deduped at least one node ((1+2) appears twice, plus
+    # the stdlib every program pulls in). Parse the actual count: the
+    # prior `"0 AST node" not in r.stdout` substring test was a
+    # false-negative — it fails for ANY count ending in 0 (e.g. the
+    # real 22770) because "22770 AST node" contains "0 AST node".
+    m = re.search(r"hash-cons:\s*(\d+)\s+AST node", r.stdout)
+    assert m is not None, f"hash-cons count not found: {r.stdout}"
+    assert int(m.group(1)) > 0, f"expected non-zero dedupe count: {r.stdout}"
 
 
 # --- Stage 28.9 cycle 35 audit-T C34-1 regression tests ---

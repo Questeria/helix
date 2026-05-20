@@ -66,10 +66,15 @@ def test_helix_status_telegram_message_is_beginner_friendly():
     # Plain-language framing for a non-engineer.
     assert "programming language" in msg
     assert "stages" in msg and "versions" in msg
-    # The three status buckets.
+    # The status buckets. "STILL AHEAD" renders only while versions are
+    # still planned — once v3.0 (the final version of the journey) is
+    # the sole one in progress and none remain planned, render_telegram
+    # omits the section (its `if planned:` guard), so the assertion must
+    # be conditional on the version model rather than unconditional.
     assert "DONE & FULLY AUDITED" in msg
     assert "IN PROGRESS" in msg
-    assert "STILL AHEAD" in msg
+    if any(v["status"] == "planned" for v in hs.VERSIONS):
+        assert "STILL AHEAD" in msg
     # The progress numbers the user asked for.
     assert "PROGRESS" in msg
     assert f"{hs.stages_percent()}%" in msg
