@@ -1878,6 +1878,38 @@ def test_v25_load_register_plan_exposes_per_class_high_water():
     assert em.planned_high_water == {}
 
 
+def test_v25_emit_kernel_loads_the_register_plan():
+    """v2.5 item 1 (operand-rewrite wiring COMPLETE) — emit_kernel now
+    loads the reuse-aware linear-scan register plan. After emitting a
+    non-empty kernel the emitter's planned_reg_map / planned_high_water
+    are populated (they were empty before the wiring landed), and every
+    scalar SSA result took its planned register. Pins that the plan
+    actually DRIVES emission — not merely that output is unchanged for
+    kernels with no register-reuse opportunity."""
+    from helixc.backend.ptx import PtxEmitter
+    a = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
+    b = ti.TileValue(id=1, ty=tir.TIRScalar("i32"))
+    s = ti.TileValue(id=2, ty=tir.TIRScalar("i32"))
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[a],
+                  attrs={"value": 1}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[b],
+                  attrs={"value": 2}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_ADD, operands=[a, b],
+                  results=[s]),
+    ])
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    em.emit_kernel(fn)
+    # emit_kernel called load_register_plan -> the plan is populated.
+    assert em.planned_reg_map != {}
+    assert set(em.planned_high_water) == {"%r"}
+    # every scalar result's emitted register IS its planned register.
+    for vid in (0, 1, 2):
+        assert em.reg_map[vid] == em.planned_reg_map[vid]
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
