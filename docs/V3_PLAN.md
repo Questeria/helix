@@ -161,7 +161,7 @@ depend on a clean, unambiguous full-suite run.
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
 | 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
-| 207 | x86_64-vs-LLVM parity gate | ~ | A,B,C 3-clean ✓ | Phase D — chunks A-C shipped (mock harness + corpus + gate + real-exec model/detection); chunk D = real-exec dispatch (closes 207) |
+| 207 | x86_64-vs-LLVM parity gate | ~ | A-D 3-clean ✓ | Phase D — chunks A-D shipped (mock harness + corpus + gate + real-exec model/detection + program-run substrate); chunk E = real-exec comparison + wiring (closes 207) |
 | 208 | Phase D — end-of-phase 5-clean-gate | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -715,3 +715,31 @@ depend on a clean, unambiguous full-suite run.
   D — the real-execution dispatch (compile both backends to runnable
   executables, run them under WSL, compare exit code / stdout /
   stderr; DEFERRED on a tool-less machine), which closes Stage 207.
+- 2026-05-20 — **Stage 207 chunk D shipped — the program-run
+  substrate.** Stage 207's real-execution path is split into chunk D
+  (this — the program-run substrate) and chunk E (the comparison + the
+  `attempt_real` wiring, which closes Stage 207). Chunk D adds
+  `_ProgramRun` — a frozen dataclass capturing one backend's build +
+  run outcome (`ran` / `exit_code` / `stdout` / `stderr` /
+  `findings`); every build-or-run failure is captured into it, never
+  raised — and the run helpers `_run_x86_program` (compile the x86_64
+  ELF, run it under WSL) and `_run_llvm_program` (emit the LLVM IR,
+  `clang`-compile it to an executable inside WSL, run it), plus
+  `_win_to_wsl` and a shell-free `_run_under_wsl`. The x86_64 run path
+  is verified end-to-end here by real WSL execution (a
+  `fn main() { 42 }` program builds and runs with exit code 42); the
+  LLVM run path needs `clang` inside WSL (absent here) and is
+  mocked-tested. 76 tests (`test_llvm_parity.py`); `x86_64.py`
+  untouched. Per-stage 3-clean audit: round 1 — silent-failure found
+  a `chmod +x && run` chain that folded a chmod failure into the
+  program's exit code (a `ran=True` for a program that never ran),
+  fixed by splitting `_run_under_wsl` into two separate shell-free WSL
+  calls; round 2 — the same masquerade class was found relocated to
+  the run leg (a `wsl`-launcher error code, e.g. 0xFFFFFFFF, folded
+  in), fixed with an out-of-0-255-range launcher-failure guard;
+  round 3 — all three surfaces returned 0 HIGH / 0 must-fix-MEDIUM.
+  **Stage 207 chunk D CLOSED.** Next: Stage 207 chunk E — the
+  real-execution comparison (compare the two `_ProgramRun`s for
+  observable-behaviour parity) + the `attempt_real` wiring into
+  `check_parity` that fills `ParityResult`'s real-* fields, which
+  closes Stage 207.

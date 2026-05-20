@@ -48,12 +48,18 @@ validation; v2.4 item 13 added real-HW dispatch):
     DEFERRED state, restoring fidelity with the
     gpu_ci.ValidationResult real-outcome model.
 
-  - Chunk D — the real-execution DISPATCH. Behind the chunk-C
-    detection, compile both backends to runnable executables, run
-    them under WSL, and compare observable behaviour (exit code,
-    stdout, stderr). DEFERRED — never FAILED — when the toolchain is
-    absent, so CI on a tool-less runner stays green (the `gpu_ci`
-    real-HW dispatch discipline). Chunk D closes Stage 207.
+  - Chunk D — the program-run SUBSTRATE. `_run_x86_program` and
+    `_run_llvm_program` build a backend's output to a runnable Linux
+    executable and run it under WSL, capturing observable behaviour
+    (exit code, stdout, stderr) into a `_ProgramRun`. Every build /
+    run failure is captured into the result, never raised.
+
+  - Chunk E — the real-execution COMPARISON + the `attempt_real`
+    wiring. Compares the two `_ProgramRun`s and fills `ParityResult`'s
+    real-* fields; behind the chunk-C detection it is DEFERRED — never
+    FAILED — when the toolchain is absent, so CI on a tool-less runner
+    stays green (the `gpu_ci` real-HW dispatch discipline). Chunk E
+    closes Stage 207.
 
 License: Apache 2.0
 """
@@ -61,8 +67,10 @@ License: Apache 2.0
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -732,7 +740,7 @@ def _probe_wsl_clang(wsl: str) -> Optional[str]:
     try:
         proc = subprocess.run(
             [wsl, "--", "bash", "-lc", "command -v clang"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, errors="replace",
             timeout=_REAL_EXEC_PROBE_TIMEOUT_S)
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -781,3 +789,296 @@ def detect_real_exec_support() -> RealExecSupport:
         detail=(f"WSL is available and `clang` was found inside it at "
                 f"{wsl_clang!r} — the real-execution parity comparison "
                 f"can run",))
+
+
+# ==========================================================================
+# Chunk D — the program-run substrate
+# ==========================================================================
+
+# Wall-clock cap on a single build (clang) or run invocation. A tiny
+# corpus program compiles + runs sub-second; the cap only guards a hung
+# tool. Matches gpu_ci.REAL_HW_TIMEOUT_S.
+_REAL_EXEC_TIMEOUT_S = 30
+
+
+@dataclass(frozen=True)
+class _ProgramRun:
+    """The observable result of building and running one backend's
+    output for a program — the chunk-D program-run substrate.
+
+    `ran` is True only when the executable was built AND run to
+    completion: then `exit_code` is concrete and `stdout` / `stderr`
+    hold its captured output. `ran` is False for ANY build or run
+    failure (a backend compile error, a `clang` link error, a timeout,
+    a WSL error): then `exit_code` is None, the output strings are
+    empty, and `findings` carries the diagnostic — a failure is never
+    silent.
+
+    Frozen + `__post_init__`-guarded (the `gpu_ci` result-type
+    discipline) so the silent-failure field shapes are
+    unrepresentable."""
+    label: str
+    ran: bool
+    exit_code: Optional[int]
+    stdout: str
+    stderr: str
+    findings: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError(
+                "_ProgramRun: label is empty/blank — every run must "
+                "name the backend it ran")
+        if not isinstance(self.stdout, str) or not isinstance(
+                self.stderr, str):
+            raise ValueError(
+                "_ProgramRun: stdout and stderr must be str")
+        if self.ran:
+            if self.exit_code is None:
+                raise ValueError(
+                    "_ProgramRun: ran=True but exit_code is None — a "
+                    "completed run has a concrete exit code")
+            if self.findings:
+                raise ValueError(
+                    "_ProgramRun: ran=True but findings is non-empty — "
+                    "a completed run carries no failure diagnostic")
+        else:
+            if self.exit_code is not None:
+                raise ValueError(
+                    f"_ProgramRun: ran=False but exit_code="
+                    f"{self.exit_code!r} — a failed run has no exit "
+                    f"code")
+            if not self.findings:
+                raise ValueError(
+                    "_ProgramRun: ran=False but findings is empty — a "
+                    "build/run failure must carry a diagnostic")
+            if self.stdout or self.stderr:
+                raise ValueError(
+                    "_ProgramRun: ran=False but stdout/stderr is "
+                    "non-empty — a run that did not complete captured "
+                    "no output")
+        for entry in self.findings:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"_ProgramRun: findings has a blank or non-str "
+                    f"entry ({entry!r}) — every diagnostic carries text")
+
+    @classmethod
+    def failed(cls, label: str, finding: str) -> "_ProgramRun":
+        """A `_ProgramRun` for a build / run that did not complete —
+        `ran=False` with the single diagnostic `finding`."""
+        return cls(label=label, ran=False, exit_code=None, stdout="",
+                   stderr="", findings=(finding,))
+
+    @classmethod
+    def completed(cls, label: str, exit_code: int, stdout: str,
+                  stderr: str) -> "_ProgramRun":
+        """A `_ProgramRun` for an executable that built and ran to
+        completion."""
+        return cls(label=label, ran=True, exit_code=exit_code,
+                   stdout=stdout, stderr=stderr, findings=())
+
+
+def _win_to_wsl(win_path: str) -> str:
+    """Translate a Windows absolute path (`C:\\foo\\bar`) to its WSL
+    form (`/mnt/c/foo/bar`), so a file on a `/mnt`-mounted drive is
+    reachable from inside WSL. Handles any drive letter; a path that is
+    already POSIX-style is returned normalised. Mirrors the helper in
+    helixc/tests/test_codegen.py."""
+    p = os.path.abspath(win_path).replace("\\", "/")
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[0].lower()
+        rest = p[2:]
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        return f"/mnt/{drive}{rest}"
+    return p
+
+
+def _run_under_wsl(label: str, program: str,
+                   exe_win_path: str) -> _ProgramRun:
+    """Run an already-built Linux executable under WSL, capturing its
+    exit code, stdout and stderr into a `_ProgramRun`.
+
+    `chmod +x` is applied first — a file on a `/mnt/c` DrvFs mount is
+    not executable by default — as a SEPARATE, return-code-checked
+    step. Folding it into the run command with `&&` would let a chmod
+    failure (the program then never running) masquerade as the
+    program's own exit code — a `ran=True` result for a program that
+    never ran. Neither WSL call uses a shell: the executable path is a
+    single argv element, so spaces / quotes in it need no escaping.
+
+    Applies the gpu_ci subprocess discipline: a `TimeoutExpired` or
+    `OSError` (a hung / vanished `wsl`) becomes a `_ProgramRun.failed`,
+    never an uncaught traceback. Output is decoded with
+    `errors='replace'` so non-UTF-8 program output cannot raise — both
+    backends are decoded identically, so the comparison stays valid."""
+    wsl = shutil.which("wsl")
+    if wsl is None:
+        return _ProgramRun.failed(
+            label, f"{label}: `wsl` is not on PATH — cannot run the "
+                   f"compiled program for {program!r}")
+    wsl_path = _win_to_wsl(exe_win_path)
+    # Step 1 — make the executable runnable; check chmod's own exit so
+    # a chmod failure is a loud failure, never folded into the run.
+    try:
+        chmod = subprocess.run(
+            [wsl, "--", "chmod", "+x", wsl_path],
+            capture_output=True, text=True, errors="replace",
+            timeout=_REAL_EXEC_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return _ProgramRun.failed(
+            label, f"{label}: chmod of {program!r}'s executable timed "
+                   f"out after {_REAL_EXEC_TIMEOUT_S}s")
+    except OSError as exc:
+        return _ProgramRun.failed(
+            label, f"{label}: `wsl` unusable for the chmod of "
+                   f"{program!r} ({type(exc).__name__}: {exc})")
+    if chmod.returncode != 0:
+        diag = (chmod.stderr or chmod.stdout or "").strip()
+        return _ProgramRun.failed(
+            label, f"{label}: chmod +x failed for {program!r}'s "
+                   f"executable (exit {chmod.returncode}): "
+                   f"{diag[:300]}")
+    # Step 2 — run the executable and capture its observable behaviour.
+    try:
+        proc = subprocess.run(
+            [wsl, "--", wsl_path],
+            capture_output=True, text=True, errors="replace",
+            timeout=_REAL_EXEC_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return _ProgramRun.failed(
+            label, f"{label}: running {program!r} timed out after "
+                   f"{_REAL_EXEC_TIMEOUT_S}s")
+    except OSError as exc:
+        return _ProgramRun.failed(
+            label, f"{label}: `wsl` unusable running {program!r} "
+                   f"({type(exc).__name__}: {exc})")
+    # A `wsl` exit OUTSIDE 0-255 is the launcher's own error code, not
+    # the program's — e.g. 0xFFFFFFFF when the WSL service is down or
+    # no distro is installed. A real Linux process exit status is
+    # always 0-255 (incl. signal deaths, reported as 128+signo). So an
+    # out-of-range code means the program NEVER RAN — capture it as a
+    # failure, never fold a launcher artifact into exit_code as a
+    # `ran=True` (the chmod-masquerade class, here on the run leg).
+    if not (0 <= proc.returncode <= 255):
+        diag = (proc.stdout or proc.stderr or "").strip()
+        return _ProgramRun.failed(
+            label, f"{label}: {program!r} did not run under WSL — the "
+                   f"`wsl` launcher exited {proc.returncode} (a real "
+                   f"Linux run exits 0-255)"
+                   + (f": {diag[:300]}" if diag else ""))
+    return _ProgramRun.completed(label, proc.returncode,
+                                 proc.stdout, proc.stderr)
+
+
+def _run_x86_program(module: tir.Module, program: str) -> _ProgramRun:
+    """Build the x86_64 backend's freestanding ELF for `module` and run
+    it under WSL, capturing observable behaviour. The caller's module
+    is not mutated — a deep copy is compiled."""
+    try:
+        elf = compile_module_to_elf(copy.deepcopy(module))
+    except Exception as exc:
+        # The x86_64 backend has full op coverage, so for a structural-
+        # MATCH module this should not happen — captured loudly anyway.
+        return _ProgramRun.failed(
+            "x86_64", f"x86_64 backend failed to compile {program!r}: "
+                      f"{type(exc).__name__}: {exc}")
+    if not elf:
+        return _ProgramRun.failed(
+            "x86_64", f"x86_64 backend produced an empty ELF for "
+                      f"{program!r} — there is nothing to run")
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="helix_parity_x86_")
+    except OSError as exc:
+        return _ProgramRun.failed(
+            "x86_64", f"could not create a temp directory to run "
+                      f"{program!r} ({type(exc).__name__}: {exc})")
+    try:
+        exe = os.path.join(tmpdir, "x86.bin")
+        try:
+            with open(exe, "wb") as f:
+                f.write(elf)
+        except OSError as exc:
+            return _ProgramRun.failed(
+                "x86_64", f"could not write the x86_64 ELF for "
+                          f"{program!r} ({type(exc).__name__}: {exc})")
+        return _run_under_wsl("x86_64", program, exe)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run_llvm_program(module: tir.Module, program: str,
+                      clang: str) -> _ProgramRun:
+    """Emit the LLVM backend's IR for `module`, compile + link it to a
+    runnable Linux executable with `clang` inside WSL, and run it,
+    capturing observable behaviour. `clang` is the path of a clang
+    INSIDE WSL (from `detect_real_exec_support().wsl_clang`). The
+    caller's module is not mutated — a deep copy is emitted."""
+    try:
+        ll_text = emit_module(copy.deepcopy(module))
+    except Exception as exc:
+        # An LLVMEmitError here means the module is not actually in the
+        # covered subset — the caller (chunk E) only runs MATCH modules,
+        # but a failure is captured loudly rather than raised.
+        return _ProgramRun.failed(
+            "llvm", f"LLVM backend failed to emit IR for {program!r}: "
+                    f"{type(exc).__name__}: {exc}")
+    wsl = shutil.which("wsl")
+    if wsl is None:
+        return _ProgramRun.failed(
+            "llvm", f"`wsl` is not on PATH — cannot compile/run the "
+                    f"LLVM output for {program!r}")
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="helix_parity_llvm_")
+    except OSError as exc:
+        return _ProgramRun.failed(
+            "llvm", f"could not create a temp directory to run "
+                    f"{program!r} ({type(exc).__name__}: {exc})")
+    try:
+        ll_path = os.path.join(tmpdir, "module.ll")
+        exe_path = os.path.join(tmpdir, "llvm.bin")
+        try:
+            with open(ll_path, "w", encoding="utf-8") as f:
+                f.write(ll_text)
+        except OSError as exc:
+            return _ProgramRun.failed(
+                "llvm", f"could not write the LLVM IR for {program!r} "
+                        f"({type(exc).__name__}: {exc})")
+        # clang takes the textual `.ll` directly — it assembles,
+        # optimizes and links it (with the C runtime, which supplies
+        # `_start` -> `main`) to a native executable in one step.
+        compile_cmd = [wsl, "--", clang, _win_to_wsl(ll_path),
+                       "-o", _win_to_wsl(exe_path)]
+        try:
+            proc = subprocess.run(
+                compile_cmd, capture_output=True, text=True,
+                errors="replace", timeout=_REAL_EXEC_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            return _ProgramRun.failed(
+                "llvm", f"clang compiling {program!r}'s LLVM IR timed "
+                        f"out after {_REAL_EXEC_TIMEOUT_S}s")
+        except OSError as exc:
+            return _ProgramRun.failed(
+                "llvm", f"clang unusable compiling {program!r} "
+                        f"({type(exc).__name__}: {exc})")
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            return _ProgramRun.failed(
+                "llvm", f"clang failed to compile {program!r}'s LLVM "
+                        f"IR (exit {proc.returncode}): {diag[:500]}")
+        # A 0 exit is necessary but not sufficient — confirm clang
+        # actually wrote a non-empty executable (the gpu_ci discipline:
+        # a 0 exit with no artifact is not a successful build).
+        try:
+            size = os.path.getsize(exe_path)
+        except OSError:
+            size = -1
+        if size <= 0:
+            return _ProgramRun.failed(
+                "llvm", f"clang exited 0 but produced no executable "
+                        f"for {program!r} — a 0 exit with no artifact "
+                        f"is not a successful build")
+        return _run_under_wsl("llvm", program, exe_path)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

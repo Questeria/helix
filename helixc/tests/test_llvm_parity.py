@@ -1,7 +1,7 @@
 """Tests for helixc.backend.llvm_parity — v3.0 Phase D, Stage 207
-chunks A+B+C: the x86_64-vs-LLVM mock structural-parity harness, the
-curated source-program corpus + parity gate, and the real-execution
-result model + toolchain detection.
+chunks A-D: the x86_64-vs-LLVM mock structural-parity harness, the
+curated source-program corpus + parity gate, the real-execution
+result model + toolchain detection, and the program-run substrate.
 
 The harness compiles a `tir.Module` through BOTH backends and
 classifies the outcome (MATCH / UNCOVERED / MISMATCH / ERROR). It is
@@ -20,11 +20,15 @@ frontend pipeline, and the Stage 207 mock-path GATE asserts every
 program in the curated corpus structurally MATCHes across both
 backends; (chunk C) `real_status()` derives the 4-state real outcome
 (NOT_RUN / DEFERRED / PASS / FAIL) and `detect_real_exec_support`
-reports whether this machine can run the real comparison.
+reports whether this machine can run the real comparison; (chunk D)
+the `_ProgramRun` substrate builds and runs a backend's output under
+WSL, capturing observable behaviour and never raising on failure.
 """
 from __future__ import annotations
 
 import copy
+import os
+import shutil
 import subprocess
 
 import pytest
@@ -699,3 +703,318 @@ def test_probe_wsl_clang_none_on_non_path_token(monkeypatch):
         stderr = ""
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
     assert llvm_parity._probe_wsl_clang("wsl") is None
+
+
+# --------------------------------------------------------------------------
+# the program-run substrate (chunk D)
+# --------------------------------------------------------------------------
+_PR = llvm_parity._ProgramRun
+
+
+def test_program_run_rejects_ran_without_exit_code():
+    """A completed run (`ran=True`) must carry a concrete exit code."""
+    with pytest.raises(ValueError, match="exit_code is None"):
+        _PR(label="x86_64", ran=True, exit_code=None, stdout="",
+            stderr="", findings=())
+
+
+def test_program_run_rejects_ran_with_findings():
+    """A completed run carries no failure diagnostic."""
+    with pytest.raises(ValueError, match="findings is non-empty"):
+        _PR(label="x86_64", ran=True, exit_code=0, stdout="",
+            stderr="", findings=("spurious",))
+
+
+def test_program_run_rejects_failed_with_exit_code():
+    """A failed run (`ran=False`) has no exit code."""
+    with pytest.raises(ValueError, match="ran=False but exit_code"):
+        _PR(label="llvm", ran=False, exit_code=0, stdout="",
+            stderr="", findings=("boom",))
+
+
+def test_program_run_rejects_failed_without_findings():
+    """A build/run failure must carry a diagnostic — silent failure
+    forbidden."""
+    with pytest.raises(ValueError, match="findings is empty"):
+        _PR(label="llvm", ran=False, exit_code=None, stdout="",
+            stderr="", findings=())
+
+
+def test_program_run_rejects_failed_with_output():
+    """A run that did not complete captured no output."""
+    with pytest.raises(ValueError, match="stdout/stderr is"):
+        _PR(label="llvm", ran=False, exit_code=None, stdout="leak",
+            stderr="", findings=("boom",))
+
+
+def test_program_run_rejects_blank_label():
+    """Every run must name the backend it ran — a blank label is
+    rejected, matching how every other string-identity field in the
+    module is guarded."""
+    with pytest.raises(ValueError, match="label is empty"):
+        _PR(label="  ", ran=True, exit_code=0, stdout="", stderr="",
+            findings=())
+
+
+def test_program_run_classmethods():
+    """`.failed` and `.completed` build the two legal shapes."""
+    f = _PR.failed("llvm", "clang exploded")
+    assert f.ran is False and f.exit_code is None
+    assert f.findings == ("clang exploded",) and f.stdout == ""
+    c = _PR.completed("x86_64", 42, "out", "err")
+    assert c.ran is True and c.exit_code == 42
+    assert c.stdout == "out" and c.stderr == "err" and c.findings == ()
+
+
+def test_win_to_wsl():
+    """A Windows path translates to its `/mnt/<drive>` WSL form, with
+    any drive letter, lower-cased and forward-slashed."""
+    assert llvm_parity._win_to_wsl("C:\\foo\\bar") == "/mnt/c/foo/bar"
+    assert llvm_parity._win_to_wsl("D:\\x\\y.bin") == "/mnt/d/x/y.bin"
+    # the result is always WSL-rooted and contains no backslashes.
+    out = llvm_parity._win_to_wsl("C:\\a b\\c.bin")
+    assert out.startswith("/mnt/c/") and "\\" not in out
+
+
+def test_run_under_wsl_failed_when_no_wsl(monkeypatch):
+    """No `wsl` on PATH -> a captured failure, not a raise."""
+    monkeypatch.setattr(llvm_parity.shutil, "which", lambda n: None)
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is False
+    assert any("wsl" in f for f in r.findings)
+
+
+def test_run_under_wsl_failed_on_timeout(monkeypatch):
+    """A run that times out is a captured failure, never a traceback."""
+    def _timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="wsl", timeout=30)
+    monkeypatch.setattr(subprocess, "run", _timeout)
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is False
+    assert any("timed out" in f for f in r.findings)
+
+
+def test_run_under_wsl_failed_on_oserror(monkeypatch):
+    """An OSError from `wsl` is a captured failure."""
+    def _oserror(*a, **k):
+        raise OSError("wsl vanished")
+    monkeypatch.setattr(subprocess, "run", _oserror)
+    r = llvm_parity._run_under_wsl("llvm", "p", "C:\\t\\x.bin")
+    assert r.ran is False
+    assert any("unusable" in f for f in r.findings)
+
+
+def test_run_under_wsl_completed_on_success(monkeypatch):
+    """A program that runs to completion yields a completed run with
+    its captured exit code and output — chmod (a separate WSL call)
+    succeeds, then the program runs."""
+    calls = []
+
+    class _Proc:
+        def __init__(self, rc, out, err):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:          # chmod +x
+            return _Proc(0, "", "")
+        return _Proc(9, "the output", "")  # the program run
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is True
+    assert r.exit_code == 9 and r.stdout == "the output"
+    assert len(calls) == 2  # chmod, then run
+
+
+def test_run_under_wsl_failed_when_chmod_fails(monkeypatch):
+    """If `chmod +x` fails the program never runs — that is a captured
+    failure, NOT chmod's exit code masquerading as the program's (the
+    `ran=True` for a program that never ran the `&&`-chain would give).
+    """
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "chmod: cannot access"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is False
+    assert any("chmod +x failed" in f for f in r.findings)
+
+
+def test_run_under_wsl_failed_when_program_does_not_launch(monkeypatch):
+    """A `wsl` exit outside 0-255 is the launcher's own error code (the
+    WSL service down / no distro), not the program's — it is captured
+    as a failure, never a `ran=True` with the plumbing artifact folded
+    in as exit_code."""
+    calls = []
+
+    class _Proc:
+        def __init__(self, rc, out, err):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:          # chmod +x succeeds
+            return _Proc(0, "", "")
+        return _Proc(4294967295, "", "no distribution")  # launcher fail
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is False
+    assert any("did not run under WSL" in f for f in r.findings)
+
+
+def test_run_under_wsl_failed_on_run_timeout(monkeypatch):
+    """A timeout on the RUN step (after chmod succeeded) is captured —
+    the step-2 timeout catch, distinct from the step-1 chmod catch."""
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:          # chmod +x succeeds
+            class _P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _P()
+        raise subprocess.TimeoutExpired(cmd="wsl", timeout=30)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is False
+    assert any("timed out" in f for f in r.findings)
+
+
+def test_run_under_wsl_completed_on_in_range_exit(monkeypatch):
+    """A legitimate in-range exit code (127 — a real program may return
+    it) passes through as a genuine completed run: the launcher-failure
+    guard rejects only codes OUTSIDE 0-255, not real program exits."""
+    calls = []
+
+    class _Proc:
+        def __init__(self, rc, out, err):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:          # chmod +x succeeds
+            return _Proc(0, "", "")
+        return _Proc(127, "", "")    # the program genuinely exits 127
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
+    assert r.ran is True
+    assert r.exit_code == 127
+
+
+def test_run_x86_program_failed_on_compile_error(monkeypatch):
+    """An x86_64 backend compile crash is captured as a failed run."""
+    def boom(_mod):
+        raise RuntimeError("x86 backend exploded")
+    monkeypatch.setattr(llvm_parity, "compile_module_to_elf", boom)
+    r = llvm_parity._run_x86_program(_const_module(), "x86_crash")
+    assert r.ran is False
+    assert any("x86_64 backend failed" in f and "RuntimeError" in f
+               for f in r.findings)
+
+
+def test_run_x86_program_failed_on_empty_elf(monkeypatch):
+    """An empty ELF from the x86_64 backend is a captured failure —
+    there is nothing to run."""
+    monkeypatch.setattr(llvm_parity, "compile_module_to_elf",
+                        lambda m: b"")
+    r = llvm_parity._run_x86_program(_const_module(), "empty_elf")
+    assert r.ran is False
+    assert any("empty ELF" in f for f in r.findings)
+
+
+def test_run_x86_program_failed_on_mkdtemp_error(monkeypatch):
+    """A temp-directory-creation OSError is captured, not raised — the
+    substrate's no-raise contract holds even when the OS will not give
+    a temp dir."""
+    def boom(*a, **k):
+        raise OSError("no space left on device")
+    monkeypatch.setattr(llvm_parity.tempfile, "mkdtemp", boom)
+    r = llvm_parity._run_x86_program(_const_module(), "no_tmp")
+    assert r.ran is False
+    assert any("temp directory" in f for f in r.findings)
+
+
+@pytest.mark.skipif(shutil.which("wsl") is None,
+                    reason="real x86_64 execution needs WSL")
+def test_run_x86_program_real_execution():
+    """End-to-end: the x86_64 backend's ELF for `fn main() { 42 }`
+    builds and runs under WSL with exit code 42 — the real x86 leg of
+    the parity comparison."""
+    r = llvm_parity._run_x86_program(_const_module(), "const42")
+    assert r.ran is True, r.findings
+    assert r.exit_code == 42
+
+
+def test_run_llvm_program_failed_on_emit_error(monkeypatch):
+    """An LLVM backend emit crash is captured as a failed run."""
+    def boom(_mod):
+        raise RuntimeError("llvm emitter exploded")
+    monkeypatch.setattr(llvm_parity, "emit_module", boom)
+    r = llvm_parity._run_llvm_program(
+        _const_module(), "llvm_crash", "/usr/bin/clang")
+    assert r.ran is False
+    assert any("LLVM backend failed to emit" in f for f in r.findings)
+
+
+def test_run_llvm_program_failed_on_clang_nonzero(monkeypatch):
+    """clang exiting non-zero on the emitted IR is a captured failure
+    carrying clang's diagnostic."""
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "error: bad IR"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    r = llvm_parity._run_llvm_program(
+        _const_module(), "bad_ir", "/usr/bin/clang")
+    assert r.ran is False
+    assert any("clang failed to compile" in f and "bad IR" in f
+               for f in r.findings)
+
+
+def test_run_llvm_program_failed_on_no_artifact(monkeypatch):
+    """clang exiting 0 but producing no executable is a captured
+    failure — a 0 exit with no artifact is not a successful build."""
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(os.path, "getsize", lambda p: 0)
+    r = llvm_parity._run_llvm_program(
+        _const_module(), "no_exe", "/usr/bin/clang")
+    assert r.ran is False
+    assert any("no executable" in f for f in r.findings)
+
+
+def test_run_llvm_program_completed_on_success(monkeypatch):
+    """Happy path: emit IR, clang compiles it (exit 0, artifact
+    present), the executable runs — a completed run carrying the
+    captured exit code and output."""
+    calls = []
+
+    class _Proc:
+        def __init__(self, rc, out, err):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) == 1:          # the clang compile
+            return _Proc(0, "", "")
+        if len(calls) == 2:          # chmod +x
+            return _Proc(0, "", "")
+        return _Proc(42, "hello", "")  # the program run
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(os.path, "getsize", lambda p: 4096)
+    r = llvm_parity._run_llvm_program(
+        _const_module(), "ok", "/usr/bin/clang")
+    assert r.ran is True, r.findings
+    assert r.exit_code == 42 and r.stdout == "hello"
+    assert len(calls) == 3  # clang compile, chmod, run
