@@ -1,41 +1,24 @@
 // hbs_sample_tree_eval.hx
 //
-// HBS dogfood: tiny "AST" evaluator. The tree is a flat array indexed
-// by node-id; each node is encoded as 4 i32 slots (kind, lhs_id,
-// rhs_id, value).  This sidesteps the lack of payload-bearing enums
-// and recursive struct types.
+// HBS dogfood: tiny "AST" evaluator. Demonstrates enum constants and
+// match-dispatch over node kinds. The expression -((1 + 2) * 7),
+// negated again to keep the exit code positive, is evaluated inline
+// in main: each node's kind and literal value is a scalar local, and
+// each node's value is computed by a `match` over its Op kind.
 //
 // Node kinds:
-//   Op::Const   value  = the literal i32, lhs/rhs unused
-//   Op::Add     lhs    = id of left operand, rhs = id of right
-//   Op::Mul     lhs/rhs same
-//   Op::Neg     lhs    = id of operand, rhs unused
+//   Op::Const   the node's value is a literal i32
+//   Op::Add     sum of two child node values
+//   Op::Mul     product of two child node values
+//   Op::Neg     negation of one child node value
 //
-// The eval routine looks up node by id, dispatches on kind, recurses.
-//
-// Demonstrates: enum constants, match dispatch, recursive function +
-// totality checker (since each recursive call passes a smaller node id),
-// struct field access through chained `tree.value` style is still TBD —
-// here we use mutable globals via a fixed-size i32 array indexed by id.
+// An earlier draft passed the tree as an [i32; 16] array to accessor
+// functions (node_kind / node_lhs / node_rhs / node_val). Indexing an
+// array-typed function parameter is not yet supported by the backend,
+// so the evaluator is inlined with scalar locals instead. When that
+// feature lands, this example can be rewritten to showcase it.
 
 enum Op { Const, Add, Mul, Neg }
-
-@total
-fn node_kind(arr: [i32; 16], id: i32) -> i32 { arr[4 * id] }
-
-@total
-fn node_lhs(arr: [i32; 16], id: i32) -> i32 { arr[4 * id + 1] }
-
-@total
-fn node_rhs(arr: [i32; 16], id: i32) -> i32 { arr[4 * id + 2] }
-
-@total
-fn node_val(arr: [i32; 16], id: i32) -> i32 { arr[4 * id + 3] }
-
-// Note: we intentionally don't call `eval` here. The evaluator is
-// inlined into main below to keep totality + codegen straightforward
-// for now. A future tick can add struct-of-array passing once we have
-// pass-by-reference for arrays.
 
 fn main() -> i32 {
     // Encode the expression  -((1 + 2) * 7)  as four nodes:

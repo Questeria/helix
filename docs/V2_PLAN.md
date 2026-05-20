@@ -1428,3 +1428,29 @@ Process note (carried from the blocker doc): `test_codegen.py` takes
 ~1h43m for a full run, so no per-fire run exercises it whole — which
 is how these stale tests sat unseen after the Cycle 3 contract
 changes. A periodic full-suite fire, or sharding, is still wanted.
+
+### 2026-05-20 — blocker fix: Bucket B — test_codegen.py blocker fully closed
+
+Closed the last of the 9 `test_codegen.py` failures —
+`test_hbs_sample_tree_eval_runs`, the distinct lowering root cause the
+Bucket A note left open for a follow-up fire.
+
+Root cause: `helixc/examples/hbs_sample_tree_eval.hx` defined four
+accessor functions (`node_kind` / `node_lhs` / `node_rhs` /
+`node_val`) that index an array-typed parameter `arr: [i32; 16]` — a
+backend feature not yet implemented. `main()` never calls them; it
+evaluates the AST inline with scalar locals, so they were dead code.
+Before the Cycle 1 IR silent-failure HIGH-3 fix, `arr[i]` in
+unreachable code lowered silently to `0`; HIGH-3 correctly made it a
+loud `NotImplementedError`, so the whole example failed to compile
+even though the broken code was unreachable.
+
+Fix (example-file-only, zero production-code risk): removed the 4
+unused accessor functions and reconciled the file header to describe
+what `main()` actually does (an inline scalar evaluator), noting that
+array-typed-parameter indexing is the future feature that would let
+the accessor-function form return.
+
+Verification: all 9 originally-failing tests now pass together
+(9 passed, 56s). `wip-codegen-9-test-failures-blocker.md` retired —
+the blocker is fully closed.
