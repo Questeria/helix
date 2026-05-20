@@ -1198,7 +1198,21 @@ def validate_kernel_tile_lowering(module: tir.Module) -> None:
     if not kernel_mod.functions:
         return
     tile_mod = ti.lower_to_tile(kernel_mod)
-    emit_ptx(tile_mod)
+    ptx = emit_ptx(tile_mod)
+    # v2.3 5-clean-gate BE HIGH-1 changed emit_op's stub/deferred/skipped
+    # handling from a raised RuntimeError to a `.error "HELIX-..."`
+    # directive written into the PTX text. This validator's contract is
+    # to RAISE on an unsupported kernel op — and the x86_64 host path
+    # embeds kernel PTX without ever running ptxas, so the directive
+    # alone would be silent. Detect it here (parity with the PTX CLI's
+    # own `.error "HELIX-` check) so the rejection stays loud.
+    if '.error "HELIX-' in ptx:
+        raise RuntimeError(
+            "emitted kernel contains a HELIX-STUB / HELIX-SKIPPED "
+            "directive — an unsupported tile-IR op (e.g. a non-inlined "
+            "helper CALL inside a @kernel) reached PTX codegen; the "
+            "kernel is non-functional and ptxas would reject it"
+        )
     if getattr(module, "_helix_kernel_tile_validation_blocked_by_dce", False):
         raise RuntimeError(
             "kernel tile validation must run before DCE/FDCE"
