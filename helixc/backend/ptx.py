@@ -370,17 +370,34 @@ class PtxEmitter:
         self.reg_map = {}
         self.planned_reg_map = {}
         self.planned_high_water = {}
-        # v2.5 item 1 — the operand-rewrite wiring (emit_kernel calling
-        # load_register_plan) is NOT enabled. Three trials each caught
-        # a real issue before it could ship: (1) bool register class,
-        # (2) plan/scratch register collision, (3) most recent —
-        # seeding scratch above the plan is necessary but NOT
-        # sufficient: a memory-op result is IN the plan yet still
-        # `_new_reg`-named, so it wastes its planned register and
-        # shifts (broke test_per_prefix_register_counters — %f1 instead
-        # of %f0). The full wiring must FIRST convert every
-        # result-naming `_new_reg` to `_result_reg`. Complete recipe in
-        # V2_PLAN.md 2026-05-20 "Edit B: full recipe".
+        # v2.5 item 1 (operand-rewrite wiring) — load the reuse-aware
+        # linear-scan register plan, then partition the register files
+        # so the plan and the emitter's bump-allocated scratch never
+        # collide.
+        #
+        # Every SSA-result register name now comes from the plan-aware
+        # `_result_reg` — the scalar-arith branches AND the indexed
+        # load. `_new_reg` is left to name ONLY genuine scratch: the
+        # %rd address-math temporaries and the multi-register tile
+        # values (TILE_ZEROS / elementwise / TILE_MATMUL — non-scalar,
+        # skipped from the plan). The plan owns %X0..%X(hw-1) per
+        # class; seeding `next_reg_by_prefix` to each class's high-water
+        # makes `_new_reg` start at %X(hw), ABOVE the plan, so the two
+        # register regions are disjoint.
+        #
+        # f64: a kernel with an f64 scalar cannot be linear-scan-planned
+        # (PTX has no f64 register file — `plan_ptx_registers` raises
+        # NotImplementedError). Catch it: `planned_reg_map` /
+        # `planned_high_water` stay empty, the seed loop is a no-op, and
+        # the whole kernel bump-allocates from 0 — current f64 PTX
+        # behaviour preserved. A spill / unrecognised dtype stays loud.
+        try:
+            self.load_register_plan(fn)
+        except NotImplementedError:
+            pass
+        for _cls, _hw in self.planned_high_water.items():
+            # _cls is "%r"/"%f"/...; next_reg_by_prefix keys drop the %.
+            self.next_reg_by_prefix[_cls.lstrip("%")] = _hw
         # Stage 16 — build the HBM tile param map. The TileValue.ty for an
         # HBM tile param is a TIRTileTy; its name_hint matches the source
         # parameter name (so `TILE_INDEX_LOAD attrs={'name':'a'}` can find
@@ -854,10 +871,15 @@ class PtxEmitter:
             self._line(f"    mul.wide.s32 {off}, {idx_reg}, {self._dtype_size(dtype)};")
             self._line(f"    add.s64 {addr}, {gen}, {off};")
             dst_prefix = self._ld_reg_prefix(dtype)
-            dst = self._new_reg(dst_prefix)
+            # v2.5 item 1 — name the loaded scalar via the plan-aware
+            # `_result_reg`, not `_new_reg`: `a[i]` is a scalar result
+            # and IS in the linear-scan plan, so it must take its
+            # planned register. `_require_result_count(op, 1, ...)`
+            # above is `_result_reg`'s precondition (and makes the old
+            # `if op.results:` guard dead — `_result_reg` binds
+            # `reg_map` itself).
+            dst = self._result_reg(op, dst_prefix)
             self._line(f"    ld.global.{self._ptx_load_suffix(dtype)} {dst}, [{addr}];")
-            if op.results:
-                self.reg_map[op.results[0].id] = dst
             return
         if op.kind == ti.TileOpKind.TILE_INDEX_STORE_HBM:
             self._require_operand_count(op, 2, "TILE_INDEX_STORE_HBM")

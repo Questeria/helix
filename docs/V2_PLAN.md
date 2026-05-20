@@ -2034,3 +2034,46 @@ the op-aware bool classifier, `load_register_plan`,
 (Part 1 + Part 2 + golden regen must land together or tests are
 inconsistent), not a cron-fire slice. Edit B reverted; `test_ptx.py`
 back to 112 passed.
+
+### 2026-05-20 — Edit B LANDED: v2.5 item 1 register-plan wiring complete
+
+The full recipe shipped as one coherent block. A concurrent fire wrote
+it into the tree; this fire verified it green and committed it (the
+per-fire "clean a dirty tree before opening new work" discipline, same
+as `bc70642`).
+
+**Part 1** — `TILE_INDEX_LOAD_HBM`'s loaded value (`a[i]`, a scalar
+SSA result and therefore IN the linear-scan plan) now names its
+register through `_result_reg`, not `_new_reg`. The dead
+`if op.results:` guard dropped (`_result_reg` binds `reg_map` itself).
+This was the exact gap the 3rd trial surfaced — a planned scalar named
+off-plan, wasting `%f0` and landing at `%f1`.
+
+**Part 2** — `emit_kernel` now calls `load_register_plan(fn)` (in a
+`try/except NotImplementedError` for f64 kernels — PTX has no f64
+register file, so they fall back to pure bump allocation, behaviour
+preserved) and seeds `next_reg_by_prefix[cls]` to each register
+file's plan high-water. Genuine emitter scratch (`%rd` address-math
+temporaries) then bump-allocates ABOVE the plan — the plan owns
+`%X0..%X(hw-1)`, scratch owns `%X(hw)..` — disjoint, no collision.
+
+**Part 3 (golden regen)** — NOT needed. The 3rd trial already proved
+111/112 pass with the plan wired; only `test_per_prefix_register_counters`
+moved, and Part 1 fixes exactly that (`a[i]` -> planned `%f0`). The
+linear-scan plan produces the same register names as bump allocation
+for every other test kernel.
+
+**Note on the recipe's "rdst / rd sites":** those were left on
+`_new_reg` deliberately — they name multi-register *tile* results
+(`TILE_ZEROS` / elementwise / `TILE_MATMUL`), which `plan_ptx_registers`
+*skips* (`_skip` drops every non-scalar; see `regalloc_classes.py`).
+A tile result is never in the plan, so `_result_reg` would only fall
+through to `_new_reg` anyway — and after Part 2's seeding, `_new_reg`
+correctly places those above the plan. Converting them would also fight
+`_result_reg`'s single-scalar-result contract (they allocate N
+registers in a loop). The one scalar result still on `_new_reg` —
+`TILE_INDEX_LOAD_HBM`'s `dst` — was the only necessary conversion.
+
+Verification: `test_ptx.py` 112 passed, `test_codegen.py` PTX subset
+6 passed, `test_regalloc` + `test_regalloc_classes` 65 passed — 183
+total. v2.5 item 1 (PTX register-allocation emitter wiring) is COMPLETE.
