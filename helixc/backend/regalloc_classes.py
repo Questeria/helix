@@ -234,6 +234,66 @@ def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
     return result
 
 
+def ptx_register_names(result: MultiClassResult) -> dict[int, str]:
+    """v2.5 item 1 — flatten a planned PTX allocation to the
+    vreg-id -> register-name map `PtxEmitter.reg_map` consumes.
+
+    `plan_ptx_registers` returns a `MultiClassResult` whose
+    `assignment` payload is one `RegAssignment(reg_class, index)` per
+    register-allocated scalar vreg. PTX register syntax is the class
+    key concatenated with the index — and the `PtxRegClass` keys
+    already carry the leading `%` (`%r` / `%rd` / `%f` / `%h` / `%p`),
+    so `%r` + `3` -> `%r3`. The returned `dict[int, str]` is the exact
+    shape `PtxEmitter.reg_map` (TileValue.id -> "%r3") already uses; the
+    operand-emission slice assigns the result straight into `reg_map`.
+
+    Only `assignment` is read. `skipped` vregs (tile / tensor values)
+    are memory-resident — named by the emitter's own mechanism, not a
+    single register — and a no-spill `MultiClassResult` (the
+    `plan_ptx_registers` contract) carries an empty `spilled` set, so
+    iterating `assignment` covers every register-allocated value
+    exactly once.
+
+    Each entry is checked against `PTX_REGISTER_POOLS`: a class absent
+    from the pool table, or an index outside its file, is a
+    register-model bug. PTX `.reg` directives declare a fixed pool per
+    file; an out-of-pool register name passes silently through Helix
+    and is rejected only by the CUDA PTX assembler far downstream. It
+    is surfaced loudly here instead — the same name-construction
+    boundary the emitter slice will trust.
+
+    This function is pure (no `PtxEmitter` state, emits no text), so it
+    is unit-testable in isolation — the higher-risk emitter rewrite
+    threads a verified name map rather than building and trusting it
+    in one step.
+
+    Raises:
+        ValueError: a `RegAssignment` names a register class absent
+            from `PTX_REGISTER_POOLS`, or an index outside that
+            class's declared pool [0, pool_size).
+    """
+    names: dict[int, str] = {}
+    for vreg, ra in result.assignment.items():
+        pool_size = PTX_REGISTER_POOLS.get(ra.reg_class)
+        if pool_size is None:
+            raise ValueError(
+                f"ptx_register_names: vreg {vreg} assigned register "
+                f"class {ra.reg_class!r}, which is not a PTX register "
+                f"file ({sorted(PTX_REGISTER_POOLS)}). The allocation "
+                f"is not consumable by PtxEmitter."
+            )
+        if not 0 <= ra.index < pool_size:
+            raise ValueError(
+                f"ptx_register_names: vreg {vreg} assigned "
+                f"{ra.reg_class}{ra.index}, an index outside the "
+                f"{ra.reg_class} pool [0, {pool_size}). PTX .reg "
+                f"directives declare {pool_size} registers per file; an "
+                f"out-of-pool name is rejected by ptxas downstream."
+            )
+        names[vreg] = f"{ra.reg_class}{ra.index}"
+    return names
+
+
 # ============================================================================
 # ROCm / AMDGCN register-class model
 # ============================================================================

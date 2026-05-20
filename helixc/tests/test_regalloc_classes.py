@@ -9,7 +9,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import pytest
 
-from helixc.backend.regalloc import allocate_by_class
+from helixc.backend.regalloc import (
+    MultiClassResult,
+    RegAssignment,
+    allocate_by_class,
+)
 from typing import get_args
 
 from helixc.backend.regalloc_classes import (
@@ -19,6 +23,7 @@ from helixc.backend.regalloc_classes import (
     RocmRegClass,
     plan_ptx_registers,
     ptx_register_class,
+    ptx_register_names,
     rocm_register_class,
 )
 from helixc.ir import tir
@@ -230,6 +235,66 @@ def test_v25_plan_ptx_registers_propagates_unknown_dtype():
                 blocks=[blk], attrs={"kernel": True})
     with pytest.raises(RuntimeError, match="unrecognised TIRScalar"):
         plan_ptx_registers(fn)
+
+
+# ============================================================================
+# ptx_register_names — v2.5 item 1 (emitter-wiring: the name bridge)
+# ============================================================================
+def test_v25_ptx_register_names_flattens_assignment_to_emitter_map():
+    """v2.5 item 1 — ptx_register_names turns a planned allocation into
+    the {vreg-id -> "%r3"} map PtxEmitter.reg_map consumes: class key
+    concatenated with index, the leading `%` carried by the class key.
+    Only register-allocated scalars appear; a memory-resident tile
+    param (skipped, no RegAssignment) is absent — the emitter names it
+    by its own mechanism."""
+    vi = _val(0, "i32")   # scalar -> %r0
+    vf = _val(1, "f32")   # scalar -> %f0
+    tile_ty = tir.TIRTileTy(
+        dtype=tir.TIRScalar("f32"),
+        shape=(tir.DimConst(16),),
+        memspace="reg",
+    )
+    vt = TileValue(id=2, ty=tile_ty)   # memory-resident -> skipped
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vi]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_FLOAT, results=[vf]),
+        TileOp(kind=TileOpKind.CALL, operands=[vi, vf, vt]),
+    ])
+    fn = TileFn(name="k", params=[vt], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    names = ptx_register_names(plan_ptx_registers(fn))
+    assert names == {0: "%r0", 1: "%f0"}
+    assert 2 not in names              # the skipped tile param
+
+
+def test_v25_ptx_register_names_rejects_unknown_register_class():
+    """v2.5 item 1 — ptx_register_names refuses to flatten a
+    RegAssignment naming a class absent from PTX_REGISTER_POOLS: a
+    register-model bug surfaced loudly at the name-construction
+    boundary, not emitted as an undeclared register the PTX assembler
+    rejects far downstream."""
+    bad = MultiClassResult(assignment={0: RegAssignment("%bogus", 0)})
+    with pytest.raises(ValueError, match="not a PTX register file"):
+        ptx_register_names(bad)
+
+
+def test_v25_ptx_register_names_rejects_out_of_pool_index():
+    """v2.5 item 1 — ptx_register_names refuses an index outside its
+    file's declared pool. PTX .reg directives declare a fixed 256-deep
+    pool per file; `%r256` would pass silently through Helix and be
+    rejected only by ptxas — caught here at the boundary instead."""
+    over = MultiClassResult(
+        assignment={0: RegAssignment("%r", PTX_REGISTER_POOLS["%r"])})
+    with pytest.raises(ValueError, match="outside the %r pool"):
+        ptx_register_names(over)
+
+
+def test_v25_ptx_register_names_empty_assignment_is_empty_map():
+    """v2.5 item 1 — a MultiClassResult with no register-allocated
+    vregs (e.g. an all-tile kernel, every value skipped) flattens to
+    an empty map, not an error: the emitter has nothing to place by
+    register and falls back entirely to its memory-resident path."""
+    assert ptx_register_names(MultiClassResult()) == {}
 
 
 # ============================================================================

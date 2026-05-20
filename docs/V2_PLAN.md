@@ -1481,3 +1481,51 @@ clean diagnostic — the lowering message itself says "typecheck should
 have rejected this"; or (b) the backend gains array-parameter
 indexing support. Tracked as a future item; the new test is the
 flip-point when it lands.
+
+### 2026-05-20T02:21Z — v2.5 item 1 slice: ptx_register_names (the name bridge)
+
+Per-fire pick: the next **cron-fire-safe slice of v2.5 item 1**
+(emitter wiring). The v2.5 polish backlog is fully drained and the
+test_codegen.py 9-failure blocker is fully closed (`3d5ada8`), so the
+only remaining v2.5 feature work is item 1. Its risky core — threading
+the register assignment into every `PtxEmitter._emit_op` operand,
+which rewrites the 1656-line `ptx.py` and regenerates the 102 PTX
+golden pins (`test_codegen.py`, a ~1h43m run) — stays reserved for a
+focused block. But it has another pure, additive prerequisite this
+fire shipped.
+
+`plan_ptx_registers(fn)` (shipped `ace2eb6`) returns a
+`MultiClassResult` whose `assignment` payload is one
+`RegAssignment(reg_class, index)` per scalar vreg. `PtxEmitter.reg_map`
+is `dict[int, str]` — `TileValue.id -> "%r3"`. The bridge between the
+two was missing. Shipped this fire as
+`regalloc_classes.ptx_register_names(result) -> dict[int, str]`:
+
+- Flattens each `RegAssignment` to a PTX register name — class key +
+  index, the leading `%` carried by the `PtxRegClass` key (`%r` + `3`
+  -> `%r3`). Output is the exact `reg_map` shape the operand-emission
+  slice assigns straight in.
+- Reads only `assignment`: `skipped` vregs (tile/tensor, memory-
+  resident) are absent — named by the emitter's own mechanism — and a
+  no-spill result (the `plan_ptx_registers` contract) has empty
+  `spilled`, so iterating `assignment` covers every register-allocated
+  value exactly once.
+- Validates each entry against `PTX_REGISTER_POOLS`: an unknown class
+  or an out-of-pool index raises `ValueError`. An undeclared PTX
+  register name otherwise passes silently through Helix and is
+  rejected only by ptxas far downstream; this catches it at the
+  name-construction boundary the emitter slice will trust.
+- Pure (no `PtxEmitter` state, emits no text). Nothing in codegen
+  calls it yet, so the 102 PTX golden pins are green by construction —
+  same substrate-first discipline as the `plan_ptx_registers` slice.
+
+Tests (`test_regalloc_classes.py`, +4): a real mixed scalar/tile
+kernel flattens to `{0: "%r0", 1: "%f0"}` with the skipped tile param
+absent; an unknown register class raises; an out-of-pool index
+(`%r256`) raises; an empty `MultiClassResult` flattens to `{}`.
+Verification: `pytest test_regalloc_classes.py test_regalloc.py -q`
+-> 56 passed.
+
+v2.5 remaining: item 1 operand-threading rewrite (focused block —
+`plan_ptx_registers` + `ptx_register_names` are now both ready for it
+to consume) + end-of-v2.5 5-clean-gate.
