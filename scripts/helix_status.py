@@ -63,7 +63,7 @@ VERSIONS: list[dict[str, str]] = [
 # closes with a 3-part audit. Bump `V3_STAGES_DONE` as each closes —
 # every percentage below recomputes from it.
 V3_STAGES_TOTAL = 19
-V3_STAGES_DONE = 6        # Stages 200-205 closed (Phase D)
+V3_STAGES_DONE = 7        # Stages 200-206 closed (Phase D)
 
 # Size of the automated test suite (`helixc/tests/`) — a
 # scale-of-testing signal for non-engineers. Bump as the suite grows.

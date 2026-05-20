@@ -159,8 +159,10 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A-D ✓ | A-D 3-clean ✓ | Phase D — Result/panic/string/output CLOSED |
-| 207–208 | Phase D — LLVM IR backend | — | — | planned |
+| 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
+| 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
+| 207 | x86_64-vs-LLVM parity gate | — | — | Phase D — next |
+| 208 | Phase D — end-of-phase 5-clean-gate | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -601,3 +603,27 @@ depend on a clean, unambiguous full-suite run.
   machinery — each a later chunk before the Stage 221 cutover. Next:
   continue the remaining Stage 206 chunks, then Stage 207 (the
   x86_64-vs-LLVM parity gate).
+- 2026-05-20 — **Stage 206 CLOSED (intrinsic core); runtime-op
+  residual carved out as 206-R.** Assessment after chunk D: Stage
+  206's intrinsic core — the runtime ops ordinary Helix programs use
+  (Result<T,E> pack/tag/payload, panic/TRAP, string-literal access,
+  string output) — is delivered across chunks A-D, each 3-clean
+  audited. The remaining ops `x86_64.py` lowers specially —
+  PRINT.print_int, PRINT.write_file / read_file_to_arena,
+  TRACE_ENTRY/EXIT, the six ARENA ops, and the QUOTE / SPLICE /
+  MODIFY / REFLECT_HASH metaprogramming family — are a distinct,
+  deeper body of work: the self-hosting bump allocator, AGI
+  metaprogramming cells, the `@trace` ring buffer, and file I/O.
+  Several need machinery the additive `_emit_op` backend does not yet
+  have — a mutable data section (arena / trace buffer / cells), and
+  control flow WITHIN a single op (print_int's digit loop,
+  write_file's open/write/close) which the per-block emitter cannot
+  express without a one-op-to-many-blocks lowering capability. Rather
+  than block the Stage 207 parity-gate milestone behind ~8 more deep
+  op-chunks, they are carved out as **206-R** — a tracked residual,
+  completed as additive op-coverage chunks before the Stage 221
+  cutover. The Stage 207 parity gate covers the implemented op set:
+  the LLVM backend fails closed (loudly) on a 206-R op, so a program
+  using one is simply outside the parity gate's covered subset, never
+  miscompiled. Stage 206 (the numbered stage) is CLOSED. Next:
+  Stage 207 — the x86_64-vs-LLVM parity gate.
