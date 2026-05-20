@@ -150,8 +150,10 @@ def test_stage201_dispatch_failed_on_zero_exit_no_artifact(monkeypatch):
                         _fake_run(0, write_artifact=False))
     res = lt.dispatch_validate_ll(_good_ll())
     assert res.status() is lt.LLVMDispatchStatus.FAILED
-    assert any("no output artifact" in f for f in res.real_findings), \
-        res.real_findings
+    # Only llvm-as is detected -> exactly one _run_tool call -> exactly
+    # one finding, and it is the artifact-check finding.
+    assert len(res.real_findings) == 1, res.real_findings
+    assert "no output artifact" in res.real_findings[0], res.real_findings
 
 
 def test_stage201_dispatch_failed_on_timeout(monkeypatch):
@@ -177,6 +179,60 @@ def test_stage201_dispatch_failed_on_os_error(monkeypatch):
     res = lt.dispatch_validate_ll(_good_ll())
     assert res.status() is lt.LLVMDispatchStatus.FAILED
     assert any("unusable at invocation" in f
+               for f in res.real_findings), res.real_findings
+
+
+def test_stage201_dispatch_runs_llc_when_present(monkeypatch):
+    """When both llvm-as and llc are detected, the dispatch runs both —
+    llvm-as -> bitcode, then llc -> object — and `real_tool` reports
+    the deepest tool reached (llc)."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        _tools(**{"llvm-as": "/fake/llvm-as",
+                                  "llc": "/fake/llc"}))
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if "-o" in cmd:
+            out = cmd[cmd.index("-o") + 1]
+            with open(out, "wb") as f:
+                f.write(b"\x00fake\x00")
+        return _FakeProc(0)
+
+    monkeypatch.setattr(lt.subprocess, "run", run)
+    res = lt.dispatch_validate_ll(_good_ll())
+    assert res.status() is lt.LLVMDispatchStatus.PASSED
+    assert res.real_tool == "llc", res.real_tool
+    assert len(calls) == 2, calls
+    assert calls[0][0] == "/fake/llvm-as", calls[0]
+    assert calls[1][0] == "/fake/llc", calls[1]
+    assert calls[1][-1].endswith("module.o"), calls[1]
+
+
+def test_stage201_dispatch_attributes_llc_failure_to_llc(monkeypatch):
+    """v3.0 Stage 201 audit-fix — when llvm-as passes but llc fails,
+    the failure is attributed to `llc`, not misattributed to llvm-as
+    (the tool that actually passed)."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        _tools(**{"llvm-as": "/fake/llvm-as",
+                                  "llc": "/fake/llc"}))
+    n = [0]
+
+    def run(cmd, **kwargs):
+        n[0] += 1
+        if n[0] == 1:  # llvm-as succeeds, writes the bitcode
+            if "-o" in cmd:
+                out = cmd[cmd.index("-o") + 1]
+                with open(out, "wb") as f:
+                    f.write(b"\x00bc\x00")
+            return _FakeProc(0)
+        return _FakeProc(1, stderr="llc: bad target triple")  # llc fails
+
+    monkeypatch.setattr(lt.subprocess, "run", run)
+    res = lt.dispatch_validate_ll(_good_ll())
+    assert res.status() is lt.LLVMDispatchStatus.FAILED
+    assert res.real_tool == "llc", res.real_tool  # NOT "llvm-as"
+    assert any("llc" in f and "exit 1" in f
                for f in res.real_findings), res.real_findings
 
 

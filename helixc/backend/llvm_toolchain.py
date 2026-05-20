@@ -48,6 +48,28 @@ LLVM_TOOLS: tuple[str, ...] = ("llvm-as", "opt", "llc", "clang")
 _LLVM_DISPATCH_TIMEOUT_S = 30
 
 
+# `dispatch_validate_ll` selects these tools from `detect_llvm_tools()`
+# by literal name. A module-load guard keeps them coupled to
+# LLVM_TOOLS, so a future rename of a tool in LLVM_TOOLS that misses
+# the dispatch site cannot silently degrade every dispatch to a
+# DEFERRED (mock-only) verdict. Mirrors gpu_ci's `_check_gpu_ci_drift`.
+_DISPATCH_TOOLS: tuple[str, ...] = ("llvm-as", "llc")
+
+
+def _check_llvm_toolchain_drift() -> None:
+    missing = [t for t in _DISPATCH_TOOLS if t not in LLVM_TOOLS]
+    if missing:
+        raise AssertionError(
+            f"helixc.backend.llvm_toolchain: dispatch_validate_ll "
+            f"selects tool(s) {missing} absent from LLVM_TOOLS "
+            f"{LLVM_TOOLS} — a rename would silently degrade every "
+            f"dispatch to a DEFERRED (mock-only) verdict"
+        )
+
+
+_check_llvm_toolchain_drift()
+
+
 class LLVMDispatchStatus(Enum):
     """Tri-state outcome of validating emitted LLVM IR.
 
@@ -213,6 +235,14 @@ def dispatch_validate_ll(ll_text: str) -> LLVMDispatchResult:
             real_tool=None, real_findings=())
 
     findings: list[str] = []
+    # `real_tool` reports the DEEPEST tool the dispatch reached: on a
+    # failure that is the tool that failed (the pipeline stops there);
+    # on success it is the last tool run. It starts at "llvm-as" and
+    # advances to "llc" only once the llc leg actually begins — so a
+    # caller never reads "llvm-as" for a failure llc produced, and a
+    # bitcode-only run (no llc on PATH) is distinguishable from a full
+    # lowering. v3.0 Stage 201 audit-fix.
+    last_tool = "llvm-as"
     tmpdir = tempfile.mkdtemp(prefix="helix_llvm_")
     try:
         ll_path = os.path.join(tmpdir, "module.ll")
@@ -228,11 +258,13 @@ def dispatch_validate_ll(ll_text: str) -> LLVMDispatchResult:
             # llvm-as assembles + verifies the textual IR -> bitcode.
             findings += _run_tool(
                 [llvm_as, ll_path, "-o", bc_path], artifact=bc_path)
-            # When llvm-as succeeded and llc is present, lower the
+            # When llvm-as succeeded (`not findings` — it is the only
+            # finding source so far) and llc is present, lower the
             # bitcode to a native object too — the full "assemble
             # emitted IR to an object".
             llc = tools.get("llc")
             if not findings and llc is not None:
+                last_tool = "llc"
                 obj_path = os.path.join(tmpdir, "module.o")
                 findings += _run_tool(
                     [llc, "-filetype=obj", bc_path, "-o", obj_path],
@@ -244,4 +276,4 @@ def dispatch_validate_ll(ll_text: str) -> LLVMDispatchResult:
     return LLVMDispatchResult(
         mock_passed=mock_passed, mock_findings=mock_findings,
         real_attempted=True, real_passed=real_passed,
-        real_tool="llvm-as", real_findings=tuple(findings))
+        real_tool=last_tool, real_findings=tuple(findings))
