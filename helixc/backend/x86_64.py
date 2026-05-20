@@ -1085,10 +1085,22 @@ class FnCompiler:
         """
         idx = self._op_index.get(id(op))
         if idx is None:
-            # Defensive guard — op was created post-init. Log via the
-            # symbol name itself so the byte-identical regression test
-            # surfaces the breach with a localized diff.
-            return f"{self.fn_index}_unk{id(op):x}"
+            # v2.x re-audit R2b (BE 5-clean-gate MEDIUM): an op absent
+            # from the index map was created AFTER FnCompiler.__init__
+            # — an internal invariant violation. The prior fallback
+            # returned a suffix containing `id(op)`, silently leaking
+            # the Python object address into the emitted ELF symbol
+            # name — re-introducing the exact cross-process
+            # non-reproducibility this method exists to kill,
+            # detectable only by a byte-diff if a determinism test
+            # happened to be running. Fail loudly instead: a post-init
+            # op must register itself with the FnCompiler op-index.
+            raise RuntimeError(
+                f"x86_64 _op_suffix: op {op.kind.name} is not in the "
+                f"FnCompiler op-index — it was created after __init__ "
+                f"without being registered. The codegen pass that "
+                f"created it must register it, or emitted symbol names "
+                f"lose cross-process byte-reproducibility.")
         return f"{self.fn_index}_{idx}"
 
     def _alloc_var(self, name: str) -> int:
@@ -1322,26 +1334,35 @@ class FnCompiler:
     }
 
     def _int_bits_for_type(self, ty: tir.TIRType) -> int:
-        # Cycle 3 R2 fix batch 25 (BE R2 NEW-HIGH-1): pre-fix the
-        # .get(default) silently defaulted to 32 bits for any future
-        # TIRScalar dtype (i128, f128, i4) not in the map AND for
-        # non-TIRScalar (TIRTensorTy, TIRTuple). Consumed by operand
-        # load width AND CONST_INT validator — wrong bits propagates.
-        # Post-fix: explicit allowlist + warn on miss (NOT raise, since
-        # current codebase has non-scalar callers we don't want to break).
+        # Cycle 3 R2 fix batch 25 (BE R2 NEW-HIGH-1): the original
+        # `.get(default)` silently defaulted to 32 bits for any
+        # TIRScalar dtype not in the map AND for non-TIRScalar types —
+        # consumed by operand load width AND the CONST_INT range
+        # validator, so a wrong width silently miscompiles.
+        #
+        # v2.x re-audit R2b (BE 5-clean-gate MEDIUM): the interim fix
+        # used `warnings.warn` + return 32, which is default-suppressed
+        # and trivially lost — a 64-bit value loaded with a 32-bit
+        # `mov eax` would miscompile with no durable signal. Both
+        # misses now raise loudly, parity with ptx.py `_dtype_size`.
+        # `_INT_BITS_TABLE` covers every Helix integer/float scalar
+        # dtype; f16/bf16/fp8/... are rejected upstream by
+        # `_check_float_supported`, so an unknown scalar reaching here
+        # is a real gap. All three callers (`_load_cmp_operand_rax`,
+        # `_load_cmp_operand_rcx`, the CONST_INT range check) pass a
+        # scalar operand/result element type — the earlier "non-scalar
+        # callers exist" note was stale; a non-scalar here is a misuse.
         if isinstance(ty, tir.TIRScalar):
             if ty.name in self._INT_BITS_TABLE:
                 return self._INT_BITS_TABLE[ty.name]
-            import warnings
-            warnings.warn(
-                f"x86_64 backend: unknown scalar type {ty.name!r}; "
-                f"defaulting to 32 bits. Add to _INT_BITS_TABLE if "
-                f"this is an integer/float type — Cycle 3 R2 BE "
-                f"NEW-HIGH-1",
-                stacklevel=2,
-            )
-            return 32
-        return 32
+            raise RuntimeError(
+                f"x86_64 _int_bits_for_type: unknown scalar dtype "
+                f"{ty.name!r} has no bit width — add it to "
+                f"_INT_BITS_TABLE if it is an integer/float type")
+        raise RuntimeError(
+            f"x86_64 _int_bits_for_type: non-scalar type "
+            f"{type(ty).__name__} has no integer bit width — the "
+            f"caller must pass a TIRScalar operand/result element type")
 
     # Cycle 3 R1 fix batch 22 (BE HIGH-2): the `unsigned_compare`
     # parameter was added during a Cycle 100/115 refactor but the

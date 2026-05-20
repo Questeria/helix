@@ -2264,6 +2264,34 @@ gate re-run.
   comment that implied the skip was always benign was corrected to
   document the Phase-0 limitation honestly.
 
-The FE-batch MEDIUMs are now resolved. Still open: the BE MEDIUMs
-(x86_64.py ×3), the RT MEDIUM, the TEST `_zip_cmp_test` finding —
-then the gate re-run.
+The FE-batch MEDIUMs are now resolved.
+
+**BE MEDIUMs (x86_64.py)** — verified each:
+- BE-M4 — FIXED. `_op_suffix`'s fallback for an op absent from the
+  op-index returned a suffix embedding `id(op)` (the Python object
+  address), silently leaking process-nondeterminism into emitted ELF
+  symbol names — re-introducing the exact non-reproducibility
+  `_op_suffix` exists to kill. Now raises loudly (a post-init
+  unregistered op is an internal invariant violation).
+- BE-M2 — FIXED. `_int_bits_for_type` returned 32 bits with a
+  default-suppressed `warnings.warn` for an unknown scalar dtype, and
+  a bare silent 32 for a non-scalar — a wrong load width is a silent
+  miscompile. Both misses now raise (parity with ptx.py
+  `_dtype_size`). Audited all three call sites: each passes a scalar
+  operand/result element type, so the old "non-scalar callers exist"
+  comment was stale.
+- BE-M3 — DISMISSED with reasoning (two parts, neither a real silent
+  failure). (a) The `_load_cmp_operand` `unsigned_compare` parameter
+  is dead — the signed/unsigned decision is type-driven and correct;
+  the parameter only feeds a mismatch `warnings.warn` that fires
+  benignly in real `test_c115` tests today, so it CANNOT be promoted
+  to a raise without breaking them, and removing the dead parameter
+  is a 12-call-site mechanical refactor (code-cleanliness — logged
+  for a future code-simplifier pass, not a silent-failure fix).
+  (b) Bitwise ops on a float operand defaulting to 32-bit emission is
+  unreachable — typecheck rejects float-bitwise — and the code
+  comment already documents it; an assert across six bitwise arms is
+  disproportionate hardening of a dead path.
+
+Still open: the RT MEDIUM, the TEST `_zip_cmp_test` finding — then
+the gate re-run.
