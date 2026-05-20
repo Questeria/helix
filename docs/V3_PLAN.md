@@ -153,7 +153,7 @@ depend on a clean, unambiguous full-suite run.
 
 | Stage | Title | Ship | Audit | Notes |
 |-------|-------|------|-------|-------|
-| 200 | LLVM IR emitter substrate | ✓ | 3-clean (re-run) | Phase D — see status note |
+| 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
 | 201 | LLVM toolchain detection + dispatch | — | — | next |
 | 202–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
@@ -183,3 +183,18 @@ depend on a clean, unambiguous full-suite run.
   (Stage 201's `llc` catches it), `char` dtype width, `nsw`/`nuw`
   overflow-flag parity (a Stage 207 decision). Next: Stage 201 — LLVM
   toolchain detection + dispatch.
+- 2026-05-20 — **Stage 200 — 3-clean audit CLOSED.** The per-stage
+  audit ran three rounds (silent-failure-hunter / type-design-analyzer
+  / code-reviewer). Round 1: 1 HIGH + 2 must-fix MEDIUM → fixed in the
+  ship commit (`88a45b0`). Round 2: type-design + code-review CLEAN;
+  silent-failure-hunter found 1 must-fix MEDIUM + 1 MEDIUM → fixed
+  (`d9adcee`). Round 3 (silent-failure re-confirm): 0 HIGH, 0 must-fix
+  (1 MEDIUM + 1 LOW, both non-blocking — `mock_validate_ll` robustness
+  on hand-written / future `.ll` that the Stage-200 emitter never
+  produces; Stage 201's real `llvm-as` supersedes the mock path). All
+  three audit surfaces reached 0 HIGH / 0 must-fix-MEDIUM — the
+  3-clean criterion is satisfied; **Stage 200 is CLOSED**. Non-blocking
+  backlog carried forward: the round-3 `mock_validate_ll` MEDIUM+LOW,
+  plus the round-1 deferrals (Operand tagged-union refactor, CONST_INT
+  range check, `char` dtype width, `nsw`/`nuw` overflow parity). Next:
+  Stage 201 — LLVM toolchain detection + dispatch.
