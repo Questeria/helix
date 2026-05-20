@@ -29,7 +29,11 @@ from ..ir import tir, tile_ir as ti
 from ._lowering_schema import (  # v2.3 item 2 shared schema
     OpLowering, VALID_STATUSES, is_loud_stub_status,
 )
-from .regalloc_classes import plan_ptx_registers, ptx_register_names
+from .regalloc_classes import (
+    PTX_REGISTER_POOLS,
+    plan_ptx_registers,
+    ptx_register_names,
+)
 
 
 # ============================================================================
@@ -1235,6 +1239,28 @@ class PtxEmitter:
         # Phase-0 uses the same labels as `_format_param`. Centralized so
         # the convention is easy to change later.
         return f"param_{param_idx}"
+
+
+# v2.5 item 1 — module-load drift detector: pin the emitter's `.reg`
+# pool depth to the regalloc planner's pool table. PtxEmitter writes
+# `.reg .b32 %r<_REG_POOL_CAP>;` directives; the linear-scan planner
+# (regalloc_classes.PTX_REGISTER_POOLS) sizes its allocation against
+# its own copy of that depth. `load_register_plan` re-checks per
+# kernel, but that only fires once a kernel actually plans a high
+# register index — a drift could ship silently for every kernel that
+# stays under the smaller of the two constants. Pinning them here
+# fails a mismatch loudly at import, the same discipline as
+# `_check_ptx_lowering_coverage` above and regalloc_classes' own
+# pool/Literal drift checks.
+if set(PTX_REGISTER_POOLS.values()) != {PtxEmitter._REG_POOL_CAP}:
+    raise AssertionError(
+        f"helixc.backend.ptx: PtxEmitter._REG_POOL_CAP "
+        f"({PtxEmitter._REG_POOL_CAP}) disagrees with "
+        f"regalloc_classes.PTX_REGISTER_POOLS depths "
+        f"{sorted(set(PTX_REGISTER_POOLS.values()))}. The emitter's "
+        f"`.reg` directives and the linear-scan planner's pool table "
+        f"must declare the same per-file register depth — bump both."
+    )
 
 
 def emit_ptx(tile_module: ti.TileModule, target: str = DEFAULT_TARGET) -> str:

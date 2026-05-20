@@ -1579,3 +1579,27 @@ Verification: `pytest test_regalloc.py test_regalloc_classes.py -q`
 -> 58 passed; `test_ptx.py` -> 106 passed (the new
 `PtxEmitter.load_register_plan` bridge consumes a `MultiClassResult`
 read-only — unaffected by the freeze).
+
+### 2026-05-20 — v2.5 item 1: module-load drift check on the emitter pool depth
+
+`PtxEmitter.load_register_plan` (shipped `ab1f38a`) bridges the
+linear-scan planner to the emitter, and its own docstring flags a
+real seam: `PtxEmitter._REG_POOL_CAP` (which sizes the emitter's
+`.reg .b32 %r<N>;` directives) and `regalloc_classes.PTX_REGISTER_POOLS`
+(which the planner allocates against) are two constants in two
+modules with nothing pinning them. `load_register_plan` re-checks
+*per kernel* — but that only fires once a kernel actually plans a
+high register index; a drift could ship silently for every kernel
+that stays under the smaller of the two.
+
+This fire closes the seam with a **module-load drift detector** in
+`ptx.py` (the established codebase pattern — `_check_ptx_lowering_coverage`,
+the three `regalloc_classes` checks, `gpu_ci._check_gpu_ci_drift`):
+right after the `PtxEmitter` class, an `if set(PTX_REGISTER_POOLS
+.values()) != {PtxEmitter._REG_POOL_CAP}: raise AssertionError(...)`.
+A mismatch now fails loudly at import, not at some unlucky kernel.
+
+Test: `test_v25_reg_pool_cap_pinned_to_planner_pool_sizes` re-pins
+the invariant (parity with `test_v25_register_class_literals_pin_pool_keys`).
+Verification: `import helixc.backend.ptx` clean; `test_ptx.py` ->
+107 passed (was 106, +1).

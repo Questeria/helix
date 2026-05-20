@@ -1734,6 +1734,20 @@ def test_v25_emit_kernel_resets_planned_reg_map():
     assert em.planned_reg_map == {}
 
 
+def test_v25_reg_pool_cap_pinned_to_planner_pool_sizes():
+    """v2.5 item 1 — PtxEmitter._REG_POOL_CAP (which sizes the
+    emitter's `.reg .b32 %r<N>;` directives) must equal every
+    regalloc_classes.PTX_REGISTER_POOLS file depth. A module-load
+    drift check in ptx.py enforces this at import; this test documents
+    + re-pins it. Were the two to drift, a kernel could plan into a
+    register the emitter never declared — rejected by ptxas far
+    downstream (load_register_plan's per-kernel check only catches it
+    once a kernel actually plans that high)."""
+    from helixc.backend.ptx import PtxEmitter
+    from helixc.backend.regalloc_classes import PTX_REGISTER_POOLS
+    assert set(PTX_REGISTER_POOLS.values()) == {PtxEmitter._REG_POOL_CAP}
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
