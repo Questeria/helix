@@ -38,15 +38,22 @@ validation; v2.4 item 13 added real-HW dispatch):
     corpus program is MATCH — real Helix programs structurally agree
     across both backends.
 
-  - Chunk C — the REAL-EXECUTION parity path. Behind toolchain + WSL
+  - Chunk C — the real-execution RESULT MODEL + toolchain detection.
+    `RealParityStatus` (NOT_RUN / DEFERRED / PASS / FAIL) and
+    `ParityResult.real_status()` model the observable-behaviour
+    outcome; `detect_real_exec_support` reports whether this machine
+    can run the comparison (WSL present, and `clang` inside WSL to
+    compile the LLVM backend's IR to a runnable executable). It also
+    relaxes a chunk-A `ParityResult` invariant that forbade the
+    DEFERRED state, restoring fidelity with the
+    gpu_ci.ValidationResult real-outcome model.
+
+  - Chunk D — the real-execution DISPATCH. Behind the chunk-C
     detection, compile both backends to runnable executables, run
-    them, and compare observable behaviour (exit code, stdout,
-    stderr); real `llvm-as` (via `llvm_toolchain.dispatch_validate_ll`)
-    supersedes the chunk-A shape check. DEFERRED — never FAILED — when
-    no toolchain is present, so CI on a tool-less runner stays green
-    (the `gpu_ci` discipline). The `ParityResult` type already carries
-    the real-execution fields chunk C fills in, so chunk C needs no
-    type change.
+    them under WSL, and compare observable behaviour (exit code,
+    stdout, stderr). DEFERRED — never FAILED — when the toolchain is
+    absent, so CI on a tool-less runner stays green (the `gpu_ci`
+    real-HW dispatch discipline). Chunk D closes Stage 207.
 
 License: Apache 2.0
 """
@@ -54,6 +61,8 @@ License: Apache 2.0
 from __future__ import annotations
 
 import copy
+import shutil
+import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -154,6 +163,30 @@ def _check_parity_verdict_coverage() -> None:
 _check_parity_verdict_coverage()
 
 
+class RealParityStatus(Enum):
+    """The real-execution (observable-behaviour) parity outcome — the
+    chunk C/D counterpart to the structural `ParityVerdict`. Derived
+    from `ParityResult`'s real-* fields by `real_status()`.
+
+    - NOT_RUN — no real run was requested; the result is mock-only
+      (the chunk-A/B default — `check_parity` without a real run).
+    - DEFERRED — a real run WAS requested but could not be carried out
+      because the toolchain / runtime to run it is absent (no WSL, or
+      no `clang` inside WSL to compile the LLVM backend's IR). NOT a
+      failure — CI on a tool-less runner stays green, mirroring the
+      `gpu_ci` real-HW dispatch discipline.
+    - PASS — both backends were compiled, run, and produced identical
+      observable behaviour (exit code, stdout, stderr).
+    - FAIL — both backends were run and their observable behaviour
+      differed, or a backend's executable could not be built or ran
+      abnormally.
+    """
+    NOT_RUN = "not_run"
+    DEFERRED = "deferred"
+    PASS = "pass"
+    FAIL = "fail"
+
+
 @dataclass(frozen=True)
 class ParityResult:
     """Outcome of a structural parity check for one program.
@@ -184,11 +217,16 @@ class ParityResult:
       presence of a reason, not its wording — the verdict is derived
       from the facts, not from the detail text.
 
-    Real-execution fields — filled by chunk C's toolchain-gated path;
-    chunk A always leaves them at their defaults (not attempted):
-    - `real_attempted` — a real run-and-compare was dispatched.
-    - `real_passed` — its verdict (None when not attempted).
-    - `real_findings` — its diagnostics (non-empty on a real failure).
+    Real-execution fields — filled by chunk D's dispatch; the mock
+    path (chunks A/B) always leaves them at their defaults. They
+    encode the 4-state real outcome `real_status()` derives (see
+    `RealParityStatus`):
+    - `real_attempted` — a real run-and-compare was requested.
+    - `real_passed` — True (PASS) / False (FAIL) / None. None with
+      `real_attempted=False` is NOT_RUN; None with
+      `real_attempted=True` is DEFERRED (requested, no toolchain).
+    - `real_findings` — its diagnostics; non-empty for a DEFERRED
+      (why it was deferred) or a FAIL (how the behaviour differed).
     """
     program: str
     x86_compiled: bool
@@ -227,8 +265,16 @@ class ParityResult:
             raise ValueError(
                 "ParityResult: llvm_mock_clean is True but llvm_emitted "
                 "is False — there is no emitted IR to have validated")
-        # --- real-execution field consistency (the gpu_ci invariant) ---
+        # --- real-execution field consistency ---
+        # The real outcome is a 4-state model (see `real_status` /
+        # `RealParityStatus`): NOT_RUN, DEFERRED, PASS, FAIL, encoded
+        # by (real_attempted, real_passed). chunk C relaxed an earlier
+        # invariant that forbade `real_attempted=True, real_passed=None`
+        # — that pair IS legal: it is the DEFERRED state (a real run
+        # was requested but no toolchain could run it), mirroring the
+        # gpu_ci.ValidationResult real-outcome model.
         if not self.real_attempted:
+            # NOT_RUN — no real run was requested or reached.
             if self.real_passed is not None:
                 raise ValueError(
                     f"ParityResult: real_attempted=False but "
@@ -238,10 +284,15 @@ class ParityResult:
                     "ParityResult: real_attempted=False but "
                     "real_findings has entries — illegal")
         else:
-            if self.real_passed is None:
+            # real_passed: None -> DEFERRED, True -> PASS, False ->
+            # FAIL. DEFERRED and FAIL must each carry a diagnostic (why
+            # it was deferred / how the behaviour differed); a PASS may
+            # carry advisory notes but need not.
+            if self.real_passed is None and not self.real_findings:
                 raise ValueError(
-                    "ParityResult: real_attempted=True but real_passed "
-                    "is None — a real run must reach a concrete verdict")
+                    "ParityResult: real_attempted=True with "
+                    "real_passed=None (DEFERRED) but real_findings is "
+                    "empty — a deferred real run must record why")
             if self.real_passed is False and not self.real_findings:
                 raise ValueError(
                     "ParityResult: real_passed=False but real_findings "
@@ -303,6 +354,24 @@ class ParityResult:
         UNCOVERED is the LLVM backend's fail-closed guarantee working
         as designed."""
         return self.verdict() in _PARITY_DEFECT_VERDICTS
+
+    def real_status(self) -> RealParityStatus:
+        """The real-execution (observable-behaviour) outcome, derived
+        from the real-* fields — the chunk C/D counterpart to the
+        structural `verdict()`. NOT_RUN when no real run was requested
+        (the chunk-A/B mock-only default); DEFERRED when one was
+        requested but no toolchain could run it; PASS / FAIL when both
+        backends were run and their observable behaviour was identical
+        / differed. Independent of `verdict()` — a structural MATCH may
+        still be a real FAIL, which is exactly what chunk D exists to
+        catch."""
+        if not self.real_attempted:
+            return RealParityStatus.NOT_RUN
+        if self.real_passed is None:
+            return RealParityStatus.DEFERRED
+        if self.real_passed:
+            return RealParityStatus.PASS
+        return RealParityStatus.FAIL
 
 
 def check_parity(module: tir.Module, program: str) -> ParityResult:
@@ -587,3 +656,128 @@ def run_parity_corpus() -> list[ParityResult]:
     UNCOVERED or MISMATCH breaks the gate."""
     return [check_parity_source(source, name)
             for name, source in PARITY_CORPUS]
+
+
+# ==========================================================================
+# Chunk C — real-execution toolchain / runtime detection
+# ==========================================================================
+
+# Wall-clock cap on the WSL `clang`-detection probe. `command -v` is
+# near-instant; the cap only guards against a hung `wsl` invocation.
+_REAL_EXEC_PROBE_TIMEOUT_S = 20
+
+
+@dataclass(frozen=True)
+class RealExecSupport:
+    """Whether this machine can run the Stage 207 real-execution parity
+    comparison (chunk D's dispatch).
+
+    The real path runs Linux executables: the x86_64 backend's
+    freestanding ELF, and the LLVM backend's IR compiled + linked to an
+    executable. Both run under WSL on a Windows host; the LLVM side
+    additionally needs `clang` INSIDE WSL to turn the emitted `.ll`
+    into a runnable executable — a Windows-PATH `clang` (which
+    `shutil.which` would find) cannot produce a Linux executable, so
+    the relevant compiler is probed inside WSL, not on the host PATH.
+
+    Frozen + `__post_init__`-guarded (the `gpu_ci` result-type
+    discipline). `can_run_real()` is the single predicate chunk D's
+    dispatch gates on; when it is False the real comparison is
+    DEFERRED, never FAILED."""
+    # `wsl_available` is True when the `wsl` launcher is on the host
+    # PATH — NOT a guarantee a distro is installed or WSL is otherwise
+    # functional. A launcher-present-but-distro-less machine still
+    # fails safe: `_probe_wsl_clang`'s WSL call then exits non-zero ->
+    # `wsl_clang` is None -> `can_run_real()` is False -> DEFERRED.
+    wsl_available: bool
+    wsl_clang: Optional[str]
+    detail: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        # `clang` inside WSL is unreachable if WSL itself is not.
+        if self.wsl_clang is not None and not self.wsl_available:
+            raise ValueError(
+                "RealExecSupport: wsl_clang is set but wsl_available "
+                "is False — clang inside WSL implies WSL is available")
+        # A support result must always explain what it found — a
+        # tool-less machine especially must say WHY the real path is
+        # unavailable, so a DEFERRED is never silent.
+        if not self.detail:
+            raise ValueError(
+                "RealExecSupport: detail is empty — the result must "
+                "explain what is or is not available")
+        for entry in self.detail:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"RealExecSupport: detail has a blank or non-str "
+                    f"entry ({entry!r}) — every line must carry text")
+
+    def can_run_real(self) -> bool:
+        """True iff a real-execution parity run is possible here — WSL
+        is available AND `clang` was found inside it. When False, chunk
+        D's dispatch records the comparison as DEFERRED (never a hard
+        failure), mirroring `gpu_ci`'s tool-absent path."""
+        return self.wsl_available and self.wsl_clang is not None
+
+
+def _probe_wsl_clang(wsl: str) -> Optional[str]:
+    """Probe for `clang` inside WSL — return its resolved path, or None
+    when it is absent or WSL is unusable.
+
+    Applies the `gpu_ci` subprocess discipline: a `TimeoutExpired` or
+    `OSError` (a `wsl` that hangs, vanished, or refuses to spawn)
+    becomes a None result, never an uncaught traceback — a probe that
+    cannot answer is treated exactly as 'clang not found', so detection
+    fails safe to DEFERRED."""
+    try:
+        proc = subprocess.run(
+            [wsl, "--", "bash", "-lc", "command -v clang"],
+            capture_output=True, text=True,
+            timeout=_REAL_EXEC_PROBE_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    # `command -v clang` prints the resolved path as its FINAL stdout
+    # line; a login shell (`bash -lc`) may emit profile banner lines
+    # before it, so take the last non-blank line — and accept it only
+    # if it is an absolute path (clang is always an executable, never a
+    # shell builtin / alias), so a non-path token fails safe to None.
+    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    path = lines[-1]
+    return path if path.startswith("/") else None
+
+
+def detect_real_exec_support() -> RealExecSupport:
+    """Detect whether the real-execution parity comparison can run on
+    this machine.
+
+    `wsl` is located on the host PATH via `shutil.which`; `clang` is
+    then probed INSIDE WSL (a Windows-PATH clang cannot build a Linux
+    executable, so it is the wrong tool to detect). A machine with no
+    WSL, or with WSL but no `clang`, yields `can_run_real() == False` —
+    chunk D's dispatch then records the comparison as DEFERRED, never a
+    hard failure, so CI on a tool-less runner stays green. Mirrors
+    `gpu_ci.detect_tools` / `llvm_toolchain.detect_llvm_tools`."""
+    wsl = shutil.which("wsl")
+    if wsl is None:
+        return RealExecSupport(
+            wsl_available=False, wsl_clang=None,
+            detail=("`wsl` is not on PATH — the real-execution parity "
+                    "path runs Linux executables under WSL; without it "
+                    "the real comparison is DEFERRED",))
+    wsl_clang = _probe_wsl_clang(wsl)
+    if wsl_clang is None:
+        return RealExecSupport(
+            wsl_available=True, wsl_clang=None,
+            detail=("WSL is available but no `clang` was found inside "
+                    "it — the LLVM backend's IR needs clang to compile "
+                    "+ link to a runnable executable; the real "
+                    "comparison is DEFERRED",))
+    return RealExecSupport(
+        wsl_available=True, wsl_clang=wsl_clang,
+        detail=(f"WSL is available and `clang` was found inside it at "
+                f"{wsl_clang!r} — the real-execution parity comparison "
+                f"can run",))

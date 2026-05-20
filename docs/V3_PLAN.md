@@ -161,7 +161,7 @@ depend on a clean, unambiguous full-suite run.
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
 | 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
-| 207 | x86_64-vs-LLVM parity gate | ~ | A,B 3-clean ✓ | Phase D — chunks A+B shipped (mock harness + curated corpus + mock-path gate); chunk C = real-execution path |
+| 207 | x86_64-vs-LLVM parity gate | ~ | A,B,C 3-clean ✓ | Phase D — chunks A-C shipped (mock harness + corpus + gate + real-exec model/detection); chunk D = real-exec dispatch (closes 207) |
 | 208 | Phase D — end-of-phase 5-clean-gate | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -688,3 +688,30 @@ depend on a clean, unambiguous full-suite run.
   runnable executables, run them, compare exit code / stdout / stderr
   behind WSL + LLVM-toolchain detection, DEFERRED when absent), which
   closes Stage 207.
+- 2026-05-20 — **Stage 207 chunk C shipped — the real-execution
+  result model + toolchain detection.** Stage 207's real-execution
+  path is split into chunk C (this — the result model + detection,
+  toolchain-free and fully verifiable here) and chunk D (the
+  compile-link-run-compare dispatch). Chunk C adds: `RealParityStatus`
+  (NOT_RUN / DEFERRED / PASS / FAIL — the observable-behaviour
+  outcome, the counterpart to the structural `ParityVerdict`) and
+  `ParityResult.real_status()` deriving it; a relaxed `ParityResult`
+  invariant — chunk A forbade `real_attempted=True, real_passed=None`,
+  chunk C admits it as the DEFERRED state (a real run was requested
+  but no toolchain could run it), restoring fidelity with
+  `gpu_ci.ValidationResult`; and `detect_real_exec_support` /
+  `RealExecSupport` — detects whether the real comparison can run here
+  (WSL on PATH + `clang` probed INSIDE WSL, since a Windows-PATH clang
+  cannot build a Linux executable). A tool-less machine yields
+  `can_run_real() == False`, so chunk D's dispatch records DEFERRED,
+  never a hard failure — the gpu_ci real-HW dispatch discipline. This
+  dev machine: WSL present, no clang in WSL → real parity correctly
+  DEFERRED here. 52 tests (`test_llvm_parity.py`); `x86_64.py`
+  untouched. Per-stage 3-clean audit: round 1 returned 0 HIGH / 0
+  must-fix-MEDIUM on all three surfaces — **Stage 207 chunk C
+  CLOSED**; the cheap LOWs (`_probe_wsl_clang` multi-line / non-path
+  stdout hardening, two stale chunk-label comments, a `wsl_available`
+  clarifying comment) folded into the closure. Next: Stage 207 chunk
+  D — the real-execution dispatch (compile both backends to runnable
+  executables, run them under WSL, compare exit code / stdout /
+  stderr; DEFERRED on a tool-less machine), which closes Stage 207.

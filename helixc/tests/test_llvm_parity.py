@@ -1,13 +1,14 @@
 """Tests for helixc.backend.llvm_parity — v3.0 Phase D, Stage 207
-chunks A+B: the x86_64-vs-LLVM mock structural-parity harness and the
-curated source-program corpus + parity gate.
+chunks A+B+C: the x86_64-vs-LLVM mock structural-parity harness, the
+curated source-program corpus + parity gate, and the real-execution
+result model + toolchain detection.
 
 The harness compiles a `tir.Module` through BOTH backends and
 classifies the outcome (MATCH / UNCOVERED / MISMATCH / ERROR). It is
 the MOCK path — toolchain-free, always runs; it proves the LLVM
 backend either emits structurally shaped IR or fails closed LOUDLY on
-an op outside its covered subset, never silently miscompiles.
-Real-execution (observable-behaviour) parity is chunk C.
+an op outside its covered subset, never silently miscompiles. The
+real-execution (observable-behaviour) DISPATCH is chunk D.
 
 These tests pin: (chunk A) the `ParityResult` type rejects every
 silent-failure field shape, `verdict()` derives the classification
@@ -17,17 +18,21 @@ it escape, without mutating the caller's module; (chunk B)
 `check_parity_source` compiles a Helix source string through the
 frontend pipeline, and the Stage 207 mock-path GATE asserts every
 program in the curated corpus structurally MATCHes across both
-backends.
+backends; (chunk C) `real_status()` derives the 4-state real outcome
+(NOT_RUN / DEFERRED / PASS / FAIL) and `detect_real_exec_support`
+reports whether this machine can run the real comparison.
 """
 from __future__ import annotations
 
 import copy
+import subprocess
 
 import pytest
 
 from helixc.ir import tir
 from helixc.backend import llvm_parity
-from helixc.backend.llvm_parity import ParityResult, ParityVerdict
+from helixc.backend.llvm_parity import (
+    ParityResult, ParityVerdict, RealParityStatus)
 
 
 # --------------------------------------------------------------------------
@@ -190,10 +195,11 @@ def test_parity_result_rejects_unattempted_real_with_findings():
                      real_findings=("ran",))
 
 
-def test_parity_result_rejects_attempted_real_without_verdict():
-    """real_attempted=True must reach a concrete real_passed — a real
-    run that returns None is the silent-failure shape forbidden."""
-    with pytest.raises(ValueError, match="must reach a concrete"):
+def test_parity_result_rejects_deferred_real_without_reason():
+    """A DEFERRED real run (real_attempted=True, real_passed=None) is
+    legal — but it must record WHY it was deferred. real_passed=None
+    with empty real_findings is the silent-failure shape forbidden."""
+    with pytest.raises(ValueError, match="deferred real run must"):
         ParityResult(program="p", x86_compiled=True, llvm_emitted=True,
                      llvm_failed_closed=False, llvm_mock_clean=True,
                      detail=(), real_attempted=True, real_passed=None)
@@ -211,7 +217,7 @@ def test_parity_result_rejects_real_failure_without_diagnostic():
 
 def test_parity_result_accepts_valid_real_attempted():
     """Well-formed real-attempted results construct cleanly — the
-    forward-compatible fields chunk B fills in are usable now. A real
+    forward-compatible fields chunk D fills in are usable now. A real
     PASS may still carry advisory findings; a real FAIL must."""
     ok = ParityResult(program="p", x86_compiled=True, llvm_emitted=True,
                       llvm_failed_closed=False, llvm_mock_clean=True,
@@ -443,7 +449,7 @@ def test_check_parity_does_not_mutate_caller_module():
 
 def test_check_parity_leaves_real_fields_unattempted():
     """Chunk A is the MOCK path only — every result it produces leaves
-    the real-execution fields not-attempted (chunk B fills them in)."""
+    the real-execution fields not-attempted (chunk D fills them in)."""
     for mod, name in ((_const_module(), "c"),
                       (_print_int_module(), "p")):
         r = llvm_parity.check_parity(mod, name)
@@ -550,3 +556,146 @@ def test_parity_corpus_gate():
                  for r in results
                  if r.verdict() is not ParityVerdict.MATCH]
     assert not non_match, f"corpus programs not MATCH: {non_match}"
+
+
+# --------------------------------------------------------------------------
+# real-execution result model + toolchain detection (chunk C)
+# --------------------------------------------------------------------------
+def _real(attempted, passed, findings=()):
+    """A MATCH-shaped ParityResult with the given real-* fields."""
+    return ParityResult(
+        program="p", x86_compiled=True, llvm_emitted=True,
+        llvm_failed_closed=False, llvm_mock_clean=True, detail=(),
+        real_attempted=attempted, real_passed=passed,
+        real_findings=findings)
+
+
+def test_real_status_derivation():
+    """real_status() derives the 4-state real outcome from the real-*
+    fields: NOT_RUN / DEFERRED / PASS / FAIL."""
+    assert _real(False, None).real_status() is RealParityStatus.NOT_RUN
+    assert _real(True, None, ("no toolchain",)).real_status() is \
+        RealParityStatus.DEFERRED
+    assert _real(True, True).real_status() is RealParityStatus.PASS
+    assert _real(True, False, ("exit 1 vs 0",)).real_status() is \
+        RealParityStatus.FAIL
+
+
+def test_real_status_independent_of_verdict():
+    """A structural MATCH can still carry a real FAIL — `real_status()`
+    and `verdict()` are independent axes. That a covered, structurally
+    matching program can still behave differently at runtime is exactly
+    what the chunk-D real-execution path exists to catch."""
+    r = _real(True, False, ("stdout differed",))
+    assert r.verdict() is ParityVerdict.MATCH
+    assert r.real_status() is RealParityStatus.FAIL
+    assert not r.is_parity_defect()  # is_parity_defect is structural only
+
+
+def test_parity_result_accepts_deferred_real():
+    """A DEFERRED real run with a recorded reason constructs cleanly —
+    it is a legal 4-state outcome, not a silent failure."""
+    r = _real(True, None, ("no clang inside WSL — real run DEFERRED",))
+    assert r.real_status() is RealParityStatus.DEFERRED
+    assert r.real_passed is None and r.real_findings
+
+
+def test_real_exec_support_rejects_clang_without_wsl():
+    """`clang` inside WSL implies WSL itself is available — a support
+    result claiming clang but no WSL is illegal."""
+    with pytest.raises(ValueError, match="implies WSL"):
+        llvm_parity.RealExecSupport(
+            wsl_available=False, wsl_clang="/usr/bin/clang",
+            detail=("x",))
+
+
+def test_real_exec_support_rejects_empty_detail():
+    """A support result must always explain what it found — an empty
+    detail would make a DEFERRED silent about why."""
+    with pytest.raises(ValueError, match="detail is empty"):
+        llvm_parity.RealExecSupport(
+            wsl_available=False, wsl_clang=None, detail=())
+
+
+def test_detect_real_exec_support_is_consistent():
+    """`detect_real_exec_support` returns a coherent RealExecSupport,
+    whatever this machine actually has: non-empty self-explaining
+    detail, and `can_run_real()` is exactly `wsl_available AND a clang
+    was found`."""
+    s = llvm_parity.detect_real_exec_support()
+    assert isinstance(s, llvm_parity.RealExecSupport)
+    assert s.detail  # always explains itself
+    assert s.can_run_real() == (
+        s.wsl_available and s.wsl_clang is not None)
+    if s.wsl_clang is not None:
+        assert s.wsl_available  # the __post_init__ invariant
+
+
+def test_probe_wsl_clang_returns_path_on_success(monkeypatch):
+    """A WSL probe exiting 0 with a path on stdout yields that path."""
+    class _Proc:
+        returncode = 0
+        stdout = "/usr/bin/clang\n"
+        stderr = ""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    assert llvm_parity._probe_wsl_clang("wsl") == "/usr/bin/clang"
+
+
+def test_probe_wsl_clang_none_on_nonzero_exit(monkeypatch):
+    """A WSL probe exiting non-zero (clang absent) yields None."""
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "clang: not found"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    assert llvm_parity._probe_wsl_clang("wsl") is None
+
+
+def test_probe_wsl_clang_handles_subprocess_failure(monkeypatch):
+    """A timeout or OSError from the WSL probe yields None (clang not
+    found) — never an escaping traceback; detection fails safe to
+    DEFERRED."""
+    def _oserror(*a, **k):
+        raise OSError("wsl vanished between detection and probe")
+    monkeypatch.setattr(subprocess, "run", _oserror)
+    assert llvm_parity._probe_wsl_clang("wsl") is None
+
+    def _timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="wsl", timeout=20)
+    monkeypatch.setattr(subprocess, "run", _timeout)
+    assert llvm_parity._probe_wsl_clang("wsl") is None
+
+
+def test_probe_wsl_clang_none_on_empty_stdout(monkeypatch):
+    """A WSL probe exiting 0 but printing nothing usable (blank
+    stdout) yields None — a 0 exit alone is not a found clang."""
+    class _Proc:
+        returncode = 0
+        stdout = "   \n"
+        stderr = ""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    assert llvm_parity._probe_wsl_clang("wsl") is None
+
+
+def test_probe_wsl_clang_takes_last_line(monkeypatch):
+    """A login shell may print a profile banner before `command -v`'s
+    output — the probe takes the FINAL non-blank stdout line as the
+    path, not the whole multi-line blob."""
+    class _Proc:
+        returncode = 0
+        stdout = "profile banner line\n/usr/bin/clang\n"
+        stderr = ""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    assert llvm_parity._probe_wsl_clang("wsl") == "/usr/bin/clang"
+
+
+def test_probe_wsl_clang_none_on_non_path_token(monkeypatch):
+    """A `command -v` result that is not an absolute path (a builtin /
+    alias token) fails safe to None rather than being trusted as a
+    compiler path."""
+    class _Proc:
+        returncode = 0
+        stdout = "clang\n"
+        stderr = ""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    assert llvm_parity._probe_wsl_clang("wsl") is None
