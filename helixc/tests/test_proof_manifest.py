@@ -12,6 +12,7 @@ import pytest
 from helixc.backend.proof_manifest import (
     PROOF_MANIFEST_VERSION,
     Sha256Hex,
+    SignatureFormat,
     as_sha256_hex,
     extract_enclave_tag,
     fn_proof_obligations,
@@ -138,6 +139,78 @@ def test_stage122_emit_manifest_structure():
     # Functions are sorted by name.
     names = [f["name"] for f in m["functions"]]
     assert names == sorted(names)
+
+
+def test_v23_signature_format_enum_default_is_deferred():
+    """v2.3 item 3 slice 3 — emit_manifest defaults signature_format
+    to SignatureFormat.DEFERRED; the manifest field stores the Enum's
+    `.value` (plain str) so the JSON wire form is unchanged from the
+    pre-Enum substrate."""
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    m = emit_manifest(tc.functions)
+    assert m["signature_format"] == "ed25519-or-rsa-pss-sha256-DEFERRED"
+    assert m["signature_format"] == SignatureFormat.DEFERRED.value
+    # The stored value must be a plain str (JSON-serializable, hash-
+    # stable) — not an Enum member repr.
+    assert type(m["signature_format"]) is str
+
+
+def test_v23_signature_format_enum_accepts_member_and_str():
+    """v2.3 item 3 slice 3 — emit_manifest accepts a SignatureFormat
+    member OR a valid str; both coerce to the same stored value."""
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    # Enum member.
+    m1 = emit_manifest(tc.functions,
+                       signature_format=SignatureFormat.ED25519)
+    assert m1["signature_format"] == "ed25519"
+    # Plain str (coerced through the Enum).
+    m2 = emit_manifest(tc.functions, signature_format="ed25519")
+    assert m2["signature_format"] == "ed25519"
+    assert m1["signature_format"] == m2["signature_format"]
+
+
+def test_v23_signature_format_enum_rejects_unknown_scheme():
+    """v2.3 item 3 slice 3 — an unrecognized signing-scheme string
+    raises ValueError at emit_manifest's boundary, not deep inside a
+    downstream attestation verifier."""
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    with pytest.raises(ValueError, match="not a recognized signing"):
+        emit_manifest(tc.functions, signature_format="ecdsa-p384")
+    with pytest.raises(ValueError, match="not a recognized signing"):
+        emit_manifest(tc.functions, signature_format="ED25519")  # case
+
+
+def test_v23_signature_format_enum_members():
+    """v2.3 item 3 slice 3 — closed-set membership: the Enum has
+    exactly the 4 documented schemes."""
+    assert {s.name for s in SignatureFormat} == {
+        "DEFERRED", "ED25519", "RSA_PSS_SHA256", "TEE_QUOTE",
+    }
+    # str-based Enum: members compare equal to their string value.
+    assert SignatureFormat.ED25519 == "ed25519"
+    assert SignatureFormat.TEE_QUOTE == "tee-quote"
+
+
+def test_v23_signature_format_manifest_still_verifies():
+    """v2.3 item 3 slice 3 — a manifest emitted with a non-default
+    signature_format still passes verify_manifest_hash (the field is
+    inside the canonical hash; the Enum `.value` keeps it hash-stable)."""
+    src = "fn main() -> i32 { 0 }"
+    prog = parse(src, include_stdlib=False)
+    tc = TypeChecker(prog)
+    tc.check()
+    m = emit_manifest(tc.functions,
+                      signature_format=SignatureFormat.TEE_QUOTE)
+    assert verify_manifest_hash(m) is True
 
 
 def test_stage122_manifest_hash_is_deterministic():

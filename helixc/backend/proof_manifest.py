@@ -33,12 +33,43 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from enum import Enum
 from typing import Any, NewType, Optional, cast
 
 
 # Manifest format version. Bump when fields are added/removed in a
 # non-backward-compatible way.
 PROOF_MANIFEST_VERSION = "v2.0-stage122-substrate"
+
+
+# v2.3 polish item 3 (slice 3 of 3): closed-set signing-scheme tag.
+# The manifest's `signature_format` field was a free-form `str`
+# (`"ed25519-or-rsa-pss-sha256-DEFERRED"`) — a typo or an
+# unrecognized scheme name would slip through to an attestation
+# verifier that pivots on the value. A `str`-based Enum keeps the
+# JSON wire form a plain string (so existing manifests + the
+# canonical hash are unchanged) while giving static checkers a
+# closed set and runtime code a `SignatureFormat(value)` parse that
+# rejects unknown schemes at the boundary.
+#
+# Semantics:
+#   DEFERRED:        Stage 122 substrate — manifest is emitted
+#                    UNSIGNED; the format string documents the
+#                    *expected* scheme for downstream signing tools.
+#   ED25519:         Ed25519 detached signature over the canonical
+#                    manifest bytes (compact, fast verify).
+#   RSA_PSS_SHA256:  RSA-PSS / SHA-256 — for HSM / TPM key stores
+#                    that don't expose Ed25519.
+#   TEE_QUOTE:       signature is a TEE attestation quote (SGX DCAP /
+#                    SEV-SNP report / NRAS bundle) — verified against
+#                    the platform's attestation service, not a bare
+#                    public key.
+class SignatureFormat(str, Enum):
+    """Closed set of manifest signing schemes (v2.3 item 3 slice 3)."""
+    DEFERRED = "ed25519-or-rsa-pss-sha256-DEFERRED"
+    ED25519 = "ed25519"
+    RSA_PSS_SHA256 = "rsa-pss-sha256"
+    TEE_QUOTE = "tee-quote"
 
 
 # v2.3 polish item 3 (slice 1 of 3): typed marker for sha256 hex
@@ -167,6 +198,7 @@ def emit_manifest(
     artifact_path: Optional[str] = None,
     artifact_sha256: Optional[Sha256Hex] = None,
     helix_version: str = "v2.0-substrate",
+    signature_format: SignatureFormat = SignatureFormat.DEFERRED,
 ) -> dict:
     """Stage 122 — emit a ProofObligation manifest dict.
 
@@ -180,6 +212,12 @@ def emit_manifest(
                          if provided, bound into the manifest hash.
         helix_version: compiler version string for downstream
                        attestation gates that pin Helix versions.
+        signature_format: v2.3 item 3 slice 3 — the signing scheme
+                          this manifest will be signed under. Defaults
+                          to SignatureFormat.DEFERRED (Stage 122
+                          substrate emits unsigned). A plain str is
+                          accepted and coerced via SignatureFormat(...)
+                          which rejects unknown schemes loudly.
 
     Returns:
         A dict containing the manifest. Caller serializes via
@@ -188,7 +226,26 @@ def emit_manifest(
     The returned dict includes a `manifest_sha256` field over the
     sorted-keys canonical form of every other field — this is the
     hash an attestation verifier challenges.
+
+    Raises:
+        ValueError: if `signature_format` is a str that is not a
+            recognized SignatureFormat value.
     """
+    # v2.3 item 3 slice 3: coerce a str arg through the Enum so an
+    # unrecognized scheme name fails at the boundary, not inside a
+    # downstream attestation verifier. Enum members pass through
+    # unchanged; valid str values are accepted; bad values raise.
+    if not isinstance(signature_format, SignatureFormat):
+        try:
+            signature_format = SignatureFormat(signature_format)
+        except ValueError as exc:
+            valid = ", ".join(repr(s.value) for s in SignatureFormat)
+            raise ValueError(
+                f"emit_manifest: signature_format="
+                f"{signature_format!r} is not a recognized signing "
+                f"scheme. Valid values: {valid}."
+            ) from exc
+
     fn_obligations = []
     for name in sorted(functions.keys()):
         sig = functions[name]
@@ -204,8 +261,10 @@ def emit_manifest(
         # Signature plumbing — Stage 122 ships unsigned + format
         # declaration. Stage 123+ may add HW-backed signing once
         # the GPU CI substrate (Stage 129) provides attestation
-        # endpoints.
-        "signature_format": "ed25519-or-rsa-pss-sha256-DEFERRED",
+        # endpoints. v2.3 item 3 slice 3: the field stores the Enum's
+        # `.value` (plain str) so the JSON wire form + canonical
+        # hash are byte-identical to pre-Enum manifests.
+        "signature_format": signature_format.value,
         "signature": None,
     }
 
