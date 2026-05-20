@@ -1844,3 +1844,50 @@ scalars get reuse-aware registers. It still needs the f64 try/except
 (an f64 scalar is still a `plan_ptx_registers` NotImplementedError)
 and the emitted-PTX test regen (register reuse changes register
 numbers in the golden tests).
+
+### 2026-05-20 — Edit B re-trialled; BLOCKED again, on a liveness/emitter mismatch
+
+With bool excluded from the plan (`093aa7d`), Edit B was re-trialled.
+`test_ptx.py` passed 111 — but the `test_codegen.py` PTX subset
+caught a **correctness bug**. `test_stage35_i32_kernel_ptx_in_binary`
+(kernel `c[i] = a[i] + b[i]`) emitted WRONG PTX:
+
+    mov.u32 %r0, %tid.x;        ; i -> %r0
+    mul.wide.s32 %rd2, %r0, 4;  ; i*4 for a's addr  (ok: %r0 = i)
+    ld.global.s32 %r0, [%rd3];  ; a[i] -> %r0  -- CLOBBERS i
+    mul.wide.s32 %rd6, %r0, 4;  ; i*4 for b's addr -- %r0 is a[i]! WRONG
+    ...
+    mul.wide.s32 %rd10, %r0, 4; ; i*4 for c's addr -- %r0 is a[i]! WRONG
+
+The linear-scan allocator gave `i` (thread index) and `a[i]` the
+SAME register `%r0`, although `i` is read again for the `b` and `c`
+address arithmetic AFTER `a[i]` is loaded — the kernel would touch
+wrong memory.
+
+**Root cause — a liveness/emitter mismatch.** `compute_live_intervals`
+derives a value's live range from its tile-IR appearances
+(`op.results` + `op.operands`). But the PTX emitter reads the index
+register (`reg_map[i]`) for the address arithmetic of EVERY indexed
+load/store, and at the `b`/`c` index ops `i` is apparently not an
+`op.operands` entry the liveness walk sees — so `i`'s interval ends
+too early and the allocator reuses its register while the emitter
+still needs it.
+
+**This is the real foundational blocker for the operand rewrite.**
+The linear-scan allocation is only safe to wire in if its liveness
+input captures every register the emitter reads. Concrete next step:
+inspect whether `TILE_INDEX_LOAD_HBM` / `TILE_INDEX_STORE_HBM` list
+the index value in `op.operands`. If they do not, that IS the bug —
+the fix is to have the IR carry the index as a genuine operand so
+the operand-walk liveness is complete (preferred — liveness should
+derive from the IR, not from emitter internals). If they do, the
+emitter has an extra implicit read that a PTX-specific liveness pass
+must model.
+
+Edit B reverted; `test_ptx.py` 111 + the 6 `test_codegen` PTX tests
+green. The `_result_reg` body flip + bool exclusion stay (inert
+while `planned_reg_map` is empty). The careful slicing worked: the
+trial surfaced a correctness bug, `test_codegen.py` caught it,
+nothing wrong shipped. But the operand rewrite is NOT one slice from
+done — it is blocked on a genuine liveness-accuracy fix, which is a
+focused IR/lowering task, not a cron-fire slice.
