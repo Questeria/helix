@@ -29,6 +29,7 @@ from ..ir import tir, tile_ir as ti
 from ._lowering_schema import (  # v2.3 item 2 shared schema
     OpLowering, VALID_STATUSES, is_loud_stub_status,
 )
+from .regalloc_classes import plan_ptx_registers, ptx_register_names
 
 
 # ============================================================================
@@ -167,6 +168,10 @@ class PtxEmitter:
         self.next_reg = 0
         # Map TileValue.id -> PTX register name like "%r3"
         self.reg_map: dict[int, str] = {}
+        # v2.5 item 1 — the planned PTX register allocation for the
+        # current kernel (TileValue.id -> "%r3"), produced by
+        # load_register_plan. Per-kernel state; reset in emit_kernel.
+        self.planned_reg_map: dict[int, str] = {}
         # Stage 16 — per-kernel state. Maps HBM tile param NAME (from
         # TILE_INDEX_LOAD_HBM/STORE_HBM attrs) to (param_index, dtype).
         # Built in emit_kernel by scanning kernel params; reset per kernel.
@@ -202,6 +207,61 @@ class PtxEmitter:
         self.next_reg += 1
         return n
 
+    def load_register_plan(self, fn: ti.TileFn) -> dict[int, str]:
+        """v2.5 item 1 (emitter-wiring: the emitter-side bridge) —
+        compute the planned PTX register allocation for one kernel and
+        validate it fits *this emitter's* declared `.reg` pool.
+
+        `plan_ptx_registers` + `ptx_register_names` (regalloc_classes)
+        produce a {vreg-id -> "%r3"} map, each name validated against
+        `PTX_REGISTER_POOLS`. But that pool table and the emitter's own
+        `_REG_POOL_CAP` — which sizes the `.reg .b32 %r<N>;` directives
+        `emit_kernel` writes — are two constants in two modules. They
+        agree today (both 256); nothing pins them together. If
+        `PTX_REGISTER_POOLS` were raised without bumping `_REG_POOL_CAP`,
+        a kernel could plan into `%r300` while `emit_kernel` declared
+        only `%r<256>` — an undeclared register the CUDA PTX assembler
+        rejects far downstream. This method is that seam: every planned
+        index is checked against the emitter's actual declared pool, so
+        the drift fails loudly here at the emitter boundary.
+
+        Stores the validated map in `self.planned_reg_map` (per-kernel
+        emitter state, reset in `emit_kernel` alongside `reg_map`) and
+        returns it. The operand-emission slice will consume it: at
+        kernel entry it seeds `reg_map` from this plan instead of
+        naming registers ad-hoc via `_new_reg`.
+
+        Deliberately not yet called by `emit_kernel` — the same
+        substrate-first discipline `plan_ptx_registers` /
+        `ptx_register_names` shipped under: the planning + validation
+        path lands and is tested in isolation before the higher-risk
+        operand rewrite threads it in.
+
+        Raises:
+            RuntimeError: a planned register index is >= `_REG_POOL_CAP`
+                — the planner produced a name beyond what `emit_kernel`'s
+                `.reg` directives declare (the drift case above). Also
+                propagates `plan_ptx_registers`' own raises (f64 scalar,
+                unrecognised dtype, spill).
+            ValueError: propagates `ptx_register_names`' raises (a
+                planned class absent from `PTX_REGISTER_POOLS`).
+        """
+        result = plan_ptx_registers(fn)
+        for vreg, ra in result.assignment.items():
+            if ra.index >= self._REG_POOL_CAP:
+                raise RuntimeError(
+                    f"load_register_plan: kernel {fn.name!r} vreg "
+                    f"{vreg} planned into {ra.reg_class}{ra.index}, "
+                    f"beyond the emitter's declared .reg pool of "
+                    f"{self._REG_POOL_CAP} registers per file. "
+                    f"PTX_REGISTER_POOLS (regalloc_classes) and "
+                    f"PtxEmitter._REG_POOL_CAP are declared "
+                    f"independently — bump _REG_POOL_CAP and the .reg "
+                    f"directives in emit_kernel to match."
+                )
+        self.planned_reg_map = ptx_register_names(result)
+        return self.planned_reg_map
+
     def _line(self, s: str = "") -> None:
         self.buf.write(s)
         self.buf.write("\n")
@@ -235,6 +295,7 @@ class PtxEmitter:
         self.next_reg = 0
         self.next_reg_by_prefix = {}
         self.reg_map = {}
+        self.planned_reg_map = {}
         # Stage 16 — build the HBM tile param map. The TileValue.ty for an
         # HBM tile param is a TIRTileTy; its name_hint matches the source
         # parameter name (so `TILE_INDEX_LOAD attrs={'name':'a'}` can find

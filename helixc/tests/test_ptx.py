@@ -1645,6 +1645,95 @@ def test_stage64_inc1_unsupported_dtype_still_rejected():
     assert "i64" in str(exc_info.value)
 
 
+# ============================================================================
+# v2.5 item 1 — PtxEmitter.load_register_plan (emitter-side bridge)
+# ============================================================================
+def test_v25_load_register_plan_bridges_plan_to_emitter_state():
+    """v2.5 item 1 — PtxEmitter.load_register_plan computes the planned
+    PTX allocation for a kernel and exposes it as emitter state. A
+    kernel mixing register-allocated scalars (i32 -> %r, f32 -> %f) with
+    a memory-resident tile param: the scalars get register names, the
+    tile param is skipped (named by the emitter's own mechanism), and
+    the validated map is both stored in planned_reg_map and returned."""
+    from helixc.backend.ptx import PtxEmitter
+    vi = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
+    vf = ti.TileValue(id=1, ty=tir.TIRScalar("f32"))
+    tile_ty = tir.TIRTileTy(
+        dtype=tir.TIRScalar("f32"),
+        shape=(tir.DimConst(16),),
+        memspace="reg",
+    )
+    vt = ti.TileValue(id=2, ty=tile_ty)   # memory-resident -> skipped
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[vi]),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_FLOAT, results=[vf]),
+        ti.TileOp(kind=ti.TileOpKind.CALL, operands=[vi, vf, vt]),
+    ])
+    fn = ti.TileFn(name="k", params=[vt], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    names = em.load_register_plan(fn)
+    assert names == {0: "%r0", 1: "%f0"}
+    assert names is em.planned_reg_map        # stored as emitter state
+    assert 2 not in names                     # tile param — skipped
+
+
+def test_v25_load_register_plan_rejects_index_beyond_emitter_pool():
+    """v2.5 item 1 — load_register_plan is the seam pinning the planner's
+    PTX_REGISTER_POOLS to the emitter's own _REG_POOL_CAP. The planner
+    allocates from a 256-deep pool; if the emitter's declared .reg pool
+    were smaller, a planned name would exceed it — an undeclared
+    register ptxas rejects downstream. Forced here by shrinking this
+    emitter's _REG_POOL_CAP to 1, then keeping two i32 scalars live at
+    once so the planner assigns %r0 and %r1: %r1 is beyond the cap."""
+    from helixc.backend.ptx import PtxEmitter
+    a = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
+    b = ti.TileValue(id=1, ty=tir.TIRScalar("i32"))
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[a]),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[b]),
+        ti.TileOp(kind=ti.TileOpKind.CALL, operands=[a, b]),   # both live
+    ])
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    em._REG_POOL_CAP = 1          # instance shadow — emitter declares %r<1>
+    with pytest.raises(RuntimeError, match="beyond the emitter's declared"):
+        em.load_register_plan(fn)
+
+
+def test_v25_load_register_plan_propagates_planner_raises():
+    """v2.5 item 1 — load_register_plan must not swallow the planner's
+    documented raises. An f64 scalar has no PTX register file, so
+    plan_ptx_registers raises NotImplementedError; it must propagate
+    cleanly out of load_register_plan — a guard against a future
+    defensive try/except quietly masking the gap."""
+    from helixc.backend.ptx import PtxEmitter
+    vf64 = ti.TileValue(id=0, ty=tir.TIRScalar("f64"))
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_FLOAT, results=[vf64]),
+    ])
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    with pytest.raises(NotImplementedError, match="f64 has no PTX"):
+        em.load_register_plan(fn)
+
+
+def test_v25_emit_kernel_resets_planned_reg_map():
+    """v2.5 item 1 — planned_reg_map is per-kernel emitter state: an
+    emitter reused across kernels must not carry a previous kernel's
+    plan. emit_kernel resets it alongside reg_map, so a stale plan from
+    a prior load_register_plan call cannot leak into the next kernel."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    em.planned_reg_map = {99: "%rd99"}        # stale plan from a prior kernel
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[ti.TileBlock(id=0, ops=[])], attrs={"kernel": True})
+    em.emit_kernel(fn)
+    assert em.planned_reg_map == {}
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
