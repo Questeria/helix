@@ -43,6 +43,10 @@ Supported so far (Stages 200, 202-204):
     `panic[<id>]: <text>` message to stderr, `exit(<id> & 0xFF)`, and
     `unreachable` — the message is a private module-scope string
     constant; `write` / `exit` are declared externs.
+  - string-literal access (Stage 206): STR_PTR lowers to `ptrtoint`
+    of the literal's module-scope constant; STR_BYTE to a
+    bounds-checked indexed `load i8` (an out-of-range index yields 0,
+    with no out-of-bounds read — see the TRAP-shared string globals).
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -1178,6 +1182,83 @@ class _FnEmitter:
                     f"i64 {str_len})\n"
                     f"call void @exit(i32 {trap_id & 0xFF})\n"
                     f"unreachable")
+        if kind == tir.OpKind.STR_PTR:
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_PTR takes no "
+                    f"operands, got {len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_PTR must have "
+                    f"exactly one result, got {len(op.results)}")
+            text = op.attrs.get("text", "")
+            if not isinstance(text, str):
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_PTR needs a "
+                    f"string 'text' attr (got {type(text).__name__})")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} STR_PTR result")
+            if res_ty != "i64":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_PTR result has "
+                    f"LLVM type {res_ty}, but a string pointer is a "
+                    f"u64 (i64)")
+            str_name, _ = self._register_string(text.encode("utf-8"))
+            # The result is the literal's address as an integer.
+            return f"%v{result.id} = ptrtoint ptr {str_name} to i64"
+        if kind == tir.OpKind.STR_BYTE:
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_BYTE expects "
+                    f"exactly one operand (the index), got "
+                    f"{len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_BYTE must have "
+                    f"exactly one result, got {len(op.results)}")
+            text = op.attrs.get("text", "")
+            if not isinstance(text, str):
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_BYTE needs a "
+                    f"string 'text' attr (got {type(text).__name__})")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} STR_BYTE result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STR_BYTE result has "
+                    f"LLVM type {res_ty}, but a string byte is an i32")
+            index = op.operands[0]
+            idx_ty = _llvm_int_type(
+                index.ty,
+                ctx=f"function {self.fn.name!r} STR_BYTE index")
+            data = text.encode("utf-8")
+            n = len(data)
+            # The byte-access global is the literal + one NUL pad, so
+            # the bounds-clamped GEP index (0 when out of range) always
+            # lands on a valid byte — even for an empty literal. The
+            # bounds check is against the REAL length `n`: an
+            # out-of-range index yields 0, matching x86_64.py, and no
+            # out-of-bounds memory is ever read.
+            str_name, padded_len = self._register_string(
+                data + b"\x00")
+            rid = result.id
+            idx = self._ref(index)
+            t0, t1, t2, t3, t4 = (
+                f"%v{rid}.t0", f"%v{rid}.t1", f"%v{rid}.t2",
+                f"%v{rid}.t3", f"%v{rid}.t4")
+            return (
+                f"{t0} = icmp ult {idx_ty} {idx}, {n}\n"
+                f"{t1} = select i1 {t0}, {idx_ty} {idx}, "
+                f"{idx_ty} 0\n"
+                f"{t2} = getelementptr [{padded_len} x i8], ptr "
+                f"{str_name}, i64 0, {idx_ty} {t1}\n"
+                f"{t3} = load i8, ptr {t2}\n"
+                f"{t4} = zext i8 {t3} to i32\n"
+                f"%v{rid} = select i1 {t0}, i32 {t4}, i32 0")
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
@@ -1186,8 +1267,8 @@ class _FnEmitter:
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
-            f"TRAP; RETURN; BR; COND_BR — floats and structs are later "
-            f"stages)"
+            f"TRAP; STR_PTR; STR_BYTE; RETURN; BR; COND_BR — floats and "
+            f"structs are later stages)"
         )
 
 

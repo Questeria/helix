@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A,B ✓ | A,B 3-clean ✓ | Phase D — Result intrinsics + panic CLOSED |
+| 206 | Runtime & intrinsics (chunked) | chunk A,B,C ✓ | A,B 3-clean ✓ · C audit pending | Phase D — + string-literal access shipped |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -543,3 +543,18 @@ depend on a clean, unambiguous full-suite run.
   surface (TRACE_ENTRY/EXIT, PRINT, the arena ops, STR_BYTE/STR_PTR)
   — ship the remaining-op chunks or close Stage 206 — then Stage 207
   (the x86_64-vs-LLVM parity gate).
+- 2026-05-20 — **Stage 206 chunk C shipped — LLVM string-literal
+  access (STR_PTR / STR_BYTE).** STR_PTR lowers to `ptrtoint ptr
+  @.helix.str.<hash> to i64` — the literal's address as a u64.
+  STR_BYTE lowers to a bounds-checked indexed byte load: `icmp ult`
+  the index against the real length, `select`-clamp the GEP index to
+  0 when out of range, `getelementptr` + `load i8` + `zext to i32`,
+  then `select` 0 for the out-of-range case — matching x86_64.py
+  (out-of-range yields 0) with NO out-of-bounds read. The
+  byte-access global is the literal + one NUL pad, so the clamped
+  GEP always lands on a valid byte even for an empty literal. Both
+  reuse chunk B's `_register_string` machinery. Fail-closed —
+  STR_PTR with operands / a non-i64 result, STR_BYTE with the wrong
+  operand count / a non-i32 result, a non-string `text`, all raise.
+  10 new tests; 155 passed + 2 skipped across the two LLVM test
+  files. `x86_64.py` untouched. Per-stage 3-clean audit dispatched.

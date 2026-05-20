@@ -10,9 +10,10 @@ div/mod, bitwise ops, unsigned integer dtypes); mutable local
 variables and stack arrays (`alloca`/`load`/`store`/`getelementptr`);
 direct + FFI function calls (`call`, with a module-scope `declare`
 for FFI targets); and the Result<T,E> packed-tag intrinsics
-(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD); and panic (TRAP).
-Everything else must be REJECTED loudly with `LLVMEmitError` — a
-partial backend fails closed, it never emits
+(RESULT_PACK / RESULT_TAG / RESULT_PAYLOAD); panic (TRAP); and
+string-literal access (STR_PTR / STR_BYTE). Everything else must be
+REJECTED loudly with `LLVMEmitError` — a partial backend fails
+closed, it never emits
 wrong IR.
 """
 
@@ -2235,4 +2236,172 @@ def test_stage206_trap_result_not_referenceable():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="defined by no op"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 206 chunk C — string-literal access (STR_PTR / STR_BYTE)
+# ==========================================================================
+def test_stage206_emit_str_ptr():
+    """STR_PTR lowers to `ptrtoint` of the literal's module-scope
+    string constant — the literal's address as a u64."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("u64"))
+    r = b.emit(tir.OpKind.STR_PTR, result_ty=tir.TIRScalar("u64"),
+               attrs={"text": "hello"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = ptrtoint ptr @.helix.str." in ll, ll
+    assert " to i64" in ll, ll
+    assert "private unnamed_addr constant" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_emit_str_byte():
+    """STR_BYTE lowers to a bounds-checked indexed byte load — an
+    out-of-range index yields 0, with no out-of-bounds read (the
+    clamp + the NUL-padded global)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], _i32())
+    r = b.emit(tir.OpKind.STR_BYTE, fn.params[0], result_ty=_i32(),
+               attrs={"text": "abc"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    p = fn.params[0].id
+    assert f"%v{r.id}.t0 = icmp ult i32 %v{p}, 3" in ll, ll
+    assert (f"%v{r.id}.t1 = select i1 %v{r.id}.t0, i32 %v{p}, "
+            f"i32 0") in ll, ll
+    assert (f"%v{r.id}.t2 = getelementptr [4 x i8], ptr @.helix.str."
+            in ll), ll
+    assert f"%v{r.id}.t3 = load i8, ptr %v{r.id}.t2" in ll, ll
+    assert f"%v{r.id}.t4 = zext i8 %v{r.id}.t3 to i32" in ll, ll
+    assert (f"%v{r.id} = select i1 %v{r.id}.t0, i32 %v{r.id}.t4, "
+            f"i32 0") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_str_byte_empty_literal():
+    """STR_BYTE on an empty string literal is valid — the NUL-padded
+    global is `[1 x i8]`, so the bounds-clamped GEP never reads out of
+    bounds; every index is out of range and yields 0."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], _i32())
+    r = b.emit(tir.OpKind.STR_BYTE, fn.params[0], result_ty=_i32(),
+               attrs={"text": ""})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"icmp ult i32 %v{fn.params[0].id}, 0" in ll, ll
+    assert "[1 x i8]" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_str_ptr_and_byte_share_text():
+    """STR_PTR and STR_BYTE on the same literal register two distinct
+    globals — STR_PTR the exact bytes, STR_BYTE the NUL-padded form."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], tir.TIRScalar("u64"))
+    b.emit(tir.OpKind.STR_BYTE, fn.params[0], result_ty=_i32(),
+           attrs={"text": "hi"})
+    p = b.emit(tir.OpKind.STR_PTR, result_ty=tir.TIRScalar("u64"),
+               attrs={"text": "hi"})
+    b.ret(p)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "[2 x i8]" in ll, ll   # STR_PTR — the exact bytes
+    assert "[3 x i8]" in ll, ll   # STR_BYTE — + the NUL pad
+    assert ll.count("private unnamed_addr constant") == 2, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206_str_ptr_deduped():
+    """Two STR_PTRs on the same literal share one string global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("u64"))
+    b.emit(tir.OpKind.STR_PTR, result_ty=tir.TIRScalar("u64"),
+           attrs={"text": "dup"})
+    p = b.emit(tir.OpKind.STR_PTR, result_ty=tir.TIRScalar("u64"),
+               attrs={"text": "dup"})
+    b.ret(p)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("private unnamed_addr constant") == 1, ll
+
+
+def test_stage206_str_emit_is_deterministic():
+    """Two emits of a module with STR_BYTE are byte-identical."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        fn = b.begin_function("f", [("i", _i32())], _i32())
+        r = b.emit(tir.OpKind.STR_BYTE, fn.params[0], result_ty=_i32(),
+                   attrs={"text": "xyz"})
+        b.ret(r)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206_rejects_str_ptr_with_operands():
+    """STR_PTR takes no operands — the literal is an attr."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("u64"))
+    p = b.emit(tir.OpKind.STR_PTR, b.const_int(0),
+               result_ty=tir.TIRScalar("u64"), attrs={"text": "x"})
+    b.ret(p)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="STR_PTR takes no operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_str_ptr_non_i64_result():
+    """STR_PTR must produce a u64 (i64) — it is a raw pointer."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    p = b.emit(tir.OpKind.STR_PTR, result_ty=_i32(),
+               attrs={"text": "x"})   # i32 result, must be i64
+    b.ret(p)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string pointer is a u64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_str_byte_non_i32_result():
+    """STR_BYTE must produce an i32."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.STR_BYTE, fn.params[0],
+               result_ty=tir.TIRScalar("i64"),   # i64 result, must be i32
+               attrs={"text": "x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string byte is an i32"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206_rejects_str_byte_non_string_text():
+    """STR_BYTE's 'text' attr must be a string."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], _i32())
+    r = b.emit(tir.OpKind.STR_BYTE, fn.params[0], result_ty=_i32(),
+               attrs={"text": 99})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'text' attr"):
         llvm_ir.emit_module(mod)
