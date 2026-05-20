@@ -1603,3 +1603,51 @@ Test: `test_v25_reg_pool_cap_pinned_to_planner_pool_sizes` re-pins
 the invariant (parity with `test_v25_register_class_literals_pin_pool_keys`).
 Verification: `import helixc.backend.ptx` clean; `test_ptx.py` ->
 107 passed (was 106, +1).
+
+### 2026-05-20 — operand-rewrite risk re-assessed + implementation plan
+
+The v2.5 cron-fire-sized backlog is genuinely exhausted: polish all
+done, the test_codegen.py blocker closed, and the emitter-wiring prep
+chain complete (`plan_ptx_registers` -> `ptx_register_names` ->
+`load_register_plan` + the pool-depth drift check). The only v2.5 work
+left is the **operand-threading rewrite** (then the 5-clean-gate).
+
+**Risk re-assessment — the "102 PTX golden pins" framing was wrong.**
+This fire measured what the PTX tests actually assert:
+`grep -cE '%r[0-9]|%f[0-9]'` -> `test_ptx.py` 12 lines, `test_codegen.py`
+9 lines. The PTX suites are overwhelmingly STRUCTURAL (directive /
+mnemonic / attribute presence), not exact-full-text golden pins. The
+~21 exact-register references are mostly robust substring checks
+(`assert "%r0" in out`) — and linear-scan allocates the lowest free
+index first, so `%r0` is still emitted for any kernel with a `%r`
+value. The exact-map assertion (`names == {0:"%r0",1:"%f0"}`) is
+`ptx_register_names`' own unit test on synthetic input, untouched by
+an emitter change. Net: the operand rewrite would break a handful of
+tests at most, not 102 — it is a focused-block task because of its
+SIZE (~40 `_emit_op` call sites) + concurrent-fire collision risk on
+`ptx.py`, NOT because of a golden-test minefield.
+
+**Implementation plan for the operand-threading rewrite** (one
+focused fire, ideally when no peer fire is mid-`ptx.py`):
+1. `emit_kernel(fn)`: after the existing `reg_map = {}` reset, call
+   `self.load_register_plan(fn)` then `self.reg_map = dict(self.planned_reg_map)`
+   — seed the map from the linear-scan plan. Guard f64: a kernel with
+   an f64 scalar makes `plan_ptx_registers` raise NotImplementedError
+   (no PTX f64 file) — keep that loud (do not swallow); f64 PTX
+   kernels are already an unsupported case.
+2. The ~40 `_emit_op` sites that do `r = self._new_reg(P); ...;
+   self.reg_map[res.id] = r`: change to `r = self.reg_map[res.id]`
+   (the planned name, already seeded). A skipped (tile/tensor) value
+   is not in the plan — those ops already route through the
+   memory-resident path, not `_new_reg`; verify per site.
+3. `emit_kernel`'s `.reg` directives: size each file to its
+   `per_class[cls].register_high_water` (from the `MultiClassResult`)
+   instead of a flat `_REG_POOL_CAP` — the reuse payoff.
+4. Run `test_ptx.py` (~70s) + the PTX slice of `test_codegen.py`;
+   fix the handful of exact-register tests; review 2-3 emitted
+   kernels by eye for correctness.
+Keep `_new_reg` as a fallback only if a non-planned scalar can still
+appear; otherwise delete it.
+
+This fire is the planning + de-risking step; the rewrite itself is
+the next focused fire.
