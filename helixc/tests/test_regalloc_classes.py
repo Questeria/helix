@@ -12,7 +12,9 @@ import pytest
 from helixc.backend.regalloc import allocate_by_class
 from helixc.backend.regalloc_classes import (
     PTX_REGISTER_POOLS,
+    ROCM_REGISTER_POOLS,
     ptx_register_class,
+    rocm_register_class,
 )
 from helixc.ir import tir
 from helixc.ir.tile_ir import TileBlock, TileFn, TileOp, TileOpKind, TileValue
@@ -108,3 +110,71 @@ def test_v24_ptx_register_class_drives_allocate_by_class():
     assert r.assignment[0][0] == "%r"   # i32 -> %r file
     assert r.assignment[1][0] == "%f"   # f32 -> %f file
     assert set(r.per_class) == {"%r", "%f"}
+
+
+# ============================================================================
+# ROCm / AMDGCN register-class model (v2.4 item 15 slice 5)
+# ============================================================================
+def test_v24_rocm_pools_two_files():
+    """v2.4 item 15 slice 5 — AMDGCN has two register files: vgpr
+    (256 deep on gfx942) and sgpr (~104 usable)."""
+    assert set(ROCM_REGISTER_POOLS) == {"vgpr", "sgpr"}
+    assert ROCM_REGISTER_POOLS["vgpr"] == 256
+    assert ROCM_REGISTER_POOLS["sgpr"] == 104
+
+
+def test_v24_rocm_classify_bool_to_sgpr():
+    """v2.4 item 15 slice 5 — a boolean is a wavefront condition; it
+    lives in the scalar file (sgpr)."""
+    assert rocm_register_class(_val(0, "bool")) == "sgpr"
+
+
+def test_v24_rocm_classify_scalars_to_vgpr():
+    """v2.4 item 15 slice 5 — every non-bool scalar dtype is a
+    per-thread value in the vector file (vgpr), including 64-bit
+    dtypes (vgpr register pairs — pairing is a later slice) and
+    f64 (which PTX rejects but AMDGCN handles in a vgpr pair)."""
+    for dt in ("i8", "u8", "char", "i16", "u16", "f16", "bf16",
+               "i32", "u32", "f32", "i64", "u64", "isize", "usize",
+               "f64"):
+        assert rocm_register_class(_val(0, dt)) == "vgpr", dt
+
+
+def test_v24_rocm_classify_rejects_non_scalar():
+    """v2.4 item 15 slice 5 — tile/tensor values are memory-resident
+    (LDS/HBM), not single-register; classify raises ValueError."""
+    tile_ty = tir.TIRTileTy(
+        dtype=tir.TIRScalar("f32"),
+        shape=(tir.DimConst(16),),
+        memspace="reg",
+    )
+    with pytest.raises(ValueError, match="scalar values only"):
+        rocm_register_class(TileValue(id=0, ty=tile_ty))
+
+
+def test_v24_rocm_classify_unknown_dtype_raises():
+    """v2.4 item 15 slice 5 — an unrecognised scalar dtype raises
+    RuntimeError, never a silent mis-file."""
+    with pytest.raises(RuntimeError, match="unrecognised TIRScalar"):
+        rocm_register_class(_val(0, "ternary"))
+
+
+def test_v24_rocm_register_class_drives_allocate_by_class():
+    """v2.4 item 15 slice 5 — end-to-end: rocm_register_class +
+    ROCM_REGISTER_POOLS drive allocate_by_class. A bool predicate
+    (sgpr) and an f32 value (vgpr), both live, land in different
+    AMDGCN files and do not contend."""
+    vb = _val(0, "bool")  # -> sgpr
+    vf = _val(1, "f32")   # -> vgpr
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vb]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_FLOAT, results=[vf]),
+        TileOp(kind=TileOpKind.CALL, operands=[vb, vf]),
+    ])
+    fn = TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    r = allocate_by_class(fn, rocm_register_class, ROCM_REGISTER_POOLS)
+    assert r.spilled == set()
+    assert r.assignment[0][0] == "sgpr"
+    assert r.assignment[1][0] == "vgpr"
+    assert set(r.per_class) == {"sgpr", "vgpr"}

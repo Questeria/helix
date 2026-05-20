@@ -11,9 +11,17 @@ VGPR / SGPR. This module supplies that knowledge: one `<backend>_
 register_class(value)` classifier + one `<BACKEND>_REGISTER_POOLS`
 pool-size table per backend.
 
-Slice 4 ships the PTX model. ROCm / Metal / WebGPU models land in
-subsequent slices; the emitter-wiring (threading the resulting
-register assignment into operand emission) is the slice after that.
+Slice 4 ships the PTX model; slice 5 the ROCm/AMDGCN model.
+
+NOTE — only PTX and ROCm need a register-class model. PTX is a
+virtual ISA with explicit `.reg` declarations; AMDGCN is real
+assembly with explicit VGPR/SGPR. Metal MSL and WebGPU WGSL are
+HIGH-LEVEL shading languages — their downstream compilers
+(xcrun-metal, naga) do register allocation. Helix's Metal/WebGPU
+emitters emit named variables (`v3`, `v_smem`, ...), not registers,
+so they need no Helix-side register-class model. The emitter-wiring
+slice (threading the assignment into operand emission) therefore
+targets PtxEmitter + HipEmitter only.
 
 License: Apache 2.0
 """
@@ -109,3 +117,69 @@ def ptx_register_class(value: ti.TileValue) -> str:
             f"{dtype!r} — add it to _PTX_DTYPE_TO_CLASS."
         )
     return cls
+
+
+# ============================================================================
+# ROCm / AMDGCN register-class model
+# ============================================================================
+# AMDGCN (gfx942 / MI300) exposes two register files HipEmitter
+# allocates into:
+#   vgpr — vector general-purpose registers (v0..), 32-bit, per-lane;
+#          hold per-thread values — the bulk of a kernel's scalars.
+#   sgpr — scalar general-purpose registers (s0..), 32-bit, uniform
+#          across the wavefront; hold conditions / predicates / the
+#          exec mask.
+# Unlike PTX (a register file per width), AMDGCN VGPRs/SGPRs are all
+# 32-bit: a 64-bit value occupies a register PAIR in the SAME file.
+# Pair-aligned allocation is a register-allocation refinement (a
+# later item-15 slice extends linear_scan); the register-CLASS model
+# here just answers "which file", and 64-bit values answer "vgpr"
+# (the file) — the pairing is orthogonal.
+#
+# gfx942: 256 VGPRs addressable per wave; ~104 usable SGPRs (the top
+# few are reserved for vcc / exec / the wave's hardware state).
+ROCM_REGISTER_POOLS: Final[dict[str, int]] = {
+    "vgpr": 256,
+    "sgpr": 104,
+}
+
+# A boolean / predicate is a wavefront condition — it lives in the
+# scalar file (sgpr). Every other scalar dtype is a per-thread value
+# in the vector file (vgpr); 64-bit dtypes are vgpr register pairs
+# (pairing handled by a later slice — see module note above).
+_ROCM_SGPR_DTYPES: Final[frozenset[str]] = frozenset({"bool"})
+
+
+def rocm_register_class(value: ti.TileValue) -> str:
+    """v2.4 item 15 slice 5 — map a tile-IR scalar value to its
+    AMDGCN register-class key (`vgpr` or `sgpr`).
+
+    Pass this as the `classify` argument of
+    `regalloc.allocate_by_class` together with `ROCM_REGISTER_POOLS`.
+
+    Raises:
+        ValueError: if `value.ty` is not a `TIRScalar` — tile/tensor
+            values are memory-resident (LDS / HBM), not single-
+            register; a caller filters those out before allocation.
+        RuntimeError: for an unrecognised TIRScalar dtype — surfaces
+            a missing mapping entry loudly rather than mis-filing it.
+    """
+    ty = value.ty
+    if not isinstance(ty, tir.TIRScalar):
+        raise ValueError(
+            f"rocm_register_class: register allocation handles scalar "
+            f"values only; vreg {value.id} has type "
+            f"{type(ty).__name__} — tile/tensor values are memory-"
+            f"resident (LDS/HBM), not single-register. Filter to "
+            f"scalar values before allocate_by_class."
+        )
+    dtype = ty.name
+    # Reuse the PTX dtype set as the recognised-dtype gate — both
+    # backends accept the same TIRScalar dtype vocabulary; only the
+    # file partition differs.
+    if dtype != "f64" and dtype not in _PTX_DTYPE_TO_CLASS:
+        raise RuntimeError(
+            f"rocm_register_class: unrecognised TIRScalar dtype "
+            f"{dtype!r}."
+        )
+    return "sgpr" if dtype in _ROCM_SGPR_DTYPES else "vgpr"
