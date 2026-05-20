@@ -1114,15 +1114,18 @@ emit-ptx/grad) regression — all green, no regressions.
   per-dispatcher `try/except OSError` returning a structured finding,
   parity with the subprocess OSError catch. Parametrized regression
   `test_v25_dispatch_tempfile_write_oserror_is_a_finding`.
-- BE LOW-2: add a `verify_manifest_hash(emit_manifest(...))`
-  dataclass-input test to pin the `isinstance(.., ProofManifest)`
-  branch.
+- BE LOW-2 ✅ DONE: `test_v24_verify_manifest_hash_accepts_dataclass_and_dict`
+  (shipped with item 3, commit 0db380d) already calls
+  `verify_manifest_hash(emit_manifest(...))` on the dataclass — it
+  pins the `isinstance(.., ProofManifest)` branch. Re-verified green
+  this fire; no new test needed.
 - IR LOW-1 ✅ DONE: the `if not class_pools: raise ValueError` guard
   is in shipped `allocate_by_class` — an empty pool table is a
   backend-configuration error surfaced up front.
-- IR LOW-2: the v2.5 emitter-wiring slice MUST assert
-  `result.spill_count == 0` (or handle spills) before trusting
-  `RegAllocResult.assignment`.
+- IR LOW-2 ✅ DONE: the no-spill assertion is enforced by
+  `plan_ptx_registers` (v2.5 item 1 prep) — it raises RuntimeError if
+  `allocate_by_class` spilled, before any caller trusts the
+  assignment.
 
 **RECONCILIATION (concurrent-fire convergence).** This note's
 original "next fire: stamp v2.4.0" plan is SUPERSEDED — `v2.4.0`
@@ -1261,3 +1264,41 @@ v2.5 polish backlog now: BE LOW-1 ✅ · IR LOW-1 ✅ · BE LOW-2 open ·
 IR LOW-2 is an emitter-wiring constraint, not a standalone task.
 Remaining v2.5: item 1 (emitter wiring — focused block), BE LOW-2,
 end-of-v2.5 5-clean-gate.
+
+### 2026-05-20 — v2.5 item 1 slice 1: plan_ptx_registers (emitter-wiring prep)
+
+Per-fire pick: the **safe slice-1 of v2.5 item 1** (emitter wiring).
+The v2.5 polish backlog is drained — this fire verified **BE LOW-2**
+was already closed by `test_v24_verify_manifest_hash_accepts_dataclass_and_dict`
+(shipped with item 3, `0db380d`), so no new test was needed there.
+
+Item 1's risky part — threading the register assignment into every
+`PtxEmitter._emit_op` operand — stays reserved for a focused block
+(it rewrites the 1656-line `ptx.py` and must keep the 102 PTX golden
+pins green). But that part has a *pure, additive* prerequisite that
+is cron-fire-safe: the planning step. Shipped this fire as
+`regalloc_classes.plan_ptx_registers(fn) -> MultiClassResult`:
+
+- Composes `allocate_by_class` with `ptx_register_class` +
+  `PTX_REGISTER_POOLS` + a scalar-skip predicate
+  (`lambda v: not isinstance(v.ty, tir.TIRScalar)`), so it runs over
+  a real kernel — scalars register-allocated, tile/tensor values
+  routed to `MultiClassResult.skipped`, the classifier never handed
+  a non-scalar.
+- Enforces the **IR LOW-2** no-spill contract: raises `RuntimeError`
+  if the allocation spilled, before any caller trusts the
+  assignment. IR LOW-2 is therefore now closed too.
+- Touches NO codegen — nothing calls it yet — so the 102 PTX pins
+  are green by construction. The emitter-wiring block will call
+  `plan_ptx_registers(fn)` and thread the result into operand
+  emission.
+
+Tests (`test_regalloc_classes.py`, +2): a real mixed scalar/tile
+kernel → correct `%r`/`%f` assignment + `skipped`; a monkeypatched
+1-deep `%r` pool → two live i32s → loud `RuntimeError`. Verification:
+`pytest test_regalloc_classes.py test_regalloc.py -q` → 50 passed.
+
+v2.5 polish backlog now fully drained: BE LOW-1 ✅ · BE LOW-2 ✅ ·
+IR LOW-1 ✅ · IR LOW-2 ✅. Remaining v2.5: item 1 emitter wiring
+(the operand-threading rewrite — focused block) + end-of-v2.5
+5-clean-gate.

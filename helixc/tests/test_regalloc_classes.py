@@ -17,6 +17,7 @@ from helixc.backend.regalloc_classes import (
     PtxRegClass,
     ROCM_REGISTER_POOLS,
     RocmRegClass,
+    plan_ptx_registers,
     ptx_register_class,
     rocm_register_class,
 )
@@ -130,6 +131,68 @@ def test_v24_ptx_register_class_drives_allocate_by_class():
     assert r.assignment[0][0] == "%r"   # i32 -> %r file
     assert r.assignment[1][0] == "%f"   # f32 -> %f file
     assert set(r.per_class) == {"%r", "%f"}
+
+
+# ============================================================================
+# plan_ptx_registers — v2.5 item 1 (emitter-wiring prep)
+# ============================================================================
+def test_v25_plan_ptx_registers_runs_allocate_by_class_with_skip():
+    """v2.5 item 1 (emitter-wiring prep) — plan_ptx_registers composes
+    allocate_by_class with the PTX classifier + pool table + the
+    scalar-skip predicate, so it runs over a REAL kernel that mixes
+    register-allocated scalars with a memory-resident tile param. The
+    scalars get RegAssignments in their files; the tile param lands in
+    `skipped` (ptx_register_class is never handed it); no spills."""
+    vi = _val(0, "i32")   # scalar -> %r
+    vf = _val(1, "f32")   # scalar -> %f
+    # A memory-resident tile param — not single-register; must be
+    # skipped, never passed to ptx_register_class.
+    tile_ty = tir.TIRTileTy(
+        dtype=tir.TIRScalar("f32"),
+        shape=(tir.DimConst(16),),
+        memspace="reg",
+    )
+    vt = TileValue(id=2, ty=tile_ty)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vi]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_FLOAT, results=[vf]),
+        TileOp(kind=TileOpKind.CALL, operands=[vi, vf, vt]),
+    ])
+    fn = TileFn(name="k", params=[vt], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    r = plan_ptx_registers(fn)
+    assert r.spill_count == 0
+    assert r.spilled == set()
+    assert r.skipped == {2}            # the tile param, memory-resident
+    assert r.assignment[0].reg_class == "%r"   # i32 scalar
+    assert r.assignment[1].reg_class == "%f"   # f32 scalar
+    assert 2 not in r.assignment       # skipped — not register-allocated
+
+
+def test_v25_plan_ptx_registers_raises_loudly_on_spill(monkeypatch):
+    """v2.5 item 1 — plan_ptx_registers enforces the IR LOW-2 no-spill
+    contract: the emitter-wiring slice trusts every scalar vreg has a
+    RegAssignment, so a spill (a vreg in neither `assignment` nor
+    `skipped`) must fail loudly, never be silently trusted. Forced
+    here by shrinking the %r pool to a single register via
+    monkeypatch, then keeping two i32 values simultaneously live."""
+    import helixc.backend.regalloc_classes as rc
+    # Shrink %r to one register; keep the other 4 files at 256 so
+    # allocate_by_class's classify-key-in-pools check still passes.
+    monkeypatch.setattr(rc, "PTX_REGISTER_POOLS", {
+        "%p": 256, "%r": 1, "%rd": 256, "%f": 256, "%h": 256,
+    })
+    a = _val(0, "i32")
+    b = _val(1, "i32")
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[a]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[b]),
+        TileOp(kind=TileOpKind.CALL, operands=[a, b]),   # both live at once
+    ])
+    fn = TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    with pytest.raises(RuntimeError, match="spilled"):
+        plan_ptx_registers(fn)
 
 
 # ============================================================================

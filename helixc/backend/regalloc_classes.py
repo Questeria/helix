@@ -31,6 +31,7 @@ from typing import Final, Literal, get_args
 
 from ..ir import tile_ir as ti
 from ..ir import tir
+from .regalloc import MultiClassResult, allocate_by_class
 
 
 # v2.5 polish (item-15 type-design audit Finding 5): closed-set
@@ -170,6 +171,67 @@ def ptx_register_class(value: ti.TileValue) -> PtxRegClass:
             f"{dtype!r} — add it to _PTX_DTYPE_TO_CLASS."
         )
     return cls
+
+
+# ============================================================================
+# PTX register-allocation planning (v2.5 item 1 — emitter-wiring prep)
+# ============================================================================
+def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
+    """v2.5 item 1 — compute the PTX register allocation for one
+    tile-IR kernel function.
+
+    The thin composition the PtxEmitter operand-emission slice will
+    consume: runs `regalloc.allocate_by_class` with the PTX
+    register-class classifier (`ptx_register_class`) + pool table
+    (`PTX_REGISTER_POOLS`), passing a `skip` predicate that excludes
+    non-scalar (tile / tensor) values. Those are memory-resident —
+    held in shared memory or across many registers, not single-
+    register — and `ptx_register_class` raises on them by design; the
+    skip predicate drops them into `MultiClassResult.skipped` so the
+    classifier is never handed one.
+
+    This function is deliberately separate from operand emission: it
+    is pure (no PtxEmitter state, emits no text), so it is unit-
+    testable in isolation and the higher-risk emitter rewrite — which
+    threads the returned assignment into every `_emit_op` operand —
+    builds on a verified planning step rather than doing both at once.
+
+    No-spill contract (v2.4 5-clean-gate IR LOW-2). The emitter slice
+    trusts every register-allocated (non-skipped) scalar vreg has a
+    `RegAssignment`. A spill would leave a vreg in neither
+    `assignment` nor `skipped` — the emitter would then have no
+    register to name it by. PTX declares 5 files * 256 registers; a
+    Helix tile-IR kernel body (a few dozen scalars) cannot exhaust
+    that, so a spill is a bug — a runaway live interval or a mis-sized
+    pool — not an expected outcome. It is surfaced loudly here rather
+    than trusted into a broken emit.
+
+    Raises:
+        NotImplementedError: via `ptx_register_class` — a scalar
+            value has dtype f64 (PTX declares no f64 register file).
+        RuntimeError: via `ptx_register_class` for an unrecognised
+            scalar dtype; or here, if the allocation spilled (see the
+            no-spill contract above).
+        ValueError: via `allocate_by_class` — an empty pool table, or
+            liveness/value-map drift (internal invariants).
+    """
+    result = allocate_by_class(
+        fn,
+        ptx_register_class,
+        PTX_REGISTER_POOLS,
+        skip=lambda v: not isinstance(v.ty, tir.TIRScalar),
+    )
+    if result.spill_count != 0:
+        raise RuntimeError(
+            f"plan_ptx_registers: register allocation for kernel "
+            f"{fn.name!r} spilled {result.spill_count} value(s) "
+            f"(vregs {sorted(result.spilled)}). PTX declares 5 files "
+            f"* 256 registers; a Helix tile-IR kernel body should "
+            f"never exhaust that — a spill here is a bug (a runaway "
+            f"live interval or a mis-sized pool), not an expected "
+            f"outcome. Investigate before trusting the assignment."
+        )
+    return result
 
 
 # ============================================================================
