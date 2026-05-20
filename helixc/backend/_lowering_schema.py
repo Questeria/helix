@@ -94,13 +94,19 @@ class OpLowering(TypedDict):
 # Stub-token sentinel
 # ============================================================================
 # Each backend emits a loud-fail directive in its target language when
-# a kind has status "stub" or "deferred". The directives are:
-#   PTX:    `.error "HELIX-STUB: ..."`
-#   ROCm:   `.error "HELIX-STUB: ..."`
-#   Metal:  `#error "HELIX-STUB: ..."`
-#   WebGPU: `@@HELIX-STUB: ...` (parse-breaking sigil)
-# This token is the substring all four emit, so downstream tooling can
-# detect "this kernel is non-functional" via a single string-match.
+# a kind has status "stub" / "deferred" (HELIX-STUB) or "skipped" —
+# no analog on this target — (HELIX-SKIPPED). The directives are:
+#   PTX:    `.error "HELIX-STUB: ..."`  / `.error "HELIX-SKIPPED: ..."`
+#   ROCm:   `.error "HELIX-STUB: ..."`  / `.error "HELIX-SKIPPED: ..."`
+#   Metal:  `#error "HELIX-STUB: ..."`  / `#error "HELIX-SKIPPED: ..."`
+#   WebGPU: `@@HELIX-STUB: ...`         / `@@HELIX-SKIPPED: ...`
+#           (parse-breaking sigil)
+# `HELIX_STUB_TOKEN` ("HELIX-STUB") is the substring every backend
+# emits for the stub/deferred case; the "skipped" case uses the
+# distinct "HELIX-SKIPPED" string (NOT a superstring of HELIX-STUB).
+# Downstream tooling that wants to detect "this kernel is non-
+# functional" must therefore check BOTH HELIX_STUB_TOKEN and the
+# "HELIX-SKIPPED" literal (see gpu_ci.validate_emit).
 HELIX_STUB_TOKEN: Final[str] = "HELIX-STUB"
 
 # Operand-binding placeholder marker. When status="supported" but

@@ -439,7 +439,10 @@ def test_stage129_validate_emit_rejects_unknown_backend():
     # Use a string that bypasses the enum membership check.
     class FakeBackend:
         value = "not_a_real_backend"
-    with pytest.raises(ValueError):
+    # v2.4 5-clean-gate TEST LOW-2 audit-fix: anchored on the
+    # unknown-backend diagnostic so a future ValueError from an
+    # unrelated arg-validation path can't make this test pass.
+    with pytest.raises(ValueError, match="unknown backend"):
         validate_emit("anything", FakeBackend())  # type: ignore[arg-type]
 
 
@@ -589,6 +592,61 @@ def test_stage129_validate_ptx_catches_missing_entry():
     assert not result.mock_passed
     assert any(".entry" in f or "kernel" in f.lower()
                for f in result.mock_findings)
+
+
+def test_v24_validate_emit_flags_helix_stub_directive():
+    """v2.4 5-clean-gate BE MEDIUM-1 audit-fix — a kernel that is
+    structurally well-formed (passes the header/attribute/terminator
+    shape-check) but carries a `.error "HELIX-STUB..."` directive —
+    a stub/deferred tile-IR op reached codegen — must NOT pass mock
+    validation. Pre-fix the shape-only mock validators returned
+    mock_passed=True for such non-functional kernels."""
+    # Structurally-complete PTX (all 4 mock shape-tokens present) but
+    # with a HELIX-STUB directive in the body.
+    stub_ptx = (
+        ".version 8.3\n"
+        ".target sm_75\n"
+        ".address_size 64\n"
+        ".visible .entry k()\n"
+        "{\n"
+        '    .error "HELIX-STUB: TileOpKind.TILE_REDUCE status=\'stub\'"\n'
+        "    ret;\n"
+        "}\n"
+    )
+    result = validate_emit(stub_ptx, BackendKind.PTX)
+    assert not result.mock_passed
+    assert any("HELIX-STUB" in f or "non-functional" in f
+               for f in result.mock_findings)
+
+
+def test_v24_validate_emit_flags_helix_skipped_directive():
+    """v2.4 5-clean-gate BE MEDIUM-1 audit-fix — same for a
+    `HELIX-SKIPPED` directive (a skipped op — no analog on the
+    target — routed to codegen)."""
+    stub_ptx = (
+        ".version 8.3\n.target sm_75\n.address_size 64\n"
+        ".visible .entry k()\n{\n"
+        '    .error "HELIX-SKIPPED: TileOpKind.TMA_LOAD"\n'
+        "    ret;\n}\n"
+    )
+    result = validate_emit(stub_ptx, BackendKind.PTX)
+    assert not result.mock_passed
+    assert any("HELIX-SKIPPED" in f or "non-functional" in f
+               for f in result.mock_findings)
+
+
+def test_v24_validate_emit_clean_kernel_still_passes():
+    """v2.4 5-clean-gate BE MEDIUM-1 audit-fix — regression-pin: a
+    genuinely clean kernel (no HELIX markers) still passes mock
+    validation. The stub-scan must not false-positive."""
+    from helixc.backend.ptx import PtxEmitter
+    src = "@kernel fn k() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = PtxEmitter().emit_module(tile_mod)
+    assert "HELIX-STUB" not in text and "HELIX-SKIPPED" not in text
+    result = validate_emit(text, BackendKind.PTX)
+    assert result.mock_passed, result.mock_findings
 
 
 def test_stage129_validation_result_frozen():

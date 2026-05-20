@@ -36,6 +36,11 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+# v2.4 5-clean-gate BE MEDIUM-1 audit-fix: the shared loud-stub
+# marker token, used by validate_emit to detect a non-functional
+# kernel in mock validation. (_lowering_schema imports only tile_ir
+# -> tir -> stdlib; no circular import with gpu_ci.)
+from ._lowering_schema import HELIX_STUB_TOKEN
 from enum import Enum
 from typing import Callable, Optional
 
@@ -584,7 +589,28 @@ def validate_emit(text: str, backend: BackendKind,
             f"validate_emit: unknown backend {backend!r}; "
             f"expected one of {list(_MOCK_VALIDATORS.keys())}"
         )
-    mock_findings = _MOCK_VALIDATORS[backend](text)
+    mock_findings = list(_MOCK_VALIDATORS[backend](text))
+    # v2.4 5-clean-gate BE MEDIUM-1 audit-fix: the per-backend mock
+    # validators above only shape-check header / attribute /
+    # terminator presence. A kernel that is non-functional by the
+    # emitter's OWN admission — one carrying a `.error "HELIX-STUB"`,
+    # `#error "HELIX-STUB"`, `@@HELIX-STUB`, or `HELIX-SKIPPED`
+    # directive (a stub/deferred/skipped tile-IR op reached codegen),
+    # or a `HELIX-STUB-OPERANDS` placeholder marker — still has all
+    # those structural tokens, so it slipped through mock validation
+    # as `mock_passed=True`. That is exactly the silent-failure class
+    # the loud-stub markers exist to prevent. Scan for them here.
+    # `HELIX_STUB_TOKEN` ("HELIX-STUB") is a substring of
+    # "HELIX-STUB-OPERANDS", so this catches the operand-placeholder
+    # marker too — an unbound-operand kernel is non-functional just
+    # as a stub-op kernel is.
+    if HELIX_STUB_TOKEN in text or "HELIX-SKIPPED" in text:
+        mock_findings.append(
+            "emitted text carries a HELIX-STUB / HELIX-SKIPPED "
+            "directive or operand-placeholder marker — the kernel is "
+            "non-functional (an unwired tile-IR op or unbound operand "
+            "reached codegen); a real toolchain would reject it"
+        )
     mock_passed = (len(mock_findings) == 0)
 
     real_hw_attempted = False
