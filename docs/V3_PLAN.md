@@ -278,3 +278,21 @@ depend on a clean, unambiguous full-suite run.
   across the two LLVM test files; `x86_64.py` untouched. Per-stage
   3-clean audit dispatched. Next after the audit: Stage 204 — memory &
   aggregates.
+- 2026-05-20 — **Stage 203 continuation — 3-clean audit round 1:
+  1 must-fix MEDIUM, fixed.** The silent-failure-hunter found that a
+  mixed-sign integer binop (e.g. `i32 / u32`) — which the frontend
+  type-checker accepts (`typecheck.py`: any two int scalars pass) and
+  which collapses to one LLVM type (`i32` and `u32` are both LLVM
+  `i32`, so the type-match guard cannot catch it) — had its
+  `sdiv`/`udiv` mnemonic chosen silently from operand 0, able to
+  diverge from `x86_64.py`. Fixed: a `_require_same_signedness` guard
+  fails closed on a mixed signed/unsigned operand pair for the ops
+  whose LLVM instruction is *chosen by* signedness — DIV / MOD and the
+  four ordered comparisons (the `icmp` branch had the identical latent
+  hole) — while shifts (the count's sign is irrelevant) and `eq`/`ne`
+  (sign-agnostic) stay permissive. Also addressed both audit LOWs: a
+  module-load disjointness assert across the two binop tables
+  (type-design), and a stale-comment fix in `tir.py` (code-review —
+  SHR is no longer "logical-right unreachable" now that the unsigned
+  dtypes exist). 6 new tests; 71 passed + 2 skipped across the two
+  LLVM test files. Round-2 re-audit dispatched.

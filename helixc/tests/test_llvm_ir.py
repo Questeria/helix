@@ -881,3 +881,111 @@ def test_stage203_div_then_mod_share_a_block():
     assert f"%v{q.id} = sdiv i32" in ll, ll
     assert f"%v{r.id} = srem i32 %v{q.id}, %v{fn.params[2].id}" in ll, ll
     assert llvm_ir.mock_validate_ll(ll) == []
+
+
+# --------------------------------------------------------------------------
+# Stage 203 (cont.) audit-fix — mixed-sign operands fail closed for the
+# ops whose LLVM instruction is CHOSEN BY signedness; sign-agnostic ops
+# and shifts stay permissive.
+# --------------------------------------------------------------------------
+def test_stage203_rejects_mixed_sign_division():
+    """A DIV whose operands disagree on signedness (i32 / u32) is
+    rejected — `sdiv` vs `udiv` is ambiguous, so the backend fails
+    closed rather than silently picking operand 0's interpretation."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "dm", [("a", _i32()), ("c", tir.TIRScalar("u32"))], _i32())
+    r = b.emit(tir.OpKind.DIV, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="disagree on signedness"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage203_rejects_mixed_sign_remainder():
+    """A MOD whose operands disagree on signedness is rejected for the
+    same reason — `srem` vs `urem` is ambiguous."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "mm", [("a", tir.TIRScalar("u32")), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.MOD, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="disagree on signedness"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage203_rejects_mixed_sign_ordered_comparison():
+    """An ordered comparison (`<`) whose operands disagree on
+    signedness is rejected — the signed/unsigned `icmp` predicate is
+    ambiguous. (`==`/`!=` stay sign-agnostic — see the next test.)"""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "cm", [("a", _i32()), ("c", tir.TIRScalar("u32"))],
+        tir.TIRScalar("bool"))
+    r = b.emit(tir.OpKind.CMP_LT, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("bool"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="disagree on signedness"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage203_allows_mixed_sign_equality():
+    """`==` is sign-agnostic (`icmp eq`) — a mixed signed/unsigned
+    operand pair is accepted, not rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "eqm", [("a", _i32()), ("c", tir.TIRScalar("u32"))],
+        tir.TIRScalar("bool"))
+    r = b.emit(tir.OpKind.CMP_EQ, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("bool"))
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = icmp eq i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_allows_mixed_sign_bitwise():
+    """The bitwise ops are sign-agnostic — a mixed signed/unsigned
+    operand pair emits the same `and` and is accepted."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "bwm", [("a", _i32()), ("c", tir.TIRScalar("u32"))], _i32())
+    r = b.emit(tir.OpKind.BIT_AND, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = and i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage203_allows_mixed_sign_shift():
+    """A shift may mix operand signedness — the shift COUNT's sign
+    never affects the result, so a signed value shifted by an
+    unsigned-typed amount is well-defined (not rejected). The
+    arithmetic-vs-logical choice still follows the shifted VALUE
+    (operand 0): a signed value -> `ashr`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "shm", [("x", _i32()), ("n", tir.TIRScalar("u32"))], _i32())
+    r = b.emit(tir.OpKind.SHR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = ashr i32" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
