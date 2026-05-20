@@ -1120,10 +1120,19 @@ emit-ptx/grad) regression — all green, no regressions.
   `result.spill_count == 0` (or handle spills) before trusting
   `RegAllocResult.assignment`.
 
-**Next fire:** re-audit the FE / IR / BE streams on the R1-fixed
-state (silent-failure-hunter per stream). If CLEAN → stamp `v2.4.0`
-on the re-audit-clean commit + write the v2.4.0 release note. If
-findings → ship R2 first.
+**RECONCILIATION (concurrent-fire convergence).** This note's
+original "next fire: stamp v2.4.0" plan is SUPERSEDED — `v2.4.0`
+was already stamped on `1a7ac95` (see the "v2.4.0 RELEASED" note
+below) by a parallel fire running the same gate. Two fires ran the
+end-of-v2.4 5-clean-gate independently and converged: this fire's
+3 MEDIUM R1 fixes (FE grad()-error labeling, BE ValidationResult
+real-HW-failure invariant, IR TIRScalar docstring) landed as
+post-release hardening at `94f6d7f`; its 2 regression tests +
+this note at `6c6a624`. The parallel fire's gate additionally
+caught a BE INTERACTION MEDIUM (validate_emit missing HELIX-STUB
+detection) closed at `1a7ac95` before the tag. Net: v2.4.0 is
+released and post-release-hardened, tree clean. **Next fire → v2.5
+backlog item 1 (item-15 emitter wiring).**
 
 ### 2026-05-19T21:24Z — 🎉 v2.4.0 RELEASED — end-of-v2.4 5-clean-gate ACHIEVED
 
