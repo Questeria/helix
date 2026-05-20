@@ -356,6 +356,22 @@ def _dispatch_ptxas(text: str, tool: str,
             return False, [
                 f"ptxas exit {proc.returncode}: {diag[:500]}"
             ]
+        # v2.5 end-of-cycle 5-clean-gate R1 audit-fix (silent-failure):
+        # a 0 exit is necessary but not sufficient — confirm ptxas
+        # actually wrote a non-empty cubin. A tool that exits 0 without
+        # producing the output artifact (a no-op invocation, a
+        # silently skipped target) would otherwise be reported as a
+        # real-HW PASS for a kernel that never assembled.
+        try:
+            artifact_size = os.path.getsize(out_path)
+        except OSError:
+            artifact_size = -1
+        if artifact_size <= 0:
+            return False, [
+                f"ptxas exited 0 but produced no output cubin at "
+                f"{out_path!r} — a 0 exit with no artifact is not a "
+                f"real-HW pass"
+            ]
         return True, []
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -494,6 +510,21 @@ def _dispatch_llvm_mc(text: str, tool: str,
             return False, [
                 f"llvm-mc exit {proc.returncode}: {diag[:500]}"
             ]
+        # v2.5 end-of-cycle 5-clean-gate R1 audit-fix (silent-failure):
+        # a 0 exit is necessary but not sufficient — confirm llvm-mc
+        # actually wrote a non-empty object file. A tool that exits 0
+        # without producing the output artifact would otherwise be
+        # reported as a real-HW PASS for a kernel that never assembled.
+        try:
+            artifact_size = os.path.getsize(out_path)
+        except OSError:
+            artifact_size = -1
+        if artifact_size <= 0:
+            return False, [
+                f"llvm-mc exited 0 but produced no output object at "
+                f"{out_path!r} — a 0 exit with no artifact is not a "
+                f"real-HW pass"
+            ]
         return True, []
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -563,6 +594,22 @@ def _dispatch_xcrun_metal(text: str, tool: str,
             diag = (proc.stderr or proc.stdout or "").strip()
             return False, [
                 f"xcrun metal exit {proc.returncode}: {diag[:500]}"
+            ]
+        # v2.5 end-of-cycle 5-clean-gate R1 audit-fix (silent-failure):
+        # a 0 exit is necessary but not sufficient — confirm the metal
+        # compiler actually wrote a non-empty AIR module. A tool that
+        # exits 0 without producing the output artifact would
+        # otherwise be reported as a real-HW PASS for a kernel that
+        # never compiled.
+        try:
+            artifact_size = os.path.getsize(out_path)
+        except OSError:
+            artifact_size = -1
+        if artifact_size <= 0:
+            return False, [
+                f"xcrun metal exited 0 but produced no output AIR "
+                f"module at {out_path!r} — a 0 exit with no artifact "
+                f"is not a real-HW pass"
             ]
         return True, []
     finally:

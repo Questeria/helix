@@ -236,12 +236,13 @@ def ptx_register_class_op_aware(
     onto %p.
 
     Raises:
-        RuntimeError: `value` is a bool with no defining op (a kernel /
-            block param — bool's class needs the producing op;
-            `plan_ptx_registers` skips those before classification, so
-            this fires only on direct misuse), or a bool produced by an
-            op absent from `_PTX_BOOL_OP_CLASS` (the PTX emitter has no
-            register-class mapping for it).
+        RuntimeError: `value` is a bool that cannot be classified — it
+            has no defining op (a kernel / block param), or its
+            defining op is absent from `_PTX_BOOL_OP_CLASS` (the PTX
+            emitter has no register-class mapping for it). bool's
+            register class is op-dependent; `plan_ptx_registers` skips
+            BOTH cases onto the bump allocator before classification,
+            so reaching either raise is a direct-call misuse.
         NotImplementedError / ValueError: via `ptx_register_class` for
             every non-bool value (f64, non-scalar, unknown dtype) —
             those are not op-dependent and delegate unchanged.
@@ -283,17 +284,23 @@ def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
     one, and PtxEmitter places them by its own bump allocator):
       - non-scalar (tile / tensor) values — memory-resident (shared
         memory / many registers), not single-register;
-      - a `bool` value with no defining op (a kernel / block param) —
-        bool's PTX register class is op-dependent, so a bool that is
-        not an op result has no determinable class.
-    Every other value — including a `bool` that IS an op result — is
-    classified. bool's register class depends on its producing op
-    (SCALAR_CMP -> %p predicate, SCALAR_CONST_INT -> %r b32);
-    `_ptx_defining_ops` builds the vreg -> defining-op map the op-aware
-    classifier consults. (An earlier slice excluded all bool from the
-    plan as a quick unblock; this is the V2_PLAN.md "option (b)"
-    op-aware classification that supersedes it — bool op results now
-    join the linear-scan reuse like every other scalar.)
+      - a `bool` value whose PTX register class is not determinable —
+        a kernel / block param (no defining op), or a bool produced
+        by an op outside `_PTX_BOOL_OP_CLASS`. bool is the one PTX
+        dtype whose register file is op-dependent, so a bool can be
+        classified ONLY when its producing op is SCALAR_CMP (%p) or
+        SCALAR_CONST_INT (%r); every other bool — no producing op, or
+        a producing op the emitter has no register-file mapping for —
+        is skipped onto the bump allocator rather than handed to the
+        op-aware classifier (which would raise RuntimeError).
+    Every other value — including a `bool` produced by SCALAR_CMP or
+    SCALAR_CONST_INT — is classified; `_ptx_defining_ops` builds the
+    vreg -> defining-op map the op-aware classifier consults. (An
+    earlier slice excluded all bool from the plan as a quick unblock;
+    this is the V2_PLAN.md "option (b)" op-aware classification that
+    supersedes it — a SCALAR_CMP / SCALAR_CONST_INT bool op result now
+    joins the linear-scan reuse like every other scalar, while a bool
+    from any other op stays on the bump allocator.)
 
     This function is deliberately separate from operand emission: it
     is pure (no PtxEmitter state, emits no text), so it is unit-
@@ -316,9 +323,11 @@ def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
             scalar value has dtype f64 (PTX declares no f64 register
             file).
         RuntimeError: via `ptx_register_class_op_aware` for an
-            unrecognised scalar dtype, or for a bool op result whose
-            defining op has no PTX register-class mapping; or here, if
-            the allocation spilled (see the no-spill contract above).
+            unrecognised scalar dtype; or here, if the allocation
+            spilled (see the no-spill contract above). A bool op
+            result whose defining op has no PTX register-class
+            mapping does NOT raise — `_skip` drops it onto the bump
+            allocator before classification.
         ValueError: via `allocate_by_class` — an empty pool table, or
             liveness/value-map drift (internal invariants).
     """
@@ -328,10 +337,19 @@ def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
         ty = v.ty
         if not isinstance(ty, tir.TIRScalar):
             return True            # tile/tensor — memory-resident
-        # A bool op result IS classified (op-aware). A bool with no
-        # defining op (kernel / block param) has no determinable
-        # class — skip it onto PtxEmitter's bump allocator.
-        return ty.name == "bool" and v.id not in defining_ops
+        if ty.name != "bool":
+            return False           # every non-bool scalar is classified
+        # bool's PTX register class is op-dependent: it can be
+        # classified ONLY when its defining op is in
+        # `_PTX_BOOL_OP_CLASS` (SCALAR_CMP -> %p, SCALAR_CONST_INT ->
+        # %r). Skip every other bool — a kernel / block param (no
+        # defining op), or a bool from an op the emitter has no
+        # register-file mapping for — onto PtxEmitter's bump
+        # allocator. Passing such a bool to the op-aware classifier
+        # raises RuntimeError, which would escape emit_kernel (it
+        # guards load_register_plan only against NotImplementedError).
+        op = defining_ops.get(v.id)
+        return op is None or op.kind not in _PTX_BOOL_OP_CLASS
 
     result = allocate_by_class(
         fn,

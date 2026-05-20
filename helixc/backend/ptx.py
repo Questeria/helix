@@ -202,6 +202,24 @@ class PtxEmitter:
     # raises a Python-level error pinned to the codegen site.
     _REG_POOL_CAP = 256
 
+    # v2.5 end-of-cycle 5-clean-gate R1 audit-fix: the PTX register
+    # files the emitter declares, as an ordered register-class -> PTX
+    # register-type map. Single source of truth — emit_kernel's `.reg`
+    # directive block is generated from this, and the module-load
+    # drift check at end of file pins its key set to
+    # regalloc_classes.PTX_REGISTER_POOLS so a register class added to
+    # the linear-scan planner without a matching emitter `.reg`
+    # directive fails loudly at import instead of letting the planner
+    # hand back a register the kernel header never declared. Insertion
+    # order is the `.reg` emission order — keep it stable for goldens.
+    _REG_FILES: dict[str, str] = {
+        "%p":  ".pred",   # 1-bit predicate file
+        "%r":  ".b32",    # 32-bit integer / bool-constant file
+        "%rd": ".b64",    # 64-bit integer / address file
+        "%f":  ".f32",    # 32/64-bit float file
+        "%h":  ".b16",    # 16-bit float file (f16 / bf16) — Stage 64
+    }
+
     def _new_reg(self, prefix: str = "r") -> str:
         # Use per-prefix counter so int / fp / 64-bit pools stay separate
         # and the PTX reads cleanly. Maintains legacy `next_reg` for the
@@ -408,20 +426,20 @@ class PtxEmitter:
                     and p.ty.memspace.lower() == "hbm":
                 if p.name_hint:
                     self.hbm_param_map[p.name_hint] = (i, p.ty.dtype.name)
-        # Reserve a register pool. Audit A3-MEDIUM-1: bumped from
-        # %p<8>/%r<32>/%rd<8>/%f<32> to %p<256>/%r<256>/%rd<256>/%f<256>
-        # so kernels with many SSA values in flight don't silently emit
-        # references to undeclared registers. Per-prefix overflow is
-        # checked at codegen time in _new_reg (raises RuntimeError).
-        self._line(f"    .reg .pred  %p<{self._REG_POOL_CAP}>;")
-        self._line(f"    .reg .b32   %r<{self._REG_POOL_CAP}>;")
-        self._line(f"    .reg .b64   %rd<{self._REG_POOL_CAP}>;")
-        self._line(f"    .reg .f32   %f<{self._REG_POOL_CAP}>;")
-        # Stage 64 Inc 1 — Tier 2 #6: declare a 16-bit register pool
-        # for bf16 + f16 tile values. PTX uses .b16 as the underlying
-        # register class; values are interpreted as bf16/f16 by the
-        # ld/st suffixes.
-        self._line(f"    .reg .b16   %h<{self._REG_POOL_CAP}>;")
+        # Reserve a register pool per PTX register file. Audit
+        # A3-MEDIUM-1: pool depth bumped from %p<8>/%r<32>/%rd<8>/
+        # %f<32> to a uniform _REG_POOL_CAP so kernels with many SSA
+        # values in flight don't silently emit references to
+        # undeclared registers; per-prefix overflow is checked at
+        # codegen time in _new_reg (raises RuntimeError). Stage 64
+        # Inc 1 — Tier 2 #6 added the %h 16-bit file (f16 / bf16).
+        # The files + their PTX register types come from `_REG_FILES`
+        # — one source of truth, drift-pinned to the linear-scan
+        # planner's pool table at module load.
+        for _cls, _ptx_ty in self._REG_FILES.items():
+            self._line(
+                f"    .reg {_ptx_ty:<7}{_cls}<{self._REG_POOL_CAP}>;"
+            )
         self._line()
         for blk in fn.blocks:
             self._line(f"BB{blk.id}:")
@@ -1329,16 +1347,30 @@ class PtxEmitter:
 
 
 # v2.5 item 1 — module-load drift detector: pin the emitter's `.reg`
-# pool depth to the regalloc planner's pool table. PtxEmitter writes
-# `.reg .b32 %r<_REG_POOL_CAP>;` directives; the linear-scan planner
-# (regalloc_classes.PTX_REGISTER_POOLS) sizes its allocation against
-# its own copy of that depth. `load_register_plan` re-checks per
-# kernel, but that only fires once a kernel actually plans a high
-# register index — a drift could ship silently for every kernel that
-# stays under the smaller of the two constants. Pinning them here
-# fails a mismatch loudly at import, the same discipline as
-# `_check_ptx_lowering_coverage` above and regalloc_classes' own
-# pool/Literal drift checks.
+# pool table to the regalloc planner's pool table. Two invariants,
+# both checked here so a mismatch fails loudly at import rather than
+# shipping silently invalid PTX:
+#
+#   (1) DEPTH. PtxEmitter writes `.reg .b32 %r<_REG_POOL_CAP>;`
+#       directives; the linear-scan planner
+#       (regalloc_classes.PTX_REGISTER_POOLS) sizes its allocation
+#       against its own copy of that depth. `load_register_plan`
+#       re-checks per kernel, but that only fires once a kernel plans
+#       a high register index — a depth drift could ship silently for
+#       every kernel that stays under the smaller of the two.
+#
+#   (2) KEY SET. v2.5 end-of-cycle 5-clean-gate R1 audit-fix: the
+#       check originally pinned only depths. The emitter declares one
+#       `.reg` file per `_REG_FILES` key; the planner assigns
+#       registers in the classes of `PTX_REGISTER_POOLS`. If a class
+#       were added to the planner without a matching emitter `.reg`
+#       directive (or vice versa), the planner could hand back a
+#       register in a class the kernel header never declared —
+#       invalid PTX — and the depth-only check would not notice.
+#       Pinning the key sets closes that gap.
+#
+# Same discipline as `_check_ptx_lowering_coverage` above and
+# regalloc_classes' own pool/Literal drift checks.
 if set(PTX_REGISTER_POOLS.values()) != {PtxEmitter._REG_POOL_CAP}:
     raise AssertionError(
         f"helixc.backend.ptx: PtxEmitter._REG_POOL_CAP "
@@ -1347,6 +1379,17 @@ if set(PTX_REGISTER_POOLS.values()) != {PtxEmitter._REG_POOL_CAP}:
         f"{sorted(set(PTX_REGISTER_POOLS.values()))}. The emitter's "
         f"`.reg` directives and the linear-scan planner's pool table "
         f"must declare the same per-file register depth — bump both."
+    )
+if set(PtxEmitter._REG_FILES) != set(PTX_REGISTER_POOLS):
+    raise AssertionError(
+        f"helixc.backend.ptx: PtxEmitter._REG_FILES register classes "
+        f"{sorted(PtxEmitter._REG_FILES)} disagree with "
+        f"regalloc_classes.PTX_REGISTER_POOLS classes "
+        f"{sorted(PTX_REGISTER_POOLS)}. The emitter declares one "
+        f"`.reg` directive per _REG_FILES key; the linear-scan "
+        f"planner assigns registers in the PTX_REGISTER_POOLS "
+        f"classes — every class the planner can assign must have an "
+        f"emitter `.reg` directive. Add the missing class to both."
     )
 
 

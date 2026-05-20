@@ -67,7 +67,7 @@ STAGES_DONE = 22
 # facts, and a hardcoded "all passing" would read false during any
 # transient regression. Live pass/fail belongs in a future mode that
 # actually runs pytest.
-TESTS_TOTAL = 4011
+TESTS_TOTAL = 4013
 
 # Weight a version contributes toward the overall journey total.
 _WEIGHT = {"released": 1.0, "in_progress": 0.5, "planned": 0.0}

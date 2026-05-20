@@ -1748,6 +1748,23 @@ def test_v25_reg_pool_cap_pinned_to_planner_pool_sizes():
     assert set(PTX_REGISTER_POOLS.values()) == {PtxEmitter._REG_POOL_CAP}
 
 
+def test_v25_reg_files_pinned_to_planner_pool_classes():
+    """v2.5 end-of-cycle 5-clean-gate R1 audit-fix — PtxEmitter._REG_FILES
+    (the register classes the emitter declares `.reg` directives for)
+    must cover exactly regalloc_classes.PTX_REGISTER_POOLS (the classes
+    the linear-scan planner assigns into). A module-load drift check in
+    ptx.py enforces this at import; this test documents + re-pins it.
+    Were the two to drift — a class added to the planner without a
+    matching emitter `.reg` directive — the planner could hand back a
+    register in a class the kernel header never declared (invalid PTX),
+    a gap the pool-DEPTH check alone could not catch. Companion to
+    test_v25_reg_pool_cap_pinned_to_planner_pool_sizes (depth) and
+    test_v25_register_class_literals_pin_pool_keys (PtxRegClass)."""
+    from helixc.backend.ptx import PtxEmitter
+    from helixc.backend.regalloc_classes import PTX_REGISTER_POOLS
+    assert set(PtxEmitter._REG_FILES) == set(PTX_REGISTER_POOLS)
+
+
 def test_v25_result_reg_seam_names_and_binds_result():
     """v2.5 item 1 — _result_reg is the single chokepoint every
     scalar-result emit_op branch (SCALAR_CONST_INT/FLOAT,
@@ -1879,13 +1896,21 @@ def test_v25_load_register_plan_exposes_per_class_high_water():
 
 
 def test_v25_emit_kernel_loads_the_register_plan():
-    """v2.5 item 1 (operand-rewrite wiring COMPLETE) — emit_kernel now
-    loads the reuse-aware linear-scan register plan. After emitting a
-    non-empty kernel the emitter's planned_reg_map / planned_high_water
-    are populated (they were empty before the wiring landed), and every
-    scalar SSA result took its planned register. Pins that the plan
-    actually DRIVES emission — not merely that output is unchanged for
-    kernels with no register-reuse opportunity."""
+    """v2.5 item 1 (operand-rewrite wiring COMPLETE) — emit_kernel
+    loads the linear-scan register plan. After emitting a non-empty
+    kernel the emitter's planned_reg_map / planned_high_water are
+    populated (they were empty before the wiring landed), and every
+    scalar SSA result's emitted register equals its planned register.
+
+    SCOPE: this kernel's three i32 values are all live at the
+    SCALAR_ADD, so the plan uses three distinct registers — identical
+    to what the never-reuse bump allocator would assign. It therefore
+    pins that the plan is LOADED and CONSISTENT with emission, but it
+    does NOT by itself prove the plan drives emission (an emitter that
+    ignored the plan would produce the same registers here).
+    test_v25_emit_kernel_register_plan_drives_reuse supplies that
+    proof with a kernel where linear-scan reuse and bump allocation
+    diverge."""
     from helixc.backend.ptx import PtxEmitter
     a = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
     b = ti.TileValue(id=1, ty=tir.TIRScalar("i32"))
@@ -1908,6 +1933,59 @@ def test_v25_emit_kernel_loads_the_register_plan():
     # every scalar result's emitted register IS its planned register.
     for vid in (0, 1, 2):
         assert em.reg_map[vid] == em.planned_reg_map[vid]
+
+
+def test_v25_emit_kernel_register_plan_drives_reuse():
+    """v2.5 item 1 — proves the linear-scan plan DRIVES emission, the
+    claim test_v25_emit_kernel_loads_the_register_plan cannot make on
+    its own. This kernel's values have disjoint live ranges: `a` and
+    `b` die at the first SCALAR_ADD, before `d` is defined, and `c`
+    and `d` die at the second. Linear-scan reuses the freed registers,
+    so five SSA values share three registers (%r0 and %r1 each carry
+    two disjoint-lifetime values). A never-reuse bump allocator would
+    assign five distinct registers (%r0..%r4) — so if emit_kernel
+    ignored the plan the emitted register set would differ. Asserting
+    the emitted registers equal the reuse-bearing plan is the proof of
+    plan-driven emission."""
+    from helixc.backend.ptx import PtxEmitter
+    a = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
+    b = ti.TileValue(id=1, ty=tir.TIRScalar("i32"))
+    c = ti.TileValue(id=2, ty=tir.TIRScalar("i32"))
+    d = ti.TileValue(id=3, ty=tir.TIRScalar("i32"))
+    e = ti.TileValue(id=4, ty=tir.TIRScalar("i32"))
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[a],
+                  attrs={"value": 1}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[b],
+                  attrs={"value": 2}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_ADD, operands=[a, b],
+                  results=[c]),                  # a, b die here
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[d],
+                  attrs={"value": 3}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_ADD, operands=[c, d],
+                  results=[e]),                  # c, d die here
+    ])
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    em.emit_kernel(fn)
+    ids = [0, 1, 2, 3, 4]
+    planned = {vid: em.planned_reg_map[vid] for vid in ids}
+    emitted = {vid: em.reg_map[vid] for vid in ids}
+    # The plan reuses registers — five values, only three registers,
+    # %r0 and %r1 each carrying two disjoint-lifetime values.
+    expected = {0: "%r0", 1: "%r1", 2: "%r2", 3: "%r0", 4: "%r1"}
+    assert planned == expected, f"plan {planned} != {expected}"
+    # Emission is plan-driven: every emitted register IS the plan's.
+    assert emitted == expected, f"emitted {emitted} != {expected}"
+    # The emitted output therefore SHOWS reuse — three registers for
+    # five values. A never-reuse bump allocator (%r0..%r4) cannot.
+    assert len(set(emitted.values())) == 3 < len(ids)
+    # `d` (defined after `a`/`b` died) took a register one of them
+    # freed; `e` likewise. This concrete reuse is what a bump
+    # allocator structurally cannot produce.
+    assert emitted[3] == emitted[0]      # d reuses a's %r0
+    assert emitted[4] == emitted[1]      # e reuses b's %r1
 
 
 def main():
