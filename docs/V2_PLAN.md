@@ -1810,3 +1810,37 @@ Resolution is a real design task (not a cron-fire fix), one of:
   defining op, not the dtype alone.
 Option (b) is likely smaller and matches reality. Either way it is
 the next v2.5 item-1 task — and it must land before Edit B can.
+
+### 2026-05-20 — v2.5 item 1: bool excluded from the linear-scan plan (Edit B unblocked)
+
+Resolves the Edit B blocker. `plan_ptx_registers`'s `skip` predicate
+now drops `bool` values (in addition to non-scalars) into
+`MultiClassResult.skipped`.
+
+Chosen over the two options above: rather than mis-model bool's
+op-dependent class, **exclude bool from linear-scan entirely**. bool
+values stay on PtxEmitter's class-agnostic bump allocator — their
+current, working behaviour. The linear-scan reuse optimisation
+applies to the cleanly-classed scalars (i32/u32/f32/i64/... + the
+16-bit dtypes); bool (op-dependent class) and f64 (no PTX register
+file) are left on the bump allocator. No correctness loss — only a
+minor missed reuse for bool, which kernels have few of. Op-aware
+bool classification (which would let bool registers reuse too) is a
+deliberately-deferred later slice.
+
+With bool excluded, the `_result_reg` class-check can no longer hit
+the bool %p-vs-%r disagreement: a skipped bool value is never in
+`planned_reg_map`, so `_result_reg` bump-allocates it with no
+class-check. **Edit B (emit_kernel wiring) is unblocked.**
+
+Test: `test_v25_plan_ptx_registers_skips_bool_values`. Verification:
+`test_regalloc` + `test_regalloc_classes` -> 59 passed; the
+load_register_plan / _result_reg `test_ptx` subset -> 8 passed.
+Behaviour-preserving — `plan_ptx_registers`' output is not consumed
+until Edit B, so emitted PTX is unchanged.
+
+Next: Edit B — `emit_kernel` calls `load_register_plan`; non-bool
+scalars get reuse-aware registers. It still needs the f64 try/except
+(an f64 scalar is still a `plan_ptx_registers` NotImplementedError)
+and the emitted-PTX test regen (register reuse changes register
+numbers in the golden tests).

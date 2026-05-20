@@ -180,15 +180,21 @@ def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
     """v2.5 item 1 — compute the PTX register allocation for one
     tile-IR kernel function.
 
-    The thin composition the PtxEmitter operand-emission slice will
-    consume: runs `regalloc.allocate_by_class` with the PTX
+    The thin composition the PtxEmitter operand-emission slice
+    consumes: runs `regalloc.allocate_by_class` with the PTX
     register-class classifier (`ptx_register_class`) + pool table
-    (`PTX_REGISTER_POOLS`), passing a `skip` predicate that excludes
-    non-scalar (tile / tensor) values. Those are memory-resident —
-    held in shared memory or across many registers, not single-
-    register — and `ptx_register_class` raises on them by design; the
-    skip predicate drops them into `MultiClassResult.skipped` so the
-    classifier is never handed one.
+    (`PTX_REGISTER_POOLS`), passing a `skip` predicate that drops two
+    kinds of value into `MultiClassResult.skipped` (so `ptx_register_class`
+    is never handed one, and PtxEmitter places them by its own
+    mechanism):
+      - non-scalar (tile / tensor) values — memory-resident (shared
+        memory / many registers), not single-register;
+      - `bool` values — a bool's PTX register class is op-dependent:
+        a SCALAR_CMP result is a `%p` predicate, a SCALAR_CONST_INT
+        bool constant is 0/1 in a `%r` (b32) register. The dtype-based
+        `ptx_register_class` (bool -> %p) cannot express that, so bool
+        is left on PtxEmitter's class-agnostic bump allocator. Op-aware
+        bool classification is a later slice (V2_PLAN.md 2026-05-20).
 
     This function is deliberately separate from operand emission: it
     is pure (no PtxEmitter state, emits no text), so it is unit-
@@ -215,11 +221,14 @@ def plan_ptx_registers(fn: ti.TileFn) -> MultiClassResult:
         ValueError: via `allocate_by_class` — an empty pool table, or
             liveness/value-map drift (internal invariants).
     """
+    def _skip(v: ti.TileValue) -> bool:
+        ty = v.ty
+        if not isinstance(ty, tir.TIRScalar):
+            return True            # tile/tensor — memory-resident
+        return ty.name == "bool"   # op-dependent class — see docstring
+
     result = allocate_by_class(
-        fn,
-        ptx_register_class,
-        PTX_REGISTER_POOLS,
-        skip=lambda v: not isinstance(v.ty, tir.TIRScalar),
+        fn, ptx_register_class, PTX_REGISTER_POOLS, skip=_skip,
     )
     if result.spill_count != 0:
         raise RuntimeError(

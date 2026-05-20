@@ -237,6 +237,32 @@ def test_v25_plan_ptx_registers_propagates_unknown_dtype():
         plan_ptx_registers(fn)
 
 
+def test_v25_plan_ptx_registers_skips_bool_values():
+    """v2.5 item 1 — plan_ptx_registers excludes bool values from the
+    linear-scan plan. A bool's PTX register class is op-dependent — a
+    SCALAR_CMP result is a `%p` predicate, a SCALAR_CONST_INT bool
+    constant is 0/1 in a `%r` (b32) register — which the dtype-based
+    `ptx_register_class` (bool -> %p) cannot express. So bool lands in
+    `MultiClassResult.skipped` (left on PtxEmitter's class-agnostic
+    bump allocator); non-bool scalars are still planned normally.
+    This is what unblocks the emit_kernel wiring: a trial of it caught
+    exactly this bool %p-vs-%r disagreement (V2_PLAN.md 2026-05-20)."""
+    vi = _val(0, "i32")    # planned -> %r
+    vb = _val(1, "bool")   # skipped — op-dependent class
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vi]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[vb]),
+        TileOp(kind=TileOpKind.CALL, operands=[vi, vb]),
+    ])
+    fn = TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                blocks=[blk], attrs={"kernel": True})
+    r = plan_ptx_registers(fn)
+    assert r.spill_count == 0
+    assert 1 in r.skipped            # the bool value — not linear-scanned
+    assert 1 not in r.assignment     # so it has no RegAssignment
+    assert r.assignment[0].reg_class == "%r"   # the i32 is still planned
+
+
 # ============================================================================
 # ptx_register_names — v2.5 item 1 (emitter-wiring: the name bridge)
 # ============================================================================
