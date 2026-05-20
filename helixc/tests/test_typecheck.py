@@ -4257,7 +4257,10 @@ def test_stage65_inc4_collect_let_type_hints_walks_simple_lets():
               value=A.IntLit(span=span, value=42)),
     ]
     out: dict[str, str] = {}
-    _collect_let_type_hints(stmts, out)
+    # v2.x re-audit R7 — _collect_let_type_hints now takes the body
+    # node (it walks every nested scope, not a flat statement list).
+    _collect_let_type_hints(
+        A.Block(span=span, stmts=stmts, final_expr=None), out)
     assert out == {"a": "Pt", "b": "Line"}
 
 
@@ -4338,6 +4341,99 @@ def test_stage65_inc4_end_to_end_let_typed_dispatch():
     assert isinstance(final, A.Call)
     assert isinstance(final.callee, A.Name)
     assert final.callee.name == "Pt__area"
+
+
+def test_stage65_inc4_dispatch_via_nested_block_let_hint():
+    """v2.x re-audit R7 (gate re-run #5 FE finding) — a `let p: Pt`
+    binding INSIDE a nested block (here an `if` arm), followed by
+    `p.area()` on a multi-@overload method, must dispatch via the let
+    hint. Pre-R7 _collect_let_type_hints scanned only the fn body's
+    top-level statement list, so the nested binding registered no hint
+    and the call was wrongly rejected with DuplicateMethodError."""
+    from helixc.frontend.flatten_impls import flatten_impls
+    from helixc.frontend import ast_nodes as A
+
+    span = A.Span(0, 0)
+
+    def mk_struct(name):
+        return A.StructDecl(
+            span=span, name=name, generics=[],
+            fields=[A.FnParam(span=span, name="x",
+                              ty=A.TyName(span=span, name="f32"),
+                              is_mut=False)],
+            is_pub=False,
+        )
+
+    def mk_method(target):
+        return A.FnDecl(
+            span=span, name="area", generics=[],
+            params=[A.FnParam(span=span, name="self",
+                              ty=A.TyName(span=span, name=target),
+                              is_mut=False)],
+            return_ty=A.TyName(span=span, name="f32"),
+            where_clauses=[],
+            body=A.Block(span=span, stmts=[],
+                         final_expr=A.FloatLit(
+                             span=span, value=1.0, type_suffix="f32")),
+            attrs=["overload"], is_pub=False,
+        )
+
+    # fn user() -> f32 {
+    #     if true { let p: Pt = Pt { x: 1.0 }; p.area() } else { 0.0 }
+    # }
+    let_stmt = A.Let(
+        span=span, name="p", is_mut=False,
+        ty=A.TyName(span=span, name="Pt"),
+        value=A.StructLit(span=span, name="Pt",
+                           fields=[("x", A.FloatLit(
+                               span=span, value=1.0,
+                               type_suffix="f32"))]),
+    )
+    method_call = A.Call(
+        span=span,
+        callee=A.Field(span=span,
+                       obj=A.Name(span=span, name="p", generics=[]),
+                       name="area"),
+        args=[],
+    )
+    nested_if = A.If(
+        span=span,
+        cond=A.BoolLit(span=span, value=True),
+        then=A.Block(span=span, stmts=[let_stmt],
+                     final_expr=method_call),
+        else_=A.Block(span=span, stmts=[],
+                      final_expr=A.FloatLit(span=span, value=0.0,
+                                            type_suffix="f32")),
+    )
+    caller = A.FnDecl(
+        span=span, name="user", generics=[], params=[],
+        return_ty=A.TyName(span=span, name="f32"),
+        where_clauses=[],
+        body=A.Block(span=span, stmts=[], final_expr=nested_if),
+        attrs=[], is_pub=False,
+    )
+    prog = A.Program(module=None,
+                     items=[mk_struct("Pt"), mk_struct("Line"),
+                            A.ImplBlock(span=span, target="Pt",
+                                         methods=[mk_method("Pt")],
+                                         trait_name=None),
+                            A.ImplBlock(span=span, target="Line",
+                                         methods=[mk_method("Line")],
+                                         trait_name=None),
+                            caller])
+    # Pre-R7 this raised DuplicateMethodError; post-R7 it resolves.
+    n = flatten_impls(prog)
+    assert n == 2
+    caller_after = next(it for it in prog.items
+                        if hasattr(it, "name") and it.name == "user")
+    nested = caller_after.body.final_expr
+    assert isinstance(nested, A.If)
+    call_after = nested.then.final_expr
+    assert isinstance(call_after, A.Call)
+    assert isinstance(call_after.callee, A.Name)
+    assert call_after.callee.name == "Pt__area", (
+        f"nested-block let hint must dispatch p.area() to Pt__area; "
+        f"got {call_after.callee.name}")
 
 
 def test_stage65_inc3_dispatch_via_structlit_receiver():

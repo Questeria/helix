@@ -179,16 +179,55 @@ def test_stage18_cse_does_not_merge_different_types():
 
 
 def test_stage18_dce_preserves_tile_index_store():
-    """Trap-id 18002 safeguard: DCE must NOT drop TILE_INDEX_STORE ops
-    (Stage 16 added them to SIDE_EFFECT_KINDS). Build a module with an
-    unused TILE_INDEX_STORE result and verify it survives."""
-    from helixc.ir.passes.dce import dce_module as _dce, SIDE_EFFECT_KINDS
-    # Smoke check that the membership is set; the actual op-kind check
-    # is in the SIDE_EFFECT_KINDS set.
-    assert tir.OpKind.TILE_INDEX_STORE in SIDE_EFFECT_KINDS, (
-        "TILE_INDEX_STORE missing from DCE side-effect set "
-        "(Stage 16 regression — would silently drop GPU tile stores)"
-    )
+    """Trap-id 18002 safeguard: DCE must NOT drop a TILE_INDEX_STORE op,
+    and — because TILE_INDEX_STORE is side-effecting — must keep alive
+    the ops computing its index/value operands (DCE's seed phase marks
+    a side-effecting op's operands live).
+
+    v2.x re-audit R8 (gate re-run #6 TEST MEDIUM): pre-R8 this test
+    only asserted set membership (`TILE_INDEX_STORE in
+    SIDE_EFFECT_KINDS`) and never ran `dce_module` — it would have
+    stayed green even if `dce_module` stopped consulting
+    SIDE_EFFECT_KINDS entirely. It now builds a module and runs the
+    pass: the store op has no result so it survives the `not op.results`
+    branch regardless, but if it were removed from SIDE_EFFECT_KINDS
+    the CONST_INTs feeding its operands would be dropped (unseeded) and
+    the store would reference dead values — a silent GPU-store
+    miscompile. The CONST_INT-count assertion catches exactly that."""
+    from helixc.ir.passes.dce import dce_module as _dce
+    mod = tir.Module()
+    i32 = tir.TIRScalar("i32")
+    blk = tir.Block(id=0)
+    v_idx = tir.Value(id=0, ty=i32)
+    v_val = tir.Value(id=1, ty=i32)   # consumed ONLY by the tile store
+    v_ret = tir.Value(id=2, ty=i32)   # consumed ONLY by RETURN
+    blk.ops = [
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_idx],
+               attrs={"value": 0}),
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_val],
+               attrs={"value": 99}),
+        tir.Op(kind=tir.OpKind.CONST_INT, operands=[], results=[v_ret],
+               attrs={"value": 7}),
+        tir.Op(kind=tir.OpKind.TILE_INDEX_STORE, operands=[v_idx, v_val],
+               results=[], attrs={"name": "out", "dtype": "i32",
+                                  "memspace": "hbm"}),
+        tir.Op(kind=tir.OpKind.RETURN, operands=[v_ret], results=[]),
+    ]
+    fn = tir.FnIR(name="main", params=[], return_ty=i32, blocks=[blk])
+    mod.functions["main"] = fn
+    mod.next_value_id = 3
+    mod.next_block_id = 1
+    _dce(mod)
+    kinds = [op.kind for op in mod.functions["main"].blocks[0].ops]
+    assert tir.OpKind.TILE_INDEX_STORE in kinds, (
+        f"DCE dropped TILE_INDEX_STORE (trap-id 18002 regression — "
+        f"would silently drop GPU tile stores); got {kinds}")
+    # All 3 CONST_INTs must survive: the store seeds v_idx/v_val live,
+    # RETURN seeds v_ret. Drop TILE_INDEX_STORE from SIDE_EFFECT_KINDS
+    # and v_idx/v_val's CONST_INTs vanish → this count fails.
+    assert kinds.count(tir.OpKind.CONST_INT) == 3, (
+        f"DCE dropped a CONST_INT feeding the tile store's operands "
+        f"(side-effect-operand liveness regression); got {kinds}")
 
 
 def test_stage18_fdce_preserves_kernel_function():

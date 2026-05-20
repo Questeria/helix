@@ -218,6 +218,17 @@ def _arg_strictly_decreases(call: A.Call, params: list[A.FnParam],
         param - <pos_const>     (e.g. n - 1)
         param / <pos_const>     (must be > 1 for strict decrease)
     Returns False if we can't verify decrease (conservative).
+
+    Positional-only by design: `A.Call` (ast_nodes.py) carries only
+    `callee` + positional `args` — Helix has no keyword-argument call
+    syntax — so indexing `call.args[param_idx]` is sound. v2.x re-audit
+    R6 assessed a "keyword self-call defeats the measure check" finding
+    as NOT REACHABLE for this reason and downgraded it to this latent
+    note. If keyword-call syntax is ever added, this index must first
+    resolve `args` against the callee signature; until then a short
+    positional call only yields `param_idx >= len(call.args)` for an
+    arity-mismatched call, which typecheck rejects first and for which
+    `return False` (cannot verify decrease) is the safe answer.
     """
     # Find the positional index of param_name.
     param_idx = None

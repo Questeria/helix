@@ -7,6 +7,7 @@ v1.0 minimum-viable scaffold coverage:
   - redundant_zero_coalesce dedups same-shape TILE_ZEROS
   - redundant_zero_coalesce rewires operand uses
   - redundant_zero_coalesce preserves different-shape TILE_ZEROS
+  - redundant_zero_coalesce skips dynamic-dim / tensor-typed zeros
   - register_reuse_hints reports last-use positions
   - run_all_passes composition order works (DCE + coalesce both fire)
 
@@ -158,6 +159,98 @@ def test_stage107_zero_coalesce_preserves_different_shapes():
     assert len(zeros_ops) == 3, (
         f"distinct-shape TILE_ZEROS must NOT coalesce; got "
         f"{len(zeros_ops)} (expected 3)")
+
+
+def test_stage107_zero_coalesce_skips_dynamic_dim():
+    """v2.x re-audit R6 (IR HIGH) — two TILE_ZEROS with a DimDyn
+    (runtime-extent) shape must NOT coalesce. DimDyn is a fieldless
+    frozen dataclass, so the pre-fix `repr(d)` shape key was one
+    constant string for every DimDyn instance — coalescing two tiles
+    of unknown, possibly different runtime length (silent miscompile).
+    `_coalesce_key` now returns None for any non-DimConst dim, so both
+    ops survive and the stores keep distinct tiles."""
+    dyn_ty = tir.TIRTileTy(tir.TIRScalar("f32"), (tir.DimDyn(),), "REG")
+    a = ti.TileValue(0, dyn_ty)
+    b = ti.TileValue(1, dyn_ty)
+    a_op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [a])
+    b_op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [b])
+    store_a = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [a], [])
+    store_b = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [b], [])
+    fn = _make_fn([a_op, b_op, store_a, store_b])
+    out = tile_opt.redundant_zero_coalesce(fn)
+    kinds = [o.kind for o in out.blocks[0].ops]
+    assert kinds.count(ti.TileOpKind.TILE_ZEROS) == 2, (
+        f"dynamic-dim TILE_ZEROS must not coalesce; got {kinds}")
+    stores = [o for o in out.blocks[0].ops
+              if o.kind == ti.TileOpKind.TILE_STORE_GLOBAL]
+    assert {s.operands[0].id for s in stores} == {0, 1}, (
+        f"stores must keep distinct tiles; got "
+        f"{[s.operands[0].id for s in stores]}")
+
+
+def test_stage107_zero_coalesce_skips_tensor_typed():
+    """v2.x re-audit R6 (IR MEDIUM-must-fix) — two TILE_ZEROS whose
+    result type is a TIRTensorTy differing only in `device` must NOT
+    coalesce. TIRTensorTy has no `memspace`, so the pre-fix key read
+    `getattr(ty, "memspace", "")` == "" for both and coalesced a cpu
+    tile with a cuda tile. `_coalesce_key` now returns None for any
+    non-TIRTileTy, so both ops survive."""
+    cpu_ty = tir.TIRTensorTy(tir.TIRScalar("f32"), (tir.DimConst(4),),
+                             device="cpu")
+    cuda_ty = tir.TIRTensorTy(tir.TIRScalar("f32"), (tir.DimConst(4),),
+                              device="cuda")
+    a = ti.TileValue(0, cpu_ty)
+    b = ti.TileValue(1, cuda_ty)
+    a_op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [a])
+    b_op = ti.TileOp(ti.TileOpKind.TILE_ZEROS, [], [b])
+    store_a = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [a], [])
+    store_b = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [b], [])
+    fn = _make_fn([a_op, b_op, store_a, store_b])
+    out = tile_opt.redundant_zero_coalesce(fn)
+    kinds = [o.kind for o in out.blocks[0].ops]
+    assert kinds.count(ti.TileOpKind.TILE_ZEROS) == 2, (
+        f"tensor-typed TILE_ZEROS on different devices must not "
+        f"coalesce; got {kinds}")
+    stores = [o for o in out.blocks[0].ops
+              if o.kind == ti.TileOpKind.TILE_STORE_GLOBAL]
+    assert {s.operands[0].id for s in stores} == {0, 1}, (
+        f"cpu/cuda stores must keep distinct tiles; got "
+        f"{[s.operands[0].id for s in stores]}")
+
+
+def test_stage107_zero_coalesce_leaves_no_dangling_result_id():
+    """v2.x re-audit R7 — gate re-run #5 raised a hypothetical IR HIGH:
+    that `redundant_zero_coalesce` rewires operands but not results, so
+    a dropped TILE_ZEROS' id could survive as a stale result reference.
+    REFUTED structurally — tile-IR is SSA (TirToTileLowerer._map_value
+    memoization makes each id the result of exactly one op), and the
+    coalesced op is that sole definer, removed whole. This test pins
+    the refutation: after coalescing two redundant zeros feeding two
+    stores, the dropped tile's id appears in NO surviving op's operands
+    or results, every used id is defined exactly once, and
+    register_reuse_hints carries no stale entry."""
+    a, a_op = _make_zeros(0, "f32", 4)
+    b, b_op = _make_zeros(1, "f32", 4)   # redundant with a
+    store_a = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [a], [])
+    store_b = ti.TileOp(ti.TileOpKind.TILE_STORE_GLOBAL, [b], [])
+    fn = _make_fn([a_op, b_op, store_a, store_b])
+    out = tile_opt.redundant_zero_coalesce(fn)
+    ops = out.blocks[0].ops
+    defined = [r.id for op in ops for r in op.results]
+    used = [v.id for op in ops for v in op.operands]
+    # b (id 1) was the redundant zero — coalesced away entirely.
+    assert 1 not in defined, f"dropped tile id 1 still defined: {defined}"
+    assert 1 not in used, f"dropped tile id 1 still referenced: {used}"
+    # Every result id is defined exactly once (SSA preserved).
+    assert len(defined) == len(set(defined)), f"duplicate def: {defined}"
+    # Every operand id has a definition (no dangling reference).
+    param_ids = {p.id for p in fn.params}
+    for u in used:
+        assert u in defined or u in param_ids, (
+            f"operand id {u} has no definition (dangling)")
+    # register_reuse_hints over the coalesced fn has no stale entry.
+    hints = tile_opt.register_reuse_hints(out)
+    assert 1 not in hints, f"stale reuse hint for coalesced id 1: {hints}"
 
 
 def test_stage107_register_reuse_hints_reports_last_use():

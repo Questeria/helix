@@ -66,6 +66,13 @@ __all__ = [
 # string labels we attach to functions via @effect(...).
 OP_EFFECTS: dict[tir.OpKind, frozenset[str]] = {
     tir.OpKind.PRINT: frozenset({"io"}),
+    # v2.x re-audit R8 (gate re-run #6 IR LOW): TENSOR_STORE writes to
+    # an external file / host buffer — observable I/O, the store
+    # counterpart of the external TENSOR_LOAD read. It was mislabeled
+    # pure in _KNOWN_NONEFFECT_OPKINDS, so a @pure fn containing one
+    # would have silently passed the effect check. Latent (no lowering
+    # emits TENSOR_STORE yet); classified before v3.0 wires it.
+    tir.OpKind.TENSOR_STORE: frozenset({"io"}),
     tir.OpKind.MODIFY: frozenset({"modify_self"}),
     tir.OpKind.SPLICE: frozenset({"modify_self"}),
     # Stage 28.9 cycle 21 audit-T C20-T5 fix (conf 92): the stale
@@ -153,7 +160,7 @@ _KNOWN_NONEFFECT_OPKINDS = {
     tir.OpKind.CONST_TENSOR,
     tir.OpKind.TENSOR_ZEROS, tir.OpKind.TENSOR_ONES,
     tir.OpKind.TENSOR_FULL, tir.OpKind.TENSOR_RAND,
-    tir.OpKind.TENSOR_LOAD, tir.OpKind.TENSOR_STORE,
+    tir.OpKind.TENSOR_LOAD,  # external read; pure for @pure-fn purposes
     tir.OpKind.ADD, tir.OpKind.SUB, tir.OpKind.MUL, tir.OpKind.DIV,
     tir.OpKind.MOD, tir.OpKind.NEG, tir.OpKind.ABS,
     tir.OpKind.MAXIMUM, tir.OpKind.MINIMUM, tir.OpKind.POW,

@@ -46,6 +46,7 @@ from dataclasses import replace
 from typing import Optional
 
 from .. import tile_ir as ti
+from .. import tir
 
 
 # Cycle 1 Batch IR silent-failure HIGH-2 fix: explicit PURE allowlist
@@ -174,6 +175,47 @@ def dead_tile_elim(fn: ti.TileFn) -> ti.TileFn:
     return replace(fn, blocks=blocks)
 
 
+def _coalesce_key(ty: object) -> Optional[tuple]:
+    """Build a faithful, hashable dedup key for a TILE_ZEROS result
+    type — or None when the type cannot be PROVEN identical to another
+    by static inspection, in which case the tile must NOT be coalesced.
+
+    v2.x re-audit R6 (IR HIGH + MEDIUM-must-fix). The pre-fix key was
+    `(dtype_name, shape_tuple, memspace)` where `shape_tuple` fell back
+    to `repr(d)` for any non-DimConst dim and `memspace` was
+    `getattr(ty, "memspace", "")`. Two silent-miscompile modes:
+
+      * `DimDyn` is a fieldless frozen dataclass, so `repr(DimDyn())`
+        is one constant string for every instance. Two zero tiles of
+        *different runtime extent* keyed identically and were
+        coalesced — downstream codegen then reads the wrong tile
+        length.
+      * `TIRTensorTy` carries `device` / `layout` but no `memspace`,
+        so `getattr(..., "memspace", "")` silently yielded `""`; two
+        tensor zeros differing only in device coalesced, rewiring a
+        use onto a tile on the wrong device.
+
+    Fix: coalesce only a `TIRTileTy` whose shape is entirely
+    `DimConst` — every key component is then a concrete, faithful
+    value. Dynamic-shaped tiles (DimVar / DimDyn / DimExpr) and
+    tensor-typed zeros are conservatively left un-coalesced; that is a
+    missed optimization, never a miscompile, and matches the pass's
+    documented v1.0 minimum-viable scope.
+    """
+    if not isinstance(ty, tir.TIRTileTy):
+        return None
+    dims: list[int] = []
+    for d in ty.shape:
+        if not isinstance(d, tir.DimConst):
+            return None
+        dims.append(d.value)
+    # v2.x re-audit R7 (IR MEDIUM): fold memspace casing. Lowering
+    # canonicalizes to lower-case ("reg"); a verbatim key would fail to
+    # coalesce a "REG"/"reg" pair. memspace is case-insensitive, so
+    # normalizing only ever recovers a missed dedup — never miscoalesces.
+    return (ty.dtype.name, tuple(dims), ty.memspace.lower())
+
+
 def redundant_zero_coalesce(fn: ti.TileFn) -> ti.TileFn:
     """Pass 2 — redundant TILE_ZEROS coalescing.
 
@@ -188,6 +230,10 @@ def redundant_zero_coalesce(fn: ti.TileFn) -> ti.TileFn:
     - Only coalesces TILE_ZEROS (not TILE_CONST, which carries a
       literal value via attrs — different constants are different
       tiles even if the shape matches).
+    - Only coalesces a TILE_ZEROS whose result is a `TIRTileTy` with
+      an entirely-`DimConst` (statically known) shape — see
+      `_coalesce_key`. Dynamic-shaped tiles and tensor-typed zeros are
+      conservatively left alone (never miscoalesced).
 
     The coalesced tiles share the same register slot in the lowered
     PTX, freeing register pressure for downstream ops (e.g., wmma
@@ -195,7 +241,7 @@ def redundant_zero_coalesce(fn: ti.TileFn) -> ti.TileFn:
     """
     new_blocks = []
     for blk in fn.blocks:
-        # Map: (dtype_name, shape_tuple, memspace) -> first TileValue
+        # Map: faithful type key (see _coalesce_key) -> first TileValue
         seen: dict[tuple, ti.TileValue] = {}
         # Map: redundant_id -> canonical TileValue
         remap: dict[int, ti.TileValue] = {}
@@ -203,14 +249,8 @@ def redundant_zero_coalesce(fn: ti.TileFn) -> ti.TileFn:
         for op in blk.ops:
             if op.kind == ti.TileOpKind.TILE_ZEROS and op.results:
                 result = op.results[0]
-                if hasattr(result.ty, "dtype") and hasattr(result.ty, "shape"):
-                    dtype_name = result.ty.dtype.name
-                    shape_tuple = tuple(
-                        d.value if hasattr(d, "value") else repr(d)
-                        for d in result.ty.shape
-                    )
-                    memspace = getattr(result.ty, "memspace", "")
-                    key = (dtype_name, shape_tuple, memspace)
+                key = _coalesce_key(result.ty)
+                if key is not None:
                     if key in seen:
                         # Drop this op; remap its result id.
                         remap[result.id] = seen[key]

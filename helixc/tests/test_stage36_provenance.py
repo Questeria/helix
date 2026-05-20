@@ -2509,7 +2509,15 @@ def test_stage36_inc15_register_derivation3_ad_erasure_fails_closed_reverse():
         ],
         final_expr=A.Name(span=span, name="x"))
     import pytest
-    with pytest.raises(NotImplementedError):
+    # v2.x re-audit R6 (TEST MEDIUM): match the AD-erasure guard's
+    # message. register_derivation3 is a recognized-but-non-AD-pure
+    # call, so `_raise_if_ad_erases_effect` raises its opaque-call
+    # variant naming the callee. Pinning the message keeps an unrelated
+    # NotImplementedError (an unsupported node form elsewhere in
+    # differentiate_reverse) from satisfying this negative control —
+    # the test must fail if the guard is removed.
+    with pytest.raises(NotImplementedError,
+                       match="opaque call 'register_derivation3'"):
         differentiate_reverse(body, ["x"])
 
 

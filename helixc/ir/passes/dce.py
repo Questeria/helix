@@ -65,6 +65,15 @@ SIDE_EFFECT_KINDS = {
     # functions of their inputs (operands + the implicit %tid.x), so
     # standard liveness is correct for those.
     tir.OpKind.TILE_INDEX_STORE,
+    # v2.x re-audit R8 (gate re-run #6 IR LOW): TENSOR_STORE writes to
+    # an external file / host buffer (the store counterpart of the
+    # external TENSOR_LOAD) — an observable side effect. It was
+    # mislabeled pure in _KNOWN_PURE_OPKINDS; a TENSOR_STORE with an
+    # unused result would have been DCE-dropped. Latent today (no
+    # lowering path emits TENSOR_STORE) — reclassified before v3.0
+    # wires it. The R7 hard-fail coverage check catches a MISSING
+    # opcode, not a WRONG decision; this is the wrong-decision fix.
+    tir.OpKind.TENSOR_STORE,
     # Stage 16.5 follow-up audit CRITICAL-1: FFI calls have side effects
     # by definition (puts, free, mutex_lock, etc.). DCE was silently
     # dropping void-return extern calls because their results were
@@ -99,12 +108,14 @@ SIDE_EFFECT_KINDS = {
 # detectable.
 #
 # Strategy: positive allowlist of side-effecting opcodes (above) +
-# explicit allowlist of pure opcodes (below). Anything in neither
-# triggers an importwarning at module load — surfacing the drift
-# but NOT breaking the build (since the existing denylist behavior
-# is preserved for safety). When new opcodes are added, the warning
-# nudges the author to classify them. To upgrade to hard-fail,
-# replace the warning with `raise AssertionError(...)`.
+# explicit allowlist of pure opcodes (below). Anything in neither is a
+# hard build error at module load (v2.x re-audit R7, gate re-run #5 IR
+# MEDIUM — upgraded from a soft importwarning): an unclassified opcode
+# would default via the SIDE_EFFECT_KINDS denylist to pure-and-
+# droppable, so if it were in fact side-effecting DCE would silently
+# drop it. Forcing the classification decision matches the sibling
+# `tile_opt._check_kind_coverage` assert and is load-bearing for v3.0,
+# which adds new IR ops.
 _KNOWN_PURE_OPKINDS = {
     # Constants
     tir.OpKind.CONST_INT, tir.OpKind.CONST_FLOAT, tir.OpKind.CONST_BOOL,
@@ -112,7 +123,7 @@ _KNOWN_PURE_OPKINDS = {
     # Tensor creation (pure: shape + dtype -> new tensor value)
     tir.OpKind.TENSOR_ZEROS, tir.OpKind.TENSOR_ONES,
     tir.OpKind.TENSOR_FULL, tir.OpKind.TENSOR_RAND,
-    tir.OpKind.TENSOR_LOAD, tir.OpKind.TENSOR_STORE,
+    tir.OpKind.TENSOR_LOAD,  # external read; pure (a dead load is droppable)
     # Arithmetic
     tir.OpKind.ADD, tir.OpKind.SUB, tir.OpKind.MUL, tir.OpKind.DIV,
     tir.OpKind.MOD, tir.OpKind.NEG, tir.OpKind.ABS,
@@ -156,24 +167,28 @@ _KNOWN_PURE_OPKINDS = {
 
 
 def _check_dce_kind_coverage() -> None:
-    """Module-load coverage check: surface OpKinds not explicitly
-    classified as pure or side-effecting. Currently soft (warning
-    only) — the existing denylist behavior is preserved so new
-    opcodes default to pure-and-droppable until classified."""
+    """Module-load coverage check: every tir.OpKind MUST be explicitly
+    classified as side-effecting (SIDE_EFFECT_KINDS) or pure
+    (_KNOWN_PURE_OPKINDS). v2.x re-audit R7 (gate re-run #5 IR MEDIUM):
+    upgraded from a soft warning to a hard build error. An unclassified
+    opcode defaults — via the SIDE_EFFECT_KINDS denylist — to pure-and-
+    droppable; if it is in fact side-effecting, DCE silently drops it
+    when its result is unused (the exact FFI_CALL drift that bit Stage
+    16.5). A build error forces the decision, matching the sibling
+    `tile_opt._check_kind_coverage` assert."""
     all_kinds = set(tir.OpKind)
     classified = SIDE_EFFECT_KINDS | _KNOWN_PURE_OPKINDS
     unclassified = all_kinds - classified
     if unclassified:
-        import warnings
         names = sorted(k.name for k in unclassified)
-        warnings.warn(
+        raise AssertionError(
             f"dce.py exhaustiveness: opcode(s) not classified as pure "
-            f"or side-effecting: {names}. Classify each in dce.py:"
-            f"SIDE_EFFECT_KINDS (if must-execute) or "
-            f"_KNOWN_PURE_OPKINDS (if liveness-droppable). Currently "
-            f"treated as pure-droppable by denylist default — risk "
-            f"of silent miscompile if any are side-effecting.",
-            stacklevel=2,
+            f"or side-effecting: {names}. Classify each in dce.py — "
+            f"SIDE_EFFECT_KINDS (if it must execute even when its "
+            f"result is unused) or _KNOWN_PURE_OPKINDS (if it is "
+            f"liveness-droppable). Leaving an opcode unclassified "
+            f"risks a silent miscompile: a side-effecting op dropped "
+            f"by DCE."
         )
 
 

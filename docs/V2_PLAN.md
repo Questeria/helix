@@ -2625,3 +2625,214 @@ test_selfhost_cascade 136 pass (incl. 3 new regression tests).
 the 5-clean-gate (silent-failure-hunters on FE/IR/BE/RT/TEST). If it
 returns no HIGH / must-fix MEDIUM and the suite is green, record
 "pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.
+
+### 2026-05-20 — 5-clean-gate re-run #4 verdicts → R6 batch
+
+The post-R5 5-clean-gate re-run dispatched 5 parallel silent-failure-
+hunters (FE / IR / BE / RT / TEST). Verdicts:
+
+- **BE: CLEAN.**
+- **RT: CLEAN** — 1 LOW only (`proof_artifact_key.decode_artifact_
+  bytes` has a cosmetic `except: pass` arm; the final decode still
+  raises and `main`'s `except Exception` catches it → exit 2, no
+  silent failure). LOW backlog.
+- **FE: 1 finding, reassessed down.** The hunter flagged
+  `totality._arg_strictly_decreases` indexing `call.args` positionally
+  as MEDIUM-must-fix (a keyword-arg self-call would mis-measure the
+  decreasing parameter). VERIFIED NOT REACHABLE: `A.Call`
+  (ast_nodes.py:158-160) has only `callee` + positional `args` — Helix
+  has no keyword-call syntax, so the trigger cannot be constructed.
+  Downgraded to LOW; a docstring note now records the positional-only
+  assumption so any future keyword-call work must revisit the index.
+- **IR: 1 HIGH + 1 MEDIUM-must-fix + 1 MEDIUM** — all in
+  `redundant_zero_coalesce`.
+- **TEST: 1 MEDIUM-must-fix + 1 MEDIUM.**
+
+R6 ships the 1 HIGH + the 2 genuine must-fix MEDIUMs + the 2 cheap
+non-must-fix MEDIUMs (the FE "must-fix" was downgraded above):
+
+1. **IR HIGH + IR MEDIUM-must-fix — one fix.** `redundant_zero_
+   coalesce` keyed TILE_ZEROS tiles on `(dtype, shape, memspace)`
+   where the shape fell back to `repr(d)` for non-DimConst dims and
+   `memspace` was `getattr(ty, "memspace", "")`. `DimDyn` is a
+   fieldless frozen dataclass → `repr(DimDyn())` is one constant
+   string → two zero tiles of different runtime extent coalesced (HIGH
+   miscompile). `TIRTensorTy` has `device`/`layout` but no `memspace`
+   → two tensor zeros on different devices coalesced (MEDIUM-must-fix).
+   FIXED: new `_coalesce_key` coalesces ONLY a `TIRTileTy` with an
+   all-`DimConst` shape — every key component is then concrete and
+   faithful; dynamic-shaped and tensor-typed zeros are conservatively
+   never coalesced (a missed optimization, never a miscompile). 2
+   regression tests added (DimDyn shape, cpu-vs-cuda TIRTensorTy);
+   both fail pre-fix.
+
+2. **IR MEDIUM (non-must-fix) — reviewed, no change.** `dead_tile_
+   elim` drops a pure op that has no results. That is *correct* DCE (a
+   pure result-less op is dead by definition), not a silent failure;
+   the branch is also unreachable today — every `_PURE_TILE_KINDS`
+   entry produces a result. Recorded so the next gate does not
+   re-flag it.
+
+3. **TEST MEDIUM-must-fix — `test_hbs_sample_loss_fn_runs`.** The
+   `assert 1 <= code <= 30` band absorbed real regressions (a gradient
+   sign error, a wrong learning-rate step, an autodiff lowering defect
+   would all still land in 1..30). The 5-step SGD exit is fully
+   deterministic — measured 20 at both `-O0` and the default opt
+   level. Pinned to `== 20`.
+
+4. **TEST MEDIUM — `test_stage36_provenance` AD-erasure control.**
+   `pytest.raises(NotImplementedError)` had no `match=`. Added
+   `match="opaque call 'register_derivation3'"`, keyed to the
+   `_raise_if_ad_erases_effect` opaque-call message — an unrelated
+   NotImplementedError can no longer satisfy the negative control.
+
+Verification: test_tile_opt (incl. 2 new regression tests),
+test_stage36_provenance, test_codegen hbs samples all green; full
+suite verified jointly with R7 below (gate re-run #5 came back before
+an independent R6-only full-suite run finished, so R6 + R7 share one
+combined verification run).
+
+**Gate status: OPEN.** R1–R6 shipped; gate re-run #5 dispatched next.
+
+### 2026-05-20 — 5-clean-gate re-run #5 verdicts → R7 batch
+
+Re-run #5 — 5 parallel silent-failure-hunters, dispatched concurrently
+with the full suite for speed. Verdicts:
+
+- **BE: CLEAN.** **TEST: CLEAN** (R6's 3 test-file changes verified
+  genuine hardening). **RT: CLEAN** apart from the same cosmetic
+  proof_artifact_key LOW (re-confirmed it raises loudly — not silent).
+- **FE: 1 finding.** `flatten_impls._collect_let_type_hints` scanned
+  only a function body's top-level statement list, so a `let p: Pt`
+  binding inside a nested block (if / for / while / loop / match arm)
+  registered no type hint — and a following `p.method()` on a
+  multi-`@overload` method was wrongly rejected with
+  DuplicateMethodError. Fail-closed (a spurious rejection of valid
+  code, not a miscompile). The R6 totality item was independently
+  re-confirmed NOT reachable.
+- **IR: 1 HIGH (refuted) + 2 MEDIUM.** The "HIGH" — that
+  `redundant_zero_coalesce` rewires operands but not results, leaving
+  a dropped tile's id dangling — was REFUTED: tile-IR is strict SSA
+  (`TirToTileLowerer._map_value` memoizes, so each id is the result of
+  exactly one op); the coalesced op is that sole definer and is
+  removed whole, so its id cannot survive in any other op's `results`.
+  The agent's premise (a non-defining op holding the id as a result)
+  is structurally impossible. The two MEDIUMs were real.
+
+R7 ships the FE fix + the 2 IR MEDIUMs + a test pinning the refutation:
+
+1. **FE — nested-block let-hint.** `_collect_let_type_hints` rewritten
+   to walk the whole function body via the shared `ASTVisitor`
+   (`_LetTypeHintCollector`), covering every nested scope. First-wins
+   (`setdefault`): an enclosing/earlier binding is never clobbered by
+   a deeper/later one, so no call site loses a hint it relied on. True
+   cross-sibling lexical shadowing still needs the documented Inc-5
+   typecheck-integrated pass — `_LET_HINTS` stays best-effort. New
+   regression test (`@overload` dispatch via a `let` inside an `if`
+   arm); it raises DuplicateMethodError pre-fix.
+
+2. **IR HIGH refuted — proof test.** `test_stage107_zero_coalesce_
+   leaves_no_dangling_result_id` composes coalesce + register_reuse_
+   hints and asserts the dropped tile's id appears in no surviving
+   op's operands or results and in no reuse-hint entry — pinning the
+   SSA refutation as a permanent check.
+
+3. **IR MEDIUM — dce.py coverage check.** `_check_dce_kind_coverage`
+   upgraded from a soft `warnings.warn` to a hard `raise` (build
+   error) when a `tir.OpKind` is unclassified — an unclassified
+   side-effecting op would default to pure-and-droppable and be
+   silently DCE'd. Matches the sibling `tile_opt._check_kind_coverage`
+   assert; load-bearing for v3.0, which adds new IR ops. All current
+   OpKinds verified classified (module imports clean).
+
+4. **IR MEDIUM — `_coalesce_key` memspace casing.** Folded memspace to
+   lower-case in the dedup key so a `"REG"`/`"reg"` pair coalesces
+   (case-insensitive; only ever recovers a missed dedup).
+
+Non-blocking (LOW backlog): proof_artifact_key.py utf-16 even-length
+ASCII mis-decode (raises loudly, not silent); the IR LOW "side-channel
+flag with no reader" finding was refuted —
+`_helix_kernel_tile_validation_blocked_by_dce` IS read by ptx.py:1433.
+
+Verification: imports clean; test_typecheck + test_tile_opt 480 pass
+(incl. 2 new regression tests); full suite <FULL_SUITE_PENDING>.
+
+**Gate status: OPEN.** R1–R7 shipped. Next: 5-clean-gate re-run #6 on
+the R7 tree; if no HIGH / must-fix MEDIUM and the suite is green,
+record "pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.
+
+### 2026-05-20 — 5-clean-gate re-run #6 → R8
+
+Re-run #6 — 5 parallel silent-failure-hunters on the R7 tree.
+Verdicts: **BE CLEAN**; **FE** 0 HIGH / 0 must-fix (1 MEDIUM + 3 LOW);
+**IR** 0 HIGH / 0 must-fix (1 LOW); **RT** 0 HIGH / 0 must-fix
+(1 LOW); **TEST** 0 HIGH / 0 must-fix (1 MEDIUM). **No HIGH and no
+must-fix-MEDIUM on any surface — the gate criterion is met.** R7's
+fixes were independently verified correct, and the gate-re-run-#5 IR
+"HIGH" refutation (tile-IR is strict SSA — `redundant_zero_coalesce`
+cannot leave a dangling id) was independently re-confirmed.
+
+R8 cleared the two cheapest non-blocking findings before declaring
+closure:
+
+1. **TEST MEDIUM — `test_cse.py::test_stage18_dce_preserves_tile_
+   index_store`.** The test imported `dce_module` but never called it —
+   it only asserted `TILE_INDEX_STORE in SIDE_EFFECT_KINDS`, so it
+   would have stayed green even if `dce_module` stopped consulting
+   SIDE_EFFECT_KINDS. Rewritten to build a module (an unused-result
+   TILE_INDEX_STORE fed by CONST_INTs) and actually run `dce_module`,
+   asserting both the store and the CONST_INTs feeding its operands
+   survive.
+
+2. **IR LOW — TENSOR_STORE mislabeled pure.** `TENSOR_STORE` (the
+   external file/host-buffer store, counterpart of the external
+   TENSOR_LOAD) was in dce.py `_KNOWN_PURE_OPKINDS` and effect_check.py
+   `_KNOWN_NONEFFECT_OPKINDS`. A `TENSOR_STORE` with an unused result
+   would be DCE-dropped, and a `@pure` fn containing one would pass the
+   effect check. Latent today (no lowering path emits TENSOR_STORE),
+   but a silent-miscompile landmine for v3.0 — moved to dce.py
+   `SIDE_EFFECT_KINDS` and effect_check.py `OP_EFFECTS` ({"io"}). The
+   hard-fail coverage checks catch a MISSING opcode, not a WRONG
+   classification — this is the wrong-classification fix.
+
+Deferred to the v3.0 LOW/MEDIUM backlog (none HIGH or must-fix — all
+narrow, fail-closed, latent, or cosmetic):
+- **FE MEDIUM** — `flatten_impls._LET_HINTS` is a flat (non-scoped)
+  map; a nested-scope `let` of a name colliding with an outer param
+  could mis-hint a multi-`@overload` dispatch. Typecheck rejects the
+  resulting type mismatch downstream (fail-closed, not a miscompile);
+  the proper fix is the documented Inc-5 typecheck-integrated pass.
+- **FE/RT LOWs** — `autodiff._find_opaque_call_name` omits `args` from
+  its recursion (the rejection still fires loudly, just with a generic
+  message); `flatten_impls._resolve_method_target` returns `""` on an
+  empty target list (unreachable — the caller guards);
+  `proof_artifact_key.py` utf-16 even-length-ASCII mis-decode (raises
+  loudly, not silent).
+- **FE LOW** — Quote/Splice/Modify reverse-mode AD soft-warns then
+  deposits a zero adjoint (pre-existing Audit-28.8-B5 accepted design).
+
+Verification: imports clean; test_typecheck + test_tile_opt 480 pass;
+test_cse + test_effect_check 47 pass; gate re-run #6 returned
+0-HIGH / 0-must-fix across all 5 surfaces; full suite **4068 passed,
+3 skipped** (28m, 16-worker parallel — floor-bounded by the multi-
+generation self-host bootstrap tests, e.g. 353s for
+`test_bootstrap_parser_root_tag_matches_grammar`).
+
+## ✅ pre-v3.0 re-audit gate CLOSED — 2026-05-20
+
+The pre-v3.0 v2.x re-audit gate is **CLOSED**. Across fix batches
+R1–R8 the iterative 5-clean-gate (re-runs #1–#6) drove every HIGH and
+must-fix-MEDIUM silent-failure finding to resolution. The final round,
+re-run #6, returned **no HIGH and no must-fix-MEDIUM on any of the
+five surfaces** (FE / IR / BE / RT / TEST), and the full suite is
+green (4068 passed, 3 skipped). The gate criterion — "no HIGH /
+must-fix MEDIUM and the suite green" — is met.
+
+Residual non-blocking items (1 FE MEDIUM + several LOWs, all narrow /
+fail-closed / latent / cosmetic — itemized in the re-run #6 entry
+above) carry forward as a v3.0 backlog; they will be re-surfaced and
+addressed by the v3.0 per-stage 3-clean audits and the end-of-v3.0
+5-clean-gate.
+
+**v3.0 Stage 200 (the LLVM IR emitter substrate) is unpaused.** See
+docs/V3_PLAN.md.

@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Optional
 
 from . import ast_nodes as A
+from .ast_walker import ASTVisitor
 
 
 TRAP_DUPLICATE_METHOD_NAME = 74002
@@ -174,17 +175,18 @@ def _rewrite_method_calls(prog: A.Program,
     try:
         for item in prog.items:
             if isinstance(item, A.FnDecl):
-                # Stage 65 Inc 4 — collect let-binding type hints
-                # from the fn body before walking it. Also seed
-                # from fn params (param type is a hint for usages
-                # of the param name).
+                # Stage 65 Inc 4 / v2.x re-audit R7 — collect let-
+                # binding type hints from the WHOLE fn body (every
+                # nested scope) first, then fill in param types for any
+                # name no `let` binding shadows. Collect-then-setdefault
+                # preserves the "a `let` shadows a same-named param"
+                # precedence the pre-R7 seed-then-overwrite order gave.
                 _LET_HINTS = {}
+                if isinstance(item.body, A.Block):
+                    _collect_let_type_hints(item.body, _LET_HINTS)
                 for p in item.params:
                     if isinstance(p.ty, A.TyName):
-                        _LET_HINTS[p.name] = p.ty.name
-                if isinstance(item.body, A.Block):
-                    _collect_let_type_hints(
-                        item.body.stmts, _LET_HINTS)
+                        _LET_HINTS.setdefault(p.name, p.ty.name)
                 item.body = _rewrite_expr(item.body, m2t)
         _LET_HINTS = {}
     finally:
@@ -192,19 +194,47 @@ def _rewrite_method_calls(prog: A.Program,
         _LET_HINTS = {}
 
 
-def _collect_let_type_hints(stmt_list: "list[A.Stmt]",
+class _LetTypeHintCollector(ASTVisitor):
+    """v2.x re-audit R7 — collect `let NAME: TYNAME = ...` bindings via
+    the shared ASTVisitor walker, so EVERY nested scope (if / for /
+    while / loop / match-arm / block bodies, and blocks nested inside a
+    let value) is covered — not only a function body's top-level
+    statement list.
+
+    First-wins: `setdefault` means a name already recorded by an
+    enclosing or earlier binding is never overwritten by a deeper or
+    later one, so a hint a call site in the outer scope relies on
+    cannot be clobbered by an inner binding. True lexical shadowing of
+    one name across sibling scopes still needs the Inc-5 typecheck-
+    integrated pass — `_LET_HINTS` stays a best-effort heuristic.
+
+    ASTVisitor auto-descends after `visit_Let` returns; do NOT call
+    `generic_visit` here (the cycle-73 double-descent discipline)."""
+
+    def __init__(self, out: "dict[str, str]") -> None:
+        self.out = out
+
+    def visit_Let(self, node: A.Let) -> None:
+        if node.ty is not None and isinstance(node.ty, A.TyName):
+            self.out.setdefault(node.name, node.ty.name)
+
+
+def _collect_let_type_hints(body: A.Expr,
                               out: "dict[str, str]") -> None:
-    """Stage 65 Inc 4 — walk a list of statements collecting
-    `let NAME: TYNAME = ...` bindings into out (name → type-name).
-    Only handles explicit type annotations of the simple `TyName`
-    form (not generic / nested / inferred). This is the cheapest
-    pre-typecheck type-hint source for bare-Name receivers, and
-    covers the common pattern `let p: Pt = ...; p.area()`.
-    """
-    for st in stmt_list:
-        if isinstance(st, A.Let) and st.ty is not None:
-            if isinstance(st.ty, A.TyName):
-                out[st.name] = st.ty.name
+    """Stage 65 Inc 4 — collect `let NAME: TYNAME = ...` bindings into
+    `out` (name → type-name) from `body` and every scope nested within
+    it. Only explicit simple-`TyName` annotations (not generic / nested
+    / inferred). The cheapest pre-typecheck type-hint source for
+    bare-Name receivers; covers the common pattern
+    `let p: Pt = ...; p.area()`.
+
+    v2.x re-audit R7 — previously a flat scan of a function body's
+    top-level statement list, so a `let` inside an if/for/while/loop/
+    match arm contributed no hint and a following multi-`@overload`
+    method call on that binding was wrongly rejected with
+    DuplicateMethodError (gate-re-run-#5 FE finding). Now walks the
+    whole body via `_LetTypeHintCollector`."""
+    _LetTypeHintCollector(out).visit(body)
 
 
 def _receiver_static_type_hint(

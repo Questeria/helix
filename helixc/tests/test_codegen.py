@@ -16681,9 +16681,13 @@ def test_hbs_sample_loss_fn_runs():
     with open(sample_path, "r", encoding="utf-8") as f:
         src = f.read()
     code = compile_and_run(src)
-    # Allow a small range to absorb stdlib precision drift; the SGD path
-    # should always yield 0 < w5 < 3 after 5 steps from w0=0 with lr=0.1.
-    assert 1 <= code <= 30, f"expected convergence-direction value 1..=30, got {code}"
+    # Exit is `(w5 * 10) as i32`; the 5-step SGD path is fully
+    # deterministic and lands at exactly 20 (verified at both -O0 and
+    # the default opt level). v2.x re-audit R6 (TEST MEDIUM-must-fix):
+    # the prior `1 <= code <= 30` band absorbed real regressions — a
+    # sign error in the stdlib gradient, a wrong learning-rate step, or
+    # an autodiff lowering defect would all still land in 1..30. Pinned.
+    assert code == 20, f"expected SGD convergence value 20, got {code}"
 
 
 def test_hbs_sample_calculator_runs():
