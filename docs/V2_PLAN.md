@@ -2411,3 +2411,37 @@ struct-passed 2 pass.
 (silent-failure-hunters on FE/IR/BE/RT/TEST). When it returns no
 HIGH / must-fix MEDIUM and the test suite is green, record
 "pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.
+
+### 2026-05-20 — gate re-run #2 verdicts → R4
+
+The post-R3 gate re-run (silent-failure-hunters on FE/RT/TEST; IR+BE
+were clean + byte-unchanged since the first re-run) verified the
+R1/R2/R3 fixes hold, but surfaced 2 new HIGH:
+
+- **FE-NEW-2 (HIGH) — FIXED, commit `5aec2d8`.** `match_lower
+  ._collect_binds_with_path` silently skipped a name-binding nested
+  `PatVariant`/`PatTuple`/`PatOr` at a struct-field position. The
+  earlier FE-M4 *dismissal was wrong*: it claimed a loud
+  "unresolved name" reject, but typecheck's `_bind_pattern` recurses
+  into struct-field sub-patterns and DOES bind the name — so the skip
+  left a free `Name()` flowing past a clean typecheck into
+  IR-lowering (ICE / miscompile). Now raises loudly at lowering for a
+  name-binding nested pattern; a non-binding one is still skipped.
+- **RT HIGH-1 (HIGH) — FIXED, commit `5aec2d8`.** The R3
+  dashboard_server `size`-knob fix checked only `grid_n()` presence —
+  true for the `nn` agent too, which hardcodes
+  `grid_total()`/`goal_id()` rather than deriving them — so
+  `?kind=nn&size=N` was accepted and silently miscompiled. The knob
+  is now restricted to the `qlearn` agent; rejected loudly otherwise.
+  RT MEDIUM-1 also fixed (dropped the `kind in (...)` gate that
+  skipped knob-validation for the `hillclimb` agent).
+
+**Remaining R4b (MEDIUM/LOW — not gate-blocking silent failures):**
+the TEST batch flagged ~9 AD tests with weak substring/membership
+assertions where an exact form is computable (same class as the R2b
+TEST fixes — a swapped-arm or wrong-numerator regression passes);
+RT MEDIUM-2 (`str.replace` non-unique-target latent risk); plus LOW
+items.
+
+**Gate status: OPEN.** Both HIGH fixed. Next: ship R4b (TEST
+weak-assertion hardening + RT MEDIUM-2), then re-run the gate.
