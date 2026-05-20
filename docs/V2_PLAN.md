@@ -871,3 +871,50 @@ closes; if findings, an R1 audit-fix lands first.
 - Stage 35 wmt_predict_or regression (pre-existing, spawned task):
   open.
 - End-of-v2.4 5-clean-gate: pending all the above.
+
+### 2026-05-19T20:51Z — v2.4 item 13 3-clean-audit CLOSED
+
+The item-13 3-clean-audit (dispatched 20:42Z) returned 3 MEDIUMs;
+all closed.
+
+**Verdicts:**
+- silent-failure-hunter: 1 MEDIUM — the 4 `_dispatch_*` functions
+  caught only TimeoutExpired + FileNotFoundError; PermissionError /
+  OSError spawn failures escaped uncaught. Cardinal sin (failure-
+  swallowed-as-pass) confirmed ABSENT.
+- type-design-analyzer: PASS-with-observations — Finding 1 MEDIUM
+  (DEFAULT_PTXAS_ARCH / DEFAULT_AMDGCN_MCPU string-copy drift),
+  Finding 2 LOW (`_REAL_HW_DISPATCH` table parity), Finding 3 LOW
+  (NamedTuple return).
+- code-reviewer: PASS — MEDIUM-1 (stale "deferred to Stage 130+"
+  docstrings + a self-masking `test_stage129_real_hw_deferred`
+  test). All 4 tool invocations + flags verified correct.
+
+**R1 audit-fix `85526c0`:** OSError dispatch guard (silent-failure
+MEDIUM) + arch-constant import (type-design Finding 1) +
+`_REAL_HW_DISPATCH` table & drift check (Finding 2) + docstring
+rewrites & self-masking-test replacement (code-review MEDIUM-1).
+30 test_gpu_ci tests pass. 3 LOW notes deferred to v2.5 polish
+(NamedTuple return; deterministic timeout-branch test;
+errors="replace" on subprocess decode).
+
+**Concurrent regression-fix `4385dcf`:** BE HIGH-1 changed emit_op
+stub handling from raise to a `.error "HELIX-"` directive. The
+x86_64 host path embeds kernel PTX without running ptxas, so
+`validate_kernel_tile_lowering` stopped raising on unsupported
+kernel ops — silent. Fix: it now scans for `.error "HELIX-` and
+re-raises. Verified: 102 test_ptx + 23 codegen kernel/tile tests
+pass.
+
+**v2.4 item 13: COMPLETE + 3-clean ACHIEVED.**
+
+**v2.4 backlog state:**
+- Item 13 (real-HW dispatch): SHIPPED 4 slices + R1 audit-fix +
+  regression-fix. CLOSED.
+- Item 15 (RegAlloc for emitted backend kernel bodies): pending —
+  the remaining substrate->hardware-real gap. Largest open item.
+- Item 3 slice 2/3 (frozen ProofManifest dataclass): pending —
+  substantial public-API change.
+- Stage 35 wmt_predict_or regression (pre-existing, spawned task):
+  open.
+- End-of-v2.4 5-clean-gate: pending items 15 + 3-slice-2/3.
