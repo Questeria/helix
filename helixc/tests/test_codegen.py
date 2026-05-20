@@ -8453,6 +8453,23 @@ def test_agi_wmt_predict_or():
 
 
 def test_stage35_wmt_predictors_reject_invalid_and_corrupt_states():
+    """v2.5 stale-test fix — the two `wmt_predict_or` checks asserted
+    `== -1` for an invalid action and a corrupted slot. That encoded
+    the PRE-Cycle-3 contract. `agi_world.hx` "Cycle 3 R1 fix batch 20
+    (RT MEDIUM-5)" deliberately changed `wmt_predict_or` so that ALL
+    failure modes (invalid wmt / state / action / corrupted next-
+    state) return `default_v`, matching Python's `dict.get(key,
+    default)` — only the non-`_or` `wmt_predict` / `wmt_rollout`
+    return the -1 error sentinel. The test was not updated when that
+    contract changed, so it had been failing (returned 7).
+
+    Corrected expectations, verified against agi_world.hx:
+      invalid_default — wmt_predict_or, invalid action 99 -> 42 (default_v)
+      invalid_self    — wmt_is_self_loop, invalid state   -> 0
+      corrupt_predict — wmt_predict, corrupted slot       -> -1
+      corrupt_or      — wmt_predict_or, corrupted slot    -> 42 (default_v)
+      corrupt_rollout — wmt_rollout, corrupted slot       -> -1
+    """
     src = """
     fn main() -> i32 {
         let wmt = wmt_new(2, 1);
@@ -8465,10 +8482,10 @@ def test_stage35_wmt_predictors_reject_invalid_and_corrupt_states():
         let actions = t1d_new(1);
         ti1d_set(actions, 0, 0);
         let corrupt_rollout = wmt_rollout(wmt, 0, actions, 1);
-        if invalid_default == (0 - 1) {
+        if invalid_default == 42 {
         if invalid_self == 0 {
         if corrupt_predict == (0 - 1) {
-        if corrupt_or == (0 - 1) {
+        if corrupt_or == 42 {
         if corrupt_rollout == (0 - 1) { 42 } else { 7 }
         } else { 7 }} else { 7 }} else { 7 }} else { 7 }
     }
