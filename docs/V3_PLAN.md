@@ -153,8 +153,9 @@ depend on a clean, unambiguous full-suite run.
 
 | Stage | Title | Ship | Audit | Notes |
 |-------|-------|------|-------|-------|
-| 200 | LLVM IR emitter substrate | — | — | next |
-| 201–208 | Phase D — LLVM IR backend | — | — | planned |
+| 200 | LLVM IR emitter substrate | ✓ | 3-clean (re-run) | Phase D — see status note |
+| 201 | LLVM toolchain detection + dispatch | — | — | next |
+| 202–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -163,3 +164,22 @@ depend on a clean, unambiguous full-suite run.
 - 2026-05-20 — v3.0 opened. v2.5.0 released (tag `v2.5.0`). This plan
   drafted as the v3.0 scoping pass; `pytest.ini` testpaths fix shipped
   alongside. Next: Stage 200 — the LLVM IR emitter substrate.
+- 2026-05-20 — pre-v3.0 v2.x re-audit gate **CLOSED** (see
+  docs/V2_PLAN.md): R1–R8, 6 gate re-runs, 4068 tests green. Phase D
+  unpaused.
+- 2026-05-20 — **Stage 200 shipped — LLVM IR emitter substrate.**
+  `helixc/backend/llvm_ir.py` — an additive textual-LLVM-IR backend
+  consuming the same `tir.Module` that `x86_64.py::compile_module_to_
+  elf` consumes; scalar core (module triple, `define`, integer
+  const/add/sub/mul, `ret`) + `mock_validate_ll`; 19 tests
+  (`test_llvm_ir.py`). x86_64.py untouched — purely additive. The
+  per-stage 3-clean audit found 1 HIGH (binop emitted the result type
+  without checking operand types) + 2 must-fix MEDIUM (function name
+  not escaped into the `@` global; `mock_validate_ll` matched `define`
+  only at column 0) — all fixed in the same batch (operand-type check;
+  `_llvm_global_name` quotes out-of-grammar names; strip-based
+  validation). 3-clean re-run dispatched. Deferred to backlog: an
+  `Operand` tagged-union refactor (Stage 202), a CONST_INT range check
+  (Stage 201's `llc` catches it), `char` dtype width, `nsw`/`nuw`
+  overflow-flag parity (a Stage 207 decision). Next: Stage 201 — LLVM
+  toolchain detection + dispatch.
