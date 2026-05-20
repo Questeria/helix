@@ -159,7 +159,7 @@ depend on a clean, unambiguous full-suite run.
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 204 | Memory & aggregates | ✓ | 3-clean ✓ | Phase D — CLOSED (structs are SSA-bound) |
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
-| 206 | Runtime & intrinsics (chunked) | chunk A,B ✓ | A 3-clean ✓ · B audit pending | Phase D — Result intrinsics + panic shipped |
+| 206 | Runtime & intrinsics (chunked) | chunk A,B ✓ | A,B 3-clean ✓ | Phase D — Result intrinsics + panic CLOSED |
 | 207–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
@@ -533,3 +533,13 @@ depend on a clean, unambiguous full-suite run.
   pins the fail-closed behaviour; one closes the audit's noted
   non-int `trap_id` coverage gap); 145 passed + 2 skipped. Round-2
   re-audit dispatched.
+- 2026-05-20 — **Stage 206 chunk B — 3-clean audit round 2: CLEAN.**
+  All three audit surfaces returned 0 HIGH / 0 must-fix-MEDIUM on the
+  re-confirm: the round-1 fix (`_prepass` skipping TRAP's result) is
+  verified to fail closed, and the rest of chunk B (string globals,
+  `_llvm_cstring` escaping, the `write`/`exit` declares,
+  TRAP-as-terminator, x86_64 parity) re-confirmed sound. Chunk B
+  (TRAP / panic) is CLOSED. Next: assess the remaining Stage 206
+  surface (TRACE_ENTRY/EXIT, PRINT, the arena ops, STR_BYTE/STR_PTR)
+  — ship the remaining-op chunks or close Stage 206 — then Stage 207
+  (the x86_64-vs-LLVM parity gate).
