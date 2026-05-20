@@ -154,7 +154,7 @@ depend on a clean, unambiguous full-suite run.
 | Stage | Title | Ship | Audit | Notes |
 |-------|-------|------|-------|-------|
 | 200 | LLVM IR emitter substrate | ✓ | 3-clean ✓ | Phase D — CLOSED; see status note |
-| 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean (pending) | Phase D — see status note |
+| 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | — | — | next |
 | 203–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
@@ -216,3 +216,17 @@ depend on a clean, unambiguous full-suite run.
   monkeypatched `subprocess.run`, plus 2 skipif-guarded real-`llvm-as`
   tests. Per-stage 3-clean audit dispatched. Next: Stage 202 — control
   flow.
+- 2026-05-20 — **Stage 201 — 3-clean audit CLOSED.** Round 1:
+  type-design + code-review both 0 HIGH / 0 must-fix; the
+  silent-failure-hunter found 1 must-fix MEDIUM (`real_tool`
+  misattributed an `llc`-stage failure to `llvm-as`) → fixed
+  (`e66e15e`: `last_tool` tracking so `real_tool` reports the deepest
+  tool reached, a `_check_llvm_toolchain_drift` module-load guard, and
+  2 llc-leg tests). Round 2 (silent-failure re-confirm): 0 HIGH,
+  0 must-fix, 1 LOW (a benign cleanup-only `rmtree(ignore_errors=True)`
+  that deliberately matches gpu_ci's four dispatchers). All three
+  audit surfaces at 0 HIGH / 0 must-fix-MEDIUM — **Stage 201 CLOSED**.
+  Phase-E prep (Stage 210 MLIR dialect-strategy decision record) is
+  being drafted in parallel by a background agent. Next: Stages
+  202 + 203, batched — control flow + the full scalar op set, one
+  3-clean audit for the pair.
