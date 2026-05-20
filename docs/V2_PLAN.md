@@ -1033,3 +1033,23 @@ it will audit half-finished code. This fire committed only this
 note (`git add docs/V2_PLAN.md` — scoped); it deliberately left the
 dirty regalloc files untouched, as committing a concurrent fire's
 partial work could break its build.
+
+### 2026-05-19T21:18Z — end-of-v2.4 5-clean-gate dispatched
+
+v2.4 is feature-complete (items 13 + 3 + 15-allocator, all 3-clean
+audited). This fire dispatches the end-of-v2.4 5-clean-gate — 5
+parallel silent-failure-hunters across FE/IR/BE/RT/TEST:
+
+- FE: grad_pass raise-instead-of-return soundness + regression
+- IR: regalloc's tile-IR consumer-attribute reliance + regression
+- BE: v2.4 INTERACTION bugs across the 8 backend files (the
+  per-item audits already happened; this looks for cross-change
+  interactions)
+- RT: run.py exit aggregation + module-load drift detectors
+  (incl. the new regalloc_classes.py load-time check)
+- TEST: the new test_regalloc*.py + test_gpu_ci/proof_manifest
+  updates — assertion tightness, match= anchors, docstring honesty
+
+Verdicts process this session. If all CLEAN (or only LOW/MED),
+stamp v2.4.0; if any HIGH or must-fix MEDIUM, ship an R1 audit-fix
+first then re-audit the affected stream.
