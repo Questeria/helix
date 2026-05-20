@@ -211,6 +211,36 @@ class PtxEmitter:
         self.next_reg += 1
         return n
 
+    def _result_reg(self, op: ti.TileOp, prefix: str = "r") -> str:
+        """v2.5 item 1 (emitter-wiring: the result-naming seam) — name
+        the destination register for `op`'s single SSA result and bind
+        it in `reg_map`.
+
+        Every scalar-arithmetic `emit_op` branch (SCALAR_CONST_INT/
+        FLOAT, SCALAR_ADD/MUL/SUB/NEG/CMP, THREAD_IDX) names its result
+        register with the same two-step pair: `r = self._new_reg(P)` to
+        bump-allocate a fresh name, then `self.reg_map[op.results[0].id]
+        = r` once the instruction is emitted. This collapses that pair
+        into one chokepoint — the *only* place a scalar SSA result gets
+        a register name.
+
+        That single seam is the substrate for the operand-emission
+        flip. The final item-1 slice swaps this body to return
+        `self.planned_reg_map[op.results[0].id]` (the reuse-aware
+        linear-scan assignment `load_register_plan` validated) when a
+        plan is loaded — reaching one method, not every branch. Today
+        the body is still the bump allocator, so emitted PTX is
+        byte-identical to the pre-seam code.
+
+        Every caller runs `_require_result_count(op, 1, ...)` first, so
+        `op.results[0]` is the one and only result — the prior
+        `if op.results:` guard on the bind was dead defensiveness and
+        is dropped here.
+        """
+        name = self._new_reg(prefix)
+        self.reg_map[op.results[0].id] = name
+        return name
+
     def load_register_plan(self, fn: ti.TileFn) -> dict[int, str]:
         """v2.5 item 1 (emitter-wiring: the emitter-side bridge) —
         compute the planned PTX register allocation for one kernel and
@@ -557,7 +587,7 @@ class PtxEmitter:
             )
             if "value" not in op.attrs:
                 raise RuntimeError("SCALAR_CONST_INT requires value attr")
-            r = self._new_reg("r")
+            r = self._result_reg(op, "r")
             v = op.attrs["value"]
             result_ty = self._scalar_type_name(op.results[0])
             if result_ty == "bool":
@@ -574,8 +604,6 @@ class PtxEmitter:
             elif v < -(2 ** 31) or v > (2 ** 31 - 1):
                 raise RuntimeError("SCALAR_CONST_INT i32 value out of range")
             self._line(f"    mov.b32 {r}, {v};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_ADD:
             self._require_operand_count(op, 2, "SCALAR_ADD")
@@ -595,15 +623,13 @@ class PtxEmitter:
             if a_ty == "f32":
                 self._require_reg_class(a_reg, "%f", "scalar add lhs")
                 self._require_reg_class(b_reg, "%f", "scalar add rhs")
-                r = self._new_reg("f")
+                r = self._result_reg(op, "f")
                 self._line(f"    add.f32 {r}, {a_reg}, {b_reg};")
             else:
                 self._require_reg_class(a_reg, "%r", "scalar add lhs")
                 self._require_reg_class(b_reg, "%r", "scalar add rhs")
-                r = self._new_reg("r")
+                r = self._result_reg(op, "r")
                 self._line(f"    add.s32 {r}, {a_reg}, {b_reg};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_MUL:
             self._require_operand_count(op, 2, "SCALAR_MUL")
@@ -620,15 +646,13 @@ class PtxEmitter:
             if a_ty == "f32":
                 self._require_reg_class(a_reg, "%f", "scalar multiply lhs")
                 self._require_reg_class(b_reg, "%f", "scalar multiply rhs")
-                r = self._new_reg("f")
+                r = self._result_reg(op, "f")
                 self._line(f"    mul.f32 {r}, {a_reg}, {b_reg};")
             else:
                 self._require_reg_class(a_reg, "%r", "scalar multiply lhs")
                 self._require_reg_class(b_reg, "%r", "scalar multiply rhs")
-                r = self._new_reg("r")
+                r = self._result_reg(op, "r")
                 self._line(f"    mul.lo.s32 {r}, {a_reg}, {b_reg};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_SUB:
             self._require_operand_count(op, 2, "SCALAR_SUB")
@@ -645,15 +669,13 @@ class PtxEmitter:
             if a_ty == "f32":
                 self._require_reg_class(a_reg, "%f", "scalar subtract lhs")
                 self._require_reg_class(b_reg, "%f", "scalar subtract rhs")
-                r = self._new_reg("f")
+                r = self._result_reg(op, "f")
                 self._line(f"    sub.f32 {r}, {a_reg}, {b_reg};")
             else:
                 self._require_reg_class(a_reg, "%r", "scalar subtract lhs")
                 self._require_reg_class(b_reg, "%r", "scalar subtract rhs")
-                r = self._new_reg("r")
+                r = self._result_reg(op, "r")
                 self._line(f"    sub.s32 {r}, {a_reg}, {b_reg};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_NEG:
             self._require_operand_count(op, 1, "SCALAR_NEG")
@@ -664,14 +686,12 @@ class PtxEmitter:
             self._require_scalar_result_type(op, a_ty, "scalar neg result")
             if a_ty == "f32":
                 self._require_reg_class(a_reg, "%f", "scalar neg operand")
-                r = self._new_reg("f")
+                r = self._result_reg(op, "f")
                 self._line(f"    neg.f32 {r}, {a_reg};")
             else:
                 self._require_reg_class(a_reg, "%r", "scalar neg operand")
-                r = self._new_reg("r")
+                r = self._result_reg(op, "r")
                 self._line(f"    neg.s32 {r}, {a_reg};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_CONST_FLOAT:
             self._require_operand_count(op, 0, "SCALAR_CONST_FLOAT")
@@ -688,10 +708,8 @@ class PtxEmitter:
             if type(v) is not float:
                 raise RuntimeError("SCALAR_CONST_FLOAT value must be a float")
             bits = struct.unpack("<I", struct.pack("<f", v))[0]
-            r = self._new_reg("f")
+            r = self._result_reg(op, "f")
             self._line(f"    mov.f32 {r}, 0f{bits:08X};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.SCALAR_CMP:
             self._require_operand_count(op, 2, "SCALAR_CMP")
@@ -715,7 +733,7 @@ class PtxEmitter:
                 raise RuntimeError("unsupported PTX mixed scalar compare types")
             # Result lives in a %p predicate register. Phase-0 emits the
             # signed-int or f32 form based on the lowered register class.
-            r = self._new_reg("p")
+            r = self._result_reg(op, "p")
             if a_ty == "f32":
                 self._require_reg_class(a_reg, "%f", "scalar compare lhs")
                 self._require_reg_class(b_reg, "%f", "scalar compare rhs")
@@ -724,8 +742,6 @@ class PtxEmitter:
                 self._require_reg_class(a_reg, "%r", "scalar compare lhs")
                 self._require_reg_class(b_reg, "%r", "scalar compare rhs")
                 self._line(f"    setp.{cmp_suffix}.s32 {r}, {a_reg}, {b_reg};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.RETURN:
             if op.operands or op.results:
@@ -748,10 +764,8 @@ class PtxEmitter:
                 raise RuntimeError(f"unsupported PTX THREAD_IDX dim {dim!r}")
             if sreg not in {"tid", "ctaid", "ntid"}:
                 raise RuntimeError(f"unsupported PTX THREAD_IDX sreg {sreg!r}")
-            r = self._new_reg("r")
+            r = self._result_reg(op, "r")
             self._line(f"    mov.u32 {r}, %{sreg}.{dim};")
-            if op.results:
-                self.reg_map[op.results[0].id] = r
             return
         if op.kind == ti.TileOpKind.TILE_INDEX_LOAD_HBM:
             self._require_operand_count(op, 1, "TILE_INDEX_LOAD_HBM")

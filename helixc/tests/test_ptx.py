@@ -1748,6 +1748,64 @@ def test_v25_reg_pool_cap_pinned_to_planner_pool_sizes():
     assert set(PTX_REGISTER_POOLS.values()) == {PtxEmitter._REG_POOL_CAP}
 
 
+def test_v25_result_reg_seam_names_and_binds_result():
+    """v2.5 item 1 — _result_reg is the single chokepoint every
+    scalar-result emit_op branch (SCALAR_CONST_INT/FLOAT,
+    SCALAR_ADD/MUL/SUB/NEG/CMP, THREAD_IDX) routes destination-register
+    naming through. Its contract is two coupled steps: bump-allocate a
+    name in the requested register class AND bind op.results[0] to that
+    name in reg_map. The operand-emission flip swaps this one body to a
+    planned-allocation lookup, so name and bind must stay coupled in
+    the seam — never re-split across call sites."""
+    from helixc.backend.ptx import PtxEmitter
+    em = PtxEmitter()
+    v = ti.TileValue(id=7, ty=tir.TIRScalar("f32"))
+    op = ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_FLOAT, results=[v])
+    name = em._result_reg(op, "f")
+    assert name == "%f0"                  # bump-allocated in the %f class
+    assert em.reg_map[7] == "%f0"         # and bound to the result vreg
+    # a second result advances the per-class counter (parity with
+    # _new_reg) and is independent of other classes
+    v2 = ti.TileValue(id=8, ty=tir.TIRScalar("bool"))
+    op2 = ti.TileOp(kind=ti.TileOpKind.SCALAR_CMP, results=[v2])
+    assert em._result_reg(op2, "p") == "%p0"
+    assert em.reg_map[8] == "%p0"
+    v3 = ti.TileValue(id=9, ty=tir.TIRScalar("f32"))
+    op3 = ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_FLOAT, results=[v3])
+    assert em._result_reg(op3, "f") == "%f1"   # %f counter advanced, %p did not
+    assert em.reg_map[9] == "%f1"
+
+
+def test_v25_result_reg_seam_binds_through_emit_op():
+    """v2.5 item 1 — emit_op's scalar branches must still bind their
+    result register after the seam refactor. SCALAR_CONST_INT routes
+    its result naming through _result_reg; a downstream SCALAR_ADD that
+    consumes the constant must find it in reg_map. Pins that collapsing
+    the `r = _new_reg(); reg_map[...] = r` pair into _result_reg (and
+    dropping the now-dead `if op.results:` guard) kept the bind."""
+    from helixc.backend.ptx import PtxEmitter
+    a = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
+    b = ti.TileValue(id=1, ty=tir.TIRScalar("i32"))
+    s = ti.TileValue(id=2, ty=tir.TIRScalar("i32"))
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[a],
+                  attrs={"value": 3}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[b],
+                  attrs={"value": 4}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_ADD, operands=[a, b],
+                  results=[s]),
+    ])
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    em.emit_kernel(fn)
+    # every scalar result was bound through the seam
+    assert em.reg_map[0] == "%r0" and em.reg_map[1] == "%r1"
+    assert em.reg_map[2] == "%r2"
+    # and the add consumed its operands from those bindings
+    assert "add.s32 %r2, %r0, %r1;" in em.buf.getvalue()
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

@@ -1604,6 +1604,58 @@ the invariant (parity with `test_v25_register_class_literals_pin_pool_keys`).
 Verification: `import helixc.backend.ptx` clean; `test_ptx.py` ->
 107 passed (was 106, +1).
 
+### 2026-05-20 — v2.5 item 1: the `_result_reg` result-naming seam
+
+The emitter-side bridges are all shipped (`plan_ptx_registers`,
+`ptx_register_names`, `load_register_plan`, the module-load drift
+check). The remaining item-1 work is the operand-emission rewrite —
+flagged headline-sized + high-risk because it touches LIVE codegen
+across every `_emit_op` branch. This fire ships the substrate slice
+that de-risks that flip: a single result-naming chokepoint.
+
+Every scalar-arithmetic `emit_op` branch named its destination
+register with the identical two-step pair — `r = self._new_reg(P)`
+to bump-allocate, then `self.reg_map[op.results[0].id] = r` once the
+instruction emitted. Eight op kinds (`SCALAR_CONST_INT`/`_FLOAT`,
+`SCALAR_ADD`/`_MUL`/`_SUB`/`_NEG`/`_CMP`, `THREAD_IDX` — 12 call
+sites counting the f32/i32 branch splits) repeated that pair.
+
+New method `PtxEmitter._result_reg(op, prefix)` collapses the pair:
+it bump-allocates via `_new_reg` and binds `reg_map[op.results[0].id]`
+in one place, returning the name. All 12 call sites now route through
+it. The now-dead `if op.results:` guard on each bind is dropped —
+every caller runs `_require_result_count(op, 1, ...)` first, so
+`op.results[0]` is guaranteed present.
+
+Why this is the right substrate: the operand-emission flip becomes a
+**one-method change** — `_result_reg`'s body swaps to return
+`self.planned_reg_map[op.results[0].id]` (the reuse-aware linear-scan
+assignment `load_register_plan` already validates) when a plan is
+loaded, instead of reaching into every branch. Today the body is
+still the bump allocator, so emitted PTX is **byte-identical** — the
+107 PTX pins confirm it.
+
+Scope honesty: this seam covers the 8 *uniform* scalar-arithmetic
+result sites. The HBM-load result (`TILE_INDEX_LOAD_HBM`, also a
+scalar the planner assigns) keeps `_new_reg` for now — its `dst`
+register is interleaved with scratch pointer-arith temps
+(`base`/`gen`/`off`/`addr`), not the uniform pattern; routing it
+through the seam is a follow-up slice. Tile/tensor results
+(`base_reg`, `result_base`, `d_base` — loop-emitted N registers) are
+`skipped` by `plan_ptx_registers` and correctly stay on `_new_reg`.
+
+Tests: `test_v25_result_reg_seam_names_and_binds_result` pins the
+name+bind contract + per-class counter independence;
+`test_v25_result_reg_seam_binds_through_emit_op` pins that a real
+`emit_op` scalar path still binds its result after the refactor.
+Verification: `test_ptx.py` -> 109 passed (was 107, +2), the 107
+pre-existing pins byte-identical. `helix_status.py` `TESTS_TOTAL`
+4009 -> 4011.
+
+v2.5 remaining: item 1 operand-emission flip (now a one-method swap
+in `_result_reg`, plus the HBM-load-result seam follow-up) +
+end-of-v2.5 5-clean-gate.
+
 ### 2026-05-20 — operand-rewrite risk re-assessed + implementation plan
 
 The v2.5 cron-fire-sized backlog is genuinely exhausted: polish all
