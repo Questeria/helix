@@ -70,6 +70,38 @@ def test_stage129_validate_rocm_catches_missing_endpgm():
     assert any("s_endpgm" in f for f in result.mock_findings)
 
 
+def test_v2x_reaudit_rocm_operand_less_kernel_flagged():
+    """v2.x re-audit R1 regression (BE 5-clean-gate HIGH): a ROCm
+    kernel whose ops emit operand-less substrate text (TILE_MATMUL et
+    al.) must be flagged non-functional by validate_emit. Pre-fix
+    rocm.py omitted the HELIX-STUB-OPERANDS marker its metal/webgpu
+    siblings carry, so validate_emit reported mock_passed=True for a
+    non-functional ROCm kernel."""
+    from helixc.ir.tile_ir import (
+        TileOp, TileBlock, TileFn, TileModule, TileOpKind)
+    fn = TileFn(
+        name="mm_k", params=[], return_ty=None,
+        blocks=[TileBlock(id=0, ops=[
+            TileOp(kind=TileOpKind.TILE_MATMUL),
+            TileOp(kind=TileOpKind.RETURN),
+        ])],
+        attrs={"kernel": True},
+    )
+    tile_mod = TileModule()
+    tile_mod.functions["mm_k"] = fn
+    text = HipEmitter().emit_module(tile_mod)
+    # The emit still carries the real mnemonic AND the stub marker.
+    assert "v_mfma_f32_16x16x16_f16" in text
+    assert "HELIX-STUB-OPERANDS" in text
+    result = validate_emit(text, BackendKind.ROCM_HIP)
+    assert not result.mock_passed, (
+        "validate_emit must flag an operand-less ROCm kernel as "
+        "non-functional")
+    assert not result.overall_passed()
+    assert any("HELIX-STUB" in f or "non-functional" in f
+               for f in result.mock_findings), result.mock_findings
+
+
 # ============================================================================
 # Mock validation: Apple Metal MSL
 # ============================================================================

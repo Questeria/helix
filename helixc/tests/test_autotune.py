@@ -498,5 +498,61 @@ fn k2(x: i32) -> i32 { x + N }
     assert "plain" not in summary
 
 
+# ----------------------------------------------------------------------
+# v2.x re-audit R1 regression — FE 5-clean-gate HIGH (autotune_expand)
+# ----------------------------------------------------------------------
+def test_v2x_reaudit_autotune_subst_tile_lit_and_agi_nodes():
+    """v2.x re-audit R1 regression (FE 5-clean-gate HIGH): the
+    autotune constant-substituter must recurse into A.TileLit / Quote
+    / Splice / Modify. Pre-fix `_substitute_autotune_consts` had no
+    arm for these four A.Expr subclasses and fell through a silent
+    `return expr`, leaving the autotune param un-substituted — a
+    miscompile of `tile<f32,[BLOCK_SIZE,BLOCK_SIZE],REG>::zeros()`
+    inside an autotuned kernel."""
+    from helixc.frontend.autotune_expand import _substitute_autotune_consts
+    sp = A.Span(0, 0)
+    cfg = {"BS": 16}
+
+    def _name(n):
+        return A.Name(span=sp, name=n)
+
+    # TileLit — the autotune param rides in `shape` (and `memspace`).
+    tl = A.TileLit(span=sp, dtype="f32",
+                   shape=[_name("BS"), _name("BS")],
+                   memspace=_name("REG"), init="zeros")
+    out_tl = _substitute_autotune_consts(tl, cfg)
+    assert isinstance(out_tl, A.TileLit)
+    assert [d.value for d in out_tl.shape] == [16, 16], out_tl.shape
+
+    # Quote / Splice — a single inner Expr.
+    q = _substitute_autotune_consts(A.Quote(span=sp, inner=_name("BS")), cfg)
+    assert isinstance(q.inner, A.IntLit) and q.inner.value == 16
+    s = _substitute_autotune_consts(A.Splice(span=sp, inner=_name("BS")), cfg)
+    assert isinstance(s.inner, A.IntLit) and s.inner.value == 16
+
+    # Modify — three inner Exprs, all substituted.
+    m = _substitute_autotune_consts(
+        A.Modify(span=sp, target=_name("BS"),
+                 transformation=_name("BS"), verifier=_name("BS")), cfg)
+    assert all(isinstance(x, A.IntLit) and x.value == 16
+               for x in (m.target, m.transformation, m.verifier))
+
+
+def test_v2x_reaudit_autotune_subst_loud_catchall():
+    """v2.x re-audit R1 regression (FE 5-clean-gate HIGH): an A.Expr
+    subclass with no explicit arm must raise NotImplementedError, not
+    silently pass through with autotune params un-substituted."""
+    from helixc.frontend.autotune_expand import _substitute_autotune_consts
+
+    class _UnhandledExpr(A.Expr):
+        pass
+
+    # Bare instance — dodges field requirements; the substituter only
+    # needs type(expr).__name__ on the catchall path.
+    node = _UnhandledExpr.__new__(_UnhandledExpr)
+    with pytest.raises(NotImplementedError, match="unhandled AST node"):
+        _substitute_autotune_consts(node, {})
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

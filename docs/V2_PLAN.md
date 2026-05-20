@@ -2223,3 +2223,14 @@ assert pass.
 regression tests, and the gate re-run on the touched batches. The IR
 batch is already clean. Until the gate re-runs clean, the v2.x
 foundation is "re-audit in progress" — v3.0 Stage 200 stays paused.
+
+**R2a (done) — regression tests for the 3 R1 HIGH fixes.** +7 tests,
+all green, locking in the HIGH fixes so they cannot silently regress:
+`test_autotune.py` — `_substitute_autotune_consts` substitutes the
+autotune param inside `A.TileLit` / `Quote` / `Splice` / `Modify`,
+and an unhandled `A.Expr` subclass raises (loud catchall).
+`test_gpu_ci.py` — an operand-less ROCm kernel is flagged
+non-functional by `validate_emit`. New `test_run.py` — `_run_one`
+checks each demo's documented exit code (40/77/1/42/43-44; mandelbrot
+0), not `code == 0`. Remaining: the MEDIUM/LOW findings (R2b) + the
+gate re-run.
