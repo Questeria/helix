@@ -243,13 +243,29 @@ def test_v22_ptx_baseline_status_is_derived_view():
 
 def test_v22_ptx_module_load_coverage_check():
     """v2.2 polish — ptx._check_ptx_lowering_coverage() fires at module
-    load. We exercise the function path explicitly to confirm it raises
-    on a hypothetical missing kind. Real coverage is enforced by the
-    module-load check that's already passed by the time this test runs."""
+    load. Confirms BOTH the positive path (clean on the current
+    table) and the negative path (raises when a TileOpKind is
+    missing).
+
+    v2.x re-audit R2b (TEST 5-clean-gate MEDIUM): the prior body only
+    called the function and asserted nothing — its docstring claimed
+    to 'confirm it raises on a hypothetical missing kind' but never
+    constructed that case, so a regression making the check never
+    raise would have passed unnoticed."""
     from helixc.backend import ptx
-    # The check is module-level; if it failed, import would have failed.
-    # Confirm the function exists and runs cleanly on the current table.
-    ptx._check_ptx_lowering_coverage()  # must not raise on current state
+    # Positive path: clean on the current (complete) table.
+    ptx._check_ptx_lowering_coverage()
+    # Negative path: drop a kind, confirm the check raises loudly,
+    # restore in a finally so no other test sees the gap.
+    victim = TileOpKind.RETURN
+    saved = ptx.PTX_OP_LOWERING[victim]
+    del ptx.PTX_OP_LOWERING[victim]  # type: ignore[index]
+    try:
+        with pytest.raises(AssertionError,
+                           match="missing from PTX_OP_LOWERING"):
+            ptx._check_ptx_lowering_coverage()
+    finally:
+        ptx.PTX_OP_LOWERING[victim] = saved  # type: ignore[index]
 
 
 def test_v22_ptx_emit_op_parity_guard_phantom_supported():

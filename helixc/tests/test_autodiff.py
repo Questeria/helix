@@ -81,11 +81,15 @@ def test_diff_x_squared():
 
 
 def test_diff_x_cubed():
-    # d(x*x*x)/dx by recursive product rule
-    # x*x*x parses as ((x*x) * x); chain of product rules
+    # d(x*x*x)/dx by recursive product rule.
+    # x*x*x parses as ((x*x)*x); product rule gives
+    # d(x*x)*x + (x*x)*d(x) = (x+x)*x + x*x.
     out = diff_expr("x * x * x", "x")
-    # Result is non-trivial but should contain x
-    assert "x" in out
+    # v2.x re-audit R2b (TEST 5-clean-gate MEDIUM): pin the exact
+    # simplified form. The prior `"x" in out` passed for ANY output
+    # containing the letter x — a regression collapsing the product
+    # rule to `x` or `x*x` would have slipped through unnoticed.
+    assert out == "(((x + x) * x) + (x * x))", out
 
 
 def test_diff_2x():
@@ -148,9 +152,11 @@ def test_diff_through_chain_let():
     fn = prog.items[0]
     deriv = differentiate(fn.body, "x")
     out = fmt(deriv)
-    # Expect a non-trivial expression in x. After full simplification it would
-    # be 3*x*x but our simplifier may leave intermediate forms.
-    assert "x" in out
+    # v2.x re-audit R2b (TEST 5-clean-gate MEDIUM): pin the exact
+    # form. d(x^3)/dx via the let-chain simplifies to the same
+    # (x+x)*x + x*x as test_diff_x_cubed — `"x" in out` would pass
+    # even if let-substitution silently broke and emitted just `x`.
+    assert out == "(((x + x) * x) + (x * x))", out
 
 
 def test_diff_const_let_unaffected():

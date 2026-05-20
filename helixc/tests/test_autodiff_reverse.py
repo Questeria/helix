@@ -30,10 +30,13 @@ def test_const_zero_gradient():
 def test_x_squared_grad_is_2x():
     body = _body_of("fn f(x: f32) -> f32 { x * x }")
     grads = differentiate_reverse(body, ["x"])
-    # Reverse mode: adjoint left = 1*x = x; adjoint right = 1*x = x. Sum = x+x = 2x.
-    # The simplifier may fold (1*x)+(1*x) -> x+x or (x+x).
+    # Reverse mode: adjoint left = 1*x = x; adjoint right = 1*x = x.
+    # Sum = x+x = 2x; the simplifier folds (1*x)+(1*x) -> (x + x).
+    # v2.x re-audit R2b (TEST 5-clean-gate MEDIUM): pin the exact
+    # form — `"x" in out and "+" in out` passed for wrong adjoints
+    # like `(x + 1)`, `(x + x*x)`, or a swapped `(y + x)`.
     out = fmt(grads["x"])
-    assert "x" in out and "+" in out, f"expected sum-of-x form, got {out}"
+    assert out == "(x + x)", f"expected (x + x), got {out}"
 
 
 def test_linear_gradient_x():
@@ -47,11 +50,15 @@ def test_linear_gradient_x():
 def test_quadratic_two_vars():
     body = _body_of("fn f(x: f32, y: f32) -> f32 { x * x + y * y }")
     grads = differentiate_reverse(body, ["x", "y"])
-    # ∂f/∂x = 2x; reverse mode emits x+x.
+    # ∂f/∂x = 2x, ∂f/∂y = 2y; reverse mode emits (x + x) / (y + y).
+    # v2.x re-audit R2b (TEST 5-clean-gate MEDIUM): pin the exact
+    # forms — the prior `"x" in out_x and "+" in out_x` passed for
+    # wrong adjoints carrying the same two tokens, and would NOT
+    # catch an x/y variable swap between the two gradients.
     out_x = fmt(grads["x"])
     out_y = fmt(grads["y"])
-    assert "x" in out_x and "+" in out_x
-    assert "y" in out_y and "+" in out_y
+    assert out_x == "(x + x)", f"expected (x + x), got {out_x}"
+    assert out_y == "(y + y)", f"expected (y + y), got {out_y}"
 
 
 def test_subtraction():
