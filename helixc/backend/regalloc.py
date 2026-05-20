@@ -277,15 +277,28 @@ class MultiClassResult:
                    they name distinct physical files (e.g. PTX `%r0`
                    vs `%f0`), so that is correct, not a collision.
     `spilled`    — vregs that did not fit their class's register file.
+    `skipped`    — vregs an optional `allocate_by_class(skip=...)`
+                   predicate excluded from register allocation. A real
+                   kernel function mixes scalar values (one register
+                   each — register-allocated) with tile/tensor values
+                   (memory-resident — held across many registers or in
+                   shared memory). The v2.5 emitter-wiring caller
+                   passes a `skip` predicate so the allocator runs over
+                   a real kernel without the per-backend classifier
+                   raising on the first non-scalar value. A skipped
+                   vreg is neither assigned nor spilled — the emitter
+                   places it by its own memory-resident mechanism.
     `per_class`  — the underlying single-class RegAllocResult for each
                    class key, so a backend can read each class's
                    `register_high_water` to size its `.reg` decls.
 
-    Invariant: `assignment.keys()` and `spilled` are disjoint and
-    together cover every vreg with a live interval exactly once.
+    Invariant: `assignment.keys()`, `spilled`, and `skipped` are
+    pairwise disjoint and together cover every vreg with a live
+    interval exactly once.
     """
     assignment: dict[int, RegAssignment] = field(default_factory=dict)
     spilled: set[int] = field(default_factory=set)
+    skipped: set[int] = field(default_factory=set)
     per_class: dict[str, RegAllocResult] = field(default_factory=dict)
 
     @property
@@ -314,6 +327,7 @@ def allocate_by_class(
     fn: ti.TileFn,
     classify: Callable[[ti.TileValue], str],
     class_pools: dict[str, int],
+    skip: Callable[[ti.TileValue], bool] | None = None,
 ) -> MultiClassResult:
     """v2.4 item 15 (slice 3) — multi-register-class allocation.
 
@@ -336,15 +350,42 @@ def allocate_by_class(
         classify: maps a TileValue to its register-class key. The
             per-backend dtype -> class mapping (slice 4+).
         class_pools: class key -> register-file size for that class.
+        skip: optional predicate marking a value as NOT register-
+            allocated. v2.5 item-15 emitter-wiring slice: a real
+            kernel function mixes scalar values (one register each)
+            with tile/tensor values (memory-resident — many registers
+            or shared memory). The per-backend classifier
+            (`ptx_register_class` / `rocm_register_class`) raises on a
+            non-scalar value by design, so `allocate_by_class` cannot
+            be pointed at a real kernel without first excluding those
+            values. A caller passes `skip` (e.g.
+            `lambda v: not isinstance(v.ty, tir.TIRScalar)`) to drop
+            them: a skipped vreg lands in `MultiClassResult.skipped`,
+            is neither assigned nor spilled, and `classify` is never
+            called on it. When `skip` is None every value is
+            classified (the slice-3 behaviour).
 
     Raises:
+        ValueError: if `class_pools` is empty — a backend must supply
+            at least one register-class pool size. An empty table is
+            a backend-configuration error; surfaced once, up front,
+            rather than as a vacuous empty allocation (which an empty
+            kernel would otherwise produce, hiding the misconfig).
         ValueError: if `classify` returns a key absent from
             `class_pools` — a backend that forgot to size a class
             fails loudly here, not with a silent mis-allocation.
     """
+    if not class_pools:
+        raise ValueError(
+            "allocate_by_class: class_pools is empty — a backend must "
+            "supply at least one register-class pool size. An empty "
+            "pool table is a backend-configuration error, surfaced "
+            "here rather than as a vacuous empty allocation."
+        )
     vmap = _value_map(fn)
     intervals = compute_live_intervals(fn)
 
+    result = MultiClassResult()
     # Partition intervals by register class.
     by_class: dict[str, list[LiveInterval]] = {}
     for iv in intervals:
@@ -357,6 +398,11 @@ def allocate_by_class(
                 f"allocate_by_class: vreg {iv.vreg} has a live "
                 f"interval but no TileValue — liveness/value-map drift"
             )
+        if skip is not None and skip(value):
+            # Memory-resident (tile/tensor) value — excluded from
+            # register allocation; classify is deliberately not called.
+            result.skipped.add(iv.vreg)
+            continue
         cls = classify(value)
         if cls not in class_pools:
             raise ValueError(
@@ -367,7 +413,6 @@ def allocate_by_class(
             )
         by_class.setdefault(cls, []).append(iv)
 
-    result = MultiClassResult()
     # Iterate class keys in sorted order for deterministic merge.
     for cls in sorted(by_class):
         class_result = linear_scan(by_class[cls], class_pools[cls])

@@ -462,3 +462,117 @@ def test_v25_reg_assignment_namedtuple_fields():
     # Backward-compat: still a tuple — equality + index access work.
     assert a0 == ("A", 0)
     assert a0[0] == "A" and a0[1] == 0
+
+
+# ============================================================================
+# skip predicate — v2.5 item 15 emitter-wiring slice
+# ============================================================================
+def _skip_odd_ids(value: TileValue) -> bool:
+    """Test skip predicate: exclude odd-id values from allocation.
+    Stands in for the emitter-wiring caller's real predicate,
+    `lambda v: not isinstance(v.ty, tir.TIRScalar)` — which excludes
+    memory-resident tile/tensor values so the allocator can run over a
+    real (mixed scalar + tile) kernel function."""
+    return value.id % 2 == 1
+
+
+def test_v25_allocate_by_class_skip_excludes_values():
+    """v2.5 item 15 — a `skip`-marked value is neither assigned nor
+    spilled; it lands in `.skipped`. The emitter-wiring caller skips
+    memory-resident tile values so the allocator only sizes the scalar
+    register files."""
+    vals = [_val(i) for i in range(4)]  # 0,2 kept; 1,3 skipped
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v]) for v in vals
+    ] + [
+        TileOp(kind=TileOpKind.CALL, operands=list(vals)),  # all live
+    ])
+    r = allocate_by_class(_fn([blk]), _classify_by_even_odd,
+                          class_pools={"A": 4, "B": 4}, skip=_skip_odd_ids)
+    assert r.skipped == {1, 3}
+    assert set(r.assignment) == {0, 2}
+    assert r.spilled == set()
+    # Skipped (odd-id -> class B) vregs never reach a per-class scan:
+    # only the kept even-id class-A values are allocated.
+    assert set(r.per_class) == {"A"}
+
+
+def test_v25_allocate_by_class_skip_none_classifies_everything():
+    """v2.5 item 15 — `skip=None` (the default) is the slice-3
+    behaviour unchanged: every value is classified, `.skipped` is
+    empty."""
+    vals = [_val(i) for i in range(4)]
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v]) for v in vals
+    ] + [
+        TileOp(kind=TileOpKind.CALL, operands=list(vals)),
+    ])
+    r = allocate_by_class(_fn([blk]), _classify_by_even_odd,
+                          class_pools={"A": 4, "B": 4})
+    assert r.skipped == set()
+    assert set(r.assignment) == {0, 1, 2, 3}
+
+
+def test_v25_allocate_by_class_partition_invariant_with_skip():
+    """v2.5 item 15 — with a `skip` predicate the three result sets
+    (assignment / spilled / skipped) are pairwise disjoint and
+    together cover every vreg with a live interval exactly once."""
+    vals = [_val(i) for i in range(8)]
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v]) for v in vals
+    ] + [
+        TileOp(kind=TileOpKind.CALL, operands=list(vals)),  # all live
+    ])
+    # Even ids kept (class A), odd ids skipped. Pool A=2 < 4 kept
+    # values, all overlapping -> exactly 2 of them spill.
+    r = allocate_by_class(_fn([blk]), _classify_by_even_odd,
+                          class_pools={"A": 2, "B": 2}, skip=_skip_odd_ids)
+    all_vregs = {v.id for v in vals}
+    assigned = set(r.assignment)
+    assert assigned | r.spilled | r.skipped == all_vregs
+    assert assigned & r.spilled == set()
+    assert assigned & r.skipped == set()
+    assert r.spilled & r.skipped == set()
+    assert r.skipped == {1, 3, 5, 7}
+    assert r.spill_count == 2
+
+
+def test_v25_allocate_by_class_skip_filters_before_classify():
+    """v2.5 item 15 — `skip` is checked BEFORE `classify`, so a
+    classifier that raises on a value (exactly how `ptx_register_class`
+    raises on a non-scalar tile value) is never called on a skipped
+    vreg. This is what lets the emitter-wiring caller point the
+    allocator at a real mixed scalar/tile kernel function."""
+    vals = [_val(i) for i in range(4)]
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v]) for v in vals
+    ] + [
+        TileOp(kind=TileOpKind.CALL, operands=list(vals)),
+    ])
+
+    def _classify_raises_on_odd(value: TileValue) -> str:
+        # Mirrors ptx_register_class raising on a non-scalar value.
+        if value.id % 2 == 1:
+            raise RuntimeError(
+                f"classify must not be called on skipped vreg {value.id}")
+        return "A"
+
+    r = allocate_by_class(_fn([blk]), _classify_raises_on_odd,
+                          class_pools={"A": 4}, skip=_skip_odd_ids)
+    assert r.skipped == {1, 3}
+    assert set(r.assignment) == {0, 2}
+
+
+def test_v25_allocate_by_class_empty_pools_raises():
+    """v2.5 item 15 (IR LOW-1, deferred from the v2.4 5-clean-gate) —
+    an empty `class_pools` is a backend-configuration error: a backend
+    must supply at least one register-class pool. Surfaced once, up
+    front, rather than as a vacuous empty result (which an empty
+    kernel would otherwise produce, hiding the misconfig)."""
+    v0 = _val(0)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+    ])
+    with pytest.raises(ValueError, match="class_pools is empty"):
+        allocate_by_class(_fn([blk]), _classify_by_even_odd,
+                          class_pools={})
