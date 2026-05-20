@@ -308,3 +308,42 @@ def test_stage200_mock_validate_handles_indented_module():
         "  }\n"
     )
     assert llvm_ir.mock_validate_ll(indented) == []
+
+
+def test_stage200_mock_validate_not_fooled_by_brace_in_quoted_name():
+    """A `}` legally inside a quoted `@"..."` identifier must not be
+    counted as a structural brace. A genuinely unbalanced module whose
+    only `}` sits inside a quoted name is still flagged."""
+    broken = (
+        'target triple = "x86_64-unknown-linux-gnu"\n'
+        'define i32 @"bad}"() {\n'
+        "  ret i32 0\n"
+    )  # the define body's closing `}` is missing
+    problems = llvm_ir.mock_validate_ll(broken)
+    assert any("unbalanced braces" in p for p in problems), problems
+    # A *valid* module with a brace-bearing quoted name still validates
+    # clean — the quoted-span masking does not break the happy path.
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("ok}name", [], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert '@"ok}name"' in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage200_rejects_const_int_bool_value():
+    """A CONST_INT whose `value` attr is a Python bool is rejected —
+    `isinstance(True, int)` is True, so the guard uses `type(...) is
+    int` to avoid emitting a malformed `ret i32 True`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    cv = b.emit(tir.OpKind.CONST_INT, result_ty=_i32(),
+                attrs={"value": True})
+    b.ret(cv)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="integer 'value' attr"):
+        llvm_ir.emit_module(mod)

@@ -70,6 +70,13 @@ _LLVM_SCALAR_BINOPS: dict[tir.OpKind, str] = {
 # LLVM's unquoted global/local identifier grammar.
 _LLVM_BARE_IDENT = re.compile(r"[-a-zA-Z$._][-a-zA-Z$._0-9]*\Z")
 
+# A double-quoted span — a quoted `@"..."` identifier or the target-
+# triple string. `_llvm_global_name` hex-escapes `"` inside a quoted
+# name, so a span never contains a literal `"`; `mock_validate_ll`
+# masks these spans before counting braces (a `}` inside a quoted
+# name is not a structural brace).
+_QUOTED_SPAN = re.compile(r'"[^"]*"')
+
 
 def _llvm_int_type(ty: tir.TIRType, *, ctx: str) -> str:
     """Map a TIR scalar integer type to its LLVM type string. Raises
@@ -195,10 +202,15 @@ class _FnEmitter:
                 )
             result = op.results[0]
             value = op.attrs.get("value")
-            if not isinstance(value, int):
+            # `type(value) is int`, NOT isinstance — a Python `bool` is
+            # an int subclass; a bool would `str()` to "True"/"False"
+            # and emit malformed IR (`ret i32 True`). A real boolean
+            # constant is a CONST_BOOL op, not CONST_INT.
+            if type(value) is not int:
                 raise LLVMEmitError(
-                    f"function {self.fn.name!r}: CONST_INT op is "
-                    f"missing an integer 'value' attr (got {value!r})"
+                    f"function {self.fn.name!r}: CONST_INT op needs an "
+                    f"integer 'value' attr (got {value!r}: "
+                    f"{type(value).__name__})"
                 )
             # Validate the result type is emittable; the literal is
             # then used inline at every use site.
@@ -309,8 +321,12 @@ def mock_validate_ll(ll_text: str) -> list[str]:
         problems.append("missing `target triple` line")
     if not any(s.startswith("define ") for s in stripped):
         problems.append("no `define` line — module declares no functions")
-    opens = ll_text.count("{")
-    closes = ll_text.count("}")
+    # Brace balance — counted on text with quoted spans masked out, so
+    # a brace legally inside a quoted identifier (e.g. a quoted function
+    # name `@"a}b"`) is not miscounted as a structural brace.
+    brace_text = _QUOTED_SPAN.sub("", ll_text)
+    opens = brace_text.count("{")
+    closes = brace_text.count("}")
     if opens != closes:
         problems.append(
             f"unbalanced braces: {opens} '{{' vs {closes} '}}'")
