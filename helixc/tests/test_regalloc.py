@@ -576,3 +576,36 @@ def test_v25_allocate_by_class_empty_pools_raises():
     with pytest.raises(ValueError, match="class_pools is empty"):
         allocate_by_class(_fn([blk]), _classify_by_even_odd,
                           class_pools={})
+
+
+def test_v25_regalloc_result_is_frozen():
+    """v2.5 polish (item-15 type-design) — RegAllocResult is a frozen
+    dataclass: an allocation result is an immutable fact once
+    linear_scan returns it. Rebinding a field raises
+    FrozenInstanceError (the aliasing-bug class is eliminated).
+    linear_scan itself still works — it mutates the dict/set CONTENTS
+    during the pass, which frozen permits."""
+    import dataclasses
+    r = linear_scan([LiveInterval(vreg=0, start=0, end=1)],
+                    num_registers=2)
+    # linear_scan built the result fine (content mutation is allowed).
+    assert r.assignment == {0: 0}
+    # But the field bindings are frozen.
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.assignment = {}          # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.num_registers = 99       # type: ignore[misc]
+
+
+def test_v25_multiclass_result_is_frozen():
+    """v2.5 polish (item-15 type-design) — MultiClassResult is frozen
+    too (parity with RegAllocResult). allocate_by_class still builds it
+    — content mutation of the dict/set fields is permitted, including
+    the `spilled.update(...)` merge — and rebinding a field afterward
+    raises FrozenInstanceError."""
+    import dataclasses
+    r = MultiClassResult()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.spilled = set()          # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.assignment = {}          # type: ignore[misc]

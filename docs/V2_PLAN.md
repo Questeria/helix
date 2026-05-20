@@ -1551,3 +1551,31 @@ is a verification + maintenance pass:
   (the helixc/tests/ suite has grown +11 tests across recent fires).
   Keeps the beginner-friendly Telegram message's "~N automated tests"
   line accurate — a maintained constant, bumped as the suite grows.
+
+### 2026-05-20 — v2.5 polish: frozen RegAllocResult / MultiClassResult
+
+Closed the last open v2.5 type-design polish LOW — "frozen result
+dataclasses" (item-15 type-design audit; the NamedTuple `RegAssignment`
+and `Literal` classifier returns shipped earlier as `b169f60` /
+`e781c49`). `RegAllocResult` and `MultiClassResult` were plain mutable
+`@dataclass`, unlike `LiveInterval` (frozen) and `gpu_ci`'s
+`ValidationResult` (frozen). An allocation result is an immutable fact
+once the pass returns it; a mutable result lets a consumer rebind
+`assignment` / `spilled` and silently corrupt downstream emit.
+
+Both are now `@dataclass(frozen=True)`. The passes build a result by
+mutating its dict/set CONTENTS during construction — `frozen=True`
+blocks attribute REBINDING, not content mutation, so `linear_scan` is
+unaffected. The one exception was `allocate_by_class`'s
+`result.spilled |= class_result.spilled`: `|=` desugars to
+`spilled = spilled.__ior__(...)`, an attribute rebind that a frozen
+dataclass rejects — changed to `result.spilled.update(...)` (in-place
+content merge, same effect).
+
+Tests: `test_v25_regalloc_result_is_frozen` +
+`test_v25_multiclass_result_is_frozen` pin that rebinding raises
+`FrozenInstanceError` while the passes still build results normally.
+Verification: `pytest test_regalloc.py test_regalloc_classes.py -q`
+-> 58 passed; `test_ptx.py` -> 106 passed (the new
+`PtxEmitter.load_register_plan` bridge consumes a `MultiClassResult`
+read-only — unaffected by the freeze).

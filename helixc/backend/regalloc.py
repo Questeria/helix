@@ -52,7 +52,7 @@ class LiveInterval:
     end: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class RegAllocResult:
     """Outcome of a linear-scan pass.
 
@@ -68,6 +68,13 @@ class RegAllocResult:
     together cover every input vreg exactly once. `register_high_water`
     reports how many distinct physical registers were actually used —
     a backend emits exactly that many register declarations.
+
+    v2.5 polish (item-15 type-design): frozen. An allocation result is
+    an immutable fact once the pass returns it — `frozen=True` blocks a
+    consumer from rebinding `assignment` / `spilled` (an aliasing-bug
+    class). `linear_scan` builds the result by mutating the dict/set
+    CONTENTS during the pass; freezing blocks attribute rebinding, not
+    content mutation, so that construction is unaffected.
     """
     assignment: dict[int, int] = field(default_factory=dict)
     spilled: set[int] = field(default_factory=set)
@@ -268,7 +275,7 @@ class RegAssignment(NamedTuple):
     index: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class MultiClassResult:
     """Outcome of a multi-register-class allocation pass.
 
@@ -295,6 +302,9 @@ class MultiClassResult:
     Invariant: `assignment.keys()`, `spilled`, and `skipped` are
     pairwise disjoint and together cover every vreg with a live
     interval exactly once.
+
+    v2.5 polish (item-15 type-design): frozen, parity with
+    `RegAllocResult` — see that class's note.
     """
     assignment: dict[int, RegAssignment] = field(default_factory=dict)
     spilled: set[int] = field(default_factory=set)
@@ -420,5 +430,9 @@ def allocate_by_class(
         for vreg, reg_idx in class_result.assignment.items():
             result.assignment[vreg] = RegAssignment(
                 reg_class=cls, index=reg_idx)
-        result.spilled |= class_result.spilled
+        # `.update()` not `|=`: with the frozen dataclass `spilled |=`
+        # desugars to `spilled = spilled.__ior__(...)` — an attribute
+        # rebind that raises FrozenInstanceError. In-place update of
+        # the set's CONTENTS is allowed and is what is intended.
+        result.spilled.update(class_result.spilled)
     return result
