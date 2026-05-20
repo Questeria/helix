@@ -176,6 +176,13 @@ class PtxEmitter:
         # current kernel (TileValue.id -> "%r3"), produced by
         # load_register_plan. Per-kernel state; reset in emit_kernel.
         self.planned_reg_map: dict[int, str] = {}
+        # v2.5 item 1 — per register-class high-water count of the plan
+        # above (class key "%r"/"%f"/... -> number of registers used).
+        # The operand-rewrite wiring (Edit B) seeds `next_reg_by_prefix`
+        # from this so emitter scratch temporaries bump-allocate ABOVE
+        # the plan's registers and the two never collide. Produced by
+        # load_register_plan; reset per kernel in emit_kernel.
+        self.planned_high_water: dict[str, int] = {}
         # Stage 16 — per-kernel state. Maps HBM tile param NAME (from
         # TILE_INDEX_LOAD_HBM/STORE_HBM attrs) to (param_index, dtype).
         # Built in emit_kernel by scanning kernel params; reset per kernel.
@@ -317,6 +324,15 @@ class PtxEmitter:
                     f"directives in emit_kernel to match."
                 )
         self.planned_reg_map = ptx_register_names(result)
+        # v2.5 item 1 — per-class high-water of the plan, so the
+        # operand-rewrite wiring can seed the bump allocator above the
+        # plan's registers (see __init__). `result.per_class[cls]` is
+        # that class's single-class RegAllocResult; `register_high_water`
+        # is the count of distinct registers it actually used.
+        self.planned_high_water = {
+            cls: rr.register_high_water
+            for cls, rr in result.per_class.items()
+        }
         return self.planned_reg_map
 
     def _line(self, s: str = "") -> None:
@@ -353,6 +369,7 @@ class PtxEmitter:
         self.next_reg_by_prefix = {}
         self.reg_map = {}
         self.planned_reg_map = {}
+        self.planned_high_water = {}
         # v2.5 item 1 — the operand-rewrite wiring (emit_kernel calling
         # load_register_plan) is NOT enabled. A trial emitted WRONG
         # PTX: the thread-index register %r0 was reused for a loaded

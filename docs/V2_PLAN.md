@@ -1964,3 +1964,26 @@ blocker is the one from the corrected diagnosis above — the
 unfinished `_new_reg` -> `_result_reg` conversion for the memory ops
 + the plan/scratch register partition (seed `_new_reg` above the
 plan's per-class high-water).
+
+### 2026-05-20 — v2.5 item 1: load_register_plan exposes the per-class high-water
+
+Prep for the plan/scratch register partition (Edit B "Part 2" from
+the corrected diagnosis). `PtxEmitter.load_register_plan` now also
+stores `planned_high_water` — a `dict[class_key, int]` of how many
+distinct registers each register file's plan used (`result.per_class
+[cls].register_high_water`). `emit_kernel` resets it per kernel
+alongside `planned_reg_map`.
+
+The Edit B wiring will seed `next_reg_by_prefix[prefix] =
+planned_high_water["%" + prefix]` right after loading the plan, so
+`_new_reg` (emitter scratch temporaries + any not-yet-converted
+result registers) bump-allocates ABOVE the plan's registers — the
+plan owns `%r0..%r(hw-1)`, scratch owns `%r(hw)..` — and the two
+register regions never collide. That collision was the root cause of
+the Edit B re-trial's wrong PTX (`4bb5dbd`).
+
+Safe, additive — no codegen change: `planned_high_water` is populated
+only by `load_register_plan`, which `emit_kernel` does not yet call
+(Edit B remains unwired). Test:
+`test_v25_load_register_plan_exposes_per_class_high_water` (the count
++ the per-kernel reset). Targeted `test_ptx` subset -> 10 passed.

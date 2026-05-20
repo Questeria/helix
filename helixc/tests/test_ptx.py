@@ -1842,6 +1842,42 @@ def test_v25_result_reg_rejects_planned_class_mismatch():
         em._result_reg(op, "r")       # branch asks for %r — mismatch
 
 
+def test_v25_load_register_plan_exposes_per_class_high_water():
+    """v2.5 item 1 — load_register_plan stores the plan's per-class
+    register high-water in `planned_high_water` (class key -> count of
+    distinct registers used). The operand-rewrite wiring (Edit B) will
+    seed the bump allocator from this so emitter scratch temporaries
+    allocate ABOVE the plan's registers and never collide with them."""
+    from helixc.backend.ptx import PtxEmitter
+    # Three i32 scalars, each live at the SCALAR_ADD -> the %r-class
+    # plan uses 3 distinct registers (%r0/%r1/%r2) -> high-water 3.
+    a = ti.TileValue(id=0, ty=tir.TIRScalar("i32"))
+    b = ti.TileValue(id=1, ty=tir.TIRScalar("i32"))
+    s = ti.TileValue(id=2, ty=tir.TIRScalar("i32"))
+    blk = ti.TileBlock(id=0, ops=[
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[a],
+                  attrs={"value": 1}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_CONST_INT, results=[b],
+                  attrs={"value": 2}),
+        ti.TileOp(kind=ti.TileOpKind.SCALAR_ADD, operands=[a, b],
+                  results=[s]),
+    ])
+    fn = ti.TileFn(name="k", params=[], return_ty=tir.TIRUnit(),
+                   blocks=[blk], attrs={"kernel": True})
+    em = PtxEmitter()
+    em.load_register_plan(fn)
+    # Only the %r file is used; its high-water is the 3 live i32s.
+    assert set(em.planned_high_water) == {"%r"}
+    assert em.planned_high_water["%r"] == 3
+    # emit_kernel resets it per kernel (no stale leak).
+    em.planned_high_water = {"%r": 99}
+    empty = ti.TileFn(name="e", params=[], return_ty=tir.TIRUnit(),
+                      blocks=[ti.TileBlock(id=0, ops=[])],
+                      attrs={"kernel": True})
+    em.emit_kernel(empty)
+    assert em.planned_high_water == {}
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]
