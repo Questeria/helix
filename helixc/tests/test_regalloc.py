@@ -12,8 +12,28 @@ import pytest
 from helixc.backend.regalloc import (
     LiveInterval,
     RegAllocResult,
+    allocate_fn,
+    compute_live_intervals,
     linear_scan,
 )
+from helixc.ir import tir
+from helixc.ir.tile_ir import TileBlock, TileFn, TileOp, TileOpKind, TileValue
+
+
+_I32 = tir.TIRScalar("i32")
+
+
+def _val(vid: int) -> TileValue:
+    """Construct a tile-IR SSA value for liveness tests."""
+    return TileValue(id=vid, ty=_I32)
+
+
+def _fn(blocks: list[TileBlock], params: list[TileValue] | None = None) -> TileFn:
+    """Construct a minimal tile-IR kernel function for liveness tests."""
+    return TileFn(
+        name="k", params=params or [], return_ty=tir.TIRUnit(),
+        blocks=blocks, attrs={"kernel": True},
+    )
 
 
 def test_v24_empty_intervals_empty_result():
@@ -163,3 +183,100 @@ def test_v24_regalloc_result_partition_invariant():
     assert set(r.assignment) & r.spilled == set()
     assert len(r.assignment) == 4
     assert r.spill_count == 6
+
+
+# ============================================================================
+# Liveness analysis (v2.4 item 15 slice 2)
+# ============================================================================
+def test_v24_liveness_empty_function():
+    """v2.4 item 15 slice 2 — a function with no params and no ops
+    has no live intervals."""
+    fn = _fn(blocks=[TileBlock(id=0, ops=[])])
+    assert compute_live_intervals(fn) == []
+
+
+def test_v24_liveness_straight_line_def_use():
+    """v2.4 item 15 slice 2 — a value defined at op i and last used
+    at op j has interval [i, j]. Straight-line case is exact."""
+    v0, v1, v2 = _val(0), _val(1), _val(2)
+    # op0: v0 = const ; op1: v1 = const ; op2: v2 = v0 + v1
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v1]),
+        TileOp(kind=TileOpKind.SCALAR_ADD, operands=[v0, v1], results=[v2]),
+    ])
+    intervals = {iv.vreg: iv for iv in compute_live_intervals(_fn([blk]))}
+    # v0 defined op0, used op2 -> [0, 2]
+    assert (intervals[0].start, intervals[0].end) == (0, 2)
+    # v1 defined op1, used op2 -> [1, 2]
+    assert (intervals[1].start, intervals[1].end) == (1, 2)
+    # v2 defined op2, never used -> [2, 2]
+    assert (intervals[2].start, intervals[2].end) == (2, 2)
+
+
+def test_v24_liveness_params_live_from_entry():
+    """v2.4 item 15 slice 2 — function params hold inputs and are
+    live from index 0 (the entry instruction)."""
+    p0 = _val(10)
+    r0 = _val(11)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_NEG, operands=[p0], results=[r0]),
+    ])
+    intervals = {iv.vreg: iv for iv in compute_live_intervals(
+        _fn([blk], params=[p0]))}
+    # p0 is a param (touched at 0) and used at op0 -> [0, 0].
+    assert intervals[10].start == 0
+    # r0 defined at op0 -> [0, 0].
+    assert (intervals[11].start, intervals[11].end) == (0, 0)
+
+
+def test_v24_liveness_spans_multiple_blocks():
+    """v2.4 item 15 slice 2 — ops are flattened across all blocks
+    into one linear numbering; a value defined in block 0 and used
+    in block 1 gets an interval spanning the gap (conservative)."""
+    v0, v1 = _val(0), _val(1)
+    blk0 = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),  # op 0
+        TileOp(kind=TileOpKind.BARRIER_WAIT),                    # op 1
+    ])
+    blk1 = TileBlock(id=1, ops=[
+        TileOp(kind=TileOpKind.SCALAR_NEG, operands=[v0], results=[v1]),  # op 2
+    ])
+    intervals = {iv.vreg: iv for iv in compute_live_intervals(
+        _fn([blk0, blk1]))}
+    # v0 defined at op0 (block 0), used at op2 (block 1) -> [0, 2].
+    assert (intervals[0].start, intervals[0].end) == (0, 2)
+
+
+def test_v24_liveness_is_deterministic_sorted_by_vreg():
+    """v2.4 item 15 slice 2 — intervals are returned sorted by vreg;
+    two runs produce identical output."""
+    v5, v2, v9 = _val(5), _val(2), _val(9)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v9]),
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v5]),
+        TileOp(kind=TileOpKind.SCALAR_ADD, operands=[v9, v5], results=[v2]),
+    ])
+    fn = _fn([blk])
+    a = compute_live_intervals(fn)
+    b = compute_live_intervals(fn)
+    assert a == b
+    assert [iv.vreg for iv in a] == [2, 5, 9]  # sorted ascending
+
+
+def test_v24_allocate_fn_end_to_end():
+    """v2.4 item 15 slice 2 — `allocate_fn` composes liveness +
+    linear-scan. A 3-value straight-line kernel where at most 2
+    values are simultaneously live fits in 2 registers with no
+    spill; v0 and v2 (non-overlapping) reuse a register."""
+    v0, v1, v2 = _val(0), _val(1), _val(2)
+    blk = TileBlock(id=0, ops=[
+        TileOp(kind=TileOpKind.SCALAR_CONST_INT, results=[v0]),
+        TileOp(kind=TileOpKind.SCALAR_NEG, operands=[v0], results=[v1]),
+        TileOp(kind=TileOpKind.SCALAR_NEG, operands=[v1], results=[v2]),
+    ])
+    r = allocate_fn(_fn([blk]), num_registers=2)
+    assert r.spilled == set()
+    assert set(r.assignment) == {0, 1, 2}
+    # v0 ends at op1, v2 starts at op2 — disjoint, so they reuse.
+    assert r.register_high_water == 2

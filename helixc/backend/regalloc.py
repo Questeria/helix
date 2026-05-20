@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..ir import tile_ir as ti
+
 
 @dataclass(frozen=True)
 class LiveInterval:
@@ -172,3 +174,75 @@ def linear_scan(intervals: list[LiveInterval],
         active.sort(key=lambda pair: (pair[0].end, pair[0].vreg))
 
     return result
+
+
+# ============================================================================
+# Liveness analysis (v2.4 item 15, slice 2)
+# ============================================================================
+def compute_live_intervals(fn: ti.TileFn) -> list[LiveInterval]:
+    """Compute conservative live intervals for every TileValue in a
+    tile-IR function — the liveness half of register allocation,
+    producing the input `linear_scan` consumes.
+
+    All ops across all blocks are flattened into one linear
+    numbering (op 0, 1, 2, ...). Each value's interval spans
+    [min, max] over every op index where it appears as a result OR
+    an operand. Function params and every block's params are treated
+    as live from index 0 (defined at entry — they hold inputs).
+
+    CONSERVATIVE LINEAR APPROXIMATION. For a straight-line kernel
+    body this is exact. For control flow (branches, loops) it
+    over-approximates: a value touched in two blocks gets an
+    interval spanning the gap between them, so a register is never
+    freed too early — safe, just less tight. Taking min/max over
+    BOTH defs and uses also makes a loop back-edge use (which can
+    precede the linear def index) widen the interval rather than
+    produce a malformed start>end. Precise per-block dataflow
+    liveness is a later item-15 slice if branchy kernels need
+    tighter allocation; Helix tile-IR kernel bodies are mostly
+    straight-line, so the approximation costs little today.
+
+    Returns the intervals sorted by `vreg` (deterministic — required
+    for the codegen-determinism the Helix test suite pins).
+    """
+    appearances: dict[int, list[int]] = {}
+
+    def _touch(value_id: int, idx: int) -> None:
+        appearances.setdefault(value_id, []).append(idx)
+
+    # Function params + every block's params hold inputs — live from
+    # the entry instruction (index 0).
+    for p in fn.params:
+        _touch(p.id, 0)
+    for blk in fn.blocks:
+        for p in blk.params:
+            _touch(p.id, 0)
+
+    # Flatten every op across every block into one linear numbering.
+    idx = 0
+    for blk in fn.blocks:
+        for op in blk.ops:
+            for v in op.results:
+                _touch(v.id, idx)
+            for v in op.operands:
+                _touch(v.id, idx)
+            idx += 1
+
+    intervals = [
+        LiveInterval(vreg=vid, start=min(idxs), end=max(idxs))
+        for vid, idxs in appearances.items()
+    ]
+    intervals.sort(key=lambda iv: iv.vreg)
+    return intervals
+
+
+def allocate_fn(fn: ti.TileFn, num_registers: int) -> RegAllocResult:
+    """v2.4 item 15 — end-to-end register allocation for one tile-IR
+    function: liveness analysis followed by linear-scan.
+
+    Convenience composition of `compute_live_intervals` +
+    `linear_scan`. Per-backend slices wrap this with a register-class
+    model (dtype -> class + pool size) and thread the resulting
+    `assignment` into operand emission.
+    """
+    return linear_scan(compute_live_intervals(fn), num_registers)
