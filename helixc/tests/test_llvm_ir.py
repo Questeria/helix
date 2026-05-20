@@ -1,14 +1,15 @@
-"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-203):
+"""Tests for helixc.backend.llvm_ir — v3.0 Phase D (Stages 200-204):
 the additive LLVM IR emitter.
 
 The emitter consumes the same host IR (`tir.Module`) that
 `x86_64.py::compile_module_to_elf` consumes. Covered so far: the
 scalar core (module header / target triple, `define`, integer
 constants, add/sub/mul, `ret`); control flow (multi-block, `br`,
-`phi`); and the scalar op set (the six comparisons, `select`, `neg`,
-unsigned integer dtypes). Everything else must be REJECTED loudly
-with `LLVMEmitError` — a partial backend fails closed, it never emits
-wrong IR.
+`phi`); the scalar op set (the six comparisons, `select`, `neg`,
+div/mod, bitwise ops, unsigned integer dtypes); and mutable local
+variables (`alloca`/`load`/`store`). Everything else must be
+REJECTED loudly with `LLVMEmitError` — a partial backend fails
+closed, it never emits wrong IR.
 """
 
 from __future__ import annotations
@@ -1008,4 +1009,248 @@ def test_stage203_rejects_shift_value_result_signedness_mismatch():
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="disagree on signedness"):
+        llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 204 — mutable local variables (alloca / load / store)
+# ==========================================================================
+def test_stage204_emit_alloc_store_load():
+    """A mutable local: ALLOC_VAR -> `alloca`, STORE_VAR -> `store`,
+    LOAD_VAR -> `load` (opaque-pointer form)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(42), attrs={"name": "x"})
+    ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                attrs={"name": "x"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%slot.0 = alloca i32" in ll, ll
+    assert "store i32 42, ptr %slot.0" in ll, ll
+    assert f"%v{ld.id} = load i32, ptr %slot.0" in ll, ll
+    assert f"ret i32 %v{ld.id}" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_alloca_hoisted_to_entry_block():
+    """An ALLOC_VAR that appears textually in a non-entry block still
+    has its `alloca` emitted in the entry block — the LLVM convention,
+    and the entry block dominates every use."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [], _i32())
+    second = b.append_block()
+    b.emit(tir.OpKind.BR, attrs={"target_block": second.id})
+    b.switch_to(second)
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(7), attrs={"name": "x"})
+    ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                attrs={"name": "x"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    entry_id = fn.blocks[0].id
+    entry_seg = ll[ll.index(f"bb{entry_id}:"):ll.index(f"bb{second.id}:")]
+    assert "%slot.0 = alloca i32" in entry_seg, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_load_store_in_non_entry_block():
+    """A LOAD_VAR / STORE_VAR in a non-entry block resolves the slot
+    allocated (and hoisted) in the entry block — the entry alloca
+    dominates every block."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    second = b.append_block()
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.BR, attrs={"target_block": second.id})
+    b.switch_to(second)
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(9), attrs={"name": "x"})
+    ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                attrs={"name": "x"})
+    b.ret(ld)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%slot.0 = alloca i32" in ll, ll
+    assert "store i32 9, ptr %slot.0" in ll, ll
+    assert f"%v{ld.id} = load i32, ptr %slot.0" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_multiple_vars_distinct_slots():
+    """Two mutable locals get two allocas with distinct counter-named
+    registers (%slot.0, %slot.1)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("two", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "a", "dtype": _i32()})
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "c", "dtype": _i32()})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(1), attrs={"name": "a"})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(2), attrs={"name": "c"})
+    la = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                attrs={"name": "a"})
+    b.ret(la)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%slot.0 = alloca i32" in ll, ll
+    assert "%slot.1 = alloca i32" in ll, ll
+    assert "store i32 1, ptr %slot.0" in ll, ll
+    assert "store i32 2, ptr %slot.1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_round_trip_mutable_counter():
+    """A realistic mutable local — `let mut x = 5; x = x + 1; x` —
+    lowers to alloca + store + (load, add, store) + load."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("count", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(5), attrs={"name": "x"})
+    cur = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                 attrs={"name": "x"})
+    inc = b.add(cur, b.const_int(1))
+    b.emit(tir.OpKind.STORE_VAR, inc, attrs={"name": "x"})
+    final = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                   attrs={"name": "x"})
+    b.ret(final)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%slot.0 = alloca i32" in ll, ll
+    assert "store i32 5, ptr %slot.0" in ll, ll
+    assert f"%v{cur.id} = load i32, ptr %slot.0" in ll, ll
+    assert f"%v{inc.id} = add i32 %v{cur.id}, 1" in ll, ll
+    assert f"store i32 %v{inc.id}, ptr %slot.0" in ll, ll
+    assert f"%v{final.id} = load i32, ptr %slot.0" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage204_emit_is_deterministic_with_allocas():
+    """Two emits of a module with mutable locals are byte-identical —
+    the alloca order (ALLOC_VAR-encounter order) is deterministic."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        b.emit(tir.OpKind.ALLOC_VAR,
+               attrs={"name": "a", "dtype": _i32()})
+        b.emit(tir.OpKind.ALLOC_VAR,
+               attrs={"name": "c", "dtype": _i32()})
+        b.emit(tir.OpKind.STORE_VAR, b.const_int(1),
+               attrs={"name": "a"})
+        ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                    attrs={"name": "a"})
+        b.ret(ld)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage204_rejects_load_undeclared_var():
+    """A LOAD_VAR naming a variable that no ALLOC_VAR declares is
+    rejected — never a dangling load of an unknown slot."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=_i32(),
+                attrs={"name": "ghost"})
+    b.ret(ld)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="no ALLOC_VAR"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_store_undeclared_var():
+    """A STORE_VAR naming a variable that no ALLOC_VAR declares is
+    rejected."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(1),
+           attrs={"name": "ghost"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="no ALLOC_VAR"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_duplicate_alloc_var():
+    """Two ALLOC_VAR ops with the same name are rejected — lower_ast
+    mangles shadowed locals to unique names, so a duplicate name is
+    malformed IR."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="more than one ALLOC_VAR"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_alloc_var_with_result():
+    """An ALLOC_VAR carrying a result is rejected — the op declares a
+    cell, it produces no SSA value."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, result_ty=_i32(),
+           attrs={"name": "x", "dtype": _i32()})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ALLOC_VAR produces no result"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_load_var_type_mismatch():
+    """A LOAD_VAR whose result type differs from the cell's allocated
+    type is rejected — a load must read the type the cell holds."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    ld = b.emit(tir.OpKind.LOAD_VAR, result_ty=tir.TIRScalar("i64"),
+                attrs={"name": "x"})
+    b.ret(ld)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="a load must read the type"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_store_var_type_mismatch():
+    """A STORE_VAR whose value type differs from the cell's allocated
+    type is rejected — a store must write the type the cell holds."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR, attrs={"name": "x", "dtype": _i32()})
+    b.emit(tir.OpKind.STORE_VAR, b.const_int(1, dtype="i64"),
+           attrs={"name": "x"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="a store must write the type"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage204_rejects_non_scalar_alloc_var():
+    """An ALLOC_VAR whose dtype is not a scalar integer (here f32) is
+    rejected — Stage 204 allocates only scalar integer cells."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.ALLOC_VAR,
+           attrs={"name": "x", "dtype": tir.TIRScalar("f32")})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="f32"):
         llvm_ir.emit_module(mod)

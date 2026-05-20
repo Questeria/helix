@@ -8,7 +8,7 @@ consumes the same host IR — a `tir.Module` — that
 `helixc/backend/x86_64.py::compile_module_to_elf` consumes, and
 `x86_64.py` is left completely untouched until the Stage 221 cutover.
 
-Supported so far (Stages 200, 202, 203):
+Supported so far (Stages 200, 202-204):
   - module header + target triple
   - a `define` for each function (integer params + integer/void return)
   - integer constants (CONST_INT, materialized as inline literals)
@@ -25,9 +25,14 @@ Supported so far (Stages 200, 202, 203):
     operand dtype), the sign-agnostic AND / OR / XOR and left shift
     SHL, the right shift SHR (arithmetic `ashr` or logical `lshr` per
     operand dtype), and the unary bitwise NOT.
+  - mutable local variables (Stage 204): ALLOC_VAR / LOAD_VAR /
+    STORE_VAR become LLVM `alloca` / `load` / `store` — every
+    variable's `alloca` is hoisted to the entry block; loads and
+    stores use opaque pointers (`ptr`).
 
-Anything outside that set — memory, calls, floats, the wider op
-surface — is REJECTED with a loud `LLVMEmitError`,
+Anything outside that set — aggregates (arrays, structs), calls,
+floats, the wider op surface — is REJECTED with a loud
+`LLVMEmitError`,
 never emitted wrong. Those land in later stages. A mock-validation path
 (`mock_validate_ll`) checks the emitted `.ll` text shape without needing
 an LLVM toolchain, mirroring `gpu_ci.py`'s mock path; real
@@ -246,12 +251,19 @@ class _FnEmitter:
     inline integer literal (a CONST_INT) or an `%vN` register. It is
     fully populated by `_prepass` BEFORE any block is emitted, so a
     loop-header phi can reference a value defined later on the
-    back-edge (LLVM textual IR permits the forward reference)."""
+    back-edge (LLVM textual IR permits the forward reference).
+
+    `var_slots` maps each mutable local's name to its `alloca` pointer
+    register and LLVM cell type (also populated by `_prepass`); the
+    allocas are hoisted to the entry block."""
 
     def __init__(self, fn: tir.FnIR):
         self.fn = fn
         # tir.Value.id -> LLVM operand text
         self.operand: dict[int, str] = {}
+        # mutable-local name -> (alloca register, LLVM cell type),
+        # populated by `_prepass`; see `_register_alloc_var`.
+        self.var_slots: dict[str, tuple[str, str]] = {}
 
     @staticmethod
     def _block_label(block_id: int) -> str:
@@ -284,6 +296,8 @@ class _FnEmitter:
             for op in block.ops:
                 if op.kind == tir.OpKind.CONST_INT:
                     self._register_const_int(op)
+                elif op.kind == tir.OpKind.ALLOC_VAR:
+                    self._register_alloc_var(op)
                 else:
                     for r in op.results:
                         self.operand[r.id] = f"%v{r.id}"
@@ -309,6 +323,56 @@ class _FnEmitter:
         _llvm_int_type(
             result.ty, ctx=f"function {self.fn.name!r} CONST_INT")
         self.operand[result.id] = str(value)
+
+    def _register_alloc_var(self, op: tir.Op) -> None:
+        """Validate an ALLOC_VAR and register its stack slot — a
+        counter-named `alloca` pointer plus the cell's LLVM type. The
+        `alloca` itself is emitted, hoisted to the entry block, by
+        `_emit_allocas`; LOAD_VAR / STORE_VAR resolve the slot by name
+        via `_lookup_var_slot`."""
+        if op.results:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: ALLOC_VAR produces no "
+                f"result, got {len(op.results)}")
+        if op.operands:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: ALLOC_VAR takes no "
+                f"operands, got {len(op.operands)}")
+        name = op.attrs.get("name")
+        if not isinstance(name, str) or not name:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: ALLOC_VAR needs a "
+                f"non-empty string 'name' attr (got {name!r})")
+        if name in self.var_slots:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: mutable local {name!r} is "
+                f"declared by more than one ALLOC_VAR — lower_ast "
+                f"mangles shadowed locals to unique names, so a "
+                f"duplicate is malformed IR")
+        llvm_ty = _llvm_int_type(
+            op.attrs.get("dtype"),
+            ctx=f"function {self.fn.name!r} ALLOC_VAR {name!r} dtype")
+        register = f"%slot.{len(self.var_slots)}"
+        self.var_slots[name] = (register, llvm_ty)
+
+    def _lookup_var_slot(self, op: tir.Op,
+                         label: str) -> "tuple[str, str]":
+        """Resolve a LOAD_VAR / STORE_VAR `name` attr to the (alloca
+        register, LLVM cell type) registered for that mutable local.
+        Raises `LLVMEmitError` if the name is missing / not a string,
+        or names no ALLOC_VAR-declared variable in this function."""
+        name = op.attrs.get("name")
+        if not isinstance(name, str) or not name:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} needs a non-empty "
+                f"string 'name' attr (got {name!r})")
+        slot = self.var_slots.get(name)
+        if slot is None:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: {label} references "
+                f"variable {name!r}, which no ALLOC_VAR in this "
+                f"function declares")
+        return slot
 
     def _compute_predecessors(
             self) -> "dict[int, list[tuple[tir.Block, tir.Op]]]":
@@ -369,16 +433,32 @@ class _FnEmitter:
             f"define {ret_ty} {_llvm_global_name(fn.name)}"
             f"({', '.join(param_decls)}) {{"
         ]
-        for block in fn.blocks:
-            lines.extend(self._emit_block(block, preds))
+        for i, block in enumerate(fn.blocks):
+            lines.extend(
+                self._emit_block(block, preds, is_entry=(i == 0)))
         lines.append("}")
         return "\n".join(lines)
 
+    def _emit_allocas(self) -> list[str]:
+        """The `alloca` instruction for every mutable local, in
+        ALLOC_VAR-encounter order (deterministic — a Stage 207 parity
+        prerequisite). `align` is omitted, so LLVM uses each type's
+        ABI-natural alignment — correct for every scalar integer cell
+        this stage allocates."""
+        return [f"  {register} = alloca {llvm_ty}"
+                for register, llvm_ty in self.var_slots.values()]
+
     def _emit_block(
             self, block: tir.Block,
-            preds: "dict[int, list[tuple[tir.Block, tir.Op]]]"
-            ) -> list[str]:
+            preds: "dict[int, list[tuple[tir.Block, tir.Op]]]",
+            *, is_entry: bool) -> list[str]:
         lines = [f"{self._block_label(block.id)}:"]
+        if is_entry:
+            # Every mutable local's `alloca` is hoisted to the top of
+            # the entry block: the LLVM convention, and — the entry
+            # block dominating every other — it lets a LOAD_VAR /
+            # STORE_VAR in any block reference the slot pointer.
+            lines.extend(self._emit_allocas())
         lines.extend(self._emit_phis(block, preds.get(block.id, [])))
         saw_terminator = False
         for op in block.ops:
@@ -682,13 +762,63 @@ class _FnEmitter:
             # `xor <ty> x, -1` is the canonical form — `-1` is all-ones
             # at every integer width, so the xor flips every bit.
             return f"%v{result.id} = xor {ty} {operand_ref}, -1"
+        if kind == tir.OpKind.ALLOC_VAR:
+            # The `alloca` was hoisted to the entry block by
+            # `_emit_allocas` (the slot was registered in `_prepass`).
+            # The ALLOC_VAR op itself materializes no instruction at
+            # its original position — like a CONST_INT.
+            return None
+        if kind == tir.OpKind.LOAD_VAR:
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: LOAD_VAR must have "
+                    f"exactly one result, got {len(op.results)}")
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: LOAD_VAR takes no "
+                    f"operands, got {len(op.operands)}")
+            register, slot_ty = self._lookup_var_slot(op, "LOAD_VAR")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} LOAD_VAR result")
+            if res_ty != slot_ty:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: LOAD_VAR result has "
+                    f"LLVM type {res_ty} but the variable's cell was "
+                    f"allocated as {slot_ty} — a load must read the "
+                    f"type the cell holds")
+            return f"%v{result.id} = load {slot_ty}, ptr {register}"
+        if kind == tir.OpKind.STORE_VAR:
+            if op.results:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STORE_VAR produces no "
+                    f"result, got {len(op.results)}")
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STORE_VAR expects "
+                    f"exactly one operand (the value), got "
+                    f"{len(op.operands)}")
+            register, slot_ty = self._lookup_var_slot(op, "STORE_VAR")
+            value = op.operands[0]
+            val_ty = _llvm_int_type(
+                value.ty,
+                ctx=f"function {self.fn.name!r} STORE_VAR value")
+            if val_ty != slot_ty:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: STORE_VAR value has "
+                    f"LLVM type {val_ty} but the variable's cell was "
+                    f"allocated as {slot_ty} — a store must write the "
+                    f"type the cell holds")
+            return f"store {slot_ty} {self._ref(value)}, ptr {register}"
         raise LLVMEmitError(
             f"function {self.fn.name!r}: the LLVM backend does not yet "
             f"emit op {kind.value} (supported: CONST_INT; the integer "
             f"arithmetic ADD/SUB/MUL/DIV/MOD; the bitwise AND/OR/XOR/NOT "
             f"and shifts SHL/SHR; the six comparisons; SELECT; NEG; "
-            f"RETURN; BR; COND_BR — memory, calls, and floats are later "
-            f"stages)"
+            f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; "
+            f"RETURN; BR; COND_BR — aggregates, calls, and floats are "
+            f"later stages)"
         )
 
 

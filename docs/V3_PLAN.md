@@ -157,7 +157,8 @@ depend on a clean, unambiguous full-suite run.
 | 201 | LLVM toolchain detection + dispatch | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 202 | Control flow (blocks, br, phi) | ✓ | 3-clean ✓ | Phase D — CLOSED |
 | 203 | Scalar op set (cmp, select, neg, div/mod, bitwise) | ✓ | 3-clean ✓ | Phase D — CLOSED |
-| 204–208 | Phase D — LLVM IR backend | — | — | planned |
+| 204 | Memory & aggregates (sub-staged) | sub-A ✓ | sub-A audit pending | Phase D — mutable locals shipped |
+| 205–208 | Phase D — LLVM IR backend | — | — | planned |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -325,3 +326,21 @@ depend on a clean, unambiguous full-suite run.
   test files. The "full scalar op set" is complete — **Stage 203
   CLOSED**. Next: Stage 204 — memory & aggregates (loads/stores,
   structs, arrays).
+- 2026-05-20 — **Stage 204 sub-stage A shipped — LLVM mutable local
+  variables.** Stage 204 (memory & aggregates) is the largest x86_64
+  surface, so it is sub-staged. Sub-stage A: the mutable-local ops
+  ALLOC_VAR / LOAD_VAR / STORE_VAR lower to LLVM `alloca` / `load` /
+  `store`. Each variable's `alloca` is hoisted to the top of the entry
+  block (the LLVM convention — the entry block dominates every use, so
+  a LOAD_VAR / STORE_VAR in any block resolves the slot); slot
+  pointers are counter-named (`%slot.N`, collision-free with the `%vN`
+  value registers) and load/store use opaque pointers (`ptr`). Slots
+  are collected and validated in `_prepass` (`_register_alloc_var`);
+  LOAD_VAR / STORE_VAR resolve them by name and type-check the
+  loaded/stored type against the cell's allocated type. Fail-closed
+  throughout — undeclared-variable, duplicate-ALLOC_VAR,
+  result-on-ALLOC_VAR, type-mismatch and non-scalar-dtype all raise
+  `LLVMEmitError`. 13 new tests; 85 passed + 2 skipped across the two
+  LLVM test files. `x86_64.py` untouched. Per-stage 3-clean audit
+  dispatched. Next sub-stage: stack arrays (ALLOC_ARRAY / LOAD_ELEM /
+  STORE_ELEM → an array-typed `alloca` + GEP).
