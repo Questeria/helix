@@ -918,3 +918,45 @@ pass.
 - Stage 35 wmt_predict_or regression (pre-existing, spawned task):
   open.
 - End-of-v2.4 5-clean-gate: pending items 15 + 3-slice-2/3.
+
+### 2026-05-19T21:12Z — v2.4 item 15 register allocator COMPLETE + 3-clean-audit dispatched
+
+**v2.4 item 15 (RegAlloc) — the allocator subsystem shipped in 5 slices:**
+- slice 1 `8e4f110`: linear-scan core (Poletto-Sarkar)
+- slice 2 `767b592`: liveness analysis (tile-IR -> LiveIntervals)
+- slice 3 `d1bebc4`: multi-register-class framework
+- slice 4 `eb1dbbd`: PTX register-class model
+- slice 5 `0345a41`: ROCm/AMDGCN register-class model
+
+`allocate_by_class(kernel, classify, class_pools)` now produces a
+full value -> (register-file, index) assignment with per-class spill
+detection. New modules: `helixc/backend/regalloc.py` (backend-
+agnostic engine) + `helixc/backend/regalloc_classes.py` (per-backend
+dtype -> register-class models). 39 tests pass.
+
+**Scoping note recorded in slice 5:** only PTX and ROCm need a
+register-class model — they emit assembly with explicit registers.
+Metal MSL and WebGPU WGSL are high-level shading languages; their
+compilers (xcrun-metal, naga) do register allocation. So the
+emitter-wiring slice targets PtxEmitter + HipEmitter only.
+
+This fire dispatches the item-15 allocator 3-clean-audit (silent-
+failure-hunter + type-design-analyzer + code-reviewer) on
+regalloc.py + regalloc_classes.py. Auditing the allocator now —
+before the emitter wiring depends on it — is the right sequencing:
+the allocator is a pure, self-contained library; finding issues
+before PtxEmitter/HipEmitter consume it is cheaper. Verdicts
+process this session.
+
+**v2.4 backlog state:**
+- Item 13 (real-HW dispatch): COMPLETE + 3-clean audited.
+- Item 3 (ProofManifest type-design): COMPLETE (3 slices).
+- Item 15 (RegAlloc): allocator COMPLETE (5 slices) + 3-clean-audit
+  dispatched. Emitter wiring (slice 6 — thread the assignment into
+  PtxEmitter + HipEmitter operand emission) remains; it is the
+  substantive, higher-risk consumer-side change and a good
+  candidate for a focused synchronous block.
+- Stage 35 wmt_predict_or regression (pre-existing, spawned task):
+  open.
+- End-of-v2.4 5-clean-gate: pending the item-15 emitter wiring +
+  the item-15 audit verdicts.
