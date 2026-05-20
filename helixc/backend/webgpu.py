@@ -37,7 +37,9 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
-from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
+from ._lowering_schema import (  # v2.3 item 2 shared schema
+    OpLowering, VALID_STATUSES, is_loud_stub_status,
+)
 
 
 # ============================================================================
@@ -191,6 +193,14 @@ def _check_webgpu_lowering_coverage() -> None:
                 f"from WEBGPU_OP_LOWERING. Every kind must have a "
                 f"lowering or be marked status='skipped' with rationale."
             )
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: validate status
+        # against the shared VALID_STATUSES set at module load.
+        status = WEBGPU_OP_LOWERING[k]["status"]
+        if status not in VALID_STATUSES:
+            raise AssertionError(
+                f"helixc.backend.webgpu: WEBGPU_OP_LOWERING[{k.name}] "
+                f"has status={status!r}, not in {sorted(VALID_STATUSES)}."
+            )
 
 
 _check_webgpu_lowering_coverage()
@@ -277,25 +287,28 @@ class WgslEmitter:
         """
         kind = op.kind
         # v2.1 R1 audit-fix: stub status → loud failure.
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: gate on the shared
+        # `is_loud_stub_status` helper so _lowering_schema.py is the
+        # single source of truth for which statuses are loud-stub.
         status = WEBGPU_OP_LOWERING[kind]["status"]
-        if status in ("stub", "deferred"):
+        if is_loud_stub_status(status):
             # WGSL has no #error directive; use a parse-breaking
-            # token that's also self-documenting.
-            self._line(
-                f"    @@HELIX-STUB: TileOpKind.{kind.name} "
-                f"status={status!r} not wired"
-            )
-            return
-        if status == "skipped":
-            # v2.3 BE MED audit-fix: parity with rocm.py HELIX-SKIPPED
-            # branch + metal.py v2.3 fix. WebGPU has no analog for
-            # NVIDIA-specific TMA ops; routing them to this backend
-            # is a miscompile-routing bug.
-            self._line(
-                f"    @@HELIX-SKIPPED: TileOpKind.{kind.name} has "
-                f"no WebGPU analog (NVIDIA-specific); routing to "
-                f"WebGPU backend is a bug."
-            )
+            # `@@` token that's also self-documenting.
+            if status == "skipped":
+                # v2.3 BE MED audit-fix: parity with rocm.py + metal.py
+                # HELIX-SKIPPED branches. WebGPU has no analog for
+                # NVIDIA-specific TMA ops; routing them here is a
+                # miscompile-routing bug.
+                self._line(
+                    f"    @@HELIX-SKIPPED: TileOpKind.{kind.name} has "
+                    f"no WebGPU analog (NVIDIA-specific); routing to "
+                    f"WebGPU backend is a bug."
+                )
+            else:  # "stub" or "deferred"
+                self._line(
+                    f"    @@HELIX-STUB: TileOpKind.{kind.name} "
+                    f"status={status!r} not wired"
+                )
             return
         if kind is ti.TileOpKind.BARRIER_WAIT:
             self._line("    workgroupBarrier();")

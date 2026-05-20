@@ -40,7 +40,9 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
-from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
+from ._lowering_schema import (  # v2.3 item 2 shared schema
+    OpLowering, VALID_STATUSES, is_loud_stub_status,
+)
 
 
 # ============================================================================
@@ -224,6 +226,18 @@ def _check_rocm_lowering_coverage() -> None:
                 f"from ROCM_OP_LOWERING. Every kind must have a "
                 f"lowering or be marked status='skipped' with rationale."
             )
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: validate the status
+        # value against the shared VALID_STATUSES set at module load.
+        # Pre-fix a typo like "stubb" passed the coverage check, was
+        # treated as not-loud-stub by the `in ("stub","deferred")`
+        # guard, and the op fell to the exhaustiveness AssertionError.
+        # Catching it here names the offending kind + bad value.
+        status = ROCM_OP_LOWERING[k]["status"]
+        if status not in VALID_STATUSES:
+            raise AssertionError(
+                f"helixc.backend.rocm: ROCM_OP_LOWERING[{k.name}] has "
+                f"status={status!r}, not in {sorted(VALID_STATUSES)}."
+            )
 
 
 _check_rocm_lowering_coverage()
@@ -312,26 +326,32 @@ class HipEmitter:
         """
         kind = op.kind
         status = ROCM_OP_LOWERING[kind]["status"]
-        if status in ("stub", "deferred"):
-            self._line(
-                f"    .error \"HELIX-STUB: TileOpKind.{kind.name} "
-                f"status={status!r}; codegen not wired in this backend.\""
-            )
-            return
-        if status == "skipped":
-            # v2.1 R1 audit-fix Finding H2 (silent-failure-hunter):
-            # pre-R1 the "skipped" status fell through to a silent
-            # comment because only "stub"/"deferred" hit the .error
-            # branch. TMA_LOAD/TMA_STORE on the ROCm path would
-            # produce a benign-looking AMDGPU kernel with no error,
-            # the exact failure class Stage 120 R3 closed for grad.
-            # "skipped" means "no analog on this target" — must be
-            # LOUDER than a stub, not quieter.
-            self._line(
-                f"    .error \"HELIX-SKIPPED: TileOpKind.{kind.name} "
-                f"has no AMD analog (NVIDIA-only); routing to ROCm "
-                f"backend is a bug.\""
-            )
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: gate on the shared
+        # `is_loud_stub_status` helper rather than an inline
+        # `status in ("stub","deferred")` literal — so the schema in
+        # _lowering_schema.py is the single source of truth. If a 5th
+        # loud status is ever added there, this guard picks it up.
+        if is_loud_stub_status(status):
+            if status == "skipped":
+                # v2.1 R1 audit-fix Finding H2 (silent-failure-hunter):
+                # pre-R1 the "skipped" status fell through to a silent
+                # comment because only "stub"/"deferred" hit the .error
+                # branch. TMA_LOAD/TMA_STORE on the ROCm path would
+                # produce a benign-looking AMDGPU kernel with no error,
+                # the exact failure class Stage 120 R3 closed for grad.
+                # "skipped" means "no analog on this target" — must be
+                # LOUDER than a stub, not quieter.
+                self._line(
+                    f"    .error \"HELIX-SKIPPED: TileOpKind.{kind.name} "
+                    f"has no AMD analog (NVIDIA-only); routing to ROCm "
+                    f"backend is a bug.\""
+                )
+            else:  # "stub" or "deferred"
+                self._line(
+                    f"    .error \"HELIX-STUB: TileOpKind.{kind.name} "
+                    f"status={status!r}; codegen not wired in this "
+                    f"backend.\""
+                )
             return
         if kind is ti.TileOpKind.BARRIER_WAIT:
             # bar.sync 0 (CUDA) maps to s_waitcnt + s_barrier on AMDGPU.

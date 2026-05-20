@@ -44,7 +44,9 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
-from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
+from ._lowering_schema import (  # v2.3 item 2 shared schema
+    OpLowering, VALID_STATUSES, is_loud_stub_status,
+)
 
 
 # ============================================================================
@@ -253,6 +255,16 @@ def _check_metal_lowering_coverage() -> None:
                 f"from METAL_OP_LOWERING. Every kind must have a "
                 f"lowering or be marked status='skipped' with rationale."
             )
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: validate status
+        # against the shared VALID_STATUSES set at module load — a
+        # typo'd status would otherwise pass coverage and be treated
+        # as not-loud-stub by the forward guard.
+        status = METAL_OP_LOWERING[k]["status"]
+        if status not in VALID_STATUSES:
+            raise AssertionError(
+                f"helixc.backend.metal: METAL_OP_LOWERING[{k.name}] has "
+                f"status={status!r}, not in {sorted(VALID_STATUSES)}."
+            )
 
 
 _check_metal_lowering_coverage()
@@ -354,23 +366,28 @@ class MslEmitter:
         """
         kind = op.kind
         # v2.1 R1 audit-fix: stub status → loud failure.
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: gate on the shared
+        # `is_loud_stub_status` helper so _lowering_schema.py is the
+        # single source of truth for which statuses are loud-stub.
         status = METAL_OP_LOWERING[kind]["status"]
-        if status in ("stub", "deferred"):
-            self._line(
-                f"    #error \"HELIX-STUB: TileOpKind.{kind.name} "
-                f"status={status!r}; codegen not wired in this backend.\""
-            )
-            return
-        if status == "skipped":
-            # v2.3 BE MED audit-fix: parity with rocm.py's HELIX-SKIPPED
-            # branch (rocm.py:320). Skipped ops have no Apple analog
-            # (TMA_LOAD/STORE on the Metal path); routing them here is
-            # a miscompile-routing bug, not a backend deficiency.
-            self._line(
-                f"    #error \"HELIX-SKIPPED: TileOpKind.{kind.name} "
-                f"has no Apple analog (NVIDIA-specific); routing to "
-                f"Metal backend is a bug.\""
-            )
+        if is_loud_stub_status(status):
+            if status == "skipped":
+                # v2.3 BE MED audit-fix: parity with rocm.py's
+                # HELIX-SKIPPED branch. Skipped ops have no Apple
+                # analog (TMA_LOAD/STORE on the Metal path); routing
+                # them here is a miscompile-routing bug, not a backend
+                # deficiency.
+                self._line(
+                    f"    #error \"HELIX-SKIPPED: TileOpKind.{kind.name} "
+                    f"has no Apple analog (NVIDIA-specific); routing to "
+                    f"Metal backend is a bug.\""
+                )
+            else:  # "stub" or "deferred"
+                self._line(
+                    f"    #error \"HELIX-STUB: TileOpKind.{kind.name} "
+                    f"status={status!r}; codegen not wired in this "
+                    f"backend.\""
+                )
             return
         # v2.2 polish item 9: numeric extraction. Apple's M5 introduced
         # Neural Accelerators at family `apple10+`. `apple9` is M3/M4

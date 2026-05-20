@@ -23,7 +23,7 @@ from dataclasses import fields, is_dataclass
 
 from . import ast_nodes as A
 from .ast_walker import ASTVisitor
-from .autodiff import differentiate, _inline_lets
+from .autodiff import differentiate
 from .autodiff_reverse import differentiate_reverse
 
 

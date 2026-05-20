@@ -26,7 +26,9 @@ from io import StringIO
 from typing import Final, Mapping, Optional
 
 from ..ir import tir, tile_ir as ti
-from ._lowering_schema import OpLowering  # v2.3 item 2 shared schema
+from ._lowering_schema import (  # v2.3 item 2 shared schema
+    OpLowering, VALID_STATUSES, is_loud_stub_status,
+)
 
 
 # ============================================================================
@@ -117,6 +119,14 @@ def _check_ptx_lowering_coverage() -> None:
                 f"helixc.backend.ptx: TileOpKind {k.name} is missing "
                 f"from PTX_OP_LOWERING. Every kind must have a "
                 f"lowering or be marked status='skipped' with rationale."
+            )
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: validate status
+        # against the shared VALID_STATUSES set at module load.
+        status = PTX_OP_LOWERING[k]["status"]
+        if status not in VALID_STATUSES:
+            raise AssertionError(
+                f"helixc.backend.ptx: PTX_OP_LOWERING[{k.name}] has "
+                f"status={status!r}, not in {sorted(VALID_STATUSES)}."
             )
 
 
@@ -455,19 +465,23 @@ class PtxEmitter:
         # string-matches HELIX_STUB_TOKEN) can detect. `.error` is a
         # real PTX directive — ptxas aborts on it, so the failure is
         # loud at assemble time, parity with rocm's `.error`.
+        # v2.3 5-clean-gate BE MEDIUM-1 audit-fix: gate on the shared
+        # `is_loud_stub_status` helper so _lowering_schema.py is the
+        # single source of truth for which statuses are loud-stub.
         status = PTX_OP_LOWERING[op.kind]["status"]
-        if status in ("stub", "deferred"):
-            self._line(
-                f'    .error "HELIX-STUB: TileOpKind.{op.kind.name} '
-                f'status={status!r}; codegen not wired in the PTX '
-                f'backend."'
-            )
-            return
-        if status == "skipped":
-            self._line(
-                f'    .error "HELIX-SKIPPED: TileOpKind.{op.kind.name} '
-                f'has no PTX analog; routing it here is a bug."'
-            )
+        if is_loud_stub_status(status):
+            if status == "skipped":
+                self._line(
+                    f'    .error "HELIX-SKIPPED: TileOpKind.'
+                    f'{op.kind.name} has no PTX analog; routing it '
+                    f'here is a bug."'
+                )
+            else:  # "stub" or "deferred"
+                self._line(
+                    f'    .error "HELIX-STUB: TileOpKind.{op.kind.name} '
+                    f'status={status!r}; codegen not wired in the PTX '
+                    f'backend."'
+                )
             return
         # v0.1: only handle a tiny scalar subset for sanity testing
         if op.kind == ti.TileOpKind.SCALAR_CONST_INT:

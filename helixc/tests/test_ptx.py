@@ -1366,14 +1366,17 @@ def test_thread_idx_emits_tid_x():
 
 
 def test_thread_idx_outside_kernel_traps():
-    # Trap-id 96001: thread_idx() outside @kernel.
+    """Trap-id 96001: thread_idx() outside @kernel.
+
+    v2.3 5-clean-gate TEST LOW-2 audit-fix: pinned to
+    `pytest.raises(SyntaxError, match="trap 96001")`. The prior
+    `except (SyntaxError, NotImplementedError)` + `"96001" ... or
+    "thread_idx" ...` disjunction would pass on any NotImplementedError
+    merely mentioning `thread_idx` — diluting the trap-id contract.
+    The trap-id IS the contract; match on it exactly."""
     src = "fn main() -> i32 { let i = thread_idx(); 0 }"
-    try:
+    with pytest.raises(SyntaxError, match=r"trap 96001"):
         emit(src)
-    except (SyntaxError, NotImplementedError) as e:
-        assert "96001" in str(e) or "thread_idx" in str(e)
-        return
-    raise AssertionError("expected trap 96001 for thread_idx() outside kernel")
 
 
 def test_hbm_tile_param_indexed_load_emits_ld_global_f32():
@@ -1621,16 +1624,25 @@ def test_stage64_inc1_existing_f32_kernels_still_get_b16_pool():
 
 def test_stage64_inc1_unsupported_dtype_still_rejected():
     """Stage 64 Inc 1 negative: dtypes outside the now-expanded
-    set (f32/i32/bf16/f16) still get rejected."""
+    set (f32/i32/bf16/f16) still get rejected.
+
+    v2.3 5-clean-gate TEST LOW-1 audit-fix: pinned to the actual
+    rejection path. The prior `pytest.raises((RuntimeError,
+    ValueError))` + `"i64" ... or "unsupported" ...` disjunction
+    would pass on any RuntimeError merely containing the generic
+    word "unsupported". The real rejection is a NotImplementedError
+    (a RuntimeError subclass) from the Stage-16 HBM tile-param dtype
+    check; match its specific diagnostic."""
     src = """
     @kernel fn k(a: tile<i64, [16], HBM>) {}
     """
-    with pytest.raises((RuntimeError, ValueError)) as exc_info:
+    with pytest.raises(
+        NotImplementedError,
+        match=r"HBM tile param dtype must be",
+    ) as exc_info:
         emit(src)
-    msg = str(exc_info.value)
-    # Error message mentions the unsupported dtype OR an upstream
-    # rejection at a different layer.
-    assert "i64" in msg or "unsupported" in msg.lower()
+    # The rejection names the offending dtype.
+    assert "i64" in str(exc_info.value)
 
 
 def main():
