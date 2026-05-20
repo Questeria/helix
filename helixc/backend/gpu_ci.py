@@ -153,7 +153,11 @@ class ValidationResult:
 # toolchains are skipped (via pytest marker indirection in test_gpu_ci.py).
 GPU_TOOLS: dict[BackendKind, list[str]] = {
     BackendKind.PTX: ["ptxas", "nvcc"],
-    BackendKind.ROCM_HIP: ["hipcc"],
+    # v2.4 item 13 slice 3: `llvm-mc` listed first — it assembles the
+    # AMDGCN *assembly text* helixc.backend.rocm emits. `hipcc`
+    # compiles HIP *C++ source*, a different input format; it is kept
+    # as a fallback-only entry (real-HW dispatch is wired for llvm-mc).
+    BackendKind.ROCM_HIP: ["llvm-mc", "hipcc"],
     BackendKind.METAL_MSL: ["xcrun"],  # macOS-only; also need `xcrun -find metal`
     BackendKind.WEBGPU_WGSL: ["naga", "wgpu", "dawn_node"],  # any of these
 }
@@ -238,6 +242,10 @@ _MOCK_VALIDATORS = {
 # Default NVIDIA arch for ptxas. Matches helixc.backend.ptx.DEFAULT_TARGET
 # (sm_75 Turing baseline). A caller targeting a newer GPU can override.
 DEFAULT_PTXAS_ARCH = "sm_75"
+
+# Default AMDGCN target for llvm-mc. Matches helixc.backend.rocm.
+# DEFAULT_TARGET (gfx942 = MI300 baseline).
+DEFAULT_AMDGCN_MCPU = "gfx942"
 
 # Hard cap on a single real-HW tool invocation. A hung assembler must
 # not stall a CI run — TimeoutExpired is caught and surfaced as a
@@ -356,6 +364,70 @@ def _dispatch_naga(text: str, tool: str,
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _dispatch_llvm_mc(text: str, tool: str,
+                      mcpu: str = DEFAULT_AMDGCN_MCPU,
+                      timeout_s: int = REAL_HW_TIMEOUT_S) -> tuple[bool, list[str]]:
+    """v2.4 item 13 (slice 3) — real-HW dispatch for the ROCm backend.
+
+    Writes the emitted AMDGCN assembly to a temp file and runs
+    `llvm-mc` on it with the amdgcn-amd-amdhsa triple. llvm-mc
+    assembles the `.s` text to an object file and exits non-zero with
+    a stderr diagnostic on any assembly error — a genuine AMDGCN
+    syntax gate, parity with `_dispatch_ptxas` (PTX) and
+    `_dispatch_naga` (WGSL).
+
+    `hipcc` (the other ROCM_HIP GPU_TOOLS entry) is NOT used for
+    dispatch: it compiles HIP C++ source, not raw AMDGCN assembly —
+    the wrong input format for helixc.backend.rocm's text emit.
+
+    Returns (passed, findings): passed=True iff llvm-mc exited 0;
+    findings carries the truncated diagnostic on failure, the timeout
+    message on a hang, or a tool-not-found message if `tool` vanished
+    between detect_tools() and dispatch.
+
+    NOTE: Helix's ROCm emit is substrate-level — operand-less MFMA /
+    memory mnemonics until v2.4 item 15 RegAlloc. llvm-mc will
+    legitimately reject such kernels; that honest outcome is exactly
+    what this gate surfaces.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="helix_llvmmc_")
+    in_path = os.path.join(tmpdir, "kernel.s")
+    out_path = os.path.join(tmpdir, "kernel.o")
+    try:
+        with open(in_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        cmd = [
+            tool,
+            "-triple=amdgcn-amd-amdhsa",
+            f"-mcpu={mcpu}",
+            "-filetype=obj",
+            in_path,
+            "-o", out_path,
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return False, [
+                f"llvm-mc dispatch timed out after {timeout_s}s "
+                f"(tool={tool!r}, mcpu={mcpu})"
+            ]
+        except FileNotFoundError:
+            return False, [
+                f"llvm-mc dispatch: tool {tool!r} not found / not "
+                f"executable at invocation time"
+            ]
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            return False, [
+                f"llvm-mc exit {proc.returncode}: {diag[:500]}"
+            ]
+        return True, []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 # Stage 129 type-design audit-fix: module-load drift detector.
 # Catches the case where a new BackendKind is added without updating
 # GPU_TOOLS or _MOCK_VALIDATORS. Same pattern as the per-backend
@@ -411,13 +483,11 @@ def validate_emit(text: str, backend: BackendKind,
         if available:
             real_hw_attempted = True
             real_hw_tool = available[0]
-            # v2.4 item 13 — real-HW dispatch. PTX via ptxas (slice 1)
-            # and WebGPU via naga (slice 2) are wired — both tools
-            # validate their target text directly. ROCm/Metal remain
-            # deferred until their slices land: ROCm AMDGCN assembly
-            # needs llvm-mc (not the `hipcc` GPU_TOOLS entry, which
-            # compiles HIP C++), and Metal MSL needs `xcrun -sdk
-            # macosx metal` (mac-only).
+            # v2.4 item 13 — real-HW dispatch. PTX via ptxas (slice 1),
+            # WebGPU via naga (slice 2), ROCm via llvm-mc (slice 3) are
+            # wired — each tool validates/assembles its target text
+            # directly. Metal remains deferred: MSL needs `xcrun -sdk
+            # macosx metal` (mac-only) — its slice lands next.
             if backend is BackendKind.PTX and real_hw_tool == "ptxas":
                 passed, dispatch_findings = _dispatch_ptxas(
                     text, real_hw_tool)
@@ -426,6 +496,12 @@ def validate_emit(text: str, backend: BackendKind,
             elif (backend is BackendKind.WEBGPU_WGSL
                   and real_hw_tool == "naga"):
                 passed, dispatch_findings = _dispatch_naga(
+                    text, real_hw_tool)
+                real_hw_passed = passed
+                real_hw_findings.extend(dispatch_findings)
+            elif (backend is BackendKind.ROCM_HIP
+                  and real_hw_tool == "llvm-mc"):
+                passed, dispatch_findings = _dispatch_llvm_mc(
                     text, real_hw_tool)
                 real_hw_passed = passed
                 real_hw_findings.extend(dispatch_findings)

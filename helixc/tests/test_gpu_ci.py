@@ -277,6 +277,69 @@ def test_v24_validate_emit_webgpu_real_hw_dispatch_runs_naga():
     assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
 
 
+def test_v24_rocm_gpu_tools_lists_llvm_mc_first():
+    """v2.4 item 13 slice 3 — GPU_TOOLS[ROCM_HIP] lists `llvm-mc`
+    before `hipcc`. llvm-mc assembles AMDGCN assembly text (what
+    helixc.backend.rocm emits); hipcc compiles HIP C++ source (wrong
+    input format). detect_tools preserves list order, so validate_emit
+    picks llvm-mc as the real-HW tool whenever it is present."""
+    assert GPU_TOOLS[BackendKind.ROCM_HIP][0] == "llvm-mc"
+    assert "hipcc" in GPU_TOOLS[BackendKind.ROCM_HIP]
+
+
+def test_v24_dispatch_llvm_mc_tool_not_found():
+    """v2.4 item 13 slice 3 — _dispatch_llvm_mc surfaces a missing/
+    non-executable tool loudly as (False, [diagnostic]) rather than
+    swallowing the FileNotFoundError into a silent pass."""
+    from helixc.backend.gpu_ci import _dispatch_llvm_mc
+    passed, findings = _dispatch_llvm_mc(
+        ".amdgcn_target \"amdgcn-amd-amdhsa--gfx942\"\n",
+        "helix_no_such_llvmmc_xyz123")
+    assert passed is False
+    assert len(findings) == 1
+    assert "not found" in findings[0]
+
+
+def test_v24_validate_emit_rocm_real_hw_tool_absent_is_deterministic():
+    """v2.4 item 13 slice 3 — when neither llvm-mc nor hipcc is on
+    PATH, ROCm real-HW dispatch does not run: validate_emit returns
+    real_hw_attempted=False with post-init invariants intact."""
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = HipEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.ROCM_HIP, attempt_real_hw=True)
+    if not requires_backend_tool(BackendKind.ROCM_HIP):
+        assert result.real_hw_attempted is False
+        assert result.real_hw_tool is None
+        assert result.real_hw_passed is None
+        assert result.real_hw_findings == ()
+    else:
+        assert result.real_hw_attempted is True
+
+
+@pytest.mark.skipif(
+    "llvm-mc" not in detect_tools(BackendKind.ROCM_HIP),
+    reason="llvm-mc not on PATH — ROCm real-HW dispatch cannot be exercised",
+)
+def test_v24_validate_emit_rocm_real_hw_dispatch_runs_llvm_mc():
+    """v2.4 item 13 slice 3 — when llvm-mc IS available, ROCm real-HW
+    dispatch actually invokes it. The emitted substrate AMDGCN may or
+    may not assemble cleanly (operand-less mnemonics until item 15),
+    so we assert only that dispatch RAN: real_hw_attempted=True,
+    real_hw_tool='llvm-mc', real_hw_passed is a concrete bool."""
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = HipEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.ROCM_HIP, attempt_real_hw=True)
+    assert result.real_hw_attempted is True
+    assert result.real_hw_tool == "llvm-mc"
+    assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
+
+
 def test_stage129_validate_emit_rejects_unknown_backend():
     """Stage 129 — validate_emit raises ValueError on a backend we don't
     have a validator for. Defends against silent acceptance of garbage."""
