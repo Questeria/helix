@@ -426,8 +426,20 @@ def _collect_binds_with_path(pat: A.Pattern, scrut: str,
             _collect_binds_with_path(sub, scrut, path_segs + [fname],
                                        binds, span)
         return
-    # Other sub-pattern kinds at field positions (PatLit, PatWildcard,
-    # PatRange) don't bind names — leave them to _pattern_test_expr.
+    # PatLit / PatWildcard / PatRange at a field position genuinely
+    # bind no names — _pattern_test_expr handles them.
+    #
+    # PatOr / PatVariant / PatTuple CAN bind names (e.g. `Some(v)` or
+    # `(a, b)` as a struct field's sub-pattern). v2.x re-audit R2b
+    # (FE 5-clean-gate MEDIUM) honest-limitation note: nested
+    # destructuring INSIDE a struct pattern is not supported in
+    # Phase-0 — the bind-path chain built above models only `.field`
+    # accesses, not variant-payload / tuple-element extraction. Such
+    # a nested bind is left unbound and surfaces downstream as a loud
+    # "unresolved name" typecheck error: a safe (loud) reject, not a
+    # silent failure or a miscompile. Full nested-destructuring
+    # support is v3.0+ language work; this skip is the honest Phase-0
+    # boundary, kept deliberately.
     if isinstance(pat, (A.PatWildcard, A.PatLit, A.PatRange,
                           A.PatOr, A.PatVariant, A.PatTuple)):
         return

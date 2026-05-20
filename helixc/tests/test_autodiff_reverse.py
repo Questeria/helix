@@ -71,6 +71,19 @@ def test_subtraction():
     assert "1" in out_y and "-" in out_y, f"got {out_y}"
 
 
+def test_v2x_reaudit_reverse_zero_arg_provenance_builtin_raises():
+    """v2.x re-audit R2b (FE 5-clean-gate MEDIUM): reverse-mode AD's
+    prove / unwrap_logic / attach / detach handler must fail loudly on
+    a zero-argument call rather than silently propagating no adjoint.
+    Arity is normally enforced by typecheck; this pins the
+    defense-in-depth reverse-mode guard."""
+    sp = A.Span(0, 0)
+    body = A.Block(span=sp, stmts=[], final_expr=A.Call(
+        span=sp, callee=A.Name(span=sp, name="prove"), args=[]))
+    with pytest.raises(NotImplementedError, match="no arguments"):
+        differentiate_reverse(body, ["x"])
+
+
 def test_division_quotient_rule():
     body = _body_of("fn f(x: f32, y: f32) -> f32 { x / y }")
     grads = differentiate_reverse(body, ["x", "y"])

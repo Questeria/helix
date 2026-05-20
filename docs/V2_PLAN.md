@@ -2248,6 +2248,22 @@ gate re-run.
   clean — latent today (Phase-0 presets are valid) but a
   silent-corruption foot-gun once user-defined budgets ship.
 
-Still open: FE-M3 (autodiff_reverse arity), FE-M4 (match_lower
-nested-pattern bind), the BE MEDIUMs (x86_64.py), the RT MEDIUM, the
-TEST `_zip_cmp_test` finding — then the gate re-run.
+- FE-M3 — autodiff_reverse.py's reverse-mode handler for the
+  `prove` / `unwrap_logic` / `attach` / `detach` provenance builtins
+  used `if node.args:` — a zero-argument call silently propagated no
+  adjoint at all. Now raises `NotImplementedError` loudly. Latent
+  (typecheck enforces arity before AD) but the silent 0-arg surface
+  is closed; regression test added.
+- FE-M4 — DISMISSED with reasoning. `match_lower._collect_binds_with_path`
+  does not bind names inside a nested `PatVariant` / `PatTuple` /
+  `PatOr` at a struct-field position. Verified: this is NOT a silent
+  failure — it surfaces as a loud "unresolved name" typecheck error
+  (a safe reject, not a miscompile). The full fix is a language
+  feature (variant-payload / tuple-element extraction in the
+  bind-path) = v3.0+ scope, not an audit-fix. The misleading code
+  comment that implied the skip was always benign was corrected to
+  document the Phase-0 limitation honestly.
+
+The FE-batch MEDIUMs are now resolved. Still open: the BE MEDIUMs
+(x86_64.py ×3), the RT MEDIUM, the TEST `_zip_cmp_test` finding —
+then the gate re-run.

@@ -590,8 +590,20 @@ def _propagate(node: A.Expr, adj: A.Expr, acc: dict[str, list[A.Expr]]) -> None:
                     "register_derivation for dynamic source tags so AD "
                     "can statically see the tag is non-differentiable"
                 )
-            if node.args:
-                _propagate(node.args[0], adj, acc)
+            # v2.x re-audit R2b (FE 5-clean-gate MEDIUM): these four
+            # builtins are identity w.r.t. their value argument
+            # (args[0]). A call with NO arguments is malformed and
+            # must fail loudly — the prior `if node.args:` silently
+            # propagated no adjoint at all for a 0-arg call. Arity is
+            # normally enforced by typecheck before AD; this is the
+            # reverse-mode defense-in-depth guard, parity with the
+            # forward-mode arity checks in autodiff.py.
+            if not node.args:
+                raise NotImplementedError(
+                    f"autodiff (reverse): {node.callee.name}() called "
+                    f"with no arguments — expected at least the value "
+                    f"argument to propagate the adjoint into")
+            _propagate(node.args[0], adj, acc)
             return
         # fuzzy_and(a, b) = a * b: ∂/∂a = b, ∂/∂b = a.
         if (isinstance(node.callee, A.Name)
