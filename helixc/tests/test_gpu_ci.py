@@ -136,9 +136,10 @@ def test_stage129_requires_backend_tool_returns_bool():
 
 
 def test_stage129_real_hw_deferred_to_stage_130():
-    """Stage 129 — real-HW dispatch is deferred to Stage 130+; validation
-    result honestly reports `real_hw_passed=None` when tool detected
-    but not actually invoked, NOT True (which would lie about coverage)."""
+    """Stage 129 / v2.4 item 13 — real-HW dispatch for ROCm is still
+    deferred (only PTX+ptxas is wired so far); the validation result
+    honestly reports `real_hw_passed=None` when a tool is detected but
+    not actually invoked, NOT True (which would lie about coverage)."""
     src = "@kernel fn k() {}"
     prog = parse(src)
     tile_mod = lower_to_tile(lower(prog))
@@ -146,12 +147,73 @@ def test_stage129_real_hw_deferred_to_stage_130():
 
     result = validate_emit(text, BackendKind.ROCM_HIP, attempt_real_hw=True)
     if result.real_hw_attempted:
-        # Tool was detected — real_hw_passed must be None (deferred), not True.
+        # hipcc detected — ROCm dispatch not yet wired, so the result
+        # must be DEFERRED (real_hw_passed=None), not a lie.
         assert result.real_hw_passed is None
-        assert any("Stage 130" in f for f in result.real_hw_findings)
+        assert any("not yet wired" in f for f in result.real_hw_findings)
     else:
         # Tool not available — that's also a valid outcome.
         assert result.real_hw_passed is None
+
+
+def test_v24_dispatch_ptxas_tool_not_found():
+    """v2.4 item 13 — _dispatch_ptxas surfaces a missing/non-executable
+    tool loudly as (False, [diagnostic]) rather than swallowing the
+    FileNotFoundError into a silent pass. Deterministic — exercises
+    the error path with a tool name guaranteed not to exist."""
+    from helixc.backend.gpu_ci import _dispatch_ptxas
+    passed, findings = _dispatch_ptxas(
+        ".version 8.3\n", "helix_no_such_ptxas_xyz123")
+    assert passed is False
+    assert len(findings) == 1
+    assert "not found" in findings[0]
+
+
+def test_v24_validate_emit_ptx_real_hw_tool_absent_is_deterministic():
+    """v2.4 item 13 — when ptxas is not on PATH, PTX real-HW dispatch
+    does not run: validate_emit returns real_hw_attempted=False with
+    the post-init invariants intact (tool None, findings empty,
+    passed None). Regression-pin: wiring the dispatch must not change
+    behavior on a tool-less machine."""
+    from helixc.backend.ptx import PtxEmitter
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = PtxEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.PTX, attempt_real_hw=True)
+    if not requires_backend_tool(BackendKind.PTX):
+        # No ptxas/nvcc on PATH — dispatch must not run.
+        assert result.real_hw_attempted is False
+        assert result.real_hw_tool is None
+        assert result.real_hw_passed is None
+        assert result.real_hw_findings == ()
+    else:
+        # A toolchain IS present — dispatch (or deferred-for-nvcc) ran.
+        assert result.real_hw_attempted is True
+
+
+@pytest.mark.skipif(
+    "ptxas" not in detect_tools(BackendKind.PTX),
+    reason="ptxas not on PATH — real-HW dispatch path cannot be exercised",
+)
+def test_v24_validate_emit_ptx_real_hw_dispatch_runs_ptxas():
+    """v2.4 item 13 — when ptxas IS available, PTX real-HW dispatch
+    actually invokes it. The emitted substrate PTX may or may not
+    assemble cleanly (operand-less mnemonics until item 15 RegAlloc),
+    so we assert only that dispatch RAN: real_hw_attempted=True,
+    real_hw_tool='ptxas', and real_hw_passed is a concrete bool
+    (not None — None would mean still-deferred)."""
+    from helixc.backend.ptx import PtxEmitter
+    src = "@kernel fn empty_kernel() {}"
+    prog = parse(src)
+    tile_mod = lower_to_tile(lower(prog))
+    text = PtxEmitter().emit_module(tile_mod)
+
+    result = validate_emit(text, BackendKind.PTX, attempt_real_hw=True)
+    assert result.real_hw_attempted is True
+    assert result.real_hw_tool == "ptxas"
+    assert isinstance(result.real_hw_passed, bool)  # concrete, not deferred
 
 
 def test_stage129_validate_emit_rejects_unknown_backend():

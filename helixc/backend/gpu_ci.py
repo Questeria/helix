@@ -27,8 +27,11 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -229,6 +232,78 @@ _MOCK_VALIDATORS = {
 }
 
 
+# ============================================================================
+# Real-HW dispatch (v2.4 item 13)
+# ============================================================================
+# Default NVIDIA arch for ptxas. Matches helixc.backend.ptx.DEFAULT_TARGET
+# (sm_75 Turing baseline). A caller targeting a newer GPU can override.
+DEFAULT_PTXAS_ARCH = "sm_75"
+
+# Hard cap on a single real-HW tool invocation. A hung assembler must
+# not stall a CI run — TimeoutExpired is caught and surfaced as a
+# finding, not a swallowed silent pass.
+REAL_HW_TIMEOUT_S = 30
+
+
+def _dispatch_ptxas(text: str, tool: str,
+                    gpu_arch: str = DEFAULT_PTXAS_ARCH,
+                    timeout_s: int = REAL_HW_TIMEOUT_S) -> tuple[bool, list[str]]:
+    """v2.4 item 13 — real-HW dispatch for the PTX backend.
+
+    Writes the emitted PTX to a temp file and runs `ptxas` on it.
+    ptxas assembles PTX text directly to a cubin and exits non-zero
+    with a stderr diagnostic on any assembly error — so this is a
+    genuine syntax+semantics gate, not a mock string-check.
+
+    Returns (passed, findings): passed=True iff ptxas exited 0;
+    findings carries the ptxas diagnostic (truncated) on failure,
+    the timeout message on a hang, or a tool-not-found message if
+    `tool` vanished between detect_tools() and dispatch.
+
+    NOTE: Helix's current PTX emit is substrate-level — operand-less
+    mnemonics for several tile ops (real RegAlloc is v2.4 item 15).
+    ptxas will legitimately reject such kernels; that is the honest,
+    correct outcome and exactly what this gate exists to surface.
+    Once item 15 lands, the same dispatch starts reporting passes.
+
+    This slice wires PTX only; ROCm/Metal/WebGPU real-HW dispatch
+    land in subsequent item-13 slices (their tool<->text-format
+    matchups need llvm-mc / xcrun-metal / naga respectively).
+    """
+    tmpdir = tempfile.mkdtemp(prefix="helix_ptxas_")
+    in_path = os.path.join(tmpdir, "kernel.ptx")
+    out_path = os.path.join(tmpdir, "kernel.cubin")
+    try:
+        with open(in_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        cmd = [tool, in_path, "-o", out_path, f"--gpu-name={gpu_arch}"]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return False, [
+                f"ptxas dispatch timed out after {timeout_s}s "
+                f"(tool={tool!r}, arch={gpu_arch})"
+            ]
+        except FileNotFoundError:
+            # detect_tools() saw the tool on PATH but it vanished (or
+            # is not executable) by dispatch time. Surface loudly —
+            # do not silently fall back to a mock pass.
+            return False, [
+                f"ptxas dispatch: tool {tool!r} not found / not "
+                f"executable at invocation time"
+            ]
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            return False, [
+                f"ptxas exit {proc.returncode}: {diag[:500]}"
+            ]
+        return True, []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 # Stage 129 type-design audit-fix: module-load drift detector.
 # Catches the case where a new BackendKind is added without updating
 # GPU_TOOLS or _MOCK_VALIDATORS. Same pattern as the per-backend
@@ -284,15 +359,28 @@ def validate_emit(text: str, backend: BackendKind,
         if available:
             real_hw_attempted = True
             real_hw_tool = available[0]
-            # Stage 129 substrate: real-HW validation harness exists
-            # but actual tool dispatch is deferred to Stage 130. We
-            # mark `real_hw_passed = None` (deferred) rather than True
-            # so the result doesn't lie about coverage.
-            real_hw_passed = None
-            real_hw_findings.append(
-                f"Stage 129: real-HW tool '{real_hw_tool}' detected but "
-                f"dispatch deferred to Stage 130+"
-            )
+            # v2.4 item 13 — real-HW dispatch. PTX via ptxas is wired
+            # (ptxas assembles PTX text directly). The other 3 backends
+            # remain deferred until their item-13 slices land — their
+            # tool<->text-format matchups need llvm-mc / xcrun-metal /
+            # naga rather than the hipcc / xcrun / naga|wgpu|dawn_node
+            # entries currently in GPU_TOOLS.
+            if backend is BackendKind.PTX and real_hw_tool == "ptxas":
+                passed, dispatch_findings = _dispatch_ptxas(
+                    text, real_hw_tool)
+                real_hw_passed = passed
+                real_hw_findings.extend(dispatch_findings)
+            else:
+                # Deferred: tool detected but dispatch not yet wired
+                # for this backend. `real_hw_passed = None` (deferred)
+                # rather than True so the result doesn't lie about
+                # coverage — `overall_status()` maps this to DEFERRED.
+                real_hw_passed = None
+                real_hw_findings.append(
+                    f"v2.4 item 13: real-HW tool '{real_hw_tool}' "
+                    f"detected but dispatch for backend "
+                    f"{backend.name} not yet wired"
+                )
 
     return ValidationResult(
         backend=backend,
