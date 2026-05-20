@@ -49,9 +49,9 @@ VERSIONS: list[dict[str, str]] = [
      "theme": "Type-system design polish"},
     {"id": "v2.4", "status": "released",
      "theme": "Real-GPU testing + attestation + register allocator"},
-    {"id": "v2.5", "status": "in_progress",
+    {"id": "v2.5", "status": "released",
      "theme": "Wiring the register allocator into real GPU kernels"},
-    {"id": "v3.0", "status": "planned",
+    {"id": "v3.0", "status": "in_progress",
      "theme": "The big rewrite - industrial MLIR + LLVM backend"},
 ]
 
