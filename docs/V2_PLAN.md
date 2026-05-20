@@ -2394,7 +2394,20 @@ substring match; standalone-cascade PASS on empty sha / crash code);
 TEST-LOW (stale comment in test_property_runner.py); plus the ~12 LOW
 from the first re-audit pass.
 
-**Gate status: OPEN.** Next: ship the R3 batch (5 MEDIUM fixes above),
-then re-run the 5-clean-gate. When it returns no HIGH / must-fix
-MEDIUM and the test suite is green, record "pre-v3.0 re-audit gate
-CLOSED" and v3.0 Stage 200 unpauses.
+**R3 SHIPPED — commit `103ec4a`.** All 5 MEDIUM findings fixed and
+verified: FE-N1 (autodiff loud arms for Index/Field/aggregates + an
+empty-`TupleLit` unit-value guard so `match`-lowering still
+differentiates), RT-M1/M2 (dashboard_server knob-presence checks —
+an unsupported knob is rejected, not silently dropped), RT-M3
+(selfhost_cascade parses the binary's real exit code instead of
+hardwiring `actual_exit = expected`), TEST-MED (test_codegen
+narrowed `except Exception` → `except NotImplementedError`, tightened
+`code in (42,0)` → `== 42`). Verification: test_autodiff +
+test_autodiff_reverse + test_dashboard_server + test_selfhost_cascade
++ test_selfhost_cascade_validate 113 pass; test_codegen.py
+struct-passed 2 pass.
+
+**Gate status: OPEN — final step.** Next: re-run the 5-clean-gate
+(silent-failure-hunters on FE/IR/BE/RT/TEST). When it returns no
+HIGH / must-fix MEDIUM and the test suite is green, record
+"pre-v3.0 re-audit gate CLOSED" and v3.0 Stage 200 unpauses.
