@@ -6041,7 +6041,18 @@ class TypeChecker:
                         try:
                             return float(s)
                         except ValueError:
-                            return 0.0
+                            # v2.x re-audit R2b (FE 5-clean-gate
+                            # MEDIUM): a malformed budget string must
+                            # fail loudly. Silently substituting 0.0
+                            # drops a real budget from the accumulating
+                            # sum, letting an over-budget computation
+                            # typecheck clean — the exact silent
+                            # corruption these wrapper types exist to
+                            # prevent. (Same fix on the TyEnergy /
+                            # TyRobust / TyDP budget helpers below.)
+                            raise RuntimeError(
+                                f"typecheck: TyDeadline latency budget "
+                                f"{s!r} is not a valid number")
                     total = (_us_to_float(l_deadline_us or "0.0")
                              + _us_to_float(r_deadline_us or "0.0"))
                     chosen_us = repr(total)
@@ -6052,8 +6063,10 @@ class TypeChecker:
                     def _budget_to_float(s: str) -> float:
                         try:
                             return float(s)
-                        except ValueError:
-                            return 0.0
+                        except ValueError:  # see _us_to_float above
+                            raise RuntimeError(
+                                f"typecheck: TyEnergy budget value "
+                                f"{s!r} is not a valid number")
                     total = (_budget_to_float(l_energy_budget or "0.0")
                              + _budget_to_float(r_energy_budget or "0.0"))
                     chosen_budget = repr(total)
@@ -6065,8 +6078,10 @@ class TypeChecker:
                     def _eps_to_float(s: str) -> float:
                         try:
                             return float(s)
-                        except ValueError:
-                            return 0.0
+                        except ValueError:  # see _us_to_float above
+                            raise RuntimeError(
+                                f"typecheck: TyRobust eps value "
+                                f"{s!r} is not a valid number")
                     total = (_eps_to_float(l_robust_eps or "0.0")
                              + _eps_to_float(r_robust_eps or "0.0"))
                     chosen_eps = repr(total)
@@ -6099,8 +6114,10 @@ class TypeChecker:
                     def _eps_to_float(s: str) -> float:
                         try:
                             return float(s)
-                        except ValueError:
-                            return 0.0
+                        except ValueError:  # see _us_to_float above
+                            raise RuntimeError(
+                                f"typecheck: TyDP epsilon value "
+                                f"{s!r} is not a valid number")
                     total = (_eps_to_float(l_dp_eps or "0.0")
                              + _eps_to_float(r_dp_eps or "0.0"))
                     # Use repr() so 1.0 stays "1.0" (not "1") — keeps

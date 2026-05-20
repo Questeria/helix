@@ -2234,3 +2234,20 @@ non-functional by `validate_emit`. New `test_run.py` — `_run_one`
 checks each demo's documented exit code (40/77/1/42/43-44; mandelbrot
 0), not `code == 0`. Remaining: the MEDIUM/LOW findings (R2b) + the
 gate re-run.
+
+**R2b (in progress) — MEDIUM findings.** Shipped so far:
+- 5 weak-assertion TEST findings hardened — the autodiff `"x" in out`
+  substring checks became exact-form asserts (`(((x + x) * x) + (x *
+  x))`, `(x + x)`, `(y + y)`), and `test_v22_ptx_module_load_coverage_check`
+  gained the negative path its docstring claimed but never built.
+- FE-M2 — the four `typecheck.py` wrapper-budget helpers
+  (`_us_to_float` / `_budget_to_float` / `_eps_to_float` ×2) replaced
+  `except ValueError: return 0.0` with a loud `raise`. A malformed
+  budget string silently became 0.0 and vanished from the
+  accumulating sum, letting an over-budget computation typecheck
+  clean — latent today (Phase-0 presets are valid) but a
+  silent-corruption foot-gun once user-defined budgets ship.
+
+Still open: FE-M3 (autodiff_reverse arity), FE-M4 (match_lower
+nested-pattern bind), the BE MEDIUMs (x86_64.py), the RT MEDIUM, the
+TEST `_zip_cmp_test` finding — then the gate re-run.
