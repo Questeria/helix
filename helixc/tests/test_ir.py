@@ -1192,6 +1192,34 @@ def test_c110_neg_u64_emits_64bit_form():
     )
 
 
+def test_v25_array_param_indexing_is_a_known_limitation():
+    """KNOWN LIMITATION (tracked in docs/V2_PLAN.md) — indexing an
+    array-typed function PARAMETER (`fn g(a: [i32; N], i: i32) { a[i] }`)
+    passes parse + typecheck but is not yet supported by the backend:
+    lowering raises NotImplementedError ("A.Index on non-tensor/tile
+    callee"). Indexing a LOCAL array lowers fine — the gap is specific
+    to array-typed parameters.
+
+    This is the root cause of the Bucket B test_codegen.py failure: the
+    hbs_sample_tree_eval.hx example had dead accessor functions using
+    exactly this construct (closed in `3d5ada8` by deleting them). This
+    is a FAST regression pin — unlike test_codegen.py (~1h43m full run),
+    test_ir.py runs every fire, so a behavior change here surfaces
+    immediately. When array-parameter indexing is implemented (or
+    typecheck is made to reject it with a clean diagnostic instead of
+    letting lowering raise), update this test."""
+    # Baseline: indexing a LOCAL array lowers cleanly.
+    lower(parse(
+        "fn main() -> i32 { let a: [i32; 3] = [10, 20, 30]; a[1] }",
+        include_stdlib=False))
+    # The limitation: indexing an array-typed PARAMETER does not —
+    # lowering raises rather than emit a wrong address.
+    src = ("fn g(a: [i32; 3], i: i32) -> i32 { a[i] }\n"
+           "fn main() -> i32 { 0 }\n")
+    with pytest.raises(NotImplementedError, match="non-tensor/tile callee"):
+        lower(parse(src, include_stdlib=False))
+
+
 def main():
     tests = [(name, fn) for name, fn in globals().items()
              if name.startswith("test_") and callable(fn)]

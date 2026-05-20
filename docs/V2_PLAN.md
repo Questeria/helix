@@ -1454,3 +1454,30 @@ the accessor-function form return.
 Verification: all 9 originally-failing tests now pass together
 (9 passed, 56s). `wip-codegen-9-test-failures-blocker.md` retired —
 the blocker is fully closed.
+
+### 2026-05-20 — fast regression pin for the array-param-indexing gap
+
+Follow-up to the Bucket B closure (`3d5ada8`). That fire fixed the
+`hbs_sample_tree_eval.hx` example by deleting its dead accessor
+functions, but the underlying gap had no test pinning it: indexing an
+array-typed function PARAMETER (`fn g(a: [i32; N], i) { a[i] }`)
+passes parse + typecheck yet raises `NotImplementedError` ("A.Index
+on non-tensor/tile callee") at lowering. Probed + confirmed this
+fire: a LOCAL array indexes fine; only array-typed *parameters* hit
+the gap.
+
+The Bucket B root cause sat unseen because the only test exercising
+it lived in `test_codegen.py` (~1h43m full run — never run per-fire).
+This fire adds `test_v25_array_param_indexing_is_a_known_limitation`
+to `test_ir.py` (runs every fire, 0.68s): it pins both the baseline
+(local array indexing lowers cleanly) and the limitation (array-param
+indexing raises). A behavior change now surfaces immediately, in a
+fast suite.
+
+This is a regression PIN, not a fix. The proper fix (a backend
+limitation, not a v2.5 blocker — no shipped code uses the construct)
+is one of: (a) typecheck rejects array-parameter indexing with a
+clean diagnostic — the lowering message itself says "typecheck should
+have rejected this"; or (b) the backend gains array-parameter
+indexing support. Tracked as a future item; the new test is the
+flip-point when it lands.
