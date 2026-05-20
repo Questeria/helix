@@ -1188,3 +1188,45 @@ v2.4 commit set (since v2.3.0 `095c492`) — 30+ commits across:
 
 MLIR migration + LLVM IR rewrite, per v2.0 research "v3.0
 candidates". User authority covers through v3.0.
+
+### 2026-05-20T01:52Z — fire note: v2.5 item 1 slice 6 (skip predicate) landed; concurrency churn high
+
+The intended deliverable for this fire — `allocate_by_class`'s
+`skip` predicate + `MultiClassResult.skipped` + the empty-
+`class_pools` guard (IR LOW-1) — was implemented this fire but
+committed by a *concurrent* fire as `4d7f0d3` ("v2.5 item 15
+slice 6 prep"), which swept this fire's dirty tree. The two fires
+converged on the identical change; `4d7f0d3` is exactly this work
+(regalloc.py +51 / test_regalloc.py +114, 5 new `test_v25_*`
+tests). Re-verified green at HEAD `e7768f4`: test_regalloc +
+test_regalloc_classes = 48 pass.
+
+**Concurrency observation.** Five v2.5 commits landed inside this
+fire's single window — `b169f60` (RegAssignment NamedTuple),
+`4d7f0d3` (skip predicate), `e781c49` (Literal register-class
+types), `09f2560` (test_cli match= anchors), `e7768f4` (Stage 35
+test fix). The cron loop is NOT stalled — the opposite: several
+fires run concurrently and are chewing the v2.5 polish backlog
+fast. The skip-predicate collision resolved cleanly only because
+both fires produced byte-identical intent — luck, not design.
+
+**Next substantive slice (v2.5 item 1 proper).** The allocator
+side is now complete (slices 1-6: linear-scan, liveness, multi-
+class, PTX/ROCm class models, skip predicate). What remains is the
+*consumer* side — and it should be taken as ONE focused fire to
+avoid a multi-fire collision on the 1656-line `ptx.py`:
+- `PtxEmitter.plan_register_allocation(fn)` — call
+  `allocate_by_class(fn, ptx_register_class, PTX_REGISTER_POOLS,
+  skip=lambda v: not isinstance(v.ty, tir.TIRScalar))`, then
+  assert `spill_count == 0` (IR LOW-2) before trusting the
+  assignment.
+- Then thread the assignment into operand emission — the high-
+  regression-risk part; `test_codegen.py` green (102 PTX golden
+  pins) is the gate.
+- HipEmitter is currently stub-only (`emit_kernel_stub`); its
+  wiring follows once it emits real op bodies.
+
+This fire committed only this note (`git add docs/V2_PLAN.md` —
+scoped); `gpu_ci.py` was left dirty by a concurrent fire and is
+deliberately untouched, as committing a peer fire's partial work
+could break its build.
