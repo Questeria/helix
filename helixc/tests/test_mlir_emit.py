@@ -948,6 +948,117 @@ def test_emit_tile_transpose_fails_closed_on_wrong_result_shape():
 
 
 # --------------------------------------------------------------------------
+# the function-call emitter (chunk G)
+# --------------------------------------------------------------------------
+def _call(target: object, operands: list[tile_ir.TileValue],
+          results: list[tile_ir.TileValue]) -> tile_ir.TileOp:
+    """A Tile-IR `CALL` op naming `target` as the callee."""
+    return tile_ir.TileOp(_TK.CALL, operands=list(operands),
+                          results=list(results), attrs={"target": target})
+
+
+def test_emit_call_with_result():
+    """`call` -> `%vR = func.call @callee(%args) : (argtypes) ->
+    rettype` — a value-returning direct call; the callee name is the
+    Tile-IR `target` attribute."""
+    x = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "caller": _fn("caller", [x], _S("i32"),
+                      _call("callee", [x], [r]), _ret(r))}))
+    assert "%v1 = func.call @callee(%v0) : (i32) -> i32" in text
+
+
+def test_emit_call_void():
+    """A call with no result — hand-built Tile-IR — emits `func.call
+    @callee() : () -> ()` with no SSA result binding."""
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "caller": _fn("caller", [], tir.TIRUnit(),
+                      _call("side_effect", [], []), _ret())}))
+    assert "func.call @side_effect() : () -> ()" in text
+    assert "= func.call" not in text          # no result binding
+
+
+def test_emit_call_unit_result_is_void():
+    """A call to a unit-returning callee — the shape the front end
+    builds: a CALL carrying ONE `TIRUnit`-typed result — is a VOID call
+    `func.call @callee() : () -> ()`. Unit is not a materialized MLIR
+    value, so the result binds no `%v<id>` and the signature never ends
+    `-> none` (a dangling SSA name no consumer could use)."""
+    u = tile_ir.TileValue(0, tir.TIRUnit())
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "caller": _fn("caller", [], tir.TIRUnit(),
+                      _call("side_effect", [], [u]), _ret())}))
+    assert "func.call @side_effect() : () -> ()" in text
+    assert "-> none" not in text               # never a dangling none
+    assert "= func.call" not in text           # no result binding
+
+
+def test_emit_call_nullary_with_result():
+    """A no-argument value-returning call emits an empty argument list
+    and an empty `()` signature — `%vR = func.call @f() : () -> T`."""
+    r = tile_ir.TileValue(0, _S("f32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "caller": _fn("caller", [], _S("f32"),
+                      _call("make", [], [r]), _ret(r))}))
+    assert "%v0 = func.call @make() : () -> f32" in text
+
+
+def test_emit_call_multiple_args():
+    """A call passes its operands and their types in order — the
+    argument list and the `(argtypes)` signature line up."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("f32"))
+    r = tile_ir.TileValue(2, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "caller": _fn("caller", [a, b], _S("i32"),
+                      _call("g", [a, b], [r]), _ret(r))}))
+    assert "%v2 = func.call @g(%v0, %v1) : (i32, f32) -> i32" in text
+
+
+def test_emit_call_function_passes_mock_validate():
+    """A function that calls another emits structurally well-formed
+    MLIR (`mock_validate_mlir` -> DEFERRED)."""
+    x = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "caller": _fn("caller", [x], _S("i32"),
+                      _call("callee", [x], [r]), _ret(r))}))
+    assert mock_validate_mlir(text).deferred(), text
+
+
+def test_emit_call_fails_closed_on_missing_target():
+    """A `call` with no `target` attribute fails closed — a callee with
+    no MLIR symbol name has no faithful `func.call`."""
+    fn = _fn("caller", [], tir.TIRUnit(),
+             tile_ir.TileOp(_TK.CALL), _ret())
+    with pytest.raises(MLIRTranslationError, match="no identifier"):
+        emit_mlir_module(tile_ir.TileModule(functions={"caller": fn}))
+
+
+def test_emit_call_fails_closed_on_non_identifier_target():
+    """A `call` whose `target` is not a plain identifier fails closed —
+    a name with no MLIR symbol spelling, or a non-string."""
+    for bad in ("bad-name", 123):
+        fn = _fn("caller", [], tir.TIRUnit(),
+                 _call(bad, [], []), _ret())
+        with pytest.raises(MLIRTranslationError, match="no identifier"):
+            emit_mlir_module(tile_ir.TileModule(functions={"caller": fn}))
+
+
+def test_emit_call_fails_closed_on_multiple_results():
+    """A `call` with more than one result fails closed — a Helix
+    function returns one value or unit."""
+    r1 = tile_ir.TileValue(0, _S("i32"))
+    r2 = tile_ir.TileValue(1, _S("i32"))
+    fn = _fn("caller", [], tir.TIRUnit(),
+             _call("g", [], [r1, r2]), _ret())
+    with pytest.raises(MLIRTranslationError,
+                       match="returns one value or unit"):
+        emit_mlir_module(tile_ir.TileModule(functions={"caller": fn}))
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — emit is pure text, never `import mlir`
 # --------------------------------------------------------------------------
 def test_emit_module_is_pure_text_no_mlir_import():

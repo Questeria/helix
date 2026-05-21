@@ -56,10 +56,18 @@ Chunk F — the layout-transform tile-op emitters. `tile.reshape` ->
 change; no attribute needed) and `tile.transpose` -> `vector.transpose
 %src, [1, 0]` (chunk F handles the 2-D tile transpose — its
 permutation is unambiguously `[1, 0]`; an N-D transpose needs an
-explicit permutation attribute and fails closed). The attribute-heavy
-tile ops (`tile.matmul` / `reduce` / `const`), `memref` / `gpu`,
-`call`, the `helix` dialect, and `scalar.neg` remain later chunks;
-`_emit_op` FAILS CLOSED on them.
+explicit permutation attribute and fails closed).
+
+Chunk G — the `func.call` emitter. `call` -> `%vR = func.call
+@callee(%args) : (argtypes) -> rettype` (or `-> ()` for a void
+callee). The callee is the Tile-IR `target` attribute; a Helix
+function returns one value or unit, so a `call` has 0 or 1 result.
+The attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`),
+the `memref` tile load / store ops, the `gpu` ops (`thread_idx` /
+`tile.index_load/store_hbm` — `gpu.thread_id` yields an `index`, so a
+cast to the i32 IR type makes it a two-op lowering), the `helix`
+dialect, and `scalar.neg` remain later chunks; `_emit_op` FAILS
+CLOSED on them.
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -719,15 +727,58 @@ def _emit_tile_transpose(op: tile_ir.TileOp) -> str:
             f"{render_mlir_type(r.ty)}")
 
 
+# --- the function-call emitter (Stage 212 chunk G) ---
+def _emit_call(op: tile_ir.TileOp) -> str:
+    """`%vR = func.call @callee(%args) : (argtypes) -> rettype` — a
+    direct function call. The callee name is the Tile-IR `target`
+    attribute; a Helix function returns one value or unit, so a `call`
+    has at most one result.
+
+    A call whose single result is UNIT-typed (`TIRUnit`) is a VOID call
+    — `func.call @callee(...) : (...) -> ()`, binding no SSA result.
+    This is the shape the front end builds for a call to a `() -> ()`
+    function: it emits the `CALL` with `result_ty` set to the callee's
+    return type, so a void callee yields a one-`TIRUnit`-result op.
+    Unit is not a materialized MLIR value — the same rule `_emit_fn`
+    applies to a unit-returning function (no `->` clause) and the LLVM
+    backend's `_emit_call` applies (`call void`). A 0-result call
+    (hand-built Tile-IR) takes the same void form."""
+    callee = op.attrs.get("target")
+    if not (isinstance(callee, str) and callee.isidentifier()):
+        raise MLIRTranslationError(
+            f"call has no identifier `target` attribute (got "
+            f"{callee!r}) — a callee with no plain MLIR symbol name; "
+            f"the translator fails closed")
+    if len(op.results) > 1:
+        raise MLIRTranslationError(
+            f"call has {len(op.results)} results — a Helix function "
+            f"returns one value or unit; the translator fails closed")
+    arg_refs = ", ".join(_value_ref(o) for o in op.operands)
+    arg_types = ", ".join(render_mlir_type(o.ty) for o in op.operands)
+    # A call with no result, or a single unit-typed (`none`) result, is
+    # a VOID call — `()` is not a materialized MLIR SSA value, so it
+    # binds no result name and the signature ends `-> ()`. Emitting
+    # `-> none` with a `%v<id>` binding would mint a dangling SSA name
+    # no consumer can use. Mirrors the LLVM backend's `_emit_call` ("a
+    # call with no result, or a unit-typed result, is a void call").
+    if not op.results or isinstance(op.results[0].ty, tir.TIRUnit):
+        return (f"func.call @{callee}({arg_refs}) : "
+                f"({arg_types}) -> ()")
+    r = op.results[0]
+    return (f"{_value_ref(r)} = func.call @{callee}({arg_refs}) : "
+            f"({arg_types}) -> {render_mlir_type(r.ty)}")
+
+
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
-# B-F emit the function terminator, the scalar `arith` core, compare /
-# select, the elementwise `vector` tile ops, and the layout-transform
-# tile ops; the remaining per-op emitters (`scalar.neg`, the
-# attribute-heavy tile ops — matmul / reduce / const, `memref` /
-# `gpu`, `call`, `helix`) are added in later chunks. `_emit_op` FAILS
-# CLOSED on any op kind absent here, so the partial table is safe —
-# never a silent miss. No completeness guard, deliberately: the table
-# is MEANT to be incomplete until the per-op chunks land.
+# B-G emit the function terminator, the scalar `arith` core, compare /
+# select, the elementwise `vector` tile ops, the layout-transform
+# tile ops, and the `func.call`; the remaining per-op emitters
+# (`scalar.neg`, the attribute-heavy tile ops — matmul / reduce /
+# const, the `memref` tile load / store ops, the `gpu` ops, `helix`)
+# are added in later chunks. `_emit_op` FAILS CLOSED on any op kind
+# absent here, so the partial table is safe — never a silent miss. No
+# completeness guard, deliberately: the table is MEANT to be
+# incomplete until the per-op chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
                    Callable[[tile_ir.TileOp], str]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
@@ -744,6 +795,7 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
     tile_ir.TileOpKind.TILE_ZEROS: _emit_tile_zeros,
     tile_ir.TileOpKind.TILE_RESHAPE: _emit_tile_reshape,
     tile_ir.TileOpKind.TILE_TRANSPOSE: _emit_tile_transpose,
+    tile_ir.TileOpKind.CALL: _emit_call,
 }
 
 

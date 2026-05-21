@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-F 3-clean ✓ | Phase E — chunks A-F shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-G 3-clean ✓ | Phase E — chunks A-G shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters; func.call) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1084,3 +1084,28 @@ depend on a clean, unambiguous full-suite run.
   fail closed on the rest" boundary was endorsed as sound. Next:
   Stage 212 chunk G — the `memref` / `gpu` tile ops (the tile load /
   store and GPU-index ops), or `call`.
+
+- 2026-05-20 — **Stage 212 chunk G shipped — the `func.call`
+  emitter.** `emit.py`'s `_OP_EMITTERS` gains `call` → `func.call`:
+  `%vR = func.call @callee(%args) : (argtypes) -> rettype` for a
+  value-returning call, and the void form `func.call @callee(...) :
+  (...) -> ()` (no SSA result binding) for a call whose result is
+  unit-typed or absent. The callee symbol name is the Tile-IR `target`
+  attribute. Fail-closed throughout — a missing / non-identifier
+  `target`, or more than one result, raises `MLIRTranslationError`.
+  The void-call rule mirrors the sibling LLVM backend's `_emit_call`
+  (`llvm_ir.py`): the front end builds every `CALL` with `result_ty`
+  set, so a call to a `() -> ()` function yields a one-`TIRUnit`-
+  result op — unit is not a materialized MLIR value, so it emits
+  `-> ()`, never a dangling `-> none` SSA binding. 82 tests
+  (`test_mlir_emit.py`, +9 chunk G). Per-stage 3-clean audit: round 1
+  — all three surfaces converged on ONE must-fix (a unit-typed `CALL`
+  result emitting `%vR ... -> none`, a dangling SSA name no consumer
+  could use); fixed by routing a unit-typed result to the void form;
+  a separate reserved-word concern (`@`-prefixed MLIR symbols are a
+  distinct namespace, never keywords) was refuted. Re-audit CLEAN on
+  all three surfaces — 0 HIGH / 0 must-fix-MEDIUM. Next: Stage 212 —
+  the `memref` tile load / store ops, the `gpu` ops (`thread_idx`
+  needs a two-op `gpu.thread_id` + `arith.index_cast` lowering), the
+  attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`), and
+  `scalar.neg`; then close Stage 212 (`V3_STAGES_DONE` → 12).
