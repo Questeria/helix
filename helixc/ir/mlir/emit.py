@@ -29,6 +29,17 @@ emits SINGLE-BLOCK functions and `func.return`; multi-block CFG (the
 the translator FAILS CLOSED on them, and on any function whose
 signature is internally inconsistent.
 
+Chunk C — the scalar `arith` op emitters. The first per-op chunk:
+`scalar.const_int` / `const_float` -> `arith.constant`, and
+`scalar.add` / `sub` / `mul` -> `arith.{add,sub,mul}{i,f}` (the
+integer vs. float mnemonic chosen by the operand type). The emitters
+are STATELESS — every Tile-IR value's SSA name is `%v<id>`, a pure
+function of its id, so a result and its later uses name-match with no
+per-function symbol table (MLIR emits `arith.constant` ops rather than
+inlining constants, so a constant result has an ordinary `%v<id>`
+name). Compare / select, the `vector` tile ops, `memref` / `gpu`, and
+the `helix` dialect are later chunks; `_emit_op` FAILS CLOSED on them.
+
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
 or device, a non-static tile dimension, an unknown IR type — raises
@@ -46,6 +57,7 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 from .. import tile_ir, tir
@@ -282,12 +294,12 @@ _check_dim_coverage()
 def _value_ref(v: tile_ir.TileValue) -> str:
     """The MLIR SSA reference for a Tile-IR value — `%v<id>`.
 
-    Chunk B references only function parameters, whose SSA name IS
-    `%v<id>`. Chunk C (constants, computed results) will need a
-    stateful name map — a folded constant has no `%v<id>` register —
-    at which point the emitter becomes stateful (cf. the sibling
-    `llvm_ir._FnEmitter`'s `operand` map). This pure id->name function
-    is the chunk-B simplification, valid while only params are named."""
+    Every Tile-IR value — a parameter, a constant, a computed result —
+    has a unique `TileValue.id`, so `%v<id>` is a uniform SSA name and
+    the emitter stays STATELESS (no per-function symbol table). Unlike
+    the LLVM backend, which INLINES constants and so holds no register
+    for one, MLIR emits `arith.constant` ops — a constant result has
+    an ordinary `%v<id>` name like any other value."""
     return f"%v{v.id}"
 
 
@@ -304,15 +316,155 @@ def _emit_return(op: tile_ir.TileOp) -> str:
     return f"func.return {_value_ref(v)} : {render_mlir_type(v.ty)}"
 
 
-# Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunk B
-# emits only the function terminator; the per-op emitters (arith /
-# vector / memref / gpu / helix) are added in later chunks. `_emit_op`
-# FAILS CLOSED on any op kind absent here, so the partial table is
-# safe — never a silent miss. No completeness guard, deliberately: the
-# table is MEANT to be incomplete until the per-op chunks land.
+# --- the scalar `arith` op emitters (Stage 212 chunk C) ---
+def _single_result(op: tile_ir.TileOp, op_name: str) -> tile_ir.TileValue:
+    """The one result of a single-result op — fails closed on any
+    other result count."""
+    if len(op.results) != 1:
+        raise MLIRTranslationError(
+            f"{op_name} expects exactly 1 result, got "
+            f"{len(op.results)} — the translator fails closed")
+    return op.results[0]
+
+
+def _scalar_arith_type(ty: tir.TIRType, op_name: str) -> tuple[str, bool]:
+    """`(mlir_type, is_integer)` for a scalar-arithmetic operand /
+    result type. Fails closed on a non-scalar type — the chunk-C
+    `arith` emitters handle scalar ops only. `is_integer` is True for
+    every MLIR integer type (`i1`..`i64`), False for the floats."""
+    if not isinstance(ty, tir.TIRScalar):
+        raise MLIRTranslationError(
+            f"{op_name}: type is {type(ty).__name__}, not a scalar — "
+            f"the chunk-C `arith` emitters handle scalar ops only; the "
+            f"translator fails closed")
+    mlir = render_mlir_type(ty)        # fails closed on char / quantized
+    return mlir, mlir.startswith("i")
+
+
+def _emit_const_int(op: tile_ir.TileOp) -> str:
+    """`%vR = arith.constant <n> : <iN>` — an integer scalar constant."""
+    r = _single_result(op, "scalar.const_int")
+    if op.operands:
+        raise MLIRTranslationError(
+            "scalar.const_int takes no operands — the translator fails "
+            "closed")
+    value = op.attrs.get("value")
+    # A Python `bool` is an `int` subclass — `type(...) is int` rejects
+    # a stray bool, which would be malformed IR (a boolean constant is
+    # a distinct op, not a `scalar.const_int`).
+    if type(value) is not int:
+        raise MLIRTranslationError(
+            f"scalar.const_int has no integer `value` attribute (got "
+            f"{value!r}) — the translator fails closed")
+    mlir, is_int = _scalar_arith_type(r.ty, "scalar.const_int")
+    if not is_int:
+        raise MLIRTranslationError(
+            f"scalar.const_int has a non-integer result type ({mlir}) "
+            f"— the translator fails closed")
+    return f"{_value_ref(r)} = arith.constant {value} : {mlir}"
+
+
+def _float_literal(value: float) -> str:
+    """A FINITE float as an MLIR float literal — round-trip-precise and
+    always carrying a decimal point.
+
+    MLIR's float-literal grammar requires a `.`; Python's `repr` omits
+    it for round magnitudes in scientific notation (`repr(1e20)` is
+    `'1e+20'` — no `.`). This inserts the `.0` and renders a plain
+    decimal exponent (`int(...)` drops the `+` and any leading zeros),
+    so `1e20` becomes the MLIR-valid `1.0e20`."""
+    text = repr(value)
+    if "e" not in text:
+        return text if "." in text else text + ".0"
+    mantissa, _, exponent = text.partition("e")
+    if "." not in mantissa:
+        mantissa += ".0"
+    return f"{mantissa}e{int(exponent)}"
+
+
+def _emit_const_float(op: tile_ir.TileOp) -> str:
+    """`%vR = arith.constant <f> : <fN>` — a FINITE floating-point
+    scalar constant. Fails closed on a non-finite value: infinity and
+    NaN have no plain MLIR `arith.constant` float literal."""
+    r = _single_result(op, "scalar.const_float")
+    if op.operands:
+        raise MLIRTranslationError(
+            "scalar.const_float takes no operands — the translator "
+            "fails closed")
+    value = op.attrs.get("value")
+    if type(value) not in (int, float):
+        raise MLIRTranslationError(
+            f"scalar.const_float has no numeric `value` attribute (got "
+            f"{value!r}) — the translator fails closed")
+    number = float(value)
+    if not math.isfinite(number):
+        raise MLIRTranslationError(
+            f"scalar.const_float value {number!r} is not finite — "
+            f"MLIR's `arith.constant` has no plain float literal for "
+            f"infinity / NaN; the translator fails closed")
+    mlir, is_int = _scalar_arith_type(r.ty, "scalar.const_float")
+    if is_int:
+        raise MLIRTranslationError(
+            f"scalar.const_float has a non-float result type ({mlir}) "
+            f"— the translator fails closed")
+    return (f"{_value_ref(r)} = arith.constant "
+            f"{_float_literal(number)} : {mlir}")
+
+
+def _emit_scalar_binop(op: tile_ir.TileOp, op_name: str,
+                       int_mnemonic: str, float_mnemonic: str) -> str:
+    """A two-operand scalar `arith` op — `%vR = <mnemonic> %vA, %vB :
+    <T>`. The integer / float mnemonic is chosen by the result type;
+    the translator fails closed unless both operands and the result
+    share that one scalar type — a type-mismatched `arith` op would be
+    invalid MLIR."""
+    r = _single_result(op, op_name)
+    if len(op.operands) != 2:
+        raise MLIRTranslationError(
+            f"{op_name} expects 2 operands, got {len(op.operands)} — "
+            f"the translator fails closed")
+    a, b = op.operands
+    mlir, is_int = _scalar_arith_type(r.ty, op_name)
+    if a.ty != r.ty or b.ty != r.ty:
+        raise MLIRTranslationError(
+            f"{op_name}: operand and result types are not all equal — "
+            f"a type-mismatched `arith` op is invalid MLIR; the "
+            f"translator fails closed")
+    mnemonic = int_mnemonic if is_int else float_mnemonic
+    return (f"{_value_ref(r)} = {mnemonic} {_value_ref(a)}, "
+            f"{_value_ref(b)} : {mlir}")
+
+
+def _emit_add(op: tile_ir.TileOp) -> str:
+    return _emit_scalar_binop(op, "scalar.add", "arith.addi",
+                              "arith.addf")
+
+
+def _emit_sub(op: tile_ir.TileOp) -> str:
+    return _emit_scalar_binop(op, "scalar.sub", "arith.subi",
+                              "arith.subf")
+
+
+def _emit_mul(op: tile_ir.TileOp) -> str:
+    return _emit_scalar_binop(op, "scalar.mul", "arith.muli",
+                              "arith.mulf")
+
+
+# Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
+# B-C emit the function terminator and the scalar `arith` core; the
+# remaining per-op emitters (compare / select / `vector` / `memref` /
+# `gpu` / `helix`) are added in later chunks. `_emit_op` FAILS CLOSED
+# on any op kind absent here, so the partial table is safe — never a
+# silent miss. No completeness guard, deliberately: the table is MEANT
+# to be incomplete until the per-op chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
                    Callable[[tile_ir.TileOp], str]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
+    tile_ir.TileOpKind.SCALAR_CONST_INT: _emit_const_int,
+    tile_ir.TileOpKind.SCALAR_CONST_FLOAT: _emit_const_float,
+    tile_ir.TileOpKind.SCALAR_ADD: _emit_add,
+    tile_ir.TileOpKind.SCALAR_SUB: _emit_sub,
+    tile_ir.TileOpKind.SCALAR_MUL: _emit_mul,
 }
 
 

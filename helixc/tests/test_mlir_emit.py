@@ -381,6 +381,176 @@ def test_emit_fails_closed_on_non_identifier_fn_name():
 
 
 # --------------------------------------------------------------------------
+# the scalar `arith` op emitters (chunk C)
+# --------------------------------------------------------------------------
+def _const_int(v: tile_ir.TileValue, n: int) -> tile_ir.TileOp:
+    return tile_ir.TileOp(_TK.SCALAR_CONST_INT, results=[v],
+                          attrs={"value": n})
+
+
+def test_emit_const_int():
+    """`scalar.const_int` emits `%vR = arith.constant <n> : <iN>`."""
+    c = tile_ir.TileValue(0, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [], _S("i32"), _const_int(c, 5), _ret(c))}))
+    assert "%v0 = arith.constant 5 : i32" in text
+
+
+def test_emit_const_float():
+    """`scalar.const_float` emits `arith.constant` with a float
+    literal; an integer-valued attr is rendered float-shaped (`4` ->
+    `4.0`) so the literal matches its float type."""
+    c = tile_ir.TileValue(0, _S("f32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [], _S("f32"),
+                 tile_ir.TileOp(_TK.SCALAR_CONST_FLOAT, results=[c],
+                                attrs={"value": 2.5}), _ret(c))}))
+    assert "%v0 = arith.constant 2.5 : f32" in text
+    c2 = tile_ir.TileValue(0, _S("f32"))
+    text2 = emit_mlir_module(tile_ir.TileModule(functions={
+        "g": _fn("g", [], _S("f32"),
+                 tile_ir.TileOp(_TK.SCALAR_CONST_FLOAT, results=[c2],
+                                attrs={"value": 4}), _ret(c2))}))
+    assert "arith.constant 4.0 : f32" in text2
+
+
+def test_emit_const_float_fails_closed_on_non_finite():
+    """`scalar.const_float` fails closed on infinity / NaN — MLIR's
+    `arith.constant` has no plain float literal for them."""
+    for bad in (float("inf"), float("-inf"), float("nan")):
+        c = tile_ir.TileValue(0, _S("f32"))
+        fn = _fn("f", [], _S("f32"),
+                 tile_ir.TileOp(_TK.SCALAR_CONST_FLOAT, results=[c],
+                                attrs={"value": bad}), _ret(c))
+        with pytest.raises(MLIRTranslationError, match="not finite"):
+            emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_const_float_scientific_notation():
+    """A large-magnitude float constant emits a VALID MLIR literal — it
+    carries a decimal point and a plain decimal exponent. Python's
+    `repr(1e20)` is `'1e+20'`, which MLIR rejects (no `.`); the emitter
+    renders `1.0e20`."""
+    c = tile_ir.TileValue(0, _S("f32"))
+    fn = _fn("f", [], _S("f32"),
+             tile_ir.TileOp(_TK.SCALAR_CONST_FLOAT, results=[c],
+                            attrs={"value": 1e20}), _ret(c))
+    text = emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+    assert "arith.constant 1.0e20 : f32" in text
+    assert "e+" not in text          # no `+` in the exponent
+
+
+def test_emit_scalar_add_int_and_float():
+    """`scalar.add` picks the integer (`arith.addi`) or float
+    (`arith.addf`) mnemonic by the operand type."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))
+    int_text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a, b], _S("i32"),
+                 tile_ir.TileOp(_TK.SCALAR_ADD, operands=[a, b],
+                                results=[r]), _ret(r))}))
+    assert "%v2 = arith.addi %v0, %v1 : i32" in int_text
+    x = tile_ir.TileValue(0, _S("f32"))
+    y = tile_ir.TileValue(1, _S("f32"))
+    z = tile_ir.TileValue(2, _S("f32"))
+    flt_text = emit_mlir_module(tile_ir.TileModule(functions={
+        "g": _fn("g", [x, y], _S("f32"),
+                 tile_ir.TileOp(_TK.SCALAR_ADD, operands=[x, y],
+                                results=[z]), _ret(z))}))
+    assert "%v2 = arith.addf %v0, %v1 : f32" in flt_text
+
+
+def test_emit_scalar_sub_and_mul():
+    """`scalar.sub` / `scalar.mul` emit `arith.sub*` / `arith.mul*`."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))
+    sub = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a, b], _S("i32"),
+                 tile_ir.TileOp(_TK.SCALAR_SUB, operands=[a, b],
+                                results=[r]), _ret(r))}))
+    assert "arith.subi %v0, %v1 : i32" in sub
+    mul = emit_mlir_module(tile_ir.TileModule(functions={
+        "g": _fn("g", [a, b], _S("i32"),
+                 tile_ir.TileOp(_TK.SCALAR_MUL, operands=[a, b],
+                                results=[r]), _ret(r))}))
+    assert "arith.muli %v0, %v1 : i32" in mul
+
+
+def test_emit_arith_function_passes_mock_validate():
+    """A whole arith function — constants + an add + a return — emits
+    structurally well-formed MLIR (`mock_validate_mlir` -> DEFERRED)."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [], _S("i32"), _const_int(a, 2), _const_int(b, 3),
+                 tile_ir.TileOp(_TK.SCALAR_ADD, operands=[a, b],
+                                results=[r]), _ret(r))}))
+    result = mock_validate_mlir(text)
+    assert result.deferred(), result.findings
+
+
+def test_emit_const_int_fails_closed_on_non_integer_value():
+    """`scalar.const_int` fails closed on a non-integer `value`
+    attribute — a float, or a bool (a bool is a distinct constant)."""
+    for bad in (2.5, True):
+        c = tile_ir.TileValue(0, _S("i32"))
+        fn = _fn("f", [], _S("i32"),
+                 tile_ir.TileOp(_TK.SCALAR_CONST_INT, results=[c],
+                                attrs={"value": bad}), _ret(c))
+        with pytest.raises(MLIRTranslationError, match="const_int"):
+            emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_const_int_fails_closed_on_float_result_type():
+    """`scalar.const_int` whose result type is a float fails closed."""
+    c = tile_ir.TileValue(0, _S("f32"))
+    fn = _fn("f", [], _S("f32"), _const_int(c, 5), _ret(c))
+    with pytest.raises(MLIRTranslationError, match="non-integer result"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_scalar_binop_fails_closed_on_type_mismatch():
+    """A scalar binop whose operand and result types are not all equal
+    fails closed — a type-mismatched `arith` op is invalid MLIR."""
+    a = tile_ir.TileValue(0, _S("f32"))      # f32 operand...
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))      # ...i32 result
+    fn = _fn("f", [a, b], _S("i32"),
+             tile_ir.TileOp(_TK.SCALAR_ADD, operands=[a, b],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not all equal"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_scalar_binop_fails_closed_on_non_scalar():
+    """A scalar binop on a non-scalar (tensor) type fails closed — the
+    chunk-C `arith` emitters handle scalar ops only."""
+    tens = tir.TIRTensorTy(_S("f32"), (tir.DimConst(4),))
+    a = tile_ir.TileValue(0, tens)
+    b = tile_ir.TileValue(1, tens)
+    r = tile_ir.TileValue(2, tens)
+    fn = _fn("f", [a, b], tens,
+             tile_ir.TileOp(_TK.SCALAR_MUL, operands=[a, b],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not a scalar"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_scalar_binop_fails_closed_on_wrong_arity():
+    """A scalar binop without exactly two operands fails closed."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    fn = _fn("f", [a], _S("i32"),
+             tile_ir.TileOp(_TK.SCALAR_ADD, operands=[a], results=[r]),
+             _ret(r))
+    with pytest.raises(MLIRTranslationError, match="expects 2 operands"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — emit is pure text, never `import mlir`
 # --------------------------------------------------------------------------
 def test_emit_module_is_pure_text_no_mlir_import():

@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-B 3-clean ✓ | Phase E — chunks A-B shipped (Helix-IR→MLIR type bridge; module/func emitter scaffold) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-C 3-clean ✓ | Phase E — chunks A-C shipped (type bridge; module/func scaffold; scalar arith op emitters) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -989,3 +989,28 @@ depend on a clean, unambiguous full-suite run.
   delta re-audit on all three surfaces CLEAN. Next: Stage 212 chunk C
   — the per-op emitters (arith / vector / memref / gpu), which will
   make the emitter stateful for SSA value naming.
+- 2026-05-20 — **Stage 212 chunk C shipped — the scalar `arith` op
+  emitters.** `emit.py`'s `_OP_EMITTERS` table gains five per-op
+  emitters: `scalar.const_int` / `const_float` → `arith.constant`, and
+  `scalar.add` / `sub` / `mul` → `arith.{add,sub,mul}{i,f}` (the
+  integer vs. float mnemonic chosen by the operand type). The emitters
+  are STATELESS — every Tile-IR value's SSA name is `%v<id>`, a pure
+  function of its id, so a result and its later uses name-match with
+  no per-function symbol table. (The chunk-B audit had anticipated a
+  stateful emitter, mirroring the LLVM backend's `_FnEmitter` constant-
+  inlining map; chunk C establishes that MLIR emits `arith.constant`
+  ops rather than inlining, so a constant result has an ordinary
+  `%v<id>` name and no state is needed — recorded in the module
+  docstring.) Fail-closed throughout: a non-scalar operand, an
+  operand/result type mismatch, a bad arity, a non-integer
+  `const_int` value, a non-finite `const_float` all raise
+  `MLIRTranslationError`. 45 tests (`test_mlir_emit.py`, +12 chunk C).
+  Per-stage 3-clean audit: round 1 returned 0 HIGH, one MEDIUM (a
+  `const_float` rendered via Python `repr` emitted MLIR-invalid
+  literals for infinity / NaN and for round scientific-notation
+  magnitudes — `repr(1e20)` is `1e+20`, missing the decimal point
+  MLIR's grammar requires); fixed (a `math.isfinite` fail-closed
+  guard plus a `_float_literal` helper that always emits a
+  decimal-pointed, clean-exponent literal); delta re-audit on all
+  three surfaces CLEAN. Next: Stage 212 chunk D — the compare /
+  select op emitters.
