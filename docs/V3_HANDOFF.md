@@ -59,7 +59,8 @@ Ratified strategy (`docs/V3_STAGE210_MLIR_DECISION.md`):
 - **Stage 212 — CLOSED** — the tile-IR → MLIR translator,
   `helixc/ir/mlir/emit.py`.
 - **Stage 213 — OPEN** — chunk A shipped the mock-path-first
-  backend-target scaffold, `helixc/ir/mlir/backends.py`.
+  backend-target scaffold, `helixc/ir/mlir/backends.py`; chunk B
+  shipped real `mlir-opt` validation dispatch in `validate.py`.
 
 ### The translator (`emit.py`) — current capability
 
@@ -106,6 +107,16 @@ deferred validation into a pass).
 Current Stage 213 verification: 24 `test_mlir_backends.py` tests; the
 fast MLIR slice is 180 passing tests on this machine.
 
+`helixc/ir/mlir/validate.py` now also has the Stage-213 real validator
+seam, `validate_mlir_with_toolchain(...)`. It runs
+`mock_validate_mlir` first, fails immediately on malformed MLIR before
+tool probing, invokes `mlir-opt` when available, and returns DEFERRED
+with support details when `mlir-opt` is absent. The real dispatch
+requires a zero exit and a non-empty output artifact before returning
+PASSED. Current Stage 213 chunk-B verification: 57 focused
+validation/backend tests; the fast MLIR slice is 193 passing tests on
+this machine.
+
 ## 4. What's next (in order)
 
 1. **(Optional) finish Stage 212's deferred ops** — the 12 above.
@@ -113,8 +124,9 @@ fast MLIR slice is 180 passing tests on this machine.
    these emitters. The attribute-heavy ones (matmul / reduce / memref
    / index-hbm) need design work first.
 2. **Stage 213 — MLIR → backends** (in progress). Next chunk: wire the
-   real-lowering dispatch / pass-pipeline runner shape without
-   claiming a pass on mock-only infrastructure.
+   backend pass-pipeline runner shape / target-specific pipeline
+   contract without claiming real backend output before Stage 214
+   pipelines exist.
 3. **Stage 214 — the progressive-lowering pass pipeline.**
 4. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).

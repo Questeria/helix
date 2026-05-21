@@ -27,19 +27,27 @@ frozen tri-state `MLIRValidation`:
   DEFER. PASSED is in the tri-state so the one `MLIRValidation` type
   serves both the mock and the future real validator.
 
-This realizes the Stage 210 decision's mock-path discipline (section
-3): when no real MLIR surface is available, DEFER — never FAIL, never
-falsely PASS — so CI on a binding-less runner stays green and the
-home-grown tile-IR path stays the reversible fallback.
+Stage 213 chunk B adds `validate_mlir_with_toolchain`, the first real
+validation dispatch seam: it still runs the mock shape check first,
+then invokes `mlir-opt` when that tool is available. A tool-less
+machine continues to return DEFERRED — never a false PASS — so CI on a
+binding-less runner stays green and the home-grown tile-IR path stays
+the reversible fallback.
 
 License: Apache 2.0
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
+
+from .toolchain import MLIRSupport, detect_mlir_support
 
 
 class MLIRValidationVerdict(Enum):
@@ -95,6 +103,10 @@ class MLIRValidation:
             raise ValueError(
                 f"MLIRValidation: verdict must be a "
                 f"MLIRValidationVerdict — got {self.verdict!r}")
+        if not isinstance(self.findings, tuple):
+            raise ValueError(
+                "MLIRValidation: findings must be a tuple, got "
+                f"{type(self.findings).__name__}")
         for entry in self.findings:
             if not isinstance(entry, str) or not entry.strip():
                 raise ValueError(
@@ -136,6 +148,11 @@ class MLIRValidation:
 _QUOTED_SPAN = re.compile(r'"(?:[^"\\]|\\.)*"')
 # An MLIR `//` line comment, to end of line.
 _LINE_COMMENT = re.compile(r"//[^\n]*")
+
+# Wall-clock cap on the real `mlir-opt` verifier dispatch. Small MLIR
+# text should validate quickly; the cap exists only to avoid hanging on
+# a broken tool.
+_MLIR_VALIDATE_TIMEOUT_S = 30
 
 
 def _structural_text(mlir_text: str) -> str:
@@ -215,4 +232,111 @@ def mock_validate_mlir(mlir_text: str) -> MLIRValidation:
         ("the toolchain-free shape check found no structural defect, "
          "but real MLIR validity — verifier traits, type-correctness, "
          "SSA dominance — needs `mlir-opt`; validation is DEFERRED to "
-         "the Stage-212 real validator",))
+         "`validate_mlir_with_toolchain`",))
+
+
+def _run_mlir_opt_validate(
+        mlir_text: str,
+        mlir_opt: str,
+        *,
+        timeout_s: int = _MLIR_VALIDATE_TIMEOUT_S) -> MLIRValidation:
+    """Run `mlir-opt` as the real MLIR verifier.
+
+    A zero exit is necessary but not sufficient: the output artifact
+    must exist and be non-empty, mirroring the LLVM dispatch hygiene.
+    Tool errors are captured as FAILED findings, never uncaught
+    tracebacks.
+    """
+    if not isinstance(mlir_opt, str) or not mlir_opt.strip():
+        return MLIRValidation(
+            MLIRValidationVerdict.FAILED,
+            ("mlir-opt validation requested with a blank or non-str "
+             f"tool path ({mlir_opt!r})",))
+
+    with tempfile.TemporaryDirectory(prefix="helix_mlir_validate_") as tmpdir:
+        mlir_path = os.path.join(tmpdir, "module.mlir")
+        out_path = os.path.join(tmpdir, "verified.mlir")
+        try:
+            with open(mlir_path, "w", encoding="utf-8") as f:
+                f.write(mlir_text)
+        except OSError as exc:
+            return MLIRValidation(
+                MLIRValidationVerdict.FAILED,
+                (f"could not write temp MLIR input {mlir_path!r} "
+                 f"({type(exc).__name__}: {exc})",))
+
+        try:
+            proc = subprocess.run(
+                [mlir_opt, mlir_path, "-o", out_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return MLIRValidation(
+                MLIRValidationVerdict.FAILED,
+                (f"mlir-opt validation timed out after {timeout_s}s",))
+        except OSError as exc:
+            return MLIRValidation(
+                MLIRValidationVerdict.FAILED,
+                (f"mlir-opt validation: tool unusable at invocation "
+                 f"({type(exc).__name__}: {exc})",))
+
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            if not diag:
+                diag = "no diagnostic emitted"
+            return MLIRValidation(
+                MLIRValidationVerdict.FAILED,
+                (f"mlir-opt exit {proc.returncode}: {diag[:500]}",))
+
+        try:
+            size = os.path.getsize(out_path)
+        except OSError:
+            size = -1
+        if size <= 0:
+            return MLIRValidation(
+                MLIRValidationVerdict.FAILED,
+                (f"mlir-opt exited 0 but produced no output artifact at "
+                 f"{out_path!r} — a 0 exit with no artifact is not a "
+                 "validation pass",))
+
+    return MLIRValidation(MLIRValidationVerdict.PASSED, ())
+
+
+def validate_mlir_with_toolchain(
+        mlir_text: str,
+        *,
+        support: Optional[MLIRSupport] = None) -> MLIRValidation:
+    """Validate MLIR text with the strongest available verifier.
+
+    Always run `mock_validate_mlir` first. If it finds a structural
+    defect, return that FAILED result and do not probe or invoke tools.
+    If the mock shape is clean and `mlir-opt` is available, dispatch to
+    it for real verification. If `mlir-opt` is absent, return an honest
+    DEFERRED with the support details; the in-process bindings are only
+    a capability surface here, not a verifier runner yet.
+    """
+    mock = mock_validate_mlir(mlir_text)
+    if mock.failed():
+        return mock
+
+    if support is None:
+        support = detect_mlir_support()
+    if not isinstance(support, MLIRSupport):
+        raise ValueError(
+            "validate_mlir_with_toolchain: support must be an "
+            f"MLIRSupport or None, got {support!r}")
+
+    if support.mlir_opt is None:
+        details = tuple(f"MLIR support probe: {line}"
+                        for line in support.detail)
+        return MLIRValidation(
+            MLIRValidationVerdict.DEFERRED,
+            (mock.findings
+             + details
+             + ("real MLIR validation is DEFERRED because `mlir-opt` "
+                "is not available; in-process binding validation is "
+                "not wired in Stage 213 chunk B",)))
+
+    return _run_mlir_opt_validate(mlir_text, support.mlir_opt)

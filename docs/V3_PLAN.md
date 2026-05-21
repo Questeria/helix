@@ -1254,3 +1254,36 @@ depend on a clean, unambiguous full-suite run.
   `V3_STAGES_DONE` stays 12/19 because Stage 213 is opened but not
   closed. Next: continue Stage 213 with the real lowering dispatch /
   pass-pipeline runner shape, still mock-path-first and additive.
+
+- 2026-05-21 — **Stage 213 chunk B shipped — real MLIR validation
+  dispatch.** `validate.py` gains `validate_mlir_with_toolchain`, the
+  Stage-213 real-validation seam: it always runs
+  `mock_validate_mlir` first, returns a structural FAILED result
+  before any tool probe when the text is malformed, dispatches to
+  `mlir-opt` when available, and otherwise returns an honest
+  DEFERRED with the support details. The real `mlir-opt` helper uses
+  temp input/output files, argv-list subprocess dispatch,
+  `capture_output=True`, text mode, a timeout, structured
+  Timeout/OSError/nonzero-exit findings, and a non-empty output
+  artifact requirement before it can return PASSED. `backends.py` now
+  calls `validate_mlir_with_toolchain` before backend-pipeline
+  deferral, so a real verifier failure blocks backend lowering, while
+  a mock-only clean shape remains DEFERRED. The chunk also tightens
+  `MLIRValidation` so `findings` must be an immutable tuple, and
+  tightens `MLIRBackendResult` so no backend lowering attempt is
+  representable unless validation has actually PASSED. Tests now pin
+  the malformed-before-probe path, tool-less deferral, real
+  mlir-opt success/failure dispatch, missing-tool OSError,
+  nonzero diagnostics, timeout, zero-exit/no-artifact failure, and the
+  backend propagation of real validation failure. Verification: 57
+  focused MLIR validation/backend tests pass; fast MLIR slice passes
+  (`193 passed, 4347 deselected`); GPU-neighbor slice passes (`96
+  passed, 3 skipped`). 3-clean audit loop: round 1 found must-fix
+  issues in `MLIRValidation.findings` mutability,
+  backend attempts after DEFERRED validation, and subprocess-hygiene
+  test coverage; fixes landed; round 2 CLEAN on all three axes
+  (silent-failure, type-design, general review) with 0 HIGH / 0
+  must-fix-MEDIUM. `V3_STAGES_DONE` stays 12/19 because Stage 213 is
+  still open. Next: Stage 213 chunk C — begin the backend pass-pipeline
+  runner shape / target-specific pipeline contract without claiming
+  real backend output before Stage 214 pipelines exist.

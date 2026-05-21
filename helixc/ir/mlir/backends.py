@@ -25,7 +25,9 @@ from typing import Optional
 from helixc.backend.gpu_ci import BackendKind as GPUBackendKind
 
 from .toolchain import MLIRSupport, detect_mlir_support
-from .validate import MLIRValidation, mock_validate_mlir
+from .validate import (
+    MLIRValidation, mock_validate_mlir, validate_mlir_with_toolchain,
+)
 
 
 class MLIRBackendTarget(Enum):
@@ -272,6 +274,11 @@ class MLIRBackendResult:
             raise ValueError(
                 "MLIRBackendResult: cannot attempt backend lowering after "
                 "MLIR validation FAILED")
+        if not self.validation.passed():
+            raise ValueError(
+                "MLIRBackendResult: attempted backend lowering requires "
+                "validation to be PASSED; mock-deferred validation cannot "
+                "be used for a real backend attempt")
         if self.lowering_passed is None:
             raise ValueError(
                 "MLIRBackendResult: lowering_attempted=True but "
@@ -343,11 +350,11 @@ def lower_mlir_to_backend(
     are both wired.
     """
     target = _require_backend_target(target)
-    validation = mock_validate_mlir(mlir_text)
-    if validation.failed():
+    mock_validation = mock_validate_mlir(mlir_text)
+    if mock_validation.failed():
         return MLIRBackendResult(
             target=target,
-            validation=validation,
+            validation=mock_validation,
             lowering_attempted=False,
             lowering_passed=None,
             lowering_tool=None,
@@ -361,6 +368,19 @@ def lower_mlir_to_backend(
         raise ValueError(
             "lower_mlir_to_backend: support must be an MLIRSupport "
             f"or None, got {support!r}")
+
+    validation = validate_mlir_with_toolchain(
+        mlir_text, support=support)
+    if validation.failed():
+        return MLIRBackendResult(
+            target=target,
+            validation=validation,
+            lowering_attempted=False,
+            lowering_passed=None,
+            lowering_tool=None,
+            lowering_findings=(),
+            output_text=None,
+        )
 
     findings: list[str] = []
     if not support.is_available():

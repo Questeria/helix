@@ -184,7 +184,7 @@ def test_mlir_backend_result_rejects_real_failure_without_diagnostic():
     with pytest.raises(ValueError, match="failure must carry"):
         MLIRBackendResult(
             target=MLIRBackendTarget.PTX,
-            validation=_mock_deferred_validation(),
+            validation=_real_passed_validation(),
             lowering_attempted=True,
             lowering_passed=False,
             lowering_tool="mlir-opt",
@@ -209,7 +209,7 @@ def test_mlir_backend_result_rejects_non_str_output_text():
     with pytest.raises(ValueError, match="output_text must be a str"):
         MLIRBackendResult(
             target=MLIRBackendTarget.PTX,
-            validation=_mock_deferred_validation(),
+            validation=_real_passed_validation(),
             lowering_attempted=True,
             lowering_passed=False,
             lowering_tool="mlir-opt",
@@ -222,7 +222,7 @@ def test_mlir_backend_result_rejects_blank_output_text():
     with pytest.raises(ValueError, match="output_text must carry text"):
         MLIRBackendResult(
             target=MLIRBackendTarget.PTX,
-            validation=_mock_deferred_validation(),
+            validation=_real_passed_validation(),
             lowering_attempted=True,
             lowering_passed=False,
             lowering_tool="mlir-opt",
@@ -235,12 +235,24 @@ def test_mlir_backend_result_rejects_non_bool_lowering_passed():
     with pytest.raises(ValueError, match="lowering_passed to be a bool"):
         MLIRBackendResult(
             target=MLIRBackendTarget.PTX,
-            validation=_mock_deferred_validation(),
+            validation=_real_passed_validation(),
             lowering_attempted=True,
             lowering_passed=1,  # type: ignore[arg-type]
             lowering_tool="mlir-opt",
             lowering_findings=(),
             output_text=".version 8.3\n",
+        )
+
+
+def test_mlir_backend_result_rejects_attempt_with_deferred_validation():
+    with pytest.raises(ValueError, match="validation to be PASSED"):
+        MLIRBackendResult(
+            target=MLIRBackendTarget.PTX,
+            validation=_mock_deferred_validation(),
+            lowering_attempted=True,
+            lowering_passed=False,
+            lowering_tool="mlir-opt",
+            lowering_findings=("mlir-opt rejected IR",),
         )
 
 
@@ -314,9 +326,16 @@ def test_lower_mlir_to_backend_valid_defers_with_no_support():
     assert any("not wired yet" in f for f in result.lowering_findings)
 
 
-def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt():
+def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
     """A tool path alone is not a Stage 213 backend pass. Without the
     target pass pipeline, the result stays honestly DEFERRED."""
+    def _fake_validate(mlir_text, *, support):
+        assert mlir_text == _WELL_FORMED
+        assert support.mlir_opt == "/usr/bin/mlir-opt"
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
     support = MLIRSupport(
         bindings=False,
         dialects=False,
@@ -329,6 +348,32 @@ def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt():
     assert not any(
         "no real MLIR surface" in f for f in result.lowering_findings)
     assert any("not wired yet" in f for f in result.lowering_findings)
+
+
+def test_lower_mlir_to_backend_real_validation_failure_is_failed(
+        monkeypatch):
+    """If the real verifier rejects MLIR, backend lowering does not
+    proceed to pipeline checks."""
+    def _fake_validate(mlir_text, *, support):
+        return MLIRValidation(
+            MLIRValidationVerdict.FAILED,
+            ("mlir-opt exit 1: bad IR",),
+        )
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/usr/bin/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert result.validation.failed()
+    assert result.lowering_attempted is False
+    assert result.lowering_findings == ()
 
 
 def test_lower_mlir_to_backend_rejects_bad_support():

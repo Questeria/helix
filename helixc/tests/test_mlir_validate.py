@@ -21,13 +21,16 @@ that the module never `import mlir`.
 from __future__ import annotations
 
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from helixc.ir.mlir import validate
+from helixc.ir.mlir.toolchain import MLIRSupport
 from helixc.ir.mlir.validate import (
     MLIRValidation, MLIRValidationVerdict, mock_validate_mlir,
+    validate_mlir_with_toolchain,
 )
 
 # A structurally well-formed MLIR module — the DEFERRED baseline.
@@ -81,6 +84,16 @@ def test_mlir_validation_rejects_blank_finding():
     reason — rejected."""
     with pytest.raises(ValueError, match="blank or non-str"):
         MLIRValidation(MLIRValidationVerdict.FAILED, ("   ",))
+
+
+def test_mlir_validation_rejects_mutable_findings():
+    """Frozen validation results must not retain a mutable findings
+    list that can be cleared after invariant checks."""
+    with pytest.raises(ValueError, match="findings must be a tuple"):
+        MLIRValidation(
+            MLIRValidationVerdict.FAILED,
+            ["a reason"],  # type: ignore[arg-type]
+        )
 
 
 def test_mlir_validation_rejects_passed_with_findings():
@@ -217,6 +230,155 @@ def test_mock_validate_mlir_bare_func_defers():
 
 
 # --------------------------------------------------------------------------
+# validate_mlir_with_toolchain — real mlir-opt dispatch seam
+# --------------------------------------------------------------------------
+def test_validate_mlir_with_toolchain_mock_failure_skips_support_probe(
+        monkeypatch):
+    """A definite mock structural failure returns immediately. Tool
+    probing must not run and mask the real input defect."""
+    def _boom():
+        raise AssertionError("support probe should not run")
+
+    monkeypatch.setattr(validate, "detect_mlir_support", _boom)
+    r = validate_mlir_with_toolchain("module {")
+    assert r.failed()
+    assert any("unbalanced brace" in f for f in r.findings)
+
+
+def test_validate_mlir_with_toolchain_absent_mlir_opt_defers():
+    """A clean mock shape with no `mlir-opt` remains DEFERRED, with
+    the support details preserved."""
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt=None,
+        detail=("`mlir-opt` is not on PATH",),
+    )
+    r = validate_mlir_with_toolchain(_WELL_FORMED, support=support)
+    assert r.deferred()
+    assert any("mlir-opt" in f for f in r.findings), r.findings
+    assert any("support probe" in f for f in r.findings), r.findings
+
+
+def test_validate_mlir_with_toolchain_rejects_bad_support():
+    with pytest.raises(ValueError, match="support must be"):
+        validate_mlir_with_toolchain(
+            _WELL_FORMED,
+            support="not support",  # type: ignore[arg-type]
+        )
+
+
+def test_validate_mlir_with_toolchain_mlir_opt_success(monkeypatch):
+    """When `mlir-opt` succeeds, the real validation result is PASSED
+    with no findings."""
+    def _fake_run(mlir_text, mlir_opt):
+        assert mlir_text == _WELL_FORMED
+        assert mlir_opt == "/fake/mlir-opt"
+        return MLIRValidation(MLIRValidationVerdict.PASSED, ())
+
+    monkeypatch.setattr(validate, "_run_mlir_opt_validate", _fake_run)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/fake/mlir-opt'",),
+    )
+    r = validate_mlir_with_toolchain(_WELL_FORMED, support=support)
+    assert r.passed()
+    assert r.findings == ()
+
+
+def test_validate_mlir_with_toolchain_mlir_opt_failure(monkeypatch):
+    """A real verifier rejection stays FAILED; it is not downgraded to
+    DEFERRED after the tool was selected."""
+    def _fake_run(mlir_text, mlir_opt):
+        return MLIRValidation(
+            MLIRValidationVerdict.FAILED,
+            ("mlir-opt exit 1: bad IR",),
+        )
+
+    monkeypatch.setattr(validate, "_run_mlir_opt_validate", _fake_run)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/fake/mlir-opt'",),
+    )
+    r = validate_mlir_with_toolchain(_WELL_FORMED, support=support)
+    assert r.failed()
+    assert any("bad IR" in f for f in r.findings)
+
+
+def test_run_mlir_opt_validate_tool_not_found_is_failed():
+    """A vanished or missing `mlir-opt` is a structured FAILED result,
+    never an uncaught FileNotFoundError."""
+    r = validate._run_mlir_opt_validate(
+        _WELL_FORMED, "helix_no_such_mlir_opt_xyz123")
+    assert r.failed()
+    assert any("tool unusable" in f for f in r.findings), r.findings
+    assert any("FileNotFoundError" in f for f in r.findings), r.findings
+
+
+def test_run_mlir_opt_validate_success_writes_and_checks_artifact(
+        monkeypatch):
+    """The real-dispatch helper must pass `-o <artifact>` and require a
+    non-empty output artifact for PASS."""
+    seen: dict[str, object] = {}
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        seen["cmd"] = cmd
+        seen["capture_output"] = capture_output
+        seen["text"] = text
+        seen["timeout"] = timeout
+        in_path = cmd[1]
+        out_path = cmd[3]
+        assert cmd[2] == "-o"
+        assert Path(in_path).read_text(encoding="utf-8") == _WELL_FORMED
+        Path(out_path).write_text("module {}\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(validate.subprocess, "run", _fake_run)
+    r = validate._run_mlir_opt_validate(_WELL_FORMED, "/fake/mlir-opt")
+    assert r.passed()
+    assert seen["cmd"][0] == "/fake/mlir-opt"
+    assert seen["capture_output"] is True
+    assert seen["text"] is True
+
+
+def test_run_mlir_opt_validate_nonzero_captures_diagnostic(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 7, "", "bad mlir")
+
+    monkeypatch.setattr(validate.subprocess, "run", _fake_run)
+    r = validate._run_mlir_opt_validate(_WELL_FORMED, "/fake/mlir-opt")
+    assert r.failed()
+    assert any("mlir-opt exit 7" in f for f in r.findings), r.findings
+    assert any("bad mlir" in f for f in r.findings), r.findings
+
+
+def test_run_mlir_opt_validate_timeout_is_failed(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(validate.subprocess, "run", _fake_run)
+    r = validate._run_mlir_opt_validate(_WELL_FORMED, "/fake/mlir-opt")
+    assert r.failed()
+    assert any("timed out" in f for f in r.findings), r.findings
+
+
+def test_run_mlir_opt_validate_zero_exit_without_artifact_fails(
+        monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(validate.subprocess, "run", _fake_run)
+    r = validate._run_mlir_opt_validate(_WELL_FORMED, "/fake/mlir-opt")
+    assert r.failed()
+    assert any("produced no output artifact" in f for f in r.findings), \
+        r.findings
+
+
+# --------------------------------------------------------------------------
 # mock_validate_mlir — string-literal / comment punctuation is masked
 # --------------------------------------------------------------------------
 def test_mock_validate_mlir_masks_quoted_punctuation():
@@ -243,10 +405,10 @@ def test_mock_validate_mlir_masks_comment_punctuation():
 # --------------------------------------------------------------------------
 def test_validate_module_imports_without_mlir_bindings():
     """THE MOCK-PATH RULE (Stage 210 decision, section 3): `validate` is
-    toolchain-free — it NEVER `import mlir`, at module top level or
-    anywhere, and never shells out to `mlir-opt`. Parse the module's
-    AST and confirm not one `import mlir` / `from mlir ...` statement —
-    a host-independent structural pin."""
+    safe on machines with no MLIR bindings — it NEVER `import mlir`, at
+    module top level or anywhere. Parse the module's AST and confirm
+    not one `import mlir` / `from mlir ...` statement — a host-
+    independent structural pin."""
     tree = ast.parse(
         Path(validate.__file__).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
