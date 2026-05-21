@@ -162,8 +162,8 @@ depend on a clean, unambiguous full-suite run.
 | 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
-| 208 | Phase D — end-of-phase 5-clean-gate | — | — | Phase D — next |
-| 210–216 | Phase E — MLIR migration | — | — | planned |
+| 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
+| 210–216 | Phase E — MLIR migration | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
 ## Status notes
@@ -765,3 +765,25 @@ depend on a clean, unambiguous full-suite run.
   tool-less dev machine, exercised on a WSL+clang runner) compares
   observable behaviour. `V3_STAGES_DONE` bumped 7 -> 8. Next: Stage
   208 — the end-of-Phase-D 5-clean-gate.
+- 2026-05-20 — **Stage 208 — end-of-Phase-D 5-clean-gate CLOSED;
+  PHASE D COMPLETE.** The end-of-phase gate audited all of Phase D's
+  additive work across the five codebase areas (FE / IR / BE / RT /
+  TEST). FE + RT: CLEAN — zero files modified in the Phase-D window
+  (the additive discipline held — `x86_64.py`, the frontend and the
+  stdlib are genuinely untouched). IR: CLEAN — a single doc-comment
+  fix in `tir.py`. BE (`helixc/backend/llvm_ir.py`,
+  `llvm_toolchain.py`, `llvm_parity.py`): audited holistically across
+  silent-failure / type-design / code-review — round 1 found 1 HIGH
+  (`emit_module` did not filter `is_extern` / `@kernel` functions the
+  way the incumbent `x86_64.py` does, so any `extern fn` program got a
+  misleading `LLVMEmitError` the parity gate then mis-classified as
+  the non-defect UNCOVERED — masking a real coverage gap); fixed
+  (`emit_module` now skips `is_extern` declarations, rejects `@kernel`
+  loudly, and the `declare`/`define` collision check excludes extern
+  names), with a new `extern_ffi_call` corpus entry added as a
+  regression guard. Round 2: 0 HIGH / 0 must-fix-MEDIUM. TEST (the
+  three LLVM test files): CLEAN. All five areas clean — **Stage 208
+  CLOSED, Phase D (the LLVM IR backend, Stages 200-208) is
+  COMPLETE.** `V3_STAGES_DONE` bumped 8 -> 9. Next: Phase E — the
+  MLIR migration (Stages 210-216), using
+  docs/V3_STAGE210_MLIR_DECISION_DRAFT.md.

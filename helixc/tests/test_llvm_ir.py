@@ -2532,3 +2532,68 @@ def test_stage206_rejects_print_non_i32_result():
     with pytest.raises(llvm_ir.LLVMEmitError,
                        match="PRINT yields an i32"):
         llvm_ir.emit_module(mod)
+
+
+# ==========================================================================
+# Stage 208 5-clean-gate fix — emit_module's function filter
+# (is_extern declarations skipped; @kernel functions rejected loudly)
+# ==========================================================================
+def test_emit_module_skips_is_extern_function():
+    """An `is_extern` ("extern C") function is a body-less declaration
+    — `emit_module` emits NO `define` for it (mirroring x86_64.py),
+    rather than handing the empty FnIR to `_FnEmitter` and raising a
+    misleading "block has no terminator"."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("ext_decl", [("c", _i32())], _i32(),
+                     attrs={"is_extern": True})
+    b.end_function()
+    b.begin_function("main", [], _i32())
+    b.ret(b.const_int(42))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert llvm_ir.mock_validate_ll(ll) == [], ll
+    assert "define i32 @main()" in ll
+    # The uncalled extern gets neither a define nor a declare.
+    assert "@ext_decl" not in ll, ll
+
+
+def test_emit_module_rejects_kernel_function():
+    """A `@kernel` (GPU) function is outside the LLVM host CPU
+    backend's scope — `emit_module` rejects it with a loud, clear
+    `LLVMEmitError` naming the kernel cause."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("gpu_k", [], _i32(), attrs={"kernel": True})
+    b.end_function()
+    b.begin_function("main", [], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError, match="@kernel"):
+        llvm_ir.emit_module(mod)
+
+
+def test_emit_module_extern_ffi_call_no_define_clash():
+    """An extern-C symbol that is BOTH an `is_extern` FnIR in
+    `module.functions` AND the target of an FFI_CALL must emit cleanly:
+    the extern gets a `declare` (from the FFI_CALL), not a `define`,
+    and is NOT mistaken for a defined function colliding with that
+    declare."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("puts", [("s", _i32())], _i32(),
+                     attrs={"is_extern": True})
+    b.end_function()
+    b.begin_function("main", [], _i32())
+    r = b.emit(tir.OpKind.FFI_CALL, b.const_int(0), result_ty=_i32(),
+               attrs={"target": "puts"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert llvm_ir.mock_validate_ll(ll) == [], ll
+    lines = [ln.strip() for ln in ll.splitlines()]
+    assert any(ln.startswith("declare") and "@puts" in ln
+               for ln in lines), ll
+    assert not any(ln.startswith("define") and "@puts" in ln
+                   for ln in lines), ll
+    assert "define i32 @main()" in ll

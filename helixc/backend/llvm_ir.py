@@ -78,11 +78,12 @@ LLVM_TARGET_TRIPLE = "x86_64-unknown-linux-gnu"
 
 
 class LLVMEmitError(Exception):
-    """The host IR contains a construct the Stage 200 scalar core does
-    not yet emit. Raised loudly so an unsupported op can never be
-    silently dropped or mis-emitted — the v3.0 "additive, parity-gated"
+    """The host IR contains a construct the LLVM backend does not
+    cover. Raised loudly so an unsupported op can never be silently
+    dropped or mis-emitted — the v3.0 "additive, parity-gated"
     discipline (docs/V3_PLAN.md): a partial backend fails closed, it
-    never produces wrong IR. Stages 202-206 widen the supported set."""
+    never produces wrong IR. The supported op set is the one this
+    module's docstring enumerates."""
 
 
 # tir scalar-integer dtype name -> LLVM integer type. LLVM integer
@@ -184,16 +185,16 @@ _QUOTED_SPAN = re.compile(r'"[^"]*"')
 def _llvm_int_type(ty: tir.TIRType, *, ctx: str) -> str:
     """Map a TIR scalar integer type to its LLVM type string. Raises
     LLVMEmitError for any non-integer-scalar type (floats, tensors,
-    tuples, unit) — all out of Stage 200 scope."""
+    tuples, unit) — all outside this backend's covered subset."""
     if not isinstance(ty, tir.TIRScalar):
         raise LLVMEmitError(
-            f"{ctx}: Stage 200 scalar core emits only scalar integer "
+            f"{ctx}: the LLVM backend emits only scalar integer "
             f"types, got {type(ty).__name__}"
         )
     llvm = _LLVM_INT_TYPES.get(ty.name)
     if llvm is None:
         raise LLVMEmitError(
-            f"{ctx}: Stage 200 scalar core does not emit dtype "
+            f"{ctx}: the LLVM backend does not emit dtype "
             f"{ty.name!r} (supported: {sorted(_LLVM_INT_TYPES)})"
         )
     return llvm
@@ -1340,17 +1341,42 @@ def emit_module(module: tir.Module) -> str:
     `x86_64.py::compile_module_to_elf` consumes and emits LLVM IR the
     toolchain accepts (real `opt`/`llc` dispatch is `llvm_toolchain`).
     Functions are emitted in `module.functions` insertion order so the
-    output is deterministic (a Stage 207 parity prerequisite). A
-    module-scope `declare` is emitted for each extern symbol an
-    FFI_CALL targets."""
-    emitters = [_FnEmitter(fn) for fn in module.functions.values()]
+    output is deterministic (a Stage 207 parity prerequisite).
+
+    Mirrors `compile_module_to_elf`'s function filter: an `is_extern`
+    ("extern C") function is a body-less DECLARATION — it gets no
+    `define` (its module-scope `declare` is emitted by the FFI_CALL
+    that references it); a `@kernel` function is a GPU kernel, outside
+    this host CPU backend's scope, and is rejected with a loud
+    `LLVMEmitError`. A module-scope `declare` is emitted for each
+    extern symbol an FFI_CALL targets."""
+    # Filter exactly as x86_64.py::compile_module_to_elf does: skip
+    # body-less `is_extern` declarations (handing one to
+    # `_FnEmitter.emit()` raises a misleading "block has no
+    # terminator"), and reject a `@kernel` function loudly — the LLVM
+    # backend emits host CPU IR only, it does not lower GPU kernels.
+    emitters: list[_FnEmitter] = []
+    for fn in module.functions.values():
+        if fn.attrs.get("is_extern"):
+            continue
+        if fn.attrs.get("kernel"):
+            raise LLVMEmitError(
+                f"module: function {fn.name!r} is a @kernel (GPU) "
+                f"function — the LLVM backend emits host CPU IR only, "
+                f"it does not lower GPU kernels")
+        emitters.append(_FnEmitter(fn))
     bodies = [emitter.emit() for emitter in emitters]
     # Collect the module-scope `declare`s and string constants every
     # function accumulated during emission. A symbol declared with two
     # different signatures, or one that collides with a defined
     # function name, is malformed — fail closed on both rather than
     # emit a module `llvm-as` rejects.
-    defined = set(module.functions)
+    # `defined` is the set of names that get a `define` — the NON-
+    # extern functions only. An FFI `declare` for an extern symbol that
+    # is also an `is_extern` entry in `module.functions` is the SAME
+    # extern, not a `declare`/`define` clash.
+    defined = {name for name, fn in module.functions.items()
+               if not fn.attrs.get("is_extern")}
     declares: dict[str, str] = {}
     strings: dict[str, str] = {}
     for emitter in emitters:

@@ -541,8 +541,9 @@ def check_parity(module: tir.Module, program: str, *,
 # LLVM backend's covered op surface (Phase D Stages 200-206): integer
 # arithmetic, the bitwise ops, comparisons / select, control flow
 # (if / nested if / while), local + mutable variables, stack arrays,
-# direct calls (incl. recursion), the unsigned dtypes (incl. the
-# signedness-sensitive udiv / unsigned-icmp paths), and bool. Every
+# direct calls (incl. recursion), FFI / extern-C calls, the unsigned
+# dtypes (incl. the signedness-sensitive udiv / unsigned-icmp paths),
+# and bool. Every
 # entry is checked with `include_stdlib=False` and is curated to be
 # MATCH — the Stage 207 mock-path gate (test_llvm_parity.py) asserts
 # exactly that, so a covered op regressing to UNCOVERED / MISMATCH
@@ -596,6 +597,13 @@ PARITY_CORPUS: tuple[tuple[str, str], ...] = (
     ("bool_function",
      "fn is_pos(n: i32) -> bool { n > 0 } "
      "fn main() -> i32 { if is_pos(5) { 42 } else { 0 } }"),
+    # An extern-C declaration puts an `is_extern` FnIR into
+    # module.functions AND an FFI_CALL references it — the exact
+    # surface the Stage 208 5-clean-gate found `emit_module`
+    # mishandling. Keeps the gate honest about FFI / extern coverage.
+    ("extern_ffi_call",
+     'extern "C" fn puts(s: *const u8) -> i32; '
+     'fn main() -> i32 { let _ = puts("hi"); 0 }'),
 )
 
 
