@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-E 3-clean ✓ | Phase E — chunks A-E shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile op emitters) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-F 3-clean ✓ | Phase E — chunks A-F shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1061,3 +1061,26 @@ depend on a clean, unambiguous full-suite run.
   families). Next: Stage 212 chunk F — the non-elementwise tile ops
   (`tile.matmul` → `vector.contract`, `reduce` / `transpose` /
   `reshape`, `tile.const`).
+- 2026-05-20 — **Stage 212 chunk F shipped — the layout-transform
+  tile-op emitters.** `emit.py`'s `_OP_EMITTERS` gains `tile.reshape`
+  → `vector.shape_cast` and `tile.transpose` → `vector.transpose
+  %src, [1, 0]`. These are the two layout-transform tile ops that can
+  be emitted FAITHFULLY without a guessed attribute: `shape_cast`
+  needs no attribute (the source / result tile types carry the shape
+  change); a 2-D `transpose`'s permutation is unambiguously `[1, 0]`.
+  `tile.transpose` is deliberately 2-D-only — an N-D transpose's
+  permutation needs an explicit attribute the Tile-IR `TILE_TRANSPOSE`
+  op does not carry, so a non-2-D tile fails closed. `tile.const` /
+  `matmul` / `reduce` are deferred — each is attribute-heavy (a
+  constant value, affine indexing maps, a reduction kind + dims) and
+  those conventions are not yet pinned (the ops are stub-status with
+  no producer). A `_tile_element_count` helper backs the reshape
+  element-count-preservation check. Fail-closed throughout — a
+  non-tile operand, an element-count change, an element-dtype change,
+  a non-2-D transpose, a wrong transposed result shape all raise
+  `MLIRTranslationError`. 73 tests (`test_mlir_emit.py`, +9 chunk F).
+  Per-stage 3-clean audit: all three surfaces CLEAN on round 1 — 0
+  HIGH / 0 must-fix-MEDIUM; the "handle the unambiguous 2-D case,
+  fail closed on the rest" boundary was endorsed as sound. Next:
+  Stage 212 chunk G — the `memref` / `gpu` tile ops (the tile load /
+  store and GPU-index ops), or `call`.

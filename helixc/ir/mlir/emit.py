@@ -49,10 +49,17 @@ Chunk E — the elementwise `vector` tile-op emitters. `tile.add` /
 operands (MLIR `arith` ops are elementwise-polymorphic over vectors —
 the same mnemonics as the scalar core, the int / float choice being
 the tile's element dtype); `tile.zeros` -> a `dense<0>`-splat
-`arith.constant`. The non-elementwise tile ops (`tile.matmul` /
-`reduce` / `transpose` / `reshape` / `const`), `memref` / `gpu`, the
-`helix` dialect, and `scalar.neg` remain later chunks; `_emit_op`
-FAILS CLOSED on them.
+`arith.constant`.
+
+Chunk F — the layout-transform tile-op emitters. `tile.reshape` ->
+`vector.shape_cast` (the source / result tile types carry the shape
+change; no attribute needed) and `tile.transpose` -> `vector.transpose
+%src, [1, 0]` (chunk F handles the 2-D tile transpose — its
+permutation is unambiguously `[1, 0]`; an N-D transpose needs an
+explicit permutation attribute and fails closed). The attribute-heavy
+tile ops (`tile.matmul` / `reduce` / `const`), `memref` / `gpu`,
+`call`, the `helix` dialect, and `scalar.neg` remain later chunks;
+`_emit_op` FAILS CLOSED on them.
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -633,15 +640,94 @@ def _emit_tile_zeros(op: tile_ir.TileOp) -> str:
     return f"{_value_ref(r)} = arith.constant dense<{zero}> : {mlir}"
 
 
+# --- the layout-transform tile-op emitters (Stage 212 chunk F) ---
+def _tile_element_count(ty: tir.TIRTileTy) -> int:
+    """The total element count of a tile type — the product of its
+    (static) dimensions. Fails closed on a non-constant dimension."""
+    count = 1
+    for d in ty.shape:
+        if not isinstance(d, tir.DimConst):
+            raise MLIRTranslationError(
+                f"tile type has a non-constant dimension "
+                f"({type(d).__name__}) — the translator fails closed")
+        count *= d.value
+    return count
+
+
+def _emit_tile_reshape(op: tile_ir.TileOp) -> str:
+    """`%vR = vector.shape_cast %vA : <src> to <dst>` — a tile reshape.
+    Fails closed unless the source and result are tiles with the same
+    element dtype and the same total element count (a `shape_cast`
+    preserves the element count)."""
+    r = _single_result(op, "tile.reshape")
+    if len(op.operands) != 1:
+        raise MLIRTranslationError(
+            f"tile.reshape expects 1 operand, got {len(op.operands)} "
+            f"— the translator fails closed")
+    src = op.operands[0]
+    if not (isinstance(src.ty, tir.TIRTileTy)
+            and isinstance(r.ty, tir.TIRTileTy)):
+        raise MLIRTranslationError(
+            "tile.reshape operand and result must both be tiles — the "
+            "translator fails closed")
+    if src.ty.dtype != r.ty.dtype:
+        raise MLIRTranslationError(
+            "tile.reshape changes the element dtype — a `shape_cast` "
+            "preserves it; the translator fails closed")
+    src_n, dst_n = _tile_element_count(src.ty), _tile_element_count(r.ty)
+    if src_n != dst_n:
+        raise MLIRTranslationError(
+            f"tile.reshape changes the total element count "
+            f"({src_n} -> {dst_n}) — a `shape_cast` preserves it; the "
+            f"translator fails closed")
+    return (f"{_value_ref(r)} = vector.shape_cast {_value_ref(src)} : "
+            f"{render_mlir_type(src.ty)} to {render_mlir_type(r.ty)}")
+
+
+def _emit_tile_transpose(op: tile_ir.TileOp) -> str:
+    """`%vR = vector.transpose %vA, [1, 0] : <src> to <dst>` — a 2-D
+    tile transpose. Chunk F handles the 2-D case only: its permutation
+    is unambiguously `[1, 0]`. An N-D transpose needs an explicit
+    permutation attribute and fails closed."""
+    r = _single_result(op, "tile.transpose")
+    if len(op.operands) != 1:
+        raise MLIRTranslationError(
+            f"tile.transpose expects 1 operand, got "
+            f"{len(op.operands)} — the translator fails closed")
+    src = op.operands[0]
+    if not (isinstance(src.ty, tir.TIRTileTy)
+            and isinstance(r.ty, tir.TIRTileTy)):
+        raise MLIRTranslationError(
+            "tile.transpose operand and result must both be tiles — "
+            "the translator fails closed")
+    if len(src.ty.shape) != 2 or len(r.ty.shape) != 2:
+        raise MLIRTranslationError(
+            "tile.transpose: chunk F handles 2-D tile transpose only "
+            "— an N-D transpose needs an explicit permutation "
+            "attribute; the translator fails closed")
+    if src.ty.dtype != r.ty.dtype:
+        raise MLIRTranslationError(
+            "tile.transpose changes the element dtype — the translator "
+            "fails closed")
+    if (src.ty.shape[0] != r.ty.shape[1]
+            or src.ty.shape[1] != r.ty.shape[0]):
+        raise MLIRTranslationError(
+            "tile.transpose: the result shape is not the operand's "
+            "shape transposed — the translator fails closed")
+    return (f"{_value_ref(r)} = vector.transpose {_value_ref(src)}, "
+            f"[1, 0] : {render_mlir_type(src.ty)} to "
+            f"{render_mlir_type(r.ty)}")
+
+
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
-# B-E emit the function terminator, the scalar `arith` core, compare /
-# select, and the elementwise `vector` tile ops; the remaining per-op
-# emitters (`scalar.neg`, the non-elementwise tile ops — matmul /
-# reduce / transpose / reshape / const, `memref` / `gpu`, `helix`) are
-# added in later chunks. `_emit_op` FAILS CLOSED on any op kind absent
-# here, so the partial table is safe — never a silent miss. No
-# completeness guard, deliberately: the table is MEANT to be
-# incomplete until the per-op chunks land.
+# B-F emit the function terminator, the scalar `arith` core, compare /
+# select, the elementwise `vector` tile ops, and the layout-transform
+# tile ops; the remaining per-op emitters (`scalar.neg`, the
+# attribute-heavy tile ops — matmul / reduce / const, `memref` /
+# `gpu`, `call`, `helix`) are added in later chunks. `_emit_op` FAILS
+# CLOSED on any op kind absent here, so the partial table is safe —
+# never a silent miss. No completeness guard, deliberately: the table
+# is MEANT to be incomplete until the per-op chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
                    Callable[[tile_ir.TileOp], str]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
@@ -656,6 +742,8 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
     tile_ir.TileOpKind.TILE_SUB: _emit_tile_sub,
     tile_ir.TileOpKind.TILE_MUL: _emit_tile_mul,
     tile_ir.TileOpKind.TILE_ZEROS: _emit_tile_zeros,
+    tile_ir.TileOpKind.TILE_RESHAPE: _emit_tile_reshape,
+    tile_ir.TileOpKind.TILE_TRANSPOSE: _emit_tile_transpose,
 }
 
 

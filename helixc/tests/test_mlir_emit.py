@@ -834,6 +834,120 @@ def test_emit_tile_zeros_fails_closed_on_non_tile_result():
 
 
 # --------------------------------------------------------------------------
+# the layout-transform tile-op emitters (chunk F)
+# --------------------------------------------------------------------------
+def test_emit_tile_reshape():
+    """`tile.reshape` -> `vector.shape_cast %src : <src> to <dst>`."""
+    a = tile_ir.TileValue(0, _tile("f32", 4, 4))
+    r = tile_ir.TileValue(1, _tile("f32", 16))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], _tile("f32", 16),
+                 tile_ir.TileOp(_TK.TILE_RESHAPE, operands=[a],
+                                results=[r]), _ret(r))}))
+    assert ("%v1 = vector.shape_cast %v0 : vector<4x4xf32> to "
+            "vector<16xf32>") in text
+
+
+def test_emit_tile_transpose():
+    """`tile.transpose` -> `vector.transpose %src, [1, 0]` for a 2-D
+    tile — the result is the operand's shape with the two dims
+    swapped."""
+    a = tile_ir.TileValue(0, _tile("f32", 2, 3))
+    r = tile_ir.TileValue(1, _tile("f32", 3, 2))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], _tile("f32", 3, 2),
+                 tile_ir.TileOp(_TK.TILE_TRANSPOSE, operands=[a],
+                                results=[r]), _ret(r))}))
+    assert ("%v1 = vector.transpose %v0, [1, 0] : vector<2x3xf32> to "
+            "vector<3x2xf32>") in text
+
+
+def test_emit_tile_layout_function_passes_mock_validate():
+    """A function using a tile reshape emits structurally well-formed
+    MLIR (`mock_validate_mlir` -> DEFERRED)."""
+    a = tile_ir.TileValue(0, _tile("i32", 8, 2))
+    r = tile_ir.TileValue(1, _tile("i32", 16))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], _tile("i32", 16),
+                 tile_ir.TileOp(_TK.TILE_RESHAPE, operands=[a],
+                                results=[r]), _ret(r))}))
+    assert mock_validate_mlir(text).deferred(), text
+
+
+def test_emit_tile_reshape_fails_closed_on_element_count_mismatch():
+    """`tile.reshape` whose source and result differ in total element
+    count fails closed — a `shape_cast` preserves the count."""
+    a = tile_ir.TileValue(0, _tile("f32", 4, 4))     # 16 elements
+    r = tile_ir.TileValue(1, _tile("f32", 9))        # 9 elements
+    fn = _fn("f", [a], _tile("f32", 9),
+             tile_ir.TileOp(_TK.TILE_RESHAPE, operands=[a],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError,
+                       match="total element count"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_reshape_fails_closed_on_dtype_change():
+    """`tile.reshape` that changes the element dtype fails closed."""
+    a = tile_ir.TileValue(0, _tile("f32", 4, 4))
+    r = tile_ir.TileValue(1, _tile("i32", 16))       # f32 -> i32
+    fn = _fn("f", [a], _tile("i32", 16),
+             tile_ir.TileOp(_TK.TILE_RESHAPE, operands=[a],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="element dtype"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_reshape_fails_closed_on_non_tile():
+    """`tile.reshape` on a non-tile (scalar) operand fails closed."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    fn = _fn("f", [a], _S("i32"),
+             tile_ir.TileOp(_TK.TILE_RESHAPE, operands=[a],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="must both be tiles"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_transpose_fails_closed_on_non_2d():
+    """`tile.transpose` of a non-2-D tile fails closed — chunk F
+    handles the 2-D case only (an N-D permutation needs an explicit
+    attribute)."""
+    a = tile_ir.TileValue(0, _tile("f32", 2, 3, 4))    # 3-D
+    r = tile_ir.TileValue(1, _tile("f32", 4, 3, 2))
+    fn = _fn("f", [a], _tile("f32", 4, 3, 2),
+             tile_ir.TileOp(_TK.TILE_TRANSPOSE, operands=[a],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="2-D tile transpose"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_transpose_fails_closed_on_dtype_change():
+    """`tile.transpose` that changes the element dtype fails closed —
+    a transpose permutes axes, it does not recast the element type."""
+    a = tile_ir.TileValue(0, _tile("f32", 2, 3))
+    r = tile_ir.TileValue(1, _tile("i32", 3, 2))       # f32 -> i32
+    fn = _fn("f", [a], _tile("i32", 3, 2),
+             tile_ir.TileOp(_TK.TILE_TRANSPOSE, operands=[a],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="element dtype"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_transpose_fails_closed_on_wrong_result_shape():
+    """`tile.transpose` whose result is not the operand's shape
+    transposed fails closed."""
+    a = tile_ir.TileValue(0, _tile("f32", 2, 3))
+    r = tile_ir.TileValue(1, _tile("f32", 2, 3))        # not swapped
+    fn = _fn("f", [a], _tile("f32", 2, 3),
+             tile_ir.TileOp(_TK.TILE_TRANSPOSE, operands=[a],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError,
+                       match="not the operand's shape transposed"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — emit is pure text, never `import mlir`
 # --------------------------------------------------------------------------
 def test_emit_module_is_pure_text_no_mlir_import():
