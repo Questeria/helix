@@ -1059,6 +1059,95 @@ def test_emit_call_fails_closed_on_multiple_results():
 
 
 # --------------------------------------------------------------------------
+# the scalar-negation emitter (chunk H)
+# --------------------------------------------------------------------------
+def _neg(a: tile_ir.TileValue, r: tile_ir.TileValue) -> tile_ir.TileOp:
+    """A Tile-IR `SCALAR_NEG` op negating `a` into `r`."""
+    return tile_ir.TileOp(_TK.SCALAR_NEG, operands=[a], results=[r])
+
+
+def test_emit_neg_float():
+    """`scalar.neg` on a float -> the one-op `arith.negf`, MLIR's
+    dedicated float negate."""
+    a = tile_ir.TileValue(0, _S("f32"))
+    r = tile_ir.TileValue(1, _S("f32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], _S("f32"), _neg(a, r), _ret(r))}))
+    assert "%v1 = arith.negf %v0 : f32" in text
+
+
+def test_emit_neg_integer():
+    """`scalar.neg` on an integer -> the two-op `arith.constant 0` +
+    `arith.subi %zero, %x` (MLIR has no integer negate). The zero
+    constant takes the derived `%v<id>.zero` SSA name, and BOTH emitted
+    lines are indented like every other op-body line (4 spaces)."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], _S("i32"), _neg(a, r), _ret(r))}))
+    assert "    %v1.zero = arith.constant 0 : i32\n" in text
+    assert "    %v1 = arith.subi %v1.zero, %v0 : i32\n" in text
+
+
+def test_emit_neg_function_passes_mock_validate():
+    """A function using an integer negation emits structurally
+    well-formed MLIR (`mock_validate_mlir` -> DEFERRED) — the two-line
+    lowering does not unbalance the module."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], _S("i32"), _neg(a, r), _ret(r))}))
+    assert mock_validate_mlir(text).deferred(), text
+
+
+def test_emit_neg_fails_closed_on_wrong_arity():
+    """`scalar.neg` without exactly one operand fails closed."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))
+    fn = _fn("f", [a, b], _S("i32"),
+             tile_ir.TileOp(_TK.SCALAR_NEG, operands=[a, b],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="expects 1 operand"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_neg_fails_closed_on_type_mismatch():
+    """`scalar.neg` whose operand type is not the result type fails
+    closed — a negation preserves the type."""
+    a = tile_ir.TileValue(0, _S("i32"))      # i32 operand...
+    r = tile_ir.TileValue(1, _S("f32"))      # ...f32 result
+    fn = _fn("f", [a], _S("f32"), _neg(a, r), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="types differ"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_neg_fails_closed_on_non_scalar():
+    """`scalar.neg` on a non-scalar (tile) operand fails closed — the
+    chunk-H emitter handles scalar negation only."""
+    t = _tile("f32", 4)
+    a = tile_ir.TileValue(0, t)
+    r = tile_ir.TileValue(1, t)
+    fn = _fn("f", [a], t, _neg(a, r), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not a scalar"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_fails_closed_on_empty_emitted_line(monkeypatch):
+    """`_emit_fn` fails closed when an op emitter returns a string with
+    an empty line fragment (a stray leading / trailing / doubled
+    newline) — a blank line in a `func.func` body is malformed MLIR.
+    The multi-line `.split` contract is that every fragment is a real
+    op line; this pins that it is enforced, not silently emitted."""
+    patched = dict(emit._OP_EMITTERS)
+    patched[_TK.RETURN] = lambda op: "func.return\n"   # trailing newline
+    monkeypatch.setattr(emit, "_OP_EMITTERS", patched)
+    fn = _fn("f", [], tir.TIRUnit(), _ret())
+    with pytest.raises(MLIRTranslationError, match="empty"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — emit is pure text, never `import mlir`
 # --------------------------------------------------------------------------
 def test_emit_module_is_pure_text_no_mlir_import():

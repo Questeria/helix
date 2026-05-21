@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-G 3-clean ✓ | Phase E — chunks A-G shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters; func.call) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-H 3-clean ✓ | Phase E — chunks A-H shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters; func.call; scalar.neg) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1109,3 +1109,28 @@ depend on a clean, unambiguous full-suite run.
   needs a two-op `gpu.thread_id` + `arith.index_cast` lowering), the
   attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`), and
   `scalar.neg`; then close Stage 212 (`V3_STAGES_DONE` → 12).
+
+- 2026-05-21 — **Stage 212 chunk H shipped — the scalar-negation
+  emitter.** `emit.py`'s `_OP_EMITTERS` gains `scalar.neg` ->
+  negation: a FLOAT operand emits the one-op `arith.negf %x : <fN>`
+  (MLIR's dedicated float negate); an INTEGER operand emits the
+  canonical TWO-op `arith.constant 0` + `arith.subi %zero, %x` —
+  MLIR's `arith` dialect has no integer negate — mirroring the LLVM
+  backend's `sub <ty> 0, x`. The integer case is the translator's
+  first MULTI-line emitter: the zero constant takes the derived
+  `%v<id>.zero` SSA name (collision-free, stateless), and `_emit_fn`
+  now splits a multi-line emitter result on newlines and indents each
+  fragment. Fail-closed on a non-scalar operand, an operand whose type
+  is not the result type, or a wrong operand count. 89 tests in
+  `test_mlir_emit.py` (+7 chunk H); 142 MLIR tests pass. Per-stage
+  3-clean audit: round 1 found one must-fix — the new multi-line
+  `.split` could silently emit a blank body line on an empty fragment;
+  fixed by failing closed on an empty fragment. Re-audit CLEAN on all
+  three surfaces — 0 HIGH / 0 must-fix-MEDIUM. (A pre-existing
+  `_scalar_arith_type` note — Helix `bool` classifies as integer, so a
+  `scalar.neg` of a bool emits a valid-but-odd `arith.subi : i1` — is
+  tracked as a separate cross-cutting follow-up; the typechecker
+  rejects bool negation upstream, so it is unreachable in practice.)
+  Next: Stage 212 — the `memref` tile load / store ops, the `gpu` ops,
+  and the attribute-heavy tile ops (`tile.matmul` / `reduce` /
+  `const`); then close Stage 212 (`V3_STAGES_DONE` → 12).

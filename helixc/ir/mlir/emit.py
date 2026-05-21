@@ -62,12 +62,16 @@ Chunk G — the `func.call` emitter. `call` -> `%vR = func.call
 @callee(%args) : (argtypes) -> rettype` (or `-> ()` for a void
 callee). The callee is the Tile-IR `target` attribute; a Helix
 function returns one value or unit, so a `call` has 0 or 1 result.
+
+Chunk H — the scalar-negation emitter. `scalar.neg` -> `arith.negf`
+for a float, or — MLIR's `arith` dialect has no integer negate — the
+two-op `arith.constant 0` + `arith.subi %zero, %x` for an integer.
+
 The attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`),
 the `memref` tile load / store ops, the `gpu` ops (`thread_idx` /
 `tile.index_load/store_hbm` — `gpu.thread_id` yields an `index`, so a
-cast to the i32 IR type makes it a two-op lowering), the `helix`
-dialect, and `scalar.neg` remain later chunks; `_emit_op` FAILS
-CLOSED on them.
+cast to the i32 IR type makes it a two-op lowering), and the `helix`
+dialect remain later chunks; `_emit_op` FAILS CLOSED on them.
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -769,13 +773,51 @@ def _emit_call(op: tile_ir.TileOp) -> str:
             f"({arg_types}) -> {render_mlir_type(r.ty)}")
 
 
+# --- the scalar-negation emitter (Stage 212 chunk H) ---
+def _emit_neg(op: tile_ir.TileOp) -> str:
+    """`scalar.neg` -> integer or floating-point negation.
+
+    MLIR's `arith` dialect has a dedicated FLOAT negate — `arith.negf
+    %x : <fN>`, one op — but NO integer negate. Integer negation is the
+    canonical TWO-op form `arith.subi %zero, %x` (an `arith.constant 0`
+    then a subtract), matching the LLVM backend's `sub <ty> 0, x`. The
+    integer case therefore emits TWO MLIR lines; the zero constant
+    takes the derived SSA name `%v<id>.zero` — the result id plus a
+    `.zero` suffix, collision-free (no Tile-IR value, all named
+    `%v<int>`, spells itself that way) and a pure function of the op,
+    so the emitter stays STATELESS.
+
+    Fail-closed (`MLIRTranslationError`): a non-scalar operand (the
+    chunk-H emitter handles scalar negation only), or an operand whose
+    type is not the result type — a negation preserves the type."""
+    r = _single_result(op, "scalar.neg")
+    if len(op.operands) != 1:
+        raise MLIRTranslationError(
+            f"scalar.neg expects 1 operand, got {len(op.operands)} — "
+            f"the translator fails closed")
+    a = op.operands[0]
+    if a.ty != r.ty:
+        raise MLIRTranslationError(
+            "scalar.neg operand and result types differ — a negation "
+            "preserves the type; the translator fails closed")
+    mlir, is_int = _scalar_arith_type(r.ty, "scalar.neg")
+    if is_int:
+        # No `arith.negi` exists — integer negate is `0 - x`: a
+        # materialized zero constant plus a subtract (two lines).
+        zero = f"{_value_ref(r)}.zero"
+        return (f"{zero} = arith.constant 0 : {mlir}\n"
+                f"{_value_ref(r)} = arith.subi {zero}, "
+                f"{_value_ref(a)} : {mlir}")
+    return f"{_value_ref(r)} = arith.negf {_value_ref(a)} : {mlir}"
+
+
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
-# B-G emit the function terminator, the scalar `arith` core, compare /
+# B-H emit the function terminator, the scalar `arith` core, compare /
 # select, the elementwise `vector` tile ops, the layout-transform
-# tile ops, and the `func.call`; the remaining per-op emitters
-# (`scalar.neg`, the attribute-heavy tile ops — matmul / reduce /
-# const, the `memref` tile load / store ops, the `gpu` ops, `helix`)
-# are added in later chunks. `_emit_op` FAILS CLOSED on any op kind
+# tile ops, the `func.call`, and `scalar.neg`; the remaining per-op
+# emitters (the attribute-heavy tile ops — matmul / reduce / const,
+# the `memref` tile load / store ops, the `gpu` ops, `helix`) are
+# added in later chunks. `_emit_op` FAILS CLOSED on any op kind
 # absent here, so the partial table is safe — never a silent miss. No
 # completeness guard, deliberately: the table is MEANT to be
 # incomplete until the per-op chunks land.
@@ -787,6 +829,7 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
     tile_ir.TileOpKind.SCALAR_ADD: _emit_add,
     tile_ir.TileOpKind.SCALAR_SUB: _emit_sub,
     tile_ir.TileOpKind.SCALAR_MUL: _emit_mul,
+    tile_ir.TileOpKind.SCALAR_NEG: _emit_neg,
     tile_ir.TileOpKind.SCALAR_CMP: _emit_cmp,
     tile_ir.TileOpKind.SCALAR_SELECT: _emit_select,
     tile_ir.TileOpKind.TILE_ADD: _emit_tile_add,
@@ -800,8 +843,10 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
 
 
 def _emit_op(op: tile_ir.TileOp) -> str:
-    """Emit one Tile-IR op as an MLIR op line. Fails closed on any op
-    kind without an emitter yet — it never emits a guessed op."""
+    """Emit one Tile-IR op as MLIR text — one line, or several (joined
+    by newlines) for an op with a multi-step lowering, e.g.
+    `scalar.neg` on an integer. Fails closed on any op kind without an
+    emitter yet — it never emits a guessed op."""
     emitter = _OP_EMITTERS.get(op.kind)
     if emitter is None:
         raise MLIRTranslationError(
@@ -889,7 +934,21 @@ def _emit_fn(fn: tile_ir.TileFn) -> list[str]:
         ret = f" -> {render_mlir_type(fn.return_ty)}"
     lines = [f"func.func @{fn.name}({params}){ret} {{"]
     for op in fn.entry.ops:
-        lines.append(f"  {_emit_op(op)}")
+        # An emitter may return MULTIPLE lines (e.g. `scalar.neg`'s
+        # two-op integer lowering) — split and indent each so a
+        # multi-line op lines up like every single-line op. An EMPTY
+        # fragment (a stray leading / trailing / doubled newline in an
+        # emitter's output) would put a blank line in the function
+        # body — malformed MLIR; fail closed rather than emit it.
+        emitted = _emit_op(op)
+        for op_line in emitted.split("\n"):
+            if not op_line:
+                raise MLIRTranslationError(
+                    f"the {op.kind.name} emitter produced an empty "
+                    f"MLIR line (output {emitted!r}) — a blank line in "
+                    f"a function body is malformed; the translator "
+                    f"fails closed")
+            lines.append(f"  {op_line}")
     lines.append("}")
     return lines
 
