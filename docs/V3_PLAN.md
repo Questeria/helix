@@ -164,7 +164,7 @@ depend on a clean, unambiguous full-suite run.
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
-| 211 | Helix MLIR dialect / mapping substrate | ~ | A-D 3-clean ✓ | Phase E — chunks A-D shipped (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model) |
+| 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
 | 212–216 | Phase E — translation / lowering / pass pipeline / parity | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -913,3 +913,31 @@ depend on a clean, unambiguous full-suite run.
   result; delta re-audit on all three surfaces CLEAN. Next: Stage 211
   chunk E — `mock_validate_mlir` (a toolchain-free MLIR-text shape
   checker), then Stage 211 closes.
+- 2026-05-20 — **Stage 211 chunk E shipped + Stage 211 CLOSED — the
+  toolchain-free MLIR-text validator.** New `helixc/ir/mlir/validate.py`
+  — `mock_validate_mlir`, a STRUCTURAL shape check on MLIR textual IR
+  (the MLIR analogue of `llvm_ir.mock_validate_ll`), returning a frozen
+  tri-state `MLIRValidation`: FAILED on a definite structural defect
+  (non-str / empty input, no `module`/`func.func`, an unterminated
+  string literal, unbalanced braces / parentheses — counted with
+  string literals and `//` comments masked); DEFERRED when the shape
+  is clean but real validity is unverified (the honest mock-path
+  outcome — never a false PASSED); PASSED reserved for the Stage-212
+  real `mlir-opt` validator. Realizes the Stage 210 decision's
+  mock-path discipline (section 3): DEFER, never FAIL spuriously,
+  never falsely PASS. Pure data — never `import mlir` (AST-test-
+  pinned). 19 tests (`test_mlir_validate.py`). Per-stage 3-clean
+  audit: round 1 returned one HIGH (a non-str argument raised
+  `AttributeError`, contradicting the documented "never raises") and
+  one MEDIUM (an unterminated string mis-reported as a brace
+  imbalance); fixed (a non-str guard returning FAILED; explicit
+  unterminated-string detection that skips the unreliable balance
+  checks); delta re-audit on all surfaces CLEAN. One type-design
+  MEDIUM — `MLIRValidation` permits a PASSED with a defect-shaped
+  finding — was deferred to Stage 212, when the real validator gives
+  PASSED a producer and its findings-coherence contract is settled.
+  **Stage 211 CLOSED** — its substrate (the `detect_mlir_support`
+  capability probe; the Tensor-IR + Tile-IR op→MLIR-lowering mappings;
+  the `helix`-dialect op model; `mock_validate_mlir`) is complete and
+  every chunk is 3-clean. `V3_STAGES_DONE` → 11. Next: Stage 212 —
+  tile-IR → MLIR translation.
