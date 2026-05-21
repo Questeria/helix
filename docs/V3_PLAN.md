@@ -164,7 +164,7 @@ depend on a clean, unambiguous full-suite run.
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
-| 211 | Helix MLIR dialect / mapping substrate | ~ | A-C 3-clean ✓ | Phase E — chunks A-C shipped (MLIR capability detection; Tensor-IR + Tile-IR op→MLIR mapping) |
+| 211 | Helix MLIR dialect / mapping substrate | ~ | A-D 3-clean ✓ | Phase E — chunks A-D shipped (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model) |
 | 212–216 | Phase E — translation / lowering / pass pipeline / parity | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -885,3 +885,31 @@ depend on a clean, unambiguous full-suite run.
   LOWs — a redundant test, a type-precision nit — were assessed and
   declined with reason). Next: Stage 211 chunk D — the `helix`-dialect
   op model, then `mock_validate_mlir`, then Stage 211 closes.
+- 2026-05-20 — **Stage 211 chunk D shipped — the `helix`-dialect op
+  model.** New `helixc/ir/mlir/helix_dialect.py` — the pure-data op
+  model of the custom `helix` dialect (decision record section 2.4).
+  `HelixOp` (a frozen, `__post_init__`-guarded record) describes each
+  op: `mnemonic`, `source_opkind`, `category`, `summary`, and the
+  `unsplittable` memory-effect trait. `_HELIX_DIALECT_OPS` enumerates
+  all **13** ops in the decision record's three families — the
+  transforms (`helix.grad/jvp/vmap`), the AGI metaprogramming ops
+  (`helix.quote/splice/modify/reflect_hash`), and the atomic bump
+  allocator (`helix.arena_push/get/set/len/push_pair/push_triple`,
+  the pair/triple pushes marked `unsplittable`). A module-load guard
+  `_check_helix_dialect_model` ties the model to `mapping.py`: the ops
+  modelled are EXACTLY the `OpKind`s `mapping` classifies as
+  `MLIRLowering.HELIX` — a cross-module drift guard. The SSA operand /
+  result / attribute signature is deliberately NOT modelled — it is a
+  Stage-212 IRDL-registration concern (the transforms have no
+  front-end emit site yet). `helix_dialect_registrability()` is the
+  probe-gated registration seam: a frozen `HelixDialectRegistrability`
+  result (the registration-seam analogue of `MLIRSupport`) that
+  carries the probe's reasons, so a binding-less DEFERRED is never
+  silent. Pure data — never `import mlir` (mock-path-first; AST-test-
+  pinned). 17 tests (`test_helix_dialect.py`). Per-stage 3-clean
+  audit: round 1 returned 0 HIGH, one MEDIUM (the registration gate
+  was a bare `bool` — it discarded the probe's "why"); fixed by
+  promoting it to the reason-carrying `HelixDialectRegistrability`
+  result; delta re-audit on all three surfaces CLEAN. Next: Stage 211
+  chunk E — `mock_validate_mlir` (a toolchain-free MLIR-text shape
+  checker), then Stage 211 closes.
