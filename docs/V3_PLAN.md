@@ -163,7 +163,8 @@ depend on a clean, unambiguous full-suite run.
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
-| 210–216 | Phase E — MLIR migration | — | — | Phase E — next |
+| 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
+| 211–216 | Phase E — MLIR dialect / translation / lowering / parity | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
 ## Status notes
@@ -786,4 +787,30 @@ depend on a clean, unambiguous full-suite run.
   CLOSED, Phase D (the LLVM IR backend, Stages 200-208) is
   COMPLETE.** `V3_STAGES_DONE` bumped 8 -> 9. Next: Phase E — the
   MLIR migration (Stages 210-216), using
-  docs/V3_STAGE210_MLIR_DECISION_DRAFT.md.
+  docs/V3_STAGE210_MLIR_DECISION.md.
+- 2026-05-20 — **Stage 210 — MLIR dependency + dialect-strategy
+  decision CLOSED; Phase E opened.** The Phase-E scoping draft was
+  reviewed by an independent architecture review (which verified the
+  op-mapping against the real `tir.py` (98 `OpKind`s) / `tile_ir.py`
+  (34 `TileOpKind`s) and confirmed all three recommendations sound),
+  finalized, and ratified as `docs/V3_STAGE210_MLIR_DECISION.md`. The
+  decision: (1) **Dependency** — the Helix environment is bare `pip` +
+  venv (no conda present), so depend on the `llvm/eudsl` find-links
+  wheels for `mlir-python-bindings`, pinned to one LLVM major;
+  conda-forge is the documented alternative; no build-from-source.
+  (2) **Dialect strategy** — HYBRID: represent the ~80-85%
+  numerical/structural op core in upstream MLIR dialects
+  (`func`/`arith`/`math`/`linalg`/`vector`/`memref`/`gpu`/`nvgpu`),
+  and a small custom `helix` dialect (defined via IRDL / Python
+  registration, no C++/ODS) for the ~15-20% with no upstream home —
+  `grad`/`jvp`/`vmap`, the `agi.*` metaprogramming ops, the atomic
+  arena allocator; the `helix` dialect lowers to upstream. (3) **Mock
+  path** — reproduce the Stage-201 / `gpu_ci` discipline for MLIR: a
+  lazy (never top-level) `import mlir`, a `detect_mlir_python()`
+  capability probe, a toolchain-free `mock_validate_mlir`
+  shape-checker, and a frozen tri-state PASSED/FAILED/DEFERRED result,
+  so a binding-less machine stays green and the home-grown tile-IR
+  path remains the reversible fallback until the Stage 221 cutover.
+  A decision stage (no compiler code) — the per-stage audit was the
+  architecture review. `V3_STAGES_DONE` bumped 9 -> 10. Next: Stage
+  211 — the Helix MLIR dialect / mapping substrate.

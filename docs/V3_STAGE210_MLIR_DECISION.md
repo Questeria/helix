@@ -1,11 +1,13 @@
 # V3.0 Stage 210 — MLIR Dependency & Dialect-Strategy Decision
 
-> **STATUS: DRAFT FOR REVIEW — advance research only.**
-> This document was produced ahead of Phase E as scoping research for
-> v3.0 Stage 210. It is **not** an approved decision record. The human
-> orchestrator must review, correct, and finalize it when Phase E
-> actually begins. No compiler code was written or modified to produce
-> this draft. Date drafted: 2026-05-20.
+> **STATUS: RATIFIED — Stage 210 decision record (2026-05-20).**
+> Produced as Phase-E scoping research, then reviewed and finalized as
+> the approved Stage 210 decision. An independent architecture review
+> verified the op-mapping against the real `tir.py` / `tile_ir.py` and
+> confirmed all three recommendations sound; its corrections are
+> applied throughout and consolidated in Section 6. This is the
+> approved decision that gates Phase E (Stages 211-216). No compiler
+> code was written or modified to produce it.
 
 ---
 
@@ -29,10 +31,10 @@ The two IR layers being replaced are:
 
 - `helixc/ir/tir.py` (~600 lines) — the value-semantic **Tensor IR**:
   whole-tensor ops, named axes, layout-as-type, SSA-with-block-params
-  (no phi). ~110 `OpKind` members.
+  (no phi). 98 `OpKind` members.
 - `helixc/ir/tile_ir.py` (~520 lines) — the mid-level **Tile IR**:
   explicit memory spaces (HBM/SMEM/REG/TMEM), async memory (TMA,
-  barriers), explicit tile sizes, warp/CTA scheduling. ~30
+  barriers), explicit tile sizes, warp/CTA scheduling. 34
   `TileOpKind` members + the Stage 117-120 adjoint table.
 
 ---
@@ -85,14 +87,20 @@ Windows is the historically weakest MLIR-Python surface:
 
 ### 1.4 Recommendation for the dependency question
 
-**Primary:** depend on the **conda-forge `mlir-python-bindings`**
-package (option A), pinned to a specific LLVM major version, installed
-into the project's environment. It is the only path that is
-simultaneously (a) pip/conda-installable, (b) confirmed for `win-64`,
-and (c) demonstrably maintained in 2026.
+**Primary (resolved at ratification — see below): the eudsl
+find-links wheels** (option B) — `pip install mlir-python-bindings -f
+https://llvm.github.io/eudsl`. The Helix dev environment is bare
+`pip` + venv on Windows (Python 3.13; no conda / mamba present), so
+the bare-`pip`-installable path is the one Phase E targets. Its
+self-described **alpha** status is a tracked risk (Section 3.4),
+mitigated by Phase E being mock-path-first: a binding install that
+fails or regresses only DEFERS the real path, it never blocks
+development.
 
-**Documented fallback:** the **eudsl find-links wheels** (option B)
-for environments that are bare-`pip` only and cannot use conda.
+**Documented alternative:** the **conda-forge `mlir-python-bindings`**
+package (option A) — the cleaner, `win-64`-confirmed, 2026-maintained
+path — is the recommended choice should the project ever adopt a
+conda/mamba environment.
 
 **Explicitly rejected as the primary path:** build-from-source
 (option C) — kept only as the last-resort path if both A and B fail on
@@ -106,12 +114,13 @@ conda-forge line as of 2026-02) for the entire phase and treat a
 version bump as its own tracked stage. The pin must be recorded in the
 project's environment spec, not just in prose.
 
-> **Open item for the orchestrator:** confirm whether the Helix
-> dev/CI environment can adopt conda/mamba. If the project is
-> committed to bare `pip` + venv, option B (eudsl) becomes primary and
-> its alpha status becomes a tracked risk. This choice gates Stage
-> 211's environment setup and **should be settled before Stage 211
-> opens.**
+> **RESOLVED at Stage-210 ratification:** the Helix environment is
+> bare `pip` + venv (Windows, Python 3.13; no conda / mamba present),
+> so **option B (eudsl) is the primary dependency path** and its alpha
+> status is a tracked risk. Stage 211 provisions the binding install;
+> because Phase E is mock-path-first, a failed or absent install
+> simply leaves the real MLIR path DEFERRED and does not block
+> development.
 
 ---
 
@@ -134,7 +143,7 @@ custom; standard tensor/scalar/GPU algebra reuses upstream.
 
 ### 2.2 Mapping the existing op sets onto upstream dialects
 
-#### Tensor IR (`tir.py`, ~110 `OpKind`s)
+#### Tensor IR (`tir.py`, 98 `OpKind`s)
 
 | `tir.OpKind` group | Best upstream home | Fit |
 |--------------------|--------------------|-----|
@@ -157,7 +166,7 @@ custom; standard tensor/scalar/GPU algebra reuses upstream.
 | **`ARENA_PUSH/GET/SET/LEN/PUSH_PAIR/PUSH_TRIPLE`** | `memref` *approximates* a bump allocator but loses the atomic-pair/triple invariant | **Poor — Helix-specific bump allocator with atomicity guarantees.** |
 | `RESULT_PACK/TAG/PAYLOAD` | `arith` shifts/masks *can* express the bit-twiddling | Marginal — works but loses the discriminated-union intent the `tir.py` comments deliberately encode. |
 
-#### Tile IR (`tile_ir.py`, ~30 `TileOpKind`s)
+#### Tile IR (`tile_ir.py`, 34 `TileOpKind`s)
 
 | `TileOpKind` group | Best upstream home | Fit |
 |--------------------|--------------------|-----|
@@ -383,12 +392,14 @@ stage before the single Stage 221 cutover:
 
 ## 4. Summary of recommendations (for the orchestrator to ratify)
 
-1. **Dependency.** Depend on the **conda-forge `mlir-python-bindings`**
-   package (confirmed `win-64`, maintained into 2026), pinned to one
-   LLVM major version. Fallback: **eudsl find-links wheels** for
-   bare-`pip` environments. **Do not** build MLIR from source as the
-   primary path. *Settle the conda-vs-pip environment question before
-   Stage 211.*
+1. **Dependency.** The Helix environment is bare `pip` + venv (no
+   conda), so depend on the **eudsl find-links wheels**
+   (`mlir-python-bindings` via `-f https://llvm.github.io/eudsl`),
+   pinned to one LLVM major version; the conda-forge
+   `mlir-python-bindings` package is the documented alternative if a
+   conda environment is later adopted. **Do not** build MLIR from
+   source as the primary path. Phase E is mock-path-first, so the
+   binding install does not block development.
 2. **Dialect strategy.** Adopt the **hybrid**: upstream dialects
    (`linalg`/`vector`/`arith`/`gpu`/`func`/`memref`/`nvgpu`) for the
    ~80-85% numerical/structural core; a **small `helix` dialect** for
@@ -410,8 +421,10 @@ stage before the single Stage 221 cutover:
 
 ## 5. Open items carried to Stage 211 (consolidated)
 
-- [ ] Confirm whether Helix's dev/CI environment can adopt conda/mamba
-  (decides conda-forge-primary vs. eudsl-primary). **Blocks Stage 211.**
+- [x] ~~Confirm whether Helix's dev/CI environment can adopt
+  conda/mamba.~~ **RESOLVED (Stage 210):** bare `pip` + venv, no conda
+  — the eudsl find-links wheels are the primary dependency path
+  (Section 1.4).
 - [ ] Pin the exact LLVM major version for all of Phase E; record it
   in the environment spec.
 - [ ] Decide `result_pack`/`quantize`: custom `helix` ops vs. upstream
@@ -422,6 +435,43 @@ stage before the single Stage 221 cutover:
   async abstraction fanning out to all four GPU backends.
 - [ ] Specify the `mock_validate_mlir` shape grammar and whether to
   vendor `spcl/pymlir` for the pure-Python parse.
+- [ ] (Stage 213) Decide how the Stage 117-120 adjoint table
+  (`TILE_OP_ADJOINTS`, currently keyed by `TileOpKind`) migrates: do
+  its keys become MLIR op-name strings, or does the Helix AD pass
+  pattern-match over the lowered `helix` / `vector` ops? — flagged by
+  the Stage-210 architecture review.
+
+---
+
+## 6. Stage-210 ratification note — architecture-review corrections
+
+This decision was finalized after an independent architecture review
+that verified the op-mapping against the real `tir.py` / `tile_ir.py`.
+The review confirmed all three recommendations sound; its corrections,
+applied to this record:
+
+1. **Op counts** — corrected to the exact figures: `tir.py` has 98
+   `OpKind` members (the draft said ~110); `tile_ir.py` has 34
+   `TileOpKind` members (the draft said ~30). The ~80-85%
+   upstream-mappable conclusion is unaffected.
+2. **`TENSOR_LOAD` / `TENSOR_STORE`** belong with the effectful
+   runtime ops (`PRINT` / `TRAP` / `FFI_CALL`), NOT the in-graph
+   `tensor.*` ops — they are external host / file I/O boundaries and
+   lower to runtime `func.call`s. Marginal fit, same class as
+   `FFI_CALL`.
+3. **`scf` vs `cf`** — the Tensor IR's `BR` / `COND_BR` map to `cf`,
+   but a loop reconstructed as `scf.for` / `scf.if` is what the
+   upstream `linalg` lowering passes expect. Stage 212's tile-IR ->
+   MLIR translation should prefer raising structured loops to `scf`
+   rather than leaving them as raw `cf` branches.
+4. **`detect_mlir_python()`** must probe the dialect sub-modules
+   (`mlir.dialects.linalg`, etc.) independently of the top-level
+   `import mlir`: the eudsl / conda-forge packages ship dialects as
+   separately-importable modules, so a partial install (core present,
+   dialect bindings absent) must degrade to DEFERRED rather than pass
+   the probe and then fail deep inside a dialect call.
+5. The **adjoint-table key-type migration** is added as a Stage-213
+   open item (Section 5).
 
 ---
 
