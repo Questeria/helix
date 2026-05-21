@@ -1,6 +1,6 @@
 """
 helixc/ir/mlir/emit.py — Helix IR -> MLIR text translation
-(v3.0 Phase E, Stage 212).
+(v3.0 Phase E, Stage 212 — CLOSED).
 
 Stage 212 builds the PARALLEL MLIR path: a translator that walks a
 Helix IR module and emits MLIR textual IR, additive alongside the
@@ -72,10 +72,30 @@ Chunk I — the GPU thread-index emitter. `gpu.thread_idx` -> a two-op
 by the op's `sreg` attribute) then an `arith.index_cast` to `i32`
 (the `gpu` index ops yield MLIR's `index` type).
 
-The attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`),
-the `memref` tile load / store ops, the `tile.index_load/store_hbm`
-GPU memory ops, and the `helix` dialect remain later chunks;
-`_emit_op` FAILS CLOSED on them.
+STAGE 212 — CLOSED. The translator faithfully renders every Helix IR
+type, the module / function structure, and 17 of the 29
+`tile_ir.TileOpKind`s: the scalar `arith` core, compare / select, the
+elementwise and layout-transform `vector` tile ops, `func.call`,
+`scalar.neg`, and the GPU thread-index read. The remaining 12 op
+kinds are DELIBERATELY deferred — `_emit_op` FAILS CLOSED on each,
+never a guess — grouped by reason:
+
+- the async ops (`async.tma_load` / `tma_store` / `barrier_wait`) are
+  RESIDUAL: the `nvgpu`-only vs. cross-backend-`helix` async
+  abstraction is a Stage-213 decision;
+- the `memref` memory-movement ops (`tile.load_global` /
+  `store_global` / `load_shared` / `store_shared`) and `tile.const`
+  are stub-status across the backends, with no defined operand /
+  result signature to translate faithfully;
+- `tile.matmul` (-> `vector.contract`) and `tile.reduce` (->
+  `vector.multi_reduction`) are attribute-heavy — affine indexing
+  maps, iterator types, reduction kinds — and need MLIR-encoding
+  design;
+- `tile.index_load_hbm` / `index_store_hbm` need a `memref` type
+  bridge plus a kernel-parameter-name -> SSA-value resolution.
+
+These land when their producers and the surrounding gpu-kernel /
+pass-pipeline infrastructure arrive (Stage 213+).
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -820,8 +840,11 @@ def _emit_neg(op: tile_ir.TileOp) -> str:
 # dialect op for that GPU index read. `tid` is the thread index within
 # the block, `ctaid` the block index within the grid, `ntid` the
 # block's dimension — the PTX special-register names the front end
-# tags the op with (lower_ast.py). The fail-closed lookup in
-# `_emit_thread_idx` rejects any other `sreg`.
+# tags the op with (lower_ast.py). `sreg` is a loose attribute string
+# with no shared enum (unlike the `tir.OpKind` set behind the cmp
+# predicate tables), so there is no source-of-truth to drift-guard
+# against — the fail-closed lookup in `_emit_thread_idx` rejecting any
+# other `sreg` is the safeguard.
 _GPU_INDEX_OPS: dict[str, str] = {
     "tid": "gpu.thread_id",
     "ctaid": "gpu.block_id",
@@ -939,6 +962,10 @@ def _check_fn_translatable(fn: tile_ir.TileFn) -> None:
       blocks with no branch to reach them would be invalid MLIR);
     - an entry block whose parameters diverge from the signature
       parameters (would emit undefined SSA references);
+    - a use-before-def, or an `%v<id>` defined twice (a duplicated
+      parameter or result id) — either emits a dangling or a redefined
+      SSA reference, invalid MLIR the structural mock-validator does
+      not catch;
     - a `return` inconsistent with the declared result type (wrong
       operand count, or an operand whose type is not the result type).
     """
@@ -967,6 +994,36 @@ def _check_fn_translatable(fn: tile_ir.TileFn) -> None:
             f"entry block's arguments ARE the function parameters; the "
             f"translator fails closed rather than emit undefined SSA "
             f"references")
+    # SSA definedness + uniqueness. The entry block is single-block, so
+    # one linear scan suffices: every operand must reference a value
+    # already defined (a parameter, or an earlier op's result), and no
+    # `%v<id>` may be defined twice. A use-before-def would emit a
+    # dangling SSA reference and a duplicated id a redefined one — both
+    # invalid MLIR the structural mock-validator does not catch, so the
+    # translator fails closed here.
+    defined: set[int] = set()
+    for p in fn.params:
+        if p.id in defined:
+            raise MLIRTranslationError(
+                f"function {fn.name!r}: parameter %v{p.id} is declared "
+                f"more than once — each SSA value needs a unique "
+                f"`%v<id>` name; the translator fails closed")
+        defined.add(p.id)
+    for op in entry.ops:
+        for operand in op.operands:
+            if operand.id not in defined:
+                raise MLIRTranslationError(
+                    f"function {fn.name!r}: op {op.kind.name} uses "
+                    f"%v{operand.id} before it is defined — a "
+                    f"use-before-def would emit a dangling SSA "
+                    f"reference; the translator fails closed")
+        for result in op.results:
+            if result.id in defined:
+                raise MLIRTranslationError(
+                    f"function {fn.name!r}: op {op.kind.name} redefines "
+                    f"%v{result.id} — an SSA value is assigned exactly "
+                    f"once; the translator fails closed")
+            defined.add(result.id)
     returns_unit = isinstance(fn.return_ty, tir.TIRUnit)
     for op in entry.ops:
         if op.kind is not tile_ir.TileOpKind.RETURN:

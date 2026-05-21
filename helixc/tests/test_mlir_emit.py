@@ -382,6 +382,42 @@ def test_emit_fails_closed_on_non_identifier_fn_name():
         emit_mlir_module(tile_ir.TileModule(functions={"bad-name": fn}))
 
 
+def test_emit_fails_closed_on_use_before_def():
+    """An op whose operand references a value that no earlier op
+    defines and that is not a parameter fails closed — a use-before-def
+    would emit a dangling `%v<id>` SSA reference."""
+    ghost = tile_ir.TileValue(9, _S("i32"))      # never defined
+    fn = _fn("f", [], _S("i32"), _ret(ghost))
+    with pytest.raises(MLIRTranslationError,
+                       match="before it is defined"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_fails_closed_on_redefined_value():
+    """Two ops that each define the same `%v<id>` fail closed — an SSA
+    value is assigned exactly once; a redefined name is invalid MLIR."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(0, _S("i32"))          # same id as `a`
+    c1 = tile_ir.TileOp(_TK.SCALAR_CONST_INT, results=[a],
+                        attrs={"value": 1})
+    c2 = tile_ir.TileOp(_TK.SCALAR_CONST_INT, results=[b],
+                        attrs={"value": 2})
+    fn = _fn("f", [], _S("i32"), c1, c2, _ret(a))
+    with pytest.raises(MLIRTranslationError, match="redefines"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_fails_closed_on_duplicate_param_id():
+    """A function with two parameters sharing an id fails closed — each
+    SSA value, parameters included, needs a unique `%v<id>` name."""
+    p0 = tile_ir.TileValue(0, _S("i32"))
+    p1 = tile_ir.TileValue(0, _S("i32"))         # same id as p0
+    fn = _fn("f", [p0, p1], tir.TIRUnit(), _ret())
+    with pytest.raises(MLIRTranslationError,
+                       match="declared more than once"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
 # --------------------------------------------------------------------------
 # the scalar `arith` op emitters (chunk C)
 # --------------------------------------------------------------------------

@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-I 3-clean ✓ | Phase E — chunks A-I shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters; func.call; scalar.neg; gpu.thread_idx) |
+| 212 | tile-IR → MLIR translation (parallel path) | ✓ | A-J 3-clean ✓ | Phase E — CLOSED (the tile-IR→MLIR translator: 17/29 Tile-IR op kinds — types, module/func, arith/cmp/select/vector-tile/layout/func.call/neg/thread-idx; the other 12 fail closed — RESIDUAL async, stub memref/const, attribute-heavy matmul/reduce, index-HBM) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1159,3 +1159,34 @@ depend on a clean, unambiguous full-suite run.
   parent). Next: Stage 212 — the `memref` tile load / store ops and
   the attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`);
   then close Stage 212 (`V3_STAGES_DONE` → 12).
+
+- 2026-05-21 — **Stage 212 chunk J + CLOSE — the SSA-definedness
+  validator; Stage 212 CLOSED.** A holistic stage-close audit of the
+  whole `emit.py` translator (all three reviewers on the complete
+  file) found two HIGH silent-failure gaps: `_check_fn_translatable`
+  never validated SSA definedness, so a use-before-def emitted a
+  dangling `%v<id>` reference and a duplicated value id a redefined
+  one — invalid MLIR the structural mock-validator does not catch.
+  Fixed (chunk J): `_check_fn_translatable` gains a single-block SSA
+  definedness + uniqueness pass — seed `defined` from the parameter
+  ids, then per op require every operand already defined and every
+  result fresh. 99 tests in `test_mlir_emit.py` (+3 chunk J); 152
+  MLIR tests pass. 3-clean re-audit CLEAN on all three surfaces. The
+  audit's one must-fix-MEDIUM — `_emit_op` should return `list[str]`
+  rather than a multi-line `str` — is genuine and is scheduled as the
+  first item of the known-issues cleanup phase that follows.
+
+  **STAGE 212 CLOSED — `V3_STAGES_DONE` → 12.** The tile-IR → MLIR
+  translator faithfully renders every Helix IR type, the module /
+  function structure, and 17 of the 29 Tile-IR op kinds (the scalar
+  `arith` core, compare / select, the elementwise and
+  layout-transform `vector` tile ops, `func.call`, `scalar.neg`, the
+  GPU thread-index read). The other 12 op kinds fail closed by
+  deliberate, documented design: the async TMA / barrier ops are
+  RESIDUAL (a Stage-213 decision); the `memref` memory-movement ops
+  and `tile.const` are stub-status with no defined signature;
+  `tile.matmul` / `reduce` are attribute-heavy and need MLIR-encoding
+  design; the `tile.index_load/store_hbm` ops need a memref type
+  bridge plus parameter-name resolution — all land at Stage 213+. Per
+  the 2026-05-21 user directive, the loop now runs the known-issues
+  cleanup phase, then STOPS — it does not advance to Stage 213.
