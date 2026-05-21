@@ -27,7 +27,7 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
   - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212
-    CLOSED; Stage 213 is OPEN, chunk A shipped.**
+    CLOSED; Stage 213 is OPEN, chunks A-C shipped.**
   - **Phase F (Stages 220–222): not started.**
 - **`V3_STAGES_DONE = 12` of 19** (`scripts/helix_status.py`) —
   ~63 % of v3.0 stages, ~95 % overall toward v3.0.
@@ -60,7 +60,8 @@ Ratified strategy (`docs/V3_STAGE210_MLIR_DECISION.md`):
   `helixc/ir/mlir/emit.py`.
 - **Stage 213 — OPEN** — chunk A shipped the mock-path-first
   backend-target scaffold, `helixc/ir/mlir/backends.py`; chunk B
-  shipped real `mlir-opt` validation dispatch in `validate.py`.
+  shipped real `mlir-opt` validation dispatch in `validate.py`; chunk C
+  shipped the fail-closed backend pass-pipeline runner contract.
 
 ### The translator (`emit.py`) — current capability
 
@@ -97,15 +98,22 @@ dialects, and returns a frozen tri-state `MLIRBackendResult` from
 `lower_mlir_to_backend(...)`.
 
 Important: it is a scaffold, not a real lowering yet. Every target's
-pass pipeline is explicitly unwired. Malformed MLIR fails before any
-support probe; mock-valid MLIR returns `DEFERRED` with explicit
-findings until a real pipeline runner exists. The result type rejects
-silent illegal states (mutable findings, non-bool pass flags,
-whitespace tool names, blank/non-string output text, and promoting
-deferred validation into a pass).
+pass pipeline and output validator are explicitly unwired. Malformed
+MLIR fails before any support probe; mock-valid MLIR returns
+`DEFERRED` with explicit findings unless a real verifier, a declared
+pipeline, `mlir-opt`, and a target output validator are all present.
+If a future branch declares a pipeline before wiring the target output
+validator, `lower_mlir_to_backend` still returns `DEFERRED` rather than
+claiming a backend pass from transformed MLIR alone. The private runner
+requires passed real validation, argv-list `mlir-opt` dispatch, a
+non-empty readable artifact, and a clean target output validator before
+`PASSED` is representable. The result type rejects silent illegal
+states (mutable findings, non-bool pass flags, whitespace tool names,
+blank/non-string output text, and promoting deferred validation into a
+pass).
 
-Current Stage 213 verification: 24 `test_mlir_backends.py` tests; the
-fast MLIR slice is 180 passing tests on this machine.
+Current Stage 213 verification: 38 `test_mlir_backends.py` tests; the
+fast MLIR slice is 205 passing tests on this machine.
 
 `helixc/ir/mlir/validate.py` now also has the Stage-213 real validator
 seam, `validate_mlir_with_toolchain(...)`. It runs
@@ -113,9 +121,8 @@ seam, `validate_mlir_with_toolchain(...)`. It runs
 tool probing, invokes `mlir-opt` when available, and returns DEFERRED
 with support details when `mlir-opt` is absent. The real dispatch
 requires a zero exit and a non-empty output artifact before returning
-PASSED. Current Stage 213 chunk-B verification: 57 focused
-validation/backend tests; the fast MLIR slice is 193 passing tests on
-this machine.
+PASSED. Current Stage 213 validation/backend verification: 69 focused
+tests; the fast MLIR slice is 205 passing tests on this machine.
 
 ## 4. What's next (in order)
 
@@ -123,10 +130,10 @@ this machine.
    Stage 212 is "closed enough" per the plan, but a future run can add
    these emitters. The attribute-heavy ones (matmul / reduce / memref
    / index-hbm) need design work first.
-2. **Stage 213 — MLIR → backends** (in progress). Next chunk: wire the
-   backend pass-pipeline runner shape / target-specific pipeline
-   contract without claiming real backend output before Stage 214
-   pipelines exist.
+2. **Stage 213 — MLIR → backends** (in progress). Next chunk:
+   stage-close holistic audit of `validate.py` + `backends.py` and the
+   target-output-validator contract; if clean, close Stage 213 without
+   claiming Stage-214 pipelines.
 3. **Stage 214 — the progressive-lowering pass pipeline.**
 4. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).

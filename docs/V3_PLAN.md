@@ -1287,3 +1287,30 @@ depend on a clean, unambiguous full-suite run.
   still open. Next: Stage 213 chunk C — begin the backend pass-pipeline
   runner shape / target-specific pipeline contract without claiming
   real backend output before Stage 214 pipelines exist.
+
+- 2026-05-21 — **Stage 213 chunk C shipped — fail-closed backend
+  pass-pipeline runner contract.** `backends.py` now has the private
+  `_run_mlir_opt_pipeline` runner shape for future target pipelines:
+  it requires an already-PASSED real MLIR validation result, non-empty
+  `mlir-opt`, a non-empty argv-token pipeline, argv-list subprocess
+  dispatch, a timeout, structured Timeout/OSError/nonzero findings, a
+  non-empty readable output artifact, and a clean target output
+  validator before `MLIRBackendResult.PASSED` is representable. The
+  new `MLIR_BACKEND_OUTPUT_VALIDATORS` table is total over the five
+  Stage-213 targets and intentionally all-`None` today; therefore a
+  future non-empty pipeline entry without a target output validator
+  still returns `DEFERRED`, not a false backend pass. Tests pin the
+  no-validator deferral, validator-required success path, validator
+  finding failure, blank-artifact failure, timeout/nonzero/no-artifact
+  failures, and the declared-pipeline dispatch path. Verification: 69
+  focused MLIR validation/backend tests pass; fast MLIR slice passes
+  (`205 passed, 4347 deselected`); GPU-neighbor slice passes (`108
+  passed, 3 skipped`). 3-clean audit loop: round 1 found must-fix
+  issues in pipeline-output success semantics and whitespace-only tool
+  output; fixes landed; round 2 CLEAN on all three axes
+  (silent-failure, type-design, general review) with 0 HIGH / 0
+  must-fix-MEDIUM. `V3_STAGES_DONE` stays 12/19 because Stage 213 is
+  still open. Next: Stage 213 stage-close holistic audit of
+  `validate.py` + `backends.py` and the target-output-validator
+  contract; if clean, close Stage 213 without claiming Stage-214
+  pipelines.

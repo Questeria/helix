@@ -18,9 +18,12 @@ License: Apache 2.0
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
 from helixc.backend.gpu_ci import BackendKind as GPUBackendKind
 
@@ -86,7 +89,9 @@ MLIR_BACKEND_REQUIRED_DIALECTS: dict[MLIRBackendTarget, tuple[str, ...]] = {
 # Stage 213 chunk A records the table and leaves every target empty on
 # purpose. A future chunk must fill this table and teach
 # `lower_mlir_to_backend` how to execute those passes before any target
-# can return PASSED.
+# can return PASSED. Stage 213 chunk C defines the runner contract:
+# each entry is a complete `mlir-opt` pass argument (e.g.
+# "--canonicalize" or "--pass-pipeline=..."), not a shell fragment.
 MLIR_BACKEND_LOWERING_PIPELINES: dict[MLIRBackendTarget, tuple[str, ...]] = {
     MLIRBackendTarget.LLVM_IR: (),
     MLIRBackendTarget.PTX: (),
@@ -94,6 +99,27 @@ MLIR_BACKEND_LOWERING_PIPELINES: dict[MLIRBackendTarget, tuple[str, ...]] = {
     MLIRBackendTarget.METAL_MSL: (),
     MLIRBackendTarget.WEBGPU_WGSL: (),
 }
+
+# A target pipeline alone is not enough to claim a backend pass: after
+# `mlir-opt` runs, a target-specific validator must prove the output is
+# the backend-consumable artifact Stage 214+ promised. Stage 213 leaves
+# every validator unwired, so production lowering remains DEFERRED even
+# if a test or future branch experiments with a non-empty pipeline.
+MLIRBackendOutputValidator = Callable[[str], tuple[str, ...]]
+
+MLIR_BACKEND_OUTPUT_VALIDATORS: dict[
+    MLIRBackendTarget, Optional[MLIRBackendOutputValidator]] = {
+        MLIRBackendTarget.LLVM_IR: None,
+        MLIRBackendTarget.PTX: None,
+        MLIRBackendTarget.ROCM_HIP: None,
+        MLIRBackendTarget.METAL_MSL: None,
+        MLIRBackendTarget.WEBGPU_WGSL: None,
+}
+
+# Wall-clock cap on a target pass-pipeline dispatch. Real production
+# pipelines should be short for the small modules exercised here; the
+# cap is only a dead-tool guard.
+_MLIR_BACKEND_PIPELINE_TIMEOUT_S = 60
 
 
 def _check_mlir_backend_tables() -> None:
@@ -128,6 +154,8 @@ def _check_mlir_backend_tables() -> None:
         ("MLIR_BACKEND_REQUIRED_DIALECTS", MLIR_BACKEND_REQUIRED_DIALECTS),
         ("MLIR_BACKEND_LOWERING_PIPELINES",
          MLIR_BACKEND_LOWERING_PIPELINES),
+        ("MLIR_BACKEND_OUTPUT_VALIDATORS",
+         MLIR_BACKEND_OUTPUT_VALIDATORS),
     ):
         if set(table) != expected:
             raise AssertionError(
@@ -154,11 +182,29 @@ def _check_mlir_backend_tables() -> None:
             raise AssertionError(
                 f"helixc.ir.mlir.backends: {target.name} pipeline must "
                 f"be a tuple, got {type(pipeline).__name__}")
-        for pass_name in pipeline:
-            if not isinstance(pass_name, str) or not pass_name.strip():
+        for pass_arg in pipeline:
+            if not isinstance(pass_arg, str) or not pass_arg.strip():
                 raise AssertionError(
                     f"helixc.ir.mlir.backends: {target.name} has a "
-                    f"blank / non-str pass name {pass_name!r}")
+                    f"blank / non-str pass argument {pass_arg!r}")
+            if pass_arg != pass_arg.strip():
+                raise AssertionError(
+                    f"helixc.ir.mlir.backends: {target.name} pass "
+                    f"argument {pass_arg!r} has leading/trailing "
+                    "whitespace")
+            if not pass_arg.startswith("--"):
+                raise AssertionError(
+                    f"helixc.ir.mlir.backends: {target.name} pass "
+                    f"argument {pass_arg!r} must start with '--' so it "
+                    "is a complete argv token, not an implicit shell "
+                    "fragment")
+
+    for target, validator in MLIR_BACKEND_OUTPUT_VALIDATORS.items():
+        if validator is not None and not callable(validator):
+            raise AssertionError(
+                f"helixc.ir.mlir.backends: {target.name} output "
+                f"validator must be callable or None, got "
+                f"{type(validator).__name__}")
 
 
 _check_mlir_backend_tables()
@@ -198,6 +244,214 @@ def mlir_target_for_gpu_backend(
             f"unknown GPU backend {backend!r}; expected one of "
             f"{list(GPUBackendKind)}")
     return GPU_BACKEND_TO_MLIR_TARGET[backend]
+
+
+def _run_mlir_opt_pipeline(
+        mlir_text: str,
+        *,
+        target: MLIRBackendTarget,
+        validation: MLIRValidation,
+        mlir_opt: str,
+        pipeline: tuple[str, ...],
+        output_validator: MLIRBackendOutputValidator,
+        timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+) -> "MLIRBackendResult":
+    """Run a declared `mlir-opt` target lowering pipeline.
+
+    This is the Stage 213 chunk-C runner contract. It only runs after
+    real validation has PASSED. A 0 exit is not enough: the output
+    artifact must exist, be non-empty, and read back as text before the
+    backend result can be PASSED.
+    """
+    target = _require_backend_target(target)
+    if not isinstance(mlir_text, str) or not mlir_text.strip():
+        raise ValueError(
+            "_run_mlir_opt_pipeline: mlir_text must be non-empty text")
+    if not isinstance(validation, MLIRValidation):
+        raise ValueError(
+            "_run_mlir_opt_pipeline: validation must be an "
+            f"MLIRValidation result, got {validation!r}")
+    if not validation.passed():
+        raise ValueError(
+            "_run_mlir_opt_pipeline: validation must be PASSED before "
+            "a backend lowering pipeline can run")
+    if not isinstance(mlir_opt, str) or not mlir_opt.strip():
+        raise ValueError(
+            "_run_mlir_opt_pipeline: mlir_opt must be a non-empty "
+            f"string, got {mlir_opt!r}")
+    mlir_opt = mlir_opt.strip()
+    if not isinstance(pipeline, tuple) or not pipeline:
+        raise ValueError(
+            "_run_mlir_opt_pipeline: pipeline must be a non-empty tuple")
+    for pass_arg in pipeline:
+        if not isinstance(pass_arg, str) or not pass_arg.strip():
+            raise ValueError(
+                "_run_mlir_opt_pipeline: pipeline has a blank or "
+                f"non-str pass argument {pass_arg!r}")
+        if pass_arg != pass_arg.strip():
+            raise ValueError(
+                "_run_mlir_opt_pipeline: pipeline pass argument "
+                f"{pass_arg!r} must not have leading/trailing whitespace")
+        if not pass_arg.startswith("--"):
+            raise ValueError(
+                "_run_mlir_opt_pipeline: pipeline pass argument "
+                f"{pass_arg!r} must start with '--'")
+    if not callable(output_validator):
+        raise ValueError(
+            "_run_mlir_opt_pipeline: output_validator must be callable")
+    if ((not isinstance(timeout_s, (int, float)))
+            or isinstance(timeout_s, bool)
+            or timeout_s <= 0):
+        raise ValueError(
+            "_run_mlir_opt_pipeline: timeout_s must be a positive number")
+
+    with tempfile.TemporaryDirectory(prefix="helix_mlir_backend_") as tmpdir:
+        mlir_path = os.path.join(tmpdir, "module.mlir")
+        out_path = os.path.join(tmpdir, "lowered.mlir")
+        try:
+            with open(mlir_path, "w", encoding="utf-8") as f:
+                f.write(mlir_text)
+        except OSError as exc:
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"could not write temp MLIR input {mlir_path!r} "
+                    f"({type(exc).__name__}: {exc})",),
+                output_text=None,
+            )
+
+        try:
+            proc = subprocess.run(
+                [mlir_opt, *pipeline, mlir_path, "-o", out_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"mlir-opt backend pipeline for {target.value} "
+                    f"timed out after {timeout_s}s",),
+                output_text=None,
+            )
+        except OSError as exc:
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"mlir-opt backend pipeline for {target.value}: "
+                    f"tool unusable at invocation ({type(exc).__name__}: "
+                    f"{exc})",),
+                output_text=None,
+            )
+
+        if proc.returncode != 0:
+            diag = (proc.stderr or proc.stdout or "").strip()
+            if not diag:
+                diag = "no diagnostic emitted"
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"mlir-opt backend pipeline for {target.value} exit "
+                    f"{proc.returncode}: {diag[:500]}",),
+                output_text=None,
+            )
+
+        try:
+            size = os.path.getsize(out_path)
+        except OSError:
+            size = -1
+        if size <= 0:
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"mlir-opt backend pipeline for {target.value} "
+                    f"exited 0 but produced no output artifact at "
+                    f"{out_path!r} - a 0 exit with no artifact is not "
+                    "a backend pass",),
+                output_text=None,
+            )
+
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                output_text = f.read()
+        except OSError as exc:
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"could not read backend output artifact {out_path!r} "
+                    f"({type(exc).__name__}: {exc})",),
+                output_text=None,
+            )
+
+        if not output_text.strip():
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=(
+                    f"mlir-opt backend pipeline for {target.value} "
+                    "exited 0 but produced only blank output",),
+                output_text=None,
+            )
+        output_findings = output_validator(output_text)
+        if not isinstance(output_findings, tuple):
+            raise ValueError(
+                "_run_mlir_opt_pipeline: output_validator must return a "
+                f"tuple, got {type(output_findings).__name__}")
+        for finding in output_findings:
+            if not isinstance(finding, str) or not finding.strip():
+                raise ValueError(
+                    "_run_mlir_opt_pipeline: output_validator returned "
+                    f"a blank or non-str finding {finding!r}")
+        if output_findings:
+            return MLIRBackendResult(
+                target=target,
+                validation=validation,
+                lowering_attempted=True,
+                lowering_passed=False,
+                lowering_tool="mlir-opt",
+                lowering_findings=tuple(
+                    f"target output contract for {target.value}: {finding}"
+                    for finding in output_findings),
+                output_text=None,
+            )
+
+    return MLIRBackendResult(
+        target=target,
+        validation=validation,
+        lowering_attempted=True,
+        lowering_passed=True,
+        lowering_tool="mlir-opt",
+        lowering_findings=(),
+        output_text=output_text,
+    )
 
 
 @dataclass(frozen=True)
@@ -389,16 +643,35 @@ def lower_mlir_to_backend(
             for line in support.detail)
 
     pipeline = backend_lowering_pipeline(target)
+    output_validator = MLIR_BACKEND_OUTPUT_VALIDATORS[target]
     if not pipeline:
         findings.append(
             f"Stage 213 MLIR lowering pipeline for {target.value} is "
             "not wired yet; Stage 214 must supply target passes before "
             "this backend can consume MLIR")
-    else:
+    elif not validation.passed():
         findings.append(
-            f"Stage 213 has a declared MLIR pipeline for {target.value} "
-            "but no pipeline runner is wired yet; refusing to claim a "
-            "backend pass")
+            f"Stage 213 MLIR lowering pipeline for {target.value} is "
+            "declared, but real MLIR validation is not PASSED; "
+            "refusing to attempt backend lowering")
+    elif support.mlir_opt is None:
+        findings.append(
+            f"Stage 213 MLIR lowering pipeline for {target.value} is "
+            "declared, but `mlir-opt` is not available to run it")
+    elif output_validator is None:
+        findings.append(
+            f"Stage 213 MLIR lowering pipeline for {target.value} is "
+            "declared, but the target output validator is not wired; "
+            "refusing to claim backend output from a pass pipeline alone")
+    else:
+        return _run_mlir_opt_pipeline(
+            mlir_text,
+            target=target,
+            validation=validation,
+            mlir_opt=support.mlir_opt,
+            pipeline=pipeline,
+            output_validator=output_validator,
+        )
 
     return MLIRBackendResult(
         target=target,

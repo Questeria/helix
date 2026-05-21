@@ -8,6 +8,7 @@ claim a false PASS on a toolchain-free machine.
 from __future__ import annotations
 
 import ast
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,11 @@ def _mock_deferred_validation() -> MLIRValidation:
 
 def _real_passed_validation() -> MLIRValidation:
     return MLIRValidation(MLIRValidationVerdict.PASSED, ())
+
+
+def _accept_backend_output(output_text: str) -> tuple[str, ...]:
+    assert output_text.strip()
+    return ()
 
 
 def test_mlir_backend_target_covers_stage213_backends():
@@ -87,6 +93,14 @@ def test_backend_lowering_pipelines_are_explicitly_unwired():
     unwired; empty means DEFERRED, not PASSED."""
     for target in MLIRBackendTarget:
         assert backend_lowering_pipeline(target) == ()
+
+
+def test_backend_output_validators_are_explicitly_unwired():
+    """A pass pipeline alone cannot prove backend-consumable output."""
+    assert set(backends.MLIR_BACKEND_OUTPUT_VALIDATORS) == set(
+        MLIRBackendTarget)
+    for target in MLIRBackendTarget:
+        assert backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target] is None
 
 
 def test_backend_helpers_reject_unknown_targets():
@@ -296,6 +310,164 @@ def test_mlir_backend_result_accepts_real_success_with_output_text():
     assert result.passed()
 
 
+def test_run_mlir_opt_pipeline_rejects_unpassed_validation():
+    with pytest.raises(ValueError, match="validation must be PASSED"):
+        backends._run_mlir_opt_pipeline(
+            _WELL_FORMED,
+            target=MLIRBackendTarget.PTX,
+            validation=_mock_deferred_validation(),
+            mlir_opt="/fake/mlir-opt",
+            pipeline=("--canonicalize",),
+            output_validator=_accept_backend_output,
+        )
+
+
+def test_run_mlir_opt_pipeline_rejects_implicit_pass_arg():
+    with pytest.raises(ValueError, match="must start with '--'"):
+        backends._run_mlir_opt_pipeline(
+            _WELL_FORMED,
+            target=MLIRBackendTarget.PTX,
+            validation=_real_passed_validation(),
+            mlir_opt="/fake/mlir-opt",
+            pipeline=("canonicalize",),
+            output_validator=_accept_backend_output,
+        )
+
+
+def test_run_mlir_opt_pipeline_success_requires_output_validator(
+        monkeypatch):
+    seen: dict[str, object] = {}
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        seen["cmd"] = cmd
+        seen["capture_output"] = capture_output
+        seen["text"] = text
+        seen["timeout"] = timeout
+        o_index = cmd.index("-o")
+        in_path = cmd[o_index - 1]
+        out_path = cmd[o_index + 1]
+        assert Path(in_path).read_text(encoding="utf-8") == _WELL_FORMED
+        Path(out_path).write_text("module { }\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _validator(output_text):
+        seen["validated_output"] = output_text
+        return ()
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=_real_passed_validation(),
+        mlir_opt="/fake/mlir-opt",
+        pipeline=("--canonicalize",),
+        output_validator=_validator,
+    )
+    assert result.status() is MLIRBackendStatus.PASSED
+    assert result.output_text == "module { }\n"
+    assert seen["cmd"][0] == "/fake/mlir-opt"
+    assert "--canonicalize" in seen["cmd"]
+    assert seen["capture_output"] is True
+    assert seen["text"] is True
+    assert seen["validated_output"] == "module { }\n"
+
+
+def test_run_mlir_opt_pipeline_validator_finding_is_failed(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        out_path = cmd[cmd.index("-o") + 1]
+        Path(out_path).write_text("module { }\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def _validator(output_text):
+        assert output_text == "module { }\n"
+        return ("not a PTX artifact",)
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=_real_passed_validation(),
+        mlir_opt="/fake/mlir-opt",
+        pipeline=("--canonicalize",),
+        output_validator=_validator,
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("not a PTX artifact" in f for f in result.lowering_findings)
+
+
+def test_run_mlir_opt_pipeline_nonzero_is_failed(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 9, "", "bad pipeline")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=_real_passed_validation(),
+        mlir_opt="/fake/mlir-opt",
+        pipeline=("--canonicalize",),
+        output_validator=_accept_backend_output,
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("exit 9" in f for f in result.lowering_findings)
+    assert any("bad pipeline" in f for f in result.lowering_findings)
+
+
+def test_run_mlir_opt_pipeline_timeout_is_failed(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=_real_passed_validation(),
+        mlir_opt="/fake/mlir-opt",
+        pipeline=("--canonicalize",),
+        output_validator=_accept_backend_output,
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("timed out" in f for f in result.lowering_findings)
+
+
+def test_run_mlir_opt_pipeline_zero_exit_without_artifact_fails(
+        monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=_real_passed_validation(),
+        mlir_opt="/fake/mlir-opt",
+        pipeline=("--canonicalize",),
+        output_validator=_accept_backend_output,
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("produced no output artifact" in f
+               for f in result.lowering_findings)
+
+
+def test_run_mlir_opt_pipeline_blank_artifact_fails(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        out_path = cmd[cmd.index("-o") + 1]
+        Path(out_path).write_text(" \n\t", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=_real_passed_validation(),
+        mlir_opt="/fake/mlir-opt",
+        pipeline=("--canonicalize",),
+        output_validator=_accept_backend_output,
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("only blank output" in f for f in result.lowering_findings)
+
+
 def test_lower_mlir_to_backend_malformed_fails_before_support_probe(
         monkeypatch):
     """Bad MLIR fails on the mock validator and does not probe tools."""
@@ -348,6 +520,110 @@ def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
     assert not any(
         "no real MLIR surface" in f for f in result.lowering_findings)
     assert any("not wired yet" in f for f in result.lowering_findings)
+
+
+def test_lower_mlir_to_backend_declared_pipeline_invokes_runner(
+        monkeypatch):
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/usr/bin/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
+    )
+
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    def _validator(output_text):
+        assert output_text == "module { }\n"
+        return ()
+
+    def _fake_run(mlir_text, *, target, validation, mlir_opt, pipeline,
+                  output_validator):
+        assert target is MLIRBackendTarget.PTX
+        assert validation.passed()
+        assert mlir_opt == "/usr/bin/mlir-opt"
+        assert pipeline == ("--canonicalize",)
+        assert output_validator is _validator
+        return MLIRBackendResult(
+            target=target,
+            validation=validation,
+            lowering_attempted=True,
+            lowering_passed=True,
+            lowering_tool="mlir-opt",
+            lowering_findings=(),
+            output_text="module { }\n",
+        )
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    monkeypatch.setitem(
+        backends.MLIR_BACKEND_LOWERING_PIPELINES,
+        MLIRBackendTarget.PTX,
+        ("--canonicalize",),
+    )
+    monkeypatch.setitem(
+        backends.MLIR_BACKEND_OUTPUT_VALIDATORS,
+        MLIRBackendTarget.PTX,
+        _validator,
+    )
+    monkeypatch.setattr(backends, "_run_mlir_opt_pipeline", _fake_run)
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.passed()
+    assert result.output_text == "module { }\n"
+
+
+def test_lower_mlir_to_backend_declared_pipeline_without_mlir_opt_defers(
+        monkeypatch):
+    support = MLIRSupport(
+        bindings=True,
+        dialects=True,
+        mlir_opt=None,
+        detail=("bindings present, mlir-opt absent",),
+    )
+
+    def _fake_validate(mlir_text, *, support):
+        return _mock_deferred_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    monkeypatch.setitem(
+        backends.MLIR_BACKEND_LOWERING_PIPELINES,
+        MLIRBackendTarget.PTX,
+        ("--canonicalize",),
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.deferred()
+    assert any("validation is not PASSED" in f
+               for f in result.lowering_findings), result.lowering_findings
+
+
+def test_lower_mlir_to_backend_declared_pipeline_without_validator_defers(
+        monkeypatch):
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/usr/bin/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
+    )
+
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    monkeypatch.setitem(
+        backends.MLIR_BACKEND_LOWERING_PIPELINES,
+        MLIRBackendTarget.PTX,
+        ("--canonicalize",),
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.deferred()
+    assert any("output validator is not wired" in f
+               for f in result.lowering_findings), result.lowering_findings
 
 
 def test_lower_mlir_to_backend_real_validation_failure_is_failed(
