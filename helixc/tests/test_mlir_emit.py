@@ -1,19 +1,24 @@
-"""Tests for helixc.ir.mlir.emit — v3.0 Phase E, Stage 212 chunk A:
-the Helix-IR -> MLIR type bridge.
+"""Tests for helixc.ir.mlir.emit — v3.0 Phase E, Stage 212: the
+Tile-IR -> MLIR text translator.
 
-`emit.py` opens Stage 212 — the parallel MLIR translation path. Chunk A
-is `render_mlir_type`: every Helix IR type (`tir.TIRType`) rendered as
-MLIR type syntax — scalars to `i32` / `f32` / `i1`, tensors to
-`tensor<...>`, tiles to `vector<...>`, tuples to `tuple<...>`, unit to
-`none`. The translator FAILS CLOSED (`MLIRTranslationError`) on any
-type it cannot faithfully render rather than emit a guessed type.
+`emit.py` is the Stage-212 parallel MLIR translation path — it walks a
+`tile_ir.TileModule` and emits MLIR textual IR, additive alongside the
+home-grown tile-IR -> backends path. It was built over chunks A-J and
+closed at Stage 212; the per-op emitters return `list[str]` (one MLIR
+line per element). The translator FAILS CLOSED (`MLIRTranslationError`)
+on any type or op it cannot faithfully emit, never a guessed one.
 
-These tests pin: the scalar-dtype mapping; the fail-closed behaviour on
-`char` / the quantized dtypes / unknown types / non-static tile dims;
-shape-dimension rendering (static and dynamic); tensor / tile / tuple /
-unit rendering; the two module-load coverage guards and their
-non-vacuity; and — the mock-path rule — that the module never
-`import mlir`.
+These tests pin: the type bridge (`render_mlir_type` — scalars,
+tensors, tiles, tuples, unit — failing closed on `char` / quantized /
+unknown / non-static tile dims); shape-dimension rendering; the module
+/ function emitter and its fail-closed `_check_fn_translatable`
+(single-block, signature- and SSA-consistent); the per-op emitters for
+the 17 translated Tile-IR op kinds (the scalar `arith` core, compare /
+select, the elementwise and layout-transform `vector` tile ops,
+`func.call`, `scalar.neg`, the GPU thread-index read), including their
+bool / arity / type fail-closed paths; that an unhandled op fails
+closed; the module-load coverage / drift guards and their non-vacuity;
+and — the mock-path rule — that the module never `import mlir`.
 """
 from __future__ import annotations
 
@@ -1207,18 +1212,19 @@ def test_emit_neg_fails_closed_on_non_scalar():
         emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
 
 
-def test_emit_fails_closed_on_empty_emitted_line(monkeypatch):
-    """`_emit_fn` fails closed when an op emitter returns a string with
-    an empty line fragment (a stray leading / trailing / doubled
-    newline) — a blank line in a `func.func` body is malformed MLIR.
-    The multi-line `.split` contract is that every fragment is a real
-    op line; this pins that it is enforced, not silently emitted."""
-    patched = dict(emit._OP_EMITTERS)
-    patched[_TK.RETURN] = lambda op: "func.return\n"   # trailing newline
-    monkeypatch.setattr(emit, "_OP_EMITTERS", patched)
-    fn = _fn("f", [], tir.TIRUnit(), _ret())
-    with pytest.raises(MLIRTranslationError, match="empty"):
-        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+def test_emit_fails_closed_on_blank_emitted_line(monkeypatch):
+    """`_emit_fn` fails closed when an op emitter returns no lines, or
+    a `list[str]` carrying a blank line — every op emits at least one
+    non-blank MLIR line (a blank line in a `func.func` body is
+    malformed; a no-line op would be silently dropped)."""
+    for bad in ([], ["func.return", ""], ["func.return", "  "]):
+        patched = dict(emit._OP_EMITTERS)
+        patched[_TK.RETURN] = lambda op, _b=bad: list(_b)
+        monkeypatch.setattr(emit, "_OP_EMITTERS", patched)
+        fn = _fn("f", [], tir.TIRUnit(), _ret())
+        with pytest.raises(MLIRTranslationError,
+                           match="no lines or a blank line"):
+            emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
 
 
 # --------------------------------------------------------------------------

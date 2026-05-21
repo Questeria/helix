@@ -360,17 +360,17 @@ def _value_ref(v: tile_ir.TileValue) -> str:
     return f"%v{v.id}"
 
 
-def _emit_return(op: tile_ir.TileOp) -> str:
+def _emit_return(op: tile_ir.TileOp) -> list[str]:
     """`func.return` for a Helix function's unit (0-operand) or value
     (1-operand) return. `_check_fn_translatable` has already vetted the
     operand count against the function's declared result type, so this
     sees only 0 or 1 operand."""
     if not op.operands:
-        return "func.return"
+        return ["func.return"]
     assert len(op.operands) == 1, \
         "RETURN arity must be vetted by _check_fn_translatable"
     v = op.operands[0]
-    return f"func.return {_value_ref(v)} : {render_mlir_type(v.ty)}"
+    return [f"func.return {_value_ref(v)} : {render_mlir_type(v.ty)}"]
 
 
 # --- the scalar `arith` op emitters (Stage 212 chunk C) ---
@@ -438,7 +438,7 @@ def _tile_arith_type(ty: tir.TIRType, op_name: str) -> tuple[str, bool]:
     return mlir, element.startswith("i")
 
 
-def _emit_const_int(op: tile_ir.TileOp) -> str:
+def _emit_const_int(op: tile_ir.TileOp) -> list[str]:
     """`%vR = arith.constant <n> : <iN>` — an integer scalar constant."""
     r = _single_result(op, "scalar.const_int")
     if op.operands:
@@ -458,7 +458,7 @@ def _emit_const_int(op: tile_ir.TileOp) -> str:
         raise MLIRTranslationError(
             f"scalar.const_int has a non-integer result type ({mlir}) "
             f"— the translator fails closed")
-    return f"{_value_ref(r)} = arith.constant {value} : {mlir}"
+    return [f"{_value_ref(r)} = arith.constant {value} : {mlir}"]
 
 
 def _float_literal(value: float) -> str:
@@ -479,7 +479,7 @@ def _float_literal(value: float) -> str:
     return f"{mantissa}e{int(exponent)}"
 
 
-def _emit_const_float(op: tile_ir.TileOp) -> str:
+def _emit_const_float(op: tile_ir.TileOp) -> list[str]:
     """`%vR = arith.constant <f> : <fN>` — a FINITE floating-point
     scalar constant. Fails closed on a non-finite value: infinity and
     NaN have no plain MLIR `arith.constant` float literal."""
@@ -504,15 +504,15 @@ def _emit_const_float(op: tile_ir.TileOp) -> str:
         raise MLIRTranslationError(
             f"scalar.const_float has a non-float result type ({mlir}) "
             f"— the translator fails closed")
-    return (f"{_value_ref(r)} = arith.constant "
-            f"{_float_literal(number)} : {mlir}")
+    return [f"{_value_ref(r)} = arith.constant "
+            f"{_float_literal(number)} : {mlir}"]
 
 
 def _emit_arith_binop(
         op: tile_ir.TileOp, op_name: str, int_mnemonic: str,
         float_mnemonic: str,
         classify: Callable[[tir.TIRType, str], tuple[str, bool]],
-        ) -> str:
+        ) -> list[str]:
     """A two-operand elementwise `arith` op — `%vR = <mnemonic> %vA,
     %vB : <T>`. `classify` (`_scalar_arith_type` for a scalar op,
     `_tile_arith_type` for a `vector` tile op) resolves the result
@@ -534,21 +534,21 @@ def _emit_arith_binop(
             f"a type-mismatched `arith` op is invalid MLIR; the "
             f"translator fails closed")
     mnemonic = int_mnemonic if is_int else float_mnemonic
-    return (f"{_value_ref(r)} = {mnemonic} {_value_ref(a)}, "
-            f"{_value_ref(b)} : {mlir}")
+    return [f"{_value_ref(r)} = {mnemonic} {_value_ref(a)}, "
+            f"{_value_ref(b)} : {mlir}"]
 
 
-def _emit_add(op: tile_ir.TileOp) -> str:
+def _emit_add(op: tile_ir.TileOp) -> list[str]:
     return _emit_arith_binop(op, "scalar.add", "arith.addi",
                              "arith.addf", _scalar_arith_type)
 
 
-def _emit_sub(op: tile_ir.TileOp) -> str:
+def _emit_sub(op: tile_ir.TileOp) -> list[str]:
     return _emit_arith_binop(op, "scalar.sub", "arith.subi",
                              "arith.subf", _scalar_arith_type)
 
 
-def _emit_mul(op: tile_ir.TileOp) -> str:
+def _emit_mul(op: tile_ir.TileOp) -> list[str]:
     return _emit_arith_binop(op, "scalar.mul", "arith.muli",
                              "arith.mulf", _scalar_arith_type)
 
@@ -605,7 +605,7 @@ def _check_cmp_predicate_tables() -> None:
 _check_cmp_predicate_tables()
 
 
-def _emit_cmp(op: tile_ir.TileOp) -> str:
+def _emit_cmp(op: tile_ir.TileOp) -> list[str]:
     """`%vR = arith.cmpi <pred>, %vA, %vB : <T>` — or `arith.cmpf` for
     a float operand. A scalar comparison; the result is an `i1`. The
     predicate comes from the Tile-IR `cmp` attribute; for an integer
@@ -644,11 +644,11 @@ def _emit_cmp(op: tile_ir.TileOp) -> str:
     else:
         predicate = _CMPF_PREDICATES[cmp]
         mnemonic = "arith.cmpf"
-    return (f"{_value_ref(r)} = {mnemonic} {predicate}, "
-            f"{_value_ref(a)}, {_value_ref(b)} : {operand_mlir}")
+    return [f"{_value_ref(r)} = {mnemonic} {predicate}, "
+            f"{_value_ref(a)}, {_value_ref(b)} : {operand_mlir}"]
 
 
-def _emit_select(op: tile_ir.TileOp) -> str:
+def _emit_select(op: tile_ir.TileOp) -> list[str]:
     """`%vR = arith.select %vCond, %vA, %vB : <T>` — a ternary select.
     The condition is an `i1`; the two arms and the result share one
     type."""
@@ -666,27 +666,27 @@ def _emit_select(op: tile_ir.TileOp) -> str:
         raise MLIRTranslationError(
             "scalar.select: the two arms and the result do not all "
             "share one type — the translator fails closed")
-    return (f"{_value_ref(r)} = arith.select {_value_ref(cond)}, "
-            f"{_value_ref(a)}, {_value_ref(b)} : {render_mlir_type(r.ty)}")
+    return [f"{_value_ref(r)} = arith.select {_value_ref(cond)}, "
+            f"{_value_ref(a)}, {_value_ref(b)} : {render_mlir_type(r.ty)}"]
 
 
 # --- the elementwise `vector` tile-op emitters (Stage 212 chunk E) ---
-def _emit_tile_add(op: tile_ir.TileOp) -> str:
+def _emit_tile_add(op: tile_ir.TileOp) -> list[str]:
     return _emit_arith_binop(op, "tile.add", "arith.addi",
                              "arith.addf", _tile_arith_type)
 
 
-def _emit_tile_sub(op: tile_ir.TileOp) -> str:
+def _emit_tile_sub(op: tile_ir.TileOp) -> list[str]:
     return _emit_arith_binop(op, "tile.sub", "arith.subi",
                              "arith.subf", _tile_arith_type)
 
 
-def _emit_tile_mul(op: tile_ir.TileOp) -> str:
+def _emit_tile_mul(op: tile_ir.TileOp) -> list[str]:
     return _emit_arith_binop(op, "tile.mul", "arith.muli",
                              "arith.mulf", _tile_arith_type)
 
 
-def _emit_tile_zeros(op: tile_ir.TileOp) -> str:
+def _emit_tile_zeros(op: tile_ir.TileOp) -> list[str]:
     """`%vR = arith.constant dense<0> : vector<...>` — a zero-filled
     tile, a splat constant. Takes no operands; the element kind picks
     the `0` / `0.0` splat literal."""
@@ -697,7 +697,7 @@ def _emit_tile_zeros(op: tile_ir.TileOp) -> str:
             "closed")
     mlir, is_int = _tile_arith_type(r.ty, "tile.zeros")
     zero = "0" if is_int else "0.0"
-    return f"{_value_ref(r)} = arith.constant dense<{zero}> : {mlir}"
+    return [f"{_value_ref(r)} = arith.constant dense<{zero}> : {mlir}"]
 
 
 # --- the layout-transform tile-op emitters (Stage 212 chunk F) ---
@@ -714,7 +714,7 @@ def _tile_element_count(ty: tir.TIRTileTy) -> int:
     return count
 
 
-def _emit_tile_reshape(op: tile_ir.TileOp) -> str:
+def _emit_tile_reshape(op: tile_ir.TileOp) -> list[str]:
     """`%vR = vector.shape_cast %vA : <src> to <dst>` — a tile reshape.
     Fails closed unless the source and result are tiles with the same
     element dtype and the same total element count (a `shape_cast`
@@ -740,11 +740,11 @@ def _emit_tile_reshape(op: tile_ir.TileOp) -> str:
             f"tile.reshape changes the total element count "
             f"({src_n} -> {dst_n}) — a `shape_cast` preserves it; the "
             f"translator fails closed")
-    return (f"{_value_ref(r)} = vector.shape_cast {_value_ref(src)} : "
-            f"{render_mlir_type(src.ty)} to {render_mlir_type(r.ty)}")
+    return [f"{_value_ref(r)} = vector.shape_cast {_value_ref(src)} : "
+            f"{render_mlir_type(src.ty)} to {render_mlir_type(r.ty)}"]
 
 
-def _emit_tile_transpose(op: tile_ir.TileOp) -> str:
+def _emit_tile_transpose(op: tile_ir.TileOp) -> list[str]:
     """`%vR = vector.transpose %vA, [1, 0] : <src> to <dst>` — a 2-D
     tile transpose. Chunk F handles the 2-D case only: its permutation
     is unambiguously `[1, 0]`. An N-D transpose needs an explicit
@@ -774,13 +774,13 @@ def _emit_tile_transpose(op: tile_ir.TileOp) -> str:
         raise MLIRTranslationError(
             "tile.transpose: the result shape is not the operand's "
             "shape transposed — the translator fails closed")
-    return (f"{_value_ref(r)} = vector.transpose {_value_ref(src)}, "
+    return [f"{_value_ref(r)} = vector.transpose {_value_ref(src)}, "
             f"[1, 0] : {render_mlir_type(src.ty)} to "
-            f"{render_mlir_type(r.ty)}")
+            f"{render_mlir_type(r.ty)}"]
 
 
 # --- the function-call emitter (Stage 212 chunk G) ---
-def _emit_call(op: tile_ir.TileOp) -> str:
+def _emit_call(op: tile_ir.TileOp) -> list[str]:
     """`%vR = func.call @callee(%args) : (argtypes) -> rettype` — a
     direct function call. The callee name is the Tile-IR `target`
     attribute; a Helix function returns one value or unit, so a `call`
@@ -814,15 +814,15 @@ def _emit_call(op: tile_ir.TileOp) -> str:
     # no consumer can use. Mirrors the LLVM backend's `_emit_call` ("a
     # call with no result, or a unit-typed result, is a void call").
     if not op.results or isinstance(op.results[0].ty, tir.TIRUnit):
-        return (f"func.call @{callee}({arg_refs}) : "
-                f"({arg_types}) -> ()")
+        return [f"func.call @{callee}({arg_refs}) : "
+                f"({arg_types}) -> ()"]
     r = op.results[0]
-    return (f"{_value_ref(r)} = func.call @{callee}({arg_refs}) : "
-            f"({arg_types}) -> {render_mlir_type(r.ty)}")
+    return [f"{_value_ref(r)} = func.call @{callee}({arg_refs}) : "
+            f"({arg_types}) -> {render_mlir_type(r.ty)}"]
 
 
 # --- the scalar-negation emitter (Stage 212 chunk H) ---
-def _emit_neg(op: tile_ir.TileOp) -> str:
+def _emit_neg(op: tile_ir.TileOp) -> list[str]:
     """`scalar.neg` -> integer or floating-point negation.
 
     MLIR's `arith` dialect has a dedicated FLOAT negate — `arith.negf
@@ -853,10 +853,10 @@ def _emit_neg(op: tile_ir.TileOp) -> str:
         # No `arith.negi` exists — integer negate is `0 - x`: a
         # materialized zero constant plus a subtract (two lines).
         zero = f"{_value_ref(r)}.zero"
-        return (f"{zero} = arith.constant 0 : {mlir}\n"
+        return [f"{zero} = arith.constant 0 : {mlir}",
                 f"{_value_ref(r)} = arith.subi {zero}, "
-                f"{_value_ref(a)} : {mlir}")
-    return f"{_value_ref(r)} = arith.negf {_value_ref(a)} : {mlir}"
+                f"{_value_ref(a)} : {mlir}"]
+    return [f"{_value_ref(r)} = arith.negf {_value_ref(a)} : {mlir}"]
 
 
 # --- the GPU thread-index emitter (Stage 212 chunk I) ---
@@ -876,7 +876,7 @@ _GPU_INDEX_OPS: dict[str, str] = {
 }
 
 
-def _emit_thread_idx(op: tile_ir.TileOp) -> str:
+def _emit_thread_idx(op: tile_ir.TileOp) -> list[str]:
     """`gpu.thread_idx` -> a GPU index read.
 
     The Tile-IR `THREAD_IDX` op is the shared carrier for three GPU
@@ -922,8 +922,8 @@ def _emit_thread_idx(op: tile_ir.TileOp) -> str:
             f"{dim!r}; expected 'x', 'y' or 'z') — the translator "
             f"fails closed")
     idx = f"{_value_ref(r)}.idx"
-    return (f"{idx} = {gpu_op} {dim}\n"
-            f"{_value_ref(r)} = arith.index_cast {idx} : index to i32")
+    return [f"{idx} = {gpu_op} {dim}",
+            f"{_value_ref(r)} = arith.index_cast {idx} : index to i32"]
 
 
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
@@ -938,7 +938,7 @@ def _emit_thread_idx(op: tile_ir.TileOp) -> str:
 # guard, deliberately: the table is MEANT to be incomplete until the
 # per-op chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
-                   Callable[[tile_ir.TileOp], str]] = {
+                   Callable[[tile_ir.TileOp], list[str]]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
     tile_ir.TileOpKind.SCALAR_CONST_INT: _emit_const_int,
     tile_ir.TileOpKind.SCALAR_CONST_FLOAT: _emit_const_float,
@@ -959,11 +959,11 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
 }
 
 
-def _emit_op(op: tile_ir.TileOp) -> str:
-    """Emit one Tile-IR op as MLIR text — one line, or several (joined
-    by newlines) for an op with a multi-step lowering, e.g.
-    `scalar.neg` on an integer. Fails closed on any op kind without an
-    emitter yet — it never emits a guessed op."""
+def _emit_op(op: tile_ir.TileOp) -> list[str]:
+    """Emit one Tile-IR op as a list of MLIR lines — one element for a
+    single-line op, several for a multi-step lowering (e.g.
+    `scalar.neg` on an integer). Fails closed on any op kind without
+    an emitter yet — it never emits a guessed op."""
     emitter = _OP_EMITTERS.get(op.kind)
     if emitter is None:
         raise MLIRTranslationError(
@@ -1085,20 +1085,19 @@ def _emit_fn(fn: tile_ir.TileFn) -> list[str]:
         ret = f" -> {render_mlir_type(fn.return_ty)}"
     lines = [f"func.func @{fn.name}({params}){ret} {{"]
     for op in fn.entry.ops:
-        # An emitter may return MULTIPLE lines (e.g. `scalar.neg`'s
-        # two-op integer lowering) — split and indent each so a
-        # multi-line op lines up like every single-line op. An EMPTY
-        # fragment (a stray leading / trailing / doubled newline in an
-        # emitter's output) would put a blank line in the function
-        # body — malformed MLIR; fail closed rather than emit it.
-        emitted = _emit_op(op)
-        for op_line in emitted.split("\n"):
-            if not op_line:
-                raise MLIRTranslationError(
-                    f"the {op.kind.name} emitter produced an empty "
-                    f"MLIR line (output {emitted!r}) — a blank line in "
-                    f"a function body is malformed; the translator "
-                    f"fails closed")
+        # `_emit_op` returns a list of MLIR lines — one for a
+        # single-line op, several for a multi-step lowering (e.g.
+        # `scalar.neg` on an integer). Indent each. Fail closed if an
+        # emitter yields NO lines, or a blank one: every op emits at
+        # least one non-blank line — a blank line in a function body
+        # is malformed and a no-line op would be silently dropped.
+        op_lines = _emit_op(op)
+        if not op_lines or any(not ln.strip() for ln in op_lines):
+            raise MLIRTranslationError(
+                f"the {op.kind.name} emitter produced no lines or a "
+                f"blank line ({op_lines!r}) — every op emits at least "
+                f"one non-blank MLIR line; the translator fails closed")
+        for op_line in op_lines:
             lines.append(f"  {op_line}")
     lines.append("}")
     return lines
