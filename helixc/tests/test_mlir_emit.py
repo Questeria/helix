@@ -551,6 +551,159 @@ def test_emit_scalar_binop_fails_closed_on_wrong_arity():
 
 
 # --------------------------------------------------------------------------
+# the compare / select op emitters (chunk D)
+# --------------------------------------------------------------------------
+def _cmp(a: tile_ir.TileValue, b: tile_ir.TileValue,
+         r: tile_ir.TileValue, kind: str) -> tile_ir.TileOp:
+    return tile_ir.TileOp(_TK.SCALAR_CMP, operands=[a, b], results=[r],
+                          attrs={"cmp": kind})
+
+
+def test_emit_cmp_integer_signed_unsigned_and_eq():
+    """`scalar.cmp` -> `arith.cmpi`: an ordered comparison is `slt` on a
+    signed operand and `ult` on an unsigned one; `eq` is sign-agnostic."""
+    for dtype, kind, pred in (("i32", "cmp.lt", "slt"),
+                              ("u32", "cmp.lt", "ult"),
+                              ("u32", "cmp.eq", "eq")):
+        a = tile_ir.TileValue(0, _S(dtype))
+        b = tile_ir.TileValue(1, _S(dtype))
+        r = tile_ir.TileValue(2, _S("bool"))
+        text = emit_mlir_module(tile_ir.TileModule(functions={
+            "f": _fn("f", [a, b], _S("bool"), _cmp(a, b, r, kind),
+                     _ret(r))}))
+        assert f"arith.cmpi {pred}, %v0, %v1 : i32" in text, (dtype, kind)
+
+
+def test_emit_cmp_float_predicates():
+    """`scalar.cmp` on a float operand -> `arith.cmpf`. `==` and the
+    relational comparisons are ORDERED (`o*`); `!=` is UNORDERED-not-
+    equal (`une`, so `NaN != NaN` is true) — matching Helix's float
+    `!=` semantics, the x86_64 backend's reference."""
+    cases = {
+        "cmp.eq": "oeq", "cmp.ne": "une", "cmp.lt": "olt",
+        "cmp.le": "ole", "cmp.gt": "ogt", "cmp.ge": "oge",
+    }
+    for kind, pred in cases.items():
+        a = tile_ir.TileValue(0, _S("f32"))
+        b = tile_ir.TileValue(1, _S("f32"))
+        r = tile_ir.TileValue(2, _S("bool"))
+        text = emit_mlir_module(tile_ir.TileModule(functions={
+            "f": _fn("f", [a, b], _S("bool"), _cmp(a, b, r, kind),
+                     _ret(r))}))
+        assert f"arith.cmpf {pred}, %v0, %v1 : f32" in text, kind
+
+
+def test_emit_select():
+    """`scalar.select` -> `arith.select %cond, %a, %b : <T>`."""
+    c = tile_ir.TileValue(0, _S("bool"))
+    x = tile_ir.TileValue(1, _S("i32"))
+    y = tile_ir.TileValue(2, _S("i32"))
+    r = tile_ir.TileValue(3, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [c, x, y], _S("i32"),
+                 tile_ir.TileOp(_TK.SCALAR_SELECT, operands=[c, x, y],
+                                results=[r]), _ret(r))}))
+    assert "%v3 = arith.select %v0, %v1, %v2 : i32" in text
+
+
+def test_emit_cmp_select_function_passes_mock_validate():
+    """A function using a comparison and a select emits structurally
+    well-formed MLIR (`mock_validate_mlir` -> DEFERRED)."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    cond = tile_ir.TileValue(2, _S("bool"))
+    r = tile_ir.TileValue(3, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a, b], _S("i32"), _cmp(a, b, cond, "cmp.lt"),
+                 tile_ir.TileOp(_TK.SCALAR_SELECT, operands=[cond, a, b],
+                                results=[r]), _ret(r))}))
+    assert mock_validate_mlir(text).deferred(), text
+
+
+def test_emit_cmp_fails_closed_on_unknown_predicate():
+    """`scalar.cmp` with an unrecognised / missing `cmp` attribute
+    fails closed."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("bool"))
+    for bad in (_cmp(a, b, r, "cmp.bogus"),
+                tile_ir.TileOp(_TK.SCALAR_CMP, operands=[a, b],
+                               results=[r])):           # no `cmp` attr
+        fn = _fn("f", [a, b], _S("bool"), bad, _ret(r))
+        with pytest.raises(MLIRTranslationError,
+                           match="recognised `cmp`"):
+            emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_cmp_fails_closed_on_non_bool_result():
+    """`scalar.cmp` whose result type is not i1 fails closed — a
+    comparison produces a boolean."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))      # i32, not bool
+    fn = _fn("f", [a, b], _S("i32"), _cmp(a, b, r, "cmp.lt"), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="result type is not i1"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_cmp_fails_closed_on_operand_mismatch():
+    """`scalar.cmp` with operands of different types fails closed."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    b = tile_ir.TileValue(1, _S("f32"))      # mismatched
+    r = tile_ir.TileValue(2, _S("bool"))
+    fn = _fn("f", [a, b], _S("bool"), _cmp(a, b, r, "cmp.lt"), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="different types"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_select_fails_closed_on_non_bool_condition():
+    """`scalar.select` whose condition is not i1 fails closed."""
+    c = tile_ir.TileValue(0, _S("i32"))      # i32 condition, not bool
+    x = tile_ir.TileValue(1, _S("i32"))
+    y = tile_ir.TileValue(2, _S("i32"))
+    r = tile_ir.TileValue(3, _S("i32"))
+    fn = _fn("f", [c, x, y], _S("i32"),
+             tile_ir.TileOp(_TK.SCALAR_SELECT, operands=[c, x, y],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError,
+                       match="condition type is not i1"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_select_fails_closed_on_arm_type_mismatch():
+    """`scalar.select` whose two arms / result are not all one type
+    fails closed."""
+    c = tile_ir.TileValue(0, _S("bool"))
+    x = tile_ir.TileValue(1, _S("i32"))
+    y = tile_ir.TileValue(2, _S("f32"))      # mismatched arm
+    r = tile_ir.TileValue(3, _S("i32"))
+    fn = _fn("f", [c, x, y], _S("i32"),
+             tile_ir.TileOp(_TK.SCALAR_SELECT, operands=[c, x, y],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError,
+                       match="share one type"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_cmp_predicate_tables_guard():
+    """`_check_cmp_predicate_tables` is callable and passes — the
+    `arith.cmpi` and `arith.cmpf` tables cover the same comparison
+    kinds."""
+    emit._check_cmp_predicate_tables()      # must not raise
+    assert set(emit._CMPI_PREDICATES) == set(emit._CMPF_PREDICATES)
+
+
+def test_cmp_predicate_tables_guard_is_not_vacuous(monkeypatch):
+    """`_check_cmp_predicate_tables` genuinely catches a predicate
+    table that has drifted from the Tensor-IR comparison kinds."""
+    broken = dict(emit._CMPI_PREDICATES)
+    del broken["cmp.lt"]
+    monkeypatch.setattr(emit, "_CMPI_PREDICATES", broken)
+    with pytest.raises(AssertionError, match="_CMPI_PREDICATES"):
+        emit._check_cmp_predicate_tables()
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — emit is pure text, never `import mlir`
 # --------------------------------------------------------------------------
 def test_emit_module_is_pure_text_no_mlir_import():

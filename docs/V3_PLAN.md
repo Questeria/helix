@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-C 3-clean ✓ | Phase E — chunks A-C shipped (type bridge; module/func scaffold; scalar arith op emitters) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-D 3-clean ✓ | Phase E — chunks A-D shipped (type bridge; module/func scaffold; arith / compare / select op emitters) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1014,3 +1014,27 @@ depend on a clean, unambiguous full-suite run.
   decimal-pointed, clean-exponent literal); delta re-audit on all
   three surfaces CLEAN. Next: Stage 212 chunk D — the compare /
   select op emitters.
+- 2026-05-20 — **Stage 212 chunk D shipped — the compare / select op
+  emitters.** `emit.py`'s `_OP_EMITTERS` gains `scalar.cmp` →
+  `arith.cmpi` / `arith.cmpf` and `scalar.select` → `arith.select`.
+  The comparison predicate comes from the `cmp` attribute the Tile-IR
+  lowerer tags `SCALAR_CMP` ops with; an integer ordered comparison is
+  signed (`slt`…) or unsigned (`ult`…) by the Helix operand dtype
+  (MLIR integer types are signless, so signedness is read from the
+  dtype name — `_UNSIGNED_DTYPES`). A module-load guard
+  `_check_cmp_predicate_tables` ties the `_CMPI_PREDICATES` /
+  `_CMPF_PREDICATES` tables to `tir.OpKind`'s six `CMP_*` members.
+  Fail-closed throughout (operand-type mismatch, non-scalar operand,
+  a non-i1 cmp result, an unknown predicate, a non-i1 select
+  condition, a select arm/result type mismatch). `scalar.neg` is
+  deferred — integer negation has no single MLIR op (it is a
+  two-op lowering needing emitter state, a distinct future chunk) —
+  and fails closed via the partial dispatch table. 56 tests
+  (`test_mlir_emit.py`, +13 chunk D). Per-stage 3-clean audit: round 1
+  returned one HIGH — float `!=` was mapped to the ORDERED predicate
+  `one`, so `NaN != NaN` would wrongly be false; Helix's reference
+  (the x86_64 backend) makes float `!=` unordered-not-equal, so it
+  must be `une` — fixed, with the float-predicate table now fully
+  test-covered; a type-design MEDIUM (a vestigial dispatch local) also
+  fixed; delta re-audit on all three surfaces CLEAN. Next: Stage 212
+  chunk E — the `vector` tile-op emitters.

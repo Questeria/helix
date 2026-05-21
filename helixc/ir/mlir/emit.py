@@ -37,8 +37,15 @@ are STATELESS — every Tile-IR value's SSA name is `%v<id>`, a pure
 function of its id, so a result and its later uses name-match with no
 per-function symbol table (MLIR emits `arith.constant` ops rather than
 inlining constants, so a constant result has an ordinary `%v<id>`
-name). Compare / select, the `vector` tile ops, `memref` / `gpu`, and
-the `helix` dialect are later chunks; `_emit_op` FAILS CLOSED on them.
+name).
+
+Chunk D — the compare / select op emitters. `scalar.cmp` ->
+`arith.cmpi` / `arith.cmpf` (the predicate from the Tile-IR `cmp`
+attribute; an integer ordered comparison is signed / unsigned by the
+operand dtype), and `scalar.select` -> `arith.select`. The `vector`
+tile ops, `memref` / `gpu`, the `helix` dialect, and `scalar.neg`
+(integer negation has no single MLIR op — a deferred multi-op
+lowering) remain later chunks; `_emit_op` FAILS CLOSED on them.
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -450,13 +457,131 @@ def _emit_mul(op: tile_ir.TileOp) -> str:
                               "arith.mulf")
 
 
+# --- the compare / select op emitters (Stage 212 chunk D) ---
+# An `arith.cmpi` predicate is sign-sensitive for the ORDERED
+# comparisons: a Tensor-IR `cmp.lt` is `slt` on a signed operand,
+# `ult` on an unsigned one. `cmp.eq` / `cmp.ne` are sign-agnostic.
+_CMPI_PREDICATES: dict[str, tuple[str, str]] = {
+    # `cmp` attr -> (signed predicate, unsigned predicate)
+    "cmp.eq": ("eq", "eq"),
+    "cmp.ne": ("ne", "ne"),
+    "cmp.lt": ("slt", "ult"),
+    "cmp.le": ("sle", "ule"),
+    "cmp.gt": ("sgt", "ugt"),
+    "cmp.ge": ("sge", "uge"),
+}
+# An `arith.cmpf` predicate. `==` and the relational comparisons are
+# ORDERED (`o*` — false if either operand is NaN); `!=` is UNORDERED-
+# not-equal (`une` — true when the operands are unordered, so
+# `NaN != NaN` is true). This matches Helix's float surface semantics:
+# the x86_64 backend's reference makes float `CMP_NE` "not-equal OR
+# unordered" (it is the logical negation of the ordered `==`).
+_CMPF_PREDICATES: dict[str, str] = {
+    "cmp.eq": "oeq", "cmp.ne": "une",
+    "cmp.lt": "olt", "cmp.le": "ole",
+    "cmp.gt": "ogt", "cmp.ge": "oge",
+}
+# Helix unsigned integer dtypes — they select the unsigned `arith.cmpi`
+# predicate. MLIR integer types are SIGNLESS, so signedness is read
+# from the Helix dtype name, not the rendered MLIR type. Mirrors
+# `llvm_ir._UNSIGNED_INT_DTYPES`.
+_UNSIGNED_DTYPES: frozenset[str] = frozenset({
+    "u8", "u16", "u32", "u64", "usize",
+})
+
+
+def _check_cmp_predicate_tables() -> None:
+    """Module-load guard: the `arith.cmpi` / `arith.cmpf` predicate
+    tables cover EXACTLY the six Tensor-IR comparison kinds — the
+    `cmp.*` strings the Tile-IR lowerer tags `SCALAR_CMP` ops with. A
+    new comparison op in `tir.py`, or a key present in one table but
+    not the other, fails loudly here."""
+    expected = {k.value for k in tir.OpKind if k.name.startswith("CMP_")}
+    for name, keys in (("_CMPI_PREDICATES", set(_CMPI_PREDICATES)),
+                       ("_CMPF_PREDICATES", set(_CMPF_PREDICATES))):
+        if keys != expected:
+            raise AssertionError(
+                f"helixc.ir.mlir.emit: {name} keys {sorted(keys)} do "
+                f"not match the Tensor-IR comparison kinds "
+                f"{sorted(expected)}")
+
+
+_check_cmp_predicate_tables()
+
+
+def _emit_cmp(op: tile_ir.TileOp) -> str:
+    """`%vR = arith.cmpi <pred>, %vA, %vB : <T>` — or `arith.cmpf` for
+    a float operand. A scalar comparison; the result is an `i1`. The
+    predicate comes from the Tile-IR `cmp` attribute; for an integer
+    ordered comparison it is signed / unsigned by the operand dtype."""
+    r = _single_result(op, "scalar.cmp")
+    if len(op.operands) != 2:
+        raise MLIRTranslationError(
+            f"scalar.cmp expects 2 operands, got {len(op.operands)} — "
+            f"the translator fails closed")
+    a, b = op.operands
+    if a.ty != b.ty:
+        raise MLIRTranslationError(
+            "scalar.cmp operands have different types — a "
+            "type-mismatched comparison is invalid MLIR; the "
+            "translator fails closed")
+    if not isinstance(a.ty, tir.TIRScalar):
+        raise MLIRTranslationError(
+            f"scalar.cmp operand type is {type(a.ty).__name__}, not a "
+            f"scalar — the translator fails closed")
+    if render_mlir_type(r.ty) != "i1":
+        raise MLIRTranslationError(
+            "scalar.cmp result type is not i1 — a comparison produces "
+            "a boolean; the translator fails closed")
+    cmp = op.attrs.get("cmp")
+    operand_mlir = render_mlir_type(a.ty)   # fails closed on char etc.
+    # `_check_cmp_predicate_tables` guarantees both predicate tables
+    # carry the same key set, so one membership check covers both.
+    if cmp not in _CMPF_PREDICATES:
+        raise MLIRTranslationError(
+            f"scalar.cmp has no recognised `cmp` attribute (got "
+            f"{cmp!r}) — the translator fails closed")
+    if operand_mlir.startswith("i"):
+        signed, unsigned = _CMPI_PREDICATES[cmp]
+        predicate = unsigned if a.ty.name in _UNSIGNED_DTYPES else signed
+        mnemonic = "arith.cmpi"
+    else:
+        predicate = _CMPF_PREDICATES[cmp]
+        mnemonic = "arith.cmpf"
+    return (f"{_value_ref(r)} = {mnemonic} {predicate}, "
+            f"{_value_ref(a)}, {_value_ref(b)} : {operand_mlir}")
+
+
+def _emit_select(op: tile_ir.TileOp) -> str:
+    """`%vR = arith.select %vCond, %vA, %vB : <T>` — a ternary select.
+    The condition is an `i1`; the two arms and the result share one
+    type."""
+    r = _single_result(op, "scalar.select")
+    if len(op.operands) != 3:
+        raise MLIRTranslationError(
+            f"scalar.select expects 3 operands (cond, a, b), got "
+            f"{len(op.operands)} — the translator fails closed")
+    cond, a, b = op.operands
+    if render_mlir_type(cond.ty) != "i1":
+        raise MLIRTranslationError(
+            "scalar.select condition type is not i1 — the condition "
+            "must be a boolean; the translator fails closed")
+    if a.ty != r.ty or b.ty != r.ty:
+        raise MLIRTranslationError(
+            "scalar.select: the two arms and the result do not all "
+            "share one type — the translator fails closed")
+    return (f"{_value_ref(r)} = arith.select {_value_ref(cond)}, "
+            f"{_value_ref(a)}, {_value_ref(b)} : {render_mlir_type(r.ty)}")
+
+
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
-# B-C emit the function terminator and the scalar `arith` core; the
-# remaining per-op emitters (compare / select / `vector` / `memref` /
-# `gpu` / `helix`) are added in later chunks. `_emit_op` FAILS CLOSED
-# on any op kind absent here, so the partial table is safe — never a
-# silent miss. No completeness guard, deliberately: the table is MEANT
-# to be incomplete until the per-op chunks land.
+# B-D emit the function terminator, the scalar `arith` core, and
+# compare / select; the remaining per-op emitters (`scalar.neg`, the
+# `vector` tile ops, `memref` / `gpu`, `helix`) are added in later
+# chunks. `_emit_op` FAILS CLOSED on any op kind absent here, so the
+# partial table is safe — never a silent miss. No completeness guard,
+# deliberately: the table is MEANT to be incomplete until the per-op
+# chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
                    Callable[[tile_ir.TileOp], str]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
@@ -465,6 +590,8 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
     tile_ir.TileOpKind.SCALAR_ADD: _emit_add,
     tile_ir.TileOpKind.SCALAR_SUB: _emit_sub,
     tile_ir.TileOpKind.SCALAR_MUL: _emit_mul,
+    tile_ir.TileOpKind.SCALAR_CMP: _emit_cmp,
+    tile_ir.TileOpKind.SCALAR_SELECT: _emit_select,
 }
 
 
