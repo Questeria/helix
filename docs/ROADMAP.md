@@ -5,6 +5,13 @@ deep-research passes (2026-05-04). It's a forward-looking plan; not
 everything here will land, and priorities will shift as dogfooding
 reveals which features actually matter.
 
+> **Note (2026-05-21):** this file is the v1.0-era feature roadmap and
+> is now partly historical. The current forward plan for Helix
+> *beyond v3.0* — versions v4–v9 — lives in
+> [`docs/POST_V3_ROADMAP.md`](POST_V3_ROADMAP.md). See also
+> `docs/V3_PLAN.md` (the in-progress v3.0 plan) and
+> `docs/V3_HANDOFF.md` (the v3.0 continuation handoff).
+
 ## 🎉 v1.0.0 RELEASED 2026-05-18
 
 **Helix v1.0.0** is the first formal release. Closes Stages 1-108.
