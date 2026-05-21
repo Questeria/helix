@@ -165,7 +165,8 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212–216 | Phase E — translation / lowering / pass pipeline / parity | — | — | Phase E — next |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A 3-clean ✓ | Phase E — chunk A shipped (the Helix-IR→MLIR type bridge) |
+| 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
 ## Status notes
@@ -941,3 +942,24 @@ depend on a clean, unambiguous full-suite run.
   the `helix`-dialect op model; `mock_validate_mlir`) is complete and
   every chunk is 3-clean. `V3_STAGES_DONE` → 11. Next: Stage 212 —
   tile-IR → MLIR translation.
+- 2026-05-20 — **Stage 212 chunk A shipped — the Helix-IR → MLIR type
+  bridge.** New `helixc/ir/mlir/emit.py` opens Stage 212, the parallel
+  MLIR translation path. `render_mlir_type` renders every Helix IR
+  type as MLIR type syntax: `TIRScalar` → an MLIR scalar (`i32` /
+  `f32` / `i1` / ...; integers signless, `isize`/`usize` 64-bit);
+  `TIRTensorTy` → `tensor<…>` (a non-constant size dimension becomes a
+  dynamic `?`); `TIRTileTy` → `vector<…>` (MLIR's tile/SIMD type —
+  static dims required); `TIRTuple` → `tuple<…>`; `TIRUnit` → `none`.
+  Dispatch is by exact type through `_TYPE_RENDERERS` / `_DIM_
+  RENDERERS` dicts; two module-load coverage guards pin them to
+  `tir.TIRType` / `tir.Dim` exactly. FAIL-CLOSED — the translator
+  raises `MLIRTranslationError`, never emits a guessed or lossy type,
+  on: a width-unpinned `char`, a front-end-only quantized dtype, a
+  non-default tensor layout/device, a non-static or 0-d tile
+  dimension, an unknown IR type. Pure text — never `import mlir`
+  (mock-path-first, AST-test-pinned). 21 tests (`test_mlir_emit.py`).
+  Per-stage 3-clean audit: round 1 returned 0 HIGH, one MEDIUM (a
+  non-default tensor layout/device was silently dropped — a COL_MAJOR
+  tensor rendered identically to ROW_MAJOR); fixed by failing closed
+  on it; delta re-audit on all three surfaces CLEAN. Next: Stage 212
+  chunk B — the MLIR module / func emitter scaffold.
