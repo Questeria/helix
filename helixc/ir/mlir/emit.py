@@ -18,6 +18,17 @@ IR type must render as MLIR type syntax. `render_mlir_type` maps each
 - `TIRTuple`    -> `tuple<...>`;
 - `TIRUnit`     -> `none` (MLIR's unit type).
 
+Chunk B — the MODULE / FUNCTION EMITTER. `emit_mlir_module` walks a
+Tile-IR module (`tile_ir.TileModule`) and emits the MLIR
+`module { func.func @name(...) -> ... { ... } }` text. The translator
+works from the TILE IR — the plan (docs/V3_PLAN.md) names Stage 212
+"tile-IR -> MLIR" and Stage 215 parity-gates "the MLIR path vs. the
+home-grown tile-IR path", so the tile IR is the branch point. Chunk B
+emits SINGLE-BLOCK functions and `func.return`; multi-block CFG (the
+`cf.br` / `^bb` machinery) and the per-op bodies are later chunks —
+the translator FAILS CLOSED on them, and on any function whose
+signature is internally inconsistent.
+
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
 or device, a non-static tile dimension, an unknown IR type — raises
@@ -37,7 +48,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .. import tir
+from .. import tile_ir, tir
 
 
 class MLIRTranslationError(Exception):
@@ -263,3 +274,158 @@ def _check_dim_coverage() -> None:
 
 _check_tir_type_coverage()
 _check_dim_coverage()
+
+
+# --------------------------------------------------------------------------
+# the module / function emitter (Stage 212 chunk B)
+# --------------------------------------------------------------------------
+def _value_ref(v: tile_ir.TileValue) -> str:
+    """The MLIR SSA reference for a Tile-IR value — `%v<id>`.
+
+    Chunk B references only function parameters, whose SSA name IS
+    `%v<id>`. Chunk C (constants, computed results) will need a
+    stateful name map — a folded constant has no `%v<id>` register —
+    at which point the emitter becomes stateful (cf. the sibling
+    `llvm_ir._FnEmitter`'s `operand` map). This pure id->name function
+    is the chunk-B simplification, valid while only params are named."""
+    return f"%v{v.id}"
+
+
+def _emit_return(op: tile_ir.TileOp) -> str:
+    """`func.return` for a Helix function's unit (0-operand) or value
+    (1-operand) return. `_check_fn_translatable` has already vetted the
+    operand count against the function's declared result type, so this
+    sees only 0 or 1 operand."""
+    if not op.operands:
+        return "func.return"
+    assert len(op.operands) == 1, \
+        "RETURN arity must be vetted by _check_fn_translatable"
+    v = op.operands[0]
+    return f"func.return {_value_ref(v)} : {render_mlir_type(v.ty)}"
+
+
+# Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunk B
+# emits only the function terminator; the per-op emitters (arith /
+# vector / memref / gpu / helix) are added in later chunks. `_emit_op`
+# FAILS CLOSED on any op kind absent here, so the partial table is
+# safe — never a silent miss. No completeness guard, deliberately: the
+# table is MEANT to be incomplete until the per-op chunks land.
+_OP_EMITTERS: dict[tile_ir.TileOpKind,
+                   Callable[[tile_ir.TileOp], str]] = {
+    tile_ir.TileOpKind.RETURN: _emit_return,
+}
+
+
+def _emit_op(op: tile_ir.TileOp) -> str:
+    """Emit one Tile-IR op as an MLIR op line. Fails closed on any op
+    kind without an emitter yet — it never emits a guessed op."""
+    emitter = _OP_EMITTERS.get(op.kind)
+    if emitter is None:
+        raise MLIRTranslationError(
+            f"Stage 212 does not yet emit the Tile-IR op "
+            f"{op.kind.name} ({op.kind.value!r}) — the per-op emitters "
+            f"are added chunk by chunk; the translator fails closed "
+            f"rather than emit a guessed op")
+    return emitter(op)
+
+
+def _check_fn_translatable(fn: tile_ir.TileFn) -> None:
+    """Fail closed unless `fn` is a Tile-IR function chunk B can
+    faithfully translate. Chunk B emits SINGLE-BLOCK functions with an
+    internally consistent signature; anything else has no faithful
+    chunk-B MLIR and raises rather than emit wrong text:
+
+    - a name with no plain MLIR symbol spelling;
+    - zero blocks (a `func.func` body needs one) or MULTI-block (the
+      `cf.br` / `^bb` CFG machinery is a later chunk — emitting `^bb`
+      blocks with no branch to reach them would be invalid MLIR);
+    - an entry block whose parameters diverge from the signature
+      parameters (would emit undefined SSA references);
+    - a `return` inconsistent with the declared result type (wrong
+      operand count, or an operand whose type is not the result type).
+    """
+    if not fn.name.isidentifier():
+        raise MLIRTranslationError(
+            f"function name {fn.name!r} is not an identifier — it has "
+            f"no plain MLIR symbol spelling; the translator fails "
+            f"closed")
+    if not fn.blocks:
+        raise MLIRTranslationError(
+            f"function {fn.name!r} has no blocks — an MLIR `func.func` "
+            f"body needs at least one block")
+    if len(fn.blocks) > 1:
+        raise MLIRTranslationError(
+            f"function {fn.name!r} has {len(fn.blocks)} blocks — Stage "
+            f"212 chunk B emits only single-block functions; "
+            f"multi-block CFG (`cf.br` / `^bb` labels) is a later "
+            f"chunk. The translator fails closed")
+    entry = fn.entry
+    sig_ids = [p.id for p in fn.params]
+    entry_ids = [p.id for p in entry.params]
+    if entry_ids != sig_ids:
+        raise MLIRTranslationError(
+            f"function {fn.name!r}: the entry block's parameter ids "
+            f"{entry_ids} differ from the signature's {sig_ids} — the "
+            f"entry block's arguments ARE the function parameters; the "
+            f"translator fails closed rather than emit undefined SSA "
+            f"references")
+    returns_unit = isinstance(fn.return_ty, tir.TIRUnit)
+    for op in entry.ops:
+        if op.kind is not tile_ir.TileOpKind.RETURN:
+            continue
+        if returns_unit and op.operands:
+            raise MLIRTranslationError(
+                f"function {fn.name!r} returns unit but a `return` "
+                f"carries {len(op.operands)} operand(s) — the "
+                f"translator fails closed")
+        if not returns_unit and len(op.operands) != 1:
+            raise MLIRTranslationError(
+                f"function {fn.name!r} returns a value but a `return` "
+                f"carries {len(op.operands)} operand(s), not 1 — the "
+                f"translator fails closed")
+        if not returns_unit and op.operands[0].ty != fn.return_ty:
+            raise MLIRTranslationError(
+                f"function {fn.name!r}: a `return` operand's type does "
+                f"not match the declared result type — the translator "
+                f"fails closed rather than emit a type-mismatched "
+                f"`func.return`")
+
+
+def _emit_fn(fn: tile_ir.TileFn) -> list[str]:
+    """Emit a Tile-IR function as MLIR `func.func` lines (unindented).
+    `_check_fn_translatable` fail-closed-vets `fn` first, so this only
+    ever emits a single-block, signature-consistent function."""
+    _check_fn_translatable(fn)
+    params = ", ".join(
+        f"{_value_ref(p)}: {render_mlir_type(p.ty)}" for p in fn.params)
+    # A `TIRUnit` return is a VOID function — MLIR writes no `->` at
+    # all (not `-> none`).
+    if isinstance(fn.return_ty, tir.TIRUnit):
+        ret = ""
+    else:
+        ret = f" -> {render_mlir_type(fn.return_ty)}"
+    lines = [f"func.func @{fn.name}({params}){ret} {{"]
+    for op in fn.entry.ops:
+        lines.append(f"  {_emit_op(op)}")
+    lines.append("}")
+    return lines
+
+
+def emit_mlir_module(module: tile_ir.TileModule) -> str:
+    """Translate a Tile-IR module to MLIR textual IR — a
+    `module { ... }` string. The Stage-212 entry point.
+
+    Walks `module.functions` and emits a `func.func` for each. Pure
+    text — never `import mlir`. The emitted text is structurally
+    checkable by `validate.mock_validate_mlir`; real `mlir-opt`
+    validation is a binding-gated Stage-212+ concern.
+
+    FAILS CLOSED (`MLIRTranslationError`) on any construct it cannot
+    yet faithfully emit — it never produces a guessed or wrong
+    module."""
+    lines: list[str] = ["module {"]
+    for fn in module.functions.values():
+        for line in _emit_fn(fn):
+            lines.append(f"  {line}")
+    lines.append("}")
+    return "\n".join(lines) + "\n"

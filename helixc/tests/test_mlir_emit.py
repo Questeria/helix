@@ -22,13 +22,29 @@ from pathlib import Path
 
 import pytest
 
-from helixc.ir import tir
+from helixc.ir import tile_ir, tir
 from helixc.ir.mlir import emit
 from helixc.ir.mlir.emit import (
-    MLIRTranslationError, render_dim, render_mlir_type,
+    MLIRTranslationError, emit_mlir_module, render_dim, render_mlir_type,
 )
+from helixc.ir.mlir.validate import mock_validate_mlir
 
 _S = tir.TIRScalar
+_TK = tile_ir.TileOpKind
+
+
+def _ret(*operands: tile_ir.TileValue) -> tile_ir.TileOp:
+    """A Tile-IR `RETURN` op with the given operands."""
+    return tile_ir.TileOp(_TK.RETURN, operands=list(operands))
+
+
+def _fn(name: str, params: list[tile_ir.TileValue],
+        return_ty: tir.TIRType,
+        *ops: tile_ir.TileOp) -> tile_ir.TileFn:
+    """A single-entry-block Tile-IR function carrying `ops`."""
+    return tile_ir.TileFn(
+        name, list(params), return_ty,
+        [tile_ir.TileBlock(0, list(params), list(ops))])
 
 
 # --------------------------------------------------------------------------
@@ -229,6 +245,139 @@ def test_coverage_guards_are_not_vacuous(monkeypatch):
     monkeypatch.setattr(emit, "_DIM_RENDERERS", short_dims)
     with pytest.raises(AssertionError, match=r"unhandled.*DimExpr"):
         emit._check_dim_coverage()
+
+
+# --------------------------------------------------------------------------
+# emit_mlir_module — the module / function emitter (chunk B)
+# --------------------------------------------------------------------------
+def test_emit_empty_module():
+    """An empty Tile-IR module emits an empty MLIR `module {}` — valid,
+    if degenerate."""
+    text = emit_mlir_module(tile_ir.TileModule())
+    assert text == "module {\n}\n"
+
+
+def test_emit_void_function():
+    """A void function (a `TIRUnit` return) emits a `func.func` with no
+    `->` result and a bare `func.return`."""
+    text = emit_mlir_module(tile_ir.TileModule(
+        functions={"f": _fn("f", [], tir.TIRUnit(), _ret())}))
+    assert text == (
+        "module {\n"
+        "  func.func @f() {\n"
+        "    func.return\n"
+        "  }\n"
+        "}\n")
+
+
+def test_emit_identity_function():
+    """An identity function `g(x: i32) -> i32` carries the parameter in
+    the signature and returns it — params and results are `%v<id>`."""
+    x = tile_ir.TileValue(0, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(
+        functions={"g": _fn("g", [x], _S("i32"), _ret(x))}))
+    assert text == (
+        "module {\n"
+        "  func.func @g(%v0: i32) -> i32 {\n"
+        "    func.return %v0 : i32\n"
+        "  }\n"
+        "}\n")
+
+
+def test_emit_fails_closed_on_multi_block():
+    """A multi-block function fails closed — chunk B emits only
+    single-block functions; the `cf.br` / `^bb` CFG machinery is a
+    later chunk, and emitting `^bb` blocks with no branch to reach
+    them would be invalid MLIR."""
+    fn = tile_ir.TileFn(
+        "f", [], tir.TIRUnit(),
+        [tile_ir.TileBlock(0, [], [_ret()]),
+         tile_ir.TileBlock(1, [], [_ret()])])
+    with pytest.raises(MLIRTranslationError, match="multi-block"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_fails_closed_on_return_arity_mismatch():
+    """A `return` whose operand count is inconsistent with the declared
+    result type fails closed — a unit function with an operand-carrying
+    `return`, or a value function with a bare one."""
+    x = tile_ir.TileValue(0, _S("i32"))
+    unit_bad = _fn("f", [x], tir.TIRUnit(), _ret(x))    # unit + operand
+    with pytest.raises(MLIRTranslationError, match="returns unit"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": unit_bad}))
+    value_bad = _fn("g", [], _S("i32"), _ret())         # value + bare
+    with pytest.raises(MLIRTranslationError, match="returns a value"):
+        emit_mlir_module(tile_ir.TileModule(functions={"g": value_bad}))
+
+
+def test_emit_fails_closed_on_return_type_mismatch():
+    """A `return` whose operand type is not the function's declared
+    result type fails closed — the translator never emits a
+    type-mismatched `func.return`."""
+    x = tile_ir.TileValue(0, _S("i32"))      # an i32 value
+    fn = _fn("g", [x], _S("f32"), _ret(x))   # ...but the fn returns f32
+    with pytest.raises(MLIRTranslationError,
+                       match="does not match the declared result"):
+        emit_mlir_module(tile_ir.TileModule(functions={"g": fn}))
+
+
+def test_emit_fails_closed_on_entry_param_divergence():
+    """A function whose entry block's parameters diverge from the
+    signature parameters fails closed — emitting the signature from one
+    list and the body against another would produce undefined SSA
+    references."""
+    sig_param = tile_ir.TileValue(0, _S("i32"))
+    other_param = tile_ir.TileValue(7, _S("i32"))   # a different id
+    fn = tile_ir.TileFn(
+        "f", [sig_param], tir.TIRUnit(),
+        [tile_ir.TileBlock(0, [other_param], [_ret()])])
+    with pytest.raises(MLIRTranslationError, match="differ from the"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_multiple_functions():
+    """A module with several functions emits a `func.func` for each."""
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "a": _fn("a", [], tir.TIRUnit(), _ret()),
+        "b": _fn("b", [], tir.TIRUnit(), _ret()),
+    }))
+    assert "func.func @a()" in text and "func.func @b()" in text
+
+
+def test_emit_output_passes_mock_validate():
+    """The emitter's output is structurally well-formed — `mock_
+    validate_mlir` returns DEFERRED (clean shape, real validity
+    unverified), never FAILED."""
+    x = tile_ir.TileValue(0, _S("f32"))
+    text = emit_mlir_module(tile_ir.TileModule(
+        functions={"g": _fn("g", [x], _S("f32"), _ret(x))}))
+    result = mock_validate_mlir(text)
+    assert result.deferred(), result.findings
+    assert not result.failed()
+
+
+def test_emit_fails_closed_on_unhandled_op():
+    """An op kind with no emitter yet fails closed — the translator
+    raises `MLIRTranslationError` naming the op, never emits a guess."""
+    fn = _fn("h", [], tir.TIRUnit(), tile_ir.TileOp(_TK.TILE_ADD))
+    with pytest.raises(MLIRTranslationError, match="TILE_ADD"):
+        emit_mlir_module(tile_ir.TileModule(functions={"h": fn}))
+
+
+def test_emit_fails_closed_on_function_with_no_blocks():
+    """A function with no blocks cannot form a `func.func` body —
+    fails closed."""
+    fn = tile_ir.TileFn("f", [], tir.TIRUnit(), [])
+    with pytest.raises(MLIRTranslationError, match="no blocks"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_fails_closed_on_non_identifier_fn_name():
+    """A function name with no plain MLIR symbol spelling fails
+    closed."""
+    fn = _fn("bad-name", [], tir.TIRUnit(), _ret())
+    with pytest.raises(MLIRTranslationError, match="not an identifier"):
+        emit_mlir_module(tile_ir.TileModule(functions={"bad-name": fn}))
 
 
 # --------------------------------------------------------------------------

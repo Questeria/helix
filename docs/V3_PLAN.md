@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A 3-clean ✓ | Phase E — chunk A shipped (the Helix-IR→MLIR type bridge) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-B 3-clean ✓ | Phase E — chunks A-B shipped (Helix-IR→MLIR type bridge; module/func emitter scaffold) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -963,3 +963,29 @@ depend on a clean, unambiguous full-suite run.
   tensor rendered identically to ROW_MAJOR); fixed by failing closed
   on it; delta re-audit on all three surfaces CLEAN. Next: Stage 212
   chunk B — the MLIR module / func emitter scaffold.
+- 2026-05-20 — **Stage 212 chunk B shipped — the MLIR module / func
+  emitter scaffold.** `emit.py` gains `emit_mlir_module(module:
+  tile_ir.TileModule) -> str` — it walks a Tile-IR module and emits
+  the MLIR `module { func.func @name(%v0: T, ...) -> R { ... } }`
+  text, using the chunk-A type bridge for param / return types. The
+  translator works from the TILE IR — the plan names Stage 212
+  "tile-IR → MLIR" and Stage 215 parity-gates the tile-IR path, so the
+  tile IR is the branch point (rationale recorded in the module
+  docstring). Chunk B emits SINGLE-BLOCK functions and `func.return`;
+  a per-op dispatch table `_OP_EMITTERS` (deliberately partial — only
+  `RETURN` so far) FAILS CLOSED on every other op kind. A new
+  `_check_fn_translatable` fail-closed-vets each function before
+  emission: it rejects a non-identifier name, a zero- or multi-block
+  function (multi-block CFG — `cf.br` / `^bb` — is a later chunk;
+  emitting `^bb` blocks with no branch would be invalid MLIR), an
+  entry block whose params diverge from the signature, and a `return`
+  inconsistent with the declared result type. Pure text — never
+  `import mlir`; the output is shape-checked by `mock_validate_mlir`.
+  33 tests (`test_mlir_emit.py`, +12 chunk B). Per-stage 3-clean
+  audit: round 1 returned 0 HIGH, three MEDIUMs (multi-block emitted
+  semantically-invalid MLIR; the return-operand type was not
+  cross-checked against the signature; entry-block / signature param
+  divergence was unchecked) — all fixed via `_check_fn_translatable`;
+  delta re-audit on all three surfaces CLEAN. Next: Stage 212 chunk C
+  — the per-op emitters (arith / vector / memref / gpu), which will
+  make the emitter stateful for SSA value naming.
