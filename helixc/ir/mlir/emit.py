@@ -42,10 +42,17 @@ name).
 Chunk D — the compare / select op emitters. `scalar.cmp` ->
 `arith.cmpi` / `arith.cmpf` (the predicate from the Tile-IR `cmp`
 attribute; an integer ordered comparison is signed / unsigned by the
-operand dtype), and `scalar.select` -> `arith.select`. The `vector`
-tile ops, `memref` / `gpu`, the `helix` dialect, and `scalar.neg`
-(integer negation has no single MLIR op — a deferred multi-op
-lowering) remain later chunks; `_emit_op` FAILS CLOSED on them.
+operand dtype), and `scalar.select` -> `arith.select`.
+
+Chunk E — the elementwise `vector` tile-op emitters. `tile.add` /
+`sub` / `mul` -> `arith.{add,sub,mul}{i,f}` on `vector<...>`-typed
+operands (MLIR `arith` ops are elementwise-polymorphic over vectors —
+the same mnemonics as the scalar core, the int / float choice being
+the tile's element dtype); `tile.zeros` -> a `dense<0>`-splat
+`arith.constant`. The non-elementwise tile ops (`tile.matmul` /
+`reduce` / `transpose` / `reshape` / `const`), `memref` / `gpu`, the
+`helix` dialect, and `scalar.neg` remain later chunks; `_emit_op`
+FAILS CLOSED on them.
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -348,6 +355,22 @@ def _scalar_arith_type(ty: tir.TIRType, op_name: str) -> tuple[str, bool]:
     return mlir, mlir.startswith("i")
 
 
+def _tile_arith_type(ty: tir.TIRType, op_name: str) -> tuple[str, bool]:
+    """`(mlir_type, is_integer)` for a tile-arithmetic operand /
+    result type — a `TIRTileTy`, rendered to `vector<...>`. `arith`
+    ops are elementwise-polymorphic over vectors, so a tile binop uses
+    the same mnemonics as a scalar one; the int / float choice is the
+    tile's ELEMENT dtype. Fails closed on a non-tile type."""
+    if not isinstance(ty, tir.TIRTileTy):
+        raise MLIRTranslationError(
+            f"{op_name}: type is {type(ty).__name__}, not a tile — "
+            f"the chunk-E `vector` emitters handle tile ops only; the "
+            f"translator fails closed")
+    mlir = render_mlir_type(ty)             # vector<...>
+    element = render_mlir_type(ty.dtype)    # the element scalar type
+    return mlir, element.startswith("i")
+
+
 def _emit_const_int(op: tile_ir.TileOp) -> str:
     """`%vR = arith.constant <n> : <iN>` — an integer scalar constant."""
     r = _single_result(op, "scalar.const_int")
@@ -418,20 +441,26 @@ def _emit_const_float(op: tile_ir.TileOp) -> str:
             f"{_float_literal(number)} : {mlir}")
 
 
-def _emit_scalar_binop(op: tile_ir.TileOp, op_name: str,
-                       int_mnemonic: str, float_mnemonic: str) -> str:
-    """A two-operand scalar `arith` op — `%vR = <mnemonic> %vA, %vB :
-    <T>`. The integer / float mnemonic is chosen by the result type;
-    the translator fails closed unless both operands and the result
-    share that one scalar type — a type-mismatched `arith` op would be
-    invalid MLIR."""
+def _emit_arith_binop(
+        op: tile_ir.TileOp, op_name: str, int_mnemonic: str,
+        float_mnemonic: str,
+        classify: Callable[[tir.TIRType, str], tuple[str, bool]],
+        ) -> str:
+    """A two-operand elementwise `arith` op — `%vR = <mnemonic> %vA,
+    %vB : <T>`. `classify` (`_scalar_arith_type` for a scalar op,
+    `_tile_arith_type` for a `vector` tile op) resolves the result
+    type to its MLIR spelling and picks the integer / float mnemonic;
+    `arith` ops are elementwise-polymorphic, so the same mnemonics
+    serve both. The translator fails closed unless both operands and
+    the result share that one type — a type-mismatched `arith` op
+    would be invalid MLIR."""
     r = _single_result(op, op_name)
     if len(op.operands) != 2:
         raise MLIRTranslationError(
             f"{op_name} expects 2 operands, got {len(op.operands)} — "
             f"the translator fails closed")
     a, b = op.operands
-    mlir, is_int = _scalar_arith_type(r.ty, op_name)
+    mlir, is_int = classify(r.ty, op_name)
     if a.ty != r.ty or b.ty != r.ty:
         raise MLIRTranslationError(
             f"{op_name}: operand and result types are not all equal — "
@@ -443,18 +472,18 @@ def _emit_scalar_binop(op: tile_ir.TileOp, op_name: str,
 
 
 def _emit_add(op: tile_ir.TileOp) -> str:
-    return _emit_scalar_binop(op, "scalar.add", "arith.addi",
-                              "arith.addf")
+    return _emit_arith_binop(op, "scalar.add", "arith.addi",
+                             "arith.addf", _scalar_arith_type)
 
 
 def _emit_sub(op: tile_ir.TileOp) -> str:
-    return _emit_scalar_binop(op, "scalar.sub", "arith.subi",
-                              "arith.subf")
+    return _emit_arith_binop(op, "scalar.sub", "arith.subi",
+                             "arith.subf", _scalar_arith_type)
 
 
 def _emit_mul(op: tile_ir.TileOp) -> str:
-    return _emit_scalar_binop(op, "scalar.mul", "arith.muli",
-                              "arith.mulf")
+    return _emit_arith_binop(op, "scalar.mul", "arith.muli",
+                             "arith.mulf", _scalar_arith_type)
 
 
 # --- the compare / select op emitters (Stage 212 chunk D) ---
@@ -574,14 +603,45 @@ def _emit_select(op: tile_ir.TileOp) -> str:
             f"{_value_ref(a)}, {_value_ref(b)} : {render_mlir_type(r.ty)}")
 
 
+# --- the elementwise `vector` tile-op emitters (Stage 212 chunk E) ---
+def _emit_tile_add(op: tile_ir.TileOp) -> str:
+    return _emit_arith_binop(op, "tile.add", "arith.addi",
+                             "arith.addf", _tile_arith_type)
+
+
+def _emit_tile_sub(op: tile_ir.TileOp) -> str:
+    return _emit_arith_binop(op, "tile.sub", "arith.subi",
+                             "arith.subf", _tile_arith_type)
+
+
+def _emit_tile_mul(op: tile_ir.TileOp) -> str:
+    return _emit_arith_binop(op, "tile.mul", "arith.muli",
+                             "arith.mulf", _tile_arith_type)
+
+
+def _emit_tile_zeros(op: tile_ir.TileOp) -> str:
+    """`%vR = arith.constant dense<0> : vector<...>` — a zero-filled
+    tile, a splat constant. Takes no operands; the element kind picks
+    the `0` / `0.0` splat literal."""
+    r = _single_result(op, "tile.zeros")
+    if op.operands:
+        raise MLIRTranslationError(
+            "tile.zeros takes no operands — the translator fails "
+            "closed")
+    mlir, is_int = _tile_arith_type(r.ty, "tile.zeros")
+    zero = "0" if is_int else "0.0"
+    return f"{_value_ref(r)} = arith.constant dense<{zero}> : {mlir}"
+
+
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
-# B-D emit the function terminator, the scalar `arith` core, and
-# compare / select; the remaining per-op emitters (`scalar.neg`, the
-# `vector` tile ops, `memref` / `gpu`, `helix`) are added in later
-# chunks. `_emit_op` FAILS CLOSED on any op kind absent here, so the
-# partial table is safe — never a silent miss. No completeness guard,
-# deliberately: the table is MEANT to be incomplete until the per-op
-# chunks land.
+# B-E emit the function terminator, the scalar `arith` core, compare /
+# select, and the elementwise `vector` tile ops; the remaining per-op
+# emitters (`scalar.neg`, the non-elementwise tile ops — matmul /
+# reduce / transpose / reshape / const, `memref` / `gpu`, `helix`) are
+# added in later chunks. `_emit_op` FAILS CLOSED on any op kind absent
+# here, so the partial table is safe — never a silent miss. No
+# completeness guard, deliberately: the table is MEANT to be
+# incomplete until the per-op chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
                    Callable[[tile_ir.TileOp], str]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
@@ -592,6 +652,10 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
     tile_ir.TileOpKind.SCALAR_MUL: _emit_mul,
     tile_ir.TileOpKind.SCALAR_CMP: _emit_cmp,
     tile_ir.TileOpKind.SCALAR_SELECT: _emit_select,
+    tile_ir.TileOpKind.TILE_ADD: _emit_tile_add,
+    tile_ir.TileOpKind.TILE_SUB: _emit_tile_sub,
+    tile_ir.TileOpKind.TILE_MUL: _emit_tile_mul,
+    tile_ir.TileOpKind.TILE_ZEROS: _emit_tile_zeros,
 }
 
 

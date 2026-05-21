@@ -358,9 +358,11 @@ def test_emit_output_passes_mock_validate():
 
 def test_emit_fails_closed_on_unhandled_op():
     """An op kind with no emitter yet fails closed — the translator
-    raises `MLIRTranslationError` naming the op, never emits a guess."""
-    fn = _fn("h", [], tir.TIRUnit(), tile_ir.TileOp(_TK.TILE_ADD))
-    with pytest.raises(MLIRTranslationError, match="TILE_ADD"):
+    raises `MLIRTranslationError` naming the op, never emits a guess.
+    Uses `TILE_MATMUL`, a representative not-yet-emitted op (a later
+    chunk will add it, at which point this test picks another)."""
+    fn = _fn("h", [], tir.TIRUnit(), tile_ir.TileOp(_TK.TILE_MATMUL))
+    with pytest.raises(MLIRTranslationError, match="TILE_MATMUL"):
         emit_mlir_module(tile_ir.TileModule(functions={"h": fn}))
 
 
@@ -701,6 +703,134 @@ def test_cmp_predicate_tables_guard_is_not_vacuous(monkeypatch):
     monkeypatch.setattr(emit, "_CMPI_PREDICATES", broken)
     with pytest.raises(AssertionError, match="_CMPI_PREDICATES"):
         emit._check_cmp_predicate_tables()
+
+
+# --------------------------------------------------------------------------
+# the elementwise `vector` tile-op emitters (chunk E)
+# --------------------------------------------------------------------------
+def _tile(dtype: str, *dims: int) -> tir.TIRTileTy:
+    """A Tile-IR tile type — renders to `vector<...x<dtype>>`."""
+    return tir.TIRTileTy(_S(dtype),
+                         tuple(tir.DimConst(d) for d in dims), "reg")
+
+
+def test_emit_tile_add_int_and_float():
+    """`tile.add` -> `arith.add{i,f}` on `vector<...>`-typed operands —
+    the same mnemonic as the scalar core, the int / float choice the
+    tile's element dtype."""
+    for dtype, mnemonic in (("i32", "arith.addi"),
+                            ("f32", "arith.addf")):
+        t = _tile(dtype, 8, 8)
+        a = tile_ir.TileValue(0, t)
+        b = tile_ir.TileValue(1, t)
+        r = tile_ir.TileValue(2, t)
+        text = emit_mlir_module(tile_ir.TileModule(functions={
+            "f": _fn("f", [a, b], t,
+                     tile_ir.TileOp(_TK.TILE_ADD, operands=[a, b],
+                                    results=[r]), _ret(r))}))
+        assert f"{mnemonic} %v0, %v1 : vector<8x8x{dtype}>" in text
+
+
+def test_emit_tile_sub_and_mul():
+    """`tile.sub` / `tile.mul` -> `arith.sub*` / `arith.mul*` on
+    vectors."""
+    t = _tile("f32", 4)
+    a = tile_ir.TileValue(0, t)
+    b = tile_ir.TileValue(1, t)
+    r = tile_ir.TileValue(2, t)
+    sub = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a, b], t,
+                 tile_ir.TileOp(_TK.TILE_SUB, operands=[a, b],
+                                results=[r]), _ret(r))}))
+    assert "arith.subf %v0, %v1 : vector<4xf32>" in sub
+    mul = emit_mlir_module(tile_ir.TileModule(functions={
+        "g": _fn("g", [a, b], t,
+                 tile_ir.TileOp(_TK.TILE_MUL, operands=[a, b],
+                                results=[r]), _ret(r))}))
+    assert "arith.mulf %v0, %v1 : vector<4xf32>" in mul
+
+
+def test_emit_tile_zeros_int_and_float():
+    """`tile.zeros` -> a `dense<0>` / `dense<0.0>` splat
+    `arith.constant`."""
+    ti = _tile("i32", 8, 8)
+    zi = tile_ir.TileValue(0, ti)
+    int_text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [], ti,
+                 tile_ir.TileOp(_TK.TILE_ZEROS, results=[zi]),
+                 _ret(zi))}))
+    assert "arith.constant dense<0> : vector<8x8xi32>" in int_text
+    tf = _tile("f32", 8, 8)
+    zf = tile_ir.TileValue(0, tf)
+    flt_text = emit_mlir_module(tile_ir.TileModule(functions={
+        "g": _fn("g", [], tf,
+                 tile_ir.TileOp(_TK.TILE_ZEROS, results=[zf]),
+                 _ret(zf))}))
+    assert "arith.constant dense<0.0> : vector<8x8xf32>" in flt_text
+
+
+def test_emit_tile_function_passes_mock_validate():
+    """A tile function — a zero tile, a tile add, a return — emits
+    structurally well-formed MLIR (`mock_validate_mlir` -> DEFERRED)."""
+    t = _tile("f32", 8, 8)
+    z = tile_ir.TileValue(0, t)
+    a = tile_ir.TileValue(1, t)
+    r = tile_ir.TileValue(2, t)
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "f": _fn("f", [a], t,
+                 tile_ir.TileOp(_TK.TILE_ZEROS, results=[z]),
+                 tile_ir.TileOp(_TK.TILE_ADD, operands=[z, a],
+                                results=[r]), _ret(r))}))
+    assert mock_validate_mlir(text).deferred(), text
+
+
+def test_emit_tile_binop_fails_closed_on_non_tile():
+    """A tile binop on a non-tile (scalar) operand fails closed — the
+    chunk-E `vector` emitters handle tile ops only."""
+    a = tile_ir.TileValue(0, _S("i32"))      # scalar, not a tile
+    b = tile_ir.TileValue(1, _S("i32"))
+    r = tile_ir.TileValue(2, _S("i32"))
+    fn = _fn("f", [a, b], _S("i32"),
+             tile_ir.TileOp(_TK.TILE_ADD, operands=[a, b], results=[r]),
+             _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not a tile"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_binop_fails_closed_on_type_mismatch():
+    """A tile binop whose operand / result tile types differ fails
+    closed."""
+    t8 = _tile("f32", 8, 8)
+    t4 = _tile("f32", 4, 4)
+    a = tile_ir.TileValue(0, t8)
+    b = tile_ir.TileValue(1, t4)             # different tile shape
+    r = tile_ir.TileValue(2, t8)
+    fn = _fn("f", [a, b], t8,
+             tile_ir.TileOp(_TK.TILE_MUL, operands=[a, b], results=[r]),
+             _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not all equal"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_zeros_fails_closed_on_operands():
+    """`tile.zeros` takes no operands — one supplied fails closed."""
+    t = _tile("f32", 8, 8)
+    a = tile_ir.TileValue(0, t)
+    z = tile_ir.TileValue(1, t)
+    fn = _fn("f", [a], t,
+             tile_ir.TileOp(_TK.TILE_ZEROS, operands=[a], results=[z]),
+             _ret(z))
+    with pytest.raises(MLIRTranslationError, match="takes no operands"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_tile_zeros_fails_closed_on_non_tile_result():
+    """`tile.zeros` with a non-tile result type fails closed."""
+    z = tile_ir.TileValue(0, _S("i32"))      # scalar, not a tile
+    fn = _fn("f", [], _S("i32"),
+             tile_ir.TileOp(_TK.TILE_ZEROS, results=[z]), _ret(z))
+    with pytest.raises(MLIRTranslationError, match="not a tile"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
 
 
 # --------------------------------------------------------------------------

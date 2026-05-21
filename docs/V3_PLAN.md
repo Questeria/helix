@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-D 3-clean ✓ | Phase E — chunks A-D shipped (type bridge; module/func scaffold; arith / compare / select op emitters) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-E 3-clean ✓ | Phase E — chunks A-E shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile op emitters) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1038,3 +1038,26 @@ depend on a clean, unambiguous full-suite run.
   test-covered; a type-design MEDIUM (a vestigial dispatch local) also
   fixed; delta re-audit on all three surfaces CLEAN. Next: Stage 212
   chunk E — the `vector` tile-op emitters.
+- 2026-05-20 — **Stage 212 chunk E shipped — the elementwise `vector`
+  tile-op emitters.** `emit.py`'s `_OP_EMITTERS` gains `tile.add` /
+  `sub` / `mul` → `arith.{add,sub,mul}{i,f}` on `vector<...>`-typed
+  operands, and `tile.zeros` → a `dense<0>`-splat `arith.constant`.
+  MLIR `arith` ops are elementwise-polymorphic over vectors, so a tile
+  binop uses the SAME mnemonics as the scalar core — only the type
+  classifier differs: chunk C's `_emit_scalar_binop` was generalized
+  to `_emit_arith_binop(op, …, classify)`, with `classify` a passed-in
+  callable (`_scalar_arith_type` for scalar ops, the new
+  `_tile_arith_type` for tile ops). The int / float mnemonic for a
+  tile op is the tile's ELEMENT dtype. Fail-closed throughout — a
+  non-tile operand on a tile op (and a non-scalar on a scalar op), a
+  tile-type mismatch, a bad arity, a `tile.zeros` with operands or a
+  non-tile result all raise `MLIRTranslationError`. 64 tests
+  (`test_mlir_emit.py`, +8 chunk E; one chunk-B unhandled-op test
+  re-pointed from `TILE_ADD` to the still-unhandled `TILE_MATMUL`).
+  Per-stage 3-clean audit: all three surfaces CLEAN on round 1 — 0
+  HIGH / 0 must-fix-MEDIUM; the `classify`-callable generalization was
+  endorsed as the correct abstraction (the operand/result
+  type-equality invariant now lives in exactly one place for both op
+  families). Next: Stage 212 chunk F — the non-elementwise tile ops
+  (`tile.matmul` → `vector.contract`, `reduce` / `transpose` /
+  `reshape`, `tile.const`).
