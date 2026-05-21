@@ -1190,3 +1190,36 @@ depend on a clean, unambiguous full-suite run.
   bridge plus parameter-name resolution — all land at Stage 213+. Per
   the 2026-05-21 user directive, the loop now runs the known-issues
   cleanup phase, then STOPS — it does not advance to Stage 213.
+
+- 2026-05-21 — **v3.0 known-issues cleanup phase COMPLETE — autonomous
+  loop stopped.** Per the 2026-05-21 user directive (finish Stage 212,
+  then a known-issues cleanup, then stop), the cleanup phase ran four
+  fixes — each per-stage 3-clean audited, committed, and pushed:
+  - (a) `90b0b1f` — the "hung" full test suite was diagnosed as NOT
+    deadlocked: a large ~4500-test integration suite (the earlier
+    "40-min hang" was a `| tail`-buffering misread, not a deadlock).
+    Its dominant performance bug — a ~600 ms uncached stdlib re-parse
+    on every `parse(include_stdlib=True)`, paid by thousands of
+    compile-and-run tests — was fixed with a `pickle`-blob cache
+    (~7x faster parse).
+  - (b) `955e50e` — `emit._scalar_arith_type` now fails closed on a
+    `bool` operand: booleans are not an arithmetic domain, and it had
+    been emitting a meaningless `arith.*i : i1`.
+  - (c) `ff64d65` — `validate.MLIRValidation` now enforces a total
+    findings contract — a PASSED carries NO findings, FAILED /
+    DEFERRED carry at least one — settling the Stage-211 chunk-E
+    coherence carry-over.
+  - (d) `b9da3bb` — the MLIR op emitters return `list[str]` instead of
+    a `\n`-joined `str`, removing the join/split round-trip (the
+    Stage-212 stage-close type-design must-fix).
+  STATE AT STOP: v2.0–v2.5 released; v3.0 Phase D complete (Stages
+  200–208); Phase E Stages 210, 211, 212 closed — `V3_STAGES_DONE` =
+  12 of 19. The tile-IR → MLIR translator (`helixc/ir/mlir/emit.py`)
+  faithfully renders every IR type and 17 of 29 Tile-IR op kinds; the
+  rest fail closed by documented design. REMAINING for a future run:
+  Stage 212's deferred attribute-heavy / `memref` / async op emitters,
+  Stages 213–216 (MLIR → backends, the progressive-lowering pass
+  pipeline, the MLIR-vs-tile-IR parity gate, the end-of-Phase-E
+  5-clean-gate), Phase F 220–222 (backend unification + cutover + the
+  v3.0.0 release), and the 206-R residual LLVM-lowering ops. The
+  autonomous build loop stops here, per the directive.
