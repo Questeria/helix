@@ -1,22 +1,25 @@
 """
 helixc/ir/mlir/mapping.py — Helix-op -> MLIR-lowering mapping
-(v3.0 Phase E, Stage 211 chunk B).
+(v3.0 Phase E, Stage 211 chunks B-C).
 
-The mapping substrate for the MLIR migration: for every Tensor-IR
-`tir.OpKind`, which MLIR lowering target it belongs to, per the
-ratified Stage 210 HYBRID decision (docs/V3_STAGE210_MLIR_DECISION.md
-section 2):
+The mapping substrate for the MLIR migration: for every Helix IR
+operation — both Tensor-IR `tir.OpKind` (chunk B) and Tile-IR
+`tile_ir.TileOpKind` (chunk C) — which MLIR lowering target it belongs
+to, per the ratified Stage 210 HYBRID decision
+(docs/V3_STAGE210_MLIR_DECISION.md section 2):
 
-- an UPSTREAM MLIR dialect (`arith` / `math` / `linalg` / `tensor` /
-  `memref` / `func` / `cf` / `gpu`) — the ~80-85% numerical /
-  structural op core;
+- an UPSTREAM MLIR dialect (`arith` / `math` / `linalg` / `vector` /
+  `tensor` / `memref` / `func` / `cf` / `gpu`) — the ~80-85% numerical
+  / structural op core;
 - the custom `helix` dialect — the Helix-specific ops with no faithful
   upstream home (the `grad`/`jvp`/`vmap` transforms, the `agi.*`
   metaprogramming ops, the atomic arena allocator);
 - RESIDUAL — ops whose MLIR home the decision record explicitly
-  deferred ("flag for review": the `Result` and quantize encodings),
-  so the mapping records "not decided" honestly rather than asserting
-  a placement the decision did not make.
+  deferred ("flag for review": the `Result` and quantize encodings,
+  and the Tile-IR async memory ops — TMA / barrier — whose `nvgpu`-vs-
+  `helix`-async representation is an open Stage-213 question), so the
+  mapping records "not decided" honestly rather than asserting a
+  placement the decision did not make.
 
 This is the COARSE, type-independent classification — the indicative
 lowering target per op-KIND. Two refinements are deliberately left to
@@ -29,9 +32,10 @@ Stage 212 (the tile-IR -> MLIR translation), not encoded here:
   exact dialect+op is a per-translation decision.
 - The exact MLIR op mnemonic (`arith.addi` vs `arith.addf`, etc.).
 
-MOCK-PATH-FIRST: this module is pure data — it imports `helixc.ir.tir`
-(the home-grown IR, no MLIR dependency) and NEVER `import mlir`. It is
-fully usable on a machine with no MLIR bindings.
+MOCK-PATH-FIRST: this module is pure data — it imports the home-grown
+IR (`helixc.ir.tir` and `helixc.ir.tile_ir`, no MLIR dependency) and
+NEVER `import mlir`. It is fully usable on a machine with no MLIR
+bindings.
 
 License: Apache 2.0
 """
@@ -40,15 +44,15 @@ from __future__ import annotations
 
 from enum import Enum
 
-from .. import tir
+from .. import tile_ir, tir
 
 
 class MLIRLowering(Enum):
-    """The MLIR lowering target of a Helix `tir.OpKind` — an upstream
+    """The MLIR lowering target of a Helix IR operation — an upstream
     MLIR dialect, the custom `helix` dialect, or RESIDUAL (no target
     decided yet).
 
-    The eight upstream members name the MLIR dialects the Stage 210
+    The nine upstream members name the MLIR dialects the Stage 210
     hybrid decision maps the numerical / structural op core onto.
     `HELIX` is the small custom dialect for the Helix-specific ops.
     `RESIDUAL` is for ops the decision record explicitly flagged for
@@ -59,8 +63,9 @@ class MLIRLowering(Enum):
                           # select, cast, constants
     MATH = "math"         # transcendentals + elementwise activations
     LINALG = "linalg"     # matmul, conv, reduce, fill, transpose
+    VECTOR = "vector"     # tile / SIMD compute — the Tile-IR op layer
     TENSOR = "tensor"     # shape ops: reshape, broadcast, slice, concat
-    MEMREF = "memref"     # mutable locals + stack arrays
+    MEMREF = "memref"     # locals, stack arrays, tile memory movement
     FUNC = "func"         # calls, return, effectful runtime ops
     CF = "cf"             # unstructured control flow: br / cond_br
     GPU = "gpu"           # thread / tile-index ops
@@ -76,8 +81,8 @@ class MLIRLowering(Enum):
 # categories partition `MLIRLowering`.
 _UPSTREAM_LOWERINGS: frozenset[MLIRLowering] = frozenset({
     MLIRLowering.ARITH, MLIRLowering.MATH, MLIRLowering.LINALG,
-    MLIRLowering.TENSOR, MLIRLowering.MEMREF, MLIRLowering.FUNC,
-    MLIRLowering.CF, MLIRLowering.GPU,
+    MLIRLowering.VECTOR, MLIRLowering.TENSOR, MLIRLowering.MEMREF,
+    MLIRLowering.FUNC, MLIRLowering.CF, MLIRLowering.GPU,
 })
 
 
@@ -241,23 +246,102 @@ _OPKIND_LOWERING: dict[tir.OpKind, MLIRLowering] = {
 }
 
 
-def _check_opkind_coverage() -> None:
-    """Module-load guard: `_OPKIND_LOWERING` maps EXACTLY the
-    `tir.OpKind` enum — no op unmapped, no stale key. A new `OpKind`
-    added without a mapping entry would otherwise be silently invisible
-    to the MLIR translation; fail loudly here instead."""
-    mapped = set(_OPKIND_LOWERING)
-    all_ops = set(tir.OpKind)
-    if mapped != all_ops:
-        missing = sorted(o.name for o in all_ops - mapped)
-        stale = sorted(o.name for o in mapped - all_ops)
+def _check_mapping_coverage(table: dict, enum_cls: type[Enum],
+                            table_name: str, enum_name: str) -> None:
+    """Generic module-load drift guard: `table` maps EXACTLY the
+    members of `enum_cls` — no member unmapped, no stale key. An
+    op-kind added to the IR without a mapping entry would otherwise be
+    silently invisible to the Stage-212 MLIR translation; fail loudly
+    here instead. (Stale keys are reported via `getattr(.., 'name')`
+    so a non-enum key yields a diagnostic, not an `AttributeError`.)"""
+    mapped = set(table)
+    members = set(enum_cls)
+    if mapped != members:
+        missing = sorted(m.name for m in members - mapped)
+        stale = sorted(getattr(m, "name", repr(m))
+                       for m in mapped - members)
         raise AssertionError(
-            f"helixc.ir.mlir.mapping: _OPKIND_LOWERING does not match "
-            f"tir.OpKind — unmapped op(s): {missing or 'none'}; stale "
+            f"helixc.ir.mlir.mapping: {table_name} does not match "
+            f"{enum_name} — unmapped op(s): {missing or 'none'}; stale "
             f"key(s): {stale or 'none'}")
 
 
+def _check_opkind_coverage() -> None:
+    """Module-load guard: `_OPKIND_LOWERING` maps `tir.OpKind`
+    exactly."""
+    _check_mapping_coverage(_OPKIND_LOWERING, tir.OpKind,
+                            "_OPKIND_LOWERING", "tir.OpKind")
+
+
+def _check_tileopkind_coverage() -> None:
+    """Module-load guard: `_TILEOPKIND_LOWERING` maps
+    `tile_ir.TileOpKind` exactly."""
+    _check_mapping_coverage(_TILEOPKIND_LOWERING, tile_ir.TileOpKind,
+                            "_TILEOPKIND_LOWERING",
+                            "tile_ir.TileOpKind")
+
+
 _check_opkind_coverage()
+
+
+# The per-`TileOpKind` MLIR lowering target — the Tile IR op set (the
+# mid-level tiled-GPU IR). In `tile_ir.TileOpKind` enum order;
+# `_check_tileopkind_coverage` asserts it covers the enum exactly. Per
+# the Stage 210 decision record section 2.2 Tile-IR table: tile
+# compute / creation / layout ops are MLIR's `vector` dialect (its
+# tile / SIMD layer); tile memory movement is `memref` (with `gpu`
+# address spaces); the carried-through scalar ops are `arith` / `func`;
+# the GPU primitives are `gpu`. The async memory ops (TMA / barrier)
+# are RESIDUAL: decision-record section 3 and the section-5 checklist
+# explicitly defer whether they target `nvgpu` (NVIDIA-only) or a
+# cross-backend `helix` async abstraction — an open Stage-213 question.
+_TILEOPKIND_LOWERING: dict[tile_ir.TileOpKind, MLIRLowering] = {
+    # tile creation
+    tile_ir.TileOpKind.TILE_ZEROS: MLIRLowering.VECTOR,
+    tile_ir.TileOpKind.TILE_CONST: MLIRLowering.VECTOR,
+    # tile memory movement — `memref` load/store across HBM / SMEM /
+    # REG, the address space carried as a `gpu` memory-space attribute.
+    tile_ir.TileOpKind.TILE_LOAD_GLOBAL: MLIRLowering.MEMREF,
+    tile_ir.TileOpKind.TILE_STORE_GLOBAL: MLIRLowering.MEMREF,
+    tile_ir.TileOpKind.TILE_LOAD_SHARED: MLIRLowering.MEMREF,
+    tile_ir.TileOpKind.TILE_STORE_SHARED: MLIRLowering.MEMREF,
+    # async memory — TMA / barrier. RESIDUAL: `nvgpu`-only vs. a
+    # cross-backend `helix` async abstraction is a deferred Stage-213
+    # decision (decision record section 3 / the section-5 checklist).
+    tile_ir.TileOpKind.TMA_LOAD: MLIRLowering.RESIDUAL,
+    tile_ir.TileOpKind.TMA_STORE: MLIRLowering.RESIDUAL,
+    tile_ir.TileOpKind.BARRIER_WAIT: MLIRLowering.RESIDUAL,
+    # tile compute — `vector` elementwise arithmetic
+    tile_ir.TileOpKind.TILE_ADD: MLIRLowering.VECTOR,
+    tile_ir.TileOpKind.TILE_SUB: MLIRLowering.VECTOR,
+    tile_ir.TileOpKind.TILE_MUL: MLIRLowering.VECTOR,
+    # accumulating tile matmul — `vector.contract`
+    tile_ir.TileOpKind.TILE_MATMUL: MLIRLowering.VECTOR,
+    # axis reduce within a tile — `vector.multi_reduction`
+    tile_ir.TileOpKind.TILE_REDUCE: MLIRLowering.VECTOR,
+    # tile layout transforms — `vector.transpose` / `vector.shape_cast`
+    tile_ir.TileOpKind.TILE_TRANSPOSE: MLIRLowering.VECTOR,
+    tile_ir.TileOpKind.TILE_RESHAPE: MLIRLowering.VECTOR,
+    # scalar ops carried through from Tensor IR — `arith`
+    tile_ir.TileOpKind.SCALAR_CONST_INT: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_CONST_FLOAT: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_ADD: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_SUB: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_MUL: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_NEG: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_CMP: MLIRLowering.ARITH,
+    tile_ir.TileOpKind.SCALAR_SELECT: MLIRLowering.ARITH,
+    # call / return — `func`
+    tile_ir.TileOpKind.CALL: MLIRLowering.FUNC,
+    tile_ir.TileOpKind.RETURN: MLIRLowering.FUNC,
+    # GPU primitives — `gpu` thread / HBM tile-index ops
+    tile_ir.TileOpKind.THREAD_IDX: MLIRLowering.GPU,
+    tile_ir.TileOpKind.TILE_INDEX_LOAD_HBM: MLIRLowering.GPU,
+    tile_ir.TileOpKind.TILE_INDEX_STORE_HBM: MLIRLowering.GPU,
+}
+
+
+_check_tileopkind_coverage()
 
 
 def mlir_lowering_for(op: tir.OpKind) -> MLIRLowering:
@@ -265,6 +349,13 @@ def mlir_lowering_for(op: tir.OpKind) -> MLIRLowering:
     `tir.OpKind` — `_check_opkind_coverage` guarantees every member is
     mapped, so this never raises a `KeyError`."""
     return _OPKIND_LOWERING[op]
+
+
+def mlir_lowering_for_tile(op: tile_ir.TileOpKind) -> MLIRLowering:
+    """The MLIR lowering target of a Tile-IR op kind. Total over
+    `tile_ir.TileOpKind` — `_check_tileopkind_coverage` guarantees
+    every member is mapped, so this never raises a `KeyError`."""
+    return _TILEOPKIND_LOWERING[op]
 
 
 def is_upstream(lowering: MLIRLowering) -> bool:

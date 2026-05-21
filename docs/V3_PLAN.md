@@ -164,7 +164,7 @@ depend on a clean, unambiguous full-suite run.
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
-| 211 | Helix MLIR dialect / mapping substrate | ~ | A,B 3-clean ✓ | Phase E — chunks A,B shipped (MLIR capability detection; Helix-op→MLIR-lowering mapping) |
+| 211 | Helix MLIR dialect / mapping substrate | ~ | A-C 3-clean ✓ | Phase E — chunks A-C shipped (MLIR capability detection; Tensor-IR + Tile-IR op→MLIR mapping) |
 | 212–216 | Phase E — translation / lowering / pass pipeline / parity | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -863,3 +863,25 @@ depend on a clean, unambiguous full-suite run.
   accessor; re-audit of the delta on all three surfaces CLEAN. Next:
   Stage 211 chunk C — the `TileOpKind` (Tile IR) mapping and/or the
   `helix`-dialect op model.
+- 2026-05-20 — **Stage 211 chunk C shipped — the Tile-IR op → MLIR-
+  lowering mapping.** Extends `mapping.py` with the parallel mapping
+  for the Tile IR (the mid-level tiled-GPU IR). New `_TILEOPKIND_
+  LOWERING` maps all **29** `tile_ir.TileOpKind`s per the decision
+  record's section-2.2 Tile-IR table: tile compute / creation / matmul
+  / reduce / layout → the `vector` dialect (MLIR's tile/SIMD layer — a
+  new `VECTOR` member added to `MLIRLowering`); tile memory movement →
+  `memref`; carried-through scalar ops → `arith`; call / return →
+  `func`; GPU primitives → `gpu`. The async memory ops (TMA load /
+  store, barrier wait) are RESIDUAL — the decision record (section 3 /
+  the section-5 checklist) explicitly defers whether they target
+  `nvgpu` (NVIDIA-only) or a cross-backend `helix` async abstraction,
+  an open Stage-213 question. 26 / 29 upstream (~90%); no Tile-IR op
+  is `helix` (the adjoint table is a transform/pass, not an op). The
+  `_check_opkind_coverage` guard was refactored into a generic
+  `_check_mapping_coverage` shared by both the Tensor-IR and Tile-IR
+  coverage guards; new accessor `mlir_lowering_for_tile`. 21 tests
+  (`test_mlir_mapping.py`, +6 Tile-IR). Per-stage 3-clean audit: round
+  1 returned 0 HIGH / 0 must-fix-MEDIUM on all three surfaces (the
+  LOWs — a redundant test, a type-precision nit — were assessed and
+  declined with reason). Next: Stage 211 chunk D — the `helix`-dialect
+  op model, then `mock_validate_mlir`, then Stage 211 closes.

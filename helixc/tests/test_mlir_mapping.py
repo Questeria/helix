@@ -1,19 +1,21 @@
-"""Tests for helixc.ir.mlir.mapping — v3.0 Phase E, Stage 211 chunk B:
-the Helix-op -> MLIR-lowering mapping.
+"""Tests for helixc.ir.mlir.mapping — v3.0 Phase E, Stage 211
+chunks B-C: the Helix-op -> MLIR-lowering mapping.
 
 `mapping.py` turns the ratified Stage 210 decision record's section-2.2
 op-mapping table (docs/V3_STAGE210_MLIR_DECISION.md) into a code data
-structure: for every Tensor-IR `tir.OpKind`, which MLIR lowering target
-it belongs to — an upstream MLIR dialect, the custom `helix` dialect,
-or RESIDUAL (a placement the decision record explicitly DEFERRED, "flag
-for review").
+structure: for every Helix IR operation — both Tensor-IR `tir.OpKind`
+(chunk B) and Tile-IR `tile_ir.TileOpKind` (chunk C) — which MLIR
+lowering target it belongs to: an upstream MLIR dialect, the custom
+`helix` dialect, or RESIDUAL (a placement the decision record
+explicitly DEFERRED, "flag for review").
 
 These tests pin: the `MLIRLowering` enum and its upstream / HELIX /
-RESIDUAL partition; that `_OPKIND_LOWERING` covers `tir.OpKind` EXACTLY
-(the load-bearing drift guard — no op unmapped, no stale key); that the
-two module-load guards are NOT vacuous (each genuinely catches the
-corruption it exists to catch); the `mlir_lowering_for` accessor's
-totality and the `is_upstream` predicate; the decision-record-anchored
+RESIDUAL partition; that `_OPKIND_LOWERING` and `_TILEOPKIND_LOWERING`
+each cover their enum EXACTLY (the load-bearing drift guards — no op
+unmapped, no stale key); that the module-load guards are NOT vacuous
+(each genuinely catches the corruption it exists to catch); the
+`mlir_lowering_for` / `mlir_lowering_for_tile` accessors' totality and
+the `is_upstream` predicate; the decision-record-anchored
 classification of the Helix-specific and the deferred op sets; and —
 the mock-path rule (Stage 210 decision, section 3.2) — that the module
 is pure data: it never `import mlir`, at top level or anywhere.
@@ -26,10 +28,11 @@ from pathlib import Path
 
 import pytest
 
-from helixc.ir import tir
+from helixc.ir import tile_ir, tir
 from helixc.ir.mlir import mapping
 from helixc.ir.mlir.mapping import (
     MLIRLowering, dialect_name, is_upstream, mlir_lowering_for,
+    mlir_lowering_for_tile,
 )
 
 
@@ -37,24 +40,25 @@ from helixc.ir.mlir.mapping import (
 # MLIRLowering — the enum + the upstream / HELIX / RESIDUAL partition
 # --------------------------------------------------------------------------
 def test_mlir_lowering_members():
-    """`MLIRLowering` names the eight upstream MLIR dialects plus HELIX
-    and RESIDUAL — ten members, each carrying a distinct string value."""
+    """`MLIRLowering` names the nine upstream MLIR dialects plus HELIX
+    and RESIDUAL — eleven members, each carrying a distinct string
+    value."""
     assert {m.name for m in MLIRLowering} == {
-        "ARITH", "MATH", "LINALG", "TENSOR", "MEMREF", "FUNC", "CF",
-        "GPU", "HELIX", "RESIDUAL"}
+        "ARITH", "MATH", "LINALG", "VECTOR", "TENSOR", "MEMREF", "FUNC",
+        "CF", "GPU", "HELIX", "RESIDUAL"}
     values = [m.value for m in MLIRLowering]
     assert len(values) == len(set(values)), "values must be unique"
     assert all(isinstance(v, str) and v.strip() for v in values)
 
 
 def test_upstream_lowerings_set():
-    """`_UPSTREAM_LOWERINGS` is exactly the eight upstream MLIR dialect
+    """`_UPSTREAM_LOWERINGS` is exactly the nine upstream MLIR dialect
     members — the custom `helix` dialect and the deferred RESIDUAL
     bucket are deliberately excluded (they are not upstream dialects)."""
     assert mapping._UPSTREAM_LOWERINGS == frozenset({
         MLIRLowering.ARITH, MLIRLowering.MATH, MLIRLowering.LINALG,
-        MLIRLowering.TENSOR, MLIRLowering.MEMREF, MLIRLowering.FUNC,
-        MLIRLowering.CF, MLIRLowering.GPU})
+        MLIRLowering.VECTOR, MLIRLowering.TENSOR, MLIRLowering.MEMREF,
+        MLIRLowering.FUNC, MLIRLowering.CF, MLIRLowering.GPU})
     assert MLIRLowering.HELIX not in mapping._UPSTREAM_LOWERINGS
     assert MLIRLowering.RESIDUAL not in mapping._UPSTREAM_LOWERINGS
 
@@ -184,12 +188,13 @@ def test_mlir_lowering_for_is_total_and_consistent():
 
 
 def test_is_upstream():
-    """`is_upstream` is True for each of the eight upstream dialect
+    """`is_upstream` is True for each of the nine upstream dialect
     members and False for the custom `helix` dialect and the deferred
     RESIDUAL bucket."""
     for m in (MLIRLowering.ARITH, MLIRLowering.MATH, MLIRLowering.LINALG,
-              MLIRLowering.TENSOR, MLIRLowering.MEMREF, MLIRLowering.FUNC,
-              MLIRLowering.CF, MLIRLowering.GPU):
+              MLIRLowering.VECTOR, MLIRLowering.TENSOR,
+              MLIRLowering.MEMREF, MLIRLowering.FUNC, MLIRLowering.CF,
+              MLIRLowering.GPU):
         assert is_upstream(m) is True, m
     assert is_upstream(MLIRLowering.HELIX) is False
     assert is_upstream(MLIRLowering.RESIDUAL) is False
@@ -247,6 +252,90 @@ def test_residual_ops_are_the_decision_record_deferred_set():
 
 
 # --------------------------------------------------------------------------
+# _TILEOPKIND_LOWERING — the Tile IR op set (Stage 211 chunk C)
+# --------------------------------------------------------------------------
+def test_tileopkind_lowering_covers_every_tileopkind():
+    """`_TILEOPKIND_LOWERING` maps EXACTLY the `tile_ir.TileOpKind`
+    enum — every Tile-IR op classified, no stale key. The Tile-IR
+    sibling of the `_OPKIND_LOWERING` drift guard."""
+    assert set(mapping._TILEOPKIND_LOWERING) == set(tile_ir.TileOpKind)
+    mapping._check_tileopkind_coverage()  # the guard itself must pass
+
+
+def test_tileopkind_coverage_guard_catches_missing_op(monkeypatch):
+    """`_check_tileopkind_coverage` genuinely catches an unmapped Tile-
+    IR op — proof the guard is not vacuous. (It shares the generic
+    `_check_mapping_coverage` with the `tir.OpKind` guard.)"""
+    broken = dict(mapping._TILEOPKIND_LOWERING)
+    del broken[tile_ir.TileOpKind.TILE_MATMUL]
+    monkeypatch.setattr(mapping, "_TILEOPKIND_LOWERING", broken)
+    with pytest.raises(AssertionError, match=r"unmapped.*TILE_MATMUL"):
+        mapping._check_tileopkind_coverage()
+
+
+def test_tileopkind_lowering_spot_checks():
+    """Anchor representative Tile-IR ops to their decision-record
+    (section 2.2 Tile-IR table) lowering: tile creation / compute /
+    matmul / reduce / layout -> vector (MLIR's tile/SIMD layer); tile
+    memory movement -> memref; carried-through scalar ops -> arith;
+    call / return -> func; GPU primitives -> gpu; the deferred async
+    memory ops -> residual."""
+    cases = {
+        tile_ir.TileOpKind.TILE_ZEROS: MLIRLowering.VECTOR,
+        tile_ir.TileOpKind.TILE_ADD: MLIRLowering.VECTOR,
+        tile_ir.TileOpKind.TILE_MATMUL: MLIRLowering.VECTOR,
+        tile_ir.TileOpKind.TILE_REDUCE: MLIRLowering.VECTOR,
+        tile_ir.TileOpKind.TILE_TRANSPOSE: MLIRLowering.VECTOR,
+        tile_ir.TileOpKind.TILE_LOAD_GLOBAL: MLIRLowering.MEMREF,
+        tile_ir.TileOpKind.TILE_STORE_SHARED: MLIRLowering.MEMREF,
+        tile_ir.TileOpKind.SCALAR_ADD: MLIRLowering.ARITH,
+        tile_ir.TileOpKind.SCALAR_SELECT: MLIRLowering.ARITH,
+        tile_ir.TileOpKind.CALL: MLIRLowering.FUNC,
+        tile_ir.TileOpKind.RETURN: MLIRLowering.FUNC,
+        tile_ir.TileOpKind.THREAD_IDX: MLIRLowering.GPU,
+        tile_ir.TileOpKind.TILE_INDEX_LOAD_HBM: MLIRLowering.GPU,
+        tile_ir.TileOpKind.TMA_LOAD: MLIRLowering.RESIDUAL,
+        tile_ir.TileOpKind.BARRIER_WAIT: MLIRLowering.RESIDUAL,
+    }
+    for op, expected in cases.items():
+        assert mlir_lowering_for_tile(op) is expected, op
+
+
+def test_mlir_lowering_for_tile_is_total_and_consistent():
+    """`mlir_lowering_for_tile` is TOTAL over `tile_ir.TileOpKind` — it
+    returns an `MLIRLowering` for every op, never raising — and
+    `is_upstream` derives consistently from the result for every op."""
+    for op in tile_ir.TileOpKind:
+        low = mlir_lowering_for_tile(op)
+        assert isinstance(low, MLIRLowering)
+        assert is_upstream(low) == (low in mapping._UPSTREAM_LOWERINGS)
+
+
+def test_tile_async_ops_are_residual():
+    """The Tile-IR async memory ops — TMA load / store and the barrier
+    wait — are EXACTLY the RESIDUAL set: the decision record (section 3
+    / the section-5 checklist) explicitly defers whether they target
+    `nvgpu` or a cross-backend `helix` async abstraction. No other
+    Tile-IR op is RESIDUAL — the deferral is honest and bounded."""
+    residual = {op for op, low in mapping._TILEOPKIND_LOWERING.items()
+                if low is MLIRLowering.RESIDUAL}
+    assert residual == {
+        tile_ir.TileOpKind.TMA_LOAD, tile_ir.TileOpKind.TMA_STORE,
+        tile_ir.TileOpKind.BARRIER_WAIT,
+    }
+
+
+def test_tile_ir_has_no_helix_dialect_ops():
+    """No Tile-IR op maps to the custom `helix` dialect. The Helix-
+    specific Tile-IR concern — the Stage 117-120 adjoint table — is a
+    TRANSFORM (a pass), not an op set (decision record section 2.2), so
+    it has no `TileOpKind` and never appears here; `helix`-dialect ops
+    are a Tensor-IR-level concern only."""
+    assert all(low is not MLIRLowering.HELIX
+               for low in mapping._TILEOPKIND_LOWERING.values())
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — mapping is pure data, never `import mlir`
 # --------------------------------------------------------------------------
 def test_mapping_module_is_pure_data_no_mlir_import():
@@ -259,9 +348,9 @@ def test_mapping_module_is_pure_data_no_mlir_import():
     this binding-less machine would pass silently on an MLIR-equipped
     one).
 
-    The scan covers THIS module's own source; `mapping`'s sole import,
-    `helixc.ir.tir`, is the home-grown IR and carries no MLIR
-    dependency of its own."""
+    The scan covers THIS module's own source; `mapping`'s imports —
+    `helixc.ir.tir` and `helixc.ir.tile_ir` — are the home-grown IR
+    and carry no MLIR dependency of their own."""
     tree = ast.parse(Path(mapping.__file__).read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
