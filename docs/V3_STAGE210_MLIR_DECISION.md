@@ -31,10 +31,10 @@ The two IR layers being replaced are:
 
 - `helixc/ir/tir.py` (~600 lines) — the value-semantic **Tensor IR**:
   whole-tensor ops, named axes, layout-as-type, SSA-with-block-params
-  (no phi). 98 `OpKind` members.
+  (no phi). 96 `OpKind` members.
 - `helixc/ir/tile_ir.py` (~520 lines) — the mid-level **Tile IR**:
   explicit memory spaces (HBM/SMEM/REG/TMEM), async memory (TMA,
-  barriers), explicit tile sizes, warp/CTA scheduling. 34
+  barriers), explicit tile sizes, warp/CTA scheduling. 29
   `TileOpKind` members + the Stage 117-120 adjoint table.
 
 ---
@@ -143,7 +143,7 @@ custom; standard tensor/scalar/GPU algebra reuses upstream.
 
 ### 2.2 Mapping the existing op sets onto upstream dialects
 
-#### Tensor IR (`tir.py`, 98 `OpKind`s)
+#### Tensor IR (`tir.py`, 96 `OpKind`s)
 
 | `tir.OpKind` group | Best upstream home | Fit |
 |--------------------|--------------------|-----|
@@ -166,7 +166,7 @@ custom; standard tensor/scalar/GPU algebra reuses upstream.
 | **`ARENA_PUSH/GET/SET/LEN/PUSH_PAIR/PUSH_TRIPLE`** | `memref` *approximates* a bump allocator but loses the atomic-pair/triple invariant | **Poor — Helix-specific bump allocator with atomicity guarantees.** |
 | `RESULT_PACK/TAG/PAYLOAD` | `arith` shifts/masks *can* express the bit-twiddling | Marginal — works but loses the discriminated-union intent the `tir.py` comments deliberately encode. |
 
-#### Tile IR (`tile_ir.py`, 34 `TileOpKind`s)
+#### Tile IR (`tile_ir.py`, 29 `TileOpKind`s)
 
 | `TileOpKind` group | Best upstream home | Fit |
 |--------------------|--------------------|-----|
@@ -450,10 +450,14 @@ that verified the op-mapping against the real `tir.py` / `tile_ir.py`.
 The review confirmed all three recommendations sound; its corrections,
 applied to this record:
 
-1. **Op counts** — corrected to the exact figures: `tir.py` has 98
-   `OpKind` members (the draft said ~110); `tile_ir.py` has 34
-   `TileOpKind` members (the draft said ~30). The ~80-85%
-   upstream-mappable conclusion is unaffected.
+1. **Op counts** — `tir.py` has 96 `OpKind` members (the draft said
+   ~110); `tile_ir.py` has 29 `TileOpKind` members (the draft said
+   ~30). *Re-corrected at Stage 211 chunk B:* the architecture review
+   first recorded 98 / 34, but the Stage-211 op→MLIR mapping table
+   (`helixc/ir/mlir/mapping.py`) carries a module-load coverage guard
+   that asserts `set(_OPKIND_LOWERING) == set(tir.OpKind)` — it
+   empirically pins the exact runtime counts at **96 / 29**. The
+   ~80-85% upstream-mappable conclusion is unaffected.
 2. **`TENSOR_LOAD` / `TENSOR_STORE`** belong with the effectful
    runtime ops (`PRINT` / `TRAP` / `FFI_CALL`), NOT the in-graph
    `tensor.*` ops — they are external host / file I/O boundaries and

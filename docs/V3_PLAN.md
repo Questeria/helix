@@ -164,7 +164,7 @@ depend on a clean, unambiguous full-suite run.
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
-| 211 | Helix MLIR dialect / mapping substrate | ~ | A 3-clean ✓ | Phase E — chunk A shipped (MLIR capability detection) |
+| 211 | Helix MLIR dialect / mapping substrate | ~ | A,B 3-clean ✓ | Phase E — chunks A,B shipped (MLIR capability detection; Helix-op→MLIR-lowering mapping) |
 | 212–216 | Phase E — translation / lowering / pass pipeline / parity | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -836,3 +836,30 @@ depend on a clean, unambiguous full-suite run.
   module-load drift guard, stronger dialect-loop test coverage) were
   folded into the closure. Next: Stage 211 chunk B — the Helix-op ->
   MLIR-dialect mapping tables.
+- 2026-05-20 — **Stage 211 chunk B shipped — the Helix-op → MLIR-
+  lowering mapping.** `helixc/ir/mlir/mapping.py` turns the ratified
+  Stage 210 decision record's section-2.2 op-mapping table into a code
+  data structure. `MLIRLowering` (an `Enum`) names the lowering target:
+  the eight upstream MLIR dialects the numerical/structural op core
+  maps onto (`arith`/`math`/`linalg`/`tensor`/`memref`/`func`/`cf`/
+  `gpu`), the custom `HELIX` dialect, and `RESIDUAL` — an honest
+  "undecided" for the ops the decision record explicitly DEFERRED
+  ("flag for review", section 2.4: the `Result`/quantize encodings).
+  `_OPKIND_LOWERING` maps all **96** `tir.OpKind`s (78 upstream / 13
+  helix / 5 residual — ≈81% upstream, matching the decision record's
+  80-85%); accessors `mlir_lowering_for` / `is_upstream` /
+  `dialect_name` (the last refuses RESIDUAL — it names no dialect — so
+  a caller cannot silently format `residual.<op>`). Two module-load
+  guards: `_check_lowering_partition` (every `MLIRLowering` is upstream
+  / helix / residual) and `_check_opkind_coverage` (`_OPKIND_LOWERING`
+  matches `tir.OpKind` EXACTLY — the load-bearing drift guard). Pure
+  data — never `import mlir` (mock-path-first; AST-test-pinned). 15
+  tests (`test_mlir_mapping.py`). Also re-corrected the decision
+  record's op counts: the architecture review recorded 98/34, but the
+  coverage guard empirically pins **96 `OpKind` / 29 `TileOpKind`**.
+  Per-stage 3-clean audit: round 1 returned 0 HIGH, one MEDIUM (M1 —
+  `RESIDUAL` sharing the enum with real dialects was a foot-gun for a
+  future Stage-212 caller); fixed by adding the guarded `dialect_name`
+  accessor; re-audit of the delta on all three surfaces CLEAN. Next:
+  Stage 211 chunk C — the `TileOpKind` (Tile IR) mapping and/or the
+  `helix`-dialect op model.
