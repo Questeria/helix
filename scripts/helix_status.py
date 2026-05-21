@@ -16,9 +16,10 @@ overall.
 It is the SINGLE SOURCE OF TRUTH for release-journey status. When a
 version ships, change its `status` in `VERSIONS` below from
 "in_progress" / "planned" to "released" (and open the next one). As
-each v3.0 build stage closes its 3-part audit, bump `V3_STAGES_DONE`;
-bump `TESTS_TOTAL` as the test suite grows. Every percentage
-recomputes from those edits.
+each v3.0 build stage closes its 3-part audit, bump `V3_STAGES_DONE`.
+Every percentage recomputes from that edit; the test-suite size is
+counted LIVE from `helixc/tests/` (so it grows with every chunk and
+never goes stale — no manual bump).
 
 Usage:
     python scripts/helix_status.py
@@ -30,6 +31,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 
 # --- The v2.0 -> v3.0 release journey --------------------------------
@@ -64,14 +66,6 @@ VERSIONS: list[dict[str, str]] = [
 # every percentage below recomputes from it.
 V3_STAGES_TOTAL = 19
 V3_STAGES_DONE = 11       # Phase D done + Stages 210-211 (Phase E)
-
-# Size of the automated test suite (`helixc/tests/`) — a
-# scale-of-testing signal for non-engineers. Bump as the suite grows.
-# Deliberately NOT a live pass/fail claim: this module renders stable
-# facts, and a hardcoded "all passing" would read false during any
-# transient regression. Live pass/fail belongs in a future mode that
-# actually runs pytest.
-TESTS_TOTAL = 4194
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
@@ -108,6 +102,30 @@ def overall_percent() -> int:
     fraction."""
     score = sum(_version_credit(v) for v in VERSIONS)
     return round(100 * score / len(VERSIONS))
+
+
+def count_tests() -> int:
+    """The size of the automated test suite — a count of `def test_*`
+    definitions across `helixc/tests/`, computed LIVE so it grows with
+    every chunk and never goes stale.
+
+    A pure scale-of-testing figure for non-engineers, NOT a pass/fail
+    claim: it counts the tests that EXIST, it does not run them (a
+    live pass/fail readout would need a mode that runs pytest). Fails
+    loudly rather than render a misleading zero."""
+    tests_dir = (Path(__file__).resolve().parent.parent
+                 / "helixc" / "tests")
+    total = 0
+    for path in tests_dir.glob("test_*.py"):
+        total += sum(
+            1 for line in path.read_text(encoding="utf-8").splitlines()
+            if line.lstrip().startswith("def test_"))
+    if total == 0:
+        raise SystemExit(
+            f"helix_status: counted 0 tests under {tests_dir} — the "
+            f"test directory was not found or is empty; refusing to "
+            f"render a misleading status.")
+    return total
 
 
 def _bucket(status: str) -> list[dict[str, str]]:
@@ -161,7 +179,7 @@ def render_telegram(note: str | None = None,
         f"  - Versions released:   {len(released)} / {len(VERSIONS)}"
         f"         ({versions_percent()}%)",
         f"  - Overall toward v3.0: about {overall_percent()}%",
-        f"  - Test coverage:       ~{TESTS_TOTAL} automated tests "
+        f"  - Test coverage:       ~{count_tests()} automated tests "
         f"guard the code",
     ]
 
