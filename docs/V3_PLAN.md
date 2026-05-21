@@ -164,7 +164,8 @@ depend on a clean, unambiguous full-suite run.
 | 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
-| 211–216 | Phase E — MLIR dialect / translation / lowering / parity | — | — | Phase E — next |
+| 211 | Helix MLIR dialect / mapping substrate | ~ | A 3-clean ✓ | Phase E — chunk A shipped (MLIR capability detection) |
+| 212–216 | Phase E — translation / lowering / pass pipeline / parity | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
 ## Status notes
@@ -814,3 +815,24 @@ depend on a clean, unambiguous full-suite run.
   A decision stage (no compiler code) — the per-stage audit was the
   architecture review. `V3_STAGES_DONE` bumped 9 -> 10. Next: Stage
   211 — the Helix MLIR dialect / mapping substrate.
+- 2026-05-20 — **Stage 211 chunk A shipped — the MLIR
+  capability-detection substrate.** The first code of Phase E. New
+  package `helixc/ir/mlir/`; `toolchain.py` defines `MLIRSupport` (a
+  frozen, `__post_init__`-guarded capability result — the structural
+  sibling of `llvm_parity.RealExecSupport`) and
+  `detect_mlir_support()`, which probes the two real MLIR surfaces
+  INDEPENDENTLY: the in-process Python bindings (a LAZY `import mlir`,
+  never at module top level — the Stage 210 hard rule) and the
+  `mlir-opt` CLI. A partial bindings install (core `mlir.ir` present
+  but a required dialect sub-module absent) is reported not-usable,
+  not passed-then-failed-later. A `_check_mlir_dialects()` module-load
+  guard pins `_REQUIRED_MLIR_DIALECTS`. Mock-path-first: this
+  binding-less dev machine yields `is_available()=False`, so Phase E
+  defers the real path and the home-grown tile-IR stays the reversible
+  fallback. 12 tests (`test_mlir_toolchain.py`); the compiler still
+  imports cleanly with no MLIR bindings (the load-bearing guard,
+  test-pinned). Per-stage 3-clean audit: round 1 returned 0 HIGH / 0
+  must-fix-MEDIUM on all three surfaces; the convergent advisories (a
+  module-load drift guard, stronger dialect-loop test coverage) were
+  folded into the closure. Next: Stage 211 chunk B — the Helix-op ->
+  MLIR-dialect mapping tables.
