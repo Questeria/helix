@@ -687,6 +687,61 @@ def test_stdlib_merges_fn_decls():
         "stdlib FnDecls should still be merged when include_stdlib=True"
 
 
+def test_stdlib_parse_is_cached():
+    """The parsed stdlib is cached process-wide: after a
+    `parse(include_stdlib=True)`, `_STDLIB_PARSE_CACHE` holds a pickle
+    blob per stdlib file, so later calls skip the redundant re-parse."""
+    import helixc.frontend.parser as _p
+    _p._STDLIB_PARSE_CACHE.clear()
+    parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    assert _p._STDLIB_PARSE_CACHE, "stdlib parse should be cached"
+    assert all(isinstance(v, bytes)
+               for v in _p._STDLIB_PARSE_CACHE.values()), \
+        "cache values are pickle blobs"
+
+
+def test_stdlib_cache_yields_independent_asts():
+    """The cache must hand each compilation its OWN stdlib AST — two
+    `parse(include_stdlib=True)` calls share no AST objects, so a
+    downstream pass mutating one program's stdlib nodes cannot corrupt
+    another's."""
+    p1 = parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    p2 = parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+
+    def stdlib_fns(prog):
+        return {it.name: it for it in prog.items
+                if isinstance(it, ast.FnDecl)
+                and "__stdlib" in getattr(it, "attrs", [])}
+
+    f1, f2 = stdlib_fns(p1), stdlib_fns(p2)
+    shared = sorted(set(f1) & set(f2))
+    assert shared, "expected stdlib fns merged into both programs"
+    for name in shared:
+        assert f1[name] is not f2[name], \
+            f"cache leaked a shared AST object for {name!r}"
+    # Mutating one program's stdlib node must not touch the other's.
+    f1[shared[0]].attrs.append("__isolation_probe__")
+    assert "__isolation_probe__" not in f2[shared[0]].attrs, \
+        "cache leaked mutable state across compilations"
+
+
+def test_stdlib_cached_parse_matches_fresh():
+    """A cache hit yields the same merged stdlib as a cold re-parse —
+    same item kinds and names — so caching changes performance only,
+    never behaviour."""
+    import helixc.frontend.parser as _p
+
+    def item_signature(prog):
+        return sorted((type(it).__name__, getattr(it, "name", None))
+                      for it in prog.items)
+
+    _p._STDLIB_PARSE_CACHE.clear()
+    fresh = parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    cached = parse("fn main() -> i32 { 0 }\n", include_stdlib=True)
+    assert item_signature(fresh) == item_signature(cached), \
+        "a cached stdlib parse must match a cold re-parse"
+
+
 def test_stdlib_merges_struct_decls(tmp_path, monkeypatch):
     """Audit 28.8 A8: StructDecl items in stdlib were silently dropped.
     Simulate a stdlib drop-in that exports a struct + an impl block,

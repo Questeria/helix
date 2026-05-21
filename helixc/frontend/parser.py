@@ -1622,8 +1622,9 @@ def parse(source: str, filename: str = "<input>",
 
     Pass include_stdlib=True to also append the stdlib transcendentals
     (__exp/__log/__sin/__cos/__sqrt/__sigmoid/__relu) to the program.
-    The function-DCE pass drops unused stdlib functions, so this is
-    cheap. The end-to-end test runners enable it by default; callers
+    The parsed stdlib is cached process-wide (see `_merge_stdlib`), and
+    the function-DCE pass later drops the unused stdlib functions. The
+    end-to-end test runners enable it by default; callers
     that operate on raw user-AST (e.g. counting specific op kinds in
     optimizer tests) leave it off.
     """
@@ -1671,6 +1672,28 @@ STDLIB_FILES: list[str] = [
 STDLIB_STRICT_ENV = "HELIXC_STDLIB_STRICT"
 
 
+# Per-file cache of the parsed stdlib. `_merge_stdlib` would otherwise
+# re-lex and re-parse all ~21 stdlib files on EVERY
+# `parse(include_stdlib=True)` call — ~600 ms of pure, redundant work
+# per call, paid by every compile-and-run test (thousands of them).
+# Parsing a fixed stdlib file is a pure function of its bytes, so the
+# result is cached: keyed by (absolute path, mtime-ns, size), the
+# value is a `pickle` blob of that file's parsed top-level items.
+# `pickle.loads` (~66 ms for the whole stdlib — a ~9x speedup) yields
+# a FRESH, fully independent AST every call, exactly as a re-parse
+# did, so downstream in-place AST annotation stays isolated per
+# compilation; only the redundant lex + parse is elided. The mtime +
+# size in the key make a stdlib file rewritten mid-process (e.g. a
+# test fixture reusing a filename) a cache MISS, never a stale hit.
+_STDLIB_PARSE_CACHE: dict[tuple[str, int, int], bytes] = {}
+
+# Cap on `_STDLIB_PARSE_CACHE` entries — far above the ~21 real stdlib
+# files, so a normal process never evicts; only a pathological one (a
+# test rewriting many distinct fixture files) trips it, and then the
+# whole cache is dropped and refilled — a re-parse, never wrong output.
+_STDLIB_PARSE_CACHE_MAX = 128
+
+
 def _merge_stdlib(user_prog: "ast.Program") -> None:
     """Merge stdlib items into `user_prog.items`.
 
@@ -1696,6 +1719,8 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
     to stderr so users see partial-install symptoms.
     """
     import os as _os
+    import pickle as _pickle
+    import stat as _stat
     import sys as _sys
     stdlib_dir = _os.path.join(
         _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
@@ -1758,16 +1783,43 @@ def _merge_stdlib(user_prog: "ast.Program") -> None:
 
     for fname in STDLIB_FILES:
         stdlib_path = _os.path.join(stdlib_dir, fname)
-        if not _os.path.isfile(stdlib_path):
+        # One `stat` serves as both the existence / regular-file check
+        # and the source of the cache key — no `isfile`-then-`stat`
+        # TOCTOU window in which a vanished file escapes the strict /
+        # warn-and-skip handling below.
+        try:
+            _st = _os.stat(stdlib_path)
+        except OSError:
+            _st = None
+        if _st is None or not _stat.S_ISREG(_st.st_mode):
             msg = f"helixc: stdlib file missing: {stdlib_path}"
             if strict:
                 raise FileNotFoundError(msg)
             print(msg, file=_sys.stderr)
             continue
-        with open(stdlib_path, encoding="utf-8") as f:
-            stdlib_src = f.read()
-        stdlib_prog = Parser(lex(stdlib_src, stdlib_path)).parse_program()
-        for item in stdlib_prog.items:
+        # Parse each stdlib file once per process; thereafter reuse a
+        # `pickle` blob of its parsed items. `pickle.loads` yields a
+        # FRESH, fully independent AST, so each compilation still gets
+        # its own mutable copy (downstream passes annotate the AST in
+        # place) — only the redundant lex + parse is elided. The cache
+        # key carries the file's mtime + size, so a stdlib file
+        # rewritten mid-process is a cache miss, not a stale hit.
+        _cache_key = (stdlib_path, _st.st_mtime_ns, _st.st_size)
+        _cached = _STDLIB_PARSE_CACHE.get(_cache_key)
+        if _cached is not None:
+            stdlib_items = _pickle.loads(_cached)
+        else:
+            with open(stdlib_path, encoding="utf-8") as f:
+                stdlib_src = f.read()
+            stdlib_items = Parser(
+                lex(stdlib_src, stdlib_path)).parse_program().items
+            # Bound the cache (see _STDLIB_PARSE_CACHE_MAX): past the
+            # cap, drop everything and refill — only a re-parse, never
+            # wrong output.
+            if len(_STDLIB_PARSE_CACHE) >= _STDLIB_PARSE_CACHE_MAX:
+                _STDLIB_PARSE_CACHE.clear()
+            _STDLIB_PARSE_CACHE[_cache_key] = _pickle.dumps(stdlib_items)
+        for item in stdlib_items:
             _mark_stdlib_item(item)
             name = getattr(item, "name", None)
             if name is not None:
