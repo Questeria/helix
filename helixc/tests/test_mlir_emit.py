@@ -1148,6 +1148,94 @@ def test_emit_fails_closed_on_empty_emitted_line(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# the GPU thread-index emitter (chunk I)
+# --------------------------------------------------------------------------
+def _thread_idx(r: tile_ir.TileValue, sreg: object,
+                dim: object) -> tile_ir.TileOp:
+    """A Tile-IR `THREAD_IDX` op with the given `sreg` / `dim` attrs."""
+    return tile_ir.TileOp(_TK.THREAD_IDX, results=[r],
+                          attrs={"sreg": sreg, "dim": dim})
+
+
+def test_emit_thread_idx_tid():
+    """`gpu.thread_idx` with `sreg="tid"` -> a two-op `gpu.thread_id
+    <dim>` read plus an `arith.index_cast` to i32, both indented."""
+    r = tile_ir.TileValue(0, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "k": _fn("k", [], _S("i32"), _thread_idx(r, "tid", "x"),
+                 _ret(r))}))
+    assert "    %v0.idx = gpu.thread_id x\n" in text
+    assert "    %v0 = arith.index_cast %v0.idx : index to i32\n" in text
+
+
+def test_emit_thread_idx_all_sregs_and_dims():
+    """Each `sreg` maps to its `gpu` op — `tid`->thread_id,
+    `ctaid`->block_id, `ntid`->block_dim — and each `dim` (x/y/z) is
+    carried through to the axis argument."""
+    cases = {
+        ("tid", "x"): "gpu.thread_id x",
+        ("ctaid", "y"): "gpu.block_id y",
+        ("ntid", "z"): "gpu.block_dim z",
+    }
+    for (sreg, dim), expected in cases.items():
+        r = tile_ir.TileValue(0, _S("i32"))
+        text = emit_mlir_module(tile_ir.TileModule(functions={
+            "k": _fn("k", [], _S("i32"), _thread_idx(r, sreg, dim),
+                     _ret(r))}))
+        assert f"%v0.idx = {expected}\n" in text, (sreg, dim)
+
+
+def test_emit_thread_idx_function_passes_mock_validate():
+    """A function reading a GPU thread index emits structurally
+    well-formed MLIR (`mock_validate_mlir` -> DEFERRED)."""
+    r = tile_ir.TileValue(0, _S("i32"))
+    text = emit_mlir_module(tile_ir.TileModule(functions={
+        "k": _fn("k", [], _S("i32"), _thread_idx(r, "tid", "x"),
+                 _ret(r))}))
+    assert mock_validate_mlir(text).deferred(), text
+
+
+def test_emit_thread_idx_fails_closed_on_operands():
+    """`gpu.thread_idx` takes no operands — one supplied fails closed."""
+    a = tile_ir.TileValue(0, _S("i32"))
+    r = tile_ir.TileValue(1, _S("i32"))
+    fn = _fn("k", [a], _S("i32"),
+             tile_ir.TileOp(_TK.THREAD_IDX, operands=[a], results=[r],
+                            attrs={"sreg": "tid", "dim": "x"}), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="no operands"):
+        emit_mlir_module(tile_ir.TileModule(functions={"k": fn}))
+
+
+def test_emit_thread_idx_fails_closed_on_bad_sreg():
+    """`gpu.thread_idx` with a missing or unrecognised `sreg` fails
+    closed — the emitter never guesses the GPU index op."""
+    for bad in ("nctaid", None):
+        r = tile_ir.TileValue(0, _S("i32"))
+        fn = _fn("k", [], _S("i32"), _thread_idx(r, bad, "x"), _ret(r))
+        with pytest.raises(MLIRTranslationError, match="sreg"):
+            emit_mlir_module(tile_ir.TileModule(functions={"k": fn}))
+
+
+def test_emit_thread_idx_fails_closed_on_bad_dim():
+    """`gpu.thread_idx` with a missing or unrecognised `dim` fails
+    closed."""
+    for bad in ("w", None):
+        r = tile_ir.TileValue(0, _S("i32"))
+        fn = _fn("k", [], _S("i32"), _thread_idx(r, "tid", bad), _ret(r))
+        with pytest.raises(MLIRTranslationError, match="dim"):
+            emit_mlir_module(tile_ir.TileModule(functions={"k": fn}))
+
+
+def test_emit_thread_idx_fails_closed_on_non_i32_result():
+    """`gpu.thread_idx` whose result is not an i32 fails closed — a GPU
+    index read produces an i32."""
+    r = tile_ir.TileValue(0, _S("i64"))      # i64, not i32
+    fn = _fn("k", [], _S("i64"), _thread_idx(r, "tid", "x"), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not i32"):
+        emit_mlir_module(tile_ir.TileModule(functions={"k": fn}))
+
+
+# --------------------------------------------------------------------------
 # the mock-path rule — emit is pure text, never `import mlir`
 # --------------------------------------------------------------------------
 def test_emit_module_is_pure_text_no_mlir_import():

@@ -165,7 +165,7 @@ depend on a clean, unambiguous full-suite run.
 | 208 | Phase D — end-of-phase 5-clean-gate | ✓ | 5-clean ✓ | Phase D — CLOSED — **PHASE D COMPLETE** |
 | 210 | MLIR dependency + dialect-strategy decision | ✓ | review ✓ | Phase E — CLOSED (decision: hybrid `helix` dialect over upstream; eudsl dependency; gpu_ci-style mock path) |
 | 211 | Helix MLIR dialect / mapping substrate | ✓ | A-E 3-clean ✓ | Phase E — CLOSED (capability detection; Tensor+Tile op→MLIR mapping; helix-dialect op model; mock_validate_mlir) |
-| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-H 3-clean ✓ | Phase E — chunks A-H shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters; func.call; scalar.neg) |
+| 212 | tile-IR → MLIR translation (parallel path) | ~ | A-I 3-clean ✓ | Phase E — chunks A-I shipped (type bridge; module/func scaffold; arith / compare / select / vector-tile / layout-transform op emitters; func.call; scalar.neg; gpu.thread_idx) |
 | 213–216 | Phase E — lowering / pass pipeline / parity / 5-clean-gate | — | — | Phase E — next |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -1134,3 +1134,28 @@ depend on a clean, unambiguous full-suite run.
   Next: Stage 212 — the `memref` tile load / store ops, the `gpu` ops,
   and the attribute-heavy tile ops (`tile.matmul` / `reduce` /
   `const`); then close Stage 212 (`V3_STAGES_DONE` → 12).
+
+- 2026-05-21 — **Stage 212 chunk I shipped — the GPU thread-index
+  emitter.** `emit.py`'s `_OP_EMITTERS` gains `gpu.thread_idx` -> a
+  GPU index read. The Tile-IR `THREAD_IDX` op is the shared carrier
+  for three reads, discriminated by its `sreg` attribute — `tid` ->
+  `gpu.thread_id` (thread index within the block), `ctaid` ->
+  `gpu.block_id` (block index within the grid), `ntid` ->
+  `gpu.block_dim` (the block's dimension) — with a `dim` attribute
+  (`x`/`y`/`z`) picking the axis. The `gpu` index ops yield MLIR's
+  `index` type, so it is a TWO-op lowering: the `gpu` read into a
+  `%v<id>.idx` temp, then an `arith.index_cast` to `i32`. The front
+  end always tags THREAD_IDX with both attrs (lower_ast.py) and the
+  PTX backend requires both, so the emitter requires them too — never
+  guessing an axis. Fail-closed on any operand, a non-i32 result, or a
+  missing / unrecognised `sreg` or `dim`. 96 tests in
+  `test_mlir_emit.py` (+7 chunk I); 149 MLIR tests pass. Per-stage
+  3-clean audit: CLEAN on all three surfaces on round 1 — 0 HIGH / 0
+  must-fix-MEDIUM; the absence of a module-load drift guard was
+  endorsed (there is no `sreg` enum to guard against), and the
+  `gpu.*`-op-inside-`func.func` context (vs `gpu.func` / `gpu.module`)
+  was confirmed reasonable for a partial op-by-op translator (upstream
+  MLIR: intrinsic-wrapping `gpu` ops do not require a `gpu.func`
+  parent). Next: Stage 212 — the `memref` tile load / store ops and
+  the attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`);
+  then close Stage 212 (`V3_STAGES_DONE` → 12).

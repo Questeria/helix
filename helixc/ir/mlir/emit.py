@@ -67,11 +67,15 @@ Chunk H — the scalar-negation emitter. `scalar.neg` -> `arith.negf`
 for a float, or — MLIR's `arith` dialect has no integer negate — the
 two-op `arith.constant 0` + `arith.subi %zero, %x` for an integer.
 
+Chunk I — the GPU thread-index emitter. `gpu.thread_idx` -> a two-op
+`gpu.{thread_id,block_id,block_dim} <dim>` read (the `gpu` op picked
+by the op's `sreg` attribute) then an `arith.index_cast` to `i32`
+(the `gpu` index ops yield MLIR's `index` type).
+
 The attribute-heavy tile ops (`tile.matmul` / `reduce` / `const`),
-the `memref` tile load / store ops, the `gpu` ops (`thread_idx` /
-`tile.index_load/store_hbm` — `gpu.thread_id` yields an `index`, so a
-cast to the i32 IR type makes it a two-op lowering), and the `helix`
-dialect remain later chunks; `_emit_op` FAILS CLOSED on them.
+the `memref` tile load / store ops, the `tile.index_load/store_hbm`
+GPU memory ops, and the `helix` dialect remain later chunks;
+`_emit_op` FAILS CLOSED on them.
 
 FAIL-CLOSED: a type with no faithful MLIR rendering — a width-unpinned
 `char`, a front-end-only quantized dtype, a non-default tensor layout
@@ -811,16 +815,81 @@ def _emit_neg(op: tile_ir.TileOp) -> str:
     return f"{_value_ref(r)} = arith.negf {_value_ref(a)} : {mlir}"
 
 
+# --- the GPU thread-index emitter (Stage 212 chunk I) ---
+# The Tile-IR `THREAD_IDX` op's `sreg` attribute -> the MLIR `gpu`
+# dialect op for that GPU index read. `tid` is the thread index within
+# the block, `ctaid` the block index within the grid, `ntid` the
+# block's dimension — the PTX special-register names the front end
+# tags the op with (lower_ast.py). The fail-closed lookup in
+# `_emit_thread_idx` rejects any other `sreg`.
+_GPU_INDEX_OPS: dict[str, str] = {
+    "tid": "gpu.thread_id",
+    "ctaid": "gpu.block_id",
+    "ntid": "gpu.block_dim",
+}
+
+
+def _emit_thread_idx(op: tile_ir.TileOp) -> str:
+    """`gpu.thread_idx` -> a GPU index read.
+
+    The Tile-IR `THREAD_IDX` op is the shared carrier for three GPU
+    index reads, discriminated by its `sreg` attribute — `tid` ->
+    `gpu.thread_id`, `ctaid` -> `gpu.block_id`, `ntid` ->
+    `gpu.block_dim` — with a `dim` attribute (`x` / `y` / `z`) picking
+    the axis. The front end always tags THREAD_IDX with both attrs
+    explicitly (lower_ast.py), and the PTX backend likewise requires
+    both, so this emitter requires them too — it never guesses an axis.
+
+    Each `gpu` index op yields MLIR's `index` type, but a Helix
+    THREAD_IDX result is an `i32` — so this is a TWO-op lowering: the
+    `gpu` read into a `%v<id>.idx` temp, then an `arith.index_cast` to
+    `i32`. The derived temp name keeps the emitter STATELESS.
+
+    The emitted `gpu.*` op is the faithful op-level translation; the
+    GPU-kernel function context it belongs in (`gpu.func` within a
+    `gpu.module`, vs the chunk-B scaffold's plain `func.func`) is a
+    later-stage concern, like real `mlir-opt` validation.
+
+    Fail-closed (`MLIRTranslationError`): any operand, a result that is
+    not a single `i32`, or a missing / unrecognised `sreg` or `dim`."""
+    r = _single_result(op, "gpu.thread_idx")
+    if op.operands:
+        raise MLIRTranslationError(
+            f"gpu.thread_idx takes no operands, got "
+            f"{len(op.operands)} — the translator fails closed")
+    if render_mlir_type(r.ty) != "i32":
+        raise MLIRTranslationError(
+            "gpu.thread_idx result type is not i32 — a GPU index read "
+            "produces an i32; the translator fails closed")
+    sreg = op.attrs.get("sreg")
+    gpu_op = _GPU_INDEX_OPS.get(sreg) if isinstance(sreg, str) else None
+    if gpu_op is None:
+        raise MLIRTranslationError(
+            f"gpu.thread_idx has no recognised `sreg` attribute (got "
+            f"{sreg!r}; expected one of {sorted(_GPU_INDEX_OPS)}) — the "
+            f"translator fails closed")
+    dim = op.attrs.get("dim")
+    if dim not in ("x", "y", "z"):
+        raise MLIRTranslationError(
+            f"gpu.thread_idx has no recognised `dim` attribute (got "
+            f"{dim!r}; expected 'x', 'y' or 'z') — the translator "
+            f"fails closed")
+    idx = f"{_value_ref(r)}.idx"
+    return (f"{idx} = {gpu_op} {dim}\n"
+            f"{_value_ref(r)} = arith.index_cast {idx} : index to i32")
+
+
 # Tile-IR op kind -> its MLIR emitter. DELIBERATELY PARTIAL — chunks
-# B-H emit the function terminator, the scalar `arith` core, compare /
+# B-I emit the function terminator, the scalar `arith` core, compare /
 # select, the elementwise `vector` tile ops, the layout-transform
-# tile ops, the `func.call`, and `scalar.neg`; the remaining per-op
-# emitters (the attribute-heavy tile ops — matmul / reduce / const,
-# the `memref` tile load / store ops, the `gpu` ops, `helix`) are
-# added in later chunks. `_emit_op` FAILS CLOSED on any op kind
-# absent here, so the partial table is safe — never a silent miss. No
-# completeness guard, deliberately: the table is MEANT to be
-# incomplete until the per-op chunks land.
+# tile ops, the `func.call`, `scalar.neg`, and the GPU thread-index
+# read; the remaining per-op emitters (the attribute-heavy tile ops —
+# matmul / reduce / const, the `memref` tile load / store ops, the
+# `tile.index_load/store_hbm` GPU memory ops, `helix`) are added in
+# later chunks. `_emit_op` FAILS CLOSED on any op kind absent here, so
+# the partial table is safe — never a silent miss. No completeness
+# guard, deliberately: the table is MEANT to be incomplete until the
+# per-op chunks land.
 _OP_EMITTERS: dict[tile_ir.TileOpKind,
                    Callable[[tile_ir.TileOp], str]] = {
     tile_ir.TileOpKind.RETURN: _emit_return,
@@ -839,6 +908,7 @@ _OP_EMITTERS: dict[tile_ir.TileOpKind,
     tile_ir.TileOpKind.TILE_RESHAPE: _emit_tile_reshape,
     tile_ir.TileOpKind.TILE_TRANSPOSE: _emit_tile_transpose,
     tile_ir.TileOpKind.CALL: _emit_call,
+    tile_ir.TileOpKind.THREAD_IDX: _emit_thread_idx,
 }
 
 
