@@ -67,6 +67,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 import copy
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -382,15 +383,23 @@ class ParityResult:
         return RealParityStatus.FAIL
 
 
-def check_parity(module: tir.Module, program: str) -> ParityResult:
-    """Structurally compare the x86_64 and LLVM backends on one module.
+def check_parity(module: tir.Module, program: str, *,
+                 attempt_real: bool = False) -> ParityResult:
+    """Compare the x86_64 and LLVM backends on one module.
 
-    The chunk-A MOCK path of the Stage 207 parity gate: it needs no
-    LLVM toolchain and always runs. It compiles `module` through BOTH
-    backends and classifies the outcome (see `ParityVerdict`); it does
-    NOT run the compiled programs — observable-behaviour parity is
-    chunk C's real-execution path, and the returned `ParityResult`
-    leaves its real-execution fields not-attempted.
+    Compiles `module` through BOTH backends and classifies the
+    STRUCTURAL outcome (see `ParityVerdict`); this mock classification
+    needs no LLVM toolchain and always runs.
+
+    With `attempt_real=True` AND a structural MATCH AND the toolchain
+    present (`detect_real_exec_support().can_run_real()`), it ALSO
+    builds both backends to runnable executables, runs them, and
+    compares observable behaviour (exit code, stdout, stderr) — filling
+    the result's real-* fields (`real_status()` PASS / FAIL). When the
+    toolchain is absent the real comparison is DEFERRED, never FAILED,
+    so CI on a tool-less runner stays green. With `attempt_real=False`
+    (the default) the real-* fields stay NOT_RUN — the chunk-A/B
+    mock-only behaviour, unchanged.
 
     `module` must define `main` (the program entry the x86_64 backend
     makes the ELF entry point). A module without one — including an
@@ -505,7 +514,7 @@ def check_parity(module: tir.Module, program: str) -> ParityResult:
     # non-MATCH outcome appended a non-blank detail — so this
     # constructor cannot raise. A future branch that breaks that must
     # be re-checked against __post_init__.
-    return ParityResult(
+    result = ParityResult(
         program=program,
         x86_compiled=x86_compiled,
         llvm_emitted=llvm_emitted,
@@ -513,6 +522,15 @@ def check_parity(module: tir.Module, program: str) -> ParityResult:
         llvm_mock_clean=llvm_mock_clean,
         detail=tuple(detail),
     )
+    # Real-execution parity (chunk E) — only when requested AND the
+    # structural verdict is MATCH: a non-MATCH program has no pair of
+    # comparable runnable executables (UNCOVERED / MISMATCH / ERROR
+    # means one backend produced nothing runnable). `_attempt_real_
+    # parity` fills the real-* fields; without `attempt_real` they stay
+    # NOT_RUN.
+    if attempt_real and result.verdict() is ParityVerdict.MATCH:
+        result = _attempt_real_parity(module, program, result)
+    return result
 
 
 # ==========================================================================
@@ -603,15 +621,18 @@ _check_parity_corpus()
 
 
 def check_parity_source(source: str, program: str, *,
-                        include_stdlib: bool = False) -> ParityResult:
-    """Structurally parity-check one Helix SOURCE program.
+                        include_stdlib: bool = False,
+                        attempt_real: bool = False) -> ParityResult:
+    """Parity-check one Helix SOURCE program.
 
     Runs `source` through the frontend pipeline — parse, flatten
     modules / impls, monomorphize, grad-pass, lower — to a `tir.Module`,
-    then hands it to `check_parity` (see there for the verdict model).
-    The pipeline mirrors the one `helixc/tests/test_codegen.py`'s
-    `compile_and_run` uses for the x86_64 path, minus the optional
-    optimizer passes — the parity check is on the unoptimized module.
+    then hands it to `check_parity` (see there for the verdict model
+    and the `attempt_real` real-execution path, which is passed
+    through). The pipeline mirrors the one `helixc/tests/test_codegen.
+    py`'s `compile_and_run` uses for the x86_64 path, minus the
+    optional optimizer passes — the parity check is on the unoptimized
+    module.
 
     `include_stdlib` defaults to False: a minimal program needs no
     stdlib, and an `include_stdlib=True` build pulls in float-typed
@@ -652,17 +673,21 @@ def check_parity_source(source: str, program: str, *,
             llvm_failed_closed=False, llvm_mock_clean=False,
             detail=(f"frontend pipeline failed for {program!r}: "
                     f"{type(exc).__name__}: {exc}",))
-    return check_parity(module, program)
+    return check_parity(module, program, attempt_real=attempt_real)
 
 
-def run_parity_corpus() -> list[ParityResult]:
+def run_parity_corpus(*, attempt_real: bool = False) -> list[ParityResult]:
     """Run every program in `PARITY_CORPUS` through `check_parity_source`
     and return the results in corpus order — one `ParityResult` per
     entry. The Stage 207 mock-path parity gate (test_llvm_parity.py)
     asserts every result is MATCH: the corpus is curated to the LLVM
     backend's covered op surface, so a covered op regressing to
-    UNCOVERED or MISMATCH breaks the gate."""
-    return [check_parity_source(source, name)
+    UNCOVERED or MISMATCH breaks the gate.
+
+    `attempt_real` (passed through to `check_parity`) additionally runs
+    the real-execution comparison on each program — PASS / FAIL where
+    the toolchain is present, DEFERRED where it is absent."""
+    return [check_parity_source(source, name, attempt_real=attempt_real)
             for name, source in PARITY_CORPUS]
 
 
@@ -1082,3 +1107,96 @@ def _run_llvm_program(module: tir.Module, program: str,
         return _run_under_wsl("llvm", program, exe_path)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ==========================================================================
+# Chunk E — the real-execution comparison + the attempt_real wiring
+# ==========================================================================
+
+def _compare_runs(x86_run: _ProgramRun,
+                  llvm_run: _ProgramRun) -> tuple[bool, tuple[str, ...]]:
+    """Compare two `_ProgramRun`s for observable-behaviour parity.
+
+    Returns `(passed, findings)`. `passed` is True only when BOTH
+    backends' executables ran to completion AND their exit code,
+    stdout and stderr are byte-identical. Any build / run failure on
+    either side, or any observable difference, gives `passed=False`
+    with `findings` describing it.
+
+    The comparison is EXACT (byte-identical), which is sound for the
+    LLVM backend's CURRENT covered op set: its PRINT / TRAP lowering
+    emits program output through a direct `write` syscall (libc
+    `write` is a thin wrapper), exactly as the x86_64 freestanding ELF
+    does — neither uses buffered stdio, so there is no flush-ordering
+    divergence to tolerate. (A future 206-R op that lowered output via
+    buffered stdio would need a flush-tolerant comparison here.) Exit
+    codes are comparable for the same reason: `_run_under_wsl` has
+    already pinned each captured code to the kernel-masked 0-255
+    range, so both sides carry `main`'s return in the same 8-bit
+    form."""
+    findings: list[str] = []
+    if not x86_run.ran:
+        findings.append(
+            "x86_64 baseline did not build/run: "
+            + "; ".join(x86_run.findings))
+    if not llvm_run.ran:
+        findings.append(
+            "LLVM backend's output did not build/run: "
+            + "; ".join(llvm_run.findings))
+    if findings:
+        # One or both never produced an observable result — there is
+        # nothing to compare, so this is not parity.
+        return False, tuple(findings)
+    # Both ran — compare observable behaviour exactly.
+    if x86_run.exit_code != llvm_run.exit_code:
+        findings.append(
+            f"exit code differs: x86_64 returned {x86_run.exit_code}, "
+            f"LLVM returned {llvm_run.exit_code}")
+    if x86_run.stdout != llvm_run.stdout:
+        # Include the byte lengths — two outputs that diverge only
+        # past the 160-char snippet would otherwise show identical
+        # snippets under a "stdout differs" finding.
+        findings.append(
+            f"stdout differs: x86_64 {len(x86_run.stdout)} bytes "
+            f"{x86_run.stdout[:160]!r}, LLVM {len(llvm_run.stdout)} "
+            f"bytes {llvm_run.stdout[:160]!r}")
+    if x86_run.stderr != llvm_run.stderr:
+        findings.append(
+            f"stderr differs: x86_64 {len(x86_run.stderr)} bytes "
+            f"{x86_run.stderr[:160]!r}, LLVM {len(llvm_run.stderr)} "
+            f"bytes {llvm_run.stderr[:160]!r}")
+    if findings:
+        return False, tuple(findings)
+    return True, ()
+
+
+def _attempt_real_parity(module: tir.Module, program: str,
+                         mock_result: ParityResult) -> ParityResult:
+    """Run both backends' compiled output and compare observable
+    behaviour, returning `mock_result` with its real-* fields filled.
+
+    Called by `check_parity` only for a structural-MATCH module when
+    `attempt_real=True`. When the toolchain to run the comparison is
+    absent (`RealExecSupport.can_run_real()` is False) the real result
+    is DEFERRED — `real_attempted=True, real_passed=None` carrying the
+    detection's own reason — never a hard failure, so CI on a tool-less
+    runner stays green (the `gpu_ci` real-HW dispatch discipline).
+    Otherwise both backends are built + run and `_compare_runs` decides
+    PASS / FAIL."""
+    support = detect_real_exec_support()
+    if not support.can_run_real():
+        # DEFERRED — no toolchain to run the real comparison. The
+        # `RealExecSupport.detail` records exactly what is missing
+        # (and is guaranteed non-empty), so the DEFERRED is never
+        # silent.
+        return dataclasses.replace(
+            mock_result, real_attempted=True, real_passed=None,
+            real_findings=support.detail)
+    # can_run_real() is True, so `support.wsl_clang` is a concrete
+    # clang path inside WSL (its `__post_init__` ties the two).
+    x86_run = _run_x86_program(module, program)
+    llvm_run = _run_llvm_program(module, program, support.wsl_clang)
+    passed, findings = _compare_runs(x86_run, llvm_run)
+    return dataclasses.replace(
+        mock_result, real_attempted=True, real_passed=passed,
+        real_findings=findings)

@@ -161,8 +161,8 @@ depend on a clean, unambiguous full-suite run.
 | 205 | Calls & ABI | ✓ | 3-clean ✓ | Phase D — CLOSED (direct + FFI calls) |
 | 206 | Runtime & intrinsics (intrinsic core) | ✓ | A-D 3-clean ✓ | Phase D — CLOSED (core; runtime-op residual → 206-R) |
 | 206-R | Runtime-op residual: arena, metaprog, trace, file I/O, print_int | — | — | deferred — additive chunks before the Stage 221 cutover |
-| 207 | x86_64-vs-LLVM parity gate | ~ | A-D 3-clean ✓ | Phase D — chunks A-D shipped (mock harness + corpus + gate + real-exec model/detection + program-run substrate); chunk E = real-exec comparison + wiring (closes 207) |
-| 208 | Phase D — end-of-phase 5-clean-gate | — | — | planned |
+| 207 | x86_64-vs-LLVM parity gate | ✓ | A-E 3-clean ✓ | Phase D — CLOSED (mock-path corpus gate + real-execution comparison) |
+| 208 | Phase D — end-of-phase 5-clean-gate | — | — | Phase D — next |
 | 210–216 | Phase E — MLIR migration | — | — | planned |
 | 220–222 | Phase F — unification & cutover | — | — | planned |
 
@@ -743,3 +743,25 @@ depend on a clean, unambiguous full-suite run.
   observable-behaviour parity) + the `attempt_real` wiring into
   `check_parity` that fills `ParityResult`'s real-* fields, which
   closes Stage 207.
+- 2026-05-20 — **Stage 207 chunk E shipped — Stage 207 CLOSED.**
+  Chunk E completes the x86_64-vs-LLVM parity gate with the
+  real-execution comparison + the `attempt_real` wiring.
+  `_compare_runs` compares two `_ProgramRun`s for observable-behaviour
+  parity (exit code / stdout / stderr — an EXACT byte comparison,
+  sound because both backends emit output through a direct `write`
+  syscall, no buffered stdio); `_attempt_real_parity` orchestrates
+  detect -> run-both -> compare and fills the `ParityResult` real-*
+  fields via `dataclasses.replace`; `check_parity` gained an
+  `attempt_real=False` keyword that, on a structural MATCH with the
+  toolchain present, runs the real comparison (PASS / FAIL) and is
+  DEFERRED when the toolchain is absent. Plumbed through
+  `check_parity_source` + `run_parity_corpus`. 88 tests
+  (`test_llvm_parity.py`), including a skipif-gated real end-to-end
+  test; `x86_64.py` untouched. Per-stage 3-clean audit: round 1
+  returned 0 HIGH / 0 must-fix-MEDIUM on all three surfaces — chunk E
+  CLOSED. **Stage 207 is CLOSED** — the parity gate stands: the
+  mock-path gate proves all 28 corpus programs structurally MATCH
+  across both backends, and the real-execution path (DEFERRED on this
+  tool-less dev machine, exercised on a WSL+clang runner) compares
+  observable behaviour. `V3_STAGES_DONE` bumped 7 -> 8. Next: Stage
+  208 — the end-of-Phase-D 5-clean-gate.

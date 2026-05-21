@@ -1,7 +1,8 @@
 """Tests for helixc.backend.llvm_parity — v3.0 Phase D, Stage 207
-chunks A-D: the x86_64-vs-LLVM mock structural-parity harness, the
+chunks A-E: the x86_64-vs-LLVM mock structural-parity harness, the
 curated source-program corpus + parity gate, the real-execution
-result model + toolchain detection, and the program-run substrate.
+result model + toolchain detection, the program-run substrate, and
+the real-execution comparison + `attempt_real` wiring.
 
 The harness compiles a `tir.Module` through BOTH backends and
 classifies the outcome (MATCH / UNCOVERED / MISMATCH / ERROR). It is
@@ -22,7 +23,10 @@ backends; (chunk C) `real_status()` derives the 4-state real outcome
 (NOT_RUN / DEFERRED / PASS / FAIL) and `detect_real_exec_support`
 reports whether this machine can run the real comparison; (chunk D)
 the `_ProgramRun` substrate builds and runs a backend's output under
-WSL, capturing observable behaviour and never raising on failure.
+WSL, capturing observable behaviour and never raising on failure;
+(chunk E) `_compare_runs` decides observable-behaviour parity and
+`check_parity(attempt_real=True)` fills the real-* fields (PASS / FAIL
+where the toolchain is present, DEFERRED where it is absent).
 """
 from __future__ import annotations
 
@@ -906,6 +910,167 @@ def test_run_under_wsl_completed_on_in_range_exit(monkeypatch):
     r = llvm_parity._run_under_wsl("x86_64", "p", "C:\\t\\x.bin")
     assert r.ran is True
     assert r.exit_code == 127
+
+
+# --------------------------------------------------------------------------
+# real-execution comparison + attempt_real wiring (chunk E)
+# --------------------------------------------------------------------------
+def _ok_support():
+    """A RealExecSupport whose `can_run_real()` is True."""
+    return llvm_parity.RealExecSupport(
+        wsl_available=True, wsl_clang="/usr/bin/clang",
+        detail=("WSL + clang available",))
+
+
+def test_compare_runs_pass_on_identical():
+    """Two completed runs with identical exit code / stdout / stderr
+    are observable-behaviour PASS, carrying no findings."""
+    a = _PR.completed("x86_64", 42, "out", "")
+    b = _PR.completed("llvm", 42, "out", "")
+    passed, findings = llvm_parity._compare_runs(a, b)
+    assert passed is True and findings == ()
+
+
+def test_compare_runs_fail_on_exit_code_diff():
+    """A differing exit code is an observable-behaviour FAIL."""
+    a = _PR.completed("x86_64", 42, "", "")
+    b = _PR.completed("llvm", 7, "", "")
+    passed, findings = llvm_parity._compare_runs(a, b)
+    assert passed is False
+    assert any("exit code differs" in f for f in findings)
+
+
+def test_compare_runs_fail_on_stdout_diff():
+    """Differing stdout is an observable-behaviour FAIL."""
+    a = _PR.completed("x86_64", 0, "hello", "")
+    b = _PR.completed("llvm", 0, "HELLO", "")
+    passed, findings = llvm_parity._compare_runs(a, b)
+    assert passed is False
+    assert any("stdout differs" in f for f in findings)
+
+
+def test_compare_runs_fail_when_llvm_did_not_run():
+    """If the LLVM backend's output failed to build/run, there is
+    nothing to compare — a FAIL naming the LLVM-side failure."""
+    a = _PR.completed("x86_64", 0, "", "")
+    b = _PR.failed("llvm", "clang rejected the IR")
+    passed, findings = llvm_parity._compare_runs(a, b)
+    assert passed is False
+    assert any("LLVM backend's output did not build/run" in f
+               for f in findings)
+
+
+def test_compare_runs_fail_when_x86_did_not_run():
+    """If the x86_64 baseline failed to build/run, parity cannot be
+    established — a FAIL naming the baseline failure."""
+    a = _PR.failed("x86_64", "ELF would not run")
+    b = _PR.completed("llvm", 0, "", "")
+    passed, findings = llvm_parity._compare_runs(a, b)
+    assert passed is False
+    assert any("x86_64 baseline did not build/run" in f
+               for f in findings)
+
+
+def test_check_parity_attempt_real_deferred_here():
+    """`attempt_real=True` on a MATCH program: with no `clang` inside
+    WSL on this dev machine, the real comparison is DEFERRED — the
+    structural verdict stays MATCH, `real_status()` is DEFERRED, and
+    it is not a parity defect."""
+    r = llvm_parity.check_parity(
+        _const_module(), "real_deferred", attempt_real=True)
+    assert r.verdict() is ParityVerdict.MATCH
+    assert r.real_status() is RealParityStatus.DEFERRED
+    assert not r.is_parity_defect()
+    assert r.real_findings  # the DEFERRED reason is recorded
+
+
+def test_check_parity_attempt_real_skipped_for_non_match():
+    """`attempt_real=True` runs the real comparison ONLY for a
+    structural MATCH — a non-MATCH program (here UNCOVERED) has no
+    pair of comparable executables, so real_status stays NOT_RUN."""
+    r = llvm_parity.check_parity(
+        _print_int_module(), "uncov", attempt_real=True)
+    assert r.verdict() is ParityVerdict.UNCOVERED
+    assert r.real_status() is RealParityStatus.NOT_RUN
+
+
+def test_check_parity_attempt_real_pass(monkeypatch):
+    """With the toolchain present and both backends producing
+    identical observable behaviour, `attempt_real=True` -> real PASS."""
+    monkeypatch.setattr(llvm_parity, "detect_real_exec_support",
+                        _ok_support)
+    monkeypatch.setattr(
+        llvm_parity, "_run_x86_program",
+        lambda m, p: _PR.completed("x86_64", 42, "", ""))
+    monkeypatch.setattr(
+        llvm_parity, "_run_llvm_program",
+        lambda m, p, c: _PR.completed("llvm", 42, "", ""))
+    r = llvm_parity.check_parity(
+        _const_module(), "real_pass", attempt_real=True)
+    assert r.verdict() is ParityVerdict.MATCH
+    assert r.real_status() is RealParityStatus.PASS
+
+
+def test_check_parity_attempt_real_fail(monkeypatch):
+    """With the toolchain present but the two backends producing
+    DIFFERENT observable behaviour, `attempt_real=True` -> real FAIL
+    with a diagnostic — a real parity defect the structural mock path
+    could not have caught."""
+    monkeypatch.setattr(llvm_parity, "detect_real_exec_support",
+                        _ok_support)
+    monkeypatch.setattr(
+        llvm_parity, "_run_x86_program",
+        lambda m, p: _PR.completed("x86_64", 42, "", ""))
+    monkeypatch.setattr(
+        llvm_parity, "_run_llvm_program",
+        lambda m, p, c: _PR.completed("llvm", 7, "", ""))
+    r = llvm_parity.check_parity(
+        _const_module(), "real_fail", attempt_real=True)
+    assert r.verdict() is ParityVerdict.MATCH  # structural MATCH ...
+    assert r.real_status() is RealParityStatus.FAIL  # ... real FAIL
+    assert any("exit code differs" in f for f in r.real_findings)
+
+
+def test_check_parity_source_attempt_real_deferred():
+    """`attempt_real` passes through `check_parity_source` — a MATCH
+    source program is DEFERRED here (no toolchain)."""
+    r = llvm_parity.check_parity_source(
+        "fn main() -> i32 { 42 }", "src_real", attempt_real=True)
+    assert r.verdict() is ParityVerdict.MATCH
+    assert r.real_status() is RealParityStatus.DEFERRED
+
+
+def test_run_parity_corpus_attempt_real(monkeypatch):
+    """`attempt_real` passes through `run_parity_corpus` to every
+    program. With detection forced to no-toolchain, every result is a
+    structural MATCH with a DEFERRED real comparison — no defects."""
+    monkeypatch.setattr(
+        llvm_parity, "detect_real_exec_support",
+        lambda: llvm_parity.RealExecSupport(
+            wsl_available=True, wsl_clang=None,
+            detail=("no clang inside WSL — DEFERRED",)))
+    results = llvm_parity.run_parity_corpus(attempt_real=True)
+    assert len(results) == len(llvm_parity.PARITY_CORPUS)
+    for r in results:
+        assert r.verdict() is ParityVerdict.MATCH
+        assert r.real_status() is RealParityStatus.DEFERRED
+        assert not r.is_parity_defect()
+
+
+@pytest.mark.skipif(
+    not llvm_parity.detect_real_exec_support().can_run_real(),
+    reason="real-execution parity needs WSL + clang inside it")
+def test_check_parity_real_execution_end_to_end():
+    """End-to-end: with the toolchain present (WSL + clang), a covered
+    program's observable behaviour MATCHES across both backends — a
+    real PASS. The LLVM-side mirror of `test_run_x86_program_real_
+    execution`; skipped on a machine without WSL + clang (this dev
+    machine has no clang in WSL, so it runs only on a tooled CI
+    runner)."""
+    r = llvm_parity.check_parity_source(
+        "fn main() -> i32 { 42 }", "real_e2e", attempt_real=True)
+    assert r.verdict() is ParityVerdict.MATCH
+    assert r.real_status() is RealParityStatus.PASS, r.real_findings
 
 
 def test_run_x86_program_failed_on_compile_error(monkeypatch):
