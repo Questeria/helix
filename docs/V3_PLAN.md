@@ -1223,3 +1223,34 @@ depend on a clean, unambiguous full-suite run.
   5-clean-gate), Phase F 220–222 (backend unification + cutover + the
   v3.0.0 release), and the 206-R residual LLVM-lowering ops. The
   autonomous build loop stops here, per the directive.
+
+- 2026-05-21 — **Stage 213 chunk A shipped — the MLIR backend-target
+  scaffold.** Stage 213 is now open. New
+  `helixc/ir/mlir/backends.py` defines the five MLIR backend targets
+  (`llvm_ir`, `ptx`, `rocm_hip`, `metal_msl`, `webgpu_wgsl`), maps
+  the existing GPU backend enum to the four GPU targets, records the
+  per-target required-dialect contract, and introduces
+  `lower_mlir_to_backend(mlir_text, target, support=...)`. This chunk
+  deliberately does **not** claim real lowering yet: every target's
+  pass pipeline is explicitly unwired, malformed MLIR fails before any
+  support probe, and mock-valid MLIR returns an honest `DEFERRED`
+  result with findings until Stage 214 supplies real target passes.
+  New `MLIRBackendResult` / `MLIRBackendStatus` make the illegal
+  result shapes unrepresentable at the boundary: no mutable findings,
+  no non-bool pass flags, no whitespace-only tool names, no non-string
+  or blank output text, and no promotion of `DEFERRED` validation into
+  a backend `PASSED`. New `helixc/tests/test_mlir_backends.py` pins
+  the target tables, no-top-level-`import mlir`, the fail-closed
+  malformed path, mock-path deferrals both with and without `mlir-opt`
+  present, and the result-type invariants. Verification: 24 backend
+  scaffold tests pass; fast MLIR slice passes (`180 passed, 4347
+  deselected`); GPU-neighbor slice passes (`63 passed, 3 skipped`).
+  3-clean audit loop: round 1 found a HIGH non-bool `lowering_passed`
+  false-pass hole plus a mutable-findings must-fix; round 2 found a
+  must-fix DEFERRED-validation-to-PASSED hole; round 3 found
+  whitespace-only tool and unvalidated failure `output_text`
+  must-fixes; round 4 CLEAN on all three axes (silent-failure,
+  type-design, general review) with 0 HIGH / 0 must-fix-MEDIUM.
+  `V3_STAGES_DONE` stays 12/19 because Stage 213 is opened but not
+  closed. Next: continue Stage 213 with the real lowering dispatch /
+  pass-pipeline runner shape, still mock-path-first and additive.

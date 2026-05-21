@@ -1,7 +1,8 @@
 # Helix v3.0 — Handoff
 
 **Last updated:** 2026-05-21 · **Repo:** `C:/Projects/Kovostov-Native` ·
-**Branch:** `main` (clean; all work pushed to `origin/main` @ `f352fd4`)
+**Branch:** `main` (verify live state with `git status --short --branch`
+and `git log -1 --oneline`)
 
 This is the orientation document for whoever continues the Helix v3.0
 compiler rewrite. Read it first, then `docs/V3_PLAN.md` (the full plan
@@ -26,11 +27,11 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
   - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212
-    CLOSED.**
+    CLOSED; Stage 213 is OPEN, chunk A shipped.**
   - **Phase F (Stages 220–222): not started.**
 - **`V3_STAGES_DONE = 12` of 19** (`scripts/helix_status.py`) —
   ~63 % of v3.0 stages, ~95 % overall toward v3.0.
-- The working tree is clean; everything is committed and pushed.
+- `V3_STAGES_DONE` stays 12 until Stage 213 closes.
 
 ## 3. Phase E — the MLIR migration (the current frontier)
 
@@ -57,6 +58,8 @@ Ratified strategy (`docs/V3_STAGE210_MLIR_DECISION.md`):
   `helixc/ir/mlir/{toolchain,mapping,helix_dialect,validate}.py`.
 - **Stage 212 — CLOSED** — the tile-IR → MLIR translator,
   `helixc/ir/mlir/emit.py`.
+- **Stage 213 — OPEN** — chunk A shipped the mock-path-first
+  backend-target scaffold, `helixc/ir/mlir/backends.py`.
 
 ### The translator (`emit.py`) — current capability
 
@@ -83,13 +86,35 @@ The other **12 op kinds fail closed by deliberate, documented design**
 - `TILE_INDEX_LOAD/STORE_HBM` — need a `memref` type bridge plus a
   kernel-parameter-name → SSA-value resolution.
 
+### The Stage 213 backend scaffold (`backends.py`)
+
+`helixc/ir/mlir/backends.py` is the first Stage 213 seam. It defines
+the five targets the MLIR path must eventually feed (`llvm_ir`, `ptx`,
+`rocm_hip`, `metal_msl`, `webgpu_wgsl`), maps the existing GPU backend
+enum to the four GPU targets, records each target's required MLIR
+dialects, and returns a frozen tri-state `MLIRBackendResult` from
+`lower_mlir_to_backend(...)`.
+
+Important: it is a scaffold, not a real lowering yet. Every target's
+pass pipeline is explicitly unwired. Malformed MLIR fails before any
+support probe; mock-valid MLIR returns `DEFERRED` with explicit
+findings until a real pipeline runner exists. The result type rejects
+silent illegal states (mutable findings, non-bool pass flags,
+whitespace tool names, blank/non-string output text, and promoting
+deferred validation into a pass).
+
+Current Stage 213 verification: 24 `test_mlir_backends.py` tests; the
+fast MLIR slice is 180 passing tests on this machine.
+
 ## 4. What's next (in order)
 
 1. **(Optional) finish Stage 212's deferred ops** — the 12 above.
    Stage 212 is "closed enough" per the plan, but a future run can add
    these emitters. The attribute-heavy ones (matmul / reduce / memref
    / index-hbm) need design work first.
-2. **Stage 213 — MLIR → backends.**
+2. **Stage 213 — MLIR → backends** (in progress). Next chunk: wire the
+   real-lowering dispatch / pass-pipeline runner shape without
+   claiming a pass on mock-only infrastructure.
 3. **Stage 214 — the progressive-lowering pass pipeline.**
 4. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).
@@ -170,5 +195,5 @@ When `v3.0.0` is tagged, v3.0 is done.
 | `scripts/helix_status.py` | Progress reporter; `V3_STAGES_DONE` lives here. |
 | `helixc/ir/tir.py` | Tensor IR (`OpKind`). |
 | `helixc/ir/tile_ir.py` | Tile IR (`TileOpKind`, 29 members). |
-| `helixc/ir/mlir/` | Phase-E MLIR substrate: `toolchain.py`, `mapping.py`, `helix_dialect.py`, `validate.py`, `emit.py`. |
+| `helixc/ir/mlir/` | Phase-E MLIR substrate: `toolchain.py`, `mapping.py`, `helix_dialect.py`, `validate.py`, `emit.py`, `backends.py`. |
 | `helixc/tests/test_mlir_*.py` | The MLIR-path tests. |
