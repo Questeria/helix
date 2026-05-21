@@ -588,6 +588,44 @@ def test_emit_scalar_binop_fails_closed_on_wrong_arity():
         emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
 
 
+# --- the scalar-arith emitters fail closed on a `bool` operand ---
+# `bool` renders to MLIR `i1` and would otherwise classify as an
+# integer, emitting a valid-but-meaningless `arith.*i : i1`. Booleans
+# are not an arithmetic domain — `_scalar_arith_type` rejects them.
+def test_emit_const_int_fails_closed_on_bool_result():
+    """`scalar.const_int` with a `bool` result type fails closed — a
+    boolean constant is a distinct `CONST_BOOL` op, never
+    `scalar.const_int`."""
+    c = tile_ir.TileValue(0, _S("bool"))
+    fn = _fn("f", [], _S("bool"), _const_int(c, 1), _ret(c))
+    with pytest.raises(MLIRTranslationError, match="not an arithmetic"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_scalar_binop_fails_closed_on_bool():
+    """A scalar `arith` binop on `bool` operands fails closed — bool
+    addition is meaningless (a front-end type error), never a valid
+    `arith.addi : i1`."""
+    a = tile_ir.TileValue(0, _S("bool"))
+    b = tile_ir.TileValue(1, _S("bool"))
+    r = tile_ir.TileValue(2, _S("bool"))
+    fn = _fn("f", [a, b], _S("bool"),
+             tile_ir.TileOp(_TK.SCALAR_ADD, operands=[a, b],
+                            results=[r]), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not an arithmetic"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
+def test_emit_neg_fails_closed_on_bool():
+    """`scalar.neg` of a `bool` fails closed — negating a boolean is
+    meaningless, never a valid `arith.subi %zero, %x : i1`."""
+    a = tile_ir.TileValue(0, _S("bool"))
+    r = tile_ir.TileValue(1, _S("bool"))
+    fn = _fn("f", [a], _S("bool"), _neg(a, r), _ret(r))
+    with pytest.raises(MLIRTranslationError, match="not an arithmetic"):
+        emit_mlir_module(tile_ir.TileModule(functions={"f": fn}))
+
+
 # --------------------------------------------------------------------------
 # the compare / select op emitters (chunk D)
 # --------------------------------------------------------------------------

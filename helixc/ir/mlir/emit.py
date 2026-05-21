@@ -385,15 +385,39 @@ def _single_result(op: tile_ir.TileOp, op_name: str) -> tile_ir.TileValue:
 
 
 def _scalar_arith_type(ty: tir.TIRType, op_name: str) -> tuple[str, bool]:
-    """`(mlir_type, is_integer)` for a scalar-arithmetic operand /
-    result type. Fails closed on a non-scalar type — the chunk-C
-    `arith` emitters handle scalar ops only. `is_integer` is True for
-    every MLIR integer type (`i1`..`i64`), False for the floats."""
+    """`(mlir_type, is_integer)` for a scalar-ARITHMETIC operand /
+    result type — the helper behind `scalar.const_int` / `const_float`
+    and `scalar.add` / `sub` / `mul` / `neg`.
+
+    Fails closed on:
+    - a non-scalar type — the chunk-C `arith` emitters handle scalar
+      ops only;
+    - `bool` — booleans are not an arithmetic domain. A boolean
+      constant is a distinct `CONST_BOOL` op (never `scalar.const_int`)
+      and bool arithmetic is a front-end type error, so a `bool`
+      reaching an `arith.{constant,add,sub,mul}` or negation emitter is
+      a malformed lowering. Without this guard `bool` would classify as
+      an integer (it renders to MLIR `i1`) and the emitter would
+      produce a valid-but-meaningless `arith.*i : i1` — the translator
+      fails closed instead.
+
+    `is_integer` is True for every MLIR signless integer type (`i8`..
+    `i64`), False for the floats. Comparison (`scalar.cmp`) and
+    `scalar.select` do NOT use this helper: `bool` is a legitimate
+    operand there (boolean equality; a select condition / arm), and
+    `_emit_cmp` / `_emit_select` handle it directly."""
     if not isinstance(ty, tir.TIRScalar):
         raise MLIRTranslationError(
             f"{op_name}: type is {type(ty).__name__}, not a scalar — "
             f"the chunk-C `arith` emitters handle scalar ops only; the "
             f"translator fails closed")
+    if ty.name == "bool":
+        raise MLIRTranslationError(
+            f"{op_name}: operand / result type is `bool` — booleans "
+            f"are not an arithmetic domain (a boolean constant is a "
+            f"`CONST_BOOL` op, and bool arithmetic is a type error); "
+            f"the translator fails closed rather than emit a "
+            f"meaningless `arith.*i : i1`")
     mlir = render_mlir_type(ty)        # fails closed on char / quantized
     return mlir, mlir.startswith("i")
 
