@@ -10,7 +10,8 @@ the mock checker — PASSED (reserved for the Stage-212 real validator).
 
 These tests pin: the `MLIRValidationVerdict` tri-state and its
 module-load guard; the `MLIRValidation` frozen result's `__post_init__`
-rejections (a FAILED / DEFERRED is never silent); the predicates;
+rejections (a FAILED / DEFERRED is never silent, a PASSED never
+carries a finding); the predicates;
 `mock_validate_mlir`'s defect detection (empty, no structure,
 unbalanced braces / parens) and its honest DEFERRED on clean text; that
 it NEVER returns a false PASSED; that string-literal / comment
@@ -82,9 +83,20 @@ def test_mlir_validation_rejects_blank_finding():
         MLIRValidation(MLIRValidationVerdict.FAILED, ("   ",))
 
 
-def test_mlir_validation_passed_may_be_empty():
-    """A PASSED result MAY carry no findings — a clean pass needs no
-    explanation (unlike FAILED / DEFERRED)."""
+def test_mlir_validation_rejects_passed_with_findings():
+    """A PASSED carrying any finding is incoherent — `findings`
+    describes a defect or a deferral reason, and a PASSED has neither.
+    The frozen result rejects it, settling the Stage-211 chunk-E
+    coherence carry-over: a PASSED can never carry a defect-shaped
+    finding because it carries no finding at all."""
+    with pytest.raises(ValueError, match="PASSED result must carry NO"):
+        MLIRValidation(MLIRValidationVerdict.PASSED, ("a defect note",))
+
+
+def test_mlir_validation_passed_has_no_findings():
+    """A PASSED result carries NO findings — a clean pass has nothing
+    to report (unlike FAILED / DEFERRED, which must explain why);
+    empty findings is the one valid PASSED shape."""
     ok = MLIRValidation(MLIRValidationVerdict.PASSED, ())
     assert ok.passed() and ok.findings == ()
 

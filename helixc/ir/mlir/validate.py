@@ -59,7 +59,7 @@ def _check_validation_verdicts() -> None:
     tri-state {PASSED, FAILED, DEFERRED} the Stage 210 decision's
     mock-path discipline (section 3) defines — no more, no less. A
     fourth verdict added without updating `MLIRValidation.__post_init__`
-    (which branches on FAILED / DEFERRED) and `mock_validate_mlir`
+    (which branches on each verdict) and `mock_validate_mlir`
     would silently widen the contract. Mirrors the module-load drift
     guards of `toolchain.py` / `mapping.py`."""
     names = {v.name for v in MLIRValidationVerdict}
@@ -81,8 +81,10 @@ class MLIRValidation:
     `toolchain.MLIRSupport`:
     - a FAILED or DEFERRED result MUST carry at least one finding — it
       is never silent about why (the mock-path rule);
-    - a PASSED result may carry no findings (a clean pass) or a
-      confirming note;
+    - a PASSED result MUST carry NO findings — a clean pass has
+      nothing to report; `findings` describes a defect or a deferral
+      reason, and a PASSED has neither, so a PASSED with findings is
+      an incoherent result and is rejected;
     - every finding carries text.
     """
     verdict: MLIRValidationVerdict
@@ -105,6 +107,13 @@ class MLIRValidation:
                 f"MLIRValidation: a {self.verdict.name} result must "
                 f"carry at least one finding explaining why — it must "
                 f"never be silent about a defect or a deferral")
+        if self.verdict is MLIRValidationVerdict.PASSED and self.findings:
+            raise ValueError(
+                f"MLIRValidation: a PASSED result must carry NO "
+                f"findings ({len(self.findings)} given) — a clean pass "
+                f"has nothing to report; `findings` describes a defect "
+                f"or a deferral reason, and a PASSED has neither, so a "
+                f"PASSED carrying a finding is an incoherent result")
 
     def passed(self) -> bool:
         """True iff a real validator confirmed the IR is valid."""
