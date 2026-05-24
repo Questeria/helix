@@ -209,6 +209,68 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    Pipeline tuples and validators stay `()` / `None` for now. The
    `_check_mlir_backend_tables` drift-guard gets one new clause
    enforcing the translator table is total over `MLIRBackendTarget`.
+
+   **Chunks A, B, C shipped 2026-05-24**. State of Stage 214:
+
+   - **Chunk A** — translator-step table scaffold
+     (`_MLIR_BACKEND_TRANSLATORS_AUTHORITY`, `backend_translator()`,
+     drift-guard clause) — `backends.py`. None-everywhere baseline so
+     subsequent chunks can wire one target at a time without breaking
+     the gate.
+   - **Chunk B** — `mlir-translate` toolchain plumbing
+     (`MLIRSupport.mlir_translate`, `can_use_mlir_translate()`,
+     probe extended) — `toolchain.py`. Independent third surface
+     alongside bindings + `mlir-opt`; `is_available()` deliberately
+     stays "bindings or mlir-opt".
+   - **Chunk C** — private `_run_mlir_translate_step(...)` helper
+     (`backends.py`). Same subprocess hygiene as the rest of the
+     runner family (argv-list, timeout, captured Timeout/OSError/
+     nonzero diagnostics, blank-output rejection). Returns
+     `(output_text, findings)`.
+
+   **Chunk-D scope** (next iteration): wire
+   `_run_mlir_opt_pipeline` to chain `_run_mlir_translate_step`
+   when the target's translator entry is populated. Concretely, in
+   `_run_mlir_opt_pipeline` after the `output_text` read (around
+   `backends.py:3924-3936`):
+
+   - look up `_MLIR_BACKEND_TRANSLATORS_AUTHORITY[target]`;
+   - if `None`: behavior stays as today (the existing
+     `_looks_like_mlir_pipeline_output` rejection still fires for
+     dialect-MLIR output, so this is unchanged for unwired targets);
+   - if populated: require `mlir_translate` path arg (passed through
+     from `support.mlir_translate`); invoke
+     `_run_mlir_translate_step(output_text, mlir_translate=...,
+     flag=translator[1])`; on failure return an `MLIRBackendResult`
+     with `lowering_passed=False` and the translate findings; on
+     success replace `output_text` with the translated artifact
+     before the `_looks_like_backend_output(target, ...)` check.
+   - `lower_mlir_to_backend` adds one new gate before invoking the
+     runner: if translator is populated AND
+     `support.mlir_translate is None`, return DEFERRED with
+     "translator declared but `mlir-translate` is not on PATH".
+   - `MLIRBackendResult.lowering_tool` becomes a tuple
+     `(mlir_opt_path, mlir_translate_path)` OR a separate field is
+     added — decide before implementing. Tuple is simpler but
+     changes the existing-result shape; new field is additive but
+     more code. Recommend separate field
+     (`lowering_translator_tool: Optional[str] = None`).
+   - The translator-tuple's `follow_up_args` field is reserved for
+     PTX / ROCm / Metal / WGSL chained tools (`llc`,
+     `spirv-cross`, `tint`). Chunk D handles only the two-step
+     mlir-opt → mlir-translate chain; chunk E adds the third-stage
+     dispatcher when a target needs it.
+   - Tests: pin no-translator path (unchanged), translator-without-
+     toolchain (DEFERRED with finding), translator-with-toolchain
+     (chain runs, translated artifact reaches the validator),
+     translator failure (findings propagate).
+
+   **Chunks E+ scope**: wire one target at a time. Suggested order
+   LLVM_IR → PTX → ROCM_HIP → METAL_MSL → WEBGPU_WGSL (LLVM first
+   because it needs only `mlir-translate --mlir-to-llvmir`; the others
+   need additional follow-up tools). Each chunk wires the pipeline,
+   the translator entry, AND the output validator together so the gate
+   transitions from DEFERRED to PASSED in a single coherent step.
 3. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).
 4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
