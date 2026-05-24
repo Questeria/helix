@@ -2293,6 +2293,222 @@ def _scf_for_bounds_type_finding(
     return None
 
 
+_VECTOR_MULTI_REDUCTION_KINDS = frozenset((
+    "add", "mul", "and", "or", "xor",
+    "maxf", "maximumf", "minf", "minimumf",
+    "maxnumf", "minnumf",
+    "maxsi", "maxui", "minsi", "minui",
+))
+
+
+def _vector_multi_reduction_kind_finding(op_text: str) -> str | None:
+    """Verify `vector.multi_reduction <kind>, ...` uses a known reduction
+    kind. A smoke-aware echo tool would accept `<bogus>` because the
+    kind appears only as a bare identifier inside angle brackets. The
+    angle-bracketed kind is REQUIRED — its absence is a hard fail."""
+    _name, name_end = _read_bare_op_name(op_text, 0)
+    cursor = _skip_spaces(op_text, name_end)
+    if cursor >= len(op_text) or op_text[cursor] != "<":
+        return "vector.multi_reduction is missing the required <kind>"
+    close = _matching_closer_index(op_text, cursor, "<", ">")
+    if close is None:
+        return "vector.multi_reduction has malformed kind delimiter"
+    kind = op_text[cursor + 1:close].strip()
+    if not kind:
+        return "vector.multi_reduction has empty reduction kind"
+    if kind in _VECTOR_MULTI_REDUCTION_KINDS:
+        return None
+    return (
+        f"vector.multi_reduction unsupported reduction kind: <{kind}>")
+
+
+def _vector_type_parts(type_text: str) -> tuple[tuple[int, ...], str] | None:
+    """Decompose a `vector<...>` type into `(dims, element_type)`. The
+    parser is conservative: it returns None for dynamic / scalable /
+    parametric element types (`vector<?xi32>`, `vector<[4]xi32>`,
+    `vector<4x!quant.uniform<...>>`) so the caller defers rather than
+    misclassifies."""
+    stripped = type_text.strip()
+    if not (stripped.startswith("vector<") and stripped.endswith(">")):
+        return None
+    inner = stripped[len("vector<"):-1]
+    if "<" in inner:
+        return None
+    tokens = inner.split("x")
+    if len(tokens) < 2:
+        return None
+    dims: list[int] = []
+    for token in tokens[:-1]:
+        dim = token.strip()
+        if not dim.isdigit():
+            return None
+        dims.append(int(dim))
+    element = tokens[-1].strip()
+    if not element:
+        return None
+    return tuple(dims), element
+
+
+def _vector_type_element_count(type_text: str) -> int | None:
+    """Compute the static element count of a `vector<...>` type, e.g.
+    `vector<4x3xi32>` -> 12. Returns None when the type is not fully
+    resolvable (delegating to `_vector_type_parts`)."""
+    parts = _vector_type_parts(type_text)
+    if parts is None:
+        return None
+    dims, _element = parts
+    count = 1
+    for dim in dims:
+        count *= dim
+    return count
+
+
+def _depth_zero_substring_index(
+        text: str, needle: str, start: int = 0) -> int:
+    """Find `needle` at bracket-depth zero in `text`. Returns -1 if not
+    found. Tracks `()`, `{}`, `[]`, `<>` (with the `->` / `<=` / `=>`
+    escape hatches `_depth_zero_colon_index` uses)."""
+    pairs = {"(": ")", "{": "}", "[": "]", "<": ">"}
+    closers = set(pairs.values())
+    stack: list[str] = []
+    end = len(text)
+    i = start
+    n = len(needle)
+    while i < end:
+        char = text[i]
+        if char == "-" and i + 1 < end and text[i + 1] == ">":
+            i += 2
+            continue
+        if char == "<" and i + 1 < end and text[i + 1] == "=":
+            i += 2
+            continue
+        if (char == ">" and
+                ((i > 0 and text[i - 1] in "-=")
+                 or (i + 1 < end and text[i + 1] == "="))):
+            i += 1
+            continue
+        if not stack and text.startswith(needle, i):
+            return i
+        if char in pairs:
+            stack.append(pairs[char])
+            i += 1
+            continue
+        if char in closers and stack and stack[-1] == char:
+            stack.pop()
+            i += 1
+            continue
+        i += 1
+    return -1
+
+
+def _strip_trailing_loc_or_attrs(text: str) -> str:
+    """Trim a trailing ` loc(...)` or ` {attr = ...}` suffix from a type
+    fragment. Returns the input unchanged if neither pattern applies."""
+    stripped = text.rstrip()
+    if stripped.endswith(")"):
+        loc_start = stripped.rfind("loc(")
+        if loc_start != -1:
+            opener = stripped.rfind("(", 0, loc_start + len("loc("))
+            if opener == loc_start + len("loc(") - 1:
+                pre = stripped[:loc_start].rstrip()
+                return pre
+    if stripped.endswith("}"):
+        opener = stripped.rfind("{")
+        if opener != -1:
+            return stripped[:opener].rstrip()
+    return text
+
+
+def _vector_shape_cast_finding(op_text: str) -> str | None:
+    """Verify `vector.shape_cast %src : vector<A> to vector<B>` has
+    matching total element counts AND matching element types. A
+    smoke-aware echo tool would accept `vector<4xi32> to vector<3xi32>`
+    (count drift) or `vector<4xi32> to vector<4xf32>` (element-type
+    drift) because both sides are well-formed types in isolation."""
+    type_index = _depth_zero_colon_index(op_text, 0)
+    if type_index is None:
+        return None
+    tail = op_text[type_index + 1:]
+    to_index = _depth_zero_substring_index(tail, " to ")
+    if to_index == -1:
+        return None
+    src_raw = tail[:to_index]
+    dst_raw = _strip_trailing_loc_or_attrs(tail[to_index + len(" to "):])
+    src_type = _normalized_mlir_fragment(src_raw)
+    dst_type = _normalized_mlir_fragment(dst_raw)
+    if not src_type or not dst_type:
+        return None
+    src_parts = _vector_type_parts(src_type)
+    dst_parts = _vector_type_parts(dst_type)
+    if src_parts is None or dst_parts is None:
+        return None
+    src_dims, src_element = src_parts
+    dst_dims, dst_element = dst_parts
+    if src_element != dst_element:
+        return (
+            f"vector.shape_cast element-type mismatch: "
+            f"{src_type} has element {src_element}, "
+            f"{dst_type} has element {dst_element}")
+    src_count = 1
+    for dim in src_dims:
+        src_count *= dim
+    dst_count = 1
+    for dim in dst_dims:
+        dst_count *= dim
+    if src_count != dst_count:
+        return (
+            f"vector.shape_cast element-count mismatch: "
+            f"{src_type} has {src_count}, {dst_type} has {dst_count}")
+    return None
+
+
+def _vector_transfer_read_index_finding(
+        op_text: str, ssa_types: dict[str, str | None]) -> str | None:
+    """Verify `vector.transfer_read %src[%i, %j], %pad : ...` index
+    operands are all `index`-typed when their types are resolvable. The
+    real `mlir-opt` rejects non-`index` indices; a smoke-aware echo
+    would not.
+
+    The bracket is located by walking past the op name + the first SSA
+    source operand, so we don't accidentally pick up a `[...]` token
+    inside the type tail (e.g. `strided<[1], offset: 0>`, `[in_bounds]`
+    attribute lists)."""
+    _name, name_end = _read_bare_op_name(op_text, 0)
+    cursor = _skip_spaces(op_text, name_end)
+    if cursor >= len(op_text) or op_text[cursor] != "%":
+        return None
+    while cursor < len(op_text) and not op_text[cursor].isspace() \
+            and op_text[cursor] != "[":
+        cursor += 1
+    cursor = _skip_spaces(op_text, cursor)
+    if cursor >= len(op_text) or op_text[cursor] != "[":
+        return None
+    bracket_start = cursor
+    bracket_end = _matching_closer_index(op_text, bracket_start, "[", "]")
+    if bracket_end is None:
+        return (
+            "malformed vector.transfer_read: unbalanced index bracket "
+            "— the translator fails closed")
+    indices_text = op_text[bracket_start + 1:bracket_end].strip()
+    if not indices_text:
+        return None
+    parts = _split_depth_zero_commas(indices_text)
+    if parts is None:
+        return None
+    for raw in parts:
+        idx = raw.strip()
+        if not idx.startswith("%"):
+            continue
+        actual_type = ssa_types.get(idx)
+        if actual_type is None:
+            continue
+        if _normalized_mlir_fragment(actual_type) != "index":
+            return (
+                f"vector.transfer_read index operand {idx} has type "
+                f"{actual_type}, expected index")
+    return None
+
+
 def _op_static_type_finding(
         op_text: str, op_name: str,
         ssa_types: dict[str, str | None]) -> str | None:
@@ -2302,6 +2518,12 @@ def _op_static_type_finding(
         return _memref_access_type_finding(op_text, op_name, ssa_types)
     if op_name == "scf.for":
         return _scf_for_bounds_type_finding(op_text, ssa_types)
+    if op_name == "vector.multi_reduction":
+        return _vector_multi_reduction_kind_finding(op_text)
+    if op_name == "vector.shape_cast":
+        return _vector_shape_cast_finding(op_text)
+    if op_name == "vector.transfer_read":
+        return _vector_transfer_read_index_finding(op_text, ssa_types)
     if op_name == "arith.constant":
         type_text = _op_declared_type_text(op_text)
         if type_text is None:
@@ -2829,8 +3051,6 @@ def _strict_static_func_terminator_findings(
 
 def _func_body_terminator_finding(
         structural: str, body_start: int, body_end: int) -> str | None:
-    if _GENERIC_OP_SENTINEL in structural[body_start + 1:body_end]:
-        return None
     i = body_start + 1
     block_started = False
     block_terminated = False
@@ -2839,10 +3059,11 @@ def _func_body_terminator_finding(
         if i >= body_end:
             break
         line_end = min(_line_end(structural, i), body_end)
-        if structural[i] == '"':
-            end = _generic_top_level_op_end(structural, i + 1)
+        if structural.startswith(_GENERIC_OP_SENTINEL, i):
+            end = _generic_top_level_op_end(
+                structural, i + len(_GENERIC_OP_SENTINEL))
             if end is None or end > body_end:
-                return None
+                return "has malformed generic operation in function body"
             if block_terminated:
                 return "has operation after block terminator"
             block_started = True
@@ -2862,6 +3083,16 @@ def _func_body_terminator_finding(
                 i = line_end
                 continue
             op_start = _skip_spaces(structural, eq_index + 1)
+        if structural.startswith(_GENERIC_OP_SENTINEL, op_start):
+            end = _generic_top_level_op_end(
+                structural, op_start + len(_GENERIC_OP_SENTINEL))
+            if end is None or end > body_end:
+                return "has malformed generic operation in function body"
+            if block_terminated:
+                return "has operation after block terminator"
+            block_started = True
+            i = end
+            continue
         op_name, name_end = _read_bare_op_name(structural, op_start)
         if not op_name:
             word, word_end = _read_bare_word(structural, op_start)
@@ -3648,8 +3879,15 @@ def _braced_content_looks_like_property_dict(text: str) -> bool:
     parts = _split_depth_zero_commas(text.strip())
     if parts is None or not parts:
         return False
-    return all(part.strip() and _property_assignment_is_plausible(part)
-               for part in parts)
+    for part in parts:
+        stripped = part.strip()
+        if not stripped:
+            return False
+        if stripped.startswith(("%", "^", _GENERIC_OP_SENTINEL)):
+            return False
+        if not _property_assignment_is_plausible(part):
+            return False
+    return True
 
 
 def _text_before_brace_can_have_property_dict(text: str) -> bool:

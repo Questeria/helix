@@ -235,6 +235,50 @@ def run_canaries() -> tuple[CanaryResult, ...]:
             "module { func.func @f() -> f32 { "
             "%c = arith.constant 1 : f32 func.return %c : f32 } }\n",
         ),
+        # Generic-op body bypass (HIGH-4): a custom func.func body with
+        # only a generic-form op and no custom terminator must FAIL.
+        _fake_validator_must_not_pass(
+            "generic-op-body-without-terminator",
+            'module { func.func @f() { "test.op"() : () -> () } }\n',
+        ),
+        _fake_validator_must_not_pass(
+            "generic-form-terminator-not-recognized",
+            'module { func.func @f() { "func.return"() : () -> () } }\n',
+        ),
+        # Remaining HIGH-3 vector sub-cases.
+        _fake_validator_must_not_pass(
+            "vector-multi-reduction-bogus-kind",
+            "module { func.func @f(%v: vector<4xi32>) -> vector<4xi32> { "
+            "%0 = vector.multi_reduction <bogus>, %v, %v [0] : "
+            "vector<4xi32> to vector<4xi32> func.return "
+            "%0 : vector<4xi32> } }\n",
+        ),
+        _fake_validator_must_not_pass(
+            "vector-shape-cast-element-count-mismatch",
+            "module { func.func @f(%v: vector<4xi32>) -> vector<3xi32> { "
+            "%0 = vector.shape_cast %v : vector<4xi32> to vector<3xi32> "
+            "func.return %0 : vector<3xi32> } }\n",
+        ),
+        _fake_validator_must_not_pass(
+            "vector-transfer-read-non-index-idx",
+            "module { func.func @f(%A: memref<4xf32>, %i: i32, %c0: f32) "
+            "{ %0 = vector.transfer_read %A[%i], %c0 : "
+            "memref<4xf32>, vector<4xf32> func.return } }\n",
+        ),
+        # Audit-fix follow-ups: shape_cast element-type drift, and
+        # missing kind delimiter on multi_reduction must fail closed.
+        _fake_validator_must_not_pass(
+            "vector-shape-cast-element-type-mismatch",
+            "module { func.func @f(%v: vector<4xi32>) -> vector<4xf32> "
+            "{ %0 = vector.shape_cast %v : vector<4xi32> to "
+            "vector<4xf32> func.return %0 : vector<4xf32> } }\n",
+        ),
+        _fake_validator_must_not_pass(
+            "vector-multi-reduction-missing-kind",
+            "module { func.func @f(%v: vector<4xi32>) -> i32 { "
+            "%0 = vector.multi_reduction %v [0] : vector<4xi32> to i32 "
+            "func.return %0 : i32 } }\n",
+        ),
         _generic_func_signature_must_be_preserved(),
         _gpu_backend_symbol_must_be_bound(),
         _backend_shape_must_reject(

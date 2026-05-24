@@ -464,3 +464,91 @@ Restart protocol from here:
    215's real-`mlir-opt` parity gate.
 4. If continuing, run the gate ladder + re-audit (three axes from scratch)
    before any further commit.
+
+## 2026-05-24 Checkpoint B — HIGH-4 + Remaining HIGH-3 Vector Sub-cases
+
+Status: progress checkpoint. ALL HIGH findings from the 2026-05-22 Third-Audit-
+Round stop are now closed. The MLIR slice and the strict canaries are green; the
+new code was 3-clean audited and the must-fix MEDIUM findings the audits raised
+were fixed in the same batch.
+
+Closed in this batch:
+
+- HIGH-4 (generic function bodies bypass) — the bypass at
+  `_func_body_terminator_finding` line 2832-2833 (`if _GENERIC_OP_SENTINEL in
+  body: return None`) was removed; the walker now treats generic ops as
+  non-terminator block ops via `structural.startswith(_GENERIC_OP_SENTINEL, i)`
+  at the top of the loop AND after the `%result = ...` parse. Generic-form
+  terminators (e.g. `"func.return"()`) are conservatively rejected too because
+  the structural pass cannot recover the original op name; Helix never emits
+  generic ops so this is fail-closed by design. Two new canaries:
+  `generic-op-body-without-terminator`,
+  `generic-form-terminator-not-recognized`.
+- Remaining HIGH-3 sub-cases — three new helpers:
+  - `_vector_multi_reduction_kind_finding` rejects unknown reduction kinds
+    AND the absence of the required `<kind>` delimiter.
+  - `_vector_shape_cast_finding` rejects element-COUNT mismatches AND
+    element-TYPE mismatches, depth-aware ` to ` search, with trailing
+    `loc(...)` / attribute suffixes stripped.
+  - `_vector_transfer_read_index_finding` rejects non-`index` index
+    operands, with the `[` located by walking past op name + source SSA so
+    it doesn't accidentally pick up `[...]` inside the type tail.
+  Three new canaries: `vector-multi-reduction-bogus-kind`,
+  `vector-shape-cast-element-count-mismatch`,
+  `vector-transfer-read-non-index-idx`, plus two more from the audit-fix
+  follow-up: `vector-shape-cast-element-type-mismatch`,
+  `vector-multi-reduction-missing-kind`.
+- Latent bug: `_braced_content_looks_like_property_dict` misclassified bodies
+  with SSA assignments (`%0 = ...`) as property dicts, which let
+  `_func_op_body_findings_for_diagnostic` skip the real func body diagnostics.
+  Tightened to reject parts starting with `%`, `^`, or the generic-op
+  sentinel.
+- 3-clean audit must-fix MEDIUM findings closed in the same batch:
+  - `_VECTOR_MULTI_REDUCTION_KINDS` was missing `minnumf` / `maxnumf` —
+    valid MLIR would have been FAILED as "unsupported kind". Added.
+  - `_vector_shape_cast_finding` used `tail.lower().find(" to ")` which is
+    not depth-aware (a literal `' to '` inside a nested `< ... >` would
+    poison the split). Replaced with a new `_depth_zero_substring_index`
+    helper.
+  - `_vector_shape_cast_finding` did not validate element-TYPE matching
+    (e.g. `vector<4xi32> to vector<4xf32>` would silently pass). Now
+    explicitly compared via `_vector_type_parts`.
+  - `_vector_shape_cast_finding` was poisoned by trailing `loc(...)` /
+    `{attr = ...}` suffixes. New helper `_strip_trailing_loc_or_attrs`.
+  - `_vector_multi_reduction_kind_finding` returned `None` (silent defer)
+    when the required `<kind>` was absent or the delimiter malformed. Now
+    fails closed.
+  - `_vector_transfer_read_index_finding` used `op_text.find("[")` which
+    could grab a `[` inside the type tail. Now walks past the op name +
+    source SSA operand before looking for the brackets.
+
+Verified gates this batch:
+
+- `python scripts/mlir_audit_canaries.py --strict` -> `26 passed / 0 failed`
+  (was 19 / 0; +2 generic-op-body, +3 vector sub-cases, +2 audit-fix
+  follow-ups)
+- `python -m pytest helixc/tests/test_mlir_validate.py helixc/tests/test_mlir_backends.py -q`
+  -> `275 passed`
+- `python -m pytest -k mlir -q` -> `411 passed, 4347 deselected`
+- `python -m compileall helixc/ir/mlir helixc/tests/test_mlir_validate.py
+  helixc/tests/test_mlir_backends.py scripts/mlir_audit_canaries.py` -> clean
+- `git diff --check -- ...` -> clean except LF-to-CRLF warnings
+
+Still open (carried forward):
+
+- MEDIUM findings from the 2026-05-22 third audit: generic `llvm.func`
+  symbol-binding path; LLVM typed-value validation for aggregate/vector
+  returns; HIP/MSL C-like preflight accepting impossible declarations. These
+  belong to backend shape families rather than the validator preflight; they
+  can be closed before Stage 213 closes, or routed through Stage 215.
+
+Restart protocol from here:
+
+1. `git status --short --branch` — confirm worktree state.
+2. `python scripts/mlir_audit_canaries.py --strict` — confirm `26 / 0`.
+3. Decide whether to close the remaining backend-shape MEDIUMs in the mock
+   path or to defer them to Stage 215 (real-`mlir-opt` parity gate). Either
+   is defensible: closing here keeps the mock validator strong; deferring
+   acknowledges that the real validator does this work for free.
+4. If continuing the mock path, run the gate ladder + re-audit before any
+   commit.

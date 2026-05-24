@@ -382,7 +382,7 @@ def test_mock_validate_mlir_accepts_valid_custom_top_level_forms():
         "  }\n"
         "}\n",
         'module { func.func @f() { "test.op"() : () -> '
-        'memref<4xf32, affine_map<(d0) -> (d0)>> } }',
+        'memref<4xf32, affine_map<(d0) -> (d0)>> func.return } }',
         "module { func.func @f(%c: i1) {\n"
         "scf.if %c {\n"
         "scf.yield\n"
@@ -515,12 +515,31 @@ def test_mock_validate_mlir_accepts_nested_generic_func_ops():
         'module { "func.func"() : () -> () }',
         'module { "func.func"() <{function_type = () -> (), '
         'sym_name = "func"}> ({}) : () -> () }',
-        'module { func.func @f() { "test.op"() : () -> () } }',
+        'module { func.func @f() { "test.op"() : () -> () '
+        'func.return } }',
         'module { func.func @f() -> i32 { %0 = "arith.constant"() '
         '{value = 1 : i32} : () -> i32 return %0 : i32 } }',
     ):
         r = mock_validate_mlir(text)
         assert r.deferred(), r.findings
+
+
+def test_mock_validate_mlir_rejects_generic_op_without_custom_terminator():
+    """HIGH-4 from audit: a custom func.func body containing only a
+    generic-form op (no custom block terminator) must FAIL, not pass.
+    Generic-form terminators (e.g. `"func.return"()`) are conservatively
+    rejected too because the structural pass cannot recover their op
+    name."""
+    for text in (
+        'module { func.func @f() { "test.op"() : () -> () } }',
+        'module { func.func @f() { "func.return"() : () -> () } }',
+        'module { func.func @f() -> i32 { %0 = "arith.constant"() '
+        '{value = 1 : i32} : () -> i32 } }',
+    ):
+        r = mock_validate_mlir(text)
+        assert r.failed(), r.findings
+        assert any(
+            "missing terminator" in f for f in r.findings), r.findings
 
 
 def test_mock_validate_mlir_accepts_custom_top_level_generic_ops():
@@ -1545,7 +1564,7 @@ def test_run_mlir_opt_validate_static_preflight_blocks_memref_store_echo(
         ),
         (
             "module { func.func @main() { %0 = return } }\n",
-            "malformed nested",
+            "return cannot bind SSA results",
         ),
         (
             "module { func.func @main() { "
@@ -1658,12 +1677,12 @@ def test_run_mlir_opt_validate_static_preflight_blocks_memref_store_echo(
         (
             "module { func.func @f() { "
             "%0 = arith.constant 1 : i32 } }\n",
-            "malformed nested",
+            "missing terminator",
         ),
         (
             "module { func.func @f() -> i32 { "
             "%0 = arith.constant 1 : i32 } }\n",
-            "malformed nested",
+            "missing terminator",
         ),
         (
             "module { func.func @f(%m: memref<4xbananas>) { return } }\n",
