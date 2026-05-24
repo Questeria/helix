@@ -49,8 +49,12 @@ Supported so far (Stages 200, 202-204):
     with no out-of-bounds read — see the TRAP-shared string globals).
   - string output (Stage 206): a `print_str` PRINT lowers to
     `write(1, msg, len)` of a module-scope string constant — the i64
-    byte count truncated to the op's i32 result. Other PRINT kinds
-    (print_int, write_file, ...) are later chunks.
+    byte count truncated to the op's i32 result.
+  - integer output (Stage 206-R): a `print_int` PRINT lowers to a
+    call to the internal helper `@__helix_print_int(i32)` (an i32 ->
+    ASCII decimal conversion plus `write(1, buf, len)`); the helper's
+    body is emitted exactly once per module via the `_HELPER_FUNCTIONS`
+    registry. Other PRINT kinds (write_file, ...) are later chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -66,7 +70,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Optional
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping, NamedTuple, Optional
 
 from ..ir import tir
 
@@ -275,6 +281,254 @@ def _require_same_signedness(a: tir.Value, b: tir.Value, *,
             f"dtypes agree")
 
 
+# --------------------------------------------------------------------------
+# 206-R helper functions: small internal runtime emitted as module-scope
+# `define internal` blocks. The first user is `PRINT.print_int` (an i32-
+# to-ASCII conversion + sys_write that is too unwieldy to inline at every
+# call site). Each spec carries (1) the full LLVM `define internal ...`
+# text emitted into the module exactly once and (2) the FFI declares the
+# helper transitively needs (so an op calling the helper does not have to
+# re-state them at the call site). All helper names live under the
+# reserved `__helix_` prefix so they cannot collide with user-defined
+# Helix function names; `emit_module` enforces that with an explicit
+# collision check.
+# --------------------------------------------------------------------------
+class _FFIDeclareSpec(NamedTuple):
+    """One module-scope `declare` line a helper function depends on.
+    Named (vs. a bare 4-tuple) so positional-order swaps are caught
+    at edit time rather than as wrong-symbol declares at emit time.
+
+    Fields:
+      target: the FFI symbol's bare name (e.g. "write") — the key into
+              `_FnEmitter.ffi_declares` for dedup.
+      callee: the LLVM-globalized name (e.g. "@write") — appears verbatim
+              in the emitted `declare` line.
+      ret_ty: the LLVM return-type string (e.g. "i64").
+      arg_tys: the LLVM argument-type strings (e.g. ("i32", "ptr", "i64")).
+    """
+    target: str
+    callee: str
+    ret_ty: str
+    arg_tys: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _HelperFunctionSpec:
+    """One internal helper function. `definition` is the full
+    `define internal ...` LLVM text (multi-line); `ffi_declares` is
+    a tuple of `_FFIDeclareSpec` entries the helper's body calls
+    (these go through the same `_register_ffi_declare` plumbing so a
+    helper-needed extern dedups against an FFI_CALL-needed extern
+    instead of double-declaring).
+
+    Frozen + slots + final (subclass-guarded) — matches the house
+    pattern for cross-cutting backend result types (see `Backend` in
+    `helixc/backend/backend_registry.py` and `ParityResult` in
+    `helixc/ir/mlir/parity.py`). `__post_init__` raises `ValueError`
+    on invariant violation (same contract as the rest of the family).
+    """
+    definition: str
+    ffi_declares: tuple[_FFIDeclareSpec, ...]
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        raise TypeError(
+            "_HelperFunctionSpec is final; subclassing could bypass "
+            "the invariants")
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.definition, str) or not self.definition.strip():
+            raise ValueError(
+                f"_HelperFunctionSpec: definition must be a non-empty "
+                f"string (got {type(self.definition).__name__})")
+        # Tightened from a substring check to a per-line check: at
+        # least one stripped line must START with `define ` so a
+        # `define` mention in a `;`-comment cannot satisfy the guard.
+        if not any(ln.lstrip().startswith("define ")
+                   for ln in self.definition.splitlines()):
+            raise ValueError(
+                f"_HelperFunctionSpec: definition must contain a "
+                f"line starting with `define ` "
+                f"(got {self.definition[:60]!r}...)")
+        if not isinstance(self.ffi_declares, tuple):
+            raise ValueError(
+                f"_HelperFunctionSpec: ffi_declares must be a tuple "
+                f"(got {type(self.ffi_declares).__name__})")
+        for entry in self.ffi_declares:
+            if not isinstance(entry, _FFIDeclareSpec):
+                raise ValueError(
+                    f"_HelperFunctionSpec: ffi_declares entry must be "
+                    f"a _FFIDeclareSpec, got {type(entry).__name__} "
+                    f"({entry!r})")
+            if (not isinstance(entry.target, str)
+                    or not isinstance(entry.callee, str)
+                    or not isinstance(entry.ret_ty, str)
+                    or not isinstance(entry.arg_tys, tuple)
+                    or not all(isinstance(x, str)
+                               for x in entry.arg_tys)):
+                raise ValueError(
+                    f"_HelperFunctionSpec: ffi_declares entry has "
+                    f"wrong field types (got {entry!r})")
+
+
+# `__helix_print_int(i32) -> i32`: convert an i32 to a base-10 ASCII
+# string and write it to stdout via `write(1, buf, len)`; return the
+# byte count (the i64 syscall return truncated to i32, matching the
+# print_str PRINT contract).
+#
+# Mirrors `x86_64.py::print_int` (line ~4315) — the SAME absolute-value
+# strategy (compute `0 - v` as i32, treat the result as unsigned for the
+# digit loop). This means `INT_MIN` rolls over to itself when negated,
+# is then interpreted as the unsigned value 2147483648 by `udiv`/`urem`,
+# producing the digits "2147483648"; the `is_neg` flag is true for
+# `INT_MIN` so a '-' is prepended, yielding "-2147483648" — the correct
+# decimal text for `INT_MIN` and bit-for-bit parity with x86_64.py.
+#
+# The body is five basic blocks (entry / loop / after_loop /
+# prepend_sign / do_write); the loop's two phi nodes carry the digit
+# pointer (walks down from `buf+16`) and the running value (starts at
+# `abs`, becomes `quot` on each iteration). It is a do-while loop so
+# the input `0` still writes one '0' digit, matching x86_64.py's
+# first-iteration-always-runs structure. The stack buffer is 16 bytes
+# — large enough for an `i32`'s ten decimal digits plus a sign byte,
+# with three bytes of headroom. `internal` linkage prevents external
+# collisions; the `__helix_` prefix prevents in-module collisions
+# (enforced by `emit_module`).
+_HELIX_PRINT_INT_HELPER = """\
+define internal i32 @__helix_print_int(i32 %v) {
+entry:
+  %buf = alloca [16 x i8], align 1
+  %end_ptr = getelementptr inbounds [16 x i8], ptr %buf, i64 0, i64 16
+  %is_neg = icmp slt i32 %v, 0
+  %neg_v = sub i32 0, %v
+  %abs = select i1 %is_neg, i32 %neg_v, i32 %v
+  br label %loop
+
+loop:
+  %ptr_cur = phi ptr [ %end_ptr, %entry ], [ %ptr_next, %loop ]
+  %val_cur = phi i32 [ %abs, %entry ], [ %quot, %loop ]
+  %ptr_next = getelementptr inbounds i8, ptr %ptr_cur, i64 -1
+  %quot = udiv i32 %val_cur, 10
+  %rem = urem i32 %val_cur, 10
+  %rem8 = trunc i32 %rem to i8
+  %digit = add i8 %rem8, 48
+  store i8 %digit, ptr %ptr_next, align 1
+  %not_done = icmp ne i32 %quot, 0
+  br i1 %not_done, label %loop, label %after_loop
+
+after_loop:
+  br i1 %is_neg, label %prepend_sign, label %do_write
+
+prepend_sign:
+  %sign_ptr = getelementptr inbounds i8, ptr %ptr_next, i64 -1
+  store i8 45, ptr %sign_ptr, align 1
+  br label %do_write
+
+do_write:
+  %start_ptr = phi ptr [ %ptr_next, %after_loop ], [ %sign_ptr, %prepend_sign ]
+  %end_i64 = ptrtoint ptr %end_ptr to i64
+  %start_i64 = ptrtoint ptr %start_ptr to i64
+  %len = sub i64 %end_i64, %start_i64
+  %nwritten = call i64 @write(i32 1, ptr %start_ptr, i64 %len)
+  %result = trunc i64 %nwritten to i32
+  ret i32 %result
+}"""
+
+
+# Private authority dict — mutated only at module init. The public
+# `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
+# outside the module), mirroring the MLIR-side authority pattern at
+# `helixc/ir/mlir/backends.py`. Tests that need to mutate the registry
+# (drift-guard probes, etc.) must do so through the private name and
+# restore on teardown.
+_HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
+    "__helix_print_int": _HelperFunctionSpec(
+        definition=_HELIX_PRINT_INT_HELPER,
+        ffi_declares=(
+            _FFIDeclareSpec(
+                target="write",
+                callee="@write",
+                ret_ty="i64",
+                arg_tys=("i32", "ptr", "i64"),
+            ),
+        ),
+    ),
+}
+
+_HELPER_FUNCTIONS: Mapping[str, _HelperFunctionSpec] = MappingProxyType(
+    _HELPER_FUNCTIONS_AUTHORITY)
+
+
+def _check_helper_function_table() -> None:
+    """Drift guard: each helper's definition text must contain a
+    `define internal ...` line declaring the same name as its
+    registry key, must contain a `ret ` instruction (so a degenerate
+    no-terminator helper is rejected at module load), and every
+    callee mentioned in its `ffi_declares` must appear in a `call`
+    line whose return type matches the declared `ret_ty`.
+
+    Catches:
+      - typo'd helper name (`__helix_print_int` key vs.
+        `@__helix_printint` define) — the call site would link to a
+        nonexistent symbol;
+      - helper text with no terminator — `mock_validate_ll` would
+        catch this at first use, but the registry guard catches it at
+        module load before any test runs;
+      - helper text drift away from its declared FFI signature
+        (e.g. body says `call i32 @write(...)` but declare says
+        `i64 @write(...)`) — produces declare/use signature mismatch
+        that `mock_validate_ll` does not detect.
+    Fails loudly at module load.
+    """
+    for name, spec in _HELPER_FUNCTIONS_AUTHORITY.items():
+        if not name.startswith("__helix_"):
+            raise AssertionError(
+                f"helixc.backend.llvm_ir: helper {name!r} is missing "
+                f"the reserved `__helix_` prefix — required so user "
+                f"function names cannot collide with the helper")
+        # Tightened from substring to per-line: a `define internal` line
+        # mentioning `@<name>(` somewhere in the helper text is required
+        # — a `@<name>(` inside a `; comment` no longer satisfies the
+        # guard.
+        signature_marker = f"@{name}("
+        define_lines = [
+            ln for ln in spec.definition.splitlines()
+            if ln.lstrip().startswith("define internal ")
+            and signature_marker in ln
+        ]
+        if not define_lines:
+            raise AssertionError(
+                f"helixc.backend.llvm_ir: helper {name!r} registry "
+                f"key does not match a `define internal ...` line in "
+                f"its definition text (expected a line starting with "
+                f"`define internal ` and containing "
+                f"{signature_marker!r})")
+        if not any(ln.lstrip().startswith("ret ")
+                   for ln in spec.definition.splitlines()):
+            raise AssertionError(
+                f"helixc.backend.llvm_ir: helper {name!r} definition "
+                f"contains no `ret` instruction — a function body "
+                f"with no return is malformed LLVM IR")
+        # Cross-check: every FFI callee declared as a dependency must
+        # appear in at least one `call <ret_ty> <callee>(...)` line in
+        # the helper body. A helper that registers `write` as a
+        # declare but never calls it (or calls a different callee)
+        # has drifted between its FFI registration and its body — the
+        # emit-time path would silently emit an unused declare.
+        for entry in spec.ffi_declares:
+            call_pattern = f"call {entry.ret_ty} {entry.callee}("
+            if not any(call_pattern in ln
+                       for ln in spec.definition.splitlines()):
+                raise AssertionError(
+                    f"helixc.backend.llvm_ir: helper {name!r} "
+                    f"declares FFI dependency on {entry.callee} "
+                    f"(ret_ty={entry.ret_ty!r}) but its body does "
+                    f"not contain a matching `call` line — registry "
+                    f"and body have drifted")
+
+
+_check_helper_function_table()
+
+
 class _FnEmitter:
     """Emits the LLVM IR for one `tir.FnIR`.
 
@@ -320,6 +574,12 @@ class _FnEmitter:
         # line, filled as TRAP panic messages are emitted; collected +
         # deduped by `emit_module`.
         self.string_globals: dict[str, str] = {}
+        # internal helper-function names this function depends on (e.g.
+        # `__helix_print_int` for a print_int PRINT). `emit_module`
+        # collects the union across all emitters and emits each helper's
+        # `define internal ...` text exactly once. See `_HELPER_FUNCTIONS`
+        # for the registry.
+        self.helper_functions: set[str] = set()
 
     @staticmethod
     def _block_label(block_id: int) -> str:
@@ -737,6 +997,36 @@ class _FnEmitter:
                 f"called with two different signatures — {existing!r} "
                 f"vs {decl!r}")
         self.ffi_declares[target] = decl
+
+    def _register_helper_function(self, name: str) -> None:
+        """Record that this function calls the internal helper `name`.
+
+        Looks the helper up in `_HELPER_FUNCTIONS` and records each of
+        its FFI declares through `_register_ffi_declare` (so a helper's
+        extern dedups against an FFI_CALL extern that names the same
+        symbol — there is only one `declare` per symbol in the emitted
+        module). The helper's `define internal ...` text itself is
+        emitted exactly once by `emit_module` across the union of
+        per-function helper sets.
+
+        Raises `LLVMEmitError` (not `KeyError`) when `name` is not
+        registered — keeps the emit-time fault surface consistent with
+        every other "this op needs X but X is missing" path in the
+        backend."""
+        spec = _HELPER_FUNCTIONS.get(name)
+        if spec is None:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: internal helper {name!r} "
+                f"is not registered (known helpers: "
+                f"{sorted(_HELPER_FUNCTIONS)})")
+        # Transactional: register the FFI declares FIRST (so a
+        # signature-clash failure aborts the registration cleanly),
+        # only mark the helper as needed once all declares succeeded.
+        for entry in spec.ffi_declares:
+            self._register_ffi_declare(
+                entry.target, entry.callee, entry.ret_ty,
+                list(entry.arg_tys))
+        self.helper_functions.add(name)
 
     def _register_string(self, data: bytes) -> tuple[str, int]:
         """Register a read-only string constant — a TRAP panic
@@ -1267,27 +1557,17 @@ class _FnEmitter:
                 f"%v{rid} = select i1 {t0}, i32 {t4}, i32 0")
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
-            if print_kind != "print_str":
+            if print_kind not in ("print_str", "print_int"):
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT _kind "
                     f"{print_kind!r} is not yet emitted by the LLVM "
-                    f"backend (only 'print_str' so far — the other "
-                    f"kinds, e.g. print_int / write_file, are later "
+                    f"backend (supported: 'print_str', 'print_int'; "
+                    f"the other kinds, e.g. write_file, are later "
                     f"chunks)")
-            if op.operands:
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: a print_str PRINT "
-                    f"takes no operands, got {len(op.operands)}")
             if len(op.results) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT must have "
                     f"exactly one result, got {len(op.results)}")
-            text = op.attrs.get("text", "")
-            if not isinstance(text, str):
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: a print_str PRINT "
-                    f"needs a string 'text' attr (got "
-                    f"{type(text).__name__})")
             result = op.results[0]
             res_ty = _llvm_int_type(
                 result.ty,
@@ -1297,6 +1577,42 @@ class _FnEmitter:
                     f"function {self.fn.name!r}: PRINT result has LLVM "
                     f"type {res_ty}, but a PRINT yields an i32 (the "
                     f"byte count)")
+            if print_kind == "print_int":
+                # `print_int` takes ONE i32 operand (the value to print)
+                # and emits a call to the `__helix_print_int` internal
+                # helper — the digit-conversion loop is too unwieldy to
+                # inline at every print_int call site. The helper does
+                # the `write(1, buf, len)` syscall itself; this op just
+                # forwards its i32 result (the byte count).
+                if len(op.operands) != 1:
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: a print_int PRINT "
+                        f"takes one operand (the i32 value), got "
+                        f"{len(op.operands)}")
+                value = op.operands[0]
+                value_ty = _llvm_int_type(
+                    value.ty,
+                    ctx=f"function {self.fn.name!r} print_int operand")
+                if value_ty != "i32":
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: print_int operand "
+                        f"has LLVM type {value_ty}, but the helper "
+                        f"`__helix_print_int` takes an i32")
+                self._register_helper_function("__helix_print_int")
+                return (f"%v{result.id} = call i32 "
+                        f"@__helix_print_int(i32 {self._ref(value)})")
+            # print_str: a string attr (no operands) + `write(1, msg,
+            # len)` of a module-scope constant.
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: a print_str PRINT "
+                    f"takes no operands, got {len(op.operands)}")
+            text = op.attrs.get("text", "")
+            if not isinstance(text, str):
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: a print_str PRINT "
+                    f"needs a string 'text' attr (got "
+                    f"{type(text).__name__})")
             str_name, str_len = self._register_string(
                 text.encode("utf-8"))
             self._register_ffi_declare(
@@ -1316,8 +1632,8 @@ class _FnEmitter:
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
-            f"TRAP; STR_PTR; STR_BYTE; print_str PRINT; RETURN; BR; "
-            f"COND_BR — floats and structs are later stages)"
+            f"TRAP; STR_PTR; STR_BYTE; print_str / print_int PRINT; "
+            f"RETURN; BR; COND_BR — floats and structs are later stages)"
         )
 
 
@@ -1377,6 +1693,22 @@ def emit_module(module: tir.Module) -> str:
     # extern, not a `declare`/`define` clash.
     defined = {name for name, fn in module.functions.items()
                if not fn.attrs.get("is_extern")}
+    # Collect the union of internal helper functions every emitter
+    # depends on; one helper used by N functions still emits exactly
+    # one `define internal ...` block. A helper name reserves the
+    # `__helix_` prefix; collision with a user-defined function name is
+    # malformed and fails closed below.
+    helpers_used: set[str] = set()
+    for emitter in emitters:
+        helpers_used |= emitter.helper_functions
+    helper_collision = helpers_used & defined
+    if helper_collision:
+        raise LLVMEmitError(
+            f"module: user-defined function name(s) "
+            f"{sorted(helper_collision)} collide with reserved "
+            f"`__helix_` internal helper name(s); rename the user "
+            f"function (the `__helix_` prefix is reserved for the "
+            f"LLVM backend's internal runtime helpers)")
     declares: dict[str, str] = {}
     strings: dict[str, str] = {}
     for emitter in emitters:
@@ -1397,6 +1729,21 @@ def emit_module(module: tir.Module) -> str:
         # to the same global name from every function, so a plain
         # `update` deduplicates them.
         strings.update(emitter.string_globals)
+    # Second helper-collision gate: a user's `is_extern` declaration
+    # (e.g. an `is_extern` Helix function named `__helix_print_int` and
+    # an FFI_CALL targeting it) leaves the symbol out of `defined` but
+    # IN `declares`. Emitting BOTH the user's `declare` and the
+    # helper's `define internal` would yield malformed IR (`llvm-as`:
+    # "redefinition of @symbol") which `mock_validate_ll` does NOT
+    # detect. Fail closed at module assembly.
+    helper_ffi_collision = helpers_used & declares.keys()
+    if helper_ffi_collision:
+        raise LLVMEmitError(
+            f"module: extern FFI declare(s) {sorted(helper_ffi_collision)} "
+            f"collide with reserved `__helix_` internal helper name(s); "
+            f"a `declare` cannot share a name with the helper's "
+            f"`define internal` (the `__helix_` prefix is reserved for "
+            f"the LLVM backend's internal runtime helpers)")
     lines: list[str] = [
         "; helixc LLVM IR backend — v3.0 Phase D",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
@@ -1408,6 +1755,13 @@ def emit_module(module: tir.Module) -> str:
         lines.append("")
     for body in bodies:
         lines.append(body)
+        lines.append("")
+    # Emit internal helper functions in deterministic (sorted-by-name)
+    # order so the output is byte-stable across runs — emitter set
+    # iteration order is not. Each helper's text already terminates
+    # with `}`; add a trailing blank line for readability.
+    for name in sorted(helpers_used):
+        lines.append(_HELPER_FUNCTIONS[name].definition)
         lines.append("")
     return "\n".join(lines)
 

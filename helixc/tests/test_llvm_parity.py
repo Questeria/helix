@@ -85,20 +85,29 @@ def _two_function_module() -> tir.Module:
 
 
 def _print_int_module() -> tir.Module:
-    """`main` with a print_int PRINT — a Stage 206-R residual op the
+    """`main` with a write_file PRINT — a Stage 206-R residual op the
     LLVM backend does not yet lower (x86_64 does). The canonical
     UNCOVERED case.
 
-    NOTE: this depends on `print_int` remaining outside the LLVM
-    backend's covered subset. If a future 206-R chunk lowers
-    `print_int`, repoint this helper at a still-residual op (an ARENA
-    op, a TRACE op, ...) so the UNCOVERED tests stay meaningful."""
+    HISTORY: this helper previously emitted a `print_int` PRINT, but
+    the 2026-05-24 206-R chunk lowered `print_int` (via the internal
+    `@__helix_print_int` helper) — so the test was repointed at
+    `write_file`, the next residual op on the 206-R list. The
+    function name stays `_print_int_module` to avoid renaming every
+    call site (the name names a ROLE — "the residual-op fixture" —
+    not the specific op).
+
+    NOTE: if a future 206-R chunk lowers `write_file`, repoint this
+    helper at the next still-residual op (read_file_to_arena, a
+    TRACE op, an ARENA op, ...) so the UNCOVERED tests stay
+    meaningful."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     b.begin_function("main", [], _i32())
-    n = b.const_int(7)
-    r = b.emit(tir.OpKind.PRINT, n, result_ty=_i32(),
-               attrs={"_kind": "print_int"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file",
+                      "path": "/tmp/parity_test",
+                      "content": "uncov"})
     b.ret(r)
     b.end_function()
     return mod
@@ -338,16 +347,20 @@ def test_check_parity_match_multi_function():
 
 
 def test_check_parity_uncovered_print_int():
-    """A print_int PRINT (a Stage 206-R residual op) -> UNCOVERED: the
-    x86_64 backend compiles it, the LLVM backend fails closed loudly.
-    NOT a parity defect — the gate accepts it."""
+    """A write_file PRINT (a Stage 206-R residual op) -> UNCOVERED:
+    the x86_64 backend compiles it, the LLVM backend fails closed
+    loudly. NOT a parity defect — the gate accepts it.
+
+    HISTORY: the canonical UNCOVERED case was print_int until the
+    2026-05-24 chunk lowered it; the fixture (_print_int_module)
+    was repointed at write_file and the diagnostic check follows."""
     r = llvm_parity.check_parity(_print_int_module(), "print_int")
     assert r.verdict() is ParityVerdict.UNCOVERED
     assert r.x86_compiled
     assert not r.llvm_emitted and r.llvm_failed_closed
     assert not r.is_parity_defect()
     # the diagnostic names the uncovered op so the residual is visible
-    assert any("print_int" in d for d in r.detail), r.detail
+    assert any("write_file" in d for d in r.detail), r.detail
 
 
 def test_check_parity_error_when_no_main():

@@ -2477,10 +2477,14 @@ def test_stage206_print_emit_is_deterministic():
     assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
 
 
-def test_stage206_rejects_print_int_kind():
-    """A print_int PRINT is not yet emitted by the LLVM backend —
-    fail closed (it needs an int-to-ASCII conversion, a later
-    chunk)."""
+# ==========================================================================
+# Stage 206-R chunk — print_int PRINT lowers via the internal
+# `@__helix_print_int(i32) -> i32` helper (digit-loop + write syscall).
+# ==========================================================================
+def test_stage206r_emit_print_int_call():
+    """A print_int PRINT lowers to `call i32 @__helix_print_int(i32 %v)`
+    — the heavy lifting (digit conversion + write syscall) lives in the
+    helper, not at the call site."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     fn = b.begin_function("f", [("n", _i32())], _i32())
@@ -2488,7 +2492,374 @@ def test_stage206_rejects_print_int_kind():
                attrs={"_kind": "print_int"})
     b.ret(r)
     b.end_function()
-    with pytest.raises(llvm_ir.LLVMEmitError, match="print_int"):
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_print_int(i32 %v"
+            in ll), ll
+    # The helper definition must be emitted exactly once.
+    assert ll.count("define internal i32 @__helix_print_int(") == 1, ll
+    # `write` declare comes through the helper's transitive FFI
+    # registration (so a separate print_str in the same module
+    # dedups to the same declare — see the test below).
+    assert "declare i64 @write(i32, ptr, i64)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_print_int_helper_emitted_once_per_module():
+    """Two print_int PRINTs share ONE helper definition (the helper is
+    deduplicated across the per-function helper sets in
+    `emit_module`)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn1 = b.begin_function("a", [("n", _i32())], _i32())
+    r1 = b.emit(tir.OpKind.PRINT, fn1.params[0], result_ty=_i32(),
+                attrs={"_kind": "print_int"})
+    b.ret(r1)
+    b.end_function()
+    fn2 = b.begin_function("c", [("m", _i32())], _i32())
+    r2 = b.emit(tir.OpKind.PRINT, fn2.params[0], result_ty=_i32(),
+                attrs={"_kind": "print_int"})
+    b.ret(r2)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("define internal i32 @__helix_print_int(") == 1, ll
+    # Two call sites, one declare.
+    assert ll.count("call i32 @__helix_print_int(") == 2, ll
+    assert ll.count("declare i64 @write(") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_print_int_and_print_str_dedup_write_declare():
+    """A print_int (via the helper) and a print_str (which calls
+    @write directly) share ONE `declare i64 @write(...)` — the helper's
+    transitive FFI registration goes through the same
+    `_register_ffi_declare` plumbing the direct call uses."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(), attrs={"text": "x"})
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("declare i64 @write(i32, ptr, i64)") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_print_int_result_feeds_op():
+    """A print_int PRINT's result (the i32 byte count) is a normal SSA
+    value — it can feed a later op."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    n = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    s = b.add(n, b.const_int(1))
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{s.id} = add i32 %v{n.id}, 1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_print_int_is_deterministic():
+    """Two emits of the same print_int module are byte-identical
+    (helper-set is iterated in sorted order, so the per-module helper
+    block is stable)."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        fn = b.begin_function("f", [("n", _i32())], _i32())
+        r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+                   attrs={"_kind": "print_int"})
+        b.ret(r)
+        b.end_function()
+        return mod
+
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_print_int_rejects_zero_operands():
+    """A print_int PRINT requires its value operand — no operand is
+    malformed and must fail closed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="print_int PRINT takes one operand"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_print_int_rejects_two_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("b", _i32())], _i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], fn.params[1],
+               result_ty=_i32(), attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="print_int PRINT takes one operand"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_print_int_rejects_non_i32_operand():
+    """The helper signature is `(i32) -> i32` — a non-i32 operand
+    cannot be forwarded directly and must fail closed (no silent
+    truncation / extension)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", tir.TIRScalar("i64"))],
+                          _i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="print_int operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_print_int_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.PRINT, fn.params[0],
+               result_ty=tir.TIRScalar("i64"),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="PRINT yields an i32"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_helper_collision_with_user_function():
+    """A user-defined function whose name collides with a reserved
+    `__helix_` helper that the module actually uses must fail
+    closed — silently shadowing the helper would emit a different
+    body than the call expects."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    # A user function that incidentally chose the helper's name.
+    b.begin_function("__helix_print_int", [("v", _i32())], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    # Another function actually calls a print_int PRINT, which
+    # triggers the helper.
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="collide with reserved"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_helper_collision_only_when_used():
+    """A user `__helix_print_int` function in a module that does NOT
+    use the helper is left alone (the collision check is gated on
+    actual helper use — no use, no collision)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("__helix_print_int", [("v", _i32())], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # The user's function is emitted as-is; no helper block was
+    # added.
+    assert "define i32 @__helix_print_int(" in ll, ll
+    assert "define internal i32 @__helix_print_int(" not in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_print_int_helper_has_five_blocks():
+    """Mock-shape check on the helper: its body should contain the
+    five labelled basic blocks the digit-loop design needs (entry /
+    loop / after_loop / prepend_sign / do_write). Caught a regression
+    in chunk development where one block was missing terminator."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    for label in ("entry:", "loop:", "after_loop:",
+                  "prepend_sign:", "do_write:"):
+        assert f"\n{label}\n" in ll, (label, ll)
+
+
+def test_stage206r_register_helper_function_rejects_unknown():
+    """The `_register_helper_function` plumbing fails closed on an
+    unknown helper name (defensive against future ops registering a
+    typo or a name no longer in the registry)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn = next(iter(mod.functions.values()))
+    emitter = llvm_ir._FnEmitter(fn)
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="internal helper 'no_such_helper' is "
+                             "not registered"):
+        emitter._register_helper_function("no_such_helper")
+
+
+def test_stage206r_helper_function_table_drift_guard():
+    """`_check_helper_function_table` rejects (1) a helper name not
+    prefixed with `__helix_`, (2) a definition text whose declared
+    function name does not match the registry key, (3) a definition
+    text with no `ret` instruction, and (4) a definition text whose
+    body does not call every callee its ffi_declares list claims."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+
+    def _restore() -> None:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["bad_no_prefix"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=("define internal i32 "
+                            "@bad_no_prefix() { ret i32 0 }"),
+                ffi_declares=(),
+            ))
+        with pytest.raises(AssertionError, match="reserved `__helix_`"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        _restore()
+
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_typo"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=("define internal i32 "
+                            "@__helix_different() "
+                            "{ ret i32 0 }"),
+                ffi_declares=(),
+            ))
+        with pytest.raises(AssertionError,
+                           match="does not match a `define internal"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        _restore()
+
+    # No `ret` instruction in the helper body — caught by the drift
+    # guard at module load (cheaper than waiting for mock_validate_ll
+    # at first use).
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_noret"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=("define internal void @__helix_noret() "
+                            "{ unreachable }"),
+                ffi_declares=(),
+            ))
+        with pytest.raises(AssertionError, match="no `ret` instruction"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        _restore()
+
+    # ffi_declares mentions @write but the body never calls it.
+    # Multi-line body so the `ret` line satisfies the line-scoped
+    # ret-instruction guard (which fires first) — this test isolates
+    # the registry-vs-body drift check.
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_drift"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_drift() {\n"
+                    "entry:\n"
+                    "  ret i32 0\n"
+                    "}"),
+                ffi_declares=(
+                    llvm_ir._FFIDeclareSpec(
+                        target="write", callee="@write", ret_ty="i64",
+                        arg_tys=("i32", "ptr", "i64")),
+                ),
+            ))
+        with pytest.raises(AssertionError, match="registry and body"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        _restore()
+
+
+def test_stage206r_helper_function_spec_is_frozen():
+    """The `_HelperFunctionSpec` rejects attribute mutation — registry
+    entries are module-scope constants. House style: frozen dataclass
+    raises `FrozenInstanceError` (a subclass of `AttributeError`)."""
+    spec = llvm_ir._HELPER_FUNCTIONS["__helix_print_int"]
+    with pytest.raises(AttributeError):
+        spec.definition = "tampered"  # type: ignore[misc]
+
+
+def test_stage206r_helper_function_spec_is_final():
+    """House style: cross-cutting backend result types are final
+    (subclass-guarded) — see `Backend` and `ParityResult`."""
+    with pytest.raises(TypeError, match="final"):
+        class _Subclass(llvm_ir._HelperFunctionSpec):  # type: ignore[misc]
+            pass
+
+
+def test_stage206r_helper_function_spec_rejects_malformed_ffi():
+    """The `_HelperFunctionSpec` rejects an ffi_declares entry that
+    is not a `_FFIDeclareSpec` (a NamedTuple) — a bare 4-tuple
+    rejected at construction so positional-order swaps cannot pass
+    silently."""
+    with pytest.raises(ValueError, match="must be a _FFIDeclareSpec"):
+        llvm_ir._HelperFunctionSpec(
+            definition=("define internal i32 @__helix_x() "
+                        "{ ret i32 0 }"),
+            ffi_declares=(("only", "four", "more", ("args",)),),  # type: ignore[arg-type]
+        )
+
+
+def test_stage206r_helper_public_registry_is_immutable():
+    """The PUBLIC `_HELPER_FUNCTIONS` is a `MappingProxyType` view —
+    callers cannot mutate it. Mutations must go through the private
+    `_HELPER_FUNCTIONS_AUTHORITY` (this mirrors the MLIR backend's
+    AUTHORITY pattern)."""
+    with pytest.raises(TypeError):
+        llvm_ir._HELPER_FUNCTIONS["__helix_tampered"] = (  # type: ignore[index]
+            llvm_ir._HelperFunctionSpec(
+                definition="define internal i32 @__helix_tampered() "
+                           "{ ret i32 0 }",
+                ffi_declares=(),
+            ))
+
+
+def test_stage206r_emit_module_rejects_helper_vs_ffi_collision():
+    """Emit-time: a user `is_extern` declaration of `__helix_print_int`
+    plus an FFI_CALL to it — combined with a module that triggers the
+    helper — would otherwise emit BOTH a `declare` and a
+    `define internal` for the same symbol (malformed LLVM IR that
+    `mock_validate_ll` does not catch). The collision check in
+    `emit_module` must fail closed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    # An `is_extern` function with the helper's name; an FFI_CALL
+    # references it (so it lands in `declares`, not `defined`).
+    b.begin_function("__helix_print_int", [("v", _i32())], _i32(),
+                     attrs={"is_extern": True})
+    b.end_function()
+    fn = b.begin_function("caller", [("n", _i32())], _i32())
+    b.emit(tir.OpKind.FFI_CALL, fn.params[0], result_ty=_i32(),
+           attrs={"target": "__helix_print_int"})
+    # Also emit a print_int PRINT in the SAME function — this is what
+    # triggers the helper. (A clean module without print_int would
+    # never trigger the helper, so there'd be no collision to detect.)
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="collide with reserved"):
         llvm_ir.emit_module(mod)
 
 

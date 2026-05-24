@@ -440,9 +440,27 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    **Stage 222 — end-of-v3.0 5-clean-gate + tag `v3.0.0`**. Depends
    on Stage 221 done.
 
-6. **206-R residual ops** — additive LLVM-lowering chunks (print_int,
-   write_file / read_file_to_arena, TRACE, arena, QUOTE-family) needed
+6. **206-R residual ops** — additive LLVM-lowering chunks needed
    before the Stage-221 cutover. Safe for autonomous worker to start.
+
+   **print_int — SHIPPED 2026-05-24**. `helixc/backend/llvm_ir.py`
+   gained an internal-helper-function registry (`_HelperFunctionSpec`,
+   `_FFIDeclareSpec`, `_HELPER_FUNCTIONS` via `MappingProxyType`,
+   `_check_helper_function_table` drift guard) and the
+   `@__helix_print_int(i32) -> i32` helper (i32->ASCII digit-loop +
+   `write(1, buf, len)`, five basic blocks; bit-for-bit parity with
+   `x86_64.py::print_int` including INT_MIN). `PRINT._kind="print_int"`
+   now emits `call i32 @__helix_print_int(i32 %v)`; the helper text
+   is emitted once per module via the registry. Audit-fix batch
+   landed in the same commit: HIGH-1 (helper-vs-FFI-declare
+   collision), 4 MEDIUMs (registry tightening + house-style
+   migration to `@dataclass(frozen=True, slots=True)` with
+   `__init_subclass__` and `__post_init__` raising `ValueError`).
+
+   **Next residual ops (in priority order)**: write_file,
+   read_file_to_arena, TRACE_ENTRY/EXIT (needs a ring buffer), six
+   ARENA ops (needs a bump allocator), QUOTE/SPLICE/MODIFY/REFLECT_HASH
+   (metaprogramming).
 
 When `v3.0.0` is tagged, v3.0 is done.
 
