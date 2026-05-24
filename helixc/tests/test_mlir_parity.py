@@ -177,14 +177,22 @@ def test_parity_check_rejects_non_target():
 def test_parity_check_defers_when_mlir_backend_defers(monkeypatch):
     """On a binding-less / toolchain-less machine the MLIR backend
     returns DEFERRED; the parity verdict is PARITY_DEFERRED with the
-    deferral reason."""
+    deferral reason.
+
+    The trivial module doesn't satisfy the home-grown PTX emitter
+    (no @kernel function), so we mock the home-grown path to return
+    a stub artifact for chunk-A's MLIR-side-only tests."""
     module = _trivial_module()
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: ("stub home-grown PTX text\n", ()))
     result = mlir_vs_tile_ir_parity_check(module, MLIRBackendTarget.PTX)
     assert result.deferred()
     assert any("deferred" in f.lower() or "not on PATH" in f
                for f in result.findings), result.findings
     assert result.mlir_result is not None
     assert result.mlir_result.status() is MLIRBackendStatus.DEFERRED
+    assert result.tile_ir_output == "stub home-grown PTX text\n"
 
 
 def test_parity_check_fails_when_mlir_backend_fails(monkeypatch):
@@ -199,6 +207,9 @@ def test_parity_check_fails_when_mlir_backend_fails(monkeypatch):
     underlying lowering_findings tuple is what the parity gate
     propagates regardless of how status was computed."""
     module = _trivial_module()
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: ("stub home-grown PTX text\n", ()))
     deferred_shaped = MLIRBackendResult(
         target=MLIRBackendTarget.PTX,
         validation=_mock_passed_validation(),
@@ -237,6 +248,9 @@ def test_parity_check_holds_when_mlir_backend_passes(monkeypatch):
     Same caveat as the FAILED test: the dev machine never reaches a
     real PASSED through the runner, so we monkeypatch `status()`."""
     module = _trivial_module()
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: ("stub home-grown PTX text\n", ()))
     deferred_shaped = MLIRBackendResult(
         target=MLIRBackendTarget.PTX,
         validation=_mock_passed_validation(),
@@ -271,6 +285,11 @@ def test_parity_check_fails_on_translator_error(monkeypatch):
     gate surfaces it as a PARITY_FAILED with the translator finding —
     never silently skips."""
     module = _trivial_module()
+    # Mock the home-grown path to succeed so the translator-error
+    # branch is the one we're testing.
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: ("stub home-grown PTX text\n", ()))
 
     def _fake_emit(_module):
         raise parity.MLIRTranslationError(
@@ -283,6 +302,84 @@ def test_parity_check_fails_on_translator_error(monkeypatch):
                for f in result.findings), result.findings
     assert any("pretend_op" in f for f in result.findings), result.findings
     assert result.mlir_result is None
+    # The home-grown output is preserved on translator failures so the
+    # caller can compare what the canonical compiler produced against
+    # the missing MLIR-path artifact.
+    assert result.tile_ir_output == "stub home-grown PTX text\n"
+
+
+# --------------------------------------------------------------------------
+# Stage 215 chunk B: home-grown path runner integrated
+# --------------------------------------------------------------------------
+def test_parity_check_records_tile_ir_output_when_homegrown_succeeds(
+        monkeypatch):
+    """Chunk B: when the home-grown path produces an artifact AND the
+    MLIR path returns DEFERRED, the parity verdict captures both
+    pieces (the home-grown text is preserved for inspection)."""
+    module = _trivial_module()
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: ("HOMEGROWN-PTX-ARTIFACT\n", ()))
+    result = mlir_vs_tile_ir_parity_check(
+        module, MLIRBackendTarget.PTX)
+    assert result.deferred()
+    assert result.tile_ir_output == "HOMEGROWN-PTX-ARTIFACT\n"
+    assert result.mlir_result is not None
+
+
+def test_parity_check_fails_when_homegrown_fails(monkeypatch):
+    """Chunk B: home-grown emitter failure surfaces as PARITY_FAILED
+    BEFORE the MLIR path runs (home-grown is the canonical compiler,
+    so an exception there is the most severe outcome)."""
+    module = _trivial_module()
+    mlir_call_count = {"n": 0}
+
+    def _fake_emit(_mod):
+        mlir_call_count["n"] += 1
+        return "module { }\n"
+
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: (None, ("PTX emitter exploded: missing kernel",)))
+    monkeypatch.setattr(parity, "emit_mlir_module", _fake_emit)
+    result = mlir_vs_tile_ir_parity_check(
+        module, MLIRBackendTarget.PTX)
+    assert result.failed()
+    assert any("home-grown ptx path failed" in f
+               for f in result.findings), result.findings
+    assert any("PTX emitter exploded" in f
+               for f in result.findings), result.findings
+    # The home-grown failure short-circuits the MLIR path — it never
+    # gets invoked.
+    assert mlir_call_count["n"] == 0
+    assert result.mlir_result is None
+    assert result.tile_ir_output is None
+
+
+def test_run_tile_ir_path_llvm_ir_returns_structural_deferral():
+    """Chunk B contract: LLVM_IR's home-grown path takes tir.Module,
+    not tile_ir.TileModule, so the parity helper returns a finding
+    pointing at the Phase-D parity gate (Stage 207)."""
+    module = _trivial_module()
+    text, findings = parity._run_tile_ir_path(
+        module, MLIRBackendTarget.LLVM_IR)
+    assert text is None
+    assert any("Stage 207" in f for f in findings), findings
+
+
+def test_parity_check_llvm_ir_defers_with_both_sides_noted():
+    """Chunk B: LLVM_IR parity returns PARITY_DEFERRED with TWO
+    findings — the structural-deferral note for the home-grown side
+    AND the MLIR side's status. The Stage 207 Phase-D gate is the
+    canonical LLVM_IR parity check."""
+    module = _trivial_module()
+    result = mlir_vs_tile_ir_parity_check(
+        module, MLIRBackendTarget.LLVM_IR)
+    assert result.deferred()
+    assert len(result.findings) == 2
+    assert any("Stage 207" in f for f in result.findings), result.findings
+    assert any("MLIR side for LLVM_IR returned" in f
+               for f in result.findings), result.findings
 
 
 # --------------------------------------------------------------------------

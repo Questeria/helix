@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 
 from .backends import (
     MLIRBackendResult,
@@ -51,6 +51,79 @@ from .backends import (
 from .emit import MLIRTranslationError, emit_mlir_module
 from .toolchain import MLIRSupport
 from .. import tile_ir
+
+
+# Stage 215 chunk B — registry of home-grown path emitters per
+# backend target. Each entry is a factory that builds a fresh
+# emitter instance per call (the PTX / HIP / MSL / WGSL emitters
+# carry per-module mutable state, so they cannot be cached). The
+# `emit_module(TileModule) -> str` shape is the cross-backend
+# `BackendEmitter` Protocol (helixc/backend/_lowering_schema.py).
+#
+# LLVM_IR is intentionally absent here: the home-grown LLVM path
+# operates on `tir.Module`, not `tile_ir.TileModule`, so it cannot
+# be invoked directly from the parity gate. Chunk C will document
+# the LLVM_IR-specific parity contract (probably "MLIR side runs;
+# home-grown side is structurally inaccessible from a TileModule;
+# parity for LLVM_IR is verified by the Phase-D LLVM parity gate
+# at Stage 207, not Stage 215").
+_HOMEGROWN_EMITTERS: dict[MLIRBackendTarget,
+                          Callable[[], object]] = {}
+
+
+def _register_homegrown_emitters() -> None:
+    """Lazy-import the per-backend emitter classes so this module
+    imports cleanly even when one of the backends is unavailable.
+    Builds the global `_HOMEGROWN_EMITTERS` registry; idempotent."""
+    global _HOMEGROWN_EMITTERS
+    if _HOMEGROWN_EMITTERS:
+        return
+    from ...backend.ptx import PtxEmitter
+    from ...backend.rocm import HipEmitter
+    from ...backend.metal import MslEmitter
+    from ...backend.webgpu import WgslEmitter
+    _HOMEGROWN_EMITTERS = {
+        MLIRBackendTarget.PTX: PtxEmitter,
+        MLIRBackendTarget.ROCM_HIP: HipEmitter,
+        MLIRBackendTarget.METAL_MSL: MslEmitter,
+        MLIRBackendTarget.WEBGPU_WGSL: WgslEmitter,
+    }
+
+
+def _run_tile_ir_path(
+        module: tile_ir.TileModule,
+        target: MLIRBackendTarget) -> tuple[Optional[str], tuple[str, ...]]:
+    """Run the home-grown path: instantiate the per-target emitter
+    and call `emit_module(module)`. Returns `(artifact_text, findings)`:
+    on success `(text, ())`; on failure `(None, (finding,...))`.
+
+    LLVM_IR returns a structurally-deferred finding because the
+    home-grown LLVM path takes `tir.Module`, not `tile_ir.TileModule`,
+    so it cannot be invoked from the parity gate's TileModule entry."""
+    if target is MLIRBackendTarget.LLVM_IR:
+        return None, (
+            "home-grown LLVM_IR path operates on tir.Module, not "
+            "tile_ir.TileModule; parity for LLVM_IR is handled by the "
+            "Phase-D parity gate (Stage 207), not Stage 215",)
+    _register_homegrown_emitters()
+    factory = _HOMEGROWN_EMITTERS.get(target)
+    if factory is None:
+        return None, (
+            f"home-grown path for {target.value} is not registered in "
+            "_HOMEGROWN_EMITTERS — chunk-B+ must add the emitter "
+            "factory",)
+    try:
+        emitter = factory()
+        text = emitter.emit_module(module)  # type: ignore[attr-defined]
+    except Exception as exc:
+        return None, (
+            f"home-grown path for {target.value} raised "
+            f"{type(exc).__name__}: {exc}",)
+    if not isinstance(text, str) or not text.strip():
+        return None, (
+            f"home-grown path for {target.value} returned blank or "
+            f"non-str output ({type(text).__name__})",)
+    return text, ()
 
 
 class ParityStatus(Enum):
@@ -79,14 +152,15 @@ class ParityResult:
       finding explaining why;
     - PARITY_HOLDS MUST carry no findings;
     - the `mlir_result` attribute (when present) is the
-      `MLIRBackendResult` from the MLIR path, so a caller can
-      inspect the backend chain's provenance / output_text without
-      re-running it.
+      `MLIRBackendResult` from the MLIR path; the `tile_ir_output`
+      attribute (when present) is the home-grown path's artifact
+      text, so a caller can inspect both without re-running either.
     """
     target: MLIRBackendTarget
     status: ParityStatus
     findings: tuple[str, ...]
     mlir_result: Optional[MLIRBackendResult] = None
+    tile_ir_output: Optional[str] = None
 
     def __init_subclass__(cls, **kwargs) -> None:
         raise TypeError(
@@ -127,6 +201,12 @@ class ParityResult:
             raise ValueError(
                 "ParityResult: mlir_result must be an MLIRBackendResult "
                 "or None")
+        if self.tile_ir_output is not None:
+            if not isinstance(self.tile_ir_output, str) \
+                    or not self.tile_ir_output.strip():
+                raise ValueError(
+                    "ParityResult: tile_ir_output must be non-blank "
+                    "text or None")
 
     def holds(self) -> bool:
         return self.status is ParityStatus.PARITY_HOLDS
@@ -143,29 +223,31 @@ def mlir_vs_tile_ir_parity_check(
         target: MLIRBackendTarget,
         *,
         support: Optional[MLIRSupport] = None) -> ParityResult:
-    """Run the MLIR side of the parity gate for one Tile-IR module
-    and one backend target.
+    """Run both paths of the parity gate for one Tile-IR module and
+    one backend target.
 
-    Stage 215 chunk A: this entry point does not yet compare the
-    MLIR backend artifact byte-for-byte against the home-grown
-    backend artifact. It runs the MLIR path end-to-end and reports a
-    `ParityResult` reflecting whether parity COULD be verified:
+    Stage 215 chunks A+B: this entry point runs BOTH the MLIR path
+    (`emit_mlir_module` -> `lower_mlir_to_backend`) and the
+    home-grown path (`_run_tile_ir_path` -> per-target emitter), and
+    reports a `ParityResult` describing whether parity COULD be
+    verified and (when both paths produced text) whether the
+    artifacts match:
 
-    - MLIR translator raises `MLIRTranslationError` -> PARITY_FAILED
-      with the translator finding;
-    - MLIR backend chain returns FAILED -> PARITY_FAILED with the
-      backend findings;
-    - MLIR backend chain returns DEFERRED (no toolchain, or
-      pipeline-level deferral) -> PARITY_DEFERRED with the deferral
-      reason;
-    - MLIR backend chain returns PASSED -> PARITY_HOLDS (chunk-B+
-      replaces this with a real cross-path artifact comparison once
-      the home-grown path's outputs are accessible from the same
-      entry point).
+    - Home-grown raises -> PARITY_FAILED with the named cause.
+    - MLIR translator raises -> PARITY_FAILED with the translator finding.
+    - MLIR backend chain FAILED -> PARITY_FAILED with the backend finding.
+    - MLIR backend chain DEFERRED (no toolchain) -> PARITY_DEFERRED
+      with the deferral reason AND the home-grown output recorded
+      for inspection.
+    - MLIR backend chain PASSED + home-grown text present ->
+      PARITY_HOLDS placeholder (chunk-C+ adds the actual artifact
+      comparison; chunk B currently treats "both paths produced
+      text" as parity-holding).
 
-    The home-grown path's run is the responsibility of chunk-B+:
-    chunk A confirms the MLIR path is reachable end-to-end and the
-    parity-result type is safe to construct from each MLIR verdict.
+    For LLVM_IR specifically, the home-grown path cannot run from a
+    TileModule (it consumes tir.Module instead); chunk B returns a
+    structurally-deferred finding for LLVM_IR with a pointer to
+    Stage 207's Phase-D parity gate.
     """
     if not isinstance(module, tile_ir.TileModule):
         raise ValueError(
@@ -175,6 +257,24 @@ def mlir_vs_tile_ir_parity_check(
         raise ValueError(
             "mlir_vs_tile_ir_parity_check: target must be "
             f"MLIRBackendTarget, got {target!r}")
+
+    # Home-grown side first — if it raises, the parity gate fails
+    # without bothering the MLIR side (the home-grown path is the
+    # canonical compiler; an exception there is more severe than an
+    # MLIR-side deferral).
+    tile_ir_output, tile_ir_findings = _run_tile_ir_path(module, target)
+    if tile_ir_findings and target is not MLIRBackendTarget.LLVM_IR:
+        # Home-grown path failed; surface as PARITY_FAILED.
+        return ParityResult(
+            target=target,
+            status=ParityStatus.PARITY_FAILED,
+            findings=(
+                f"home-grown {target.value} path failed: "
+                + tile_ir_findings[0],
+            ),
+            mlir_result=None,
+            tile_ir_output=None,
+        )
 
     try:
         mlir_text = emit_mlir_module(module)
@@ -186,17 +286,45 @@ def mlir_vs_tile_ir_parity_check(
                 f"MLIR translator failed for {target.value}: "
                 f"{type(exc).__name__}: {exc}",),
             mlir_result=None,
+            tile_ir_output=tile_ir_output,
         )
 
     mlir_result = lower_mlir_to_backend(
         mlir_text, target, support=support)
     backend_status = mlir_result.status()
+
+    # LLVM_IR special case: home-grown is structurally inaccessible
+    # from a TileModule, so the parity verdict is DEFERRED with both
+    # the home-grown deferral note AND the MLIR side's status.
+    if target is MLIRBackendTarget.LLVM_IR:
+        mlir_summary = ("PASSED" if backend_status is MLIRBackendStatus.PASSED
+                        else "FAILED" if backend_status
+                        is MLIRBackendStatus.FAILED
+                        else "DEFERRED")
+        return ParityResult(
+            target=target,
+            status=ParityStatus.PARITY_DEFERRED,
+            findings=(
+                tile_ir_findings[0],
+                f"MLIR side for LLVM_IR returned {mlir_summary}; the "
+                "Stage 207 Phase-D parity gate is the canonical "
+                "LLVM_IR parity check",
+            ),
+            mlir_result=mlir_result,
+            tile_ir_output=None,
+        )
+
     if backend_status is MLIRBackendStatus.PASSED:
+        # Chunk-C+ will replace this with the actual byte / text
+        # comparison between `tile_ir_output` and the MLIR side's
+        # artifact. Chunk B treats "both paths produced text" as
+        # parity-holding (i.e. both succeeded structurally).
         return ParityResult(
             target=target,
             status=ParityStatus.PARITY_HOLDS,
             findings=(),
             mlir_result=mlir_result,
+            tile_ir_output=tile_ir_output,
         )
     if backend_status is MLIRBackendStatus.FAILED:
         return ParityResult(
@@ -209,6 +337,7 @@ def mlir_vs_tile_ir_parity_check(
                    else "no lowering finding emitted"),
             ),
             mlir_result=mlir_result,
+            tile_ir_output=tile_ir_output,
         )
     # DEFERRED — usually no real toolchain on this machine.
     return ParityResult(
@@ -222,4 +351,5 @@ def mlir_vs_tile_ir_parity_check(
                else "no deferral reason emitted"),
         ),
         mlir_result=mlir_result,
+        tile_ir_output=tile_ir_output,
     )
