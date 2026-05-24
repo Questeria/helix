@@ -3177,3 +3177,85 @@ def test_run_mlir_opt_pipeline_translator_chain_failure(monkeypatch):
     # Both tools should have been invoked.
     assert any(cmd[0] == "/fake/mlir-opt" for cmd in proc_calls)
     assert any(cmd[0] == "/fake/mlir-translate" for cmd in proc_calls)
+
+
+def test_run_mlir_opt_pipeline_rejects_non_empty_follow_up_args(monkeypatch):
+    """Stage 214 chunk D wires only the mlir-opt -> mlir-translate hop.
+    A target with non-empty `follow_up_args` (chunk-E territory) must
+    fail closed with a 'wires only ... hop' finding rather than
+    silently producing the un-chained intermediate artifact."""
+    _wire_translator(
+        monkeypatch, MLIRBackendTarget.PTX,
+        translator=("mlir-translate", "--mlir-to-llvmir",
+                    ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
+    _register_ptx_validator(monkeypatch)
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        if cmd[0] == "/fake/mlir-opt":
+            Path(cmd[-1]).write_text(
+                "module { llvm.func @f() { llvm.return } }\n",
+                encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(
+            "follow_up_args rejection must fire BEFORE any chained tool "
+            "is invoked")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    validation = _real_passed_validation()
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=validation,
+        mlir_opt="/fake/mlir-opt",
+        pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+            MLIRBackendTarget.PTX],
+        output_validator=_accept_backend_output,
+        mlir_translate="/fake/mlir-translate",
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("chunk D wires only" in f
+               for f in result.lowering_findings), result.lowering_findings
+
+
+def test_run_mlir_opt_pipeline_rejects_malformed_translator_entry(monkeypatch):
+    """Runtime defensive check: a monkeypatched translator entry that
+    is not a 3-tuple is rejected at the runner boundary even though
+    the module-load drift guard cannot have seen it."""
+    monkeypatch.setattr(
+        backends, "_MLIR_BACKEND_TRANSLATORS_AUTHORITY",
+        MappingProxyType({
+            **backends._MLIR_BACKEND_TRANSLATORS_AUTHORITY,
+            MLIRBackendTarget.PTX: ("mlir-translate", "--mlir-to-llvmir"),
+        }),
+    )
+    _register_ptx_validator(monkeypatch)
+    validation = _real_passed_validation()
+    with pytest.raises(ValueError, match="must be a 3-tuple"):
+        backends._run_mlir_opt_pipeline(
+            _WELL_FORMED,
+            target=MLIRBackendTarget.PTX,
+            validation=validation,
+            mlir_opt="/fake/mlir-opt",
+            pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+                MLIRBackendTarget.PTX],
+            output_validator=_accept_backend_output,
+            mlir_translate="/fake/mlir-translate",
+        )
+
+
+def test_backends_all_does_not_expose_private_runner_helpers():
+    """The `__all__` tuple pins the public surface so
+    `from helixc.ir.mlir.backends import *` doesn't pull in the
+    runner / branding / authority internals."""
+    public = set(backends.__all__)
+    forbidden = {
+        "_run_mlir_opt_pipeline",
+        "_run_mlir_translate_step",
+        "_BackendOutputValidationBrandingRunner",
+        "_BackendPipelineRunner",
+        "_make_backend_pipeline_runner",
+        "_MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY",
+        "_MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY",
+        "_MLIR_BACKEND_TRANSLATORS_AUTHORITY",
+    }
+    assert public.isdisjoint(forbidden), public & forbidden

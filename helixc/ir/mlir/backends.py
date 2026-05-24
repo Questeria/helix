@@ -44,6 +44,33 @@ from .validate import (
 )
 
 
+# Pin the public surface of this module so `from ... import *` and any
+# documentation generator see only the wrappers, not the runner /
+# branding internals. Underscore-prefixed names like
+# `_run_mlir_opt_pipeline`, `_run_mlir_translate_step`,
+# `_BackendOutputValidationBrandingRunner`,
+# `_BackendPipelineRunner`, and the AUTHORITY mappings are convention-
+# private — `__all__` makes that boundary explicit.
+__all__ = (
+    "MLIRBackendTarget",
+    "MLIRBackendStatus",
+    "MLIRBackendResult",
+    "MLIRBackendOutputValidation",
+    "MLIRBackendOutputValidator",
+    "MLIR_BACKEND_TARGETS",
+    "MLIR_BACKEND_REQUIRED_DIALECTS",
+    "MLIR_BACKEND_LOWERING_PIPELINES",
+    "MLIR_BACKEND_OUTPUT_VALIDATORS",
+    "MLIR_BACKEND_TRANSLATORS",
+    "GPU_BACKEND_TO_MLIR_TARGET",
+    "backend_required_dialects",
+    "backend_lowering_pipeline",
+    "backend_translator",
+    "mlir_target_for_gpu_backend",
+    "lower_mlir_to_backend",
+)
+
+
 class MLIRBackendTarget(Enum):
     """The backend targets Stage 213 must eventually lower MLIR into."""
     LLVM_IR = "llvm_ir"
@@ -3641,21 +3668,23 @@ def _run_mlir_translate_step(
         timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
 ) -> tuple[str | None, tuple[str, ...]]:
     """Run `mlir-translate` to convert dialect-MLIR text into the raw
-    target artifact (e.g. raw LLVM IR via `--mlir-to-llvmir`, SPIR-V
-    binary via `--serialize-spirv`, etc.).
+    target artifact AS TEXT (e.g. raw LLVM IR via `--mlir-to-llvmir`).
+
+    Text-only by design — the artifact is read with `encoding="utf-8"`
+    at the end, so flags that produce binary output (e.g. SPIR-V
+    serialization, cubin) are not supported by this helper. A binary
+    chain step needs a separate sibling helper that reads `"rb"`.
 
     Returns `(output_text, findings)`:
     - on success: `(output_text, ())` with output_text a non-blank
       raw target artifact;
     - on failure: `(None, (one-or-more finding strings,))`.
 
-    Stage 214 chunk C — the foundational helper. A future chunk will
-    chain this after `_run_mlir_opt_pipeline`'s dialect-MLIR output to
-    produce the raw target text the Stage-213 runner expects to
-    validate. The same subprocess hygiene `_run_mlir_opt_validate` /
-    `_run_mlir_opt_pipeline` use applies: argv-list dispatch, explicit
-    timeout, captured Timeout / OSError / nonzero diagnostics, and a
-    non-empty output artifact requirement.
+    Stage 214 chunk C — the foundational helper. Same subprocess
+    hygiene `_run_mlir_opt_validate` / `_run_mlir_opt_pipeline` use
+    applies: argv-list dispatch, explicit timeout, captured Timeout /
+    OSError / nonzero diagnostics, and a non-empty output artifact
+    requirement.
     """
     if not isinstance(dialect_mlir_text, str) or not dialect_mlir_text.strip():
         return None, (
@@ -3836,6 +3865,20 @@ def _run_mlir_opt_pipeline(
             "registered translator; mlir_translate must be None when "
             "no translator-step is declared")
     if registered_translator is not None:
+        # Defensive runtime shape-check — the module-load drift guard
+        # cannot see a monkeypatched authority table, and the runner
+        # unpacks (tool_name, flag, follow_up) below. tool_name is
+        # METADATA ONLY (the runner trusts `mlir_translate` from the
+        # caller, not the table); follow_up is enforced empty in this
+        # chunk (chunk E adds chained-tool support). flag is the only
+        # field that ALSO has independent re-validation downstream.
+        if not isinstance(registered_translator, tuple) \
+                or len(registered_translator) != 3:
+            raise ValueError(
+                f"_run_mlir_opt_pipeline: registered translator for "
+                f"{target.value} must be a 3-tuple "
+                f"(tool_name, flag, follow_up_args), got "
+                f"{registered_translator!r}")
         if not isinstance(mlir_translate, str) \
                 or not mlir_translate.strip() \
                 or mlir_translate != mlir_translate.strip():
@@ -3977,6 +4020,20 @@ def _run_mlir_opt_pipeline(
         translator_tool: str | None = None
         if registered_translator is not None:
             _tool_name, translator_flag, _follow_up = registered_translator
+            if _follow_up:
+                return MLIRBackendResult(
+                    target=target,
+                    validation=validation,
+                    lowering_attempted=True,
+                    lowering_passed=False,
+                    lowering_tool=mlir_opt,
+                    lowering_findings=(
+                        f"Stage 214 chunk D wires only the mlir-opt -> "
+                        f"mlir-translate hop; {target.value} declares "
+                        f"follow-up args {list(_follow_up)!r} which "
+                        "require a chunk-E chained-tool runner",),
+                    output_text=None,
+                )
             translated_text, translate_findings = _run_mlir_translate_step(
                 output_text,
                 mlir_translate=mlir_translate,  # type: ignore[arg-type]
@@ -4110,9 +4167,18 @@ def _run_mlir_opt_pipeline(
                     "an unbranded clean result",),
                 output_text=None,
             )
+        if translator_tool is not None:
+            _tool_name, translator_flag, _follow_up = registered_translator
+            chain_provenance = (
+                f"mlir-translate={translator_tool}",
+                f"mlir-translate-flag={translator_flag}",
+            )
+        else:
+            chain_provenance = ()
         output_provenance = (
             f"mlir-opt={mlir_opt}",
             "pipeline=" + " ".join(pipeline),
+            *chain_provenance,
             f"output_sha256={output_digest}",
             *(f"target_validation={entry}"
               for entry in output_validation.evidence),
@@ -5105,6 +5171,14 @@ class MLIRBackendResult:
     validation: MLIRValidation
     lowering_attempted: bool
     lowering_passed: Optional[bool]
+    # `lowering_tool` is the PRIMARY tool path — `mlir-opt` for any
+    # Stage 213+ backend run. When a target's Stage 214 translator
+    # entry is populated, the runner ALSO invokes `mlir-translate`
+    # after `mlir-opt`; that second-stage path appears in
+    # `output_provenance` as `mlir-translate=<path>` /
+    # `mlir-translate-flag=<flag>` entries, not in `lowering_tool`.
+    # Treat `lowering_tool` as the primary identifier for the
+    # lowering, not the complete chain inventory.
     lowering_tool: Optional[str]
     lowering_findings: tuple[str, ...]
     output_text: Optional[str] = None
