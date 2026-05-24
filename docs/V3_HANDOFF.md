@@ -62,6 +62,12 @@ Ratified strategy (`docs/V3_STAGE210_MLIR_DECISION.md`):
   backend-target scaffold, `helixc/ir/mlir/backends.py`; chunk B
   shipped real `mlir-opt` validation dispatch in `validate.py`; chunk C
   shipped the fail-closed backend pass-pipeline runner contract.
+  2026-05-24 progress batch closed 3 of 4 open HIGH audit findings
+  (control-predicate `i1`, memref access arity / index type,
+  `arith.constant` value-vs-type, `scf.for` bounds); HIGH-4 (generic
+  function bodies bypass) remains open. See
+  `docs/HELIX_MLIR_AUDIT_PACKET.md` "2026-05-24 Checkpoint" for the
+  full state.
 
 ### The translator (`emit.py`) — current capability
 

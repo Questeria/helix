@@ -386,3 +386,81 @@ Restart protocol:
    diff-check.
 5. Re-run all three audit axes from scratch. Commit only after all axes report
    0 HIGH / 0 must-fix MEDIUM.
+
+## 2026-05-24 Checkpoint — Third-Round HIGH Fix Batch (Claude)
+
+Status: progress checkpoint. Three of the four open HIGH families from the
+2026-05-22 Third-Audit-Round stop are now closed in the static preflight;
+HIGH-4 (generic function bodies bypass) remains open. The MLIR slice and the
+strict canaries are green; the new code was 3-clean audited and the one HIGH
+finding the audit raised was fixed.
+
+Closed since the previous stop:
+
+- HIGH-1 (control predicates) — `scf.if`, `cf.cond_br`, `cf.assert` now
+  require an `i1` predicate. New helper `_control_predicate_type_finding`
+  looks the first SSA operand up in `ssa_types` and rejects anything but
+  `i1`. Two new strict canaries:
+  `control-predicate-scf-if-non-i1`, `control-predicate-cf-assert-non-i1`.
+- HIGH-2 (memref access semantics) — `memref.load` / `memref.store` now
+  enforce index arity (count matches the memref rank from
+  `_memref_rank_from_type`) and index operand type (must be `index`). The
+  result-element / stored-value type checks remain a sibling follow-up.
+  Three new canaries: `memref-load-index-arity-mismatch`,
+  `memref-load-non-index-idx`, `memref-store-index-arity-mismatch`.
+- HIGH-3 (constants / loop semantics, dominant sub-cases) —
+  `arith.constant` now matches literal-vs-type: `true`/`false` require
+  `i1`, decimal integer literals (including `1_000`) require an
+  integer/`index` type, float literals require a floating-point type.
+  Hex/octal/binary-prefixed literals (`0x...`, `0o...`, `0b...`) defer
+  (they may legitimately encode a float bit-pattern under `: f32`).
+  `scf.for` now requires `index` bounds. Two new canaries:
+  `arith-constant-bool-non-i1`, `arith-constant-int-float-type`. The
+  vector sub-cases (`vector.transfer_read`, `vector.shape_cast`,
+  `vector.multi_reduction`) remain open — see "Still open" below.
+
+Audit fixes applied this batch (3-clean on the new code):
+
+- `_memref_access_type_finding` used `bracket_end == -1` but
+  `_matching_closer_index` returns `None` on no-match. The wrong sentinel
+  silently sliced past the end of the op text and emitted a bogus arity
+  finding. Fixed to `bracket_end is None`, returning a named
+  unbalanced-bracket finding.
+- `_arith_constant_value_type_finding` would misclassify hex/octal/binary
+  literals (`0x7FC00000 : f32` was wrongly treated as float-by-presence
+  of `E`). Added a short-circuit defer on `0x`/`0o`/`0b` prefixes and
+  added `_` separator handling for decimal integer literals.
+
+Verified gates this batch:
+
+- `python scripts/mlir_audit_canaries.py --strict` -> `19 passed / 0 failed`
+  (was 12 / 0; +2 control-predicate, +3 memref, +2 arith-constant)
+- `python -m pytest helixc/tests/test_mlir_validate.py helixc/tests/test_mlir_backends.py -q`
+  -> `274 passed`
+- `python -m pytest -k mlir -q` -> `410 passed, 4347 deselected`
+
+Still open (carried forward):
+
+- HIGH-4: generic function bodies bypass terminator/static checks. A custom
+  `func.func @f() { "test.op"() : () -> () }` is currently DEFERRED rather
+  than FAILED because the generic-syntax op inside the custom body confuses
+  the static preflight. Needs either generic-op-in-custom-body recognition
+  or an outright rejection of generic ops in custom bodies. Probably
+  requires parser work in `_func_body_findings`.
+- Remaining HIGH-3 sub-cases: `vector.transfer_read` wrong element/index
+  types, `vector.shape_cast` element-count mismatch, `vector.multi_reduction
+  <bogus>` kind. Each is a focused per-op check similar to the closed ones.
+- MEDIUM findings from the 2026-05-22 third audit are still in scope:
+  generic `llvm.func` symbol-binding path; LLVM typed-value validation for
+  aggregate/vector returns; HIP/MSL C-like preflight accepting impossible
+  declarations.
+
+Restart protocol from here:
+
+1. `git status --short --branch` — confirm the same dirty MLIR worktree.
+2. `python scripts/mlir_audit_canaries.py --strict` — confirm `19 / 0`.
+3. Decide whether to close HIGH-4 (a meaningful parser change) or to stop
+   the audit treadmill here and route the residual sub-cases through Stage
+   215's real-`mlir-opt` parity gate.
+4. If continuing, run the gate ladder + re-audit (three axes from scratch)
+   before any further commit.
