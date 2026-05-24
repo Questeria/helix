@@ -2912,3 +2912,136 @@ def test_backends_module_has_no_top_level_import_mlir():
                 assert not alias.name.startswith("mlir"), alias.name
         elif isinstance(node, ast.ImportFrom):
             assert not (node.module or "").startswith("mlir"), node.module
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk C: _run_mlir_translate_step
+# --------------------------------------------------------------------------
+def test_run_mlir_translate_step_success(monkeypatch, tmp_path):
+    """A zero-exit mlir-translate with non-blank output text is a
+    success — the helper returns the artifact and no findings."""
+    captured: dict = {}
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        captured["cmd"] = cmd
+        captured["timeout"] = timeout
+        in_path = cmd[2]
+        out_path = cmd[4]
+        assert Path(in_path).read_text(encoding="utf-8") \
+            == "module { llvm.func @f() { llvm.return } }\n"
+        Path(out_path).write_text(
+            "define void @f() { ret void }\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step(
+        "module { llvm.func @f() { llvm.return } }\n",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="--mlir-to-llvmir",
+    )
+    assert findings == ()
+    assert output == "define void @f() { ret void }\n"
+    assert captured["cmd"][0] == "/usr/bin/mlir-translate"
+    assert captured["cmd"][1] == "--mlir-to-llvmir"
+
+
+def test_run_mlir_translate_step_rejects_blank_input():
+    output, findings = backends._run_mlir_translate_step(
+        "   ",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="--mlir-to-llvmir",
+    )
+    assert output is None
+    assert any("non-empty text" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_rejects_blank_translate_path():
+    output, findings = backends._run_mlir_translate_step(
+        "module {}",
+        mlir_translate="",
+        flag="--mlir-to-llvmir",
+    )
+    assert output is None
+    assert any("mlir_translate" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_rejects_non_flag():
+    output, findings = backends._run_mlir_translate_step(
+        "module {}",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="mlir-to-llvmir",  # missing --
+    )
+    assert output is None
+    assert any("argv token starting with '--'" in f
+               for f in findings), findings
+
+
+def test_run_mlir_translate_step_rejects_bad_timeout():
+    output, findings = backends._run_mlir_translate_step(
+        "module {}",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="--mlir-to-llvmir",
+        timeout_s=0,
+    )
+    assert output is None
+    assert any("timeout_s" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_nonzero_exit(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "error: bogus dialect op\n")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step(
+        "module { llvm.func @f() { llvm.return } }",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="--mlir-to-llvmir",
+    )
+    assert output is None
+    assert any("exited 1" in f for f in findings), findings
+    assert any("bogus dialect op" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_blank_output(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        Path(cmd[4]).write_text("\n   \n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step(
+        "module { llvm.func @f() { llvm.return } }",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="--mlir-to-llvmir",
+    )
+    assert output is None
+    assert any("blank output" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_timeout(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step(
+        "module {}",
+        mlir_translate="/usr/bin/mlir-translate",
+        flag="--mlir-to-llvmir",
+        timeout_s=5,
+    )
+    assert output is None
+    assert any("timed out after 5s" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_os_error(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step(
+        "module {}",
+        mlir_translate="/usr/bin/nope-mlir-translate",
+        flag="--mlir-to-llvmir",
+    )
+    assert output is None
+    assert any("OSError" in f for f in findings), findings

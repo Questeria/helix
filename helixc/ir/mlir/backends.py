@@ -3633,6 +3633,98 @@ def mlir_target_for_gpu_backend(
     return _GPU_BACKEND_TO_MLIR_TARGET_AUTHORITY[backend]
 
 
+def _run_mlir_translate_step(
+        dialect_mlir_text: str,
+        *,
+        mlir_translate: str,
+        flag: str,
+        timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Run `mlir-translate` to convert dialect-MLIR text into the raw
+    target artifact (e.g. raw LLVM IR via `--mlir-to-llvmir`, SPIR-V
+    binary via `--serialize-spirv`, etc.).
+
+    Returns `(output_text, findings)`:
+    - on success: `(output_text, ())` with output_text a non-blank
+      raw target artifact;
+    - on failure: `(None, (one-or-more finding strings,))`.
+
+    Stage 214 chunk C — the foundational helper. A future chunk will
+    chain this after `_run_mlir_opt_pipeline`'s dialect-MLIR output to
+    produce the raw target text the Stage-213 runner expects to
+    validate. The same subprocess hygiene `_run_mlir_opt_validate` /
+    `_run_mlir_opt_pipeline` use applies: argv-list dispatch, explicit
+    timeout, captured Timeout / OSError / nonzero diagnostics, and a
+    non-empty output artifact requirement.
+    """
+    if not isinstance(dialect_mlir_text, str) or not dialect_mlir_text.strip():
+        return None, (
+            "_run_mlir_translate_step: dialect_mlir_text must be "
+            "non-empty text",)
+    if not isinstance(mlir_translate, str) or not mlir_translate.strip() \
+            or mlir_translate != mlir_translate.strip():
+        return None, (
+            "_run_mlir_translate_step: mlir_translate must be a "
+            f"non-blank, whitespace-stripped path, got {mlir_translate!r}",)
+    if not isinstance(flag, str) or not flag.strip() \
+            or flag != flag.strip() or not flag.startswith("--"):
+        return None, (
+            "_run_mlir_translate_step: flag must be a non-blank, "
+            "whitespace-stripped argv token starting with '--', got "
+            f"{flag!r}",)
+    if ((not isinstance(timeout_s, (int, float)))
+            or isinstance(timeout_s, bool) or timeout_s <= 0):
+        return None, (
+            "_run_mlir_translate_step: timeout_s must be a positive "
+            f"number, got {timeout_s!r}",)
+
+    with tempfile.TemporaryDirectory(prefix="helix_mlir_translate_") as tmpdir:
+        in_path = os.path.join(tmpdir, "dialect.mlir")
+        out_path = os.path.join(tmpdir, "artifact.out")
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(dialect_mlir_text)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_mlir_translate_step: could not write temp "
+                f"input {in_path!r} ({type(exc).__name__}: {exc})",)
+        try:
+            proc = subprocess.run(
+                [mlir_translate, flag, in_path, "-o", out_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return None, (
+                f"_run_mlir_translate_step: mlir-translate timed out "
+                f"after {timeout_s}s",)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_mlir_translate_step: tool unusable at invocation "
+                f"({type(exc).__name__}: {exc})",)
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or "").strip().splitlines()[-3:]
+            stderr_snippet = " | ".join(stderr_tail) if stderr_tail else ""
+            return None, (
+                f"_run_mlir_translate_step: mlir-translate exited "
+                f"{proc.returncode}"
+                + (f" — stderr: {stderr_snippet}" if stderr_snippet else ""),)
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                output_text = f.read()
+        except (OSError, UnicodeError) as exc:
+            return None, (
+                f"_run_mlir_translate_step: could not read output "
+                f"artifact {out_path!r} "
+                f"({type(exc).__name__}: {exc})",)
+        if not output_text.strip():
+            return None, (
+                "_run_mlir_translate_step: mlir-translate exited 0 but "
+                "produced blank output",)
+        return output_text, ()
+
+
 def _run_mlir_opt_pipeline(
         mlir_text: str,
         *,
