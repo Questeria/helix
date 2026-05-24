@@ -352,24 +352,29 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    backend chain's status to a parity verdict (PASSED -> HOLDS,
    FAILED -> FAILED, DEFERRED -> DEFERRED).
 
-   **Chunks B+ scope** (next iterations):
+   **Chunk B done** (2026-05-24, commit 0814fcd): the harness now
+   runs BOTH paths from one entry. `_run_tile_ir_path(module, target)`
+   dispatches to the per-target home-grown emitter (PTX / HIP / MSL /
+   WGSL); LLVM_IR returns a structural deferral pointing at the
+   Phase-D parity gate (Stage 207) because the home-grown LLVM path
+   consumes `tir.Module`, not `TileModule`. `ParityResult` gains a
+   `tile_ir_output: Optional[str]` field that records the home-grown
+   artifact when present. Home-grown failure short-circuits to
+   PARITY_FAILED before the MLIR side runs.
 
-   - **Chunk B — home-grown path runner**: add a sibling helper
-     `tile_ir_to_backend(module, target)` (or expose what
-     `helixc/backend/x86_64.py` + `helixc/backend/gpu_ci.py`
-     already provide) and call BOTH paths from
-     `mlir_vs_tile_ir_parity_check`. The harness then returns
-     PARITY_HOLDS only when both paths agree (or both defer / fail
-     for the same reason).
+   **Chunks C+ scope** (next iterations):
+
    - **Chunk C — cross-path artifact comparison**: per-target
-     equivalence checks. Text targets (PTX / MSL / WGSL / LLVM IR)
-     can compare via SHA-256 after a normalization pass (strip
-     comments, normalize whitespace, canonical symbol order).
-     Binary intermediates (SPIR-V) compare via byte-equality.
-     A semantic-equivalence option (re-execute both artifacts on
-     test inputs) belongs to Stage 216 or Phase F.
-   - **Chunk D — close**: when chunks B+C are clean and audited,
-     bump `V3_STAGES_DONE` to 15 and update this handoff.
+     equivalence checks. Text targets (PTX / MSL / WGSL) can compare
+     via SHA-256 after a normalization pass (strip comments,
+     normalize whitespace, canonical symbol order). The MLIR path
+     produces raw target text; the home-grown path produces the same
+     target text — `parity.tile_ir_output` vs
+     `parity.mlir_result.output_text`. A semantic-equivalence option
+     (re-execute both artifacts on test inputs) belongs to Stage 216
+     or Phase F.
+   - **Chunk D — close**: when chunk C is clean and audited, bump
+     `V3_STAGES_DONE` to 15 and update this handoff.
 4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
 5. **Phase F (Stages 220–222)** — backend unification, the Stage-221
    cutover, the v3.0.0 5-clean-gate + git tag.
