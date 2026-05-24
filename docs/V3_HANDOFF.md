@@ -150,6 +150,65 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    real pass pipelines and the target output validators together.
    Before starting, run `python scripts\mlir_audit_canaries.py` in
    `--strict` mode — it should report 31/31 passed.
+
+   **Design question that Stage 214 must resolve first**: `mlir-opt`
+   alone only lowers between MLIR dialects — its output is still MLIR
+   text (in `llvm.func` / `nvvm.kernel` / `rocdl.kernel` / `spirv.func`
+   form), NOT raw LLVM IR / PTX / HIP / MSL / WGSL. The Stage-213
+   runner at `_run_mlir_opt_pipeline` (`backends.py:3766-3777`)
+   explicitly REJECTS MLIR-shaped output with the finding "produced
+   MLIR, not a target artifact; the artifact translation step is not
+   wired". The downstream translate tool is target-specific:
+
+   - **LLVM_IR**: `mlir-translate --mlir-to-llvmir` reads LLVM-dialect
+     MLIR text and emits raw LLVM IR.
+   - **PTX**: typically `mlir-translate --mlir-to-llvmir` then `llc
+     -mtriple=nvptx64 -mcpu=sm_80` — two stages.
+   - **ROCM_HIP**: similar but for AMDGPU triple.
+   - **METAL_MSL** / **WEBGPU_WGSL**: routed through SPIR-V (via
+     `--convert-gpu-to-spirv` + `--spirv-translate-module-to-binary`)
+     and then `spirv-cross` (Metal) or `tint` (WGSL) — two-stage.
+
+   Stage 214 must choose ONE of:
+
+   - **Approach A — extend pipeline-tuple semantics**: the pipeline
+     stays a `tuple[str, ...]` but a new convention encodes a final
+     translate-tool reference (e.g. `("--convert-func-to-llvm", "--",
+     "mlir-translate", "--mlir-to-llvmir")`). The runner splits on
+     `--` and dispatches the suffix to the named tool. **Risk**:
+     overloads pipeline-tuple semantics; the `--` delimiter rule is
+     easy to drift on.
+   - **Approach B — add a parallel `_MLIR_BACKEND_TRANSLATORS_AUTHORITY`
+     table**: `dict[MLIRBackendTarget, tuple[str, str, tuple[str, ...]]
+     | None]` where the tuple is (tool-name, flag, follow-up-args).
+     The runner chains mlir-opt → mlir-translate → optional follow-up
+     (llc / spirv-cross / tint) and at each stage verifies the
+     artifact shape. **Risk**: 3 tools deep means 3 invocations to
+     time-out / detect / read; lots of moving parts.
+   - **Approach C — keep mlir-opt-only and update the output
+     validators to accept LLVM-dialect MLIR**: the `_llvm_ir_artifact_
+     is_plausible` predicate is broadened to accept either raw LLVM IR
+     or MLIR text in LLVM dialect. The translate step is deferred to
+     Stage 215 / 221. **Risk**: the "raw artifact" contract is the
+     entire reason Stage 213 fail-closed at the runner — relaxing it
+     here defeats the purpose; downstream consumers still need raw
+     LLVM IR.
+
+   **Recommendation for the next iteration**: Approach B. Define
+   `_MLIR_BACKEND_TRANSLATORS_AUTHORITY` with `None` for every target
+   in chunk A (mirroring how the validator table started), then wire
+   targets one at a time in subsequent chunks. The runner gains a
+   single new chain after the mlir-opt step that consults this table
+   and invokes `mlir-translate` (+ any further tool) with the same
+   argv-list / timeout / brand-the-result rigor the rest of the
+   runner uses. The dev machine has neither tool, so production
+   results stay DEFERRED with informative findings until a future
+   toolchain becomes available.
+
+   **Chunk-A scope** (next iteration): only the type and the table.
+   Pipeline tuples and validators stay `()` / `None` for now. The
+   `_check_mlir_backend_tables` drift-guard gets one new clause
+   enforcing the translator table is total over `MLIRBackendTarget`.
 3. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).
 4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**

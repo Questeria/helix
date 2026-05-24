@@ -208,6 +208,22 @@ def test_backend_output_validators_are_explicitly_unwired():
         assert backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target] is None
 
 
+def test_backend_translators_table_is_total_and_unwired():
+    """Stage 214 chunk A: the translator-step table is total over the
+    targets and starts None-everywhere. The drift-guard refuses any
+    non-None entry that isn't a `(tool_name, flag, follow_up_args)`
+    tuple with the documented shape."""
+    assert set(backends.MLIR_BACKEND_TRANSLATORS) == set(MLIRBackendTarget)
+    for target in MLIRBackendTarget:
+        assert backends.MLIR_BACKEND_TRANSLATORS[target] is None
+        assert backends.backend_translator(target) is None
+
+
+def test_backend_translator_rejects_unknown_target():
+    with pytest.raises(ValueError):
+        backends.backend_translator("llvm_ir")  # type: ignore[arg-type]
+
+
 def test_public_backend_contract_tables_are_immutable():
     with pytest.raises(TypeError):
         backends.MLIR_BACKEND_REQUIRED_DIALECTS[

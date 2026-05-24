@@ -114,6 +114,39 @@ _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY = MappingProxyType({
 })
 MLIR_BACKEND_LOWERING_PIPELINES = _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY
 
+
+# Stage 214 chunk A — the translator-step table. `mlir-opt` only lowers
+# between MLIR dialects; its output is still MLIR text. The
+# transformation from "MLIR in target dialect" to "raw target artifact
+# the downstream consumer reads" requires a separate target-specific
+# tool (`mlir-translate --mlir-to-llvmir` for LLVM IR; that plus
+# `llc -mtriple=nvptx64` for PTX; SPIR-V serialization + `spirv-cross`
+# for Metal MSL; SPIR-V serialization + `tint` for WGSL).
+#
+# Stage 214 chunk A declares the table type and a None-everywhere
+# baseline so the drift-guard can enforce totality. Subsequent chunks
+# wire one target at a time. The dev machine has none of these tools,
+# so production results stay DEFERRED with informative findings until
+# a future toolchain becomes available — the same fail-closed
+# discipline Stage 213's pipeline + validator tables use.
+#
+# Entry shape: a tuple of `(tool_name, mlir_translate_flag, follow_up_args)`
+# where `tool_name` is the executable (`"mlir-translate"`),
+# `mlir_translate_flag` is the leading flag (`"--mlir-to-llvmir"`), and
+# `follow_up_args` is a tuple of further argv tokens for the subsequent
+# tool when the artifact requires a chained transformation (e.g.
+# `("llc", "-mtriple=nvptx64", "-mcpu=sm_80")` for PTX). None means
+# "translator step is not wired for this target; lowering stays
+# DEFERRED."
+_MLIR_BACKEND_TRANSLATORS_AUTHORITY = MappingProxyType({
+    MLIRBackendTarget.LLVM_IR: None,
+    MLIRBackendTarget.PTX: None,
+    MLIRBackendTarget.ROCM_HIP: None,
+    MLIRBackendTarget.METAL_MSL: None,
+    MLIRBackendTarget.WEBGPU_WGSL: None,
+})
+MLIR_BACKEND_TRANSLATORS = _MLIR_BACKEND_TRANSLATORS_AUTHORITY
+
 _BACKEND_OUTPUT_FAILURE_PREFIX = "target output contract for "
 _ARTIFACT_DIAGNOSTIC_PREFIXES = (
     "error:", "fatal:", "failed:", "note:", "traceback",
@@ -3499,6 +3532,45 @@ def _check_mlir_backend_tables() -> None:
                 f"validator must be callable or None, got "
                 f"{type(validator).__name__}")
 
+    if set(_MLIR_BACKEND_TRANSLATORS_AUTHORITY) != expected:
+        raise AssertionError(
+            "helixc.ir.mlir.backends: MLIR_BACKEND_TRANSLATORS keys "
+            f"{set(_MLIR_BACKEND_TRANSLATORS_AUTHORITY)} != "
+            f"MLIRBackendTarget members {expected}")
+    for target, translator in _MLIR_BACKEND_TRANSLATORS_AUTHORITY.items():
+        if translator is None:
+            continue
+        if not isinstance(translator, tuple) or len(translator) != 3:
+            raise AssertionError(
+                f"helixc.ir.mlir.backends: {target.name} translator "
+                "must be a (tool_name, flag, follow_up_args) tuple "
+                f"or None, got {translator!r}")
+        tool_name, flag, follow_up = translator
+        if not isinstance(tool_name, str) or not tool_name.strip() \
+                or tool_name != tool_name.strip():
+            raise AssertionError(
+                f"helixc.ir.mlir.backends: {target.name} translator "
+                f"tool_name {tool_name!r} must be a non-blank "
+                "whitespace-stripped string")
+        if not isinstance(flag, str) or not flag.strip() \
+                or flag != flag.strip() or not flag.startswith("--"):
+            raise AssertionError(
+                f"helixc.ir.mlir.backends: {target.name} translator "
+                f"flag {flag!r} must be a non-blank, whitespace-stripped "
+                "argv token starting with '--'")
+        if not isinstance(follow_up, tuple):
+            raise AssertionError(
+                f"helixc.ir.mlir.backends: {target.name} translator "
+                f"follow_up_args must be a tuple, got "
+                f"{type(follow_up).__name__}")
+        for arg in follow_up:
+            if not isinstance(arg, str) or not arg.strip() \
+                    or arg != arg.strip():
+                raise AssertionError(
+                    f"helixc.ir.mlir.backends: {target.name} "
+                    f"translator follow-up arg {arg!r} must be a "
+                    "non-blank, whitespace-stripped string")
+
 
 _check_mlir_backend_tables()
 
@@ -3516,6 +3588,28 @@ def backend_required_dialects(
     """Return the MLIR dialect contract for a backend target."""
     target = _require_backend_target(target)
     return _MLIR_BACKEND_REQUIRED_DIALECTS_AUTHORITY[target]
+
+
+def backend_translator(
+        target: MLIRBackendTarget,
+) -> tuple[str, str, tuple[str, ...]] | None:
+    """Return the Stage 214 translator-step descriptor for a backend
+    target, or None when not yet wired.
+
+    The translator step runs AFTER the `mlir-opt` lowering pipeline.
+    Its output is the raw target artifact the downstream consumer
+    reads (LLVM IR for `LLVM_IR`, PTX text for `PTX`, etc.). A None
+    means the target's lowering still ends at `mlir-opt`'s LLVM /
+    NVVM / ROCDL / SPIR-V dialect output, which the Stage-213 runner
+    refuses to mint as PASSED.
+
+    Returns a tuple `(tool_name, flag, follow_up_args)`:
+    `tool_name` is the executable (e.g. `"mlir-translate"`); `flag` is
+    the leading argv flag (must start with `--`); `follow_up_args` is
+    a tuple of any further argv tokens for a chained tool (e.g.
+    `("llc", "-mtriple=nvptx64", "-mcpu=sm_80")`)."""
+    target = _require_backend_target(target)
+    return _MLIR_BACKEND_TRANSLATORS_AUTHORITY[target]
 
 
 def backend_lowering_pipeline(
