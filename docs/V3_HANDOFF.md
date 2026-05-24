@@ -27,9 +27,11 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
   - **Phase E (Stages 210–216): COMPLETE.**
-  - **Phase F (Stages 220–222): not started.**
-- **`V3_STAGES_DONE = 16` of 19** (`scripts/helix_status.py`) —
-  ~84 % of v3.0 stages, ~98 % overall toward v3.0.
+  - **Phase F (Stages 220–222): in progress — Stage 220 CLOSED;
+    Stage 221 (the destructive cutover) needs explicit user
+    confirmation before starting.**
+- **`V3_STAGES_DONE = 17` of 19** (`scripts/helix_status.py`) —
+  ~89 % of v3.0 stages, ~99 % overall toward v3.0.
 
 ## 3. Phase E — the MLIR migration (the current frontier)
 

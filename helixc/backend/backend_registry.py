@@ -34,7 +34,7 @@ License: Apache 2.0
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 from ..ir import tile_ir as ti
 from ..ir.mlir.backends import (
@@ -107,7 +107,21 @@ class Backend:
                     f"entry {dialect!r}")
 
     def emit_module(self, module: ti.TileModule) -> str:
-        """Convenience: build a fresh emitter and emit one module."""
+        """Convenience: build a fresh emitter (with no constructor
+        args) and emit one module.
+
+        CHUNK-A SCOPE LIMIT: this calls `self.emit_factory()` with no
+        arguments, so each per-backend emitter is constructed with
+        ITS DEFAULT TARGET (PtxEmitter -> sm_75, HipEmitter ->
+        gfx942, MslEmitter -> apple7 / metal3.2, WgslEmitter ->
+        wgsl-2024 + workgroup_size=64). Callers that need a non-
+        default sub-target (sm_90, gfx1100, metal4.0, custom
+        workgroup size) must instantiate the emitter directly via
+        the registered class rather than going through this method.
+        Stage 220 chunk B+ will widen the factory contract to
+        accept per-target options (the autotuner needs to sweep
+        sub-targets, so this convenience surface is not yet
+        sufficient for autotuning use)."""
         emitter = self.emit_factory()
         if not isinstance(emitter, BackendEmitter):
             raise TypeError(
@@ -188,7 +202,15 @@ def get_backend(target: MLIRBackendTarget) -> Backend:
 
 
 def registered_targets() -> tuple[MLIRBackendTarget, ...]:
-    """Return the targets currently in the unified registry."""
+    """Return the targets currently in the unified registry.
+
+    Returns the 4 GPU targets — PTX, ROCM_HIP, METAL_MSL,
+    WEBGPU_WGSL — i.e. 4 of the 5 `MLIRBackendTarget` members.
+    LLVM_IR is intentionally excluded (its home-grown emitter
+    consumes `tir.Module`, not `TileModule`); a caller iterating
+    this tuple expecting all 5 targets must add a separate
+    `helixc.backend.llvm_ir.emit_module` call for LLVM_IR or use
+    `get_backend(LLVM_IR)` to get the documented `ValueError`."""
     _build_registry()
     return tuple(_BACKEND_REGISTRY)
 

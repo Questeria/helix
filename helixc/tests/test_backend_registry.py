@@ -192,12 +192,19 @@ def test_backend_emit_module_convenience_method():
     assert text.strip()
 
 
-def test_backend_emit_module_rejects_bad_factory(monkeypatch):
-    """If the registered factory ever returned a non-BackendEmitter,
-    the convenience method raises TypeError rather than
-    silently returning whatever-it-was's `emit_module` (which might
-    not exist)."""
-    backend = get_backend(MLIRBackendTarget.PTX)
-    object.__setattr__(backend, "emit_factory", lambda: "not an emitter")
+def test_backend_emit_module_rejects_bad_factory():
+    """If a Backend is constructed with a factory that returns
+    non-BackendEmitter, the convenience method raises TypeError
+    rather than silently returning whatever-it-was's `emit_module`.
+
+    Audit-fix H1: construct a fresh Backend rather than mutating the
+    registered PTX singleton (which would pollute the global
+    registry and break test isolation under reorder)."""
+    bad = Backend(
+        target=MLIRBackendTarget.PTX,
+        emit_factory=lambda: "not an emitter",
+        lowering_status=lambda k: "supported",
+        required_dialects=("func",),
+    )
     with pytest.raises(TypeError, match="non-BackendEmitter"):
-        backend.emit_module(tile_ir.TileModule())
+        bad.emit_module(tile_ir.TileModule())

@@ -65,7 +65,7 @@ VERSIONS: list[dict[str, str]] = [
 # closes with a 3-part audit. Bump `V3_STAGES_DONE` as each closes —
 # every percentage below recomputes from it.
 V3_STAGES_TOTAL = 19
-V3_STAGES_DONE = 16       # Phase D done + Phase E COMPLETE (210-216)
+V3_STAGES_DONE = 17       # Phase D + E COMPLETE; Phase F Stage 220 done
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
