@@ -174,10 +174,29 @@ _PTX_LOWERING_PIPELINE: tuple[str, ...] = (
     "--reconcile-unrealized-casts",
 )
 
+
+# Stage 214 chunk H wires ROCM_HIP's mlir-opt lowering pipeline.
+# Identical to PTX except `--convert-gpu-to-rocdl` replaces
+# `--convert-gpu-to-nvvm` (AMD GPU equivalent). The translator step
+# then runs `mlir-translate --mlir-to-llvmir`; chunk-F chained tool
+# `llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx900` produces ROCm HSA-co.
+_ROCM_HIP_LOWERING_PIPELINE: tuple[str, ...] = (
+    "--gpu-kernel-outlining",
+    "--convert-scf-to-cf",
+    "--convert-cf-to-llvm",
+    "--convert-arith-to-llvm",
+    "--convert-func-to-llvm",
+    "--convert-vector-to-llvm",
+    "--convert-index-to-llvm",
+    "--finalize-memref-to-llvm-conversion",
+    "--convert-gpu-to-rocdl",
+    "--reconcile-unrealized-casts",
+)
+
 _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_LOWERING_PIPELINE,
     MLIRBackendTarget.PTX: _PTX_LOWERING_PIPELINE,
-    MLIRBackendTarget.ROCM_HIP: (),
+    MLIRBackendTarget.ROCM_HIP: _ROCM_HIP_LOWERING_PIPELINE,
     MLIRBackendTarget.METAL_MSL: (),
     MLIRBackendTarget.WEBGPU_WGSL: (),
 })
@@ -230,10 +249,23 @@ _PTX_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
     ("llc", "-mtriple=nvptx64", "-mcpu=sm_80", "-O2"),
 )
 
+
+# Stage 214 chunk H wires ROCM_HIP's translator. The mlir-translate
+# stage produces raw LLVM IR (with AMDGPU intrinsics from
+# `--convert-gpu-to-rocdl`); the chunk-F chained tool `llc` then
+# emits AMDGPU assembly / object code. The `gfx900` target matches a
+# common Vega-generation discrete GPU; lift into per-target config in
+# a later chunk when concrete deployments need a different one.
+_ROCM_HIP_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
+    "mlir-translate",
+    "--mlir-to-llvmir",
+    ("llc", "-mtriple=amdgcn-amd-amdhsa", "-mcpu=gfx900", "-O2"),
+)
+
 _MLIR_BACKEND_TRANSLATORS_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_TRANSLATOR,
     MLIRBackendTarget.PTX: _PTX_TRANSLATOR,
-    MLIRBackendTarget.ROCM_HIP: None,
+    MLIRBackendTarget.ROCM_HIP: _ROCM_HIP_TRANSLATOR,
     MLIRBackendTarget.METAL_MSL: None,
     MLIRBackendTarget.WEBGPU_WGSL: None,
 })
@@ -3599,10 +3631,50 @@ def _ptx_output_validator(
     )
 
 
+def _rocm_hip_output_validator(
+        target: MLIRBackendTarget,
+        output_text: str) -> MLIRBackendOutputValidation:
+    """Stage 214 chunk H — the ROCM_HIP target output validator.
+
+    Confirms the post-chain artifact is a ROCm-style HIP / AMDGPU
+    text artifact via the existing `_rocm_hip_artifact_is_plausible`
+    predicate. Returns a candidate result whose evidence names the
+    validator and the predicate so the runner-registry brand can
+    promote it to PASSED. A fail returns the named finding, never a
+    silent skip.
+    """
+    if target is not MLIRBackendTarget.ROCM_HIP:
+        raise ValueError(
+            f"_rocm_hip_output_validator: target must be ROCM_HIP, got "
+            f"{target.value}")
+    output_digest = hashlib.sha256(
+        output_text.encode("utf-8")).hexdigest()
+    if not _looks_like_backend_output(target, output_text):
+        return MLIRBackendOutputValidation(
+            target=target,
+            output_sha256=output_digest,
+            findings=(
+                "ROCM_HIP target output validator: artifact does not "
+                "parse as ROCm/HIP text (failed "
+                "`_rocm_hip_artifact_is_plausible` shape probe)",),
+            evidence=(),
+        )
+    return MLIRBackendOutputValidation(
+        target=target,
+        output_sha256=output_digest,
+        findings=(),
+        evidence=(
+            "validator=_rocm_hip_output_validator",
+            "predicate=_rocm_hip_artifact_is_plausible",
+            f"target={target.value}",
+        ),
+    )
+
+
 _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY = MappingProxyType({
         MLIRBackendTarget.LLVM_IR: _llvm_ir_output_validator,
         MLIRBackendTarget.PTX: _ptx_output_validator,
-        MLIRBackendTarget.ROCM_HIP: None,
+        MLIRBackendTarget.ROCM_HIP: _rocm_hip_output_validator,
         MLIRBackendTarget.METAL_MSL: None,
         MLIRBackendTarget.WEBGPU_WGSL: None,
 })

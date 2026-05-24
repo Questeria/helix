@@ -224,12 +224,13 @@ def test_backend_required_dialects_are_total_nonempty_unique():
 _WIRED_TARGETS_STAGE_214 = frozenset((
     MLIRBackendTarget.LLVM_IR,
     MLIRBackendTarget.PTX,
+    MLIRBackendTarget.ROCM_HIP,
 ))
 
 
 def test_backend_lowering_pipelines_state_per_target():
-    """Stage 214 chunks E and G wire LLVM_IR and PTX; the remaining
-    three targets stay explicitly unwired with the empty `()`
+    """Stage 214 chunks E, G, H wire LLVM_IR / PTX / ROCM_HIP; the
+    remaining two targets stay explicitly unwired with the empty `()`
     baseline. Empty means DEFERRED, not PASSED."""
     for target in _WIRED_TARGETS_STAGE_214:
         assert backend_lowering_pipeline(target) != ()
@@ -240,8 +241,8 @@ def test_backend_lowering_pipelines_state_per_target():
 
 
 def test_backend_output_validators_state_per_target():
-    """Stage 214 chunks E and G wire LLVM_IR's and PTX's output
-    validators; the other three targets stay None. A pass pipeline
+    """Stage 214 chunks E, G, H wire LLVM_IR / PTX / ROCM_HIP output
+    validators; the other two targets stay None. A pass pipeline
     alone cannot prove backend-consumable output."""
     assert set(backends.MLIR_BACKEND_OUTPUT_VALIDATORS) == set(
         MLIRBackendTarget)
@@ -255,10 +256,10 @@ def test_backend_output_validators_state_per_target():
 
 
 def test_backend_translators_table_state_per_target():
-    """Stage 214 chunks E and G wire LLVM_IR's and PTX's translator
-    entries; the other three targets stay None (they need their
-    respective chunks-H/I/J chained-tool entries). The table is
-    total over MLIRBackendTarget."""
+    """Stage 214 chunks E, G, H wire LLVM_IR / PTX / ROCM_HIP
+    translator entries; the other two targets stay None (they need
+    chunks I/J's binary translator + spirv-cross / tint chains). The
+    table is total over MLIRBackendTarget."""
     assert set(backends.MLIR_BACKEND_TRANSLATORS) == set(MLIRBackendTarget)
     llvm_translator = backends.backend_translator(
         MLIRBackendTarget.LLVM_IR)
@@ -266,11 +267,17 @@ def test_backend_translators_table_state_per_target():
     ptx_translator = backends.backend_translator(
         MLIRBackendTarget.PTX)
     assert ptx_translator is not None
-    tool_name, flag, follow_up = ptx_translator
-    assert tool_name == "mlir-translate"
-    assert flag == "--mlir-to-llvmir"
-    assert follow_up[0] == "llc"
-    assert "-mtriple=nvptx64" in follow_up
+    _, _, ptx_follow_up = ptx_translator
+    assert ptx_follow_up[0] == "llc"
+    assert "-mtriple=nvptx64" in ptx_follow_up
+    rocm_translator = backends.backend_translator(
+        MLIRBackendTarget.ROCM_HIP)
+    assert rocm_translator is not None
+    rocm_tool, rocm_flag, rocm_follow_up = rocm_translator
+    assert rocm_tool == "mlir-translate"
+    assert rocm_flag == "--mlir-to-llvmir"
+    assert rocm_follow_up[0] == "llc"
+    assert "-mtriple=amdgcn-amd-amdhsa" in rocm_follow_up
     for target in MLIRBackendTarget:
         if target in _WIRED_TARGETS_STAGE_214:
             continue
@@ -294,7 +301,7 @@ def test_public_backend_contract_tables_are_immutable():
 
 def test_public_backend_contract_rebinding_does_not_change_authority(
         monkeypatch):
-    # ROCM_HIP is still unwired (chunks H+ will wire it), so the
+    # METAL_MSL is still unwired (chunks I+ will wire it), so the
     # rebinding check uses it to confirm the AUTHORITY surface is not
     # mutated by writes to the PUBLIC alias.
     monkeypatch.setattr(
@@ -302,7 +309,7 @@ def test_public_backend_contract_rebinding_does_not_change_authority(
         "MLIR_BACKEND_LOWERING_PIPELINES",
         MappingProxyType({
             **backends.MLIR_BACKEND_LOWERING_PIPELINES,
-            MLIRBackendTarget.ROCM_HIP: ("--canonicalize",),
+            MLIRBackendTarget.METAL_MSL: ("--canonicalize",),
         }),
     )
     monkeypatch.setattr(
@@ -310,12 +317,12 @@ def test_public_backend_contract_rebinding_does_not_change_authority(
         "MLIR_BACKEND_OUTPUT_VALIDATORS",
         MappingProxyType({
             **backends.MLIR_BACKEND_OUTPUT_VALIDATORS,
-            MLIRBackendTarget.ROCM_HIP: _accept_backend_output,
+            MLIRBackendTarget.METAL_MSL: _accept_backend_output,
         }),
     )
-    assert backend_lowering_pipeline(MLIRBackendTarget.ROCM_HIP) == ()
+    assert backend_lowering_pipeline(MLIRBackendTarget.METAL_MSL) == ()
     assert backends._MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[
-        MLIRBackendTarget.ROCM_HIP] is None
+        MLIRBackendTarget.METAL_MSL] is None
 
 
 def test_backend_output_validators_return_structured_validation():
@@ -2827,11 +2834,11 @@ def test_lower_mlir_to_backend_valid_defers_with_no_support():
         mlir_opt=None,
         detail=("`mlir-opt` is not on PATH",),
     )
-    # ROCM_HIP still has an empty pipeline (Stage 214 chunks E and G
-    # wire only LLVM_IR and PTX), so this test exercises the "pipeline
-    # is not wired yet" branch.
+    # METAL_MSL still has an empty pipeline (Stage 214 chunks E/G/H
+    # wire LLVM_IR / PTX / ROCM_HIP), so this test exercises the
+    # "pipeline is not wired yet" branch.
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
+        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert result.deferred()
     assert result.lowering_attempted is False
@@ -2855,9 +2862,9 @@ def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
         mlir_opt="/usr/bin/mlir-opt",
         detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
     )
-    # ROCM_HIP still has an empty pipeline (chunks H+ will wire it).
+    # METAL_MSL still has an empty pipeline (chunks I+ will wire it).
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
+        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert not any(
         "no real MLIR surface" in f for f in result.lowering_findings)
@@ -2935,11 +2942,11 @@ def test_lower_mlir_to_backend_declared_pipeline_without_validator_defers(
 
     monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
                         _fake_validate)
-    # ROCM_HIP's output validator is still None (chunks H+ wire it),
+    # METAL_MSL's output validator is still None (chunks I+ wire it),
     # so this test exercises the "validator not wired" branch.
-    _wire_pipeline(monkeypatch, MLIRBackendTarget.ROCM_HIP)
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.METAL_MSL)
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
+        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
     assert result.deferred()
     assert any("output validator is not wired" in f
                for f in result.lowering_findings), result.lowering_findings
@@ -3701,6 +3708,105 @@ def test_ptx_chain_defers_when_chained_tool_absent(monkeypatch):
     )
     result = lower_mlir_to_backend(
         _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert any("chained tool" in f and "is not on PATH" in f
+               for f in result.lowering_findings), \
+        result.lowering_findings
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk H: ROCM_HIP target wired end-to-end
+# --------------------------------------------------------------------------
+def test_rocm_hip_output_validator_accepts_real_hip_artifact():
+    """The ROCM_HIP target output validator returns a clean candidate
+    when the artifact parses via `_rocm_hip_artifact_is_plausible`."""
+    output = (
+        "#include <hip/hip_runtime.h>\n"
+        "__global__ void kernel(float * data) {}\n"
+    )
+    validation = backends._rocm_hip_output_validator(
+        MLIRBackendTarget.ROCM_HIP, output)
+    assert validation.findings == (), validation.findings
+    assert validation.candidate()
+    keys = {entry.partition("=")[0] for entry in validation.evidence}
+    assert {"validator", "predicate"}.issubset(keys), validation.evidence
+
+
+def test_rocm_hip_output_validator_rejects_non_rocm():
+    """A non-ROCm/HIP artifact (here: still MLIR text) is rejected
+    with a named finding."""
+    output = "module { func.func @kernel() { return } }\n"
+    validation = backends._rocm_hip_output_validator(
+        MLIRBackendTarget.ROCM_HIP, output)
+    assert validation.failed()
+    assert any("does not parse as ROCm/HIP text" in f
+               for f in validation.findings), validation.findings
+
+
+def test_rocm_hip_output_validator_rejects_wrong_target():
+    """Defensive: the ROCM_HIP validator must not silently accept a
+    different target's artifact."""
+    with pytest.raises(ValueError, match="target must be ROCM_HIP"):
+        backends._rocm_hip_output_validator(
+            MLIRBackendTarget.PTX,
+            "#include <hip/hip_runtime.h>\n"
+            "__global__ void k() {}\n")
+
+
+def test_rocm_hip_pipeline_is_wired():
+    """Stage 214 chunk H pins the ROCM_HIP pipeline. Identical to PTX
+    except `--convert-gpu-to-rocdl` replaces `--convert-gpu-to-nvvm`."""
+    pipeline = backend_lowering_pipeline(MLIRBackendTarget.ROCM_HIP)
+    assert pipeline == (
+        "--gpu-kernel-outlining",
+        "--convert-scf-to-cf",
+        "--convert-cf-to-llvm",
+        "--convert-arith-to-llvm",
+        "--convert-func-to-llvm",
+        "--convert-vector-to-llvm",
+        "--convert-index-to-llvm",
+        "--finalize-memref-to-llvm-conversion",
+        "--convert-gpu-to-rocdl",
+        "--reconcile-unrealized-casts",
+    )
+    for arg in pipeline:
+        assert arg.startswith("--"), arg
+
+
+def test_rocm_hip_translator_is_wired():
+    """Stage 214 chunk H wires the ROCM_HIP translator with the llc
+    chained tool using the amdgcn-amd-amdhsa triple."""
+    translator = backends.backend_translator(MLIRBackendTarget.ROCM_HIP)
+    assert translator is not None
+    tool, flag, follow_up = translator
+    assert tool == "mlir-translate"
+    assert flag == "--mlir-to-llvmir"
+    assert follow_up[0] == "llc"
+    assert "-mtriple=amdgcn-amd-amdhsa" in follow_up
+    assert any(a.startswith("-mcpu=") for a in follow_up)
+
+
+def test_rocm_hip_chain_defers_when_chained_tool_absent(monkeypatch):
+    """The wired ROCM_HIP target with mlir-opt + mlir-translate on
+    PATH but no `llc` returns DEFERRED with a "chained tool not on
+    PATH" finding."""
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH",
+                "`mlir-translate` is on PATH",
+                "`llc` is not on PATH"),
+        mlir_translate="/fake/mlir-translate",
+        llc=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert any("chained tool" in f and "is not on PATH" in f
                for f in result.lowering_findings), \
