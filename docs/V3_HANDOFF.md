@@ -210,11 +210,12 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    `_check_mlir_backend_tables` drift-guard gets one new clause
    enforcing the translator table is total over `MLIRBackendTarget`.
 
-   **Chunks A, B, C, D, E, F, G shipped 2026-05-24** (chunks D and E
-   include their own audit-fix batches — 3 HIGH + 3 must-fix MEDIUM
-   on D, 2 must-fix MEDIUM on E; chunk F audit verdict was SHIP with
-   no HIGH/must-fix MEDIUM; chunk G needed test-helper migration but
-   no fail-closed defects). State of Stage 214:
+   **Chunks A, B, C, D, E, F, G, H shipped 2026-05-24** (chunks D
+   and E include their own audit-fix batches — 3 HIGH + 3 must-fix
+   MEDIUM on D, 2 must-fix MEDIUM on E; chunk F audit verdict was
+   SHIP with no HIGH/must-fix MEDIUM; chunks G and H needed
+   test-helper migration but no fail-closed defects). State of
+   Stage 214:
 
    - **Chunk A** — translator-step table scaffold
      (`_MLIR_BACKEND_TRANSLATORS_AUTHORITY`, `backend_translator()`,
@@ -290,30 +291,49 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    pipeline + translator entry + output validator AND a new chained
    tool path in MLIRSupport.
 
-   **Chunk H scope** (next iteration): wire ROCM_HIP end-to-end.
-   - Pipeline: substitute `--convert-gpu-to-rocdl` for the NVVM
-     conversion, otherwise mirror chunk G.
-   - Translator: `("mlir-translate", "--mlir-to-llvmir",
-       ("llc", "-mtriple=amdgcn-amd-amdhsa", "-mcpu=gfx900"))`
-     (sm/gfx is a sensible default; lift into per-target config in
-     a later chunk). `llc` is already wired in `MLIRSupport`
-     (chunk F), so no new toolchain field needed.
-   - Output validator: `_rocm_hip_output_validator` wrapping
-     `_rocm_hip_artifact_is_plausible`.
+   **Chunk H done**: ROCM_HIP wired end-to-end. Pipeline mirrors
+   PTX except `--convert-gpu-to-rocdl` swaps in for NVVM. Translator
+   chains `llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx900 -O2`. Output
+   validator wraps `_rocm_hip_artifact_is_plausible`. No new
+   MLIRSupport field needed — `llc` already wired in chunk F.
 
    **Chunks I/J scope**: METAL_MSL and WEBGPU_WGSL both route via
-   SPIR-V. They need additional `MLIRSupport` fields for
-   `mlir-translate`'s SPIR-V serializer (a different flag,
-   `--serialize-spirv`, which is BINARY output — chunk C's helper
-   needs a binary-mode sibling) and a third stage:
+   SPIR-V. They need additional `MLIRSupport` fields and a binary
+   variant of `_run_mlir_translate_step`:
+   - `mlir-translate --serialize-spirv` produces a BINARY SPIR-V
+     module — chunk C's text-only helper cannot read it.
    - METAL_MSL chains `spirv-cross --msl` to convert SPIR-V →
-     Metal Shading Language;
+     Metal Shading Language (text).
    - WEBGPU_WGSL chains `tint --format wgsl` to convert SPIR-V →
-     WGSL.
-   Both involve a binary-output stage between mlir-translate and
-   the third tool — chunk I should add the binary-output variant of
-   `_run_mlir_translate_step` first (per the chunk-C docstring's
-   own admission).
+     WGSL (text).
+
+   **Chunk I scope** (next iteration): add the binary-output helper
+   AND wire METAL_MSL end-to-end together (the helper is a small
+   addition and is exercised by the METAL_MSL chain immediately).
+   - Add `_run_mlir_translate_step_binary(input_text, *,
+     mlir_translate, flag, timeout_s)` returning `(bytes | None,
+     findings)`. Same subprocess hygiene as the text variant; opens
+     the output file with `"rb"`.
+   - Add `_run_chained_tool_step_binary_input(input_bytes, *,
+     tool_path, args, timeout_s)` that writes the bytes to the
+     input file and reads stdout / out file as TEXT (Metal MSL is
+     text output even though its input is SPIR-V binary).
+   - Extend `MLIRSupport` with `spirv_cross: Optional[str]` and
+     extend `chained_tool_path` to map `"spirv-cross"` → it.
+   - Define `_METAL_MSL_LOWERING_PIPELINE` (mirror PTX/ROCM but
+     `--convert-gpu-to-spirv` in place of the rocdl/nvvm pass);
+     `_METAL_MSL_TRANSLATOR` = `("mlir-translate",
+     "--serialize-spirv", ("spirv-cross", "--msl"))`;
+     `_metal_msl_output_validator` wraps
+     `_metal_msl_artifact_is_plausible`.
+   - Wire the runner: when the registered translator's flag is
+     `"--serialize-spirv"`, route through the binary helper +
+     binary-input chained-tool helper.
+
+   **Chunk J scope** (subsequent iteration): wire WEBGPU_WGSL using
+   the binary helper from chunk I. New `MLIRSupport.tint` field;
+   `_WEBGPU_WGSL_TRANSLATOR` = `("mlir-translate", "--serialize-spirv",
+   ("tint", "--format", "wgsl"))`.
 
    **Stage 214 close** (after chunks H/I/J): when all five targets
    are wired and audited, run the Stage-214 holistic close audit
