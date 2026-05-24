@@ -210,10 +210,10 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    `_check_mlir_backend_tables` drift-guard gets one new clause
    enforcing the translator table is total over `MLIRBackendTarget`.
 
-   **Chunks A, B, C, D, E shipped 2026-05-24** (chunks D and E
+   **Chunks A, B, C, D, E, F shipped 2026-05-24** (chunks D and E
    include their own audit-fix batches — 3 HIGH + 3 must-fix MEDIUM
-   on D, 2 must-fix MEDIUM on E, all closed before commit).
-   State of Stage 214:
+   on D, 2 must-fix MEDIUM on E; chunk F audit verdict was SHIP with
+   no HIGH/must-fix MEDIUM). State of Stage 214:
 
    - **Chunk A** — translator-step table scaffold
      (`_MLIR_BACKEND_TRANSLATORS_AUTHORITY`, `backend_translator()`,
@@ -256,30 +256,47 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    produces PASSED with mlir-translate path + flag in
    `output_provenance`.
 
-   **Chunks F+ scope** (next iterations): wire the four GPU targets
-   one at a time. PTX → ROCM_HIP → METAL_MSL → WEBGPU_WGSL. Each
-   needs a chunk-F prerequisite: the chained-tool runner that
-   invokes the follow-up tool (`llc` for PTX, similar for the
-   others) after `mlir-translate`.
+   **Chunk F done**: chained third-stage tool runner shipped. New
+   private `_run_chained_tool_step(input_text, *, tool_path, args,
+   timeout_s)` helper. `_run_mlir_opt_pipeline` gains `chained_tool`
+   parameter; invokes the chained tool when `follow_up_args` is
+   non-empty (replacing the chunk-D fail-closed). `MLIRSupport` gains
+   `llc: Optional[str]` field and `chained_tool_path(name)` lookup
+   method. `lower_mlir_to_backend` resolves the chained tool path and
+   adds a soft-DEFERRED gate when the tool isn't on PATH.
+   `output_provenance` records `chained-tool=<path>`,
+   `chained-tool-name=<name>`, `chained-tool-args=<args>`.
 
-   **Chunk F scope** (next iteration): add chained-tool support.
-   - New private `_run_chained_tool_step(input_text, tool_path,
-     args, timeout_s)` helper analogous to
-     `_run_mlir_translate_step` but for the THIRD-stage tool
-     (`llc`, `spirv-cross`, `tint`). Same subprocess hygiene.
-   - Extend `MLIRSupport` with optional fields for each follow-up
-     tool path the registered targets need (probably `llc` for PTX
-     first; `spirv-cross` / `tint` later as METAL_MSL / WEBGPU_WGSL
-     are wired). Probe via `shutil.which` in `detect_mlir_support`.
-   - Wire `_run_mlir_opt_pipeline`: when `follow_up_args` is
-     non-empty, invoke `_run_chained_tool_step` on the
-     mlir-translate output; use its output as the artifact for
-     downstream validation. The chunk-D fail-closed clause that
-     currently returns "chunk-E chained-tool runner required" is
-     replaced by the actual chain.
-   - Test the chain with both stages mocked. Pin no-tool-found
-     soft-DEFERRED gate at `lower_mlir_to_backend`.
+   **Chunks G+ scope** (next iterations): wire each GPU target's
+   pipeline + translator entry + output validator together. Per the
+   chunk-E pattern (which wired LLVM_IR end-to-end in one chunk).
+   Suggested order PTX → ROCM_HIP → METAL_MSL → WEBGPU_WGSL.
+
+   **Chunk G scope** (next iteration): wire PTX end-to-end.
+   - Define `_MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[PTX]`. Modern
+     MLIR PTX lowering: `--gpu-kernel-outlining`,
+     `--convert-gpu-to-nvvm`, then the LLVM-dialect lowering passes
+     from chunk E (arith / func / cf / vector / index / memref) so
+     the dialect-MLIR output is ready for `mlir-translate
+     --mlir-to-llvmir` and then `llc`.
+   - Define `_MLIR_BACKEND_TRANSLATORS_AUTHORITY[PTX] =
+     ("mlir-translate", "--mlir-to-llvmir",
+       ("llc", "-mtriple=nvptx64", "-mcpu=sm_80"))`.
+   - Define `_MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[PTX]` as a
+     `_ptx_output_validator` callable that uses
+     `_looks_like_backend_output(PTX, ...)` -> `_ptx_artifact_is_plausible`
+     and returns `MLIRBackendOutputValidation` clean candidate with
+     evidence on pass.
+   - Tests pin the full three-stage chain with mocked subprocess
+     invocations. Verify PASSED end-to-end. Check provenance
+     includes the chained-tool entries.
    - 3-clean audit, commit + push + Telegram.
+
+   **Stage 214 close** (after chunks G/H/I/J): when all five targets
+   are wired and audited, run the Stage-214 holistic close audit
+   (silent-failure / type-design / code-review across the whole
+   backends.py + toolchain.py changes); fix any HIGH or must-fix
+   MEDIUM; close the stage; bump `V3_STAGES_DONE` to 14.
 3. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).
 4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
