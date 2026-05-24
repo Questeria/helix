@@ -210,10 +210,11 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    `_check_mlir_backend_tables` drift-guard gets one new clause
    enforcing the translator table is total over `MLIRBackendTarget`.
 
-   **Chunks A, B, C, D, E, F shipped 2026-05-24** (chunks D and E
+   **Chunks A, B, C, D, E, F, G shipped 2026-05-24** (chunks D and E
    include their own audit-fix batches — 3 HIGH + 3 must-fix MEDIUM
    on D, 2 must-fix MEDIUM on E; chunk F audit verdict was SHIP with
-   no HIGH/must-fix MEDIUM). State of Stage 214:
+   no HIGH/must-fix MEDIUM; chunk G needed test-helper migration but
+   no fail-closed defects). State of Stage 214:
 
    - **Chunk A** — translator-step table scaffold
      (`_MLIR_BACKEND_TRANSLATORS_AUTHORITY`, `backend_translator()`,
@@ -272,27 +273,49 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    chunk-E pattern (which wired LLVM_IR end-to-end in one chunk).
    Suggested order PTX → ROCM_HIP → METAL_MSL → WEBGPU_WGSL.
 
-   **Chunk G scope** (next iteration): wire PTX end-to-end.
-   - Define `_MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[PTX]`. Modern
-     MLIR PTX lowering: `--gpu-kernel-outlining`,
-     `--convert-gpu-to-nvvm`, then the LLVM-dialect lowering passes
-     from chunk E (arith / func / cf / vector / index / memref) so
-     the dialect-MLIR output is ready for `mlir-translate
-     --mlir-to-llvmir` and then `llc`.
-   - Define `_MLIR_BACKEND_TRANSLATORS_AUTHORITY[PTX] =
-     ("mlir-translate", "--mlir-to-llvmir",
-       ("llc", "-mtriple=nvptx64", "-mcpu=sm_80"))`.
-   - Define `_MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[PTX]` as a
-     `_ptx_output_validator` callable that uses
-     `_looks_like_backend_output(PTX, ...)` -> `_ptx_artifact_is_plausible`
-     and returns `MLIRBackendOutputValidation` clean candidate with
-     evidence on pass.
-   - Tests pin the full three-stage chain with mocked subprocess
-     invocations. Verify PASSED end-to-end. Check provenance
-     includes the chained-tool entries.
-   - 3-clean audit, commit + push + Telegram.
+   **Chunk G done**: PTX wired end-to-end. Pipeline starts with
+   `--gpu-kernel-outlining`, then the LLVM-dialect lowering passes
+   from chunk E, then `--convert-gpu-to-nvvm`. Translator chains
+   `llc -mtriple=nvptx64 -mcpu=sm_80 -O2`. Output validator wraps
+   `_ptx_artifact_is_plausible`. Test-helper `_register_output_validator`
+   was updated to also reset the target's translator to None by
+   default so pre-chunk-G tests that assumed un-wired translator keep
+   their original intent; chunk-D/F tests that wire a translator now
+   call `_register_*_validator` BEFORE `_wire_translator`. 6 new
+   chunk-G tests pin validator behaviour, pipeline shape, translator
+   shape, and the toolchain-absent DEFERRED gate.
 
-   **Stage 214 close** (after chunks G/H/I/J): when all five targets
+   **Chunks H/I/J scope** (next iterations): wire the remaining GPU
+   targets ROCM_HIP, METAL_MSL, WEBGPU_WGSL. Each needs a per-target
+   pipeline + translator entry + output validator AND a new chained
+   tool path in MLIRSupport.
+
+   **Chunk H scope** (next iteration): wire ROCM_HIP end-to-end.
+   - Pipeline: substitute `--convert-gpu-to-rocdl` for the NVVM
+     conversion, otherwise mirror chunk G.
+   - Translator: `("mlir-translate", "--mlir-to-llvmir",
+       ("llc", "-mtriple=amdgcn-amd-amdhsa", "-mcpu=gfx900"))`
+     (sm/gfx is a sensible default; lift into per-target config in
+     a later chunk). `llc` is already wired in `MLIRSupport`
+     (chunk F), so no new toolchain field needed.
+   - Output validator: `_rocm_hip_output_validator` wrapping
+     `_rocm_hip_artifact_is_plausible`.
+
+   **Chunks I/J scope**: METAL_MSL and WEBGPU_WGSL both route via
+   SPIR-V. They need additional `MLIRSupport` fields for
+   `mlir-translate`'s SPIR-V serializer (a different flag,
+   `--serialize-spirv`, which is BINARY output — chunk C's helper
+   needs a binary-mode sibling) and a third stage:
+   - METAL_MSL chains `spirv-cross --msl` to convert SPIR-V →
+     Metal Shading Language;
+   - WEBGPU_WGSL chains `tint --format wgsl` to convert SPIR-V →
+     WGSL.
+   Both involve a binary-output stage between mlir-translate and
+   the third tool — chunk I should add the binary-output variant of
+   `_run_mlir_translate_step` first (per the chunk-C docstring's
+   own admission).
+
+   **Stage 214 close** (after chunks H/I/J): when all five targets
    are wired and audited, run the Stage-214 holistic close audit
    (silent-failure / type-design / code-review across the whole
    backends.py + toolchain.py changes); fix any HIGH or must-fix
