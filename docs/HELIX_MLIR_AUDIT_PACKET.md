@@ -552,3 +552,59 @@ Restart protocol from here:
    acknowledges that the real validator does this work for free.
 4. If continuing the mock path, run the gate ladder + re-audit before any
    commit.
+
+## 2026-05-24 Checkpoint C — Backend-shape MEDIUMs
+
+Status: ALL HIGH and MEDIUM findings from the 2026-05-22 Third-Audit-Round
+stop are now closed. 29/29 strict canaries pass; the new code was code-
+reviewed and the two follow-up MEDIUMs the audit raised were fixed in the
+same batch.
+
+Closed in this batch:
+
+- MEDIUM (generic `llvm.func` symbol-binding) — new helpers
+  `_mlir_defined_llvm_func_symbols`, `_llvm_func_custom_symbol_at`,
+  `_mlir_generic_llvm_func_symbols`, `_generic_llvm_func_has_body` walk
+  both the custom (`llvm.func @sym() { ... }`) and generic
+  (`"llvm.func"() <{sym_name = "..."}> ({...})`) syntactic forms and
+  contribute their symbols to `_mlir_defined_function_symbols`. Declaration-
+  only forms (no body / empty region) are excluded so the symbol-binding
+  gate isn't loosened.
+- MEDIUM (LLVM typed-value scalar-in-aggregate) — `_llvm_ir_value_token_
+  matches_type` no longer accepts a bare scalar literal for aggregate /
+  vector / array return types. The previous fall-through
+  `return type_text.startswith(("<", "{", "["))` accepted
+  `ret { i32 } 0`, `ret <4 x i32> 0`, etc. Named identifiers,
+  `zeroinitializer`, `undef`, `poison` are still accepted via the earlier
+  branches.
+- MEDIUM (HIP/MSL C-like impossible declaration) —
+  `_c_like_declaration_statement_is_plausible` now requires the trailing
+  identifier (after stripping `*` / `&`) to start with a letter or `_`.
+  This catches `float * 123;` and siblings. (`this * is * nonsense;` is
+  syntactically a valid C expression statement and stays accepted —
+  documented as out-of-scope for the mock validator.)
+- Audit-fix follow-ups (code-review axis):
+  - `_llvm_func_custom_symbol_at` modifier-keyword list extended to
+    cover all 11 `LLVM::Linkage` values plus visibility / addr-space /
+    dso-scope tokens, with a loop to consume any sequence of them.
+  - `_llvm_func_custom_symbol_at` now also verifies a non-empty body
+    region is present before binding the symbol — closes the asymmetry
+    between custom and generic body detection.
+
+Three new canaries: `generic-llvm-func-symbol-binding`,
+`llvm-typed-value-aggregate-scalar`, `c-like-declaration-digit-identifier`.
+
+Verified gates this batch:
+
+- `python scripts/mlir_audit_canaries.py --strict` -> `29 passed / 0 failed`
+- `python -m pytest helixc/tests/test_mlir_validate.py helixc/tests/test_mlir_backends.py -q`
+  -> `275 passed`
+- `python -m pytest -k mlir -q` -> `411 passed, 4347 deselected`
+
+Restart protocol from here:
+
+1. Re-confirm `python scripts/mlir_audit_canaries.py --strict` -> `29 / 0`.
+2. With all 2026-05-22 audit findings closed, the next step is the
+   Stage-213 holistic close audit (`validate.py` + `backends.py` together)
+   per `docs/V3_HANDOFF.md` section 4. If clean, close Stage 213 and bump
+   `V3_STAGES_DONE` to 13.

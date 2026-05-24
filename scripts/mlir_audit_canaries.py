@@ -145,6 +145,71 @@ def _backend_shape_must_reject(
     return CanaryResult(name, True, "malformed artifact rejected")
 
 
+def _generic_llvm_func_symbol_must_bind() -> CanaryResult:
+    helper = getattr(backends, "_mlir_defined_function_symbols", None)
+    if helper is None:
+        return CanaryResult(
+            "generic-llvm-func-symbol-binding",
+            False,
+            "MLIR symbol extraction helper is missing")
+    mlir = (
+        'module { "llvm.func"() <{sym_name = "expected", '
+        'function_type = !llvm.func<void ()>}> '
+        '({ llvm.return }) : () -> () }')
+    symbols = helper(mlir)
+    if "expected" in symbols:
+        return CanaryResult(
+            "generic-llvm-func-symbol-binding",
+            True,
+            f"symbols={symbols!r}")
+    return CanaryResult(
+        "generic-llvm-func-symbol-binding",
+        False,
+        f"generic llvm.func sym_name not picked up: {symbols!r}")
+
+
+def _llvm_typed_value_must_reject_scalar_in_aggregate() -> CanaryResult:
+    helper = getattr(backends,
+                     "_llvm_ir_typed_value_part_is_plausible", None)
+    if helper is None:
+        return CanaryResult(
+            "llvm-typed-value-aggregate-scalar",
+            False,
+            "LLVM typed-value helper is missing")
+    fails = (
+        helper("{ i32 } 0"),
+        helper("<4 x i32> 0"),
+        helper("[4 x i32] 0"),
+    )
+    if any(fails):
+        return CanaryResult(
+            "llvm-typed-value-aggregate-scalar",
+            False,
+            f"aggregate/vector accepted scalar literal: {fails!r}")
+    return CanaryResult(
+        "llvm-typed-value-aggregate-scalar",
+        True,
+        "scalar literal rejected for aggregate/vector return types")
+
+
+def _c_like_declaration_must_reject_digit_identifier() -> CanaryResult:
+    helper = getattr(backends, "_c_like_body_line_is_plausible", None)
+    if helper is None:
+        return CanaryResult(
+            "c-like-declaration-digit-identifier",
+            False,
+            "C-like body line helper is missing")
+    if helper("float * 123;"):
+        return CanaryResult(
+            "c-like-declaration-digit-identifier",
+            False,
+            "declaration with digit-prefixed identifier accepted")
+    return CanaryResult(
+        "c-like-declaration-digit-identifier",
+        True,
+        "declaration with digit-prefixed identifier rejected")
+
+
 def _quoted_symbol_must_not_collapse() -> CanaryResult:
     helper = getattr(backends, "_mlir_defined_function_symbols", None)
     if helper is None:
@@ -300,6 +365,9 @@ def run_canaries() -> tuple[CanaryResult, ...]:
             "fn expected() {}\n",
         ),
         _quoted_symbol_must_not_collapse(),
+        _generic_llvm_func_symbol_must_bind(),
+        _llvm_typed_value_must_reject_scalar_in_aggregate(),
+        _c_like_declaration_must_reject_digit_identifier(),
     )
 
 

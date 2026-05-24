@@ -68,9 +68,12 @@ Ratified strategy (`docs/V3_STAGE210_MLIR_DECISION.md`):
   function-body terminator bypass. The remaining HIGH-3 vector
   sub-cases (`vector.transfer_read` non-`index`, `vector.shape_cast`
   element-count / element-type drift, `vector.multi_reduction` kind
-  validation) are also closed. Only the 3 MEDIUM backend-shape
-  findings from the 2026-05-22 third audit remain. See
-  `docs/HELIX_MLIR_AUDIT_PACKET.md` "2026-05-24 Checkpoint B" for the
+  validation) are also closed. All 3 MEDIUM backend-shape findings
+  (generic `llvm.func` symbol binding, LLVM aggregate/vector typed-
+  value, HIP/MSL C-like impossible declarations) are also closed.
+  Next: Stage-213 holistic close audit (`validate.py` + `backends.py`
+  together) before bumping `V3_STAGES_DONE` to 13. See
+  `docs/HELIX_MLIR_AUDIT_PACKET.md` "2026-05-24 Checkpoint C" for the
   full state.
 
 ### The translator (`emit.py`) — current capability

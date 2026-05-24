@@ -840,7 +840,14 @@ def _llvm_ir_value_token_matches_type(token: str, type_text: str) -> bool:
         return False
     if _llvm_ir_type_is_float_like(type_text):
         return _llvm_ir_float_literal_is_plausible(token)
-    return type_text.startswith(("<", "{", "["))
+    # Aggregate / vector / array types accept named (`%x`, `@g`), explicit
+    # `zeroinitializer`, `undef`, `poison`, or multi-token literal forms
+    # (e.g. `<i32 0, ...>`) — never a bare scalar literal. The
+    # multi-token forms never reach this single-token-matcher in the
+    # first place; the single-token forms are already handled above. A
+    # bare `0` here is a smoke-aware-echo bug shape (e.g.
+    # `ret { i32 } 0` or `ret <4 x i32> 0`), so fail closed.
+    return False
 
 
 def _llvm_ir_type_is_pointer_like(type_text: str) -> bool:
@@ -2914,6 +2921,14 @@ def _c_like_declaration_statement_is_plausible(statement: str) -> bool:
     if len(lhs_tokens) > 1 and all(
             token.replace("_", "").isalnum() for token in lhs_tokens):
         return False
+    # The trailing token of a declaration must be a valid identifier:
+    # it starts with a letter or `_`, not a digit. This catches bug
+    # shapes like `float * 123;` that the earlier alnum-checks accept
+    # by virtue of `123` being alnum-only.
+    if lhs_tokens:
+        last = lhs_tokens[-1]
+        if last and not (last[0].isalpha() or last[0] == "_"):
+            return False
     return True
 
 
@@ -4003,7 +4018,157 @@ def _mlir_defined_function_symbols(mlir_text: str) -> tuple[str, ...]:
             symbol = fields[0]
             if symbol.startswith("@"):
                 symbols.append(_llvm_symbol_from_mlir_symbol(symbol))
-    return tuple(symbols)
+    symbols.extend(_mlir_defined_llvm_func_symbols(mlir_text))
+    return tuple(dict.fromkeys(symbols))
+
+
+def _mlir_defined_llvm_func_symbols(mlir_text: str) -> tuple[str, ...]:
+    """Extract LLVM-dialect `llvm.func` body-form symbols from both
+    custom (`llvm.func @sym() { ... }`) and generic
+    (`"llvm.func"() <{sym_name = "sym"}> ({ ... })`) syntactic forms.
+
+    Without this, a malformed input that declares `llvm.func @expected`
+    in generic form alongside a backend artifact that emits a wholly
+    unrelated symbol would clear the symbol-binding gate because the
+    input's required-symbol set comes back empty."""
+    structural = _comment_stripped_text(mlir_text)
+    symbols: list[str] = []
+    i = 0
+    while i < len(structural):
+        if structural[i] == '"':
+            i = _quoted_span_end(structural, i)
+            continue
+        if not _bare_word_at(structural, i, "llvm.func"):
+            i += 1
+            continue
+        symbol = _llvm_func_custom_symbol_at(structural, i)
+        if symbol:
+            symbols.append(_llvm_symbol_from_mlir_symbol(symbol))
+        i += len("llvm.func")
+    symbols.extend(_mlir_generic_llvm_func_symbols(mlir_text))
+    return tuple(dict.fromkeys(symbols))
+
+
+_LLVM_FUNC_MODIFIER_WORDS = frozenset((
+    # LLVM::Linkage enum (custom-form spellings).
+    "private", "internal", "available_externally", "linkonce",
+    "linkonce_odr", "weak", "weak_odr", "common", "appending",
+    "extern_weak", "external",
+    # Visibility, addr-space hints, dso scope (MLIR may emit any of
+    # these between `llvm.func` and `@symbol`).
+    "default", "hidden", "protected",
+    "unnamed_addr", "local_unnamed_addr", "dso_local", "dso_preemptable",
+    "public", "nested",
+))
+
+
+def _llvm_func_custom_symbol_at(
+        structural: str, token_start: int) -> str | None:
+    line_end = _next_op_boundary(structural, token_start, len(structural))
+    cursor = _skip_spaces(structural, token_start + len("llvm.func"))
+    while cursor < line_end:
+        word, after = _read_bare_word(structural, cursor)
+        if not word or word not in _LLVM_FUNC_MODIFIER_WORDS:
+            break
+        cursor = _skip_spaces(structural, after)
+    symbol_ref = _mlir_symbol_ref_at(structural, cursor, line_end)
+    if symbol_ref is None:
+        return None
+    after_symbol = _skip_spaces(structural, symbol_ref[1])
+    if after_symbol >= len(structural) or structural[after_symbol] != "(":
+        return None
+    paren_end = _matching_closer_index(structural, after_symbol, "(", ")")
+    if paren_end is None:
+        return None
+    if not _llvm_func_custom_has_region_after(structural, paren_end + 1):
+        return None
+    return symbol_ref[0]
+
+
+def _llvm_func_custom_has_region_after(
+        structural: str, start: int) -> bool:
+    """Look past return type / attributes for a `{ ... }` region. The
+    structural pass doesn't try to fully parse the return-type grammar;
+    it just searches for the next depth-zero `{` before the next
+    op-boundary and confirms its matching `}` contains non-whitespace
+    content."""
+    line_end = _next_op_boundary(structural, start, len(structural))
+    brace_open = -1
+    depth = 0
+    i = start
+    while i < line_end:
+        char = structural[i]
+        if char == "{" and depth == 0:
+            brace_open = i
+            break
+        if char in "(<[":
+            depth += 1
+        elif char in ")>]" and depth > 0:
+            depth -= 1
+        i += 1
+    if brace_open == -1:
+        return False
+    brace_close = _matching_closer_index(structural, brace_open, "{", "}")
+    if brace_close is None:
+        return False
+    return bool(structural[brace_open + 1:brace_close].strip())
+
+
+def _mlir_generic_llvm_func_symbols(mlir_text: str) -> tuple[str, ...]:
+    """Walk generic-form `"llvm.func"() <{sym_name = "..."}>` ops and
+    return the declared symbols. Body-vs-decl is detected by whether a
+    region (a `({...})` operand follows the property dict)."""
+    structural = _comment_stripped_text(mlir_text)
+    symbols: list[str] = []
+    i = 0
+    while i < len(structural):
+        found = structural.find('"llvm.func"', i)
+        if found == -1:
+            break
+        if not _mlir_op_start_context_allows(structural, found):
+            i = found + 1
+            continue
+        quoted_end = found + len('"llvm.func"')
+        j = _skip_spaces(structural, quoted_end)
+        if j >= len(structural) or structural[j] != "(":
+            i = quoted_end
+            continue
+        operands_end = _matching_closer_index(structural, j, "(", ")")
+        if operands_end is None:
+            i = quoted_end
+            continue
+        props = _generic_property_dict_after(
+            structural, operands_end + 1)
+        if props is None:
+            i = operands_end + 1
+            continue
+        props_text, props_end = props
+        props_map = _generic_property_assignments(props_text)
+        symbol_prop = props_map.get("sym_name")
+        if symbol_prop is not None:
+            symbol = _symbol_from_generic_string_property(symbol_prop)
+            if symbol is not None and _generic_llvm_func_has_body(
+                    structural, props_end):
+                symbols.append(_llvm_symbol_from_mlir_symbol(symbol))
+        i = props_end
+    return tuple(dict.fromkeys(symbols))
+
+
+def _generic_llvm_func_has_body(structural: str, start: int) -> bool:
+    """A generic-form llvm.func has a body iff it carries a non-empty
+    region after its property dict, written as `({ ... })`. An empty
+    region `({})` is a declaration (no body)."""
+    cursor = _skip_spaces(structural, start)
+    if cursor >= len(structural) or structural[cursor] != "(":
+        return False
+    region_end = _matching_closer_index(structural, cursor, "(", ")")
+    if region_end is None:
+        return False
+    inner = structural[cursor + 1:region_end].strip()
+    if not inner.startswith("{") or not inner.endswith("}"):
+        return False
+    body = inner[1:-1].strip()
+    return bool(body)
 
 
 def _mlir_gpu_kernel_symbols(mlir_text: str) -> tuple[str, ...]:
