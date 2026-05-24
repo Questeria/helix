@@ -389,14 +389,15 @@ def test_parity_check_llvm_ir_defers_with_both_sides_noted():
     """Chunk B: LLVM_IR parity returns PARITY_DEFERRED with TWO
     findings — the structural-deferral note for the home-grown side
     AND the MLIR side's status. The Stage 207 Phase-D gate is the
-    canonical LLVM_IR parity check."""
+    canonical LLVM_IR parity check. (The close-audit hardening
+    promoted the MLIR-side status to a `mlir_side_status=` prefix.)"""
     module = _trivial_module()
     result = mlir_vs_tile_ir_parity_check(
         module, MLIRBackendTarget.LLVM_IR)
     assert result.deferred()
     assert len(result.findings) == 2
     assert any("Stage 207" in f for f in result.findings), result.findings
-    assert any("MLIR side for LLVM_IR returned" in f
+    assert any(f.startswith("mlir_side_status=")
                for f in result.findings), result.findings
 
 
@@ -539,6 +540,124 @@ def test_parity_check_fails_on_artifact_mismatch(monkeypatch):
                for f in result.findings), result.findings
     assert any("first divergence" in f
                for f in result.findings), result.findings
+
+
+# --------------------------------------------------------------------------
+# Stage 215 close-audit fixes
+# --------------------------------------------------------------------------
+def test_compare_artifacts_refuses_empty_normalized():
+    """Audit HIGH-1: two artifacts that consist entirely of
+    comments / cosmetic directives both normalize to "" and would
+    SHA-256-collide on the empty string; the comparison helper must
+    refuse to mint a match on empty normalized forms."""
+    a = "// only a comment\n.version 7.0\n.target sm_80\n"
+    b = "// totally different comment\n.version 9.0\n.target sm_90\n"
+    match, summary = parity._compare_artifacts(
+        MLIRBackendTarget.PTX, a, b)
+    assert not match
+    assert summary is not None
+    assert "empty" in summary
+    assert "cosmetic directives" in summary
+
+
+def test_compare_artifacts_refuses_one_side_empty():
+    a = ""  # explicit blank
+    b = ".visible .entry main() { ret; }\n"
+    match, summary = parity._compare_artifacts(
+        MLIRBackendTarget.PTX, a, b)
+    assert not match
+    assert summary is not None
+    assert "tile-IR" in summary  # the empty side is named
+
+
+def test_is_positive_assertion_only_true_for_holds():
+    """Audit HIGH-2: `is_positive_assertion()` is the only
+    release-gate-safe predicate. PARITY_DEFERRED is NOT a positive
+    assertion (it means unverifiable)."""
+    holds = ParityResult(
+        target=MLIRBackendTarget.PTX,
+        status=ParityStatus.PARITY_HOLDS, findings=())
+    failed = ParityResult(
+        target=MLIRBackendTarget.PTX,
+        status=ParityStatus.PARITY_FAILED, findings=("x",))
+    deferred = ParityResult(
+        target=MLIRBackendTarget.PTX,
+        status=ParityStatus.PARITY_DEFERRED, findings=("y",))
+    assert holds.is_positive_assertion()
+    assert not failed.is_positive_assertion()
+    assert not deferred.is_positive_assertion()
+
+
+def test_llvm_ir_findings_carry_structured_mlir_side_status():
+    """Audit HIGH-2: LLVM_IR DEFERRED findings include a machine-
+    readable `mlir_side_status=` prefix so callers can branch on the
+    MLIR side without parsing prose."""
+    module = _trivial_module()
+    result = mlir_vs_tile_ir_parity_check(
+        module, MLIRBackendTarget.LLVM_IR)
+    assert result.deferred()
+    assert any(f.startswith("mlir_side_status=")
+               for f in result.findings), result.findings
+    # And the documented machine-readable contract: the prefix is
+    # followed by one of passed/failed/deferred.
+    status_finding = next(
+        f for f in result.findings if f.startswith("mlir_side_status="))
+    value = status_finding.split("=", 1)[1].split(";", 1)[0].strip()
+    assert value in ("passed", "failed", "deferred"), status_finding
+
+
+def test_normalize_artifact_strips_block_comments_ptx():
+    """Audit MEDIUM-3: `/* ... */` block comments are stripped even
+    when they span lines or appear inline."""
+    text = (
+        ".visible .entry main(/* hi */) {\n"
+        "  /* multi\n"
+        "     line */ ret;\n"
+        "}\n"
+    )
+    out = parity._normalize_artifact_text(MLIRBackendTarget.PTX, text)
+    assert "hi" not in out
+    assert "multi" not in out
+    assert ".visible .entry main(" in out
+    assert "ret;" in out
+
+
+def test_normalize_artifact_strips_block_comments_metal():
+    text = "kernel void k() {\n  /* note */ return;\n}\n"
+    out = parity._normalize_artifact_text(
+        MLIRBackendTarget.METAL_MSL, text)
+    assert "note" not in out
+    assert "kernel void k()" in out
+
+
+def test_run_tile_ir_path_re_raises_memory_error(monkeypatch):
+    """Audit MEDIUM-1: MemoryError is host-level resource exhaustion
+    and must propagate, not be swallowed as a parity failure."""
+    class _BadFactory:
+        def emit_module(self, _module):
+            raise MemoryError("simulated OOM")
+    monkeypatch.setitem(
+        parity._HOMEGROWN_EMITTERS, MLIRBackendTarget.PTX,
+        lambda: _BadFactory())
+    with pytest.raises(MemoryError):
+        parity._run_tile_ir_path(
+            _trivial_module(), MLIRBackendTarget.PTX)
+
+
+def test_run_tile_ir_path_captures_traceback(monkeypatch):
+    """Audit MEDIUM-1: a regular exception's traceback is preserved
+    in the findings tuple so a debugger can locate the offending op."""
+    class _BadFactory:
+        def emit_module(self, _module):
+            raise KeyError("unknown_op")
+    monkeypatch.setitem(
+        parity._HOMEGROWN_EMITTERS, MLIRBackendTarget.PTX,
+        lambda: _BadFactory())
+    text, findings = parity._run_tile_ir_path(
+        _trivial_module(), MLIRBackendTarget.PTX)
+    assert text is None
+    assert any("KeyError" in f for f in findings), findings
+    assert any("traceback:" in f for f in findings), findings
 
 
 # --------------------------------------------------------------------------

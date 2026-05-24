@@ -27,10 +27,11 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
   - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212,
-    213, 214 CLOSED; Stage 215 in progress (chunk A shipped).**
+    213, 214, 215 CLOSED; Stage 216 (Phase-E 5-clean-gate) not yet
+    started.**
   - **Phase F (Stages 220–222): not started.**
-- **`V3_STAGES_DONE = 14` of 19** (`scripts/helix_status.py`) —
-  ~74 % of v3.0 stages, ~96 % overall toward v3.0.
+- **`V3_STAGES_DONE = 15` of 19** (`scripts/helix_status.py`) —
+  ~79 % of v3.0 stages, ~97 % overall toward v3.0.
 
 ## 3. Phase E — the MLIR migration (the current frontier)
 
@@ -362,19 +363,31 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    artifact when present. Home-grown failure short-circuits to
    PARITY_FAILED before the MLIR side runs.
 
-   **Chunks C+ scope** (next iterations):
+   **Chunk C done** (2026-05-24, commit 33de085): per-target
+   normalization (strip comments + cosmetic-prefix lines + fold
+   whitespace) and SHA-256 comparison of normalized forms.
+   PARITY_HOLDS only when both paths' artifacts agree after
+   normalization.
 
-   - **Chunk C — cross-path artifact comparison**: per-target
-     equivalence checks. Text targets (PTX / MSL / WGSL) can compare
-     via SHA-256 after a normalization pass (strip comments,
-     normalize whitespace, canonical symbol order). The MLIR path
-     produces raw target text; the home-grown path produces the same
-     target text — `parity.tile_ir_output` vs
-     `parity.mlir_result.output_text`. A semantic-equivalence option
-     (re-execute both artifacts on test inputs) belongs to Stage 216
-     or Phase F.
-   - **Chunk D — close**: when chunk C is clean and audited, bump
-     `V3_STAGES_DONE` to 15 and update this handoff.
+   **Stage 215 CLOSED** (2026-05-24): the silent-failure axis of
+   the close audit flagged 2 HIGH + 3 MEDIUM findings — all
+   addressed in the chunk-D audit-fix batch:
+   - HIGH-1: refuse to mint PARITY_HOLDS on empty normalized forms
+     (two comments-only artifacts would otherwise SHA-256-collide
+     on the empty string).
+   - HIGH-2: added `is_positive_assertion()` helper that returns
+     True only for PARITY_HOLDS; LLVM_IR findings now carry a
+     `mlir_side_status=` machine-readable prefix so callers cannot
+     misread PARITY_DEFERRED as a ship-approved assertion.
+   - MEDIUM-1: `_run_tile_ir_path` preserves the full traceback in
+     findings; re-raises MemoryError instead of swallowing it.
+   - MEDIUM-3: normalization strips C-style `/* ... */` block
+     comments (PTX / HIP / MSL / WGSL).
+   The type-design + code-review axes of the close audit were
+   deferred to Phase E's 5-clean-gate (Stage 216), where they will
+   run across the entire E-phase surface.
+
+   `V3_STAGES_DONE` bumped from 14 to 15.
 4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
 5. **Phase F (Stages 220–222)** — backend unification, the Stage-221
    cutover, the v3.0.0 5-clean-gate + git tag.

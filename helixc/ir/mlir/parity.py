@@ -39,6 +39,8 @@ License: Apache 2.0
 from __future__ import annotations
 
 import hashlib
+import re
+import traceback
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
@@ -116,10 +118,21 @@ def _run_tile_ir_path(
     try:
         emitter = factory()
         text = emitter.emit_module(module)  # type: ignore[attr-defined]
+    except MemoryError:
+        # Resource exhaustion is a host problem the caller must see,
+        # not a parity-gate failure. Re-raise.
+        raise
     except Exception as exc:
+        # Stage 215 chunk D audit-fix MEDIUM-1: capture the full
+        # traceback alongside the type+message so a debugger six
+        # months from now can locate the offending op.
+        tb_text = "".join(traceback.format_exception(
+            type(exc), exc, exc.__traceback__))
         return None, (
             f"home-grown path for {target.value} raised "
-            f"{type(exc).__name__}: {exc}",)
+            f"{type(exc).__name__}: {exc}",
+            f"traceback:\n{tb_text}",
+        )
     if not isinstance(text, str) or not text.strip():
         return None, (
             f"home-grown path for {target.value} returned blank or "
@@ -186,6 +199,15 @@ def _normalize_artifact_text(
         raise ValueError(
             "_normalize_artifact_text: text must be str, got "
             f"{type(text).__name__}")
+    # Stage 215 chunk D audit-fix MEDIUM-3: strip C-style block
+    # comments before line iteration. The PTX home-grown emitter
+    # does not emit `/* ... */` today, but `mlir-translate` /
+    # `mlir-opt` may (e.g. via attribute serialization), and a
+    # future LLVM upgrade could surface them only on the MLIR side.
+    if target in (MLIRBackendTarget.PTX, MLIRBackendTarget.ROCM_HIP,
+                  MLIRBackendTarget.METAL_MSL,
+                  MLIRBackendTarget.WEBGPU_WGSL):
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     comment_marker = _TARGET_LINE_COMMENT_MARKER.get(target)
     cosmetic_prefixes = _TARGET_COSMETIC_LINE_PREFIXES.get(target, ())
     out: list[str] = []
@@ -230,6 +252,18 @@ def _compare_artifacts(
             "_compare_artifacts: both texts must be str")
     tile_ir_norm = _normalize_artifact_text(target, tile_ir_text)
     mlir_norm = _normalize_artifact_text(target, mlir_text)
+    # Stage 215 chunk D audit-fix HIGH-1: refuse to mint a parity
+    # match on empty normalized forms — two artifacts that consist
+    # entirely of cosmetic directives / comments would collide on
+    # SHA-256 of "" and silently PARITY_HOLDS otherwise.
+    if not tile_ir_norm or not mlir_norm:
+        which = ("both" if (not tile_ir_norm and not mlir_norm)
+                 else "tile-IR" if not tile_ir_norm else "MLIR")
+        return False, (
+            f"parity check refused: normalized {which} artifact is "
+            "empty — likely an emitter producing only cosmetic "
+            "directives or a normalization rule that ate all "
+            "semantic content")
     tile_ir_digest = hashlib.sha256(
         tile_ir_norm.encode("utf-8")).hexdigest()
     mlir_digest = hashlib.sha256(mlir_norm.encode("utf-8")).hexdigest()
@@ -354,6 +388,18 @@ class ParityResult:
     def deferred(self) -> bool:
         return self.status is ParityStatus.PARITY_DEFERRED
 
+    def is_positive_assertion(self) -> bool:
+        """True iff this is a CHECKED parity claim — the parity gate
+        ran both paths and the artifacts matched. PARITY_DEFERRED is
+        explicitly NOT a positive assertion: it means "the parity
+        gate could not verify on this machine", not "the artifacts
+        match." Callers gating release / promotion decisions on the
+        parity check MUST use `is_positive_assertion()`; using
+        `not failed()` would silently ship LLVM_IR (which always
+        defers — home-grown LLVM is structurally inaccessible from
+        a TileModule) and any unverifiable target."""
+        return self.status is ParityStatus.PARITY_HOLDS
+
 
 def mlir_vs_tile_ir_parity_check(
         module: tile_ir.TileModule,
@@ -432,20 +478,24 @@ def mlir_vs_tile_ir_parity_check(
 
     # LLVM_IR special case: home-grown is structurally inaccessible
     # from a TileModule, so the parity verdict is DEFERRED with both
-    # the home-grown deferral note AND the MLIR side's status.
+    # the home-grown deferral note AND the MLIR side's status. The
+    # status is prefixed `mlir_side_status=` so a machine-readable
+    # caller can branch on it without parsing prose; callers must
+    # still treat PARITY_DEFERRED as "unverifiable", not "ship-ok".
     if target is MLIRBackendTarget.LLVM_IR:
-        mlir_summary = ("PASSED" if backend_status is MLIRBackendStatus.PASSED
-                        else "FAILED" if backend_status
+        mlir_summary = ("passed" if backend_status is MLIRBackendStatus.PASSED
+                        else "failed" if backend_status
                         is MLIRBackendStatus.FAILED
-                        else "DEFERRED")
+                        else "deferred")
         return ParityResult(
             target=target,
             status=ParityStatus.PARITY_DEFERRED,
             findings=(
                 tile_ir_findings[0],
-                f"MLIR side for LLVM_IR returned {mlir_summary}; the "
-                "Stage 207 Phase-D parity gate is the canonical "
-                "LLVM_IR parity check",
+                f"mlir_side_status={mlir_summary}; the Stage 207 "
+                "Phase-D parity gate is the canonical LLVM_IR parity "
+                "check (treat PARITY_DEFERRED as unverifiable, never "
+                "as a positive assertion)",
             ),
             mlir_result=mlir_result,
             tile_ir_output=None,
