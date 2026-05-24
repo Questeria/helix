@@ -140,6 +140,20 @@ def _register_output_validator(
         }),
     )
     _wire_pipeline(monkeypatch, target)
+    # Stage 214 chunk G+ wires translators for the GPU targets too.
+    # Pre-chunk-G tests assumed translators were None for everything
+    # except LLVM_IR; reset the translator to None by default so
+    # `_register_output_validator` keeps the old semantics. Tests that
+    # explicitly want a translator must call `_wire_translator` AFTER
+    # this helper.
+    monkeypatch.setattr(
+        backends,
+        "_MLIR_BACKEND_TRANSLATORS_AUTHORITY",
+        MappingProxyType({
+            **backends._MLIR_BACKEND_TRANSLATORS_AUTHORITY,
+            target: None,
+        }),
+    )
     return validator
 
 
@@ -207,45 +221,58 @@ def test_backend_required_dialects_are_total_nonempty_unique():
             assert isinstance(dialect, str) and dialect.isidentifier()
 
 
+_WIRED_TARGETS_STAGE_214 = frozenset((
+    MLIRBackendTarget.LLVM_IR,
+    MLIRBackendTarget.PTX,
+))
+
+
 def test_backend_lowering_pipelines_state_per_target():
-    """Stage 214 chunk E wires LLVM_IR; the other four targets stay
-    explicitly unwired with the empty `()` baseline. Empty means
-    DEFERRED, not PASSED."""
-    assert backend_lowering_pipeline(MLIRBackendTarget.LLVM_IR) != ()
+    """Stage 214 chunks E and G wire LLVM_IR and PTX; the remaining
+    three targets stay explicitly unwired with the empty `()`
+    baseline. Empty means DEFERRED, not PASSED."""
+    for target in _WIRED_TARGETS_STAGE_214:
+        assert backend_lowering_pipeline(target) != ()
     for target in MLIRBackendTarget:
-        if target is MLIRBackendTarget.LLVM_IR:
+        if target in _WIRED_TARGETS_STAGE_214:
             continue
         assert backend_lowering_pipeline(target) == ()
 
 
 def test_backend_output_validators_state_per_target():
-    """Stage 214 chunk E wires LLVM_IR's output validator; the other
-    four targets stay None. A pass pipeline alone cannot prove
-    backend-consumable output."""
+    """Stage 214 chunks E and G wire LLVM_IR's and PTX's output
+    validators; the other three targets stay None. A pass pipeline
+    alone cannot prove backend-consumable output."""
     assert set(backends.MLIR_BACKEND_OUTPUT_VALIDATORS) == set(
         MLIRBackendTarget)
-    assert callable(
-        backends.MLIR_BACKEND_OUTPUT_VALIDATORS[MLIRBackendTarget.LLVM_IR])
+    for target in _WIRED_TARGETS_STAGE_214:
+        assert callable(
+            backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target])
     for target in MLIRBackendTarget:
-        if target is MLIRBackendTarget.LLVM_IR:
+        if target in _WIRED_TARGETS_STAGE_214:
             continue
         assert backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target] is None
 
 
 def test_backend_translators_table_state_per_target():
-    """Stage 214 chunk E wires LLVM_IR's translator entry; the other
-    four targets stay None (they need the chunk-E+ chained-tool
-    runner). The table is total over MLIRBackendTarget."""
+    """Stage 214 chunks E and G wire LLVM_IR's and PTX's translator
+    entries; the other three targets stay None (they need their
+    respective chunks-H/I/J chained-tool entries). The table is
+    total over MLIRBackendTarget."""
     assert set(backends.MLIR_BACKEND_TRANSLATORS) == set(MLIRBackendTarget)
     llvm_translator = backends.backend_translator(
         MLIRBackendTarget.LLVM_IR)
-    assert llvm_translator is not None
-    tool_name, flag, follow_up = llvm_translator
+    assert llvm_translator == ("mlir-translate", "--mlir-to-llvmir", ())
+    ptx_translator = backends.backend_translator(
+        MLIRBackendTarget.PTX)
+    assert ptx_translator is not None
+    tool_name, flag, follow_up = ptx_translator
     assert tool_name == "mlir-translate"
     assert flag == "--mlir-to-llvmir"
-    assert follow_up == ()
+    assert follow_up[0] == "llc"
+    assert "-mtriple=nvptx64" in follow_up
     for target in MLIRBackendTarget:
-        if target is MLIRBackendTarget.LLVM_IR:
+        if target in _WIRED_TARGETS_STAGE_214:
             continue
         assert backends.MLIR_BACKEND_TRANSLATORS[target] is None
         assert backends.backend_translator(target) is None
@@ -267,12 +294,15 @@ def test_public_backend_contract_tables_are_immutable():
 
 def test_public_backend_contract_rebinding_does_not_change_authority(
         monkeypatch):
+    # ROCM_HIP is still unwired (chunks H+ will wire it), so the
+    # rebinding check uses it to confirm the AUTHORITY surface is not
+    # mutated by writes to the PUBLIC alias.
     monkeypatch.setattr(
         backends,
         "MLIR_BACKEND_LOWERING_PIPELINES",
         MappingProxyType({
             **backends.MLIR_BACKEND_LOWERING_PIPELINES,
-            MLIRBackendTarget.PTX: ("--canonicalize",),
+            MLIRBackendTarget.ROCM_HIP: ("--canonicalize",),
         }),
     )
     monkeypatch.setattr(
@@ -280,12 +310,12 @@ def test_public_backend_contract_rebinding_does_not_change_authority(
         "MLIR_BACKEND_OUTPUT_VALIDATORS",
         MappingProxyType({
             **backends.MLIR_BACKEND_OUTPUT_VALIDATORS,
-            MLIRBackendTarget.PTX: _accept_backend_output,
+            MLIRBackendTarget.ROCM_HIP: _accept_backend_output,
         }),
     )
-    assert backend_lowering_pipeline(MLIRBackendTarget.PTX) == ()
+    assert backend_lowering_pipeline(MLIRBackendTarget.ROCM_HIP) == ()
     assert backends._MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[
-        MLIRBackendTarget.PTX] is None
+        MLIRBackendTarget.ROCM_HIP] is None
 
 
 def test_backend_output_validators_return_structured_validation():
@@ -2797,11 +2827,11 @@ def test_lower_mlir_to_backend_valid_defers_with_no_support():
         mlir_opt=None,
         detail=("`mlir-opt` is not on PATH",),
     )
-    # PTX still has an empty pipeline (Stage 214 chunk E wires only
-    # LLVM_IR), so this test exercises the "pipeline is not wired yet"
-    # branch.
+    # ROCM_HIP still has an empty pipeline (Stage 214 chunks E and G
+    # wire only LLVM_IR and PTX), so this test exercises the "pipeline
+    # is not wired yet" branch.
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert result.deferred()
     assert result.lowering_attempted is False
@@ -2825,8 +2855,9 @@ def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
         mlir_opt="/usr/bin/mlir-opt",
         detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
     )
+    # ROCM_HIP still has an empty pipeline (chunks H+ will wire it).
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert not any(
         "no real MLIR surface" in f for f in result.lowering_findings)
@@ -2904,9 +2935,11 @@ def test_lower_mlir_to_backend_declared_pipeline_without_validator_defers(
 
     monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
                         _fake_validate)
-    _wire_ptx_pipeline(monkeypatch)
+    # ROCM_HIP's output validator is still None (chunks H+ wire it),
+    # so this test exercises the "validator not wired" branch.
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.ROCM_HIP)
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+        _WELL_FORMED, MLIRBackendTarget.ROCM_HIP, support=support)
     assert result.deferred()
     assert any("output validator is not wired" in f
                for f in result.lowering_findings), result.lowering_findings
@@ -3152,8 +3185,8 @@ def test_run_mlir_opt_pipeline_requires_translate_path_when_translator_wired(
     """When the target's translator is wired, `mlir_translate` must be
     a non-blank path. Calling with None or blank is a configuration
     bug."""
-    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
     _register_ptx_validator(monkeypatch)
+    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
     validation = _real_passed_validation()
     with pytest.raises(ValueError, match="mlir_translate must be"):
         backends._run_mlir_opt_pipeline(
@@ -3173,8 +3206,8 @@ def test_run_mlir_opt_pipeline_translator_chain_failure(monkeypatch):
     runner returns FAILED with findings prefixed by 'mlir-translate
     step ... failed:' — never silently accepts the un-translated
     dialect text."""
-    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
     _register_ptx_validator(monkeypatch)
+    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
 
     proc_calls: list[tuple[str, ...]] = []
 
@@ -3215,11 +3248,11 @@ def test_run_mlir_opt_pipeline_requires_chained_tool_when_follow_up_args(
     """Stage 214 chunk F wires the chained-tool hop. A translator with
     non-empty `follow_up_args` requires `chained_tool` to be passed;
     omitting it is a configuration bug at the runner boundary."""
+    _register_ptx_validator(monkeypatch)
     _wire_translator(
         monkeypatch, MLIRBackendTarget.PTX,
         translator=("mlir-translate", "--mlir-to-llvmir",
                     ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
-    _register_ptx_validator(monkeypatch)
     validation = _real_passed_validation()
     with pytest.raises(ValueError, match="chained_tool must be"):
         backends._run_mlir_opt_pipeline(
@@ -3239,6 +3272,7 @@ def test_run_mlir_opt_pipeline_rejects_malformed_translator_entry(monkeypatch):
     """Runtime defensive check: a monkeypatched translator entry that
     is not a 3-tuple is rejected at the runner boundary even though
     the module-load drift guard cannot have seen it."""
+    _register_ptx_validator(monkeypatch)
     monkeypatch.setattr(
         backends, "_MLIR_BACKEND_TRANSLATORS_AUTHORITY",
         MappingProxyType({
@@ -3246,7 +3280,6 @@ def test_run_mlir_opt_pipeline_rejects_malformed_translator_entry(monkeypatch):
             MLIRBackendTarget.PTX: ("mlir-translate", "--mlir-to-llvmir"),
         }),
     )
-    _register_ptx_validator(monkeypatch)
     validation = _real_passed_validation()
     with pytest.raises(ValueError, match="must be a 3-tuple"):
         backends._run_mlir_opt_pipeline(
@@ -3485,13 +3518,13 @@ def test_chained_tool_e2e_chain_invokes_three_stages(monkeypatch):
     """End-to-end: with PTX wired as `mlir-translate --mlir-to-llvmir`
     followed by `llc ...`, the runner invokes all three stages in
     order and the artifact is the llc output."""
+    _register_ptx_validator(monkeypatch)
+    pipeline = _wire_pipeline(
+        monkeypatch, MLIRBackendTarget.PTX, ("--canonicalize",))
     _wire_translator(
         monkeypatch, MLIRBackendTarget.PTX,
         translator=("mlir-translate", "--mlir-to-llvmir",
                     ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
-    _register_ptx_validator(monkeypatch)
-    pipeline = _wire_pipeline(
-        monkeypatch, MLIRBackendTarget.PTX, ("--canonicalize",))
 
     invocations: list[str] = []
 
@@ -3540,13 +3573,117 @@ def test_lower_mlir_to_backend_defers_when_chained_tool_absent(monkeypatch):
     MLIRSupport, the gate at lower_mlir_to_backend returns DEFERRED
     with a clear finding rather than silently attempting a chain that
     cannot complete."""
+    _register_ptx_validator(monkeypatch)
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.PTX)
     _wire_translator(
         monkeypatch, MLIRBackendTarget.PTX,
         translator=("mlir-translate", "--mlir-to-llvmir",
                     ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
-    _register_ptx_validator(monkeypatch)
-    _wire_pipeline(monkeypatch, MLIRBackendTarget.PTX)
 
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH",
+                "`mlir-translate` is on PATH",
+                "`llc` is not on PATH"),
+        mlir_translate="/fake/mlir-translate",
+        llc=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert any("chained tool" in f and "is not on PATH" in f
+               for f in result.lowering_findings), \
+        result.lowering_findings
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk G: PTX target wired end-to-end
+# --------------------------------------------------------------------------
+def test_ptx_output_validator_accepts_real_ptx():
+    """The PTX target output validator returns a clean candidate when
+    the artifact parses as PTX text via `_ptx_artifact_is_plausible`."""
+    output = (
+        ".version 8.3\n"
+        ".target sm_80\n"
+        ".visible .entry main() {\n"
+        "  ret;\n"
+        "}\n"
+    )
+    validation = backends._ptx_output_validator(
+        MLIRBackendTarget.PTX, output)
+    assert validation.findings == ()
+    assert validation.candidate()
+    keys = {entry.partition("=")[0] for entry in validation.evidence}
+    assert {"validator", "predicate"}.issubset(keys), validation.evidence
+
+
+def test_ptx_output_validator_rejects_non_ptx():
+    """A non-PTX artifact (here: still MLIR text) is rejected with a
+    named finding."""
+    output = "module { func.func @kernel() { return } }\n"
+    validation = backends._ptx_output_validator(
+        MLIRBackendTarget.PTX, output)
+    assert validation.failed()
+    assert any("does not parse as PTX text" in f
+               for f in validation.findings), validation.findings
+
+
+def test_ptx_output_validator_rejects_wrong_target():
+    """Defensive: the PTX validator must not silently accept a
+    different target's artifact."""
+    with pytest.raises(ValueError, match="target must be PTX"):
+        backends._ptx_output_validator(
+            MLIRBackendTarget.LLVM_IR,
+            ".version 8.3\n.target sm_80\n.entry main() {}\n")
+
+
+def test_ptx_pipeline_is_wired():
+    """Stage 214 chunk G pins the exact PTX pipeline so reordering or
+    silently dropping a critical pass (e.g. --gpu-kernel-outlining)
+    requires an intentional test update."""
+    pipeline = backend_lowering_pipeline(MLIRBackendTarget.PTX)
+    assert pipeline == (
+        "--gpu-kernel-outlining",
+        "--convert-scf-to-cf",
+        "--convert-cf-to-llvm",
+        "--convert-arith-to-llvm",
+        "--convert-func-to-llvm",
+        "--convert-vector-to-llvm",
+        "--convert-index-to-llvm",
+        "--finalize-memref-to-llvm-conversion",
+        "--convert-gpu-to-nvvm",
+        "--reconcile-unrealized-casts",
+    )
+    for arg in pipeline:
+        assert isinstance(arg, str)
+        assert arg.startswith("--"), arg
+
+
+def test_ptx_translator_is_wired():
+    """Stage 214 chunk G wires the PTX translator with the llc chained
+    tool. The follow_up_args declares the llc invocation with the
+    nvptx64 triple and an sm_80 target."""
+    translator = backends.backend_translator(MLIRBackendTarget.PTX)
+    assert translator is not None
+    tool, flag, follow_up = translator
+    assert tool == "mlir-translate"
+    assert flag == "--mlir-to-llvmir"
+    assert follow_up[0] == "llc"
+    assert "-mtriple=nvptx64" in follow_up
+    assert any(a.startswith("-mcpu=") for a in follow_up)
+
+
+def test_ptx_chain_defers_when_chained_tool_absent(monkeypatch):
+    """The wired PTX target with mlir-opt + mlir-translate on PATH but
+    no `llc` returns DEFERRED with a clear "chained tool not on PATH"
+    finding."""
     def _fake_validate(mlir_text, *, support):
         return _real_passed_validation()
 

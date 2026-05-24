@@ -155,9 +155,28 @@ _LLVM_IR_LOWERING_PIPELINE: tuple[str, ...] = (
     "--reconcile-unrealized-casts",
 )
 
+
+# Stage 214 chunk G wires PTX's mlir-opt lowering pipeline: outline the
+# GPU kernel into its own module-level op, lower the gpu / arith / cf /
+# index / memref dialects toward NVVM + LLVM. Translator stage then
+# runs `mlir-translate --mlir-to-llvmir` to get raw LLVM IR; chunk-F
+# chained tool `llc -mtriple=nvptx64 -mcpu=sm_80` produces PTX text.
+_PTX_LOWERING_PIPELINE: tuple[str, ...] = (
+    "--gpu-kernel-outlining",
+    "--convert-scf-to-cf",
+    "--convert-cf-to-llvm",
+    "--convert-arith-to-llvm",
+    "--convert-func-to-llvm",
+    "--convert-vector-to-llvm",
+    "--convert-index-to-llvm",
+    "--finalize-memref-to-llvm-conversion",
+    "--convert-gpu-to-nvvm",
+    "--reconcile-unrealized-casts",
+)
+
 _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_LOWERING_PIPELINE,
-    MLIRBackendTarget.PTX: (),
+    MLIRBackendTarget.PTX: _PTX_LOWERING_PIPELINE,
     MLIRBackendTarget.ROCM_HIP: (),
     MLIRBackendTarget.METAL_MSL: (),
     MLIRBackendTarget.WEBGPU_WGSL: (),
@@ -199,9 +218,21 @@ _LLVM_IR_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
     (),
 )
 
+# Stage 214 chunk G wires PTX's translator. `mlir-translate
+# --mlir-to-llvmir` produces raw LLVM IR (the LLVM dialect already has
+# NVVM intrinsics from `--convert-gpu-to-nvvm`); then chunk-F's chained
+# tool `llc -mtriple=nvptx64 -mcpu=sm_80` produces PTX text. The
+# `-O2` flag is a reasonable default for the toolchain-aware case (a
+# future chunk could lift it into a per-target config).
+_PTX_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
+    "mlir-translate",
+    "--mlir-to-llvmir",
+    ("llc", "-mtriple=nvptx64", "-mcpu=sm_80", "-O2"),
+)
+
 _MLIR_BACKEND_TRANSLATORS_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_TRANSLATOR,
-    MLIRBackendTarget.PTX: None,
+    MLIRBackendTarget.PTX: _PTX_TRANSLATOR,
     MLIRBackendTarget.ROCM_HIP: None,
     MLIRBackendTarget.METAL_MSL: None,
     MLIRBackendTarget.WEBGPU_WGSL: None,
@@ -3526,9 +3557,51 @@ def _llvm_ir_output_validator(
     )
 
 
+def _ptx_output_validator(
+        target: MLIRBackendTarget,
+        output_text: str) -> MLIRBackendOutputValidation:
+    """Stage 214 chunk G — the PTX target output validator.
+
+    Confirms the post-chain artifact is PTX text via the existing
+    `_ptx_artifact_is_plausible` predicate (which has been hardened
+    through the Stage-213 audit batches against malformed PTX
+    structures including `.func`/`.entry` forms, predicate guards,
+    `.reg`/`.noreturn` directives, and byte-array params). Returns a
+    candidate result whose evidence names the validator and the
+    predicate so the runner-registry brand can promote it to PASSED.
+    A fail returns the named finding, never a silent skip.
+    """
+    if target is not MLIRBackendTarget.PTX:
+        raise ValueError(
+            f"_ptx_output_validator: target must be PTX, got "
+            f"{target.value}")
+    output_digest = hashlib.sha256(
+        output_text.encode("utf-8")).hexdigest()
+    if not _looks_like_backend_output(target, output_text):
+        return MLIRBackendOutputValidation(
+            target=target,
+            output_sha256=output_digest,
+            findings=(
+                "PTX target output validator: artifact does not parse "
+                "as PTX text (failed `_ptx_artifact_is_plausible` "
+                "shape probe)",),
+            evidence=(),
+        )
+    return MLIRBackendOutputValidation(
+        target=target,
+        output_sha256=output_digest,
+        findings=(),
+        evidence=(
+            "validator=_ptx_output_validator",
+            "predicate=_ptx_artifact_is_plausible",
+            f"target={target.value}",
+        ),
+    )
+
+
 _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY = MappingProxyType({
         MLIRBackendTarget.LLVM_IR: _llvm_ir_output_validator,
-        MLIRBackendTarget.PTX: None,
+        MLIRBackendTarget.PTX: _ptx_output_validator,
         MLIRBackendTarget.ROCM_HIP: None,
         MLIRBackendTarget.METAL_MSL: None,
         MLIRBackendTarget.WEBGPU_WGSL: None,
