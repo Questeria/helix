@@ -412,9 +412,37 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    Phase E (Stages 210–216) is COMPLETE.
 5. **Phase F (Stages 220–222)** — backend unification, the Stage-221
    cutover, the v3.0.0 5-clean-gate + git tag.
+
+   **Stage 220 — CLOSED 2026-05-24** (commit 71bbe8a). The shared
+   `Backend` dataclass + `_BACKEND_REGISTRY` + `get_backend(target)`
+   accessor unify the four GPU emitters behind one interface; LLVM_IR
+   is intentionally excluded (Stage 221's cutover retires the
+   home-grown LLVM path).
+
+   **Stage 221 — DESTRUCTIVE, NEEDS EXPLICIT USER CONFIRMATION
+   BEFORE STARTING.** The plan (`docs/V3_PLAN.md` line 130-133)
+   states verbatim: "CUTOVER (destructive; user checkpoint). With
+   parity gates 207 + 215 green, retire `x86_64.py` and the
+   home-grown tile-IR behind a flag, then remove. Recommend
+   explicit user confirmation here even under blanket authority —
+   it is the one irreversible step."
+
+   The cron-tick worker MUST NOT auto-start Stage 221. When the
+   next tick fires and sees `V3_STAGES_DONE = 17` with Stage 221
+   pending, the worker should:
+   - Either do the prerequisite 206-R residual ops (additive
+     LLVM-lowering chunks for print_int / write_file /
+     read_file_to_arena / TRACE / arena / QUOTE-family — these
+     need to land before the cutover so the LLVM path is feature-
+     complete enough to replace x86_64.py);
+   - Or send a Telegram noting the cutover gate and stop.
+
+   **Stage 222 — end-of-v3.0 5-clean-gate + tag `v3.0.0`**. Depends
+   on Stage 221 done.
+
 6. **206-R residual ops** — additive LLVM-lowering chunks (print_int,
    write_file / read_file_to_arena, TRACE, arena, QUOTE-family) needed
-   before the Stage-221 cutover.
+   before the Stage-221 cutover. Safe for autonomous worker to start.
 
 When `v3.0.0` is tagged, v3.0 is done.
 
