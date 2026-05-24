@@ -210,12 +210,27 @@ _METAL_MSL_LOWERING_PIPELINE: tuple[str, ...] = (
     "--reconcile-unrealized-casts",
 )
 
+
+# Stage 214 chunk J wires WEBGPU_WGSL's mlir-opt lowering pipeline.
+# Same SPIR-V dialect lowering as METAL_MSL — the only difference is
+# the third-stage tool (`tint --format wgsl` vs `spirv-cross --msl`).
+_WEBGPU_WGSL_LOWERING_PIPELINE: tuple[str, ...] = (
+    "--gpu-kernel-outlining",
+    "--convert-scf-to-cf",
+    "--convert-arith-to-spirv",
+    "--convert-func-to-spirv",
+    "--convert-vector-to-spirv",
+    "--convert-memref-to-spirv",
+    "--convert-gpu-to-spirv",
+    "--reconcile-unrealized-casts",
+)
+
 _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_LOWERING_PIPELINE,
     MLIRBackendTarget.PTX: _PTX_LOWERING_PIPELINE,
     MLIRBackendTarget.ROCM_HIP: _ROCM_HIP_LOWERING_PIPELINE,
     MLIRBackendTarget.METAL_MSL: _METAL_MSL_LOWERING_PIPELINE,
-    MLIRBackendTarget.WEBGPU_WGSL: (),
+    MLIRBackendTarget.WEBGPU_WGSL: _WEBGPU_WGSL_LOWERING_PIPELINE,
 })
 MLIR_BACKEND_LOWERING_PIPELINES = _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY
 
@@ -291,12 +306,22 @@ _METAL_MSL_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
     ("spirv-cross", "--msl"),
 )
 
+
+# Stage 214 chunk J wires WEBGPU_WGSL's translator. Same binary
+# SPIR-V serialization as METAL_MSL, but `tint --format wgsl` is the
+# chained tool that converts the SPIR-V binary to WGSL text.
+_WEBGPU_WGSL_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
+    "mlir-translate",
+    "--serialize-spirv",
+    ("tint", "--format", "wgsl"),
+)
+
 _MLIR_BACKEND_TRANSLATORS_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_TRANSLATOR,
     MLIRBackendTarget.PTX: _PTX_TRANSLATOR,
     MLIRBackendTarget.ROCM_HIP: _ROCM_HIP_TRANSLATOR,
     MLIRBackendTarget.METAL_MSL: _METAL_MSL_TRANSLATOR,
-    MLIRBackendTarget.WEBGPU_WGSL: None,
+    MLIRBackendTarget.WEBGPU_WGSL: _WEBGPU_WGSL_TRANSLATOR,
 })
 MLIR_BACKEND_TRANSLATORS = _MLIR_BACKEND_TRANSLATORS_AUTHORITY
 
@@ -3738,12 +3763,50 @@ def _metal_msl_output_validator(
     )
 
 
+def _webgpu_wgsl_output_validator(
+        target: MLIRBackendTarget,
+        output_text: str) -> MLIRBackendOutputValidation:
+    """Stage 214 chunk J — the WEBGPU_WGSL target output validator.
+
+    Confirms the tint output is WGSL text via the existing
+    `_webgpu_wgsl_artifact_is_plausible` predicate. Returns a
+    candidate with named evidence on pass; named finding on fail;
+    defensively rejects wrong-target calls.
+    """
+    if target is not MLIRBackendTarget.WEBGPU_WGSL:
+        raise ValueError(
+            f"_webgpu_wgsl_output_validator: target must be "
+            f"WEBGPU_WGSL, got {target.value}")
+    output_digest = hashlib.sha256(
+        output_text.encode("utf-8")).hexdigest()
+    if not _looks_like_backend_output(target, output_text):
+        return MLIRBackendOutputValidation(
+            target=target,
+            output_sha256=output_digest,
+            findings=(
+                "WEBGPU_WGSL target output validator: artifact does "
+                "not parse as WGSL (failed "
+                "`_webgpu_wgsl_artifact_is_plausible` shape probe)",),
+            evidence=(),
+        )
+    return MLIRBackendOutputValidation(
+        target=target,
+        output_sha256=output_digest,
+        findings=(),
+        evidence=(
+            "validator=_webgpu_wgsl_output_validator",
+            "predicate=_webgpu_wgsl_artifact_is_plausible",
+            f"target={target.value}",
+        ),
+    )
+
+
 _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY = MappingProxyType({
         MLIRBackendTarget.LLVM_IR: _llvm_ir_output_validator,
         MLIRBackendTarget.PTX: _ptx_output_validator,
         MLIRBackendTarget.ROCM_HIP: _rocm_hip_output_validator,
         MLIRBackendTarget.METAL_MSL: _metal_msl_output_validator,
-        MLIRBackendTarget.WEBGPU_WGSL: None,
+        MLIRBackendTarget.WEBGPU_WGSL: _webgpu_wgsl_output_validator,
 })
 MLIR_BACKEND_OUTPUT_VALIDATORS = _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY
 

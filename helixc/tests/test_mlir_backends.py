@@ -221,51 +221,35 @@ def test_backend_required_dialects_are_total_nonempty_unique():
             assert isinstance(dialect, str) and dialect.isidentifier()
 
 
-_WIRED_TARGETS_STAGE_214 = frozenset((
-    MLIRBackendTarget.LLVM_IR,
-    MLIRBackendTarget.PTX,
-    MLIRBackendTarget.ROCM_HIP,
-    MLIRBackendTarget.METAL_MSL,
-))
+_WIRED_TARGETS_STAGE_214 = frozenset(MLIRBackendTarget)
 
 
 def test_backend_lowering_pipelines_state_per_target():
-    """Stage 214 chunks E/G/H/I wire LLVM_IR / PTX / ROCM_HIP /
-    METAL_MSL; WEBGPU_WGSL stays explicitly unwired with the empty
-    `()` baseline. Empty means DEFERRED, not PASSED."""
-    for target in _WIRED_TARGETS_STAGE_214:
-        assert backend_lowering_pipeline(target) != ()
+    """Stage 214 chunks E/G/H/I/J wire all five targets with a
+    non-empty lowering pipeline; the empty `()` baseline only appears
+    transiently between chunks. Pipelines are now total."""
     for target in MLIRBackendTarget:
-        if target in _WIRED_TARGETS_STAGE_214:
-            continue
-        assert backend_lowering_pipeline(target) == ()
+        assert backend_lowering_pipeline(target) != (), target
 
 
 def test_backend_output_validators_state_per_target():
-    """Stage 214 chunks E/G/H/I wire LLVM_IR / PTX / ROCM_HIP /
-    METAL_MSL output validators; WEBGPU_WGSL stays None. A pass
-    pipeline alone cannot prove backend-consumable output."""
+    """Stage 214 chunks E/G/H/I/J wire all five output validators.
+    The table is total over MLIRBackendTarget with no None entries."""
     assert set(backends.MLIR_BACKEND_OUTPUT_VALIDATORS) == set(
         MLIRBackendTarget)
-    for target in _WIRED_TARGETS_STAGE_214:
-        assert callable(
-            backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target])
     for target in MLIRBackendTarget:
-        if target in _WIRED_TARGETS_STAGE_214:
-            continue
-        assert backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target] is None
+        validator = backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target]
+        assert callable(validator), target
 
 
 def test_backend_translators_table_state_per_target():
-    """Stage 214 chunks E/G/H/I wire LLVM_IR / PTX / ROCM_HIP /
-    METAL_MSL translator entries; WEBGPU_WGSL stays None (chunk J
-    will wire it). The table is total over MLIRBackendTarget."""
+    """Stage 214 chunks E/G/H/I/J wire all five translator entries.
+    Pin the expected tool / flag / follow_up shape for each target."""
     assert set(backends.MLIR_BACKEND_TRANSLATORS) == set(MLIRBackendTarget)
     llvm_translator = backends.backend_translator(
         MLIRBackendTarget.LLVM_IR)
     assert llvm_translator == ("mlir-translate", "--mlir-to-llvmir", ())
-    ptx_translator = backends.backend_translator(
-        MLIRBackendTarget.PTX)
+    ptx_translator = backends.backend_translator(MLIRBackendTarget.PTX)
     assert ptx_translator is not None
     _, _, ptx_follow_up = ptx_translator
     assert ptx_follow_up[0] == "llc"
@@ -273,16 +257,23 @@ def test_backend_translators_table_state_per_target():
     rocm_translator = backends.backend_translator(
         MLIRBackendTarget.ROCM_HIP)
     assert rocm_translator is not None
-    rocm_tool, rocm_flag, rocm_follow_up = rocm_translator
-    assert rocm_tool == "mlir-translate"
-    assert rocm_flag == "--mlir-to-llvmir"
+    _, _, rocm_follow_up = rocm_translator
     assert rocm_follow_up[0] == "llc"
     assert "-mtriple=amdgcn-amd-amdhsa" in rocm_follow_up
-    for target in MLIRBackendTarget:
-        if target in _WIRED_TARGETS_STAGE_214:
-            continue
-        assert backends.MLIR_BACKEND_TRANSLATORS[target] is None
-        assert backends.backend_translator(target) is None
+    msl_translator = backends.backend_translator(
+        MLIRBackendTarget.METAL_MSL)
+    assert msl_translator is not None
+    _, msl_flag, msl_follow_up = msl_translator
+    assert msl_flag == "--serialize-spirv"
+    assert msl_follow_up[0] == "spirv-cross"
+    assert "--msl" in msl_follow_up
+    wgsl_translator = backends.backend_translator(
+        MLIRBackendTarget.WEBGPU_WGSL)
+    assert wgsl_translator is not None
+    _, wgsl_flag, wgsl_follow_up = wgsl_translator
+    assert wgsl_flag == "--serialize-spirv"
+    assert wgsl_follow_up[0] == "tint"
+    assert "wgsl" in wgsl_follow_up
 
 
 def test_backend_translator_rejects_unknown_target():
@@ -301,15 +292,19 @@ def test_public_backend_contract_tables_are_immutable():
 
 def test_public_backend_contract_rebinding_does_not_change_authority(
         monkeypatch):
-    # WEBGPU_WGSL is still unwired (chunk J will wire it), so the
-    # rebinding check uses it to confirm the AUTHORITY surface is not
-    # mutated by writes to the PUBLIC alias.
+    # All targets are wired in Stage 214; this test verifies that
+    # rebinding the PUBLIC alias does not mutate the AUTHORITY
+    # tables. We compare values rather than checking for None.
+    original_pipeline = backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+        MLIRBackendTarget.PTX]
+    original_validator = backends._MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[
+        MLIRBackendTarget.PTX]
     monkeypatch.setattr(
         backends,
         "MLIR_BACKEND_LOWERING_PIPELINES",
         MappingProxyType({
             **backends.MLIR_BACKEND_LOWERING_PIPELINES,
-            MLIRBackendTarget.WEBGPU_WGSL: ("--canonicalize",),
+            MLIRBackendTarget.PTX: ("--rebound-by-public-alias",),
         }),
     )
     monkeypatch.setattr(
@@ -317,12 +312,13 @@ def test_public_backend_contract_rebinding_does_not_change_authority(
         "MLIR_BACKEND_OUTPUT_VALIDATORS",
         MappingProxyType({
             **backends.MLIR_BACKEND_OUTPUT_VALIDATORS,
-            MLIRBackendTarget.WEBGPU_WGSL: _accept_backend_output,
+            MLIRBackendTarget.PTX: _accept_backend_output,
         }),
     )
-    assert backend_lowering_pipeline(MLIRBackendTarget.WEBGPU_WGSL) == ()
+    assert backend_lowering_pipeline(MLIRBackendTarget.PTX) \
+        == original_pipeline
     assert backends._MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[
-        MLIRBackendTarget.WEBGPU_WGSL] is None
+        MLIRBackendTarget.PTX] is original_validator
 
 
 def test_backend_output_validators_return_structured_validation():
@@ -2827,16 +2823,19 @@ def test_mlir_backend_result_rejects_validation_failure_with_lowering_findings()
         )
 
 
-def test_lower_mlir_to_backend_valid_defers_with_no_support():
+def test_lower_mlir_to_backend_valid_defers_with_no_support(monkeypatch):
+    # Stage 214 chunks E/G/H/I/J wire every target; to exercise the
+    # "pipeline not wired yet" branch this test temporarily reverts
+    # one target's pipeline to empty.
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.PTX, pipeline=())
     support = MLIRSupport(
         bindings=False,
         dialects=False,
         mlir_opt=None,
         detail=("`mlir-opt` is not on PATH",),
     )
-    # WEBGPU_WGSL still has an empty pipeline (chunk J will wire it).
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert result.deferred()
     assert result.lowering_attempted is False
@@ -2847,6 +2846,9 @@ def test_lower_mlir_to_backend_valid_defers_with_no_support():
 def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
     """A tool path alone is not a Stage 213 backend pass. Without the
     target pass pipeline, the result stays honestly DEFERRED."""
+    # Temporarily un-wire PTX's pipeline to exercise this branch.
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.PTX, pipeline=())
+
     def _fake_validate(mlir_text, *, support):
         assert mlir_text == _WELL_FORMED
         assert support.mlir_opt == "/usr/bin/mlir-opt"
@@ -2860,9 +2862,8 @@ def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
         mlir_opt="/usr/bin/mlir-opt",
         detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
     )
-    # WEBGPU_WGSL still has an empty pipeline (chunk J will wire it).
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert not any(
         "no real MLIR surface" in f for f in result.lowering_findings)
@@ -2940,8 +2941,16 @@ def test_lower_mlir_to_backend_declared_pipeline_without_validator_defers(
 
     monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
                         _fake_validate)
-    # WEBGPU_WGSL's output validator is still None (chunk J wires it).
-    _wire_pipeline(monkeypatch, MLIRBackendTarget.WEBGPU_WGSL)
+    # All targets' validators are wired in chunk J; temporarily
+    # un-wire WEBGPU_WGSL's validator to exercise this branch.
+    monkeypatch.setattr(
+        backends,
+        "_MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY",
+        MappingProxyType({
+            **backends._MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY,
+            MLIRBackendTarget.WEBGPU_WGSL: None,
+        }),
+    )
     result = lower_mlir_to_backend(
         _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
     assert result.deferred()
@@ -4072,6 +4081,81 @@ def test_metal_msl_chain_e2e_routes_through_binary_helpers(monkeypatch):
         result.status(), result.lowering_findings)
     assert any("metal_stdlib" in (result.output_text or "")
                for _ in [None])
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk J: WEBGPU_WGSL target wired end-to-end
+# --------------------------------------------------------------------------
+def test_webgpu_wgsl_output_validator_accepts_wgsl():
+    output = (
+        "@compute @workgroup_size(1)\n"
+        "fn main() {}\n"
+    )
+    validation = backends._webgpu_wgsl_output_validator(
+        MLIRBackendTarget.WEBGPU_WGSL, output)
+    assert validation.findings == (), validation.findings
+    assert validation.candidate()
+    keys = {entry.partition("=")[0] for entry in validation.evidence}
+    assert {"validator", "predicate"}.issubset(keys), validation.evidence
+
+
+def test_webgpu_wgsl_output_validator_rejects_non_wgsl():
+    output = "module { func.func @k() { return } }\n"
+    validation = backends._webgpu_wgsl_output_validator(
+        MLIRBackendTarget.WEBGPU_WGSL, output)
+    assert validation.failed()
+    assert any("WGSL" in f for f in validation.findings), validation.findings
+
+
+def test_webgpu_wgsl_output_validator_rejects_wrong_target():
+    with pytest.raises(ValueError, match="target must be WEBGPU_WGSL"):
+        backends._webgpu_wgsl_output_validator(
+            MLIRBackendTarget.METAL_MSL,
+            "@compute @workgroup_size(1)\nfn main() {}\n")
+
+
+def test_webgpu_wgsl_pipeline_is_wired():
+    pipeline = backend_lowering_pipeline(MLIRBackendTarget.WEBGPU_WGSL)
+    assert pipeline
+    assert "--convert-gpu-to-spirv" in pipeline
+    for arg in pipeline:
+        assert arg.startswith("--"), arg
+
+
+def test_webgpu_wgsl_translator_uses_serialize_spirv_and_tint():
+    translator = backends.backend_translator(
+        MLIRBackendTarget.WEBGPU_WGSL)
+    assert translator is not None
+    tool, flag, follow_up = translator
+    assert tool == "mlir-translate"
+    assert flag == "--serialize-spirv"
+    assert follow_up[0] == "tint"
+    assert "--format" in follow_up
+    assert "wgsl" in follow_up
+
+
+def test_webgpu_wgsl_chain_defers_when_tint_absent(monkeypatch):
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH",
+                "`mlir-translate` is on PATH",
+                "`tint` is not on PATH"),
+        mlir_translate="/fake/mlir-translate",
+        tint=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert any("chained tool" in f and "is not on PATH" in f
+               for f in result.lowering_findings), \
+        result.lowering_findings
 
 
 def test_llvm_ir_chain_defers_when_mlir_translate_absent(monkeypatch):

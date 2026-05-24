@@ -135,6 +135,10 @@ class MLIRSupport:
     # output of `mlir-translate --serialize-spirv`) and emits Metal
     # Shading Language text for the METAL_MSL backend target.
     spirv_cross: Optional[str] = None
+    # Stage 214 chunk J: `tint` reads a SPIR-V binary (the same
+    # output as METAL_MSL's chain uses) and emits WGSL text for the
+    # WEBGPU_WGSL backend target.
+    tint: Optional[str] = None
 
     def __post_init__(self) -> None:
         # A dialect sub-module cannot import without the core package.
@@ -178,6 +182,14 @@ class MLIRSupport:
                     "MLIRSupport: spirv_cross must be a non-blank, "
                     f"whitespace-stripped path or None, got "
                     f"{self.spirv_cross!r}")
+        if self.tint is not None:
+            if not isinstance(self.tint, str) \
+                    or not self.tint.strip() \
+                    or self.tint != self.tint.strip():
+                raise ValueError(
+                    "MLIRSupport: tint must be a non-blank, "
+                    f"whitespace-stripped path or None, got "
+                    f"{self.tint!r}")
 
     def can_use_bindings(self) -> bool:
         """True iff the in-process MLIR Python bindings are FULLY
@@ -209,6 +221,12 @@ class MLIRSupport:
         to emit Metal Shading Language text for METAL_MSL."""
         return self.spirv_cross is not None
 
+    def can_use_tint(self) -> bool:
+        """True iff the `tint` CLI is on PATH. Stage 214 chunk J
+        chains `tint` after `mlir-translate --serialize-spirv` to
+        emit WGSL text for WEBGPU_WGSL."""
+        return self.tint is not None
+
     def chained_tool_path(self, tool_name: str) -> Optional[str]:
         """Resolve a chained-tool name (the first element of a
         translator's `follow_up_args`) to its PATH location, or None
@@ -217,6 +235,8 @@ class MLIRSupport:
             return self.llc
         if tool_name == "spirv-cross":
             return self.spirv_cross
+        if tool_name == "tint":
+            return self.tint
         return None
 
     def is_available(self) -> bool:
@@ -324,10 +344,19 @@ def detect_mlir_support() -> MLIRSupport:
     else:
         detail.append(f"`spirv-cross` is on PATH at {spirv_cross!r}")
 
+    # --- surface 6: the `tint` command-line tool ---
+    # Stage 214 chunk J chains this after `mlir-translate
+    # --serialize-spirv` for WEBGPU_WGSL (SPIR-V binary -> WGSL text).
+    tint = shutil.which("tint")
+    if tint is None:
+        detail.append("`tint` is not on PATH")
+    else:
+        detail.append(f"`tint` is on PATH at {tint!r}")
+
     # Every branch above appended at least one `detail` line, and
     # `dialects` is never set without `bindings` — so this construction
     # always satisfies MLIRSupport.__post_init__ and cannot raise.
     return MLIRSupport(bindings=bindings, dialects=dialects,
                        mlir_opt=mlir_opt, detail=tuple(detail),
                        mlir_translate=mlir_translate, llc=llc,
-                       spirv_cross=spirv_cross)
+                       spirv_cross=spirv_cross, tint=tint)
