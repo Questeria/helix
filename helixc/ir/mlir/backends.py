@@ -3734,6 +3734,7 @@ def _run_mlir_opt_pipeline(
         pipeline: tuple[str, ...],
         output_validator: MLIRBackendOutputValidator,
         timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+        mlir_translate: str | None = None,
         _brand_output_validation: Callable[
             ["MLIRBackendOutputValidation"], "MLIRBackendOutputValidation"
         ] | None = None,
@@ -3744,6 +3745,16 @@ def _run_mlir_opt_pipeline(
     real validation has PASSED. A 0 exit is not enough: the output
     artifact must exist, be non-empty, and read back as text before the
     backend result can be PASSED.
+
+    Stage 214 chunk D — translator-step chaining. When the target's
+    `_MLIR_BACKEND_TRANSLATORS_AUTHORITY` entry is populated, the
+    `mlir-opt` output is dialect-MLIR (the EXPECTED shape, not the
+    Stage-213 reject case). The runner then invokes
+    `_run_mlir_translate_step` to convert dialect-MLIR into the raw
+    target artifact, and downstream validation operates on the
+    translated text. `mlir_translate` is the tool path (typically
+    `support.mlir_translate`); it must be present when the translator
+    entry is populated and absent / unused when it is None.
     """
     target = _require_backend_target(target)
     if not isinstance(mlir_text, str) or not mlir_text.strip():
@@ -3818,6 +3829,20 @@ def _run_mlir_opt_pipeline(
             or timeout_s <= 0):
         raise ValueError(
             "_run_mlir_opt_pipeline: timeout_s must be a positive number")
+    registered_translator = _MLIR_BACKEND_TRANSLATORS_AUTHORITY[target]
+    if registered_translator is None and mlir_translate is not None:
+        raise ValueError(
+            f"_run_mlir_opt_pipeline: target {target.value} has no "
+            "registered translator; mlir_translate must be None when "
+            "no translator-step is declared")
+    if registered_translator is not None:
+        if not isinstance(mlir_translate, str) \
+                or not mlir_translate.strip() \
+                or mlir_translate != mlir_translate.strip():
+            raise ValueError(
+                f"_run_mlir_opt_pipeline: target {target.value} has a "
+                "registered translator; mlir_translate must be a "
+                "non-blank, whitespace-stripped path")
 
     with tempfile.TemporaryDirectory(prefix="helix_mlir_backend_") as tmpdir:
         mlir_path = os.path.join(tmpdir, "module.mlir")
@@ -3949,6 +3974,43 @@ def _run_mlir_opt_pipeline(
                     "exited 0 but produced only blank output",),
                 output_text=None,
             )
+        translator_tool: str | None = None
+        if registered_translator is not None:
+            _tool_name, translator_flag, _follow_up = registered_translator
+            translated_text, translate_findings = _run_mlir_translate_step(
+                output_text,
+                mlir_translate=mlir_translate,  # type: ignore[arg-type]
+                flag=translator_flag,
+                timeout_s=timeout_s,
+            )
+            if translate_findings:
+                return MLIRBackendResult(
+                    target=target,
+                    validation=validation,
+                    lowering_attempted=True,
+                    lowering_passed=False,
+                    lowering_tool=mlir_opt,
+                    lowering_findings=(
+                        f"mlir-translate step for {target.value} failed: "
+                        + translate_findings[0],
+                    ),
+                    output_text=None,
+                )
+            if translated_text is None:
+                return MLIRBackendResult(
+                    target=target,
+                    validation=validation,
+                    lowering_attempted=True,
+                    lowering_passed=False,
+                    lowering_tool=mlir_opt,
+                    lowering_findings=(
+                        f"mlir-translate step for {target.value} produced "
+                        "no output but also no findings; refusing to mint "
+                        "a backend pass",),
+                    output_text=None,
+                )
+            output_text = translated_text
+            translator_tool = mlir_translate
         if _looks_like_mlir_pipeline_output(output_text):
             return MLIRBackendResult(
                 target=target,
@@ -3957,9 +4019,14 @@ def _run_mlir_opt_pipeline(
                 lowering_passed=False,
                 lowering_tool=mlir_opt,
                 lowering_findings=(
-                    f"mlir-opt backend pipeline for {target.value} "
-                    "exited 0 but produced MLIR, not a target artifact; "
-                    "the artifact translation step is not wired",),
+                    (f"mlir-translate step for {target.value} produced "
+                     "MLIR, not a raw target artifact; the translator "
+                     "flag may be wrong")
+                    if translator_tool is not None
+                    else (f"mlir-opt backend pipeline for {target.value} "
+                          "exited 0 but produced MLIR, not a target "
+                          "artifact; the artifact translation step is "
+                          "not wired"),),
                 output_text=None,
             )
         if not _looks_like_backend_output(target, output_text):
@@ -4080,6 +4147,7 @@ class _BackendOutputValidationBrandingRunner:
             pipeline: tuple[str, ...],
             output_validator: MLIRBackendOutputValidator,
             timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+            mlir_translate: str | None = None,
             ) -> "MLIRBackendResult":
         return self.__raw_runner(
             mlir_text,
@@ -4089,6 +4157,7 @@ class _BackendOutputValidationBrandingRunner:
             pipeline=pipeline,
             output_validator=output_validator,
             timeout_s=timeout_s,
+            mlir_translate=mlir_translate,
             _brand_output_validation=self.__brand_output_validation,
         )
 
@@ -5270,6 +5339,7 @@ def _make_backend_pipeline_runner(raw_runner):
                 pipeline: tuple[str, ...],
                 output_validator: MLIRBackendOutputValidator,
                 timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+                mlir_translate: str | None = None,
                 ) -> MLIRBackendResult:
             result = self.__raw_runner(
                 mlir_text,
@@ -5279,6 +5349,7 @@ def _make_backend_pipeline_runner(raw_runner):
                 pipeline=pipeline,
                 output_validator=output_validator,
                 timeout_s=timeout_s,
+                mlir_translate=mlir_translate,
             )
             if _backend_result_pass_shape_is_coherent(result):
                 return brand_pass(result)
@@ -5355,6 +5426,7 @@ def lower_mlir_to_backend(
 
     pipeline = backend_lowering_pipeline(target)
     output_validator = _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[target]
+    translator = _MLIR_BACKEND_TRANSLATORS_AUTHORITY[target]
     if not pipeline:
         findings.append(
             f"Stage 213 MLIR lowering pipeline for {target.value} is "
@@ -5374,6 +5446,11 @@ def lower_mlir_to_backend(
             f"Stage 213 MLIR lowering pipeline for {target.value} is "
             "declared, but the target output validator is not wired; "
             "refusing to claim backend output from a pass pipeline alone")
+    elif translator is not None and support.mlir_translate is None:
+        findings.append(
+            f"Stage 214 translator step for {target.value} is declared, "
+            "but `mlir-translate` is not on PATH; refusing to attempt a "
+            "chain that cannot complete")
     else:
         return _run_mlir_opt_pipeline(
             mlir_text,
@@ -5382,6 +5459,8 @@ def lower_mlir_to_backend(
             mlir_opt=support.mlir_opt,
             pipeline=pipeline,
             output_validator=output_validator,
+            mlir_translate=(
+                support.mlir_translate if translator is not None else None),
         )
 
     return MLIRBackendResult(

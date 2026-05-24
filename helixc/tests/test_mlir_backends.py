@@ -159,6 +159,20 @@ def _wire_pipeline(monkeypatch, target, pipeline=("--canonicalize",)):
     return pipeline
 
 
+def _wire_translator(
+        monkeypatch, target,
+        translator=("mlir-translate", "--mlir-to-llvmir", ())):
+    monkeypatch.setattr(
+        backends,
+        "_MLIR_BACKEND_TRANSLATORS_AUTHORITY",
+        MappingProxyType({
+            **backends._MLIR_BACKEND_TRANSLATORS_AUTHORITY,
+            target: translator,
+        }),
+    )
+    return translator
+
+
 def test_mlir_backend_target_covers_stage213_backends():
     """The Stage 213 target set is exactly LLVM IR plus the 4 GPU
     backends Helix already ships."""
@@ -3045,3 +3059,121 @@ def test_run_mlir_translate_step_os_error(monkeypatch):
     )
     assert output is None
     assert any("OSError" in f for f in findings), findings
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk D: translator chaining in the runner
+# --------------------------------------------------------------------------
+def test_lower_mlir_to_backend_translator_without_toolchain_defers(
+        monkeypatch):
+    """When the target's translator entry is wired but
+    `support.mlir_translate` is None, the gate refuses to start a
+    chain it cannot complete — returns DEFERRED with a clear finding,
+    not a silent attempt-and-fail."""
+    _register_ptx_validator(monkeypatch)
+    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
+
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/usr/bin/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",
+                "`mlir-translate` is not on PATH"),
+        mlir_translate=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert result.lowering_attempted is False
+    assert any("mlir-translate" in f and "not on PATH" in f
+               for f in result.lowering_findings), result.lowering_findings
+
+
+def test_run_mlir_opt_pipeline_rejects_translate_path_without_translator(
+        monkeypatch):
+    """Passing `mlir_translate=...` for a target whose translator entry
+    is None is a configuration bug — raise rather than silently
+    discard the path."""
+    pipeline = _wire_pipeline(monkeypatch, MLIRBackendTarget.LLVM_IR)
+    _register_output_validator(monkeypatch, MLIRBackendTarget.LLVM_IR)
+    # The LLVM_IR translator entry stays None (we did NOT call
+    # _wire_translator); passing mlir_translate should be a hard error.
+    validation = _real_passed_validation()
+    with pytest.raises(ValueError, match="no registered translator"):
+        backends._run_mlir_opt_pipeline(
+            _WELL_FORMED,
+            target=MLIRBackendTarget.LLVM_IR,
+            validation=validation,
+            mlir_opt="/fake/mlir-opt",
+            pipeline=pipeline,
+            output_validator=_accept_backend_output,
+            mlir_translate="/fake/mlir-translate",
+        )
+
+
+def test_run_mlir_opt_pipeline_requires_translate_path_when_translator_wired(
+        monkeypatch):
+    """When the target's translator is wired, `mlir_translate` must be
+    a non-blank path. Calling with None or blank is a configuration
+    bug."""
+    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
+    _register_ptx_validator(monkeypatch)
+    validation = _real_passed_validation()
+    with pytest.raises(ValueError, match="mlir_translate must be"):
+        backends._run_mlir_opt_pipeline(
+            _WELL_FORMED,
+            target=MLIRBackendTarget.PTX,
+            validation=validation,
+            mlir_opt="/fake/mlir-opt",
+            pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+                MLIRBackendTarget.PTX],
+            output_validator=_accept_backend_output,
+            mlir_translate=None,
+        )
+
+
+def test_run_mlir_opt_pipeline_translator_chain_failure(monkeypatch):
+    """When mlir-translate fails on the dialect-MLIR output, the
+    runner returns FAILED with findings prefixed by 'mlir-translate
+    step ... failed:' — never silently accepts the un-translated
+    dialect text."""
+    _wire_translator(monkeypatch, MLIRBackendTarget.PTX)
+    _register_ptx_validator(monkeypatch)
+
+    proc_calls: list[tuple[str, ...]] = []
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        proc_calls.append(tuple(cmd))
+        if cmd[0] == "/fake/mlir-opt":
+            # write some dialect-MLIR output
+            Path(cmd[-1]).write_text(
+                "module { llvm.func @f() { llvm.return } }\n",
+                encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        # mlir-translate fails
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "error: unknown flag\n")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    validation = _real_passed_validation()
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=validation,
+        mlir_opt="/fake/mlir-opt",
+        pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+            MLIRBackendTarget.PTX],
+        output_validator=_accept_backend_output,
+        mlir_translate="/fake/mlir-translate",
+    )
+    assert result.status() is MLIRBackendStatus.FAILED
+    assert any("mlir-translate step" in f and "failed" in f
+               for f in result.lowering_findings), result.lowering_findings
+    # Both tools should have been invoked.
+    assert any(cmd[0] == "/fake/mlir-opt" for cmd in proc_calls)
+    assert any(cmd[0] == "/fake/mlir-translate" for cmd in proc_calls)
