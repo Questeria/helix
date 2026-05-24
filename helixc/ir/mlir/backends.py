@@ -193,11 +193,28 @@ _ROCM_HIP_LOWERING_PIPELINE: tuple[str, ...] = (
     "--reconcile-unrealized-casts",
 )
 
+
+# Stage 214 chunk I wires METAL_MSL's mlir-opt lowering pipeline. The
+# GPU kernel is outlined then lowered to the SPIR-V dialect (Metal's
+# canonical MLIR entry point); the translator step then serializes
+# to SPIR-V binary and the chained tool `spirv-cross --msl` converts
+# that to Metal Shading Language text.
+_METAL_MSL_LOWERING_PIPELINE: tuple[str, ...] = (
+    "--gpu-kernel-outlining",
+    "--convert-scf-to-cf",
+    "--convert-arith-to-spirv",
+    "--convert-func-to-spirv",
+    "--convert-vector-to-spirv",
+    "--convert-memref-to-spirv",
+    "--convert-gpu-to-spirv",
+    "--reconcile-unrealized-casts",
+)
+
 _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_LOWERING_PIPELINE,
     MLIRBackendTarget.PTX: _PTX_LOWERING_PIPELINE,
     MLIRBackendTarget.ROCM_HIP: _ROCM_HIP_LOWERING_PIPELINE,
-    MLIRBackendTarget.METAL_MSL: (),
+    MLIRBackendTarget.METAL_MSL: _METAL_MSL_LOWERING_PIPELINE,
     MLIRBackendTarget.WEBGPU_WGSL: (),
 })
 MLIR_BACKEND_LOWERING_PIPELINES = _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY
@@ -262,11 +279,23 @@ _ROCM_HIP_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
     ("llc", "-mtriple=amdgcn-amd-amdhsa", "-mcpu=gfx900", "-O2"),
 )
 
+
+# Stage 214 chunk I wires METAL_MSL's translator. The mlir-translate
+# stage uses `--serialize-spirv` (BINARY output — the runner routes
+# this through `_run_mlir_translate_step_binary`); the chained tool
+# `spirv-cross --msl` reads the SPIR-V binary and emits Metal
+# Shading Language text.
+_METAL_MSL_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
+    "mlir-translate",
+    "--serialize-spirv",
+    ("spirv-cross", "--msl"),
+)
+
 _MLIR_BACKEND_TRANSLATORS_AUTHORITY = MappingProxyType({
     MLIRBackendTarget.LLVM_IR: _LLVM_IR_TRANSLATOR,
     MLIRBackendTarget.PTX: _PTX_TRANSLATOR,
     MLIRBackendTarget.ROCM_HIP: _ROCM_HIP_TRANSLATOR,
-    MLIRBackendTarget.METAL_MSL: None,
+    MLIRBackendTarget.METAL_MSL: _METAL_MSL_TRANSLATOR,
     MLIRBackendTarget.WEBGPU_WGSL: None,
 })
 MLIR_BACKEND_TRANSLATORS = _MLIR_BACKEND_TRANSLATORS_AUTHORITY
@@ -3671,11 +3700,49 @@ def _rocm_hip_output_validator(
     )
 
 
+def _metal_msl_output_validator(
+        target: MLIRBackendTarget,
+        output_text: str) -> MLIRBackendOutputValidation:
+    """Stage 214 chunk I — the METAL_MSL target output validator.
+
+    Confirms the spirv-cross output is Metal Shading Language text
+    via the existing `_metal_msl_artifact_is_plausible` predicate.
+    Returns a candidate with named evidence on pass; named finding
+    on fail; defensively rejects wrong-target calls.
+    """
+    if target is not MLIRBackendTarget.METAL_MSL:
+        raise ValueError(
+            f"_metal_msl_output_validator: target must be METAL_MSL, "
+            f"got {target.value}")
+    output_digest = hashlib.sha256(
+        output_text.encode("utf-8")).hexdigest()
+    if not _looks_like_backend_output(target, output_text):
+        return MLIRBackendOutputValidation(
+            target=target,
+            output_sha256=output_digest,
+            findings=(
+                "METAL_MSL target output validator: artifact does not "
+                "parse as Metal Shading Language (failed "
+                "`_metal_msl_artifact_is_plausible` shape probe)",),
+            evidence=(),
+        )
+    return MLIRBackendOutputValidation(
+        target=target,
+        output_sha256=output_digest,
+        findings=(),
+        evidence=(
+            "validator=_metal_msl_output_validator",
+            "predicate=_metal_msl_artifact_is_plausible",
+            f"target={target.value}",
+        ),
+    )
+
+
 _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY = MappingProxyType({
         MLIRBackendTarget.LLVM_IR: _llvm_ir_output_validator,
         MLIRBackendTarget.PTX: _ptx_output_validator,
         MLIRBackendTarget.ROCM_HIP: _rocm_hip_output_validator,
-        MLIRBackendTarget.METAL_MSL: None,
+        MLIRBackendTarget.METAL_MSL: _metal_msl_output_validator,
         MLIRBackendTarget.WEBGPU_WGSL: None,
 })
 MLIR_BACKEND_OUTPUT_VALIDATORS = _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY
@@ -3972,6 +4039,194 @@ def _run_mlir_translate_step(
                 "_run_mlir_translate_step: mlir-translate exited 0 but "
                 "produced blank output",)
         return output_text, ()
+
+
+def _run_mlir_translate_step_binary(
+        dialect_mlir_text: str,
+        *,
+        mlir_translate: str,
+        flag: str,
+        timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+) -> tuple[bytes | None, tuple[str, ...]]:
+    """Stage 214 chunk I — binary-output sibling of
+    `_run_mlir_translate_step`. Reads the output file with `"rb"` so
+    flags like `--serialize-spirv` (which produce a SPIR-V binary
+    module) are supported. Returns `(output_bytes, findings)`.
+
+    Same subprocess hygiene as the text variant: argv-list dispatch,
+    timeout, captured Timeout / OSError / nonzero diagnostics, and a
+    non-empty output artifact requirement.
+    """
+    if not isinstance(dialect_mlir_text, str) or not dialect_mlir_text.strip():
+        return None, (
+            "_run_mlir_translate_step_binary: dialect_mlir_text must "
+            "be non-empty text",)
+    if not isinstance(mlir_translate, str) or not mlir_translate.strip() \
+            or mlir_translate != mlir_translate.strip():
+        return None, (
+            "_run_mlir_translate_step_binary: mlir_translate must be a "
+            f"non-blank, whitespace-stripped path, got {mlir_translate!r}",)
+    if not isinstance(flag, str) or not flag.strip() \
+            or flag != flag.strip() or not flag.startswith("--"):
+        return None, (
+            "_run_mlir_translate_step_binary: flag must be a non-blank, "
+            "whitespace-stripped argv token starting with '--', got "
+            f"{flag!r}",)
+    if ((not isinstance(timeout_s, (int, float)))
+            or isinstance(timeout_s, bool) or timeout_s <= 0):
+        return None, (
+            "_run_mlir_translate_step_binary: timeout_s must be a "
+            f"positive number, got {timeout_s!r}",)
+
+    with tempfile.TemporaryDirectory(prefix="helix_mlir_translate_bin_") as tmpdir:
+        in_path = os.path.join(tmpdir, "dialect.mlir")
+        out_path = os.path.join(tmpdir, "artifact.spv")
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(dialect_mlir_text)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_mlir_translate_step_binary: could not write "
+                f"temp input {in_path!r} "
+                f"({type(exc).__name__}: {exc})",)
+        try:
+            proc = subprocess.run(
+                [mlir_translate, flag, in_path, "-o", out_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return None, (
+                f"_run_mlir_translate_step_binary: mlir-translate timed "
+                f"out after {timeout_s}s",)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_mlir_translate_step_binary: tool unusable at "
+                f"invocation ({type(exc).__name__}: {exc})",)
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or "").strip().splitlines()[-3:]
+            stderr_snippet = " | ".join(stderr_tail) if stderr_tail else ""
+            return None, (
+                f"_run_mlir_translate_step_binary: mlir-translate exited "
+                f"{proc.returncode}"
+                + (f" — stderr: {stderr_snippet}"
+                   if stderr_snippet else ""),)
+        try:
+            with open(out_path, "rb") as f:
+                output_bytes = f.read()
+        except OSError as exc:
+            return None, (
+                f"_run_mlir_translate_step_binary: could not read "
+                f"output artifact {out_path!r} "
+                f"({type(exc).__name__}: {exc})",)
+        if not output_bytes:
+            return None, (
+                "_run_mlir_translate_step_binary: mlir-translate exited "
+                "0 but produced empty output",)
+        return output_bytes, ()
+
+
+def _run_chained_tool_step_binary_input(
+        input_bytes: bytes,
+        *,
+        tool_path: str,
+        args: tuple[str, ...],
+        timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Stage 214 chunk I — binary-input sibling of
+    `_run_chained_tool_step`. Writes input_bytes to a temp file with
+    `"wb"`, invokes the tool, reads output as TEXT (SPIR-V binary in,
+    Metal Shading Language / WGSL text out). Returns
+    `(output_text, findings)`.
+
+    Same subprocess hygiene as the text variant. Invocation shape
+    `[tool_path, *args, in_path, "-o", out_path]` — works for both
+    `spirv-cross --msl in.spv -o out.metal` and the future
+    `tint --format wgsl in.spv -o out.wgsl`.
+    """
+    if not isinstance(input_bytes, (bytes, bytearray)) or not input_bytes:
+        return None, (
+            "_run_chained_tool_step_binary_input: input_bytes must be "
+            "non-empty bytes",)
+    if not isinstance(tool_path, str) or not tool_path.strip() \
+            or tool_path != tool_path.strip():
+        return None, (
+            "_run_chained_tool_step_binary_input: tool_path must be a "
+            f"non-blank, whitespace-stripped path, got {tool_path!r}",)
+    if not isinstance(args, tuple):
+        return None, (
+            "_run_chained_tool_step_binary_input: args must be a tuple "
+            f"of argv tokens, got {type(args).__name__}",)
+    for arg in args:
+        if not isinstance(arg, str) or not arg.strip() \
+                or arg != arg.strip():
+            return None, (
+                "_run_chained_tool_step_binary_input: each arg must be "
+                f"a non-blank, whitespace-stripped string, got {arg!r}",)
+    if ((not isinstance(timeout_s, (int, float)))
+            or isinstance(timeout_s, bool) or timeout_s <= 0):
+        return None, (
+            "_run_chained_tool_step_binary_input: timeout_s must be a "
+            f"positive number, got {timeout_s!r}",)
+
+    with tempfile.TemporaryDirectory(prefix="helix_mlir_chained_bin_") as tmpdir:
+        in_path = os.path.join(tmpdir, "input.spv")
+        out_path = os.path.join(tmpdir, "artifact.out")
+        try:
+            with open(in_path, "wb") as f:
+                f.write(bytes(input_bytes))
+        except OSError as exc:
+            return None, (
+                f"_run_chained_tool_step_binary_input: could not write "
+                f"temp input {in_path!r} "
+                f"({type(exc).__name__}: {exc})",)
+        try:
+            proc = subprocess.run(
+                [tool_path, *args, in_path, "-o", out_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return None, (
+                f"_run_chained_tool_step_binary_input: chained tool "
+                f"timed out after {timeout_s}s",)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_chained_tool_step_binary_input: tool unusable "
+                f"at invocation ({type(exc).__name__}: {exc})",)
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or "").strip().splitlines()[-3:]
+            stderr_snippet = " | ".join(stderr_tail) if stderr_tail else ""
+            return None, (
+                f"_run_chained_tool_step_binary_input: chained tool "
+                f"exited {proc.returncode}"
+                + (f" — stderr: {stderr_snippet}"
+                   if stderr_snippet else ""),)
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                output_text = f.read()
+        except (OSError, UnicodeError) as exc:
+            return None, (
+                f"_run_chained_tool_step_binary_input: could not read "
+                f"output artifact {out_path!r} "
+                f"({type(exc).__name__}: {exc})",)
+        if not output_text.strip():
+            return None, (
+                "_run_chained_tool_step_binary_input: chained tool "
+                "exited 0 but produced blank output",)
+        return output_text, ()
+
+
+# Stage 214 chunk I — translator flags that produce BINARY output.
+# When `_run_mlir_opt_pipeline` sees one of these in the registered
+# translator's flag slot, it routes through the binary helpers
+# (`_run_mlir_translate_step_binary` + `_run_chained_tool_step_binary_input`)
+# instead of the text-only chain.
+_BINARY_MLIR_TRANSLATE_FLAGS = frozenset((
+    "--serialize-spirv",
+))
 
 
 def _run_chained_tool_step(
@@ -4349,12 +4604,27 @@ def _run_mlir_opt_pipeline(
         chained_tool_used: str | None = None
         if registered_translator is not None:
             _tool_name, translator_flag, follow_up_args = registered_translator
-            translated_text, translate_findings = _run_mlir_translate_step(
-                output_text,
-                mlir_translate=mlir_translate,  # type: ignore[arg-type]
-                flag=translator_flag,
-                timeout_s=timeout_s,
-            )
+            binary_chain = translator_flag in _BINARY_MLIR_TRANSLATE_FLAGS
+            if binary_chain:
+                translated_binary, translate_findings = (
+                    _run_mlir_translate_step_binary(
+                        output_text,
+                        mlir_translate=mlir_translate,  # type: ignore[arg-type]
+                        flag=translator_flag,
+                        timeout_s=timeout_s,
+                    )
+                )
+                translated_text = None
+            else:
+                translated_text, translate_findings = (
+                    _run_mlir_translate_step(
+                        output_text,
+                        mlir_translate=mlir_translate,  # type: ignore[arg-type]
+                        flag=translator_flag,
+                        timeout_s=timeout_s,
+                    )
+                )
+                translated_binary = None
             if translate_findings:
                 return MLIRBackendResult(
                     target=target,
@@ -4368,7 +4638,20 @@ def _run_mlir_opt_pipeline(
                     ),
                     output_text=None,
                 )
-            if translated_text is None:
+            if binary_chain and translated_binary is None:
+                return MLIRBackendResult(
+                    target=target,
+                    validation=validation,
+                    lowering_attempted=True,
+                    lowering_passed=False,
+                    lowering_tool=mlir_opt,
+                    lowering_findings=(
+                        f"mlir-translate (binary) step for {target.value} "
+                        "produced no output but also no findings; refusing "
+                        "to mint a backend pass",),
+                    output_text=None,
+                )
+            if not binary_chain and translated_text is None:
                 return MLIRBackendResult(
                     target=target,
                     validation=validation,
@@ -4381,13 +4664,17 @@ def _run_mlir_opt_pipeline(
                         "a backend pass",),
                     output_text=None,
                 )
-            output_text = translated_text
+            if not binary_chain:
+                output_text = translated_text  # type: ignore[assignment]
             translator_tool = mlir_translate
             if follow_up_args:
                 # Stage 214 chunk F — chained third-stage tool. The first
                 # entry of follow_up_args names the tool; the rest are
                 # passed as argv. The path is resolved upstream (in
                 # `lower_mlir_to_backend`) and passed through here.
+                # Chunk I — when the translator step produced binary
+                # (e.g. SPIR-V), the chained tool reads that binary and
+                # emits text via `_run_chained_tool_step_binary_input`.
                 if chained_tool is None:
                     return MLIRBackendResult(
                         target=target,
@@ -4401,12 +4688,22 @@ def _run_mlir_opt_pipeline(
                             "was provided to the runner",),
                         output_text=None,
                     )
-                chained_text, chained_findings = _run_chained_tool_step(
-                    output_text,
-                    tool_path=chained_tool,
-                    args=follow_up_args[1:],
-                    timeout_s=timeout_s,
-                )
+                if binary_chain:
+                    chained_text, chained_findings = (
+                        _run_chained_tool_step_binary_input(
+                            translated_binary,  # type: ignore[arg-type]
+                            tool_path=chained_tool,
+                            args=follow_up_args[1:],
+                            timeout_s=timeout_s,
+                        )
+                    )
+                else:
+                    chained_text, chained_findings = _run_chained_tool_step(
+                        output_text,
+                        tool_path=chained_tool,
+                        args=follow_up_args[1:],
+                        timeout_s=timeout_s,
+                    )
                 if chained_findings:
                     return MLIRBackendResult(
                         target=target,
@@ -4437,6 +4734,25 @@ def _run_mlir_opt_pipeline(
                     )
                 output_text = chained_text
                 chained_tool_used = chained_tool
+            elif binary_chain:
+                # Translator produced binary but no follow-up tool was
+                # registered to convert it to consumable text. Refuse
+                # to mint a backend pass with a binary artifact the
+                # downstream output validator (which expects text)
+                # cannot consume.
+                return MLIRBackendResult(
+                    target=target,
+                    validation=validation,
+                    lowering_attempted=True,
+                    lowering_passed=False,
+                    lowering_tool=mlir_opt,
+                    lowering_findings=(
+                        f"binary mlir-translate step for {target.value} "
+                        "produced output but no chained tool was wired "
+                        "to convert it to text; refusing to mint a "
+                        "backend pass on raw binary",),
+                    output_text=None,
+                )
         if _looks_like_mlir_pipeline_output(output_text):
             return MLIRBackendResult(
                 target=target,

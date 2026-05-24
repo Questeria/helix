@@ -225,13 +225,14 @@ _WIRED_TARGETS_STAGE_214 = frozenset((
     MLIRBackendTarget.LLVM_IR,
     MLIRBackendTarget.PTX,
     MLIRBackendTarget.ROCM_HIP,
+    MLIRBackendTarget.METAL_MSL,
 ))
 
 
 def test_backend_lowering_pipelines_state_per_target():
-    """Stage 214 chunks E, G, H wire LLVM_IR / PTX / ROCM_HIP; the
-    remaining two targets stay explicitly unwired with the empty `()`
-    baseline. Empty means DEFERRED, not PASSED."""
+    """Stage 214 chunks E/G/H/I wire LLVM_IR / PTX / ROCM_HIP /
+    METAL_MSL; WEBGPU_WGSL stays explicitly unwired with the empty
+    `()` baseline. Empty means DEFERRED, not PASSED."""
     for target in _WIRED_TARGETS_STAGE_214:
         assert backend_lowering_pipeline(target) != ()
     for target in MLIRBackendTarget:
@@ -241,9 +242,9 @@ def test_backend_lowering_pipelines_state_per_target():
 
 
 def test_backend_output_validators_state_per_target():
-    """Stage 214 chunks E, G, H wire LLVM_IR / PTX / ROCM_HIP output
-    validators; the other two targets stay None. A pass pipeline
-    alone cannot prove backend-consumable output."""
+    """Stage 214 chunks E/G/H/I wire LLVM_IR / PTX / ROCM_HIP /
+    METAL_MSL output validators; WEBGPU_WGSL stays None. A pass
+    pipeline alone cannot prove backend-consumable output."""
     assert set(backends.MLIR_BACKEND_OUTPUT_VALIDATORS) == set(
         MLIRBackendTarget)
     for target in _WIRED_TARGETS_STAGE_214:
@@ -256,10 +257,9 @@ def test_backend_output_validators_state_per_target():
 
 
 def test_backend_translators_table_state_per_target():
-    """Stage 214 chunks E, G, H wire LLVM_IR / PTX / ROCM_HIP
-    translator entries; the other two targets stay None (they need
-    chunks I/J's binary translator + spirv-cross / tint chains). The
-    table is total over MLIRBackendTarget."""
+    """Stage 214 chunks E/G/H/I wire LLVM_IR / PTX / ROCM_HIP /
+    METAL_MSL translator entries; WEBGPU_WGSL stays None (chunk J
+    will wire it). The table is total over MLIRBackendTarget."""
     assert set(backends.MLIR_BACKEND_TRANSLATORS) == set(MLIRBackendTarget)
     llvm_translator = backends.backend_translator(
         MLIRBackendTarget.LLVM_IR)
@@ -301,7 +301,7 @@ def test_public_backend_contract_tables_are_immutable():
 
 def test_public_backend_contract_rebinding_does_not_change_authority(
         monkeypatch):
-    # METAL_MSL is still unwired (chunks I+ will wire it), so the
+    # WEBGPU_WGSL is still unwired (chunk J will wire it), so the
     # rebinding check uses it to confirm the AUTHORITY surface is not
     # mutated by writes to the PUBLIC alias.
     monkeypatch.setattr(
@@ -309,7 +309,7 @@ def test_public_backend_contract_rebinding_does_not_change_authority(
         "MLIR_BACKEND_LOWERING_PIPELINES",
         MappingProxyType({
             **backends.MLIR_BACKEND_LOWERING_PIPELINES,
-            MLIRBackendTarget.METAL_MSL: ("--canonicalize",),
+            MLIRBackendTarget.WEBGPU_WGSL: ("--canonicalize",),
         }),
     )
     monkeypatch.setattr(
@@ -317,12 +317,12 @@ def test_public_backend_contract_rebinding_does_not_change_authority(
         "MLIR_BACKEND_OUTPUT_VALIDATORS",
         MappingProxyType({
             **backends.MLIR_BACKEND_OUTPUT_VALIDATORS,
-            MLIRBackendTarget.METAL_MSL: _accept_backend_output,
+            MLIRBackendTarget.WEBGPU_WGSL: _accept_backend_output,
         }),
     )
-    assert backend_lowering_pipeline(MLIRBackendTarget.METAL_MSL) == ()
+    assert backend_lowering_pipeline(MLIRBackendTarget.WEBGPU_WGSL) == ()
     assert backends._MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY[
-        MLIRBackendTarget.METAL_MSL] is None
+        MLIRBackendTarget.WEBGPU_WGSL] is None
 
 
 def test_backend_output_validators_return_structured_validation():
@@ -2834,11 +2834,9 @@ def test_lower_mlir_to_backend_valid_defers_with_no_support():
         mlir_opt=None,
         detail=("`mlir-opt` is not on PATH",),
     )
-    # METAL_MSL still has an empty pipeline (Stage 214 chunks E/G/H
-    # wire LLVM_IR / PTX / ROCM_HIP), so this test exercises the
-    # "pipeline is not wired yet" branch.
+    # WEBGPU_WGSL still has an empty pipeline (chunk J will wire it).
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
+        _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert result.deferred()
     assert result.lowering_attempted is False
@@ -2862,9 +2860,9 @@ def test_lower_mlir_to_backend_valid_defers_even_with_mlir_opt(monkeypatch):
         mlir_opt="/usr/bin/mlir-opt",
         detail=("`mlir-opt` is on PATH at '/usr/bin/mlir-opt'",),
     )
-    # METAL_MSL still has an empty pipeline (chunks I+ will wire it).
+    # WEBGPU_WGSL still has an empty pipeline (chunk J will wire it).
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
+        _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert not any(
         "no real MLIR surface" in f for f in result.lowering_findings)
@@ -2942,11 +2940,10 @@ def test_lower_mlir_to_backend_declared_pipeline_without_validator_defers(
 
     monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
                         _fake_validate)
-    # METAL_MSL's output validator is still None (chunks I+ wire it),
-    # so this test exercises the "validator not wired" branch.
-    _wire_pipeline(monkeypatch, MLIRBackendTarget.METAL_MSL)
+    # WEBGPU_WGSL's output validator is still None (chunk J wires it).
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.WEBGPU_WGSL)
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
+        _WELL_FORMED, MLIRBackendTarget.WEBGPU_WGSL, support=support)
     assert result.deferred()
     assert any("output validator is not wired" in f
                for f in result.lowering_findings), result.lowering_findings
@@ -3811,6 +3808,270 @@ def test_rocm_hip_chain_defers_when_chained_tool_absent(monkeypatch):
     assert any("chained tool" in f and "is not on PATH" in f
                for f in result.lowering_findings), \
         result.lowering_findings
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk I: binary translate + METAL_MSL wired end-to-end
+# --------------------------------------------------------------------------
+def test_run_mlir_translate_step_binary_success(monkeypatch):
+    captured: dict = {}
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        captured["cmd"] = cmd
+        out_path = cmd[cmd.index("-o") + 1]
+        # SPIR-V module magic number + payload
+        Path(out_path).write_bytes(b"\x03\x02\x23\x07" + b"\x00" * 16)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step_binary(
+        "module { spirv.module Logical GLSL450 { } }\n",
+        mlir_translate="/fake/mlir-translate",
+        flag="--serialize-spirv",
+    )
+    assert findings == ()
+    assert isinstance(output, bytes)
+    assert output.startswith(b"\x03\x02\x23\x07")
+    assert captured["cmd"][1] == "--serialize-spirv"
+
+
+def test_run_mlir_translate_step_binary_rejects_blank_input():
+    output, findings = backends._run_mlir_translate_step_binary(
+        "   ", mlir_translate="/fake/mlir-translate",
+        flag="--serialize-spirv")
+    assert output is None
+    assert any("non-empty text" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_binary_rejects_blank_path():
+    output, findings = backends._run_mlir_translate_step_binary(
+        "module {}", mlir_translate="",
+        flag="--serialize-spirv")
+    assert output is None
+    assert any("mlir_translate" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_binary_rejects_non_flag():
+    output, findings = backends._run_mlir_translate_step_binary(
+        "module {}", mlir_translate="/fake/mlir-translate",
+        flag="serialize-spirv")  # missing --
+    assert output is None
+    assert any("argv token starting with '--'" in f
+               for f in findings), findings
+
+
+def test_run_mlir_translate_step_binary_empty_output(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step_binary(
+        "module {}", mlir_translate="/fake/mlir-translate",
+        flag="--serialize-spirv")
+    assert output is None
+    assert any("empty output" in f for f in findings), findings
+
+
+def test_run_mlir_translate_step_binary_nonzero(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "error: bad input\n")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_mlir_translate_step_binary(
+        "module {}", mlir_translate="/fake/mlir-translate",
+        flag="--serialize-spirv")
+    assert output is None
+    assert any("exited 1" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_binary_input_success(monkeypatch):
+    captured: dict = {}
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        captured["cmd"] = cmd
+        in_path = cmd[-3] if "-o" in cmd else cmd[-1]
+        in_path = cmd[1 + cmd.index("--msl")] if "--msl" in cmd else in_path
+        # spirv-cross [args] in.spv -o out.metal
+        in_file = cmd[-3] if cmd[-2] == "-o" else None
+        if in_file is None:
+            in_file = cmd[-1]
+        assert Path(in_file).read_bytes() == b"\x03\x02\x23\x07payload"
+        Path(cmd[cmd.index("-o") + 1]).write_text(
+            "#include <metal_stdlib>\nusing namespace metal;\n"
+            "kernel void k() {}\n",
+            encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_chained_tool_step_binary_input(
+        b"\x03\x02\x23\x07payload",
+        tool_path="/fake/spirv-cross",
+        args=("--msl",),
+    )
+    assert findings == ()
+    assert "metal_stdlib" in output
+    assert captured["cmd"][0] == "/fake/spirv-cross"
+
+
+def test_run_chained_tool_step_binary_input_rejects_empty():
+    output, findings = backends._run_chained_tool_step_binary_input(
+        b"", tool_path="/fake/spirv-cross", args=())
+    assert output is None
+    assert any("non-empty bytes" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_binary_input_rejects_blank_tool():
+    output, findings = backends._run_chained_tool_step_binary_input(
+        b"data", tool_path="", args=())
+    assert output is None
+    assert any("tool_path" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_binary_input_nonzero(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "error: invalid SPIR-V\n")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_chained_tool_step_binary_input(
+        b"bad", tool_path="/fake/spirv-cross", args=("--msl",))
+    assert output is None
+    assert any("exited 1" in f for f in findings), findings
+
+
+def test_metal_msl_output_validator_accepts_msl():
+    output = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void k(device float * data [[buffer(0)]]) {}\n"
+    )
+    validation = backends._metal_msl_output_validator(
+        MLIRBackendTarget.METAL_MSL, output)
+    assert validation.findings == (), validation.findings
+    assert validation.candidate()
+    keys = {entry.partition("=")[0] for entry in validation.evidence}
+    assert {"validator", "predicate"}.issubset(keys), validation.evidence
+
+
+def test_metal_msl_output_validator_rejects_non_msl():
+    output = "module { func.func @kernel() { return } }\n"
+    validation = backends._metal_msl_output_validator(
+        MLIRBackendTarget.METAL_MSL, output)
+    assert validation.failed()
+    assert any("Metal Shading Language" in f
+               for f in validation.findings), validation.findings
+
+
+def test_metal_msl_output_validator_rejects_wrong_target():
+    with pytest.raises(ValueError, match="target must be METAL_MSL"):
+        backends._metal_msl_output_validator(
+            MLIRBackendTarget.PTX,
+            "#include <metal_stdlib>\nkernel void k() {}\n")
+
+
+def test_metal_msl_pipeline_is_wired():
+    pipeline = backend_lowering_pipeline(MLIRBackendTarget.METAL_MSL)
+    assert pipeline
+    assert "--gpu-kernel-outlining" in pipeline
+    assert "--convert-gpu-to-spirv" in pipeline
+    for arg in pipeline:
+        assert arg.startswith("--"), arg
+
+
+def test_metal_msl_translator_uses_serialize_spirv():
+    translator = backends.backend_translator(MLIRBackendTarget.METAL_MSL)
+    assert translator is not None
+    tool, flag, follow_up = translator
+    assert tool == "mlir-translate"
+    assert flag == "--serialize-spirv"
+    assert follow_up[0] == "spirv-cross"
+    assert "--msl" in follow_up
+
+
+def test_metal_msl_chain_defers_when_spirv_cross_absent(monkeypatch):
+    """The wired METAL_MSL target with mlir-opt + mlir-translate on
+    PATH but no `spirv-cross` returns DEFERRED."""
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH",
+                "`mlir-translate` is on PATH",
+                "`spirv-cross` is not on PATH"),
+        mlir_translate="/fake/mlir-translate",
+        spirv_cross=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.METAL_MSL, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert any("chained tool" in f and "is not on PATH" in f
+               for f in result.lowering_findings), \
+        result.lowering_findings
+
+
+def test_metal_msl_chain_e2e_routes_through_binary_helpers(monkeypatch):
+    """End-to-end: METAL_MSL chain invokes mlir-opt (text), then
+    mlir-translate --serialize-spirv (binary), then spirv-cross
+    --msl (text in, text out). Verify all three stages run and the
+    final artifact reaches the runner."""
+    spv_bytes = b"\x03\x02\x23\x07" + b"\x00" * 32
+
+    invocations: list[str] = []
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        invocations.append(cmd[0])
+        if cmd[0] == "/fake/mlir-opt":
+            Path(cmd[-1]).write_text(
+                "module { spirv.module Logical GLSL450 { } }\n",
+                encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[0] == "/fake/mlir-translate":
+            assert "--serialize-spirv" in cmd
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(spv_bytes)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[0] == "/fake/spirv-cross":
+            assert "--msl" in cmd
+            # The helper writes in_path right after `--msl`, then
+            # `-o out_path`.
+            in_path = cmd[1 + cmd.index("--msl")]
+            assert Path(in_path).read_bytes() == spv_bytes
+            # MSL kernel name must match input symbol `main` for the
+            # correspondence gate to pass.
+            Path(cmd[cmd.index("-o") + 1]).write_text(
+                "#include <metal_stdlib>\n"
+                "using namespace metal;\n"
+                "kernel void main(device int * out [[buffer(0)]]) {}\n",
+                encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"unexpected tool {cmd[0]!r}")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    validation = _real_passed_validation()
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.METAL_MSL,
+        validation=validation,
+        mlir_opt="/fake/mlir-opt",
+        pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+            MLIRBackendTarget.METAL_MSL],
+        output_validator=backends._metal_msl_output_validator,
+        mlir_translate="/fake/mlir-translate",
+        chained_tool="/fake/spirv-cross",
+    )
+    assert invocations == [
+        "/fake/mlir-opt", "/fake/mlir-translate", "/fake/spirv-cross",
+    ]
+    assert result.status() is MLIRBackendStatus.PASSED, (
+        result.status(), result.lowering_findings)
+    assert any("metal_stdlib" in (result.output_text or "")
+               for _ in [None])
 
 
 def test_llvm_ir_chain_defers_when_mlir_translate_absent(monkeypatch):

@@ -129,9 +129,12 @@ class MLIRSupport:
     mlir_translate: Optional[str] = None
     # Stage 214 chunk F: chained-tool paths. `llc` is the first wired
     # tool (used for PTX / ROCm via the `mlir-translate --mlir-to-llvmir`
-    # output as input). `spirv_cross` (Metal MSL) and `tint` (WGSL) get
-    # added in subsequent chunks as those targets are wired.
+    # output as input).
     llc: Optional[str] = None
+    # Stage 214 chunk I: `spirv-cross` reads a SPIR-V binary (the
+    # output of `mlir-translate --serialize-spirv`) and emits Metal
+    # Shading Language text for the METAL_MSL backend target.
+    spirv_cross: Optional[str] = None
 
     def __post_init__(self) -> None:
         # A dialect sub-module cannot import without the core package.
@@ -167,6 +170,14 @@ class MLIRSupport:
                     "MLIRSupport: llc must be a non-blank, "
                     f"whitespace-stripped path or None, got "
                     f"{self.llc!r}")
+        if self.spirv_cross is not None:
+            if not isinstance(self.spirv_cross, str) \
+                    or not self.spirv_cross.strip() \
+                    or self.spirv_cross != self.spirv_cross.strip():
+                raise ValueError(
+                    "MLIRSupport: spirv_cross must be a non-blank, "
+                    f"whitespace-stripped path or None, got "
+                    f"{self.spirv_cross!r}")
 
     def can_use_bindings(self) -> bool:
         """True iff the in-process MLIR Python bindings are FULLY
@@ -192,15 +203,20 @@ class MLIRSupport:
         need a third stage from raw LLVM IR to target assembly."""
         return self.llc is not None
 
+    def can_use_spirv_cross(self) -> bool:
+        """True iff the `spirv-cross` CLI is on PATH. Stage 214 chunk I
+        chains `spirv-cross` after `mlir-translate --serialize-spirv`
+        to emit Metal Shading Language text for METAL_MSL."""
+        return self.spirv_cross is not None
+
     def chained_tool_path(self, tool_name: str) -> Optional[str]:
         """Resolve a chained-tool name (the first element of a
         translator's `follow_up_args`) to its PATH location, or None
-        when not on PATH / not yet known to this support struct.
-
-        Chunk F supports only `llc`; chunks G+ will add `spirv-cross`
-        and `tint` here as METAL_MSL / WEBGPU_WGSL are wired."""
+        when not on PATH / not yet known to this support struct."""
         if tool_name == "llc":
             return self.llc
+        if tool_name == "spirv-cross":
+            return self.spirv_cross
         return None
 
     def is_available(self) -> bool:
@@ -299,9 +315,19 @@ def detect_mlir_support() -> MLIRSupport:
     else:
         detail.append(f"`llc` is on PATH at {llc!r}")
 
+    # --- surface 5: the `spirv-cross` command-line tool ---
+    # Stage 214 chunk I chains this after `mlir-translate
+    # --serialize-spirv` for METAL_MSL (SPIR-V binary -> MSL text).
+    spirv_cross = shutil.which("spirv-cross")
+    if spirv_cross is None:
+        detail.append("`spirv-cross` is not on PATH")
+    else:
+        detail.append(f"`spirv-cross` is on PATH at {spirv_cross!r}")
+
     # Every branch above appended at least one `detail` line, and
     # `dialects` is never set without `bindings` — so this construction
     # always satisfies MLIRSupport.__post_init__ and cannot raise.
     return MLIRSupport(bindings=bindings, dialects=dialects,
                        mlir_opt=mlir_opt, detail=tuple(detail),
-                       mlir_translate=mlir_translate, llc=llc)
+                       mlir_translate=mlir_translate, llc=llc,
+                       spirv_cross=spirv_cross)
