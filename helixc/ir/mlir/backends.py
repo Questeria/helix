@@ -132,8 +132,31 @@ MLIR_BACKEND_REQUIRED_DIALECTS = _MLIR_BACKEND_REQUIRED_DIALECTS_AUTHORITY
 # can return PASSED. Stage 213 chunk C defines the runner contract:
 # each entry is a complete `mlir-opt` pass argument (e.g.
 # "--canonicalize" or "--pass-pipeline=..."), not a shell fragment.
+# Stage 214 chunk E wires LLVM_IR's canonical mlir-opt lowering pipeline:
+# scf -> cf, then arith/cf/func/index/memref/vector into the llvm dialect,
+# then clean up any unrealized casts the conversions leave behind. The
+# output is LLVM-dialect MLIR; chunk D's translator step runs
+# `mlir-translate --mlir-to-llvmir` after this to produce raw LLVM IR.
+#
+# `--convert-index-to-llvm` is required before `--finalize-memref-to-llvm-
+# conversion`: `scf`/`memref` materialise `index` SSA values (loop IVs,
+# memref offsets); without the index conversion, the memref finalize pass
+# leaves unrealized `index` casts the reconcile pass cannot legalize and
+# the whole pipeline aborts with `failed to legalize operation
+# 'builtin.unrealized_conversion_cast'`.
+_LLVM_IR_LOWERING_PIPELINE: tuple[str, ...] = (
+    "--convert-scf-to-cf",
+    "--convert-cf-to-llvm",
+    "--convert-arith-to-llvm",
+    "--convert-func-to-llvm",
+    "--convert-vector-to-llvm",
+    "--convert-index-to-llvm",
+    "--finalize-memref-to-llvm-conversion",
+    "--reconcile-unrealized-casts",
+)
+
 _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY = MappingProxyType({
-    MLIRBackendTarget.LLVM_IR: (),
+    MLIRBackendTarget.LLVM_IR: _LLVM_IR_LOWERING_PIPELINE,
     MLIRBackendTarget.PTX: (),
     MLIRBackendTarget.ROCM_HIP: (),
     MLIRBackendTarget.METAL_MSL: (),
@@ -165,8 +188,19 @@ MLIR_BACKEND_LOWERING_PIPELINES = _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY
 # `("llc", "-mtriple=nvptx64", "-mcpu=sm_80")` for PTX). None means
 # "translator step is not wired for this target; lowering stays
 # DEFERRED."
+# Stage 214 chunk E wires LLVM_IR's translator entry. LLVM_IR is the
+# simplest target — one `mlir-translate --mlir-to-llvmir` invocation
+# converts the dialect-MLIR output of the lowering pipeline directly to
+# raw LLVM IR text. No chained follow-up tool needed (the other targets
+# wait on the chunk-E+ chained-tool runner).
+_LLVM_IR_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
+    "mlir-translate",
+    "--mlir-to-llvmir",
+    (),
+)
+
 _MLIR_BACKEND_TRANSLATORS_AUTHORITY = MappingProxyType({
-    MLIRBackendTarget.LLVM_IR: None,
+    MLIRBackendTarget.LLVM_IR: _LLVM_IR_TRANSLATOR,
     MLIRBackendTarget.PTX: None,
     MLIRBackendTarget.ROCM_HIP: None,
     MLIRBackendTarget.METAL_MSL: None,
@@ -3451,8 +3485,49 @@ class MLIRBackendOutputValidation:
 MLIRBackendOutputValidator = Callable[
     [MLIRBackendTarget, str], MLIRBackendOutputValidation]
 
+
+def _llvm_ir_output_validator(
+        target: MLIRBackendTarget,
+        output_text: str) -> MLIRBackendOutputValidation:
+    """Stage 214 chunk E — the LLVM_IR target output validator.
+
+    Confirms the post-chain artifact is raw LLVM IR via the existing
+    `_llvm_ir_artifact_is_plausible` predicate (which has been hardened
+    through the Stage-213 audit batches against malformed input).
+    Returns a candidate result whose evidence names the validator and
+    the predicate so the runner-registry brand can promote it to
+    PASSED. A fail returns the named finding, never a silent skip.
+    """
+    if target is not MLIRBackendTarget.LLVM_IR:
+        raise ValueError(
+            f"_llvm_ir_output_validator: target must be LLVM_IR, got "
+            f"{target.value}")
+    output_digest = hashlib.sha256(
+        output_text.encode("utf-8")).hexdigest()
+    if not _looks_like_backend_output(target, output_text):
+        return MLIRBackendOutputValidation(
+            target=target,
+            output_sha256=output_digest,
+            findings=(
+                "LLVM_IR target output validator: artifact does not "
+                "parse as raw LLVM IR (failed "
+                "`_llvm_ir_artifact_is_plausible` shape probe)",),
+            evidence=(),
+        )
+    return MLIRBackendOutputValidation(
+        target=target,
+        output_sha256=output_digest,
+        findings=(),
+        evidence=(
+            "validator=_llvm_ir_output_validator",
+            "predicate=_llvm_ir_artifact_is_plausible",
+            f"target={target.value}",
+        ),
+    )
+
+
 _MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY = MappingProxyType({
-        MLIRBackendTarget.LLVM_IR: None,
+        MLIRBackendTarget.LLVM_IR: _llvm_ir_output_validator,
         MLIRBackendTarget.PTX: None,
         MLIRBackendTarget.ROCM_HIP: None,
         MLIRBackendTarget.METAL_MSL: None,

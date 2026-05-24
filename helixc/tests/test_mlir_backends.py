@@ -207,28 +207,46 @@ def test_backend_required_dialects_are_total_nonempty_unique():
             assert isinstance(dialect, str) and dialect.isidentifier()
 
 
-def test_backend_lowering_pipelines_are_explicitly_unwired():
-    """Chunk A records the pass-pipeline table but keeps every target
-    unwired; empty means DEFERRED, not PASSED."""
+def test_backend_lowering_pipelines_state_per_target():
+    """Stage 214 chunk E wires LLVM_IR; the other four targets stay
+    explicitly unwired with the empty `()` baseline. Empty means
+    DEFERRED, not PASSED."""
+    assert backend_lowering_pipeline(MLIRBackendTarget.LLVM_IR) != ()
     for target in MLIRBackendTarget:
+        if target is MLIRBackendTarget.LLVM_IR:
+            continue
         assert backend_lowering_pipeline(target) == ()
 
 
-def test_backend_output_validators_are_explicitly_unwired():
-    """A pass pipeline alone cannot prove backend-consumable output."""
+def test_backend_output_validators_state_per_target():
+    """Stage 214 chunk E wires LLVM_IR's output validator; the other
+    four targets stay None. A pass pipeline alone cannot prove
+    backend-consumable output."""
     assert set(backends.MLIR_BACKEND_OUTPUT_VALIDATORS) == set(
         MLIRBackendTarget)
+    assert callable(
+        backends.MLIR_BACKEND_OUTPUT_VALIDATORS[MLIRBackendTarget.LLVM_IR])
     for target in MLIRBackendTarget:
+        if target is MLIRBackendTarget.LLVM_IR:
+            continue
         assert backends.MLIR_BACKEND_OUTPUT_VALIDATORS[target] is None
 
 
-def test_backend_translators_table_is_total_and_unwired():
-    """Stage 214 chunk A: the translator-step table is total over the
-    targets and starts None-everywhere. The drift-guard refuses any
-    non-None entry that isn't a `(tool_name, flag, follow_up_args)`
-    tuple with the documented shape."""
+def test_backend_translators_table_state_per_target():
+    """Stage 214 chunk E wires LLVM_IR's translator entry; the other
+    four targets stay None (they need the chunk-E+ chained-tool
+    runner). The table is total over MLIRBackendTarget."""
     assert set(backends.MLIR_BACKEND_TRANSLATORS) == set(MLIRBackendTarget)
+    llvm_translator = backends.backend_translator(
+        MLIRBackendTarget.LLVM_IR)
+    assert llvm_translator is not None
+    tool_name, flag, follow_up = llvm_translator
+    assert tool_name == "mlir-translate"
+    assert flag == "--mlir-to-llvmir"
+    assert follow_up == ()
     for target in MLIRBackendTarget:
+        if target is MLIRBackendTarget.LLVM_IR:
+            continue
         assert backends.MLIR_BACKEND_TRANSLATORS[target] is None
         assert backends.backend_translator(target) is None
 
@@ -1945,6 +1963,11 @@ def test_run_mlir_opt_pipeline_rejects_mlir_instead_of_artifact(
     monkeypatch.setattr(backends.subprocess, "run", _fake_run)
     _register_output_validator(monkeypatch, MLIRBackendTarget.LLVM_IR,
                                _validator)
+    # Temporarily un-wire the LLVM_IR translator so this exercises the
+    # "translation step is not wired" rejection rather than the chunk-E
+    # chain. The chain-version is covered by chunk-D tests.
+    _wire_translator(monkeypatch, MLIRBackendTarget.LLVM_IR,
+                     translator=None)
     result = backends._run_mlir_opt_pipeline(
         _WELL_FORMED,
         target=MLIRBackendTarget.LLVM_IR,
@@ -1978,6 +2001,12 @@ def test_run_mlir_opt_pipeline_rejects_unrelated_llvm_artifact(
     monkeypatch.setattr(backends.subprocess, "run", _fake_run)
     _register_output_validator(monkeypatch, MLIRBackendTarget.LLVM_IR,
                                _validator)
+    # Un-wire the LLVM_IR translator so mlir-opt's output is treated as
+    # the final artifact (the legacy un-chained path). The
+    # symbol-correspondence rejection should fire on the unrelated
+    # artifact regardless of whether the chain ran.
+    _wire_translator(monkeypatch, MLIRBackendTarget.LLVM_IR,
+                     translator=None)
     result = backends._run_mlir_opt_pipeline(
         _WELL_FORMED,
         target=MLIRBackendTarget.LLVM_IR,
@@ -2768,8 +2797,11 @@ def test_lower_mlir_to_backend_valid_defers_with_no_support():
         mlir_opt=None,
         detail=("`mlir-opt` is not on PATH",),
     )
+    # PTX still has an empty pipeline (Stage 214 chunk E wires only
+    # LLVM_IR), so this test exercises the "pipeline is not wired yet"
+    # branch.
     result = lower_mlir_to_backend(
-        _WELL_FORMED, MLIRBackendTarget.LLVM_IR, support=support)
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
     assert result.status() is MLIRBackendStatus.DEFERRED
     assert result.deferred()
     assert result.lowering_attempted is False
@@ -3098,16 +3130,15 @@ def test_run_mlir_opt_pipeline_rejects_translate_path_without_translator(
         monkeypatch):
     """Passing `mlir_translate=...` for a target whose translator entry
     is None is a configuration bug — raise rather than silently
-    discard the path."""
-    pipeline = _wire_pipeline(monkeypatch, MLIRBackendTarget.LLVM_IR)
-    _register_output_validator(monkeypatch, MLIRBackendTarget.LLVM_IR)
-    # The LLVM_IR translator entry stays None (we did NOT call
-    # _wire_translator); passing mlir_translate should be a hard error.
+    discard the path. PTX still has its translator None (chunk E only
+    wires LLVM_IR)."""
+    pipeline = _wire_pipeline(monkeypatch, MLIRBackendTarget.PTX)
+    _register_output_validator(monkeypatch, MLIRBackendTarget.PTX)
     validation = _real_passed_validation()
     with pytest.raises(ValueError, match="no registered translator"):
         backends._run_mlir_opt_pipeline(
             _WELL_FORMED,
-            target=MLIRBackendTarget.LLVM_IR,
+            target=MLIRBackendTarget.PTX,
             validation=validation,
             mlir_opt="/fake/mlir-opt",
             pipeline=pipeline,
@@ -3259,3 +3290,133 @@ def test_backends_all_does_not_expose_private_runner_helpers():
         "_MLIR_BACKEND_TRANSLATORS_AUTHORITY",
     }
     assert public.isdisjoint(forbidden), public & forbidden
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk E: LLVM_IR target wired end-to-end
+# --------------------------------------------------------------------------
+def test_llvm_ir_output_validator_accepts_raw_llvm_ir():
+    """The LLVM_IR target output validator returns a clean candidate
+    with the required validator + predicate evidence keys when the
+    artifact parses as raw LLVM IR."""
+    output = "define void @kernel() {\n  ret void\n}\n"
+    validation = backends._llvm_ir_output_validator(
+        MLIRBackendTarget.LLVM_IR, output)
+    assert validation.findings == ()
+    assert validation.candidate()
+    keys = {entry.partition("=")[0] for entry in validation.evidence}
+    assert {"validator", "predicate"}.issubset(keys), validation.evidence
+
+
+def test_llvm_ir_output_validator_rejects_non_llvm_ir():
+    """The LLVM_IR target output validator surfaces a clear finding
+    when the artifact is not raw LLVM IR (here: still MLIR text)."""
+    output = "module { func.func @kernel() { return } }\n"
+    validation = backends._llvm_ir_output_validator(
+        MLIRBackendTarget.LLVM_IR, output)
+    assert validation.failed()
+    assert any("does not parse as raw LLVM IR" in f
+               for f in validation.findings), validation.findings
+
+
+def test_llvm_ir_output_validator_rejects_wrong_target():
+    """Defensive: the LLVM_IR validator must not silently accept a
+    different target's artifact."""
+    with pytest.raises(ValueError, match="target must be LLVM_IR"):
+        backends._llvm_ir_output_validator(
+            MLIRBackendTarget.PTX, "define void @k() { ret void }\n")
+
+
+def test_llvm_ir_pipeline_is_wired():
+    """Stage 214 chunk E wires a non-empty mlir-opt lowering pipeline
+    for LLVM_IR. The exact 8-tuple is pinned so any future
+    reordering / replacement requires an intentional test update
+    (silent drift in this table breaks real-toolchain lowering)."""
+    pipeline = backend_lowering_pipeline(MLIRBackendTarget.LLVM_IR)
+    assert pipeline == (
+        "--convert-scf-to-cf",
+        "--convert-cf-to-llvm",
+        "--convert-arith-to-llvm",
+        "--convert-func-to-llvm",
+        "--convert-vector-to-llvm",
+        "--convert-index-to-llvm",
+        "--finalize-memref-to-llvm-conversion",
+        "--reconcile-unrealized-casts",
+    )
+    for arg in pipeline:
+        assert isinstance(arg, str)
+        assert arg.startswith("--"), arg
+        assert arg == arg.strip(), arg
+
+
+def test_llvm_ir_chain_e2e_produces_passed(monkeypatch):
+    """End-to-end: lower_mlir_to_backend on LLVM_IR with both mlir-opt
+    and mlir-translate present produces a PASSED backend result whose
+    output_provenance records the chain (mlir-opt + mlir-translate +
+    flag + sha256 + target_validation evidence)."""
+    dialect_mlir = "module { llvm.func @main() { llvm.return } }\n"
+    # `define i32 @main()` matches the `func.func @main() -> i32`
+    # symbol in _WELL_FORMED for the correspondence gate.
+    raw_llvm_ir = "define i32 @main() {\n  ret i32 1\n}\n"
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        if cmd[0] == "/fake/mlir-opt":
+            Path(cmd[-1]).write_text(dialect_mlir, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[0] == "/fake/mlir-translate":
+            out_path = cmd[cmd.index("-o") + 1]
+            Path(out_path).write_text(raw_llvm_ir, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"unexpected tool {cmd[0]!r}")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/fake/mlir-opt'",
+                "`mlir-translate` is on PATH at '/fake/mlir-translate'"),
+        mlir_translate="/fake/mlir-translate",
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.LLVM_IR, support=support)
+    assert result.status() is MLIRBackendStatus.PASSED, (
+        result.status(), result.lowering_findings)
+    assert result.output_text == raw_llvm_ir
+    assert any("mlir-translate=/fake/mlir-translate" in entry
+               for entry in result.output_provenance), \
+        result.output_provenance
+    assert any("mlir-translate-flag=--mlir-to-llvmir" in entry
+               for entry in result.output_provenance), \
+        result.output_provenance
+
+
+def test_llvm_ir_chain_defers_when_mlir_translate_absent(monkeypatch):
+    """When mlir-opt is present but mlir-translate isn't, the gate at
+    lower_mlir_to_backend returns DEFERRED with a clear finding rather
+    than silently attempting a chain that cannot complete."""
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH at '/fake/mlir-opt'",
+                "`mlir-translate` is not on PATH"),
+        mlir_translate=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.LLVM_IR, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert any("translator step" in f and "not on PATH" in f
+               for f in result.lowering_findings), \
+        result.lowering_findings
