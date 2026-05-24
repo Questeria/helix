@@ -4051,8 +4051,15 @@ def test_metal_msl_chain_e2e_routes_through_binary_helpers(monkeypatch):
             # `-o out_path`.
             in_path = cmd[1 + cmd.index("--msl")]
             assert Path(in_path).read_bytes() == spv_bytes
-            # MSL kernel name must match input symbol `main` for the
-            # correspondence gate to pass.
+            # NOTE: MSL forbids `main` as a kernel name (reserved
+            # keyword) in real Apple-metal compilation. Stage 215's
+            # parity gate will need to handle the MSL kernel-name
+            # mangling (e.g. spirv-cross's `--rename-entry-point`)
+            # before a real toolchain can produce a passing artifact
+            # for an input MLIR with `@main`. This e2e test runs
+            # against the MOCK shape probe only, which accepts
+            # `kernel void main` to match the input's `@main` symbol
+            # for the correspondence gate; real MSL would not.
             Path(cmd[cmd.index("-o") + 1]).write_text(
                 "#include <metal_stdlib>\n"
                 "using namespace metal;\n"

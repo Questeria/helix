@@ -285,13 +285,15 @@ _PTX_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
 # Stage 214 chunk H wires ROCM_HIP's translator. The mlir-translate
 # stage produces raw LLVM IR (with AMDGPU intrinsics from
 # `--convert-gpu-to-rocdl`); the chunk-F chained tool `llc` then
-# emits AMDGPU assembly / object code. The `gfx900` target matches a
-# common Vega-generation discrete GPU; lift into per-target config in
-# a later chunk when concrete deployments need a different one.
+# emits AMDGPU assembly / object code. The `gfx942` mcpu matches the
+# rest of the codebase's ROCm target (the MI300-class GPU referenced
+# in helixc/backend/regalloc_classes.py and gpu_ci.py); lift into
+# per-target config in a later chunk if concrete deployments need a
+# different one.
 _ROCM_HIP_TRANSLATOR: tuple[str, str, tuple[str, ...]] = (
     "mlir-translate",
     "--mlir-to-llvmir",
-    ("llc", "-mtriple=amdgcn-amd-amdhsa", "-mcpu=gfx900", "-O2"),
+    ("llc", "-mtriple=amdgcn-amd-amdhsa", "-mcpu=gfx942", "-O2"),
 )
 
 
@@ -3914,6 +3916,35 @@ def _check_mlir_backend_tables() -> None:
             "helixc.ir.mlir.backends: MLIR_BACKEND_TRANSLATORS keys "
             f"{set(_MLIR_BACKEND_TRANSLATORS_AUTHORITY)} != "
             f"MLIRBackendTarget members {expected}")
+
+    # Cross-table guard: a wired translator implies a non-empty
+    # pipeline. A maintainer who blanks one pipeline tuple while
+    # leaving the translator wired would otherwise ship a silently-
+    # DEFERRED state where the gate at `lower_mlir_to_backend` claims
+    # "pipeline not wired yet" but the translator still declares the
+    # chain. Catch the inconsistency at module load.
+    for target, translator in _MLIR_BACKEND_TRANSLATORS_AUTHORITY.items():
+        if translator is None:
+            continue
+        if not _MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[target]:
+            raise AssertionError(
+                f"helixc.ir.mlir.backends: {target.name} has a wired "
+                "translator entry but an empty pipeline; either wire "
+                "the pipeline too or set the translator to None")
+        # Stage 214 chunk J close-audit: every wired translator's
+        # follow_up_args[0] must be a known chained-tool name so
+        # `MLIRSupport.chained_tool_path` does not raise for it. The
+        # known set lives in helixc.ir.mlir.toolchain.
+        follow_up = translator[2]
+        if follow_up:
+            from . import toolchain
+            if follow_up[0] not in toolchain.KNOWN_CHAINED_TOOL_NAMES:
+                raise AssertionError(
+                    f"helixc.ir.mlir.backends: {target.name} translator "
+                    f"declares chained tool {follow_up[0]!r} but "
+                    "MLIRSupport.KNOWN_CHAINED_TOOL_NAMES does not list "
+                    "it; add a branch + a field + a probe before wiring "
+                    "the translator")
     for target, translator in _MLIR_BACKEND_TRANSLATORS_AUTHORITY.items():
         if translator is None:
             continue

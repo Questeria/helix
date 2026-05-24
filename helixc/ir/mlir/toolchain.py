@@ -230,14 +230,27 @@ class MLIRSupport:
     def chained_tool_path(self, tool_name: str) -> Optional[str]:
         """Resolve a chained-tool name (the first element of a
         translator's `follow_up_args`) to its PATH location, or None
-        when not on PATH / not yet known to this support struct."""
+        when the tool is known but not on PATH.
+
+        Stage 214 chunk J close-audit hardening: raises ValueError for
+        unknown tool names so a typo in a translator entry surfaces as
+        a loud configuration error rather than a silent DEFERRED. The
+        set of known names is intentionally small (see
+        `KNOWN_CHAINED_TOOL_NAMES` at module scope); extend it when a
+        new chained tool is wired AND its `MLIRSupport` field is added
+        alongside (a drift guard at module load enforces the
+        coupling)."""
         if tool_name == "llc":
             return self.llc
         if tool_name == "spirv-cross":
             return self.spirv_cross
         if tool_name == "tint":
             return self.tint
-        return None
+        raise ValueError(
+            f"MLIRSupport.chained_tool_path: unknown chained tool name "
+            f"{tool_name!r}; supported names are 'llc', 'spirv-cross', "
+            "'tint'. Add a new branch + an MLIRSupport field + a probe "
+            "in detect_mlir_support to extend the set.")
 
     def is_available(self) -> bool:
         """True iff at least one real MLIR surface — the in-process
@@ -245,6 +258,15 @@ class MLIRSupport:
         runs mock-path-only and every real-MLIR step is DEFERRED, never
         FAILED."""
         return self.can_use_bindings() or self.can_use_mlir_opt()
+
+
+# Stage 214 chunk J close-audit: the canonical set of chained-tool
+# names `chained_tool_path()` resolves. The `backends.py` drift guard
+# at module load cross-references this set against every wired
+# translator's `follow_up_args[0]` to refuse silently-misnamed entries.
+KNOWN_CHAINED_TOOL_NAMES: frozenset[str] = frozenset((
+    "llc", "spirv-cross", "tint",
+))
 
 
 def _dialect_imports(dialect: str) -> bool:
