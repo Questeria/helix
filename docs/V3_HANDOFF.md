@@ -458,10 +458,10 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    migration to `@dataclass(frozen=True, slots=True)` with
    `__init_subclass__` and `__post_init__` raising `ValueError`).
 
-   **write_file — SHIPPED 2026-05-24** (this chunk). Inline lowering
-   in `helixc/backend/llvm_ir.py`: registers `@open`, `@write`,
-   `@close` libc declares + the path (NUL-terminated) and content
-   string globals; emits the six-instruction sequence
+   **write_file — SHIPPED 2026-05-24** (commit ac366c6). Inline
+   lowering in `helixc/backend/llvm_ir.py`: registers `@open`,
+   `@write`, `@close` libc declares + the path (NUL-terminated) and
+   content string globals; emits the six-instruction sequence
    `open -> write -> close -> trunc -> icmp slt -> select`. Constants
    match x86_64.py (577 = O_WRONLY|O_CREAT|O_TRUNC, 420 = 0o644).
    Audit-fix batch: HIGH-1 (embedded NUL in path silently truncated
@@ -472,9 +472,32 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    the existing `# NOTE (Stage 207 parity)` discipline; LOW-3 test
    added that locks the embedded-NUL-in-content-preserved contract.
 
-   **Next residual ops (in priority order)**: read_file_to_arena,
-   TRACE_ENTRY/EXIT (needs a ring buffer), six ARENA ops (needs a
-   bump allocator), QUOTE/SPLICE/MODIFY/REFLECT_HASH (metaprogramming).
+   **arena infrastructure + ARENA_PUSH — SHIPPED 2026-05-24** (this
+   chunk). Foundational shared infrastructure for the ARENA op family
+   and read_file_to_arena. New `_ModuleGlobalSpec` frozen dataclass
+   + `_MODULE_GLOBALS` `MappingProxyType` registry (parallel to
+   `_HELPER_FUNCTIONS`), extended `_HelperFunctionSpec` with a
+   `module_globals: tuple[str, ...] = ()` field, `_check_module_global_table`
+   drift guard (three invariants: key-vs-name; forward dependency
+   resolution; helper-vs-global-name collision rejection). The arena
+   global `@__helix_arena_base = internal global [2097153 x i32]
+   zeroinitializer` (CAP=2097152 matches x86_64.py) is emitted only
+   when at least one helper actually pulls it in. The
+   `@__helix_arena_push(i32) -> i32` helper is a 3-block multi-block
+   LLVM function (entry / in_bounds / exit with phi) — overflow is
+   folded into entry's else branch. ARENA_PUSH lowers to a single
+   `call i32 @__helix_arena_push(...)`. Audit-fix batch: MEDIUM
+   (helper-vs-module-global name collision drift-guard); silent-
+   failure M-2/M-3 (docstring + block-count drift); test gaps
+   (module-global-vs-FFI-declare collision; helper-vs-global registry
+   collision; empty-name/def; `module_globals` duplicate detection;
+   parity-sensitive helper text pinning).
+
+   **Next residual ops (in priority order)**: ARENA_GET / ARENA_SET /
+   ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE (now trivially additive — the
+   infrastructure is in place), read_file_to_arena (uses the arena
+   global), TRACE_ENTRY/EXIT (needs a ring buffer), QUOTE/SPLICE/
+   MODIFY/REFLECT_HASH (metaprogramming).
 
 When `v3.0.0` is tagged, v3.0 is done.
 

@@ -59,9 +59,18 @@ Supported so far (Stages 200, 202-204):
     libc sequence `open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) ->
     write(fd, content, len) -> close(fd)`. The op's i32 result is
     `nwritten < 0 ? nwritten : 0` — matches x86_64.py's "negative on
-    failure, 0 on success" contract. Other PRINT kinds
-    (read_file_to_arena, TRACE_*, ARENA family, QUOTE-family) are
-    later chunks.
+    failure, 0 on success" contract.
+  - arena push (Stage 206-R): `ARENA_PUSH` lowers to a call to the
+    internal helper `@__helix_arena_push(i32) -> i32` which performs
+    the bounds-checked store on the module-scope arena global
+    `@__helix_arena_base` (a `[CAP+1 x i32]` BSS buffer with the
+    i32 cursor at slot 0 and user data in slots 1..CAP). The
+    `_MODULE_GLOBALS` registry mirrors `_HELPER_FUNCTIONS` for
+    shared module-scope state; a helper that touches a global lists
+    it in its `module_globals` and the global is emitted exactly
+    once per module. Other PRINT kinds (read_file_to_arena, TRACE_*,
+    QUOTE-family) and the other arena ops (TOP/GET/SET/POP/PAIR/
+    TRIPLE) are later chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -319,6 +328,70 @@ class _FFIDeclareSpec(NamedTuple):
     arg_tys: tuple[str, ...]
 
 
+# Arena cap — must agree with `helixc/backend/x86_64.py::HELIX_ARENA_CAP`
+# (the Stage 207 parity gate compares both backends against this single
+# value; a drift here would silently change the arena overflow point).
+# Slot layout: i32 cursor at slot 0, user data in slots 1..CAP
+# (inclusive), so the LLVM global needs `CAP + 1` slots total.
+_HELIX_ARENA_CAP = 2097152
+
+
+@dataclass(frozen=True, slots=True)
+class _ModuleGlobalSpec:
+    """One module-scope global variable a helper function depends on
+    (e.g. the arena buffer `@__helix_arena_base`). Emitted exactly
+    once per module via the `_MODULE_GLOBALS` registry when at least
+    one registered helper declares the dependency.
+
+    Frozen + slots + final — house pattern.
+
+    Fields:
+      name: the LLVM global symbol's bare name (e.g.
+            "__helix_arena_base"). Reserved `__helix_` prefix so a
+            user symbol cannot collide (enforced at emit time).
+      definition: the full LLVM line (e.g.
+            `@__helix_arena_base = internal global [2097153 x i32]
+            zeroinitializer, align 4`).
+    """
+    name: str
+    definition: str
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        raise TypeError(
+            "_ModuleGlobalSpec is final; subclassing could bypass "
+            "the invariants")
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError(
+                f"_ModuleGlobalSpec: name must be a non-empty string "
+                f"(got {type(self.name).__name__})")
+        if not self.name.startswith("__helix_"):
+            raise ValueError(
+                f"_ModuleGlobalSpec: name {self.name!r} must use the "
+                f"reserved `__helix_` prefix so user symbols cannot "
+                f"collide")
+        if not isinstance(self.definition, str) or not self.definition.strip():
+            raise ValueError(
+                f"_ModuleGlobalSpec: definition must be a non-empty "
+                f"string (got {type(self.definition).__name__})")
+        # The definition text must declare the registered name in
+        # the canonical `@<name> = ...` form on its own line — drift
+        # here means a future patch could register one name but
+        # define a different global. Tightened from substring to
+        # per-line so a `;`-comment mentioning `@<name> =` cannot
+        # satisfy the guard (matches the parallel tightening on
+        # `_check_helper_function_table`'s `define ` check).
+        expected_prefix = f"@{self.name} ="
+        if not any(ln.lstrip().startswith(expected_prefix)
+                   for ln in self.definition.splitlines()):
+            raise ValueError(
+                f"_ModuleGlobalSpec: definition does not contain a "
+                f"line starting with {expected_prefix!r} — registry "
+                f"name and global declaration disagree (got "
+                f"{self.definition[:80]!r}...)")
+
+
 @dataclass(frozen=True, slots=True)
 class _HelperFunctionSpec:
     """One internal helper function. `definition` is the full
@@ -326,7 +399,10 @@ class _HelperFunctionSpec:
     a tuple of `_FFIDeclareSpec` entries the helper's body calls
     (these go through the same `_register_ffi_declare` plumbing so a
     helper-needed extern dedups against an FFI_CALL-needed extern
-    instead of double-declaring).
+    instead of double-declaring); `module_globals` is a tuple of
+    `__helix_*` module-global names this helper references (each is
+    looked up in `_MODULE_GLOBALS` and the global is emitted exactly
+    once per module).
 
     Frozen + slots + final (subclass-guarded) — matches the house
     pattern for cross-cutting backend result types (see `Backend` in
@@ -336,6 +412,7 @@ class _HelperFunctionSpec:
     """
     definition: str
     ffi_declares: tuple[_FFIDeclareSpec, ...]
+    module_globals: tuple[str, ...] = ()
 
     def __init_subclass__(cls, **kwargs) -> None:
         raise TypeError(
@@ -375,6 +452,25 @@ class _HelperFunctionSpec:
                 raise ValueError(
                     f"_HelperFunctionSpec: ffi_declares entry has "
                     f"wrong field types (got {entry!r})")
+        if not isinstance(self.module_globals, tuple):
+            raise ValueError(
+                f"_HelperFunctionSpec: module_globals must be a "
+                f"tuple (got {type(self.module_globals).__name__})")
+        for entry in self.module_globals:
+            if not isinstance(entry, str) or not entry.startswith("__helix_"):
+                raise ValueError(
+                    f"_HelperFunctionSpec: module_globals entry "
+                    f"{entry!r} must be a `__helix_*` string")
+        # `module_globals` is a tuple but used set-like (dedup
+        # downstream via `self.module_globals.add`). Reject duplicate
+        # entries at the spec level so a typo in the registry that
+        # lists `("__helix_arena_base", "__helix_arena_base")`
+        # surfaces at module load. Mirrors `Backend.required_dialects`
+        # in `helixc/backend/backend_registry.py`.
+        if len(self.module_globals) != len(set(self.module_globals)):
+            raise ValueError(
+                f"_HelperFunctionSpec: module_globals has duplicates "
+                f"({self.module_globals})")
 
 
 # `__helix_print_int(i32) -> i32`: convert an i32 to a base-10 ASCII
@@ -441,6 +537,52 @@ do_write:
 }"""
 
 
+# `@__helix_arena_base`: the shared arena buffer. Slot 0 is the i32
+# cursor; slots 1..CAP are user data. Sized to match
+# `x86_64.py::HELIX_ARENA_CAP` so both backends overflow at the same
+# slot (a Stage 207 parity requirement). `internal` linkage so the
+# symbol is link-local; `zeroinitializer` puts it in BSS (no on-disk
+# size cost — only virtual-memory).
+_HELIX_ARENA_GLOBAL_DEF = (
+    f"@__helix_arena_base = internal global "
+    f"[{_HELIX_ARENA_CAP + 1} x i32] zeroinitializer, align 4")
+
+# `__helix_arena_push(i32) -> i32`: push one i32 value to the arena;
+# return the new slot's index, or -1 on overflow. Mirrors
+# `x86_64.py::ARENA_PUSH` (line ~3135):
+#   load cursor; if cursor >= CAP -> return -1; else
+#   store value at slot (cursor + 1); cursor++; return old cursor.
+#
+# Three basic blocks (entry / in_bounds / exit). On overflow, entry
+# branches directly to exit — the "overflow" path is folded into
+# entry's else branch (no separate `overflow:` block), so the phi at
+# exit reads `[ -1, %entry ]` (not `[ -1, %overflow ]`). The arena
+# global's layout is `[CAP+1 x i32]`: slot 0 is the cursor, slots
+# 1..CAP are user data, so slot N's byte offset from the base pointer
+# is `(N + 1) * 4` — we GEP with `i64 (cursor + 1)` after a sext.
+# `exit` is a phi (-1 from entry, old cursor from in_bounds) so the
+# function has exactly one return.
+_HELIX_ARENA_PUSH_HELPER = f"""\
+define internal i32 @__helix_arena_push(i32 %value) {{
+entry:
+  %cursor = load i32, ptr @__helix_arena_base, align 4
+  %ovfl = icmp uge i32 %cursor, {_HELIX_ARENA_CAP}
+  br i1 %ovfl, label %exit, label %in_bounds
+
+in_bounds:
+  %cursor_plus_one = add i32 %cursor, 1
+  %slot_idx_i64 = sext i32 %cursor_plus_one to i64
+  %slot_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %slot_idx_i64
+  store i32 %value, ptr %slot_ptr, align 4
+  store i32 %cursor_plus_one, ptr @__helix_arena_base, align 4
+  br label %exit
+
+exit:
+  %result = phi i32 [ -1, %entry ], [ %cursor, %in_bounds ]
+  ret i32 %result
+}}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -459,10 +601,79 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
             ),
         ),
     ),
+    "__helix_arena_push": _HelperFunctionSpec(
+        definition=_HELIX_ARENA_PUSH_HELPER,
+        ffi_declares=(),
+        module_globals=("__helix_arena_base",),
+    ),
 }
 
 _HELPER_FUNCTIONS: Mapping[str, _HelperFunctionSpec] = MappingProxyType(
     _HELPER_FUNCTIONS_AUTHORITY)
+
+
+# Module-scope globals registry — same private-AUTHORITY + public-proxy
+# pattern as `_HELPER_FUNCTIONS`. A helper declares its module-global
+# dependencies in `module_globals`; `emit_module` collects the union
+# across helpers used in the module and emits each global exactly
+# once. The `__helix_` prefix is reserved (same collision-protection
+# semantics as the helper functions).
+_MODULE_GLOBALS_AUTHORITY: dict[str, _ModuleGlobalSpec] = {
+    "__helix_arena_base": _ModuleGlobalSpec(
+        name="__helix_arena_base",
+        definition=_HELIX_ARENA_GLOBAL_DEF,
+    ),
+}
+
+_MODULE_GLOBALS: Mapping[str, _ModuleGlobalSpec] = MappingProxyType(
+    _MODULE_GLOBALS_AUTHORITY)
+
+
+def _check_module_global_table() -> None:
+    """Drift guard for `_MODULE_GLOBALS_AUTHORITY`. Fails loudly at
+    module load. Three invariants:
+
+      1. Each entry's registry key matches its `_ModuleGlobalSpec.name`
+         (a typo would let the registry resolve a different name than
+         the helper actually references in its body text).
+      2. Every helper's `module_globals` dependency name resolves in
+         `_MODULE_GLOBALS_AUTHORITY` (otherwise the helper would
+         register a global that is never emitted, and the call site
+         would link to nothing).
+      3. The `__helix_*` namespace is shared between helpers and
+         module-globals — no name appears in BOTH registries
+         simultaneously. Same-name in both would emit BOTH a
+         `define internal i32 @__helix_X(...)` AND a
+         `@__helix_X = internal global ...` line — `llvm-as` rejects
+         this with "redefinition of @X", and `mock_validate_ll`
+         does NOT detect it.
+    """
+    for key, spec in _MODULE_GLOBALS_AUTHORITY.items():
+        if key != spec.name:
+            raise AssertionError(
+                f"helixc.backend.llvm_ir: module-global key {key!r} "
+                f"does not match spec.name {spec.name!r}")
+    # Invariant 2 — every helper's module-global dependency resolves.
+    for hname, hspec in _HELPER_FUNCTIONS_AUTHORITY.items():
+        for global_name in hspec.module_globals:
+            if global_name not in _MODULE_GLOBALS_AUTHORITY:
+                raise AssertionError(
+                    f"helixc.backend.llvm_ir: helper {hname!r} "
+                    f"declares module-global dependency on "
+                    f"{global_name!r} but no such global is "
+                    f"registered (known: "
+                    f"{sorted(_MODULE_GLOBALS_AUTHORITY)})")
+    # Invariant 3 — helper-name vs module-global-name collision.
+    overlap = (set(_HELPER_FUNCTIONS_AUTHORITY)
+               & set(_MODULE_GLOBALS_AUTHORITY))
+    if overlap:
+        raise AssertionError(
+            f"helixc.backend.llvm_ir: name(s) {sorted(overlap)} "
+            f"appear in BOTH `_HELPER_FUNCTIONS_AUTHORITY` and "
+            f"`_MODULE_GLOBALS_AUTHORITY` — every `__helix_*` name "
+            f"must be unique across the two registries (emitting "
+            f"BOTH a `define internal @X(...)` and a "
+            f"`@X = ... global ...` line produces malformed LLVM IR)")
 
 
 def _check_helper_function_table() -> None:
@@ -534,6 +745,7 @@ def _check_helper_function_table() -> None:
 
 
 _check_helper_function_table()
+_check_module_global_table()
 
 
 class _FnEmitter:
@@ -587,6 +799,11 @@ class _FnEmitter:
         # `define internal ...` text exactly once. See `_HELPER_FUNCTIONS`
         # for the registry.
         self.helper_functions: set[str] = set()
+        # module-scope global names this function (transitively, via
+        # the helpers it registered) depends on. `emit_module` collects
+        # the union across emitters and emits each global exactly once.
+        # See `_MODULE_GLOBALS` for the registry.
+        self.module_globals: set[str] = set()
 
     @staticmethod
     def _block_label(block_id: int) -> str:
@@ -1028,11 +1245,26 @@ class _FnEmitter:
                 f"{sorted(_HELPER_FUNCTIONS)})")
         # Transactional: register the FFI declares FIRST (so a
         # signature-clash failure aborts the registration cleanly),
-        # only mark the helper as needed once all declares succeeded.
+        # only mark the helper + its module-globals as needed once
+        # everything that can fail has succeeded.
         for entry in spec.ffi_declares:
             self._register_ffi_declare(
                 entry.target, entry.callee, entry.ret_ty,
                 list(entry.arg_tys))
+        for global_name in spec.module_globals:
+            # `_check_module_global_table` already enforced at module
+            # load that every helper's `module_globals` name resolves
+            # in `_MODULE_GLOBALS`; a miss here would mean a runtime
+            # registry mutation moved the global out from under the
+            # helper (e.g. a test that pokes
+            # `_MODULE_GLOBALS_AUTHORITY` without restoring it).
+            if global_name not in _MODULE_GLOBALS:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: helper {name!r} "
+                    f"references module-global {global_name!r} but "
+                    f"it is not registered (known globals: "
+                    f"{sorted(_MODULE_GLOBALS)})")
+            self.module_globals.add(global_name)
         self.helper_functions.add(name)
 
     def _register_string(self, data: bytes) -> tuple[str, int]:
@@ -1562,6 +1794,45 @@ class _FnEmitter:
                 f"{t3} = load i8, ptr {t2}\n"
                 f"{t4} = zext i8 {t3} to i32\n"
                 f"%v{rid} = select i1 {t0}, i32 {t4}, i32 0")
+        if kind == tir.OpKind.ARENA_PUSH:
+            # `arena.push` pushes one i32 value into the module-scope
+            # arena buffer and returns the new slot's index (or -1 on
+            # overflow). The bounds-check + conditional store + cursor-
+            # increment is a 4-block LLVM helper — too unwieldy to
+            # inline at every call site — so this op lowers to a `call`
+            # to `@__helix_arena_push`. The helper transitively pulls
+            # in the `@__helix_arena_base` module-global via its
+            # `module_globals` entry.
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH takes one "
+                    f"operand (the i32 value to push), got "
+                    f"{len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH must have "
+                    f"exactly one result, got {len(op.results)}")
+            value = op.operands[0]
+            value_ty = _llvm_int_type(
+                value.ty,
+                ctx=f"function {self.fn.name!r} ARENA_PUSH operand")
+            if value_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH operand "
+                    f"has LLVM type {value_ty}, but the helper "
+                    f"`__helix_arena_push` takes an i32")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} ARENA_PUSH result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH result "
+                    f"has LLVM type {res_ty}, but the arena slot "
+                    f"index is an i32")
+            self._register_helper_function("__helix_arena_push")
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_arena_push(i32 {self._ref(value)})")
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
             if print_kind not in (
@@ -1758,8 +2029,8 @@ class _FnEmitter:
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
             f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
-            f"write_file PRINT; RETURN; BR; COND_BR — floats and "
-            f"structs are later stages)"
+            f"write_file PRINT; ARENA_PUSH; RETURN; BR; COND_BR — "
+            f"floats and structs are later stages)"
         )
 
 
@@ -1825,8 +2096,10 @@ def emit_module(module: tir.Module) -> str:
     # `__helix_` prefix; collision with a user-defined function name is
     # malformed and fails closed below.
     helpers_used: set[str] = set()
+    module_globals_used: set[str] = set()
     for emitter in emitters:
         helpers_used |= emitter.helper_functions
+        module_globals_used |= emitter.module_globals
     helper_collision = helpers_used & defined
     if helper_collision:
         raise LLVMEmitError(
@@ -1835,6 +2108,18 @@ def emit_module(module: tir.Module) -> str:
             f"`__helix_` internal helper name(s); rename the user "
             f"function (the `__helix_` prefix is reserved for the "
             f"LLVM backend's internal runtime helpers)")
+    # Module-global collision check: a user-defined function whose
+    # name shadows a `__helix_*` module-global would emit two
+    # different globals with the same `@<name>`. Same fail-closed
+    # discipline as the helper-collision gate above.
+    module_global_collision = module_globals_used & defined
+    if module_global_collision:
+        raise LLVMEmitError(
+            f"module: user-defined function name(s) "
+            f"{sorted(module_global_collision)} collide with reserved "
+            f"`__helix_` module-global name(s); rename the user "
+            f"function (the `__helix_` prefix is reserved for the "
+            f"LLVM backend's internal runtime state)")
     declares: dict[str, str] = {}
     strings: dict[str, str] = {}
     for emitter in emitters:
@@ -1870,6 +2155,15 @@ def emit_module(module: tir.Module) -> str:
             f"a `declare` cannot share a name with the helper's "
             f"`define internal` (the `__helix_` prefix is reserved for "
             f"the LLVM backend's internal runtime helpers)")
+    # Same gate, but for module-globals: a user's extern declare of a
+    # `__helix_*` symbol would collide with the global emitted below.
+    module_global_ffi_collision = module_globals_used & declares.keys()
+    if module_global_ffi_collision:
+        raise LLVMEmitError(
+            f"module: extern FFI declare(s) "
+            f"{sorted(module_global_ffi_collision)} collide with "
+            f"reserved `__helix_` module-global name(s); a `declare` "
+            f"cannot share a name with a module-global definition")
     lines: list[str] = [
         "; helixc LLVM IR backend — v3.0 Phase D",
         f'target triple = "{LLVM_TARGET_TRIPLE}"',
@@ -1877,7 +2171,15 @@ def emit_module(module: tir.Module) -> str:
     ]
     lines.extend(strings.values())
     lines.extend(declares.values())
-    if strings or declares:
+    # Module-scope globals (e.g. the arena buffer) — emitted in
+    # sorted-by-name order for determinism. Emitted BEFORE function
+    # bodies so a `define` can reference any global by symbol name
+    # (LLVM permits forward references, but emitting top-down keeps
+    # `mock_validate_ll`'s simple line-scan reading the module the
+    # way a human would).
+    for name in sorted(module_globals_used):
+        lines.append(_MODULE_GLOBALS[name].definition)
+    if strings or declares or module_globals_used:
         lines.append("")
     for body in bodies:
         lines.append(body)

@@ -2864,6 +2864,439 @@ def test_stage206r_emit_module_rejects_helper_vs_ffi_collision():
 
 
 # ==========================================================================
+# Stage 206-R chunk — arena infrastructure + ARENA_PUSH op
+# `@__helix_arena_base = internal global [CAP+1 x i32] zeroinitializer`
+# (slot 0 = cursor, slots 1..CAP = user data; CAP = 2097152 matches
+# x86_64.py). ARENA_PUSH lowers to `call i32 @__helix_arena_push(i32)`
+# — a 4-block LLVM helper that bounds-checks the cursor, stores the
+# value at the new slot, increments the cursor, returns the old cursor
+# (or -1 on overflow). The arena global is emitted exactly once per
+# module via the new `_MODULE_GLOBALS` registry.
+# ==========================================================================
+def test_stage206r_emit_arena_push_call():
+    """ARENA_PUSH lowers to `call i32 @__helix_arena_push(i32 %v)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_arena_push(i32 %v"
+            in ll), ll
+    # Helper defined exactly once.
+    assert ll.count(
+        "define internal i32 @__helix_arena_push(") == 1, ll
+    # Arena global emitted exactly once.
+    assert ll.count(
+        "@__helix_arena_base = internal global") == 1, ll
+    # The arena is sized to CAP + 1 slots (cursor + data).
+    assert (f"[{llvm_ir._HELIX_ARENA_CAP + 1} x i32] "
+            f"zeroinitializer") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_cap_matches_x86_backend():
+    """The LLVM-side `_HELIX_ARENA_CAP` MUST match
+    `x86_64.py::HELIX_ARENA_CAP` — Stage 207 parity gate would
+    otherwise compare two backends with different overflow points
+    (a silent divergence that the structural mock validator cannot
+    detect)."""
+    from helixc.backend import x86_64
+    assert llvm_ir._HELIX_ARENA_CAP == x86_64.HELIX_ARENA_CAP
+
+
+def test_stage206r_arena_push_helper_has_three_blocks():
+    """The arena_push helper has three basic blocks (entry / in_bounds
+    / exit) — the overflow case is folded into entry's direct branch
+    to exit, so the phi at exit reads `[ -1, %entry ]`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    for label in ("entry:", "in_bounds:", "exit:"):
+        assert f"\n{label}\n" in ll, (label, ll)
+    # No `overflow:` block — the overflow path is entry's else branch.
+    assert "\noverflow:\n" not in ll, ll
+
+
+def test_stage206r_arena_push_helper_text_pinned():
+    """The four parity-sensitive lines in the arena_push helper are
+    pinned by exact substring: the overflow predicate, the +1
+    arithmetic, the sign-extend width, and the GEP element type. A
+    mutation of any one (e.g. `ugt` instead of `uge`, `zext` instead
+    of `sext`, GEP on `i8`) would silently produce wrong IR that
+    still passes the structural mock validator."""
+    helper = llvm_ir._HELIX_ARENA_PUSH_HELPER
+    assert (f"icmp uge i32 %cursor, {llvm_ir._HELIX_ARENA_CAP}"
+            in helper), helper
+    assert "%cursor_plus_one = add i32 %cursor, 1" in helper, helper
+    assert ("%slot_idx_i64 = sext i32 %cursor_plus_one to i64"
+            in helper), helper
+    assert ("getelementptr inbounds i32, ptr @__helix_arena_base, "
+            "i64 %slot_idx_i64") in helper, helper
+    # The phi MUST return the OLD cursor on success, not the
+    # incremented one — x86_64.py does `dec ecx` to recover the old
+    # cursor for the same reason.
+    assert ("phi i32 [ -1, %entry ], [ %cursor, %in_bounds ]"
+            in helper), helper
+
+
+def test_stage206r_arena_push_helper_emitted_once_per_module():
+    """N ARENA_PUSH ops in M functions still emit ONE helper +
+    ONE arena global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn1 = b.begin_function("a", [("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn1.params[0], result_ty=_i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn1.params[0], result_ty=_i32())
+    r1 = b.emit(tir.OpKind.ARENA_PUSH, fn1.params[0], result_ty=_i32())
+    b.ret(r1)
+    b.end_function()
+    fn2 = b.begin_function("c", [("v", _i32())], _i32())
+    r2 = b.emit(tir.OpKind.ARENA_PUSH, fn2.params[0], result_ty=_i32())
+    b.ret(r2)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("define internal i32 @__helix_arena_push(") == 1, ll
+    assert ll.count("@__helix_arena_base = internal global") == 1, ll
+    assert ll.count("call i32 @__helix_arena_push(") == 4, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_push_module_global_not_emitted_when_unused():
+    """A module with NO ARENA_PUSH ops must NOT emit the arena
+    global (so a `print_int`-only program does not pay 8 MB of BSS
+    for an unused arena)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("n", _i32())], _i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "@__helix_arena_base" not in ll, ll
+    # print_int's helper still emitted as before.
+    assert "define internal i32 @__helix_print_int(" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_push_result_feeds_op():
+    """ARENA_PUSH's result is a normal i32 SSA value."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    idx = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    s = b.add(idx, b.const_int(1))
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{s.id} = add i32 %v{idx.id}, 1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_push_is_deterministic():
+    """Two emits of the same ARENA_PUSH module are byte-identical
+    (module-globals emitted in sorted-by-name order, like helpers)."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        fn = b.begin_function("f", [("v", _i32())], _i32())
+        r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+        b.ret(r)
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_arena_push_rejects_zero_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH, result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH takes one operand"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_rejects_two_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("b", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH takes one operand"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_rejects_non_i32_operand():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0],
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_module_global_spec_is_frozen():
+    spec = llvm_ir._MODULE_GLOBALS["__helix_arena_base"]
+    with pytest.raises(AttributeError):
+        spec.name = "tampered"  # type: ignore[misc]
+
+
+def test_stage206r_module_global_spec_is_final():
+    with pytest.raises(TypeError, match="final"):
+        class _Subclass(llvm_ir._ModuleGlobalSpec):  # type: ignore[misc]
+            pass
+
+
+def test_stage206r_module_global_spec_rejects_non_helix_prefix():
+    with pytest.raises(ValueError, match="reserved `__helix_` prefix"):
+        llvm_ir._ModuleGlobalSpec(
+            name="user_global",
+            definition="@user_global = internal global i32 0",
+        )
+
+
+def test_stage206r_module_global_spec_rejects_name_vs_def_mismatch():
+    with pytest.raises(ValueError,
+                       match="registry name and global declaration"):
+        llvm_ir._ModuleGlobalSpec(
+            name="__helix_typo",
+            definition="@__helix_different = internal global i32 0",
+        )
+
+
+def test_stage206r_module_global_public_registry_is_immutable():
+    """`_MODULE_GLOBALS` is `MappingProxyType` — same pattern as
+    `_HELPER_FUNCTIONS`."""
+    with pytest.raises(TypeError):
+        llvm_ir._MODULE_GLOBALS["__helix_tamper"] = (  # type: ignore[index]
+            llvm_ir._ModuleGlobalSpec(
+                name="__helix_tamper",
+                definition="@__helix_tamper = internal global i32 0",
+            ))
+
+
+def test_stage206r_module_global_drift_guard_rejects_unknown_dep():
+    """A helper that declares `module_globals=("__helix_unknown",)`
+    must be rejected at module load by
+    `_check_module_global_table` (cheaper than waiting for first
+    use to fail in `_register_helper_function`)."""
+    original_helpers = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_bad"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_bad() {\n"
+                    "entry:\n"
+                    "  ret i32 0\n"
+                    "}"),
+                ffi_declares=(),
+                module_globals=("__helix_unknown",),
+            ))
+        with pytest.raises(AssertionError,
+                           match="declares module-global dependency"):
+            llvm_ir._check_module_global_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original_helpers)
+
+
+def test_stage206r_helper_spec_rejects_malformed_module_globals():
+    with pytest.raises(ValueError, match="module_globals must be"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ffi_declares=(),
+            module_globals="not_a_tuple",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError,
+                       match="module_globals entry"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ffi_declares=(),
+            module_globals=("user_global",),
+        )
+
+
+def test_stage206r_arena_push_helper_does_not_collide_with_print_int():
+    """A module that uses BOTH ARENA_PUSH and a print_int PRINT emits
+    BOTH helpers + the arena global + the @write FFI declare, with
+    no cross-contamination."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    r = b.emit(tir.OpKind.PRINT, fn.params[0], result_ty=_i32(),
+               attrs={"_kind": "print_int"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "define internal i32 @__helix_arena_push(" in ll, ll
+    assert "define internal i32 @__helix_print_int(" in ll, ll
+    assert "@__helix_arena_base = internal global" in ll, ll
+    assert "declare i64 @write(" in ll, ll
+    # Sorted-by-name emission order: arena_push before print_int.
+    arena_pos = ll.index("define internal i32 @__helix_arena_push(")
+    print_pos = ll.index("define internal i32 @__helix_print_int(")
+    assert arena_pos < print_pos, (arena_pos, print_pos)
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_global_rejects_user_function_collision():
+    """A user-defined function named `__helix_arena_base` would
+    shadow the arena global. The collision gate added in this chunk
+    must fail closed when the global is actually used."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("__helix_arena_base", [], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="module-global name"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_global_rejects_user_ffi_collision():
+    """Sibling of the helper-vs-FFI-declare collision test: a user
+    `is_extern` declaration of `__helix_arena_base` + an FFI_CALL
+    targeting it (so it lands in `declares`, not `defined`) +
+    ARENA_PUSH (so the arena global is actually pulled in) must
+    fail closed. Without this gate, `emit_module` would emit BOTH
+    the user's `declare ... @__helix_arena_base(...)` AND the
+    `@__helix_arena_base = internal global ...` line — malformed
+    LLVM IR that `mock_validate_ll` does not detect."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    # `is_extern` user declaration of the arena symbol.
+    b.begin_function("__helix_arena_base", [("v", _i32())], _i32(),
+                     attrs={"is_extern": True})
+    b.end_function()
+    fn = b.begin_function("caller", [("v", _i32())], _i32())
+    # FFI_CALL puts the extern in `declares`, not `defined`.
+    b.emit(tir.OpKind.FFI_CALL, fn.params[0], result_ty=_i32(),
+           attrs={"target": "__helix_arena_base"})
+    # ARENA_PUSH pulls the arena global in (otherwise no collision
+    # to detect).
+    r = b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="module-global name"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_module_global_drift_guard_rejects_helper_vs_global_name_collision():
+    """Module-load drift guard: a `__helix_*` name registered in
+    BOTH `_HELPER_FUNCTIONS_AUTHORITY` and `_MODULE_GLOBALS_AUTHORITY`
+    would emit BOTH a `define internal i32 @X(...)` AND a
+    `@X = internal global ...` for the same `@X` — malformed LLVM
+    IR that `llvm-as` rejects with "redefinition of @X" and that
+    `mock_validate_ll` does NOT detect."""
+    original_helpers = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    original_globals = dict(llvm_ir._MODULE_GLOBALS_AUTHORITY)
+
+    def _restore() -> None:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original_helpers)
+        llvm_ir._MODULE_GLOBALS_AUTHORITY.clear()
+        llvm_ir._MODULE_GLOBALS_AUTHORITY.update(original_globals)
+
+    try:
+        # Register the SAME `__helix_*` name as a helper AND a global.
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_collide"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_collide() {\n"
+                    "entry:\n"
+                    "  ret i32 0\n"
+                    "}"),
+                ffi_declares=(),
+                module_globals=(),
+            ))
+        llvm_ir._MODULE_GLOBALS_AUTHORITY["__helix_collide"] = (
+            llvm_ir._ModuleGlobalSpec(
+                name="__helix_collide",
+                definition="@__helix_collide = internal global i32 0",
+            ))
+        with pytest.raises(AssertionError,
+                           match="appear in BOTH"):
+            llvm_ir._check_module_global_table()
+    finally:
+        _restore()
+
+
+def test_stage206r_module_global_spec_rejects_empty_name():
+    with pytest.raises(ValueError, match="non-empty string"):
+        llvm_ir._ModuleGlobalSpec(
+            name="",
+            definition="@__helix_x = internal global i32 0",
+        )
+
+
+def test_stage206r_module_global_spec_rejects_empty_definition():
+    with pytest.raises(ValueError, match="non-empty string"):
+        llvm_ir._ModuleGlobalSpec(
+            name="__helix_x",
+            definition="",
+        )
+
+
+def test_stage206r_helper_spec_rejects_module_globals_duplicates():
+    """`module_globals` is consumed set-like at emit time, but a
+    duplicate at the spec level is a typo / drift signal — reject
+    at construction (mirrors `Backend.required_dialects`)."""
+    with pytest.raises(ValueError, match="module_globals has duplicates"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ffi_declares=(),
+            module_globals=("__helix_arena_base", "__helix_arena_base"),
+        )
+
+
+# ==========================================================================
 # Stage 206-R chunk — write_file PRINT lowers inline to the libc
 # sequence open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) -> write(fd,
 # content, len) -> close(fd); result is `nwritten < 0 ? nwritten : 0`
