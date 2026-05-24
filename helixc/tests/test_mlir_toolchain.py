@@ -93,11 +93,62 @@ def test_detect_mlir_support_on_this_machine():
     assert s.detail
     assert s.can_use_bindings() == (s.bindings and s.dialects)
     assert s.can_use_mlir_opt() == (s.mlir_opt is not None)
+    assert s.can_use_mlir_translate() == (s.mlir_translate is not None)
     assert s.is_available() == (
         s.can_use_bindings() or s.can_use_mlir_opt())
     # dialects set implies bindings set (the __post_init__ invariant)
     if s.dialects:
         assert s.bindings
+
+
+def test_mlir_support_rejects_blank_mlir_translate():
+    """`mlir_translate` must be None or a non-blank whitespace-stripped
+    path. A blank or whitespace-padded string would be reason-shaped
+    junk masquerading as a real tool path."""
+    with pytest.raises(ValueError, match="mlir_translate"):
+        MLIRSupport(bindings=False, dialects=False, mlir_opt=None,
+                    detail=("x",), mlir_translate="")
+    with pytest.raises(ValueError, match="mlir_translate"):
+        MLIRSupport(bindings=False, dialects=False, mlir_opt=None,
+                    detail=("x",), mlir_translate="   ")
+    with pytest.raises(ValueError, match="mlir_translate"):
+        MLIRSupport(bindings=False, dialects=False, mlir_opt=None,
+                    detail=("x",), mlir_translate=" /tmp/mlir-translate ")
+
+
+def test_detect_mlir_support_mlir_translate_present(monkeypatch):
+    """The `mlir-translate` CLI is an INDEPENDENT surface (a Stage 214
+    chain after `mlir-opt`) — it must be probed even when bindings are
+    absent. A binding-less machine with `mlir-translate` on PATH still
+    reports the tool present."""
+    def _no_bindings(name):
+        raise ModuleNotFoundError("No module named 'mlir'")
+    monkeypatch.setattr(importlib, "import_module", _no_bindings)
+    monkeypatch.setattr(
+        shutil, "which",
+        lambda name: "/usr/bin/mlir-translate" if name == "mlir-translate"
+        else None)
+    s = detect_mlir_support()
+    assert s.mlir_translate == "/usr/bin/mlir-translate"
+    assert s.can_use_mlir_translate() is True
+    # mlir-translate alone does not constitute a usable real surface —
+    # is_available() still requires bindings or mlir-opt.
+    assert s.is_available() is False
+    assert any("mlir-translate" in d for d in s.detail), s.detail
+
+
+def test_detect_mlir_support_mlir_translate_absent(monkeypatch):
+    """An absent `mlir-translate` is a clean None, with a self-
+    explaining detail line; no exception escapes."""
+    def _no_bindings(name):
+        raise ModuleNotFoundError("No module named 'mlir'")
+    monkeypatch.setattr(importlib, "import_module", _no_bindings)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    s = detect_mlir_support()
+    assert s.mlir_translate is None
+    assert s.can_use_mlir_translate() is False
+    assert any("`mlir-translate` is not on PATH" in d
+               for d in s.detail), s.detail
 
 
 def test_detect_mlir_support_full_bindings(monkeypatch):

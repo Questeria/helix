@@ -91,7 +91,8 @@ class MLIRSupport:
     """Whether this machine can run real MLIR work, and via which
     surface — the result of `detect_mlir_support()`.
 
-    Two independent real surfaces (Stage 210 decision, section 3.2):
+    Three independent real surfaces (Stage 210 decision, section 3.2,
+    expanded for Stage 214's translate-step plumbing):
 
     - The in-process MLIR Python bindings. `bindings` is True when core
       `mlir.ir` imports; `dialects` is True when, additionally, every
@@ -100,6 +101,11 @@ class MLIRSupport:
       which `can_use_bindings()` treats as NOT usable.
     - The `mlir-opt` command-line tool: `mlir_opt` is its resolved
       PATH location, or None when absent.
+    - The `mlir-translate` command-line tool: `mlir_translate` is its
+      resolved PATH location, or None when absent. Stage 214 chains
+      this after `mlir-opt` to convert MLIR dialect output into the
+      raw target artifact downstream consumers read (LLVM IR / SPIR-V
+      binary / etc.).
 
     Frozen + `__post_init__`-guarded — the structural sibling of
     `llvm_parity.RealExecSupport` (the Phase-D WSL/clang
@@ -120,6 +126,7 @@ class MLIRSupport:
     dialects: bool
     mlir_opt: Optional[str]
     detail: tuple[str, ...]
+    mlir_translate: Optional[str] = None
 
     def __post_init__(self) -> None:
         # A dialect sub-module cannot import without the core package.
@@ -139,6 +146,14 @@ class MLIRSupport:
                 raise ValueError(
                     f"MLIRSupport: detail has a blank or non-str entry "
                     f"({entry!r}) — every line must carry text")
+        if self.mlir_translate is not None:
+            if not isinstance(self.mlir_translate, str) \
+                    or not self.mlir_translate.strip() \
+                    or self.mlir_translate != self.mlir_translate.strip():
+                raise ValueError(
+                    "MLIRSupport: mlir_translate must be a non-blank, "
+                    f"whitespace-stripped path or None, got "
+                    f"{self.mlir_translate!r}")
 
     def can_use_bindings(self) -> bool:
         """True iff the in-process MLIR Python bindings are FULLY
@@ -150,6 +165,13 @@ class MLIRSupport:
     def can_use_mlir_opt(self) -> bool:
         """True iff the `mlir-opt` command-line tool is on PATH."""
         return self.mlir_opt is not None
+
+    def can_use_mlir_translate(self) -> bool:
+        """True iff the `mlir-translate` CLI is on PATH. Stage 214
+        chains this after `mlir-opt` to emit the raw target artifact
+        downstream consumers read; without it, lowering stays
+        DEFERRED for any target whose translator entry is wired."""
+        return self.mlir_translate is not None
 
     def is_available(self) -> bool:
         """True iff at least one real MLIR surface — the in-process
@@ -229,8 +251,18 @@ def detect_mlir_support() -> MLIRSupport:
     else:
         detail.append(f"`mlir-opt` is on PATH at {mlir_opt!r}")
 
+    # --- surface 3: the `mlir-translate` command-line tool ---
+    # Stage 214 chains this after `mlir-opt` to convert dialect-MLIR
+    # output into the raw target artifact (LLVM IR, SPIR-V, etc.).
+    mlir_translate = shutil.which("mlir-translate")
+    if mlir_translate is None:
+        detail.append("`mlir-translate` is not on PATH")
+    else:
+        detail.append(f"`mlir-translate` is on PATH at {mlir_translate!r}")
+
     # Every branch above appended at least one `detail` line, and
     # `dialects` is never set without `bindings` — so this construction
     # always satisfies MLIRSupport.__post_init__ and cannot raise.
     return MLIRSupport(bindings=bindings, dialects=dialects,
-                       mlir_opt=mlir_opt, detail=tuple(detail))
+                       mlir_opt=mlir_opt, detail=tuple(detail),
+                       mlir_translate=mlir_translate)
