@@ -2863,8 +2863,16 @@ def test_stage206r_emit_module_rejects_helper_vs_ffi_collision():
         llvm_ir.emit_module(mod)
 
 
-def test_stage206_rejects_print_write_file_kind():
-    """A write_file PRINT is not yet emitted by the LLVM backend."""
+# ==========================================================================
+# Stage 206-R chunk — write_file PRINT lowers inline to the libc
+# sequence open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) -> write(fd,
+# content, len) -> close(fd); result is `nwritten < 0 ? nwritten : 0`
+# (negative on failure, 0 on success — matches x86_64.py).
+# ==========================================================================
+def test_stage206r_emit_write_file():
+    """A write_file PRINT lowers to the open/write/close libc
+    sequence, with the path and content stored as module-scope
+    string constants (path NUL-terminated, content raw)."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     b.begin_function("f", [], _i32())
@@ -2873,8 +2881,287 @@ def test_stage206_rejects_print_write_file_kind():
                       "content": "data"})
     b.ret(r)
     b.end_function()
-    with pytest.raises(llvm_ir.LLVMEmitError, match="write_file"):
+    ll = llvm_ir.emit_module(mod)
+    # The path constant is NUL-terminated; content is raw.
+    assert "[7 x i8] c\"/tmp/x\\00\"" in ll, ll
+    assert "[4 x i8] c\"data\"" in ll, ll
+    # The three libc declares.
+    assert "declare i32 @open(ptr, i32, i32)" in ll, ll
+    assert "declare i64 @write(i32, ptr, i64)" in ll, ll
+    assert "declare i32 @close(i32)" in ll, ll
+    # The six-instruction call site. Constants: 577 =
+    # O_WRONLY|O_CREAT|O_TRUNC, 420 = 0o644.
+    assert f"%v{r.id}.fd = call i32 @open(ptr @.helix.str." in ll, ll
+    assert "i32 577, i32 420)" in ll, ll
+    assert (f"%v{r.id}.nwritten = call i64 @write(i32 %v{r.id}.fd, "
+            f"ptr @.helix.str." in ll), ll
+    assert "i64 4)" in ll, ll  # content length
+    assert f"%v{r.id}.close = call i32 @close(i32 %v{r.id}.fd)" in ll, ll
+    assert (f"%v{r.id}.nw32 = trunc i64 %v{r.id}.nwritten to i32"
+            in ll), ll
+    assert (f"%v{r.id}.is_neg = icmp slt i32 %v{r.id}.nw32, 0"
+            in ll), ll
+    assert (f"%v{r.id} = select i1 %v{r.id}.is_neg, i32 "
+            f"%v{r.id}.nw32, i32 0") in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_dedups_path_and_content():
+    """Two write_file PRINTs with the same path AND same content
+    share ONE path global and ONE content global (string constants
+    are content-addressed via SHA-256)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+           attrs={"_kind": "write_file", "path": "/tmp/a",
+                  "content": "x"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/a",
+                      "content": "x"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # path "/tmp/a\\0" + content "x" = 2 string constants, exactly.
+    assert ll.count("private unnamed_addr constant") == 2, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_distinct_globals_for_different_strings():
+    """Two write_file PRINTs with DIFFERENT path or content each get
+    their own globals (no false-dedup; the NUL terminator on the
+    path is what distinguishes a 'path' from a 'content' that happens
+    to spell the same text)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+           attrs={"_kind": "write_file", "path": "/tmp/a",
+                  "content": "one"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/b",
+                      "content": "two"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # 4 distinct string constants (2 paths + 2 contents).
+    assert ll.count("private unnamed_addr constant") == 4, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_dedups_libc_declares():
+    """Two write_file PRINTs in one module emit ONE declare per libc
+    symbol (open / write / close), regardless of how many call sites
+    reference them."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+           attrs={"_kind": "write_file", "path": "/tmp/a",
+                  "content": "x"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/b",
+                      "content": "y"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("declare i32 @open(") == 1, ll
+    assert ll.count("declare i64 @write(") == 1, ll
+    assert ll.count("declare i32 @close(") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_write_declare_dedups_with_print_str():
+    """A write_file (which calls @write) and a print_str (which also
+    calls @write) share ONE `declare i64 @write(...)` — both go
+    through `_register_ffi_declare` with identical signatures."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(), attrs={"text": "x"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/a",
+                      "content": "data"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("declare i64 @write(i32, ptr, i64)") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_result_feeds_op():
+    """A write_file PRINT's result is a normal i32 SSA value — can
+    feed a later op."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    n = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": "y"})
+    s = b.add(n, b.const_int(1))
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{s.id} = add i32 %v{n.id}, 1" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_is_deterministic():
+    """Two emits of the same write_file module are byte-identical."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("f", [], _i32())
+        r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+                   attrs={"_kind": "write_file", "path": "/tmp/x",
+                          "content": "data"})
+        b.ret(r)
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_write_file_rejects_operands():
+    """A write_file PRINT takes no operands — fail closed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, b.const_int(0), result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": "y"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="write_file PRINT takes no operands"):
         llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_rejects_missing_path_attr():
+    """The `path` attr is required — a missing one fails closed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "content": "y"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'path' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_rejects_missing_content_attr():
+    """The `content` attr is required — a missing one fails closed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'content' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_rejects_non_string_path():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": 42,
+                      "content": "y"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'path' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_rejects_non_string_content():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": b"bytes"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'content' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.PRINT, result_ty=tir.TIRScalar("i64"),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": "y"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="PRINT yields an i32"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_empty_content():
+    """A write_file with empty content still works: the content
+    global is a zero-length array, len arg to write is 0."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": ""})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # length 0 in the write call.
+    assert "i64 0)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_write_file_rejects_embedded_nul_in_path():
+    """An embedded NUL in the `path` attr would silently truncate the
+    filesystem target — `open(2)` reads the path as a C-string and
+    stops at the first NUL. Fail closed (audit HIGH-1)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file",
+                      "path": "/tmp/a\x00/etc/passwd",
+                      "content": "x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="embedded NUL"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_write_file_content_with_embedded_nul_preserved():
+    """A `content` attr with embedded NUL bytes is preserved verbatim
+    — `write(fd, ptr, len)` takes a length, not a NUL-terminated
+    string, so binary data containing NULs is written intact.
+    Locks the contract documented in the branch comment (audit LOW-3)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "write_file", "path": "/tmp/x",
+                      "content": "a\x00b"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # 3 content bytes including the NUL — escaped as `\\00` in LLVM's
+    # cstring form.
+    assert "[3 x i8] c\"a\\00b\"" in ll, ll
+    # The write call passes i64 3 (the full content length).
+    assert f"%v{r.id}.nwritten = call i64 @write(" in ll, ll
+    assert "i64 3)" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
 
 
 def test_stage206_rejects_print_str_with_operands():

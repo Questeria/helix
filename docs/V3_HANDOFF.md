@@ -443,9 +443,10 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
 6. **206-R residual ops** — additive LLVM-lowering chunks needed
    before the Stage-221 cutover. Safe for autonomous worker to start.
 
-   **print_int — SHIPPED 2026-05-24**. `helixc/backend/llvm_ir.py`
-   gained an internal-helper-function registry (`_HelperFunctionSpec`,
-   `_FFIDeclareSpec`, `_HELPER_FUNCTIONS` via `MappingProxyType`,
+   **print_int — SHIPPED 2026-05-24** (commit c7b7cec).
+   `helixc/backend/llvm_ir.py` gained an internal-helper-function
+   registry (`_HelperFunctionSpec`, `_FFIDeclareSpec`,
+   `_HELPER_FUNCTIONS` via `MappingProxyType`,
    `_check_helper_function_table` drift guard) and the
    `@__helix_print_int(i32) -> i32` helper (i32->ASCII digit-loop +
    `write(1, buf, len)`, five basic blocks; bit-for-bit parity with
@@ -457,10 +458,23 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    migration to `@dataclass(frozen=True, slots=True)` with
    `__init_subclass__` and `__post_init__` raising `ValueError`).
 
-   **Next residual ops (in priority order)**: write_file,
-   read_file_to_arena, TRACE_ENTRY/EXIT (needs a ring buffer), six
-   ARENA ops (needs a bump allocator), QUOTE/SPLICE/MODIFY/REFLECT_HASH
-   (metaprogramming).
+   **write_file — SHIPPED 2026-05-24** (this chunk). Inline lowering
+   in `helixc/backend/llvm_ir.py`: registers `@open`, `@write`,
+   `@close` libc declares + the path (NUL-terminated) and content
+   string globals; emits the six-instruction sequence
+   `open -> write -> close -> trunc -> icmp slt -> select`. Constants
+   match x86_64.py (577 = O_WRONLY|O_CREAT|O_TRUNC, 420 = 0o644).
+   Audit-fix batch: HIGH-1 (embedded NUL in path silently truncated
+   via open() C-string semantics — now rejected); 3 cross-backend
+   contract gaps (short-write success masking, close errors discarded,
+   open errors propagated as -EBADF from downstream write) are
+   documented inline as Stage 207 parity-gate decisions matching
+   the existing `# NOTE (Stage 207 parity)` discipline; LOW-3 test
+   added that locks the embedded-NUL-in-content-preserved contract.
+
+   **Next residual ops (in priority order)**: read_file_to_arena,
+   TRACE_ENTRY/EXIT (needs a ring buffer), six ARENA ops (needs a
+   bump allocator), QUOTE/SPLICE/MODIFY/REFLECT_HASH (metaprogramming).
 
 When `v3.0.0` is tagged, v3.0 is done.
 

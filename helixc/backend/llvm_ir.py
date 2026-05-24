@@ -54,7 +54,14 @@ Supported so far (Stages 200, 202-204):
     call to the internal helper `@__helix_print_int(i32)` (an i32 ->
     ASCII decimal conversion plus `write(1, buf, len)`); the helper's
     body is emitted exactly once per module via the `_HELPER_FUNCTIONS`
-    registry. Other PRINT kinds (write_file, ...) are later chunks.
+    registry.
+  - file output (Stage 206-R): a `write_file` PRINT lowers to the
+    libc sequence `open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) ->
+    write(fd, content, len) -> close(fd)`. The op's i32 result is
+    `nwritten < 0 ? nwritten : 0` — matches x86_64.py's "negative on
+    failure, 0 on success" contract. Other PRINT kinds
+    (read_file_to_arena, TRACE_*, ARENA family, QUOTE-family) are
+    later chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -1557,13 +1564,15 @@ class _FnEmitter:
                 f"%v{rid} = select i1 {t0}, i32 {t4}, i32 0")
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
-            if print_kind not in ("print_str", "print_int"):
+            if print_kind not in (
+                    "print_str", "print_int", "write_file"):
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT _kind "
                     f"{print_kind!r} is not yet emitted by the LLVM "
-                    f"backend (supported: 'print_str', 'print_int'; "
-                    f"the other kinds, e.g. write_file, are later "
-                    f"chunks)")
+                    f"backend (supported: 'print_str', 'print_int', "
+                    f"'write_file'; the other kinds, e.g. "
+                    f"read_file_to_arena, TRACE_ENTRY/EXIT, the ARENA "
+                    f"family, the QUOTE-family, are later chunks)")
             if len(op.results) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT must have "
@@ -1577,6 +1586,122 @@ class _FnEmitter:
                     f"function {self.fn.name!r}: PRINT result has LLVM "
                     f"type {res_ty}, but a PRINT yields an i32 (the "
                     f"byte count)")
+            if print_kind == "write_file":
+                # `write_file` takes NO operands and two string attrs
+                # — `path` (the file path) and `content` (the bytes to
+                # write). Lowers to `open(path, O_WRONLY|O_CREAT|O_TRUNC,
+                # 0644) -> write(fd, content, len) -> close(fd)`, the
+                # exact sequence x86_64.py emits via direct syscalls
+                # (we go through libc here; the LLVM target triple is
+                # `x86_64-unknown-linux-gnu` so the libc constants line
+                # up with the syscall numbers). The op's i32 result is
+                # `nwritten < 0 ? nwritten : 0` — matches x86_64.py's
+                # "return negative on failure, 0 on success" contract.
+                # Inline (no helper) because the sequence is short
+                # enough that a per-call-site lowering reads cleaner
+                # than a separate helper would.
+                if op.operands:
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: a write_file "
+                        f"PRINT takes no operands, got "
+                        f"{len(op.operands)}")
+                path = op.attrs.get("path")
+                content = op.attrs.get("content")
+                if not isinstance(path, str):
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: a write_file "
+                        f"PRINT needs a string 'path' attr (got "
+                        f"{type(path).__name__})")
+                if not isinstance(content, str):
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: a write_file "
+                        f"PRINT needs a string 'content' attr (got "
+                        f"{type(content).__name__})")
+                # `open(2)` reads the path as a C-string and stops at
+                # the first NUL byte — so an embedded NUL would
+                # SILENTLY truncate the path (a path
+                # `"/tmp/a\0/etc/passwd"` would open `/tmp/a`). Fail
+                # closed instead: the LLVM backend never silently
+                # narrows a user-named filesystem target.
+                if "\x00" in path:
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: a write_file "
+                        f"PRINT 'path' attr contains an embedded NUL "
+                        f"byte at position {path.index(chr(0))} — "
+                        f"open() reads a C-string, so a NUL would "
+                        f"silently truncate the path")
+                # The path goes to `open()` which takes a C-string —
+                # register it with a trailing NUL. The content is raw
+                # bytes; `write` takes (ptr, len) so no terminator is
+                # needed (content with embedded NULs is preserved).
+                path_data = path.encode("utf-8") + b"\x00"
+                content_data = content.encode("utf-8")
+                path_name, _path_len = self._register_string(path_data)
+                content_name, content_len = self._register_string(
+                    content_data)
+                # libc declarations. `mode_t` is `unsigned int` on
+                # Linux x86-64; LLVM's signless-integer types make the
+                # signed/unsigned distinction per-instruction, so we
+                # declare both `flags` and `mode` as i32.
+                self._register_ffi_declare(
+                    "open", "@open", "i32", ["ptr", "i32", "i32"])
+                self._register_ffi_declare(
+                    "write", "@write", "i64", ["i32", "ptr", "i64"])
+                self._register_ffi_declare(
+                    "close", "@close", "i32", ["i32"])
+                # O_WRONLY=1 | O_CREAT=64 (0o100) | O_TRUNC=512 (0o1000)
+                # = 577 (0x241). Mode 0o644 = 420 (0x1A4). The flag
+                # bit values are stable between the Linux kernel ABI
+                # (which x86_64.py uses via direct syscalls) and the
+                # glibc / musl `open()` wrappers (which the LLVM path
+                # invokes here).
+                #
+                # NOTE (Stage 207 parity): three cross-backend
+                # contract gaps are inherited verbatim from x86_64.py
+                # to keep the two backends bit-for-bit observable-
+                # equivalent — they are NOT silent failures
+                # introduced by the LLVM path:
+                #
+                #   1. `open` failure is propagated indirectly: if
+                #      open returns -1, the program does
+                #      `write(-1, ...)` -> -EBADF, and the user-
+                #      visible result is -EBADF, NOT the real errno
+                #      from open (ENOENT, EACCES, EROFS, ...).
+                #   2. Short writes (0 < nwritten < content_len) are
+                #      reported as `nwritten == 0` -> success, even
+                #      though `content_len - nwritten` bytes were
+                #      dropped.
+                #   3. `close(fd)` failure (EIO from a delayed flush
+                #      on NFS, EBADF from a double-close) is silently
+                #      discarded — the LLVM register `%vN.close`
+                #      captures the return for naming clarity but the
+                #      value flows nowhere, matching x86_64.py's
+                #      `pop rcx (= fd, discarded)`.
+                #
+                # Both backends are mutually consistent on each
+                # point; the Stage 207 parity gate decides whether to
+                # tighten any of them in a coordinated way (e.g.
+                # wrap `write` in an EINTR / short-write loop, surface
+                # `open` errors before `write`, propagate `close`
+                # errors). Until then: documented contract gaps, not
+                # silent bugs.
+                rid = result.id
+                fd = f"%v{rid}.fd"
+                nwritten = f"%v{rid}.nwritten"
+                # close's return is intentionally discarded — see the
+                # Stage 207 parity note above.
+                close_ret = f"%v{rid}.close"
+                nw32 = f"%v{rid}.nw32"
+                is_neg = f"%v{rid}.is_neg"
+                return (
+                    f"{fd} = call i32 @open(ptr {path_name}, "
+                    f"i32 577, i32 420)\n"
+                    f"{nwritten} = call i64 @write(i32 {fd}, ptr "
+                    f"{content_name}, i64 {content_len})\n"
+                    f"{close_ret} = call i32 @close(i32 {fd})\n"
+                    f"{nw32} = trunc i64 {nwritten} to i32\n"
+                    f"{is_neg} = icmp slt i32 {nw32}, 0\n"
+                    f"%v{rid} = select i1 {is_neg}, i32 {nw32}, i32 0")
             if print_kind == "print_int":
                 # `print_int` takes ONE i32 operand (the value to print)
                 # and emits a call to the `__helix_print_int` internal
@@ -1632,8 +1757,9 @@ class _FnEmitter:
             f"the mutable locals ALLOC_VAR/LOAD_VAR/STORE_VAR; the stack "
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
-            f"TRAP; STR_PTR; STR_BYTE; print_str / print_int PRINT; "
-            f"RETURN; BR; COND_BR — floats and structs are later stages)"
+            f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
+            f"write_file PRINT; RETURN; BR; COND_BR — floats and "
+            f"structs are later stages)"
         )
 
 
