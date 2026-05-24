@@ -3046,6 +3046,12 @@ def _strict_static_func_terminator_findings(
         if finding is not None:
             findings.append(f"function {symbol} {finding}")
         i = body_end + 1
+    for symbol, body_start, body_end in _mlir_generic_func_body_spans(
+            structural):
+        finding = _func_body_terminator_finding(
+            structural, body_start, body_end)
+        if finding is not None:
+            findings.append(f"function {symbol} (generic form) {finding}")
     return tuple(findings)
 
 
@@ -3243,6 +3249,15 @@ def _strict_static_empty_return_findings(
                 f"function {symbol} declares result type {result} "
                 "but has an empty return")
         i = body_end + 1
+    for symbol, body_start, body_end, result in (
+            _mlir_generic_func_body_spans_with_result(structural)):
+        if not _mlir_return_type_items(result):
+            continue
+        if _func_body_has_empty_return(
+                structural[body_start + 1:body_end]):
+            findings.append(
+                f"function {symbol} (generic form) declares result type "
+                f"{result} but has an empty return")
     return tuple(findings)
 
 
@@ -5237,6 +5252,122 @@ def _mlir_generic_func_interfaces(mlir_text: str) -> frozenset[str]:
             interfaces.add(interface)
         i = props_end
     return frozenset(interfaces)
+
+
+def _mlir_generic_func_body_spans(
+        structural: str) -> tuple[tuple[str, int, int], ...]:
+    """Yield `(symbol, body_start, body_end)` triples for each
+    generic-form `"func.func"` op with a non-empty region body. Used by
+    the strict-static terminator check so generic-form bypasses the
+    bare-form walker can't sneak past."""
+    spans: list[tuple[str, int, int]] = []
+    i = 0
+    while i < len(structural):
+        found = structural.find('"func.func"', i)
+        if found == -1:
+            break
+        if not _mlir_op_start_context_allows(structural, found):
+            i = found + 1
+            continue
+        quoted_end = found + len('"func.func"')
+        j = _skip_spaces(structural, quoted_end)
+        if j >= len(structural) or structural[j] != "(":
+            i = quoted_end
+            continue
+        operands_end = _matching_closer_index(structural, j, "(", ")")
+        if operands_end is None:
+            i = quoted_end
+            continue
+        props = _generic_property_dict_after(structural, operands_end + 1)
+        if props is None:
+            i = operands_end + 1
+            continue
+        props_text, props_end = props
+        props_map = _generic_property_assignments(props_text)
+        sym_name = props_map.get("sym_name")
+        if sym_name is None:
+            i = props_end
+            continue
+        symbol = _symbol_from_generic_string_property(sym_name)
+        if symbol is None:
+            i = props_end
+            continue
+        span = _generic_func_body_span(structural, props_end)
+        if span is not None:
+            spans.append((symbol, span[0], span[1]))
+        i = props_end
+    return tuple(spans)
+
+
+def _mlir_generic_func_body_spans_with_result(
+        structural: str) -> tuple[tuple[str, int, int, str], ...]:
+    """Same as `_mlir_generic_func_body_spans` but also returns the
+    declared result-type text for the empty-return strict check."""
+    out: list[tuple[str, int, int, str]] = []
+    i = 0
+    while i < len(structural):
+        found = structural.find('"func.func"', i)
+        if found == -1:
+            break
+        if not _mlir_op_start_context_allows(structural, found):
+            i = found + 1
+            continue
+        quoted_end = found + len('"func.func"')
+        j = _skip_spaces(structural, quoted_end)
+        if j >= len(structural) or structural[j] != "(":
+            i = quoted_end
+            continue
+        operands_end = _matching_closer_index(structural, j, "(", ")")
+        if operands_end is None:
+            i = quoted_end
+            continue
+        props = _generic_property_dict_after(structural, operands_end + 1)
+        if props is None:
+            i = operands_end + 1
+            continue
+        props_text, props_end = props
+        props_map = _generic_property_assignments(props_text)
+        sym_name = props_map.get("sym_name")
+        function_type = props_map.get("function_type")
+        if sym_name is None or function_type is None:
+            i = props_end
+            continue
+        symbol = _symbol_from_generic_string_property(sym_name)
+        if symbol is None:
+            i = props_end
+            continue
+        signature = _generic_function_type_signature(function_type)
+        if signature is None:
+            i = props_end
+            continue
+        _args, result = signature
+        span = _generic_func_body_span(structural, props_end)
+        if span is not None:
+            out.append((symbol, span[0], span[1], result))
+        i = props_end
+    return tuple(out)
+
+
+def _generic_func_body_span(
+        structural: str, props_end: int) -> tuple[int, int] | None:
+    """Find the `({ body })` region operand of a generic `"func.func"`,
+    returning `(body_start, body_end)` (the indices of the inner braces)
+    or None if the region is empty / absent."""
+    cursor = _skip_spaces(structural, props_end)
+    if cursor >= len(structural) or structural[cursor] != "(":
+        return None
+    region_end = _matching_closer_index(structural, cursor, "(", ")")
+    if region_end is None:
+        return None
+    inner_start = _skip_spaces(structural, cursor + 1)
+    if inner_start >= region_end or structural[inner_start] != "{":
+        return None
+    inner_end = _matching_closer_index(structural, inner_start, "{", "}")
+    if inner_end is None or inner_end > region_end:
+        return None
+    if not structural[inner_start + 1:inner_end].strip():
+        return None
+    return inner_start, inner_end
 
 
 def _generic_property_dict_after(

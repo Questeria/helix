@@ -3924,6 +3924,13 @@ def _backend_output_symbol_finding(
     input_symbols, require_kernel_entries = _backend_input_symbol_binding(
         mlir_text, target)
     if not input_symbols:
+        if _mlir_text_declares_body_form_function_shape(mlir_text):
+            return (
+                f"mlir-opt backend pipeline for {target.value} exited 0 "
+                "but the input declares body-form function-shape ops the "
+                "structural symbol extractor cannot bind; refusing to "
+                "mint a backend pass without a verifiable symbol "
+                "correspondence")
         return None
     ptx_entry_finding = _ptx_entry_symbol_binding_finding(
         input_symbols, target, output_text, require_kernel_entries)
@@ -3939,6 +3946,96 @@ def _backend_output_symbol_finding(
             "but the target artifact is missing lowered input function "
             "definitions: " + ", ".join(missing[:5]))
     return None
+
+
+_BODY_FORM_FUNCTION_SHAPE_TOKENS = (
+    "func.func", "llvm.func", "gpu.func",
+)
+_BODY_FORM_FUNCTION_SHAPE_GENERIC_TOKENS = (
+    '"func.func"', '"llvm.func"', '"gpu.func"',
+)
+
+
+def _mlir_text_declares_body_form_function_shape(mlir_text: str) -> bool:
+    """Return True iff the input MLIR contains a body-form
+    function-shape op (custom or generic) that the symbol extractor
+    might not have picked up. The walker is intentionally cheap — it
+    only confirms the *presence* of such an op so the symbol-binding
+    gate can fail closed rather than silently bind nothing.
+
+    Sibling-dialect coverage (`spirv.func`, `nvvm.kernel`, etc.) is
+    deliberately out of scope: those targets are not in
+    `MLIRBackendTarget` yet, so a declaration of them is itself a
+    backend-shape mismatch that the upstream contract refuses earlier.
+    """
+    structural = _comment_stripped_text(mlir_text)
+    i = 0
+    while i < len(structural):
+        if structural[i] == '"':
+            quoted_end = _quoted_span_end(structural, i)
+            for token in _BODY_FORM_FUNCTION_SHAPE_GENERIC_TOKENS:
+                if structural.startswith(token, i):
+                    if _generic_body_form_func_has_body(
+                            structural, i + len(token)):
+                        return True
+            i = quoted_end
+            continue
+        matched = False
+        for token in _BODY_FORM_FUNCTION_SHAPE_TOKENS:
+            if not _bare_word_at(structural, i, token):
+                continue
+            if _custom_body_form_func_has_body(
+                    structural, i + len(token)):
+                return True
+            i += len(token)
+            matched = True
+            break
+        if not matched:
+            i += 1
+    return False
+
+
+def _custom_body_form_func_has_body(
+        structural: str, start: int) -> bool:
+    """Custom-form function-shape op has a body iff a non-empty
+    `{ ... }` follows the args parenthetical. The walker is generic
+    over func.func / llvm.func / gpu.func — the latter three all
+    share the bare grammar `<op> [modifiers] @symbol ( ... ) [tail] { ... }`."""
+    line_end = _next_op_boundary(structural, start, len(structural))
+    cursor = _skip_spaces(structural, start)
+    while cursor < line_end:
+        word, after = _read_bare_word(structural, cursor)
+        if not word or word not in _LLVM_FUNC_MODIFIER_WORDS \
+                and word not in ("private", "public", "nested"):
+            break
+        cursor = _skip_spaces(structural, after)
+    if cursor >= line_end or structural[cursor] != "@":
+        return False
+    symbol = _mlir_symbol_ref_at(structural, cursor, line_end)
+    if symbol is None:
+        return False
+    cursor = _skip_spaces(structural, symbol[1])
+    if cursor >= len(structural) or structural[cursor] != "(":
+        return False
+    paren_end = _matching_closer_index(structural, cursor, "(", ")")
+    if paren_end is None:
+        return False
+    return _llvm_func_custom_has_region_after(structural, paren_end + 1)
+
+
+def _generic_body_form_func_has_body(
+        structural: str, start: int) -> bool:
+    """Generic-form body iff the trailing region operand contains a
+    non-empty `{ ... }`."""
+    cursor = _skip_spaces(structural, start)
+    if cursor >= len(structural) or structural[cursor] != "(":
+        return False
+    operands_end = _matching_closer_index(structural, cursor, "(", ")")
+    if operands_end is None:
+        return False
+    props = _generic_property_dict_after(structural, operands_end + 1)
+    props_end = props[1] if props is not None else operands_end + 1
+    return _generic_llvm_func_has_body(structural, props_end)
 
 
 def _ptx_entry_symbol_binding_finding(

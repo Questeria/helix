@@ -192,6 +192,36 @@ def _llvm_typed_value_must_reject_scalar_in_aggregate() -> CanaryResult:
         "scalar literal rejected for aggregate/vector return types")
 
 
+def _empty_input_symbols_must_not_bypass_gate() -> CanaryResult:
+    """Stage 213 close-audit HIGH: an input declaring body-form
+    function-shape ops the structural extractor cannot bind must NOT
+    silently clear the symbol-binding gate."""
+    finding = backends._backend_output_symbol_finding(
+        'module { gpu.module @m { gpu.func @device() { gpu.return } } }',
+        MLIRBackendTarget.PTX,
+        '.version 8.3\n.target sm_80\n'
+        '.visible .entry totally_unrelated() {\n  ret;\n}\n')
+    if finding is None:
+        return CanaryResult(
+            "empty-input-symbols-bypass",
+            False,
+            "input with gpu.func device function silently cleared the "
+            "symbol-binding gate against an unrelated PTX artifact")
+    return CanaryResult(
+        "empty-input-symbols-bypass",
+        True,
+        f"gate refused: {finding[:80]}")
+
+
+def _generic_func_missing_terminator_must_fail() -> CanaryResult:
+    """Stage 213 close-audit HIGH: strict-static terminator check now
+    covers generic-form `"func.func"` bodies, not just bare-form."""
+    return _fake_validator_must_not_pass(
+        "generic-func-missing-terminator",
+        'module { "func.func"() <{function_type = () -> (), '
+        'sym_name = "f"}> ({ "test.op"() : () -> () }) : () -> () }\n')
+
+
 def _c_like_declaration_must_reject_digit_identifier() -> CanaryResult:
     helper = getattr(backends, "_c_like_body_line_is_plausible", None)
     if helper is None:
@@ -368,6 +398,8 @@ def run_canaries() -> tuple[CanaryResult, ...]:
         _generic_llvm_func_symbol_must_bind(),
         _llvm_typed_value_must_reject_scalar_in_aggregate(),
         _c_like_declaration_must_reject_digit_identifier(),
+        _empty_input_symbols_must_not_bypass_gate(),
+        _generic_func_missing_terminator_must_fail(),
     )
 
 

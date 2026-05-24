@@ -26,12 +26,11 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
   register allocator).
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
-  - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212
-    CLOSED; Stage 213 is OPEN, chunks A-C shipped.**
+  - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212, 213
+    CLOSED; Stage 214 not yet started.**
   - **Phase F (Stages 220–222): not started.**
-- **`V3_STAGES_DONE = 12` of 19** (`scripts/helix_status.py`) —
-  ~63 % of v3.0 stages, ~95 % overall toward v3.0.
-- `V3_STAGES_DONE` stays 12 until Stage 213 closes.
+- **`V3_STAGES_DONE = 13` of 19** (`scripts/helix_status.py`) —
+  ~68 % of v3.0 stages, ~95 % overall toward v3.0.
 
 ## 3. Phase E — the MLIR migration (the current frontier)
 
@@ -58,23 +57,25 @@ Ratified strategy (`docs/V3_STAGE210_MLIR_DECISION.md`):
   `helixc/ir/mlir/{toolchain,mapping,helix_dialect,validate}.py`.
 - **Stage 212 — CLOSED** — the tile-IR → MLIR translator,
   `helixc/ir/mlir/emit.py`.
-- **Stage 213 — OPEN** — chunk A shipped the mock-path-first
-  backend-target scaffold, `helixc/ir/mlir/backends.py`; chunk B
-  shipped real `mlir-opt` validation dispatch in `validate.py`; chunk C
-  shipped the fail-closed backend pass-pipeline runner contract.
-  2026-05-24 progress batch closed all 4 open HIGH audit findings:
-  control-predicate `i1`, memref access arity / index type,
-  `arith.constant` value-vs-type + `scf.for` bounds, and the generic-
-  function-body terminator bypass. The remaining HIGH-3 vector
-  sub-cases (`vector.transfer_read` non-`index`, `vector.shape_cast`
-  element-count / element-type drift, `vector.multi_reduction` kind
-  validation) are also closed. All 3 MEDIUM backend-shape findings
-  (generic `llvm.func` symbol binding, LLVM aggregate/vector typed-
-  value, HIP/MSL C-like impossible declarations) are also closed.
-  Next: Stage-213 holistic close audit (`validate.py` + `backends.py`
-  together) before bumping `V3_STAGES_DONE` to 13. See
-  `docs/HELIX_MLIR_AUDIT_PACKET.md` "2026-05-24 Checkpoint C" for the
-  full state.
+- **Stage 213 — CLOSED** — chunks A-C shipped the mock-path-first
+  backend-target scaffold, real `mlir-opt` validation dispatch, and
+  the fail-closed backend pass-pipeline runner contract. The 2026-05-24
+  audit batches closed all HIGH and MEDIUM findings from the audit
+  packet (control predicates, memref access, arith.constant value/type,
+  scf.for bounds, generic-function-body terminator, vector
+  transfer_read / shape_cast / multi_reduction, llvm.func symbol
+  binding, LLVM aggregate/vector typed-value, C-like impossible
+  declarations). The holistic close audit closed two more HIGH
+  findings (empty `input_symbols` bypass; generic-form `"func.func"`
+  strict-static skip). 31/31 strict canaries; 411 MLIR slice.
+  Documented structural-tightening items (PASSED brand bypass via
+  `object.__new__`, `dict[str, str|None]` SSA-type conflation,
+  `MLIRBackendResult` three-state shape) are deferred — they are
+  design-tightening opportunities, not silent-failure shapes, and
+  the existing in-file fail-closed discipline + post_init invariants
+  handle the accidental-misuse axis. See
+  `docs/HELIX_MLIR_AUDIT_PACKET.md` "2026-05-24 Checkpoint D" for
+  the close-audit details.
 
 ### The translator (`emit.py`) — current capability
 
@@ -143,22 +144,18 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    Stage 212 is "closed enough" per the plan, but a future run can add
    these emitters. The attribute-heavy ones (matmul / reduce / memref
    / index-hbm) need design work first.
-2. **Stage 213 — MLIR → backends** (in progress). Next chunk:
-   stage-close holistic audit of `validate.py` + `backends.py` and the
-   target-output-validator contract; if clean, close Stage 213 without
-   claiming Stage-214 pipelines.
-   Before resuming the current dirty MLIR audit branch, read
-   `docs/HELIX_MLIR_AUDIT_PACKET.md` and run
-   `python scripts\mlir_audit_canaries.py` in report mode. Use
-   `--strict` only after the next fix batch is expected to close the
-   listed verifier/correspondence families.
-3. **Stage 214 — the progressive-lowering pass pipeline.**
-4. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
+2. **Stage 214 — the progressive-lowering pass pipeline** (next).
+   Stage 213 is CLOSED. The five `_MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY`
+   table entries are still `None`, deliberately; Stage 214 wires the
+   real pass pipelines and the target output validators together.
+   Before starting, run `python scripts\mlir_audit_canaries.py` in
+   `--strict` mode — it should report 31/31 passed.
+3. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).
-5. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
-6. **Phase F (Stages 220–222)** — backend unification, the Stage-221
+4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
+5. **Phase F (Stages 220–222)** — backend unification, the Stage-221
    cutover, the v3.0.0 5-clean-gate + git tag.
-7. **206-R residual ops** — additive LLVM-lowering chunks (print_int,
+6. **206-R residual ops** — additive LLVM-lowering chunks (print_int,
    write_file / read_file_to_arena, TRACE, arena, QUOTE-family) needed
    before the Stage-221 cutover.
 

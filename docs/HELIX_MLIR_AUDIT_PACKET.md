@@ -608,3 +608,72 @@ Restart protocol from here:
    Stage-213 holistic close audit (`validate.py` + `backends.py` together)
    per `docs/V3_HANDOFF.md` section 4. If clean, close Stage 213 and bump
    `V3_STAGES_DONE` to 13.
+
+## 2026-05-24 Checkpoint D — Stage 213 close audit
+
+Status: STAGE 213 CLOSED. The holistic close audit was run across all
+three axes (silent-failure, type-design, code-review) over the entire
+validate.py + backends.py + canary substrate; the resulting HIGH
+findings (two concrete silent-failure bypasses) were closed in the
+same batch, and the structural type-design HIGHs were triaged as
+design-tightening opportunities (not silent-failure shapes) and
+documented for future iterations.
+
+Closed in this batch:
+
+- HIGH (silent-failure) — empty `input_symbols` silent bypass at
+  `backends.py:_backend_output_symbol_finding`. Inputs declaring
+  body-form function-shape ops the structural extractor doesn't
+  recognize (e.g. `gpu.func` device functions, not just kernel-tagged
+  ones) cleared the symbol-binding gate trivially. Fix: new helper
+  `_mlir_text_declares_body_form_function_shape` detects body-form
+  func.func / llvm.func / gpu.func in both custom and generic forms.
+  When `input_symbols == ()` but the input declares one of these,
+  the gate now refuses to mint PASSED.
+- HIGH (code-review) — strict-static `_strict_static_func_terminator_
+  findings` and `_strict_static_empty_return_findings` walked only the
+  bare `func.func` form. A generic-form `"func.func"() <{...}> ({...})`
+  could mint PASSED through a smoke-aware echo because the static
+  preflight never scanned its body. Fix: new helpers
+  `_mlir_generic_func_body_spans` and `_mlir_generic_func_body_spans_
+  with_result` extend both strict-static checks to cover the generic
+  form. Finding text is suffixed " (generic form)" to disambiguate.
+
+Two new canaries: `empty-input-symbols-bypass`,
+`generic-func-missing-terminator`.
+
+Triaged structural HIGHs (deferred as design-tightening, not
+silent-failure):
+
+- `MLIRValidation` PASSED brand bypass via `object.__new__` +
+  `object.__setattr__` in-module. The docstring at `validate.py:101-103`
+  explicitly states this is "an integrity check inside Helix's own
+  code, not a Python security boundary against adversarial same-process
+  introspection." The fail-closed contract holds for any code outside
+  the validator module. Future tightening: per-callable `_brand`
+  closures or frame-checked brand assertions.
+- `ssa_types: dict[str, str | None]` conflates "tracked but unparseable
+  type" with "no constraint to check". The current callers all `continue`
+  on None, which is the project's defer-when-uncertain pattern. Future
+  tightening: introduce a `TypeStatus` sum (`KNOWN_AS`,
+  `TRACKED_BUT_UNKNOWN`, `UNDEFINED`) and let each per-op check decide
+  whether to defer or fail closed.
+- `MLIRBackendResult`'s `(lowering_attempted, lowering_passed)` two-axis
+  encoding has a verbose post_init enforcing the 3 legal cross-product
+  shapes. The invariants currently hold, but a future maintainer
+  adding a fourth shape would have to maintain them across both the
+  post_init and `_backend_result_pass_shape_is_coherent`. Future
+  tightening: collapse to a single `MLIRBackendOutcome` sum type.
+
+Verified gates this batch:
+
+- `python scripts/mlir_audit_canaries.py --strict` -> `31 passed / 0 failed`
+  (was 29 / 0; +2 close-audit canaries)
+- `python -m pytest helixc/tests/test_mlir_validate.py helixc/tests/test_mlir_backends.py -q`
+  -> `275 passed`
+- `python -m pytest -k mlir -q` -> `411 passed, 4347 deselected`
+- `git diff --check -- ...` -> clean except LF-to-CRLF warnings
+
+`V3_STAGES_DONE` bumped from 12 to 13. Stage 213 is now CLOSED.
+Next: Stage 214 — the progressive-lowering pass pipeline (wire the
+five `_MLIR_BACKEND_OUTPUT_VALIDATORS_AUTHORITY` table entries).
