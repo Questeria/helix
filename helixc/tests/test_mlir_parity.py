@@ -246,11 +246,23 @@ def test_parity_check_holds_when_mlir_backend_passes(monkeypatch):
     comparison once the home-grown side is wired in.
 
     Same caveat as the FAILED test: the dev machine never reaches a
-    real PASSED through the runner, so we monkeypatch `status()`."""
+    real PASSED through the runner, so we monkeypatch `status()`.
+
+    Chunk C: when both paths PASSED, the parity gate runs the
+    cross-path comparison; for PARITY_HOLDS the two artifacts must
+    match after normalization. The mock here passes the same text to
+    both sides so the comparison succeeds."""
     module = _trivial_module()
+    homegrown_text = ".version 7.5\n.target sm_80\n.entry main() { ret; }\n"
+    mlir_text = ".version 8.0\n.target sm_90\n.entry main() { ret; }\n"
     monkeypatch.setattr(
         parity, "_run_tile_ir_path",
-        lambda mod, tgt: ("stub home-grown PTX text\n", ()))
+        lambda mod, tgt: (homegrown_text, ()))
+    # Construct a deferred-shaped result that still carries output_text
+    # so the chunk-C comparison has something to inspect. The
+    # MLIRBackendResult __post_init__ only enforces output_text on
+    # PASSED results (which require the real branding); a
+    # deferred-shaped result with output_text is structurally fine.
     deferred_shaped = MLIRBackendResult(
         target=MLIRBackendTarget.PTX,
         validation=_mock_passed_validation(),
@@ -260,6 +272,12 @@ def test_parity_check_holds_when_mlir_backend_passes(monkeypatch):
         lowering_findings=("placeholder — status() is monkeypatched",),
         output_text=None,
     )
+
+    # We need output_text to be the MLIR-side artifact for the chunk-C
+    # comparison. Since the dataclass is frozen, monkeypatch returns a
+    # property-replaced view via object.__setattr__.
+    object.__setattr__(deferred_shaped, "output_text", mlir_text)
+
     original_status = MLIRBackendResult.status
 
     def _patched_status(self):
@@ -270,7 +288,7 @@ def test_parity_check_holds_when_mlir_backend_passes(monkeypatch):
     monkeypatch.setattr(
         MLIRBackendResult, "status", _patched_status, raising=True)
 
-    def _fake_lower(mlir_text, target, *, support=None):
+    def _fake_lower(mlir_text_, target, *, support=None):
         return deferred_shaped
 
     monkeypatch.setattr(parity, "lower_mlir_to_backend", _fake_lower)
@@ -379,6 +397,147 @@ def test_parity_check_llvm_ir_defers_with_both_sides_noted():
     assert len(result.findings) == 2
     assert any("Stage 207" in f for f in result.findings), result.findings
     assert any("MLIR side for LLVM_IR returned" in f
+               for f in result.findings), result.findings
+
+
+# --------------------------------------------------------------------------
+# Stage 215 chunk C: per-target normalization + artifact comparison
+# --------------------------------------------------------------------------
+def test_normalize_artifact_drops_blank_lines():
+    text = "line one\n\n\n  \nline two\n"
+    out = parity._normalize_artifact_text(MLIRBackendTarget.PTX, text)
+    assert out == "line one\nline two"
+
+
+def test_normalize_artifact_strips_line_comments_ptx():
+    text = "// header\nentry main // inline\nret;\n"
+    out = parity._normalize_artifact_text(MLIRBackendTarget.PTX, text)
+    assert "header" not in out
+    assert "inline" not in out
+    assert "entry main" in out
+    assert "ret;" in out
+
+
+def test_normalize_artifact_strips_line_comments_llvm():
+    text = "; pre\ndefine void @k() {\n  ret void ; trailing\n}\n"
+    out = parity._normalize_artifact_text(
+        MLIRBackendTarget.LLVM_IR, text)
+    assert "pre" not in out
+    assert "trailing" not in out
+    assert "define void @k()" in out
+    assert "ret void" in out
+
+
+def test_normalize_artifact_drops_cosmetic_prefixes_ptx():
+    text = (
+        ".version 7.5\n"
+        ".target sm_80\n"
+        ".address_size 64\n"
+        ".visible .entry main() { ret; }\n"
+    )
+    out = parity._normalize_artifact_text(MLIRBackendTarget.PTX, text)
+    assert ".version" not in out
+    assert ".target" not in out
+    assert ".address_size" not in out
+    assert ".entry main" in out
+
+
+def test_normalize_artifact_collapses_whitespace_runs():
+    text = "kernel    void    main(    int    *    p   )    {  }\n"
+    out = parity._normalize_artifact_text(
+        MLIRBackendTarget.METAL_MSL, text)
+    assert out == "kernel void main( int * p ) { }"
+
+
+def test_normalize_artifact_rejects_non_str():
+    with pytest.raises(ValueError, match="must be str"):
+        parity._normalize_artifact_text(
+            MLIRBackendTarget.PTX,
+            b"bytes",  # type: ignore[arg-type]
+        )
+
+
+def test_compare_artifacts_match_after_normalization():
+    a = ".version 7.5\n.target sm_80\n.entry main() { ret; }\n"
+    b = ".version 9.0\n.target sm_90\n.entry main() { ret; }\n"
+    match, summary = parity._compare_artifacts(
+        MLIRBackendTarget.PTX, a, b)
+    assert match
+    assert summary is None
+
+
+def test_compare_artifacts_mismatch_emits_diff_summary():
+    a = ".entry main() { ret; }\n"
+    b = ".entry kernel_main() { ret; }\n"
+    match, summary = parity._compare_artifacts(
+        MLIRBackendTarget.PTX, a, b)
+    assert not match
+    assert summary is not None
+    assert "first divergence at line" in summary
+    assert "tile-IR=" in summary
+    assert "MLIR=" in summary
+
+
+def test_compare_artifacts_different_line_counts():
+    a = ".entry main() { ret; }\n"
+    b = ".entry main() {\n  ret;\n}\n"
+    match, summary = parity._compare_artifacts(
+        MLIRBackendTarget.PTX, a, b)
+    # After normalization these likely still differ in line count.
+    assert not match
+    assert summary is not None
+    assert "lines" in summary
+
+
+def test_compare_artifacts_rejects_bad_inputs():
+    with pytest.raises(ValueError, match="must be"):
+        parity._compare_artifacts(
+            "ptx", "a", "b")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="both texts must be str"):
+        parity._compare_artifacts(
+            MLIRBackendTarget.PTX,
+            "a",
+            b"b",  # type: ignore[arg-type]
+        )
+
+
+def test_parity_check_fails_on_artifact_mismatch(monkeypatch):
+    """Chunk C: when both paths PASSED but the normalized artifacts
+    differ, PARITY_FAILED with a clear diff summary."""
+    module = _trivial_module()
+    homegrown_text = ".visible .entry main() { ret; }\n"
+    mlir_text = ".visible .entry not_main() { ret; }\n"
+    monkeypatch.setattr(
+        parity, "_run_tile_ir_path",
+        lambda mod, tgt: (homegrown_text, ()))
+    deferred_shaped = MLIRBackendResult(
+        target=MLIRBackendTarget.PTX,
+        validation=_mock_passed_validation(),
+        lowering_attempted=False,
+        lowering_passed=None,
+        lowering_tool=None,
+        lowering_findings=("placeholder",),
+        output_text=None,
+    )
+    object.__setattr__(deferred_shaped, "output_text", mlir_text)
+    original_status = MLIRBackendResult.status
+
+    def _patched_status(self):
+        if self is deferred_shaped:
+            return MLIRBackendStatus.PASSED
+        return original_status(self)
+
+    monkeypatch.setattr(
+        MLIRBackendResult, "status", _patched_status, raising=True)
+    monkeypatch.setattr(
+        parity, "lower_mlir_to_backend",
+        lambda mlir, t, *, support=None: deferred_shaped)
+    result = mlir_vs_tile_ir_parity_check(
+        module, MLIRBackendTarget.PTX)
+    assert result.failed(), result.findings
+    assert any("normalized artifact mismatch" in f
+               for f in result.findings), result.findings
+    assert any("first divergence" in f
                for f in result.findings), result.findings
 
 

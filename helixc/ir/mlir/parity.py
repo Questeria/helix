@@ -38,6 +38,7 @@ License: Apache 2.0
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
@@ -124,6 +125,142 @@ def _run_tile_ir_path(
             f"home-grown path for {target.value} returned blank or "
             f"non-str output ({type(text).__name__})",)
     return text, ()
+
+
+# Stage 215 chunk C — per-target line-comment markers. The
+# normalization pass strips trailing line-comment text using this
+# marker before whitespace folding so compiler-version-dependent
+# inline annotations don't cause spurious parity-failure findings.
+_TARGET_LINE_COMMENT_MARKER: dict[MLIRBackendTarget, str] = {
+    MLIRBackendTarget.PTX: "//",        # PTX uses // (and /* */).
+    MLIRBackendTarget.ROCM_HIP: "//",   # ROCm HIP (C++).
+    MLIRBackendTarget.METAL_MSL: "//",  # MSL (C++-derived).
+    MLIRBackendTarget.WEBGPU_WGSL: "//",
+    MLIRBackendTarget.LLVM_IR: ";",     # LLVM IR uses ; for comments.
+}
+
+
+# Stage 215 chunk C — line-prefix markers that indicate a directive
+# whose textual content can vary across compiler versions / build
+# configurations but does not affect semantic equivalence. The
+# normalization pass drops these lines outright. These are
+# conservative — only the most clearly-cosmetic directives.
+_TARGET_COSMETIC_LINE_PREFIXES: dict[MLIRBackendTarget,
+                                     tuple[str, ...]] = {
+    MLIRBackendTarget.PTX: (
+        ".version",  # PTX assembler version differs per ptxas build.
+        ".target",   # target sm version may be set per-deployment.
+        ".address_size",
+    ),
+    MLIRBackendTarget.LLVM_IR: (
+        "target datalayout",
+        "target triple",
+        "source_filename",
+        "; ModuleID",
+    ),
+    MLIRBackendTarget.ROCM_HIP: (
+        "#include",  # HIP / Metal / WGSL include-style headers.
+    ),
+    MLIRBackendTarget.METAL_MSL: (
+        "#include",
+        "using namespace",
+    ),
+    MLIRBackendTarget.WEBGPU_WGSL: (),
+}
+
+
+def _normalize_artifact_text(
+        target: MLIRBackendTarget, text: str) -> str:
+    """Normalize a target artifact for cross-path equivalence
+    comparison. Strips line comments per target, drops cosmetic
+    directive lines whose content varies across compiler builds,
+    collapses whitespace runs, and discards blank lines.
+
+    Conservative by design: only the rules listed in
+    `_TARGET_LINE_COMMENT_MARKER` and
+    `_TARGET_COSMETIC_LINE_PREFIXES` apply. More aggressive
+    normalization (symbol reordering, dead-code elimination) belongs
+    to Stage 216 / Phase F when concrete real-toolchain diffs
+    inform the rules."""
+    if not isinstance(text, str):
+        raise ValueError(
+            "_normalize_artifact_text: text must be str, got "
+            f"{type(text).__name__}")
+    comment_marker = _TARGET_LINE_COMMENT_MARKER.get(target)
+    cosmetic_prefixes = _TARGET_COSMETIC_LINE_PREFIXES.get(target, ())
+    out: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if comment_marker is not None:
+            idx = line.find(comment_marker)
+            if idx == 0:
+                continue
+            if idx > 0:
+                line = line[:idx].rstrip()
+                if not line:
+                    continue
+        if cosmetic_prefixes and any(
+                line.startswith(prefix) for prefix in cosmetic_prefixes):
+            continue
+        line = " ".join(line.split())
+        out.append(line)
+    return "\n".join(out)
+
+
+def _compare_artifacts(
+        target: MLIRBackendTarget,
+        tile_ir_text: str, mlir_text: str) -> tuple[bool, Optional[str]]:
+    """Compare two artifacts after target-specific normalization.
+    Returns `(match, summary)`: when the normalized SHA-256 digests
+    match, returns `(True, None)`; otherwise `(False, summary)` with
+    a short diff summary suitable for a `ParityResult.findings`
+    entry.
+
+    The summary names byte counts of both normalized forms and the
+    first divergent line, so a downstream debugger can locate the
+    mismatch without needing to recompute the diff."""
+    if not isinstance(target, MLIRBackendTarget):
+        raise ValueError(
+            "_compare_artifacts: target must be MLIRBackendTarget")
+    if not isinstance(tile_ir_text, str) \
+            or not isinstance(mlir_text, str):
+        raise ValueError(
+            "_compare_artifacts: both texts must be str")
+    tile_ir_norm = _normalize_artifact_text(target, tile_ir_text)
+    mlir_norm = _normalize_artifact_text(target, mlir_text)
+    tile_ir_digest = hashlib.sha256(
+        tile_ir_norm.encode("utf-8")).hexdigest()
+    mlir_digest = hashlib.sha256(mlir_norm.encode("utf-8")).hexdigest()
+    if tile_ir_digest == mlir_digest:
+        return True, None
+    tile_ir_lines = tile_ir_norm.splitlines()
+    mlir_lines = mlir_norm.splitlines()
+    divergence_line: Optional[int] = None
+    sample_tile_ir = ""
+    sample_mlir = ""
+    for index in range(max(len(tile_ir_lines), len(mlir_lines))):
+        tile_ir_line = tile_ir_lines[index] if index < len(tile_ir_lines) \
+            else "<eof>"
+        mlir_line = mlir_lines[index] if index < len(mlir_lines) \
+            else "<eof>"
+        if tile_ir_line != mlir_line:
+            divergence_line = index + 1
+            sample_tile_ir = tile_ir_line[:80]
+            sample_mlir = mlir_line[:80]
+            break
+    summary = (
+        f"artifacts differ after normalization "
+        f"(tile-IR side: {len(tile_ir_norm)} bytes, "
+        f"{len(tile_ir_lines)} lines; "
+        f"MLIR side: {len(mlir_norm)} bytes, "
+        f"{len(mlir_lines)} lines)")
+    if divergence_line is not None:
+        summary += (
+            f"; first divergence at line {divergence_line}: "
+            f"tile-IR={sample_tile_ir!r}, MLIR={sample_mlir!r}")
+    return False, summary
 
 
 class ParityStatus(Enum):
@@ -315,14 +452,41 @@ def mlir_vs_tile_ir_parity_check(
         )
 
     if backend_status is MLIRBackendStatus.PASSED:
-        # Chunk-C+ will replace this with the actual byte / text
-        # comparison between `tile_ir_output` and the MLIR side's
-        # artifact. Chunk B treats "both paths produced text" as
-        # parity-holding (i.e. both succeeded structurally).
+        # Chunk C — actual cross-path artifact comparison. Both
+        # paths produced text; normalize each per target and compare
+        # SHA-256 digests. PARITY_HOLDS only when they agree.
+        if tile_ir_output is None or mlir_result.output_text is None:
+            return ParityResult(
+                target=target,
+                status=ParityStatus.PARITY_FAILED,
+                findings=(
+                    f"parity check for {target.value} cannot compare: "
+                    "one side produced no artifact text "
+                    f"(tile_ir_output={'present' if tile_ir_output else 'None'}"
+                    f", mlir_output_text="
+                    f"{'present' if mlir_result.output_text else 'None'})",
+                ),
+                mlir_result=mlir_result,
+                tile_ir_output=tile_ir_output,
+            )
+        match, summary = _compare_artifacts(
+            target, tile_ir_output, mlir_result.output_text)
+        if match:
+            return ParityResult(
+                target=target,
+                status=ParityStatus.PARITY_HOLDS,
+                findings=(),
+                mlir_result=mlir_result,
+                tile_ir_output=tile_ir_output,
+            )
         return ParityResult(
             target=target,
-            status=ParityStatus.PARITY_HOLDS,
-            findings=(),
+            status=ParityStatus.PARITY_FAILED,
+            findings=(
+                f"parity check for {target.value} found a normalized "
+                "artifact mismatch: "
+                + (summary or "no diff summary emitted"),
+            ),
             mlir_result=mlir_result,
             tile_ir_output=tile_ir_output,
         )
