@@ -1,1076 +1,201 @@
 # Helix Handoff for Claude
 
-**Date**: 2026-05-16  
-**Repo**: `C:\Projects\Kovostov-Native`  
-**Remote**: `https://github.com/Questeria/helix.git`  
-**Branch**: `main`  
-**Handoff written after**: Stage 35 restart 65 CLEAN — **STAGE 35 CLOSED (3/3 clean gates)**
-(Increment 82); post-closure full-codebase audit + HIGH-finding fixes
-applied in Increment 84 (2026-05-16).
+Date: 2026-05-23
+Repo: `C:\Projects\Kovostov-Native`
+Remote: `https://github.com/Questeria/helix.git`
+Branch: `main`
 
-This handoff is for Claude to begin Stage 36. Stage 35 is now CLOSED.
-Treat live git state as truth if it differs from this file.
+This handoff replaces the old Stage 35 takeover file. Treat live git state as
+truth if it differs from this file.
 
-## Current State
+## Current Snapshot
 
-**STAGE 35 IS CLOSED.** Three consecutive all-clean fresh audits
-(restarts 63 + 64 + 65) on top of the substantive HEAD `e441173`
-satisfied the 3-clean-gate closure policy. The audit campaign that
-ran from restart 1 through restart 65 is now archived; restart 65
-is the final restart of the Stage 35 audit-cleanup campaign.
+Helix is in v3.0, Phase E, after Stage 213 chunk C. The latest pushed code
+commit before this handoff work was:
 
-The next campaign opens **Stage 36** with whatever protocol Stage 36
-declares.
-
-The closure chain is restart 62 combined audit-and-fix (Increments
-78 + 79 — retroactive ledger + lane docs for restart 61 PLUS 2 Lane A
-optimizer NaN-fail-closed fixes from a fresh audit on top of c697f3d;
-HEAD `e441173`), restart 63 CLEAN (Increment 80 — first all-clean
-fresh audit of the campaign on top of e441173; clean-gate counter
-`0/3` → `1/3`; HEAD `d6851f0`), restart 64 CLEAN (Increment 81 —
-second consecutive all-clean fresh audit on top of d6851f0;
-clean-gate counter `1/3` → `2/3`; HEAD `8f1b6a2`), and **restart 65
-CLEAN — STAGE 35 CLOSED** (Increment 82 — third and final all-clean
-fresh audit on top of 8f1b6a2; clean-gate counter `2/3` → `3/3`;
-surface refresh landed in the same commit per the closure protocol).
-
-- Commit: pinned by the latest `git log -1 --oneline`
-- Status at handoff creation: clean working tree, `main` aligned with
-  `origin/main`
-- Progress ledger: `docs/stage35-progress-2026-05-15.md` (see Increment
-  82 for the **STAGE 35 CLOSED** record; 81 for the restart 64 CLEAN
-  gate; 80 for the restart 63 CLEAN gate; 79 for the restart 62
-  combined audit-and-fix; 78 for restart 61 retroactive; 77 for
-  restart 58 catch-up sweep; 76 for restart 57 catch-up sweep;
-  75 for restart 56 retroactive; 74 for restart 55 retroactive;
-  73 for restart 54; 72 for restart 53; 71 for restart 52;
-  70 for restart 51; 69 for restart 50; 68 for restart 49)
-- Current-facing status files now say "restart 65 / 2,556+ tests /
-  Stage 35 CLOSED (3/3 clean gates)" — the closure restart performed
-  the surface refresh that was deferred during the two clean-gate
-  restarts (63 + 64) per the deferred-refresh convention.
-
-## What Restart 65 Returned (CLEAN — STAGE 35 CLOSED, gate 3/3)
-
-Restart 65 ran as a **combined audit-AND-fix** agent (single dispatch,
-continuing the restart 62/63/64 anti-abbreviation pattern) on top of
-`8f1b6a2`. **Result: zero findings across all three lanes — THIRD AND
-FINAL CLEAN GATE of the campaign.** Increment 82 in the ledger.
-
-- Lane A: CLEAN. Frontier remains exhausted. `git diff e441173..HEAD
-  -- helixc/` is empty — restarts 63 + 64 touched only ledger +
-  handoff, not source. All restart-62-era guarantees carry forward
-  unchanged: sgd_f32_step / momentum_step / adam_f32_step per-element
-  NaN-skip, dense_classifier_sgd_step_f32 sum_e fail-closed (different
-  defense pattern — input-validation aggregate, validated against the
-  NaN-`lr` corner: upstream NaN propagates through score → __exp →
-  sum_e and is caught), transcendentals NaN pass-through convention,
-  i32/INT_MIN saturation closure. No new optimizer surfaces introduced
-  (rmsprop / adagrad / adamw / nesterov / etc absent).
-- Lane B: CLEAN (eighth consecutive Lane B clean window). No Python
-  source changes since restart 61 commit `c697f3d`. No new bare
-  `except Exception` introduced.
-- Lane C: CLEAN — surface refresh landed in the same commit per the
-  closure protocol. README / QUICKSTART / stats_and_facts / HANDOFF
-  all advanced from "restart 62 / clean gates 0/3" to "restart 65 /
-  Stage 35 CLOSED (3/3)".
-
-Verification: `python -m pytest helixc/tests --collect-only -q` →
-**2,556 tests** (exact match with surface claim).
-
-Clean-gate counter advances `2/3` → **`3/3`**. **STAGE 35 IS CLOSED.**
-Increment 82 + surface refresh + this handoff are the closure ceremony.
-
-Next: **Stage 36** opens. The Stage 35 audit-cleanup campaign is
-archived. The combined audit-and-fix anti-abbreviation discipline
-established at restart 62 should remain the default for any future
-audit campaign.
-
-## Post-Closure Full-Codebase Audit (Increment 84, 2026-05-16)
-
-Per the user direction "do full audit cycles on all the work we have
-done so far", three parallel post-closure audit lanes ran on top of
-the closure catch-up commit `8177350`. Stage 35 remains CLOSED;
-this audit is **Stage 36 prep**, not a clean-gate reset.
-
-**HIGH findings applied (Increment 84):**
-
-- `docs/ROADMAP.md` Current-state header + Stage 35 section advanced
-  from "audit cleanup" to "CLOSED 2026-05-16 at restart 65".
-- `docs/HELIX_V1_FINAL_FEATURES.md` Part 5 sequencing plan + Status
-  advanced from "0/3 clean gates" to "Stage 35 CLOSED; Stage 36 opens".
-- `scripts/stage33_selfhost_gate.py` re-run — PASS (G2..G4 byte-
-  identical sha `a6f1ee44...`; smoke programs literal/call/loop/
-  metadata_attrs all exit 42; validate ok). The Stage 35 stdlib
-  changes did not break the self-host cascade.
-- 4 broken examples fixed:
-  - `helixc/examples/hello.hx` — `add_kernel` returns `()` (was
-    returning `tile<bf16, [N], reg>` which the strengthened @kernel
-    typecheck rejects).
-  - `helixc/examples/hbs_sample_enum_struct.hx` — `Shape.kind` field
-    tightened from `i32` to `Kind` to match match-arm usage.
-  - `helixc/examples/hbs_integration_calculator.hx` — `dispatch_or`
-    parameter type tightened from `i32` to `Op`.
-  - `helixc/examples/hbs_reference_500loc.hx` — `vm_eval` / `vm_unary`
-    parameter types tightened from `i32` to `Op`.
-
-The 3 hbs_* fixes reflect a strengthened typechecker that previously
-allowed implicit enum→i32 conversion; the right repair is to tighten
-the user-side type annotations to the actual enum, not to weaken the
-checker.
-
-**MEDIUM / LOW findings deferred** to Stage 36 backlog:
-
-- DONE (98d8e1f) — delete `_probe_stage29_*.py` (11 files, 1,940
-  lines of dev-time bisect scripts).
-- DONE (98d8e1f) — refresh stale "post-Stage-30" doc references in
-  HELIX_PURPOSE.md and HELIX_FINAL_PRODUCT_RESEARCH.md.
-- DONE (this commit) — promote Stage 36 starting protocol out of the
-  progress ledger to `docs/STAGE_36_STARTING_PROTOCOL.md`.
-- DONE (this commit) — reconcile three-docs-disagree framing on
-  Stage 36 first deliverable. Refinement types + capability tokens
-  already shipped (Stages 31/33/34); live candidates documented in
-  STAGE_36_STARTING_PROTOCOL.md §3; provenance-typed primitives
-  recommended pending user approval.
-- DONE (eb476b4, 2026-05-16) — refresh stale Stage 35 status pointer
-  in HELIX_PURPOSE.md to point at live Stage 36 progress ledger.
-- DEFERRED — stale `pytest-codegen-shard-1-of-2 / 1-of-4` timing
-  JSONs in `.stage31-logs/` (unused by current 1-of-8 sharding;
-  cleanup-only, no functional impact).
-- DEFERRED — split `helixc/tests/test_codegen.py` (21,504 lines).
-  Touches every Stage 1-35 codegen test; deserves its own scoped
-  commit campaign, not a Stage 36 prep sweep.
-
-## Stage 36 Increments 1-15 SHIPPED (2026-05-16)
-
-User-approved 2026-05-16: Stage 36 first deliverable is
-**provenance-typed neuro-symbolic primitives** (ROADMAP Tier 3 #10
-strategic differentiator vs JAX/Mojo/Triton). Twelve increments
-shipped in this session plus three dogfood programs and three
-audit cycles closing 19/20 findings:
-
-| # | Commit | What landed |
-|---|--------|-------------|
-| 1 | 9e9b421 | `prove(value, source) -> Logic<T>` + `unwrap_logic(l) -> T` builtins. Logic<T> wrapper lowers to identity at IR (Phase-0 zero-overhead). |
-| 2 | c142ce0 | `derive(a, b)`, `and_logic`, `or_logic`, `not_logic`. Boolean ops on Logic<i32> via BIT_AND / BIT_OR / 1-a. |
-| 3 | fb36c51 | `xor_logic`, `implies_logic`, `eq_logic`, `if_logic`, `to_logic_bool`. Boolean algebra feature-complete. De Morgan's law verified end-to-end at runtime. |
-| 4 | de0b60b | `attach` + `detach` wired through IR as identity, unblocking `D<Logic<T>>` strategic composition end-to-end. |
-| dogfood 6 | 8784976 | `dogfood_06_provenance_datalog.hx` — Datalog-shaped reasoning: grandparent rule + tautology check. |
-| 5 | 60c7b4a | Real two-parent provenance via arena side-table: `register_derivation(L, R)`, `parent_left_at(h)`, `parent_right_at(h)`. |
-| 6 | 2a05132 | Fuzzy logic: `fuzzy_and/or/not` on Logic<f32> + AD chain rules in both forward and reverse mode. |
-| 7 | a7cb41c | `dogfood_07_provenance_sgd.hx` — first Helix program that learns a fuzzy-logic weight via SGD-through-propositional-logic. |
-| 8 | a451591 | `fuzzy_xor` + `fuzzy_implies` + `dogfood_08_two_param_fuzzy_rule.hx` (multi-param SGD over fuzzy rule). |
-| 9 | (audit cycle, 13 findings) | Inc 9 fix-sweep across 0e548f0 + 31810c3 + 9442842 + 8411cf2 + 9400789 + 61b50b2 + 707deff + e1ca1f9. Closed: bounds-check, 1-based handles, fuzzy clamp, AD-pure ergonomics, source-order, ∂/∂b coverage, inner-type strictness, to_logic_bool i32-strict, unwrap_logic recovery, ARENA_PUSH_PAIR atomic op, derive() now observable, prove flatten rejection, prove src strict-i32, lowerer return-None. |
-| dogfood 9 | 821592f + 9d78805 | `dogfood_09_knowledge_graph.hx` — chained-rule reasoner + parent_*_at evidence recovery + 8-invariant witness. |
-| 11 | (audit cycle, 5 findings) | 5c83860 + a76b954 — post-Inc-10 audit: derive/register_derivation removed from AD-pure set (Inc 9 C2 regressed Inc 9 B2), prove + register_derivation strict-i32, if_logic inner-type matching, parent_*_at None consistency. |
-| 12 | 4742128 + abef645 | Reverse-mode AD now rejects integer-valued boolean Logic ops in grad_rev paths (mirrors Inc 11 forward-mode guard). 6 new regression tests + 2 negative controls. |
-| 13 | 6894348 | provenance.hx stdlib: has_evidence / evidence_left / evidence_right / trace_evidence helpers wrapping the Inc 5/9 arena side-table. |
-| 14 | e7c3552 | Three-parent provenance: register_derivation3 + parent_at builtins + ARENA_PUSH_TRIPLE atomic opcode. 16 new tests pinning codegen, atomicity, AD purity, effect-table classification. |
-| 14 audit | 78b127b | post-Inc-14 3-lane audit: 1H + 2M + 3L findings (silent-failure H1 parent_at cross-record, silent-failure M1 provenance.hx triple-handle lies, type-design M1 strictness asymmetry, code-review L1/L2/L3). |
-| 15 | (this commit) | Inc 14-audit fix-sweep: 5/6 findings closed. parent_at gains static literal-slot-bounds + runtime null-handle + dynamic-negative-slot guards (silent-failure H1 partial). provenance.hx gains evidence_middle / evidence_third / trace_evidence3 + honest "slot0= slot1=" stdout labels (silent-failure M1). parent_left_at / parent_right_at tightened to strict-i32 (type-design M1). AD-erasability negative control for register_derivation3 (code-review L2). has_evidence comment tightened (code-review L3). ARENA_PUSH_TRIPLE overflow-test deferred with TODO (code-review L1, awaits `__arena_set_cursor` infrastructure). 11 new tests + 5 existing tests updated for new labels. |
-
-**Stage 36 progress ledger**: `docs/stage36-progress-2026-05-16.md`
-documents all 15 increments. Four audit cycles also documented at
-`docs/audit-stage36-postinc8-*.md` (Inc 9),
-`docs/audit-stage36-postinc10-*.md` (Inc 11), and
-`docs/audit-stage36-postinc14-*.md` (Inc 15 fix-sweep target).
-
-**Tests**: 131 passing in `helixc/tests/test_stage36_provenance.py`
-post-Inc-15 (was 121 pre-Inc-15, 94 pre-Inc-13). 2,699 total tests
-across the suite (up from 2,556 at Stage 35 closure; Stage 36
-added 143 across Inc 1-15).
-
-**Self-host gate**: PASS at every increment commit (G2..G4 byte-
-identical, smoke programs all exit 42, validate ok).
-
-**Total Stage 36 surface area** (26 typecheck-recognized builtins
-after Inc 14, no new builtins in Inc 15): prove, unwrap_logic,
-derive, and_logic, or_logic, not_logic, xor_logic, implies_logic,
-eq_logic, if_logic, to_logic_bool, register_derivation,
-parent_left_at, parent_right_at, register_derivation3 (Inc 14),
-parent_at (Inc 14), fuzzy_and, fuzzy_or, fuzzy_not, fuzzy_xor,
-fuzzy_implies, plus the now-runnable attach + detach from Stage 24.
-IR opcodes: `ARENA_PUSH_PAIR` + `ARENA_PUSH_TRIPLE` (Inc 14) for
-atomic 2-/3-parent provenance side-table writes. Stdlib helpers in
-`provenance.hx`: has_evidence, evidence_left, evidence_right,
-evidence_middle (Inc 15), evidence_third (Inc 15), trace_evidence,
-trace_evidence3 (Inc 15).
-
-**Audit-fix scorecard across 4 cycles**: 24/26 findings closed.
-
-| Cycle | HIGH | MEDIUM | LOW | Total | Closed |
-|---|---|---|---|---|---|
-| Inc 9 (post-Inc-8) | 5 | 5 | 3 | 13 | 13/13 ✅ |
-| Inc 11 (post-Inc-10) | 2 | 2 | 2 | 6 | 5/6 (1 deferred) |
-| Inc 12 (Inc 11 B2 closure) | 0 | 1 | 0 | 1 | 1/1 ✅ |
-| Inc 15 (post-Inc-14) | 1 | 2 | 3 | 6 | 5/6 (silent-failure H1 partial, code-review L1 deferred — both depend on per-record arity-word architecture, planned Inc 16) |
-
-### What's still missing from Stage 36
-
-1. **Nominal handle wrapper type** (Inc 11 type-design A1 HIGH,
-   deferred). `register_derivation` returns bare `i32` which can be
-   silently aliased to source IDs (themselves `i32`). Fix needs a
-   new `TyDerivationHandle` TyPrim subclass so `parent_*_at` only
-   accepts handles and source IDs can't be passed by mistake.
-   Genuinely architectural.
-2. **Auto-registration via derive**. Inc 9 B2 made `derive(a, b)`
-   observable (ARENA_PUSH_PAIR), but the user-visible Logic<T>
-   value still doesn't carry the handle. A future increment could
-   thread an implicit handle through Logic<T> at runtime.
-3. **Logic<f64> precision variant** — `fuzzy_*` ops currently lock
-   to Logic<f32>. Extending to Logic<f64> would let user code do
-   scientific-grade fuzzy logic.
-4. **Multi-output reverse-mode AD** (Stage 35 backlog). Currently
-   `grad_rev(loss, k)` runs a separate pass per parameter index;
-   N× too expensive for rule systems with many learnable weights.
-5. **JAX-style pytrees** — `grad(loss)(model)` over a nested struct
-   of provenance-typed values. Required for real-shape rule systems.
-
-## What Restart 64 Returned (CLEAN — gate 2/3)
-
-Restart 64 ran as a **combined audit-AND-fix** agent (single dispatch,
-continuing the restart 62/63 anti-abbreviation pattern) on top of
-`d6851f0`. **Result: zero findings across all three lanes — SECOND
-CLEAN GATE of the campaign.** Increment 81 in the ledger.
-
-- Lane A: CLEAN. Frontier remains exhausted. `git diff e441173..HEAD
-  -- helixc/` is empty — restart 63 touched only ledger + handoff,
-  not source. All restart-62-era guarantees carry forward unchanged.
-- Lane B: CLEAN (seventh consecutive Lane B clean window). No Python
-  source changes since restart 61 commit `c697f3d`.
-- Lane C: CLEAN. All eight current-facing surfaces consistent at
-  "restart 62 / 2,556+ tests" (deliberately deferred surface refresh
-  during clean-gate runs per convention).
-
-Verification: `python -m pytest helixc/tests --collect-only -q` →
-**2,556 tests** (exact match with surface claim).
-
-Clean-gate counter advances `1/3` → `2/3`. No source / test edits, no
-canary additions. Increment 81 is the only ledger change.
-
-(Restart 65 returned CLEAN and closed Stage 35 — see top of this file.)
-
-## What Restart 63 Returned (CLEAN — gate 1/3)
-
-Restart 63 ran as a **combined audit-AND-fix** agent (single dispatch,
-continuing the restart 62 anti-abbreviation pattern) on top of `e441173`.
-**Result: zero findings across all three lanes — FIRST CLEAN GATE of
-the campaign.** Increment 80 in the ledger.
-
-- Lane A: CLEAN. Frontier verified exhausted (no new optimizer
-  surfaces; `accuracy_count_from_logits_f32` NaN guard already in
-  place from restart 61 A2; `__powi` is by-design NaN-pass-through per
-  transcendentals convention; no new `__sqrt`/`__log`/division sites).
-- Lane B: CLEAN (sixth consecutive Lane B clean window). No Python
-  source changes since restart 61 commit `c697f3d`.
-- Lane C: CLEAN. All eight current-facing surfaces consistent at
-  "restart 62 / 2,556+ tests".
-
-Verification: `python -m pytest helixc/tests --collect-only -q` →
-**2,556 tests** (exact match with surface claim).
-
-Clean-gate counter advances `0/3` → `1/3`. No source / test edits, no
-canary additions. Increment 80 is the only ledger change.
-
-## What Restart 62 Fixed (Combined Audit-and-Fix)
-
-Restart 62 ran as a **combined audit-AND-fix** agent (single dispatch,
-no separate read-only / fix-apply lanes — the abbreviation-prone path
-of restarts 52, 55, 56, 58, 59 was sidestepped by design). Increments
-78 + 79 in the ledger.
-
-Lane A (2 MEDIUM — Family 2 optimizer NaN-fail-closed):
-
-- **A1 MEDIUM**: `helixc/stdlib/nn.hx sgd_f32_step` — per-element
-  NaN-fail-closed. Pre-fix, a NaN gradient overwrote every weight
-  with NaN, propagating into every subsequent forward pass. Sibling
-  of restart 50 A2 `adam_f32_step`.
-- **A2 MEDIUM**: `helixc/stdlib/nn.hx momentum_step` — per-element
-  NaN-fail-closed for BOTH v[i] and w[i]. Velocity carries forward
-  across steps, so a single NaN gradient pre-fix latched into v
-  permanently. Sibling of restart 50 A2 + restart 62 A1.
-
-Lane B: CLEAN (fifth consecutive Lane B clean window since restart 58).
-
-Lane C (3 HIGH + 2 MEDIUM — mostly restart 61 bookkeeping debt):
-
-- **C1 HIGH**: Ledger Increment 78 missing for restart 61 — closed
-  retroactively.
-- **C2 HIGH**: Lane audit docs missing for restart 61 — closed
-  retroactively (laneA + laneB + laneC).
-- **C3 HIGH**: Eight surfaces stale at "restart 58 catch-up / 2,530+"
-  — advanced to "restart 62 / 2,556+ tests".
-- **C4 MEDIUM**: HANDOFF_FOR_CLAUDE.md restart history truncated at 58
-  — added "What Restart 61/62 Fixed" sections.
-- **C5 MEDIUM**: Restarts 59 + 60 commit bodies empty — documented as
-  process-discipline observation in Increment 79.
-
-Regression canaries added (2 in `test_codegen.py` + 3 in `test_cli.py`):
-`test_stage35_restart62_sgd_f32_step_nan_fails_closed`,
-`test_stage35_restart62_momentum_step_nan_fails_closed`,
-`test_stage35_restart62_ledger_has_increment_79`,
-`test_stage35_restart62_lane_audit_docs_exist`,
-`test_stage35_restart62_surfaces_advanced_past_restart_58_catch_up`.
-
-Live test count after restart 62: 2,551 → 2,556.
-
-## What Restart 61 Fixed
-
-Restart 61 was a big-batch family sweep on top of restart 60 HEAD that
-closed 6 sibling-class sites across 5 fix families in one increment.
-The commit (c697f3d, "Fix Stage 35 sixty-first restart findings") had
-a well-detailed body but skipped the ledger Increment + lane docs +
-surface refresh — softer abbreviation than 59/60 (which had empty
-commit bodies) but still produced drift. Restart 62 closed that debt
-in Increments 78 + 79.
-
-Family 2 — f32 NaN-skip discipline (2 sites):
-
-- A1 HIGH: `tensor.hx tf1d_running_sum` — NaN-skip on per-element
-  prefix-sum. Pre-fix, one NaN slot poisoned every subsequent slot.
-- A2 HIGH: `nn.hx accuracy_count_from_logits_f32` — NaN-at-col-0 via
-  `seen = 0` sentinel. IEEE-754 `v > NaN` is always false, so the
-  bare-init pre-fix froze the row's argmax at index 0.
-
-Family 3 — INT32_MIN abs saturate (1 site):
-
-- A3 MEDIUM: `transcendentals.hx __abs_i32` — saturate INT32_MIN to
-  INT32_MAX. The canonical abs helper is now total for all i32 inputs.
-
-Family 4 — loud-fail discipline (1 site):
-
-- B1 MEDIUM: `diagnostics.py _should_color` — narrow bare
-  `except Exception` to `(AttributeError, OSError, ValueError)` after
-  the standard re-raise prelude. Mirrors restart 47 B1.
-
-Family 5 — small bookkeeping (3 sites):
-
-- B2 LOW: `check.py` argv parser — reject duplicate `-o` flags and
-  empty `-o` arguments (both rc=2).
-- B3 LOW: `examples/run.py` — add `-h` / `--help` flag with usage banner.
-- B4 LOW: `monomorphize.py _mangle_expr` — remove dead
-  `try/except: raise` block around `structural_hash`.
-
-Regression coverage added (8 canaries: 3 in test_codegen.py, 5 in
-test_cli.py).
-
-## What Restart 58 (Catch-up Sweep) Fixed
-
-Restart 58 produced commit `c8398d3` ("Fix Stage 35 fifty-eighth restart
-findings" — title +1 drift) which closed 3 of the 4 carry-forward NaN-
-skip siblings logged for restart 58's Lane A (`tf1d_dot`, `tf1d_l1_norm`,
-`tf1d_max_abs`) but shipped source-only (no canaries, no lane docs, no
-ledger entry, no surface refresh) — the fourth occurrence of the
-abbreviated-commit anti-pattern (after 52, 55, 56).
-
-The restart 58 catch-up sweep (Increment 77) closes that bookkeeping
-debt AND lands a fresh 3-lane audit on top of c8398d3:
-
-Lane A (1 HIGH + 5 MEDIUM + 1 LOW; all closed):
-
-- **A1 HIGH**: `tf1d_sum_in_range` NaN-skip — the missed carry-forward
-  sibling. Same family as `tf1d_sum` / `tf1d_dot` / `tf1d_l1_norm` /
-  `tf1d_max_abs`.
-- **A2 MEDIUM**: `vec_map_abs` INT32_MIN saturation. Sibling of
-  restart 51 A5 (`vec_map_neg` / `vec_negate_inplace`) and restart 56
-  A2/A3 (`ti1d_max_abs` / `vec_max_abs`).
-- **A3 MEDIUM**: `tf1d_dot_with_offset` NaN-skip. Offset twin of the
-  just-fixed `tf1d_dot`.
-- **A4 MEDIUM**: `tf2d_matvec` + `tf2d_matmul` per-cell NaN-skip.
-  Extends dot-product NaN-skip to the 2D layer.
-- **A5 MEDIUM**: `tf2d_row_sum` + `tf2d_col_sum` + `tf2d_trace`
-  NaN-skip. 2D-reduction extension of restart 57 A1.
-- **A6 MEDIUM**: `mse_loss_f32` + `mae_loss_f32` NaN-skip. Loss
-  helpers now follow the codebase NaN-fail-closed convention.
-- **A7 LOW**: `tf1d_max`/`min`/`argmax*`/`argmin`/`argmax_rows_f32`
-  NaN-at-index-0 robustness via the `seen = 0` sentinel pattern.
-
-Lane B: CLEAN (third consecutive Lane B clean window).
-
-Lane C (3 HIGH + 2 MEDIUM + 2 LOW; all closed):
-
-- **C1 HIGH**: README status paragraph stale (restart 54 / 2,522).
-- **C2 HIGH**: HANDOFF_FOR_CHATGPT.md line 6 ↔ line 231 internal
-  contradiction.
-- **C3 MEDIUM**: stats_and_facts.md prose header ↔ table row
-  contradiction.
-- **C4 MEDIUM**: README per-module stdlib attribution 4 cycles stale.
-- **C5 HIGH**: Restart 58 source commit shipped without paired
-  bookkeeping — closed by Increment 77 + lane docs A/B/C + 16 canaries
-  + 8 surface refreshes in one catch-up commit.
-- **C6 LOW**: Roadmap-snippets attribution rewritten drift-proof.
-- **C7 LOW**: HELIX_REFERENCE.md project-tree comment rewritten
-  drift-proof.
-
-Regression coverage added (16 canaries):
-- 10 in `helixc/tests/test_codegen.py` (3 retroactive for c8398d3 +
-  7 for A1-A7).
-- 6 in `helixc/tests/test_cli.py` (3 for C1/C2/C3 surface drift +
-  3 for C5 bookkeeping-debt detection).
-
-Live test count after restart 58 catch-up: 2,527 → 2,543.
-
-Restart 51 ran a fresh 3-lane read-only audit on top of restart 50's HEAD
-plus picked up the restart-50-deferred C8 carry-forward. Result: 12
-findings (4 HIGH + 5 MEDIUM + 3 LOW) plus a sibling B4 const_fold sweep
-discovered during the fix sweep itself. Fix sweep closed all 12 plus
-the C8 carry-forward; no items deferred to restart 52.
-
-Restart 52 ran a fresh 3-lane read-only audit on top of restart 51 HEAD.
-Result: 3 findings (1 Lane A HIGH + 0 Lane B + 1 Lane C MEDIUM + 1 Lane C
-LOW). The Lane A finding was the missed 2D sibling of restart 51 A3
-(`ti1d_dot` saturation): `ti2d_matvec` and `ti2d_matmul` lifted to i64 +
-saturation. Commit `c584b0b` landed the runtime fix but did NOT add the
-regression canaries, lane audit docs, or Increment 71 ledger entry —
-restart 53 picked up that bookkeeping.
-
-Restart 53 ran a fresh 3-lane read-only audit on top of restart 52 HEAD
-(`c584b0b`). Result: 15 findings (4 Lane A HIGH + 3 Lane A MEDIUM + 1
-Lane A LOW + 1 Lane B MEDIUM + 1 Lane B LOW + 5 Lane C HIGH). The Lane A
-findings were missed siblings in the i64-saturation sweep (vec_dot,
-vec_sum/product family, attention_dot, ti1d_axpy/add_scalar/mul_scalar,
-dense_layer bias-add, sgd_step_array) plus an attention_softmax_f32
-NaN-fail-closed gap. Lane B added a re-raise guard sibling on the
-backend driver and an explanatory comment on validate_kernel_tile_lowering.
-Lane C wrote the missing restart 52 lane docs + Increment 71 + Increment
-72 + reconciled 11 surfaces to "restart 53" + fixed the HANDOFF protocol
-numbers. Fix sweep closed all 15. See Increments 71 + 72 in the ledger.
-
-## Restart 54 → Restart 55 deferred findings
-
-(none — restart 55 started from a clean carry-forward; it then found
-1 HIGH transcendentals range-reduction bug)
-
-## What Restart 55 Fixed
-
-Restart 55 ran a fresh 3-lane audit on top of restart 54 HEAD (`e34b4d6`)
-and found 1 Lane A HIGH (Lane B + Lane C clean). Source fix landed in
-commit `218ffd0` ("Fix Stage 35 fifty-sixth restart findings" — title
-+1 drift from actual restart number). Lane docs + canary + ledger
-Increment 74 were written retroactively by restart 57's catch-up sweep.
-
-Lane A (1 HIGH):
-
-- A1 HIGH: `helixc/stdlib/transcendentals.hx` — `__sin`, `__cos`,
-  `__sin_f64`, `__cos_f64` gained explicit `[-π, π]` range reduction
-  before the 4-term Taylor series. Without reduction, |x| > 2π
-  produced nonsense. Round-via-i32-cast trick keeps the reduction
-  arena-pure.
-
-## What Restart 56 Fixed
-
-Restart 56 ran a fresh 3-lane audit on top of restart 55 HEAD (`218ffd0`)
-and found 3 Lane A findings (Lane B + Lane C clean). Source fixes
-landed in commit `278d46a` ("Fix Stage 35 fifty-seventh restart
-findings" — title +1 drift). Lane docs + canaries + ledger Increment 75
-were written retroactively by restart 57's catch-up sweep.
-
-Lane A (2 HIGH + 1 MEDIUM):
-
-- A1 HIGH: `helixc/stdlib/tensor.hx` `tf1d_sum` — NaN-skip discipline
-  via `if v == v`. Without the fix, a single NaN slot poisoned the
-  entire sum (NaN + anything = NaN).
-- A2 HIGH: `helixc/stdlib/tensor.hx` `ti1d_max_abs` — INT32_MIN
-  special-case. Without the fix, `0 - INT32_MIN` wraps back to
-  INT32_MIN and the `av > best` test silently dropped the negative
-  slot.
-- A3 MEDIUM: `helixc/stdlib/iterators.hx` `vec_max_abs` — same
-  INT32_MIN bug as A2 in the iterators.hx companion.
-
-## What Restart 57 (Catch-up Sweep) Fixed
-
-Restart 57 was a bookkeeping-and-catch-up sweep on top of restart 56
-HEAD (`278d46a`). No fresh 3-lane audit dispatched. Closed the
-bookkeeping debt accumulated by restarts 55 + 56 and trimmed one
-overclaiming comment.
-
-- Wrote ledger Increments 74 + 75 + 76 retroactively.
-- Wrote 6 lane audit docs (`docs/audit-stage35-restart55-laneA.md`
-  through `docs/audit-stage35-restart57-laneC.md`).
-- Added 5 regression canaries in `helixc/tests/test_codegen.py`
-  (3 for restart 55 sin/cos/sin_f64 range reduction; 1 for restart
-  56 tf1d_sum NaN-skip; 1 family canary for restart 56 max_abs
-  INT32_MIN saturation across ti1d_max_abs + vec_max_abs).
-- Trimmed `tf1d_sum` comment overclaim (it had said "Same pattern
-  applied across tf1d_dot, tf1d_l1_norm, tf1d_max_abs, tf1d_sum_in_range"
-  but the sibling sweep was not actually applied — carried forward
-  to restart 58 Lane A).
-- Refreshed HANDOFF_FOR_CLAUDE (this file), HANDOFF_FOR_CHATGPT,
-  README narrative (via test count), QUICKSTART, HELIX_REFERENCE,
-  stats_and_facts, code_samples.
-
-## What Restart 54 Fixed
-
-Restart 54 ran a fresh 3-lane read-only audit on top of restart 53 HEAD
-(`c4cb7a3`). Result: 11 findings (4 Lane A HIGH + 2 Lane A MEDIUM + 1
-Lane A LOW + 0 Lane B HIGH + 1 Lane B MEDIUM + 1 Lane B LOW + 0 Lane C
-HIGH + 0 Lane C MEDIUM + 2 Lane C LOW).
-
-Lane A findings (i64-saturation siblings — campaign's dominant family):
-
-- A1 HIGH: `autodiff_reverse.hx` reverse-mode AD tape was the missed
-  consumer of the restart 51/52/53 saturation discipline. Both forward
-  record (`rev_add`/`rev_sub`/`rev_mul`/`rev_neg`) and backward adjoint
-  accumulation (`rev_backward` kind=1/2/3/4) lifted to i64 + INT32
-  saturation. The mul branch was double-wrapping silently.
-- A2 HIGH: `tensor.hx` `ti1d_mul` Hadamard product (also `ti1d_add` and
-  `ti1d_sub`) per-element i64 + INT32 saturation.
-- A3 HIGH: `iterators.hx` `vec_zip_mul` Hadamard product per-element
-  saturation. Sibling of vec_dot (restart 53 A1).
-- A4 HIGH: `iterators.hx` `vec_window_sum` rolling accumulator + per-
-  output saturation. Worse than other window helpers because a wrap
-  propagates via subtraction into every subsequent output. Also
-  saturated `vec_sum_in_range`.
-- A5 MEDIUM: `iterators.hx` `vec_l1_distance` and `vec_l2_squared_distance`
-  i64 accumulator + INT32 saturation. Sibling of vec_sum_squares
-  (already saturated).
-- A6 MEDIUM: `nn.hx` `lin_reg_grad_w`/`lin_reg_grad_b`/`sgd_step_scalar`
-  i64 intermediates + INT32 saturation. Scalar mirrors of the array
-  helpers that restart 53 A7 saturated.
-- A7 LOW: `iterators.hx` cluster sweep — `vec_zip_add`, `vec_zip_sub`,
-  `vec_map_add_scalar`, `vec_map_mul_scalar`, `vec_scale_inplace`,
-  `vec_offset_inplace`, `vec_pairwise_diff`, `vec_pairwise_sum`,
-  `vec_offset_alloc`, `vec_fold_op` per-element saturation.
-
-Lane B findings:
-
-- B1 MEDIUM: `check.py:43-44` `--help` `-W<flag>` example line gained
-  `-Wad` / `-Wad=error` enumeration, matching backend banners. Closes
-  parser-vs-banner drift on a behaviour-honoured flag.
-- B2 LOW: `helixc/ir/lower_ast.py:847` `_lower_type` loud-fails
-  (NotImplementedError) on unknown TyNode subclass instead of returning
-  `tir.TIRScalar("?")` sentinel. Added `A.TyFn` case lowering to u64
-  closure-pointer placeholder. Sibling of restart 47 B1 discipline.
-
-Lane C findings:
-
-- C1 LOW: `HELIX_REFERENCE.md:1153` + `code_samples.md:8` roadmap-
-  snippets attribution re-stamped from "Stage 35 restart 50 lane C
-  audit" to "Stage 35 restart 54 lane C audit".
-- C2 LOW: README + 6 sibling surfaces narrative compression replaced
-  with drift-proof "see Increments 70-73 in the progress ledger for
-  the per-restart canary chain since restart 50" — sidesteps the
-  +N-canaries chain each restart.
-
-Fix sweep closed all 11. Regression coverage added (11 canaries: 9 in
-`test_codegen.py`, 2 in `test_cli.py`). Live test count: 2,511 → 2,522.
-
-## What Restart 51 Fixed
-
-Restart 51 ran a fresh 3-lane read-only audit (with the C8 carry-forward
-from restart 50). The fix sweep closed all findings.
-
-Lane A (1 HIGH + 2 MEDIUM + 2 LOW): `__log_stable_f64` added and
-`d_log_v` rewired to use it (closes the f64-log domain-guard gap);
-`clip_grad_norm_f32` NaN-fail-closed (was only `<= 0`-guarded);
-`string_to_int` uses i64 accumulator + saturation (was: i32 wrap at
-INT32_MAX+1); `vec_zip_mod` and `vec_zip_div` fail-closed on b[i] == 0
-(was: trap to runtime); `vec_negate_inplace` + `vec_map_neg` saturate
-INT32_MIN to INT32_MAX (was: silent wrap to INT32_MIN).
-
-Lane B (1 HIGH + 2 MEDIUM): `autodiff_cli` rejects unknown
-single-dash flags with `rc=2 unknown flag` (was: silent positional-arg
-aliasing); `check.py --emit-asm`/`--emit-ptx`/`-o` artifact-emit branches
-re-raise `(NotImplementedError, AssertionError, ...)` loud-fail signals
-before the catch-all `except Exception`. Sibling sweep: `const_fold.py`
-int-arith / float-arith / bitwise blocks gained the same re-raise
-discipline (3 try-blocks).
-
-**Important — do NOT re-flag in restart 52**: the two
-`validate_kernel_tile_lowering` blocks in `check.py` (lines ~1716 and
-~1750) deliberately KEEP `except Exception` without a re-raise guard.
-That function uses `NotImplementedError` as the user-facing
-"unsupported tile op" signal, codified by
-`test_stage35_emit_ptx_reports_tile_lowering_error_without_bug_label`
-and `test_stage35_output_binary_rejects_dead_unsupported_kernel_op`.
-An earlier audit-lane reviewer flagged these as siblings and the fix
-was applied + reverted before commit. The current state is intentional.
-
-Lane C (1 HIGH + 3 MEDIUM + 1 LOW + C8 carry-forward): `README.md`
-restart-attribution corrected (was: "restart 49 collected 2,489" inside
-a "restart 50 is latest" paragraph); `stats_and_facts.md` preamble
-reconciled with the table row (was: line 8 said restart 49, line 14
-said restart 50); `HANDOFF_FOR_CHATGPT.md` continuation pointer reconciled
-the same way; live test-count reconciled across 8 surfaces from the
-restart-50 forecast 2,489 to the actual 2,497 post-restart-51;
-`HELIX_REFERENCE.md` "Increments 50-68+" / "50-67+" anchors replaced
-with "Increments 50 onward" (open-ended, restart-drift-proof); C8
-carry-forward closed by adding `"6 bare fn (+0 @-attributed)"` to
-`ieee754.hx` and `"2 bare fn (+50 @-attributed)"` to
-`transcendentals.hx` per-module callouts (the other 14 modules were
-already standardized by restart 50).
-
-Regression coverage added (10 cases): 5 in `test_codegen.py` (Lane A
-A1-A5), 4 in `test_cli.py` (Lane B B1 unknown-short-flag + B2 emit-ptx
-NIE-propagation + B3 emit-asm NIE-propagation + 1 source-text canary
-covering the 3 check.py codegen re-raise sites), and 1 source-text
-canary in `test_cli.py` for the const_fold re-raise sibling sweep.
-
-## What Restart 50 Fixed
-
-Restart 50 ran a fresh 3-lane read-only audit (no deferred backlog from
-restart 49). Result: 17 findings (3 HIGH + 5 MEDIUM + 9 LOW). The fix
-sweep closed 16 of 17; 1 LOW (C8 per-module fn-count convention)
-deferred to restart 51 (see "Restart 50 → Restart 51 deferred findings"
-above).
-
-Lane A (4 LOW): `string_from_int(INT32_MIN)` writes the full sentinel;
-adam/layer_norm now NaN-fail-closed in addition to negative-fail-closed;
-`ti1d_prod` i64+saturate; `hashmap_load_factor_x100` numerator i64.
-
-Lane B (1 MEDIUM + 2 LOW + 1 deferred-prior): `autodiff_cli --as-function`
-preserves source param/return types (was: hardcoded f32); `const_fold`
-`is_const` exception narrowed to cast-failure family; `presburger` dead
-`if False else` simplified; `hash_cons` SHA-256 fallback documented-prior
-(no fix).
-
-Lane C (3 HIGH + 4 MEDIUM): HELIX_REFERENCE.md:59 "23+" sibling reframed
-(closes restart-49 miss); agi-features.md remaining-work row for const-
-fold+DCE removed (those are shipped); HANDOFF_FOR_CLAUDE Protocol section
-de-staled; trap-ids.md header pinned to ledger anchor with grep guidance;
-HELIX_REFERENCE + code_samples Gallery preambles list known-roadmap
-snippets; tutorial.md fragment-level disclaimer; `scripts/run_all_tests.sh`
-echo line matches QUICKSTART promise.
-
-Regression coverage added (10 cases): 4 in test_codegen.py (Lane A), 3 in
-test_cli.py (Lane B).
-
-## What Restart 49 Fixed
-
-Restart 49 was a deferred-only fix sweep — no fresh 3-lane audit dispatch.
-It closed all 7 of the Lane B + Lane C items that restart 48 explicitly
-deferred (per Increment 67), plus one new finding (B4) caught while reading
-adjacent code:
-
-Lane B (4 fixes):
-
-1. `autodiff_cli` exit codes now match the check/x86/ptx convention:
-   bad invocation → rc=2, source/parse error → rc=1, internal/runtime
-   error → rc=1. Previously: bad invocation rc=1 (wrong), parse error
-   rc=2 (wrong), differentiate failure rc=2 (wrong).
-2. `-h` / `--help` works on every CLI (`helixc.check`,
-   `helixc.backend.x86_64`, `helixc.backend.ptx`,
-   `helixc.frontend.autodiff_cli`). All four print a banner to stdout and
-   exit 0. Previously only `helixc.check` had proper help support.
-3. `helixc.backend.x86_64` and `helixc.backend.ptx` banners now enumerate
-   every accepted flag: `-O0..-O3`, `--no-opt`, `-Wad=`, `-Wdeprecated=`,
-   `-l <libname>`, `--no-color`, `--color`, `--hash`, `--hash-cons`.
-   `helixc.backend.ptx` also gained a usage banner on bare invocation
-   (was: only `error: ptx: missing input path`).
-4. `helixc/ir/lower_ast.py:3082-3086` narrowed `except Exception` around
-   `structural_hash(expr.inner)` to
-   `except (KeyError, AttributeError, TypeError, ValueError)` so
-   `NotImplementedError` from `ast_hash`'s loud-fail discipline
-   propagates instead of aliasing distinct quote bodies to the same
-   `_pretty` fallback string. Mirror of restart 47 B1 + restart 48 B2/B3.
-
-Lane C (6 fixes):
-
-5. `docs/HELIX_V1_FINAL_FEATURES.md` line 3 status sentence rewritten to
-   disclaim its planning-era Stage 31-34 numbering and point at
-   `docs/ROADMAP.md` as authoritative.
-6. `docs/ROADMAP.md` line 17 corrected from "5 dogfood programs" to
-   "6 dogfood programs + self-improving-agent flagship".
-7. Date stamps in `docs/ROADMAP.md`, `docs/HELIX_V1_FINAL_FEATURES.md`,
-   `docs/HELIX_PURPOSE.md` switched to ledger-anchored phrasings.
-8. `helix_website/HELIX_REFERENCE.md` Compiler-Architecture stdlib list
-   (lines 956-962) rewritten with all 16 actual modules + per-module tags.
-9. HELIX_REFERENCE.md "23+ silent-corruption bugs (and counting)" reframed
-   as "Dozens of silent-corruption defects (live count grows with each
-   restart; see Increments 50-67+)" so the headline doesn't understate.
-10. `HANDOFF_FOR_CHATGPT.md` line 17 historical-block license-triple
-    softened to match current-facing surfaces.
-
-Regression coverage added in `helixc/tests/test_cli.py` (13 cases): 2 for
-B1 exit codes, 8 parametrized for B2 -h/--help (4 CLIs × 2 flags), 2 for
-B3 banner content, 1 for B4 source-text invariant.
-
-## What Restart 48 Fixed
-
-Restart 48 closed 6 of the 13 audit findings (1 HIGH + 5 MEDIUM); 7 LOW
-findings were deferred (see "Restart 48 → Restart 49 deferred findings"
-above):
-
-Lane A — Runtime / stdlib safety:
-
-1. `d_div_v` and `d_div_dx` (autodiff.hx) now fail-closed at `b_v == 0`.
-2. `softmax_layer` (nn.hx) writes the maximum-entropy distribution (1/n
-   to every slot) when `sum_e <= 0` or `sum_e` is NaN.
-3. `tanh_layer` (nn.hx) delegates to `__tanh` instead of inlining
-   `__exp(2*xi) / (e2x+1)`, so the |x| > 20 saturation short-circuit
-   protects against NaN at the boundary.
-
-Lane B — Compiler / backend / CLI:
-
-4. `helixc.check` now accepts `--no-opt` as a `-O0` synonym (closes the
-   restart-47 reverse-direction parity gap).
-5. `helixc.backend.ptx` outer `except Exception` handlers narrowed to
-   re-raise `NotImplementedError`/`AssertionError`/`KeyboardInterrupt`/
-   `SystemExit`/`MemoryError` first.
-6. `helixc.frontend.autodiff_cli` `_parse_or_exit` and `differentiate`
-   wrappers narrowed the same way.
-
-Lane C — Docs / status / release:
-
-7. `helix_website/HELIX_REFERENCE.md` Standard Library section rewritten
-   against `ls helixc/stdlib/*.hx`: all 16 actual modules, grouped by
-   purpose (Numerics & IEEE 754, Tensors & tiles, Neural networks,
-   Autodiff, AGI primitives, Collections), with per-module function
-   counts and a discoverability one-liner.
-8. HELIX_REFERENCE.md Stats block refined: "design doc references stage
-   numbers up to Stage 65 (35 distinct stages enumerated; not a strict
-   consecutive sequence)" replaces the looser "65+ stages" claim.
-9. `helix_website/README.md` `/learn` softened from "10-lesson interactive
-   tutorial" to "Planned beginner tutorial sequence (no shipped content
-   yet)".
-
-## What Restart 47 Fixed
-
-Restart 47 closed 17 findings (5 MEDIUM + 12 LOW) across the three lanes:
-
-Lane A — Runtime / stdlib safety:
-
-1. `adam_f32_step` (nn.hx) and `__adam_step` (transcendentals.hx) now clamp
-   `next_v` / `v` to `>= 0` before `__sqrt`, preventing a negative
-   moment-estimate from producing a tiny denominator and an exploding weight
-   update.
-2. `layer_norm_f32` (nn.hx) writes 0 to every output slot when
-   `denom = __sqrt(var + safe_eps) <= 0`, so a constant-input + zero-eps
-   call no longer propagates `Inf`/`NaN`.
-3. `d_sqrt_dx`, `d_log_dx`, `d_recip_v`, `d_recip_dx` (autodiff.hx) now
-   fail-closed (return 0) at their analytical singularities (`a_v <= 0` or
-   `a_v == 0`), matching the layer-norm precedent.
-
-Lane B — Compiler / backend / CLI:
-
-4. `_resolve_monomorphized_struct_type` (lower_ast.py) narrowed its
-   exception scope from `except Exception` to
-   `except (KeyError, AttributeError)` so `NotImplementedError` from the
-   `struct_mono._mangle_ty` loud-fail discipline propagates. Future
-   `TyNode` subclasses (refinement, confidence, tiered memory) will now
-   force explicit dispatch instead of silently miscompiling.
-5. `examples/dashboard_server.py` switched its generated-source write to
-   the canonical `tempfile.mkstemp + os.replace + on-failure cleanup`
-   pattern (mirrors `examples/run.py` from restart 46 B5).
-6. `frontend/autodiff_cli.py` wrapped file-IO, parse, and differentiate
-   calls in structured `try/except` blocks; failures now surface
-   `error: autodiff_cli: ...` diagnostics instead of raw Python tracebacks.
-7. Both `helixc.backend.x86_64` and `helixc.backend.ptx` now accept
-   `-l <libname>` / `-lm`, `--no-color`, `--color`, `--hash`,
-   `--hash-cons` for flag-parity with `helixc.check` (treated as no-ops
-   here; goal is parity, not actual implementation).
-
-Lane C — Docs / status / release:
-
-8. `helix_website/HELIX_REFERENCE.md` Live-compiler-driver flag list
-   rewritten against `helixc/check.py`'s actual `--help` text. Removed
-   fictitious flags (`--dump-ast-hashes`, `--no-bootstrap-cache`,
-   `--target=*`, `--version`) and clarified that `--dump-ast-hashes`
-   lives on `helixc.frontend.autodiff_cli`.
-9. `helix_website/HELIX_REFERENCE.md` Open-Source Commitments section
-   softened to match the restart-46 license-triple wording (Apache 2.0
-   file-resident; CC-BY 4.0 + CC0 stated policy).
-10. `helix_website/HELIX_REFERENCE.md` bootstrap-chain diagram updated
-    so the final node says "self-hosted Helix compiler (roadmap target)"
-    with a side note clarifying that today's `helixc` is not chain-derived.
-11. `QUICKSTART.md` CLI flags section expanded to include `-O0..-O3`,
-    `--stdlib`/`--no-stdlib`, and `-Wad`/`-Wdeprecated` policies.
-12. `README.md` "30+ stdlib builtins" updated to
-    "Stdlib in `helixc/stdlib/*.hx` (16 modules, ~455 functions)".
-
-## What Restart 46 Fixed
-
-Restart 46 used a 3-lane bug-family audit protocol and landed twelve findings:
-
-Lane A — Runtime / stdlib safety:
-
-1. `rev_tape_valid` and `rev_adj_cap` in `autodiff_reverse.hx` now reject
-   `arena_span_in_tensor_payload` spans. Extends the restart-45 forge-guard
-   sweep (wm / ep / bfs / visited / pq / hashmap) to the two remaining typed
-   handles in the reverse-AD layer.
-2. `tree_node_magic` was changed from `7007001` to `7107001` to break the
-   magic-header collision with `hashmap_magic`. A whole-class
-   `test_stage35_stdlib_magic_constants_unique` regression pins the invariant.
-3. `wml_ok` in `agi_world.hx` gained the family-pattern
-   `if wml > 2147483647 - 3 { 0 }` overflow guard before its `__arena_len()`
-   bounds check.
-4. `layer_norm_f32` in `nn.hx` clamps negative `eps` to `0.0_f32` so a hostile
-   caller cannot drive `sqrt(var + eps) = 0` and propagate `Inf` / `NaN`.
-
-Lane B — Compiler / backend / CLI:
-
-5. Every bad-invocation early-return path in `helixc.check` and direct
-   `helixc.backend.x86_64` now clears stale `-o` artifacts.
-6. `-O0 / -O1 / -O2 / -O3` accepted by both `helixc.backend.x86_64` and
-   `helixc.backend.ptx`; `--no-opt` accepted by `helixc.backend.ptx`. Closes
-   the flag-parity gap with `helixc.check`.
-7. `helixc.backend.x86_64` usage banner now lists `-Wdeprecated=warn|error`
-   alongside `-Wad=warn|error`.
-8. `_atomic_write_bytes` (in `helixc.check`) and `_atomic_write_output`
-   (in `helixc.backend.x86_64`) now catch `BaseException` so a
-   `KeyboardInterrupt`, `MemoryError`, or any other interruption mid-write
-   cleans the temp file.
-9. `helixc/examples/run.py` switched its demo-binary write to the canonical
-   atomic-replace pattern.
-
-Lane C — Docs / status / release:
-
-10. `helix_website/README.md` no longer calls samples "30 ready-to-use
-    snippets" — matches the draft-vs-validated framing the rest of the
-    website set adopted in restart 45.
-11. Stage-count references in `helix_website/HELIX_REFERENCE.md` and
-    `helix_website/README.md` reframed: "Approach A roadmap (30 numbered
-    stages)" plus "Live roadmap scope: 65+ stages across Phase 1/2/3 in
-    `docs/HELIX_V1_FINAL_FEATURES.md`".
-12. License-triple wording in `README.md`, `QUICKSTART.md`,
-    `helix_website/HELIX_REFERENCE.md`, and `helix_website/stats_and_facts.md`
-    softened: Apache 2.0 is the file-resident license; CC-BY 4.0 (docs) and
-    CC0 (future weights) are stated policy.
-
-A mid-restart regression in the new bad-invocation cleanup helper (it
-over-deleted a flag-shaped input source) was caught by
-`test_stage35_direct_x86_rejects_flag_shaped_input_before_output` immediately
-after the first fix iteration and tightened in the same restart. Documented
-in the Increment 65 process note in the progress ledger.
-
-## Verification Evidence
-
-These checks were recorded for restart 47 in
-`docs/stage35-progress-2026-05-15.md` (Increment 66):
-
-- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/examples/dashboard_server.py helixc/frontend/autodiff_cli.py helixc/ir/lower_ast.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
-  - passed
-- per-file stdlib parser sweep
-  - parsed 16 files
-- Lane A new regression canaries (6 new tests for A1-A7; A6/A7 share one test)
-  - 6 passed
-- Lane B new regression canaries (B1 + B2 + B3 × 2 + B4 × 12 parametrized)
-  - 16 passed
-- All Lane A regression tests including restart 46 + restart 47
-  - 10 passed
-- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
-  - 103 passed (was 87 + 16 new)
-- `python -m pytest helixc/tests/test_ptx.py -q -k "stage35"`
-  - 26 passed
-- `python -m pytest helixc/tests --collect-only -q`
-  - 2,459 tests collected (was 2,437 + 22 net)
-- `git diff --check`
-  - passed
-
-The full CLI and full PTX suites + broad codegen slice were not re-run in
-the restart-47 commit window; restart 47's changes are safe-by-construction
-for the broad family (fail-closed clamps only stricten existing behavior;
-loud-fail propagation only surfaces NotImplementedError that previously was
-silently swallowed; flag-parity additions are no-ops). Restart 48's baseline
-should rerun these for fresh confirmation.
-
-The following older checks were recorded for restart 46 in Increment 65:
-
-- `python -m py_compile helixc/check.py helixc/backend/x86_64.py helixc/backend/ptx.py helixc/examples/run.py helixc/tests/test_cli.py helixc/tests/test_codegen.py`
-  - passed
-- per-file stdlib parser sweep
-  - parsed 16 files
-- Lane A new regression canaries (forge-rev-tape, magic-unique, wml overflow,
-  layer-norm eps clamp)
-  - 4 passed, 922 deselected
-- Lane B new regression canaries (B1 bad-invocation cleanup × 11 cases, B2
-  flag parity × 9, B3 banner, B4 atomic-write × 2, B5 examples atomic)
-  - 24 passed, 208 deselected
-- `python -m pytest helixc/tests/test_cli.py -q -k "stage35"`
-  - 87 passed, 145 deselected (was 63 + 24 new)
-- `python -m pytest helixc/tests/test_ptx.py -q -k "stage35"`
-  - 26 passed, 52 deselected
-- `python -m pytest helixc/tests/test_cli.py -q`
-  - 232 passed (was 208 + 24 new)
-- `python -m pytest helixc/tests/test_ptx.py -q`
-  - 78 passed
-- `python -m pytest helixc/tests --collect-only -q`
-  - 2,437 tests collected (was 2,409 + 28 net)
-- `git diff --check`
-  - passed
-
-The broad codegen family slice
-(`-k "stage35 or agi or hashmap or tensor"`) was kicked off but did not flush
-output before the restart-46 commit window closed. The restart-46 changes are
-safe-by-construction for the agi / hashmap / tensor families (only stricter
-validators added, no behavior change for valid inputs), and the Stage 35
-codegen tests are covered by the dedicated Stage 35 slice. If Claude wants
-fresh confirmation before restart 47, rerun it alone with a longer timeout:
-
-```powershell
-python -m pytest helixc/tests/test_codegen.py -q -k "stage35 or agi or hashmap or tensor"
+```text
+ff497af6b99f7a4d620000d957857adac1106eb3 mlir: add backend pipeline runner contract
 ```
 
-## Restart 63 Protocol (combined audit-and-fix, refined from restart 62)
+`main` was fetched from `origin` on 2026-05-23 and was aligned with
+`origin/main` before the handoff-doc update. The compiler worktree is
+intentionally dirty with an MLIR audit-hardening batch. Do not commit or push
+the dirty compiler changes yet.
 
-**IMPORTANT**: restart 62 ran as a **combined audit-AND-fix** agent in
-one dispatch (sidestepping the abbreviation-prone separate read-only /
-fix-apply dispatch pattern that produced restarts 52, 55, 56, 58, 59).
-Restart 62 closed the restart 61 bookkeeping debt PLUS landed 2 Lane A
-optimizer NaN-fail-closed fixes from a fresh audit on top of c697f3d.
-It is NOT itself a clean gate. Restart 63 MUST run a fresh 3-lane
-audit on the post-Increment-79 HEAD.
+## What Is Safe To Commit/Push Now
 
-No explicit carry-forward family logged into restart 63 Lane A —
-restart 62 closed both `sgd_f32_step` and `momentum_step` NaN-fail-
-closed gaps. Lane A run should spot-check any NEW optimizer surfaces
-introduced since c697f3d and verify the `if new_w == new_w` pattern
-hasn't regressed the existing adam / sgd / momentum tests (22
-regression tests verified passing).
+Only status and handoff material is safe to publish:
 
-The campaign run-rate (findings closed per restart):
-46-62 → 12, 17, 13, 11, 17, 12, 3, 15, 11, 1, 3, 0 (catch-up), 14 (3
-source-only + 11 catch-up), 0 (source-only abbreviated), 0
-(bookkeeping for 59), 7, 7 (5 retroactive + 2 fresh). The first
-restart where the fresh audit returns 0 findings on the same HEAD
-becomes clean gate 1/3.
+- `HANDOFF_FOR_CLAUDE.md`
+- `docs\V3_HANDOFF.md`
+- `docs\HELIX_MLIR_AUDIT_PACKET.md`
 
-### Process-discipline rule (REINFORCED — Increment 79)
+The compiler/test changes below are local working-tree state and remain
+audit-blocked:
 
-Five out of fifteen restarts in the campaign (52, 55, 56, 58, 59) have
-abbreviated to source-only commits with empty commit bodies. Restart
-61 added a sixth softer abbreviation (detailed commit body but no
-ledger/lane-docs/surface-refresh). Restart 62's combined audit-and-fix
-pattern sidesteps the issue at the dispatch level. Restart 63 onward
-MUST either:
+- `helixc\ir\mlir\backends.py`
+- `helixc\ir\mlir\validate.py`
+- `helixc\tests\test_mlir_backends.py`
+- `helixc\tests\test_mlir_validate.py`
+- `scripts\mlir_audit_canaries.py` (local untracked restart helper)
 
-1. Land the bookkeeping (ledger Increment + lane docs + canaries +
-   surface refresh) in the **same commit** as the source fix, OR
-2. Explicitly defer to a "Restart N catch-up sweep" labelled commit
-   (like Increment 77 here, Increment 76 for 55/56) so the gap is
-   visible in the ledger from the start, not retroactively patched.
+If you are taking over in the same machine/worktree, use those local dirty
+files. If you are taking over from a fresh GitHub clone only, ask Anthony for
+the local working-tree copy or reconstruct the batch from
+`docs\HELIX_MLIR_AUDIT_PACKET.md`.
 
-The scheduled-task fire path appears to be the abbreviation source.
-If you are running as a scheduled task and cannot complete the full
-cycle in one fire, default to landing a catch-up-labelled commit
-explicitly instead of shipping source-only.
+## Verification Refreshed On 2026-05-23
 
-**Process discipline reminder**: restart 52, 55, 56 all landed
-partial commits (source fixes without paired canaries / ledger /
-docs). The hardening rule is "verify each restart commit ALSO
-writes the ledger increment + lane docs + canaries before pushing."
-If the next fire abbreviates the process again, the cleanup catches
-up in a later "catch-up sweep" labeled as such.
-
-The bug-family audit pattern from restart 46 (12 findings) and restart 47
-(17 findings) worked well — each restart pulls more sibling issues into the
-same fix sweep. Continue using it. **IMPORTANT:** instruct the audit lane
-agents to be strictly read-only this time (no Edit/Write); restart 46's
-agents "auto-applied" their findings despite the instruction.
-
-Each audit lane must:
-
-1. Keep inspecting after the first finding.
-2. Report up to several findings, grouped by bug family.
-3. For every finding, include:
-   - the exact affected files/functions
-   - the sibling sweep performed (with the table of safe vs unsafe sites)
-   - nearby sites that appear safe and why
-   - the strongest targeted regression needed
-   - whether the finding is HIGH, MEDIUM, LOW, or clean
-
-Use three lanes (read-only; fixes apply in a separate sweep):
-
-- Runtime / safety lane:
-  - forged handles — restart 47 verified ALL 13 magic-bearing validators
-    are now guarded. Look for any NEW typed handle introduced since restart
-    47, plus any handles NOT magic-bearing (vec, deque, ring buffer).
-  - arena span validation — restart 47 verified all 14 sites have overflow
-    guards. Re-verify if any new validators were added.
-  - magic-constant uniqueness — restart 47 verified all 13 distinct.
-  - stale state resurrection — restart 47 swept 5 rewind/clear functions
-    clean. Re-verify if any new rewind/restore/reset surfaces appeared.
-  - fail-closed numerical helpers — restart 47 fixed Adam clamp,
-    layer_norm var+eps==0, and 4 autodiff div-by-zero rules. Still LOW-risk
-    areas: NaN-eps handling (currently documented as garbage-in/garbage-out),
-    any new `__sqrt`/`__log`/division sites added since.
-
-- Compiler / backend / CLI lane:
-  - stale artifacts — restart 46 covered bad-invocation, restart 47 verified
-    no new failure surfaces. Re-verify if new return-paths were added.
-  - partial writes — restart 47 swept clean except `dashboard_server.py`
-    (now atomic). Verify no new file-writers.
-  - backend / flag mismatch — restart 46 + 47 closed flag parity for
-    `-O*`, `--no-opt`, `-l*`, `--no-color`/`--color`, `--hash`/`--hash-cons`.
-    `--debug`/`--symbols` were confirmed not to exist anywhere; if you find
-    new check.py flags, mirror to backends.
-  - parser / typechecker / codegen silent fallbacks — restart 47 fixed
-    `lower_ast._resolve_monomorphized_struct_type` loud-fail. Other
-    `except Exception` sites verified safe or narrowed.
-  - bootstrap parser drift vs Python parser — restart 47 verified no new
-    metadata kinds since the Stage 33 alignment commit.
-
-- Docs / status / release lane:
-  - current vs future capability claims — restart 47 fixed the
-    HELIX_REFERENCE.md fictitious-flag list and bootstrap-chain diagram.
-    Sweep any new website material added since.
-  - test counts and restart numbers (sweep the eight surfaces listed in
-    Increment 65; current count after the latest restart is in the
-    progress ledger tail and in `helix_website/stats_and_facts.md`)
-  - website claims — verify after the eighth surface sweep is done
-  - handoff and progress-ledger consistency
-  - license / open-source claims — restart 46 + 47 + 48 + 49 swept
-    softer. Verify no new triple-license claims appeared.
-  - tool flag completeness — restart 47 + 49 rewrote HELIX_REFERENCE.md
-    + QUICKSTART.md against `helixc/check.py`'s `--help`. If any new
-    check.py flags were added, re-sync.
-
-If the next restart's audit returns 0 findings across all three lanes on
-the same HEAD as the current handoff, the clean-gate counter advances to
-`1/3`. The restart after that starts from the same HEAD; the third
-consecutive clean gate closes Stage 35.
-
-If any lane finds an issue, fix the whole bug family, add canaries, run
-verification, commit, push, and restart the clean counter from `0/3`.
-
-## Suggested First Commands
+These commands were rerun from `C:\Projects\Kovostov-Native` before this
+handoff:
 
 ```powershell
-cd C:\Projects\Kovostov-Native
-git status --short --branch
-git log -1 --oneline
-Get-Content docs\stage35-progress-2026-05-15.md -Tail 140
+python scripts\mlir_audit_canaries.py --strict
+python -m pytest helixc\tests\test_mlir_validate.py helixc\tests\test_mlir_backends.py -q
+python -m compileall helixc\ir\mlir helixc\tests\test_mlir_validate.py helixc\tests\test_mlir_backends.py scripts\mlir_audit_canaries.py
+python -m pytest -k mlir -q
+git diff --check -- docs/V3_HANDOFF.md docs/HELIX_MLIR_AUDIT_PACKET.md helixc/ir/mlir/backends.py helixc/ir/mlir/validate.py helixc/tests/test_mlir_backends.py helixc/tests/test_mlir_validate.py scripts/mlir_audit_canaries.py HANDOFF_FOR_CLAUDE.md
 ```
 
-Then run a fresh support baseline:
+Results:
+
+- strict MLIR canaries: `12 passed / 0 failed`
+- focused validator/backend tests: `274 passed`
+- compileall: clean
+- MLIR pytest slice: `410 passed, 4347 deselected`
+- diff-check: only LF-to-CRLF warnings, no whitespace errors
+
+These green gates do not make the batch committable because the third audit
+round is still blocked.
+
+## Current Audit Status
+
+The current source of truth is `docs\HELIX_MLIR_AUDIT_PACKET.md`, section:
+
+```text
+2026-05-22 Stop Checkpoint After Third Audit Round
+```
+
+Third audit round status:
+
+- Silent-failure axis: BLOCKED.
+- Type-design axis: BLOCKED.
+- General-review axis: stopped at Anthony's request before completion.
+
+Open HIGH findings:
+
+1. Control predicates are underchecked. Invalid `scf.if`, `cf.cond_br`, and
+   `cf.assert` predicates can still pass when the predicate SSA value is not
+   `i1`.
+2. Memref access semantics are underchecked. `memref.load` and
+   `memref.store` still need rank/index arity checks, index operand type
+   checks, load result element checks, and store value type checks.
+3. Constants/vector/loop semantics are underchecked. Examples include
+   `arith.constant true : i32`, `arith.constant 1 : f32`, non-index
+   `scf.for` bounds/steps, invalid `vector.transfer_read`,
+   invalid `vector.shape_cast`, and invalid `vector.multi_reduction`.
+4. Generic function bodies can bypass canonical terminator/static checks.
+   Examples include generic `func.func` spellings that hide a missing
+   terminator from smoke-aware validation.
+
+Open must-fix MEDIUM findings:
+
+1. Generic `llvm.func` input symbol binding is skipped in one backend path.
+2. LLVM typed-value validation can accept scalar constants for aggregate or
+   vector returns, e.g. `ret { i32 } 0` and `ret <4 x i32> 0`.
+3. HIP/MSL C-like preflight can still accept impossible declarations or
+   statements such as `float * 123;` and `this * is * nonsense;`.
+
+## Required Next Move
+
+Do one bounded audit/fix increment. Do not start Stage 214 yet.
+
+1. Confirm the local worktree still matches this state:
+
+   ```powershell
+   cd C:\Projects\Kovostov-Native
+   git status --short --branch
+   git log -1 --oneline
+   ```
+
+2. Run the local canary gate:
+
+   ```powershell
+   python scripts\mlir_audit_canaries.py --strict
+   ```
+
+3. Pick one finding family, preferably control predicates or memref access.
+   Fix the family and sibling sites together. Add or extend canaries/tests for
+   the exact invalid examples.
+
+4. Run the gate ladder:
+
+   ```powershell
+   python scripts\mlir_audit_canaries.py --strict
+   python -m pytest helixc\tests\test_mlir_validate.py helixc\tests\test_mlir_backends.py -q
+   python -m pytest -k mlir -q
+   python -m compileall helixc\ir\mlir helixc\tests\test_mlir_validate.py helixc\tests\test_mlir_backends.py scripts\mlir_audit_canaries.py
+   git diff --check -- docs/V3_HANDOFF.md docs/HELIX_MLIR_AUDIT_PACKET.md helixc/ir/mlir/backends.py helixc/ir/mlir/validate.py helixc/tests/test_mlir_backends.py helixc/tests/test_mlir_validate.py scripts/mlir_audit_canaries.py HANDOFF_FOR_CLAUDE.md
+   ```
+
+5. Re-run all three clean audit axes from scratch:
+
+   - silent-failure hunt
+   - type-design analysis
+   - general code review
+
+   Each reviewer must keep inspecting after the first issue and report all
+   HIGH and must-fix MEDIUM findings. If any HIGH or must-fix MEDIUM remains,
+   verify it, fix the whole family, and rerun all gates and all three axes.
+
+6. Commit only after the strict canaries, tests, compileall, diff-check, and
+   all three audit axes are clean. Use explicit path staging. Push after the
+   commit.
+
+## Audit Discipline Anthony Requires
+
+- Fail closed always. Unsupported compiler constructs must raise or return a
+  FAILED validation result, never emit plausible-but-wrong output.
+- Per chunk: audit the diff on all three axes.
+- At stage close: audit whole touched files holistically.
+- At phase close: run the five-clean gate across frontend, IR, backend,
+  runtime, and tests.
+- Never force-push to `main`.
+- Never skip git hooks.
+- Never use broad `git add .`; stage explicit paths only.
+- Do not commit the current dirty compiler batch until the re-audit loop is
+  clean.
+
+## GitHub State
+
+The intended GitHub update for this handoff is a docs-only commit containing
+the current takeover documents. The dirty compiler/test changes are not pushed
+as code because they are audit-blocked.
+
+After the docs-only handoff commit, `origin/main` should contain this file and
+the current audit packet, while the local worktree should still show the dirty
+MLIR compiler/test files.
+
+## Telegram
+
+Anthony expects concise Telegram updates after meaningful progress or blockers.
+
+Use:
 
 ```powershell
-python -m py_compile helixc\check.py helixc\backend\x86_64.py helixc\tests\test_cli.py helixc\tests\test_codegen.py helixc\tests\test_ptx.py
-@'
-from pathlib import Path
-from helixc.frontend import parser
-files = sorted(Path("helixc/stdlib").glob("*.hx"))
-for p in files:
-    parser.parse(p.read_text(encoding="utf-8"), filename=str(p))
-print("parsed", len(files), "stdlib files")
-'@ | python -
-python -m pytest helixc\tests\test_cli.py -q -k "stage35"
-python -m pytest helixc\tests\test_ptx.py -q -k "stage35"
-python -m pytest helixc\tests --collect-only -q
+python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat 8212106071 --msg "Helix update: <short status>. Next: <next step>."
 ```
 
-## Telegram Updates
+## Important Project Docs
 
-Anthony wants beginner-friendly progress updates with estimated percent
-complete. Send Telegram messages after meaningful progress and when a restart
-begins/ends.
+- `docs\V3_PLAN.md` - v3.0 implementation plan and shipped chunk history.
+- `docs\V3_HANDOFF.md` - current v3 continuation notes.
+- `docs\V3_STAGE210_MLIR_DECISION.md` - ratified MLIR decision.
+- `docs\POST_V3_ROADMAP.md` - v4 to v9 roadmap, only after v3.0 is complete.
+- `docs\HELIX_MLIR_AUDIT_PACKET.md` - current audit packet and restart source.
 
-Use ASCII-only messages:
+## One-Sentence Takeover
 
-```powershell
-python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat 8212106071 --msg "Helix update: <short beginner-friendly update>. Estimated Stage 35: about 95%."
-```
-
-## Commit Rules
-
-- Use explicit path staging only. Do not use broad `git add .`.
-- Do not revert unrelated user changes.
-- Commit only after targeted canaries and relevant family tests are green.
-- Push to `origin main` after a good commit.
-
-## Important Reminder
-
-The current production compiler is still Python-hosted `helixc`. The
-self-hosted Helix compiler remains the target, not the shipped replacement yet.
-Do not claim Helix is fully self-hosted until the repo proves it with
-repeatable self-hosting tests.
+You are taking over a local, tested, audit-blocked MLIR hardening batch on v3
+Stage 213. Finish one open audit family, rerun the full gate ladder and all
+three audit axes, then commit/push only when clean.

@@ -134,6 +134,11 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    stage-close holistic audit of `validate.py` + `backends.py` and the
    target-output-validator contract; if clean, close Stage 213 without
    claiming Stage-214 pipelines.
+   Before resuming the current dirty MLIR audit branch, read
+   `docs/HELIX_MLIR_AUDIT_PACKET.md` and run
+   `python scripts\mlir_audit_canaries.py` in report mode. Use
+   `--strict` only after the next fix batch is expected to close the
+   listed verifier/correspondence families.
 3. **Stage 214 — the progressive-lowering pass pipeline.**
 4. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
    path matches the home-grown path).
@@ -174,6 +179,10 @@ When `v3.0.0` is tagged, v3.0 is done.
 - **Fast MLIR-path verification** (use this for `helixc/ir/mlir/`
   work): `python -m pytest helixc/tests/ -k mlir -q` — ~156 tests,
   ~30 s, bounded.
+- **Current MLIR audit canaries**:
+  `python scripts\mlir_audit_canaries.py` reports the known-open
+  verifier/backend proof families; `--strict` is the pre-commit gate
+  once those families are fixed.
 - **The full suite is SLOW (not broken).**
   `python -m pytest helixc/tests/` is a large integration suite
   (~4,500 tests; `test_codegen.py` alone is ~1,000 real
@@ -216,3 +225,87 @@ When `v3.0.0` is tagged, v3.0 is done.
 | `helixc/ir/tile_ir.py` | Tile IR (`TileOpKind`, 29 members). |
 | `helixc/ir/mlir/` | Phase-E MLIR substrate: `toolchain.py`, `mapping.py`, `helix_dialect.py`, `validate.py`, `emit.py`, `backends.py`. |
 | `helixc/tests/test_mlir_*.py` | The MLIR-path tests. |
+
+## 10. Current MLIR Audit Restart Note (2026-05-21 23:23Z)
+
+The latest accelerated heartbeat stopped at an uncommitted, tested checkpoint.
+Do not commit until strict canaries are clean.
+
+- Closed: quoted-symbol/interface correspondence and a large sibling set in
+  `validate.py` / `backends.py` / MLIR tests.
+- Verified: focused validator/backend tests `240 passed`; MLIR slice
+  `376 passed, 4347 deselected`; compileall clean; `git diff --check` clean
+  except LF-to-CRLF warnings.
+- Still open: `scripts\mlir_audit_canaries.py --strict` fails
+  fake-validator bad-type, fake-validator addf-i32, and GPU backend symbol
+  binding.
+- Next restart source: `docs\HELIX_MLIR_AUDIT_PACKET.md` section
+  `2026-05-21 23:23Z Heartbeat Checkpoint`.
+
+## 11. Current MLIR Audit Restart Note (2026-05-22 01:16Z)
+
+The latest accelerated heartbeat stopped at an uncommitted, tested checkpoint.
+Do not commit yet.
+
+- Closed/advanced: GPU backend symbol-binding canary now passes; PTX wrong
+  entry reports a missing PTX entry for `expected`. The chunk added target-aware
+  symbol extraction for PTX, ROCm/HIP, Metal MSL, and WGSL, plus many sibling
+  regression tests in `helixc/tests/test_mlir_backends.py`.
+- Verified: backend tests `94 passed`; focused validator/backend tests
+  `254 passed`; MLIR slice `390 passed, 4347 deselected`; compileall clean;
+  `git diff --check` clean except LF-to-CRLF warnings.
+- Still open: strict canaries fail fake-validator bad-type and fake-validator
+  `arith.addf` over `i32`.
+- Still open from the final GPU-family audit: WGSL malformed parameter names
+  and attributed params without identifiers still bind; PTX `.func` forms with
+  `.reg` return params or `.noreturn` are currently false-rejected.
+- Next restart source: `docs\HELIX_MLIR_AUDIT_PACKET.md` section
+  `2026-05-22 01:16Z Heartbeat Checkpoint`.
+
+## 12. Current MLIR Audit Stop Note (2026-05-22)
+
+The latest stop point is uncommitted but tested. Treat the older restart notes
+above as historical; this note and `docs\HELIX_MLIR_AUDIT_PACKET.md` are the
+current source.
+
+- Closed since the 01:16Z checkpoint: all strict MLIR audit canaries now pass;
+  WGSL malformed parameter names and missing parameter identifiers reject; PTX
+  `.reg` function params and `.noreturn` function directives accept; malformed
+  PTX predicate guards reject.
+- Closed from the post-fix audit findings: unsupported obvious function types,
+  duplicate `func.func` symbols, empty returns from non-void functions,
+  same-line function declaration boundary drift, malformed backend output
+  symbol extraction, and loose MLIR/backend tool identity.
+- Verified: `python scripts\mlir_audit_canaries.py --strict` -> `7 passed /
+  0 failed`; focused validator/backend tests -> `266 passed`; MLIR slice ->
+  `402 passed, 4347 deselected`; compileall clean; `git diff --check` clean
+  except LF-to-CRLF warnings.
+- Still required before any commit: re-run all three audit axes from scratch.
+  The prior audit round was BLOCKED before these fixes landed, so this is not
+  yet committable.
+- Next restart source: `docs\HELIX_MLIR_AUDIT_PACKET.md` section
+  `2026-05-22 Stop Checkpoint After Audit Fix Batch`.
+
+## 13. Current MLIR Audit Stop Note (2026-05-22 Third Audit Round)
+
+The latest stop point is uncommitted, tested, and audit-blocked. Do not commit
+or push this packet until the open audit findings below are fixed and all three
+audit axes rerun clean.
+
+- Closed since the previous stop: strict MLIR canaries now pass `12/12`;
+  focused validator/backend tests pass `274`; the MLIR pytest slice passes
+  `410`; compileall is clean; `git diff --check` reports only line-ending
+  warnings.
+- Third audit status: silent-failure and type-design axes returned BLOCKED; the
+  general-review axis was stopped before completion at the user's request.
+- Open HIGH: control predicates are still underchecked (`scf.if`,
+  `cf.cond_br`, `cf.assert` can accept non-`i1` predicates); memref access
+  semantics are still underchecked; several constants/vector/loop semantics
+  still accept invalid forms; generic function bodies can bypass canonical
+  terminator/static checks.
+- Open MEDIUM: generic `llvm.func` input symbol binding is still skipped in one
+  path; LLVM typed-value validation can accept scalar constants for
+  aggregate/vector returns; HIP/MSL C-like preflight still accepts impossible
+  declarations/statements in some cases.
+- Next restart source: `docs\HELIX_MLIR_AUDIT_PACKET.md` section
+  `2026-05-22 Stop Checkpoint After Third Audit Round`.
