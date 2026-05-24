@@ -27,7 +27,7 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
   - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212,
-    213, 214 CLOSED; Stage 215 not yet started.**
+    213, 214 CLOSED; Stage 215 in progress (chunk A shipped).**
   - **Phase F (Stages 220–222): not started.**
 - **`V3_STAGES_DONE = 14` of 19** (`scripts/helix_status.py`) —
   ~74 % of v3.0 stages, ~96 % overall toward v3.0.
@@ -340,8 +340,36 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    (silent-failure / type-design / code-review across the whole
    backends.py + toolchain.py changes); fix any HIGH or must-fix
    MEDIUM; close the stage; bump `V3_STAGES_DONE` to 14.
-3. **Stage 215 — the MLIR-vs-tile-IR parity gate** (verify the new
-   path matches the home-grown path).
+3. **Stage 215 — the MLIR-vs-tile-IR parity gate** (in progress).
+
+   **Chunk A done** (2026-05-24, commit 94d85fb): the harness
+   skeleton in `helixc/ir/mlir/parity.py`. Defines `ParityStatus`
+   (PARITY_HOLDS / PARITY_FAILED / PARITY_DEFERRED), `ParityResult`
+   frozen dataclass (final, post_init-guarded — same discipline as
+   the Stage 213 result types), and
+   `mlir_vs_tile_ir_parity_check(module, target, *, support)`. The
+   entry point catches `MLIRTranslationError`, then maps the MLIR
+   backend chain's status to a parity verdict (PASSED -> HOLDS,
+   FAILED -> FAILED, DEFERRED -> DEFERRED).
+
+   **Chunks B+ scope** (next iterations):
+
+   - **Chunk B — home-grown path runner**: add a sibling helper
+     `tile_ir_to_backend(module, target)` (or expose what
+     `helixc/backend/x86_64.py` + `helixc/backend/gpu_ci.py`
+     already provide) and call BOTH paths from
+     `mlir_vs_tile_ir_parity_check`. The harness then returns
+     PARITY_HOLDS only when both paths agree (or both defer / fail
+     for the same reason).
+   - **Chunk C — cross-path artifact comparison**: per-target
+     equivalence checks. Text targets (PTX / MSL / WGSL / LLVM IR)
+     can compare via SHA-256 after a normalization pass (strip
+     comments, normalize whitespace, canonical symbol order).
+     Binary intermediates (SPIR-V) compare via byte-equality.
+     A semantic-equivalence option (re-execute both artifacts on
+     test inputs) belongs to Stage 216 or Phase F.
+   - **Chunk D — close**: when chunks B+C are clean and audited,
+     bump `V3_STAGES_DONE` to 15 and update this handoff.
 4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
 5. **Phase F (Stages 220–222)** — backend unification, the Stage-221
    cutover, the v3.0.0 5-clean-gate + git tag.
