@@ -127,6 +127,11 @@ class MLIRSupport:
     mlir_opt: Optional[str]
     detail: tuple[str, ...]
     mlir_translate: Optional[str] = None
+    # Stage 214 chunk F: chained-tool paths. `llc` is the first wired
+    # tool (used for PTX / ROCm via the `mlir-translate --mlir-to-llvmir`
+    # output as input). `spirv_cross` (Metal MSL) and `tint` (WGSL) get
+    # added in subsequent chunks as those targets are wired.
+    llc: Optional[str] = None
 
     def __post_init__(self) -> None:
         # A dialect sub-module cannot import without the core package.
@@ -154,6 +159,14 @@ class MLIRSupport:
                     "MLIRSupport: mlir_translate must be a non-blank, "
                     f"whitespace-stripped path or None, got "
                     f"{self.mlir_translate!r}")
+        if self.llc is not None:
+            if not isinstance(self.llc, str) \
+                    or not self.llc.strip() \
+                    or self.llc != self.llc.strip():
+                raise ValueError(
+                    "MLIRSupport: llc must be a non-blank, "
+                    f"whitespace-stripped path or None, got "
+                    f"{self.llc!r}")
 
     def can_use_bindings(self) -> bool:
         """True iff the in-process MLIR Python bindings are FULLY
@@ -172,6 +185,23 @@ class MLIRSupport:
         downstream consumers read; without it, lowering stays
         DEFERRED for any target whose translator entry is wired."""
         return self.mlir_translate is not None
+
+    def can_use_llc(self) -> bool:
+        """True iff the `llc` CLI is on PATH. Stage 214 chunk F chains
+        `llc` after `mlir-translate` for targets like PTX / ROCm that
+        need a third stage from raw LLVM IR to target assembly."""
+        return self.llc is not None
+
+    def chained_tool_path(self, tool_name: str) -> Optional[str]:
+        """Resolve a chained-tool name (the first element of a
+        translator's `follow_up_args`) to its PATH location, or None
+        when not on PATH / not yet known to this support struct.
+
+        Chunk F supports only `llc`; chunks G+ will add `spirv-cross`
+        and `tint` here as METAL_MSL / WEBGPU_WGSL are wired."""
+        if tool_name == "llc":
+            return self.llc
+        return None
 
     def is_available(self) -> bool:
         """True iff at least one real MLIR surface — the in-process
@@ -260,9 +290,18 @@ def detect_mlir_support() -> MLIRSupport:
     else:
         detail.append(f"`mlir-translate` is on PATH at {mlir_translate!r}")
 
+    # --- surface 4: the `llc` command-line tool ---
+    # Stage 214 chunk F chains this after `mlir-translate` for targets
+    # (e.g. PTX) that need raw-LLVM-IR -> target-assembly translation.
+    llc = shutil.which("llc")
+    if llc is None:
+        detail.append("`llc` is not on PATH")
+    else:
+        detail.append(f"`llc` is on PATH at {llc!r}")
+
     # Every branch above appended at least one `detail` line, and
     # `dialects` is never set without `bindings` — so this construction
     # always satisfies MLIRSupport.__post_init__ and cannot raise.
     return MLIRSupport(bindings=bindings, dialects=dialects,
                        mlir_opt=mlir_opt, detail=tuple(detail),
-                       mlir_translate=mlir_translate)
+                       mlir_translate=mlir_translate, llc=llc)

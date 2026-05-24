@@ -3829,6 +3829,95 @@ def _run_mlir_translate_step(
         return output_text, ()
 
 
+def _run_chained_tool_step(
+        input_text: str,
+        *,
+        tool_path: str,
+        args: tuple[str, ...],
+        timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Run a chained third-stage tool (typically `llc`) on the raw
+    text output of `mlir-translate`. Same subprocess hygiene as
+    `_run_mlir_translate_step`. Returns `(output_text, findings)` —
+    on success: `(output_text, ())`; on failure: `(None, (finding,...))`.
+
+    Stage 214 chunk F — the chained-tool helper. Invocation shape is
+    `[tool_path, *args, "-o", out_path, in_path]`, which works for
+    `llc` and most modern target assemblers (the canonical `llc`
+    usage `llc -mtriple=nvptx64 -mcpu=sm_80 -o out.ptx in.ll`).
+    """
+    if not isinstance(input_text, str) or not input_text.strip():
+        return None, (
+            "_run_chained_tool_step: input_text must be non-empty text",)
+    if not isinstance(tool_path, str) or not tool_path.strip() \
+            or tool_path != tool_path.strip():
+        return None, (
+            "_run_chained_tool_step: tool_path must be a non-blank, "
+            f"whitespace-stripped path, got {tool_path!r}",)
+    if not isinstance(args, tuple):
+        return None, (
+            "_run_chained_tool_step: args must be a tuple of argv "
+            f"tokens, got {type(args).__name__}",)
+    for arg in args:
+        if not isinstance(arg, str) or not arg.strip() \
+                or arg != arg.strip():
+            return None, (
+                "_run_chained_tool_step: each arg must be a non-blank, "
+                f"whitespace-stripped string, got {arg!r}",)
+    if ((not isinstance(timeout_s, (int, float)))
+            or isinstance(timeout_s, bool) or timeout_s <= 0):
+        return None, (
+            "_run_chained_tool_step: timeout_s must be a positive "
+            f"number, got {timeout_s!r}",)
+
+    with tempfile.TemporaryDirectory(prefix="helix_mlir_chained_") as tmpdir:
+        in_path = os.path.join(tmpdir, "input.txt")
+        out_path = os.path.join(tmpdir, "artifact.out")
+        try:
+            with open(in_path, "w", encoding="utf-8") as f:
+                f.write(input_text)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_chained_tool_step: could not write temp input "
+                f"{in_path!r} ({type(exc).__name__}: {exc})",)
+        try:
+            proc = subprocess.run(
+                [tool_path, *args, "-o", out_path, in_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return None, (
+                f"_run_chained_tool_step: chained tool timed out after "
+                f"{timeout_s}s",)
+        except (OSError, UnicodeError, ValueError) as exc:
+            return None, (
+                f"_run_chained_tool_step: tool unusable at invocation "
+                f"({type(exc).__name__}: {exc})",)
+        if proc.returncode != 0:
+            stderr_tail = (proc.stderr or "").strip().splitlines()[-3:]
+            stderr_snippet = " | ".join(stderr_tail) if stderr_tail else ""
+            return None, (
+                f"_run_chained_tool_step: chained tool exited "
+                f"{proc.returncode}"
+                + (f" — stderr: {stderr_snippet}"
+                   if stderr_snippet else ""),)
+        try:
+            with open(out_path, "r", encoding="utf-8") as f:
+                output_text = f.read()
+        except (OSError, UnicodeError) as exc:
+            return None, (
+                f"_run_chained_tool_step: could not read output "
+                f"artifact {out_path!r} "
+                f"({type(exc).__name__}: {exc})",)
+        if not output_text.strip():
+            return None, (
+                "_run_chained_tool_step: chained tool exited 0 but "
+                "produced blank output",)
+        return output_text, ()
+
+
 def _run_mlir_opt_pipeline(
         mlir_text: str,
         *,
@@ -3839,6 +3928,7 @@ def _run_mlir_opt_pipeline(
         output_validator: MLIRBackendOutputValidator,
         timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
         mlir_translate: str | None = None,
+        chained_tool: str | None = None,
         _brand_output_validation: Callable[
             ["MLIRBackendOutputValidation"], "MLIRBackendOutputValidation"
         ] | None = None,
@@ -3939,14 +4029,18 @@ def _run_mlir_opt_pipeline(
             f"_run_mlir_opt_pipeline: target {target.value} has no "
             "registered translator; mlir_translate must be None when "
             "no translator-step is declared")
+    if registered_translator is None and chained_tool is not None:
+        raise ValueError(
+            f"_run_mlir_opt_pipeline: target {target.value} has no "
+            "registered translator; chained_tool must be None when "
+            "no chain is declared")
     if registered_translator is not None:
         # Defensive runtime shape-check — the module-load drift guard
-        # cannot see a monkeypatched authority table, and the runner
-        # unpacks (tool_name, flag, follow_up) below. tool_name is
+        # cannot see a monkeypatched authority table. tool_name is
         # METADATA ONLY (the runner trusts `mlir_translate` from the
-        # caller, not the table); follow_up is enforced empty in this
-        # chunk (chunk E adds chained-tool support). flag is the only
-        # field that ALSO has independent re-validation downstream.
+        # caller, not the table); flag has independent re-validation
+        # downstream; follow_up_args' first element is the chained tool
+        # name (validated below via the chained_tool path requirement).
         if not isinstance(registered_translator, tuple) \
                 or len(registered_translator) != 3:
             raise ValueError(
@@ -3961,6 +4055,20 @@ def _run_mlir_opt_pipeline(
                 f"_run_mlir_opt_pipeline: target {target.value} has a "
                 "registered translator; mlir_translate must be a "
                 "non-blank, whitespace-stripped path")
+        _follow_up = registered_translator[2]
+        if _follow_up:
+            if not isinstance(chained_tool, str) \
+                    or not chained_tool.strip() \
+                    or chained_tool != chained_tool.strip():
+                raise ValueError(
+                    f"_run_mlir_opt_pipeline: target {target.value} "
+                    "declares chained follow_up_args; chained_tool must "
+                    "be a non-blank, whitespace-stripped path")
+        elif chained_tool is not None:
+            raise ValueError(
+                f"_run_mlir_opt_pipeline: target {target.value} "
+                "translator has empty follow_up_args; chained_tool must "
+                "be None when no chained step is declared")
 
     with tempfile.TemporaryDirectory(prefix="helix_mlir_backend_") as tmpdir:
         mlir_path = os.path.join(tmpdir, "module.mlir")
@@ -4093,22 +4201,9 @@ def _run_mlir_opt_pipeline(
                 output_text=None,
             )
         translator_tool: str | None = None
+        chained_tool_used: str | None = None
         if registered_translator is not None:
-            _tool_name, translator_flag, _follow_up = registered_translator
-            if _follow_up:
-                return MLIRBackendResult(
-                    target=target,
-                    validation=validation,
-                    lowering_attempted=True,
-                    lowering_passed=False,
-                    lowering_tool=mlir_opt,
-                    lowering_findings=(
-                        f"Stage 214 chunk D wires only the mlir-opt -> "
-                        f"mlir-translate hop; {target.value} declares "
-                        f"follow-up args {list(_follow_up)!r} which "
-                        "require a chunk-E chained-tool runner",),
-                    output_text=None,
-                )
+            _tool_name, translator_flag, follow_up_args = registered_translator
             translated_text, translate_findings = _run_mlir_translate_step(
                 output_text,
                 mlir_translate=mlir_translate,  # type: ignore[arg-type]
@@ -4143,6 +4238,60 @@ def _run_mlir_opt_pipeline(
                 )
             output_text = translated_text
             translator_tool = mlir_translate
+            if follow_up_args:
+                # Stage 214 chunk F — chained third-stage tool. The first
+                # entry of follow_up_args names the tool; the rest are
+                # passed as argv. The path is resolved upstream (in
+                # `lower_mlir_to_backend`) and passed through here.
+                if chained_tool is None:
+                    return MLIRBackendResult(
+                        target=target,
+                        validation=validation,
+                        lowering_attempted=True,
+                        lowering_passed=False,
+                        lowering_tool=mlir_opt,
+                        lowering_findings=(
+                            f"chained tool step for {target.value} requires "
+                            f"the {follow_up_args[0]!r} tool path but none "
+                            "was provided to the runner",),
+                        output_text=None,
+                    )
+                chained_text, chained_findings = _run_chained_tool_step(
+                    output_text,
+                    tool_path=chained_tool,
+                    args=follow_up_args[1:],
+                    timeout_s=timeout_s,
+                )
+                if chained_findings:
+                    return MLIRBackendResult(
+                        target=target,
+                        validation=validation,
+                        lowering_attempted=True,
+                        lowering_passed=False,
+                        lowering_tool=mlir_opt,
+                        lowering_findings=(
+                            f"chained-tool step for {target.value} "
+                            f"({follow_up_args[0]}) failed: "
+                            + chained_findings[0],
+                        ),
+                        output_text=None,
+                    )
+                if chained_text is None:
+                    return MLIRBackendResult(
+                        target=target,
+                        validation=validation,
+                        lowering_attempted=True,
+                        lowering_passed=False,
+                        lowering_tool=mlir_opt,
+                        lowering_findings=(
+                            f"chained-tool step for {target.value} "
+                            f"({follow_up_args[0]}) produced no output "
+                            "but also no findings; refusing to mint a "
+                            "backend pass",),
+                        output_text=None,
+                    )
+                output_text = chained_text
+                chained_tool_used = chained_tool
         if _looks_like_mlir_pipeline_output(output_text):
             return MLIRBackendResult(
                 target=target,
@@ -4243,17 +4392,28 @@ def _run_mlir_opt_pipeline(
                 output_text=None,
             )
         if translator_tool is not None:
-            _tool_name, translator_flag, _follow_up = registered_translator
-            chain_provenance = (
+            _tool_name, translator_flag, follow_up_args = (
+                registered_translator)
+            translator_provenance = (
                 f"mlir-translate={translator_tool}",
                 f"mlir-translate-flag={translator_flag}",
             )
+            if chained_tool_used is not None:
+                chained_provenance = (
+                    f"chained-tool={chained_tool_used}",
+                    f"chained-tool-name={follow_up_args[0]}",
+                    "chained-tool-args=" + " ".join(follow_up_args[1:]),
+                )
+            else:
+                chained_provenance = ()
         else:
-            chain_provenance = ()
+            translator_provenance = ()
+            chained_provenance = ()
         output_provenance = (
             f"mlir-opt={mlir_opt}",
             "pipeline=" + " ".join(pipeline),
-            *chain_provenance,
+            *translator_provenance,
+            *chained_provenance,
             f"output_sha256={output_digest}",
             *(f"target_validation={entry}"
               for entry in output_validation.evidence),
@@ -4289,6 +4449,7 @@ class _BackendOutputValidationBrandingRunner:
             output_validator: MLIRBackendOutputValidator,
             timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
             mlir_translate: str | None = None,
+            chained_tool: str | None = None,
             ) -> "MLIRBackendResult":
         return self.__raw_runner(
             mlir_text,
@@ -4299,6 +4460,7 @@ class _BackendOutputValidationBrandingRunner:
             output_validator=output_validator,
             timeout_s=timeout_s,
             mlir_translate=mlir_translate,
+            chained_tool=chained_tool,
             _brand_output_validation=self.__brand_output_validation,
         )
 
@@ -5489,6 +5651,7 @@ def _make_backend_pipeline_runner(raw_runner):
                 output_validator: MLIRBackendOutputValidator,
                 timeout_s: int = _MLIR_BACKEND_PIPELINE_TIMEOUT_S,
                 mlir_translate: str | None = None,
+                chained_tool: str | None = None,
                 ) -> MLIRBackendResult:
             result = self.__raw_runner(
                 mlir_text,
@@ -5499,6 +5662,7 @@ def _make_backend_pipeline_runner(raw_runner):
                 output_validator=output_validator,
                 timeout_s=timeout_s,
                 mlir_translate=mlir_translate,
+                chained_tool=chained_tool,
             )
             if _backend_result_pass_shape_is_coherent(result):
                 return brand_pass(result)
@@ -5601,6 +5765,25 @@ def lower_mlir_to_backend(
             "but `mlir-translate` is not on PATH; refusing to attempt a "
             "chain that cannot complete")
     else:
+        chained_tool_path: str | None = None
+        if translator is not None and translator[2]:
+            chained_name = translator[2][0]
+            chained_tool_path = support.chained_tool_path(chained_name)
+            if chained_tool_path is None:
+                findings.append(
+                    f"Stage 214 chained tool {chained_name!r} for "
+                    f"{target.value} is declared, but is not on PATH "
+                    "(or not recognized by MLIRSupport); refusing to "
+                    "attempt a chain that cannot complete")
+                return MLIRBackendResult(
+                    target=target,
+                    validation=validation,
+                    lowering_attempted=False,
+                    lowering_passed=None,
+                    lowering_tool=None,
+                    lowering_findings=tuple(findings),
+                    output_text=None,
+                )
         return _run_mlir_opt_pipeline(
             mlir_text,
             target=target,
@@ -5610,6 +5793,7 @@ def lower_mlir_to_backend(
             output_validator=output_validator,
             mlir_translate=(
                 support.mlir_translate if translator is not None else None),
+            chained_tool=chained_tool_path,
         )
 
     return MLIRBackendResult(

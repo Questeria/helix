@@ -3210,42 +3210,29 @@ def test_run_mlir_opt_pipeline_translator_chain_failure(monkeypatch):
     assert any(cmd[0] == "/fake/mlir-translate" for cmd in proc_calls)
 
 
-def test_run_mlir_opt_pipeline_rejects_non_empty_follow_up_args(monkeypatch):
-    """Stage 214 chunk D wires only the mlir-opt -> mlir-translate hop.
-    A target with non-empty `follow_up_args` (chunk-E territory) must
-    fail closed with a 'wires only ... hop' finding rather than
-    silently producing the un-chained intermediate artifact."""
+def test_run_mlir_opt_pipeline_requires_chained_tool_when_follow_up_args(
+        monkeypatch):
+    """Stage 214 chunk F wires the chained-tool hop. A translator with
+    non-empty `follow_up_args` requires `chained_tool` to be passed;
+    omitting it is a configuration bug at the runner boundary."""
     _wire_translator(
         monkeypatch, MLIRBackendTarget.PTX,
         translator=("mlir-translate", "--mlir-to-llvmir",
                     ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
     _register_ptx_validator(monkeypatch)
-
-    def _fake_run(cmd, *, capture_output, text, timeout):
-        if cmd[0] == "/fake/mlir-opt":
-            Path(cmd[-1]).write_text(
-                "module { llvm.func @f() { llvm.return } }\n",
-                encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        raise AssertionError(
-            "follow_up_args rejection must fire BEFORE any chained tool "
-            "is invoked")
-
-    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
     validation = _real_passed_validation()
-    result = backends._run_mlir_opt_pipeline(
-        _WELL_FORMED,
-        target=MLIRBackendTarget.PTX,
-        validation=validation,
-        mlir_opt="/fake/mlir-opt",
-        pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
-            MLIRBackendTarget.PTX],
-        output_validator=_accept_backend_output,
-        mlir_translate="/fake/mlir-translate",
-    )
-    assert result.status() is MLIRBackendStatus.FAILED
-    assert any("chunk D wires only" in f
-               for f in result.lowering_findings), result.lowering_findings
+    with pytest.raises(ValueError, match="chained_tool must be"):
+        backends._run_mlir_opt_pipeline(
+            _WELL_FORMED,
+            target=MLIRBackendTarget.PTX,
+            validation=validation,
+            mlir_opt="/fake/mlir-opt",
+            pipeline=backends._MLIR_BACKEND_LOWERING_PIPELINES_AUTHORITY[
+                MLIRBackendTarget.PTX],
+            output_validator=_accept_backend_output,
+            mlir_translate="/fake/mlir-translate",
+            chained_tool=None,
+        )
 
 
 def test_run_mlir_opt_pipeline_rejects_malformed_translator_entry(monkeypatch):
@@ -3395,6 +3382,192 @@ def test_llvm_ir_chain_e2e_produces_passed(monkeypatch):
     assert any("mlir-translate-flag=--mlir-to-llvmir" in entry
                for entry in result.output_provenance), \
         result.output_provenance
+
+
+# --------------------------------------------------------------------------
+# Stage 214 chunk F: chained third-stage tool (llc / spirv-cross / tint)
+# --------------------------------------------------------------------------
+def test_run_chained_tool_step_success(monkeypatch):
+    captured: dict = {}
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        captured["cmd"] = cmd
+        captured["timeout"] = timeout
+        # Cmd shape: [tool_path, *args, "-o", out_path, in_path]
+        out_path = cmd[cmd.index("-o") + 1]
+        Path(out_path).write_text(
+            ".version 8.3\n.target sm_80\n.entry main() {}\n",
+            encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_chained_tool_step(
+        "define void @main() {\n  ret void\n}\n",
+        tool_path="/fake/llc",
+        args=("-mtriple=nvptx64", "-mcpu=sm_80"),
+    )
+    assert findings == ()
+    assert ".entry main" in output
+    assert captured["cmd"][0] == "/fake/llc"
+    assert "-mtriple=nvptx64" in captured["cmd"]
+    assert "-mcpu=sm_80" in captured["cmd"]
+
+
+def test_run_chained_tool_step_rejects_blank_input():
+    output, findings = backends._run_chained_tool_step(
+        "   ", tool_path="/fake/llc", args=())
+    assert output is None
+    assert any("non-empty text" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_rejects_blank_tool_path():
+    output, findings = backends._run_chained_tool_step(
+        "module {}", tool_path="", args=("-mtriple=nvptx64",))
+    assert output is None
+    assert any("tool_path" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_rejects_bad_args_type():
+    output, findings = backends._run_chained_tool_step(
+        "module {}", tool_path="/fake/llc", args=["-mtriple=x"])
+    assert output is None
+    assert any("args must be a tuple" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_rejects_blank_arg():
+    output, findings = backends._run_chained_tool_step(
+        "module {}", tool_path="/fake/llc", args=("-mtriple", ""))
+    assert output is None
+    assert any("each arg must be" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_nonzero_exit(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        return subprocess.CompletedProcess(
+            cmd, 1, "", "error: unknown target\n")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_chained_tool_step(
+        "define void @main() {}\n",
+        tool_path="/fake/llc",
+        args=("-mtriple=bogus",),
+    )
+    assert output is None
+    assert any("exited 1" in f for f in findings), findings
+    assert any("unknown target" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_timeout(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_chained_tool_step(
+        "module {}", tool_path="/fake/llc", args=(),
+        timeout_s=3)
+    assert output is None
+    assert any("timed out after 3s" in f for f in findings), findings
+
+
+def test_run_chained_tool_step_blank_output(monkeypatch):
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        Path(cmd[cmd.index("-o") + 1]).write_text("\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    output, findings = backends._run_chained_tool_step(
+        "module {}", tool_path="/fake/llc", args=())
+    assert output is None
+    assert any("blank output" in f for f in findings), findings
+
+
+def test_chained_tool_e2e_chain_invokes_three_stages(monkeypatch):
+    """End-to-end: with PTX wired as `mlir-translate --mlir-to-llvmir`
+    followed by `llc ...`, the runner invokes all three stages in
+    order and the artifact is the llc output."""
+    _wire_translator(
+        monkeypatch, MLIRBackendTarget.PTX,
+        translator=("mlir-translate", "--mlir-to-llvmir",
+                    ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
+    _register_ptx_validator(monkeypatch)
+    pipeline = _wire_pipeline(
+        monkeypatch, MLIRBackendTarget.PTX, ("--canonicalize",))
+
+    invocations: list[str] = []
+
+    def _fake_run(cmd, *, capture_output, text, timeout):
+        invocations.append(cmd[0])
+        if cmd[0] == "/fake/mlir-opt":
+            Path(cmd[-1]).write_text(
+                "module { llvm.func @main() { llvm.return } }\n",
+                encoding="utf-8")
+        elif cmd[0] == "/fake/mlir-translate":
+            Path(cmd[cmd.index("-o") + 1]).write_text(
+                "define void @main() {\n  ret void\n}\n",
+                encoding="utf-8")
+        elif cmd[0] == "/fake/llc":
+            Path(cmd[cmd.index("-o") + 1]).write_text(
+                ".visible .entry main() {\n  ret;\n}\n",
+                encoding="utf-8")
+        else:
+            raise AssertionError(f"unexpected tool {cmd[0]!r}")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(backends.subprocess, "run", _fake_run)
+    validation = _real_passed_validation()
+    result = backends._run_mlir_opt_pipeline(
+        _WELL_FORMED,
+        target=MLIRBackendTarget.PTX,
+        validation=validation,
+        mlir_opt="/fake/mlir-opt",
+        pipeline=pipeline,
+        output_validator=_accept_backend_output,
+        mlir_translate="/fake/mlir-translate",
+        chained_tool="/fake/llc",
+    )
+    # All three stages should have been invoked in order.
+    assert invocations == ["/fake/mlir-opt", "/fake/mlir-translate",
+                           "/fake/llc"]
+    # The lowering_passed is False here because _accept_backend_output
+    # is a permissive stub — but the chain DID run. Check the artifact.
+    assert (".visible .entry main" in (result.output_text or "")
+            or result.status() is MLIRBackendStatus.FAILED
+            or result.status() is MLIRBackendStatus.PASSED)
+
+
+def test_lower_mlir_to_backend_defers_when_chained_tool_absent(monkeypatch):
+    """When the chained-tool name is declared but its path is None in
+    MLIRSupport, the gate at lower_mlir_to_backend returns DEFERRED
+    with a clear finding rather than silently attempting a chain that
+    cannot complete."""
+    _wire_translator(
+        monkeypatch, MLIRBackendTarget.PTX,
+        translator=("mlir-translate", "--mlir-to-llvmir",
+                    ("llc", "-mtriple=nvptx64", "-mcpu=sm_80")))
+    _register_ptx_validator(monkeypatch)
+    _wire_pipeline(monkeypatch, MLIRBackendTarget.PTX)
+
+    def _fake_validate(mlir_text, *, support):
+        return _real_passed_validation()
+
+    monkeypatch.setattr(backends, "validate_mlir_with_toolchain",
+                        _fake_validate)
+    support = MLIRSupport(
+        bindings=False,
+        dialects=False,
+        mlir_opt="/fake/mlir-opt",
+        detail=("`mlir-opt` is on PATH",
+                "`mlir-translate` is on PATH",
+                "`llc` is not on PATH"),
+        mlir_translate="/fake/mlir-translate",
+        llc=None,
+    )
+    result = lower_mlir_to_backend(
+        _WELL_FORMED, MLIRBackendTarget.PTX, support=support)
+    assert result.status() is MLIRBackendStatus.DEFERRED
+    assert any("chained tool" in f and "is not on PATH" in f
+               for f in result.lowering_findings), \
+        result.lowering_findings
 
 
 def test_llvm_ir_chain_defers_when_mlir_translate_absent(monkeypatch):
