@@ -6144,6 +6144,17 @@ class MLIRBackendResult:
     def deferred(self) -> bool:
         return self.status() is MLIRBackendStatus.DEFERRED
 
+    def is_positive_assertion(self) -> bool:
+        """True iff this is a CHECKED-pass result — the runner
+        confirmed the backend chain produced a valid artifact. Stage
+        216 close-audit MEDIUM-1: release-gate callers MUST use this
+        instead of `not failed()` — the latter is silently
+        DEFERRED-permissive on toolchain-less CI machines, which
+        would ship unverified backend output. Same discipline as
+        `ParityResult.is_positive_assertion()` and
+        `MLIRValidation.is_positive_assertion()`."""
+        return self.status() is MLIRBackendStatus.PASSED
+
     def __copy__(self) -> "MLIRBackendResult":
         return _copy_backend_result(self)
 

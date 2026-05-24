@@ -178,6 +178,16 @@ class MLIRValidation:
         — the honest mock-path outcome for well-formed text."""
         return self.verdict is MLIRValidationVerdict.DEFERRED
 
+    def is_positive_assertion(self) -> bool:
+        """True iff this is a CHECKED-pass result — real `mlir-opt`
+        confirmed the IR is valid. Stage 216 close-audit MEDIUM-1:
+        release-gate callers MUST use this instead of `not failed()`
+        — the latter is silently DEFERRED-permissive on toolchain-
+        less CI machines, which would ship unverified IR. Same
+        discipline as `ParityResult.is_positive_assertion()` and
+        `MLIRBackendResult.is_positive_assertion()`."""
+        return self.passed()
+
     def __copy__(self) -> "MLIRValidation":
         return _copy_mlir_validation(self)
 

@@ -26,12 +26,10 @@ industrial MLIR + LLVM backend path alongside the home-grown one.
   register allocator).
 - **v3.0: in progress** — 19 numbered stages across three phases:
   - **Phase D (Stages 200–208): COMPLETE.**
-  - **Phase E (Stages 210–216): in progress — Stages 210, 211, 212,
-    213, 214, 215 CLOSED; Stage 216 (Phase-E 5-clean-gate) not yet
-    started.**
+  - **Phase E (Stages 210–216): COMPLETE.**
   - **Phase F (Stages 220–222): not started.**
-- **`V3_STAGES_DONE = 15` of 19** (`scripts/helix_status.py`) —
-  ~79 % of v3.0 stages, ~97 % overall toward v3.0.
+- **`V3_STAGES_DONE = 16` of 19** (`scripts/helix_status.py`) —
+  ~84 % of v3.0 stages, ~98 % overall toward v3.0.
 
 ## 3. Phase E — the MLIR migration (the current frontier)
 
@@ -388,7 +386,28 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    run across the entire E-phase surface.
 
    `V3_STAGES_DONE` bumped from 14 to 15.
-4. **Stage 216 — the end-of-Phase-E 5-clean-gate.**
+4. **Stage 216 — the end-of-Phase-E 5-clean-gate** — CLOSED 2026-05-24.
+   Type-design audit (2 HIGH + 3 MEDIUM) and code-review audit
+   (1 MEDIUM) ran against the entire Phase-E surface. All HIGH and
+   must-fix MEDIUM findings closed in the chunk-D fix batch:
+   - HIGH-1: `_HOMEGROWN_EMITTERS` value type tightened to
+     `Callable[[], BackendEmitter]`; runtime `isinstance` check
+     added in `_run_tile_ir_path` for belt-and-suspenders.
+   - HIGH-2: New `_check_parity_target_tables()` drift guard runs
+     at module load — refuses any partial coverage of the
+     MLIRBackendTarget set in `_TARGET_LINE_COMMENT_MARKER` /
+     `_TARGET_COSMETIC_LINE_PREFIXES` / `_HOMEGROWN_EMITTERS`.
+   - MEDIUM-1: `is_positive_assertion()` promoted to the whole
+     Phase-E result-type family (`MLIRValidation`,
+     `MLIRBackendResult`, `ParityResult`) — release-gate callers
+     have a uniform DEFERRED-safe predicate.
+   - MEDIUM-3: `ParityResult.__post_init__` delegates target
+     validation to the same `_require_backend_target` helper the
+     other result types use.
+   - Code-review M1: Cosmetic-prefix lists for LLVM_IR / ROCM_HIP /
+     METAL_MSL / WEBGPU_WGSL are now pinned by tests so accidental
+     drift is impossible (the PTX entry already had a test).
+   Phase E (Stages 210–216) is COMPLETE.
 5. **Phase F (Stages 220–222)** — backend unification, the Stage-221
    cutover, the v3.0.0 5-clean-gate + git tag.
 6. **206-R residual ops** — additive LLVM-lowering chunks (print_int,

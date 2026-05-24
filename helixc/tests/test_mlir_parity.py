@@ -58,7 +58,11 @@ def test_parity_status_tri_state():
 
 
 def test_parity_result_rejects_non_target():
-    with pytest.raises(ValueError, match="target must be"):
+    # Stage 216 close-audit MEDIUM-3: target validation now delegates
+    # to `_require_backend_target`, which produces the same "unknown
+    # MLIR backend target" message MLIRBackendResult and
+    # MLIRBackendOutputValidation use.
+    with pytest.raises(ValueError, match="unknown MLIR backend target"):
         ParityResult(
             target="ptx",  # type: ignore[arg-type]
             status=ParityStatus.PARITY_HOLDS,
@@ -441,6 +445,93 @@ def test_normalize_artifact_drops_cosmetic_prefixes_ptx():
     assert ".target" not in out
     assert ".address_size" not in out
     assert ".entry main" in out
+
+
+def test_normalize_artifact_drops_cosmetic_prefixes_llvm_ir():
+    """Stage 216 close-audit code-review M1: pin the LLVM_IR
+    cosmetic-prefix set. Each prefix must be dropped, and a
+    SEMANTIC_TOKEN line must survive."""
+    text = (
+        "; ModuleID = 'test'\n"
+        "source_filename = \"test.ll\"\n"
+        "target datalayout = \"e-m:e\"\n"
+        "target triple = \"x86_64-unknown-linux-gnu\"\n"
+        "define void @SEMANTIC_TOKEN() { ret void }\n"
+    )
+    out = parity._normalize_artifact_text(
+        MLIRBackendTarget.LLVM_IR, text)
+    assert "ModuleID" not in out
+    assert "source_filename" not in out
+    assert "target datalayout" not in out
+    assert "target triple" not in out
+    assert "SEMANTIC_TOKEN" in out
+
+
+def test_normalize_artifact_drops_cosmetic_prefixes_rocm_hip():
+    text = (
+        "#include <hip/hip_runtime.h>\n"
+        "__global__ void SEMANTIC_TOKEN(float * data) {}\n"
+    )
+    out = parity._normalize_artifact_text(
+        MLIRBackendTarget.ROCM_HIP, text)
+    assert "#include" not in out
+    assert "SEMANTIC_TOKEN" in out
+
+
+def test_normalize_artifact_drops_cosmetic_prefixes_metal_msl():
+    text = (
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void SEMANTIC_TOKEN() {}\n"
+    )
+    out = parity._normalize_artifact_text(
+        MLIRBackendTarget.METAL_MSL, text)
+    assert "#include" not in out
+    assert "using namespace" not in out
+    assert "SEMANTIC_TOKEN" in out
+
+
+def test_webgpu_wgsl_cosmetic_prefix_set_is_pinned_empty():
+    """WEBGPU_WGSL has no canonical cosmetic prefixes (the WGSL
+    spec is the youngest and most conservative). Pin the empty set
+    so a future addition is intentional, not accidental drift."""
+    assert parity._TARGET_COSMETIC_LINE_PREFIXES[
+        MLIRBackendTarget.WEBGPU_WGSL] == ()
+
+
+def test_parity_target_tables_cover_all_backends():
+    """Stage 216 close-audit HIGH-2: every parity target-keyed table
+    must cover the canonical MLIRBackendTarget set. The drift guard
+    runs at module load; this test pins it for the test runner."""
+    parity._check_parity_target_tables()
+    expected = set(MLIRBackendTarget)
+    assert set(parity._TARGET_LINE_COMMENT_MARKER) == expected
+    assert set(parity._TARGET_COSMETIC_LINE_PREFIXES) == expected
+
+
+def test_is_positive_assertion_on_validation_and_backend_result():
+    """Stage 216 close-audit MEDIUM-1: the predicate is now also on
+    MLIRValidation and MLIRBackendResult so release-gate callers
+    have the same DEFERRED-safe escape hatch across the Phase-E
+    family. A DEFERRED validation / result must NOT pass."""
+    deferred = MLIRValidation(
+        MLIRValidationVerdict.DEFERRED, ("mock deferred",))
+    assert not deferred.is_positive_assertion()
+    assert deferred.is_positive_assertion() is False
+    failed = MLIRValidation(
+        MLIRValidationVerdict.FAILED, ("mock failed",))
+    assert not failed.is_positive_assertion()
+    # The MLIRBackendResult predicate also matches DEFERRED -> False.
+    deferred_result = MLIRBackendResult(
+        target=MLIRBackendTarget.PTX,
+        validation=deferred,
+        lowering_attempted=False,
+        lowering_passed=None,
+        lowering_tool=None,
+        lowering_findings=("mock deferral",),
+        output_text=None,
+    )
+    assert not deferred_result.is_positive_assertion()
 
 
 def test_normalize_artifact_collapses_whitespace_runs():

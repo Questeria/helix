@@ -49,6 +49,7 @@ from .backends import (
     MLIRBackendResult,
     MLIRBackendStatus,
     MLIRBackendTarget,
+    _require_backend_target,
     lower_mlir_to_backend,
 )
 from .emit import MLIRTranslationError, emit_mlir_module
@@ -65,13 +66,17 @@ from .. import tile_ir
 #
 # LLVM_IR is intentionally absent here: the home-grown LLVM path
 # operates on `tir.Module`, not `tile_ir.TileModule`, so it cannot
-# be invoked directly from the parity gate. Chunk C will document
-# the LLVM_IR-specific parity contract (probably "MLIR side runs;
-# home-grown side is structurally inaccessible from a TileModule;
-# parity for LLVM_IR is verified by the Phase-D LLVM parity gate
-# at Stage 207, not Stage 215").
+# be invoked directly from the parity gate. Stage 207's Phase-D
+# parity gate is the canonical LLVM_IR check.
+#
+# Stage 216 close-audit HIGH-1 hardening: the registry's value type
+# is the BackendEmitter Protocol (not `object`) so a typo returning
+# a non-emitter type is caught at import / mypy time. A runtime
+# isinstance check in `_run_tile_ir_path` adds belt-and-suspenders.
+from ...backend._lowering_schema import BackendEmitter
+
 _HOMEGROWN_EMITTERS: dict[MLIRBackendTarget,
-                          Callable[[], object]] = {}
+                          Callable[[], BackendEmitter]] = {}
 
 
 def _register_homegrown_emitters() -> None:
@@ -91,6 +96,41 @@ def _register_homegrown_emitters() -> None:
         MLIRBackendTarget.METAL_MSL: MslEmitter,
         MLIRBackendTarget.WEBGPU_WGSL: WgslEmitter,
     }
+
+
+def _check_parity_target_tables() -> None:
+    """Stage 216 close-audit HIGH-2 drift guard: every Phase-E
+    target-keyed table in parity.py must cover the canonical
+    `MLIRBackendTarget` set (sans LLVM_IR for `_HOMEGROWN_EMITTERS`,
+    which is intentionally structurally-inaccessible). A future
+    `MLIRBackendTarget` member added without updating these tables
+    would otherwise silently degrade to "tool not registered" /
+    "no comment marker" findings."""
+    expected = set(MLIRBackendTarget)
+    line_keys = set(_TARGET_LINE_COMMENT_MARKER)
+    if line_keys != expected:
+        raise AssertionError(
+            f"helixc.ir.mlir.parity: _TARGET_LINE_COMMENT_MARKER "
+            f"keys {line_keys} != MLIRBackendTarget members {expected}")
+    cosmetic_keys = set(_TARGET_COSMETIC_LINE_PREFIXES)
+    if cosmetic_keys != expected:
+        raise AssertionError(
+            f"helixc.ir.mlir.parity: _TARGET_COSMETIC_LINE_PREFIXES "
+            f"keys {cosmetic_keys} != MLIRBackendTarget members "
+            f"{expected}")
+    # _HOMEGROWN_EMITTERS is checked only post-registration since it
+    # populates lazily; the runtime path uses `.get(target)` and
+    # surfaces a "not registered" finding for unknown targets, so
+    # the harder failure mode is "registered but for the wrong
+    # target". Check that whatever IS registered is a subset of the
+    # canonical targets minus LLVM_IR.
+    expected_homegrown = expected - {MLIRBackendTarget.LLVM_IR}
+    extra = set(_HOMEGROWN_EMITTERS) - expected_homegrown
+    if extra:
+        raise AssertionError(
+            f"helixc.ir.mlir.parity: _HOMEGROWN_EMITTERS has entries "
+            f"for {extra} which are not in MLIRBackendTarget \\ "
+            f"{{LLVM_IR}}")
 
 
 def _run_tile_ir_path(
@@ -117,7 +157,12 @@ def _run_tile_ir_path(
             "factory",)
     try:
         emitter = factory()
-        text = emitter.emit_module(module)  # type: ignore[attr-defined]
+        if not isinstance(emitter, BackendEmitter):
+            return None, (
+                f"home-grown path for {target.value}: factory returned "
+                f"non-BackendEmitter ({type(emitter).__name__}); "
+                "registry value-type contract violated",)
+        text = emitter.emit_module(module)
     except MemoryError:
         # Resource exhaustion is a host problem the caller must see,
         # not a parity-gate failure. Re-raise.
@@ -339,10 +384,11 @@ class ParityResult:
             "result invariants")
 
     def __post_init__(self) -> None:
-        if not isinstance(self.target, MLIRBackendTarget):
-            raise ValueError(
-                "ParityResult: target must be MLIRBackendTarget, got "
-                f"{self.target!r}")
+        # Stage 216 close-audit MEDIUM-3: delegate target validation
+        # to the same helper `MLIRBackendResult` / `MLIRBackendOutput-
+        # Validation` use so any future tightening of the target
+        # contract (e.g. deprecation guards) applies uniformly.
+        _require_backend_target(self.target)
         if not isinstance(self.status, ParityStatus):
             raise ValueError(
                 "ParityResult: status must be ParityStatus, got "
@@ -567,3 +613,10 @@ def mlir_vs_tile_ir_parity_check(
         mlir_result=mlir_result,
         tile_ir_output=tile_ir_output,
     )
+
+
+# Stage 216 close-audit HIGH-2: enforce the target-keyed table
+# coverage at module load. `_HOMEGROWN_EMITTERS` populates lazily,
+# so only the structural-equality check runs here; the
+# post-registration sweep runs inside `_register_homegrown_emitters`.
+_check_parity_target_tables()
