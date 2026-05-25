@@ -7948,10 +7948,17 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         let nt = tok_tag(tok_base, nk);
         if nt == 43 {                        // TK_DOTDOT
             cur_advance(sb);                 // consume `..`
+            // K1.L (2026-05-25): inclusive `..=` -- TK_EQ (15) right
+            // after TK_DOTDOT marks the closed form. p3 of the
+            // AST_PAT_RANGE node carries the inclusive flag; the
+            // kovc.hx codegen reads it to choose `jg` vs `jge`.
+            let pek = cur_get(sb);
+            let pet = tok_tag(tok_base, pek);
+            let inclusive = if pet == 15 { cur_advance(sb); 1 } else { 0 };
             let hk = cur_get(sb);
             let hi = tok_p1(tok_base, hk);
             cur_advance(sb);                 // consume hi INT
-            mk_node(67, v, hi, 0)
+            mk_node(67, v, hi, inclusive)
         } else {
             mk_node(64, v, 0, 0)
         }
@@ -8137,6 +8144,12 @@ fn parse_for(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume 'in' IDENT
     let start_expr = parse_expr_basic(tok_base, sb);
     cur_advance(sb);                              // consume '..' (TK_DOTDOT = 43)
+    // K1.L (2026-05-25): inclusive `..=` -- TK_EQ right after `..`
+    // makes the cond AST_LE instead of AST_LT, so the body runs at
+    // x == end too.
+    let pek = cur_get(sb);
+    let pet = tok_tag(tok_base, pek);
+    let for_inclusive = if pet == 15 { cur_advance(sb); 1 } else { 0 };
     let end_expr = parse_expr_basic(tok_base, sb);
     cur_advance(sb);                              // consume '{'
     let body_expr = parse_expr(tok_base, sb);
@@ -8148,7 +8161,8 @@ fn parse_for(tok_base: i32, sb: i32) -> i32 {
     let assign = mk_node(11, var_s, var_l, inc_expr);         // AST_ASSIGN
     let body_chain = mk_node(13, body_expr, assign, 0);       // AST_SEQ
     let var_ref_cond = mk_node(1, var_s, var_l, 0);           // AST_VAR
-    let cond_expr = mk_node(6, var_ref_cond, end_expr, 0);    // AST_LT
+    let cmp_tag = if for_inclusive == 1 { 22 } else { 6 };    // AST_LE vs AST_LT
+    let cond_expr = mk_node(cmp_tag, var_ref_cond, end_expr, 0);
     let while_node = mk_node(10, cond_expr, body_chain, 0);   // AST_WHILE
     let let_mut_node = mk_node(12, var_s, var_l, while_node); // AST_LET_MUT (4 slots)
     __arena_push(start_expr);                                  // 5th slot = init value

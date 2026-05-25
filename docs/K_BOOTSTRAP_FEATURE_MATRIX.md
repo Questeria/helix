@@ -89,7 +89,7 @@ iterates.
 | `continue` | ✅ | ❌ | KOVC-MISSING |
 | `return` (explicit) | ✅ | ✅ (K1.C, 2026-05-25, commits 816ce51 + b02017f: AST_RET tag 43 + parse_return + parse_primary arm) | PARITY |
 | `match` + patterns | ✅ | ✅ (Stage 5+ match-arm codegen at kovc.hx -- int-literal arms, wildcard `_`, enum-variant tags + payload destructure, bare tuple destructure all verified end-to-end. K1.F-discovery batch 2 2026-05-25: 4 regression tests pin behaviour via bootstrap-self-host) | PARITY |
-| `Range` (`a..b`, `a..=b`) | ✅ | ❌ | KOVC-MISSING |
+| `Range` (`a..b`, `a..=b`) | ✅ | ✅ (half-open `a..b` works as for-loop bounds since K1.G-wireup; closed `a..=b` lands in K1.L 2026-05-25 -- parser detects TK_EQ after TK_DOTDOT, parse_for uses AST_LE for the cond, emit_pat_range honors the inclusive flag from p3 of AST_PAT_RANGE. As-a-first-class-value Range is still not supported -- that needs a `Range` type and would be a follow-up) | PARITY |
 
 ## 5. Patterns (for `match`)
 
@@ -100,7 +100,7 @@ iterates.
 | `PatWildcard` (`_`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_match_wildcard_fallback_self_host` -- wildcard arm fires when no literal matches) | PARITY |
 | `PatTuple` (`(a, b, c)`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_pat_tuple_destructure_self_host` -- `match (3,4) { (a,b) => a+b }` returns 7) | PARITY |
 | `PatOr` (`a | b | c`) | ✅ | ❌ | KOVC-MISSING |
-| `PatRange` (`0..10`, `0..=10`) | ✅ | ✅ (K1.F-discovery batch 5 2026-05-25: half-open `0..10` form works as a match arm pattern -- verified via `test_bootstrap_kovc_pat_range_match_self_host`. Closed `0..=10` form is a separate gap -- lexer has no `..=` token; tracked as its own follow-up) | PARITY |
+| `PatRange` (`0..10`, `0..=10`) | ✅ | ✅ (Both forms now supported. Half-open `0..10` matched via K1.F-discovery batch 5 2026-05-25 (already worked). Closed `0..=10` lands in K1.L 2026-05-25 -- parse_pattern_atom detects TK_EQ after TK_DOTDOT, sets p3=1, emit_pat_range emits `jg` instead of `jge` for the upper-bound check. Verified via 3 bootstrap-self-host regression tests including a boundary test that 11 is NOT in 0..=10) | PARITY |
 | `PatVariant` (`Enum::Variant(p)`) | ✅ | ✅ (K1.F-discovery batch 3 2026-05-25: payload-variant destructure verified via `test_bootstrap_kovc_enum_payload_variant_match_self_host` -- `match n { N::Val(v) => v }` binds the payload to v) | PARITY |
 | `PatStruct` (`Point { x, y }`) | ✅ | ❌ | KOVC-MISSING |
 

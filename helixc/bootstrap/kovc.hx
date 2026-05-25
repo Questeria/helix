@@ -4706,13 +4706,23 @@ fn emit_pat_or(pat_idx: i32, scrut_off: i32, fail_state: i32,
 }
 
 // Stage 7 PAT_RANGE helper (exclusive: lo <= x < hi).
-fn emit_pat_range(scrut_off: i32, lo: i32, hi: i32, fail_state: i32) -> i32 {
+fn emit_pat_range(scrut_off: i32, lo: i32, hi: i32,
+                  fail_state: i32, inclusive: i32) -> i32 {
+    // K1.L (2026-05-25): the `inclusive` param chooses the upper-
+    // bound jump. Half-open `lo..hi` (inclusive == 0): fail when
+    // eax >= hi (`jge`). Closed `lo..=hi` (inclusive == 1): fail
+    // when eax > hi (`jg`). The lower-bound check is always `jl`
+    // (fail when eax < lo).
     let n_load = emit_mov_eax_local(scrut_off);
     let n_cmp_lo = emit_cmp_eax_imm32(lo);
     let disp_lo = emit_jl_rel32_placeholder();
     fail_jmp_state_add(fail_state, disp_lo);
     let n_cmp_hi = emit_cmp_eax_imm32(hi);
-    let disp_hi = emit_jge_rel32_placeholder();
+    let disp_hi = if inclusive == 1 {
+        emit_jg_rel32_placeholder()
+    } else {
+        emit_jge_rel32_placeholder()
+    };
     fail_jmp_state_add(fail_state, disp_hi);
     n_load + n_cmp_lo + 6 + n_cmp_hi + 6
 }
@@ -4761,7 +4771,12 @@ fn emit_scalar_pattern_test(pat_idx: i32, scrut_off: i32, fail_state: i32,
     if pt == 64 { emit_pat_lit(scrut_off, pp1, fail_state) }
     else { if pt == 66 { 0 }
     else { if pt == 65 { bind_push_typed(bind_state, pp1, pp2, scrut_off, 0); 0 }
-    else { if pt == 67 { emit_pat_range(scrut_off, pp1, pp2, fail_state) }
+    else { if pt == 67 {
+        // K1.L (2026-05-25): pp3 of AST_PAT_RANGE carries the
+        // inclusive flag (0 = half-open `..`, 1 = closed `..=`).
+        let pp3 = __arena_get(pat_idx + 3);
+        emit_pat_range(scrut_off, pp1, pp2, fail_state, pp3)
+    }
     else { 0 }}}}
 }
 

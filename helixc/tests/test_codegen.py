@@ -7192,6 +7192,54 @@ def test_bootstrap_kovc_pat_range_match_self_host():
     assert rc == 1, f"expected K2 exit 1 (5 in 0..10); got {rc}"
 
 
+def test_bootstrap_kovc_for_loop_inclusive_range_self_host():
+    """K1.L regression (2026-05-25): `for i in 0..=N` (closed) form
+    iterates through i = 0, 1, 2, ..., N (vs the half-open
+    `0..N` which stops at N-1). The desugar uses AST_LE (tag 22)
+    instead of AST_LT (tag 6) for the loop condition.
+
+    Without K1.L the closed `..=` form failed because the parser
+    consumed `..` and then tripped on the unexpected `=` token.
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "for_incl",
+        "fn main() -> i32 { let mut s = 0; "
+        "for i in 0..=4 { s = s + i }; s }",
+    )
+    # 0+1+2+3+4 = 10 (same as half-open `0..5`).
+    assert rc == 10, f"expected K2 exit 10 (0+1+2+3+4 from 0..=4); got {rc}"
+
+
+def test_bootstrap_kovc_pat_range_inclusive_self_host():
+    """K1.L regression: `match x { 0..=10 => 1 }` (closed) matches
+    when x is in [0, 10], including x == 10. emit_pat_range now
+    chooses `jg` (fail only if strictly above) for closed ranges
+    vs `jge` (fail if at or above) for half-open. p3 of the
+    AST_PAT_RANGE node carries the inclusive flag.
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "pat_range_incl",
+        "fn main() -> i32 { let x = 10; "
+        "match x { 0..=10 => 1, _ => 0 } }",
+    )
+    assert rc == 1, (
+        f"expected K2 exit 1 (10 is in closed range 0..=10); got {rc}")
+
+
+def test_bootstrap_kovc_pat_range_inclusive_above_self_host():
+    """K1.L regression: a value ABOVE the closed range's upper
+    bound falls through to the wildcard. Distinguishes the
+    inclusive form from a half-open one (where 10 in `0..10`
+    would NOT match -- it would only match `0..11`)."""
+    rc = _kovc_self_host_compile_and_run(
+        "pat_range_above",
+        "fn main() -> i32 { let x = 11; "
+        "match x { 0..=10 => 1, _ => 0 } }",
+    )
+    assert rc == 0, (
+        f"expected K2 exit 0 (11 is NOT in 0..=10); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
