@@ -9003,6 +9003,28 @@ fn parse_unsafe(tok_base: i32, sb: i32) -> i32 {
 }
 
 // `match` keyword has already been peeked but NOT consumed by caller.
+// K1.AL (2026-05-25): parse the body of a match arm. Two forms:
+//   `pat => expr`         -- single expression (delegates to
+//                             parse_expr_basic).
+//   `pat => { expr }`     -- braced block. Consume '{', parse the
+//                             interior expression via parse_expr
+//                             (which handles let-statements +
+//                             final expr like parse_loop's body),
+//                             consume '}'.
+// Returns the body's AST index. Caller consumes the trailing
+// '=>' BEFORE invoking this helper.
+fn parse_match_arm_body(tok_base: i32, sb: i32) -> i32 {
+    let bt = tok_tag(tok_base, cur_get(sb));
+    if bt == 5 {                             // TK_LBRACE
+        cur_advance(sb);                     // consume '{'
+        let body_expr = parse_expr(tok_base, sb);
+        cur_advance(sb);                     // consume '}'
+        body_expr
+    } else {
+        parse_expr_basic(tok_base, sb)
+    }
+}
+
 fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'match' IDENT
     let scrut_idx = parse_expr_basic(tok_base, sb);
@@ -9010,7 +9032,7 @@ fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
     // Parse first arm.
     let first_pat = parse_pattern(tok_base, sb);
     cur_advance(sb);                         // consume '=>' (TK_FATARROW = 42)
-    let first_body = parse_expr_basic(tok_base, sb);
+    let first_body = parse_match_arm_body(tok_base, sb);
     let arms_head = mk_node(63, first_pat, first_body, 0);
     let mut tail_idx: i32 = arms_head;
     let mut keep: i32 = 1;
@@ -9027,7 +9049,7 @@ fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
             } else {
                 let next_pat = parse_pattern(tok_base, sb);
                 cur_advance(sb);             // consume '=>'
-                let next_body = parse_expr_basic(tok_base, sb);
+                let next_body = parse_match_arm_body(tok_base, sb);
                 let new_arm = mk_node(63, next_pat, next_body, 0);
                 __arena_set(tail_idx + 3, new_arm);
                 tail_idx = new_arm;

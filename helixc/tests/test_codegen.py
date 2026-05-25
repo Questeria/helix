@@ -8202,6 +8202,35 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_match_block_arm_self_host():
+    """K1.AL (2026-05-25): match arm bodies now accept braced
+    blocks like `1 => { 42 }`. Previously parse_match_expr
+    called parse_expr_basic which doesn't recognize `{` as an
+    expression start. K1.AL adds parse_match_arm_body that
+    peeks for LBRACE and delegates to parse_expr (which handles
+    let-statements + final expr, like parse_loop's body).
+    Pinned via 3 sub-probes: simple block, multi-stmt block,
+    and a mixed match with both block and expr arms."""
+    rc_simple = _kovc_self_host_compile_and_run(
+        "match_block",
+        "fn main() -> i32 { let x = 1; "
+        "match x { 1 => { 42 }, _ => 0 } }",
+    )
+    assert rc_simple == 42, f"match block arm should yield 42; got {rc_simple}"
+    rc_multi = _kovc_self_host_compile_and_run(
+        "match_block_multi",
+        "fn main() -> i32 { let x = 1; "
+        "match x { 1 => { let y = x * 2; y + 10 }, _ => 0 } }",
+    )
+    assert rc_multi == 12, f"match block with let+expr should yield 12; got {rc_multi}"
+    rc_mixed = _kovc_self_host_compile_and_run(
+        "match_block_mixed",
+        "fn main() -> i32 { let x = 2; "
+        "match x { 1 => { 10 }, 2 => 20, _ => { 99 } } }",
+    )
+    assert rc_mixed == 20, f"mixed match (block + expr arms) should yield 20; got {rc_mixed}"
+
+
 def test_bootstrap_kovc_print_str_self_host():
     """K1.AK (2026-05-25): print_str("msg") emits sys_write(1,
     msg_ptr, msg_len) to stdout. Mirror of print_int but with
