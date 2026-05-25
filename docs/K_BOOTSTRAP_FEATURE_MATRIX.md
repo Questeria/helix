@@ -125,7 +125,7 @@ iterates.
 | `x = v` (`AST_ASSIGN`) | ✅ | ✅ | PARITY |
 | `x += v` etc. (compound assign) | ✅ | ✅ (K1.U 2026-05-25: parser-side desugar in parse_primary's var-ref dispatch -- peeks (op, `=`) after an IDENT and, if matched, emits AST_ASSIGN(name, AST_BINOP(VAR(name), rhs)). No lexer change needed; the lexer already emits `+`, `-`, `*`, `/`, `%`, `=` as separate tokens. Five compound ops supported -- the binop choice routes via existing AST_ADD (2), AST_SUB (3), AST_MUL (4), AST_DIV (5), AST_MOD (24) tags) | PARITY |
 | `ExprStmt` (`expr;`) | ✅ | ✅ (via AST_SEQ chains) | PARITY |
-| `const X: T = expr;` | ✅ | ❌ | KOVC-MISSING |
+| `const X: T = expr;` | ✅ | ✅ (K1.Z 2026-05-25: parse_const_decl consumes `const NAME [: T] = EXPR ;` at top level; wired into parse_top + parse_program's 2 decl loops. SYNTAX-ONLY parity -- the NAME is NOT registered in any lookup table, so user code that references the const downstream fails as undefined var. Full support needs a const_tab + IDENT lookup hook in parse_primary, queued as follow-up) | PARITY |
 | `Cast` (`expr as T`) | ✅ | ✅ (K1.N 2026-05-25: parse_unary handles postfix `as Type` -- consumes the `as` IDENT and the type IDENT, returns the inner expr unchanged. The bootstrap is type-erased at codegen (i32-everywhere) so cast is a runtime no-op. Chained casts loop. Type forms beyond a bare IDENT (`Box<T>`, `&T`, `(i32, i32)`) are not yet supported -- follow-up extension when needed) | PARITY |
 
 ## 8. Declarations / items
@@ -140,7 +140,7 @@ iterates.
 | Parametric struct `struct<T>` | ✅ (`struct_mono.py`) | ✅ (K1.F-discovery batch 7 2026-05-25: parser/codegen already accept `struct Box<T> { val: T }` and instantiation+field access work end-to-end. Verified via `test_bootstrap_kovc_generic_struct_self_host` + multi-instance variant. Sub-gap: PatStruct destructure inside a match arm (`match b { Box { val: v } => v }`) still fails -- separate row tracks PatStruct) | PARITY |
 | `enum Foo { A, B(i32) }` | ✅ | ✅ (Stage 6 enum codegen landed long ago: unit variants encoded as tag-only, payload variants destructured via match. K1.F-discovery batch 2 2026-05-25: pinned via `test_bootstrap_kovc_enum_unit_variant_match_self_host` (Color::Green) + `test_bootstrap_kovc_enum_payload_variant_match_self_host` (N::Val(42))) | PARITY |
 | `type Alias = T;` | ✅ | ✅ (K1.V 2026-05-25: parse_top dispatch + parse_program's two decl loops all recognize the "type" IDENT and route to a new parse_type_alias_decl that consumes `type NAME = TY ;`. Returns AST_STRUCT_DECL (tag 54) -- codegen no-op pattern shared with struct/enum/trait/impl/mod/use decls. Downstream uses of the alias name pass through let-type-position which accepts any IDENT) | PARITY |
-| `const X: T = expr;` (top-level) | ✅ | ❌ | KOVC-MISSING |
+| `const X: T = expr;` (top-level) | ✅ | ✅ (K1.Z 2026-05-25: same fix as the line-128 const row -- parse_const_decl wired into parse_top + parse_program. The "(top-level)" qualifier doesn't add anything; both rows reference the same feature) | PARITY |
 | `use foo::bar::baz;` | ✅ | ❌ | KOVC-MISSING |
 | `mod foo { ... }` / module decl | ✅ (`flatten_modules.py`) | ❌ | KOVC-MISSING |
 | `impl Type { methods }` | ✅ (`flatten_impls.py`) | ❌ | KOVC-MISSING |

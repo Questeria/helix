@@ -7931,6 +7931,40 @@ def test_bootstrap_kovc_let_ty_tuple_nested_self_host():
     assert rc == 11, f"nested tuple annotation: got {rc}"
 
 
+def test_bootstrap_kovc_const_top_level_self_host():
+    """K1.Z regression (2026-05-25): top-level `const NAME [: T]
+    = EXPR ;` is accepted as a no-op decl. The bootstrap consumes
+    the syntax via a new parse_const_decl + arms in parse_top +
+    parse_program's two decl loops. SYNTAX-ONLY parity -- the
+    NAME is NOT registered, so user code that references the
+    const downstream will fail (as an undefined var)."""
+    rc = _kovc_self_host_compile_and_run(
+        "const_first",
+        "const X: i32 = 42; fn main() -> i32 { 7 }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (const consumed, main returns 7); got {rc}"
+
+
+def test_bootstrap_kovc_const_no_type_annotation_self_host():
+    """K1.Z regression: the type annotation is optional --
+    `const Y = 99;` (no `: T`) also parses."""
+    rc = _kovc_self_host_compile_and_run(
+        "const_no_ty",
+        "const Y = 99; fn main() -> i32 { 11 }",
+    )
+    assert rc == 11, f"expected K2 exit 11 (const no-ty); got {rc}"
+
+
+def test_bootstrap_kovc_const_after_fn_self_host():
+    """K1.Z regression: const decls also work AFTER a fn decl
+    via the post-fn loop arm, mirroring K1.V's type-alias arm."""
+    rc = _kovc_self_host_compile_and_run(
+        "const_after_fn",
+        "fn main() -> i32 { 5 } const Z = 13;",
+    )
+    assert rc == 5, f"expected K2 exit 5 (fn first, const after); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
