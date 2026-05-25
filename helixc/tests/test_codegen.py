@@ -7483,6 +7483,39 @@ def test_bootstrap_kovc_where_clause_multibound_self_host():
         f"expected K2 exit 42 (multi-bound where skipped, 20+22); got {rc}")
 
 
+def test_bootstrap_kovc_nested_struct_field_access_self_host():
+    """K1.F-discovery batch 8 (2026-05-25): the matrix's "Struct
+    field access" entry (line 116) flagged a "no real layout walk"
+    caveat, but a probe shows nested struct field access works
+    end-to-end. `Outer { inner: Inner { v: 42 } }; o.inner.v`
+    chains `.field.field` correctly via the cur_struct_idx tracking
+    in parse_unary's postfix loop. Pin the behaviour."""
+    rc = _kovc_self_host_compile_and_run(
+        "nested_struct",
+        "struct Inner { v: i32 } "
+        "struct Outer { inner: Inner } "
+        "fn main() -> i32 { "
+        "let o = Outer { inner: Inner { v: 42 } }; o.inner.v }",
+    )
+    assert rc == 42, (
+        f"expected K2 exit 42 (o.inner.v); got {rc}")
+
+
+def test_bootstrap_kovc_multi_field_struct_self_host():
+    """K1.F-discovery batch 8: 3-field struct decl + literal +
+    field-read works. Each field gets its own offset from the rbp-
+    relative slot region (per the Stage 5 Iter D rbp-relative
+    addressing fix)."""
+    rc = _kovc_self_host_compile_and_run(
+        "multi_field",
+        "struct T { a: i32, b: i32, c: i32 } "
+        "fn main() -> i32 { let t = T { a: 1, b: 2, c: 3 }; "
+        "t.a + t.b + t.c }",
+    )
+    assert rc == 6, (
+        f"expected K2 exit 6 (1+2+3 from 3-field struct); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
