@@ -2730,6 +2730,7 @@ def test_stage206r_helper_function_table_drift_guard():
             llvm_ir._HelperFunctionSpec(
                 definition=("define internal i32 "
                             "@bad_no_prefix() { ret i32 0 }"),
+                ret_ty="i32",
                 ffi_declares=(),
             ))
         with pytest.raises(AssertionError, match="reserved `__helix_`"):
@@ -2743,6 +2744,7 @@ def test_stage206r_helper_function_table_drift_guard():
                 definition=("define internal i32 "
                             "@__helix_different() "
                             "{ ret i32 0 }"),
+                ret_ty="i32",
                 ffi_declares=(),
             ))
         with pytest.raises(AssertionError,
@@ -2759,6 +2761,7 @@ def test_stage206r_helper_function_table_drift_guard():
             llvm_ir._HelperFunctionSpec(
                 definition=("define internal void @__helix_noret() "
                             "{ unreachable }"),
+                ret_ty="void",
                 ffi_declares=(),
             ))
         with pytest.raises(AssertionError, match="no `ret` instruction"):
@@ -2778,6 +2781,7 @@ def test_stage206r_helper_function_table_drift_guard():
                     "entry:\n"
                     "  ret i32 0\n"
                     "}"),
+                ret_ty="i32",
                 ffi_declares=(
                     llvm_ir._FFIDeclareSpec(
                         target="write", callee="@write", ret_ty="i64",
@@ -2816,6 +2820,7 @@ def test_stage206r_helper_function_spec_rejects_malformed_ffi():
         llvm_ir._HelperFunctionSpec(
             definition=("define internal i32 @__helix_x() "
                         "{ ret i32 0 }"),
+            ret_ty="i32",
             ffi_declares=(("only", "four", "more", ("args",)),),  # type: ignore[arg-type]
         )
 
@@ -2830,6 +2835,7 @@ def test_stage206r_helper_public_registry_is_immutable():
             llvm_ir._HelperFunctionSpec(
                 definition="define internal i32 @__helix_tampered() "
                            "{ ret i32 0 }",
+                ret_ty="i32",
                 ffi_declares=(),
             ))
 
@@ -3117,6 +3123,7 @@ def test_stage206r_module_global_drift_guard_rejects_unknown_dep():
                     "entry:\n"
                     "  ret i32 0\n"
                     "}"),
+                ret_ty="i32",
                 ffi_declares=(),
                 module_globals=("__helix_unknown",),
             ))
@@ -3136,6 +3143,7 @@ def test_stage206r_helper_spec_rejects_malformed_module_globals():
                 "entry:\n"
                 "  ret i32 0\n"
                 "}"),
+            ret_ty="i32",
             ffi_declares=(),
             module_globals="not_a_tuple",  # type: ignore[arg-type]
         )
@@ -3148,6 +3156,7 @@ def test_stage206r_helper_spec_rejects_malformed_module_globals():
                 "entry:\n"
                 "  ret i32 0\n"
                 "}"),
+            ret_ty="i32",
             ffi_declares=(),
             module_globals=("user_global",),
         )
@@ -3249,6 +3258,7 @@ def test_stage206r_module_global_drift_guard_rejects_helper_vs_global_name_colli
                     "entry:\n"
                     "  ret i32 0\n"
                     "}"),
+                ret_ty="i32",
                 ffi_declares=(),
                 module_globals=(),
             ))
@@ -3291,6 +3301,7 @@ def test_stage206r_helper_spec_rejects_module_globals_duplicates():
                 "entry:\n"
                 "  ret i32 0\n"
                 "}"),
+            ret_ty="i32",
             ffi_declares=(),
             module_globals=("__helix_arena_base", "__helix_arena_base"),
         )
@@ -4042,6 +4053,551 @@ def test_stage206r_arena_triple_helper_emitted_once_per_module():
         "define internal i32 @__helix_arena_push_triple(") == 1, ll
     assert ll.count("call i32 @__helix_arena_push_triple(") == 2, ll
     assert llvm_ir.mock_validate_ll(ll) == []
+
+
+# ==========================================================================
+# Stage 206-R chunk — TRACE_ENTRY / TRACE_EXIT
+# First void-returning helper (`@__helix_trace_event(i32 fn_id, i32 kind)
+# -> void`) + two new module globals (`@__helix_trace_count: i32`,
+# `@__helix_trace_buf: [2*CAP x i32]`). emit_module pre-pass interns
+# fn_names from every TRACE op in module-walk order; the resulting
+# stable name->id table is shared across every _FnEmitter so fn_ids
+# are consistent across functions.
+# ==========================================================================
+def test_stage206r_trace_cap_matches_x86_backend():
+    """`_HELIX_TRACE_CAP` MUST equal `x86_64.HELIX_TRACE_CAP` —
+    Stage 207 parity gate compares the buffer's overflow point
+    across both backends."""
+    from helixc.backend import x86_64
+    assert llvm_ir._HELIX_TRACE_CAP == x86_64.HELIX_TRACE_CAP
+
+
+def test_stage206r_emit_trace_entry_exit_calls():
+    """TRACE_ENTRY emits `call void @__helix_trace_event(i32 fn_id,
+    i32 0)`; TRACE_EXIT emits the same with `i32 1`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("main", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "main"})
+    r = b.const_int(0)
+    b.emit(tir.OpKind.TRACE_EXIT, r, attrs={"fn_name": "main"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # fn_id = 0 (first and only interned fn_name).
+    assert "call void @__helix_trace_event(i32 0, i32 0)" in ll, ll
+    assert "call void @__helix_trace_event(i32 0, i32 1)" in ll, ll
+    # Helper + both globals emitted exactly once.
+    assert ll.count("define internal void @__helix_trace_event(") == 1, ll
+    assert ll.count("@__helix_trace_count = internal global") == 1, ll
+    assert ll.count("@__helix_trace_buf = internal global") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_trace_globals_not_emitted_when_unused():
+    """A module with no TRACE ops must NOT emit the trace globals
+    OR the helper — same lazy-emission discipline as the arena
+    global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.ret(b.const_int(1))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "@__helix_trace_count" not in ll, ll
+    assert "@__helix_trace_buf" not in ll, ll
+    assert "@__helix_trace_event" not in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_intern_trace_fn_ids_deterministic_order():
+    """Pre-pass interns fn_names in module-walk order: function
+    insertion order, then block order, then op order. Same module
+    -> same id table -> same emitted constants."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("alpha", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "alpha"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    b.begin_function("beta", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "beta"})
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "alpha"})  # repeat
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "gamma"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn_ids = llvm_ir._intern_trace_fn_ids(mod)
+    # Insertion order: alpha first (from `alpha`'s body), beta next
+    # (from `beta`'s first op), gamma last (from `beta`'s third op
+    # -- the second op is a repeat of alpha, so no new id).
+    assert fn_ids == {"alpha": 0, "beta": 1, "gamma": 2}
+
+
+def test_stage206r_intern_trace_fn_ids_shared_across_emitters():
+    """A fn_name appearing in TRACE ops in two different functions
+    resolves to the SAME id — the interning table is shared by
+    every _FnEmitter in emit_module."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("a", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "shared"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    b.begin_function("c", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "shared"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # Both functions reference fn_id 0 (the only interned name).
+    assert ll.count("call void @__helix_trace_event(i32 0, i32 0)") == 2, ll
+    # No other fn_id is used.
+    assert "i32 1, i32 0)" not in ll, ll
+
+
+def test_stage206r_intern_trace_fn_ids_skips_extern():
+    """`_intern_trace_fn_ids` skips `is_extern` functions (they
+    have no body to walk)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("extern_fn", [], _i32(),
+                     attrs={"is_extern": True})
+    b.end_function()
+    b.begin_function("main", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "main"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn_ids = llvm_ir._intern_trace_fn_ids(mod)
+    # "extern_fn" is not in the table even though it's a function
+    # name — its body wasn't scanned. "main" is interned because
+    # its body has a TRACE_ENTRY.
+    assert fn_ids == {"main": 0}
+
+
+def test_stage206r_intern_trace_fn_ids_skips_non_trace_ops():
+    """The pre-pass walks every op but only interns TRACE_ENTRY /
+    TRACE_EXIT — unrelated ops don't pollute the table."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn_ids = llvm_ir._intern_trace_fn_ids(mod)
+    assert fn_ids == {"f": 0}
+
+
+def test_stage206r_intern_trace_fn_ids_skips_malformed_fn_name():
+    """A malformed `fn_name` attr is left for the per-op handler to
+    reject (the pre-pass intentionally stays total over the
+    module). Test confirms a missing `fn_name` doesn't crash
+    `_intern_trace_fn_ids`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY)  # no fn_name attr
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn_ids = llvm_ir._intern_trace_fn_ids(mod)
+    assert fn_ids == {}
+
+
+def test_stage206r_trace_event_helper_has_three_blocks():
+    """The trace_event helper has three labelled blocks (entry /
+    store / skip)."""
+    helper = llvm_ir._HELIX_TRACE_EVENT_HELPER
+    for label in ("entry:", "store:", "skip:"):
+        assert f"\n{label}\n" in helper, (label, helper)
+
+
+def test_stage206r_trace_event_helper_text_pinned():
+    """Parity-sensitive lines of the trace_event helper. A mutation
+    of any one (full-buffer predicate, shift width, GEP element
+    type, store ordering) would silently produce a wrong layout
+    that x86 cannot read back."""
+    helper = llvm_ir._HELIX_TRACE_EVENT_HELPER
+    assert (f"icmp uge i32 %count, {llvm_ir._HELIX_TRACE_CAP}"
+            in helper), helper
+    # Each event is 2 i32s, so fn_id index = count * 2; the shl by
+    # 1 is the equivalent of count << 1 = count * 2.
+    assert "%fn_id_idx = shl i64 %count_i64, 1" in helper, helper
+    assert "%kind_idx = add i64 %fn_id_idx, 1" in helper, helper
+    assert ("getelementptr inbounds i32, ptr @__helix_trace_buf, "
+            "i64 %fn_id_idx") in helper, helper
+    assert ("getelementptr inbounds i32, ptr @__helix_trace_buf, "
+            "i64 %kind_idx") in helper, helper
+    # cursor advance must store cursor+1 back to the SAME slot we
+    # loaded from.
+    assert "%new_count = add i32 %count, 1" in helper, helper
+    assert ("store i32 %new_count, ptr @__helix_trace_count"
+            in helper), helper
+    # void return.
+    assert "ret void" in helper, helper
+
+
+def test_stage206r_trace_event_helper_atomic_on_overflow():
+    """No `store i32` runs in entry / skip blocks (only in
+    store). On full buffer, the helper branches `entry -> skip`
+    directly and returns void with no side effects."""
+    helper = llvm_ir._HELIX_TRACE_EVENT_HELPER
+    assert ("br i1 %full, label %skip, label %store" in helper), helper
+    entry_block = helper.split("store:")[0]
+    assert "store i32" not in entry_block, entry_block
+    skip_block = helper.split("skip:")[1]
+    assert "store i32" not in skip_block, skip_block
+
+
+def test_stage206r_trace_buf_size_matches_event_layout():
+    """The buffer global is `[2 * CAP x i32]` so each event (i32
+    fn_id + i32 kind) fits in two i32 slots — 8 bytes total per
+    event, matching x86_64.py's `HELIX_TRACE_CAP * 8` byte layout."""
+    cap = llvm_ir._HELIX_TRACE_CAP
+    assert (f"@__helix_trace_buf = internal global "
+            f"[{cap * 2} x i32] zeroinitializer"
+            in llvm_ir._HELIX_TRACE_BUF_GLOBAL_DEF), (
+        llvm_ir._HELIX_TRACE_BUF_GLOBAL_DEF)
+
+
+def test_stage206r_trace_count_starts_at_zero():
+    """The cursor global zeros at module load — the first event
+    lands at slot 0 (matches x86 which `zeroinitializer`s BSS)."""
+    assert ("@__helix_trace_count = internal global i32 0"
+            in llvm_ir._HELIX_TRACE_COUNT_GLOBAL_DEF), (
+        llvm_ir._HELIX_TRACE_COUNT_GLOBAL_DEF)
+
+
+def test_stage206r_trace_event_helper_emitted_once_per_module():
+    """Many TRACE ops in many functions still emit ONE helper and
+    ONE set of globals."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("a", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "a"})
+    b.emit(tir.OpKind.TRACE_EXIT, attrs={"fn_name": "a"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    b.begin_function("c", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "c"})
+    b.emit(tir.OpKind.TRACE_EXIT, attrs={"fn_name": "c"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("define internal void @__helix_trace_event(") == 1, ll
+    assert ll.count("@__helix_trace_count = internal global") == 1, ll
+    assert ll.count("@__helix_trace_buf = internal global") == 1, ll
+    assert ll.count("call void @__helix_trace_event(") == 4, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_trace_is_deterministic():
+    """Two emits of the same module produce byte-identical output
+    (deterministic pre-pass + sorted-by-name global / helper
+    emission)."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("alpha", [], _i32())
+        b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "alpha"})
+        b.ret(b.const_int(0))
+        b.end_function()
+        b.begin_function("beta", [], _i32())
+        b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "beta"})
+        b.ret(b.const_int(0))
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_trace_entry_rejects_operands():
+    """TRACE_ENTRY takes NO operands — fail closed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, b.const_int(0),
+           attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="TRACE_ENTRY takes no operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_trace_exit_accepts_zero_or_one_operands():
+    """TRACE_EXIT optionally takes one operand (the return value
+    for liveness). Both forms must succeed."""
+    # Zero operands.
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_EXIT, attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "call void @__helix_trace_event(i32 0, i32 1)" in ll, ll
+
+    # One operand.
+    mod2 = tir.Module()
+    b2 = tir.IRBuilder(mod2)
+    b2.begin_function("f", [], _i32())
+    v = b2.const_int(42)
+    b2.emit(tir.OpKind.TRACE_EXIT, v, attrs={"fn_name": "f"})
+    b2.ret(v)
+    b2.end_function()
+    ll2 = llvm_ir.emit_module(mod2)
+    assert "call void @__helix_trace_event(i32 0, i32 1)" in ll2, ll2
+
+
+def test_stage206r_trace_exit_rejects_two_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_EXIT, b.const_int(0), b.const_int(1),
+           attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="TRACE_EXIT expects zero or one operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_trace_rejects_op_with_result():
+    """TRACE_ENTRY / TRACE_EXIT are VOID — having a result is
+    malformed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, result_ty=_i32(),
+           attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="has no result"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_trace_rejects_missing_fn_name_attr():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY)  # no fn_name
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="non-empty 'fn_name' string attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_trace_rejects_empty_fn_name():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": ""})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="non-empty 'fn_name' string attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_trace_rejects_non_string_fn_name():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": 42})
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="non-empty 'fn_name' string attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_trace_via_emit_function_fails_closed():
+    """A TRACE op handed to `_FnEmitter` directly (without a
+    module-level pre-pass) has no fn-id table to resolve against
+    -- fail closed with a clear diagnostic pointing the caller at
+    `emit_module`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn = next(iter(mod.functions.values()))
+    # Construct without trace_fn_ids; calling .emit() should fail.
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="emit this module via `emit_module"):
+        llvm_ir._FnEmitter(fn).emit()
+
+
+def test_stage206r_trace_exit_keepalive_bitcast_emitted_for_operand():
+    """TRACE_EXIT with an operand emits a `bitcast` that forces an
+    LLVM-IR use of the operand — mirrors x86's `mov eax, [slot]`
+    load that keeps the value alive past the trace call.
+    Audit-fix MEDIUM-2 (silent-failure)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [], _i32())
+    v = b.const_int(42)
+    b.emit(tir.OpKind.TRACE_EXIT, v, attrs={"fn_name": "f"})
+    b.ret(v)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # Operand of TRACE_EXIT here is the const_int 42 -> inline
+    # literal `42`. Keepalive bitcast must reference it.
+    assert "%trace_keepalive.0 = bitcast i32 42 to i32" in ll, ll
+
+
+def test_stage206r_trace_exit_keepalive_skipped_when_no_operand():
+    """TRACE_EXIT with no operand has no value to keep alive — no
+    keepalive bitcast is emitted."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_EXIT, attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "%trace_keepalive" not in ll, ll
+
+
+def test_stage206r_trace_exit_keepalive_index_increments_per_op():
+    """Multiple TRACE_EXITs with operands in the same function get
+    distinct keepalive register names so they don't clash."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    b.emit(tir.OpKind.TRACE_EXIT, fn.params[0], attrs={"fn_name": "f"})
+    b.emit(tir.OpKind.TRACE_EXIT, fn.params[0], attrs={"fn_name": "f"})
+    b.emit(tir.OpKind.TRACE_EXIT, fn.params[0], attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    for idx in (0, 1, 2):
+        assert (f"%trace_keepalive.{idx} = bitcast i32 %v0 to i32"
+                in ll), (idx, ll)
+
+
+def test_stage206r_intern_trace_fn_ids_skips_kernel():
+    """`_intern_trace_fn_ids` skips `@kernel` functions for the
+    same reason it skips `is_extern`: kernels are rejected by
+    `emit_module` so their TRACE ops never produce IR — latent
+    defense against any future relaxation of the kernel rejection.
+    Audit-fix LOW (code-reviewer / type-design)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("kern", [], _i32(), attrs={"kernel": True})
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "kern_inner"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    b.begin_function("host", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "host"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn_ids = llvm_ir._intern_trace_fn_ids(mod)
+    # `kern_inner` is NOT interned even though it appeared first —
+    # the kernel function is skipped, so `host` gets id 0.
+    assert "kern_inner" not in fn_ids
+    assert fn_ids == {"host": 0}
+
+
+def test_stage206r_trace_diagnostic_names_both_root_causes():
+    """The "fn_id not in table" diagnostic must name BOTH possible
+    causes (hand-built dict vs concurrent mutation) so a developer
+    sees the more-likely cause first. Audit-fix MEDIUM-3
+    (silent-failure)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.TRACE_ENTRY, attrs={"fn_name": "f"})
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn = next(iter(mod.functions.values()))
+    # Construct with a hand-built dict that omits the fn_name.
+    emitter = llvm_ir._FnEmitter(fn, trace_fn_ids={"other_name": 0})
+    with pytest.raises(llvm_ir.LLVMEmitError) as exc_info:
+        emitter.emit()
+    msg = str(exc_info.value)
+    assert "hand-built" in msg, msg
+    assert "concurrent mutation" in msg, msg
+    assert "emit_module" in msg, msg
+
+
+def test_stage206r_helper_spec_advertises_ret_ty():
+    """Every helper in the registry advertises its return type
+    explicitly via `_HelperFunctionSpec.ret_ty`. Cross-checked at
+    module load by `_check_helper_function_table`. Audit-fix
+    type-design polish #1 (NOW that void helpers exist)."""
+    assert (llvm_ir._HELPER_FUNCTIONS["__helix_trace_event"].ret_ty
+            == "void")
+    for arena_name in ("__helix_arena_push", "__helix_arena_get",
+                       "__helix_arena_set", "__helix_arena_len",
+                       "__helix_arena_push_pair",
+                       "__helix_arena_push_triple"):
+        assert (llvm_ir._HELPER_FUNCTIONS[arena_name].ret_ty == "i32"), (
+            arena_name)
+    assert (llvm_ir._HELPER_FUNCTIONS["__helix_print_int"].ret_ty
+            == "i32")
+
+
+def test_stage206r_helper_spec_ret_ty_drift_rejected():
+    """A `_HelperFunctionSpec` whose `ret_ty` does not match the
+    helper's `define internal <ret_ty>` line is rejected at
+    construction (call-site signature drift would otherwise emit
+    invalid LLVM IR that `mock_validate_ll` does not detect)."""
+    with pytest.raises(
+            ValueError, match="ret_ty 'i64' does not match"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ret_ty="i64",  # claims i64, but body says i32
+            ffi_declares=(),
+        )
+
+
+def test_stage206r_helper_spec_rejects_empty_ret_ty():
+    with pytest.raises(ValueError, match="ret_ty must be"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ret_ty="",
+            ffi_declares=(),
+        )
+
+
+def test_stage206r_print_kind_catchall_does_not_mention_landed_ops():
+    """The PRINT _kind catchall must not advertise already-landed
+    ops as "later chunks" — audit-fix MEDIUM-1 (silent-failure /
+    documentation drift)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "unknown_kind"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError) as exc_info:
+        llvm_ir.emit_module(mod)
+    msg = str(exc_info.value)
+    # The landed ops must not appear as residual.
+    assert "TRACE_ENTRY/EXIT" not in msg, msg
+    # The actually-pending residual must.
+    assert "read_file_to_arena" in msg, msg
+
+
+def test_stage206r_trace_globals_shared_constant():
+    """`_HELIX_TRACE_GLOBALS` is referenced by the trace_event
+    helper — single source of truth for the (count, buf) pair so a
+    future trace-related helper picks up both by reference."""
+    assert llvm_ir._HELIX_TRACE_GLOBALS == (
+        "__helix_trace_count", "__helix_trace_buf")
+    spec = llvm_ir._HELPER_FUNCTIONS["__helix_trace_event"]
+    assert spec.module_globals is llvm_ir._HELIX_TRACE_GLOBALS
 
 
 def test_stage206r_arena_globals_shared_constant():

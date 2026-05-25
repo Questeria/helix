@@ -71,9 +71,18 @@ Supported so far (Stages 200, 202-204):
     AND the cursor does not advance. The `_MODULE_GLOBALS` registry
     mirrors `_HELPER_FUNCTIONS` for shared module-scope state; a
     helper that touches a global lists it in its `module_globals`
-    and the global is emitted exactly once per module. Other PRINT
-    kinds (read_file_to_arena, TRACE_*, QUOTE-family) are later
-    chunks.
+    and the global is emitted exactly once per module.
+  - trace ops (Stage 206-R): `TRACE_ENTRY` / `TRACE_EXIT` lower to a
+    call to the void-returning helper `@__helix_trace_event(i32 fn_id,
+    i32 kind)` (the first void-returning helper in the registry).
+    The helper appends a (fn_id, kind) event to the ring buffer
+    `@__helix_trace_buf` ([2*CAP x i32]) at cursor `@__helix_trace_count`
+    if there's room; full buffer silently drops the event (fail-
+    closed, no allocation/syscall — matches x86). fn_ids are
+    interned per-module by `_intern_trace_fn_ids` in module-walk
+    order — `emit_module` builds the table BEFORE constructing the
+    per-fn emitters and shares it across all of them. Other PRINT
+    kinds (read_file_to_arena, QUOTE-family) are later chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -354,6 +363,22 @@ _HELIX_ARENA_CAP = 2097152
 _HELIX_ARENA_GLOBALS: tuple[str, ...] = ("__helix_arena_base",)
 
 
+# Trace ring-buffer capacity — must agree with
+# `helixc/backend/x86_64.py::HELIX_TRACE_CAP`. Each trace event is
+# (i32 fn_id, i32 kind) — 8 bytes — so the buffer is `2 * CAP` i32
+# slots. Cursor (`@__helix_trace_count`) tracks how many events
+# have been appended; when it reaches CAP, subsequent events are
+# silently dropped (Phase-0 fail-closed: no allocation, no syscall,
+# no blocking — matches x86 line 4404-4407).
+_HELIX_TRACE_CAP = 1024
+
+
+# Shared module-globals tuple for the trace helper (parallel to
+# `_HELIX_ARENA_GLOBALS`).
+_HELIX_TRACE_GLOBALS: tuple[str, ...] = (
+    "__helix_trace_count", "__helix_trace_buf")
+
+
 @dataclass(frozen=True, slots=True)
 class _ModuleGlobalSpec:
     """One module-scope global variable a helper function depends on
@@ -413,14 +438,20 @@ class _ModuleGlobalSpec:
 @dataclass(frozen=True, slots=True)
 class _HelperFunctionSpec:
     """One internal helper function. `definition` is the full
-    `define internal ...` LLVM text (multi-line); `ffi_declares` is
-    a tuple of `_FFIDeclareSpec` entries the helper's body calls
-    (these go through the same `_register_ffi_declare` plumbing so a
-    helper-needed extern dedups against an FFI_CALL-needed extern
-    instead of double-declaring); `module_globals` is a tuple of
-    `__helix_*` module-global names this helper references (each is
-    looked up in `_MODULE_GLOBALS` and the global is emitted exactly
-    once per module).
+    `define internal ...` LLVM text (multi-line); `ret_ty` is the
+    helper's LLVM return-type string (e.g. "i32", "void"), used by
+    `_check_helper_function_table` to cross-check the call-site
+    emission shape — a mismatch between call-site `call <ret_ty>
+    @<name>(...)` and the helper's `define internal <ret_ty>` would
+    produce malformed IR that `mock_validate_ll` does not catch;
+    `ffi_declares` is a tuple of `_FFIDeclareSpec` entries the
+    helper's body calls (these go through the same
+    `_register_ffi_declare` plumbing so a helper-needed extern
+    dedups against an FFI_CALL-needed extern instead of double-
+    declaring); `module_globals` is a tuple of `__helix_*` module-
+    global names this helper references (each is looked up in
+    `_MODULE_GLOBALS` and the global is emitted exactly once per
+    module).
 
     Frozen + slots + final (subclass-guarded) — matches the house
     pattern for cross-cutting backend result types (see `Backend` in
@@ -429,6 +460,7 @@ class _HelperFunctionSpec:
     on invariant violation (same contract as the rest of the family).
     """
     definition: str
+    ret_ty: str
     ffi_declares: tuple[_FFIDeclareSpec, ...]
     module_globals: tuple[str, ...] = ()
 
@@ -451,6 +483,23 @@ class _HelperFunctionSpec:
                 f"_HelperFunctionSpec: definition must contain a "
                 f"line starting with `define ` "
                 f"(got {self.definition[:60]!r}...)")
+        if not isinstance(self.ret_ty, str) or not self.ret_ty.strip():
+            raise ValueError(
+                f"_HelperFunctionSpec: ret_ty must be a non-empty "
+                f"string (got {type(self.ret_ty).__name__})")
+        # Cross-check the advertised ret_ty against the helper's
+        # `define internal <ret_ty>` line — drift here would let a
+        # call-site emit `call i32 @<name>(...)` against a `define
+        # internal void` helper, producing IR that `mock_validate_ll`
+        # does not detect but `llvm-as` rejects.
+        expected_define_prefix = f"define internal {self.ret_ty} "
+        if not any(ln.lstrip().startswith(expected_define_prefix)
+                   for ln in self.definition.splitlines()):
+            raise ValueError(
+                f"_HelperFunctionSpec: ret_ty {self.ret_ty!r} does "
+                f"not match any `define internal <ret_ty> ...` line "
+                f"in the definition text (expected a line starting "
+                f"with {expected_define_prefix!r})")
         if not isinstance(self.ffi_declares, tuple):
             raise ValueError(
                 f"_HelperFunctionSpec: ffi_declares must be a tuple "
@@ -564,6 +613,23 @@ do_write:
 _HELIX_ARENA_GLOBAL_DEF = (
     f"@__helix_arena_base = internal global "
     f"[{_HELIX_ARENA_CAP + 1} x i32] zeroinitializer, align 4")
+
+
+# Trace globals — `@__helix_trace_count` is the i32 cursor (number of
+# events appended), `@__helix_trace_buf` is the ring buffer. Each
+# event is two consecutive i32s (fn_id at +0, kind at +4), so the
+# buffer is laid out as `[2 * CAP x i32]` and the helper indexes
+# `count * 2` for fn_id, `count * 2 + 1` for kind. Layout matches
+# x86_64.py's `(HELIX_TRACE_CAP * 8) bytes` BSS region (line ~4925
+# of x86_64.py) — the Stage 207 parity gate compares observable
+# event-buffer state after a traced run, so the byte layout must
+# agree exactly.
+_HELIX_TRACE_COUNT_GLOBAL_DEF = (
+    "@__helix_trace_count = internal global i32 0, align 4")
+
+_HELIX_TRACE_BUF_GLOBAL_DEF = (
+    f"@__helix_trace_buf = internal global "
+    f"[{_HELIX_TRACE_CAP * 2} x i32] zeroinitializer, align 4")
 
 # `__helix_arena_push(i32) -> i32`: push one i32 value to the arena;
 # return the new slot's index, or -1 on overflow. Mirrors
@@ -741,6 +807,38 @@ exit:
 }}"""
 
 
+# `__helix_trace_event(i32 fn_id, i32 kind) -> void`: append one
+# trace event to the ring buffer. Three blocks (entry / store /
+# skip). If `count >= CAP`, skip silently (full buffer fail-closed,
+# matches x86 comment "no allocation, no syscall"). Otherwise store
+# fn_id at `__helix_trace_buf[count * 2]`, kind at `[count * 2 + 1]`,
+# and increment `__helix_trace_count`. The helper returns void --
+# the first void-returning entry in `_HELPER_FUNCTIONS`. Mirrors
+# x86_64.py::_emit_trace_event (line ~1005).
+_HELIX_TRACE_EVENT_HELPER = f"""\
+define internal void @__helix_trace_event(i32 %fn_id, i32 %kind) {{
+entry:
+  %count = load i32, ptr @__helix_trace_count, align 4
+  %full = icmp uge i32 %count, {_HELIX_TRACE_CAP}
+  br i1 %full, label %skip, label %store
+
+store:
+  %count_i64 = sext i32 %count to i64
+  %fn_id_idx = shl i64 %count_i64, 1
+  %kind_idx = add i64 %fn_id_idx, 1
+  %fn_id_ptr = getelementptr inbounds i32, ptr @__helix_trace_buf, i64 %fn_id_idx
+  %kind_ptr = getelementptr inbounds i32, ptr @__helix_trace_buf, i64 %kind_idx
+  store i32 %fn_id, ptr %fn_id_ptr, align 4
+  store i32 %kind, ptr %kind_ptr, align 4
+  %new_count = add i32 %count, 1
+  store i32 %new_count, ptr @__helix_trace_count, align 4
+  br label %skip
+
+skip:
+  ret void
+}}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -750,6 +848,7 @@ exit:
 _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
     "__helix_print_int": _HelperFunctionSpec(
         definition=_HELIX_PRINT_INT_HELPER,
+        ret_ty="i32",
         ffi_declares=(
             _FFIDeclareSpec(
                 target="write",
@@ -761,33 +860,45 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
     ),
     "__helix_arena_push": _HelperFunctionSpec(
         definition=_HELIX_ARENA_PUSH_HELPER,
+        ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_get": _HelperFunctionSpec(
         definition=_HELIX_ARENA_GET_HELPER,
+        ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_set": _HelperFunctionSpec(
         definition=_HELIX_ARENA_SET_HELPER,
+        ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_len": _HelperFunctionSpec(
         definition=_HELIX_ARENA_LEN_HELPER,
+        ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_push_pair": _HelperFunctionSpec(
         definition=_HELIX_ARENA_PUSH_PAIR_HELPER,
+        ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_push_triple": _HelperFunctionSpec(
         definition=_HELIX_ARENA_PUSH_TRIPLE_HELPER,
+        ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_ARENA_GLOBALS,
+    ),
+    "__helix_trace_event": _HelperFunctionSpec(
+        definition=_HELIX_TRACE_EVENT_HELPER,
+        ret_ty="void",
+        ffi_declares=(),
+        module_globals=_HELIX_TRACE_GLOBALS,
     ),
 }
 
@@ -805,6 +916,14 @@ _MODULE_GLOBALS_AUTHORITY: dict[str, _ModuleGlobalSpec] = {
     "__helix_arena_base": _ModuleGlobalSpec(
         name="__helix_arena_base",
         definition=_HELIX_ARENA_GLOBAL_DEF,
+    ),
+    "__helix_trace_count": _ModuleGlobalSpec(
+        name="__helix_trace_count",
+        definition=_HELIX_TRACE_COUNT_GLOBAL_DEF,
+    ),
+    "__helix_trace_buf": _ModuleGlobalSpec(
+        name="__helix_trace_buf",
+        definition=_HELIX_TRACE_BUF_GLOBAL_DEF,
     ),
 }
 
@@ -955,8 +1074,21 @@ class _FnEmitter:
     the read-only string constants a TRAP needs; `emit_module` emits
     both deduped sets."""
 
-    def __init__(self, fn: tir.FnIR):
+    def __init__(self, fn: tir.FnIR, *,
+                 trace_fn_ids: Optional[Mapping[str, int]] = None):
         self.fn = fn
+        # Per-module trace-event fn_name -> i32 id table, populated by
+        # `_intern_trace_fn_ids` in `emit_module` before any emitter
+        # runs. `None` means no module-level interning was done (used
+        # by single-function callers like `emit_function`); a TRACE
+        # op in that case fails closed at emit time with an explicit
+        # diagnostic. The table is SHARED across all `_FnEmitter`
+        # instances in one `emit_module` call so a fn_name appearing
+        # in one function's TRACE op gets the same id as the same
+        # fn_name in another function. Typed as `Mapping` (read-only
+        # view) so a per-op handler cannot accidentally mutate the
+        # shared table.
+        self.trace_fn_ids: Optional[Mapping[str, int]] = trace_fn_ids
         # tir.Value.id -> LLVM operand text
         self.operand: dict[int, str] = {}
         # mutable-local name -> (alloca register, LLVM cell type),
@@ -968,6 +1100,10 @@ class _FnEmitter:
         # counter for the `%gep.N` element-address registers that a
         # LOAD_ELEM / STORE_ELEM emits.
         self.gep_count: int = 0
+        # counter for `%trace_keepalive.N` bitcast registers that
+        # TRACE_EXIT emits to force a real LLVM use of its optional
+        # operand (mirrors x86's always-load liveness semantics).
+        self.trace_keepalive_count: int = 0
         # extern symbol -> its module-scope `declare` line, filled as
         # FFI_CALLs (and TRAP's write/exit) are emitted; `emit_module`
         # collects + dedups these.
@@ -1340,6 +1476,16 @@ class _FnEmitter:
         gep = (f"{addr} = getelementptr [{length} x {elem_ty}], "
                f"ptr {array_reg}, i64 0, {idx_ty} {self._ref(index)}")
         return gep, addr
+
+    def _next_keepalive_idx(self) -> int:
+        """Allocate a fresh `%trace_keepalive.N` index — used by the
+        TRACE_EXIT handler to force an LLVM-level use of the
+        optional operand. N increments per TRACE_EXIT with an
+        operand within this function, so concurrent TRACE_EXITs
+        get distinct keepalive register names."""
+        idx = self.trace_keepalive_count
+        self.trace_keepalive_count += 1
+        return idx
 
     def _emit_call(self, op: tir.Op) -> str:
         """Lower a CALL or FFI_CALL to an LLVM `call`. The two share
@@ -2207,6 +2353,99 @@ class _FnEmitter:
                     f"i32 {self._ref(left)}, "
                     f"i32 {self._ref(middle)}, "
                     f"i32 {self._ref(right)})")
+        if kind in (tir.OpKind.TRACE_ENTRY, tir.OpKind.TRACE_EXIT):
+            # `trace.entry` / `trace.exit` append a (fn_id, kind=0/1)
+            # event to the trace ring buffer via the void-returning
+            # `__helix_trace_event` helper. The fn_id is the per-
+            # module interned i32 for the `fn_name` attr (table built
+            # by `_intern_trace_fn_ids` in `emit_module`). When the
+            # buffer is full the event is silently dropped (matches
+            # x86_64.py's "no allocation, no syscall" contract).
+            #
+            # TRACE_EXIT optionally takes one operand (the return
+            # value being returned); on x86 this triggers an extra
+            # `mov eax, [slot]` load that keeps the SSA value alive
+            # past the trace call.
+            #
+            # NOTE (Stage 207 parity): LLVM's SSA def-use chains do
+            # NOT keep a value alive when it has zero uses — if the
+            # TRACE_EXIT operand is the SOLE use of some SSA value,
+            # an LLVM DCE pass can drop the value's computation,
+            # diverging from x86's always-load. The handler emits a
+            # no-op `bitcast` to force the operand into a real use
+            # so the LLVM IR mirrors x86's observable load. The
+            # bitcast result is discarded; LLVM's instruction
+            # combiner will fold it away after register allocation
+            # but the SSA-level use keeps the operand's def alive
+            # through every optimization pass that respects use lists.
+            if kind == tir.OpKind.TRACE_ENTRY and op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: TRACE_ENTRY takes no "
+                    f"operands, got {len(op.operands)}")
+            if kind == tir.OpKind.TRACE_EXIT and len(op.operands) > 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: TRACE_EXIT expects "
+                    f"zero or one operands (the optional return value "
+                    f"for liveness), got {len(op.operands)}")
+            if op.results:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: {kind.value} has no "
+                    f"result (void), but got {len(op.results)}")
+            fn_name = op.attrs.get("fn_name", "")
+            if not isinstance(fn_name, str) or not fn_name:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: {kind.value} needs a "
+                    f"non-empty 'fn_name' string attr (got "
+                    f"{type(fn_name).__name__} {fn_name!r})")
+            if self.trace_fn_ids is None:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: {kind.value} requires "
+                    f"a module-level fn-id interning table — emit this "
+                    f"module via `emit_module(...)` (which builds the "
+                    f"table) rather than `emit_function(...)`")
+            fn_id = self.trace_fn_ids.get(fn_name)
+            if fn_id is None:
+                # Two possible causes — name both, since a developer
+                # writing a custom caller will see this before any
+                # documented `emit_module` flow could mutate state.
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: {kind.value} "
+                    f"references fn_name {fn_name!r} but it is not in "
+                    f"the trace-fn-id table (table has "
+                    f"{len(self.trace_fn_ids)} entries). Possible "
+                    f"causes: (a) the caller constructed _FnEmitter "
+                    f"directly with a hand-built trace_fn_ids that "
+                    f"omits this fn_name — use `emit_module(...)` to "
+                    f"auto-build the table; (b) the module was "
+                    f"mutated between `_intern_trace_fn_ids` and "
+                    f"`emit()` (concurrent mutation)")
+            event_kind = 0 if kind == tir.OpKind.TRACE_ENTRY else 1
+            self._register_helper_function("__helix_trace_event")
+            lines = []
+            # Force a real LLVM-IR use of the TRACE_EXIT operand to
+            # mirror x86's `mov eax, [slot]` load (see the Stage 207
+            # parity note above). `bitcast i32 X to i32` is the
+            # cheapest possible use — LLVM treats it as a no-op
+            # value but it appears in the use-list of X's def, so
+            # DCE cannot remove the def while the bitcast lives.
+            if (kind == tir.OpKind.TRACE_EXIT
+                    and len(op.operands) == 1):
+                operand = op.operands[0]
+                operand_ty = _llvm_int_type(
+                    operand.ty,
+                    ctx=f"function {self.fn.name!r} TRACE_EXIT operand")
+                # `%vN.trace_keepalive` namespaces the bitcast so it
+                # never collides with other generated names.
+                # `_op_index` is the position of this op within the
+                # function — stable across re-emits.
+                idx = self._next_keepalive_idx()
+                lines.append(
+                    f"%trace_keepalive.{idx} = bitcast "
+                    f"{operand_ty} {self._ref(operand)} to {operand_ty}")
+            lines.append(
+                f"call void @__helix_trace_event("
+                f"i32 {fn_id}, i32 {event_kind})")
+            return "\n".join(lines)
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
             if print_kind not in (
@@ -2216,8 +2455,9 @@ class _FnEmitter:
                     f"{print_kind!r} is not yet emitted by the LLVM "
                     f"backend (supported: 'print_str', 'print_int', "
                     f"'write_file'; the other kinds, e.g. "
-                    f"read_file_to_arena, TRACE_ENTRY/EXIT, the "
-                    f"QUOTE-family, are later chunks)")
+                    f"read_file_to_arena, are later chunks. TRACE_*, "
+                    f"ARENA_*, QUOTE/SPLICE/MODIFY/REFLECT_HASH lower "
+                    f"via their own OpKinds, NOT via PRINT)")
             if len(op.results) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT must have "
@@ -2404,8 +2644,9 @@ class _FnEmitter:
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
             f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
             f"write_file PRINT; ARENA_PUSH / GET / SET / LEN / "
-            f"PUSH_PAIR / PUSH_TRIPLE; RETURN; BR; COND_BR — floats "
-            f"and structs are later stages)"
+            f"PUSH_PAIR / PUSH_TRIPLE; TRACE_ENTRY / TRACE_EXIT; "
+            f"RETURN; BR; COND_BR — floats and structs are later "
+            f"stages)"
         )
 
 
@@ -2420,6 +2661,51 @@ def emit_function(fn: tir.FnIR) -> str:
     `emit_module`. Use `emit_module` for a complete,
     standalone-valid module."""
     return _FnEmitter(fn).emit()
+
+
+def _intern_trace_fn_ids(module: tir.Module) -> dict[str, int]:
+    """Walk a module and assign a stable i32 id to each `fn_name`
+    referenced by a TRACE_ENTRY/TRACE_EXIT op. Returns a name->id
+    dict where ids are 0, 1, 2... in first-encounter order.
+
+    Iteration: `module.functions` insertion order, then
+    `fn.blocks` order, then `block.ops` order. This produces a
+    deterministic id table — same module -> same ids — which is a
+    parity-gate prerequisite (the x86_64 backend uses the same
+    insertion-order interning).
+
+    Skips `is_extern` functions (they have no body to scan). A
+    fn_name that is not a non-empty string is left for the per-op
+    handler to reject loudly — this pre-pass intentionally avoids
+    raising so a single malformed TRACE op does not block
+    interning of every other op in the module.
+    """
+    fn_ids: dict[str, int] = {}
+    for fn in module.functions.values():
+        if fn.attrs.get("is_extern"):
+            continue
+        if fn.attrs.get("kernel"):
+            # Mirrors `emit_module`'s kernel rejection — a kernel
+            # function never produces LLVM IR (raised at line ~2670),
+            # so its TRACE ops would otherwise pollute the fn-id
+            # table with names that will never appear in emitted
+            # output. Latent today (the kernel rejection runs after
+            # this pre-pass), defensive against any future relaxation.
+            continue
+        for block in fn.blocks:
+            for op in block.ops:
+                if op.kind not in (
+                        tir.OpKind.TRACE_ENTRY, tir.OpKind.TRACE_EXIT):
+                    continue
+                fn_name = op.attrs.get("fn_name", "")
+                if not isinstance(fn_name, str) or not fn_name:
+                    # Per-op handler will reject this loudly with a
+                    # better diagnostic; skip rather than raise so
+                    # this pre-pass stays total over the module.
+                    continue
+                if fn_name not in fn_ids:
+                    fn_ids[fn_name] = len(fn_ids)
+    return fn_ids
 
 
 def emit_module(module: tir.Module) -> str:
@@ -2443,6 +2729,17 @@ def emit_module(module: tir.Module) -> str:
     # `_FnEmitter.emit()` raises a misleading "block has no
     # terminator"), and reject a `@kernel` function loudly — the LLVM
     # backend emits host CPU IR only, it does not lower GPU kernels.
+    # Pre-pass: build the trace-fn-id interning table by walking
+    # every TRACE_ENTRY / TRACE_EXIT op in every non-extern function
+    # (in `module.functions` insertion order, then per-block, then
+    # per-op order). This guarantees fn_id assignment is deterministic
+    # — same module input -> same id table -> same emitted constants.
+    # The table is shared across every `_FnEmitter` so a fn_name
+    # appearing in multiple functions' TRACE ops resolves to one
+    # consistent i32. Mirrors x86_64.py's per-module
+    # `_trace_fn_ids` semantics (shared across the single
+    # `compile_module_to_elf` walker).
+    trace_fn_ids = _intern_trace_fn_ids(module)
     emitters: list[_FnEmitter] = []
     for fn in module.functions.values():
         if fn.attrs.get("is_extern"):
@@ -2452,7 +2749,7 @@ def emit_module(module: tir.Module) -> str:
                 f"module: function {fn.name!r} is a @kernel (GPU) "
                 f"function — the LLVM backend emits host CPU IR only, "
                 f"it does not lower GPU kernels")
-        emitters.append(_FnEmitter(fn))
+        emitters.append(_FnEmitter(fn, trace_fn_ids=trace_fn_ids))
     bodies = [emitter.emit() for emitter in emitters]
     # Collect the module-scope `declare`s and string constants every
     # function accumulated during emission. A symbol declared with two

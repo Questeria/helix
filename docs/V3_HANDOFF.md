@@ -505,8 +505,8 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    `E741` ambiguous `l` variable name) + two coverage gaps (ARENA_SET
    non-i32 result, ARENA_SET >1 results) addressed.
 
-   **ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE — SHIPPED 2026-05-24** (this
-   chunk). Atomic multi-slot pushes. PAIR (2 i32 operands, threshold
+   **ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE — SHIPPED 2026-05-24** (commit
+   b0bf3d4). Atomic multi-slot pushes. PAIR (2 i32 operands, threshold
    `cursor >= CAP - 1`) writes at cursor+1/cursor+2, advances cursor
    by 2, returns OLD cursor or -1. TRIPLE (3 operands, threshold
    `cursor >= CAP - 2`) writes at cursor+1/2/3, advances by 3. Both
@@ -520,13 +520,34 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    PRINT catchall), 1 LOW (exit-block atomic-test pinning), plus
    helper-text/structural/dedup pinning for both helpers.
 
+   **TRACE_ENTRY / TRACE_EXIT — SHIPPED 2026-05-24** (this chunk).
+   First VOID-returning helper. Two new module globals
+   (`@__helix_trace_count: i32`, `@__helix_trace_buf: [2*CAP x i32]`,
+   CAP=1024 matches x86); `@__helix_trace_event(i32 fn_id, i32 kind)
+   -> void` 3-block helper (full-buffer fail-closed, atomic-or-none
+   on overflow). New `_intern_trace_fn_ids` pre-pass in `emit_module`
+   walks every TRACE op in deterministic order to assign a stable
+   per-module fn-id table, then passes the table to every per-fn
+   emitter so a fn_name appearing across functions resolves to one
+   id. TRACE_EXIT emits a `bitcast` keepalive on its optional operand
+   to force an LLVM-IR use (mirrors x86's `mov eax, [slot]` load
+   for liveness — without this, LLVM DCE could drop sole-use defs).
+   Type-design polish landed: `_HelperFunctionSpec` gained an
+   explicit `ret_ty` field cross-checked against the helper text by
+   `_check_helper_function_table` (call-site `call <ret_ty>
+   @<name>(...)` can no longer drift from `define internal <ret_ty>`
+   silently; `mock_validate_ll` does not catch this otherwise);
+   `_FnEmitter.trace_fn_ids` typed as `Mapping[str, int]` to prevent
+   per-op-handler mutation. Audit-fix batch: NO HIGH; 3 MEDIUMs
+   (stale PRINT catchall, TRACE_EXIT operand drop, "concurrent
+   mutation" diagnostic misattribution) + 1 LOW (kernel-skip in
+   pre-pass) all closed.
+
    **Next residual ops (in priority order)**: read_file_to_arena
-   (uses the arena global + a per-byte push loop; non-trivial multi-
-   syscall sequence); TRACE_ENTRY/EXIT (needs a `__helix_trace_buf`
-   ring-buffer global — likely the first void-returning helper,
-   which is the moment to upgrade `_HelperFunctionSpec` with an
-   explicit signature field); QUOTE/SPLICE/MODIFY/REFLECT_HASH
-   (metaprogramming).
+   (uses the arena global + a per-byte push loop); QUOTE / SPLICE /
+   MODIFY / REFLECT_HASH (metaprogramming — needs reflection-cells
+   infrastructure). Parity fixture currently points at QUOTE
+   (the simplest still-uncovered residual).
 
 When `v3.0.0` is tagged, v3.0 is done.
 
