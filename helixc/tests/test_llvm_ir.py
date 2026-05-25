@@ -5763,10 +5763,11 @@ def test_stage206r_polymorphic_dispatch_tables_are_immutable():
         llvm_ir._MODIFY_DISPATCH["i32"] = ("evil", "evil")  # type: ignore[index]
 
 
-def test_stage206r_reflect_hash_lands_in_catchall():
-    """REFLECT_HASH is unimplemented in BOTH backends (x86 has no
-    arm; LLVM uses the general catchall). The catchall must
-    name the unsupported op kind."""
+def test_stage206r_reflect_hash_rejects_zero_operands():
+    """v3.1 step 5: REFLECT_HASH is now LOWERED on LLVM (x86 still
+    has no arm — catchall stays in place until v3.1 step 6 deletes
+    the x86 backend). The lowering needs an i32 handle operand
+    naming the cell to hash; zero operands is malformed."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     b.begin_function("f", [], _i32())
@@ -5774,8 +5775,148 @@ def test_stage206r_reflect_hash_lands_in_catchall():
     b.ret(r)
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
-                       match="agi.reflect_hash"):
+                       match="REFLECT_HASH takes one operand"):
         llvm_ir.emit_module(mod)
+
+
+def test_stage206r_reflect_hash_emits_call_to_helper():
+    """REFLECT_HASH with an i32 handle operand lowers to a call to
+    the `__helix_reflect_hash` helper. The helper pulls in the
+    reflection-state global so the cell load resolves at link time."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32())], _i32())
+    r = b.emit(tir.OpKind.REFLECT_HASH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 "
+            f"@__helix_reflect_hash(i32 %v{fn.params[0].id})"
+            in ll), ll
+    # The helper itself is emitted exactly once.
+    assert ll.count(
+        "define internal i32 @__helix_reflect_hash") == 1, ll
+    # Pulled in the reflection-state global.
+    assert "@__helix_state_base" in ll, ll
+
+
+def test_stage206r_reflect_hash_rejects_non_i32_handle():
+    """The helper signature is `(i32) -> i32`. An i64 handle would
+    produce an LLVM type-mismatch at the call site."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.REFLECT_HASH, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="REFLECT_HASH handle has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_reflect_hash_rejects_non_i32_result():
+    """The helper returns i32. An i64 result is rejected.
+
+    The REFLECT_HASH op-handler's result-type check fires during
+    per-op emission inside `_FnEmitter._emit_op`. It does not
+    matter that the function's `ret` returns a different value
+    (a CONST_INT, here) — emit_module walks every op in source
+    order and fails the first malformed one. Calls to `_emit_op`
+    for ops whose result is later unused still run."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32())], _i32())
+    b.emit(tir.OpKind.REFLECT_HASH, fn.params[0],
+           result_ty=tir.TIRScalar("i64"))
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="REFLECT_HASH result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_reflect_hash_helper_has_correct_shape():
+    """The `__helix_reflect_hash` helper is a 3-block (entry/load/
+    exit) function over the reflection cells: bounds-check, load
+    i64 from cell, splitmix64 finalizer, truncate to i32, phi 0
+    on OOB. Pin the structural shape so a future drift in the
+    finalizer (e.g. a constant typo) surfaces as a test failure
+    rather than a runtime collision-rate regression.
+
+    Audit-fix CRITICAL-1: pin the multiplier constants AGAINST their
+    hex source-of-truth (not against pre-computed decimals — a
+    prior version had a typo that the test happily pinned in
+    place). The module-load assertion `_check_reflect_hash_constants`
+    is additional defense at the encoding layer."""
+    spec = llvm_ir._HELPER_FUNCTIONS["__helix_reflect_hash"]
+    assert spec.ret_ty == "i32", spec
+    assert spec.module_globals is llvm_ir._HELIX_STATE_GLOBALS, spec
+    body = spec.definition
+    # Bounds check uses _HELIX_NUM_CELLS.
+    assert (f"icmp sge i32 %handle, {llvm_ir._HELIX_NUM_CELLS}"
+            in body), body
+    # The Stafford mix13 (splitmix64 finalizer) multipliers, derived
+    # from their hex bit-pattern source-of-truth.
+    assert llvm_ir._SPLITMIX64_C1_HEX == 0xff51afd7ed558ccd
+    assert llvm_ir._SPLITMIX64_C2_HEX == 0xc4ceb9fe1a85ec53
+    c1_i64 = 0xff51afd7ed558ccd - (1 << 64)
+    c2_i64 = 0xc4ceb9fe1a85ec53 - (1 << 64)
+    assert f"mul i64 %x1, {c1_i64}" in body, body
+    assert f"mul i64 %x2, {c2_i64}" in body, body
+    # Three `lshr i64 %.., 33` mixings.
+    assert body.count("lshr i64") == 3, body
+    # Final truncation to i32.
+    assert "trunc i64 %x3 to i32" in body, body
+    # Three labels: entry / load / exit. Crude but stable.
+    for label in ("entry:", "load:", "exit:"):
+        assert label in body, (label, body)
+
+
+def test_stage206r_reflect_hash_constants_module_load_pinned():
+    """Audit-fix CRITICAL-1: the splitmix64 multiplier constants are
+    encoded as `hex - (1<<64)` (signed-twos-complement i64) and the
+    module-load assertion `_check_reflect_hash_constants` verifies
+    the round-trip. A future typo on either constant would crash at
+    import rather than silently producing a wrong hash."""
+    # Source-of-truth hex matches the well-known Stafford mix13.
+    assert llvm_ir._SPLITMIX64_C1_HEX == 0xff51afd7ed558ccd
+    assert llvm_ir._SPLITMIX64_C2_HEX == 0xc4ceb9fe1a85ec53
+    # The signed encoding round-trips to the hex.
+    assert (llvm_ir._SPLITMIX64_C1_I64 + (1 << 64)
+            == llvm_ir._SPLITMIX64_C1_HEX)
+    assert (llvm_ir._SPLITMIX64_C2_I64 + (1 << 64)
+            == llvm_ir._SPLITMIX64_C2_HEX)
+
+
+def test_stage206r_reflect_hash_round_trip_with_modify():
+    """A MODIFY(cell, value) followed by REFLECT_HASH(cell) calls
+    both helpers — the SSA chain is `modify ... reflect_hash`. The
+    test pins the emission shape so a future refactor that
+    accidentally folds the two helpers together is detectable."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    # Verifier function (i32, i32) -> i32 that always accepts.
+    b.begin_function("v", [("h", _i32()), ("x", _i32())], _i32())
+    b.ret(b.const_int(1))
+    b.end_function()
+    fn = b.begin_function("f", [("h", _i32()), ("x", _i32())], _i32())
+    m = b.emit(tir.OpKind.MODIFY,
+               fn.params[0], fn.params[1],
+               result_ty=_i32(), attrs={"verifier_fn": "v"})
+    # Ignore m's accepted-flag; hash the cell directly.
+    h = b.emit(tir.OpKind.REFLECT_HASH, fn.params[0], result_ty=_i32())
+    b.ret(h)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{m.id} = call i32 @__helix_modify(i32 "
+            f"%v{fn.params[0].id}, i32 %v{fn.params[1].id}, "
+            f"ptr @v)" in ll), ll
+    assert (f"%v{h.id} = call i32 @__helix_reflect_hash(i32 "
+            f"%v{fn.params[0].id})" in ll), ll
+    # Both helpers emitted.
+    assert ll.count("define internal i32 @__helix_modify(") == 1, ll
+    assert ll.count(
+        "define internal i32 @__helix_reflect_hash(") == 1, ll
 
 
 def test_stage206r_quote_splice_round_trip_arithmetic():

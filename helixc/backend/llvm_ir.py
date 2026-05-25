@@ -1261,6 +1261,91 @@ exit:
 }}"""
 
 
+# v3.1 step 5 — `__helix_reflect_hash(i32 handle) -> i32`: bounds-
+# checked load + splitmix64 finalizer + truncate to i32. The
+# reflection-state cells store i64 values (AST handles, content
+# identifiers, structural fingerprints). REFLECT_HASH gives a
+# deterministic content-addressed i32 hash of the i64 currently in
+# cell[handle] — suitable for use as a dedup key in
+# program-synthesis / evolutionary-search caches.
+#
+# The hash function is splitmix64's finalizer (Stafford mix13):
+#   x ^= x >> 33
+#   x *= 0xff51afd7ed558ccd
+#   x ^= x >> 33
+#   x *= 0xc4ceb9fe1a85ec53
+#   x ^= x >> 33
+# Truncated to i32 (low 32 bits of the final i64). This is the same
+# finalizer used by SplitMix64 and (a variant of) MurmurHash3 fmix64
+# — extensively studied for low-collision diffusion on small bit-
+# patterns. Pure SSA arithmetic; no allocation, no syscall.
+#
+# OOB handle (< 0 or >= NUM_CELLS) returns 0. The same exit-via-phi
+# pattern as SPLICE keeps the helper at three blocks.
+#
+# Audit-fix CRITICAL-1: a prior version of this helper hard-coded
+# the signed-twos-complement decimals at the call site, and one of
+# them silently drifted (the C2 multiplier corresponded to
+# `0xc4ceb9fde2b9b7d7` instead of the documented
+# `0xc4ceb9fe1a85ec53`). The hex constants are now the source of
+# truth — derived to signed i64 via a one-line conversion below.
+# A module-load assertion (`_check_reflect_hash_constants`) ties
+# the derived values to the hex bit-pattern so a future typo
+# crashes at import rather than emitting a silently-wrong hash.
+_SPLITMIX64_C1_HEX = 0xff51afd7ed558ccd  # Stafford mix13 multiplier 1
+_SPLITMIX64_C2_HEX = 0xc4ceb9fe1a85ec53  # Stafford mix13 multiplier 2
+# LLVM accepts unsigned hex via the signed-twos-complement decimal
+# form for i64 immediates. Compute once at module load.
+_SPLITMIX64_C1_I64 = _SPLITMIX64_C1_HEX - (1 << 64)
+_SPLITMIX64_C2_I64 = _SPLITMIX64_C2_HEX - (1 << 64)
+_HELIX_REFLECT_HASH_HELPER = f"""\
+define internal i32 @__helix_reflect_hash(i32 %handle) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %load
+
+load:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %v0 = load i64, ptr %slot_ptr, align 8
+  %s1 = lshr i64 %v0, 33
+  %x1 = xor i64 %v0, %s1
+  %m1 = mul i64 %x1, {_SPLITMIX64_C1_I64}
+  %s2 = lshr i64 %m1, 33
+  %x2 = xor i64 %m1, %s2
+  %m2 = mul i64 %x2, {_SPLITMIX64_C2_I64}
+  %s3 = lshr i64 %m2, 33
+  %x3 = xor i64 %m2, %s3
+  %hash_i32 = trunc i64 %x3 to i32
+  br label %exit
+
+exit:
+  %result = phi i32 [ 0, %entry ], [ %hash_i32, %load ]
+  ret i32 %result
+}}"""
+
+
+def _check_reflect_hash_constants() -> None:
+    """Pin the splitmix64 multiplier constants to their hex source-
+    of-truth. Catches any future re-encoding drift at module load
+    rather than at runtime-collision-rate inspection time."""
+    if _SPLITMIX64_C1_I64 + (1 << 64) != _SPLITMIX64_C1_HEX:
+        raise LLVMEmitError(
+            f"splitmix64 C1 i64 encoding "
+            f"({_SPLITMIX64_C1_I64}) does not round-trip to hex "
+            f"{_SPLITMIX64_C1_HEX:#x}")
+    if _SPLITMIX64_C2_I64 + (1 << 64) != _SPLITMIX64_C2_HEX:
+        raise LLVMEmitError(
+            f"splitmix64 C2 i64 encoding "
+            f"({_SPLITMIX64_C2_I64}) does not round-trip to hex "
+            f"{_SPLITMIX64_C2_HEX:#x}")
+
+
+_check_reflect_hash_constants()
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -1378,6 +1463,12 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
     ),
     "__helix_modify_f64": _HelperFunctionSpec(
         definition=_HELIX_MODIFY_F64_HELPER,
+        ret_ty="i32",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
+    "__helix_reflect_hash": _HelperFunctionSpec(
+        definition=_HELIX_REFLECT_HASH_HELPER,
         ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_STATE_GLOBALS,
@@ -3205,6 +3296,52 @@ class _FnEmitter:
                     f"@{helper_name}(i32 {self._ref(handle)}, "
                     f"{new_value_llvm_ty} {self._ref(new_value)}, "
                     f"ptr {verifier_global})")
+        if kind == tir.OpKind.REFLECT_HASH:
+            # `reflect.hash` lowers to a call into the
+            # `__helix_reflect_hash(i32 handle) -> i32` helper. The
+            # helper bounds-checks the handle, loads the i64 cell
+            # value, runs splitmix64's finalizer (Stafford mix13),
+            # and truncates to i32. OOB returns 0.
+            #
+            # x86_64.py has no REFLECT_HASH arm (the catchall
+            # NotImplementedError fires there). The parity gate
+            # (`helixc/backend/llvm_parity.py`) has no fixture
+            # exercising REFLECT_HASH today, so this asymmetry does
+            # not surface as an ERROR verdict. The asymmetry resolves
+            # at v3.1 step 6 (x86 deletion); until then any new
+            # parity-gate fixture that uses REFLECT_HASH would land
+            # in the ERROR partition and must be added together with
+            # an x86-side implementation OR a documented exclusion.
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: REFLECT_HASH takes "
+                    f"one operand (the i32 handle), got "
+                    f"{len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: REFLECT_HASH must "
+                    f"have exactly one result, got {len(op.results)}")
+            handle = op.operands[0]
+            handle_ty = _llvm_int_type(
+                handle.ty,
+                ctx=f"function {self.fn.name!r} REFLECT_HASH handle")
+            if handle_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: REFLECT_HASH handle "
+                    f"has LLVM type {handle_ty}, but the helper "
+                    f"expects i32")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} REFLECT_HASH result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: REFLECT_HASH result "
+                    f"has LLVM type {res_ty}, but the helper returns "
+                    f"i32")
+            self._register_helper_function("__helix_reflect_hash")
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_reflect_hash(i32 {self._ref(handle)})")
         if kind in (tir.OpKind.TRACE_ENTRY, tir.OpKind.TRACE_EXIT):
             # `trace.entry` / `trace.exit` append a (fn_id, kind=0/1)
             # event to the trace ring buffer via the void-returning
