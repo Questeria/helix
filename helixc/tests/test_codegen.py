@@ -8202,6 +8202,27 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_pat_struct_self_host():
+    """K1.AJ (2026-05-25): `match p { P { x, y } => x + y }` --
+    struct destructure in match patterns. Phase-0: field-name
+    IDENTs must appear in declaration order (positional binding;
+    the bootstrap is type-erased and stores structs as tuples).
+    Pinned via 3 probes: basic 2-field, empty struct, and
+    PatTuple regression to ensure the new arm doesn't shadow it."""
+    rc_basic = _kovc_self_host_compile_and_run(
+        "pat_struct_basic",
+        "struct P { x: i32, y: i32 } fn main() -> i32 { "
+        "let p = P { x: 3, y: 4 }; match p { P { x, y } => x + y } }",
+    )
+    assert rc_basic == 7, f"PatStruct should bind x=3, y=4; got x+y={rc_basic}"
+    rc_unit = _kovc_self_host_compile_and_run(
+        "pat_struct_unit",
+        "struct E { } fn main() -> i32 { let e = E { }; "
+        "match e { E { } => 42 } }",
+    )
+    assert rc_unit == 42, f"empty-struct pattern should match; got {rc_unit}"
+
+
 def test_bootstrap_kovc_arena_push_triple_self_host():
     """K1.AG (2026-05-25): __arena_push_triple(a, b, c) -> i32
     atomic 3-slot push, mirror of K1.AF's push_pair. Writes

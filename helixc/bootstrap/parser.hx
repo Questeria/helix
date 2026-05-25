@@ -8747,9 +8747,75 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
                 mk_node(69, safe_disc, sub_head, e_idx_pre)
             }}
         } else {
-            // Plain identifier binding pattern.
-            cur_advance(sb);                 // consume IDENT
-            mk_node(65, id_s, id_l, 0)
+            // K1.AJ (2026-05-25): PatStruct pre-check. IDENT followed
+            // by LBRACE AND the IDENT matches a registered struct ->
+            // parse as a struct destructure (`Point { x, y }`).
+            // Phase-0 limitation: field name IDENTs are bound as
+            // PAT_BIND nodes in the order they appear in the pattern,
+            // which must match the struct's declaration order. The
+            // bootstrap is type-erased and does positional layout for
+            // structs (same convention as PatTuple), so naming the
+            // fields in declaration order yields correct binding.
+            // Re-ordered patterns ("P { y, x }" for "struct P {x,y}")
+            // would bind incorrectly without trapping -- documented
+            // as a Phase-0 gap.
+            let s_idx_pat = struct_tab_lookup_idx(sb, id_s, id_l);
+            let is_struct_pat = if s_idx_pat >= 0 {
+                if t1_pre == 5 { 1 } else { 0 }
+            } else { 0 };
+            if is_struct_pat == 1 {
+                cur_advance(sb);             // consume IDENT (struct name)
+                cur_advance(sb);             // consume '{'
+                // Empty struct pattern `Foo {}` -- arity 0.
+                let pt_first_t = tok_tag(tok_base, cur_get(sb));
+                if pt_first_t == 6 {
+                    cur_advance(sb);         // consume '}'
+                    mk_node(70, 0, 0, 0)
+                } else {
+                    // First field IDENT.
+                    let fk0 = cur_get(sb);
+                    let fn0_s = tok_p2(tok_base, fk0);
+                    let fn0_l = tok_p3(tok_base, fk0);
+                    cur_advance(sb);         // consume first field IDENT
+                    let first_bind = mk_node(65, fn0_s, fn0_l, 0);
+                    let mut sub_head_st: i32 = mk_node(51, first_bind, 0, 0);
+                    let mut tail_idx_st: i32 = sub_head_st;
+                    let mut arity_st: i32 = 1;
+                    let mut keep_st: i32 = 1;
+                    while keep_st == 1 {
+                        let at_st = tok_tag(tok_base, cur_get(sb));
+                        if at_st == 6 {       // '}'
+                            keep_st = 0;
+                        } else { if at_st == 13 {  // ','
+                            cur_advance(sb);
+                            let next_t = tok_tag(tok_base, cur_get(sb));
+                            if next_t == 6 {       // trailing comma before '}'
+                                keep_st = 0;
+                            } else {
+                                let fk_n = cur_get(sb);
+                                let fn_n_s = tok_p2(tok_base, fk_n);
+                                let fn_n_l = tok_p3(tok_base, fk_n);
+                                cur_advance(sb);
+                                let next_bind = mk_node(65, fn_n_s, fn_n_l, 0);
+                                let new_cons = mk_node(51, next_bind, 0, 0);
+                                __arena_set(tail_idx_st + 2, new_cons);
+                                tail_idx_st = new_cons;
+                                arity_st = arity_st + 1;
+                            };
+                        } else { if at_st == 0 {  // EOF safety
+                            keep_st = 0;
+                        } else {
+                            keep_st = 0;
+                        }}};
+                    }
+                    cur_advance(sb);         // consume '}'
+                    mk_node(70, arity_st, sub_head_st, 0)
+                }
+            } else {
+                // Plain identifier binding pattern.
+                cur_advance(sb);                 // consume IDENT
+                mk_node(65, id_s, id_l, 0)
+            }
         }}
     } else { if t == 3 {
         // LPAREN — tuple pattern (sub_pat1, sub_pat2, ...).
