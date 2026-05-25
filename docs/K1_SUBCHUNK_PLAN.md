@@ -158,6 +158,12 @@ inside an if.
 
 ### K1.D — `print_int` builtin
 
+**Status (2026-05-25): FIRST ATTEMPT REVERTED.** The K1.D-stub
+attempt (dispatch arm wired but body emits trap 17001) bumped the
+`install_builtin_names` init-loop count from 152 → 160 to add a
+new name-pointer slot at index 157 for "print_int". That broke
+the self-host loop test (K2 produced no K3). Tree reverted.
+
 **Goal:** kovc-compiled programs can call `print_int(n)` to write an
 i32 to stdout.
 
@@ -167,12 +173,58 @@ syscall.
 
 - kovc.hx: in `try_emit_builtin_call`, recognize a call to fn name
   "print_int" with one arg, and emit the ASCII-conversion + syscall
-  sequence inline (~50 bytes of code).
+  sequence inline (~80-100 bytes of code).
 
-**Tests:** `fn main() -> i32 { print_int(42); 0 }` — verify stdout
-contains "42".
+**LESSON FROM FIRST ATTEMPT (2026-05-25):**
 
-**Estimated size:** ~100 lines, 1 commit.
+Bumping `install_builtin_names`'s init-loop count (152 → 160)
+breaks the self-host fixpoint. After the bump, the K2 binary
+produced by K1 (kovc-compiled-kovc) crashes or fails to write
+output. Root cause hypothesis: subsequent name-byte arena
+positions shift by 8 bytes, and SOMETHING in the codegen path
+is position-sensitive — possibly the `lea_rax_rip` placeholder
+patches for builtin-name comparisons, or the `str_table`'s
+backpatching, or the bn_state region's interaction with the
+match_state / OR scratch regions at slots 84-117 / 123-156.
+
+The first-attempt edits (5 minimal changes — bump loop, add
+install, add accessor, add dispatch arm, add brace) collectively
+break the fixpoint without breaking Python helixc's compilation.
+Suggests the bug surfaces only at SELF-COMPILE time, not
+Python-compile time. Fragile.
+
+**REDO PLAN (next K1.D attempt):**
+
+Three options under consideration:
+
+- **Option (i)** — Use one of the EXISTING zero-init slots
+  (0..151) that's currently unused. Looking at the slot map,
+  slot 9..56 is str_table (50 slots). Slot 72 is "__strlen".
+  Slot 56 might be unused (str_table is at 9-56 inclusive = 48
+  slots for 16 entries × 3 slots/entry). Pick a slot, no
+  init-loop bump needed. This avoids the position-shift risk.
+
+- **Option (ii)** — Direct byte-literal comparison in
+  `try_emit_builtin_call`: write a small `is_print_int_name(s, l)`
+  helper that uses 9 byte_eqs against inline byte constants
+  (112, 114, 105, 110, 116, 95, 105, 110, 116). No install
+  needed; no bn_state slot. Cost: more verbose dispatch site.
+  Risk: parser recursion depth (the 9 nested ifs OR a while
+  loop with hardcoded `if i == 0 { 112 } else { ... }` cascade).
+
+- **Option (iii)** — Defer entirely. Move K1.D to AFTER K2
+  (parity harness) lands. K2 might surface why the init-loop
+  bump breaks the fixpoint, making the fix obvious.
+
+**Preferred next attempt: option (i)** — find an unused slot in
+the existing 0..151 range. The slot map needs a careful audit
+of which slots are actually claimed vs reserved-for-future.
+
+**Tests:** after the wire-up + body lands, `fn main() -> i32 {
+print_int(42); 0 }` should print "42" to stdout (and exit 0).
+
+**Estimated size:** body ~80 lines + tests, 1 commit. After
+option (i) resolves the slot question.
 
 ### K1.E — functional string literals (codegen)
 
