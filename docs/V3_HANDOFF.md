@@ -679,13 +679,54 @@ acknowledgement** per the same gate that protected Stage 221a/221b.
   code-reviewer) independently flagged it. Fixed before shipping.
   7 new tests; x86_64.py still has no REFLECT_HASH arm — the
   asymmetry resolves at step 6.
+- **v3.1 step 3b — bulk test-file migration to the seam.** SHIPPED
+  (commit `630be9f`). 19 test files (58 import sites; biggest is
+  `test_ir.py` @ 37) swapped `from helixc.backend.x86_64 import
+  compile_module_to_elf` to the `_codegen_backend` helper. The
+  helper's API is drop-in; no semantic change at default
+  (`HELIX_TEST_BACKEND` unset → routes to x86). 1196 tests across
+  the migrated surface verified green.
+- **v3.1 step 6a — shared-constants module.** SHIPPED (commit
+  `56859d1`). Runtime layout constants (HELIX_NUM_CELLS,
+  HELIX_CELL_SIZE, HELIX_ARENA_CAP, HELIX_TRACE_CAP, SYSV_STACK_*)
+  extracted to `helixc/backend/_shared_constants.py`. Both
+  backends + `lower_ast.py` + `test_stage44` now read from one
+  source of truth. Audit caught two converged MEDIUMs (small-int
+  `is`-cache silent-pass + missing mirror contract pin); both
+  fixed with source-grep checks paralleling the lower_ast pattern.
+  Closes the `lower_ast → x86_64` and `test_stage44 → x86_64`
+  constant dependencies that previously blocked the delete.
 - **v3.1 step 6 — Delete x86_64.py.** **GATED — needs explicit user
-  acknowledgement.** Stage 221b deferral. Requires updating
-  `_codegen_backend.py::_DEFAULT_BACKEND` from `"x86"` to `"llvm"`,
-  removing the legacy file, migrating any remaining
-  `from .backend.x86_64 import ...` call sites (~10 test files,
-  `check.py`, `examples/run.py`, `lower_ast.py`). Irreversible.
-- **v3.1 step 7 — Tag `v3.1.0`.** Depends on step 6.
+  acknowledgement AND a policy decision.** Stage 221b deferral.
+  Remaining `from .backend.x86_64 import compile_module_to_elf`
+  consumers in production code are:
+    - `check.py:1918` (the LEGACY `--emit-asm` flag — deletes with
+      x86_64),
+    - `check.py:2061` (the GENERAL `-o <output>` ELF path — needs
+      a replacement),
+    - `examples/run.py:28` (example runner — needs a replacement).
+  Plus subprocess-CLI tests in `test_cli.py` (~40 sites that
+  invoke `python -m helixc.backend.x86_64 ...` as the legacy
+  CLI entrypoint).
+
+  **Open policy question for the user:** the LLVM toolchain path
+  (`compile_module_to_elf_via_llvm`) returns DEFERRED on Windows /
+  macOS without a Linux sysroot. Deleting x86_64 without a
+  replacement breaks the `helixc check -o foo.bin` dev loop on
+  those machines. Options A/B/C/D were tabled on 2026-05-25:
+    - **A.** Require LLVM toolchain (delete x86, document).
+    - **B.** Keep x86 as a no-toolchain fallback (cleanup never
+      finishes).
+    - **C.** Bundle a Python-side LLVM-IR-to-ELF assembler (weeks
+      of work, separate project).
+    - **D.** Defer the delete, tag v3.1.0 with the cleanup done
+      so far (D was the recommended path).
+  No decision yet → autonomous worker should not advance to step 6.
+- **v3.1 step 7 — Tag `v3.1.0`.** Depends on step 6 decision.
+  With option D, this can ship NOW (the cleanup-track work is
+  coherent; x86 deletion just slips to v3.2 or later). With
+  option A, this waits on the delete. With B/C, the meaning of
+  v3.1 shifts.
 
 When `v3.1.0` is tagged, v3.1 cleanup is done. v3.2 begins the
 real-execution Stage-207 parity gate work.
