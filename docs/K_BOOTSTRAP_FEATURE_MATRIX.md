@@ -53,8 +53,8 @@ iterates.
 | `FloatLit` (f32) | ✅ | ✅ (AST_FLOATLIT) | PARITY |
 | `f64` literal | ✅ | ✅ (AST_FLOATLIT_F64, tag 34) | PARITY |
 | `bf16` literal | ✅ | ✅ (AST_FLOATLIT_BF16, tag 42) | PARITY |
-| `f16` literal | ✅ | ? | UNKNOWN |
-| `BoolLit` (`true`/`false`) | ✅ | ? (no AST tag found in survey) | UNKNOWN |
+| `f16` literal | ✅ | ❌ (type tag 5 reserved in kovc.hx line 1177; no AST tag emitted) | KOVC-MISSING |
+| `BoolLit` (`true`/`false`) | ✅ | ❌ (no `true`/`false` keyword in lexer.hx; the bootstrap has NO bool literal — `i32` 1/0 is used instead) | KOVC-MISSING |
 | `CharLit` (`'a'`) | ✅ | ❌ | KOVC-MISSING |
 | `StrLit` | ✅ | ⚠️ (AST_STR_LIT, tag 25; codegen emits 0 — only useful as file-IO arg) | KOVC-MISSING |
 
@@ -74,7 +74,7 @@ iterates.
 | Bitwise `& | ^` | ✅ | ✅ (BAND/BOR/BXOR) | PARITY |
 | Shifts `<< >>` | ✅ | ✅ (AST_SHL/AST_SHR) | PARITY |
 | Comparisons `< > <= >= == !=` | ✅ | ✅ | PARITY |
-| Logical `&&` `||` | ✅ | ? (short-circuit semantics need check) | UNKNOWN |
+| Logical `&&` `||` | ✅ | ❌ (no `&&` or `||` token in lexer.hx — only `&` `|` for bitwise) | KOVC-MISSING |
 | Address-of `&`, deref `*` | ✅ | ❌ | KOVC-MISSING |
 
 ## 4. Control flow
@@ -123,7 +123,7 @@ iterates.
 | `let x = v` (`AST_LET`) | ✅ | ✅ | PARITY |
 | `let mut x = v` (`AST_LET_MUT`) | ✅ | ✅ | PARITY |
 | `x = v` (`AST_ASSIGN`) | ✅ | ✅ | PARITY |
-| `x += v` etc. | ✅ | ? | UNKNOWN |
+| `x += v` etc. (compound assign) | ✅ | ❌ (no `+=`/`-=`/`*=`/`/=` etc. tokens in lexer.hx) | KOVC-MISSING |
 | `ExprStmt` (`expr;`) | ✅ | ✅ (via AST_SEQ chains) | PARITY |
 | `const X: T = expr;` | ✅ | ❌ | KOVC-MISSING |
 | `Cast` (`expr as T`) | ✅ | ❌ | KOVC-MISSING |
@@ -261,15 +261,15 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 
 ## 17. Coverage tally
 
-Rough count from the matrix above (UNKNOWN rows excluded from
-both buckets):
+Rough count from the matrix above, post K0 chunk 2 resolution of
+the 5 UNKNOWN rows (all five resolved to KOVC-MISSING):
 
 | Bucket | Count |
 |--------|-------|
 | **PARITY** (kovc.hx matches Python) | ~28 rows |
-| **KOVC-MISSING** (Python has it, kovc.hx does not) | ~110 rows |
+| **KOVC-MISSING** (Python has it, kovc.hx does not) | ~115 rows |
 | **PYTHON-MISSING** (kovc.hx has it but Python doesn't) | 0 |
-| **UNKNOWN** (survey uncertain — refine next chunk) | ~5 |
+| **UNKNOWN** (survey uncertain) | 0 |
 
 The bulk of Helix's surface — types beyond scalars, control flow
 beyond if/while, all patterns, all aggregates, all metaprogramming,
@@ -312,18 +312,104 @@ Suggested order based on dependency (foundations first):
 Subsequent K1 chunks pick up the remaining KOVC-MISSING rows in
 roughly the order they unblock other work.
 
-## 19. UNKNOWN-row refinement (deferred chunk)
+## 19. UNKNOWN-row refinement — RESOLVED (K0 chunk 2)
 
-A follow-up K0 chunk should resolve the UNKNOWN rows:
+K0 chunk 2 resolved all 5 UNKNOWN rows; all five resolved to
+**KOVC-MISSING** (the bootstrap simply does not have the feature
+at the lexer level — adding it requires lexer + parser + codegen
+work):
 
-- `f16` literal in `kovc.hx`?
-- `BoolLit` (`true` / `false`) AST tag in parser.hx?
-- `&&` / `||` short-circuit semantics in kovc.hx?
-- Compound assignment (`+=` etc.) in kovc.hx?
-- Any AST tags 24, 27, 43-49, 51, 54-98 reserved or in use?
+- **`f16` literal in `kovc.hx`?** Resolved: type tag 5 is reserved
+  in `kovc.hx` line 1177 ("`5 = f16 (Stage 1.5, reserved)`") but no
+  AST tag is emitted by `parser.hx` for `f16` literals — they would
+  lex as identifiers. KOVC-MISSING.
+- **`BoolLit` (`true`/`false`) AST tag in parser.hx?** Resolved:
+  `lexer.hx` has no `true`/`false` keyword. The bootstrap uses raw
+  `i32` `1`/`0` instead of a boolean type. KOVC-MISSING (entirely
+  absent, not just codegen-stubbed).
+- **`&&` / `||` short-circuit semantics?** Resolved: `lexer.hx` has
+  only `TK_AMP` (`&`, tag 27) and `TK_PIPE` (`|`, tag 28) — single-
+  character bitwise tokens. No two-character `&&` / `||`. KOVC-MISSING.
+- **Compound assignment `+=` etc.?** Resolved: `lexer.hx` has only
+  `TK_EQ` (`=`, tag 15). No compound-assignment tokens. KOVC-MISSING.
+- **Reserved AST tag holes 43-49, 54-75, 77-98?** Resolved: a full
+  enumeration of `mk_node(N, ...)` calls in `parser.hx` shows the
+  ACTIVE tag set is {0-42, 50, 51, 52, 53, 76, 99}. The remaining
+  numbers (43-49, 54-75, 77-98) are unused — placeholders for
+  future AST shapes. Not a gap in the matrix.
 
-Resolving these tightens the gap-list count by ~5 rows and removes
-the question marks.
+The matrix now has **0 UNKNOWN rows**. Gap list is final-form
+(subject to refinement as new Python features land or as new ports
+expose surface I missed).
+
+## 20. Active AST-tag enumeration (post-survey reference)
+
+For future K-track chunks, this is the authoritative list of AST
+tags that `parser.hx` actually emits (via `mk_node`). Tags not
+listed are unused holes in the numbering.
+
+| Tag | Name | Comment |
+|-----|------|---------|
+| 0 | AST_INT | i32 literal (p1 = value) |
+| 1 | AST_VAR | identifier (p1 = name_start, p2 = name_len) |
+| 2 | AST_ADD | binary `+` |
+| 3 | AST_SUB | binary `-` |
+| 4 | AST_MUL | binary `*` |
+| 5 | AST_DIV | binary `/` |
+| 6 | AST_LT | `<` |
+| 7 | AST_IF | `if cond then else` |
+| 8 | AST_LET | immutable binding |
+| 9 | AST_NEG | unary `-` |
+| 10 | AST_WHILE | `while cond body` |
+| 11 | AST_ASSIGN | `x = v` |
+| 12 | AST_LET_MUT | mutable binding |
+| 13 | AST_SEQ | semicolon sequence (left-to-right) |
+| 14 | AST_FN_DECL | function declaration |
+| 15 | AST_FN_LIST | linked list of fn decls |
+| 16 | AST_CALL | function call (p1, p2 = name; p3 = args_head) |
+| 17 | AST_ARG | argument cons-cell |
+| 18 | AST_PARAM | function parameter (p4 = type_tag) |
+| 19 | AST_GT | `>` |
+| 20 | AST_EQ | `==` |
+| 21 | AST_NE | `!=` |
+| 22 | AST_LE | `<=` |
+| 23 | AST_GE | `>=` |
+| 24 | AST_MOD | binary `%` |
+| 25 | AST_STR_LIT | string literal (codegen stub — emits 0) |
+| 26 | AST_BNOT | unary `~` (bitwise not) |
+| 27 | AST_FLOATLIT | f32 literal (default float type) |
+| 28 | AST_BAND | binary `&` (bitwise AND) |
+| 29 | AST_BOR | binary `|` (bitwise OR) |
+| 30 | AST_BXOR | binary `^` (bitwise XOR) |
+| 31 | AST_NOT | unary `!` (logical not, currently same as bitwise on i32) |
+| 32 | AST_SHL | `<<` |
+| 33 | AST_SHR | `>>` arithmetic right shift |
+| 34 | AST_FLOATLIT_F64 | f64 literal |
+| 35 | AST_INTLIT_I64 | i64 literal |
+| 36 | AST_INTLIT_U32 | u32 literal |
+| 37 | AST_INTLIT_U8 | u8 literal |
+| 38 | AST_INTLIT_U64 | u64 literal |
+| 39 | AST_INTLIT_I8 | i8 literal |
+| 40 | AST_INTLIT_I16 | i16 literal |
+| 41 | AST_INTLIT_U16 | u16 literal |
+| 42 | AST_FLOATLIT_BF16 | bf16 literal (Stage 1.5) |
+| 50 | AST_TUPLE_LIT | tuple literal (p1 = arity, p2 = head_idx) |
+| 51 | AST_TUPLE_CONS | tuple element cons-cell |
+| 52 | AST_TUPLE_FIELD | `.field` access (p2 = field_idx) |
+| 53 | AST_INDEX | `a[i]` |
+| 76 | AST_STDLIB_FN | stdlib fn reference (parse_program splices these) |
+| 99 | AST_ERR | parse/lex error (p1 = trap_id) |
+
+**Reserved (unused) tag holes**: 43-49, 54-75, 77-98. The K-track
+can claim these for new AST shapes (bool literal, char literal,
+`&&` / `||`, `for`, `loop`, `break`, `continue`, `return`, `match`,
+`PatLit` etc., struct literal, enum constructor, cast, const,
+`unsafe`, AGI `quote`/`splice`/`modify`, attribute parsing). 50+
+slots remain — enough for the entire K1 port work.
+
+**Token-tag holes in `lexer.hx`**: 19, 20, 21, 22, 24, 26. These
+are similarly available for new tokens (`true`, `false`, `&&`, `||`,
+compound-assign tokens, `for`, `loop`, `match`, etc.).
 
 ---
 
