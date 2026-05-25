@@ -8074,6 +8074,43 @@ def test_bootstrap_kovc_modal_counterfactual_self_host():
     assert rc == 33, f"Counterfactual<i32> annotation: got {rc}"
 
 
+def test_bootstrap_kovc_panic_traps_self_host():
+    """K1.F-discovery batch 20 (2026-05-25): the matrix listed
+    `panic("msg")` builtin as KOVC-MISSING. Probe through the
+    bootstrap self-host chain shows it actually compiles cleanly
+    and traps at runtime via SIGILL (rc=132): parse_primary parses
+    `panic("oh no")` as a regular AST_CALL with callee name
+    "panic", panic_pass walker (kovc.hx:2654) validates the
+    str-literal-arg contract, and codegen emits an unresolved CALL
+    whose backpatcher fills the stub with `ud2 + 3 nops` (because
+    no fn_decl named "panic" exists in the source). Different
+    mechanism than Python's TRAP-op lowering -- which emits a
+    "panic[id]: msg\\n" header and sys_exit -- but the fail-stop
+    semantic is preserved. Pin the behaviour."""
+    rc = _kovc_self_host_compile_and_run(
+        "panic_traps",
+        'fn main() -> i32 { panic("oh no"); 0 }',
+    )
+    assert rc == 132, (
+        f"panic('msg') in bootstrap must SIGILL (rc=132); got {rc}"
+    )
+
+
+def test_bootstrap_kovc_panic_unreachable_after_self_host():
+    """K1.F-discovery batch 20 (2026-05-25): code after a panic
+    must never execute. Probe wraps panic in an if-then so the
+    parser sees it inside a block and codegen still emits the
+    ud2 stub; the trailing `42` would only return if execution
+    fell through, which would mean the trap silently no-op'd."""
+    rc = _kovc_self_host_compile_and_run(
+        "panic_unreachable",
+        'fn main() -> i32 { if 1 == 1 { panic("halt"); } else { } 42 }',
+    )
+    assert rc == 132, (
+        f"post-panic code must not execute; expected SIGILL (132), got {rc}"
+    )
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
