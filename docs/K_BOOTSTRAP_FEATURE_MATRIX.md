@@ -87,7 +87,7 @@ iterates.
 | `loop` (infinite) | ✅ | ❌ | KOVC-MISSING |
 | `break` (with optional value) | ✅ | ❌ | KOVC-MISSING |
 | `continue` | ✅ | ❌ | KOVC-MISSING |
-| `return` (explicit) | ✅ | ❌ (AST_RET parsed; no codegen) | KOVC-MISSING |
+| `return` (explicit) | ✅ | ✅ (K1.C, 2026-05-25, commits 816ce51 + b02017f: AST_RET tag 43 + parse_return + parse_primary arm) | PARITY |
 | `match` + patterns | ✅ | ⚠️ (parsed; codegen ud2) | KOVC-MISSING |
 | `Range` (`a..b`, `a..=b`) | ✅ | ❌ | KOVC-MISSING |
 
@@ -133,7 +133,7 @@ iterates.
 | Feature | Python | `kovc.hx` | Status |
 |---------|--------|-----------|--------|
 | `fn` (basic) | ✅ | ✅ (`AST_FN_DECL`, 0-6 args) | PARITY |
-| `fn` with stack-passed args (> 6) | ✅ (`SYSV_STACK_ARG_*` infra) | ⚠️ (traps 16002) | KOVC-MISSING |
+| `fn` with stack-passed args (> 6) | ✅ (`SYSV_STACK_ARG_*` infra) | ✅ (K1.B, 2026-05-25, commit cb63d78: SysV caller-cleanup pattern; 9 new mov-rsp-disp32 helpers; float args via int regs is documented divergence from x86_64.py) | PARITY |
 | Generic `fn<T>` | ✅ (`monomorphize.py`) | ⚠️ (parser tracks gp_tab; no monomorph) | KOVC-MISSING |
 | `where` clauses | ✅ | ❌ | KOVC-MISSING |
 | `struct Foo { ... }` | ✅ | ⚠️ (parser has struct_table; codegen missing) | KOVC-MISSING |
@@ -261,15 +261,19 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 
 ## 17. Coverage tally
 
-Rough count from the matrix above, post K0 chunk 2 resolution of
-the 5 UNKNOWN rows (all five resolved to KOVC-MISSING):
+Rough count from the matrix above, post K0 + K1.B + K1.C
+shipping (live count tracked in `scripts/helix_status.py`'s
+`K_BOOTSTRAP_PARITY_DONE`):
 
-| Bucket | Count |
-|--------|-------|
-| **PARITY** (kovc.hx matches Python) | ~28 rows |
-| **KOVC-MISSING** (Python has it, kovc.hx does not) | ~115 rows |
-| **PYTHON-MISSING** (kovc.hx has it but Python doesn't) | 0 |
-| **UNKNOWN** (survey uncertain) | 0 |
+| Bucket | Count | Notes |
+|--------|-------|-------|
+| **PARITY** (kovc.hx matches Python) | ~30 rows | +2 since K0: K1.B (stack args > 6) + K1.C (return) |
+| **KOVC-MISSING** (Python has it, kovc.hx does not) | ~113 rows | -2 since K0 |
+| **PYTHON-MISSING** (kovc.hx has it but Python doesn't) | 0 | |
+| **UNKNOWN** (survey uncertain) | 0 | resolved K0 chunk 2 |
+
+The K-bootstrap percentage in the Telegram status update is
+computed live from these counts: `30 / 143 ≈ 21%`.
 
 The bulk of Helix's surface — types beyond scalars, control flow
 beyond if/while, all patterns, all aggregates, all metaprogramming,
@@ -429,6 +433,63 @@ the codebase read-only (no edits):
 Both agent reports were merged into this matrix. Any row marked
 UNKNOWN is where the two surveys did not converge; subsequent
 chunks resolve them.
+
+## Appendix A2 — bootstrap-fragility lessons (post K1.A-D)
+
+After shipping K1.A, K1.B, K1.C and attempting K1.D, two
+defect patterns have surfaced that any future K-track chunk
+should respect:
+
+### Pattern 1: host-parser recursion budget (K1.B audit-fix)
+
+Inserting nested control flow (a `while` loop, a multi-arm
+if-cascade) DIRECTLY inside an existing AST_CALL or similar
+deeply-nested codegen arm trips Python helixc's parser
+recursion budget. Symptom: the bootstrap compiles via Python
+but the produced K1 binary miscompiles its own source when
+generating K2 (so K2 is broken even though K1 looks OK).
+
+**Mitigation:** extract the new logic into top-level helper
+functions. The arm at the deeply-nested site becomes a single
+flat call to the helper. K1.B's `emit_stack_args_reverse_copy`
+and `emit_load_six_int_args` are the established pattern.
+
+### Pattern 2: arena-position shift (K1.D defeated us)
+
+Bumping `install_builtin_names`'s init-loop count (152 → 160)
+to add a new name-pointer slot at index 157 shifted the
+position of subsequent name-byte arena cells by 8 bytes.
+Symptom: identical to Pattern 1 — Python compiles fine, K2
+breaks. Root cause UNRESOLVED — likely a `lea_rax_rip`
+placeholder patch or the str_table back-patching encodes
+expectations about specific arena positions.
+
+**Mitigations to try (untested):**
+- Use an existing zero-init slot inside the 0..151 range.
+- Direct byte-literal comparison without the bn_state lookup.
+- Defer until K2 (parity harness) lands; the harness might
+  surface the position-sensitive code.
+
+### Pattern 3 (suspected, untested): the parse_primary IDENT
+sub-cascade
+
+K1.C's first attempt added a new arm in parse_primary's IDENT
+keyword cascade but adjusted the closing brace count at the
+WRONG location (the outer cascade closer at parser.hx:3848,
+not the IDENT sub-cascade closer at parser.hx:3722). Counted
++2 instead of the correct +1.
+
+**Mitigation:** carefully count brace pairs locally at the
+insertion site, not at the file-end closer pile. Each `} else
+{ if X { ... } else { ... }` pattern is +2 opens, +1 close at
+the site, requiring +1 close downstream (not +2). The K1.C
+deadcode + wireup split lets the wireup be a tiny isolated
+edit with verifiable arithmetic.
+
+These patterns will recur on K1.E-J chunks. The discipline:
+write the chunk small, run the bootstrap-kovc test slice
+(`pytest -k bootstrap_kovc`, ~5-min wall) before commit, REVERT
+clean if it breaks, document the lesson.
 
 ## Appendix B — what this matrix is NOT
 
