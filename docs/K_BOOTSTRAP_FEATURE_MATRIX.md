@@ -126,7 +126,7 @@ iterates.
 | `x += v` etc. (compound assign) | ✅ | ❌ (no `+=`/`-=`/`*=`/`/=` etc. tokens in lexer.hx) | KOVC-MISSING |
 | `ExprStmt` (`expr;`) | ✅ | ✅ (via AST_SEQ chains) | PARITY |
 | `const X: T = expr;` | ✅ | ❌ | KOVC-MISSING |
-| `Cast` (`expr as T`) | ✅ | ❌ | KOVC-MISSING |
+| `Cast` (`expr as T`) | ✅ | ✅ (K1.N 2026-05-25: parse_unary handles postfix `as Type` -- consumes the `as` IDENT and the type IDENT, returns the inner expr unchanged. The bootstrap is type-erased at codegen (i32-everywhere) so cast is a runtime no-op. Chained casts loop. Type forms beyond a bare IDENT (`Box<T>`, `&T`, `(i32, i32)`) are not yet supported -- follow-up extension when needed) | PARITY |
 
 ## 8. Declarations / items
 

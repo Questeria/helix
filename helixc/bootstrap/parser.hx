@@ -1903,6 +1903,36 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                 cur_struct_idx = 0 - 1;
             } else { keep_p = 0; }; };
         }
+        // K1.N (2026-05-25): postfix `expr as Type` cast. The
+        // bootstrap is type-erased at codegen (all storage is i32-
+        // shaped), so cast is a runtime no-op: consume the `as`
+        // IDENT and the type IDENT, return `prim` unchanged. Chained
+        // casts (`x as i32 as i64`) loop. Type forms beyond a bare
+        // IDENT (e.g. `Box<T>`, `&T`, `(i32, i32)`) are NOT yet
+        // supported -- a follow-up can extend this when needed.
+        let mut keep_cast: i32 = 1;
+        while keep_cast == 1 {
+            let ck = cur_get(sb);
+            let ct = tok_tag(tok_base, ck);
+            if ct == 2 {
+                let cs = tok_p2(tok_base, ck);
+                let cl = tok_p3(tok_base, ck);
+                // Match the 2-byte IDENT "as" = bytes (97, 115).
+                let is_as = if cl == 2 {
+                    if __arena_get(cs) == 97 {
+                        if __arena_get(cs + 1) == 115 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 };
+                if is_as == 1 {
+                    cur_advance(sb);       // consume `as`
+                    cur_advance(sb);       // consume type IDENT
+                } else {
+                    keep_cast = 0;
+                }
+            } else {
+                keep_cast = 0;
+            }
+        }
         prim
     }}}
 }

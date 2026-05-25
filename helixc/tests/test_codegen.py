@@ -7364,6 +7364,41 @@ def test_bootstrap_kovc_generic_struct_two_instances_self_host():
         f"expected K2 exit 16 (a.v + b.v = 5+11); got {rc}")
 
 
+def test_bootstrap_kovc_cast_simple_self_host():
+    """K1.N regression (2026-05-25): `expr as Type` is a type-
+    erased no-op in the i32-everywhere bootstrap. parse_unary's
+    else-branch loops after the .field/[idx] postfix, consuming
+    `as` + the type IDENT. The inner expr is returned unchanged."""
+    rc = _kovc_self_host_compile_and_run(
+        "cast_simple",
+        "fn main() -> i32 { let x = 7 as i32; x }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (cast no-op); got {rc}"
+
+
+def test_bootstrap_kovc_cast_chained_self_host():
+    """K1.N regression: chained casts (`x as i32 as i64`) loop in
+    parse_unary's keep_cast while -- each iteration consumes one
+    `as Type` pair, returning when no further `as` appears."""
+    rc = _kovc_self_host_compile_and_run(
+        "cast_chain",
+        "fn main() -> i32 { let x = 7 as i32 as i64; x }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (chained cast no-op); got {rc}"
+
+
+def test_bootstrap_kovc_cast_on_field_access_self_host():
+    """K1.N regression: cast composes after `.field` postfix. The
+    postfix-loop runs first to consume `.v`, then the as-loop
+    kicks in."""
+    rc = _kovc_self_host_compile_and_run(
+        "cast_field",
+        "struct P { v: i32 } "
+        "fn main() -> i32 { let p = P { v: 42 }; p.v as i32 }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (p.v cast); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
