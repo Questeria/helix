@@ -55,7 +55,7 @@ iterates.
 | `bf16` literal | ✅ | ✅ (AST_FLOATLIT_BF16, tag 42) | PARITY |
 | `f16` literal | ✅ | ❌ (type tag 5 reserved in kovc.hx line 1177; no AST tag emitted) | KOVC-MISSING |
 | `BoolLit` (`true`/`false`) | ✅ | ❌ (no `true`/`false` keyword in lexer.hx; the bootstrap has NO bool literal — `i32` 1/0 is used instead) | KOVC-MISSING |
-| `CharLit` (`'a'`) | ✅ | ❌ | KOVC-MISSING |
+| `CharLit` (`'a'`) | ✅ | ✅ (K1.K 2026-05-25: lex_char_lit in lexer.hx handles `'X'` and the standard escape set `\n \t \r \0 \' \" \\` -- emits TK_INTLIT with the byte value as payload, so chars are integers throughout. No parser/codegen changes. Verified end-to-end via 4 bootstrap-self-host regression tests) | PARITY |
 | `StrLit` | ✅ | ⚠️ (AST_STR_LIT, tag 25; codegen emits 0 — only useful as file-IO arg) | KOVC-MISSING |
 
 ## 3. Operators

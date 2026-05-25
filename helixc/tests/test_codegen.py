@@ -7110,6 +7110,58 @@ def test_bootstrap_kovc_array_variable_index_self_host():
     assert rc == 50, f"expected K2 exit 50 (a[2] via var idx); got {rc}"
 
 
+def test_bootstrap_kovc_char_literal_simple_self_host():
+    """K1.K regression (2026-05-25): the bootstrap lexer now
+    accepts `'X'` (and the standard escape forms) and lexes it as
+    TK_INTLIT with the byte value as payload. So `'A'` is the
+    integer 65, indistinguishable from writing `65` -- no new tag,
+    no parser/codegen changes needed.
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "char_simple",
+        "fn main() -> i32 { 'A' }",
+    )
+    assert rc == 65, f"expected K2 exit 65 ('A' byte value); got {rc}"
+
+
+def test_bootstrap_kovc_char_literal_arithmetic_self_host():
+    """K1.K regression: char literals are int values, so arithmetic
+    on them works trivially (no extra lowering required)."""
+    rc = _kovc_self_host_compile_and_run(
+        "char_arith",
+        "fn main() -> i32 { 'a' - 'A' }",
+    )
+    assert rc == 32, (
+        f"expected K2 exit 32 ('a' - 'A' = lowercase offset); got {rc}")
+
+
+def test_bootstrap_kovc_char_literal_escape_self_host():
+    """K1.K regression: the standard escape set resolves to the
+    correct byte values. `'\\n'` -> 10 (newline), verified via the
+    same self-host chain."""
+    # Use a Python raw string so the source written to /tmp is
+    # literally `'\n'` (4 chars: apostrophe, backslash, n,
+    # apostrophe), not an actual newline byte.
+    rc = _kovc_self_host_compile_and_run(
+        "char_esc_n",
+        r"fn main() -> i32 { '\n' }",
+    )
+    assert rc == 10, (
+        f"expected K2 exit 10 (newline escape); got {rc}")
+
+
+def test_bootstrap_kovc_char_literal_escape_null_self_host():
+    """K1.K regression: `'\\0'` -> 0 (NUL). Test via a non-trivial
+    expression so the K2 exit code isn't a no-op zero."""
+    # Raw string: 4 chars `'\0'` written literally to /tmp.
+    rc = _kovc_self_host_compile_and_run(
+        "char_esc_zero",
+        r"fn main() -> i32 { let nl = '\0'; nl + 7 }",
+    )
+    assert rc == 7, (
+        f"expected K2 exit 7 (NUL + 7); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

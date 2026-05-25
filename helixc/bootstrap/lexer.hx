@@ -486,6 +486,84 @@ fn lex_ident(src_start: i32, src_len: i32, pos: i32) -> i32 {
 }
 
 // --------------------------------------------------------------
+// K1.K (2026-05-25): lex a char literal. Caller has verified
+// bytes[pos] == 39 (`'`). Two shapes:
+//   `'X'` -- bytes[pos+1] is the literal byte, bytes[pos+2] == 39.
+//            Emit TK_INTLIT (tag 1) with payload = byte value, span
+//            3 bytes. Returns pos+3.
+//   `'\X'` -- bytes[pos+1] == 92 ('\'), bytes[pos+2] is the escape
+//            code. Resolves the standard set: n=10, t=9, r=13, 0=0,
+//            '=39, "=34, \=92. Emit TK_INTLIT with payload = the
+//            resolved byte, span 4 bytes. Returns pos+4.
+//
+// Unterminated / unknown shapes emit TK_ERR (tag 19) and advance
+// minimally so the parser unwinds cleanly (same convention as
+// lex_string's audit-13b fix).
+//
+// Lexing as TK_INTLIT (rather than introducing a TK_CHARLIT tag)
+// is deliberate: char literals are int values in Helix (per the
+// Python helixc semantics) so the parser + codegen go through
+// the int-literal path unchanged. Matches the K1.F-discovery
+// pattern of reusing existing tags rather than minting new ones.
+// --------------------------------------------------------------
+fn lex_char_lit(src_start: i32, src_len: i32, pos: i32) -> i32 {
+    let end = src_start + src_len;
+    // Need at least pos+2 in bounds for `'X'` (3 bytes total).
+    if pos + 2 >= end {
+        push_token(19, 0, pos, 1);
+        pos + 1
+    } else {
+        let b1 = __arena_get(pos + 1);
+        if b1 == 92 {
+            // Escape form: `'\X'` -- need pos+3 in bounds.
+            if pos + 3 >= end {
+                push_token(19, 0, pos, 1);
+                pos + 1
+            } else {
+                let esc = __arena_get(pos + 2);
+                let close = __arena_get(pos + 3);
+                if close != 39 {
+                    push_token(19, 0, pos, 1);
+                    pos + 1
+                } else {
+                    // Resolve standard escape codes. Unknown
+                    // escapes emit TK_ERR rather than passing the
+                    // raw escape byte through (matches Python's
+                    // strict behaviour).
+                    let val =
+                        if esc == 110 { 10 }           // \n
+                        else { if esc == 116 { 9 }     // \t
+                        else { if esc == 114 { 13 }    // \r
+                        else { if esc == 48 { 0 }      // \0
+                        else { if esc == 39 { 39 }     // \'
+                        else { if esc == 34 { 34 }     // \"
+                        else { if esc == 92 { 92 }     // \\
+                        else { 0 - 1 } } } } } } };    // sentinel for unknown
+                    if val == (0 - 1) {
+                        push_token(19, 0, pos, 1);
+                        pos + 1
+                    } else {
+                        push_token(1, val, pos, 4);
+                        pos + 4
+                    }
+                }
+            }
+        } else {
+            // Simple form: `'X'`. The closing apostrophe must be at
+            // pos+2 (one byte body).
+            let close = __arena_get(pos + 2);
+            if close != 39 {
+                push_token(19, 0, pos, 1);
+                pos + 1
+            } else {
+                push_token(1, b1, pos, 3);
+                pos + 3
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------
 // Lex a string literal. Caller has verified bytes[pos] == 34 ('"').
 // Walks forward to the next unescaped '"' (Phase-0: no escape
 // processing yet — '\' is treated as a literal byte). Emits a
@@ -590,6 +668,12 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
         } else { if b == 34 {
             // '"' — string literal.
             pos = lex_string(src_start, src_len, pos);
+        } else { if b == 39 {
+            // K1.K (2026-05-25): `'` — char literal. Lexes to
+            // TK_INTLIT with the byte value as payload (no new tag
+            // needed; chars are int values in Helix). Handles the
+            // standard escape set (\n \t \r \0 \' \" \\).
+            pos = lex_char_lit(src_start, src_len, pos);
         } else { if b == 60 {
             // '<' — could be `<<` (TK_LSHIFT=30) or single `<` (TK_LT=16).
             // `<=` is still emitted as two separate TK_LT TK_EQ tokens
@@ -667,7 +751,7 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
                 push_token(pk, 0, pos, 1);
                 pos = pos + 1;
             };
-        }}}}}}}}};
+        }}}}}}}}}};     // K1.K (2026-05-25): +1 close for the new b==39 (char-lit) arm
     }
     push_token(0, 0, pos, 0);   // TK_EOF sentinel
     let after = __arena_len();
