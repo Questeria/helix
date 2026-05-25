@@ -7965,6 +7965,34 @@ def test_bootstrap_kovc_const_after_fn_self_host():
     assert rc == 5, f"expected K2 exit 5 (fn first, const after); got {rc}"
 
 
+def test_bootstrap_kovc_agent_decl_self_host():
+    """K1.AA regression (2026-05-25): `agent Foo { ... }` AGI-
+    primitive blocks are accepted at top-level as no-op decls via
+    parse_agent_decl + arms in parse_top + parse_program's two
+    decl loops. Brace-balanced body consumes nested fn defs etc.
+    Syntax-only parity -- the AGI runtime is a separate concern."""
+    rc = _kovc_self_host_compile_and_run(
+        "agent_first",
+        "agent Foo { } fn main() -> i32 { 42 }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (agent first, main 42); got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "agent_nested",
+        "agent Foo { fn act() -> i32 { 7 } } fn main() -> i32 { 11 }",
+    )
+    assert rc == 11, f"expected K2 exit 11 (agent w/ inner fn); got {rc}"
+
+
+def test_bootstrap_kovc_agent_after_fn_self_host():
+    """K1.AA regression: post-fn loop arm. `fn main() { } agent
+    Foo {}` parses cleanly."""
+    rc = _kovc_self_host_compile_and_run(
+        "agent_after_fn",
+        "fn main() -> i32 { 5 } agent Foo {}",
+    )
+    assert rc == 5, f"expected K2 exit 5 (fn first, agent after); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

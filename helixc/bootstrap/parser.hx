@@ -1533,6 +1533,26 @@ fn is_kw_type_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AA (2026-05-25): match the 5-byte IDENT "agent" (bytes 97,
+// 103, 101, 110, 116). Used by parse_top + parse_program to
+// recognize top-level `agent Foo { ... }` AGI-primitive blocks.
+// Currently a syntax-only no-op -- the bootstrap consumes the
+// decl as metadata. Full agent codegen (the AGI primitive's
+// runtime behaviour) is a separate codegen-level concern.
+fn is_kw_agent_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 5 {
+        if __arena_get(id_s) == 97 {
+            if __arena_get(id_s + 1) == 103 {
+                if __arena_get(id_s + 2) == 101 {
+                    if __arena_get(id_s + 3) == 110 {
+                        if __arena_get(id_s + 4) == 116 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.Z (2026-05-25): match the 5-byte IDENT "const" (bytes 99,
 // 111, 110, 115, 116). Used by parse_top + parse_program to
 // recognize top-level `const X: T = expr;` decls. Syntax-only
@@ -4735,6 +4755,8 @@ fn parse_top(tok_base: i32) -> i32 {
         let is_type = is_kw_type_ident(id_s, id_l);
         // K1.Z (2026-05-25): `const` is also a top-level decl prefix.
         let is_const = is_kw_const_ident(id_s, id_l);
+        // K1.AA (2026-05-25): `agent` is also a top-level decl prefix.
+        let is_agent = is_kw_agent_ident(id_s, id_l);
         if is_fn == 1 {
             parse_program(tok_base, cur_slot)
         } else { if is_struct == 1 {
@@ -4753,9 +4775,11 @@ fn parse_top(tok_base: i32) -> i32 {
             parse_program(tok_base, cur_slot)
         } else { if is_const == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_agent == 1 {
+            parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}}}}}}}}
+        }}}}}}}}}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -5106,6 +5130,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             // K1.Z (2026-05-25): `const X = ...;` is also a top-level
             // no-op decl. Syntax accepted; name not registered.
             let is_const_kw = is_kw_const_ident(s, l);
+            // K1.AA (2026-05-25): `agent Foo { ... }` -- AGI primitive
+            // block, no-op at codegen.
+            let is_agent_kw = is_kw_agent_ident(s, l);
             if is_struct_kw == 1 {
                 parse_struct_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
@@ -5130,9 +5157,12 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_const_kw == 1 {
                 parse_const_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_agent_kw == 1 {
+                parse_agent_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 keep_decl = 0;
-            }}}}}}}};
+            }}}}}}}}};
         } else {
             keep_decl = 0;
         };
@@ -5171,6 +5201,8 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let is_type_kw2 = is_kw_type_ident(s, l);
             // K1.Z (2026-05-25): `const X = ...;` arm for the post-fn loop.
             let is_const_kw2 = is_kw_const_ident(s, l);
+            // K1.AA (2026-05-25): `agent Foo { ... }` arm for the post-fn loop.
+            let is_agent_kw2 = is_kw_agent_ident(s, l);
             if is_fn_kw2 == 1 {
                 let next_fn = parse_fn_decl(tok_base, sb);
                 let new_node = mk_node(15, next_fn, 0, 0);
@@ -5200,10 +5232,13 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_const_kw2 == 1 {
                 parse_const_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_agent_kw2 == 1 {
+                parse_agent_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
                 keep = 0;
-            }}}}}}}}};
+            }}}}}}}}}};
         } else {
             keep = 0;
         }};
@@ -7902,6 +7937,34 @@ fn parse_use_decl(tok_base: i32, sb: i32) -> i32 {
 // consume tokens until the closing '}'. Returns AST_STRUCT_DECL (tag 54)
 // — same metadata-only pattern as struct/enum decls — so codegen emits
 // 0 bytes and there is no new emit_ast_code arm.
+// K1.AA (2026-05-25): parse `agent Foo { ... }`. Caller has
+// verified the cursor sits on the `agent` IDENT. Consumes
+// `agent`, the agent-name IDENT, `{`, the brace-balanced body,
+// and `}`. Same pattern as parse_trait_decl. Syntax-only no-op
+// at codegen time -- the AGI-primitive runtime is a separate
+// concern.
+fn parse_agent_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'agent' IDENT
+    cur_advance(sb);                         // consume agent-name IDENT
+    cur_advance(sb);                         // consume '{' (LBRACE = 5)
+    let mut depth: i32 = 1;
+    while depth > 0 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 5 {
+            depth = depth + 1;
+        } else { if tt == 6 {
+            depth = depth - 1;
+        } else { if tt == 0 {
+            depth = 0;
+        } else {} } };
+        if depth > 0 {
+            cur_advance(sb);
+        };
+    }
+    cur_advance(sb);                         // consume final '}'
+    mk_node(54, 0, 0, 0)
+}
+
 // K1.Z (2026-05-25): parse `const NAME [: TY] = EXPR ;`. Caller
 // has verified the cursor sits on the `const` IDENT. Consumes the
 // entire decl up to and including the trailing `;`. Returns

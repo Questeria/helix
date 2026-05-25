@@ -144,7 +144,7 @@ iterates.
 | `use foo::bar::baz;` | ✅ | ❌ | KOVC-MISSING |
 | `mod foo { ... }` / module decl | ✅ (`flatten_modules.py`) | ❌ | KOVC-MISSING |
 | `impl Type { methods }` | ✅ (`flatten_impls.py`) | ❌ | KOVC-MISSING |
-| `agent Foo { ... }` (AGI primitive) | ✅ | ❌ | KOVC-MISSING |
+| `agent Foo { ... }` (AGI primitive) | ✅ | ✅ (K1.AA 2026-05-25: parse_agent_decl + arms in parse_top + parse_program's 2 decl loops consume `agent Foo { ... }` blocks (brace-balanced). Syntax-only parity -- the AGI-runtime semantics are a separate codegen concern. Same metadata-only pattern as struct/enum/trait/mod/use/type) | PARITY |
 
 ## 9. AGI / metaprogramming primitives
 
