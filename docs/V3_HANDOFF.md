@@ -696,40 +696,29 @@ acknowledgement** per the same gate that protected Stage 221a/221b.
   fixed with source-grep checks paralleling the lower_ast pattern.
   Closes the `lower_ast → x86_64` and `test_stage44 → x86_64`
   constant dependencies that previously blocked the delete.
-- **v3.1 step 6 — Delete x86_64.py.** **GATED — needs explicit user
-  acknowledgement AND a policy decision.** Stage 221b deferral.
-  Remaining `from .backend.x86_64 import compile_module_to_elf`
-  consumers in production code are:
-    - `check.py:1918` (the LEGACY `--emit-asm` flag — deletes with
-      x86_64),
-    - `check.py:2061` (the GENERAL `-o <output>` ELF path — needs
-      a replacement),
-    - `examples/run.py:28` (example runner — needs a replacement).
-  Plus subprocess-CLI tests in `test_cli.py` (~40 sites that
-  invoke `python -m helixc.backend.x86_64 ...` as the legacy
-  CLI entrypoint).
+- **v3.1 step 6 — Delete x86_64.py.** **RE-SCOPED 2026-05-25.**
+  The user's directive shifted the goal from "delete one Python
+  file" to "the end product is completely in Helix compiled in
+  Helix from raw binary, zero Python anywhere." Step 6 is now
+  absorbed into the **K-Bootstrap track** — see
+  `docs/HELIX_K_BOOTSTRAP_MASTER_PLAN.md`. The Python `helixc/`
+  package (including `x86_64.py`, but also `llvm_ir.py`, the
+  frontend, the driver, every pass) deletes together when the
+  Helix-in-Helix path (`kovc.hx`) reaches feature parity AND
+  the parity harness is green AND a trusted bootstrap seed
+  exists. That is a multi-month effort.
+- **v3.1 step 7 — Tag `v3.1.0`.** **READY** under option D from
+  the 2026-05-25 decision table. The cleanup-track work that
+  shipped (steps 3a/3b/4/5/6a) is coherent and audit-clean. The
+  deletion piece is now K-track. Tagging v3.1.0 NOW gives a
+  clean release boundary between the v3 cleanup era and the
+  K-bootstrap era; v3.2 can then be redefined as the first
+  K-track milestone or as the real-execution parity gate (the
+  two now overlap — Stage 207 parity is exactly what Track P
+  of the K-bootstrap needs).
 
-  **Open policy question for the user:** the LLVM toolchain path
-  (`compile_module_to_elf_via_llvm`) returns DEFERRED on Windows /
-  macOS without a Linux sysroot. Deleting x86_64 without a
-  replacement breaks the `helixc check -o foo.bin` dev loop on
-  those machines. Options A/B/C/D were tabled on 2026-05-25:
-    - **A.** Require LLVM toolchain (delete x86, document).
-    - **B.** Keep x86 as a no-toolchain fallback (cleanup never
-      finishes).
-    - **C.** Bundle a Python-side LLVM-IR-to-ELF assembler (weeks
-      of work, separate project).
-    - **D.** Defer the delete, tag v3.1.0 with the cleanup done
-      so far (D was the recommended path).
-  No decision yet → autonomous worker should not advance to step 6.
-- **v3.1 step 7 — Tag `v3.1.0`.** Depends on step 6 decision.
-  With option D, this can ship NOW (the cleanup-track work is
-  coherent; x86 deletion just slips to v3.2 or later). With
-  option A, this waits on the delete. With B/C, the meaning of
-  v3.1 shifts.
-
-When `v3.1.0` is tagged, v3.1 cleanup is done. v3.2 begins the
-real-execution Stage-207 parity gate work.
+When `v3.1.0` is tagged, the cleanup track closes. The
+K-bootstrap track begins per `docs/HELIX_K_BOOTSTRAP_MASTER_PLAN.md`.
 
 ## 5. The working discipline (follow this)
 
