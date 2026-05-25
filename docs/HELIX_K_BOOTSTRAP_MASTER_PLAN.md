@@ -200,8 +200,48 @@ Prerequisites — **all** required:
 4. **User confirmation in Telegram.** The same gate that
    protects v3.1 step 6 protects this — only stronger.
 
-Once these land, `helixc/` (the Python package) is removed; tests
-are ported to `.hx`; CI runs Helix-only.
+#### K4-pre — continuous-audit phase (autonomous, NO deletion)
+
+**User directive 2026-05-25 (verbatim):**
+
+> "I want you to not stop working until I stop you or you get to
+> Python deletion at K4 in which case you should run continuous
+> audits at K4 before Python deletion fixing anything that comes
+> up until I stop you and give you the green light for Python
+> deletion."
+
+When the cron-tick worker observes prerequisites 1-3 are met but
+prerequisite 4 (user TG confirmation) is still PENDING, it MUST
+NOT delete Python. Instead it enters K4-pre — a continuous-audit
+loop:
+
+- Each cron-tick chunk = one multi-agent audit cycle across the
+  full repo (silent-failure-hunter / type-design-analyzer /
+  code-reviewer in parallel; optionally a 4th and 5th axis once
+  K2 is wired — see §5 K2 for the parity-harness audit).
+- Each cycle's HIGH and must-fix MEDIUM findings are fixed in
+  the same iteration (or scoped into a follow-up chunk if too
+  large), 3-axis re-audited until clean.
+- The autonomous worker NEVER calls a Python-deletion command
+  (no `rm helixc/`, no `git rm -r helixc/`, no `git push`
+  containing a deletion) while in K4-pre.
+- Cycles continue indefinitely until the user explicitly
+  greenlights the deletion in Telegram. Then K4-proper executes.
+
+This phase exists because (a) K-track is multi-month and the
+user may want a different long-term direction before the
+irreversible deletion, and (b) the audit cycles are still
+PRODUCTIVE — they harden the eventual self-hosted code rather
+than burning idle cycles.
+
+#### K4-proper — the irreversible cutover
+
+Once green-lit:
+- `helixc/` (the Python package) removed.
+- Tests ported to `.hx`.
+- CI runs Helix-only.
+- helix_status.py VERSIONS table flips the next-version status
+  to "released" once the K4 commit lands and K5 closes.
 
 ### Stage K5 — DDC + 5-clean-audits final gate
 
@@ -275,6 +315,21 @@ These carry from v3 unchanged:
 - **Telegram per commit**, beginner-friendly prose.
 - **Never force-push, never skip hooks, Claude subscription only,
   never read `C:/Projects/Neptune/api.env`**.
+
+### Autonomous-driving policy (2026-05-25)
+
+Per the user directive recorded in §5 K4-pre, the cron-tick
+worker has these stopping conditions and these only:
+
+| Condition | Action |
+|-----------|--------|
+| User stops the worker explicitly (any TG / chat message saying stop). | Halt. |
+| All K4 prerequisites 1-3 met; prerequisite 4 (TG confirmation for deletion) PENDING. | Enter K4-pre continuous-audit loop. Never delete Python. Wait for green-light. |
+| Chunk fails audit hard AND fix requires design input only the user can give. | Pause that chunk, surface the question, continue with a different chunk if one is available. |
+| Any irreversible action other than K4 (force-push, tag deletion, rm -rf-style ops). | Halt. Surface to user. |
+
+Otherwise: the cron keeps firing, the worker keeps porting K-track
+rows one chunk at a time, audited, committed, pushed, Telegram'd.
 
 ---
 
