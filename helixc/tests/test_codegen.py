@@ -8202,6 +8202,30 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_compound_assign_bitwise_self_host():
+    """K1.AN (2026-05-25): compound-assign operator extension to
+    bitwise + shift forms. K1.U previously implemented +=, -=,
+    *=, /=, %= only; K1.AN adds ^=, &=, |=, <<=, >>= by mapping
+    TK_AMP/PIPE/CARET/LSHIFT/RSHIFT (tags 27-31) + TK_EQ to the
+    corresponding AST_BAND/BOR/BXOR/SHL/SHR codegen tags
+    (28-30, 32-33). Distinguishable from `&&`/`||` because those
+    lex as TK_AMP+TK_AMP/TK_PIPE+TK_PIPE rather than ending in
+    TK_EQ. 5 sub-probes, one per new op."""
+    cases = [
+        ("xor_eq", "let mut x = 7; x ^= 5; x", 2),
+        ("and_eq", "let mut x = 7; x &= 5; x", 5),
+        ("or_eq",  "let mut x = 5; x |= 2; x", 7),
+        ("shl_eq", "let mut x = 1; x <<= 4; x", 16),
+        ("shr_eq", "let mut x = 32; x >>= 2; x", 8),
+    ]
+    for name, body, expected in cases:
+        rc = _kovc_self_host_compile_and_run(
+            f"compound_{name}",
+            f"fn main() -> i32 {{ {body} }}",
+        )
+        assert rc == expected, f"compound {name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_block_as_expression_self_host():
     """K1.AM (2026-05-25): brace-block as expression -- `let x =
     { let y = 1; y + 2 }`. parse_primary now accepts LBRACE as

@@ -3674,12 +3674,32 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Desugar to AST_ASSIGN(name, AST_BINOP(VAR(name), rhs))
             // using the existing arith fold for the binop kind.
             let nt_plus1 = tok_tag(tok_base, cur_get(sb) + 1);
+            // K1.U + K1.AN (2026-05-25): compound-assign op-tag map.
+            // K1.U did the arith ops; K1.AN extends to bitwise + shift.
+            //   TK_PLUS  (7)  -> AST_ADD  (2)
+            //   TK_MINUS (8)  -> AST_SUB  (3)
+            //   TK_STAR  (9)  -> AST_MUL  (4)
+            //   TK_SLASH (10) -> AST_DIV  (5)
+            //   TK_PERCENT (11) -> AST_MOD (24)
+            //   TK_AMP   (27) -> AST_BAND (28)
+            //   TK_PIPE  (28) -> AST_BOR  (29)
+            //   TK_CARET (29) -> AST_BXOR (30)
+            //   TK_LSHIFT (30) -> AST_SHL (32)
+            //   TK_RSHIFT (31) -> AST_SHR (33)
+            // Distinguishable from `&&` / `||` because those lex as
+            // TK_AMP+TK_AMP / TK_PIPE+TK_PIPE (nt_plus1 == 27 / 28),
+            // whereas compound forms have nt_plus1 == 15 (TK_EQ).
             let compound_op = if nt_plus1 == 15 {
                 if nt == 7 { 2 }
                 else { if nt == 8 { 3 }
                 else { if nt == 9 { 4 }
                 else { if nt == 10 { 5 }
-                else { if nt == 11 { 24 } else { 0 - 1 }}}}}
+                else { if nt == 11 { 24 }
+                else { if nt == 27 { 28 }
+                else { if nt == 28 { 29 }
+                else { if nt == 29 { 30 }
+                else { if nt == 30 { 32 }
+                else { if nt == 31 { 33 } else { 0 - 1 }}}}}}}}}}
             } else { 0 - 1 };
             if compound_op >= 0 {
                 cur_advance(sb);    // consume op token
