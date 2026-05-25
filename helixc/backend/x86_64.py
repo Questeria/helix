@@ -1,6 +1,27 @@
 """
 helixc/backend/x86_64.py — minimal x86-64 backend (Linux ELF emission).
 
+LEGACY (Stage 221 cutover, 2026-05-24): this module is the v0.1 -- v2.5
+home-grown ELF emitter and the historical reference backend that the
+Stage 207 parity gate compares against. As of v3.0.0 the canonical
+Helix backend is the LLVM IR path (`helixc/backend/llvm_ir.py`,
+selected via `--emit-llvm-ir` on the CLI); this module is retained
+through v3.0.x for:
+
+  - `helixc/backend/llvm_parity.py`: the x86_64-vs-LLVM parity gate
+    runs both backends on the same module and asserts identical
+    observable behaviour;
+  - `helixc/tests/test_codegen.py` (~1000 real compile+link+execute
+    tests) and the other backend-specific tests that depend on
+    `compile_module_to_elf` for runnable ELF output until the LLVM
+    real-execution toolchain integration matures;
+  - the legacy CLI surface `--emit-asm` and `helixc check -o
+    output.bin` paths, marked LEGACY in `helixc/check.py`.
+
+v3.1 will complete the removal once the LLVM toolchain integration
+ships and the test-suite migration finishes (per docs/V3_PLAN.md
+Stage 221 "behind a flag, then remove" two-step).
+
 v0.1 scope (the smallest viable subset):
 - Functions with i32 parameters and i32 return type
 - Constants

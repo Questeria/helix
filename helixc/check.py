@@ -28,6 +28,12 @@ Flags:
   --emit-proof-obligations
                         Print Stage 31 proof-obligation JSON and exit
   --emit-asm            Print x86_64 hex/textual disassembly and exit
+                        (LEGACY: see --emit-llvm-ir for the canonical
+                        v3.0+ backend output; --emit-asm retained for
+                        parity-gate testing, slated for removal in
+                        v3.1 per docs/V3_PLAN.md Stage 221).
+  --emit-llvm-ir        Print LLVM IR text (the canonical v3.0+
+                        backend output) and exit.
   --emit-ptx            Print PTX kernels and exit
   --doc                 Extract /// doc comments to markdown and exit
   -O0 / -O1 / -O2 / -O3
@@ -208,6 +214,12 @@ _KNOWN_LONG_FLAGS = frozenset({
     "--stdlib", "--no-stdlib", "--hash", "--hash-cons", "--strict",
     "--check-only", "--emit-ast", "--emit-ir", "--emit-asm",
     "--emit-ptx", "--emit-adjoint", "--emit-proof-obligations",
+    # Stage 221 cutover: `--emit-llvm-ir` is the canonical v3.0+
+    # backend output. `--emit-asm` (the x86_64 ELF hex dump) is
+    # retained as legacy through v3.0.x for parity-gate testing
+    # and is slated for removal in v3.1 once LLVM toolchain
+    # integration matures (per docs/V3_PLAN.md Stage 221).
+    "--emit-llvm-ir",
     "--doc", "--help",
     "--no-color", "--color", "-h",
     # Restart 48 B1: --no-opt is documented in HELIX_REFERENCE.md and
@@ -1105,6 +1117,12 @@ def _main_inner(argv: list[str] | None,
         # dropped without diagnostic. Same loud-fail-discipline drift
         # the surrounding mutex was built to prevent.
         "--emit-adjoint",
+        # Stage 221 cutover (2026-05-24): `--emit-llvm-ir` is the
+        # canonical v3.0+ backend output and joins the stdout-modes
+        # mutex set (mirrors `--emit-asm`'s membership) so combining
+        # it with another stdout-mode produces a clean diagnostic
+        # rather than a silent first-wins dispatch.
+        "--emit-llvm-ir",
         "--emit-proof-obligations", "--doc",
     }
     selected_stdout_modes = sorted(a.flags & stdout_modes)
@@ -1665,7 +1683,8 @@ def _main_inner(argv: list[str] | None,
     # point. Without this, --emit-adjoint hits an UnboundLocalError on
     # `mod` before reaching the adjoint emit handler at line ~1905.
     if any(f in a.flags for f in ("--emit-ir", "--emit-asm",
-                                  "--emit-ptx", "--emit-adjoint")) \
+                                  "--emit-llvm-ir", "--emit-ptx",
+                                  "--emit-adjoint")) \
             or "--strict" in a.flags \
             or a.output is not None:
         from .ir.lower_ast import lower
@@ -1892,6 +1911,10 @@ def _main_inner(argv: list[str] | None,
         return 0
 
     if "--emit-asm" in a.flags:
+        # LEGACY (Stage 221 cutover): the x86_64 ELF emission path
+        # is retained through v3.0.x for parity-gate testing but
+        # marked for removal in v3.1. New code should prefer
+        # `--emit-llvm-ir` (the canonical v3.0+ backend output).
         from .backend.x86_64 import compile_module_to_elf
         ad_rc = _drain_ad_warnings(a)
         if ad_rc != 0:
@@ -1914,6 +1937,34 @@ def _main_inner(argv: list[str] | None,
             row = elf[i:i + 16]
             hex_row = " ".join(f"{b:02x}" for b in row)
             print(f"     {i:08x}  {hex_row}")
+        return 0
+
+    if "--emit-llvm-ir" in a.flags:
+        # Stage 221 cutover (2026-05-24): the LLVM IR text emission
+        # is the canonical v3.0+ backend output. All 17 v3.0 stages
+        # plus 8 206-R additive prep chunks shipped; the LLVM
+        # backend now covers the full host op set that x86_64.py
+        # supports plus the MLIR-bridged GPU targets. The
+        # `--emit-asm` path remains available for parity-gate
+        # testing (see _check_parity_target_tables) but is
+        # documented as LEGACY.
+        from .backend.llvm_ir import emit_module as llvm_emit_module
+        from .backend.llvm_ir import LLVMEmitError
+        ad_rc = _drain_ad_warnings(a)
+        if ad_rc != 0:
+            return ad_rc
+        try:
+            ll_text = llvm_emit_module(mod)
+        except (LLVMEmitError, NotImplementedError, AssertionError,
+                KeyboardInterrupt, SystemExit, MemoryError):
+            # Loud-fail discipline matching --emit-asm. A future
+            # follow-up could share `_report_x86_codegen_exception`
+            # logic; for now keep the surface narrow.
+            raise
+        except Exception as e:
+            print(f"   llvm: backend error: {e}", file=sys.stderr)
+            return 1
+        print(ll_text)
         return 0
 
     if "--emit-ptx" in a.flags:

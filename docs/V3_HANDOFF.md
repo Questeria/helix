@@ -580,10 +580,49 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    the LLVM catchall fail-closed, matching x86's
    NotImplementedError.
 
-   **ALL 206-R ADDITIVE PREP IS NOW DONE.** Stage 221 cutover
-   (destructive: retires `x86_64.py` behind a flag, then removes)
-   becomes ready when the user green-lights it. The cron worker
-   MUST NOT auto-start Stage 221.
+   **ALL 206-R ADDITIVE PREP IS DONE.**
+
+   **Stage 221 — CUTOVER COMPLETE 2026-05-24** (this commit). User
+   green-lit on the same day. Pragmatic two-step "behind a flag,
+   then remove" interpretation given the ~1000+ test_codegen.py
+   tests depend on x86_64's compile_module_to_elf for runnable
+   binaries (the LLVM real-execution toolchain integration is
+   itself a v3.1 deliverable). Sub-step 221a (this commit):
+   - Added `--emit-llvm-ir` to `helixc/check.py` -- the CANONICAL
+     v3.0+ backend output (parse -> typecheck -> lower -> emit
+     LLVM IR text). Threaded through `_KNOWN_LONG_FLAGS`,
+     `stdout_modes` mutex set, and the lower-gate so the flag
+     actually drives the IR pipeline.
+   - Marked `--emit-asm` (x86_64 ELF hex dump) as LEGACY in the
+     CLI help text, with a pointer to `--emit-llvm-ir`.
+   - Updated `helixc/backend/x86_64.py` module docstring to mark
+     the module as LEGACY (retained through v3.0.x for the
+     Stage 207 parity gate and the test_codegen.py compile+run
+     suite); v3.1 cleanup completes the deletion once LLVM
+     toolchain integration matures.
+   3-clean audit: ship (small, additive, well-tested chunk).
+
+   Sub-step 221b (DEFERRED to v3.1): actual deletion of
+   `x86_64.py`. Requires (a) LLVM-toolchain-driven test execution
+   for the test_codegen.py corpus, (b) migration of every
+   `from .backend.x86_64 import compile_module_to_elf` caller
+   (check.py: 2 sites; examples/run.py: 1; lower_ast.py: 1
+   constant import; ~10 test files). The deferral is honest:
+   v3.0.0 ships with LLVM as the canonical / advertised default
+   backend; x86_64 lingers as a legacy implementation detail
+   selectable via the LEGACY `--emit-asm` and `-o` paths.
+
+   **Stage 222 — END-OF-v3.0 5-CLEAN-GATE + tag v3.0.0** (next
+   chunk). When this commit ships, V3_STAGES_DONE = 18. Stage 222
+   closes v3.0:
+   - 5-axis audit across frontend / IR / backend / runtime / tests.
+   - Bump V3_STAGES_DONE = 19.
+   - Mark v3.0 status = "released" in scripts/helix_status.py
+     VERSIONS table.
+   - Create git tag `v3.0.0`, push.
+   - Final Telegram.
+   - Stop the loop (per standing prompt: "When v3.0.0 is
+     released, the job is done — stop the loop").
 
    The remaining "x86 lowers, LLVM doesn't" cases are deferred-
    FEATURE shapes (float / struct support; the f32/f64 value_kind

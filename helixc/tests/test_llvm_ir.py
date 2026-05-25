@@ -6030,3 +6030,55 @@ def test_emit_module_extern_ffi_call_no_define_clash():
     assert not any(ln.startswith("define") and "@puts" in ln
                    for ln in lines), ll
     assert "define i32 @main()" in ll
+
+
+# ==========================================================================
+# Stage 221 cutover: `--emit-llvm-ir` is the canonical v3.0+ backend
+# output. These tests exercise the new CLI flag end-to-end via the
+# check.py entry point (parse → typecheck → lower → emit LLVM IR text).
+# ==========================================================================
+def test_stage221_emit_llvm_ir_smoke(tmp_path):
+    """`helixc check --emit-llvm-ir` on a trivial program prints
+    LLVM IR text with the target triple and a `define` for main."""
+    from helixc.check import main as check_main
+    src_path = tmp_path / "smoke.hx"
+    src_path.write_text("fn main() -> i32 { 42 }\n", encoding="utf-8")
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = check_main(["--emit-llvm-ir", str(src_path)])
+    out = buf.getvalue()
+    assert rc == 0, out
+    assert 'target triple = "x86_64-unknown-linux-gnu"' in out, out
+    assert "define i32 @main()" in out, out
+    assert "ret i32 42" in out, out
+
+
+def test_stage221_emit_llvm_ir_in_stdout_modes_mutex(tmp_path):
+    """`--emit-llvm-ir` is in the stdout-modes mutex set so combining
+    it with `--emit-asm` produces a clean diagnostic (rather than a
+    silent first-wins dispatch)."""
+    from helixc.check import main as check_main
+    src_path = tmp_path / "conflict.hx"
+    src_path.write_text("fn main() -> i32 { 0 }\n", encoding="utf-8")
+    import io
+    import contextlib
+    buf = io.StringIO()
+    err = io.StringIO()
+    with contextlib.redirect_stdout(buf), \
+            contextlib.redirect_stderr(err):
+        rc = check_main(["--emit-llvm-ir", "--emit-asm",
+                         str(src_path)])
+    out = err.getvalue() + buf.getvalue()
+    assert rc != 0, out
+    # The diagnostic names both conflicting flags.
+    assert "--emit-llvm-ir" in out, out
+    assert "--emit-asm" in out, out
+
+
+def test_stage221_emit_llvm_ir_in_known_long_flags():
+    """The new flag is registered in `_KNOWN_LONG_FLAGS` so an
+    unknown-flag check passes for it."""
+    from helixc import check as check_module
+    assert "--emit-llvm-ir" in check_module._KNOWN_LONG_FLAGS
