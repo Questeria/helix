@@ -454,21 +454,53 @@ functions. The arm at the deeply-nested site becomes a single
 flat call to the helper. K1.B's `emit_stack_args_reverse_copy`
 and `emit_load_six_int_args` are the established pattern.
 
-### Pattern 2: arena-position shift (K1.D defeated us)
+### Pattern 2: install_builtin_names arena-budget invariant
 
-Bumping `install_builtin_names`'s init-loop count (152 → 160)
-to add a new name-pointer slot at index 157 shifted the
-position of subsequent name-byte arena cells by 8 bytes.
-Symptom: identical to Pattern 1 — Python compiles fine, K2
-breaks. Root cause UNRESOLVED — likely a `lea_rax_rip`
-placeholder patch or the str_table back-patching encodes
-expectations about specific arena positions.
+**Investigation 2026-05-25: root cause IDENTIFIED.**
 
-**Mitigations to try (untested):**
-- Use an existing zero-init slot inside the 0..151 range.
-- Direct byte-literal comparison without the bn_state lookup.
-- Defer until K2 (parity harness) lands; the harness might
-  surface the position-sensitive code.
+Bisection found that:
+- Bare `while i < 152` → `while i < 160` bump alone: PASSES
+  self-host. The init-loop count is NOT the culprit.
+- Bump + adding 9 `__arena_push` calls for "print_int" bytes
+  (with or without the corresponding `__arena_set` slot
+  pointer): FAILS self-host.
+
+Conclusion: **adding additional `__arena_push` calls inside
+`install_builtin_names` breaks the self-host fixpoint.** Each
+extra push advances the arena cursor by 1 i32 slot. The
+post-install arena cursor must land at a SPECIFIC position —
+likely a downstream consumer (emit_elf_for_ast_to_path or the
+str_state setup at slots 7-8) expects the cursor at exactly
+where the existing 32 names leave it.
+
+**The fragility surface:** `install_builtin_names` is a
+variadic-byte-count factory disguised as a fixed-layout
+reserve. Bumping the init-loop count (152 → 160) extends the
+ZERO-init region, but adding name-byte pushes extends the
+CURSOR position, which has implicit invariants downstream that
+nobody documented.
+
+**Mitigations for future K-track chunks needing new builtins:**
+
+- **Option A (preferred): direct byte-literal comparison
+  in `try_emit_builtin_call`** that avoids `install_builtin_names`
+  entirely. Write a small `is_print_int_name(s, l)` helper that
+  checks 9 bytes inline via `__arena_get(s+i)` comparisons.
+  Cost: more verbose dispatch. Risk: parser depth for ~9
+  inline comparisons (mitigated by a flat `while` loop with
+  hardcoded expected bytes per index).
+- **Option B**: find the downstream consumer that expects the
+  cursor at a specific position; bump it in lockstep with the
+  install-bytes addition. Requires reading
+  emit_elf_for_ast_to_path carefully.
+- **Option C**: defer K1.D entirely. Implement print_int as
+  a USER-LAND helper in the language's stdlib (not a backend
+  builtin). After K2 (parity harness) lands and the
+  reference-oracle comparison surfaces the position-sensitive
+  invariant, the right fix becomes obvious.
+
+Preferred next attempt: option A. The byte-literal approach
+doesn't touch install_builtin_names at all.
 
 ### Pattern 3 (suspected, untested): the parse_primary IDENT
 sub-cascade
