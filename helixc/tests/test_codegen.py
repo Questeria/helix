@@ -8202,6 +8202,73 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_block_comment_self_host():
+    """K1.AP (2026-05-25): block comments `/* ... */` now work
+    in the lexer. Previously only `//` line comments were
+    skipped; `/*` lexed as TK_SLASH followed by TK_STAR and
+    cascaded into parser confusion. New skip_block_comment
+    handles single-line, multi-line, AND nested `/* a /* b */ c */`
+    forms. EOF-safe if closer is missing. 4 sub-probes."""
+    cases = [
+        ("block_simple", "fn main() -> i32 { /* a block */ 42 }", 42),
+        ("block_multiline",
+         "fn main() -> i32 {\n  /*\n   * multi-line\n   * comment\n   */\n  42\n}", 42),
+        ("block_nested",
+         "fn main() -> i32 { /* outer /* inner */ tail */ 42 }", 42),
+        ("block_top_level",
+         "/* file-level comment */ fn main() -> i32 { 42 }", 42),
+    ]
+    import base64
+    for name, src, expected in cases:
+        in_path = f"/tmp/sh_blockcmt_{name}_in.hx"
+        out_path = f"/tmp/sh_blockcmt_{name}_out.bin"
+        import os
+        proj = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        lexer = open(os.path.join(
+            proj, "helixc", "bootstrap", "lexer.hx")).read()
+        lexer_no_main = lexer.rsplit(
+            "// --------------------------------------------------------------\n// Demo:",
+            1,
+        )[0]
+        parser_body = open(os.path.join(
+            proj, "helixc", "bootstrap", "parser.hx")).read()
+        kovc = open(os.path.join(
+            proj, "helixc", "bootstrap", "kovc.hx")).read()
+        kovc_lib = kovc.rsplit(
+            "// --------------------------------------------------------------\n// Demo:",
+            1,
+        )[0]
+        k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+        import subprocess
+        encoded = base64.b64encode(src.encode('utf-8')).decode('ascii')
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"echo '{encoded}' | base64 -d > {in_path}"],
+            check=True, timeout=10,
+        )
+        compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+        run_k2 = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"chmod +x {out_path} && {out_path}"],
+            capture_output=True, timeout=10,
+        )
+        assert run_k2.returncode == expected, (
+            f"{name}: expected rc={expected}, got rc={run_k2.returncode}"
+        )
+
+
 def test_bootstrap_kovc_pat_negative_literal_self_host():
     """K1.AO (2026-05-25): negative integer literal patterns
     (`match x { -7 => 42, _ => 0 }`). parse_pattern_atom now

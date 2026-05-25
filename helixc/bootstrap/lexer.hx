@@ -127,6 +127,48 @@ fn skip_line_comment(src_start: i32, src_len: i32, pos: i32) -> i32 {
     p
 }
 
+// K1.AP (2026-05-25): Skip a `/* ... */` block comment starting
+// at byte index `pos`. Assumes caller has already verified
+// bytes [pos..pos+2) == "/*". Supports nested block comments
+// (each `/*` increments depth; `*/` decrements; returns when
+// depth reaches 0). Hits EOF safety if the closer is missing
+// in malformed input -- returns end-of-source which the caller
+// observes as the lex loop terminating.
+fn skip_block_comment(src_start: i32, src_len: i32, pos: i32) -> i32 {
+    let mut p: i32 = pos + 2;
+    let end = src_start + src_len;
+    let mut depth: i32 = 1;
+    while depth > 0 {
+        if p >= end {
+            depth = 0;       // EOF safety -- bail out
+        } else { if p + 1 >= end {
+            // Only 1 byte left; can't form `/*` or `*/`. Skip it.
+            p = p + 1;
+        } else {
+            let b0 = __arena_get(p);
+            let b1 = __arena_get(p + 1);
+            if b0 == 47 {           // '/'
+                if b1 == 42 {       // '/*' nested opener
+                    depth = depth + 1;
+                    p = p + 2;
+                } else {
+                    p = p + 1;
+                };
+            } else { if b0 == 42 {  // '*'
+                if b1 == 47 {       // '*/' closer
+                    depth = depth - 1;
+                    p = p + 2;
+                } else {
+                    p = p + 1;
+                };
+            } else {
+                p = p + 1;
+            }};
+        }};
+    }
+    p
+}
+
 // Stage 1.5 audit fix helpers: u64 lex overflow detection for 10-digit
 // values. Returns the i'th byte of "4294967295" (2^32-1, the max valid
 // 10-digit u64 literal via the two's-complement bit-trick).
@@ -648,15 +690,19 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
         if is_whitespace(b) == 1 {
             pos = pos + 1;
         } else { if b == 47 {
-            // Possible '//' line comment, else slash punctuation.
+            // Possible '//' line comment, '/*' block comment (K1.AP),
+            // else slash punctuation.
             if pos + 1 < end {
                 let nxt = __arena_get(pos + 1);
                 if nxt == 47 {
                     pos = skip_line_comment(src_start, src_len, pos);
+                } else { if nxt == 42 {
+                    // K1.AP (2026-05-25): '/*' block comment opener.
+                    pos = skip_block_comment(src_start, src_len, pos);
                 } else {
                     push_token(10, 0, pos, 1);
                     pos = pos + 1;
-                };
+                }};
             } else {
                 push_token(10, 0, pos, 1);
                 pos = pos + 1;
