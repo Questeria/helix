@@ -137,7 +137,7 @@ iterates.
 | Generic `fn<T>` | ✅ (`monomorphize.py`) | ⚠️ (parser tracks gp_tab; no monomorph) | KOVC-MISSING |
 | `where` clauses | ✅ | ❌ | KOVC-MISSING |
 | `struct Foo { ... }` | ✅ | ⚠️ (parser has struct_table; codegen missing) | KOVC-MISSING |
-| Parametric struct `struct<T>` | ✅ (`struct_mono.py`) | ❌ | KOVC-MISSING |
+| Parametric struct `struct<T>` | ✅ (`struct_mono.py`) | ✅ (K1.F-discovery batch 7 2026-05-25: parser/codegen already accept `struct Box<T> { val: T }` and instantiation+field access work end-to-end. Verified via `test_bootstrap_kovc_generic_struct_self_host` + multi-instance variant. Sub-gap: PatStruct destructure inside a match arm (`match b { Box { val: v } => v }`) still fails -- separate row tracks PatStruct) | PARITY |
 | `enum Foo { A, B(i32) }` | ✅ | ✅ (Stage 6 enum codegen landed long ago: unit variants encoded as tag-only, payload variants destructured via match. K1.F-discovery batch 2 2026-05-25: pinned via `test_bootstrap_kovc_enum_unit_variant_match_self_host` (Color::Green) + `test_bootstrap_kovc_enum_payload_variant_match_self_host` (N::Val(42))) | PARITY |
 | `type Alias = T;` | ✅ | ❌ | KOVC-MISSING |
 | `const X: T = expr;` (top-level) | ✅ | ❌ | KOVC-MISSING |

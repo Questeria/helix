@@ -7330,6 +7330,40 @@ def test_bootstrap_kovc_bitwise_still_works_after_K1M_self_host():
     assert rc == 14, f"12 | 10 should be bitwise 14; got {rc}"
 
 
+def test_bootstrap_kovc_generic_struct_self_host():
+    """K1.F-discovery batch 7 (2026-05-25): the matrix listed
+    `Parametric struct struct<T>` as KOVC-MISSING. The parser+codegen
+    accept the generic-parameter syntax and treat each instantiation
+    as a concrete struct -- so `Box { val: 7 }` builds the value
+    and `b.val` reads it back. The only sub-feature that still
+    fails is `PatStruct` destructure inside a match arm (`match b
+    { Box { val: v } => v }` -- separate row, separate fix).
+
+    Pinned via single-type and multi-instance probes.
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "gen_struct_single",
+        "struct Box<T> { val: T } "
+        "fn main() -> i32 { let b = Box { val: 13 }; b.val * 2 }",
+    )
+    assert rc == 26, (
+        f"expected K2 exit 26 (Box{{val:13}}.val * 2); got {rc}")
+
+
+def test_bootstrap_kovc_generic_struct_two_instances_self_host():
+    """K1.F-discovery batch 7: two separate instances of the same
+    parametric struct don't collide -- each gets its own storage,
+    fields read independently."""
+    rc = _kovc_self_host_compile_and_run(
+        "gen_struct_two",
+        "struct B<T> { v: T } "
+        "fn main() -> i32 { let a = B { v: 5 }; "
+        "let b = B { v: 11 }; a.v + b.v }",
+    )
+    assert rc == 16, (
+        f"expected K2 exit 16 (a.v + b.v = 5+11); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
