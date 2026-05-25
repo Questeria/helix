@@ -636,6 +636,60 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
 
 When `v3.0.0` is tagged, v3.0 is done.
 
+## 4a. Post-v3.0 — v3.1 cleanup track (in progress)
+
+After v3.0.0 ships, the v3.1 cleanup track addresses the residual
+items the cutover left behind. The autonomous worker can advance
+steps 1-5 freely; **step 6 (x86_64.py deletion) needs explicit user
+acknowledgement** per the same gate that protected Stage 221a/221b.
+
+- **v3.1 step 1 — LLVM compile-to-ELF wrapper.** SHIPPED (commit
+  `ef72950`). Adds `compile_module_to_elf_via_llvm` /
+  `compile_module_to_elf_via_llvm_full` in `llvm_toolchain.py`.
+  Tri-state (PASSED / FAILED / DEFERRED); host-OS guard returns
+  DEFERRED on non-Linux without `HELIX_LLVM_CROSS=1`.
+- **v3.1 step 3 — `_codegen_backend.py` test-side seam.** SHIPPED
+  (commit `f5bfd6d`). `selected_backend()` reads
+  `HELIX_TEST_BACKEND`; default is `"x86"`; `"llvm"` swaps every
+  call site. `compile_or_skip` translates `LLVMToolchainAbsent`
+  to `pytest.skip(...)`. 6 import sites in `test_codegen.py`
+  migrated to use the helper.
+- **v3.1 step 4 — f32 / f64 polymorphic SPLICE / MODIFY.** SHIPPED
+  (commit `3359ba7`). Four new helpers
+  (`__helix_splice_f32/f64`, `__helix_modify_f32/f64`) and two
+  `MappingProxyType` dispatch tables (`_SPLICE_DISPATCH`,
+  `_MODIFY_DISPATCH`) as the single source of truth for the
+  polymorphic value_kind set. Validation set is derived from the
+  dispatch keys — cannot drift. 8 new tests pin emission + SSOT.
+  Note: positive-emission tests bypass `emit_module` (because the
+  module-level float-return rejection still stands) via
+  `_FnEmitter._emit_op` direct drive; this is documented as
+  load-bearing-temporary until the broader float-arithmetic
+  support lifts the float-return restriction.
+- **v3.1 step 5 — REFLECT_HASH LLVM lowering.** SHIPPED (commit
+  `3809baf`). `__helix_reflect_hash(i32 handle) -> i32` helper:
+  bounds-check + i64 load from cell + splitmix64 finalizer
+  (Stafford mix13) + truncate to i32. Multiplier constants are
+  derived from named hex source-of-truth (`_SPLITMIX64_C1/C2_HEX`)
+  via `hex - (1<<64)`; a module-load assertion
+  `_check_reflect_hash_constants` pins the round-trip so a future
+  typo crashes at import. **Audit caught a CRITICAL bug here**:
+  the original hand-derived C2 decimal corresponded to a different
+  hex than documented; both auditors (silent-failure-hunter and
+  code-reviewer) independently flagged it. Fixed before shipping.
+  7 new tests; x86_64.py still has no REFLECT_HASH arm — the
+  asymmetry resolves at step 6.
+- **v3.1 step 6 — Delete x86_64.py.** **GATED — needs explicit user
+  acknowledgement.** Stage 221b deferral. Requires updating
+  `_codegen_backend.py::_DEFAULT_BACKEND` from `"x86"` to `"llvm"`,
+  removing the legacy file, migrating any remaining
+  `from .backend.x86_64 import ...` call sites (~10 test files,
+  `check.py`, `examples/run.py`, `lower_ast.py`). Irreversible.
+- **v3.1 step 7 — Tag `v3.1.0`.** Depends on step 6.
+
+When `v3.1.0` is tagged, v3.1 cleanup is done. v3.2 begins the
+real-execution Stage-207 parity gate work.
+
 ## 5. The working discipline (follow this)
 
 - **One coherent chunk per work unit.** A stage is built in small
