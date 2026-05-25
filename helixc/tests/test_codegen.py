@@ -7240,6 +7240,32 @@ def test_bootstrap_kovc_pat_range_inclusive_above_self_host():
         f"expected K2 exit 0 (11 is NOT in 0..=10); got {rc}")
 
 
+def test_bootstrap_kovc_pat_or_alternatives_self_host():
+    """K1.F-discovery batch 6 (2026-05-25): the matrix listed
+    `PatOr` (`a | b | c`) as KOVC-MISSING. parse_pattern (parser.hx
+    :7713+) already implements the alt-chain build via PAT_OR
+    (tag 68); kovc.hx emit_pat_or (Stage 28.10 INCREMENT 3) does
+    the codegen. End-to-end probe shows 3-alt int patterns fire
+    correctly. Pin the behaviour."""
+    rc = _kovc_self_host_compile_and_run(
+        "or_match",
+        "fn main() -> i32 { let x = 2; "
+        "match x { 1 | 2 | 3 => 7, _ => 99 } }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (2 in {{1,2,3}}); got {rc}"
+
+
+def test_bootstrap_kovc_pat_or_no_match_self_host():
+    """K1.F-discovery batch 6: a value NOT in any of the alts
+    falls through to the wildcard arm."""
+    rc = _kovc_self_host_compile_and_run(
+        "or_match_miss",
+        "fn main() -> i32 { let x = 4; "
+        "match x { 1 | 2 | 3 => 7, _ => 99 } }",
+    )
+    assert rc == 99, f"expected K2 exit 99 (4 not in {{1,2,3}}); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
