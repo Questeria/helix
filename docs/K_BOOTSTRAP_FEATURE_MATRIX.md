@@ -100,7 +100,7 @@ iterates.
 | `PatWildcard` (`_`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_match_wildcard_fallback_self_host` -- wildcard arm fires when no literal matches) | PARITY |
 | `PatTuple` (`(a, b, c)`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_pat_tuple_destructure_self_host` -- `match (3,4) { (a,b) => a+b }` returns 7) | PARITY |
 | `PatOr` (`a | b | c`) | ✅ | ❌ | KOVC-MISSING |
-| `PatRange` (`0..10`, `0..=10`) | ✅ | ❌ | KOVC-MISSING |
+| `PatRange` (`0..10`, `0..=10`) | ✅ | ✅ (K1.F-discovery batch 5 2026-05-25: half-open `0..10` form works as a match arm pattern -- verified via `test_bootstrap_kovc_pat_range_match_self_host`. Closed `0..=10` form is a separate gap -- lexer has no `..=` token; tracked as its own follow-up) | PARITY |
 | `PatVariant` (`Enum::Variant(p)`) | ✅ | ✅ (K1.F-discovery batch 3 2026-05-25: payload-variant destructure verified via `test_bootstrap_kovc_enum_payload_variant_match_self_host` -- `match n { N::Val(v) => v }` binds the payload to v) | PARITY |
 | `PatStruct` (`Point { x, y }`) | ✅ | ❌ | KOVC-MISSING |
 

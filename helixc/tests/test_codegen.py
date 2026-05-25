@@ -7162,6 +7162,36 @@ def test_bootstrap_kovc_char_literal_escape_null_self_host():
         f"expected K2 exit 7 (NUL + 7); got {rc}")
 
 
+def test_bootstrap_kovc_for_loop_in_range_self_host():
+    """K1.G regression (2026-05-25, gap-fill): the parse_for arm
+    desugars `for x in start..end { body }` to AST_LET_MUT +
+    AST_WHILE + AST_SEQ + AST_ASSIGN + AST_ADD + AST_LT.
+    K1.G-wireup commit 52599d7 added the parser arm but no
+    bootstrap-self-host test pinned the behaviour -- this fills
+    that gap."""
+    rc = _kovc_self_host_compile_and_run(
+        "for_excl",
+        "fn main() -> i32 { let mut s = 0; "
+        "for i in 0..5 { s = s + i }; s }",
+    )
+    assert rc == 10, f"expected K2 exit 10 (0+1+2+3+4); got {rc}"
+
+
+def test_bootstrap_kovc_pat_range_match_self_host():
+    """K1.F-discovery batch 5 (2026-05-25): the matrix listed
+    `PatRange` (`0..10`, `0..=10`) as KOVC-MISSING. Direct probe
+    shows half-open `0..10` works as a match arm pattern -- a
+    value in the range fires the arm. The closed `0..=10` form
+    fails (the `..=` token is a real lexer gap).
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "pat_range",
+        "fn main() -> i32 { let x = 5; "
+        "match x { 0..10 => 1, _ => 0 } }",
+    )
+    assert rc == 1, f"expected K2 exit 1 (5 in 0..10); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
