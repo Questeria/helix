@@ -178,8 +178,17 @@ iterates.
 `Diff<T>`, `Logic<T>`, `Modal<T>`, `Causal<T>`, `Conf<T>`, `Taint<T>`, `DP<T>`,
 `Quant<T>`, `Domain<T>`, `Robust<T>`, `Energy<T>`, `Enclave<T>`,
 `Counterfactual<T>`, `Deadline<T>`, `Attribution<T>` (15 composable
-wrappers) — all ✅ in Python, all ❌ in `kovc.hx`. **Status: KOVC-MISSING
-(all 15).**
+wrappers). **Status: PARITY (all 15, syntax-only)** -- K1.F-discovery
+batch 13 (2026-05-25) verified that all 15 modal-type wrappers in
+let-binding annotations work via K1.T's generic-args `<>` depth-
+tracking skip. The bootstrap accepts the syntax; the wrapped value
+passes through unchanged. SEMANTIC ENFORCEMENT is still missing --
+the bootstrap doesn't run effect_check / DP-composition / taint-
+propagation / differentiability tracking. Python helixc has
+dedicated passes for each (`effect_check.py`, `dp_pass.py`, etc.).
+Full semantic parity is a v3.x+ followup; the K-bootstrap target
+is syntax acceptance so user code parses. Pinned via 3 self-host
+regression tests (`Diff<f32>`, `Taint<i32>`, `Counterfactual<i32>`).
 
 ## 12. Tile / tensor / GPU
 

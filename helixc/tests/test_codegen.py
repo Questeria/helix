@@ -8034,6 +8034,46 @@ def test_bootstrap_kovc_attribute_partial_self_host():
     assert rc == 11, f"expected K2 exit 11 (@partial accepted); got {rc}"
 
 
+def test_bootstrap_kovc_modal_diff_self_host():
+    """K1.F-discovery batch 13 (2026-05-25): all 15 Tier-S/A modal-
+    type wrappers (Diff, DP, Taint, Conf, Counterfactual, ...)
+    work syntactically in let-binding annotations via K1.T's
+    generic-args `<>` depth-tracking skip. The bootstrap consumes
+    the type info as metadata; the wrapped value passes through.
+
+    SYNTAX-only parity -- the bootstrap doesn't ENFORCE the modal
+    semantics (no differentiability tracking, no DP composition,
+    no taint propagation). Python helixc has dedicated passes for
+    each. The K-bootstrap target is to get the syntax accepted so
+    user code parses; full semantics are a v3.x+ followup."""
+    rc = _kovc_self_host_compile_and_run(
+        "modal_diff",
+        "fn main() -> i32 { let x: Diff<f32> = 42; x }",
+    )
+    assert rc == 42, f"Diff<f32> annotation: got {rc}"
+
+
+def test_bootstrap_kovc_modal_taint_self_host():
+    """K1.F-discovery batch 13: `Taint<T>` for taint-tracking type.
+    Same pattern as the other 14 modals."""
+    rc = _kovc_self_host_compile_and_run(
+        "modal_taint",
+        "fn main() -> i32 { let x: Taint<i32> = 11; x }",
+    )
+    assert rc == 11, f"Taint<i32> annotation: got {rc}"
+
+
+def test_bootstrap_kovc_modal_counterfactual_self_host():
+    """K1.F-discovery batch 13: `Counterfactual<T>` -- the longest
+    of the 15 modal names (15 bytes). The K1.T skip handles
+    arbitrary-length type IDENTs."""
+    rc = _kovc_self_host_compile_and_run(
+        "modal_cf",
+        "fn main() -> i32 { let x: Counterfactual<i32> = 33; x }",
+    )
+    assert rc == 33, f"Counterfactual<i32> annotation: got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
