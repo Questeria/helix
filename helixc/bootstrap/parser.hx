@@ -210,6 +210,11 @@ fn kw_return_n(sb: i32) -> i32 { __arena_get(sb + 89) }
 // for-loop arm yet; the wire-up follows in K1.G-wireup.
 fn kw_in_s(sb: i32) -> i32 { __arena_get(sb + 90) }
 fn kw_in_n(sb: i32) -> i32 { __arena_get(sb + 91) }
+// K1.H1-deadcode (2026-05-25): `loop { body }` keyword at slots
+// 92/93. Desugars to `while 1 { body }` -- no new AST tag. break
+// and continue are deferred (K1.H2/H3 -- they need label tracking).
+fn kw_loop_s(sb: i32) -> i32 { __arena_get(sb + 92) }
+fn kw_loop_n(sb: i32) -> i32 { __arena_get(sb + 93) }
 // Stage 8: generic-params scratch table for the CURRENT fn being parsed.
 // sb+29 = base (offset of 8-slot region: 4 entries x 2 fields name_s,name_l).
 // sb+30 = count (0..4). Reset to 0 by parse_fn_decl when entering, set
@@ -4107,6 +4112,11 @@ fn install_keywords(sb: i32) -> i32 {
     let in_s = __arena_push(105); __arena_push(110);
     __arena_set(sb + 90, in_s);
     __arena_set(sb + 91, 2);
+    // K1.H1-deadcode (2026-05-25): "loop" = 108 111 111 112.
+    let loop_s = __arena_push(108); __arena_push(111); __arena_push(111);
+    __arena_push(112);
+    __arena_set(sb + 92, loop_s);
+    __arena_set(sb + 93, 4);
     0
 }
 
@@ -4218,6 +4228,8 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0);
     // K1.G-deadcode (2026-05-25): slots 90/91 = in keyword (start, len).
     // Note: `for` is already at slot 41 (Stage 8.5 trait kw); we reuse it.
+    __arena_push(0); __arena_push(0);
+    // K1.H1-deadcode (2026-05-25): slots 92/93 = loop keyword (start, len).
     __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
@@ -8132,6 +8144,29 @@ fn parse_for(tok_base: i32, sb: i32) -> i32 {
     let let_mut_node = mk_node(12, var_s, var_l, while_node); // AST_LET_MUT (4 slots)
     __arena_push(start_expr);                                  // 5th slot = init value
     let_mut_node
+}
+
+// K1.H1-deadcode (2026-05-25): parse a `loop { body }` form. The
+// 'loop' IDENT has been peeked but NOT consumed by the caller.
+// Desugars to `while 1 { body }` -- AST_WHILE(AST_INT(1), body) --
+// using existing tags only. No codegen changes needed (the while
+// arm already lowers cond==1 like any other condition).
+//
+// break/continue inside the body are NOT supported yet (K1.H2/H3
+// will add them once label tracking is in place). If the user
+// writes `loop { ...; break; ... }` today the parser will fail at
+// the `break` IDENT just like it does outside any loop. That's the
+// correct fail-closed behaviour for K1.H1.
+//
+// CURRENTLY UNREACHABLE -- parse_primary has no `loop` arm yet. The
+// follow-up K1.H1-wireup chunk adds the dispatch line.
+fn parse_loop(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                              // consume 'loop' IDENT
+    cur_advance(sb);                              // consume '{'
+    let body_expr = parse_expr(tok_base, sb);
+    cur_advance(sb);                              // consume '}'
+    let one_lit = mk_node(0, 1, 0, 0);            // AST_INT(1)
+    mk_node(10, one_lit, body_expr, 0)            // AST_WHILE
 }
 
 // `match` keyword has already been peeked but NOT consumed by caller.
