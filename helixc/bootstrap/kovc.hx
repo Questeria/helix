@@ -1913,12 +1913,28 @@ fn install_builtin_names() -> i32 {
     // loop_top instead of end_label).
     __arena_push(0);      // slot 157: break-chain head
     __arena_push(0);      // slot 158: continue-chain head
+    // K1.AF (2026-05-25): slot 159 holds the name-offset of the
+    // builtin "__arena_push_pair" (set just after the name bytes
+    // are pushed below). Init to 0 here so kovc_byte_eq probes
+    // before assignment return a safe miss (length still 17
+    // ensures no false match).
+    __arena_push(0);      // slot 159: __arena_push_pair name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
     __arena_push(101); __arena_push(110); __arena_push(97); __arena_push(95);
     __arena_push(112); __arena_push(117); __arena_push(115); __arena_push(104);
     __arena_set(bn_state, s0);
+
+    // K1.AF (2026-05-25): "__arena_push_pair" (17 chars: 95 95 97
+    // 114 101 110 97 95 112 117 115 104 95 112 97 105 114). Atomic
+    // 2-slot push for parser/codegen use. Stored at slot 159.
+    let s_pair = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
+    __arena_push(101); __arena_push(110); __arena_push(97); __arena_push(95);
+    __arena_push(112); __arena_push(117); __arena_push(115); __arena_push(104);
+    __arena_push(95); __arena_push(112); __arena_push(97); __arena_push(105);
+    __arena_push(114);
+    __arena_set(bn_state + 159, s_pair);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3336,6 +3352,12 @@ fn bn_f64_pack_s(b: i32) -> i32 { __arena_get(b + 83) }
 fn bn_break_chain_head_s(b: i32) -> i32 { __arena_get(b + 157) }
 fn bn_set_break_chain_head_s(b: i32, v: i32) -> i32 { __arena_set(b + 157, v); 0 }
 
+// K1.AF (2026-05-25): bn_state slot 159 holds the name-offset
+// of the builtin "__arena_push_pair" (17 bytes). Looked up by
+// the dispatcher in try_emit_builtin_call to recognize the
+// call site and emit the inline atomic 2-slot push.
+fn bn_arena_push_pair_s(b: i32) -> i32 { __arena_get(b + 159) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3714,6 +3736,44 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         patch_table_add(patch_state, disp_slot, arena_base_s, 18);
         emit_byte(0x8B); emit_byte(0x44); emit_byte(0x88); emit_byte(0x04);
         n_arg + 2 + 7 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_arena_push_pair_s(bn_state), 17) == 1 {
+        // K1.AF (2026-05-25): __arena_push_pair(left, right) -> i32.
+        // Atomic 2-slot push: writes left at slot cursor, right at
+        // slot cursor+1, advances cursor by 2, returns OLD cursor.
+        // Overflow (cursor >= CAP-1) returns -1 with no writes.
+        // Mirrors Python's _HELIX_ARENA_PUSH_PAIR_HELPER (LLVM
+        // backend). Atomic-or-none: cursor check is done BEFORE
+        // either write so either both slots land or neither.
+        //
+        // Register usage (after arg evaluation):
+        //   eax = arena_base ptr; esi = OLD cursor; edx = left; ecx = right
+        //   on overflow path: eax = -1 (returned)
+        //   on success path: eax = OLD cursor (returned)
+        let a0_pp = __arena_get(args_head + 1);
+        let next_arg_pp = __arena_get(args_head + 2);
+        let a1_pp = __arena_get(next_arg_pp + 1);
+        let n_left_pp = emit_ast_code(a0_pp, bind_state, patch_state, bn_state);
+        emit_byte(0x50);                                       // push rax (left)
+        let n_right_pp = emit_ast_code(a1_pp, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                      // mov ecx, eax (right)
+        emit_byte(0x5A);                                       // pop rdx (edx = left)
+        let disp_slot_pp = emit_lea_rax_rip_placeholder();    // 7 bytes
+        patch_table_add(patch_state, disp_slot_pp, arena_base_s, 18);
+        emit_byte(0x8B); emit_byte(0x30);                      // mov esi, [rax] (cursor)
+        emit_byte(0x81); emit_byte(0xFE);                      // cmp esi, CAP-1 (6 bytes)
+        emit_u32_le(helix_arena_cap() - 1);
+        emit_byte(0x7D); emit_byte(0x11);                      // jge overflow (skip 17 = in-bounds path)
+        // in_bounds (17 bytes):
+        emit_byte(0x89); emit_byte(0x54); emit_byte(0xB0); emit_byte(0x04);  // mov [rax+rsi*4+4], edx (write left at slot esi)
+        emit_byte(0x89); emit_byte(0x4C); emit_byte(0xB0); emit_byte(0x08);  // mov [rax+rsi*4+8], ecx (write right at slot esi+1)
+        emit_byte(0x8D); emit_byte(0x4E); emit_byte(0x02);                   // lea ecx, [rsi+2] (new cursor)
+        emit_byte(0x89); emit_byte(0x08);                                    // mov [rax], ecx (store new cursor)
+        emit_byte(0x89); emit_byte(0xF0);                                    // mov eax, esi (return OLD cursor)
+        emit_byte(0xEB); emit_byte(0x05);                                    // jmp end (skip 5 = overflow path)
+        // overflow (5 bytes):
+        emit_byte(0xB8); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);  // mov eax, -1
+        // Total bytes after arg evals: 1 + 2 + 1 + 7 + 2 + 6 + 2 + 17 + 5 = 43
+        n_left_pp + n_right_pp + 43
     } else { if kovc_byte_eq(name_s, name_l, bn_arena_push_s(bn_state), 12) == 1 {
         // __arena_push(val): eval val in eax; bounds-checked
         // write to arena; return old cursor.
@@ -4433,7 +4493,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE (2026-05-25): +1 brace each closes print_int + panic arms
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE + K1.AF: +1 brace each for print_int + panic + push_pair arms
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

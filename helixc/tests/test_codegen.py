@@ -8202,6 +8202,35 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_arena_push_pair_self_host():
+    """K1.AF (2026-05-25): __arena_push_pair(left, right) -> i32
+    atomic 2-slot push. Returns OLD cursor; writes left at slot
+    cursor and right at slot cursor+1. Mirrors Python's
+    _HELIX_ARENA_PUSH_PAIR_HELPER (atomic-or-none on overflow,
+    though this test stays well inside CAP). 3 sub-probes pinned
+    via separate assertions: (a) the returned index reads back
+    the left value, (b) idx+1 reads back the right value, (c)
+    consecutive push_pair returns advance by exactly 2."""
+    rc_a = _kovc_self_host_compile_and_run(
+        "push_pair_a",
+        "fn main() -> i32 { let idx = __arena_push_pair(7, 8); "
+        "__arena_get(idx) }",
+    )
+    assert rc_a == 7, f"push_pair stored left=7 should read back as 7; got {rc_a}"
+    rc_b = _kovc_self_host_compile_and_run(
+        "push_pair_b",
+        "fn main() -> i32 { let idx = __arena_push_pair(7, 8); "
+        "__arena_get(idx + 1) }",
+    )
+    assert rc_b == 8, f"push_pair stored right=8 at idx+1 should read 8; got {rc_b}"
+    rc_c = _kovc_self_host_compile_and_run(
+        "push_pair_c",
+        "fn main() -> i32 { let a = __arena_push_pair(7, 8); "
+        "let b = __arena_push_pair(9, 10); b - a }",
+    )
+    assert rc_c == 2, f"two consecutive push_pair calls should advance cursor by 2 per call; got delta={rc_c}"
+
+
 def test_bootstrap_kovc_panic_prints_message_self_host():
     """K1.AE (2026-05-25): panic("msg") now emits the message
     text to stderr via sys_write(2, ptr, len) before the ud2

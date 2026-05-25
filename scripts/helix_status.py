@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 120      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 121      # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -339,7 +339,13 @@ K_BOOTSTRAP_PARITY_DONE = 120      # was 28 after K0; K1.B (stack
                                     # @partial); diagnostics uses
                                     # numeric trap-ids vs Python's
                                     # carets but the fail-stop
-                                    # signal matches. +4 made it 120
+                                    # signal matches. +4 made it 120;
+                                    # K1.AF: __arena_push_pair(a,b)
+                                    # inline builtin -- atomic
+                                    # 2-slot push, returns OLD
+                                    # cursor, -1 on overflow.
+                                    # push_triple deferred. +1
+                                    # made it 121
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
