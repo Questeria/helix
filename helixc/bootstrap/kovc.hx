@@ -329,6 +329,114 @@ fn emit_add_rsp_imm32(imm: i32) -> i32 {
     emit_u32_le(imm);
     7
 }
+
+// K-bootstrap K1.B — `mov reg64, [rsp + disp32]` helpers (8 bytes
+// each). SIB byte 0x24 (scale=0, index=none, base=rsp) is MANDATORY
+// whenever the effective address uses rsp as base — without it, the
+// ModRM r/m=100 would be interpreted as "SIB follows" anyway, so
+// the SIB is part of the encoding contract.
+//
+// Encoding template:
+//   <REX> 8B <ModRM=10rrr100> 24 <disp32-LE>
+// where:
+//   REX = 0x48 (W=1, R=0) for the low-8 registers (rax/rcx/rdx/
+//         rbx/rsp/rbp/rsi/rdi); 0x4C (W=1, R=1) for r8-r15.
+//   ModRM = mod=10 (disp32 follows) + reg=destination + rm=100 (SIB).
+//   reg field encodes the destination's low-3 bits:
+//     rax = 000  -> ModRM 0x84
+//     rcx = 001  -> ModRM 0x8C
+//     rdx = 010  -> ModRM 0x94
+//     rsi = 110  -> ModRM 0xB4
+//     rdi = 111  -> ModRM 0xBC
+//     r8  = 000 (with REX.R) -> ModRM 0x84
+//     r9  = 001 (with REX.R) -> ModRM 0x8C
+//
+// SysV ABI uses rdi/rsi/rdx/rcx/r8/r9 for the first 6 int args, so
+// these 6 helpers + the rax helpers cover what K1.B's caller-cleanup
+// stack-arg phase needs.
+fn emit_mov_rax_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x84); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+fn emit_mov_rcx_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x8C); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+fn emit_mov_rdx_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x94); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+fn emit_mov_rsi_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xB4); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+fn emit_mov_rdi_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+fn emit_mov_r8_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x4C); emit_byte(0x8B); emit_byte(0x84); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+fn emit_mov_r9_rsp_disp32(disp: i32) -> i32 {
+    emit_byte(0x4C); emit_byte(0x8B); emit_byte(0x8C); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+// Store: `mov [rsp + disp32], rax`. Opcode 0x89 (MOV r/m64, r64),
+// ModRM 0x84 (reg=rax=000, rm=SIB), SIB 0x24 (rsp).
+fn emit_mov_rsp_disp32_rax(disp: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0x84); emit_byte(0x24);
+    emit_u32_le(disp);
+    8
+}
+
+// K-bootstrap K1.B — the stack-arg reverse-copy loop, extracted to
+// a top-level fn so the AST_CALL arm stays shallow (host parser's
+// recursion budget — see the Finding #7 lesson note at the
+// AST_CALL handler). `stack_args` = (arg_count - 6); `stack_alloc`
+// = stack_args * 8 (always 16-aligned since stack_args >= 1 and
+// 8*N + stack_alloc is always 16*(N-3) when both are computed).
+fn emit_stack_args_reverse_copy(stack_args: i32, stack_alloc: i32) -> i32 {
+    let mut n: i32 = 0;
+    let mut i: i32 = 0;
+    while i < stack_args {
+        let src_disp = stack_alloc + 8 * (stack_args - 1 - i);
+        let dst_disp = 8 * i;
+        n = n + emit_mov_rax_rsp_disp32(src_disp);
+        n = n + emit_mov_rsp_disp32_rax(dst_disp);
+        i = i + 1;
+    }
+    n
+}
+
+// K-bootstrap K1.B — load args 0..5 from the post-`sub rsp` stack
+// positions into rdi/rsi/rdx/rcx/r8/r9. Extracted to keep the
+// AST_CALL arm shallow.
+fn emit_load_six_int_args(stack_alloc: i32, arg_count: i32) -> i32 {
+    let mut n: i32 = 0;
+    n = n + emit_mov_rdi_rsp_disp32(stack_alloc + 8 * (arg_count - 1));
+    n = n + emit_mov_rsi_rsp_disp32(stack_alloc + 8 * (arg_count - 2));
+    n = n + emit_mov_rdx_rsp_disp32(stack_alloc + 8 * (arg_count - 3));
+    n = n + emit_mov_rcx_rsp_disp32(stack_alloc + 8 * (arg_count - 4));
+    n = n + emit_mov_r8_rsp_disp32(stack_alloc + 8 * (arg_count - 5));
+    n = n + emit_mov_r9_rsp_disp32(stack_alloc + 8 * (arg_count - 6));
+    n
+}
+
 // 64-bit signed divide: cqo (sign-extend rax into rdx:rax) + idiv rcx.
 //   48 99        cqo
 //   48 F7 F9     idiv rcx
@@ -6139,18 +6247,71 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { 0 }
         } else { 0 };
         bytes_emitted = bytes_emitted + n_arity_trap;
-        // Audit fix #7 (cycle 1): if arg_count > 6, emit ud2 trap.
-        // Phase 0 doesn't yet implement SysV stack args (args 6+ are
-        // supposed to be passed on the stack at [rsp+0], [rsp+8], ...
-        // with the caller adding `add rsp, N` after the call). Without
-        // that, the args 6+ remain on the stack and the call still
-        // happens — corrupting both the stack and any subsequent
-        // pop/cmp operations. Loud SIGILL is much better than silent
-        // corruption. Implement stack-args properly when needed.
-        // Speedup #4 wire-in: AST_CALL arity-overflow trap id 16002.
+        // K-bootstrap K1.B (2026-05-25): the arg_count > 6 path no
+        // longer traps. SysV stack-arg passing is implemented via the
+        // caller-cleanup pattern (matches helixc/backend/x86_64.py).
+        //
+        // After pass 1, all N args are on the runtime stack. Layout
+        // from rsp (top to bottom):
+        //   [rsp + 8*i] = arg(N-1-i) for i in 0..N
+        // i.e., arg(N-1) is on top (latest push), arg0 at the bottom.
+        //
+        // SysV ABI wants at the CALL instruction:
+        //   rdi=arg0, rsi=arg1, rdx=arg2, rcx=arg3, r8=arg4, r9=arg5,
+        //   [rsp_call + 0] = arg6  (lowest stack-arg INDEX at lowest
+        //                            address — source-index order),
+        //   [rsp_call + 8] = arg7,
+        //   ...
+        //   [rsp_call + 8*(N-7)] = arg(N-1),
+        //   rsp_call ≡ 0 (mod 16).
+        //
+        // Algorithm:
+        //   sub rsp, stack_alloc                    ; reserve stack-arg
+        //                                              region; stack_alloc =
+        //                                              (N-6) * 8 bytes.
+        //                                              (N >= 7 guarantees
+        //                                              stack_alloc is a
+        //                                              multiple of 8 and
+        //                                              that 8*N + stack_alloc
+        //                                              = 16*(N - 3) which
+        //                                              is always 16-aligned —
+        //                                              no extra padding
+        //                                              needed for rsp_call.)
+        //   for i in 0..(N-7):                      ; reverse stack args
+        //     mov rax, [rsp + stack_alloc + 8*(N-7-i)]
+        //     mov [rsp + 8*i], rax
+        //   mov rdi, [rsp + stack_alloc + 8*(N-1)]  ; load arg0
+        //   mov rsi, [rsp + stack_alloc + 8*(N-2)]  ; arg1
+        //   mov rdx, [rsp + stack_alloc + 8*(N-3)]  ; arg2
+        //   mov rcx, [rsp + stack_alloc + 8*(N-4)]  ; arg3
+        //   mov r8,  [rsp + stack_alloc + 8*(N-5)]  ; arg4
+        //   mov r9,  [rsp + stack_alloc + 8*(N-6)]  ; arg5
+        //   call rel32
+        //   add rsp, stack_alloc + 8*N              ; cleanup
+        //
+        // Float args (f32/f64) flow through the integer path here,
+        // matching the existing pre-K1.B kovc.hx convention for args
+        // 0-5 (they go through rdi..r9, not xmm0..7). x86_64.py uses
+        // xmm regs; kovc.hx's bootstrap-simpler convention diverges
+        // here, and that divergence is documented in the matrix
+        // (KOVC-MISSING: f32/f64 in registers via xmm).
+        //
+        // FLAT control flow (Finding #7 lesson at line 6099+): the
+        // implementation is one `while` loop + a sequence of flat
+        // emit-helper calls — no nested if-cascade — to stay under
+        // the host parser's recursion budget.
         if arg_count > 6 {
-            let n_trap = emit_trap_with_id(16002);
-            bytes_emitted + n_trap
+            // Flat call sequence — actual work in top-level fns so the
+            // AST_CALL arm stays shallow (host-parser recursion budget).
+            let stack_args = arg_count - 6;
+            let stack_alloc = stack_args * 8;
+            let n_sub = emit_sub_rsp_imm32(stack_alloc);
+            let n_rev = emit_stack_args_reverse_copy(stack_args, stack_alloc);
+            let n_load = emit_load_six_int_args(stack_alloc, arg_count);
+            let disp_slot = emit_call_rel32_placeholder();
+            patch_table_add(patch_state, disp_slot, p1, p2);
+            let n_clean = emit_add_rsp_imm32(stack_alloc + 8 * arg_count);
+            bytes_emitted + n_sub + n_rev + n_load + 5 + n_clean
         } else {
         // Pass 2: pop into SysV regs in reverse-of-push order.
         // pushed: arg0, arg1, ..., argN-1 (top is argN-1).
