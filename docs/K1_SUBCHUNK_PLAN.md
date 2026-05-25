@@ -81,35 +81,80 @@ lines of test, 1 commit.
 
 ### K1.C — `return` statement (lexer + parser + codegen)
 
+**Status (2026-05-25): FIRST ATTEMPT REVERTED.** The attempt
+broke 24 bootstrap tests; tree restored to pre-K1.C state.
+Lesson + redo plan below.
+
 **Goal:** support the `return expr;` form. Today the bootstrap uses
 the implicit-last-expression form only.
 
 **Design:**
-- lexer.hx: add `TK_RETURN` (use tag 19 — currently a hole).
-  Keyword recognition: a 6-byte ident `return` becomes TK_RETURN.
-- parser.hx: in `parse_primary`, recognize TK_RETURN, parse the
-  expression, emit `mk_node(43, value_idx, 0, 0)` — claim tag 43
-  for AST_RET.
-- kovc.hx: in the codegen dispatch, add an arm for tag 43:
-  emit value into rax, then JUMP TO the function's epilogue.
+- lexer.hx: no changes — keywords are post-lex-classified in the
+  parser via byte_eq against state-slot-installed bytes.
+- parser.hx: install "return" keyword bytes in `install_keywords`,
+  add accessors `kw_return_s/n`, add `parse_return` top-level fn,
+  add a new arm in `parse_primary`'s IDENT dispatch.
+- kovc.hx: in the codegen dispatch, add an arm for AST_RET (tag
+  43): emit value into rax, then emit_epilogue + emit_ret (same
+  bytes the fn-end currently emits at kovc.hx:6806).
 
-**Subtle bit:** the function's epilogue label isn't known when the
-AST_RET arm fires. Two options:
-- (a) Emit `ret` directly here (skip rbp restore). Works if the
-  function never `push rbp` / `sub rsp, frame_size`. Bootstrap
-  uses a simple stack-frame model — verify.
-- (b) Track an "epilogue label" in `bind_state` (parallel to the
-  existing patch_table for forward-fn-call refs). AST_RET emits
-  a jmp-rel32 with a forward-patch entry; the fn end patches all
-  AST_RET sites to point at the epilogue.
+**LESSON FROM FIRST ATTEMPT (2026-05-25):**
 
-Pick (a) if kovc.hx fns have no real prologue/epilogue beyond ret;
-pick (b) if they do. Read kovc.hx fn-emit to decide.
+The first K1.C attempt added all the pieces above, ran the
+bootstrap tests, and 24 of 25 tests failed with
+`ParseError: expected expression (got KW_ELSE 'else')`. Tree
+reverted via `git checkout`. Root cause analysis:
 
-**Tests:** a fn that returns early from a loop or from inside an if.
+1. `parse_primary` has a NESTED if-cascade across token types
+   (t == 2 = IDENT, t == 3, t == 4, ...). Inside each token-
+   type arm, there's a further sub-cascade over keyword bytes
+   (let / if / while / match / catchall).
+2. The closing `}}}}` braces at `parser.hx:3708-3711` close
+   sub-cascades for SPECIFIC token-type arms, with explanatory
+   comments ("Stage 28.11 INC-3b.2: extra `}` closes the new
+   nt==16 branch" etc.). The very-end `}}}}}}}}}}}}}}}}` at
+   `parser.hx:3848` closes the OUTER token-type if-cascade.
+3. The first K1.C insertion correctly added the new arm in
+   parse_primary, and adjusted the closing-brace count at
+   line 3848 by +2. But that's the WRONG closing location for
+   the new arm — the match-arm's else-block closes at line
+   ~3708, not at line 3848.
+4. Net effect: the IDENT sub-cascade had unbalanced braces;
+   subsequent token-type arms (t == 3 etc.) parsed in the
+   wrong scope; Python helixc choked on the resulting
+   ill-structured source.
 
-**Estimated size:** ~80 lines (lexer + parser + codegen) + tests,
-1 commit.
+**REDO PLAN (next K1.C attempt):**
+
+Instead of touching parse_primary's brace cascade, factor the
+keyword dispatch in a way that doesn't require new braces:
+
+- Option (i): add a `parse_keyword_or_ident(tok_base, sb, id_s, id_l)`
+  top-level fn that takes the IDENT bytes and dispatches to
+  parse_let / parse_if / parse_match / parse_return /
+  fall-through-to-var-ref. Replace the existing inline keyword
+  cascade with one call to this. The brace surface is owned by
+  the new fn, not by parse_primary. Cleaner but a much larger
+  edit.
+- Option (ii): add the new arm AFTER closing the existing
+  keyword sub-cascade — but BEFORE the token-type cascade
+  continues. Requires identifying the exact `}` that closes
+  the IDENT sub-cascade and inserting the new arm there with
+  matching braces.
+- Option (iii): split the work — first add the AST_RET codegen
+  + parse_return fn as DEAD CODE (no caller). Then in a
+  follow-up chunk, do option (i) or (ii) carefully with
+  per-line brace counts.
+
+For autonomous-cron-driving safety, **option (iii)** is the
+preferred next attempt. The dead-code chunk lands safely; the
+parse_primary chunk gets its own audit-pre-commit verification.
+
+**Tests:** after the wire-up, a fn that returns early from
+inside an if.
+
+**Estimated size:** dead-code chunk ~50 lines; wire-up chunk
+~30 lines + tests. Two commits.
 
 ### K1.D — `print_int` builtin
 
