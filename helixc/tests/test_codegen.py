@@ -8321,9 +8321,11 @@ fn main() -> i32 {{
     assert b"kaboom!" in run_k2.stderr, (
         f"panic message should reach stderr; got stderr={run_k2.stderr!r}"
     )
-    # K1.AH (2026-05-25): also require the "panic[28501]: " prefix.
-    assert b"panic[28501]: " in run_k2.stderr, (
-        f"panic prefix should match Python format; got stderr={run_k2.stderr!r}"
+    # K1.AH (2026-05-25): require the "panic[28501]: " prefix.
+    # K1.AI (2026-05-25): also require the trailing newline -- full
+    # Python format match is "panic[28501]: <msg>\n".
+    assert run_k2.stderr == b"panic[28501]: kaboom!\n", (
+        f"panic full format should match Python exactly; got stderr={run_k2.stderr!r}"
     )
 
 

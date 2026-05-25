@@ -1923,6 +1923,8 @@ fn install_builtin_names() -> i32 {
     __arena_push(0);      // slot 160: __arena_push_triple name offset
     // K1.AH (2026-05-25): slot 161 = "panic[28501]: " prefix offset.
     __arena_push(0);      // slot 161: panic prefix name offset
+    // K1.AI (2026-05-25): slot 162 = "\n" newline byte offset.
+    __arena_push(0);      // slot 162: panic newline offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -1959,6 +1961,12 @@ fn install_builtin_names() -> i32 {
     __arena_push(53); __arena_push(48); __arena_push(49); __arena_push(93);
     __arena_push(58); __arena_push(32);
     __arena_set(bn_state + 161, s_panic_pfx);
+
+    // K1.AI (2026-05-25): "\n" (1 byte: 10). Trailing newline for
+    // panic output. Pushed as a 1-byte arena entry so str_table_add
+    // can register it the same way as the prefix and message.
+    let s_panic_nl = __arena_push(10);
+    __arena_set(bn_state + 162, s_panic_nl);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3394,6 +3402,13 @@ fn bn_arena_push_triple_s(b: i32) -> i32 { __arena_get(b + 160) }
 // "panic[id]: msg\n" format.
 fn bn_panic_prefix_s(b: i32) -> i32 { __arena_get(b + 161) }
 
+// K1.AI (2026-05-25): bn_state slot 162 holds the byte-offset
+// of the 1-byte "\n" newline in the K1 arena. Read by the
+// panic codegen arm to emit a 3rd sys_write for the trailing
+// newline AFTER the message sys_write, fully matching Python's
+// "panic[id]: msg\n" format.
+fn bn_panic_newline_s(b: i32) -> i32 { __arena_get(b + 162) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3951,12 +3966,25 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
             // syscall -- 2 bytes (0F 05)
             emit_byte(0x0F); emit_byte(0x05);
+            // K1.AI (2026-05-25): trailing-newline sys_write (24
+            // bytes). Loads the 1-byte "\n" from slot 162 of the
+            // bn_state into rsi and writes it to fd=2. Fully matches
+            // Python's "panic[id]: msg\n" terminator.
+            let nl_disp_slot = emit_lea_rsi_rip_placeholder();
+            str_table_add(bn_state, nl_disp_slot, bn_panic_newline_s(bn_state), 1);
+            emit_byte(0xBF); emit_byte(0x02);                                    // mov edi, 2
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0xBA); emit_byte(0x01);                                    // mov edx, 1
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0xB8); emit_byte(0x01);                                    // mov eax, 1
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0x0F); emit_byte(0x05);                                    // syscall
             // ud2 -- 2 bytes (0F 0B). Could use sys_exit instead but
             // ud2 also raises SIGILL = rc 132, distinctive enough.
             emit_byte(0x0F); emit_byte(0x0B);
             // Total: prefix sys_write (24) + message sys_write (24)
-            //        + ud2 (2) = 50 bytes.
-            50
+            //        + newline sys_write (24) + ud2 (2) = 74 bytes.
+            74
         }
     } else { if kovc_byte_eq(name_s, name_l, bn_read_file_to_arena_s(bn_state), 18) == 1 {
         // read_file_to_arena(path: STRLIT) -> i32 (bytes_read).
