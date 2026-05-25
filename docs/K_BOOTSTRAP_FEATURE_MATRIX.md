@@ -36,8 +36,8 @@ iterates.
 | `TyName` (i32, f32, named types) | ✅ | ✅ | PARITY |
 | `TyTuple` (`(T1, T2, ...)`) | ✅ | ⚠️ (parsed; codegen ud2) | KOVC-MISSING |
 | `TyArray` (`[T; N]`) | ✅ | ✅ (K1.R 2026-05-25: let-binding type-annotation site (parser.hx ~2615) now accepts `[T; N]` in addition to bare-IDENT types. If `:` is followed by `[` (TK_LBRACK), the parser skips tokens until `]`. Type info is metadata-only -- the bootstrap is type-erased so the runtime layout is determined by the value (`[a, b, c]` literals fold to AST_TUPLE_LIT). Verified end-to-end: `let a: [i32; 2] = [11, 13]; a[0] + a[1]` returns 24. Generic types `<T>` and reference types `&T` are NOT yet supported in the type position -- separate follow-ups) | PARITY |
-| `TyRef` (`&T`, `&mut T`) | ✅ | ❌ | KOVC-MISSING |
-| `TyPtr` (`*const T`, `*mut T`) | ✅ | ❌ | KOVC-MISSING |
+| `TyRef` (`&T`, `&mut T`) | ✅ | ✅ (K1.S 2026-05-25: let-binding type-annotation site accepts `&T` / `&mut T` -- consumes `&`, optionally consumes `mut` IDENT, consumes the type IDENT. The bootstrap is type-erased so the annotation is metadata-only. Address-of `&` EXPRESSION is a separate gap -- still unsupported) | PARITY |
+| `TyPtr` (`*const T`, `*mut T`) | ✅ | ✅ (K1.S 2026-05-25: let-binding accepts `*const T` / `*mut T` / `*T` -- consumes `*`, optionally consumes `const` or `mut` IDENT, consumes the type IDENT. Same type-erased no-op pattern as TyRef) | PARITY |
 | `TyFn` (`fn(T1) -> R`) | ✅ | ❌ (no fn-type values) | KOVC-MISSING |
 | `TyTensor` | ✅ | ❌ | KOVC-MISSING |
 | `TyTile` | ✅ | ❌ | KOVC-MISSING |

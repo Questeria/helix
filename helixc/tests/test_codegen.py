@@ -7580,6 +7580,40 @@ def test_bootstrap_kovc_let_ty_array_with_mut_self_host():
     assert rc == 30, f"expected K2 exit 30 (a[2] with mut array); got {rc}"
 
 
+def test_bootstrap_kovc_let_ty_ref_annotation_self_host():
+    """K1.S regression (2026-05-25): the let-binding type-annotation
+    site now accepts `&T` / `&mut T` (TyRef) in addition to the
+    bare-IDENT and `[T; N]` forms. The annotation is metadata-only
+    (bootstrap is type-erased); the parser just consumes the syntax
+    without enforcing reference semantics. The actual address-of
+    `&` expression is a separate gap (still unsupported)."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_ref",
+        "fn main() -> i32 { let x: &i32 = 42; x }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (&i32 annotation); got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "ty_ref_mut",
+        "fn main() -> i32 { let x: &mut i32 = 7; x }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (&mut i32 annotation); got {rc}"
+
+
+def test_bootstrap_kovc_let_ty_ptr_annotation_self_host():
+    """K1.S regression: `*const T` / `*mut T` / `*T` (TyPtr) all
+    accepted. Same type-erased no-op pattern as TyRef."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_ptr_const",
+        "fn main() -> i32 { let x: *const i32 = 11; x }",
+    )
+    assert rc == 11, f"expected K2 exit 11 (*const i32 annotation); got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "ty_ptr_mut",
+        "fn main() -> i32 { let x: *mut i32 = 13; x }",
+    )
+    assert rc == 13, f"expected K2 exit 13 (*mut i32 annotation); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

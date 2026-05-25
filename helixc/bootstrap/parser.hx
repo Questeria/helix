@@ -2640,13 +2640,74 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         }};
                     }
                     cur_advance(sb);    // consume ']'
+                } else { if type_start_tag == 27 {
+                    // K1.S (2026-05-25): `&T` or `&mut T` -- TyRef.
+                    // Consume the `&`, optionally consume `mut`,
+                    // then consume the type IDENT. Type-erased.
+                    cur_advance(sb);    // consume '&'
+                    let after_amp = cur_get(sb);
+                    let aa_tag = tok_tag(tok_base, after_amp);
+                    if aa_tag == 2 {
+                        let aa_s = tok_p2(tok_base, after_amp);
+                        let aa_l = tok_p3(tok_base, after_amp);
+                        // 3-byte "mut" check (bytes 109, 117, 116).
+                        let is_mut_kw = if aa_l == 3 {
+                            if __arena_get(aa_s) == 109 {
+                                if __arena_get(aa_s + 1) == 117 {
+                                    if __arena_get(aa_s + 2) == 116 { 1 } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 };
+                        if is_mut_kw == 1 {
+                            cur_advance(sb);    // consume 'mut'
+                        };
+                    };
+                    cur_advance(sb);    // consume type IDENT
+                } else { if type_start_tag == 9 {
+                    // K1.S (2026-05-25): `*const T` / `*mut T` / `*T`
+                    // -- TyPtr. Consume `*`, optionally consume
+                    // `const` or `mut`, then consume the type IDENT.
+                    cur_advance(sb);    // consume '*'
+                    let after_star = cur_get(sb);
+                    let as_tag = tok_tag(tok_base, after_star);
+                    if as_tag == 2 {
+                        let as_s = tok_p2(tok_base, after_star);
+                        let as_l = tok_p3(tok_base, after_star);
+                        // 5-byte "const" (99,111,110,115,116) or
+                        // 3-byte "mut" (109,117,116) -- consume if
+                        // matched, else leave for type IDENT.
+                        let is_const_kw = if as_l == 5 {
+                            if __arena_get(as_s) == 99 {
+                                if __arena_get(as_s + 1) == 111 {
+                                    if __arena_get(as_s + 2) == 110 {
+                                        if __arena_get(as_s + 3) == 115 {
+                                            if __arena_get(as_s + 4) == 116 { 1 } else { 0 }
+                                        } else { 0 }
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 };
+                        let is_mut_kw_s = if as_l == 3 {
+                            if __arena_get(as_s) == 109 {
+                                if __arena_get(as_s + 1) == 117 {
+                                    if __arena_get(as_s + 2) == 116 { 1 } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 };
+                        if is_const_kw == 1 {
+                            cur_advance(sb);    // consume 'const'
+                        } else { if is_mut_kw_s == 1 {
+                            cur_advance(sb);    // consume 'mut'
+                        }};
+                    };
+                    cur_advance(sb);    // consume type IDENT
                 } else {
                     let lt_tok = cur_get(sb);
                     let lt_s = tok_p2(tok_base, lt_tok);
                     let lt_l = tok_p3(tok_base, lt_tok);
                     let_ty_tag = ty_ident_to_tag(lt_s, lt_l);
                     cur_advance(sb);    // consume type IDENT
-                };
+                }}};
             };
             // Register the typed binding (only when the annotation produced
             // a recognized scalar tag; struct-typed lets continue to use

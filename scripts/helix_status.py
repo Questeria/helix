@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 57       # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 59       # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -165,7 +165,13 @@ K_BOOTSTRAP_PARITY_DONE = 57       # was 28 after K0; K1.B (stack
                                     # K1.R (TyArray `[T;N]` annotation
                                     # in let-binding via skip-to-`]`;
                                     # type-erased so info discarded)
-                                    # +1 made it 57
+                                    # +1 made it 57;
+                                    # K1.S (TyRef `&T` / `&mut T` +
+                                    # TyPtr `*const T` / `*mut T` /
+                                    # `*T` annotation in let-binding;
+                                    # type-erased no-op, address-of
+                                    # EXPRESSION still unsupported)
+                                    # +2 made it 59
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
