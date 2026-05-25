@@ -193,6 +193,16 @@ fn kw_enum_n(sb: i32) -> i32 { __arena_get(sb + 26) }
 // Stage 7: match keyword installed at sb+27/sb+28.
 fn kw_match_s(sb: i32) -> i32 { __arena_get(sb + 27) }
 fn kw_match_n(sb: i32) -> i32 { __arena_get(sb + 28) }
+// K1.C-deadcode (2026-05-25): return keyword installed at sb+88/sb+89.
+// Currently UNREACHABLE -- parse_primary has no caller-arm yet (the
+// wire-up is a follow-up chunk per docs/K1_SUBCHUNK_PLAN.md §K1.C
+// redo plan, option iii). The infrastructure (state slot + accessor
+// + install + parse_return fn + kovc.hx codegen for tag 43) is
+// staged here so the wire-up chunk is a single-line insertion + 2
+// closing braces -- minimal touch on the audit-fragile parse_primary
+// cascade.
+fn kw_return_s(sb: i32) -> i32 { __arena_get(sb + 88) }
+fn kw_return_n(sb: i32) -> i32 { __arena_get(sb + 89) }
 // Stage 8: generic-params scratch table for the CURRENT fn being parsed.
 // sb+29 = base (offset of 8-slot region: 4 entries x 2 fields name_s,name_l).
 // sb+30 = count (0..4). Reset to 0 by parse_fn_decl when entering, set
@@ -4059,6 +4069,11 @@ fn install_keywords(sb: i32) -> i32 {
     let use_s = __arena_push(117); __arena_push(115); __arena_push(101);
     __arena_set(sb + 62, use_s);
     __arena_set(sb + 63, 3);
+    // K1.C-deadcode (2026-05-25): "return" = 114 101 116 117 114 110.
+    let return_s = __arena_push(114); __arena_push(101); __arena_push(116);
+    __arena_push(117); __arena_push(114); __arena_push(110);
+    __arena_set(sb + 88, return_s);
+    __arena_set(sb + 89, 6);
     0
 }
 
@@ -4162,6 +4177,10 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0);
     __arena_push(0);
     // Stage 33: slots 86/87 = next @since message body start/len.
+    __arena_push(0);
+    __arena_push(0);
+    // K1.C-deadcode (2026-05-25): slots 88/89 = return keyword
+    // (start, len). Reserved here; populated by install_keywords.
     __arena_push(0);
     __arena_push(0);
     install_keywords(cur_slot);
@@ -8019,6 +8038,24 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
 //   p1 = pattern_idx
 //   p2 = body_idx
 //   p3 = next_arm_idx (0 at end)
+// K1.C-deadcode (2026-05-25): parse a `return <expr>` form. The
+// 'return' IDENT has been peeked but NOT consumed by the caller.
+// Emits an AST_RET node (tag 43) whose p1 is the value-expression's
+// arena index; kovc.hx codegen emits the value into rax then the
+// fn epilogue + ret.
+//
+// This fn is CURRENTLY UNREACHABLE -- parse_primary has no caller
+// arm yet. The follow-up wire-up chunk adds a 1-line dispatch entry
+// in parse_primary's IDENT keyword cascade. Extracted to a
+// top-level fn so the eventual arm stays SHALLOW (parse_primary's
+// host-parser recursion budget is fragile -- see K1.B's audit-fix
+// note at line 6099 of kovc.hx for the lesson).
+fn parse_return(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                              // consume 'return' IDENT
+    let value = parse_expr_basic(tok_base, sb);   // value expression
+    mk_node(43, value, 0, 0)                      // AST_RET
+}
+
 // `match` keyword has already been peeked but NOT consumed by caller.
 fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'match' IDENT

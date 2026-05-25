@@ -6389,6 +6389,27 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // eax, 0` so codegen completes cleanly. Trying to use the
         // result is undefined behavior at this stage.
         emit_ast_int(0)
+    } else { if t == 43 {
+        // K1.C-deadcode (2026-05-25): AST_RET — explicit `return
+        // <expr>`. p1 = value expression's arena index. Emit the
+        // value into rax (via the normal AST-walker dispatch),
+        // then the fn epilogue + ret. Dead code after this in the
+        // same fn body is harmless — execution never reaches it.
+        //
+        // The kovc.hx convention for fn results is "result in rax";
+        // for i32 results the high 32 bits are unspecified but the
+        // caller-side `mov eax` (or `cmp eax`) only reads the low
+        // 32. Mirroring the fn-end emit pattern at kovc.hx:6806-7
+        // (emit_epilogue + emit_ret) keeps the semantics identical.
+        //
+        // CURRENTLY UNREACHABLE — no parser produces tag 43 until
+        // the follow-up wire-up chunk adds the parse_primary arm.
+        // The codegen is staged here so the wire-up chunk only
+        // touches the parser side (smaller audit surface).
+        let n_val = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let n_ep = emit_epilogue();
+        let n_rt = emit_ret();
+        n_val + n_ep + n_rt
     } else { if t == 99 {
         // AST_ERR with custom trap-id. Audit follow-up: callers that
         // synthesize mk_node(99, trap_id, 0, 0) want the trap-id in eax,
@@ -6407,7 +6428,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // --------------------------------------------------------------
