@@ -4590,6 +4590,552 @@ def test_stage206r_print_kind_catchall_does_not_mention_landed_ops():
     assert "read_file_to_arena" in msg, msg
 
 
+# ==========================================================================
+# Stage 206-R chunk — PRINT.read_file_to_arena
+# Opens path O_RDONLY into 1MB stack buffer; traps via @llvm.trap on
+# truncation (read == BUF_SIZE sentinel mirrors x86's ud2); pushes
+# each byte to the arena via __helix_arena_push. New
+# `_HelperFunctionSpec.helper_deps` field for transitive helper deps
+# (read_file_to_arena depends on arena_push).
+# ==========================================================================
+def test_stage206r_read_file_buf_size_matches_x86_backend():
+    """`_HELIX_READ_FILE_BUF_SIZE` (1 MiB) must match
+    x86_64.py's BUF_SIZE in `read_file_to_arena` so both backends
+    trap on the same input file size."""
+    assert llvm_ir._HELIX_READ_FILE_BUF_SIZE == 0x100000
+
+
+def test_stage206r_emit_read_file_to_arena_call():
+    """A read_file_to_arena PRINT lowers to a single call to
+    `@__helix_read_file_to_arena(ptr <path>)` — the helper handles
+    everything (open / read / close / trap / per-byte arena push)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("main", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/src.hx"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # Path string is NUL-terminated.
+    assert "[12 x i8] c\"/tmp/src.hx\\00\"" in ll, ll
+    # Single call site.
+    assert (f"%v{r.id} = call i32 @__helix_read_file_to_arena(ptr "
+            in ll), ll
+    # Helper defined once; transitive arena_push helper + arena
+    # global also pulled in.
+    assert ll.count(
+        "define internal i32 @__helix_read_file_to_arena(") == 1, ll
+    assert ll.count(
+        "define internal i32 @__helix_arena_push(") == 1, ll
+    assert "@__helix_arena_base = internal global" in ll, ll
+    # All four FFI declares present.
+    assert "declare i32 @open(ptr, i32, i32)" in ll, ll
+    assert "declare i64 @read(i32, ptr, i64)" in ll, ll
+    assert "declare i32 @close(i32)" in ll, ll
+    assert "declare void @llvm.trap()" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_read_file_helper_text_pinned():
+    """Parity-sensitive lines: open args (O_RDONLY=0, mode=0), the
+    truncation-sentinel predicate (nread == BUF_SIZE), trap+
+    unreachable, sign-clamp pattern, loop-header phi, per-byte
+    zext/push call."""
+    helper = llvm_ir._HELIX_READ_FILE_TO_ARENA_HELPER
+    # open(path, O_RDONLY=0, mode=0) — matches x86 line 3464-3466.
+    assert "call i32 @open(ptr %path, i32 0, i32 0)" in helper, helper
+    # read(fd, buf, BUF_SIZE) — full buffer size as i64.
+    bufsize = llvm_ir._HELIX_READ_FILE_BUF_SIZE
+    assert (f"call i64 @read(i32 %fd, ptr %buf, i64 {bufsize})"
+            in helper), helper
+    # Truncation sentinel.
+    assert (f"icmp eq i64 %nread, {bufsize}" in helper), helper
+    assert "call void @llvm.trap()" in helper, helper
+    assert "unreachable" in helper, helper
+    # Sign-clamp: select on icmp slt.
+    assert "%is_neg = icmp slt i32 %nread_i32, 0" in helper, helper
+    assert ("%nread_clamped = select i1 %is_neg, i32 0, i32 %nread_i32"
+            in helper), helper
+    # Loop-header phi sets i=0 from sign_check, i+1 from loop_body.
+    assert ("%i = phi i32 [ 0, %sign_check ], [ %i_next, %loop_body ]"
+            in helper), helper
+    # Per-byte push.
+    assert ("%byte_i32 = zext i8 %byte to i32" in helper), helper
+    assert ("%push_ret = call i32 @__helix_arena_push(i32 %byte_i32)"
+            in helper), helper
+
+
+def test_stage206r_read_file_helper_has_six_blocks():
+    """The read_file_to_arena helper has six labelled blocks
+    (entry / trap / sign_check / loop_header / loop_body / exit)."""
+    helper = llvm_ir._HELIX_READ_FILE_TO_ARENA_HELPER
+    for label in ("entry:", "trap:", "sign_check:",
+                  "loop_header:", "loop_body:", "exit:"):
+        assert f"\n{label}\n" in helper, (label, helper)
+
+
+def test_stage206r_read_file_traps_on_truncation_via_llvm_trap():
+    """The truncation branch calls `@llvm.trap()` (not `exit`) so
+    the process dies via SIGILL — matches x86's literal `ud2`."""
+    helper = llvm_ir._HELIX_READ_FILE_TO_ARENA_HELPER
+    # The trap block contains EXACTLY one llvm.trap call followed
+    # by unreachable, in that order.
+    trap_block = helper.split("trap:")[1].split("sign_check:")[0]
+    assert "call void @llvm.trap()" in trap_block, trap_block
+    assert "unreachable" in trap_block, trap_block
+
+
+def test_stage206r_read_file_loop_push_result_is_discarded():
+    """The per-byte push call's return value is bound (`%push_ret`)
+    but never used — matches x86's "loop counter advances regardless
+    of arena_push success" semantics (line 3537). A full arena
+    returns -1 from each push but the loop continues."""
+    helper = llvm_ir._HELIX_READ_FILE_TO_ARENA_HELPER
+    # The bound register exists exactly once (the call site)
+    # — it's NEVER referenced elsewhere in the helper body.
+    assert helper.count("%push_ret") == 1, helper
+
+
+def test_stage206r_read_file_rejects_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, b.const_int(0), result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="read_file_to_arena PRINT takes no "
+                             "operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_read_file_rejects_missing_path_attr():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'path' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_read_file_rejects_non_string_path():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena", "path": 42})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="string 'path' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_read_file_rejects_embedded_nul_in_path():
+    """Same HIGH-1 guard as write_file — open(2) reads a C-string
+    and stops at the first NUL; an embedded NUL would silently
+    truncate the path."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/a\x00/etc/shadow"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="embedded NUL"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_read_file_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.PRINT, result_ty=tir.TIRScalar("i64"),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/x"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="PRINT yields an i32"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_read_file_to_arena_is_deterministic():
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("main", [], _i32())
+        r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+                   attrs={"_kind": "read_file_to_arena",
+                          "path": "/tmp/src.hx"})
+        b.ret(r)
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_read_file_transitive_dep_pulls_arena_push():
+    """`__helix_read_file_to_arena` declares
+    `helper_deps=("__helix_arena_push",)` — registering the read
+    helper must pull in arena_push (and its module-global) even when
+    no ARENA_PUSH op appears in the source module."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("main", [], _i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/x"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # No explicit ARENA_PUSH op, but the helper + global must be
+    # present because read_file_to_arena depends on them.
+    assert "define internal i32 @__helix_arena_push(" in ll, ll
+    assert "@__helix_arena_base = internal global" in ll, ll
+
+
+def test_stage206r_read_file_dedups_with_explicit_arena_push():
+    """If a module uses BOTH read_file_to_arena AND a direct
+    ARENA_PUSH op, the arena_push helper is still emitted exactly
+    once (the recursive registration is idempotent via
+    `name in self.helper_functions`)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("main", [("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn.params[0], result_ty=_i32())
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/x"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count(
+        "define internal i32 @__helix_arena_push(") == 1, ll
+    assert ll.count(
+        "define internal i32 @__helix_read_file_to_arena(") == 1, ll
+    assert ll.count("@__helix_arena_base = internal global") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_read_file_helper_spec_advertises_helper_deps():
+    """The registry must record the helper-dep so the drift guard
+    cross-checks it against the helper body."""
+    spec = llvm_ir._HELPER_FUNCTIONS["__helix_read_file_to_arena"]
+    assert spec.helper_deps == ("__helix_arena_push",)
+
+
+def test_stage206r_helper_spec_rejects_unknown_helper_dep():
+    """A helper_deps entry must resolve in
+    `_HELPER_FUNCTIONS_AUTHORITY` — the drift guard catches typos
+    at module load."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_bad_dep"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_bad_dep() {\n"
+                    "entry:\n"
+                    "  %x = call i32 @__helix_nonexistent()\n"
+                    "  ret i32 %x\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_nonexistent",),
+            ))
+        with pytest.raises(AssertionError,
+                           match="declares helper-dep on"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+
+def test_stage206r_helper_spec_rejects_helper_deps_body_drift():
+    """A helper_deps entry whose name is not called in the helper
+    body has drifted — the drift guard catches it (analogous to the
+    ffi_declares cross-check)."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_no_call_drift"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_no_call_drift() {\n"
+                    "entry:\n"
+                    "  ret i32 0\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_arena_push",),
+            ))
+        with pytest.raises(AssertionError,
+                           match="registry and body have drifted"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+
+def test_stage206r_helper_spec_rejects_malformed_helper_deps():
+    with pytest.raises(ValueError, match="helper_deps must be"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ret_ty="i32",
+            ffi_declares=(),
+            helper_deps="not_a_tuple",  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="helper_deps entry"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ret_ty="i32",
+            ffi_declares=(),
+            helper_deps=("user_helper",),
+        )
+
+
+def test_stage206r_helper_spec_rejects_helper_deps_duplicates():
+    with pytest.raises(ValueError,
+                       match="helper_deps has duplicates"):
+        llvm_ir._HelperFunctionSpec(
+            definition=(
+                "define internal i32 @__helix_x() {\n"
+                "entry:\n"
+                "  ret i32 0\n"
+                "}"),
+            ret_ty="i32",
+            ffi_declares=(),
+            helper_deps=("__helix_arena_push", "__helix_arena_push"),
+        )
+
+
+def test_stage206r_helper_deps_cycle_detected_at_module_load():
+    """Audit-fix HIGH-1: a true `helper_deps` cycle would otherwise
+    leak as a raw `RecursionError` (the early-return idempotency
+    check sets the visited marker AFTER the recursive walk). The
+    drift guard's DFS-based cycle detector fires at module load
+    with an actionable diagnostic naming the cycle."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        # Construct a 2-node cycle A <-> B.
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_cyc_a"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_cyc_a() {\n"
+                    "entry:\n"
+                    "  %x = call i32 @__helix_cyc_b()\n"
+                    "  ret i32 %x\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_cyc_b",),
+            ))
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_cyc_b"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_cyc_b() {\n"
+                    "entry:\n"
+                    "  %y = call i32 @__helix_cyc_a()\n"
+                    "  ret i32 %y\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_cyc_a",),
+            ))
+        with pytest.raises(AssertionError, match="cycle detected"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+
+def test_stage206r_helper_deps_self_cycle_detected():
+    """Same audit fix: a self-cycle (A depends on A) is the simplest
+    cycle and must also be caught."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_self_cyc"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_self_cyc() {\n"
+                    "entry:\n"
+                    "  %x = call i32 @__helix_self_cyc()\n"
+                    "  ret i32 %x\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_self_cyc",),
+            ))
+        with pytest.raises(AssertionError, match="cycle detected"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+
+def test_stage206r_drift_guard_ignores_comment_lines():
+    """Audit-fix HIGH-2: a `;`-comment-only mention of a call
+    pattern must NOT satisfy the body-vs-registry drift check.
+    Without `_strip_llvm_comment`, a future helper whose body got
+    refactored to remove the real call but retain a comment about
+    it would silently pass the drift guard."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        # Comment-only mention of @__helix_arena_push — no real call.
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_comment_only"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_comment_only() {\n"
+                    "entry:\n"
+                    "  ; the real arena_push call: "
+                    "call i32 @__helix_arena_push(i32 0)\n"
+                    "  ret i32 0\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_arena_push",),
+            ))
+        with pytest.raises(AssertionError,
+                           match="registry and body have drifted"):
+            llvm_ir._check_helper_function_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+
+def test_stage206r_drift_guard_strips_trailing_comments():
+    """Sibling audit fix: a real `call` line with a trailing
+    `; comment` is still recognized (the strip is correct, not
+    overzealous)."""
+    original = dict(llvm_ir._HELPER_FUNCTIONS_AUTHORITY)
+    try:
+        # Real call followed by a trailing comment.
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY["__helix_real_call"] = (
+            llvm_ir._HelperFunctionSpec(
+                definition=(
+                    "define internal i32 @__helix_real_call() {\n"
+                    "entry:\n"
+                    "  %x = call i32 @__helix_arena_push(i32 0)  "
+                    "; with trailing comment\n"
+                    "  ret i32 %x\n"
+                    "}"),
+                ret_ty="i32",
+                ffi_declares=(),
+                helper_deps=("__helix_arena_push",),
+            ))
+        # Should NOT raise — the real call is detected.
+        llvm_ir._check_helper_function_table()
+    finally:
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.clear()
+        llvm_ir._HELPER_FUNCTIONS_AUTHORITY.update(original)
+
+
+def test_stage206r_supported_print_kinds_pinned():
+    """`_SUPPORTED_PRINT_KINDS` is the single source of truth for
+    the PRINT _kind whitelist (audit-fix polish Q4). A new sub-kind
+    landing in a future chunk updates ONE constant rather than
+    drifting between the dispatch check and the error message."""
+    assert llvm_ir._SUPPORTED_PRINT_KINDS == frozenset({
+        "print_str", "print_int", "write_file", "read_file_to_arena",
+    })
+
+
+def test_stage206r_read_file_truncation_predicate_is_eq_not_relaxed():
+    """Audit-fix MEDIUM-3: pin that the truncation sentinel uses
+    exactly `icmp eq i64 %nread, BUF_SIZE` — a relaxed comparator
+    (uge / sgt / ne) would either silently widen the trap or
+    silently let truncation through."""
+    helper = llvm_ir._HELIX_READ_FILE_TO_ARENA_HELPER
+    bufsize = llvm_ir._HELIX_READ_FILE_BUF_SIZE
+    # Find the i64 icmp on %nread (NOT the post-trunc i32 sign
+    # check on `%nread_i32`, NOT the loop's i32 done check on
+    # `%nread_clamped`).
+    nread_i64_cmps = [
+        ln.strip() for ln in helper.splitlines()
+        if "icmp" in ln and "i64 %nread," in ln
+    ]
+    assert len(nread_i64_cmps) == 1, nread_i64_cmps
+    assert (f"icmp eq i64 %nread, {bufsize}"
+            in nread_i64_cmps[0]), nread_i64_cmps
+
+
+def test_stage206r_read_file_dedups_same_path():
+    """Two read_file_to_arena PRINTs with the same path share one
+    string global (content-addressed via SHA-256). Parallel to the
+    existing write_file dedup test (audit-fix LOW-1)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+           attrs={"_kind": "read_file_to_arena", "path": "/tmp/x"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/x"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # Exactly one path constant (the helper's own globals are
+    # @__helix_arena_base, not strings).
+    assert ll.count('private unnamed_addr constant [') == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_read_file_distinct_paths_distinct_globals():
+    """Two read_file_to_arena PRINTs with DIFFERENT paths each get
+    their own string global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+           attrs={"_kind": "read_file_to_arena",
+                  "path": "/tmp/one"})
+    r = b.emit(tir.OpKind.PRINT, result_ty=_i32(),
+               attrs={"_kind": "read_file_to_arena",
+                      "path": "/tmp/two"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count('private unnamed_addr constant [') == 2, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_register_helper_function_is_idempotent():
+    """Calling `_register_helper_function` twice for the same name
+    is a no-op — the early `if name in self.helper_functions:
+    return` short-circuit prevents both double-registration and
+    infinite recursion on cycles."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    b.ret(b.const_int(0))
+    b.end_function()
+    fn = next(iter(mod.functions.values()))
+    emitter = llvm_ir._FnEmitter(fn)
+    emitter._register_helper_function("__helix_arena_push")
+    emitter._register_helper_function("__helix_arena_push")
+    emitter._register_helper_function("__helix_arena_push")
+    assert emitter.helper_functions == {"__helix_arena_push"}
+    # The module-global was added exactly once.
+    assert emitter.module_globals == {"__helix_arena_base"}
+
+
 def test_stage206r_trace_globals_shared_constant():
     """`_HELIX_TRACE_GLOBALS` is referenced by the trace_event
     helper — single source of truth for the (count, buf) pair so a

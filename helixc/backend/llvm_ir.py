@@ -60,6 +60,15 @@ Supported so far (Stages 200, 202-204):
     write(fd, content, len) -> close(fd)`. The op's i32 result is
     `nwritten < 0 ? nwritten : 0` — matches x86_64.py's "negative on
     failure, 0 on success" contract.
+  - file input (Stage 206-R): a `read_file_to_arena` PRINT lowers
+    to a call to `@__helix_read_file_to_arena` (a six-block helper
+    that opens path O_RDONLY, reads up to BUF_SIZE bytes into a
+    stack buffer, traps via `@llvm.trap()` on truncation
+    (`nread == BUF_SIZE` sentinel — matches x86's `ud2`), and pushes
+    each byte to the shared arena via `__helix_arena_push`). The
+    helper carries `helper_deps=("__helix_arena_push",)` so the
+    transitive dependency on the arena global is auto-registered
+    through `_register_helper_function`'s recursive walk.
   - arena ops (Stage 206-R): `ARENA_PUSH` / `ARENA_GET` / `ARENA_SET`
     / `ARENA_LEN` / `ARENA_PUSH_PAIR` / `ARENA_PUSH_TRIPLE` all lower
     to calls to internal helpers (each its own three-block bounds-
@@ -373,6 +382,28 @@ _HELIX_ARENA_GLOBALS: tuple[str, ...] = ("__helix_arena_base",)
 _HELIX_TRACE_CAP = 1024
 
 
+# `read_file_to_arena` stack-buffer size. 1 MiB matches
+# `x86_64.py::BUF_SIZE` in the same op (line ~3456) — sized to
+# accommodate the bootstrap source (lexer + parser + kovc, ~111 KB)
+# with ~4x headroom for tokens + AST. If the file is larger than
+# this, `read(2)` returns exactly this many bytes and the helper
+# TRAPS (truncation sentinel — mirrors x86's `ud2`). Stage 207
+# parity requires both backends to use the same buffer size so they
+# trap on the same input.
+_HELIX_READ_FILE_BUF_SIZE = 0x100000
+
+
+# The PRINT op's `_kind` attribute names a sub-operation; this is
+# the closed set the LLVM backend currently lowers. A single source
+# of truth across the dispatch check (`if print_kind not in ...`)
+# and the error-message text, so the two can never drift apart when
+# the next PRINT sub-kind lands (a new entry here updates both
+# sites simultaneously).
+_SUPPORTED_PRINT_KINDS: frozenset[str] = frozenset({
+    "print_str", "print_int", "write_file", "read_file_to_arena",
+})
+
+
 # Shared module-globals tuple for the trace helper (parallel to
 # `_HELIX_ARENA_GLOBALS`).
 _HELIX_TRACE_GLOBALS: tuple[str, ...] = (
@@ -458,11 +489,19 @@ class _HelperFunctionSpec:
     `helixc/backend/backend_registry.py` and `ParityResult` in
     `helixc/ir/mlir/parity.py`). `__post_init__` raises `ValueError`
     on invariant violation (same contract as the rest of the family).
+
+    `helper_deps` lists other `__helix_*` helpers this helper's body
+    calls transitively. `_register_helper_function` walks `helper_deps`
+    recursively so a caller that registers only the leaf helper still
+    pulls every transitively-needed helper (and its globals + FFI
+    declares) into the emitted module. Cycles are broken by the early
+    `if name in self.helper_functions: return` short-circuit.
     """
     definition: str
     ret_ty: str
     ffi_declares: tuple[_FFIDeclareSpec, ...]
     module_globals: tuple[str, ...] = ()
+    helper_deps: tuple[str, ...] = ()
 
     def __init_subclass__(cls, **kwargs) -> None:
         raise TypeError(
@@ -538,6 +577,19 @@ class _HelperFunctionSpec:
             raise ValueError(
                 f"_HelperFunctionSpec: module_globals has duplicates "
                 f"({self.module_globals})")
+        if not isinstance(self.helper_deps, tuple):
+            raise ValueError(
+                f"_HelperFunctionSpec: helper_deps must be a tuple "
+                f"(got {type(self.helper_deps).__name__})")
+        for entry in self.helper_deps:
+            if not isinstance(entry, str) or not entry.startswith("__helix_"):
+                raise ValueError(
+                    f"_HelperFunctionSpec: helper_deps entry "
+                    f"{entry!r} must be a `__helix_*` string")
+        if len(self.helper_deps) != len(set(self.helper_deps)):
+            raise ValueError(
+                f"_HelperFunctionSpec: helper_deps has duplicates "
+                f"({self.helper_deps})")
 
 
 # `__helix_print_int(i32) -> i32`: convert an i32 to a base-10 ASCII
@@ -839,6 +891,100 @@ skip:
 }}"""
 
 
+# `__helix_read_file_to_arena(ptr path) -> i32`: open `path` read-
+# only, read up to BUF_SIZE bytes into a stack buffer, push each
+# byte (as i32) into the arena via `__helix_arena_push`, return the
+# number of bytes read (clamped to 0 on a negative read return).
+# Mirrors `x86_64.py::read_file_to_arena` (line ~3423).
+#
+# TRUNCATION SENTINEL: if `read` returns exactly BUF_SIZE, the file
+# either filled the buffer exactly OR was larger and got truncated.
+# The helper cannot distinguish, so it TRAPS via `@llvm.trap()`
+# (lowers to `ud2` / SIGILL on x86_64, matching x86's literal `ud2`
+# at line 3500). The build fails loudly rather than silently
+# producing a corrupt arena state — the original cascade-bug
+# (bootstrap source crept up to 261 KB of a 256 KB buffer, silent
+# truncation produced a bad K2, SIGILL at runtime far downstream —
+# see x86_64.py's BUG-mitigation comments at line 3486-3496) is
+# exactly the failure mode this guards against.
+#
+# FALSE-POSITIVE WINDOW: a file of EXACTLY BUF_SIZE bytes traps
+# even though it was not truncated — `read` cannot signal "file
+# is exactly this size" without a follow-up zero-byte read. The
+# trap is the conservative choice (lose a legitimate edge-case
+# file to a build failure; do not silently produce a corrupt
+# arena from a truncated file). Mirrors x86_64.py line 3494-3500.
+#
+# Six basic blocks (entry / trap / sign_check / loop_header /
+# loop_body / exit). The per-byte push loop calls
+# `__helix_arena_push` for each byte and discards the result (a
+# full arena returns -1 from push but the loop continues — matches
+# x86's "rcx increments regardless of push success" at line 3537).
+#
+# NOTE (Stage 207 parity): four cross-backend contract gaps are
+# inherited verbatim from x86_64.py — both backends are mutually
+# consistent, and these are NOT silent failures introduced by the
+# LLVM path. Documented here for the Stage 207 parity gate:
+#
+#   1. `open` failure (path not found, permission denied, etc.) is
+#      propagated indirectly: a -1 fd flows into `read(fd=-1, ...)`
+#      which returns -EBADF, which the sign-clamp drives to 0 —
+#      the user-visible result is "0 bytes read" rather than the
+#      real `open` errno.
+#   2. `read` failure (EINTR, EIO, etc.) is sign-clamped to 0 —
+#      same shape as #1 (real errno lost).
+#   3. `close(fd)` failure (EIO from delayed flush, EBADF from
+#      prior bug) silently discarded — `%close_ret` is bound but
+#      never observed. Matches x86's "no error check after
+#      sys_close".
+#   4. `__helix_arena_push` failure mid-loop (arena full -> -1
+#      returns) is dropped on the floor; the helper returns bytes-
+#      READ, NOT bytes-PUSHED. A full arena scenario silently
+#      under-reports actual push count. Matches x86's
+#      "rcx increments regardless of push success" at line 3537.
+#
+# All four are conscious tradeoffs that match x86's contract; the
+# Stage 207 parity gate decides whether to tighten any of them in
+# a coordinated way.
+_HELIX_READ_FILE_TO_ARENA_HELPER = f"""\
+define internal i32 @__helix_read_file_to_arena(ptr %path) {{
+entry:
+  %buf = alloca [{_HELIX_READ_FILE_BUF_SIZE} x i8], align 1
+  %fd = call i32 @open(ptr %path, i32 0, i32 0)
+  %nread = call i64 @read(i32 %fd, ptr %buf, i64 {_HELIX_READ_FILE_BUF_SIZE})
+  %close_ret = call i32 @close(i32 %fd)
+  %was_full = icmp eq i64 %nread, {_HELIX_READ_FILE_BUF_SIZE}
+  br i1 %was_full, label %trap, label %sign_check
+
+trap:
+  call void @llvm.trap()
+  unreachable
+
+sign_check:
+  %nread_i32 = trunc i64 %nread to i32
+  %is_neg = icmp slt i32 %nread_i32, 0
+  %nread_clamped = select i1 %is_neg, i32 0, i32 %nread_i32
+  br label %loop_header
+
+loop_header:
+  %i = phi i32 [ 0, %sign_check ], [ %i_next, %loop_body ]
+  %done = icmp uge i32 %i, %nread_clamped
+  br i1 %done, label %exit, label %loop_body
+
+loop_body:
+  %i_i64 = sext i32 %i to i64
+  %byte_ptr = getelementptr inbounds [{_HELIX_READ_FILE_BUF_SIZE} x i8], ptr %buf, i64 0, i64 %i_i64
+  %byte = load i8, ptr %byte_ptr, align 1
+  %byte_i32 = zext i8 %byte to i32
+  %push_ret = call i32 @__helix_arena_push(i32 %byte_i32)
+  %i_next = add i32 %i, 1
+  br label %loop_header
+
+exit:
+  ret i32 %nread_clamped
+}}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -899,6 +1045,30 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
         ret_ty="void",
         ffi_declares=(),
         module_globals=_HELIX_TRACE_GLOBALS,
+    ),
+    "__helix_read_file_to_arena": _HelperFunctionSpec(
+        definition=_HELIX_READ_FILE_TO_ARENA_HELPER,
+        ret_ty="i32",
+        ffi_declares=(
+            _FFIDeclareSpec(
+                target="open", callee="@open", ret_ty="i32",
+                arg_tys=("ptr", "i32", "i32"),
+            ),
+            _FFIDeclareSpec(
+                target="read", callee="@read", ret_ty="i64",
+                arg_tys=("i32", "ptr", "i64"),
+            ),
+            _FFIDeclareSpec(
+                target="close", callee="@close", ret_ty="i32",
+                arg_tys=("i32",),
+            ),
+            _FFIDeclareSpec(
+                target="llvm.trap", callee="@llvm.trap",
+                ret_ty="void", arg_tys=(),
+            ),
+        ),
+        module_globals=(),
+        helper_deps=("__helix_arena_push",),
     ),
 }
 
@@ -978,13 +1148,27 @@ def _check_module_global_table() -> None:
             f"`@X = ... global ...` line produces malformed LLVM IR)")
 
 
+def _strip_llvm_comment(line: str) -> str:
+    """Strip a trailing `; ...` LLVM comment from a line. Used by the
+    drift-guard cross-checks so a `;`-comment mentioning a call
+    pattern cannot satisfy the body-vs-registry coherence check
+    (audit-fix HIGH-2: pre-tightening, a comment-only mention of
+    `call i32 @__helix_arena_push(` would falsely satisfy the
+    helper_deps body check). LLVM textual IR uses `;` for line
+    comments. None of the helper texts in this file use `";"` inside
+    quoted identifiers, so a plain `find(";")` is safe."""
+    semi = line.find(";")
+    return line if semi < 0 else line[:semi]
+
+
 def _check_helper_function_table() -> None:
     """Drift guard: each helper's definition text must contain a
     `define internal ...` line declaring the same name as its
     registry key, must contain a `ret ` instruction (so a degenerate
-    no-terminator helper is rejected at module load), and every
-    callee mentioned in its `ffi_declares` must appear in a `call`
-    line whose return type matches the declared `ret_ty`.
+    no-terminator helper is rejected at module load), every callee
+    mentioned in its `ffi_declares` must appear in a `call` line
+    whose return type matches the declared `ret_ty`, and the
+    helper_deps graph must be acyclic.
 
     Catches:
       - typo'd helper name (`__helix_print_int` key vs.
@@ -996,7 +1180,14 @@ def _check_helper_function_table() -> None:
       - helper text drift away from its declared FFI signature
         (e.g. body says `call i32 @write(...)` but declare says
         `i64 @write(...)`) — produces declare/use signature mismatch
-        that `mock_validate_ll` does not detect.
+        that `mock_validate_ll` does not detect;
+      - helper_deps cycle (A depends on B, B depends on A, or any
+        cycle through them) — `_register_helper_function` cannot
+        break a true cycle even with its idempotency check, since
+        the visited marker is set AFTER recursion. Module-load
+        detection produces an actionable diagnostic naming the
+        cycle, vs. the raw `RecursionError` Python would otherwise
+        leak.
     Fails loudly at module load.
     """
     for name, spec in _HELPER_FUNCTIONS_AUTHORITY.items():
@@ -1034,16 +1225,71 @@ def _check_helper_function_table() -> None:
         # declare but never calls it (or calls a different callee)
         # has drifted between its FFI registration and its body — the
         # emit-time path would silently emit an unused declare.
+        # `_strip_llvm_comment` ensures a `;`-comment mentioning the
+        # call pattern does not falsely satisfy the check.
+        uncomment_lines = [
+            _strip_llvm_comment(ln)
+            for ln in spec.definition.splitlines()
+        ]
         for entry in spec.ffi_declares:
             call_pattern = f"call {entry.ret_ty} {entry.callee}("
-            if not any(call_pattern in ln
-                       for ln in spec.definition.splitlines()):
+            if not any(call_pattern in ln for ln in uncomment_lines):
                 raise AssertionError(
                     f"helixc.backend.llvm_ir: helper {name!r} "
                     f"declares FFI dependency on {entry.callee} "
                     f"(ret_ty={entry.ret_ty!r}) but its body does "
                     f"not contain a matching `call` line — registry "
                     f"and body have drifted")
+        # Cross-check: every helper_dep listed must resolve in the
+        # registry AND appear in the body as a `call <dep.ret_ty>
+        # @<dep>(...)` line — same drift discipline as the FFI
+        # check above. Same `;`-comment exclusion.
+        for dep_name in spec.helper_deps:
+            dep_spec = _HELPER_FUNCTIONS_AUTHORITY.get(dep_name)
+            if dep_spec is None:
+                raise AssertionError(
+                    f"helixc.backend.llvm_ir: helper {name!r} "
+                    f"declares helper-dep on {dep_name!r} but no "
+                    f"such helper is registered (known: "
+                    f"{sorted(_HELPER_FUNCTIONS_AUTHORITY)})")
+            dep_call_pattern = (
+                f"call {dep_spec.ret_ty} @{dep_name}(")
+            if not any(dep_call_pattern in ln
+                       for ln in uncomment_lines):
+                raise AssertionError(
+                    f"helixc.backend.llvm_ir: helper {name!r} "
+                    f"declares helper-dep on {dep_name!r} "
+                    f"(ret_ty={dep_spec.ret_ty!r}) but its body "
+                    f"does not contain a matching `call` line — "
+                    f"registry and body have drifted")
+    # Cycle detection on the helper_deps DAG (DFS with grey/black
+    # marker set). Audit-fix HIGH-1: `_register_helper_function`'s
+    # idempotency check cannot break a true cycle because the visited
+    # marker is added AFTER the recursive `helper_deps` loop.
+    # Detecting at module load produces an actionable diagnostic
+    # rather than a `RecursionError` at first use.
+    _GREY, _BLACK = 1, 2
+    state: dict[str, int] = {}
+
+    def _visit(name: str, path: list[str]) -> None:
+        if state.get(name) == _BLACK:
+            return
+        if state.get(name) == _GREY:
+            cycle_start = path.index(name)
+            cycle = path[cycle_start:] + [name]
+            raise AssertionError(
+                f"helixc.backend.llvm_ir: helper_deps cycle "
+                f"detected: {' -> '.join(cycle)}. A cycle cannot "
+                f"be broken by `_register_helper_function`'s "
+                f"idempotency check (the visited marker is added "
+                f"after the recursive walk).")
+        state[name] = _GREY
+        for dep in _HELPER_FUNCTIONS_AUTHORITY[name].helper_deps:
+            _visit(dep, path + [name])
+        state[name] = _BLACK
+
+    for helper_name in _HELPER_FUNCTIONS_AUTHORITY:
+        _visit(helper_name, [])
 
 
 _check_helper_function_table()
@@ -1487,6 +1733,33 @@ class _FnEmitter:
         self.trace_keepalive_count += 1
         return idx
 
+    def _validate_path_attr(self, kind_label: str,
+                            path: object) -> str:
+        """Validate a user-supplied filesystem-path attr: must be a
+        non-NUL-containing string. Shared by `write_file` and
+        `read_file_to_arena` PRINT sub-kinds — both call `open(2)`
+        which reads the path as a C-string and stops at the first
+        NUL byte, so an embedded NUL would SILENTLY truncate the
+        target (a path `"/tmp/a\\0/etc/passwd"` would open
+        `/tmp/a`). Fail closed.
+
+        `kind_label` is the user-facing op name (`"write_file"` /
+        `"read_file_to_arena"`) used in the diagnostic. Returns the
+        validated string."""
+        if not isinstance(path, str):
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: a {kind_label} PRINT "
+                f"needs a string 'path' attr (got "
+                f"{type(path).__name__})")
+        if "\x00" in path:
+            raise LLVMEmitError(
+                f"function {self.fn.name!r}: a {kind_label} PRINT "
+                f"'path' attr contains an embedded NUL byte at "
+                f"position {path.index(chr(0))} — open() reads a "
+                f"C-string, so a NUL would silently truncate the "
+                f"path")
+        return path
+
     def _emit_call(self, op: tir.Op) -> str:
         """Lower a CALL or FFI_CALL to an LLVM `call`. The two share
         every emission detail — a value call `%vN = call <ty> @t(...)`
@@ -1566,16 +1839,35 @@ class _FnEmitter:
         registered — keeps the emit-time fault surface consistent with
         every other "this op needs X but X is missing" path in the
         backend."""
+        # Idempotency: if this helper is already registered, return
+        # early. This is NOT a cycle break — the visited marker
+        # (`self.helper_functions.add(name)`) only fires AFTER the
+        # recursive `helper_deps` walk completes, so a true
+        # registry-level cycle would still recurse to RecursionError.
+        # `_check_helper_function_table` runs DFS-based cycle
+        # detection at module load (audit-fix HIGH-1) so a cyclic
+        # registry never reaches this code path. The idempotency
+        # check here serves diamond dependencies (A->B, A->C, B->C
+        # registers C once) and double-registration from caller
+        # code, both of which are benign.
+        if name in self.helper_functions:
+            return
         spec = _HELPER_FUNCTIONS.get(name)
         if spec is None:
             raise LLVMEmitError(
                 f"function {self.fn.name!r}: internal helper {name!r} "
                 f"is not registered (known helpers: "
                 f"{sorted(_HELPER_FUNCTIONS)})")
-        # Transactional: register the FFI declares FIRST (so a
-        # signature-clash failure aborts the registration cleanly),
-        # only mark the helper + its module-globals as needed once
-        # everything that can fail has succeeded.
+        # Transactional: register transitive helper deps FIRST (each
+        # one recursively pulls in its own FFI / globals / deps),
+        # then this helper's FFI declares, then its module-globals,
+        # then mark this helper as needed. If any step fails, the
+        # deps stay registered (harmless — they're emitted but their
+        # caller never makes it into the module) and THIS helper is
+        # left out of `helper_functions` so emit_module won't emit
+        # its `define`.
+        for dep_name in spec.helper_deps:
+            self._register_helper_function(dep_name)
         for entry in spec.ffi_declares:
             self._register_ffi_declare(
                 entry.target, entry.callee, entry.ret_ty,
@@ -2448,16 +2740,14 @@ class _FnEmitter:
             return "\n".join(lines)
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
-            if print_kind not in (
-                    "print_str", "print_int", "write_file"):
+            if print_kind not in _SUPPORTED_PRINT_KINDS:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT _kind "
                     f"{print_kind!r} is not yet emitted by the LLVM "
-                    f"backend (supported: 'print_str', 'print_int', "
-                    f"'write_file'; the other kinds, e.g. "
-                    f"read_file_to_arena, are later chunks. TRACE_*, "
-                    f"ARENA_*, QUOTE/SPLICE/MODIFY/REFLECT_HASH lower "
-                    f"via their own OpKinds, NOT via PRINT)")
+                    f"backend (supported: "
+                    f"{sorted(_SUPPORTED_PRINT_KINDS)}. "
+                    f"TRACE_*, ARENA_*, QUOTE/SPLICE/MODIFY/REFLECT_HASH "
+                    f"lower via their own OpKinds, NOT via PRINT)")
             if len(op.results) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT must have "
@@ -2490,31 +2780,14 @@ class _FnEmitter:
                         f"function {self.fn.name!r}: a write_file "
                         f"PRINT takes no operands, got "
                         f"{len(op.operands)}")
-                path = op.attrs.get("path")
                 content = op.attrs.get("content")
-                if not isinstance(path, str):
-                    raise LLVMEmitError(
-                        f"function {self.fn.name!r}: a write_file "
-                        f"PRINT needs a string 'path' attr (got "
-                        f"{type(path).__name__})")
                 if not isinstance(content, str):
                     raise LLVMEmitError(
                         f"function {self.fn.name!r}: a write_file "
                         f"PRINT needs a string 'content' attr (got "
                         f"{type(content).__name__})")
-                # `open(2)` reads the path as a C-string and stops at
-                # the first NUL byte — so an embedded NUL would
-                # SILENTLY truncate the path (a path
-                # `"/tmp/a\0/etc/passwd"` would open `/tmp/a`). Fail
-                # closed instead: the LLVM backend never silently
-                # narrows a user-named filesystem target.
-                if "\x00" in path:
-                    raise LLVMEmitError(
-                        f"function {self.fn.name!r}: a write_file "
-                        f"PRINT 'path' attr contains an embedded NUL "
-                        f"byte at position {path.index(chr(0))} — "
-                        f"open() reads a C-string, so a NUL would "
-                        f"silently truncate the path")
+                path = self._validate_path_attr(
+                    "write_file", op.attrs.get("path"))
                 # The path goes to `open()` which takes a C-string —
                 # register it with a trailing NUL. The content is raw
                 # bytes; `write` takes (ptr, len) so no terminator is
@@ -2587,6 +2860,47 @@ class _FnEmitter:
                     f"{nw32} = trunc i64 {nwritten} to i32\n"
                     f"{is_neg} = icmp slt i32 {nw32}, 0\n"
                     f"%v{rid} = select i1 {is_neg}, i32 {nw32}, i32 0")
+            if print_kind == "read_file_to_arena":
+                # `read_file_to_arena` takes NO operands and one
+                # string attr `path`. Opens the path O_RDONLY, reads
+                # up to BUF_SIZE bytes into a stack buffer, pushes
+                # each byte (as i32) into the shared arena via
+                # `__helix_arena_push`, returns the byte count read
+                # (clamped to 0 on a negative read return).
+                #
+                # TRUNCATION SENTINEL: if read returns exactly
+                # BUF_SIZE, the helper traps via `@llvm.trap()`
+                # (matches x86's `ud2` at line 3500 — the build must
+                # fail loudly, not silently produce a corrupt arena
+                # state from a truncated source).
+                #
+                # The arena IS the result destination — there's no
+                # arena-pointer operand because the arena is module-
+                # global state (`@__helix_arena_base`). The helper's
+                # transitive `helper_deps=("__helix_arena_push",)`
+                # auto-registers the arena helper + global through
+                # the existing `_register_helper_function` chain.
+                if op.operands:
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: a "
+                        f"read_file_to_arena PRINT takes no "
+                        f"operands, got {len(op.operands)}")
+                path = self._validate_path_attr(
+                    "read_file_to_arena", op.attrs.get("path"))
+                # Register the NUL-terminated path string as a
+                # module-scope constant (content-addressed, dedups
+                # against any other path with the same bytes).
+                path_data = path.encode("utf-8") + b"\x00"
+                path_name, _path_len = self._register_string(
+                    path_data)
+                # Pull in the helper (which transitively pulls in
+                # arena_push + arena_base + open/read/close/llvm.trap
+                # via its `helper_deps` + `ffi_declares`).
+                self._register_helper_function(
+                    "__helix_read_file_to_arena")
+                return (f"%v{result.id} = call i32 "
+                        f"@__helix_read_file_to_arena(ptr "
+                        f"{path_name})")
             if print_kind == "print_int":
                 # `print_int` takes ONE i32 operand (the value to print)
                 # and emits a call to the `__helix_print_int` internal
@@ -2643,10 +2957,10 @@ class _FnEmitter:
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
             f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
-            f"write_file PRINT; ARENA_PUSH / GET / SET / LEN / "
-            f"PUSH_PAIR / PUSH_TRIPLE; TRACE_ENTRY / TRACE_EXIT; "
-            f"RETURN; BR; COND_BR — floats and structs are later "
-            f"stages)"
+            f"write_file / read_file_to_arena PRINT; "
+            f"ARENA_PUSH / GET / SET / LEN / PUSH_PAIR / PUSH_TRIPLE; "
+            f"TRACE_ENTRY / TRACE_EXIT; RETURN; BR; COND_BR — "
+            f"floats and structs are later stages)"
         )
 
 

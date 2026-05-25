@@ -520,7 +520,7 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    PRINT catchall), 1 LOW (exit-block atomic-test pinning), plus
    helper-text/structural/dedup pinning for both helpers.
 
-   **TRACE_ENTRY / TRACE_EXIT — SHIPPED 2026-05-24** (this chunk).
+   **TRACE_ENTRY / TRACE_EXIT — SHIPPED 2026-05-24** (commit 7ce6280).
    First VOID-returning helper. Two new module globals
    (`@__helix_trace_count: i32`, `@__helix_trace_buf: [2*CAP x i32]`,
    CAP=1024 matches x86); `@__helix_trace_event(i32 fn_id, i32 kind)
@@ -543,11 +543,38 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    mutation" diagnostic misattribution) + 1 LOW (kernel-skip in
    pre-pass) all closed.
 
-   **Next residual ops (in priority order)**: read_file_to_arena
-   (uses the arena global + a per-byte push loop); QUOTE / SPLICE /
+   **read_file_to_arena — SHIPPED 2026-05-24** (this chunk). The
+   most complex 206-R chunk to date. Adds `_HelperFunctionSpec.helper_deps`
+   for TRANSITIVE helper-call dependencies (read_file_to_arena calls
+   __helix_arena_push in its per-byte push loop); `_register_helper_function`
+   becomes recursive over deps with idempotency via
+   `name in self.helper_functions`; `_check_helper_function_table`
+   adds (a) a body cross-check that every dep appears as a real
+   `call` line and (b) module-load DFS-based CYCLE DETECTION
+   (audit-fix HIGH-1 — without this a true cycle would leak as
+   RecursionError). The body cross-check now strips `;` comments
+   via `_strip_llvm_comment` so a comment-only mention of a call
+   pattern cannot falsely satisfy the drift guard (audit-fix HIGH-2
+   — same tightening applied to the existing FFI cross-check).
+   The helper itself: 6-block multi-block LLVM (entry / trap /
+   sign_check / loop_header / loop_body / exit). Opens path O_RDONLY,
+   reads up to 1 MiB into a stack buffer, traps via `@llvm.trap()`
+   on truncation (matches x86's `ud2`), sign-clamps nread, pushes
+   each byte to the shared arena. Four Stage 207 parity-gate notes
+   documented inline (open / read / close / arena_push contract
+   gaps mirrored from x86_64.py). Polish landed:
+   `_SUPPORTED_PRINT_KINDS` frozenset constant (single source of
+   truth for the dispatch + error-message); `_validate_path_attr`
+   shared helper for the NUL-rejection guard (was duplicated
+   between write_file and read_file_to_arena).
+
+   **Next residual ops (in priority order)**: QUOTE / SPLICE /
    MODIFY / REFLECT_HASH (metaprogramming — needs reflection-cells
    infrastructure). Parity fixture currently points at QUOTE
-   (the simplest still-uncovered residual).
+   (the simplest still-uncovered residual). After QUOTE-family
+   lands, all 206-R additive prep is DONE and Stage 221 (the
+   destructive x86_64.py cutover) can proceed once the user
+   green-lights it.
 
 When `v3.0.0` is tagged, v3.0 is done.
 
