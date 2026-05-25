@@ -7641,6 +7641,66 @@ def test_bootstrap_kovc_let_ty_generic_multi_param_self_host():
     assert rc == 7, f"expected K2 exit 7 (Pair<i32,i32> annotation, 3+4); got {rc}"
 
 
+def test_bootstrap_kovc_compound_assign_plus_eq_self_host():
+    """K1.U regression (2026-05-25): `x += v` desugars to `x = x + v`
+    via parse_primary's pre-dispatch compound-op detection. The
+    bootstrap lexer has no `+=` token; the parser peeks (op, `=`)
+    after the IDENT and dispatches if matched. Each compound op
+    maps to the existing AST_ADD / SUB / MUL / DIV / MOD."""
+    rc = _kovc_self_host_compile_and_run(
+        "plus_eq",
+        "fn main() -> i32 { let mut x = 5; x += 3; x }",
+    )
+    assert rc == 8, f"expected K2 exit 8 (5 += 3); got {rc}"
+
+
+def test_bootstrap_kovc_compound_assign_full_set_self_host():
+    """K1.U regression: all 5 compound ops -- +=, -=, *=, /=, %= --
+    each verified in a separate snippet."""
+    rc = _kovc_self_host_compile_and_run(
+        "minus_eq",
+        "fn main() -> i32 { let mut x = 10; x -= 4; x }",
+    )
+    assert rc == 6, f"-=: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "mul_eq",
+        "fn main() -> i32 { let mut x = 6; x *= 7; x }",
+    )
+    assert rc == 42, f"*=: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "div_eq",
+        "fn main() -> i32 { let mut x = 20; x /= 4; x }",
+    )
+    assert rc == 5, f"/=: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "mod_eq",
+        "fn main() -> i32 { let mut x = 17; x %= 5; x }",
+    )
+    assert rc == 2, f"%%=: got {rc}"
+
+
+def test_bootstrap_kovc_compound_assign_regressions_self_host():
+    """K1.U regression: the compound-op detection must NOT break
+    existing dispatch. Verify regular `x = v` assign, `x == v`
+    equality, and `x + 3` simple binop all still parse correctly
+    (none of these match the (op, `=`) lookahead pattern)."""
+    rc = _kovc_self_host_compile_and_run(
+        "regular_assign",
+        "fn main() -> i32 { let mut x = 0; x = 42; x }",
+    )
+    assert rc == 42, f"regular assign: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "eq_compare",
+        "fn main() -> i32 { let x = 5; if x == 5 { 1 } else { 0 } }",
+    )
+    assert rc == 1, f"== compare: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "simple_binop",
+        "fn main() -> i32 { let x = 5; x + 3 }",
+    )
+    assert rc == 8, f"x + 3: got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

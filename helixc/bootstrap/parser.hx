@@ -3395,7 +3395,29 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
             let next = cur_get(sb);
             let nt = tok_tag(tok_base, next);
-            if nt == 15 {
+            // K1.U (2026-05-25): compound assign `x op= v` detection.
+            // The lexer has no `+=`/etc. tokens, so we look for the
+            // pattern (op token, TK_EQ) right after the IDENT. nt
+            // is the op (TK_PLUS=7, MINUS=8, STAR=9, SLASH=10,
+            // PERCENT=11); cur_get(sb)+1 should be TK_EQ (15).
+            // Desugar to AST_ASSIGN(name, AST_BINOP(VAR(name), rhs))
+            // using the existing arith fold for the binop kind.
+            let nt_plus1 = tok_tag(tok_base, cur_get(sb) + 1);
+            let compound_op = if nt_plus1 == 15 {
+                if nt == 7 { 2 }
+                else { if nt == 8 { 3 }
+                else { if nt == 9 { 4 }
+                else { if nt == 10 { 5 }
+                else { if nt == 11 { 24 } else { 0 - 1 }}}}}
+            } else { 0 - 1 };
+            if compound_op >= 0 {
+                cur_advance(sb);    // consume op token
+                cur_advance(sb);    // consume '='
+                let crhs = parse_expr_basic(tok_base, sb);
+                let clhs = mk_var_with_capture(sb, id_start, id_len);
+                let cnew = mk_arith_fold(compound_op, clhs, crhs);
+                mk_node(11, id_start, id_len, cnew)
+            } else { if nt == 15 {
                 // Could be `=` (assign) or `==` (equality). Peek one
                 // more ahead: if it's also `=`, this is `name == ...`,
                 // and we should NOT consume the `=`s here — leave
@@ -3998,6 +4020,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Var ref
                 mk_var_with_capture(sb, id_start, id_len)
             }}}}     // Stage 28.11 INC-3b.2: extra `}` closes the new nt==16 branch
+            }     // K1.U (2026-05-25): +1 brace closes the new compound_op wrapper around the inner nt-dispatch
             }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
         }}}}}     // Stage 12: extra '}' closes the is_grad_call else-branch wrapper
         }     // Stage 14: extra '}' closes the is_grad_rev_call else-branch wrapper

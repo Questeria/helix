@@ -123,7 +123,7 @@ iterates.
 | `let x = v` (`AST_LET`) | ✅ | ✅ | PARITY |
 | `let mut x = v` (`AST_LET_MUT`) | ✅ | ✅ | PARITY |
 | `x = v` (`AST_ASSIGN`) | ✅ | ✅ | PARITY |
-| `x += v` etc. (compound assign) | ✅ | ❌ (no `+=`/`-=`/`*=`/`/=` etc. tokens in lexer.hx) | KOVC-MISSING |
+| `x += v` etc. (compound assign) | ✅ | ✅ (K1.U 2026-05-25: parser-side desugar in parse_primary's var-ref dispatch -- peeks (op, `=`) after an IDENT and, if matched, emits AST_ASSIGN(name, AST_BINOP(VAR(name), rhs)). No lexer change needed; the lexer already emits `+`, `-`, `*`, `/`, `%`, `=` as separate tokens. Five compound ops supported -- the binop choice routes via existing AST_ADD (2), AST_SUB (3), AST_MUL (4), AST_DIV (5), AST_MOD (24) tags) | PARITY |
 | `ExprStmt` (`expr;`) | ✅ | ✅ (via AST_SEQ chains) | PARITY |
 | `const X: T = expr;` | ✅ | ❌ | KOVC-MISSING |
 | `Cast` (`expr as T`) | ✅ | ✅ (K1.N 2026-05-25: parse_unary handles postfix `as Type` -- consumes the `as` IDENT and the type IDENT, returns the inner expr unchanged. The bootstrap is type-erased at codegen (i32-everywhere) so cast is a runtime no-op. Chained casts loop. Type forms beyond a bare IDENT (`Box<T>`, `&T`, `(i32, i32)`) are not yet supported -- follow-up extension when needed) | PARITY |
