@@ -1921,6 +1921,8 @@ fn install_builtin_names() -> i32 {
     __arena_push(0);      // slot 159: __arena_push_pair name offset
     // K1.AG (2026-05-25): slot 160 = __arena_push_triple name offset.
     __arena_push(0);      // slot 160: __arena_push_triple name offset
+    // K1.AH (2026-05-25): slot 161 = "panic[28501]: " prefix offset.
+    __arena_push(0);      // slot 161: panic prefix name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -1947,6 +1949,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(95); __arena_push(116); __arena_push(114); __arena_push(105);
     __arena_push(112); __arena_push(108); __arena_push(101);
     __arena_set(bn_state + 160, s_triple);
+
+    // K1.AH (2026-05-25): "panic[28501]: " (14 bytes: 112 97 110
+    // 105 99 91 50 56 53 48 49 93 58 32). Matches Python's panic
+    // codegen prefix format. Stored at slot 161 for the panic
+    // codegen to load via lea_rsi + str_table_add.
+    let s_panic_pfx = __arena_push(112); __arena_push(97); __arena_push(110); __arena_push(105);
+    __arena_push(99); __arena_push(91); __arena_push(50); __arena_push(56);
+    __arena_push(53); __arena_push(48); __arena_push(49); __arena_push(93);
+    __arena_push(58); __arena_push(32);
+    __arena_set(bn_state + 161, s_panic_pfx);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3375,6 +3387,13 @@ fn bn_arena_push_pair_s(b: i32) -> i32 { __arena_get(b + 159) }
 // 3-slot push.
 fn bn_arena_push_triple_s(b: i32) -> i32 { __arena_get(b + 160) }
 
+// K1.AH (2026-05-25): bn_state slot 161 holds the byte-offset
+// of the 14-byte string "panic[28501]: " in the K1 arena.
+// Read by the panic codegen arm to emit a sys_write for the
+// prefix before the user-message sys_write, matching Python's
+// "panic[id]: msg\n" format.
+fn bn_panic_prefix_s(b: i32) -> i32 { __arena_get(b + 161) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3893,9 +3912,32 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         } else {
             let body_s_p = __arena_get(arg_idx_p + 1);
             let body_l_p = __arena_get(arg_idx_p + 2);
-            // lea rsi, [rip + msg_disp] -- registers the placeholder
-            // with the str_table so the linker fills in the offset
-            // to the actual string bytes emitted into rodata.
+            // K1.AH (2026-05-25): emit the "panic[28501]: " prefix
+            // FIRST via its own sys_write call, then the user
+            // message. Matches Python's "panic[id]: msg" format.
+            // (Python also writes a trailing newline; bootstrap
+            // omits that for simplicity -- the stderr-on-tty user
+            // sees the message on its own line anyway because the
+            // shell prints a prompt afterwards.)
+            //
+            // Prefix sys_write (22 bytes: 7+5+5+5+2):
+            let pfx_disp_slot = emit_lea_rsi_rip_placeholder();
+            str_table_add(bn_state, pfx_disp_slot, bn_panic_prefix_s(bn_state), 14);
+            // mov edi, 2 (fd=stderr) -- 5 bytes
+            emit_byte(0xBF); emit_byte(0x02);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // mov edx, 14 (prefix len) -- 5 bytes
+            emit_byte(0xBA); emit_byte(0x0E);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // mov eax, 1 (sys_write) -- 5 bytes
+            emit_byte(0xB8); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // syscall -- 2 bytes
+            emit_byte(0x0F); emit_byte(0x05);
+            // Message sys_write (continues with rdi/rax already set
+            // to 2 and 1 respectively -- but the kernel doesn't
+            // preserve registers across syscalls so we re-set them).
+            // lea rsi, [rip + msg_disp]
             let msg_disp_slot = emit_lea_rsi_rip_placeholder();
             str_table_add(bn_state, msg_disp_slot, body_s_p, body_l_p);
             // mov edi, 2 (fd=stderr) -- 5 bytes (BF + 4-byte imm32)
@@ -3912,9 +3954,9 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             // ud2 -- 2 bytes (0F 0B). Could use sys_exit instead but
             // ud2 also raises SIGILL = rc 132, distinctive enough.
             emit_byte(0x0F); emit_byte(0x0B);
-            // Total: 7 (lea rsi) + 5 (mov edi) + 5 (mov edx) + 5
-            //        (mov eax) + 2 (syscall) + 2 (ud2) = 26 bytes
-            26
+            // Total: prefix sys_write (24) + message sys_write (24)
+            //        + ud2 (2) = 50 bytes.
+            50
         }
     } else { if kovc_byte_eq(name_s, name_l, bn_read_file_to_arena_s(bn_state), 18) == 1 {
         // read_file_to_arena(path: STRLIT) -> i32 (bytes_read).

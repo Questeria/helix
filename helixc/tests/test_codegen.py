@@ -8321,6 +8321,10 @@ fn main() -> i32 {{
     assert b"kaboom!" in run_k2.stderr, (
         f"panic message should reach stderr; got stderr={run_k2.stderr!r}"
     )
+    # K1.AH (2026-05-25): also require the "panic[28501]: " prefix.
+    assert b"panic[28501]: " in run_k2.stderr, (
+        f"panic prefix should match Python format; got stderr={run_k2.stderr!r}"
+    )
 
 
 def test_bootstrap_kovc_panic_unreachable_after_self_host():
