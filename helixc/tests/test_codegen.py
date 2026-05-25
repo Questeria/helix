@@ -8022,6 +8022,18 @@ def test_bootstrap_kovc_use_decl_self_host():
     assert rc == 13, f"expected K2 exit 13 (use stmts parsed); got {rc}"
 
 
+def test_bootstrap_kovc_attribute_partial_self_host():
+    """K1.F-discovery batch 12 (2026-05-25): `@partial` fn-prefix
+    attribute parses + runs. Same skip_attributes path as the
+    other attributes flipped in batch 10. SYNTAX-only parity --
+    the bootstrap doesn't run totality.py's non-totality check."""
+    rc = _kovc_self_host_compile_and_run(
+        "attr_partial",
+        "@partial fn main() -> i32 { 11 }",
+    )
+    assert rc == 11, f"expected K2 exit 11 (@partial accepted); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

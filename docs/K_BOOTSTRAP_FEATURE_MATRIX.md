@@ -158,7 +158,7 @@ iterates.
 | `@checkpoint` (rematerialization) | ✅ | ✅ (K1.F-discovery batch 10 2026-05-25: `@checkpoint` fn-prefix attribute parses; bootstrap stores the flag in AST_FN_DECL slot 8 but doesn't implement rematerialization. Syntax parity only) | PARITY |
 | `@autotune(KEY: [v1, v2, ...])` | ✅ (`autotune.py` + `autotune_expand.py`) | ❌ (parser tracks the attr but the specific `@autotune(K: [1, 2])` arg form trips -- bootstrap returns rc=132 on user programs that use it) | KOVC-MISSING |
 | `@deprecated` / `@since` | ✅ (`deprecated_pass.py`) | ✅ (K1.F-discovery batch 10 2026-05-25: both string-arg attributes parse + run (`@deprecated("msg")`, `@since("v3.0")`). Pinned via `test_bootstrap_kovc_attribute_deprecated_since_self_host`. Bootstrap doesn't emit warnings) | PARITY |
-| `@partial` (non-totality) | ✅ (`totality.py`) | ❌ | KOVC-MISSING |
+| `@partial` (non-totality) | ✅ (`totality.py`) | ✅ (K1.F-discovery batch 12 2026-05-25: parser's skip_attributes consumes `@partial` as an fn-prefix attribute. SYNTAX parity only -- the bootstrap doesn't run the totality.py non-totality check) | PARITY |
 | `@pure` / `@effect(...)` capability typing | ✅ (`effect_check.py`) | ✅ (K1.F-discovery batch 10 2026-05-25: both attributes parse + run (the parser's skip_attributes consumes them and doesn't enforce purity / effects). Stacking attributes (`@pure @trace fn ...`) also works. Pinned via `test_bootstrap_kovc_attribute_pure_effect_self_host` + `test_bootstrap_kovc_attribute_stacking_self_host`. Bootstrap doesn't run effect_check) | PARITY |
 | `unsafe { ... }` blocks | ✅ (`unsafe_pass.py`) | ❌ | KOVC-MISSING |
 | `panic("msg")` builtin | ✅ (`panic_pass.py`) | ❌ | KOVC-MISSING |
