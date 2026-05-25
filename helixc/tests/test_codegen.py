@@ -6721,6 +6721,79 @@ fn main() -> i32 {
     )
 
 
+def test_bootstrap_kovc_print_int_self_host():
+    """K1.D-impl regression (2026-05-25): the K2 binary (compiled
+    from kovc.hx by K1) should support `print_int(n)` in user
+    programs. K3 (the user program K2 compiles) runs and writes
+    n's decimal representation to stdout.
+
+    Pattern mirrors test_bootstrap_kovc_self_host_loop but the
+    K2-input program calls print_int instead of computing 6*7.
+    This is the end-to-end test for the K1.D-impl 90-byte asm
+    sequence (commits c02ff71 stub + 550329e impl).
+
+    Skipped on Windows hosts without WSL (the existing
+    self_host_loop test would also be skipped/fail there).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    # K1 reads /tmp/sh_pi_in.hx and writes K2 binary to
+    # /tmp/sh_pi_out.bin.
+    k1_main = """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/sh_pi_in.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/sh_pi_out.bin", elf_start, total)
+}
+"""
+
+    # The K2 input source: a program that calls print_int(42).
+    k2_input_src = "fn main() -> i32 { print_int(42); 0 }"
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(k2_input_src)} > /tmp/sh_pi_in.hx"],
+        check=True, timeout=10,
+    )
+
+    # P0 compiles the K1 driver via Python helixc.
+    k1_driver = lexer_no_main + parser_body + kovc_lib + k1_main
+    compile_and_run(k1_driver)
+
+    # /tmp/sh_pi_out.bin is K2 (the binary K1 produced from the
+    # print_int source). Run K2 and check stdout + exit code.
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/sh_pi_out.bin && /tmp/sh_pi_out.bin"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 0, (
+        f"K2 (the kovc-compiled print_int program) should exit 0; "
+        f"got rc={run_k2.returncode}, stderr={run_k2.stderr!r}")
+    assert run_k2.stdout == b"42", (
+        f"K2 should print '42' to stdout; got {run_k2.stdout!r}")
+
+
 def test_bootstrap_kovc_return_statement_compiles():
     """K1.C regression (2026-05-25): the kovc.hx-compiled-by-Python
     binary (K1) must accept Helix source that uses the `return
