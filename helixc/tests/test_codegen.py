@@ -7780,6 +7780,35 @@ def test_bootstrap_kovc_binary_ops_after_K1W_self_host():
     assert rc == 42, f"6 * 7 (multiplication) should be 42; got {rc}"
 
 
+def test_bootstrap_kovc_let_ty_fn_simple_self_host():
+    """K1.X regression (2026-05-25): let-binding type-annotation
+    accepts `fn(T1) -> R` function-type forms. The bootstrap is
+    type-erased; the parser consumes `fn`, `(`, the param-type
+    list until `)`, and the optional `-> R` -- the RHS value just
+    binds normally (no first-class fn-pointer codegen exists)."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_fn_simple",
+        "fn main() -> i32 { let f: fn(i32) -> i32 = 42; f }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (fn(i32)->i32 annotation); got {rc}"
+
+
+def test_bootstrap_kovc_let_ty_fn_multi_param_self_host():
+    """K1.X regression: multi-param fn type `fn(T1, T2) -> R` --
+    the inner skip-loop consumes commas. Also tests the no-return
+    form `fn(T1)` without the `->` clause."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_fn_multi",
+        "fn main() -> i32 { let g: fn(i32, i32) -> i32 = 7; g }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (fn(i32,i32)->i32 annotation); got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "ty_fn_no_ret",
+        "fn main() -> i32 { let h: fn(i32) = 11; h }",
+    )
+    assert rc == 11, f"expected K2 exit 11 (fn(i32) annotation, no -> R); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

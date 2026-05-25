@@ -2757,6 +2757,45 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     let lt_tok = cur_get(sb);
                     let lt_s = tok_p2(tok_base, lt_tok);
                     let lt_l = tok_p3(tok_base, lt_tok);
+                    // K1.X (2026-05-25): TyFn `fn(T1, T2) -> R`
+                    // detection. The 2-byte "fn" IDENT (102, 110)
+                    // in type position is the function-type prefix.
+                    // Consume `fn`, `(`, tokens-until-`)`, then
+                    // optional `-> R`. Type-erased no-op.
+                    let is_fn_ty = if lt_l == 2 {
+                        if __arena_get(lt_s) == 102 {
+                            if __arena_get(lt_s + 1) == 110 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 };
+                    if is_fn_ty == 1 {
+                        cur_advance(sb);    // consume 'fn'
+                        cur_advance(sb);    // consume '('
+                        let mut keep_fn: i32 = 1;
+                        while keep_fn == 1 {
+                            let ft = tok_tag(tok_base, cur_get(sb));
+                            if ft == 4 {     // ')'
+                                keep_fn = 0;
+                            } else { if ft == 0 {
+                                keep_fn = 0;
+                            } else {
+                                cur_advance(sb);
+                            }};
+                        }
+                        cur_advance(sb);    // consume ')'
+                        // Optional `-> R`: `-` (8) then `>` (17)
+                        // then IDENT. Same shape as the closure-
+                        // body return-type pattern (parse_unary
+                        // ~line 2028).
+                        let aap = tok_tag(tok_base, cur_get(sb));
+                        if aap == 8 {
+                            let aap2 = tok_tag(tok_base, cur_get(sb) + 1);
+                            if aap2 == 17 {
+                                cur_advance(sb);    // consume '-'
+                                cur_advance(sb);    // consume '>'
+                                cur_advance(sb);    // consume ret-type IDENT
+                            };
+                        };
+                    } else {
                     let_ty_tag = ty_ident_to_tag(lt_s, lt_l);
                     cur_advance(sb);    // consume type IDENT
                     // K1.T (2026-05-25): optional `<...>` generic
@@ -2792,6 +2831,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         }
                         cur_advance(sb);    // consume final '>' / '>>'
                     };
+                    };     // K1.X (2026-05-25): close the is_fn_ty else-branch wrapping the bare-IDENT + generic-args path
                 }}};
             };
             // Register the typed binding (only when the annotation produced
