@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 64       # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 66       # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -199,7 +199,11 @@ K_BOOTSTRAP_PARITY_DONE = 64       # was 28 after K0; K1.B (stack
                                     # let-binding type-position --
                                     # detect "fn" IDENT, consume
                                     # `(`...`)` + optional `-> R`)
-                                    # +1 made it 64
+                                    # +1 made it 64;
+                                    # K1.F discovery batch 9: TyTensor
+                                    # + TyTile already work via K1.T
+                                    # generic skip, matrix stale +2
+                                    # made it 66
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})

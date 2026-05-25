@@ -7809,6 +7809,31 @@ def test_bootstrap_kovc_let_ty_fn_multi_param_self_host():
     assert rc == 11, f"expected K2 exit 11 (fn(i32) annotation, no -> R); got {rc}"
 
 
+def test_bootstrap_kovc_let_ty_tensor_self_host():
+    """K1.F-discovery batch 9 (2026-05-25): `let t: tensor<f32, [N, M]>`
+    type annotations work via K1.T's generic-args `<>` depth-tracking
+    skip -- tensor is just an IDENT followed by generic args, and the
+    `[N, M]` array dims inside `<>` are consumed by the skip loop.
+    Matrix row TyTensor was stale-MISSING; bootstrap accepted the
+    syntax all along once K1.T landed."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_tensor",
+        "fn main() -> i32 { let t: tensor<f32, [4, 4]> = 13; t }",
+    )
+    assert rc == 13, f"expected K2 exit 13 (tensor<f32,[4,4]> annotation); got {rc}"
+
+
+def test_bootstrap_kovc_let_ty_tile_self_host():
+    """K1.F-discovery batch 9: same pattern for tile types with
+    multiple generic args including a memory tag (`shared`)."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_tile",
+        "fn main() -> i32 { let x: tile<f32, [4, 4], shared> = 17; x }",
+    )
+    assert rc == 17, (
+        f"expected K2 exit 17 (tile<f32,[4,4],shared> annotation); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
