@@ -1624,14 +1624,38 @@ fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
     while keep == 1 {
         let k = cur_get(sb);
         let t = tok_tag(tok_base, k);
-        if t == 27 {       // TK_AMP -> AST_BAND
-            cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
-            lhs = mk_arith_fold(28, lhs, rhs);
-        } else { if t == 28 {       // TK_PIPE -> AST_BOR
-            cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
-            lhs = mk_arith_fold(29, lhs, rhs);
+        if t == 27 {       // TK_AMP -> AST_BAND or TK_AMP TK_AMP -> &&
+            // K1.M (2026-05-25): peek for a second TK_AMP. The
+            // doubled form is logical AND, which we desugar to
+            // AST_IF(lhs, rhs, 0) so the codegen short-circuits
+            // (only evaluates rhs when lhs is truthy). The single
+            // form stays bitwise AND.
+            let t_next = tok_tag(tok_base, k + 1);
+            if t_next == 27 {
+                cur_advance(sb); cur_advance(sb);
+                let rhs = parse_add(tok_base, sb);
+                let zero = mk_node(0, 0, 0, 0);
+                lhs = mk_node(7, lhs, rhs, zero);
+            } else {
+                cur_advance(sb);
+                let rhs = parse_add(tok_base, sb);
+                lhs = mk_arith_fold(28, lhs, rhs);
+            }
+        } else { if t == 28 {       // TK_PIPE -> AST_BOR or TK_PIPE TK_PIPE -> ||
+            // K1.M (2026-05-25): peek for a second TK_PIPE. The
+            // doubled form is logical OR, desugared to AST_IF(lhs,
+            // 1, rhs) for short-circuit. Single form is bitwise OR.
+            let t_next = tok_tag(tok_base, k + 1);
+            if t_next == 28 {
+                cur_advance(sb); cur_advance(sb);
+                let rhs = parse_add(tok_base, sb);
+                let one = mk_node(0, 1, 0, 0);
+                lhs = mk_node(7, lhs, one, rhs);
+            } else {
+                cur_advance(sb);
+                let rhs = parse_add(tok_base, sb);
+                lhs = mk_arith_fold(29, lhs, rhs);
+            }
         } else { if t == 29 {       // TK_CARET -> AST_BXOR
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);

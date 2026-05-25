@@ -7266,6 +7266,70 @@ def test_bootstrap_kovc_pat_or_no_match_self_host():
     assert rc == 99, f"expected K2 exit 99 (4 not in {{1,2,3}}); got {rc}"
 
 
+def test_bootstrap_kovc_logical_and_short_circuit_self_host():
+    """K1.M regression (2026-05-25): `a && b` parses as a doubled
+    TK_AMP pair in parse_bitwise. Desugared to AST_IF(a, b, 0) so
+    the codegen short-circuits naturally (the if-arm only evaluates
+    the matching branch). All three truth-table cases:
+      1 && 1 -> true  (fires the then-arm)
+      0 && 1 -> false (lhs false, rhs not evaluated)
+      1 && 0 -> false (lhs true, rhs false)
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "and_tt",
+        "fn main() -> i32 { if 1 && 1 { 7 } else { 99 } }",
+    )
+    assert rc == 7, f"1 && 1 should fire then-arm; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "and_ft",
+        "fn main() -> i32 { if 0 && 1 { 7 } else { 99 } }",
+    )
+    assert rc == 99, f"0 && 1 should fire else-arm; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "and_tf",
+        "fn main() -> i32 { if 1 && 0 { 7 } else { 99 } }",
+    )
+    assert rc == 99, f"1 && 0 should fire else-arm; got {rc}"
+
+
+def test_bootstrap_kovc_logical_or_short_circuit_self_host():
+    """K1.M regression: `a || b` desugars to AST_IF(a, 1, b)."""
+    rc = _kovc_self_host_compile_and_run(
+        "or_tf",
+        "fn main() -> i32 { if 1 || 0 { 7 } else { 99 } }",
+    )
+    assert rc == 7, f"1 || 0 should fire then-arm; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "or_ft",
+        "fn main() -> i32 { if 0 || 1 { 7 } else { 99 } }",
+    )
+    assert rc == 7, f"0 || 1 should fire then-arm; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "or_ff",
+        "fn main() -> i32 { if 0 || 0 { 7 } else { 99 } }",
+    )
+    assert rc == 99, f"0 || 0 should fire else-arm; got {rc}"
+
+
+def test_bootstrap_kovc_bitwise_still_works_after_K1M_self_host():
+    """K1.M regression: the single-token `&` / `|` forms must
+    still produce bitwise AST_BAND / AST_BOR -- not get confused
+    with the doubled logical forms. The peek-for-doubled-token in
+    parse_bitwise is a strict equality check (TK_AMP TK_AMP, not
+    TK_AMP <anything>), so `12 & 10` still produces 8 (bitwise AND
+    of 1100 and 1010 is 1000 = 8) and `12 | 10` still produces 14."""
+    rc = _kovc_self_host_compile_and_run(
+        "band_after_k1m",
+        "fn main() -> i32 { let a = 12; let b = 10; a & b }",
+    )
+    assert rc == 8, f"12 & 10 should be bitwise 8; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "bor_after_k1m",
+        "fn main() -> i32 { let a = 12; let b = 10; a | b }",
+    )
+    assert rc == 14, f"12 | 10 should be bitwise 14; got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

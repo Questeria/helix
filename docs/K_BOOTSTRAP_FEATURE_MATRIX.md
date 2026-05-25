@@ -74,7 +74,7 @@ iterates.
 | Bitwise `& | ^` | ✅ | ✅ (BAND/BOR/BXOR) | PARITY |
 | Shifts `<< >>` | ✅ | ✅ (AST_SHL/AST_SHR) | PARITY |
 | Comparisons `< > <= >= == !=` | ✅ | ✅ | PARITY |
-| Logical `&&` `||` | ✅ | ❌ (no `&&` or `||` token in lexer.hx — only `&` `|` for bitwise) | KOVC-MISSING |
+| Logical `&&` `||` | ✅ | ✅ (K1.M 2026-05-25: parse_bitwise detects doubled TK_AMP / TK_PIPE pairs and desugars to AST_IF, which short-circuits at codegen. No lexer change needed -- the bootstrap convention is that the parser combines duplicated single-byte tokens, same as `==`/`<=`/`>=`/`!=`. Same precedence as bitwise -- C-wrong but consistent. Verified via 3 self-host tests covering all 6 truth-table positions + bitwise-still-works regression) | PARITY |
 | Address-of `&`, deref `*` | ✅ | ❌ | KOVC-MISSING |
 
 ## 4. Control flow
