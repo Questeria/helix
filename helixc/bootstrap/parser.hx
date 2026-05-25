@@ -1824,6 +1824,40 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
         cur_advance(sb);
         let inner = parse_unary(tok_base, sb);
         mk_node(31, inner, 0, 0)
+    } else { if tg == 27 {
+        // K1.W (2026-05-25): unary `&` (address-of) and `&mut` are
+        // no-ops in the type-erased bootstrap. Consume `&`,
+        // optionally consume the `mut` IDENT (3 bytes 109, 117,
+        // 116), then recurse for the inner expression. The result
+        // is just the inner expression. Real pointer semantics are
+        // a separate codegen-level gap; this chunk only unblocks
+        // the syntax.
+        cur_advance(sb);                // consume '&'
+        let after_amp = cur_get(sb);
+        let aa_tag = tok_tag(tok_base, after_amp);
+        if aa_tag == 2 {
+            let aa_s = tok_p2(tok_base, after_amp);
+            let aa_l = tok_p3(tok_base, after_amp);
+            let is_mut = if aa_l == 3 {
+                if __arena_get(aa_s) == 109 {
+                    if __arena_get(aa_s + 1) == 117 {
+                        if __arena_get(aa_s + 2) == 116 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            if is_mut == 1 {
+                cur_advance(sb);        // consume 'mut'
+            };
+        };
+        parse_unary(tok_base, sb)
+    } else { if tg == 9 {
+        // K1.W (2026-05-25): unary `*` (deref) is a no-op in the
+        // type-erased bootstrap. Binary `*` (multiplication) gets
+        // consumed by parse_mul BEFORE parse_unary is called for
+        // the RHS, so a `*` at parse_unary's entry can only be a
+        // prefix deref. Consume `*` and recurse.
+        cur_advance(sb);                // consume '*'
+        parse_unary(tok_base, sb)
     } else {
         // Stage 4 iter B + E: postfix tuple field access AND array index.
         //   .NUM         → AST_TUPLE_FIELD (tag 52, static idx).
@@ -2019,7 +2053,7 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
             }
         }
         prim
-    }}}
+    }}}}}
 }
 
 // Stage 9: parse `|param1, param2, ...| body_expr`. Caller has detected

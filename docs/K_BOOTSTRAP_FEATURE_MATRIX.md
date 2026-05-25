@@ -75,7 +75,7 @@ iterates.
 | Shifts `<< >>` | ✅ | ✅ (AST_SHL/AST_SHR) | PARITY |
 | Comparisons `< > <= >= == !=` | ✅ | ✅ | PARITY |
 | Logical `&&` `||` | ✅ | ✅ (K1.M-fix 2026-05-25: parse_bitwise bails on doubled TK_AMP / TK_PIPE so the higher-level parse_expr_basic can chain `&&`/`||` AFTER its comparison logic. This gives C/Rust-correct precedence -- `a == 5 && b == 7` parses as `(a == 5) && (b == 7)`. Desugars to AST_IF which short-circuits at codegen. Initial K1.M placed them at parse_bitwise level (wrong precedence; mixed comparison + logical produced garbage AST) -- K1.M-fix relocated. Verified end-to-end including short-circuit via div-by-zero side-effect test) | PARITY |
-| Address-of `&`, deref `*` | ✅ | ❌ | KOVC-MISSING |
+| Address-of `&`, deref `*` | ✅ | ✅ (K1.W 2026-05-25: parse_unary's prefix dispatch grows two new arms -- `&` (TK_AMP=27) consumes the op, optionally consumes `mut` IDENT, then recurses; `*` (TK_STAR=9) consumes the op then recurses. Both are runtime no-ops in the type-erased bootstrap so the inner expression's value is returned unchanged. Binary `&` (bitwise) and `*` (multiplication) are consumed by parse_bitwise / parse_mul BEFORE parse_unary sees them, so the unary-prefix arms don't conflict) | PARITY |
 
 ## 4. Control flow
 

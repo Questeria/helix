@@ -7739,6 +7739,47 @@ def test_bootstrap_kovc_multiple_type_aliases_self_host():
     assert rc == 24, f"expected K2 exit 24 (11+13); got {rc}"
 
 
+def test_bootstrap_kovc_addr_of_deref_no_op_self_host():
+    """K1.W regression (2026-05-25): unary `&` and `*` are accepted
+    in expression position as no-ops. The type-erased bootstrap
+    doesn't have real pointer semantics; the parser strips the
+    operators and returns the inner expression. Verifies the
+    common idiom `let p = &x; *p` round-trips the value."""
+    rc = _kovc_self_host_compile_and_run(
+        "addr_of",
+        "fn main() -> i32 { let x = 42; let p = &x; *p }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (&x then *p == x); got {rc}"
+
+
+def test_bootstrap_kovc_addr_of_mut_self_host():
+    """K1.W regression: `&mut x` form also accepted. The optional
+    `mut` IDENT after `&` is consumed (3 bytes 109,117,116)."""
+    rc = _kovc_self_host_compile_and_run(
+        "addr_of_mut",
+        "fn main() -> i32 { let mut x = 7; let p = &mut x; *p }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (&mut x then *p); got {rc}"
+
+
+def test_bootstrap_kovc_binary_ops_after_K1W_self_host():
+    """K1.W regression: bitwise `&` (binop) and `*` (multiplication)
+    must still work after K1.W added the unary-prefix arms. The
+    unary detection happens at parse_unary's entry; binops are
+    consumed earlier in parse_bitwise / parse_mul before parse_unary
+    gets a chance to see them as prefix."""
+    rc = _kovc_self_host_compile_and_run(
+        "bit_and_after_k1w",
+        "fn main() -> i32 { 12 & 10 }",
+    )
+    assert rc == 8, f"12 & 10 (bitwise) should be 8; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "mul_after_k1w",
+        "fn main() -> i32 { 6 * 7 }",
+    )
+    assert rc == 42, f"6 * 7 (multiplication) should be 42; got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
