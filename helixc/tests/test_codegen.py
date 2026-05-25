@@ -7449,6 +7449,40 @@ def test_bootstrap_kovc_logical_short_circuit_div_zero_self_host():
         f"|| should short-circuit (not eval 10/0); got {rc}")
 
 
+def test_bootstrap_kovc_where_clause_skip_self_host():
+    """K1.O regression (2026-05-25): parse_fn_decl now accepts an
+    optional `where T: Bound, U: Bound2` clause between the return
+    type and the body LBRACE. Bounds are not enforced (type-erased
+    bootstrap), just skipped. Without K1.O, the parser tripped on
+    the `where` IDENT and failed compilation.
+
+    This test uses a non-generic fn -- generic-fn codegen is a
+    separate KOVC-MISSING gap (no monomorphization yet) so testing
+    where-clause skip via a generic fn would conflate two issues.
+    The where bound is meaningless for a concrete fn but exercises
+    the parser path."""
+    rc = _kovc_self_host_compile_and_run(
+        "where_skip",
+        "fn f(x: i32) -> i32 where i32: Sized { x + 1 } "
+        "fn main() -> i32 { f(41) }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (where skipped, x+1 = 42); got {rc}"
+
+
+def test_bootstrap_kovc_where_clause_multibound_self_host():
+    """K1.O regression: multi-bound where clauses (`where T: A, U:
+    B`) also skip cleanly. The skip-loop consumes all tokens until
+    LBRACE, including commas and colons inside bounds."""
+    rc = _kovc_self_host_compile_and_run(
+        "where_multi",
+        "fn g(a: i32, b: i32) -> i32 where i32: Sized, i32: Eq "
+        "{ a + b } "
+        "fn main() -> i32 { g(20, 22) }",
+    )
+    assert rc == 42, (
+        f"expected K2 exit 42 (multi-bound where skipped, 20+22); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

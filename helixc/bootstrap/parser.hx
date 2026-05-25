@@ -6935,6 +6935,44 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let rt_struct_idx = struct_tab_lookup_idx(sb, rt_s, rt_l);
     let ret_ty_post_struct = if rt_struct_idx >= 0 { 100 + rt_struct_idx } else { ret_ty };
     let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty_post_struct };
+    // K1.O (2026-05-25): optional `where T: Bound, U: Bound2` clause
+    // after the return type and before the body LBRACE. Bounds are
+    // not enforced in the type-erased bootstrap -- just consume all
+    // tokens up to (but not including) the body LBRACE so the
+    // existing body-parsing path continues unchanged. "where" is a
+    // 5-byte IDENT (bytes 119,104,101,114,101).
+    let w_k = cur_get(sb);
+    let w_tg = tok_tag(tok_base, w_k);
+    if w_tg == 2 {
+        let w_s = tok_p2(tok_base, w_k);
+        let w_l = tok_p3(tok_base, w_k);
+        let is_where_kw = if w_l == 5 {
+            if __arena_get(w_s) == 119 {
+                if __arena_get(w_s + 1) == 104 {
+                    if __arena_get(w_s + 2) == 101 {
+                        if __arena_get(w_s + 3) == 114 {
+                            if __arena_get(w_s + 4) == 101 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 };
+        if is_where_kw == 1 {
+            cur_advance(sb);    // consume 'where' IDENT
+            // Skip tokens until LBRACE (or EOF safety).
+            let mut keep_w: i32 = 1;
+            while keep_w == 1 {
+                let wt = tok_tag(tok_base, cur_get(sb));
+                if wt == 5 {
+                    keep_w = 0;
+                } else { if wt == 0 {
+                    keep_w = 0;
+                } else {
+                    cur_advance(sb);
+                }};
+            }
+        };
+    };
     cur_advance(sb);     // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);     // '}'
