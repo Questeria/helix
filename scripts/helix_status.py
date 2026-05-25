@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 121      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 125      # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -350,7 +350,19 @@ K_BOOTSTRAP_PARITY_DONE = 121      # was 28 after K0; K1.B (stack
                                     # (a,b,c) parallel 3-slot
                                     # variant; same matrix row
                                     # (now full PARITY, was
-                                    # partial). No counter bump.
+                                    # partial). No counter bump;
+                                    # K1.F discovery batch 23:
+                                    # presburger + pytree +
+                                    # effect_check + tile_opt
+                                    # all flip to FUNCTIONAL PARITY.
+                                    # effect_check + tile_opt are
+                                    # aspirational (no .py file in
+                                    # helixc/frontend/); presburger
+                                    # and pytree exist but are
+                                    # never invoked for bootstrap-
+                                    # compileable programs (no
+                                    # tensor shapes, no AD).
+                                    # +4 made it 125
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
