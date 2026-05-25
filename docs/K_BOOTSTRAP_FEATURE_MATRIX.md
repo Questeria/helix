@@ -85,7 +85,7 @@ iterates.
 | `while` (`AST_WHILE`) | ✅ | ✅ | PARITY |
 | `for` | ✅ | ✅ (K1.G, 2026-05-25, commits 889b8b1 + 52599d7: parse_for desugars `for var in start..end { body }` to AST_LET_MUT + AST_WHILE + AST_SEQ + AST_ASSIGN + AST_ADD + AST_LT using only existing tags) | PARITY |
 | `loop` (infinite) | ✅ | ✅ (K1.H1, 2026-05-25, commits 41497a3 + this commit: parse_loop desugars `loop { body }` to AST_WHILE(AST_INT(1), body), no new tag; break/continue still pending as K1.H2/H3) | PARITY |
-| `break` (with optional value) | ✅ | ❌ | KOVC-MISSING |
+| `break` (with optional value) | ✅ | ⚠️ (K1.AC 2026-05-25: bare `break` early-exits the innermost enclosing AST_WHILE / `loop` -- parser emits AST_BREAK (tag 77), codegen emits a `jmp rel32` placeholder, prepends (jmp_pos, prev_head) onto a chain on bn_state slot 122, and AST_WHILE walks the chain post-body to patch each jmp to end_label. Nested loops work via save/restore of the chain head. The Python `break value` form (returning a value from the loop expression) is a separate gap; bare break is the common case. Pinned via 3 self-host tests: break_self_host (basic), break_nested (inner doesn't escape outer), loop_break (loop+break)) | PARITY |
 | `continue` | ✅ | ❌ | KOVC-MISSING |
 | `return` (explicit) | ✅ | ✅ (K1.C, 2026-05-25, commits 816ce51 + b02017f: AST_RET tag 43 + parse_return + parse_primary arm) | PARITY |
 | `match` + patterns | ✅ | ✅ (Stage 5+ match-arm codegen at kovc.hx -- int-literal arms, wildcard `_`, enum-variant tags + payload destructure, bare tuple destructure all verified end-to-end. K1.F-discovery batch 2 2026-05-25: 4 regression tests pin behaviour via bootstrap-self-host) | PARITY |

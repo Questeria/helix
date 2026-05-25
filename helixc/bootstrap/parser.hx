@@ -1553,6 +1553,26 @@ fn is_kw_agent_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AC (2026-05-25): match the 5-byte IDENT "break" (bytes
+// 98, 114, 101, 97, 107). Used by parse_primary to recognize
+// `break` as an early loop exit. Emits AST_BREAK (tag 77);
+// codegen in kovc.hx walks a per-loop break-jump chain stored
+// on bn_state slot 122 and patches each jmp to the AST_WHILE's
+// end_label.
+fn is_kw_break_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 5 {
+        if __arena_get(id_s) == 98 {
+            if __arena_get(id_s + 1) == 114 {
+                if __arena_get(id_s + 2) == 101 {
+                    if __arena_get(id_s + 3) == 97 {
+                        if __arena_get(id_s + 4) == 107 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.AB (2026-05-25): match the 6-byte IDENT "unsafe" (bytes
 // 117, 110, 115, 97, 102, 101). Used by parse_primary to
 // recognize `unsafe { expr }` as a no-op block. The bootstrap
@@ -3143,6 +3163,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // sub-cascade closer per the K1.C lesson (same algebra as
             // K1.G).
             parse_loop(tok_base, sb)
+        } else { if is_kw_break_ident(id_start, id_len) == 1 {
+            // K1.AC (2026-05-25): bare `break` -- early loop exit.
+            // Emits AST_BREAK (tag 77); codegen backpatches the
+            // jmp at AST_WHILE close. No optional-value form
+            // (Phase-0 limitation; the value-bearing form is a
+            // separate gap). +1 closing brace at the IDENT sub-
+            // cascade closer per the K1.C lesson.
+            parse_break(tok_base, sb)
         } else { if is_kw_unsafe_ident(id_start, id_len) == 1 {
             // K1.AB (2026-05-25): `unsafe { expr }` -- no-op block.
             // The bootstrap is type-erased and runs no effect_check
@@ -4225,6 +4253,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // K1.Q (2026-05-25): +1 brace closes the new `true` arm
         }     // K1.Q (2026-05-25): +1 brace closes the new `false` arm
         }     // K1.AB (2026-05-25): +1 brace closes the new `unsafe` arm (same algebra as K1.H1)
+        }     // K1.AC (2026-05-25): +1 brace closes the new `break` arm (same algebra as K1.AB)
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
@@ -8831,6 +8860,17 @@ fn parse_loop(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume '}'
     let one_lit = mk_node(0, 1, 0, 0);            // AST_INT(1)
     mk_node(10, one_lit, body_expr, 0)            // AST_WHILE
+}
+
+// K1.AC (2026-05-25): `break` -- early exit from the innermost
+// enclosing loop. Emits AST_BREAK (tag 77); codegen in kovc.hx
+// walks a per-loop chain on bn_state slot 122 and patches each
+// jmp to the AST_WHILE's end_label. Phase-0 form is bare
+// `break` only (no `break <value>`); the optional-value form
+// is a separate gap. Mirrors parse_loop's terseness.
+fn parse_break(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                              // consume 'break' IDENT
+    mk_node(77, 0, 0, 0)
 }
 
 // K1.AB (2026-05-25): `unsafe { expr }` -- no-op block. Bootstrap

@@ -8074,6 +8074,42 @@ def test_bootstrap_kovc_modal_counterfactual_self_host():
     assert rc == 33, f"Counterfactual<i32> annotation: got {rc}"
 
 
+def test_bootstrap_kovc_break_self_host():
+    """K1.AC (2026-05-25): `break` exits the innermost enclosing
+    loop early. Probe walks x from 0 to 100 via while, breaks
+    out at x==7, and asserts the K2 exit code is 7."""
+    rc = _kovc_self_host_compile_and_run(
+        "break_basic",
+        "fn main() -> i32 { let mut x = 0; while x < 100 { x = x + 1; "
+        "if x == 7 { break; } } x }",
+    )
+    assert rc == 7, f"break should exit at x=7; got {rc}"
+
+
+def test_bootstrap_kovc_break_nested_self_host():
+    """K1.AC: inner break only exits the inner loop -- outer
+    continues. 3 outer iterations x 1 inner-before-break = 3
+    body-runs."""
+    rc = _kovc_self_host_compile_and_run(
+        "break_nested",
+        "fn main() -> i32 { let mut o = 0; let mut t = 0; while o < 3 { "
+        "let mut i = 0; while i < 5 { i = i + 1; if i == 2 { break; } "
+        "t = t + 1; } o = o + 1; } t }",
+    )
+    assert rc == 3, f"nested break should yield t=3; got {rc}"
+
+
+def test_bootstrap_kovc_loop_break_self_host():
+    """K1.AC: `loop { ... break }` -- the only way out of a
+    `loop` keyword is via break. Probe counts to 9 then breaks."""
+    rc = _kovc_self_host_compile_and_run(
+        "loop_break",
+        "fn main() -> i32 { let mut x = 0; loop { x = x + 1; "
+        "if x == 9 { break; } } x }",
+    )
+    assert rc == 9, f"loop+break should yield x=9; got {rc}"
+
+
 def test_bootstrap_kovc_unsafe_block_self_host():
     """K1.AB (2026-05-25): `unsafe { expr }` is a no-op block --
     bootstrap is type-erased and runs no effect_check pass, so the

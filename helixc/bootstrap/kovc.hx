@@ -3296,6 +3296,19 @@ fn bn_bits_lo_f64_s(b: i32) -> i32 { __arena_get(b + 81) }
 fn bn_bits_hi_f64_s(b: i32) -> i32 { __arena_get(b + 82) }
 fn bn_f64_pack_s(b: i32) -> i32 { __arena_get(b + 83) }
 // Stage 11: reflection-runtime name slots and handle counter.
+// K1.AC (2026-05-25): bn_state slot 122 holds the head of a
+// linked list of pending `break` jmp positions for the
+// innermost enclosing AST_WHILE. Each list cell is a 2-tuple
+// (jmp_pos, next) pushed onto the main arena; 0 = list end.
+// AST_BREAK codegen prepends a new cell; AST_WHILE codegen
+// saves the old head, sets head=0, emits the body, then walks
+// the chain patching each jmp to end_label, and restores the
+// old head. Slot init is the global init-loop's i<152 cap so
+// the slot starts at 0 (the empty-list sentinel) on a fresh
+// bn_state.
+fn bn_break_chain_head_s(b: i32) -> i32 { __arena_get(b + 122) }
+fn bn_set_break_chain_head_s(b: i32, v: i32) -> i32 { __arena_set(b + 122, v); 0 }
+
 fn bn_quote_s(b: i32) -> i32 { __arena_get(b + 118) }
 fn bn_splice_s(b: i32) -> i32 { __arena_get(b + 119) }
 fn bn_modify_s(b: i32) -> i32 { __arena_get(b + 120) }
@@ -6510,6 +6523,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         //     mov eax, 0      Helix while-expr returns unit (0)
         // Stage 1 audit batch 3 fix: i64 cond uses REX.W test (mirrors
         // AST_IF fix above).
+        //
+        // K1.AC (2026-05-25): break support. Before emitting the body
+        // we SAVE the previous break-chain head from bn_state slot
+        // 122 and RESET it to 0 (empty list). AST_BREAK in the body
+        // prepends a (jmp_pos, prev_head) cell onto the chain. After
+        // the body emits but BEFORE we know end_label, we walk the
+        // chain and patch each jmp_pos to end_label, then restore
+        // the previous head (which makes nested loops work: outer's
+        // break-chain is preserved across the inner loop's body).
+        let saved_break_head = bn_break_chain_head_s(bn_state);
+        bn_set_break_chain_head_s(bn_state, 0);
         let loop_top = __arena_len();
         let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
         // Stage 2.4b audit fix: u64 cond also needs REX.W test (same
@@ -6524,8 +6548,36 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let end_label = __arena_len();
         patch_rel32(je_disp, end_label);
         patch_rel32(jmp_disp, loop_top);
+        // K1.AC: walk + patch the break-chain.
+        let mut bk_cur: i32 = bn_break_chain_head_s(bn_state);
+        while bk_cur != 0 {
+            let bk_pos = __arena_get(bk_cur);
+            let bk_next = __arena_get(bk_cur + 1);
+            patch_rel32(bk_pos, end_label);
+            bk_cur = bk_next;
+        }
+        bn_set_break_chain_head_s(bn_state, saved_break_head);
         let n_zero = emit_ast_int(0);
         n_cond + n_test + 6 + n_body + 5 + n_zero
+    } else { if t == 77 {
+        // K1.AC (2026-05-25): AST_BREAK -- emit `jmp rel32`
+        // placeholder; record (jmp_pos, prev_head) onto the
+        // break-chain on bn_state slot 122. AST_WHILE walks the
+        // chain at loop-end-codegen and patches each jmp_pos to
+        // its end_label. The chain cell layout is two arena
+        // slots: cell+0 = jmp_pos, cell+1 = next (0 = end).
+        let jmp_pos = emit_jmp_rel32_placeholder();
+        let cell_addr = __arena_len();
+        let prev_head = bn_break_chain_head_s(bn_state);
+        __arena_push(jmp_pos);
+        __arena_push(prev_head);
+        bn_set_break_chain_head_s(bn_state, cell_addr);
+        // Return value is meaningless (execution never reaches the
+        // code after a break) but emit_ast_int(0) keeps the
+        // byte-count bookkeeping consistent with other arms that
+        // return a value -- AST_WHILE doesn't need an extra mov
+        // because the jmp transfers control unconditionally.
+        5
     } else { if t == 25 {
         // AST_STR_LIT used as a value. Phase-0: strings are only
         // meaningful as the FIRST arg of a file builtin (handled in
@@ -6573,7 +6625,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC: +1 brace for AST_BREAK arm
 }
 
 // --------------------------------------------------------------
