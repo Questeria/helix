@@ -7554,6 +7554,32 @@ def test_bootstrap_kovc_bool_lit_in_if_cond_self_host():
     assert rc == 0, f"expected K2 exit 0 (false fires else); got {rc}"
 
 
+def test_bootstrap_kovc_let_ty_array_annotation_self_host():
+    """K1.R regression (2026-05-25): the let-binding type-annotation
+    site (parser.hx ~2615) now accepts `[T; N]` array types in
+    addition to bare-IDENT types. Without K1.R the `[` after `:`
+    tripped the parser. The type info is metadata-only -- the
+    bootstrap is type-erased -- so let_ty_tag stays -1 for array
+    types (no scalar tag fits anyway)."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_arr_anno",
+        "fn main() -> i32 { let a: [i32; 2] = [11, 13]; a[0] + a[1] }",
+    )
+    assert rc == 24, (
+        f"expected K2 exit 24 (11+13 with [i32;2] annotation); got {rc}")
+
+
+def test_bootstrap_kovc_let_ty_array_with_mut_self_host():
+    """K1.R regression: `let mut a: [i32; N] = ...` also works --
+    the mut prefix consumed by the existing branch, then the array
+    annotation consumed by K1.R, then the value parsed normally."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_arr_mut",
+        "fn main() -> i32 { let mut a: [i32; 3] = [10, 20, 30]; a[2] }",
+    )
+    assert rc == 30, f"expected K2 exit 30 (a[2] with mut array); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

@@ -2616,11 +2616,37 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let mut let_ty_tag: i32 = 0 - 1;
             if after_name_tag == 14 {
                 cur_advance(sb);    // consume ':'
-                let lt_tok = cur_get(sb);
-                let lt_s = tok_p2(tok_base, lt_tok);
-                let lt_l = tok_p3(tok_base, lt_tok);
-                let_ty_tag = ty_ident_to_tag(lt_s, lt_l);
-                cur_advance(sb);    // consume type IDENT
+                // K1.R (2026-05-25): handle the `[T; N]` TyArray
+                // form in addition to the bare-IDENT type. If the
+                // type position starts with TK_LBRACK (tag 20),
+                // skip to the matching TK_RBRACK (21). The bootstrap
+                // is type-erased so the annotation is metadata-only;
+                // let_ty_tag stays -1 for array types since
+                // ty_ident_to_tag doesn't model them. Generic types
+                // (`Foo<T>`) and reference types (`&T`) are still
+                // out of scope -- separate follow-ups.
+                let type_start_tag = tok_tag(tok_base, cur_get(sb));
+                if type_start_tag == 20 {
+                    cur_advance(sb);    // consume '['
+                    let mut keep_ty: i32 = 1;
+                    while keep_ty == 1 {
+                        let tyt = tok_tag(tok_base, cur_get(sb));
+                        if tyt == 21 {
+                            keep_ty = 0;
+                        } else { if tyt == 0 {
+                            keep_ty = 0;
+                        } else {
+                            cur_advance(sb);
+                        }};
+                    }
+                    cur_advance(sb);    // consume ']'
+                } else {
+                    let lt_tok = cur_get(sb);
+                    let lt_s = tok_p2(tok_base, lt_tok);
+                    let lt_l = tok_p3(tok_base, lt_tok);
+                    let_ty_tag = ty_ident_to_tag(lt_s, lt_l);
+                    cur_advance(sb);    // consume type IDENT
+                };
             };
             // Register the typed binding (only when the annotation produced
             // a recognized scalar tag; struct-typed lets continue to use
