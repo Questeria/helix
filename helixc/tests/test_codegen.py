@@ -8202,6 +8202,33 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_return_bare_self_host():
+    """K1.AR (2026-05-25): bare `return;` (no value) now accepted.
+    parse_return previously REQUIRED a value expression via
+    parse_expr_basic, so `return;` choked on TK_SEMI. Now it
+    peeks for TK_SEMI/TK_RBRACE and emits AST_RET with a
+    placeholder AST_INT(0). Pinned with 3 probes covering bare
+    return, return-with-value, and trailing return (no semi)."""
+    rc_bare = _kovc_self_host_compile_and_run(
+        "return_bare_semi",
+        "fn early() -> i32 { if 1 == 1 { return; }; 99 } "
+        "fn main() -> i32 { early() + 42 }",
+    )
+    assert rc_bare == 42, f"bare return; should yield 0, plus 42 = 42; got {rc_bare}"
+    rc_val = _kovc_self_host_compile_and_run(
+        "return_with_value",
+        "fn early() -> i32 { return 42; 0 } "
+        "fn main() -> i32 { early() }",
+    )
+    assert rc_val == 42, f"return 42; should yield 42; got {rc_val}"
+    rc_trail = _kovc_self_host_compile_and_run(
+        "return_trailing",
+        "fn foo() -> i32 { return 42 } "
+        "fn main() -> i32 { foo() }",
+    )
+    assert rc_trail == 42, f"trailing return 42 should yield 42; got {rc_trail}"
+
+
 def test_bootstrap_kovc_int_literal_forms_self_host():
     """K1.AQ (2026-05-25): binary (0b), octal (0o), and
     underscore-separated integer literals (1_000_000) now lex

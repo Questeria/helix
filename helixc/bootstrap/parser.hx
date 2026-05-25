@@ -8941,8 +8941,21 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
 // note at line 6099 of kovc.hx for the lesson).
 fn parse_return(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume 'return' IDENT
-    let value = parse_expr_basic(tok_base, sb);   // value expression
-    mk_node(43, value, 0, 0)                      // AST_RET
+    // K1.AR (2026-05-25): bare `return;` (no value) is now accepted
+    // for fns whose return type is unit / i32-default. Peek the
+    // next token: if it's TK_SEMI (12) or TK_RBRACE (6), emit
+    // AST_RET with a placeholder AST_INT(0) value. The semi is
+    // left for the enclosing block-parser to consume. Otherwise
+    // proceed with parse_expr_basic as before.
+    let after_t = tok_tag(tok_base, cur_get(sb));
+    if after_t == 12 {
+        mk_node(43, mk_node(0, 0, 0, 0), 0, 0)
+    } else { if after_t == 6 {
+        mk_node(43, mk_node(0, 0, 0, 0), 0, 0)
+    } else {
+        let value = parse_expr_basic(tok_base, sb);
+        mk_node(43, value, 0, 0)
+    }}
 }
 
 // K1.G-deadcode (2026-05-25): parse a `for var in start..end { body }`
