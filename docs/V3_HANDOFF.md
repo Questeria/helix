@@ -1,6 +1,6 @@
 # Helix v3.0 — Handoff
 
-**Last updated:** 2026-05-21 · **Repo:** `C:/Projects/Kovostov-Native` ·
+**Last updated:** 2026-05-24 · **Repo:** `C:/Projects/Kovostov-Native` ·
 **Branch:** `main` (verify live state with `git status --short --branch`
 and `git log -1 --oneline`)
 
@@ -20,18 +20,21 @@ Python-hosted). The pipeline: frontend (lexer / parser / typechecker)
 backends (x86-64, PTX, …). v3.0 is "the big rewrite" — adding an
 industrial MLIR + LLVM backend path alongside the home-grown one.
 
-## 2. Where the project stands (2026-05-21)
+## 2. Where the project stands (2026-05-24)
 
-- **v2.0–v2.5: released** (the home-grown GPU compiler + autodiff +
-  register allocator).
-- **v3.0: in progress** — 19 numbered stages across three phases:
+- **v2.0–v3.0: released**.
+- **v3.0.0 RELEASED 2026-05-24** — all 19 numbered stages across
+  three phases complete:
   - **Phase D (Stages 200–208): COMPLETE.**
   - **Phase E (Stages 210–216): COMPLETE.**
-  - **Phase F (Stages 220–222): in progress — Stage 220 CLOSED;
-    Stage 221 (the destructive cutover) needs explicit user
-    confirmation before starting.**
-- **`V3_STAGES_DONE = 17` of 19** (`scripts/helix_status.py`) —
-  ~89 % of v3.0 stages, ~99 % overall toward v3.0.
+  - **Phase F (Stages 220–222): COMPLETE.** Stage 220 (shared
+    Backend Protocol) closed in commit 71bbe8a. Stage 221
+    (cutover — LLVM becomes the canonical backend; `x86_64.py`
+    marked LEGACY through v3.0.x) closed in commit b9fe8be.
+    Stage 222 (end-of-v3.0 5-clean-gate + `v3.0.0` tag) closed
+    in this commit.
+- **`V3_STAGES_DONE = 19` of 19** (`scripts/helix_status.py`) —
+  100 % of v3.0 stages.
 
 ## 3. Phase E — the MLIR migration (the current frontier)
 

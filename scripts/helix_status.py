@@ -54,7 +54,7 @@ VERSIONS: list[dict[str, str]] = [
      "theme": "Real-GPU testing + attestation + register allocator"},
     {"id": "v2.5", "status": "released",
      "theme": "Wiring the register allocator into real GPU kernels"},
-    {"id": "v3.0", "status": "in_progress",
+    {"id": "v3.0", "status": "released",
      "theme": "The big rewrite - industrial MLIR + LLVM backend"},
 ]
 
@@ -65,7 +65,7 @@ VERSIONS: list[dict[str, str]] = [
 # closes with a 3-part audit. Bump `V3_STAGES_DONE` as each closes —
 # every percentage below recomputes from it.
 V3_STAGES_TOTAL = 19
-V3_STAGES_DONE = 18       # Phase D + E COMPLETE; Phase F Stages 220 + 221 done
+V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASED
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})

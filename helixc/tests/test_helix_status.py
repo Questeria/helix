@@ -58,42 +58,58 @@ def test_helix_status_overall_tracks_v3_stage_progress():
     while v3.0 is in progress. (The bug this reporter was fixed for: a
     flat 0.5 in-progress weight pinned 'about 93%' constant for the
     whole of v3.0, so the Telegram update never reflected real
-    progress.)"""
-    base = hs.overall_percent()
-    original = hs.V3_STAGES_DONE
+    progress.) Post v3.0.0 release, the in-progress weight no longer
+    contributes — but the partial-credit semantics for an unfinished
+    in-progress version must still be exercised, so this test pokes
+    v3.0 back to "in_progress" for the duration of the assertions."""
+    original_done = hs.V3_STAGES_DONE
+    original_v3_status = next(
+        v["status"] for v in hs.VERSIONS if v["id"] == "v3.0")
+    v3_entry = next(v for v in hs.VERSIONS if v["id"] == "v3.0")
     try:
+        # Restore the "v3.0 in_progress" world for the partial-credit
+        # test to be meaningful — and pin V3_STAGES_DONE to a
+        # middle value so `base` isn't already at the boundary.
+        v3_entry["status"] = "in_progress"
+        hs.V3_STAGES_DONE = hs.V3_STAGES_TOTAL // 2
+        base = hs.overall_percent()
         hs.V3_STAGES_DONE = hs.V3_STAGES_TOTAL      # v3.0 fully done
         assert hs.overall_percent() > base
         assert hs.overall_percent() == 100          # whole journey done
         hs.V3_STAGES_DONE = 0                       # v3.0 not started
         assert hs.overall_percent() < base
     finally:
-        hs.V3_STAGES_DONE = original
+        hs.V3_STAGES_DONE = original_done
+        v3_entry["status"] = original_v3_status
 
 
 def test_helix_status_counts_are_sane():
     """V3_STAGES_DONE never exceeds V3_STAGES_TOTAL; the test-suite
-    size is a positive integer (a beginner-facing scale signal)."""
+    size is a positive integer (a beginner-facing scale signal).
+    Stage 222 5-clean-gate fix: `TESTS_TOTAL` was retired in commit
+    1c827d8 (2026-05-20) in favour of the live `count_tests()`
+    function — the test was latent-failing through 11 v3.0 stage
+    closures until the v3.0.0-tag prep flushed the bookkeeping."""
     assert 0 <= hs.V3_STAGES_DONE <= hs.V3_STAGES_TOTAL
-    assert isinstance(hs.TESTS_TOTAL, int) and hs.TESTS_TOTAL > 0
+    count = hs.count_tests()
+    assert isinstance(count, int) and count > 0
 
 
 def test_helix_status_telegram_message_is_beginner_friendly():
     """The rendered update names every section a non-expert needs:
-    what is done + audited, what is in progress, what is left, and the
-    progress numbers — plus a plain-language explanation of the jargon
-    (stages / versions)."""
+    what is done + audited, what is in progress (if any), what is
+    left (if any), and the progress numbers — plus a plain-language
+    explanation of the jargon (stages / versions). Each bucket
+    section renders conditionally; with every version released
+    (post v3.0.0), only DONE + PROGRESS render."""
     msg = hs.render_telegram()
     # Plain-language framing for a non-engineer.
     assert "programming language" in msg
     assert "stages" in msg and "versions" in msg
-    # The status buckets. "STILL AHEAD" renders only while versions are
-    # still planned — once v3.0 (the final version of the journey) is
-    # the sole one in progress and none remain planned, render_telegram
-    # omits the section (its `if planned:` guard), so the assertion must
-    # be conditional on the version model rather than unconditional.
+    # The status buckets all render conditionally.
     assert "DONE & FULLY AUDITED" in msg
-    assert "IN PROGRESS" in msg
+    if any(v["status"] == "in_progress" for v in hs.VERSIONS):
+        assert "IN PROGRESS" in msg
     if any(v["status"] == "planned" for v in hs.VERSIONS):
         assert "STILL AHEAD" in msg
     # The progress numbers the user asked for.

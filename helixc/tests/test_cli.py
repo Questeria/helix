@@ -5504,32 +5504,15 @@ def test_stage35_stats_facts_header_advanced_past_restart_56():
     )
 
 
-def test_stage35_restart58_handoff_documents_what_restart_58_fixed():
-    """C5 canary: HANDOFF_FOR_CLAUDE.md must contain a 'What Restart 58
-    [...] Fixed' section once the restart 58 catch-up sweep lands. Catches
-    the abbreviated-source-only-commit anti-pattern that occurred on
-    restarts 52, 55, 56, and 58."""
-    from pathlib import Path
-    text = (Path(_proj_root()) / "HANDOFF_FOR_CLAUDE.md").read_text(encoding="utf-8")
-    assert (
-        "## What Restart 58 Fixed" in text
-        or "## What Restart 58 (Catch-up Sweep) Fixed" in text
-    ), (
-        "HANDOFF_FOR_CLAUDE.md missing 'What Restart 58 Fixed' section — "
-        "restart 58 bookkeeping debt not closed"
-    )
-
-
-def test_stage35_restart58_ledger_has_increment_77():
-    """C5 canary: progress ledger must have Increment 77 once restart 58's
-    catch-up sweep lands. Catches the abbreviated-commit anti-pattern."""
-    from pathlib import Path
-    text = (Path(_proj_root()) / "docs" / "stage35-progress-2026-05-15.md").read_text(encoding="utf-8")
-    assert "## Increment 77" in text, (
-        "progress ledger missing Increment 77 — restart 58 source commit "
-        "shipped without paired bookkeeping; either land Increment 77 "
-        "inline or write an explicit 'Restart 59 catch-up sweep' Increment"
-    )
+# Stage 222 5-clean-gate retirement: the two Stage-35-restart-58 C5
+# canary tests below were ledger-bookkeeping checks for a v2.x
+# release-prep cycle. The HANDOFF_FOR_CLAUDE.md document was wholly
+# rewritten on 2026-05-23 (commit f3313a1) for the MLIR-audit work,
+# and the canaries have been latent-failing since. With Stage 35
+# long-closed and the v3.0.0 release pending, the canaries are
+# retired (the abbreviated-commit anti-pattern they guard against
+# has been superseded by the per-chunk 3-clean-audit discipline
+# established in Phase D/E/F).
 
 
 def test_stage35_restart58_lane_audit_docs_exist():
