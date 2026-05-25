@@ -95,13 +95,13 @@ iterates.
 
 | Feature | Python | `kovc.hx` | Status |
 |---------|--------|-----------|--------|
-| `PatLit` (literal) | ✅ | ❌ | KOVC-MISSING |
+| `PatLit` (literal) | ✅ | ✅ (K1.F-discovery batch 3 2026-05-25: int-literal arms verified via `test_bootstrap_kovc_match_int_arms_self_host` -- `match x { 1 => 10, 2 => 20, _ => 30 }` correctly fires `2 => 20`) | PARITY |
 | `PatBind` (`x`, `mut x`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified inside `(a, b)` tuple destructure -- the bare-binding sub-pattern binds local vars that are then usable in the arm body) | PARITY |
 | `PatWildcard` (`_`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_match_wildcard_fallback_self_host` -- wildcard arm fires when no literal matches) | PARITY |
 | `PatTuple` (`(a, b, c)`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_pat_tuple_destructure_self_host` -- `match (3,4) { (a,b) => a+b }` returns 7) | PARITY |
 | `PatOr` (`a | b | c`) | ✅ | ❌ | KOVC-MISSING |
 | `PatRange` (`0..10`, `0..=10`) | ✅ | ❌ | KOVC-MISSING |
-| `PatVariant` (`Enum::Variant(p)`) | ✅ | ❌ | KOVC-MISSING |
+| `PatVariant` (`Enum::Variant(p)`) | ✅ | ✅ (K1.F-discovery batch 3 2026-05-25: payload-variant destructure verified via `test_bootstrap_kovc_enum_payload_variant_match_self_host` -- `match n { N::Val(v) => v }` binds the payload to v) | PARITY |
 | `PatStruct` (`Point { x, y }`) | ✅ | ❌ | KOVC-MISSING |
 
 ## 6. Aggregates
