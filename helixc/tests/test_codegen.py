@@ -7077,6 +7077,39 @@ def test_bootstrap_kovc_enum_payload_variant_match_self_host():
     assert rc == 42, f"expected K2 exit 42 (Val(42) destructure); got {rc}"
 
 
+def test_bootstrap_kovc_array_lit_and_index_self_host():
+    """K1.F-discovery batch 4 (2026-05-25): the matrix listed
+    `ArrayLit` and 1D `Index` as KOVC-MISSING. Parser.hx Stage 4
+    iter D folds `[a, b, c]` into AST_TUPLE_LIT (tag 50) using
+    AST_TUPLE_CONS (tag 51) -- codegen-identical to tuples. So
+    arrays SHARE the tuple-lit codegen path that already works.
+
+    Caveat: this works only WITHOUT an explicit `[i32; N]` type
+    annotation. The TyArray type position is genuinely missing
+    (separate row, separate fix).
+
+    Verified end-to-end through bootstrap-self-host: `let a = [10,
+    20]; a[0] + a[1]` returns 30. Variable indices also work
+    (`let i = 2; a[i]`).
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "arr_lit_idx",
+        "fn main() -> i32 { let a = [10, 20]; a[0] + a[1] }",
+    )
+    assert rc == 30, f"expected K2 exit 30 (10+20 via index); got {rc}"
+
+
+def test_bootstrap_kovc_array_variable_index_self_host():
+    """K1.F-discovery batch 4: a non-literal index expression also
+    works -- the AST_INDEX (tag 53) arm computes base+i*8 at run
+    time via the imul/add sequence at kovc.hx:5048."""
+    rc = _kovc_self_host_compile_and_run(
+        "arr_var_idx",
+        "fn main() -> i32 { let a = [100, 200, 50]; let i = 2; a[i] }",
+    )
+    assert rc == 50, f"expected K2 exit 50 (a[2] via var idx); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
