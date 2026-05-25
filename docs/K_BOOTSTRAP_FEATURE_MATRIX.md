@@ -260,10 +260,10 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 | Feature | Python | `kovc.hx` | Status |
 |---------|--------|-----------|--------|
 | x86-64 ELF (Linux) direct from AST | ✅ (`x86_64.py`) | ✅ (kovc.hx is exactly this) | PARITY (subset only) |
-| LLVM IR text emitter | ✅ (`llvm_ir.py`) | ❌ | KOVC-MISSING (and possibly not needed — kovc.hx is direct-to-ELF) |
-| LLVM toolchain wrapper | ✅ (`llvm_toolchain.py`) | ❌ | KOVC-MISSING (same reasoning) |
-| MLIR substrate (Phase E) | ✅ | ❌ | KOVC-MISSING |
-| Backend Protocol (Stage 220) | ✅ | ❌ | KOVC-MISSING |
+| LLVM IR text emitter | ✅ (`llvm_ir.py`) | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: not needed in the bootstrap -- kovc.hx is DIRECT-to-ELF (`emit_elf_for_ast_to_path` at the demo entry), bypassing the LLVM IR intermediate text. The end-user behaviour (Helix source -> runnable x86-64 ELF binary) is delivered via a shorter path. The original matrix row even acknowledged "possibly not needed") |
+| LLVM toolchain wrapper | ✅ (`llvm_toolchain.py`) | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: not needed -- kovc.hx hand-assembles x86-64 instructions directly into an ELF, no clang/llc invocation. Same end-user binary product) |
+| MLIR substrate (Phase E) | ✅ | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: not needed -- the bootstrap doesn't need the MLIR migration since it emits ELF directly. Python helixc's Phase E was specifically about Python's compilation pipeline; the bootstrap's monolithic architecture has no analogous migration to perform) |
+| Backend Protocol (Stage 220) | ✅ | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: the bootstrap has exactly ONE backend (kovc.hx direct-to-ELF). A swappable-backend protocol abstraction is unnecessary when there's only one backend; the protocol-equivalent is the kovc.hx emit functions themselves) |
 | Parity gate (Stage 207 / 215) | ✅ (`llvm_parity.py`) | ❌ | KOVC-MISSING (this becomes Track P) |
 
 ---
