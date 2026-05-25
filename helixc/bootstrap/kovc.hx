@@ -1919,6 +1919,8 @@ fn install_builtin_names() -> i32 {
     // before assignment return a safe miss (length still 17
     // ensures no false match).
     __arena_push(0);      // slot 159: __arena_push_pair name offset
+    // K1.AG (2026-05-25): slot 160 = __arena_push_triple name offset.
+    __arena_push(0);      // slot 160: __arena_push_triple name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -1935,6 +1937,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(95); __arena_push(112); __arena_push(97); __arena_push(105);
     __arena_push(114);
     __arena_set(bn_state + 159, s_pair);
+
+    // K1.AG (2026-05-25): "__arena_push_triple" (19 chars: 95 95
+    // 97 114 101 110 97 95 112 117 115 104 95 116 114 105 112 108
+    // 101). Atomic 3-slot push. Stored at slot 160.
+    let s_triple = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
+    __arena_push(101); __arena_push(110); __arena_push(97); __arena_push(95);
+    __arena_push(112); __arena_push(117); __arena_push(115); __arena_push(104);
+    __arena_push(95); __arena_push(116); __arena_push(114); __arena_push(105);
+    __arena_push(112); __arena_push(108); __arena_push(101);
+    __arena_set(bn_state + 160, s_triple);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3358,6 +3370,11 @@ fn bn_set_break_chain_head_s(b: i32, v: i32) -> i32 { __arena_set(b + 157, v); 0
 // call site and emit the inline atomic 2-slot push.
 fn bn_arena_push_pair_s(b: i32) -> i32 { __arena_get(b + 159) }
 
+// K1.AG (2026-05-25): bn_state slot 160 holds the name-offset
+// of the builtin "__arena_push_triple" (19 bytes). Atomic
+// 3-slot push.
+fn bn_arena_push_triple_s(b: i32) -> i32 { __arena_get(b + 160) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3736,6 +3753,43 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         patch_table_add(patch_state, disp_slot, arena_base_s, 18);
         emit_byte(0x8B); emit_byte(0x44); emit_byte(0x88); emit_byte(0x04);
         n_arg + 2 + 7 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_arena_push_triple_s(bn_state), 19) == 1 {
+        // K1.AG (2026-05-25): __arena_push_triple(a, b, c) -> i32.
+        // Atomic 3-slot push, mirror of push_pair. Writes a, b, c
+        // at slots cursor, cursor+1, cursor+2; advances cursor by
+        // 3; returns OLD cursor. Overflow when cursor >= CAP-2
+        // (need all 3 slots in range): returns -1, no writes.
+        let a0_pt = __arena_get(args_head + 1);
+        let next1_pt = __arena_get(args_head + 2);
+        let a1_pt = __arena_get(next1_pt + 1);
+        let next2_pt = __arena_get(next1_pt + 2);
+        let a2_pt = __arena_get(next2_pt + 1);
+        let n_left_pt = emit_ast_code(a0_pt, bind_state, patch_state, bn_state);
+        emit_byte(0x50);                                       // push rax (left)
+        let n_mid_pt = emit_ast_code(a1_pt, bind_state, patch_state, bn_state);
+        emit_byte(0x50);                                       // push rax (middle)
+        let n_right_pt = emit_ast_code(a2_pt, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                      // mov ecx, eax (right)
+        emit_byte(0x5F);                                       // pop rdi (middle -> edi)
+        emit_byte(0x5A);                                       // pop rdx (left -> edx)
+        let disp_slot_pt = emit_lea_rax_rip_placeholder();    // 7 bytes
+        patch_table_add(patch_state, disp_slot_pt, arena_base_s, 18);
+        emit_byte(0x8B); emit_byte(0x30);                      // mov esi, [rax] (cursor)
+        emit_byte(0x81); emit_byte(0xFE);                      // cmp esi, CAP-2 (6 bytes)
+        emit_u32_le(helix_arena_cap() - 2);
+        emit_byte(0x7D); emit_byte(0x15);                      // jge overflow (skip 21 = in-bounds path)
+        // in_bounds (21 bytes):
+        emit_byte(0x89); emit_byte(0x54); emit_byte(0xB0); emit_byte(0x04);  // mov [rax+rsi*4+4],  edx (left)
+        emit_byte(0x89); emit_byte(0x7C); emit_byte(0xB0); emit_byte(0x08);  // mov [rax+rsi*4+8],  edi (middle)
+        emit_byte(0x89); emit_byte(0x4C); emit_byte(0xB0); emit_byte(0x0C);  // mov [rax+rsi*4+12], ecx (right)
+        emit_byte(0x8D); emit_byte(0x4E); emit_byte(0x03);                   // lea ecx, [rsi+3] (new cursor)
+        emit_byte(0x89); emit_byte(0x08);                                    // mov [rax], ecx
+        emit_byte(0x89); emit_byte(0xF0);                                    // mov eax, esi (return OLD cursor)
+        emit_byte(0xEB); emit_byte(0x05);                                    // jmp end (skip overflow=5)
+        // overflow (5 bytes):
+        emit_byte(0xB8); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);  // mov eax, -1
+        // Total after arg evals: 1 + 1 + 2 + 1 + 1 + 7 + 2 + 6 + 2 + 21 + 5 = 49 bytes
+        n_left_pt + n_mid_pt + n_right_pt + 49
     } else { if kovc_byte_eq(name_s, name_l, bn_arena_push_pair_s(bn_state), 17) == 1 {
         // K1.AF (2026-05-25): __arena_push_pair(left, right) -> i32.
         // Atomic 2-slot push: writes left at slot cursor, right at
@@ -4493,7 +4547,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE + K1.AF: +1 brace each for print_int + panic + push_pair arms
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE + K1.AF + K1.AG: +1 brace each (print_int + panic + push_pair + push_triple)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

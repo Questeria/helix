@@ -8202,6 +8202,39 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_arena_push_triple_self_host():
+    """K1.AG (2026-05-25): __arena_push_triple(a, b, c) -> i32
+    atomic 3-slot push, mirror of K1.AF's push_pair. Writes
+    left/mid/right at cursor/+1/+2 and advances by 3. Overflow
+    if cursor >= CAP-2 returns -1, no writes. 4 sub-probes:
+    left readback, mid readback at idx+1, right readback at
+    idx+2, advance-by-3 across consecutive calls."""
+    rc_l = _kovc_self_host_compile_and_run(
+        "push_triple_l",
+        "fn main() -> i32 { let i = __arena_push_triple(11, 22, 33); "
+        "__arena_get(i) }",
+    )
+    assert rc_l == 11, f"push_triple left=11 should read back as 11; got {rc_l}"
+    rc_m = _kovc_self_host_compile_and_run(
+        "push_triple_m",
+        "fn main() -> i32 { let i = __arena_push_triple(11, 22, 33); "
+        "__arena_get(i + 1) }",
+    )
+    assert rc_m == 22, f"push_triple middle=22 at idx+1 should read 22; got {rc_m}"
+    rc_r = _kovc_self_host_compile_and_run(
+        "push_triple_r",
+        "fn main() -> i32 { let i = __arena_push_triple(11, 22, 33); "
+        "__arena_get(i + 2) }",
+    )
+    assert rc_r == 33, f"push_triple right=33 at idx+2 should read 33; got {rc_r}"
+    rc_a = _kovc_self_host_compile_and_run(
+        "push_triple_a",
+        "fn main() -> i32 { let a = __arena_push_triple(1, 2, 3); "
+        "let b = __arena_push_triple(4, 5, 6); b - a }",
+    )
+    assert rc_a == 3, f"two consecutive push_triple should advance by 3; got delta={rc_a}"
+
+
 def test_bootstrap_kovc_arena_push_pair_self_host():
     """K1.AF (2026-05-25): __arena_push_pair(left, right) -> i32
     atomic 2-slot push. Returns OLD cursor; writes left at slot

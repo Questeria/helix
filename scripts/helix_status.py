@@ -345,7 +345,12 @@ K_BOOTSTRAP_PARITY_DONE = 121      # was 28 after K0; K1.B (stack
                                     # 2-slot push, returns OLD
                                     # cursor, -1 on overflow.
                                     # push_triple deferred. +1
-                                    # made it 121
+                                    # made it 121;
+                                    # K1.AG: __arena_push_triple
+                                    # (a,b,c) parallel 3-slot
+                                    # variant; same matrix row
+                                    # (now full PARITY, was
+                                    # partial). No counter bump.
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
