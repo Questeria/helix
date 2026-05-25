@@ -1553,12 +1553,39 @@ fn is_kw_agent_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AD (2026-05-25): match the 8-byte IDENT "continue" (bytes
+// 99, 111, 110, 116, 105, 110, 117, 101). Emits AST_CONTINUE
+// (tag 78); codegen patches the jmp to loop_top. Phase-0
+// limitation: `continue` inside `for var in start..end { }`
+// skips the auto-increment because parse_for wraps the body in
+// AST_SEQ(user_body, increment); use a plain `while` if you
+// need continue.
+fn is_kw_continue_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 8 {
+        if __arena_get(id_s) == 99 {
+            if __arena_get(id_s + 1) == 111 {
+                if __arena_get(id_s + 2) == 110 {
+                    if __arena_get(id_s + 3) == 116 {
+                        if __arena_get(id_s + 4) == 105 {
+                            if __arena_get(id_s + 5) == 110 {
+                                if __arena_get(id_s + 6) == 117 {
+                                    if __arena_get(id_s + 7) == 101 { 1 } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.AC (2026-05-25): match the 5-byte IDENT "break" (bytes
 // 98, 114, 101, 97, 107). Used by parse_primary to recognize
 // `break` as an early loop exit. Emits AST_BREAK (tag 77);
 // codegen in kovc.hx walks a per-loop break-jump chain stored
-// on bn_state slot 122 and patches each jmp to the AST_WHILE's
-// end_label.
+// on bn_state slot 157 (moved from 122 by K1.AD) and patches
+// each jmp to the AST_WHILE's end_label.
 fn is_kw_break_ident(id_s: i32, id_l: i32) -> i32 {
     if id_l == 5 {
         if __arena_get(id_s) == 98 {
@@ -3171,6 +3198,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // separate gap). +1 closing brace at the IDENT sub-
             // cascade closer per the K1.C lesson.
             parse_break(tok_base, sb)
+        } else { if is_kw_continue_ident(id_start, id_len) == 1 {
+            // K1.AD (2026-05-25): `continue` -- restart innermost
+            // enclosing loop. Emits AST_CONTINUE (tag 78); codegen
+            // jmps to loop_top via slot 158's chain. Caveat: in
+            // for-loops the auto-increment is skipped (parse_for
+            // desugar limitation). +1 closing brace at the IDENT
+            // sub-cascade closer per the K1.C lesson.
+            parse_continue(tok_base, sb)
         } else { if is_kw_unsafe_ident(id_start, id_len) == 1 {
             // K1.AB (2026-05-25): `unsafe { expr }` -- no-op block.
             // The bootstrap is type-erased and runs no effect_check
@@ -4254,6 +4289,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // K1.Q (2026-05-25): +1 brace closes the new `false` arm
         }     // K1.AB (2026-05-25): +1 brace closes the new `unsafe` arm (same algebra as K1.H1)
         }     // K1.AC (2026-05-25): +1 brace closes the new `break` arm (same algebra as K1.AB)
+        }     // K1.AD (2026-05-25): +1 brace closes the new `continue` arm (same algebra as K1.AC)
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
@@ -8864,13 +8900,26 @@ fn parse_loop(tok_base: i32, sb: i32) -> i32 {
 
 // K1.AC (2026-05-25): `break` -- early exit from the innermost
 // enclosing loop. Emits AST_BREAK (tag 77); codegen in kovc.hx
-// walks a per-loop chain on bn_state slot 122 and patches each
-// jmp to the AST_WHILE's end_label. Phase-0 form is bare
-// `break` only (no `break <value>`); the optional-value form
-// is a separate gap. Mirrors parse_loop's terseness.
+// walks a per-loop chain on bn_state slot 157 (moved from 122
+// by K1.AD) and patches each jmp to the AST_WHILE's end_label.
+// Phase-0 form is bare `break` only (no `break <value>`); the
+// optional-value form is a separate gap. Mirrors parse_loop's
+// terseness.
 fn parse_break(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume 'break' IDENT
     mk_node(77, 0, 0, 0)
+}
+
+// K1.AD (2026-05-25): `continue` -- restart innermost enclosing
+// loop. Emits AST_CONTINUE (tag 78); codegen patches the jmp
+// to loop_top via bn_state slot 158's chain. Phase-0: works
+// for `while` + `loop { }`; in `for var in start..end { ... }`
+// the body is desugared as AST_SEQ(user_body, increment), so
+// continue skips the auto-increment and risks an infinite loop
+// -- use plain `while` if continue is needed.
+fn parse_continue(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                              // consume 'continue' IDENT
+    mk_node(78, 0, 0, 0)
 }
 
 // K1.AB (2026-05-25): `unsafe { expr }` -- no-op block. Bootstrap

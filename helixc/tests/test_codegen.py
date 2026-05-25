@@ -8099,6 +8099,34 @@ def test_bootstrap_kovc_break_nested_self_host():
     assert rc == 3, f"nested break should yield t=3; got {rc}"
 
 
+def test_bootstrap_kovc_continue_self_host():
+    """K1.AD (2026-05-25): `continue` restarts the innermost
+    enclosing loop. Probe walks x 1..10 and skips counting
+    sum at x==5; the final sum is 9 (10 iterations minus 1)."""
+    rc = _kovc_self_host_compile_and_run(
+        "continue_basic",
+        "fn main() -> i32 { let mut x = 0; let mut sum = 0; "
+        "while x < 10 { x = x + 1; if x == 5 { continue; } "
+        "sum = sum + 1; } sum }",
+    )
+    assert rc == 9, f"continue should skip x==5; got sum={rc}"
+
+
+def test_bootstrap_kovc_match_with_break_self_host():
+    """K1.AD: K1.AC's break-chain slot 122 collided with
+    match_scrut_ty (Audit A1-F1) -- match-inside-while-with-
+    break in the body silently corrupted the chain head and
+    trapped at backpatching. K1.AD moves break to slot 157.
+    Probe combines match arm with `break` (expression form,
+    `=> break`) inside a while loop and asserts no trap."""
+    rc = _kovc_self_host_compile_and_run(
+        "match_break",
+        "fn main() -> i32 { let mut x = 0; while x < 100 { "
+        "x = x + 1; let r = match x { 3 => break, _ => 0 }; } x }",
+    )
+    assert rc == 3, f"match + break should exit at x=3; got {rc}"
+
+
 def test_bootstrap_kovc_loop_break_self_host():
     """K1.AC: `loop { ... break }` -- the only way out of a
     `loop` keyword is via break. Probe counts to 9 then breaks."""

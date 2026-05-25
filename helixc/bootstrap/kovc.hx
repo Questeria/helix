@@ -1893,6 +1893,14 @@ fn install_builtin_names() -> i32 {
         __arena_push(0);
         i = i + 1;
     }
+    // K1.AD (2026-05-25): reserve 2 more init-zeroed slots AFTER
+    // the PAT_OR region (123..156) but BEFORE the name strings.
+    // Slot 157 = break-chain head (moved from slot 122 which
+    // collided with match_scrut_ty -- match-inside-while traps).
+    // Slot 158 = continue-chain head (mirrors break but targets
+    // loop_top instead of end_label).
+    __arena_push(0);      // slot 157: break-chain head
+    __arena_push(0);      // slot 158: continue-chain head
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3296,18 +3304,38 @@ fn bn_bits_lo_f64_s(b: i32) -> i32 { __arena_get(b + 81) }
 fn bn_bits_hi_f64_s(b: i32) -> i32 { __arena_get(b + 82) }
 fn bn_f64_pack_s(b: i32) -> i32 { __arena_get(b + 83) }
 // Stage 11: reflection-runtime name slots and handle counter.
-// K1.AC (2026-05-25): bn_state slot 122 holds the head of a
-// linked list of pending `break` jmp positions for the
+// K1.AC/K1.AD (2026-05-25): bn_state slot 157 holds the head of
+// a linked list of pending `break` jmp positions for the
 // innermost enclosing AST_WHILE. Each list cell is a 2-tuple
 // (jmp_pos, next) pushed onto the main arena; 0 = list end.
 // AST_BREAK codegen prepends a new cell; AST_WHILE codegen
 // saves the old head, sets head=0, emits the body, then walks
 // the chain patching each jmp to end_label, and restores the
-// old head. Slot init is the global init-loop's i<152 cap so
-// the slot starts at 0 (the empty-list sentinel) on a fresh
-// bn_state.
-fn bn_break_chain_head_s(b: i32) -> i32 { __arena_get(b + 122) }
-fn bn_set_break_chain_head_s(b: i32, v: i32) -> i32 { __arena_set(b + 122, v); 0 }
+// old head.
+//
+// K1.AD moved this from slot 122 -> 157 because slot 122 is
+// match_scrut_ty (Audit A1-F1). A match inside a while body
+// would call match_scrut_ty_set during pattern emission, which
+// silently overwrote the break chain head -- subsequent
+// AST_BREAK in the same body wrote a cell whose "prev" was the
+// scrut_ty (typically a small integer), creating a corrupt
+// chain that traps at backpatching time. The two slots are now
+// disjoint; see also slot 158 for continue.
+fn bn_break_chain_head_s(b: i32) -> i32 { __arena_get(b + 157) }
+fn bn_set_break_chain_head_s(b: i32, v: i32) -> i32 { __arena_set(b + 157, v); 0 }
+
+// K1.AD (2026-05-25): bn_state slot 158 holds the head of the
+// continue-chain. Same layout as break: linked list of
+// (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
+// the chain post-body and patches each jmp_pos to loop_top
+// (re-evaluates cond + runs body again). Phase-0 limitation:
+// `continue` inside the body of a `for var in start..end { ... }`
+// loop skips the auto-increment since parse_for desugars
+// for-body to AST_SEQ(user_body, increment) and continue jumps
+// past both; users should use plain `while` if continue is
+// needed. Bare `while` and `loop { }` work correctly.
+fn bn_continue_chain_head_s(b: i32) -> i32 { __arena_get(b + 158) }
+fn bn_set_continue_chain_head_s(b: i32, v: i32) -> i32 { __arena_set(b + 158, v); 0 }
 
 fn bn_quote_s(b: i32) -> i32 { __arena_get(b + 118) }
 fn bn_splice_s(b: i32) -> i32 { __arena_get(b + 119) }
@@ -6526,14 +6554,22 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         //
         // K1.AC (2026-05-25): break support. Before emitting the body
         // we SAVE the previous break-chain head from bn_state slot
-        // 122 and RESET it to 0 (empty list). AST_BREAK in the body
+        // 157 and RESET it to 0 (empty list). AST_BREAK in the body
         // prepends a (jmp_pos, prev_head) cell onto the chain. After
         // the body emits but BEFORE we know end_label, we walk the
         // chain and patch each jmp_pos to end_label, then restore
         // the previous head (which makes nested loops work: outer's
         // break-chain is preserved across the inner loop's body).
+        //
+        // K1.AD (2026-05-25): continue support. Same save/restore
+        // pattern for slot 158. Continue jumps patch to loop_top
+        // (re-eval cond + run body again). Patch must happen BEFORE
+        // the `jmp loop_top` slot bookkeeping is done since loop_top
+        // is known from the start.
         let saved_break_head = bn_break_chain_head_s(bn_state);
         bn_set_break_chain_head_s(bn_state, 0);
+        let saved_cont_head = bn_continue_chain_head_s(bn_state);
+        bn_set_continue_chain_head_s(bn_state, 0);
         let loop_top = __arena_len();
         let n_cond = emit_ast_code(p1, bind_state, patch_state, bn_state);
         // Stage 2.4b audit fix: u64 cond also needs REX.W test (same
@@ -6548,7 +6584,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let end_label = __arena_len();
         patch_rel32(je_disp, end_label);
         patch_rel32(jmp_disp, loop_top);
-        // K1.AC: walk + patch the break-chain.
+        // K1.AC: walk + patch the break-chain (target = end_label).
         let mut bk_cur: i32 = bn_break_chain_head_s(bn_state);
         while bk_cur != 0 {
             let bk_pos = __arena_get(bk_cur);
@@ -6557,12 +6593,21 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             bk_cur = bk_next;
         }
         bn_set_break_chain_head_s(bn_state, saved_break_head);
+        // K1.AD: walk + patch the continue-chain (target = loop_top).
+        let mut ct_cur: i32 = bn_continue_chain_head_s(bn_state);
+        while ct_cur != 0 {
+            let ct_pos = __arena_get(ct_cur);
+            let ct_next = __arena_get(ct_cur + 1);
+            patch_rel32(ct_pos, loop_top);
+            ct_cur = ct_next;
+        }
+        bn_set_continue_chain_head_s(bn_state, saved_cont_head);
         let n_zero = emit_ast_int(0);
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else { if t == 77 {
         // K1.AC (2026-05-25): AST_BREAK -- emit `jmp rel32`
         // placeholder; record (jmp_pos, prev_head) onto the
-        // break-chain on bn_state slot 122. AST_WHILE walks the
+        // break-chain on bn_state slot 157. AST_WHILE walks the
         // chain at loop-end-codegen and patches each jmp_pos to
         // its end_label. The chain cell layout is two arena
         // slots: cell+0 = jmp_pos, cell+1 = next (0 = end).
@@ -6577,6 +6622,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // byte-count bookkeeping consistent with other arms that
         // return a value -- AST_WHILE doesn't need an extra mov
         // because the jmp transfers control unconditionally.
+        5
+    } else { if t == 78 {
+        // K1.AD (2026-05-25): AST_CONTINUE -- emit `jmp rel32`
+        // placeholder; record (jmp_pos, prev_head) onto the
+        // continue-chain on bn_state slot 158. AST_WHILE walks
+        // the chain at loop-end-codegen and patches each jmp_pos
+        // to loop_top (re-evaluates cond + runs body again).
+        // Same cell layout as break.
+        let jmp_pos_ct = emit_jmp_rel32_placeholder();
+        let cell_addr_ct = __arena_len();
+        let prev_head_ct = bn_continue_chain_head_s(bn_state);
+        __arena_push(jmp_pos_ct);
+        __arena_push(prev_head_ct);
+        bn_set_continue_chain_head_s(bn_state, cell_addr_ct);
         5
     } else { if t == 25 {
         // AST_STR_LIT used as a value. Phase-0: strings are only
@@ -6625,7 +6684,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC: +1 brace for AST_BREAK arm
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2 braces for AST_BREAK + AST_CONTINUE arms
 }
 
 // --------------------------------------------------------------
