@@ -8074,6 +8074,32 @@ def test_bootstrap_kovc_modal_counterfactual_self_host():
     assert rc == 33, f"Counterfactual<i32> annotation: got {rc}"
 
 
+def test_bootstrap_kovc_unsafe_block_self_host():
+    """K1.AB (2026-05-25): `unsafe { expr }` is a no-op block --
+    bootstrap is type-erased and runs no effect_check pass, so the
+    only thing the keyword does at parse time is gate the brace
+    block. parse_primary detects the IDENT "unsafe" followed by
+    LBRACE, delegates to parse_unsafe (mirrors parse_loop), and
+    the inner expression's value passes through. Pin the
+    behaviour: the value 42 must reach the K2 exit code."""
+    rc = _kovc_self_host_compile_and_run(
+        "unsafe_block",
+        "fn main() -> i32 { let x = unsafe { 42 }; x }",
+    )
+    assert rc == 42, f"unsafe {{ 42 }} must yield 42; got {rc}"
+
+
+def test_bootstrap_kovc_unsafe_block_with_arith_self_host():
+    """K1.AB: unsafe blocks must pass through compound
+    expressions, not just literals. Probes the inner-expr eval
+    path with `21 + 21`."""
+    rc = _kovc_self_host_compile_and_run(
+        "unsafe_arith",
+        "fn main() -> i32 { let x = unsafe { 21 + 21 }; x }",
+    )
+    assert rc == 42, f"unsafe {{ 21+21 }} must yield 42; got {rc}"
+
+
 def test_bootstrap_kovc_panic_traps_self_host():
     """K1.F-discovery batch 20 (2026-05-25): the matrix listed
     `panic("msg")` builtin as KOVC-MISSING. Probe through the

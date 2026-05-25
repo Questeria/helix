@@ -1553,6 +1553,30 @@ fn is_kw_agent_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AB (2026-05-25): match the 6-byte IDENT "unsafe" (bytes
+// 117, 110, 115, 97, 102, 101). Used by parse_primary to
+// recognize `unsafe { expr }` as a no-op block. The bootstrap
+// is already type-erased and runs no effect_check, so unsafe
+// blocks have no semantic content -- they're a parser-level
+// passthrough that yields the inner expression's value. The
+// surface syntax barrier is gone; downstream semantics like
+// raw-pointer deref still trap (those are separate gaps).
+fn is_kw_unsafe_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 6 {
+        if __arena_get(id_s) == 117 {
+            if __arena_get(id_s + 1) == 110 {
+                if __arena_get(id_s + 2) == 115 {
+                    if __arena_get(id_s + 3) == 97 {
+                        if __arena_get(id_s + 4) == 102 {
+                            if __arena_get(id_s + 5) == 101 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.Z (2026-05-25): match the 5-byte IDENT "const" (bytes 99,
 // 111, 110, 115, 116). Used by parse_top + parse_program to
 // recognize top-level `const X: T = expr;` decls. Syntax-only
@@ -3119,6 +3143,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // sub-cascade closer per the K1.C lesson (same algebra as
             // K1.G).
             parse_loop(tok_base, sb)
+        } else { if is_kw_unsafe_ident(id_start, id_len) == 1 {
+            // K1.AB (2026-05-25): `unsafe { expr }` -- no-op block.
+            // The bootstrap is type-erased and runs no effect_check
+            // pass, so unsafe blocks have no semantic content -- the
+            // parser just consumes the keyword + braces and yields
+            // the inner expression's value. Only matches when the
+            // next token after the 'unsafe' IDENT is LBRACE; bare
+            // `unsafe` as a var name (rare) falls through to the
+            // var-ref path. +1 closing brace at the IDENT sub-
+            // cascade closer per the K1.C lesson (same algebra as
+            // K1.G / K1.H1).
+            let nt_us = tok_tag(tok_base, k + 1);
+            if nt_us == 5 {
+                parse_unsafe(tok_base, sb)
+            } else {
+                cur_advance(sb);
+                mk_var_with_capture(sb, id_start, id_len)
+            }
         } else { if is_kw_true_ident(id_start, id_len) == 1 {
             // K1.Q (2026-05-25): `true` -- emit AST_INT(1). Chars
             // were the closest precedent (K1.K) but bool lits go
@@ -4182,6 +4224,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // K1.H1-wireup (2026-05-25): +1 brace closes the new loop-keyword arm (same algebra as K1.G: existing trailing `}` cascades down through return->for->loop, this new `}` closes the wrapping arm)
         }     // K1.Q (2026-05-25): +1 brace closes the new `true` arm
         }     // K1.Q (2026-05-25): +1 brace closes the new `false` arm
+        }     // K1.AB (2026-05-25): +1 brace closes the new `unsafe` arm (same algebra as K1.H1)
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
@@ -8788,6 +8831,20 @@ fn parse_loop(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume '}'
     let one_lit = mk_node(0, 1, 0, 0);            // AST_INT(1)
     mk_node(10, one_lit, body_expr, 0)            // AST_WHILE
+}
+
+// K1.AB (2026-05-25): `unsafe { expr }` -- no-op block. Bootstrap
+// has no effect_check / unsafe_pass and is type-erased, so the
+// only purpose of `unsafe` at parse time is to consume the
+// keyword and let the inner expression's value pass through.
+// Caller MUST have already verified the next token after the
+// 'unsafe' IDENT is TK_LBRACE (5). Mirrors parse_loop's shape.
+fn parse_unsafe(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                              // consume 'unsafe' IDENT
+    cur_advance(sb);                              // consume '{'
+    let body_expr = parse_expr(tok_base, sb);
+    cur_advance(sb);                              // consume '}'
+    body_expr                                     // pass through
 }
 
 // `match` keyword has already been peeked but NOT consumed by caller.
