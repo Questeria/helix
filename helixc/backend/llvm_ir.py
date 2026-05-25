@@ -407,12 +407,22 @@ class _FFIDeclareSpec(NamedTuple):
     arg_tys: tuple[str, ...]
 
 
-# Arena cap — must agree with `helixc/backend/x86_64.py::HELIX_ARENA_CAP`
+# v3.1 step 6a — runtime-layout constants moved to the shared module
+# `helixc/backend/_shared_constants.py`. Both backends import from
+# there; the underscored aliases here preserve every existing f-string
+# interpolation and test reference. The `_check_*_constants_match`
+# tests (e.g. `test_stage206r_num_cells_matches_x86_backend`) are now
+# trivially-true belt-and-braces since both ends source the same
+# module — they remain as load-bearing pins against a future refactor
+# that breaks the shared-import chain.
+from . import _shared_constants as _shared
+
+# Arena cap — must agree with `helixc/backend/_shared_constants.HELIX_ARENA_CAP`
 # (the Stage 207 parity gate compares both backends against this single
 # value; a drift here would silently change the arena overflow point).
 # Slot layout: i32 cursor at slot 0, user data in slots 1..CAP
 # (inclusive), so the LLVM global needs `CAP + 1` slots total.
-_HELIX_ARENA_CAP = 2097152
+_HELIX_ARENA_CAP = _shared.HELIX_ARENA_CAP
 
 # Threshold formula for an N-slot atomic push: `cursor >= CAP - (N - 1)`
 # is overflow. PUSH (N=1) uses CAP, PAIR (N=2) uses CAP - 1, TRIPLE
@@ -431,13 +441,13 @@ _HELIX_ARENA_GLOBALS: tuple[str, ...] = ("__helix_arena_base",)
 
 
 # Trace ring-buffer capacity — must agree with
-# `helixc/backend/x86_64.py::HELIX_TRACE_CAP`. Each trace event is
-# (i32 fn_id, i32 kind) — 8 bytes — so the buffer is `2 * CAP` i32
+# `helixc/backend/_shared_constants.HELIX_TRACE_CAP`. Each trace event
+# is (i32 fn_id, i32 kind) — 8 bytes — so the buffer is `2 * CAP` i32
 # slots. Cursor (`@__helix_trace_count`) tracks how many events
 # have been appended; when it reaches CAP, subsequent events are
 # silently dropped (Phase-0 fail-closed: no allocation, no syscall,
 # no blocking — matches x86 line 4404-4407).
-_HELIX_TRACE_CAP = 1024
+_HELIX_TRACE_CAP = _shared.HELIX_TRACE_CAP
 
 
 # `read_file_to_arena` stack-buffer size. 1 MiB matches
@@ -451,14 +461,15 @@ _HELIX_TRACE_CAP = 1024
 _HELIX_READ_FILE_BUF_SIZE = 0x100000
 
 
-# Reflection-cell count — must match `x86_64.py::HELIX_NUM_CELLS`.
-# Each cell is i64 (`HELIX_CELL_SIZE = 8` on x86). QUOTE materialises
-# a handle in [0, NUM_CELLS) at compile time (via `ast_handle %
-# NUM_CELLS`); SPLICE loads from `@__helix_state_base[handle]`;
-# MODIFY conditionally stores after a user-supplied verifier
-# function approves. A handle outside [0, NUM_CELLS) returns 0 from
-# SPLICE / fails MODIFY (matches x86's bounds-check semantics).
-_HELIX_NUM_CELLS = 64
+# Reflection-cell count — must match
+# `helixc/backend/_shared_constants.HELIX_NUM_CELLS`. Each cell is i64
+# (HELIX_CELL_SIZE = 8). QUOTE materialises a handle in [0, NUM_CELLS)
+# at compile time (via `ast_handle % NUM_CELLS`); SPLICE loads from
+# `@__helix_state_base[handle]`; MODIFY conditionally stores after a
+# user-supplied verifier function approves. A handle outside
+# [0, NUM_CELLS) returns 0 from SPLICE / fails MODIFY (matches x86's
+# bounds-check semantics).
+_HELIX_NUM_CELLS = _shared.HELIX_NUM_CELLS
 
 # Shared module-globals tuple for the reflection cells (parallel to
 # `_HELIX_ARENA_GLOBALS` / `_HELIX_TRACE_GLOBALS`).

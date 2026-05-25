@@ -2907,7 +2907,13 @@ def test_stage206r_arena_cap_matches_x86_backend():
     `x86_64.py::HELIX_ARENA_CAP` — Stage 207 parity gate would
     otherwise compare two backends with different overflow points
     (a silent divergence that the structural mock validator cannot
-    detect)."""
+    detect).
+
+    v3.1 step 6a note: both sides now source ARENA_CAP from
+    `helixc.backend._shared_constants` so the equality is
+    tautological — until the day someone introduces a private
+    re-definition. `test_shared_constants.py` is the primary
+    drift guard via source-grep; this remains as belt-and-braces."""
     from helixc.backend import x86_64
     assert llvm_ir._HELIX_ARENA_CAP == x86_64.HELIX_ARENA_CAP
 
@@ -4067,7 +4073,11 @@ def test_stage206r_arena_triple_helper_emitted_once_per_module():
 def test_stage206r_trace_cap_matches_x86_backend():
     """`_HELIX_TRACE_CAP` MUST equal `x86_64.HELIX_TRACE_CAP` —
     Stage 207 parity gate compares the buffer's overflow point
-    across both backends."""
+    across both backends.
+
+    v3.1 step 6a: tautological since both sides import from
+    `_shared_constants`. The source-grep drift guard lives in
+    `test_shared_constants.py`."""
     from helixc.backend import x86_64
     assert llvm_ir._HELIX_TRACE_CAP == x86_64.HELIX_TRACE_CAP
 
@@ -5149,7 +5159,11 @@ def test_stage206r_register_helper_function_is_idempotent():
 def test_stage206r_num_cells_matches_x86_backend():
     """`_HELIX_NUM_CELLS` (64) must match
     `x86_64.py::HELIX_NUM_CELLS` — Stage 207 parity gate compares
-    both backends against this single overflow point."""
+    both backends against this single overflow point.
+
+    v3.1 step 6a: tautological since both sides import from
+    `_shared_constants`. The source-grep drift guard lives in
+    `test_shared_constants.py`."""
     from helixc.backend import x86_64
     assert llvm_ir._HELIX_NUM_CELLS == x86_64.HELIX_NUM_CELLS
 

@@ -257,7 +257,7 @@ fn main() -> i32 {
 def test_stage44_gate1_f4_named_sysv_constants_exist():
     """Module-level SysV constants are importable. Replaces the
     pre-fix hard-coded 16 / 8 magic numbers in 3 sites."""
-    from helixc.backend.x86_64 import (
+    from helixc.backend._shared_constants import (
         SYSV_STACK_ARG_BASE,
         SYSV_STACK_ARG_STRIDE,
         SYSV_STACK_ALIGNMENT,

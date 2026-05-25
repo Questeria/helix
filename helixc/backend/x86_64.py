@@ -65,49 +65,20 @@ ELF_BASE = 0x400000
 CODE_OFFSET = 0x1000   # code segment starts at this file offset (page-aligned)
 ENTRY_OFFSET = 0x1000  # entry virtual address: ELF_BASE + ENTRY_OFFSET
 
-# Reflection cells: 64 i64 mutable cells appended at the end of the code
-# segment. Each cell is 8 bytes, addressed by index. Used for verifier-gated
-# self-modification (quote/splice/modify primitives).
-HELIX_NUM_CELLS = 64
-# Arena capacity: 32K i32 slots = 128KB. Slot 0 reserved for the cursor;
-# slots 1..HELIX_ARENA_CAP available for user data. Sized to fit a self-
-# hosted compiler's working set (AST nodes + IR ops + symbol table) for
-# small-to-medium programs without reallocation.
-# 2 097 152 slots × 4 bytes = 8 MB BSS arena. Sized for self-host:
-# the bootstrap source (lexer + parser + kovc, ~111 KB) lands as
-# 111 K slots; each Helix source byte gets pushed as a one-byte
-# value into a full i32 slot. Tokens add ~30 K * 4 = 120 K slots;
-# AST adds ~5 K nodes * 5 slots = 25 K. ELF output is ~30 K. Total
-# ~290 K slots — well under 2 M with room for compile-time state
-# (fn_table, patch_table, str_state). The arena lives in BSS so
-# the cap bump doesn't inflate produced binary file sizes.
-HELIX_ARENA_CAP = 2097152
-HELIX_CELL_SIZE = 8
-
-# Stage 63 Inc 1 — Tier 3 #11 runtime trace wiring.
-# Each trace event is 8 bytes (4 fn_id + 4 kind+value). 1024 events
-# = 8 KB BSS overhead, more than enough for typical @trace fn-
-# instrumented programs. Phase-0 fail-closed: when the buffer is
-# full, subsequent events are silently dropped (rather than blocking
-# or wrapping). Tests can read back the count via the
-# __trace_event_count() builtin.
-HELIX_TRACE_CAP = 1024
-
-# Stage 44 closure gate-1 type-design MEDIUM fix: name the SysV
-# ABI constants that appear in both caller (CALL / FFI_CALL) and
-# callee (function prologue) stack-passed-arg handling. Pre-fix
-# these were hard-coded 16 + 8*idx in 3 sites with no shared
-# symbol — any future change (struct-by-value, mixed int+float
-# overflow, etc.) had to touch all 3 in lockstep.
-#
-# SYSV_STACK_ARG_BASE = saved rbp (8) + return address (8) above
-# the function's local frame. The callee reads stack args at
-# [rbp + SYSV_STACK_ARG_BASE + SYSV_STACK_ARG_STRIDE * idx].
-# SYSV_STACK_ARG_STRIDE = each stack arg occupies 8 bytes regardless
-# of its actual payload size (f32 pads to 8).
-SYSV_STACK_ARG_BASE = 16
-SYSV_STACK_ARG_STRIDE = 8
-SYSV_STACK_ALIGNMENT = 16  # rsp must be 16-aligned before CALL
+# v3.1 step 6a — Runtime-layout constants moved to a shared module so
+# every backend reads from one source of truth. The names are re-
+# exported here to preserve the public API (`from helixc.backend.x86_64
+# import HELIX_NUM_CELLS` still works) — but the values now live in
+# `helixc/backend/_shared_constants.py`. A cap bump is one edit there.
+from ._shared_constants import (  # noqa: F401 (re-exported public API)
+    HELIX_NUM_CELLS,
+    HELIX_CELL_SIZE,
+    HELIX_ARENA_CAP,
+    HELIX_TRACE_CAP,
+    SYSV_STACK_ARG_BASE,
+    SYSV_STACK_ARG_STRIDE,
+    SYSV_STACK_ALIGNMENT,
+)
 
 
 # ============================================================================

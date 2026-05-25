@@ -4828,7 +4828,11 @@ class Lowerer:
             # structural_hash), distinct shapes get distinct cells (no
             # collision aliasing). Backed by HELIX_NUM_CELLS mutable cells
             # in the binary.
-            from ..backend.x86_64 import HELIX_NUM_CELLS
+            # Lazy import (in-function): keeps the IR layer
+            # backend-agnostic at module load. Relies on
+            # `_shared_constants` staying side-effect-free per its
+            # docstring's LEAF discipline.
+            from ..backend._shared_constants import HELIX_NUM_CELLS
             from ..frontend.ast_hash import structural_hash
             # Restart 49 B4: narrow exception scope. structural_hash
             # raises NotImplementedError (per ast_hash._hash_into's
