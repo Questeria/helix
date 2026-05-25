@@ -2717,6 +2717,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // the `impl Trait for Type` syntax; we reuse it. +1 closing
             // brace at the IDENT sub-cascade closer per K1.C lesson.
             parse_for(tok_base, sb)
+        } else { if byte_eq(id_start, id_len, kw_loop_s(sb), kw_loop_n(sb)) == 1 {
+            // K1.H1-wireup (2026-05-25): `loop { body }` form.
+            // parse_loop desugars to AST_WHILE(AST_INT(1), body) --
+            // no new codegen tag. kw_loop_s/n was installed in K1.H1-
+            // deadcode at slots 92/93. +1 closing brace at the IDENT
+            // sub-cascade closer per the K1.C lesson (same algebra as
+            // K1.G).
+            parse_loop(tok_base, sb)
         } else {
             // Plain identifier. Could be a var ref, an assignment
             // (`name = expr`), or a fn call (`name()`). Peek the
@@ -3741,6 +3749,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // Stage 14: extra '}' closes the is_grad_rev_call else-branch wrapper
         }     // K1.C-wireup (2026-05-25): +1 brace closes the new return-keyword arm (the existing trailing `}` now closes RETURN-else; this new `}` closes the match-else that wraps RETURN)
         }     // K1.G-wireup (2026-05-25): +1 brace closes the new for-keyword arm (same algebra as K1.C: existing trailing `}` cascades down, this new `}` closes the wrapping arm)
+        }     // K1.H1-wireup (2026-05-25): +1 brace closes the new loop-keyword arm (same algebra as K1.G: existing trailing `}` cascades down through return->for->loop, this new `}` closes the wrapping arm)
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this

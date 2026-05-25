@@ -83,8 +83,8 @@ iterates.
 |---------|--------|-----------|--------|
 | `if` / `else` (`AST_IF`) | ✅ | ✅ | PARITY |
 | `while` (`AST_WHILE`) | ✅ | ✅ | PARITY |
-| `for` | ✅ | ❌ | KOVC-MISSING |
-| `loop` (infinite) | ✅ | ❌ | KOVC-MISSING |
+| `for` | ✅ | ✅ (K1.G, 2026-05-25, commits 889b8b1 + 52599d7: parse_for desugars `for var in start..end { body }` to AST_LET_MUT + AST_WHILE + AST_SEQ + AST_ASSIGN + AST_ADD + AST_LT using only existing tags) | PARITY |
+| `loop` (infinite) | ✅ | ✅ (K1.H1, 2026-05-25, commits 41497a3 + this commit: parse_loop desugars `loop { body }` to AST_WHILE(AST_INT(1), body), no new tag; break/continue still pending as K1.H2/H3) | PARITY |
 | `break` (with optional value) | ✅ | ❌ | KOVC-MISSING |
 | `continue` | ✅ | ❌ | KOVC-MISSING |
 | `return` (explicit) | ✅ | ✅ (K1.C, 2026-05-25, commits 816ce51 + b02017f: AST_RET tag 43 + parse_return + parse_primary arm) | PARITY |

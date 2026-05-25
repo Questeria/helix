@@ -6841,6 +6841,42 @@ def test_bootstrap_kovc_return_statement_no_early_return():
         f"got {rc}")
 
 
+def test_bootstrap_kovc_loop_keyword_compiles():
+    """K1.H1 regression (2026-05-25): the kovc-compiled bootstrap
+    binary must accept Helix source that uses the `loop { body }`
+    form (no condition, infinite-by-default), parse it via parse_
+    primary's new keyword arm (commits 41497a3 K1.H1-deadcode +
+    follow-up K1.H1-wireup), and emit the same code as `while 1 {
+    body }`.
+
+    Without the wireup, parse_primary would treat the `loop` IDENT
+    as a function-call lookup, failing at the unknown name. With
+    the wireup, parse_primary dispatches to parse_loop, which
+    builds AST_WHILE(AST_INT(1), body) -- the codegen path is the
+    same as a regular while loop.
+
+    The test source increments a counter inside `loop { ... }` and
+    exits via `return` when the counter reaches 7. break/continue
+    are NOT yet supported (K1.H2/H3), so `return` is the only way
+    out -- which exercises both K1.C (return) and K1.H1 (loop) in
+    one shot.
+    """
+    src = (
+        "fn count() -> i32 {\n"
+        "    let mut i: i32 = 0;\n"
+        "    loop {\n"
+        "        i = i + 1;\n"
+        "        if i == 7 { return i; };\n"
+        "    };\n"
+        "    0\n"
+        "}\n"
+        "fn main() -> i32 { count() }\n"
+    )
+    rc = compile_and_run(src)
+    assert rc == 7, (
+        f"expected exit 7 (loop counts to 7 then returns); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
