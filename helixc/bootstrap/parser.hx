@@ -1515,6 +1515,24 @@ fn is_kw_true_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.V (2026-05-25): match the 4-byte IDENT "type" (bytes 116,
+// 121, 112, 101). Used by parse_top + parse_program to recognize
+// top-level `type Alias = T;` decls. The alias is consumed as
+// metadata (the bootstrap doesn't enforce type aliases; downstream
+// uses of the alias name pass through let-type-position which
+// accepts any IDENT).
+fn is_kw_type_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 4 {
+        if __arena_get(id_s) == 116 {
+            if __arena_get(id_s + 1) == 121 {
+                if __arena_get(id_s + 2) == 112 {
+                    if __arena_get(id_s + 3) == 101 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.Q (2026-05-25): match the 5-byte IDENT "false" (bytes 102,
 // 97, 108, 115, 101). Returns 1 if matched, 0 otherwise.
 fn is_kw_false_ident(id_s: i32, id_l: i32) -> i32 {
@@ -4598,6 +4616,8 @@ fn parse_top(tok_base: i32) -> i32 {
         // Stage 10: mod/use are also program-mode prefixes.
         let is_mod = byte_eq(id_s, id_l, kw_mod_s(cur_slot), kw_mod_n(cur_slot));
         let is_use = byte_eq(id_s, id_l, kw_use_s(cur_slot), kw_use_n(cur_slot));
+        // K1.V (2026-05-25): `type` is also a top-level decl prefix.
+        let is_type = is_kw_type_ident(id_s, id_l);
         if is_fn == 1 {
             parse_program(tok_base, cur_slot)
         } else { if is_struct == 1 {
@@ -4612,9 +4632,11 @@ fn parse_top(tok_base: i32) -> i32 {
             parse_program(tok_base, cur_slot)
         } else { if is_use == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_type == 1 {
+            parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}}}}}}
+        }}}}}}}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -4959,6 +4981,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             // Stage 10: also skip `mod IDENT { ... }` and `use IDENT::...;`.
             let is_mod_kw = byte_eq(s, l, kw_mod_s(sb), kw_mod_n(sb));
             let is_use_kw = byte_eq(s, l, kw_use_s(sb), kw_use_n(sb));
+            // K1.V (2026-05-25): `type Alias = T;` is a top-level no-op
+            // decl. Same metadata-only pattern as struct/enum/mod/use.
+            let is_type_kw = is_kw_type_ident(s, l);
             if is_struct_kw == 1 {
                 parse_struct_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
@@ -4977,9 +5002,12 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_use_kw == 1 {
                 parse_use_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_type_kw == 1 {
+                parse_type_alias_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 keep_decl = 0;
-            }}}}}};
+            }}}}}}};
         } else {
             keep_decl = 0;
         };
@@ -5013,6 +5041,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let is_impl_kw2 = byte_eq(s, l, kw_impl_s(sb), kw_impl_n(sb));
             let is_mod_kw2 = byte_eq(s, l, kw_mod_s(sb), kw_mod_n(sb));
             let is_use_kw2 = byte_eq(s, l, kw_use_s(sb), kw_use_n(sb));
+            // K1.V (2026-05-25): `type Alias = T;` arm for the
+            // post-fn loop, mirroring the leading-decl loop above.
+            let is_type_kw2 = is_kw_type_ident(s, l);
             if is_fn_kw2 == 1 {
                 let next_fn = parse_fn_decl(tok_base, sb);
                 let new_node = mk_node(15, next_fn, 0, 0);
@@ -5036,10 +5067,13 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_use_kw2 == 1 {
                 parse_use_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_type_kw2 == 1 {
+                parse_type_alias_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
                 keep = 0;
-            }}}}}}};
+            }}}}}}}};
         } else {
             keep = 0;
         }};
@@ -7738,6 +7772,35 @@ fn parse_use_decl(tok_base: i32, sb: i32) -> i32 {
 // consume tokens until the closing '}'. Returns AST_STRUCT_DECL (tag 54)
 // — same metadata-only pattern as struct/enum decls — so codegen emits
 // 0 bytes and there is no new emit_ast_code arm.
+// K1.V (2026-05-25): parse `type Alias = TypeExpr ;`. Caller has
+// verified the cursor sits on the `type` IDENT. Consumes the
+// entire decl up to and including the trailing `;`. Returns
+// AST_STRUCT_DECL (tag 54) -- codegen no-op pattern shared with
+// struct/enum/trait/impl/mod/use decls.
+//
+// The TypeExpr can contain anything (bare IDENT, `[T; N]`, `&T`,
+// `*const T`, `Foo<T>`, etc.) -- the skip-loop just consumes
+// tokens until it hits TK_SEMI (12) or TK_EOF (0). Doesn't need
+// `<>` nesting since `;` doesn't appear inside type expressions.
+fn parse_type_alias_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'type' IDENT
+    cur_advance(sb);                         // consume alias name IDENT
+    cur_advance(sb);                         // consume '=' (TK_EQ = 15)
+    let mut keep_ty: i32 = 1;
+    while keep_ty == 1 {
+        let tt = tok_tag(tok_base, cur_get(sb));
+        if tt == 12 {
+            keep_ty = 0;
+        } else { if tt == 0 {
+            keep_ty = 0;
+        } else {
+            cur_advance(sb);
+        }};
+    }
+    cur_advance(sb);                         // consume ';'
+    mk_node(54, 0, 0, 0)
+}
+
 fn parse_trait_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'trait' IDENT
     let nk = cur_get(sb);

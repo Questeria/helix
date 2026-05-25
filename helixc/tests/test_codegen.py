@@ -7701,6 +7701,44 @@ def test_bootstrap_kovc_compound_assign_regressions_self_host():
     assert rc == 8, f"x + 3: got {rc}"
 
 
+def test_bootstrap_kovc_type_alias_first_decl_self_host():
+    """K1.V regression (2026-05-25): parse_top + parse_program's
+    leading-decl loop accept `type Alias = TypeExpr ;` as a no-op
+    decl. The Helix-side compiler consumes the syntax and the
+    downstream `let x: Alias = ...` resolves via the let-type
+    position (which accepts any IDENT). Result: a top-level
+    type-alias program runs cleanly."""
+    rc = _kovc_self_host_compile_and_run(
+        "type_first",
+        "type Foo = i32; fn main() -> i32 { let x: Foo = 42; x }",
+    )
+    assert rc == 42, (
+        f"expected K2 exit 42 (type alias + let with alias type); got {rc}")
+
+
+def test_bootstrap_kovc_type_alias_after_fn_self_host():
+    """K1.V regression: type aliases also work AFTER a fn decl --
+    the post-fn loop's new arm consumes the syntax just like the
+    leading-decl loop."""
+    rc = _kovc_self_host_compile_and_run(
+        "type_after_fn",
+        "fn main() -> i32 { 7 } type Bar = i32;",
+    )
+    assert rc == 7, (
+        f"expected K2 exit 7 (fn first, type alias after); got {rc}")
+
+
+def test_bootstrap_kovc_multiple_type_aliases_self_host():
+    """K1.V regression: multiple consecutive type aliases work --
+    the leading-decl loop iterates and consumes each."""
+    rc = _kovc_self_host_compile_and_run(
+        "multi_type",
+        "type A = i32; type B = i64; "
+        "fn main() -> i32 { let x: A = 11; let y: B = 13; x + y }",
+    )
+    assert rc == 24, f"expected K2 exit 24 (11+13); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
