@@ -2415,7 +2415,20 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
 fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
-    if t == 28 {
+    if t == 5 {
+        // K1.AM (2026-05-25): brace-block as expression --
+        // `let x = { let y = 1; y + 2 }`. parse_primary previously
+        // had no LBRACE arm, so the block-as-value form (common in
+        // Rust for scoping intermediate computations) failed at
+        // parse. Consume `{`, parse_expr the interior (which
+        // handles let-statements + final expression, like the
+        // bodies of parse_loop / parse_unsafe / parse_match_arm_body),
+        // consume `}`, return the inner expression's value.
+        cur_advance(sb);                     // consume '{'
+        let body_block = parse_expr(tok_base, sb);
+        cur_advance(sb);                     // consume '}'
+        body_block
+    } else { if t == 28 {
         // Stage 9: closure literal `|params| body`. TK_PIPE (28) at the
         // start of a primary is unambiguous — bitwise OR is parsed at the
         // bitwise level (parse_bitwise) and never reaches primary as a
@@ -4426,7 +4439,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         } else {
             mk_node(99, t, 0, 0)
         }
-    }}}}}}}}}}}}}}}}     // Stage 9: extra '}' closes the leading t == 28 closure wrapper
+    }}}}}}}}}}}}}}}}}     // Stage 9 + K1.AM: +1 '}' for the new t == 5 (LBRACE-block) wrapper
 }
 
 // Stage 5 Iter B: struct_table region — 12 slots = 3 entries x 4 fields

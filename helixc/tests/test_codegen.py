@@ -8202,6 +8202,33 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_block_as_expression_self_host():
+    """K1.AM (2026-05-25): brace-block as expression -- `let x =
+    { let y = 1; y + 2 }`. parse_primary now accepts LBRACE as
+    a primary expression start; consumes `{`, parses interior
+    via parse_expr (let-statements + final expr), consumes `}`.
+    Mirrors the body-parse pattern of parse_loop / parse_unsafe
+    / parse_match_arm_body. 3 sub-probes: simple block, nested
+    block, block-as-fn-arg."""
+    rc_simple = _kovc_self_host_compile_and_run(
+        "block_expr_simple",
+        "fn main() -> i32 { let x = { let y = 1; y + 2 }; x }",
+    )
+    assert rc_simple == 3, f"let x = {{ let y=1; y+2 }} should yield 3; got {rc_simple}"
+    rc_nested = _kovc_self_host_compile_and_run(
+        "block_expr_nested",
+        "fn main() -> i32 { "
+        "let x = { let y = { let z = 1; z + 1 }; y + 1 }; x }",
+    )
+    assert rc_nested == 3, f"nested block-as-expr should yield 3; got {rc_nested}"
+    rc_arg = _kovc_self_host_compile_and_run(
+        "block_expr_arg",
+        "fn add_one(x: i32) -> i32 { x + 1 } "
+        "fn main() -> i32 { add_one({ let y = 10; y + 31 }) }",
+    )
+    assert rc_arg == 42, f"block as fn arg should yield 42; got {rc_arg}"
+
+
 def test_bootstrap_kovc_match_block_arm_self_host():
     """K1.AL (2026-05-25): match arm bodies now accept braced
     blocks like `1 => { 42 }`. Previously parse_match_expr
