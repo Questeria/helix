@@ -2704,6 +2704,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // was the first-attempt K1.C bug, reverted in commit
             // a180366).
             parse_return(tok_base, sb)
+        } else { if byte_eq(id_start, id_len, kw_for_s(sb), kw_for_n(sb)) == 1 {
+            // K1.G-wireup (2026-05-25): `for var in start..end { body }`
+            // form. parse_for desugars to AST_LET_MUT + AST_WHILE +
+            // AST_SEQ + AST_ASSIGN + AST_ADD + AST_LT (no new codegen
+            // tag). kw_for_s/n was already installed by Stage 8.5 for
+            // the `impl Trait for Type` syntax; we reuse it. +1 closing
+            // brace at the IDENT sub-cascade closer per K1.C lesson.
+            parse_for(tok_base, sb)
         } else {
             // Plain identifier. Could be a var ref, an assignment
             // (`name = expr`), or a fn call (`name()`). Peek the
@@ -3727,6 +3735,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }}}}}     // Stage 12: extra '}' closes the is_grad_call else-branch wrapper
         }     // Stage 14: extra '}' closes the is_grad_rev_call else-branch wrapper
         }     // K1.C-wireup (2026-05-25): +1 brace closes the new return-keyword arm (the existing trailing `}` now closes RETURN-else; this new `}` closes the match-else that wraps RETURN)
+        }     // K1.G-wireup (2026-05-25): +1 brace closes the new for-keyword arm (same algebra as K1.C: existing trailing `}` cascades down, this new `}` closes the wrapping arm)
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
