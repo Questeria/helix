@@ -60,17 +60,18 @@ Supported so far (Stages 200, 202-204):
     write(fd, content, len) -> close(fd)`. The op's i32 result is
     `nwritten < 0 ? nwritten : 0` — matches x86_64.py's "negative on
     failure, 0 on success" contract.
-  - arena push (Stage 206-R): `ARENA_PUSH` lowers to a call to the
-    internal helper `@__helix_arena_push(i32) -> i32` which performs
-    the bounds-checked store on the module-scope arena global
+  - arena ops (Stage 206-R): `ARENA_PUSH` / `ARENA_GET` / `ARENA_SET`
+    / `ARENA_LEN` all lower to calls to internal helpers (each its
+    own three-block bounds-checked routine, except ARENA_LEN which
+    is a single load) that share the module-scope arena global
     `@__helix_arena_base` (a `[CAP+1 x i32]` BSS buffer with the
     i32 cursor at slot 0 and user data in slots 1..CAP). The
     `_MODULE_GLOBALS` registry mirrors `_HELPER_FUNCTIONS` for
     shared module-scope state; a helper that touches a global lists
     it in its `module_globals` and the global is emitted exactly
     once per module. Other PRINT kinds (read_file_to_arena, TRACE_*,
-    QUOTE-family) and the other arena ops (TOP/GET/SET/POP/PAIR/
-    TRIPLE) are later chunks.
+    QUOTE-family) and the remaining arena ops (PUSH_PAIR /
+    PUSH_TRIPLE / POP) are later chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -583,6 +584,70 @@ exit:
 }}"""
 
 
+# `__helix_arena_get(i32 idx) -> i32`: return arena[idx + 1] (slot 0
+# is the cursor; user data lives in slots 1..CAP). Out-of-bounds
+# (negative when interpreted unsigned, or >= CAP) returns 0 — defined
+# behaviour matching x86_64.py::ARENA_GET (line ~3261). The `icmp uge`
+# catches both negative indices (which are large unsigned values) and
+# values >= CAP. Three blocks (entry / in_bounds / exit).
+_HELIX_ARENA_GET_HELPER = f"""\
+define internal i32 @__helix_arena_get(i32 %idx) {{
+entry:
+  %ovfl = icmp uge i32 %idx, {_HELIX_ARENA_CAP}
+  br i1 %ovfl, label %exit, label %in_bounds
+
+in_bounds:
+  %idx_plus_one = add i32 %idx, 1
+  %idx_i64 = sext i32 %idx_plus_one to i64
+  %slot_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %idx_i64
+  %loaded = load i32, ptr %slot_ptr, align 4
+  br label %exit
+
+exit:
+  %result = phi i32 [ 0, %entry ], [ %loaded, %in_bounds ]
+  ret i32 %result
+}}"""
+
+
+# `__helix_arena_set(i32 idx, i32 value) -> i32`: store value at
+# arena[idx + 1]. Out-of-bounds silently no-ops (matches
+# x86_64.py::ARENA_SET line ~3284 — "out-of-bounds set silently
+# no-ops"). Always returns 0 — TIR says ARENA_SET has no result, but
+# x86_64.py tolerates a result slot and writes 0 into it; this helper
+# matches that contract so the op handler can either bind the return
+# (when op.results) or discard it (when no results). Three blocks
+# (entry / in_bounds / exit).
+_HELIX_ARENA_SET_HELPER = f"""\
+define internal i32 @__helix_arena_set(i32 %idx, i32 %value) {{
+entry:
+  %ovfl = icmp uge i32 %idx, {_HELIX_ARENA_CAP}
+  br i1 %ovfl, label %exit, label %in_bounds
+
+in_bounds:
+  %idx_plus_one = add i32 %idx, 1
+  %idx_i64 = sext i32 %idx_plus_one to i64
+  %slot_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %idx_i64
+  store i32 %value, ptr %slot_ptr, align 4
+  br label %exit
+
+exit:
+  ret i32 0
+}}"""
+
+
+# `__helix_arena_len() -> i32`: return the current cursor (slot 0 of
+# the arena). One-block helper — the same single load x86_64.py
+# emits inline (line ~3334), but wrapped in a helper for symmetry
+# with the other arena ops (every arena op routes through a helper,
+# the helper is the only thing that touches the global).
+_HELIX_ARENA_LEN_HELPER = """\
+define internal i32 @__helix_arena_len() {
+entry:
+  %result = load i32, ptr @__helix_arena_base, align 4
+  ret i32 %result
+}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -603,6 +668,21 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
     ),
     "__helix_arena_push": _HelperFunctionSpec(
         definition=_HELIX_ARENA_PUSH_HELPER,
+        ffi_declares=(),
+        module_globals=("__helix_arena_base",),
+    ),
+    "__helix_arena_get": _HelperFunctionSpec(
+        definition=_HELIX_ARENA_GET_HELPER,
+        ffi_declares=(),
+        module_globals=("__helix_arena_base",),
+    ),
+    "__helix_arena_set": _HelperFunctionSpec(
+        definition=_HELIX_ARENA_SET_HELPER,
+        ffi_declares=(),
+        module_globals=("__helix_arena_base",),
+    ),
+    "__helix_arena_len": _HelperFunctionSpec(
+        definition=_HELIX_ARENA_LEN_HELPER,
         ffi_declares=(),
         module_globals=("__helix_arena_base",),
     ),
@@ -1833,6 +1913,112 @@ class _FnEmitter:
             self._register_helper_function("__helix_arena_push")
             return (f"%v{result.id} = call i32 "
                     f"@__helix_arena_push(i32 {self._ref(value)})")
+        if kind == tir.OpKind.ARENA_GET:
+            # `arena.get` reads arena[idx + 1]. Out-of-bounds returns
+            # 0 (the helper handles the bounds check); one i32 operand
+            # (index), one i32 result (the loaded value).
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_GET takes one "
+                    f"operand (the i32 index), got "
+                    f"{len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_GET must have "
+                    f"exactly one result, got {len(op.results)}")
+            idx = op.operands[0]
+            idx_ty = _llvm_int_type(
+                idx.ty,
+                ctx=f"function {self.fn.name!r} ARENA_GET operand")
+            if idx_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_GET operand has "
+                    f"LLVM type {idx_ty}, but the helper "
+                    f"`__helix_arena_get` takes an i32 index")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} ARENA_GET result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_GET result has "
+                    f"LLVM type {res_ty}, but the arena cell is an "
+                    f"i32")
+            self._register_helper_function("__helix_arena_get")
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_arena_get(i32 {self._ref(idx)})")
+        if kind == tir.OpKind.ARENA_SET:
+            # `arena.set` writes value at arena[idx + 1]. Out-of-bounds
+            # silently no-ops. Two i32 operands (index, value); TIR
+            # says "no result" but x86_64.py tolerates a result slot
+            # (and writes 0 into it) — this handler matches that
+            # tolerance. The helper always returns i32 0, which the
+            # op handler either binds (if op.results) or discards.
+            if len(op.operands) != 2:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_SET takes two "
+                    f"operands (i32 index, i32 value), got "
+                    f"{len(op.operands)}")
+            if len(op.results) > 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_SET expects "
+                    f"zero or one results, got {len(op.results)}")
+            idx, value = op.operands
+            idx_ty = _llvm_int_type(
+                idx.ty,
+                ctx=f"function {self.fn.name!r} ARENA_SET index")
+            if idx_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_SET index has "
+                    f"LLVM type {idx_ty}, but the helper "
+                    f"`__helix_arena_set` takes an i32 index")
+            value_ty = _llvm_int_type(
+                value.ty,
+                ctx=f"function {self.fn.name!r} ARENA_SET value")
+            if value_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_SET value has "
+                    f"LLVM type {value_ty}, but the helper "
+                    f"`__helix_arena_set` takes an i32 value")
+            self._register_helper_function("__helix_arena_set")
+            call_args = (f"i32 {self._ref(idx)}, "
+                         f"i32 {self._ref(value)}")
+            if op.results:
+                result = op.results[0]
+                res_ty = _llvm_int_type(
+                    result.ty,
+                    ctx=f"function {self.fn.name!r} ARENA_SET result")
+                if res_ty != "i32":
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: ARENA_SET result "
+                        f"has LLVM type {res_ty}, but the helper "
+                        f"returns i32 (always 0)")
+                return (f"%v{result.id} = call i32 "
+                        f"@__helix_arena_set({call_args})")
+            # No result — discard the helper's return.
+            return f"call i32 @__helix_arena_set({call_args})"
+        if kind == tir.OpKind.ARENA_LEN:
+            # `arena.len` returns the cursor (the i32 at slot 0).
+            # Zero operands, one i32 result.
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_LEN takes no "
+                    f"operands, got {len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_LEN must have "
+                    f"exactly one result, got {len(op.results)}")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} ARENA_LEN result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_LEN result has "
+                    f"LLVM type {res_ty}, but the arena cursor is an "
+                    f"i32")
+            self._register_helper_function("__helix_arena_len")
+            return f"%v{result.id} = call i32 @__helix_arena_len()"
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
             if print_kind not in (
@@ -2029,8 +2215,9 @@ class _FnEmitter:
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
             f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
-            f"write_file PRINT; ARENA_PUSH; RETURN; BR; COND_BR — "
-            f"floats and structs are later stages)"
+            f"write_file PRINT; ARENA_PUSH / GET / SET / LEN; "
+            f"RETURN; BR; COND_BR — floats and structs are later "
+            f"stages)"
         )
 
 

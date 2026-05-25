@@ -3297,6 +3297,333 @@ def test_stage206r_helper_spec_rejects_module_globals_duplicates():
 
 
 # ==========================================================================
+# Stage 206-R chunk — ARENA_GET / ARENA_SET / ARENA_LEN
+# Three more arena ops, each its own internal helper (GET / SET both
+# 3-block bounds-checked; LEN single-load). All four arena helpers
+# (push / get / set / len) share the `@__helix_arena_base` global via
+# the `_MODULE_GLOBALS` registry.
+# ==========================================================================
+def test_stage206r_emit_arena_get_call():
+    """ARENA_GET lowers to `call i32 @__helix_arena_get(i32 %idx)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_GET, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_arena_get(i32 %v"
+            in ll), ll
+    assert ll.count(
+        "define internal i32 @__helix_arena_get(") == 1, ll
+    assert ll.count(
+        "@__helix_arena_base = internal global") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_emit_arena_set_call_with_result():
+    """ARENA_SET with a result slot lowers to a value-returning call
+    (helper always returns i32 0). Two i32 operands."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32()), ("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_arena_set(i32 %v0, "
+            f"i32 %v1)" in ll), ll
+    assert ll.count(
+        "define internal i32 @__helix_arena_set(") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_emit_arena_set_call_without_result():
+    """ARENA_SET with no result lowers to a discard call (helper's
+    return value drops on the floor — TIR-canonical shape)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32()), ("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1])
+    b.ret(b.const_int(0))
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # No `%vN =` prefix — call's return is discarded.
+    assert ("call i32 @__helix_arena_set(i32 %v0, i32 %v1)"
+            in ll), ll
+    # Sanity: ensure we did NOT accidentally bind a result.
+    assert "= call i32 @__helix_arena_set" not in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_emit_arena_len_call():
+    """ARENA_LEN lowers to `call i32 @__helix_arena_len()` (no
+    operands)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.ARENA_LEN, result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = call i32 @__helix_arena_len()" in ll, ll
+    assert ll.count("define internal i32 @__helix_arena_len(") == 1, ll
+    assert "load i32, ptr @__helix_arena_base, align 4" in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_four_arena_ops_share_one_global():
+    """A module that touches all four arena ops emits exactly ONE
+    arena global + the four helpers + four call sites."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32()), ("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn.params[1], result_ty=_i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1])
+    g = b.emit(tir.OpKind.ARENA_GET, fn.params[0], result_ty=_i32())
+    length = b.emit(tir.OpKind.ARENA_LEN, result_ty=_i32())
+    s = b.add(g, length)
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("@__helix_arena_base = internal global") == 1, ll
+    for name in ("__helix_arena_push", "__helix_arena_get",
+                 "__helix_arena_set", "__helix_arena_len"):
+        assert ll.count(f"define internal i32 @{name}(") == 1, (name, ll)
+        assert ll.count(f"call i32 @{name}(") == 1, (name, ll)
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_get_helper_returns_zero_on_overflow():
+    """The arena_get helper's phi reads `[ 0, %entry ]` so an
+    out-of-bounds index returns 0 (matches x86_64.py)."""
+    helper = llvm_ir._HELIX_ARENA_GET_HELPER
+    assert (f"icmp uge i32 %idx, {llvm_ir._HELIX_ARENA_CAP}"
+            in helper), helper
+    assert ("phi i32 [ 0, %entry ], [ %loaded, %in_bounds ]"
+            in helper), helper
+    # Idx+1 + sext to i64 + GEP i32 — must mirror push's arithmetic
+    # so a slot stored by push is readable by get at the same index.
+    assert "%idx_plus_one = add i32 %idx, 1" in helper, helper
+    assert "%idx_i64 = sext i32 %idx_plus_one to i64" in helper, helper
+    assert ("getelementptr inbounds i32, ptr "
+            "@__helix_arena_base, i64 %idx_i64") in helper, helper
+
+
+def test_stage206r_arena_set_helper_silently_skips_overflow():
+    """The arena_set helper branches to exit on overflow WITHOUT
+    storing — matches x86_64.py's "out-of-bounds set silently
+    no-ops" comment (line 3285). Always returns i32 0 so the op
+    handler can bind the result uniformly."""
+    helper = llvm_ir._HELIX_ARENA_SET_HELPER
+    assert (f"icmp uge i32 %idx, {llvm_ir._HELIX_ARENA_CAP}"
+            in helper), helper
+    # `br i1 %ovfl, label %exit, label %in_bounds` — overflow goes
+    # directly to exit (no store). The store lives only in
+    # in_bounds.
+    assert "br i1 %ovfl, label %exit, label %in_bounds" in helper, helper
+    assert "store i32 %value, ptr %slot_ptr, align 4" in helper, helper
+    # The exit block is the only `ret`.
+    assert helper.count("ret i32") == 1, helper
+    assert "ret i32 0" in helper, helper
+
+
+def test_stage206r_arena_len_helper_is_single_load():
+    """arena_len is the smallest possible helper — entry block with
+    one load + ret."""
+    helper = llvm_ir._HELIX_ARENA_LEN_HELPER
+    assert "load i32, ptr @__helix_arena_base, align 4" in helper, helper
+    assert helper.count("\nentry:") == 1, helper
+    # No additional labelled blocks (no `\n<word>:` for non-entry).
+    block_lines = [
+        ln for ln in helper.splitlines()
+        if ln.endswith(":") and not ln.lstrip().startswith(";")
+    ]
+    assert block_lines == ["entry:"], block_lines
+
+
+def test_stage206r_arena_get_rejects_zero_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.ARENA_GET, result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_GET takes one operand"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_get_rejects_non_i32_operand():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.ARENA_GET, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_GET operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_get_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.ARENA_GET, fn.params[0],
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_GET result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_set_rejects_one_operand():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("i", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0])
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_SET takes two operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_set_rejects_three_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()), ("c", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1], fn.params[2])
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_SET takes two operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_set_rejects_non_i32_index():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("i", tir.TIRScalar("i64")), ("v", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1])
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_SET index has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_set_rejects_non_i32_value():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("i", _i32()), ("v", tir.TIRScalar("i64"))], _i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1])
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_SET value has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_len_rejects_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("x", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_LEN, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_LEN takes no operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_len_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.ARENA_LEN, result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_LEN result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_all_arena_ops_are_deterministic():
+    """A module using all four arena ops emits byte-identically
+    twice (the sorted-by-name helper emission keeps the helper
+    block order stable: get / len / push / set)."""
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        fn = b.begin_function("f", [("i", _i32()), ("v", _i32())], _i32())
+        b.emit(tir.OpKind.ARENA_PUSH, fn.params[1], result_ty=_i32())
+        b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1])
+        g = b.emit(tir.OpKind.ARENA_GET, fn.params[0], result_ty=_i32())
+        length = b.emit(tir.OpKind.ARENA_LEN, result_ty=_i32())
+        s = b.add(g, length)
+        b.ret(s)
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_arena_set_rejects_non_i32_result():
+    """When ARENA_SET carries an optional result, it must be i32 —
+    the helper always returns i32 0. Symmetry with the GET/LEN
+    result-type rejection paths."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("i", _i32()), ("v", _i32())], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_SET result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_set_rejects_two_results():
+    """ARENA_SET tolerates 0 or 1 result; 2+ is malformed. Pin the
+    `expects zero or one results` diagnostic so a future refactor
+    that loosens this guard fails the test."""
+    # The TIR builder normally enforces single-result; construct the
+    # op directly to test the LLVM-side guard.
+    op = tir.Op(
+        kind=tir.OpKind.ARENA_SET,
+        operands=[
+            tir.Value(id=0, ty=_i32()),
+            tir.Value(id=1, ty=_i32()),
+        ],
+        results=[
+            tir.Value(id=10, ty=_i32()),
+            tir.Value(id=11, ty=_i32()),  # the extra one — malformed
+        ],
+    )
+    fn = tir.FnIR(
+        name="f",
+        params=[
+            tir.Value(id=0, ty=_i32()),
+            tir.Value(id=1, ty=_i32()),
+        ],
+        return_ty=_i32(),
+        blocks=[tir.Block(id=0, params=[], ops=[op])],
+    )
+    emitter = llvm_ir._FnEmitter(fn)
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="expects zero or one results"):
+        emitter._emit_op(op)
+
+
+# ==========================================================================
 # Stage 206-R chunk — write_file PRINT lowers inline to the libc
 # sequence open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) -> write(fd,
 # content, len) -> close(fd); result is `nwritten < 0 ? nwritten : 0`

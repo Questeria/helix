@@ -493,11 +493,26 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    collision; empty-name/def; `module_globals` duplicate detection;
    parity-sensitive helper text pinning).
 
-   **Next residual ops (in priority order)**: ARENA_GET / ARENA_SET /
-   ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE (now trivially additive — the
-   infrastructure is in place), read_file_to_arena (uses the arena
-   global), TRACE_ENTRY/EXIT (needs a ring buffer), QUOTE/SPLICE/
-   MODIFY/REFLECT_HASH (metaprogramming).
+   **ARENA_GET / ARENA_SET / ARENA_LEN — SHIPPED 2026-05-24** (this
+   chunk). Three more arena ops, each its own small helper sharing
+   the `@__helix_arena_base` global from the prior chunk. GET +
+   SET are 3-block bounds-checked routines (overflow returns 0 from
+   GET, silently no-ops from SET — matches x86_64.py); LEN is a
+   single load. ARENA_SET's op handler tolerates an optional result
+   slot (TIR says no result; x86_64.py tolerates one) — the helper
+   always returns i32 0, the op handler binds or discards uniformly.
+   Audit-fix batch: NO HIGH/MEDIUM across all three axes; 1 LOW
+   (lint `E741` ambiguous `l` variable name) + two coverage gaps
+   (ARENA_SET non-i32 result, ARENA_SET >1 results) addressed.
+
+   **Next residual ops (in priority order)**: ARENA_PUSH_PAIR /
+   ARENA_PUSH_TRIPLE (trivially additive, same pattern as the
+   single-slot push); read_file_to_arena (uses the arena global +
+   a per-byte push loop); TRACE_ENTRY/EXIT (needs a `__helix_trace_buf`
+   ring-buffer global — likely the first void-returning helper,
+   which is the moment to upgrade `_HelperFunctionSpec` with an
+   explicit signature field); QUOTE/SPLICE/MODIFY/REFLECT_HASH
+   (metaprogramming).
 
 When `v3.0.0` is tagged, v3.0 is done.
 
