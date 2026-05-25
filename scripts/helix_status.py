@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 139      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 140      # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -407,7 +407,15 @@ K_BOOTSTRAP_PARITY_DONE = 139      # was 28 after K0; K1.B (stack
                                     # actually work via Stage 8 +
                                     # type erasure. Matrix was
                                     # overly pessimistic. +1 made
-                                    # it 139
+                                    # it 139;
+                                    # K1.AK: print_str("msg") inline
+                                    # builtin -- mirror of print_int
+                                    # but writes a string literal to
+                                    # stdout via sys_write(1,p,l).
+                                    # StrLit row upgraded from MISSING
+                                    # to PARITY (now usable as arg to
+                                    # file-IO + panic + print_str).
+                                    # +1 made it 140
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})

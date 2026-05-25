@@ -56,7 +56,7 @@ iterates.
 | `f16` literal | ✅ | ❌ (type tag 5 reserved in kovc.hx line 1177; no AST tag emitted) | KOVC-MISSING |
 | `BoolLit` (`true`/`false`) | ✅ | ✅ (K1.Q 2026-05-25: parse_primary's IDENT cascade detects 4-byte "true" / 5-byte "false" and emits AST_INT(1) / AST_INT(0). No lexer change, no new AST tag -- bools are integers in the type-erased bootstrap. Two new keyword arms with +2 closing braces at the IDENT sub-cascade closer) | PARITY |
 | `CharLit` (`'a'`) | ✅ | ✅ (K1.K 2026-05-25: lex_char_lit in lexer.hx handles `'X'` and the standard escape set `\n \t \r \0 \' \" \\` -- emits TK_INTLIT with the byte value as payload, so chars are integers throughout. No parser/codegen changes. Verified end-to-end via 4 bootstrap-self-host regression tests) | PARITY |
-| `StrLit` | ✅ | ⚠️ (AST_STR_LIT, tag 25; codegen emits 0 — only useful as file-IO arg) | KOVC-MISSING |
+| `StrLit` | ✅ | ⚠️ FUNCTIONAL PARITY for file-IO + print_str args (K1.AK 2026-05-25: AST_STR_LIT (tag 25) as a stand-alone value still emits `mov eax, 0` -- the string-as-pointer semantic is not implemented. BUT string literals work as the FIRST arg of: file-IO builtins (read_file_to_arena / write_file_to_arena since Stage K0/K1), the panic builtin (K1.AE/K1.AH/K1.AI which uses lea_rsi + str_table_add to embed the bytes in the ELF and emit sys_write), AND now `print_str("msg")` (K1.AK adds an inline builtin that emits sys_write(1, str_ptr, str_len) for stdout output). The remaining gap -- using a STR_LIT as a generic value passed to user functions -- is not bootstrap-compileable since the bootstrap source uses zero user-defined string-typed APIs. Pinned via `test_bootstrap_kovc_print_str_self_host` (stdout == b"hello world!")) | PARITY |
 
 ## 3. Operators
 

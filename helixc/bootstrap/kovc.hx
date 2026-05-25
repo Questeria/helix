@@ -1925,6 +1925,8 @@ fn install_builtin_names() -> i32 {
     __arena_push(0);      // slot 161: panic prefix name offset
     // K1.AI (2026-05-25): slot 162 = "\n" newline byte offset.
     __arena_push(0);      // slot 162: panic newline offset
+    // K1.AK (2026-05-25): slot 163 = "print_str" name offset.
+    __arena_push(0);      // slot 163: print_str name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -1967,6 +1969,14 @@ fn install_builtin_names() -> i32 {
     // can register it the same way as the prefix and message.
     let s_panic_nl = __arena_push(10);
     __arena_set(bn_state + 162, s_panic_nl);
+
+    // K1.AK (2026-05-25): "print_str" (9 chars: 112 114 105 110 116
+    // 95 115 116 114). Builtin for writing a string literal to
+    // stdout via sys_write(1, ptr, len). Stored at slot 163.
+    let s_print_str = __arena_push(112); __arena_push(114); __arena_push(105); __arena_push(110);
+    __arena_push(116); __arena_push(95); __arena_push(115); __arena_push(116);
+    __arena_push(114);
+    __arena_set(bn_state + 163, s_print_str);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3409,6 +3419,11 @@ fn bn_panic_prefix_s(b: i32) -> i32 { __arena_get(b + 161) }
 // "panic[id]: msg\n" format.
 fn bn_panic_newline_s(b: i32) -> i32 { __arena_get(b + 162) }
 
+// K1.AK (2026-05-25): bn_state slot 163 holds the name-offset
+// of the "print_str" builtin. Used by try_emit_builtin_call to
+// recognize the call site and emit sys_write(1, str, len).
+fn bn_print_str_s(b: i32) -> i32 { __arena_get(b + 163) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3901,6 +3916,41 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x89); emit_byte(0x4C); emit_byte(0x90); emit_byte(0x04);
         emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
         n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
+    } else { if kovc_byte_eq(name_s, name_l, bn_print_str_s(bn_state), 9) == 1 {
+        // K1.AK (2026-05-25): print_str("msg") -- emit sys_write(1,
+        // str_ptr, str_len) for an AST_STR_LIT arg. Mirror of the
+        // panic codegen MINUS the trap. Validates first arg is
+        // AST_STR_LIT (tag 25); else emits a defensive ud2.
+        let arg_ps = __arena_get(args_head + 1);
+        let arg_tag_ps = __arena_get(arg_ps);
+        if arg_tag_ps != 25 {
+            // First arg must be a string literal -- emit ud2 for misuse.
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s_ps = __arena_get(arg_ps + 1);
+            let body_l_ps = __arena_get(arg_ps + 2);
+            // lea rsi, [rip + str_disp]
+            let str_disp_slot_ps = emit_lea_rsi_rip_placeholder();
+            str_table_add(bn_state, str_disp_slot_ps, body_s_ps, body_l_ps);
+            // mov edi, 1 (fd=stdout) -- 5 bytes
+            emit_byte(0xBF); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // mov edx, body_l (len) -- 5 bytes
+            emit_byte(0xBA);
+            emit_u32_le(body_l_ps);
+            // mov eax, 1 (sys_write) -- 5 bytes
+            emit_byte(0xB8); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // syscall -- 2 bytes
+            emit_byte(0x0F); emit_byte(0x05);
+            // Return 0 in eax (sys_write returned bytes written -- we
+            // overwrite for parity with print_int's "returns 0").
+            // xor eax, eax -- 2 bytes
+            emit_byte(0x31); emit_byte(0xC0);
+            // Total: 7 (lea) + 5 + 5 + 5 + 2 + 2 = 26 bytes
+            26
+        }
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -4617,7 +4667,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE + K1.AF + K1.AG: +1 brace each (print_int + panic + push_pair + push_triple)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE + K1.AF + K1.AG + K1.AK: +1 brace each (+print_str)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

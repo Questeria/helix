@@ -8202,6 +8202,63 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_print_str_self_host():
+    """K1.AK (2026-05-25): print_str("msg") emits sys_write(1,
+    msg_ptr, msg_len) to stdout. Mirror of print_int but with
+    a string-literal arg; uses the lea_rsi + str_table_add
+    infrastructure from K1.AE/K1.AH. Pinned via subprocess
+    capture of stdout."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    in_path = "/tmp/sh_print_str_in.hx"
+    out_path = "/tmp/sh_print_str_out.bin"
+    k2_src = 'fn main() -> i32 { print_str("hello world!"); 0 }'
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(k2_src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 0, (
+        f"print_str program should exit cleanly; got rc={run_k2.returncode}"
+    )
+    assert run_k2.stdout == b"hello world!", (
+        f"print_str should write exactly 'hello world!' to stdout; got {run_k2.stdout!r}"
+    )
+
+
 def test_bootstrap_kovc_generic_fn_turbofish_self_host():
     """K1.F-discovery batch 27 (2026-05-25): the matrix listed
     Generic fn<T> as KOVC-MISSING. Probing shows turbofish-form
