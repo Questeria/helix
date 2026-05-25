@@ -56,6 +56,12 @@ VERSIONS: list[dict[str, str]] = [
      "theme": "Wiring the register allocator into real GPU kernels"},
     {"id": "v3.0", "status": "released",
      "theme": "The big rewrite - industrial MLIR + LLVM backend"},
+    {"id": "v3.1", "status": "released",
+     "theme": "Post-v3.0 cleanup - LLVM toolchain wiring, polymorphic "
+              "SPLICE/MODIFY, REFLECT_HASH, shared-constants module"},
+    {"id": "v3.2", "status": "planned",
+     "theme": "Real-execution parity gate (or first K-bootstrap "
+              "milestone toward Helix-in-Helix)"},
 ]
 
 # v2.x shipped its compiler work as 22 numbered build stages
@@ -86,14 +92,21 @@ def versions_percent() -> int:
 def _version_credit(v: dict[str, str]) -> float:
     """How much one version contributes toward the overall journey
     total: a released version counts 1.0, a planned version 0.0, and
-    the in-progress version (always v3.0 on this journey) counts its
-    ACTUAL v3.0-stage fraction — honest partial credit that climbs as
-    stages close, never a frozen guess."""
+    an in-progress version gets partial credit. For v3.0 specifically
+    (the only version with a published numbered-stage breakdown) we
+    use the live V3_STAGES_DONE fraction so partial credit climbs as
+    stages close. For other in-progress versions (v3.1 cleanup, v3.2
+    parity gate, future K-bootstrap milestones) there is no
+    fine-grained stage table — they tick from 0% to 100% at release.
+    A reasonable middle-credit (0.5) keeps the overall percentage
+    honest without inventing a fake-precision stage count."""
     if v["status"] == "released":
         return 1.0
     if v["status"] == "planned":
         return 0.0
-    return V3_STAGES_DONE / V3_STAGES_TOTAL
+    if v["id"] == "v3.0":
+        return V3_STAGES_DONE / V3_STAGES_TOTAL
+    return 0.5
 
 
 def overall_percent() -> int:

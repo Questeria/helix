@@ -35,17 +35,30 @@ def test_helix_status_version_model_is_consistent():
 
 def test_helix_status_percentages_are_computed_from_the_model():
     """The progress numbers are derived from VERSIONS / the v3.0 stage
-    counts — never hand-typed — so they cannot drift from the model."""
+    counts — never hand-typed — so they cannot drift from the model.
+
+    v3.1.0 update: the credit model now has THREE cases for an
+    in-progress version. v3.0 (the only version with a published
+    numbered-stage breakdown) earns `V3_STAGES_DONE / V3_STAGES_TOTAL`.
+    Other in-progress versions (v3.1 cleanup track, v3.2 parity gate,
+    future K-bootstrap milestones) earn a flat 0.5 — there is no
+    fine-grained stage table for them so a fake-precision number would
+    be dishonest."""
     released = sum(1 for v in hs.VERSIONS if v["status"] == "released")
     total = len(hs.VERSIONS)
     assert hs.versions_percent() == round(100 * released / total)
     assert hs.v3_stages_percent() == round(
         100 * hs.V3_STAGES_DONE / hs.V3_STAGES_TOTAL)
-    # overall: a released version counts 1.0, a planned version 0.0,
-    # the in-progress version its live v3.0-stage fraction.
-    credit = {"released": 1.0, "planned": 0.0,
-              "in_progress": hs.V3_STAGES_DONE / hs.V3_STAGES_TOTAL}
-    score = sum(credit[v["status"]] for v in hs.VERSIONS)
+    # Replicate the production credit model exactly.
+    def _credit(v: dict[str, str]) -> float:
+        if v["status"] == "released":
+            return 1.0
+        if v["status"] == "planned":
+            return 0.0
+        if v["id"] == "v3.0":
+            return hs.V3_STAGES_DONE / hs.V3_STAGES_TOTAL
+        return 0.5
+    score = sum(_credit(v) for v in hs.VERSIONS)
     assert hs.overall_percent() == round(100 * score / total)
     # All three must be valid percentages.
     for p in (hs.v3_stages_percent(), hs.versions_percent(),
@@ -61,7 +74,13 @@ def test_helix_status_overall_tracks_v3_stage_progress():
     progress.) Post v3.0.0 release, the in-progress weight no longer
     contributes — but the partial-credit semantics for an unfinished
     in-progress version must still be exercised, so this test pokes
-    v3.0 back to "in_progress" for the duration of the assertions."""
+    v3.0 back to "in_progress" for the duration of the assertions.
+
+    v3.1.0 update: with v3.1 released and v3.2 planned, the journey
+    is no longer "v3.0 is the last entry" — so the assertion
+    `overall_percent() == 100` only holds if EVERY version is
+    released. This test re-poses to compare ordering of base /
+    upper / lower without anchoring on 100."""
     original_done = hs.V3_STAGES_DONE
     original_v3_status = next(
         v["status"] for v in hs.VERSIONS if v["id"] == "v3.0")
@@ -74,10 +93,11 @@ def test_helix_status_overall_tracks_v3_stage_progress():
         hs.V3_STAGES_DONE = hs.V3_STAGES_TOTAL // 2
         base = hs.overall_percent()
         hs.V3_STAGES_DONE = hs.V3_STAGES_TOTAL      # v3.0 fully done
-        assert hs.overall_percent() > base
-        assert hs.overall_percent() == 100          # whole journey done
+        upper = hs.overall_percent()
         hs.V3_STAGES_DONE = 0                       # v3.0 not started
-        assert hs.overall_percent() < base
+        lower = hs.overall_percent()
+        # Strict ordering — overall tracks v3.0 progress monotonically.
+        assert lower < base < upper, (lower, base, upper)
     finally:
         hs.V3_STAGES_DONE = original_done
         v3_entry["status"] = original_v3_status
@@ -100,8 +120,7 @@ def test_helix_status_telegram_message_is_beginner_friendly():
     what is done + audited, what is in progress (if any), what is
     left (if any), and the progress numbers — plus a plain-language
     explanation of the jargon (stages / versions). Each bucket
-    section renders conditionally; with every version released
-    (post v3.0.0), only DONE + PROGRESS render."""
+    section renders conditionally."""
     msg = hs.render_telegram()
     # Plain-language framing for a non-engineer.
     assert "programming language" in msg
