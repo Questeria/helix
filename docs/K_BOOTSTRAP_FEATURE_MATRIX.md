@@ -248,7 +248,7 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 
 | Pass | Purpose | Status |
 |------|---------|--------|
-| `const_fold` | Constant folding | KOVC-MISSING |
+| `const_fold` | Constant folding | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 14 2026-05-25: parser.hx:1298 `mk_arith_fold` performs compile-time const folding at PARSE time for AST_INT + AST_INT pairs across all the standard binops (add/sub/mul/AND/OR/XOR/`<`/`>`/`==`/`!=`/`<=`/`>=`/etc.). Architecturally different from Python's separate IR pass (the bootstrap is monolithic — passes are inlined into parse/codegen) but identical end behaviour: `1 + 2` becomes the constant `3` before codegen sees it) |
 | `cse` | Common-subexpression elimination | KOVC-MISSING |
 | `dce` | Dead-code elimination | KOVC-MISSING |
 | `effect_check` | Effect-discipline verification | KOVC-MISSING |
