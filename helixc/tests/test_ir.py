@@ -313,7 +313,7 @@ def test_c100_unsigned_cmp_emits_setb_not_setl():
     cmp). Cycle-100 added `unsigned_int_cmp_setters` with setb/setbe/
     seta/setae. This test inspects the emitted ELF for the unsigned
     opcodes when the operand type is u32."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn cmp_u32(a: u32, b: u32) -> i32 {
         if a < b { 1 } else { 0 }
@@ -339,7 +339,7 @@ def test_c102_u64_add_emits_64bit_path():
 
     This test asserts the emitted ELF for a `u64 + u64` body
     contains the rex.W ADD opcode (48 01 C8 = `add rax, rcx`)."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn add_u64(a: u64, b: u64) -> u64 {
         a + b
@@ -360,7 +360,7 @@ def test_c105_f64_to_f32_cast_emits_cvtsd2ss():
     `f64 as f32` must emit `cvtsd2ss` (F2 0F 5A C0) — pre-fix this
     fell through to a 4-byte mov-copy, silently emitting the wrong
     bit-pattern for the narrowing cross-precision cast."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn narrow(x: f64) -> f32 {
         x as f32
@@ -377,7 +377,7 @@ def test_c105_f64_to_f32_cast_emits_cvtsd2ss():
 def test_c105_f32_to_f64_cast_emits_cvtss2sd():
     """C105-F1 regression: symmetric widening cast must emit
     `cvtss2sd` (F3 0F 5A C0)."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn widen(x: f32) -> f64 {
         x as f64
@@ -396,7 +396,7 @@ def test_c105_u64_const_emits_64bit_path():
     Pre-fix `_is_i64_type` matched only i64/isize, so u64 CONST_INT
     emitted 32-bit `mov eax, imm32` into an 8-byte slot — leaving
     high 4 bytes stale."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn make_u64() -> u64 {
         12345_u64
@@ -495,7 +495,7 @@ def test_c107_call_return_u64_stores_full_8_bytes():
     Also covers C107-F3 (callee RETURN of u64): the callee must load
     via `mov rax, [rbp+disp]` (48 8B 45 ...) — the byte sequence
     `48 8B 45` is the discriminative opcode for the wide load."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn id_u64(x: u64) -> u64 { x }
     fn main() -> i32 {
@@ -518,7 +518,7 @@ def test_c107_call_arg_u64_uses_64bit_reg():
     Pre-fix only i64/isize args went through INT_REGS_64; u64/usize
     args fell through to `mov edi, [rbp+disp]` (8B 7D <disp>), losing
     the high half of the slot."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn take_u64(x: u64) -> i32 { 0 }
     fn main() -> i32 {
@@ -542,7 +542,7 @@ def test_c107_if_else_u64_emits_64bit_branch_copy():
     (48 8B 45 ...) + `mov [rbp+dst], rax` (48 89 45 ...). Pre-fix the
     BR arm ran through eax, silently truncating both branches'
     computed u64 values to 32 bits on entry to the merge block."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn pick(c: i32, a: u64, b: u64) -> u64 {
         if c == 0 { a } else { b }
@@ -563,7 +563,7 @@ def test_c107_mut_u64_local_uses_64bit_load_store():
     x + 1u64; x` must use the 64-bit LOAD_VAR/STORE_VAR path. Pre-
     fix every read-modify-write cycle of a mutable u64 local silently
     dropped the high half of the var slot via 32-bit eax-based moves."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn rmw_u64() -> u64 {
         let mut x: u64 = 1_u64;
@@ -590,7 +590,7 @@ def test_c107_cast_u32_to_u64_uses_zero_extend_not_sign_extend():
     emits `mov eax, [src]` + `mov [dst], rax` (relies on x86-64's
     implicit zero-extension of 32-bit destination writes to rax) —
     must NOT emit `movsxd` (48 63 C0)."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn widen_u32(x: u32) -> u64 {
         x as u64
@@ -680,7 +680,7 @@ def test_c109_mut_u64_load_store_byte_identical_to_i64():
     bodies that differ only in the type annotation MUST emit identical
     bytes. Pre-cycle-108 they didn't (i64 used 64-bit path; u64 fell
     to 32-bit). Post-cycle-108 they should match exactly."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src_u64 = """
     fn body_u64(input: u64) -> u64 {
         let mut x: u64 = input;
@@ -715,7 +715,7 @@ def test_c109_call_return_u64_caller_stores_full_rax():
     store after CALL — discriminator is byte-identity with i64 caller
     (both must emit the same 48 89 prefix for the caller-side
     store)."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src_u64 = """
     fn id_u64(x: u64) -> u64 { x }
     fn caller_u64() -> i32 {
@@ -782,7 +782,7 @@ def test_c110_cast_u32_to_f64_uses_zero_extend_path():
     correct unsigned interpretation. Discriminator: presence of the
     REX.W-prefixed 5-byte sequence F2 48 0F 2A C0 inside the u32-cast
     fn body."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn u32_to_f64(x: u32) -> f64 {
         x as f64
@@ -799,7 +799,7 @@ def test_c110_cast_u32_to_f64_uses_zero_extend_path():
 def test_c110_cast_u32_to_f32_uses_zero_extend_path():
     """C109-SF-F3 sibling for u32→f32: must emit REX.W cvtsi2ss
     (F3 48 0F 2A C0) after a zero-extending load through eax."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn u32_to_f32(x: u32) -> f32 {
         x as f32
@@ -816,7 +816,7 @@ def test_c110_cast_u32_to_f32_uses_zero_extend_path():
 def test_c111_cast_u64_to_f64_uses_unsigned_high_bit_path():
     """Cycle-111 F1: u64->f64 must not route through signed i64 only.
     High-bit-set u64 values need the unsigned split/convert/double sequence."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn u64_to_f64(x: u64) -> f64 {
         x as f64
@@ -839,7 +839,7 @@ def test_c111_cast_u64_to_f64_uses_unsigned_high_bit_path():
 
 def test_c111_cast_u64_to_f32_uses_unsigned_high_bit_path():
     """Cycle-111 F1 sibling: u64->f32 needs the same unsigned sequence."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn u64_to_f32(x: u64) -> f32 {
         x as f32
@@ -862,7 +862,7 @@ def test_c111_cast_u64_to_f32_uses_unsigned_high_bit_path():
 
 def test_c112_cast_i64_to_f32_uses_64bit_signed_path():
     """Cycle-112: i64->f32 must emit REX.W cvtsi2ss, not low-32 fallback."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn i64_to_f32(x: i64) -> f32 {
         x as f32
@@ -880,7 +880,7 @@ def test_c112_cast_i64_to_f32_uses_64bit_signed_path():
 
 def test_c115_cast_f64_to_i64_uses_64bit_result_path():
     """Cycle-115: f64->i64 must emit REX.W cvttsd2si into rax."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn f64_to_i64(x: f64) -> i64 {
         x as i64
@@ -895,7 +895,7 @@ def test_c115_cast_f64_to_i64_uses_64bit_result_path():
 
 def test_c115_cast_f32_to_i64_uses_64bit_result_path():
     """Cycle-115: f32->i64 must emit REX.W cvttss2si into rax."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn f32_to_i64(x: f32) -> i64 {
         x as i64
@@ -910,7 +910,7 @@ def test_c115_cast_f32_to_i64_uses_64bit_result_path():
 
 def test_c115_div_u64_emits_unsigned_64bit_form():
     """Cycle-115: u64 division must use unsigned 64-bit div rcx."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn div_u64(a: u64, b: u64) -> u64 { a / b }
     fn main() -> i32 { 0 }
@@ -929,7 +929,7 @@ def test_c115_div_u64_emits_unsigned_64bit_form():
 
 def test_c115_mod_u64_emits_unsigned_64bit_form():
     """Cycle-115: u64 modulo must use unsigned 64-bit div and rdx."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn mod_u64(a: u64, b: u64) -> u64 { a % b }
     fn main() -> i32 { 0 }
@@ -946,7 +946,7 @@ def test_c110_bit_and_u64_emits_64bit_form():
     only matched i64/isize so u64 fell to 32-bit `and eax, ecx`
     (21 C8 no REX prefix), silently truncating the high half of both
     operands. Discriminator: REX.W-prefixed `and rax, rcx` (48 21 C8)."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn and_u64(a: u64, b: u64) -> u64 { a & b }
     fn main() -> i32 { 0 }
@@ -960,7 +960,7 @@ def test_c110_bit_and_u64_emits_64bit_form():
 
 def test_c110_bit_or_u64_emits_64bit_form():
     """C109-SF-F4 BIT_OR sibling: `or rax, rcx` = 48 09 C8."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn or_u64(a: u64, b: u64) -> u64 { a | b }
     fn main() -> i32 { 0 }
@@ -974,7 +974,7 @@ def test_c110_bit_or_u64_emits_64bit_form():
 
 def test_c110_bit_xor_u64_emits_64bit_form():
     """C109-SF-F4 BIT_XOR sibling: `xor rax, rcx` = 48 31 C8."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn xor_u64(a: u64, b: u64) -> u64 { a ^ b }
     fn main() -> i32 { 0 }
@@ -988,7 +988,7 @@ def test_c110_bit_xor_u64_emits_64bit_form():
 
 def test_c110_shl_u64_emits_64bit_form():
     """C109-SF-F4 SHL sibling: `shl rax, cl` = 48 D3 E0."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn shl_u64(a: u64, b: u64) -> u64 { a << b }
     fn main() -> i32 { 0 }
@@ -1002,7 +1002,7 @@ def test_c110_shl_u64_emits_64bit_form():
 
 def test_c111_shr_u64_emits_logical_64bit_form():
     """Cycle-111 F2: u64 right shift must be 64-bit logical shr."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn shr_u64(a: u64, b: u64) -> u64 { a >> b }
     fn main() -> i32 { 0 }
@@ -1018,7 +1018,7 @@ def test_c111_shr_u64_emits_logical_64bit_form():
 
 def test_c111_shr_usize_emits_logical_64bit_form():
     """Cycle-111 F2 alias: usize right shift follows the u64 SHR path."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn shr_usize(a: usize, b: usize) -> usize { a >> b }
     fn main() -> i32 { 0 }
@@ -1031,7 +1031,7 @@ def test_c111_shr_usize_emits_logical_64bit_form():
 
 def test_c111_shr_u32_emits_logical_32bit_form():
     """Cycle-111 F2 sibling: unsigned 32-bit right shift uses shr, not sar."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn shr_u32(a: u32, b: u32) -> u32 { a >> b }
     fn main() -> i32 { 0 }
@@ -1048,7 +1048,7 @@ def test_c111_shr_u32_emits_logical_32bit_form():
 def test_c115_mixed_width_unsigned_compare_zero_extends_narrow_operand():
     """Cycle-115: u32-vs-u64 compare must not 64-bit-load the u32 slot."""
     import re
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn cmp_u32_u64(a: u32, b: u64) -> i32 { if a > b { 1 } else { 0 } }
     fn main() -> i32 { 0 }
@@ -1065,7 +1065,7 @@ def test_c115_mixed_width_unsigned_compare_zero_extends_narrow_operand():
 
 def test_c115_u8_unsigned_compare_masks_declared_width():
     """Cycle-115: u8 compare masks the 32-bit slot before setcc."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn cmp_u8_u32(a: u8, b: u32) -> i32 { if a > b { 1 } else { 0 } }
     fn main() -> i32 { 0 }
@@ -1078,7 +1078,7 @@ def test_c115_u8_unsigned_compare_masks_declared_width():
 
 def test_c115_u8_cast_to_i32_masks_declared_width():
     """Cycle-115: u8->i32 cast must not raw-copy hidden slot bits."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn cast_u8_i32(a: u8) -> i32 { a as i32 }
     fn main() -> i32 { 0 }
@@ -1091,7 +1091,7 @@ def test_c115_u8_cast_to_i32_masks_declared_width():
 
 def test_c115_f64_to_u64_uses_unsigned_high_half_sequence():
     """Cycle-115: f64 -> u64 needs subtract-2^63 unsigned conversion path."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn cast_hi(x: f64) -> u64 { x as u64 }
     fn main() -> i32 { 0 }
@@ -1108,7 +1108,7 @@ def test_c115_f64_to_u64_uses_unsigned_high_half_sequence():
 def test_c115_u64_div_u32_zero_extends_rhs_before_64bit_div():
     """Cycle-115: mixed-width unsigned div must widen operands individually."""
     import re
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn div_u64_u32(a: u64, b: u32) -> u64 { a / b }
     fn main() -> i32 { 0 }
@@ -1123,7 +1123,7 @@ def test_c115_u64_div_u32_zero_extends_rhs_before_64bit_div():
 def test_c115_u64_arithmetic_u32_zero_extends_rhs_before_64bit_op():
     """Cycle-115: mixed-width 64-bit arithmetic widens operands by own type."""
     import re
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     cases = [
         ("+", b"\x48\x01\xc8", "add"),
         ("-", b"\x48\x29\xc8", "sub"),
@@ -1145,7 +1145,7 @@ def test_c115_u64_arithmetic_u32_zero_extends_rhs_before_64bit_op():
 def test_c115_u64_bitwise_u32_zero_extends_rhs_before_64bit_op():
     """Cycle-115: mixed-width 64-bit bitwise ops widen operands by own type."""
     import re
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     cases = [
         ("&", b"\x48\x21\xc8", "and"),
         ("|", b"\x48\x09\xc8", "or"),
@@ -1166,7 +1166,7 @@ def test_c115_u64_bitwise_u32_zero_extends_rhs_before_64bit_op():
 
 def test_c110_bit_not_u64_emits_64bit_form():
     """C109-SF-F4 BIT_NOT sibling: `not rax` = 48 F7 D0."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn not_u64(a: u64) -> u64 { ~a }
     fn main() -> i32 { 0 }
@@ -1181,7 +1181,7 @@ def test_c110_bit_not_u64_emits_64bit_form():
 def test_c110_neg_u64_emits_64bit_form():
     """C109-SF-F4 NEG sibling: unary `-a` where a: u64 must emit
     REX.W-prefixed `neg rax` (48 F7 D8), not the 32-bit `neg eax` form."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn neg_u64(a: u64) -> u64 { -a }
     fn main() -> i32 { 0 }

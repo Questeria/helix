@@ -21,7 +21,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from helixc.backend.x86_64 import compile_module_to_elf
+from helixc.tests._codegen_backend import compile_module_to_elf
 from helixc.frontend.parser import parse
 from helixc.frontend.typecheck import TypeChecker, typecheck
 from helixc.ir.lower_ast import lower

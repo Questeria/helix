@@ -219,7 +219,7 @@ def test_a7_backend_emits_trace_ops_as_stubs():
     from helixc.frontend.parser import parse
     from helixc.frontend.typecheck import typecheck
     from helixc.ir.lower_ast import lower
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = "@trace fn pong(x: i32) -> i32 { x }\nfn main() -> i32 { pong(7) }"
     prog = parse(src)
     # Cycle 3 R1 fix batch 24 (TEST HIGH-1): typecheck returns list.

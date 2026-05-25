@@ -302,7 +302,7 @@ def test_panic_emits_elf_bytes():
     non-empty ELF blob with the panic message in the rodata-equivalent
     string region."""
     from helixc.ir.lower_ast import lower
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = '''
 fn main() -> i32 { panic("test-msg-uniq-7777"); 0 }
 '''

@@ -23,7 +23,7 @@ import os, sys, subprocess, tempfile, shlex
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from helixc.ir import tir
-from helixc.backend.x86_64 import compile_module_to_elf
+from helixc.tests._codegen_backend import compile_module_to_elf
 
 
 def _win_to_wsl(win_path: str) -> str:

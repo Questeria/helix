@@ -781,7 +781,7 @@ def test_stage17_i32_overflow_wraps_two_complement():
 def test_stage17_emits_mov_eax_14():
     """Stage 17 spec end-to-end: 2+3*4 is folded so the backend emits
     `mov eax, 14` (B8 0E 00 00 00) as the entry-stub exit code."""
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     mod = lower_and_fold("fn main() -> i32 { 2 + 3 * 4 }")
     elf = compile_module_to_elf(mod)
     # B8 imm32 = mov eax, imm32. 14 = 0x0E little-endian.

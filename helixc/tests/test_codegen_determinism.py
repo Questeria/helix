@@ -33,7 +33,7 @@ sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-from helixc.backend.x86_64 import compile_module_to_elf
+from helixc.tests._codegen_backend import compile_module_to_elf
 from helixc.frontend.flatten_impls import flatten_impls
 from helixc.frontend.flatten_modules import flatten_modules
 from helixc.frontend.grad_pass import grad_pass
@@ -222,7 +222,7 @@ def test_codegen_determinism_subprocess():
         "from helixc.ir.passes.cse import cse_module\n"
         "from helixc.ir.passes.dce import dce_module\n"
         "from helixc.ir.passes.fdce import fdce_module\n"
-        "from helixc.backend.x86_64 import compile_module_to_elf\n"
+        "from helixc.tests._codegen_backend import compile_module_to_elf\n"
         "prog = parse(" + repr(src) + ", include_stdlib=True)\n"
         "flatten_modules(prog); flatten_impls(prog); monomorphize(prog)\n"
         "grad_pass(prog)\n"

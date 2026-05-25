@@ -8,7 +8,7 @@ from helixc.frontend.parser import parse
 from helixc.frontend.grad_pass import grad_pass
 from helixc.ir.lower_ast import lower
 from helixc.ir.passes.fdce import fdce_module
-from helixc.backend.x86_64 import compile_module_to_elf
+from helixc.tests._codegen_backend import compile_module_to_elf
 
 
 def _win_to_wsl(win_path: str) -> str:

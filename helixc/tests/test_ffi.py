@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from helixc.frontend.parser import parse
 from helixc.ir.lower_ast import lower
-from helixc.backend.x86_64 import compile_module_to_elf
+from helixc.tests._codegen_backend import compile_module_to_elf
 
 
 _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

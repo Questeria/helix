@@ -24,7 +24,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from helixc.backend.x86_64 import compile_module_to_elf
+from helixc.tests._codegen_backend import compile_module_to_elf
 from helixc.frontend.parser import parse
 from helixc.frontend.typecheck import typecheck
 from helixc.ir.lower_ast import lower
@@ -189,7 +189,7 @@ def test_stage44_gate1_f1_ffi_call_supports_9_float_args():
     from helixc.frontend.parser import parse as parse_helix
     from helixc.frontend.typecheck import typecheck as tc
     from helixc.ir.lower_ast import lower as lower_ir
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
 
     src = """
 extern "C" fn fma9(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, h: f32, i: f32) -> f32;
@@ -215,7 +215,7 @@ def test_stage44_gate1_f2_mixed_int_float_overflow_rejects_cleanly():
     from helixc.frontend.parser import parse as parse_helix
     from helixc.frontend.typecheck import typecheck as tc
     from helixc.ir.lower_ast import lower as lower_ir
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     import pytest
 
     src = """
