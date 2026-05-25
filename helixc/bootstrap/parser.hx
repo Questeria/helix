@@ -2692,6 +2692,27 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         }};
                     }
                     cur_advance(sb);    // consume ']'
+                } else { if type_start_tag == 3 {
+                    // K1.Y (2026-05-25): `(T1, T2, ...)` tuple type
+                    // annotation. Consume `(`, skip nested parens
+                    // until matching `)`, consume `)`. Type-erased
+                    // no-op like the other type forms.
+                    cur_advance(sb);    // consume '('
+                    let mut tu_depth: i32 = 1;
+                    while tu_depth > 0 {
+                        let tut = tok_tag(tok_base, cur_get(sb));
+                        if tut == 3 {
+                            tu_depth = tu_depth + 1;
+                        } else { if tut == 4 {
+                            tu_depth = tu_depth - 1;
+                        } else { if tut == 0 {
+                            tu_depth = 0;
+                        } else {} } };
+                        if tu_depth > 0 {
+                            cur_advance(sb);
+                        };
+                    }
+                    cur_advance(sb);    // consume final ')'
                 } else { if type_start_tag == 27 {
                     // K1.S (2026-05-25): `&T` or `&mut T` -- TyRef.
                     // Consume the `&`, optionally consume `mut`,
@@ -2832,7 +2853,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         cur_advance(sb);    // consume final '>' / '>>'
                     };
                     };     // K1.X (2026-05-25): close the is_fn_ty else-branch wrapping the bare-IDENT + generic-args path
-                }}};
+                }}}};     // K1.Y (2026-05-25): +1 close for the new TK_LPAREN tuple-type arm
             };
             // Register the typed binding (only when the annotation produced
             // a recognized scalar tag; struct-typed lets continue to use

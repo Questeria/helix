@@ -7903,6 +7903,34 @@ def test_bootstrap_kovc_attribute_stacking_self_host():
     assert rc == 99, f"stacked @pure @trace: got {rc}"
 
 
+def test_bootstrap_kovc_let_ty_tuple_self_host():
+    """K1.Y regression (2026-05-25): let-binding type-annotation
+    accepts `(T1, T2, ...)` tuple types. The dispatch grows a new
+    `(` (TK_LPAREN) arm that consumes the tuple-type-paren group
+    using `(` `)` depth-tracking (handles nested tuples like
+    `((i32, i32), i32)`). Type-erased no-op."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_tuple_2",
+        "fn main() -> i32 { let t: (i32, i32) = 42; t }",
+    )
+    assert rc == 42, f"expected K2 exit 42 ((i32,i32) annotation); got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "ty_tuple_3",
+        "fn main() -> i32 { let t: (i32, i32, i32) = 7; t }",
+    )
+    assert rc == 7, f"3-tuple annotation: got {rc}"
+
+
+def test_bootstrap_kovc_let_ty_tuple_nested_self_host():
+    """K1.Y regression: nested tuples `((T, T), T)` -- the
+    depth-tracking handles inner parens."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_tuple_nested",
+        "fn main() -> i32 { let t: ((i32, i32), i32) = 11; t }",
+    )
+    assert rc == 11, f"nested tuple annotation: got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
