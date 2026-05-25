@@ -111,31 +111,49 @@ def test_helix_status_counts_are_sane():
     function — the test was latent-failing through 11 v3.0 stage
     closures until the v3.0.0-tag prep flushed the bookkeeping."""
     assert 0 <= hs.V3_STAGES_DONE <= hs.V3_STAGES_TOTAL
+    # K-bootstrap track counts also bounded.
+    assert 0 <= hs.K_BOOTSTRAP_PARITY_DONE <= hs.K_BOOTSTRAP_TOTAL_ROWS
     count = hs.count_tests()
     assert isinstance(count, int) and count > 0
 
 
+def test_k_bootstrap_percent_is_computed_from_model():
+    """K-bootstrap percent comes from K_BOOTSTRAP_PARITY_DONE /
+    K_BOOTSTRAP_TOTAL_ROWS — never hand-typed — so a chunk that
+    bumps the parity count automatically moves the displayed
+    percent without any other edit."""
+    expected = round(
+        100 * hs.K_BOOTSTRAP_PARITY_DONE / hs.K_BOOTSTRAP_TOTAL_ROWS)
+    assert hs.k_bootstrap_percent() == expected
+    assert 0 <= hs.k_bootstrap_percent() <= 100
+
+
 def test_helix_status_telegram_message_is_beginner_friendly():
     """The rendered update names every section a non-expert needs:
-    what is done + audited, what is in progress (if any), what is
-    left (if any), and the progress numbers — plus a plain-language
-    explanation of the jargon (stages / versions). Each bucket
-    section renders conditionally."""
+    released versions, in-progress (if any), still-ahead (if any),
+    self-hosting progress (the K-bootstrap track — the new top-line
+    goal as of 2026-05-25), and the progress numbers — plus a
+    plain-language explanation of the jargon. Each bucket section
+    renders conditionally."""
     msg = hs.render_telegram()
     # Plain-language framing for a non-engineer.
     assert "programming language" in msg
-    assert "stages" in msg and "versions" in msg
+    assert "SELF-HOSTING" in msg
+    assert "versions" in msg
     # The status buckets all render conditionally.
-    assert "DONE & FULLY AUDITED" in msg
+    assert "RELEASED VERSIONS" in msg
     if any(v["status"] == "in_progress" for v in hs.VERSIONS):
         assert "IN PROGRESS" in msg
     if any(v["status"] == "planned" for v in hs.VERSIONS):
         assert "STILL AHEAD" in msg
+    # K-bootstrap (self-hosting) progress section.
+    assert "SELF-HOSTING PROGRESS" in msg
+    assert "Feature-parity rows" in msg
+    assert f"{hs.k_bootstrap_percent()}%" in msg
     # The progress numbers the user asked for.
     assert "PROGRESS" in msg
     assert f"{hs.v3_stages_percent()}%" in msg
     assert f"{hs.versions_percent()}%" in msg
-    assert f"{hs.overall_percent()}%" in msg
     # The first released and the final planned version both appear.
     assert "v2.0" in msg and "v3.0" in msg
 

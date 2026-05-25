@@ -73,6 +73,22 @@ VERSIONS: list[dict[str, str]] = [
 V3_STAGES_TOTAL = 19
 V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASED
 
+# K-bootstrap track (post v3.1.0, declared the new top-line goal
+# 2026-05-25). See docs/HELIX_K_BOOTSTRAP_MASTER_PLAN.md and the
+# feature-parity matrix docs/K_BOOTSTRAP_FEATURE_MATRIX.md. The
+# matrix enumerates every Helix language feature with a column for
+# Python helixc support and a column for kovc.hx support. A row is
+# PARITY when both columns agree; KOVC-MISSING when only Python
+# supports it. The goal: get every row to PARITY, then delete the
+# Python compiler.
+#
+# Bump K_BOOTSTRAP_PARITY_DONE as each K-track chunk lands and the
+# matrix's PARITY count rises.
+K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
+                                    # KOVC-MISSING at K0 chunk 2 close)
+K_BOOTSTRAP_PARITY_DONE = 29       # was 28 after K0; K1.B (stack
+                                    # args > 6) made it 29
+
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
 
@@ -115,6 +131,12 @@ def overall_percent() -> int:
     fraction."""
     score = sum(_version_credit(v) for v in VERSIONS)
     return round(100 * score / len(VERSIONS))
+
+
+def k_bootstrap_percent() -> int:
+    """Percent of Helix-in-Helix self-hosting feature-parity reached.
+    Computed live from the matrix counts; never hand-typed."""
+    return round(100 * K_BOOTSTRAP_PARITY_DONE / K_BOOTSTRAP_TOTAL_ROWS)
 
 
 def count_tests() -> int:
@@ -163,12 +185,17 @@ def render_telegram(note: str | None = None,
         "================================",
         "",
         "Helix is a new programming language and the compiler that "
-        "builds and runs it. The work is split into small numbered "
-        '"stages", which are grouped into "versions" (v2.0, v2.1, and '
-        "so on). Every version must pass a thorough multi-part code "
-        "audit before it counts as done.",
+        "builds and runs it. The current top-line goal is "
+        "SELF-HOSTING: get the Helix compiler written in Helix, "
+        "compiled in Helix, all the way from raw binary -- no Python "
+        "in the final product. We track two things: the released "
+        'versions (grouped into "v2.0", "v3.0", and so on), and the '
+        "feature-parity matrix that measures how close the Helix-"
+        "side compiler is to the Python compiler. Every version "
+        "ends with a thorough multi-part code audit before it counts "
+        "as done.",
         "",
-        "DONE & FULLY AUDITED",
+        "RELEASED VERSIONS",
     ]
     for v in released:
         lines.append(f"  - {v['id']}   {v['theme']}")
@@ -185,13 +212,24 @@ def render_telegram(note: str | None = None,
 
     lines += [
         "",
+        "SELF-HOSTING PROGRESS (Helix-in-Helix)",
+        f"  - Feature-parity rows: {K_BOOTSTRAP_PARITY_DONE} / "
+        f"{K_BOOTSTRAP_TOTAL_ROWS} done   "
+        f"({k_bootstrap_percent()}%)",
+        "    Each row is a Helix language feature; PARITY means the "
+        "Helix-",
+        "    side compiler handles it the same way the Python compiler "
+        "does.",
+        "    Track plan: K0 survey -> K1 ports -> K2 parity harness ->",
+        "    K3 trusted seed -> K4 delete Python (gated) -> K5 final "
+        "audits.",
+        "",
         "PROGRESS",
         f"  - v3.0 build stages:   {V3_STAGES_DONE} / "
         f"{V3_STAGES_TOTAL} done   ({v3_stages_percent()}%) - each "
         f"one 3-part audited",
         f"  - Versions released:   {len(released)} / {len(VERSIONS)}"
         f"         ({versions_percent()}%)",
-        f"  - Overall toward v3.0: about {overall_percent()}%",
         f"  - Test coverage:       ~{count_tests()} automated tests "
         f"guard the code",
     ]
@@ -231,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(
             f"helix_status: V3_STAGES_DONE ({V3_STAGES_DONE}) must be "
             f"in 0..V3_STAGES_TOTAL ({V3_STAGES_TOTAL}).")
+    if not 0 <= K_BOOTSTRAP_PARITY_DONE <= K_BOOTSTRAP_TOTAL_ROWS:
+        raise SystemExit(
+            f"helix_status: K_BOOTSTRAP_PARITY_DONE "
+            f"({K_BOOTSTRAP_PARITY_DONE}) must be in "
+            f"0..K_BOOTSTRAP_TOTAL_ROWS ({K_BOOTSTRAP_TOTAL_ROWS}).")
 
     print(render_telegram(note=args.note, commit=args.commit))
     return 0
