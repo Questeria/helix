@@ -199,7 +199,7 @@ wrappers) — all ✅ in Python, all ❌ in `kovc.hx`. **Status: KOVC-MISSING
 | `__arena_push / get / set / len` | ✅ | ✅ | PARITY |
 | `__arena_push_pair / triple` (atomic) | ✅ | ❌ | KOVC-MISSING |
 | `read_file_to_arena` / `write_file_to_arena` | ✅ | ✅ | PARITY |
-| `print_int(i32)` | ✅ | ❌ | KOVC-MISSING |
+| `print_int(i32)` | ✅ | ✅ (K1.D, 2026-05-25, commits c02ff71 stub + 550329e impl: byte-literal dispatch + 90-byte inline ASCII conversion + write syscall) | PARITY |
 | `__trace_event` (trace ring buffer) | ✅ | ❌ | KOVC-MISSING |
 | `__helix_splice` / `__helix_modify` (reflection) | ✅ | ❌ | KOVC-MISSING |
 | `__helix_reflect_hash` | ✅ | ❌ | KOVC-MISSING |
