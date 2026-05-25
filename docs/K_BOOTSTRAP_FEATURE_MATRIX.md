@@ -41,7 +41,7 @@ iterates.
 | `TyFn` (`fn(T1) -> R`) | ✅ | ❌ (no fn-type values) | KOVC-MISSING |
 | `TyTensor` | ✅ | ❌ | KOVC-MISSING |
 | `TyTile` | ✅ | ❌ | KOVC-MISSING |
-| `TyGeneric` (`Foo<A, B>`) | ✅ | ⚠️ (parsed via gp_tab; no monomorphization) | KOVC-MISSING |
+| `TyGeneric` (`Foo<A, B>`) | ✅ | ✅ (K1.T 2026-05-25: let-binding type-annotation site accepts generic types like `Foo<i32>` or `Pair<A, B>` -- after consuming the type IDENT, peek for `<` (TK_LT 16) and skip with `<>` depth-tracking until matching `>`. The TK_RSHIFT `>>` token (lexer folds two `>` into one tag-31 token) decrements depth by 2 so nested generics like `Box<Box<i32>>` parse cleanly. Generic-fn monomorphization is still a separate codegen-level gap -- TyGeneric here is the TYPE-POSITION acceptance) | PARITY |
 
 ## 2. Scalar literals + numerics
 

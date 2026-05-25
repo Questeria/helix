@@ -7614,6 +7614,33 @@ def test_bootstrap_kovc_let_ty_ptr_annotation_self_host():
     assert rc == 13, f"expected K2 exit 13 (*mut i32 annotation); got {rc}"
 
 
+def test_bootstrap_kovc_let_ty_generic_single_param_self_host():
+    """K1.T regression (2026-05-25): the let-binding type-annotation
+    accepts generic types like `Foo<T>`. After consuming the type
+    IDENT, the parser peeks for `<` (TK_LT=16) and if found skips
+    with `<>` depth-tracking until the matching `>`. The TK_RSHIFT
+    (`>>`) token decrements depth by 2 for nested generics. The
+    annotation is metadata-only (type-erased)."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_gen_single",
+        "struct Box<T> { v: T } "
+        "fn main() -> i32 { let b: Box<i32> = Box { v: 42 }; b.v }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (Box<i32> annotation); got {rc}"
+
+
+def test_bootstrap_kovc_let_ty_generic_multi_param_self_host():
+    """K1.T regression: multi-param generics `Foo<A, B>` work --
+    commas inside the angle brackets are part of the skip."""
+    rc = _kovc_self_host_compile_and_run(
+        "ty_gen_multi",
+        "struct Pair<A, B> { a: A, b: B } "
+        "fn main() -> i32 { let p: Pair<i32, i32> = Pair { a: 3, b: 4 }; "
+        "p.a + p.b }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (Pair<i32,i32> annotation, 3+4); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

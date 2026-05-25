@@ -2707,6 +2707,39 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     let lt_l = tok_p3(tok_base, lt_tok);
                     let_ty_tag = ty_ident_to_tag(lt_s, lt_l);
                     cur_advance(sb);    // consume type IDENT
+                    // K1.T (2026-05-25): optional `<...>` generic
+                    // arg list. If the type IDENT is followed by
+                    // TK_LT (16), it's a generic instantiation like
+                    // `Foo<i32>` or `Foo<Bar<T>>`. Skip with depth-
+                    // tracking until matching `>`. The type info is
+                    // discarded -- let_ty_tag holds the base IDENT's
+                    // tag (or -1 for unknown bases), which is fine
+                    // since the bootstrap is type-erased.
+                    let after_id_tag = tok_tag(tok_base, cur_get(sb));
+                    if after_id_tag == 16 {
+                        cur_advance(sb);    // consume '<'
+                        let mut g_depth: i32 = 1;
+                        while g_depth > 0 {
+                            let gt = tok_tag(tok_base, cur_get(sb));
+                            if gt == 16 {
+                                g_depth = g_depth + 1;
+                            } else { if gt == 17 {
+                                g_depth = g_depth - 1;
+                            } else { if gt == 31 {
+                                // K1.T (2026-05-25): the lexer folds
+                                // `>>` into a single TK_RSHIFT token.
+                                // For nested generics `Box<Box<i32>>`
+                                // we treat that as TWO closing `>`s.
+                                g_depth = g_depth - 2;
+                            } else { if gt == 0 {
+                                g_depth = 0;
+                            } else {} }} };
+                            if g_depth > 0 {
+                                cur_advance(sb);
+                            };
+                        }
+                        cur_advance(sb);    // consume final '>' / '>>'
+                    };
                 }}};
             };
             // Register the typed binding (only when the annotation produced
