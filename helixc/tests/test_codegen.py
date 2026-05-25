@@ -7834,6 +7834,75 @@ def test_bootstrap_kovc_let_ty_tile_self_host():
         f"expected K2 exit 17 (tile<f32,[4,4],shared> annotation); got {rc}")
 
 
+def test_bootstrap_kovc_attribute_trace_self_host():
+    """K1.F-discovery batch 10 (2026-05-25): the bootstrap parser
+    already consumes `@trace` as an fn-prefix attribute via
+    skip_attributes; the fn body then compiles + runs normally.
+    Matrix `@trace attribute` row was stale.
+
+    CAVEAT: this is SYNTAX parity only -- the bootstrap doesn't
+    have trace_pass instrumentation, so user code with `@trace`
+    runs without trace emission. Same caveat applies to the other
+    attribute rows flipped in this batch."""
+    rc = _kovc_self_host_compile_and_run(
+        "attr_trace",
+        "@trace fn main() -> i32 { 42 }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (@trace + ret 42); got {rc}"
+
+
+def test_bootstrap_kovc_attribute_checkpoint_self_host():
+    """K1.F-discovery batch 10: `@checkpoint` (gradient
+    rematerialization marker) parses + runs."""
+    rc = _kovc_self_host_compile_and_run(
+        "attr_checkpoint",
+        "@checkpoint fn main() -> i32 { 7 }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (@checkpoint + ret 7); got {rc}"
+
+
+def test_bootstrap_kovc_attribute_deprecated_since_self_host():
+    """K1.F-discovery batch 10: `@deprecated("msg")` and `@since
+    ("ver")` -- both string-arg attributes parse + run."""
+    rc = _kovc_self_host_compile_and_run(
+        "attr_deprecated",
+        "@deprecated(\"old\") fn main() -> i32 { 13 }",
+    )
+    assert rc == 13, f"@deprecated: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "attr_since",
+        "@since(\"v3.0\") fn main() -> i32 { 11 }",
+    )
+    assert rc == 11, f"@since: got {rc}"
+
+
+def test_bootstrap_kovc_attribute_pure_effect_self_host():
+    """K1.F-discovery batch 10: `@pure` / `@effect` (capability
+    typing) -- both parse + run. The bootstrap doesn't enforce
+    purity / effects, just accepts the syntax."""
+    rc = _kovc_self_host_compile_and_run(
+        "attr_pure",
+        "@pure fn main() -> i32 { 5 }",
+    )
+    assert rc == 5, f"@pure: got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "attr_effect",
+        "@effect fn main() -> i32 { 7 }",
+    )
+    assert rc == 7, f"@effect: got {rc}"
+
+
+def test_bootstrap_kovc_attribute_stacking_self_host():
+    """K1.F-discovery batch 10: multiple attributes can stack on
+    one fn (`@pure @trace fn ...`). The parser's attribute-skip
+    loop chains them."""
+    rc = _kovc_self_host_compile_and_run(
+        "attr_stack",
+        "@pure @trace fn main() -> i32 { 99 }",
+    )
+    assert rc == 99, f"stacked @pure @trace: got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
