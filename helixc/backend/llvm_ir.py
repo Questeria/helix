@@ -61,17 +61,19 @@ Supported so far (Stages 200, 202-204):
     `nwritten < 0 ? nwritten : 0` — matches x86_64.py's "negative on
     failure, 0 on success" contract.
   - arena ops (Stage 206-R): `ARENA_PUSH` / `ARENA_GET` / `ARENA_SET`
-    / `ARENA_LEN` all lower to calls to internal helpers (each its
-    own three-block bounds-checked routine, except ARENA_LEN which
-    is a single load) that share the module-scope arena global
-    `@__helix_arena_base` (a `[CAP+1 x i32]` BSS buffer with the
-    i32 cursor at slot 0 and user data in slots 1..CAP). The
-    `_MODULE_GLOBALS` registry mirrors `_HELPER_FUNCTIONS` for
-    shared module-scope state; a helper that touches a global lists
-    it in its `module_globals` and the global is emitted exactly
-    once per module. Other PRINT kinds (read_file_to_arena, TRACE_*,
-    QUOTE-family) and the remaining arena ops (PUSH_PAIR /
-    PUSH_TRIPLE / POP) are later chunks.
+    / `ARENA_LEN` / `ARENA_PUSH_PAIR` / `ARENA_PUSH_TRIPLE` all lower
+    to calls to internal helpers (each its own three-block bounds-
+    checked routine, except ARENA_LEN which is a single load) that
+    share the module-scope arena global `@__helix_arena_base` (a
+    `[CAP+1 x i32]` BSS buffer with the i32 cursor at slot 0 and user
+    data in slots 1..CAP). The multi-slot pushes (PAIR / TRIPLE) are
+    atomic-or-none: on overflow neither / none of the writes happen
+    AND the cursor does not advance. The `_MODULE_GLOBALS` registry
+    mirrors `_HELPER_FUNCTIONS` for shared module-scope state; a
+    helper that touches a global lists it in its `module_globals`
+    and the global is emitted exactly once per module. Other PRINT
+    kinds (read_file_to_arena, TRACE_*, QUOTE-family) are later
+    chunks.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -335,6 +337,21 @@ class _FFIDeclareSpec(NamedTuple):
 # Slot layout: i32 cursor at slot 0, user data in slots 1..CAP
 # (inclusive), so the LLVM global needs `CAP + 1` slots total.
 _HELIX_ARENA_CAP = 2097152
+
+# Threshold formula for an N-slot atomic push: `cursor >= CAP - (N - 1)`
+# is overflow. PUSH (N=1) uses CAP, PAIR (N=2) uses CAP - 1, TRIPLE
+# (N=3) uses CAP - 2. A future `__helix_arena_push_quad` (N=4) would
+# use CAP - 3. The formula is encoded inline in each push helper
+# rather than centralised — `mock_validate_ll` and the helper-text-
+# pinning tests grep the literal threshold, which would have to know
+# the formula too if it were factored out.
+
+# Shared module-globals tuple — every arena helper depends on the
+# same `__helix_arena_base` global, so reference one constant rather
+# than typing the name six times (eliminates the typo surface; a
+# new arena helper added in a future chunk gets the dependency
+# right by reference).
+_HELIX_ARENA_GLOBALS: tuple[str, ...] = ("__helix_arena_base",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -648,6 +665,82 @@ entry:
 }"""
 
 
+# `__helix_arena_push_pair(i32 left, i32 right) -> i32`: ATOMIC two-
+# slot push. Writes `left` at arena[cursor+1] and `right` at
+# arena[cursor+2], advances cursor by 2, returns the OLD cursor (=
+# slot index of left). Overflow when cursor would land both writes
+# outside data slots: `cursor + 1 >= CAP` ⇔ `cursor >= CAP - 1`
+# (i.e., CAP - 1 leaves room for slot CAP-1 and slot CAP at write
+# offsets, both of which are inside the [CAP+1]-slot array). On
+# overflow, neither write happens AND the cursor does NOT advance —
+# atomic-or-none, mirroring `x86_64.py::ARENA_PUSH_PAIR` (line
+# ~3170). Returns -1 on overflow.
+#
+# Three blocks (entry / in_bounds / exit). The phi at exit reads
+# `[-1, %entry]` (overflow path is folded into entry's else branch,
+# same shape as `__helix_arena_push`).
+_HELIX_ARENA_PUSH_PAIR_HELPER = f"""\
+define internal i32 @__helix_arena_push_pair(i32 %left, i32 %right) {{
+entry:
+  %cursor = load i32, ptr @__helix_arena_base, align 4
+  %ovfl = icmp uge i32 %cursor, {_HELIX_ARENA_CAP - 1}
+  br i1 %ovfl, label %exit, label %in_bounds
+
+in_bounds:
+  %cursor_plus_one = add i32 %cursor, 1
+  %cursor_plus_two = add i32 %cursor, 2
+  %left_idx_i64 = sext i32 %cursor_plus_one to i64
+  %right_idx_i64 = sext i32 %cursor_plus_two to i64
+  %left_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %left_idx_i64
+  %right_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %right_idx_i64
+  store i32 %left, ptr %left_ptr, align 4
+  store i32 %right, ptr %right_ptr, align 4
+  store i32 %cursor_plus_two, ptr @__helix_arena_base, align 4
+  br label %exit
+
+exit:
+  %result = phi i32 [ -1, %entry ], [ %cursor, %in_bounds ]
+  ret i32 %result
+}}"""
+
+
+# `__helix_arena_push_triple(i32 left, i32 middle, i32 right) -> i32`:
+# ATOMIC three-slot push. Mirror of PUSH_PAIR with one extra slot.
+# Writes at cursor+1 / cursor+2 / cursor+3; advances cursor by 3;
+# returns the OLD cursor (slot index of left). Overflow threshold is
+# `cursor + 2 >= CAP` ⇔ `cursor >= CAP - 2` (so all three target
+# slots fit in [CAP+1] data). Atomic-or-none: on overflow none of
+# the writes happen and the cursor stays put. Mirrors
+# `x86_64.py::ARENA_PUSH_TRIPLE` (line ~3214). Returns -1 on overflow.
+_HELIX_ARENA_PUSH_TRIPLE_HELPER = f"""\
+define internal i32 @__helix_arena_push_triple(i32 %left, i32 %middle, i32 %right) {{
+entry:
+  %cursor = load i32, ptr @__helix_arena_base, align 4
+  %ovfl = icmp uge i32 %cursor, {_HELIX_ARENA_CAP - 2}
+  br i1 %ovfl, label %exit, label %in_bounds
+
+in_bounds:
+  %cursor_plus_one = add i32 %cursor, 1
+  %cursor_plus_two = add i32 %cursor, 2
+  %cursor_plus_three = add i32 %cursor, 3
+  %left_idx_i64 = sext i32 %cursor_plus_one to i64
+  %middle_idx_i64 = sext i32 %cursor_plus_two to i64
+  %right_idx_i64 = sext i32 %cursor_plus_three to i64
+  %left_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %left_idx_i64
+  %middle_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %middle_idx_i64
+  %right_ptr = getelementptr inbounds i32, ptr @__helix_arena_base, i64 %right_idx_i64
+  store i32 %left, ptr %left_ptr, align 4
+  store i32 %middle, ptr %middle_ptr, align 4
+  store i32 %right, ptr %right_ptr, align 4
+  store i32 %cursor_plus_three, ptr @__helix_arena_base, align 4
+  br label %exit
+
+exit:
+  %result = phi i32 [ -1, %entry ], [ %cursor, %in_bounds ]
+  ret i32 %result
+}}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -669,22 +762,32 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
     "__helix_arena_push": _HelperFunctionSpec(
         definition=_HELIX_ARENA_PUSH_HELPER,
         ffi_declares=(),
-        module_globals=("__helix_arena_base",),
+        module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_get": _HelperFunctionSpec(
         definition=_HELIX_ARENA_GET_HELPER,
         ffi_declares=(),
-        module_globals=("__helix_arena_base",),
+        module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_set": _HelperFunctionSpec(
         definition=_HELIX_ARENA_SET_HELPER,
         ffi_declares=(),
-        module_globals=("__helix_arena_base",),
+        module_globals=_HELIX_ARENA_GLOBALS,
     ),
     "__helix_arena_len": _HelperFunctionSpec(
         definition=_HELIX_ARENA_LEN_HELPER,
         ffi_declares=(),
-        module_globals=("__helix_arena_base",),
+        module_globals=_HELIX_ARENA_GLOBALS,
+    ),
+    "__helix_arena_push_pair": _HelperFunctionSpec(
+        definition=_HELIX_ARENA_PUSH_PAIR_HELPER,
+        ffi_declares=(),
+        module_globals=_HELIX_ARENA_GLOBALS,
+    ),
+    "__helix_arena_push_triple": _HelperFunctionSpec(
+        definition=_HELIX_ARENA_PUSH_TRIPLE_HELPER,
+        ffi_declares=(),
+        module_globals=_HELIX_ARENA_GLOBALS,
     ),
 }
 
@@ -2019,6 +2122,91 @@ class _FnEmitter:
                     f"i32")
             self._register_helper_function("__helix_arena_len")
             return f"%v{result.id} = call i32 @__helix_arena_len()"
+        if kind == tir.OpKind.ARENA_PUSH_PAIR:
+            # `arena.push_pair` ATOMICALLY writes two i32 values into
+            # consecutive arena slots and returns the slot index of
+            # `left` (= old cursor). On overflow neither write
+            # happens AND the cursor does not advance — atomic-or-none.
+            if len(op.operands) != 2:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_PAIR takes "
+                    f"two operands (i32 left, i32 right), got "
+                    f"{len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_PAIR must "
+                    f"have exactly one result, got {len(op.results)}")
+            left, right = op.operands
+            left_ty = _llvm_int_type(
+                left.ty,
+                ctx=f"function {self.fn.name!r} ARENA_PUSH_PAIR left")
+            if left_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_PAIR left "
+                    f"operand has LLVM type {left_ty}, but the helper "
+                    f"`__helix_arena_push_pair` takes an i32")
+            right_ty = _llvm_int_type(
+                right.ty,
+                ctx=f"function {self.fn.name!r} ARENA_PUSH_PAIR right")
+            if right_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_PAIR right "
+                    f"operand has LLVM type {right_ty}, but the helper "
+                    f"`__helix_arena_push_pair` takes an i32")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} ARENA_PUSH_PAIR result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_PAIR result "
+                    f"has LLVM type {res_ty}, but the arena slot index "
+                    f"is an i32")
+            self._register_helper_function("__helix_arena_push_pair")
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_arena_push_pair(i32 {self._ref(left)}, "
+                    f"i32 {self._ref(right)})")
+        if kind == tir.OpKind.ARENA_PUSH_TRIPLE:
+            # `arena.push_triple` is the three-slot counterpart of
+            # PUSH_PAIR with the same atomic-or-none contract.
+            if len(op.operands) != 3:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_TRIPLE "
+                    f"takes three operands (i32 left, i32 middle, "
+                    f"i32 right), got {len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_TRIPLE "
+                    f"must have exactly one result, got "
+                    f"{len(op.results)}")
+            left, middle, right = op.operands
+            for label, operand in (("left", left), ("middle", middle),
+                                   ("right", right)):
+                operand_ty = _llvm_int_type(
+                    operand.ty,
+                    ctx=(f"function {self.fn.name!r} ARENA_PUSH_TRIPLE "
+                         f"{label}"))
+                if operand_ty != "i32":
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: ARENA_PUSH_TRIPLE "
+                        f"{label} operand has LLVM type {operand_ty}, "
+                        f"but the helper `__helix_arena_push_triple` "
+                        f"takes an i32")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} ARENA_PUSH_TRIPLE result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: ARENA_PUSH_TRIPLE "
+                    f"result has LLVM type {res_ty}, but the arena "
+                    f"slot index is an i32")
+            self._register_helper_function("__helix_arena_push_triple")
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_arena_push_triple("
+                    f"i32 {self._ref(left)}, "
+                    f"i32 {self._ref(middle)}, "
+                    f"i32 {self._ref(right)})")
         if kind == tir.OpKind.PRINT:
             print_kind = op.attrs.get("_kind", "print_str")
             if print_kind not in (
@@ -2028,8 +2216,8 @@ class _FnEmitter:
                     f"{print_kind!r} is not yet emitted by the LLVM "
                     f"backend (supported: 'print_str', 'print_int', "
                     f"'write_file'; the other kinds, e.g. "
-                    f"read_file_to_arena, TRACE_ENTRY/EXIT, the ARENA "
-                    f"family, the QUOTE-family, are later chunks)")
+                    f"read_file_to_arena, TRACE_ENTRY/EXIT, the "
+                    f"QUOTE-family, are later chunks)")
             if len(op.results) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: PRINT must have "
@@ -2215,9 +2403,9 @@ class _FnEmitter:
             f"arrays ALLOC_ARRAY/LOAD_ELEM/STORE_ELEM; direct + FFI "
             f"calls; the Result intrinsics RESULT_PACK/TAG/PAYLOAD; "
             f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
-            f"write_file PRINT; ARENA_PUSH / GET / SET / LEN; "
-            f"RETURN; BR; COND_BR — floats and structs are later "
-            f"stages)"
+            f"write_file PRINT; ARENA_PUSH / GET / SET / LEN / "
+            f"PUSH_PAIR / PUSH_TRIPLE; RETURN; BR; COND_BR — floats "
+            f"and structs are later stages)"
         )
 
 

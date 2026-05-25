@@ -493,22 +493,36 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    collision; empty-name/def; `module_globals` duplicate detection;
    parity-sensitive helper text pinning).
 
-   **ARENA_GET / ARENA_SET / ARENA_LEN — SHIPPED 2026-05-24** (this
-   chunk). Three more arena ops, each its own small helper sharing
-   the `@__helix_arena_base` global from the prior chunk. GET +
-   SET are 3-block bounds-checked routines (overflow returns 0 from
-   GET, silently no-ops from SET — matches x86_64.py); LEN is a
-   single load. ARENA_SET's op handler tolerates an optional result
-   slot (TIR says no result; x86_64.py tolerates one) — the helper
-   always returns i32 0, the op handler binds or discards uniformly.
-   Audit-fix batch: NO HIGH/MEDIUM across all three axes; 1 LOW
-   (lint `E741` ambiguous `l` variable name) + two coverage gaps
-   (ARENA_SET non-i32 result, ARENA_SET >1 results) addressed.
+   **ARENA_GET / ARENA_SET / ARENA_LEN — SHIPPED 2026-05-24** (commit
+   7a0d332). Three more arena ops, each its own small helper sharing
+   the `@__helix_arena_base` global from the prior chunk. GET + SET
+   are 3-block bounds-checked routines (overflow returns 0 from GET,
+   silently no-ops from SET — matches x86_64.py); LEN is a single
+   load. ARENA_SET's op handler tolerates an optional result slot
+   (TIR says no result; x86_64.py tolerates one) — the helper always
+   returns i32 0, the op handler binds or discards uniformly. Audit-
+   fix batch: NO HIGH/MEDIUM across all three axes; 1 LOW (lint
+   `E741` ambiguous `l` variable name) + two coverage gaps (ARENA_SET
+   non-i32 result, ARENA_SET >1 results) addressed.
 
-   **Next residual ops (in priority order)**: ARENA_PUSH_PAIR /
-   ARENA_PUSH_TRIPLE (trivially additive, same pattern as the
-   single-slot push); read_file_to_arena (uses the arena global +
-   a per-byte push loop); TRACE_ENTRY/EXIT (needs a `__helix_trace_buf`
+   **ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE — SHIPPED 2026-05-24** (this
+   chunk). Atomic multi-slot pushes. PAIR (2 i32 operands, threshold
+   `cursor >= CAP - 1`) writes at cursor+1/cursor+2, advances cursor
+   by 2, returns OLD cursor or -1. TRIPLE (3 operands, threshold
+   `cursor >= CAP - 2`) writes at cursor+1/2/3, advances by 3. Both
+   atomic-or-none: on overflow neither/none of the writes happen AND
+   the cursor does not advance — pinned by structural tests that
+   assert no `store i32` lives outside the `in_bounds:` block.
+   Shared `_HELIX_ARENA_GLOBALS` constant introduced (all six arena
+   helpers now reference the same tuple by name). Audit-fix batch:
+   1 MUST-FIX MEDIUM (missing TRIPLE non-i32-left test — exercises
+   loop's first iteration), 1 LOW (stale "ARENA family" mention in
+   PRINT catchall), 1 LOW (exit-block atomic-test pinning), plus
+   helper-text/structural/dedup pinning for both helpers.
+
+   **Next residual ops (in priority order)**: read_file_to_arena
+   (uses the arena global + a per-byte push loop; non-trivial multi-
+   syscall sequence); TRACE_ENTRY/EXIT (needs a `__helix_trace_buf`
    ring-buffer global — likely the first void-returning helper,
    which is the moment to upgrade `_HelperFunctionSpec` with an
    explicit signature field); QUOTE/SPLICE/MODIFY/REFLECT_HASH

@@ -3624,6 +3624,444 @@ def test_stage206r_arena_set_rejects_two_results():
 
 
 # ==========================================================================
+# Stage 206-R chunk — ARENA_PUSH_PAIR / ARENA_PUSH_TRIPLE
+# Atomic multi-slot pushes. PAIR writes 2 i32s at cursor+1/cursor+2
+# with bounds threshold CAP-1; TRIPLE writes 3 i32s at
+# cursor+1/cursor+2/cursor+3 with threshold CAP-2. Atomic-or-none:
+# on overflow, neither/none of the writes happen AND the cursor does
+# NOT advance. Returns the old cursor (= slot index of left) or -1
+# on overflow.
+# ==========================================================================
+def test_stage206r_emit_arena_push_pair_call():
+    """ARENA_PUSH_PAIR lowers to `call i32 @__helix_arena_push_pair(
+    i32 %left, i32 %right)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("b", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_arena_push_pair("
+            f"i32 %v0, i32 %v1)" in ll), ll
+    assert ll.count(
+        "define internal i32 @__helix_arena_push_pair(") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_emit_arena_push_triple_call():
+    """ARENA_PUSH_TRIPLE lowers to `call i32
+    @__helix_arena_push_triple(i32 %left, i32 %middle, i32 %right)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_arena_push_triple("
+            f"i32 %v0, i32 %v1, i32 %v2)" in ll), ll
+    assert ll.count(
+        "define internal i32 @__helix_arena_push_triple(") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_push_pair_helper_bounds_threshold():
+    """PAIR overflow threshold is `cursor >= CAP - 1` (so cursor+1
+    and cursor+2 both fit). Matches x86_64.py::ARENA_PUSH_PAIR line
+    3194-3195."""
+    helper = llvm_ir._HELIX_ARENA_PUSH_PAIR_HELPER
+    assert (f"icmp uge i32 %cursor, {llvm_ir._HELIX_ARENA_CAP - 1}"
+            in helper), helper
+    # cursor advances by 2 on success (atomic; mirrors x86 line 3206).
+    assert ("store i32 %cursor_plus_two, ptr @__helix_arena_base"
+            in helper), helper
+    # Returns OLD cursor (= slot index of left) on success.
+    assert ("phi i32 [ -1, %entry ], [ %cursor, %in_bounds ]"
+            in helper), helper
+
+
+def test_stage206r_arena_push_triple_helper_bounds_threshold():
+    """TRIPLE overflow threshold is `cursor >= CAP - 2`. Matches
+    x86_64.py::ARENA_PUSH_TRIPLE line 3239-3240."""
+    helper = llvm_ir._HELIX_ARENA_PUSH_TRIPLE_HELPER
+    assert (f"icmp uge i32 %cursor, {llvm_ir._HELIX_ARENA_CAP - 2}"
+            in helper), helper
+    # cursor advances by 3 on success.
+    assert ("store i32 %cursor_plus_three, ptr @__helix_arena_base"
+            in helper), helper
+    # Three stores in in_bounds — atomic.
+    assert helper.count("store i32 %left,") == 1, helper
+    assert helper.count("store i32 %middle,") == 1, helper
+    assert helper.count("store i32 %right,") == 1, helper
+    assert ("phi i32 [ -1, %entry ], [ %cursor, %in_bounds ]"
+            in helper), helper
+
+
+def test_stage206r_arena_pair_triple_atomic_on_overflow():
+    """Atomic-or-none: on overflow the helper branches DIRECTLY from
+    entry to exit, skipping the entire in_bounds block (no partial
+    writes, no cursor advance). Pin "no store outside in_bounds"
+    against BOTH entry and exit so a future refactor cannot regress
+    the contract by sinking a conditional cursor write into exit."""
+    for helper in (llvm_ir._HELIX_ARENA_PUSH_PAIR_HELPER,
+                   llvm_ir._HELIX_ARENA_PUSH_TRIPLE_HELPER):
+        assert ("br i1 %ovfl, label %exit, label %in_bounds"
+                in helper), helper
+        # cursor write lives only in in_bounds, never in entry/exit
+        # — pin this so a future refactor that "optimizes" by
+        # storing the cursor up-front (and only conditionally
+        # advancing) cannot regress the atomic-or-none contract.
+        entry_block = helper.split("in_bounds:")[0]
+        assert ("store i32" not in entry_block), entry_block
+        exit_block = helper.split("exit:")[1]
+        assert ("store i32" not in exit_block), exit_block
+
+
+def test_stage206r_arena_push_pair_rejects_one_operand():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_PAIR takes two operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_pair_rejects_three_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_PAIR takes two operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_pair_rejects_non_i32_left():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", tir.TIRScalar("i64")), ("b", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_PAIR left operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_pair_rejects_non_i32_right():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_PAIR right operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_pair_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32())], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_PAIR result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_triple_rejects_two_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("b", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_TRIPLE takes three operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_triple_rejects_four_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()),
+              ("c", _i32()), ("d", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2], fn.params[3],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_TRIPLE takes three operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_triple_rejects_non_i32_left():
+    """TRIPLE's per-operand check iterates `(left, middle, right)`;
+    the LEFT case is the first iteration. Pin it explicitly so a
+    future refactor that short-circuits the loop (e.g. starts at
+    `middle`) cannot silently regress the left-position guard.
+    Audit-fix: type-design MUST-FIX MEDIUM on this chunk."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", tir.TIRScalar("i64")), ("b", _i32()), ("c", _i32())],
+        _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_TRIPLE left operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_triple_rejects_non_i32_middle():
+    """TRIPLE checks ALL THREE operands individually; the middle one
+    is the easiest to forget if the handler loops sloppily."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", tir.TIRScalar("i64")), ("c", _i32())],
+        _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_TRIPLE middle operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_triple_rejects_non_i32_right():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()), ("c", tir.TIRScalar("i64"))],
+        _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_TRIPLE right operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_arena_push_triple_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()), ("c", _i32())],
+        tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=tir.TIRScalar("i64"))
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="ARENA_PUSH_TRIPLE result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_all_six_arena_ops_share_one_global():
+    """All six arena ops (PUSH / GET / SET / LEN / PUSH_PAIR /
+    PUSH_TRIPLE) sharing one global + the same overflow contract."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("i", _i32()), ("v", _i32()), ("w", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH, fn.params[1], result_ty=_i32())
+    b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[1], fn.params[2],
+           result_ty=_i32())
+    b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+           fn.params[1], fn.params[2], fn.params[0], result_ty=_i32())
+    b.emit(tir.OpKind.ARENA_SET, fn.params[0], fn.params[1])
+    g = b.emit(tir.OpKind.ARENA_GET, fn.params[0], result_ty=_i32())
+    length = b.emit(tir.OpKind.ARENA_LEN, result_ty=_i32())
+    s = b.add(g, length)
+    b.ret(s)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("@__helix_arena_base = internal global") == 1, ll
+    for name in ("__helix_arena_push", "__helix_arena_push_pair",
+                 "__helix_arena_push_triple", "__helix_arena_get",
+                 "__helix_arena_set", "__helix_arena_len"):
+        assert ll.count(f"define internal i32 @{name}(") == 1, (name, ll)
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_pair_triple_are_deterministic():
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        fn = b.begin_function(
+            "f", [("a", _i32()), ("b", _i32()), ("c", _i32())], _i32())
+        b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+        r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+                   fn.params[0], fn.params[1], fn.params[2],
+                   result_ty=_i32())
+        b.ret(r)
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_arena_pair_helper_text_pinned():
+    """The PAIR helper's parity-sensitive lines (sext width, GEP
+    element type, ±1/±2 arithmetic) are pinned by exact substring —
+    mirrors the existing arena_push pin (audit-fix LOW)."""
+    helper = llvm_ir._HELIX_ARENA_PUSH_PAIR_HELPER
+    assert "%cursor_plus_one = add i32 %cursor, 1" in helper, helper
+    assert "%cursor_plus_two = add i32 %cursor, 2" in helper, helper
+    assert ("%left_idx_i64 = sext i32 %cursor_plus_one to i64"
+            in helper), helper
+    assert ("%right_idx_i64 = sext i32 %cursor_plus_two to i64"
+            in helper), helper
+    assert ("getelementptr inbounds i32, ptr @__helix_arena_base, "
+            "i64 %left_idx_i64") in helper, helper
+    assert ("getelementptr inbounds i32, ptr @__helix_arena_base, "
+            "i64 %right_idx_i64") in helper, helper
+    # Exactly one data store per operand + one cursor write.
+    assert helper.count("store i32 %left,") == 1, helper
+    assert helper.count("store i32 %right,") == 1, helper
+
+
+def test_stage206r_arena_triple_helper_text_pinned():
+    """Same shape pinning for TRIPLE (third operand uses
+    cursor+3)."""
+    helper = llvm_ir._HELIX_ARENA_PUSH_TRIPLE_HELPER
+    assert "%cursor_plus_one = add i32 %cursor, 1" in helper, helper
+    assert "%cursor_plus_two = add i32 %cursor, 2" in helper, helper
+    assert "%cursor_plus_three = add i32 %cursor, 3" in helper, helper
+    for name in ("left_idx_i64", "middle_idx_i64", "right_idx_i64"):
+        assert (f"%{name} = sext i32 %cursor_plus_"
+                in helper), (name, helper)
+        assert (f"getelementptr inbounds i32, ptr @__helix_arena_base, "
+                f"i64 %{name}") in helper, (name, helper)
+    # Exactly one data store per operand.
+    assert helper.count("store i32 %left,") == 1, helper
+    assert helper.count("store i32 %middle,") == 1, helper
+    assert helper.count("store i32 %right,") == 1, helper
+
+
+def test_stage206r_arena_pair_helper_has_three_blocks():
+    """Same structural assertion as arena_push has (audit-fix LOW)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("a", _i32()), ("b", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    for label in ("entry:", "in_bounds:", "exit:"):
+        assert f"\n{label}\n" in ll, (label, ll)
+
+
+def test_stage206r_arena_triple_helper_has_three_blocks():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("a", _i32()), ("b", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    for label in ("entry:", "in_bounds:", "exit:"):
+        assert f"\n{label}\n" in ll, (label, ll)
+
+
+def test_stage206r_arena_pair_helper_emitted_once_per_module():
+    """N PAIR ops in M functions still emit ONE helper + ONE global."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("a", [("x", _i32()), ("y", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+           result_ty=_i32())
+    r1 = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn.params[0], fn.params[1],
+                result_ty=_i32())
+    b.ret(r1)
+    b.end_function()
+    fn2 = b.begin_function("c", [("x", _i32()), ("y", _i32())], _i32())
+    r2 = b.emit(tir.OpKind.ARENA_PUSH_PAIR, fn2.params[0], fn2.params[1],
+                result_ty=_i32())
+    b.ret(r2)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("define internal i32 @__helix_arena_push_pair(") == 1, ll
+    assert ll.count("@__helix_arena_base = internal global") == 1, ll
+    assert ll.count("call i32 @__helix_arena_push_pair(") == 3, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_triple_helper_emitted_once_per_module():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "a", [("x", _i32()), ("y", _i32()), ("z", _i32())], _i32())
+    b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+           fn.params[0], fn.params[1], fn.params[2], result_ty=_i32())
+    r = b.emit(tir.OpKind.ARENA_PUSH_TRIPLE,
+               fn.params[0], fn.params[1], fn.params[2], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count(
+        "define internal i32 @__helix_arena_push_triple(") == 1, ll
+    assert ll.count("call i32 @__helix_arena_push_triple(") == 2, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_arena_globals_shared_constant():
+    """`_HELIX_ARENA_GLOBALS` is referenced by every arena helper —
+    typing the name six times invites typo drift; the constant
+    eliminates the surface."""
+    assert llvm_ir._HELIX_ARENA_GLOBALS == ("__helix_arena_base",)
+    # Every arena helper points to the same tuple by reference.
+    arena_helpers = (
+        "__helix_arena_push", "__helix_arena_push_pair",
+        "__helix_arena_push_triple", "__helix_arena_get",
+        "__helix_arena_set", "__helix_arena_len",
+    )
+    for name in arena_helpers:
+        spec = llvm_ir._HELPER_FUNCTIONS[name]
+        assert spec.module_globals is llvm_ir._HELIX_ARENA_GLOBALS, (
+            name, spec.module_globals)
+
+
+# ==========================================================================
 # Stage 206-R chunk — write_file PRINT lowers inline to the libc
 # sequence open(path, O_WRONLY|O_CREAT|O_TRUNC, 0644) -> write(fd,
 # content, len) -> close(fd); result is `nwritten < 0 ? nwritten : 0`
