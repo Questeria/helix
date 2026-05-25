@@ -108,8 +108,8 @@ iterates.
 
 | Feature | Python | `kovc.hx` | Status |
 |---------|--------|-----------|--------|
-| `TupleLit` (`(a, b, c)`) | ✅ | ⚠️ (AST_TUPLE_LIT, tag 50 parsed; codegen ud2) | KOVC-MISSING |
-| Tuple field access (`.0`, `.1`) | ✅ | ⚠️ (AST_TUPLE_FIELD, tag 52 parsed; codegen ud2) | KOVC-MISSING |
+| `TupleLit` (`(a, b, c)`) | ✅ | ✅ (Stage 4 iter A landed long ago at kovc.hx:5072 -- AST_TUPLE_LIT allocates N rbp-relative slots via bind_alloc_offset, stores each child, returns slot0 address. K1.F discovery 2026-05-25: codegen present + works end-to-end through bootstrap-self-host; the previous "codegen ud2" matrix entry was stale audit data) | PARITY |
+| Tuple field access (`.0`, `.1`) | ✅ | ✅ (Stage 4 iter B at kovc.hx:5024 -- AST_TUPLE_FIELD reads `[rax + p2*8]`, width dispatch on p3 for scalar vs struct fields. K1.F discovery 2026-05-25; verified via test_bootstrap_kovc_tuple_literal_and_field_access_self_host) | PARITY |
 | `ArrayLit` (`[1, 2, 3]`) | ✅ | ❌ | KOVC-MISSING |
 | `Index` (`a[i, j]`) | ✅ | ⚠️ (AST_INDEX, tag 53 parsed; codegen ud2) | KOVC-MISSING |
 | `StructLit` (`Point { x: 1, y: 2 }`) | ✅ | ⚠️ (parser has struct_table; codegen ud2) | KOVC-MISSING |

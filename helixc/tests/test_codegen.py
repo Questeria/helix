@@ -6877,6 +6877,74 @@ def test_bootstrap_kovc_loop_keyword_compiles():
         f"expected exit 7 (loop counts to 7 then returns); got {rc}")
 
 
+def test_bootstrap_kovc_tuple_literal_and_field_access_self_host():
+    """K1.F regression (2026-05-25): tuple literals + `.field` access
+    already work in the kovc.hx bootstrap (Stage 4 iters A + B
+    landed long ago at kovc.hx:5072 and :5024 -- the K-bootstrap
+    feature matrix's KOVC-MISSING entry for these was stale).
+
+    This test pins the behaviour: the K1 binary (kovc-compiled-by-
+    Python) must compile a user program that builds a 3-tuple and
+    reads two fields out, producing K2 (the user program), which
+    exits with the correct sum.
+
+    Pattern mirrors test_bootstrap_kovc_print_int_self_host (full
+    Python -> K1 -> K2 chain).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    k1_main = """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/sh_tup_in.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/sh_tup_out.bin", elf_start, total)
+}
+"""
+
+    # K2 input: build a 3-tuple, return t.0 + t.2 = 10 + 30 = 40.
+    k2_input_src = (
+        "fn main() -> i32 { let t = (10, 20, 30); t.0 + t.2 }"
+    )
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(k2_input_src)} > /tmp/sh_tup_in.hx"],
+        check=True, timeout=10,
+    )
+
+    k1_driver = lexer_no_main + parser_body + kovc_lib + k1_main
+    compile_and_run(k1_driver)
+
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         "chmod +x /tmp/sh_tup_out.bin && /tmp/sh_tup_out.bin"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 40, (
+        f"K2 should exit with 40 (10+30 from tuple .0 + .2); "
+        f"got rc={run_k2.returncode}, stderr={run_k2.stderr!r}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
