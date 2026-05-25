@@ -8202,6 +8202,35 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_generic_fn_turbofish_self_host():
+    """K1.F-discovery batch 27 (2026-05-25): the matrix listed
+    Generic fn<T> as KOVC-MISSING. Probing shows turbofish-form
+    calls (`id::<i32>(x)`) actually work via Stage 8 detection
+    in parse_primary + type erasure (parser mangles to `id__i32`,
+    codegen treats T as i32-sized). 3 sub-probes pin the working
+    case: identity call, 2-level composition, mixed with non-
+    generic fn. Bare-call form (`id(42)`) doesn't work --
+    type-inference is a Phase-0 limitation."""
+    rc_id = _kovc_self_host_compile_and_run(
+        "generic_id",
+        "fn id<T>(x: T) -> T { x } fn main() -> i32 { id::<i32>(42) }",
+    )
+    assert rc_id == 42, f"generic id::<i32>(42) should yield 42; got {rc_id}"
+    rc_compose = _kovc_self_host_compile_and_run(
+        "generic_compose",
+        "fn inc<T>(x: T) -> T { x } fn dub<T>(x: T) -> T { x } "
+        "fn main() -> i32 { inc::<i32>(dub::<i32>(21)) }",
+    )
+    assert rc_compose == 21, f"generic composition should yield 21; got {rc_compose}"
+    rc_mix = _kovc_self_host_compile_and_run(
+        "generic_mix",
+        "fn add_one(x: i32) -> i32 { x + 1 } "
+        "fn use_g<T>(x: T) -> T { x } "
+        "fn main() -> i32 { add_one(use_g::<i32>(41)) }",
+    )
+    assert rc_mix == 42, f"generic + concrete mix should yield 42; got {rc_mix}"
+
+
 def test_bootstrap_kovc_pat_struct_self_host():
     """K1.AJ (2026-05-25): `match p { P { x, y } => x + y }` --
     struct destructure in match patterns. Phase-0: field-name
