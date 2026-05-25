@@ -168,6 +168,49 @@ _UNSIGNED_INT_DTYPES: frozenset[str] = frozenset({
     "u8", "u16", "u32", "u64", "usize",
 })
 
+# v3.1 step 4 — TIR float dtype -> LLVM float type. Currently used
+# only by the `__helix_splice_f32/f64` + `__helix_modify_f32/f64`
+# polymorphic helpers' op-handler validation (the rest of the LLVM
+# backend's docstring at the top of this file says "floats and
+# structs are later stages" — full float-arithmetic support remains
+# a larger v3.1+ chunk that adds `fadd`/`fsub`/etc. and threads
+# float types through `_llvm_return_type`).
+_LLVM_FLOAT_TYPES: dict[str, str] = {
+    "f32": "float",
+    "f64": "double",
+}
+
+# v3.1 step 4 audit-fix HIGH-1 — single source of truth for the
+# SPLICE/MODIFY polymorphic dispatch tables. Hoisted to module scope so
+# the validation set (`value_kind in _SPLICE_DISPATCH`) and the lookup
+# (`_SPLICE_DISPATCH[value_kind]`) cannot drift. The op handler used to
+# duplicate the validation tuple `("i32","f32","f64")` alongside the
+# inline dict literal — adding a new value_kind to one without the
+# other surfaced as a bare KeyError in production (silent-failure-
+# hunter LOW-1 + type-design-analyzer HIGH-1).
+#
+# SPLICE: value_kind -> (helper_name, expected_llvm_result_ty,
+#                        llvm_call_ret_ty)
+#   helper_name: registry key in `_HELPER_FUNCTIONS`
+#   expected_llvm_result_ty: what the result's LLVM type-text MUST be
+#   llvm_call_ret_ty: the LLVM return-type text in the call site
+# All three are the same string today (i32/i32/i32, float/float/float,
+# double/double/double) but kept as a triple in case a future
+# value_kind decouples (e.g. an i64 splice that casts to i32 result).
+_SPLICE_DISPATCH: Mapping[str, tuple[str, str, str]] = MappingProxyType({
+    "i32": ("__helix_splice", "i32", "i32"),
+    "f32": ("__helix_splice_f32", "float", "float"),
+    "f64": ("__helix_splice_f64", "double", "double"),
+})
+
+# MODIFY: value_kind -> (helper_name, new_value_llvm_ty). Result is
+# ALWAYS i32 (the accepted-or-not flag) — independent of value_kind.
+_MODIFY_DISPATCH: Mapping[str, tuple[str, str]] = MappingProxyType({
+    "i32": ("__helix_modify", "i32"),
+    "f32": ("__helix_modify_f32", "float"),
+    "f64": ("__helix_modify_f64", "double"),
+})
+
 # tir comparison OpKind -> (signed predicate, unsigned predicate) for
 # LLVM `icmp`. eq / ne are sign-agnostic; the ordered comparisons are
 # not, so the predicate is chosen by the operand dtype's signedness.
@@ -1102,6 +1145,122 @@ exit:
 }}"""
 
 
+# v3.1 step 4 — f32 / f64 polymorphic SPLICE / MODIFY helpers.
+# x86_64.py::SPLICE/MODIFY (lines 4523-4527, 4571-4609) handle the
+# three value_kinds at the same op site by switching ABIs:
+#   - i32 splice -> load i64, return low 32 bits (current
+#     `__helix_splice`).
+#   - f32 splice -> load low 32 bits of cell, bitcast to float (the
+#     cell's upper 32 bits are zero per the f32 modify path).
+#   - f64 splice -> load full 64-bit cell, bitcast to double.
+#   - i32 modify -> verifier(i32, i32) -> i32; sext value to i64, store.
+#   - f32 modify -> verifier(i32, float) -> i32; bitcast float to
+#     i32, zext to i64, store. Cell upper 32 bits = 0.
+#   - f64 modify -> verifier(i32, double) -> i32; bitcast double to
+#     i64, store.
+#
+# Each kind gets its own helper because LLVM's `define internal
+# <T>` is mono-typed; a polymorphic `__helix_splice` would need
+# either separate definitions per overload OR an i64-typed return
+# the caller bitcasts (which complicates the call-site SSA shape
+# and loses LLVM's type-system check). Separate helpers keep each
+# call site clean: the op handler picks the right one by
+# value_kind.
+_HELIX_SPLICE_F32_HELPER = f"""\
+define internal float @__helix_splice_f32(i32 %handle) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %load
+
+load:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %loaded = load i32, ptr %slot_ptr, align 4
+  %as_float = bitcast i32 %loaded to float
+  br label %exit
+
+exit:
+  %result = phi float [ 0.000000e+00, %entry ], [ %as_float, %load ]
+  ret float %result
+}}"""
+
+
+_HELIX_SPLICE_F64_HELPER = f"""\
+define internal double @__helix_splice_f64(i32 %handle) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %load
+
+load:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %loaded = load i64, ptr %slot_ptr, align 8
+  %as_double = bitcast i64 %loaded to double
+  br label %exit
+
+exit:
+  %result = phi double [ 0.000000e+00, %entry ], [ %as_double, %load ]
+  ret double %result
+}}"""
+
+
+_HELIX_MODIFY_F32_HELPER = f"""\
+define internal i32 @__helix_modify_f32(i32 %handle, float %new_value, ptr %verifier) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %verify
+
+verify:
+  %accepted = call i32 %verifier(i32 %handle, float %new_value)
+  %ok = icmp ne i32 %accepted, 0
+  br i1 %ok, label %apply, label %exit
+
+apply:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %value_i32 = bitcast float %new_value to i32
+  %value_i64 = zext i32 %value_i32 to i64
+  store i64 %value_i64, ptr %slot_ptr, align 8
+  br label %exit
+
+exit:
+  %result = phi i32 [ 0, %entry ], [ 0, %verify ], [ 1, %apply ]
+  ret i32 %result
+}}"""
+
+
+_HELIX_MODIFY_F64_HELPER = f"""\
+define internal i32 @__helix_modify_f64(i32 %handle, double %new_value, ptr %verifier) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %verify
+
+verify:
+  %accepted = call i32 %verifier(i32 %handle, double %new_value)
+  %ok = icmp ne i32 %accepted, 0
+  br i1 %ok, label %apply, label %exit
+
+apply:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %value_i64 = bitcast double %new_value to i64
+  store i64 %value_i64, ptr %slot_ptr, align 8
+  br label %exit
+
+exit:
+  %result = phi i32 [ 0, %entry ], [ 0, %verify ], [ 1, %apply ]
+  ret i32 %result
+}}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -1195,6 +1354,30 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
     ),
     "__helix_modify": _HelperFunctionSpec(
         definition=_HELIX_MODIFY_HELPER,
+        ret_ty="i32",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
+    "__helix_splice_f32": _HelperFunctionSpec(
+        definition=_HELIX_SPLICE_F32_HELPER,
+        ret_ty="float",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
+    "__helix_splice_f64": _HelperFunctionSpec(
+        definition=_HELIX_SPLICE_F64_HELPER,
+        ret_ty="double",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
+    "__helix_modify_f32": _HelperFunctionSpec(
+        definition=_HELIX_MODIFY_F32_HELPER,
+        ret_ty="i32",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
+    "__helix_modify_f64": _HelperFunctionSpec(
+        definition=_HELIX_MODIFY_F64_HELPER,
         ret_ty="i32",
         ffi_declares=(),
         module_globals=_HELIX_STATE_GLOBALS,
@@ -2829,14 +3012,11 @@ class _FnEmitter:
             handle = ast_handle % _HELIX_NUM_CELLS
             return f"%v{result.id} = add i32 0, {handle}"
         if kind == tir.OpKind.SPLICE:
-            # `splice` loads cell[handle] as i32. Bounds-check the
-            # handle (negative or >= NUM_CELLS returns 0). One i32
-            # operand, one i32 result.
-            #
-            # Only the i32 value_kind is supported — `f32`/`f64`
-            # variants exist in x86 (line 4523-4527) but lower
-            # differently (return i64 directly). Reject explicitly
-            # so a future polymorphic helper migration is loud.
+            # `splice` loads cell[handle] and returns it as i32 / f32
+            # / f64 depending on `value_kind`. One i32 operand, one
+            # result matching the value_kind. v3.1 step 4 added
+            # polymorphic f32/f64 dispatch — pre-v3.1 only `i32` was
+            # supported (the f32/f64 variants raised).
             if len(op.operands) != 1:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: SPLICE takes one "
@@ -2847,12 +3027,16 @@ class _FnEmitter:
                     f"function {self.fn.name!r}: SPLICE must have "
                     f"exactly one result, got {len(op.results)}")
             value_kind = op.attrs.get("value_kind", "i32")
-            if value_kind != "i32":
+            # Validation + lookup go through `_SPLICE_DISPATCH` so the
+            # known set and the dispatch entries cannot drift (audit-
+            # fix HIGH-1).
+            splice_entry = _SPLICE_DISPATCH.get(value_kind)
+            if splice_entry is None:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: SPLICE value_kind "
-                    f"{value_kind!r} is not yet lowered (only 'i32' "
-                    f"so far — f32 / f64 variants are a follow-up "
-                    f"chunk that needs a polymorphic helper)")
+                    f"{value_kind!r} is not supported (known: "
+                    f"{sorted(_SPLICE_DISPATCH)})")
+            helper_name, expected_ty, call_ret_ty = splice_entry
             handle = op.operands[0]
             handle_ty = _llvm_int_type(
                 handle.ty,
@@ -2860,20 +3044,36 @@ class _FnEmitter:
             if handle_ty != "i32":
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: SPLICE handle has "
-                    f"LLVM type {handle_ty}, but the helper "
-                    f"`__helix_splice` takes an i32")
+                    f"LLVM type {handle_ty}, but every SPLICE helper "
+                    f"takes an i32 handle")
             result = op.results[0]
-            res_ty = _llvm_int_type(
-                result.ty,
-                ctx=f"function {self.fn.name!r} SPLICE result")
-            if res_ty != "i32":
+            # Validate result type matches value_kind. f32/f64 result
+            # types are validated against `_LLVM_FLOAT_TYPES`; i32
+            # against the existing int-type check.
+            if value_kind == "i32":
+                actual_ty = _llvm_int_type(
+                    result.ty,
+                    ctx=f"function {self.fn.name!r} SPLICE result")
+            else:
+                # Float scalar — must be the same TIRScalar name as
+                # value_kind for the bitcast inside the helper to
+                # produce a value of the expected type.
+                if (not isinstance(result.ty, tir.TIRScalar)
+                        or result.ty.name != value_kind):
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: SPLICE "
+                        f"value_kind {value_kind!r} requires a "
+                        f"matching {value_kind} result type (got "
+                        f"{result.ty!r})")
+                actual_ty = _LLVM_FLOAT_TYPES[value_kind]
+            if actual_ty != expected_ty:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: SPLICE result has "
-                    f"LLVM type {res_ty}, but the i32 value_kind "
-                    f"yields i32")
-            self._register_helper_function("__helix_splice")
-            return (f"%v{result.id} = call i32 "
-                    f"@__helix_splice(i32 {self._ref(handle)})")
+                    f"LLVM type {actual_ty}, but value_kind "
+                    f"{value_kind!r} yields {expected_ty}")
+            self._register_helper_function(helper_name)
+            return (f"%v{result.id} = call {call_ret_ty} "
+                    f"@{helper_name}(i32 {self._ref(handle)})")
         if kind == tir.OpKind.MODIFY:
             # `modify` bounds-checks the handle, calls a user-
             # supplied verifier(handle, new_value), and stores
@@ -2899,15 +3099,18 @@ class _FnEmitter:
                     f"function {self.fn.name!r}: MODIFY must have "
                     f"exactly one result, got {len(op.results)}")
             value_kind = op.attrs.get("value_kind", "i32")
-            if value_kind != "i32":
+            # Validation goes through `_MODIFY_DISPATCH` (audit-fix
+            # HIGH-1) so the known set and the dispatch entries cannot
+            # drift. Lookup happens later in the canonical-form branch.
+            if value_kind not in _MODIFY_DISPATCH:
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: MODIFY value_kind "
-                    f"{value_kind!r} is not yet lowered (only 'i32' "
-                    f"so far — f32 / f64 variants are a follow-up "
-                    f"chunk that needs a polymorphic helper and a "
-                    f"separate ABI for the verifier signature)")
+                    f"{value_kind!r} is not supported (known: "
+                    f"{sorted(_MODIFY_DISPATCH)})")
             verifier_fn = op.attrs.get("verifier_fn")
             result = op.results[0]
+            # MODIFY's result is always i32 (the accepted-or-not
+            # flag) — independent of value_kind.
             res_ty = _llvm_int_type(
                 result.ty,
                 ctx=f"function {self.fn.name!r} MODIFY result")
@@ -2969,21 +3172,38 @@ class _FnEmitter:
             if handle_ty != "i32":
                 raise LLVMEmitError(
                     f"function {self.fn.name!r}: MODIFY handle has "
-                    f"LLVM type {handle_ty}, but the helper "
-                    f"`__helix_modify` takes an i32 handle")
-            new_value_ty = _llvm_int_type(
-                new_value.ty,
-                ctx=f"function {self.fn.name!r} MODIFY new_value")
-            if new_value_ty != "i32":
-                raise LLVMEmitError(
-                    f"function {self.fn.name!r}: MODIFY new_value "
-                    f"has LLVM type {new_value_ty}, but the i32 "
-                    f"value_kind takes an i32 new_value")
-            self._register_helper_function("__helix_modify")
+                    f"LLVM type {handle_ty}, but every MODIFY helper "
+                    f"takes an i32 handle")
+            # Dispatch by value_kind to the right helper + new_value
+            # LLVM type. v3.1 step 4. `value_kind` was validated
+            # against `_MODIFY_DISPATCH.keys()` above, so the lookup
+            # cannot KeyError.
+            helper_name, new_value_llvm_ty = (
+                _MODIFY_DISPATCH[value_kind])
+            if value_kind == "i32":
+                new_value_ty = _llvm_int_type(
+                    new_value.ty,
+                    ctx=f"function {self.fn.name!r} MODIFY new_value")
+                if new_value_ty != "i32":
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: MODIFY new_value "
+                        f"has LLVM type {new_value_ty}, but the i32 "
+                        f"value_kind takes an i32 new_value")
+            else:
+                # f32 / f64 — validate new_value's TIRScalar matches
+                # value_kind so the helper's signature aligns.
+                if (not isinstance(new_value.ty, tir.TIRScalar)
+                        or new_value.ty.name != value_kind):
+                    raise LLVMEmitError(
+                        f"function {self.fn.name!r}: MODIFY "
+                        f"value_kind {value_kind!r} requires a "
+                        f"matching {value_kind} new_value type (got "
+                        f"{new_value.ty!r})")
+            self._register_helper_function(helper_name)
             verifier_global = _llvm_global_name(verifier_fn)
             return (f"%v{result.id} = call i32 "
-                    f"@__helix_modify(i32 {self._ref(handle)}, "
-                    f"i32 {self._ref(new_value)}, "
+                    f"@{helper_name}(i32 {self._ref(handle)}, "
+                    f"{new_value_llvm_ty} {self._ref(new_value)}, "
                     f"ptr {verifier_global})")
         if kind in (tir.OpKind.TRACE_ENTRY, tir.OpKind.TRACE_EXIT):
             # `trace.entry` / `trace.exit` append a (fn_id, kind=0/1)

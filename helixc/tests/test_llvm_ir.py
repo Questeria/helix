@@ -5394,18 +5394,20 @@ def test_stage206r_splice_rejects_non_i32_handle():
         llvm_ir.emit_module(mod)
 
 
-def test_stage206r_splice_rejects_non_i32_value_kind():
-    """f32 / f64 SPLICE variants are NOT yet lowered — reject loudly
-    so the future polymorphic-helper migration is visible."""
+def test_stage206r_splice_rejects_unknown_value_kind():
+    """v3.1 step 4: f32 / f64 SPLICE variants are now LOWERED via
+    polymorphic helpers. Truly unknown value_kinds (e.g. 'f128',
+    'ptx') still reject — the dispatch table is exhaustive over
+    {'i32','f32','f64'} and fail-closed on anything else."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     fn = b.begin_function("f", [("h", _i32())], _i32())
     r = b.emit(tir.OpKind.SPLICE, fn.params[0], result_ty=_i32(),
-               attrs={"value_kind": "f64"})
+               attrs={"value_kind": "f128"})
     b.ret(r)
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
-                       match="SPLICE value_kind 'f64' is not yet"):
+                       match="SPLICE value_kind 'f128' is not supported"):
         llvm_ir.emit_module(mod)
 
 
@@ -5533,18 +5535,232 @@ def test_stage206r_modify_rejects_empty_verifier_fn():
         llvm_ir.emit_module(mod)
 
 
-def test_stage206r_modify_rejects_non_i32_value_kind():
+def test_stage206r_modify_rejects_unknown_value_kind():
+    """Mirror of `test_stage206r_splice_rejects_unknown_value_kind`
+    for MODIFY — f32/f64 now lower; unknown kinds still reject."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
     fn = b.begin_function("f", [("h", _i32()), ("v", _i32())], _i32())
     r = b.emit(tir.OpKind.MODIFY, fn.params[0], fn.params[1],
                result_ty=_i32(),
-               attrs={"verifier_fn": "v", "value_kind": "f64"})
+               attrs={"verifier_fn": "v", "value_kind": "f128"})
     b.ret(r)
     b.end_function()
     with pytest.raises(llvm_ir.LLVMEmitError,
-                       match="MODIFY value_kind 'f64' is not yet"):
+                       match="MODIFY value_kind 'f128' is not supported"):
         llvm_ir.emit_module(mod)
+
+
+# --------------------------------------------------------------------------
+# v3.1 step 4 — f32/f64 polymorphic SPLICE/MODIFY
+# Positive-emission tests. These bypass `emit_module` (which still
+# rejects float return types at the module-level shape check) by
+# driving `_FnEmitter._emit_op` directly with a synthesized FnIR.
+# The unit under test is the dispatch-table routing + the helper
+# register-on-use side-effect — both observable from a single
+# `_emit_op` call.
+#
+# DESIGN NOTE (audit HIGH-2 followup): the `_FnEmitter._emit_op`
+# bypass is LOAD-BEARING-TEMPORARY. A real end-to-end module that
+# returns f32/f64 cannot today round-trip through `emit_module`
+# (the float-return rejection is intentional until full
+# float-arithmetic support is wired). Until that lands, the
+# dispatch table's correctness is pinned by THREE complementary
+# tests at this level:
+#   1. The positive `_emit_op` tests below (per-op smoke).
+#   2. `test_stage206r_polymorphic_dispatch_tables_single_source_of_truth`
+#      (cross-checks dispatch keys vs. helper registry ret_ty
+#      vs. helper definition text — typo on either side surfaces).
+#   3. The Stage 207 parity gate (compares x86_64 emission against
+#      LLVM emission for the i32 path; f32/f64 parity will land in
+#      a follow-up chunk that lifts the float-return restriction).
+# When emit_module loses its float-return rejection, replace these
+# tests with end-to-end module-level coverage (a SPLICE result
+# feeding `fptosi` into an i32 ret, for example).
+# --------------------------------------------------------------------------
+def _emit_one_op(op: tir.Op, *,
+                 params: list[tir.Value],
+                 return_ty: tir.TIRType = None) -> tuple[str, set[str]]:
+    """Build a minimal FnIR `f(params...) -> return_ty` whose single
+    block contains `op`, run `_prepass` to wire param refs, and emit
+    just `op`. Returns (emitted_text, helper_functions_registered)."""
+    if return_ty is None:
+        return_ty = _i32()
+    fn = tir.FnIR(
+        name="f", params=params, return_ty=return_ty,
+        blocks=[tir.Block(id=0, params=[], ops=[op])])
+    emitter = llvm_ir._FnEmitter(fn)
+    emitter._prepass()
+    text = emitter._emit_op(op)
+    return text, set(emitter.helper_functions)
+
+
+def test_stage206r_splice_f32_emits_float_call_to_helper():
+    """SPLICE with value_kind='f32' lowers to a `call float
+    @__helix_splice_f32(i32 <handle>)` and pulls the f32 helper in."""
+    handle = tir.Value(id=0, ty=_i32())
+    result = tir.Value(id=1, ty=tir.TIRScalar("f32"))
+    op = tir.Op(kind=tir.OpKind.SPLICE,
+                operands=[handle], results=[result],
+                attrs={"value_kind": "f32"})
+    text, helpers = _emit_one_op(op, params=[handle],
+                                 return_ty=tir.TIRScalar("f32"))
+    assert text == "%v1 = call float @__helix_splice_f32(i32 %v0)", text
+    assert helpers == {"__helix_splice_f32"}
+
+
+def test_stage206r_splice_f64_emits_double_call_to_helper():
+    """SPLICE with value_kind='f64' lowers to a `call double
+    @__helix_splice_f64(i32 <handle>)` and pulls the f64 helper in."""
+    handle = tir.Value(id=0, ty=_i32())
+    result = tir.Value(id=1, ty=tir.TIRScalar("f64"))
+    op = tir.Op(kind=tir.OpKind.SPLICE,
+                operands=[handle], results=[result],
+                attrs={"value_kind": "f64"})
+    text, helpers = _emit_one_op(op, params=[handle],
+                                 return_ty=tir.TIRScalar("f64"))
+    assert text == "%v1 = call double @__helix_splice_f64(i32 %v0)", text
+    assert helpers == {"__helix_splice_f64"}
+
+
+def test_stage206r_splice_f32_rejects_mismatched_result_type():
+    """value_kind='f32' with an f64 result type is rejected — the
+    dispatch table's expected_ty is checked against the result's
+    rendered LLVM type so a shape mismatch can't sneak through."""
+    handle = tir.Value(id=0, ty=_i32())
+    result = tir.Value(id=1, ty=tir.TIRScalar("f64"))  # mismatch
+    op = tir.Op(kind=tir.OpKind.SPLICE,
+                operands=[handle], results=[result],
+                attrs={"value_kind": "f32"})
+    fn = tir.FnIR(
+        name="f", params=[handle], return_ty=tir.TIRScalar("f64"),
+        blocks=[tir.Block(id=0, params=[], ops=[op])])
+    emitter = llvm_ir._FnEmitter(fn)
+    emitter._prepass()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="SPLICE value_kind 'f32' requires a "
+                             "matching f32 result type"):
+        emitter._emit_op(op)
+
+
+def test_stage206r_modify_f32_emits_float_call_to_helper():
+    """MODIFY with value_kind='f32' lowers to a `call i32
+    @__helix_modify_f32(i32 <h>, float <v>, ptr @verifier)` and
+    pulls the f32 helper in. Result is always i32 (the accepted
+    flag) regardless of value_kind."""
+    handle = tir.Value(id=0, ty=_i32())
+    new_val = tir.Value(id=1, ty=tir.TIRScalar("f32"))
+    result = tir.Value(id=2, ty=_i32())
+    op = tir.Op(kind=tir.OpKind.MODIFY,
+                operands=[handle, new_val], results=[result],
+                attrs={"verifier_fn": "v", "value_kind": "f32"})
+    text, helpers = _emit_one_op(op, params=[handle, new_val])
+    assert text == (
+        "%v2 = call i32 @__helix_modify_f32"
+        "(i32 %v0, float %v1, ptr @v)"), text
+    assert helpers == {"__helix_modify_f32"}
+
+
+def test_stage206r_modify_f64_emits_double_call_to_helper():
+    """MODIFY with value_kind='f64' lowers to a `call i32
+    @__helix_modify_f64(i32 <h>, double <v>, ptr @verifier)`."""
+    handle = tir.Value(id=0, ty=_i32())
+    new_val = tir.Value(id=1, ty=tir.TIRScalar("f64"))
+    result = tir.Value(id=2, ty=_i32())
+    op = tir.Op(kind=tir.OpKind.MODIFY,
+                operands=[handle, new_val], results=[result],
+                attrs={"verifier_fn": "v", "value_kind": "f64"})
+    text, helpers = _emit_one_op(op, params=[handle, new_val])
+    assert text == (
+        "%v2 = call i32 @__helix_modify_f64"
+        "(i32 %v0, double %v1, ptr @v)"), text
+    assert helpers == {"__helix_modify_f64"}
+
+
+def test_stage206r_modify_f32_rejects_mismatched_new_value_type():
+    """value_kind='f32' with an f64 new_value is rejected — the
+    helper's signature is `(i32, float, ptr)`, so an f64 SSA value
+    would be a type-mismatch in the emitted call site."""
+    handle = tir.Value(id=0, ty=_i32())
+    new_val = tir.Value(id=1, ty=tir.TIRScalar("f64"))  # mismatch
+    result = tir.Value(id=2, ty=_i32())
+    op = tir.Op(kind=tir.OpKind.MODIFY,
+                operands=[handle, new_val], results=[result],
+                attrs={"verifier_fn": "v", "value_kind": "f32"})
+    fn = tir.FnIR(
+        name="f", params=[handle, new_val], return_ty=_i32(),
+        blocks=[tir.Block(id=0, params=[], ops=[op])])
+    emitter = llvm_ir._FnEmitter(fn)
+    emitter._prepass()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="MODIFY value_kind 'f32' requires a "
+                             "matching f32 new_value type"):
+        emitter._emit_op(op)
+
+
+def test_stage206r_polymorphic_helpers_registered_with_correct_types():
+    """The four new helpers are in `_HELPER_FUNCTIONS` with the
+    right `ret_ty` ('float' for splice_f32, 'double' for splice_f64,
+    'i32' for both modify variants — modify's accepted-or-not flag
+    is always i32). All four share the cell-state global so the
+    reflection cells stay one source of truth."""
+    splice_f32 = llvm_ir._HELPER_FUNCTIONS["__helix_splice_f32"]
+    splice_f64 = llvm_ir._HELPER_FUNCTIONS["__helix_splice_f64"]
+    modify_f32 = llvm_ir._HELPER_FUNCTIONS["__helix_modify_f32"]
+    modify_f64 = llvm_ir._HELPER_FUNCTIONS["__helix_modify_f64"]
+    assert splice_f32.ret_ty == "float", splice_f32
+    assert splice_f64.ret_ty == "double", splice_f64
+    assert modify_f32.ret_ty == "i32", modify_f32
+    assert modify_f64.ret_ty == "i32", modify_f64
+    for spec in (splice_f32, splice_f64, modify_f32, modify_f64):
+        assert spec.module_globals is llvm_ir._HELIX_STATE_GLOBALS, spec
+
+
+def test_stage206r_polymorphic_dispatch_tables_single_source_of_truth():
+    """v3.1 step 4 audit-fix HIGH-1: `_SPLICE_DISPATCH` and
+    `_MODIFY_DISPATCH` are the SOLE source of truth for the polymorphic
+    value_kind sets. The op handlers validate against the dispatch
+    `.keys()` instead of duplicating a tuple of known values — so
+    adding a new value_kind in one place and forgetting the other
+    cannot happen.
+
+    Also pins: every dispatch helper_name resolves to a real
+    `_HELPER_FUNCTIONS` entry, and the helper's ret_ty matches the
+    dispatch table's declared call_ret_ty / new_value_llvm_ty."""
+    # SPLICE: keys must equal {"i32","f32","f64"} (the v3.1 step 4
+    # contract). If this set grows, the test list below grows with it.
+    assert set(llvm_ir._SPLICE_DISPATCH) == {"i32", "f32", "f64"}
+    assert set(llvm_ir._MODIFY_DISPATCH) == {"i32", "f32", "f64"}
+    # Every helper name in the dispatch table resolves to a registered
+    # helper.
+    for value_kind, (helper_name, expected_ty, call_ret_ty) in (
+            llvm_ir._SPLICE_DISPATCH.items()):
+        spec = llvm_ir._HELPER_FUNCTIONS[helper_name]
+        assert spec.ret_ty == call_ret_ty == expected_ty, (
+            value_kind, helper_name, spec.ret_ty,
+            expected_ty, call_ret_ty)
+    for value_kind, (helper_name, new_value_llvm_ty) in (
+            llvm_ir._MODIFY_DISPATCH.items()):
+        spec = llvm_ir._HELPER_FUNCTIONS[helper_name]
+        # MODIFY result is always i32 regardless of value_kind.
+        assert spec.ret_ty == "i32", (value_kind, helper_name, spec.ret_ty)
+        # The 2nd-arg LLVM type the dispatch table promises must
+        # appear in the helper's definition text — a typo on either
+        # side surfaces here.
+        assert (f"{new_value_llvm_ty} %new_value"
+                in spec.definition), (
+            value_kind, helper_name, new_value_llvm_ty)
+
+
+def test_stage206r_polymorphic_dispatch_tables_are_immutable():
+    """The two dispatch tables are `MappingProxyType` (read-only
+    view) so an op handler cannot accidentally mutate them and
+    poison future emissions in the same process. Belt-and-braces
+    for the SSOT discipline introduced in audit-fix HIGH-1."""
+    with pytest.raises(TypeError):
+        llvm_ir._SPLICE_DISPATCH["i32"] = ("evil", "evil", "evil")  # type: ignore[index]
+    with pytest.raises(TypeError):
+        llvm_ir._MODIFY_DISPATCH["i32"] = ("evil", "evil")  # type: ignore[index]
 
 
 def test_stage206r_reflect_hash_lands_in_catchall():
