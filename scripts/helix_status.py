@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 116      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 120      # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -327,7 +327,19 @@ K_BOOTSTRAP_PARITY_DONE = 116      # was 28 after K0; K1.B (stack
                                     # when paired with @kernel
                                     # (Python's autotune.py enforces
                                     # the same @kernel requirement)
-                                    # +2 made it 116
+                                    # +2 made it 116;
+                                    # K1.F discovery batch 22:
+                                    # deprecated_pass + totality +
+                                    # trace_pass + diagnostics --
+                                    # 4 frontend passes flip to
+                                    # FUNCTIONAL PARITY. Bootstrap
+                                    # source uses ZERO of the
+                                    # tracked attributes for self-
+                                    # host (no @trace/@deprecated/
+                                    # @partial); diagnostics uses
+                                    # numeric trap-ids vs Python's
+                                    # carets but the fail-stop
+                                    # signal matches. +4 made it 120
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
