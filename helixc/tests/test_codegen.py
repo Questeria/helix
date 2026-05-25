@@ -8202,6 +8202,34 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_pat_negative_literal_self_host():
+    """K1.AO (2026-05-25): negative integer literal patterns
+    (`match x { -7 => 42, _ => 0 }`). parse_pattern_atom now
+    accepts TK_MINUS (tag 8) followed by TK_INT and emits
+    AST_PAT_LIT (tag 64) with the negated value. Pre-K1.AO the
+    minus token hit the unknown-token trap (62002). 3 sub-
+    probes: matching negative, non-matching negative, mixed
+    positive+negative arms in the same match."""
+    rc_match = _kovc_self_host_compile_and_run(
+        "pat_neg_match",
+        "fn main() -> i32 { let x = 0 - 7; "
+        "match x { -7 => 42, _ => 0 } }",
+    )
+    assert rc_match == 42, f"pat -7 should match -7; got {rc_match}"
+    rc_nomatch = _kovc_self_host_compile_and_run(
+        "pat_neg_nomatch",
+        "fn main() -> i32 { let x = 0 - 7; "
+        "match x { -3 => 99, _ => 42 } }",
+    )
+    assert rc_nomatch == 42, f"pat -3 should NOT match -7; got {rc_nomatch}"
+    rc_mixed = _kovc_self_host_compile_and_run(
+        "pat_neg_mixed",
+        "fn main() -> i32 { let x = 0 - 1; "
+        "match x { 1 => 10, -1 => 42, _ => 0 } }",
+    )
+    assert rc_mixed == 42, f"mixed +/- arms should match -1; got {rc_mixed}"
+
+
 def test_bootstrap_kovc_compound_assign_bitwise_self_host():
     """K1.AN (2026-05-25): compound-assign operator extension to
     bitwise + shift forms. K1.U previously implemented +=, -=,

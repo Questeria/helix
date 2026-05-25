@@ -8882,6 +8882,26 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         }
         cur_advance(sb);                     // consume ')'
         mk_node(70, arity, sub_head, 0)
+    } else { if t == 8 {
+        // K1.AO (2026-05-25): negative integer literal pattern.
+        // `match x { -7 => ... }` lexes as TK_MINUS + TK_INT (the
+        // lexer doesn't fold the sign into the literal). Detect
+        // the pattern here: peek for TK_INT (tag 1) after the
+        // minus; if found, consume both tokens and emit AST_PAT_LIT
+        // (tag 64) with the NEGATED value. Else fall through to
+        // the unknown-token trap.
+        let next_tk = tok_tag(tok_base, k + 1);
+        if next_tk == 1 {
+            cur_advance(sb);                 // consume '-'
+            let n_k = cur_get(sb);
+            let n_val = tok_p1(tok_base, n_k);
+            cur_advance(sb);                 // consume INT
+            // PAT_LIT (tag 64) p1 = signed value. Negate via 0 - n.
+            mk_node(64, 0 - n_val, 0, 0)
+        } else {
+            cur_advance(sb);
+            mk_node(99, 62002, 0, 0)
+        }
     } else {
         // Audit A2-F6 fix: unknown pattern token used to silently emit
         // PAT_WILDCARD (tag 66), which always matches. The leading token
@@ -8895,7 +8915,7 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         // and continue cleanly until codegen fires the trap.
         cur_advance(sb);
         mk_node(99, 62002, 0, 0)
-    }}}
+    }}}}
 }
 
 // Stage 7: parse `match scrut { pat => body, pat => body, ... }`.
