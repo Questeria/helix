@@ -1500,6 +1500,37 @@ fn byte_eq(src_a: i32, len_a: i32, src_b: i32, len_b: i32) -> i32 {
     }
 }
 
+// K1.Q (2026-05-25): match the 4-byte IDENT "true" (bytes 116,
+// 114, 117, 101). Returns 1 if matched, 0 otherwise. Used by
+// parse_primary's IDENT cascade to recognize the bool literal.
+fn is_kw_true_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 4 {
+        if __arena_get(id_s) == 116 {
+            if __arena_get(id_s + 1) == 114 {
+                if __arena_get(id_s + 2) == 117 {
+                    if __arena_get(id_s + 3) == 101 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
+// K1.Q (2026-05-25): match the 5-byte IDENT "false" (bytes 102,
+// 97, 108, 115, 101). Returns 1 if matched, 0 otherwise.
+fn is_kw_false_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 5 {
+        if __arena_get(id_s) == 102 {
+            if __arena_get(id_s + 1) == 97 {
+                if __arena_get(id_s + 2) == 108 {
+                    if __arena_get(id_s + 3) == 115 {
+                        if __arena_get(id_s + 4) == 101 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // --------------------------------------------------------------
 // Forward-style state-passing parser. Each function takes only
 // tok_base + state_base; arena slots store the rest.
@@ -2815,6 +2846,19 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // sub-cascade closer per the K1.C lesson (same algebra as
             // K1.G).
             parse_loop(tok_base, sb)
+        } else { if is_kw_true_ident(id_start, id_len) == 1 {
+            // K1.Q (2026-05-25): `true` -- emit AST_INT(1). Chars
+            // were the closest precedent (K1.K) but bool lits go
+            // through this arm rather than the lexer so no install
+            // is needed -- the IDENT just gets translated. +1
+            // closing brace at the IDENT sub-cascade closer.
+            cur_advance(sb);
+            mk_node(0, 1, 0, 0)
+        } else { if is_kw_false_ident(id_start, id_len) == 1 {
+            // K1.Q (2026-05-25): `false` -- emit AST_INT(0). +1
+            // closing brace at the IDENT sub-cascade closer.
+            cur_advance(sb);
+            mk_node(0, 0, 0, 0)
         } else {
             // Plain identifier. Could be a var ref, an assignment
             // (`name = expr`), or a fn call (`name()`). Peek the
@@ -3840,6 +3884,8 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // K1.C-wireup (2026-05-25): +1 brace closes the new return-keyword arm (the existing trailing `}` now closes RETURN-else; this new `}` closes the match-else that wraps RETURN)
         }     // K1.G-wireup (2026-05-25): +1 brace closes the new for-keyword arm (same algebra as K1.C: existing trailing `}` cascades down, this new `}` closes the wrapping arm)
         }     // K1.H1-wireup (2026-05-25): +1 brace closes the new loop-keyword arm (same algebra as K1.G: existing trailing `}` cascades down through return->for->loop, this new `}` closes the wrapping arm)
+        }     // K1.Q (2026-05-25): +1 brace closes the new `true` arm
+        }     // K1.Q (2026-05-25): +1 brace closes the new `false` arm
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this

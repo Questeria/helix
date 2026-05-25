@@ -7516,6 +7516,44 @@ def test_bootstrap_kovc_multi_field_struct_self_host():
         f"expected K2 exit 6 (1+2+3 from 3-field struct); got {rc}")
 
 
+def test_bootstrap_kovc_bool_lit_true_self_host():
+    """K1.Q regression (2026-05-25): parse_primary's IDENT cascade
+    detects the 4-byte "true" identifier and emits AST_INT(1).
+    No lexer change, no new AST tag -- bools are integers in the
+    type-erased bootstrap."""
+    rc = _kovc_self_host_compile_and_run(
+        "true_val",
+        "fn main() -> i32 { let x = true; x }",
+    )
+    assert rc == 1, f"expected K2 exit 1 (true -> 1); got {rc}"
+
+
+def test_bootstrap_kovc_bool_lit_false_self_host():
+    """K1.Q regression: similar arm for the 5-byte "false" IDENT --
+    emits AST_INT(0)."""
+    rc = _kovc_self_host_compile_and_run(
+        "false_val",
+        "fn main() -> i32 { let x = false; x + 7 }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (false + 7 = 0 + 7); got {rc}"
+
+
+def test_bootstrap_kovc_bool_lit_in_if_cond_self_host():
+    """K1.Q regression: bool literals as if-conditions route through
+    the AST_IF codegen normally -- `if true { ... }` always fires
+    the then-arm; `if false { ... }` always fires the else-arm."""
+    rc = _kovc_self_host_compile_and_run(
+        "true_cond",
+        "fn main() -> i32 { if true { 42 } else { 0 } }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (true fires then); got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "false_cond",
+        "fn main() -> i32 { if false { 42 } else { 0 } }",
+    )
+    assert rc == 0, f"expected K2 exit 0 (false fires else); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
