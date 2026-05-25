@@ -203,6 +203,13 @@ fn kw_match_n(sb: i32) -> i32 { __arena_get(sb + 28) }
 // cascade.
 fn kw_return_s(sb: i32) -> i32 { __arena_get(sb + 88) }
 fn kw_return_n(sb: i32) -> i32 { __arena_get(sb + 89) }
+// K1.G-deadcode (2026-05-25): for-loop infrastructure REUSES the
+// existing kw_for_s/n at slot 41 (already installed by Stage 8.5
+// for the `impl Trait for Type` syntax). Only the new `in` keyword
+// needs a fresh slot pair. UNREACHABLE -- parse_primary has no
+// for-loop arm yet; the wire-up follows in K1.G-wireup.
+fn kw_in_s(sb: i32) -> i32 { __arena_get(sb + 90) }
+fn kw_in_n(sb: i32) -> i32 { __arena_get(sb + 91) }
 // Stage 8: generic-params scratch table for the CURRENT fn being parsed.
 // sb+29 = base (offset of 8-slot region: 4 entries x 2 fields name_s,name_l).
 // sb+30 = count (0..4). Reset to 0 by parse_fn_decl when entering, set
@@ -4086,6 +4093,11 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_push(117); __arena_push(114); __arena_push(110);
     __arena_set(sb + 88, return_s);
     __arena_set(sb + 89, 6);
+    // K1.G-deadcode (2026-05-25): "in" = 105 110. ("for" reuses
+    // slot 41 from Stage 8.5 -- already installed above.)
+    let in_s = __arena_push(105); __arena_push(110);
+    __arena_set(sb + 90, in_s);
+    __arena_set(sb + 91, 2);
     0
 }
 
@@ -4195,6 +4207,9 @@ fn parse_top(tok_base: i32) -> i32 {
     // (start, len). Reserved here; populated by install_keywords.
     __arena_push(0);
     __arena_push(0);
+    // K1.G-deadcode (2026-05-25): slots 90/91 = in keyword (start, len).
+    // Note: `for` is already at slot 41 (Stage 8.5 trait kw); we reuse it.
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -8066,6 +8081,48 @@ fn parse_return(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume 'return' IDENT
     let value = parse_expr_basic(tok_base, sb);   // value expression
     mk_node(43, value, 0, 0)                      // AST_RET
+}
+
+// K1.G-deadcode (2026-05-25): parse a `for var in start..end { body }`
+// form. The 'for' IDENT has been peeked but NOT consumed by the caller.
+// Desugars into existing AST tags (no new tag): a `let mut var = start;
+// while var < end { body; var = var + 1 }` sequence.
+//
+// All existing tags. No codegen changes needed -- the while + let_mut +
+// assign + var + add + lt arms handle the desugared shape.
+//
+// AST_LET_MUT (tag 12) uses a 5-slot layout per the audit-14 fix at
+// parser.hx:2622-2627: mk_node creates 4 slots (tag, name_s, name_l,
+// body), and an EXTRA __arena_push(value) appends a 5th slot for the
+// init value.
+//
+// CURRENTLY UNREACHABLE -- parse_primary has no `for` arm yet. The
+// follow-up K1.G-wireup chunk adds the dispatch line.
+fn parse_for(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                              // consume 'for' IDENT
+    let var_tok = cur_get(sb);
+    let var_s = tok_p2(tok_base, var_tok);
+    let var_l = tok_p3(tok_base, var_tok);
+    cur_advance(sb);                              // consume var IDENT
+    cur_advance(sb);                              // consume 'in' IDENT
+    let start_expr = parse_expr_basic(tok_base, sb);
+    cur_advance(sb);                              // consume '..' (TK_DOTDOT = 43)
+    let end_expr = parse_expr_basic(tok_base, sb);
+    cur_advance(sb);                              // consume '{'
+    let body_expr = parse_expr(tok_base, sb);
+    cur_advance(sb);                              // consume '}'
+    // Desugared AST (inner-out construction):
+    let var_ref_inc = mk_node(1, var_s, var_l, 0);            // AST_VAR
+    let one_lit = mk_node(0, 1, 0, 0);                        // AST_INT(1)
+    let inc_expr = mk_node(2, var_ref_inc, one_lit, 0);       // AST_ADD
+    let assign = mk_node(11, var_s, var_l, inc_expr);         // AST_ASSIGN
+    let body_chain = mk_node(13, body_expr, assign, 0);       // AST_SEQ
+    let var_ref_cond = mk_node(1, var_s, var_l, 0);           // AST_VAR
+    let cond_expr = mk_node(6, var_ref_cond, end_expr, 0);    // AST_LT
+    let while_node = mk_node(10, cond_expr, body_chain, 0);   // AST_WHILE
+    let let_mut_node = mk_node(12, var_s, var_l, while_node); // AST_LET_MUT (4 slots)
+    __arena_push(start_expr);                                  // 5th slot = init value
+    let_mut_node
 }
 
 // `match` keyword has already been peeked but NOT consumed by caller.
