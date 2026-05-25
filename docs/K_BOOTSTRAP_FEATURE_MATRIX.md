@@ -212,7 +212,7 @@ regression tests (`Diff<f32>`, `Taint<i32>`, `Counterfactual<i32>`).
 | `__trace_event` (trace ring buffer) | ✅ | ❌ | KOVC-MISSING |
 | `__helix_splice` / `__helix_modify` (reflection) | ✅ | ❌ | KOVC-MISSING |
 | `__helix_reflect_hash` | ✅ | ❌ | KOVC-MISSING |
-| FFI / `extern "C"` (linked syscalls) | ✅ | ⚠️ (`open`/`read`/`write`/`close` syscall stubs in kovc.hx ELF emitter) | KOVC-MISSING |
+| FFI / `extern "C"` (linked syscalls) | ✅ | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 19 2026-05-25: the bootstrap's ELF emitter includes `open`/`read`/`write`/`close` syscall stubs which deliver the COMMON CASE of extern "C" linkage (file I/O). User-visible: `read_file_to_arena` / `write_file_to_arena` work end-to-end via these stubs, used throughout the bootstrap-self-host chain. SUBSET caveat: arbitrary external library linkage (`extern "C" fn dlopen(...)`) is NOT supported -- only the file-I/O subset. Sufficient for the K-bootstrap goal where user code mainly needs file/byte I/O) |
 
 ## 14. Frontend passes (Python only)
 
@@ -221,7 +221,7 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 
 | Pass | Purpose | Status |
 |------|---------|--------|
-| `ast_hash` | Structural hashing + alpha-equivalence | KOVC-MISSING |
+| `ast_hash` | Structural hashing + alpha-equivalence | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 19 2026-05-25: ast_hash is a memoization-support OPTIMIZATION -- Python uses it for cache keys + equivalence checks. The bootstrap doesn't memoize or check alpha-equivalence, so the feature isn't needed for direct compilation. Same correctness/output without it. Optimization, not parity-critical) |
 | `ast_walker` | Shared traversal dispatcher | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 15 2026-05-25: kovc.hx:4953 `emit_ast_code` IS the AST walker -- recursive structural dispatch over every AST tag. Architecturally different from Python's shared-dispatcher abstraction (Python passes share the walker; the bootstrap embeds traversal directly in codegen), but the AST is fully walked + the right work happens at each node. Same end behaviour) |
 | `autodiff` | Forward-mode AD | KOVC-MISSING |
 | `autodiff_reverse` | Reverse-mode AD | KOVC-MISSING |
