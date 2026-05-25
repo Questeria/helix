@@ -318,35 +318,73 @@ def render_telegram(note: str | None = None,
     in_progress = _bucket("in_progress")
     planned = _bucket("planned")
 
+    # Hide the v2.x and v3.0 entries from the RELEASED VERSIONS
+    # display -- they are long-shipped historical milestones and
+    # the Telegram update should focus on what's current. The
+    # internal _bucket("released") still includes them for the
+    # versions_percent() math; they just don't get listed here.
+    _HISTORICAL_RELEASED = frozenset({
+        "v2.0", "v2.1", "v2.2", "v2.3", "v2.4", "v2.5", "v3.0",
+    })
+    released_visible = [v for v in released if v["id"] not in _HISTORICAL_RELEASED]
+
     lines: list[str] = [
         "HELIX COMPILER  -  BUILD UPDATE",
         "================================",
         "",
-        "Helix is a new programming language and the compiler that "
-        "builds and runs it. The current top-line goal is "
-        "SELF-HOSTING: get the Helix compiler written in Helix, "
-        "compiled in Helix, all the way from raw binary -- no Python "
-        "in the final product. We track two things: the released "
-        'versions (grouped into "v2.0", "v3.0", and so on), and the '
-        "feature-parity matrix that measures how close the Helix-"
-        "side compiler is to the Python compiler. Every version "
-        "ends with a thorough multi-part code audit before it counts "
-        "as done.",
+        "NAMING CONVENTION",
+        "  v<M.m>    Release version, gated by a 5-clean-axis audit.",
+        "            (v2.0..v2.5 = compiler foundation; v3.0 = big",
+        "            MLIR+LLVM rewrite; v3.1 = polish; v3.2+ = ahead.)",
+        "  K<n>      K-bootstrap track stage toward self-hosting.",
+        "            K0 = survey; K1 = ports; K2 = parity harness;",
+        "            K3 = trusted seed; K4 = delete Python (gated);",
+        "            K5 = DDC + final 5-clean audits.",
+        "  K1.<X>    A K1 sub-chunk (each ports one Helix feature",
+        "            from Python helixc into the Helix-side compiler).",
+        "  Stage <n> v3.0 build-stage ID. 200-208 = Phase D (frontend),",
+        "            210-216 = Phase E (MLIR), 220-222 = Phase F.",
+        "  3-clean   Per-chunk audit by 3 review axes (silent-failure",
+        "            / type-design / code-review).",
+        "  5-clean   End-of-phase audit by 5 axes (FE/IR/BE/RT/TEST).",
         "",
-        "RELEASED VERSIONS",
     ]
-    for v in released:
-        lines.append(f"  - {v['id']}   {v['theme']}")
+    if released_visible:
+        lines.append("RELEASED VERSIONS")
+        for v in released_visible:
+            lines.append(f"  - {v['id']}   {v['theme']}")
 
     if in_progress:
         lines += ["", "IN PROGRESS"]
         for v in in_progress:
             lines.append(f"  - {v['id']}   {v['theme']}")
 
-    if planned:
-        lines += ["", "STILL AHEAD"]
-        for v in planned:
-            lines.append(f"  - {v['id']}   {v['theme']}")
+    # STILL AHEAD now shows ALL the main future milestones (both
+    # the planned-version entries from VERSIONS and the K-track
+    # stages that aren't yet at PARITY-complete). The K-track plan
+    # is the load-bearing future work; release versions after v3.2
+    # are the headline cadence.
+    lines += ["", "STILL AHEAD"]
+    for v in planned:
+        lines.append(f"  - {v['id']}   {v['theme']}")
+    # K-track stages -- list each remaining stage with its current
+    # state. K1 is in progress (per K_BOOTSTRAP_PARITY_DONE rising
+    # row-by-row); K2..K5 are scheduled but not started.
+    lines += [
+        f"  - K1     Feature ports ({K_BOOTSTRAP_PARITY_DONE}/"
+        f"{K_BOOTSTRAP_TOTAL_ROWS} rows at PARITY) -- IN PROGRESS",
+        "  - K2     Parity harness -- runs every test program "
+        "through both compilers and asserts identical output",
+        "  - K3     Trusted seed -- a small hand-audited Helix "
+        "binary that can re-bootstrap the compiler from source",
+        "  - K4     Delete Python helixc (USER-GATED -- continuous "
+        "audits run at K4 until the green light)",
+        "  - K5     DDC (Diverse Double-Compilation) + final "
+        "5-clean audits -- the trust-from-first-principles gate",
+        "  - SELF-HOSTING ACHIEVED -- the headline goal: a Helix "
+        "compiler written in Helix, compiled in Helix, all the "
+        "way from raw binary with NO Python in the final product",
+    ]
 
     lines += [
         "",
