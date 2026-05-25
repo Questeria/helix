@@ -300,6 +300,35 @@ fn emit_imul_eax_ecx() -> i32 { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1
 fn emit_add_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x01); emit_byte(0xC8); 3 }
 fn emit_sub_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x29); emit_byte(0xC8); 3 }
 fn emit_imul_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); 4 }
+
+// K-bootstrap K1.A — rsp imm32 adjust helpers. The foundation for
+// SysV stack-arg passing (K1.B), future `unsafe`-block stack
+// alloca, closure environment frames, and any other inline rsp
+// adjustment a caller needs.
+//
+// Encoding (REX.W prefixed, ModRM /5 = sub, /0 = add, with
+// destination = rsp = reg #4):
+//   48 81 EC <imm32-LE>   sub rsp, imm32   (7 bytes)
+//   48 81 C4 <imm32-LE>   add rsp, imm32   (7 bytes)
+//
+// imm32 is signed 32-bit two's complement. The caller-provided i32
+// value is encoded as-is by emit_u32_le, which handles negative
+// inputs via the post-fix in emit_u32_le (the `-8 / 256` workaround
+// at line ~46). Callers in K1.B will only pass small POSITIVE
+// alignment-padded values (= (arg_count-6)*8 rounded up to 16), but
+// the helper itself imposes no sign restriction — the encoding is
+// sign-agnostic at the bit level.
+fn emit_sub_rsp_imm32(imm: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
+    emit_u32_le(imm);
+    7
+}
+
+fn emit_add_rsp_imm32(imm: i32) -> i32 {
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4);
+    emit_u32_le(imm);
+    7
+}
 // 64-bit signed divide: cqo (sign-extend rax into rdx:rax) + idiv rcx.
 //   48 99        cqo
 //   48 F7 F9     idiv rcx
