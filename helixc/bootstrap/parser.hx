@@ -1573,7 +1573,7 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
     let t2 = tok_tag(tok_base, k + 1);
     // Token tags: 15='=', 16='<', 17='>', 18='!'.
     // Compound comparisons require the next char to be `=`.
-    if t == 16 {
+    let mut cmp_result = if t == 16 {
         if t2 == 15 {
             // `<=`
             cur_advance(sb); cur_advance(sb);
@@ -1611,7 +1611,51 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
             let rhs = parse_bitwise(tok_base, sb);
             mk_arith_fold(21, lhs, rhs)
         } else { lhs }
-    } else { lhs }}}}
+    } else { lhs }}}};
+    // K1.M-fix (2026-05-25): logical short-circuit `&&` / `||`
+    // chain at precedence ABOVE comparison (correct C/Rust order:
+    // `a == 5 && b == 7` parses as `(a == 5) && (b == 7)`).
+    // parse_bitwise bails on the doubled tokens so they fall
+    // through here. Left-associative loop. Each iteration consumes
+    // one `&&` or `||` and one comparison-level RHS (parse_bitwise
+    // + a comparison via the same comparison logic above is
+    // approximated by calling parse_bitwise for the RHS -- chained
+    // `a && b == c` then parses as `a && (b == c)` because the
+    // RHS is one full comparison... but parse_bitwise alone
+    // doesn't handle comparison. To get the right shape we recurse
+    // into a comparison-only helper inline: capture (rhs_bit, rt,
+    // rt2) and apply comparison-folding before combining.
+    let mut keep_l: i32 = 1;
+    while keep_l == 1 {
+        let lk = cur_get(sb);
+        let lt = tok_tag(tok_base, lk);
+        let lt2 = tok_tag(tok_base, lk + 1);
+        if lt == 27 {
+            if lt2 == 27 {
+                cur_advance(sb); cur_advance(sb);
+                // RHS is a full comparison-level expression.
+                // Reuse parse_expr_basic recursively so chained
+                // `a && b && c` works (right-associative via
+                // recursion; for boolean ops this is equivalent
+                // to left-associative).
+                let rhs = parse_expr_basic(tok_base, sb);
+                let zero = mk_node(0, 0, 0, 0);
+                cmp_result = mk_node(7, cmp_result, rhs, zero);
+                keep_l = 0;
+            } else { keep_l = 0; }
+        } else { if lt == 28 {
+            if lt2 == 28 {
+                cur_advance(sb); cur_advance(sb);
+                let rhs = parse_expr_basic(tok_base, sb);
+                let one = mk_node(0, 1, 0, 0);
+                cmp_result = mk_node(7, cmp_result, one, rhs);
+                keep_l = 0;
+            } else { keep_l = 0; }
+        } else {
+            keep_l = 0;
+        }};
+    }
+    cmp_result
 }
 
 // Phase 1.10 step 5+: binary bitwise AND/OR/XOR at one precedence level
@@ -1624,33 +1668,25 @@ fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
     while keep == 1 {
         let k = cur_get(sb);
         let t = tok_tag(tok_base, k);
-        if t == 27 {       // TK_AMP -> AST_BAND or TK_AMP TK_AMP -> &&
-            // K1.M (2026-05-25): peek for a second TK_AMP. The
-            // doubled form is logical AND, which we desugar to
-            // AST_IF(lhs, rhs, 0) so the codegen short-circuits
-            // (only evaluates rhs when lhs is truthy). The single
-            // form stays bitwise AND.
+        if t == 27 {       // TK_AMP -> AST_BAND, or TK_AMP TK_AMP -> bail
+            // K1.M-fix (2026-05-25): the doubled `&&` form is handled
+            // at parse_expr_basic level (above comparison) -- bail
+            // out so the higher level can see the token pair. Single
+            // `&` continues as bitwise.
             let t_next = tok_tag(tok_base, k + 1);
             if t_next == 27 {
-                cur_advance(sb); cur_advance(sb);
-                let rhs = parse_add(tok_base, sb);
-                let zero = mk_node(0, 0, 0, 0);
-                lhs = mk_node(7, lhs, rhs, zero);
+                keep = 0;
             } else {
                 cur_advance(sb);
                 let rhs = parse_add(tok_base, sb);
                 lhs = mk_arith_fold(28, lhs, rhs);
             }
-        } else { if t == 28 {       // TK_PIPE -> AST_BOR or TK_PIPE TK_PIPE -> ||
-            // K1.M (2026-05-25): peek for a second TK_PIPE. The
-            // doubled form is logical OR, desugared to AST_IF(lhs,
-            // 1, rhs) for short-circuit. Single form is bitwise OR.
+        } else { if t == 28 {       // TK_PIPE -> AST_BOR, or TK_PIPE TK_PIPE -> bail
+            // K1.M-fix (2026-05-25): doubled `||` bail-out, same as
+            // `&&` -- handled at parse_expr_basic level above.
             let t_next = tok_tag(tok_base, k + 1);
             if t_next == 28 {
-                cur_advance(sb); cur_advance(sb);
-                let rhs = parse_add(tok_base, sb);
-                let one = mk_node(0, 1, 0, 0);
-                lhs = mk_node(7, lhs, one, rhs);
+                keep = 0;
             } else {
                 cur_advance(sb);
                 let rhs = parse_add(tok_base, sb);

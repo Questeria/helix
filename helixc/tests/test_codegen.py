@@ -7399,6 +7399,56 @@ def test_bootstrap_kovc_cast_on_field_access_self_host():
     assert rc == 42, f"expected K2 exit 42 (p.v cast); got {rc}"
 
 
+def test_bootstrap_kovc_logical_mixed_with_comparison_self_host():
+    """K1.M-fix regression (2026-05-25): logical ops now bind LOWER
+    than comparison, matching C/Rust precedence. The K1.M initial
+    placement at parse_bitwise level was wrong -- it made
+    `a == 5 && b == 7` parse as `a == (5 && b) == 7` (nonsense).
+    K1.M-fix moves the chain to parse_expr_basic AFTER comparison
+    so `5 == 5 && 7 == 7` correctly evaluates `(5 == 5) && (7 == 7)`."""
+    rc = _kovc_self_host_compile_and_run(
+        "mix_and_tt",
+        "fn main() -> i32 { if 5 == 5 && 7 == 7 { 1 } else { 0 } }",
+    )
+    assert rc == 1, f"(5==5)&&(7==7) should be true; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "mix_and_tf",
+        "fn main() -> i32 { if 5 == 5 && 7 == 8 { 1 } else { 0 } }",
+    )
+    assert rc == 0, f"(5==5)&&(7==8) should be false; got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "mix_or_ft",
+        "fn main() -> i32 { if 5 == 6 || 7 == 7 { 1 } else { 0 } }",
+    )
+    assert rc == 1, f"(5==6)||(7==7) should be true; got {rc}"
+
+
+def test_bootstrap_kovc_logical_short_circuit_div_zero_self_host():
+    """K1.M-fix regression: `&&` and `||` actually short-circuit at
+    codegen. Verified by putting a side-effecting expression
+    (10 / a, which traps SIGFPE for a=0) on the right-hand side
+    and observing the program completes normally:
+      `a > 0 && (10/a) > 0` with a=0 -- lhs false -> rhs not eval
+      `a == 0 || (10/a) > 0` with a=0 -- lhs true -> rhs not eval
+    Both programs return cleanly because the AST_IF codegen only
+    evaluates one branch."""
+    rc = _kovc_self_host_compile_and_run(
+        "sc_and",
+        "fn main() -> i32 { let a = 0; "
+        "if a > 0 && (10 / a) > 0 { 1 } else { 99 } }",
+    )
+    assert rc == 99, (
+        f"&& should short-circuit (not eval 10/0); got {rc} "
+        f"(rc=136 would mean SIGFPE, rc=132 SIGILL)")
+    rc = _kovc_self_host_compile_and_run(
+        "sc_or",
+        "fn main() -> i32 { let a = 0; "
+        "if a == 0 || (10 / a) > 0 { 7 } else { 99 } }",
+    )
+    assert rc == 7, (
+        f"|| should short-circuit (not eval 10/0); got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced

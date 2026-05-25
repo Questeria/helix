@@ -74,7 +74,7 @@ iterates.
 | Bitwise `& | ^` | ✅ | ✅ (BAND/BOR/BXOR) | PARITY |
 | Shifts `<< >>` | ✅ | ✅ (AST_SHL/AST_SHR) | PARITY |
 | Comparisons `< > <= >= == !=` | ✅ | ✅ | PARITY |
-| Logical `&&` `||` | ✅ | ✅ (K1.M 2026-05-25: parse_bitwise detects doubled TK_AMP / TK_PIPE pairs and desugars to AST_IF, which short-circuits at codegen. No lexer change needed -- the bootstrap convention is that the parser combines duplicated single-byte tokens, same as `==`/`<=`/`>=`/`!=`. Same precedence as bitwise -- C-wrong but consistent. Verified via 3 self-host tests covering all 6 truth-table positions + bitwise-still-works regression) | PARITY |
+| Logical `&&` `||` | ✅ | ✅ (K1.M-fix 2026-05-25: parse_bitwise bails on doubled TK_AMP / TK_PIPE so the higher-level parse_expr_basic can chain `&&`/`||` AFTER its comparison logic. This gives C/Rust-correct precedence -- `a == 5 && b == 7` parses as `(a == 5) && (b == 7)`. Desugars to AST_IF which short-circuits at codegen. Initial K1.M placed them at parse_bitwise level (wrong precedence; mixed comparison + logical produced garbage AST) -- K1.M-fix relocated. Verified end-to-end including short-circuit via div-by-zero side-effect test) | PARITY |
 | Address-of `&`, deref `*` | ✅ | ❌ | KOVC-MISSING |
 
 ## 4. Control flow
