@@ -3128,6 +3128,41 @@ fn bn_arena_len_s(b: i32) -> i32  { __arena_get(b + 3) }
 fn bn_helix_arena_base_s(b: i32) -> i32 { __arena_get(b + 4) }
 fn bn_read_file_to_arena_s(b: i32) -> i32 { __arena_get(b + 5) }
 fn bn_write_file_to_arena_s(b: i32) -> i32 { __arena_get(b + 6) }
+
+// K1.D Option A (2026-05-25): direct byte-literal comparison for
+// the "print_int" builtin name. install_builtin_names is FRAGILE
+// (per matrix Appendix A2 Pattern 2: adding __arena_push calls in
+// it breaks the self-host fixpoint via an implicit cursor-position
+// invariant). Option A avoids it entirely — the expected bytes are
+// returned by a small top-level fn, no arena cursor advance, no
+// bn_state slot pointer.
+//
+// "print_int" = p(112) r(114) i(105) n(110) t(116) _(95) i(105)
+// n(110) t(116) — 9 bytes.
+fn print_int_kw_byte(i: i32) -> i32 {
+    if i == 0 { 112 }
+    else { if i == 1 { 114 }
+    else { if i == 2 { 105 }
+    else { if i == 3 { 110 }
+    else { if i == 4 { 116 }
+    else { if i == 5 { 95 }
+    else { if i == 6 { 105 }
+    else { if i == 7 { 110 }
+    else { 116 } } } } } } } }
+}
+
+fn is_print_int_name(s: i32, l: i32) -> i32 {
+    if l != 9 { 0 } else {
+        let mut ok: i32 = 1;
+        let mut i: i32 = 0;
+        while i < 9 {
+            if __arena_get(s + i) != print_int_kw_byte(i) { ok = 0; };
+            i = i + 1;
+        }
+        ok
+    }
+}
+
 // Phase 1.10 step 4: f32 SSE arithmetic builtins.
 fn bn_fadd_s(b: i32) -> i32 { __arena_get(b + 57) }
 fn bn_fsub_s(b: i32) -> i32 { __arena_get(b + 58) }
@@ -3576,6 +3611,13 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x89); emit_byte(0x4C); emit_byte(0x90); emit_byte(0x04);
         emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
         n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
+    } else { if is_print_int_name(name_s, name_l) == 1 {
+        // K1.D Option A stub (2026-05-25): wire the dispatch via the
+        // byte-literal comparison helper (no install_builtin_names
+        // touch — see matrix Appendix A2 Pattern 2). Body is a trap
+        // for now; the follow-up K1.D-impl chunk replaces it with
+        // the real ASCII-conversion + write syscall asm.
+        emit_trap_with_id(17001)
     } else { if kovc_byte_eq(name_s, name_l, bn_read_file_to_arena_s(bn_state), 18) == 1 {
         // read_file_to_arena(path: STRLIT) -> i32 (bytes_read).
         // First arg MUST be AST_STR_LIT. We inspect args_head's
@@ -4207,7 +4249,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D Option A (2026-05-25): +1 brace closes the new print_int arm
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
