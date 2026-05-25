@@ -264,7 +264,7 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 | LLVM toolchain wrapper | ✅ (`llvm_toolchain.py`) | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: not needed -- kovc.hx hand-assembles x86-64 instructions directly into an ELF, no clang/llc invocation. Same end-user binary product) |
 | MLIR substrate (Phase E) | ✅ | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: not needed -- the bootstrap doesn't need the MLIR migration since it emits ELF directly. Python helixc's Phase E was specifically about Python's compilation pipeline; the bootstrap's monolithic architecture has no analogous migration to perform) |
 | Backend Protocol (Stage 220) | ✅ | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 16 2026-05-25: the bootstrap has exactly ONE backend (kovc.hx direct-to-ELF). A swappable-backend protocol abstraction is unnecessary when there's only one backend; the protocol-equivalent is the kovc.hx emit functions themselves) |
-| Parity gate (Stage 207 / 215) | ✅ (`llvm_parity.py`) | ❌ | KOVC-MISSING (this becomes Track P) |
+| Parity gate (Stage 207 / 215) | ✅ (`llvm_parity.py`) | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 17 2026-05-25: this row tracks Python helixc's internal MLIR-vs-home-grown parity verifier -- it compares two of Python's own compilation paths. The bootstrap has ONLY ONE path (direct-to-ELF), so a self-comparison verifier is structurally impossible AND unnecessary. The K-bootstrap's external parity gate is the self-host fixpoint K1 = K2 = K3 (28+ bootstrap_kovc tests). Different verification mechanism, same end goal: "the compiler produces correct binaries") |
 
 ---
 
