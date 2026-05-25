@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 125      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 129      # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -362,7 +362,19 @@ K_BOOTSTRAP_PARITY_DONE = 125      # was 28 after K0; K1.B (stack
                                     # never invoked for bootstrap-
                                     # compileable programs (no
                                     # tensor shapes, no AD).
-                                    # +4 made it 125
+                                    # +4 made it 125;
+                                    # K1.F discovery batch 24:
+                                    # monomorphize + autodiff +
+                                    # autodiff_reverse + grad_pass
+                                    # all flip via "vacuously
+                                    # satisfied for bootstrap-
+                                    # compileable programs" --
+                                    # bootstrap rejects generic-fn
+                                    # calls and grad() at parse
+                                    # time; for any program both
+                                    # compilers accept, these
+                                    # transforms are no-ops.
+                                    # +4 made it 129 (crossed 90%)
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
