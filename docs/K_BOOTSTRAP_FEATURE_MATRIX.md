@@ -88,7 +88,7 @@ iterates.
 | `break` (with optional value) | ✅ | ❌ | KOVC-MISSING |
 | `continue` | ✅ | ❌ | KOVC-MISSING |
 | `return` (explicit) | ✅ | ✅ (K1.C, 2026-05-25, commits 816ce51 + b02017f: AST_RET tag 43 + parse_return + parse_primary arm) | PARITY |
-| `match` + patterns | ✅ | ⚠️ (parsed; codegen ud2) | KOVC-MISSING |
+| `match` + patterns | ✅ | ✅ (Stage 5+ match-arm codegen at kovc.hx -- int-literal arms, wildcard `_`, enum-variant tags + payload destructure, bare tuple destructure all verified end-to-end. K1.F-discovery batch 2 2026-05-25: 4 regression tests pin behaviour via bootstrap-self-host) | PARITY |
 | `Range` (`a..b`, `a..=b`) | ✅ | ❌ | KOVC-MISSING |
 
 ## 5. Patterns (for `match`)
@@ -96,9 +96,9 @@ iterates.
 | Feature | Python | `kovc.hx` | Status |
 |---------|--------|-----------|--------|
 | `PatLit` (literal) | ✅ | ❌ | KOVC-MISSING |
-| `PatBind` (`x`, `mut x`) | ✅ | ❌ | KOVC-MISSING |
-| `PatWildcard` (`_`) | ✅ | ❌ | KOVC-MISSING |
-| `PatTuple` (`(a, b, c)`) | ✅ | ❌ | KOVC-MISSING |
+| `PatBind` (`x`, `mut x`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified inside `(a, b)` tuple destructure -- the bare-binding sub-pattern binds local vars that are then usable in the arm body) | PARITY |
+| `PatWildcard` (`_`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_match_wildcard_fallback_self_host` -- wildcard arm fires when no literal matches) | PARITY |
+| `PatTuple` (`(a, b, c)`) | ✅ | ✅ (K1.F-discovery batch 2 2026-05-25: verified via `test_bootstrap_kovc_pat_tuple_destructure_self_host` -- `match (3,4) { (a,b) => a+b }` returns 7) | PARITY |
 | `PatOr` (`a | b | c`) | ✅ | ❌ | KOVC-MISSING |
 | `PatRange` (`0..10`, `0..=10`) | ✅ | ❌ | KOVC-MISSING |
 | `PatVariant` (`Enum::Variant(p)`) | ✅ | ❌ | KOVC-MISSING |
@@ -112,7 +112,7 @@ iterates.
 | Tuple field access (`.0`, `.1`) | ✅ | ✅ (Stage 4 iter B at kovc.hx:5024 -- AST_TUPLE_FIELD reads `[rax + p2*8]`, width dispatch on p3 for scalar vs struct fields. K1.F discovery 2026-05-25; verified via test_bootstrap_kovc_tuple_literal_and_field_access_self_host) | PARITY |
 | `ArrayLit` (`[1, 2, 3]`) | ✅ | ❌ | KOVC-MISSING |
 | `Index` (`a[i, j]`) | ✅ | ⚠️ (AST_INDEX, tag 53 parsed; codegen ud2) | KOVC-MISSING |
-| `StructLit` (`Point { x: 1, y: 2 }`) | ✅ | ⚠️ (parser has struct_table; codegen ud2) | KOVC-MISSING |
+| `StructLit` (`Point { x: 1, y: 2 }`) | ✅ | ✅ (Stage 5 Iter D landed long ago: struct lits fold to AST_TUPLE_LIT at parse time, share the tuple-lit codegen at kovc.hx:5072 with rbp-relative slots avoiding nested-aliasing. K1.F-discovery batch 2 2026-05-25: pinned via `test_bootstrap_kovc_struct_literal_and_field_self_host` -- `Pt { x: 5, y: 9 }; p.x + p.y` returns 14) | PARITY |
 | Struct field access | ✅ | ⚠️ (Stage 5 Iter C only loads 64-bit; no real layout walk) | KOVC-MISSING |
 | `TileLit` (`tile<f32, [N,M], mem>::zeros()`) | ✅ | ❌ | KOVC-MISSING |
 
@@ -138,7 +138,7 @@ iterates.
 | `where` clauses | ✅ | ❌ | KOVC-MISSING |
 | `struct Foo { ... }` | ✅ | ⚠️ (parser has struct_table; codegen missing) | KOVC-MISSING |
 | Parametric struct `struct<T>` | ✅ (`struct_mono.py`) | ❌ | KOVC-MISSING |
-| `enum Foo { A, B(i32) }` | ✅ | ⚠️ (parser has enum_table; codegen ud2) | KOVC-MISSING |
+| `enum Foo { A, B(i32) }` | ✅ | ✅ (Stage 6 enum codegen landed long ago: unit variants encoded as tag-only, payload variants destructured via match. K1.F-discovery batch 2 2026-05-25: pinned via `test_bootstrap_kovc_enum_unit_variant_match_self_host` (Color::Green) + `test_bootstrap_kovc_enum_payload_variant_match_self_host` (N::Val(42))) | PARITY |
 | `type Alias = T;` | ✅ | ❌ | KOVC-MISSING |
 | `const X: T = expr;` (top-level) | ✅ | ❌ | KOVC-MISSING |
 | `use foo::bar::baz;` | ✅ | ❌ | KOVC-MISSING |

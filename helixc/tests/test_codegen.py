@@ -6945,6 +6945,138 @@ fn main() -> i32 {
         f"got rc={run_k2.returncode}, stderr={run_k2.stderr!r}")
 
 
+def _kovc_self_host_compile_and_run(name: str, k2_src: str) -> int:
+    """K1.F-discovery test helper (2026-05-25): compile `k2_src` via
+    the full P0 -> K1 -> K2 bootstrap chain and return the K2 exit
+    code. Each `name` gets its own /tmp/sh_<name>_in.hx and
+    /tmp/sh_<name>_out.bin to avoid cross-test collision.
+
+    Used by the K1.F-discovery batch tests that flip stale matrix
+    entries (match arms, bare tuple patterns, struct literals,
+    enum variants) to PARITY -- they all exercise the same
+    bootstrap chain, so the helper drops duplication.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.bin"
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(k2_src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    return run_k2.returncode
+
+
+def test_bootstrap_kovc_match_int_arms_self_host():
+    """K1.F-discovery (2026-05-25): the matrix listed `match` +
+    patterns as KOVC-MISSING. Direct probe through the bootstrap
+    self-host chain shows it works for int literal arms with a
+    wildcard fallback. Pin the behaviour."""
+    rc = _kovc_self_host_compile_and_run(
+        "match_int",
+        "fn main() -> i32 { let x = 2; "
+        "match x { 1 => 10, 2 => 20, _ => 30 } }",
+    )
+    assert rc == 20, f"expected K2 exit 20 (match 2 -> 20); got {rc}"
+
+
+def test_bootstrap_kovc_match_wildcard_fallback_self_host():
+    """K1.F-discovery: the wildcard arm must fire when no literal
+    matches (rather than falling through and silently returning a
+    junk value)."""
+    rc = _kovc_self_host_compile_and_run(
+        "match_wild",
+        "fn main() -> i32 { let x = 99; match x { 1 => 10, _ => 7 } }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (wildcard for x=99); got {rc}"
+
+
+def test_bootstrap_kovc_pat_tuple_destructure_self_host():
+    """K1.F-discovery: the matrix listed bare `PatTuple` as KOVC-
+    MISSING. Direct probe shows the bootstrap's match codegen
+    destructures `(a, b)` patterns and binds the components."""
+    rc = _kovc_self_host_compile_and_run(
+        "pat_tup",
+        "fn main() -> i32 { let t = (3, 4); "
+        "match t { (a, b) => a + b } }",
+    )
+    assert rc == 7, f"expected K2 exit 7 (3+4 from (a,b) bind); got {rc}"
+
+
+def test_bootstrap_kovc_struct_literal_and_field_self_host():
+    """K1.F-discovery: the matrix listed `StructLit` as KOVC-
+    MISSING. Direct probe shows struct literals fold to AST_TUPLE_
+    LIT at parse time and the tuple-literal codegen handles them
+    (Stage 5 Iter D rbp-relative slots avoid the nested-aliasing
+    issue)."""
+    rc = _kovc_self_host_compile_and_run(
+        "struct_lit",
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { x: 5, y: 9 }; p.x + p.y }",
+    )
+    assert rc == 14, f"expected K2 exit 14 (5+9 via Pt.x + Pt.y); got {rc}"
+
+
+def test_bootstrap_kovc_enum_unit_variant_match_self_host():
+    """K1.F-discovery: the matrix listed `enum Foo { A, B(i32) }`
+    as KOVC-MISSING. Unit variants (no payload) work end-to-end:
+    construct via `Color::Green`, match against bare variant tags."""
+    rc = _kovc_self_host_compile_and_run(
+        "enum_unit",
+        "enum Color { Red, Green, Blue } "
+        "fn main() -> i32 { let c = Color::Green; "
+        "match c { Color::Red => 1, Color::Green => 2, "
+        "Color::Blue => 3 } }",
+    )
+    assert rc == 2, f"expected K2 exit 2 (Green->2); got {rc}"
+
+
+def test_bootstrap_kovc_enum_payload_variant_match_self_host():
+    """K1.F-discovery: payload variants (`N::Val(i32)`) also work --
+    construct via `N::Val(42)`, match destructures the payload."""
+    rc = _kovc_self_host_compile_and_run(
+        "enum_payload",
+        "enum N { Val(i32) } "
+        "fn main() -> i32 { let n = N::Val(42); "
+        "match n { N::Val(v) => v } }",
+    )
+    assert rc == 42, f"expected K2 exit 42 (Val(42) destructure); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
