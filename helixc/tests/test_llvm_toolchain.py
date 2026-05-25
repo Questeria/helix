@@ -323,3 +323,333 @@ def test_stage201_real_llvm_as_rejects_malformed_ir():
     res = lt.dispatch_validate_ll(bad)
     assert res.status() is lt.LLVMDispatchStatus.FAILED, res
     assert res.real_findings
+
+
+# ==========================================================================
+# v3.1 — compile_module_to_elf_via_llvm: drop-in replacement for
+# x86_64.compile_module_to_elf. Tri-state result type + thin
+# bytes-returning wrapper that raises LLVMToolchainAbsent on missing
+# clang/llc/llvm-as (so test_codegen.py can pytest.skip cleanly).
+# ==========================================================================
+def _trivial_module() -> tir.Module:
+    """`fn main() -> i32 { 42 }` — minimal compilable module."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("main", [], tir.TIRScalar("i32"))
+    b.ret(b.const_int(42))
+    b.end_function()
+    return mod
+
+
+def test_stage_v31_compile_result_post_init_rejects_passed_with_empty_elf():
+    """A PASSED status with no/empty ELF is malformed."""
+    with pytest.raises(ValueError, match="elf_bytes is None or empty"):
+        lt.LLVMCompileResult(
+            status=lt.LLVMDispatchStatus.PASSED,
+            elf_bytes=None, findings=(), real_tool="clang")
+    with pytest.raises(ValueError, match="elf_bytes is None or empty"):
+        lt.LLVMCompileResult(
+            status=lt.LLVMDispatchStatus.PASSED,
+            elf_bytes=b"", findings=(), real_tool="clang")
+
+
+def test_stage_v31_compile_result_post_init_rejects_passed_with_findings():
+    """A PASSED status with diagnostic findings is contradictory."""
+    with pytest.raises(ValueError, match="PASS carries no diagnostics"):
+        lt.LLVMCompileResult(
+            status=lt.LLVMDispatchStatus.PASSED,
+            elf_bytes=b"\x7fELF...", findings=("oops",),
+            real_tool="clang")
+
+
+def test_stage_v31_compile_result_post_init_rejects_passed_with_no_tool():
+    with pytest.raises(ValueError, match="real_tool is None"):
+        lt.LLVMCompileResult(
+            status=lt.LLVMDispatchStatus.PASSED,
+            elf_bytes=b"\x7fELF...", findings=(), real_tool=None)
+
+
+def test_stage_v31_compile_result_post_init_rejects_deferred_with_elf():
+    """A non-PASSED status carrying ELF bytes is contradictory."""
+    with pytest.raises(ValueError, match="only PASSED carries"):
+        lt.LLVMCompileResult(
+            status=lt.LLVMDispatchStatus.DEFERRED,
+            elf_bytes=b"\x7fELF...", findings=(), real_tool=None)
+
+
+def test_stage_v31_compile_result_post_init_rejects_failed_no_findings():
+    """A FAILED status with no diagnostics is contradictory."""
+    with pytest.raises(ValueError,
+                       match="FAILED but findings is empty"):
+        lt.LLVMCompileResult(
+            status=lt.LLVMDispatchStatus.FAILED,
+            elf_bytes=None, findings=(), real_tool="clang")
+
+
+def test_stage_v31_compile_deferred_when_toolchain_absent(monkeypatch):
+    """Toolchain-absent (clang missing) -> DEFERRED, never FAILED.
+    Mirrors `dispatch_validate_ll`'s DEFERRED semantics so a no-LLVM
+    CI runner stays green."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": None})
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.DEFERRED
+    assert result.elf_bytes is None
+    assert result.findings == ()
+    assert result.real_tool is None
+
+
+def test_stage_v31_compile_deferred_when_llc_absent(monkeypatch):
+    """Any missing tool (here llc) triggers DEFERRED — all three of
+    llvm-as / llc / clang are required to reach a runnable ELF."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": None,
+                                 "clang": "/x/clang"})
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.DEFERRED
+
+
+def test_stage_v31_compile_deferred_when_llvm_as_absent(monkeypatch):
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": None, "opt": None,
+                                 "llc": "/x/llc", "clang": "/x/clang"})
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.DEFERRED
+
+
+def test_stage_v31_compile_bytes_wrapper_raises_on_deferred(monkeypatch):
+    """The thin bytes-returning wrapper raises `LLVMToolchainAbsent`
+    on DEFERRED — so test code can `pytest.skip` cleanly without
+    masking real codegen bugs."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": None, "opt": None,
+                                 "llc": None, "clang": None})
+    with pytest.raises(lt.LLVMToolchainAbsent,
+                       match="not installed"):
+        lt.compile_module_to_elf_via_llvm(_trivial_module())
+
+
+def test_stage_v31_compile_bytes_wrapper_raises_on_failed(monkeypatch):
+    """The wrapper raises `LLVMToolchainError` (carrying the
+    diagnostic chain) when a tool fails — distinct exception type so
+    callers can distinguish toolchain-absent from real codegen
+    failure."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setenv("HELIX_LLVM_CROSS", "1")  # bypass host-OS guard
+
+    def fake_run(cmd, **kwargs):
+        return _FakeProc(returncode=1, stderr="simulated llvm-as failure")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(lt.LLVMToolchainError) as exc_info:
+        lt.compile_module_to_elf_via_llvm(_trivial_module())
+    assert "simulated" in str(exc_info.value)
+    # Diagnostic chain accessible on the exception.
+    assert exc_info.value.findings
+
+
+def test_stage_v31_compile_failed_carries_diagnostic_chain(monkeypatch):
+    """The full result type records the chain of findings when a
+    tool fails mid-pipeline. real_tool names the deepest tool
+    reached."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setenv("HELIX_LLVM_CROSS", "1")
+
+    def fake_run(cmd, **kwargs):
+        # llvm-as succeeds (writes a fake bitcode file), llc fails.
+        tool = cmd[0]
+        if "llvm-as" in tool:
+            # Write the output artifact so the success path advances.
+            out_idx = cmd.index("-o") + 1
+            with open(cmd[out_idx], "wb") as f:
+                f.write(b"fake-bitcode")
+            return _FakeProc(returncode=0)
+        # llc fails.
+        return _FakeProc(returncode=2, stderr="simulated llc error")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.FAILED
+    assert result.elf_bytes is None
+    assert result.real_tool == "llc", result.real_tool
+    assert any("simulated llc error" in f
+               for f in result.findings), result.findings
+
+
+def test_stage_v31_compile_passed_returns_elf_bytes(monkeypatch):
+    """A simulated successful pipeline: every tool exits 0, the
+    final ELF file contains valid bytes. Result is PASSED with
+    elf_bytes populated."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setenv("HELIX_LLVM_CROSS", "1")
+    elf_magic = b"\x7fELF" + b"\x00" * 60
+
+    def fake_run(cmd, **kwargs):
+        out_idx = cmd.index("-o") + 1
+        out_path = cmd[out_idx]
+        # Final stage (clang) writes an ELF-shaped file; earlier
+        # stages write placeholder bytes.
+        with open(out_path, "wb") as f:
+            f.write(elf_magic if cmd[0].endswith("clang")
+                    else b"intermediate")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.PASSED, (
+        result.findings)
+    assert result.real_tool == "clang"
+    assert result.elf_bytes == elf_magic
+    # Bytes-wrapper returns the same bytes.
+    bytes_out = lt.compile_module_to_elf_via_llvm(_trivial_module())
+    assert bytes_out == elf_magic
+
+
+def test_stage_v31_compile_passed_rejects_empty_elf(monkeypatch):
+    """If clang exits 0 but writes a 0-byte ELF, the result is
+    FAILED (not PASSED): a clean exit without bytes is not a pass."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setenv("HELIX_LLVM_CROSS", "1")
+
+    def fake_run(cmd, **kwargs):
+        out_idx = cmd.index("-o") + 1
+        # Write empty bytes for every stage.
+        with open(cmd[out_idx], "wb") as f:
+            f.write(b"")
+        return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.FAILED
+    assert result.elf_bytes is None
+    assert any("no output artifact" in f or "is empty" in f
+               for f in result.findings), result.findings
+
+
+def test_stage_v31_compile_rejects_missing_entry_fn():
+    """Audit-fix HIGH-1: `entry_fn` matches `x86_64.compile_module_
+    to_elf`'s contract — a typo'd entry is ValueErrored up front
+    rather than producing an opaque linker error."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("not_main", [], tir.TIRScalar("i32"))
+    b.ret(b.const_int(0))
+    b.end_function()
+    with pytest.raises(ValueError, match="entry_fn 'main' not in"):
+        lt.compile_module_to_elf_via_llvm_full(mod)
+    with pytest.raises(ValueError, match="entry_fn 'main' not in"):
+        lt.compile_module_to_elf_via_llvm(mod)
+
+
+def test_stage_v31_compile_accepts_custom_entry_fn(monkeypatch):
+    """`entry_fn` validation accepts any function present in the
+    module (matches x86_64's tolerance)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("custom_entry", [], tir.TIRScalar("i32"))
+    b.ret(b.const_int(0))
+    b.end_function()
+    # No real toolchain on dev — expect DEFERRED, not a raise.
+    result = lt.compile_module_to_elf_via_llvm_full(
+        mod, "custom_entry")
+    assert result.status is lt.LLVMDispatchStatus.DEFERRED
+
+
+def test_stage_v31_compile_deferred_on_non_linux_host(monkeypatch):
+    """Audit-fix HIGH-2: on Windows / macOS without
+    HELIX_LLVM_CROSS=1, clang-present-but-wrong-host returns
+    DEFERRED with an explanatory finding (rather than blowing up
+    in the linker with a libc-missing error)."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setattr(lt.sys, "platform", "win32")
+    monkeypatch.delenv("HELIX_LLVM_CROSS", raising=False)
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    assert result.status is lt.LLVMDispatchStatus.DEFERRED
+    assert any("cross-link" in f.lower() or "sysroot" in f.lower()
+               for f in result.findings), result.findings
+
+
+def test_stage_v31_compile_host_guard_bypassed_via_env(monkeypatch):
+    """HELIX_LLVM_CROSS=1 bypasses the host-OS guard so users with
+    a configured cross-link sysroot can opt in."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setattr(lt.sys, "platform", "win32")
+    monkeypatch.setenv("HELIX_LLVM_CROSS", "1")
+    # Toolchain monkeypatched present but real subprocess will be
+    # called; we don't care about the result, only that the host-
+    # OS guard was bypassed (status is NOT DEFERRED with a
+    # cross-link finding).
+    def fake_run(cmd, **kwargs):
+        out_idx = cmd.index("-o") + 1
+        with open(cmd[out_idx], "wb") as f:
+            f.write(b"placeholder")
+        return _FakeProc(returncode=0)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    # With the guard bypassed AND tools monkeypatched to "succeed",
+    # the pipeline reaches PASSED.
+    assert result.status is lt.LLVMDispatchStatus.PASSED, (
+        result.findings)
+
+
+def test_stage_v31_compile_clang_invocation_carries_explicit_target(
+        monkeypatch):
+    """Audit-fix HIGH-2 sibling: the clang command line includes
+    `--target=x86_64-unknown-linux-gnu` so a cross-link clang on
+    macOS/Windows knows which triple to target (matching the IR's
+    emitted target triple)."""
+    monkeypatch.setattr(lt, "detect_llvm_tools",
+                        lambda: {"llvm-as": "/x/llvm-as",
+                                 "opt": None, "llc": "/x/llc",
+                                 "clang": "/x/clang"})
+    monkeypatch.setenv("HELIX_LLVM_CROSS", "1")
+    captured: list[list[str]] = []
+
+    def capturing_run(cmd, **kwargs):
+        captured.append(list(cmd))
+        out_idx = cmd.index("-o") + 1
+        with open(cmd[out_idx], "wb") as f:
+            f.write(b"\x7fELF" + b"\x00" * 32)
+        return _FakeProc(returncode=0)
+    monkeypatch.setattr(subprocess, "run", capturing_run)
+    lt.compile_module_to_elf_via_llvm_full(_trivial_module())
+    # The clang invocation (the third tool call) carries --target.
+    clang_calls = [c for c in captured if "clang" in c[0]]
+    assert len(clang_calls) == 1, captured
+    assert "--target=x86_64-unknown-linux-gnu" in clang_calls[0], (
+        clang_calls[0])
+
+
+@pytest.mark.skipif(
+    shutil.which("llvm-as") is None
+    or shutil.which("llc") is None
+    or shutil.which("clang") is None,
+    reason="full LLVM toolchain (llvm-as + llc + clang) not installed")
+def test_stage_v31_compile_real_toolchain_produces_runnable_elf():
+    """When the full LLVM toolchain is genuinely installed, compile
+    a trivial module to a real ELF. The ELF starts with the ELF
+    magic bytes; running it is out of scope for this test (the
+    test_codegen migration exercises execution)."""
+    elf = lt.compile_module_to_elf_via_llvm(_trivial_module())
+    assert elf.startswith(b"\x7fELF"), elf[:16]

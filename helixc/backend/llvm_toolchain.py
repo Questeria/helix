@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from enum import Enum
@@ -277,3 +278,283 @@ def dispatch_validate_ll(ll_text: str) -> LLVMDispatchResult:
         mock_passed=mock_passed, mock_findings=mock_findings,
         real_attempted=True, real_passed=real_passed,
         real_tool=last_tool, real_findings=tuple(findings))
+
+
+# v3.1 — drop-in replacement for `x86_64.compile_module_to_elf`.
+# Tri-state result type so callers that want to introspect the
+# DEFERRED-vs-FAILED distinction can; a thin raise-on-non-PASS
+# wrapper (`compile_module_to_elf_via_llvm`) gives the simpler
+# bytes-returning surface that x86_64.py's callers use today.
+
+
+class LLVMToolchainAbsent(Exception):
+    """The LLVM toolchain isn't installed (or isn't complete enough
+    to lower IR to a runnable ELF). Distinct from `LLVMEmitError` so
+    test code can `pytest.skip` on toolchain-absent without
+    masking real codegen bugs."""
+
+
+class LLVMToolchainError(Exception):
+    """The LLVM toolchain is installed but one of its tools reported
+    a failure (non-zero exit, empty artifact, timeout, etc.).
+    Carries the full chain of tool diagnostics on `.findings`."""
+
+    def __init__(self, message: str, findings: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.findings = findings
+
+
+@dataclass(frozen=True)
+class LLVMCompileResult:
+    """Result of compiling a `tir.Module` through the LLVM toolchain
+    to a runnable ELF.
+
+    Tri-state status mirrors `LLVMDispatchResult`:
+      - PASSED: `elf_bytes` is the linked ELF.
+      - FAILED: `findings` has the diagnostic chain; `elf_bytes` is
+        None.
+      - DEFERRED: toolchain absent (`clang` not on PATH — the linker
+        is the last tool the pipeline needs); `elf_bytes` is None.
+        Distinct from FAILED so a no-LLVM CI runner doesn't fail.
+
+    `real_tool` reports the DEEPEST tool the pipeline reached
+    (`llvm-as` / `llc` / `clang`) — on success the last tool run; on
+    FAILED the tool that produced the failure.
+    """
+    status: LLVMDispatchStatus
+    elf_bytes: Optional[bytes]
+    findings: tuple[str, ...]
+    real_tool: Optional[str]
+
+    def __post_init__(self) -> None:
+        if self.status is LLVMDispatchStatus.PASSED:
+            if self.elf_bytes is None or len(self.elf_bytes) == 0:
+                raise ValueError(
+                    "LLVMCompileResult: status=PASSED but "
+                    "elf_bytes is None or empty — a PASS must "
+                    "produce a non-empty ELF")
+            if self.findings:
+                raise ValueError(
+                    f"LLVMCompileResult: status=PASSED but "
+                    f"findings has entries {self.findings!r} — "
+                    f"a PASS carries no diagnostics")
+            if self.real_tool is None:
+                raise ValueError(
+                    "LLVMCompileResult: status=PASSED but "
+                    "real_tool is None — a PASS reached at least "
+                    "one tool")
+        else:
+            if self.elf_bytes is not None:
+                raise ValueError(
+                    f"LLVMCompileResult: status={self.status} but "
+                    f"elf_bytes is not None (len="
+                    f"{len(self.elf_bytes)}) — only PASSED carries "
+                    f"an ELF")
+            if (self.status is LLVMDispatchStatus.FAILED
+                    and not self.findings):
+                raise ValueError(
+                    "LLVMCompileResult: status=FAILED but findings "
+                    "is empty — a failure must carry a diagnostic")
+
+
+def compile_module_to_elf_via_llvm_full(
+        module, entry_fn: str = "main", *,
+        timeout_s: int = _LLVM_DISPATCH_TIMEOUT_S) -> LLVMCompileResult:
+    """Compile a `tir.Module` through the LLVM toolchain to a
+    runnable ELF, returning a tri-state result. Pipeline:
+
+        llvm_ir.emit_module(mod) -> .ll text
+        llvm-as -> .bc bitcode
+        llc -filetype=obj -> .o object
+        clang --target=x86_64-unknown-linux-gnu -o elf <object>
+            -> ELF binary (links libc + crt)
+
+    `clang` is the deepest tool because the emitted IR uses libc
+    symbols (open / read / write / close / exit / llvm.trap) — those
+    need to be resolved at link time. The explicit `--target` tells
+    clang to cross-compile to the same Linux x86_64 triple
+    `helixc/backend/llvm_ir.py` emits — without it, a Windows /
+    macOS clang would default to its host triple and fail at link
+    time with a confusing libc-missing error.
+
+    DEFERRED conditions (all return without raising):
+      - any of {llvm-as, llc, clang} not on PATH;
+      - host platform is not Linux AND no `HELIX_LLVM_CROSS=1` env
+        flag is set (cross-linking to x86_64-linux ELF requires a
+        Linux sysroot which clang on Windows/macOS does not bundle).
+        Findings carry a one-line explanation so a caller can show
+        the user why DEFERRED fired (this is the one DEFERRED path
+        that benefits from a finding — the toolchain-absent case
+        is intentionally finding-free since the missing-tool log is
+        more useful than a generic "tool missing" string).
+    FAILED when any tool returns non-zero / empty artifact /
+    timeout / OS error.
+    PASSED only when every stage emits a non-empty artifact and
+    the final ELF is readable.
+
+    `entry_fn` mirrors `x86_64.compile_module_to_elf`'s parameter
+    and is validated up front (the LLVM linker would otherwise fail
+    with an opaque "undefined reference to `<entry>`" message).
+
+    This is the v3.1 drop-in replacement for
+    `x86_64.compile_module_to_elf` — see the thin wrapper
+    `compile_module_to_elf_via_llvm` below for the bytes-returning
+    surface that x86_64-style callers use today.
+    """
+    # entry_fn validation — mirror x86_64.compile_module_to_elf so
+    # a typo'd entry produces the same diagnostic shape across
+    # backends rather than an opaque linker error. Audit-fix HIGH-1.
+    if entry_fn not in module.functions:
+        # ValueError mirrors x86_64.compile_module_to_elf's contract
+        # so callers can keep one `try/except ValueError` arm.
+        raise ValueError(
+            f"compile_module_to_elf_via_llvm: entry_fn "
+            f"{entry_fn!r} not in module.functions "
+            f"({sorted(module.functions)})")
+
+    # Late import: llvm_ir's catchall + helper-registry validation
+    # runs at module load and pulls in a lot of code; defer until
+    # actually needed so a tool-detection-only caller doesn't pay
+    # the import cost.
+    from .llvm_ir import emit_module as llvm_emit_module
+    ll_text = llvm_emit_module(module)
+
+    tools = detect_llvm_tools()
+    llvm_as = tools.get("llvm-as")
+    llc = tools.get("llc")
+    clang = tools.get("clang")
+    if llvm_as is None or llc is None or clang is None:
+        # DEFERRED — no diagnostic in findings (the absence is the
+        # status; reporting it as a finding would conflate with
+        # toolchain-present-but-failed).
+        return LLVMCompileResult(
+            status=LLVMDispatchStatus.DEFERRED,
+            elf_bytes=None, findings=(), real_tool=None)
+
+    # Host-OS guard (audit-fix HIGH-2): the emitted IR's target
+    # triple is `x86_64-unknown-linux-gnu`. A clang on Windows /
+    # macOS defaults to its host driver and would fail at link time
+    # with a libc-missing error rather than a clean DEFERRED. The
+    # `HELIX_LLVM_CROSS=1` env flag is the explicit escape hatch
+    # for users who have configured a Linux sysroot for cross-link.
+    if (sys.platform != "linux"
+            and os.environ.get("HELIX_LLVM_CROSS") != "1"):
+        return LLVMCompileResult(
+            status=LLVMDispatchStatus.DEFERRED,
+            elf_bytes=None,
+            findings=(
+                f"clang is installed but host platform is "
+                f"{sys.platform!r}; cross-linking to "
+                f"x86_64-unknown-linux-gnu requires a Linux "
+                f"sysroot (set HELIX_LLVM_CROSS=1 to bypass this "
+                f"guard once your sysroot is configured)",),
+            real_tool=None)
+
+    findings: list[str] = []
+    last_tool = "llvm-as"
+    elf_bytes: Optional[bytes] = None
+    tmpdir = tempfile.mkdtemp(prefix="helix_llvm_compile_")
+    try:
+        ll_path = os.path.join(tmpdir, "module.ll")
+        bc_path = os.path.join(tmpdir, "module.bc")
+        obj_path = os.path.join(tmpdir, "module.o")
+        elf_path = os.path.join(tmpdir, "module.elf")
+        try:
+            with open(ll_path, "w", encoding="utf-8") as f:
+                f.write(ll_text)
+        except OSError as e:
+            findings.append(
+                f"could not write temp .ll {ll_path!r} "
+                f"({type(e).__name__}: {e})")
+        else:
+            findings += _run_tool(
+                [llvm_as, ll_path, "-o", bc_path],
+                artifact=bc_path, timeout_s=timeout_s)
+            if not findings:
+                last_tool = "llc"
+                findings += _run_tool(
+                    [llc, "-filetype=obj", bc_path, "-o", obj_path],
+                    artifact=obj_path, timeout_s=timeout_s)
+            if not findings:
+                last_tool = "clang"
+                # `clang` (not `ld` directly) so the host's libc +
+                # crt are picked up via clang's driver search paths.
+                # `--target=x86_64-unknown-linux-gnu` pins the link
+                # to the same triple the IR carries — on a Linux
+                # host this is a no-op; on cross-link platforms
+                # (gated by HELIX_LLVM_CROSS above) it tells clang
+                # to look for the Linux sysroot.
+                findings += _run_tool(
+                    [clang,
+                     "--target=x86_64-unknown-linux-gnu",
+                     obj_path, "-o", elf_path],
+                    artifact=elf_path, timeout_s=timeout_s)
+            if not findings:
+                try:
+                    with open(elf_path, "rb") as f:
+                        elf_bytes = f.read()
+                except OSError as e:
+                    findings.append(
+                        f"could not read linked ELF "
+                        f"{elf_path!r} ({type(e).__name__}: {e})")
+                else:
+                    if not elf_bytes:
+                        findings.append(
+                            f"linked ELF {elf_path!r} is empty — "
+                            f"a 0 exit with no bytes is not a pass")
+                        elf_bytes = None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    if findings:
+        return LLVMCompileResult(
+            status=LLVMDispatchStatus.FAILED,
+            elf_bytes=None, findings=tuple(findings),
+            real_tool=last_tool)
+    return LLVMCompileResult(
+        status=LLVMDispatchStatus.PASSED,
+        elf_bytes=elf_bytes, findings=(), real_tool=last_tool)
+
+
+def compile_module_to_elf_via_llvm(
+        module, entry_fn: str = "main", *,
+        timeout_s: int = _LLVM_DISPATCH_TIMEOUT_S) -> bytes:
+    """Bytes-returning drop-in replacement for
+    `x86_64.compile_module_to_elf(module, entry_fn="main") -> bytes`.
+
+    Raises `LLVMToolchainAbsent` when the LLVM toolchain is not
+    installed OR the host platform is not Linux without an explicit
+    `HELIX_LLVM_CROSS=1` opt-in (so test code can
+    `pytest.skip(...)` on toolchain-absent CI runners AND on
+    Windows / macOS dev machines without masking real codegen bugs).
+    `.findings` on the raised exception carries any explanatory
+    text (currently the cross-link guard message; toolchain-absent
+    raises with empty `.findings` since the missing-tool log is
+    more useful than a generic string).
+    Raises `LLVMToolchainError` carrying the diagnostic chain when
+    a tool failed.
+    Raises `ValueError` when `entry_fn` is not in `module.functions`
+    (mirrors `x86_64.compile_module_to_elf`'s contract).
+
+    Callers that want to introspect the DEFERRED-vs-FAILED-vs-PASS
+    distinction (e.g. the Stage 207 parity gate) should use
+    `compile_module_to_elf_via_llvm_full` directly.
+    """
+    result = compile_module_to_elf_via_llvm_full(
+        module, entry_fn, timeout_s=timeout_s)
+    if result.status is LLVMDispatchStatus.PASSED:
+        assert result.elf_bytes is not None  # post_init invariant
+        return result.elf_bytes
+    if result.status is LLVMDispatchStatus.DEFERRED:
+        reason = ("; ".join(result.findings) if result.findings
+                  else ("LLVM toolchain not installed (llvm-as / "
+                        "llc / clang all required for "
+                        "compile_module_to_elf_via_llvm; detected "
+                        "via shutil.which)"))
+        exc = LLVMToolchainAbsent(reason)
+        exc.findings = result.findings  # type: ignore[attr-defined]
+        raise exc
+    raise LLVMToolchainError(
+        f"LLVM toolchain failed at {result.real_tool!r}: "
+        f"{'; '.join(result.findings)}",
+        findings=result.findings)
