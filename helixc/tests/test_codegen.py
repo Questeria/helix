@@ -22,7 +22,13 @@ from helixc.ir.passes.const_fold import fold_module
 from helixc.ir.passes.dce import dce_module
 from helixc.ir.passes.cse import cse_module
 from helixc.ir.passes.fdce import fdce_module
-from helixc.backend.x86_64 import compile_module_to_elf
+# v3.1 step 3 migration: route compile_module_to_elf through the
+# backend-selection seam so this file works under both the legacy
+# x86_64 backend (default — preserves the Windows / macOS dev
+# workflow) and the canonical v3.0+ LLVM backend (opt-in via
+# `HELIX_TEST_BACKEND=llvm`). See `helixc/tests/_codegen_backend.py`
+# for the routing logic.
+from helixc.tests._codegen_backend import compile_module_to_elf
 
 
 def _win_to_wsl(win_path: str) -> str:
@@ -469,7 +475,7 @@ def test_c16_1_wide_array_elem_traps_at_codegen():
     from helixc.frontend.parser import parse as parse_src
     from helixc.frontend.typecheck import typecheck as type_check
     from helixc.ir.lower_ast import lower
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn main() -> i32 {
         let xs = [1.0_f64, 2.5_f64];
@@ -2092,7 +2098,7 @@ def test_print_int_preserves_rbx():
     0x5B (pop rbx) wrapping the body."""
     from helixc.frontend.parser import parse
     from helixc.ir.lower_ast import lower
-    from helixc.backend.x86_64 import compile_module_to_elf
+    from helixc.tests._codegen_backend import compile_module_to_elf
     src = """
     fn main() -> i32 {
         print_int(7);
@@ -6986,7 +6992,7 @@ def test_demo_mandelbrot_renders_recognizable_shape():
     from helixc.ir.passes.dce import dce_module as _dce
     from helixc.ir.passes.fdce import fdce_module as _fdce
     from helixc.frontend.grad_pass import grad_pass as _gp
-    from helixc.backend.x86_64 import compile_module_to_elf as _compile
+    from helixc.tests._codegen_backend import compile_module_to_elf as _compile
 
     proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     src = open(os.path.join(proj, "helixc", "examples", "mandelbrot.hx")).read()
@@ -20615,7 +20621,7 @@ def _compile_to_elf_bytes(src: str, optimize: bool = True) -> bytes:
     from helixc.ir.passes.dce import dce_module as _dce
     from helixc.ir.passes.fdce import fdce_module as _fdce
     from helixc.backend.ptx import validate_kernel_tile_lowering as _validate_ptx
-    from helixc.backend.x86_64 import compile_module_to_elf as _emit
+    from helixc.tests._codegen_backend import compile_module_to_elf as _emit
     prog = _parse(src, include_stdlib=True)
     _fmods(prog); _fimpls(prog); _mono(prog); _grad(prog)
     mod = _lower(prog)
@@ -20643,7 +20649,7 @@ def test_stage35_compile_module_to_elf_requires_pre_dce_kernel_validation():
     from helixc.ir.passes.dce import dce_module as _dce
     from helixc.ir.passes.fdce import fdce_module as _fdce
     from helixc.backend.ptx import validate_kernel_tile_lowering as _validate_ptx
-    from helixc.backend.x86_64 import compile_module_to_elf as _emit
+    from helixc.tests._codegen_backend import compile_module_to_elf as _emit
     import pytest
     src = """
     @kernel fn k(a: tile<i32, [16], HBM>) {
