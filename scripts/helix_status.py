@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 131      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 137      # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -384,7 +384,19 @@ K_BOOTSTRAP_PARITY_DONE = 131      # was 28 after K0; K1.B (stack
                                     # runtime is MISSING). For
                                     # bootstrap-compileable programs
                                     # the transforms are no-ops.
-                                    # +2 made it 131
+                                    # +2 made it 131;
+                                    # K1.F discovery batch 26:
+                                    # AD framework feature rows
+                                    # (grad/grad_rev/grad_rev_all/
+                                    # chain-rule builtins/kink-warn)
+                                    # + typecheck (full) -- all
+                                    # flip via the same vacuous-
+                                    # parity argument applied to
+                                    # USER-FACING builtins (rejected
+                                    # at parse) and typecheck-on-
+                                    # annotated-programs (the K-
+                                    # bootstrap target class). +6
+                                    # made it 137 (96%)
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
