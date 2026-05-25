@@ -3163,6 +3163,95 @@ fn is_print_int_name(s: i32, l: i32) -> i32 {
     }
 }
 
+// K1.D-impl (2026-05-25): emit the inline asm for print_int(n).
+//
+// Algorithm:
+//   - Evaluate arg into eax (the value to print).
+//   - sub rsp, 16: stack-allocate a 16-byte buffer (enough for sign
+//     + 10 i32 digits + newline + spare). Aligned naturally.
+//   - r12 = rsp + 11 (one PAST the last writable position; the
+//     conversion loop writes at [r12] then decrements r12).
+//   - Save sign of n in ecx; take abs(n) in eax.
+//   - Conversion loop: divide eax by 10 (unsigned div) into eax + edx;
+//     edx is the remainder digit (0..9); add 48 ('0') and write at
+//     [r12]; decrement r12; loop while eax != 0.
+//   - After loop, r12 points one-BELOW the most-significant digit.
+//     If original was negative, write '-' (45) at [r12]; the syscall
+//     reads from r12. Otherwise inc r12 to skip past the unwritten
+//     pre-MSB position.
+//   - Compute length = (rsp + 12) - r12.
+//   - sys_write(stdout=1, buf=r12, len=rdx) via syscall.
+//   - add rsp, 16; xor eax, eax (return 0).
+//
+// Byte layout (90 bytes inline, calculated for accurate jump disps):
+//   0: sub rsp, 16            (48 83 EC 10) = 4 bytes
+//   4: mov r12, rsp           (49 89 E4)    = 3
+//   7: add r12, 11            (49 83 C4 0B) = 4
+//  11: mov ecx, eax           (89 C1)       = 2
+//  13: test ecx, ecx          (85 C9)       = 2
+//  15: jns +2                 (79 02)       = 2  -> target 17 (skip neg)
+//  17: neg eax                (F7 D8)       = 2
+//  19: [loop] xor edx, edx    (31 D2)       = 2
+//  21: mov ebx, 10            (BB 0A 00 00 00) = 5
+//  26: div ebx                (F7 F3)       = 2
+//  28: add dl, 48             (80 C2 30)    = 3
+//  31: mov [r12], dl          (41 88 14 24) = 4
+//  35: dec r12                (49 FF CC)    = 3
+//  38: test eax, eax          (85 C0)       = 2
+//  40: jnz back to loop       (75 E9)       = 2  -> disp = 19 - 42 = -23
+//  42: test ecx, ecx          (85 C9)       = 2
+//  44: jns +7                 (79 07)       = 2  -> target 53 (skip neg branch)
+//  46: mov byte [r12], 45     (41 C6 04 24 2D) = 5
+//  51: jmp +3                 (EB 03)       = 2  -> target 56 (skip inc r12)
+//  53: [pos] inc r12          (49 FF C4)    = 3
+//  56: [calc_len] mov rax, rsp (48 89 E0)   = 3
+//  59: add rax, 12            (48 83 C0 0C) = 4
+//  63: sub rax, r12           (4C 29 E0)    = 3
+//  66: mov rdx, rax           (48 89 C2)    = 3
+//  69: mov rsi, r12           (4C 89 E6)    = 3
+//  72: mov edi, 1             (BF 01 00 00 00) = 5
+//  77: mov eax, 1             (B8 01 00 00 00) = 5
+//  82: syscall                (0F 05)       = 2
+//  84: add rsp, 16            (48 83 C4 10) = 4
+//  88: xor eax, eax           (31 C0)       = 2
+//  90: end
+//
+// Returns: total bytes emitted (n_arg + 90).
+fn emit_print_int_body(arg_idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xEC); emit_byte(0x10);
+    emit_byte(0x49); emit_byte(0x89); emit_byte(0xE4);
+    emit_byte(0x49); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x0B);
+    emit_byte(0x89); emit_byte(0xC1);
+    emit_byte(0x85); emit_byte(0xC9);
+    emit_byte(0x79); emit_byte(0x02);
+    emit_byte(0xF7); emit_byte(0xD8);
+    emit_byte(0x31); emit_byte(0xD2);
+    emit_byte(0xBB); emit_byte(0x0A); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0xF7); emit_byte(0xF3);
+    emit_byte(0x80); emit_byte(0xC2); emit_byte(0x30);
+    emit_byte(0x41); emit_byte(0x88); emit_byte(0x14); emit_byte(0x24);
+    emit_byte(0x49); emit_byte(0xFF); emit_byte(0xCC);
+    emit_byte(0x85); emit_byte(0xC0);
+    emit_byte(0x75); emit_byte(0xE9);
+    emit_byte(0x85); emit_byte(0xC9);
+    emit_byte(0x79); emit_byte(0x07);
+    emit_byte(0x41); emit_byte(0xC6); emit_byte(0x04); emit_byte(0x24); emit_byte(0x2D);
+    emit_byte(0xEB); emit_byte(0x03);
+    emit_byte(0x49); emit_byte(0xFF); emit_byte(0xC4);
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE0);
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xC0); emit_byte(0x0C);
+    emit_byte(0x4C); emit_byte(0x29); emit_byte(0xE0);
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xC2);
+    emit_byte(0x4C); emit_byte(0x89); emit_byte(0xE6);
+    emit_byte(0xBF); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0xB8); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x10);
+    emit_byte(0x31); emit_byte(0xC0);
+    n_arg + 90
+}
+
 // Phase 1.10 step 4: f32 SSE arithmetic builtins.
 fn bn_fadd_s(b: i32) -> i32 { __arena_get(b + 57) }
 fn bn_fsub_s(b: i32) -> i32 { __arena_get(b + 58) }
@@ -3612,12 +3701,11 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
         n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
     } else { if is_print_int_name(name_s, name_l) == 1 {
-        // K1.D Option A stub (2026-05-25): wire the dispatch via the
-        // byte-literal comparison helper (no install_builtin_names
-        // touch — see matrix Appendix A2 Pattern 2). Body is a trap
-        // for now; the follow-up K1.D-impl chunk replaces it with
-        // the real ASCII-conversion + write syscall asm.
-        emit_trap_with_id(17001)
+        // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
+        // ASCII conversion + write(1, buf, len) syscall. See
+        // emit_print_int_body for the byte layout. Returns 0 in eax.
+        let arg_idx = __arena_get(args_head + 1);
+        emit_print_int_body(arg_idx, bind_state, patch_state, bn_state)
     } else { if kovc_byte_eq(name_s, name_l, bn_read_file_to_arena_s(bn_state), 18) == 1 {
         // read_file_to_arena(path: STRLIT) -> i32 (bytes_read).
         // First arg MUST be AST_STR_LIT. We inspect args_head's
