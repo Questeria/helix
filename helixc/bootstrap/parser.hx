@@ -2686,6 +2686,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Build AST_MATCH (tag 62) with p1 = scrut_idx, p2 = arms_head_idx.
             // Each arm is AST_MATCH_ARM (tag 63) p1=pattern, p2=body, p3=next.
             parse_match_expr(tok_base, sb)
+        } else { if byte_eq(id_start, id_len, kw_return_s(sb), kw_return_n(sb)) == 1 {
+            // K1.C-wireup (2026-05-25): `return <expr>` form. The
+            // parse_return fn + AST_RET codegen + keyword bytes were
+            // staged in commit 816ce51 (K1.C-deadcode); this arm is
+            // the one-line connector that makes them reachable.
+            // Closing braces for this arm's `if`+`else` blocks are
+            // added at the IDENT sub-cascade closer (line ~3712) --
+            // NOT at the outer if-cascade closer at line ~3850 (that
+            // was the first-attempt K1.C bug, reverted in commit
+            // a180366).
+            parse_return(tok_base, sb)
         } else {
             // Plain identifier. Could be a var ref, an assignment
             // (`name = expr`), or a fn call (`name()`). Peek the
@@ -3708,6 +3719,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
         }}}}}     // Stage 12: extra '}' closes the is_grad_call else-branch wrapper
         }     // Stage 14: extra '}' closes the is_grad_rev_call else-branch wrapper
+        }     // K1.C-wireup (2026-05-25): +1 brace closes the new return-keyword arm (the existing trailing `}` now closes RETURN-else; this new `}` closes the match-else that wraps RETURN)
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this
