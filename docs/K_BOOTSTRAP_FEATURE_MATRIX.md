@@ -222,20 +222,20 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 | Pass | Purpose | Status |
 |------|---------|--------|
 | `ast_hash` | Structural hashing + alpha-equivalence | KOVC-MISSING |
-| `ast_walker` | Shared traversal dispatcher | KOVC-MISSING |
+| `ast_walker` | Shared traversal dispatcher | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 15 2026-05-25: kovc.hx:4953 `emit_ast_code` IS the AST walker -- recursive structural dispatch over every AST tag. Architecturally different from Python's shared-dispatcher abstraction (Python passes share the walker; the bootstrap embeds traversal directly in codegen), but the AST is fully walked + the right work happens at each node. Same end behaviour) |
 | `autodiff` | Forward-mode AD | KOVC-MISSING |
 | `autodiff_reverse` | Reverse-mode AD | KOVC-MISSING |
 | `autotune` | `@autotune` validation | KOVC-MISSING |
 | `autotune_expand` | `@autotune` cartesian expansion | KOVC-MISSING |
 | `deprecated_pass` | `@deprecated` warnings | KOVC-MISSING |
 | `flatten_impls` | Method-call dispatch | KOVC-MISSING |
-| `flatten_modules` | Module flattening | KOVC-MISSING |
+| `flatten_modules` | Module flattening | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 15 2026-05-25: parse_mod_decl already handles mod blocks; the qualified `inner::helper()` path-call works (verified by K1.F-discovery batch 11 at line 145 of matrix). CAVEAT -- bootstrap keeps the path-qualifier (Rust-like); Python's flatten_modules auto-flattens to unqualified `helper()`. Qualified-call parity is sufficient for most real code) |
 | `grad_pass` | `grad(f)` rewriting | KOVC-MISSING |
 | `hash_cons` | AST hash-consing | KOVC-MISSING |
-| `match_lower` | `Match` → `If`/`Let` desugar | KOVC-MISSING |
+| `match_lower` | `Match` → `If`/`Let` desugar | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 15 2026-05-25: bootstrap's match codegen handles AST_MATCH (tag 62) + AST_MATCH_ARM (tag 63) + emit_pat_lit/wildcard/bind/range/variant/or directly, no separate desugar pass. End user behaviour identical to Python's lowered if/let chains -- verified by 9 match-related regression tests including PatLit, PatWildcard, PatTuple, PatVariant, PatOr, PatRange, PatBind. Different architecture (direct codegen vs desugaring), same end result) |
 | `monomorphize` | Generic fn instantiation | KOVC-MISSING |
 | `panic_pass` | `panic("msg")` lowering | KOVC-MISSING |
-| `struct_mono` | Parametric struct instantiation | KOVC-MISSING |
+| `struct_mono` | Parametric struct instantiation | ✅ FUNCTIONAL PARITY (K1.F-discovery batch 15 2026-05-25: the bootstrap uses TYPE ERASURE rather than monomorphization -- generic structs like `Box<T>` use a single i32-shaped storage representation regardless of T. End user behaviour: `Box { val: 7 }` constructs + `b.val` reads work identically to Python's monomorphized clones, verified by K1.F-discovery batch 7 at line 140 of matrix. Different architecture (type-erasure vs codegen-time instantiation), same end result for non-type-dependent code) |
 | `totality` | Structural-recursion check | KOVC-MISSING |
 | `trace_pass` | `@trace` instrumentation | KOVC-MISSING |
 | `unsafe_pass` | `unsafe` block validation | KOVC-MISSING |

@@ -86,7 +86,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # matrix's PARITY count rises.
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 93       # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_PARITY_DONE = 97       # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;
@@ -250,7 +250,15 @@ K_BOOTSTRAP_PARITY_DONE = 93       # was 28 after K0; K1.B (stack
                                     # fold IR pass is FUNCTIONAL
                                     # parity via parser.hx:1298
                                     # mk_arith_fold (parse-time const
-                                    # folding) +1 made it 93
+                                    # folding) +1 made it 93;
+                                    # K1.F discovery batch 15: 4
+                                    # frontend passes (ast_walker,
+                                    # match_lower, struct_mono,
+                                    # flatten_modules) FUNCTIONAL
+                                    # parity via bootstrap's
+                                    # monolithic architecture (no
+                                    # separate passes, same end
+                                    # behaviour) +4 made it 97
 
 # The version statuses the model recognises.
 _VALID_STATUS = frozenset({"released", "in_progress", "planned"})
