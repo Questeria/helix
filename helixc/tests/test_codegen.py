@@ -6721,6 +6721,53 @@ fn main() -> i32 {
     )
 
 
+def test_bootstrap_kovc_return_statement_compiles():
+    """K1.C regression (2026-05-25): the kovc.hx-compiled-by-Python
+    binary (K1) must accept Helix source that uses the `return
+    <expr>;` form, parse it via parse_primary's new keyword arm
+    (commits 816ce51 K1.C-deadcode + b02017f K1.C-wireup), and
+    emit code that exits with the returned value.
+
+    The test compiles a 4-line source that uses return inside an
+    if-block (early return) and checks the produced binary's exit
+    code. Without K1.C, the bootstrap's parse_primary would
+    fall-through to identifier handling on the `return` ident and
+    treat `return 42` as a CALL of a fn named `return` -- failing.
+
+    With K1.C, parse_primary detects the return keyword via
+    kw_return_s/n, dispatches to parse_return, which emits AST_RET
+    (tag 43); kovc.hx's tag-43 codegen arm emits the value into
+    rax + epilogue + ret.
+    """
+    src = (
+        "fn use_ret(x: i32) -> i32 {\n"
+        "    if x > 10 { return 99; };\n"
+        "    x + 1\n"
+        "}\n"
+        "fn main() -> i32 { use_ret(20) }\n"
+    )
+    rc = compile_and_run(src)
+    assert rc == 99, (
+        f"expected exit 99 (early return for x=20 > 10); got {rc}")
+
+
+def test_bootstrap_kovc_return_statement_no_early_return():
+    """K1.C regression: same as above but the if-condition is false,
+    so the return statement is NOT executed and the function's
+    implicit tail-expression (x + 1) is the return value."""
+    src = (
+        "fn use_ret(x: i32) -> i32 {\n"
+        "    if x > 10 { return 99; };\n"
+        "    x + 1\n"
+        "}\n"
+        "fn main() -> i32 { use_ret(5) }\n"
+    )
+    rc = compile_and_run(src)
+    assert rc == 6, (
+        f"expected exit 6 (5 + 1; no early return since 5 <= 10); "
+        f"got {rc}")
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
