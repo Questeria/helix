@@ -7993,6 +7993,35 @@ def test_bootstrap_kovc_agent_after_fn_self_host():
     assert rc == 5, f"expected K2 exit 5 (fn first, agent after); got {rc}"
 
 
+def test_bootstrap_kovc_mod_block_qualified_call_self_host():
+    """K1.F-discovery batch 11 (2026-05-25): `mod inner { fn helper
+    () { ... } }` followed by a qualified `inner::helper()` call
+    works end-to-end. Python helixc additionally AUTO-FLATTENS the
+    mod so `helper()` (unqualified) also works -- that semantic gap
+    is documented in the matrix row caveat. The SYNTAX barrier is
+    gone in the bootstrap."""
+    rc = _kovc_self_host_compile_and_run(
+        "mod_qual",
+        "mod inner { fn helper() -> i32 { 9 } } "
+        "fn main() -> i32 { inner::helper() }",
+    )
+    assert rc == 9, f"expected K2 exit 9 (inner::helper()); got {rc}"
+
+
+def test_bootstrap_kovc_use_decl_self_host():
+    """K1.F-discovery batch 11: `use foo::bar::baz;` decls are
+    accepted at top-level (the parser consumes the path-list).
+    Python helixc would resolve `baz` into the local scope; the
+    bootstrap doesn't (semantics caveat), but the syntax parses
+    cleanly so user code that has stylistic `use` statements
+    doesn't fail."""
+    rc = _kovc_self_host_compile_and_run(
+        "use_multi",
+        "use a::b; use c::d; fn main() -> i32 { 13 }",
+    )
+    assert rc == 13, f"expected K2 exit 13 (use stmts parsed); got {rc}"
+
+
 def test_bootstrap_kovc_demo_emits_ast_int_42():
     """Stage 4 demo: kovc.hx's main() builds AST_INT(42) by hand,
     compiles it, and writes the resulting ELF to disk. The produced
