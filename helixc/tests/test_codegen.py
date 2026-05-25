@@ -8099,6 +8099,22 @@ def test_bootstrap_kovc_break_nested_self_host():
     assert rc == 3, f"nested break should yield t=3; got {rc}"
 
 
+def test_bootstrap_kovc_autotune_with_kernel_self_host():
+    """K1.F-discovery batch 21 (2026-05-25): the matrix listed
+    @autotune(KEY: [v1, v2]) as KOVC-MISSING, but it actually
+    parses + validates correctly when paired with @kernel.
+    Python's autotune.py also enforces the @kernel requirement,
+    so both compilers reject bare @autotune (no @kernel) -- the
+    bootstrap matches Python's behavior. Pin the @kernel +
+    @autotune combo that DOES work."""
+    rc = _kovc_self_host_compile_and_run(
+        "autotune_kernel",
+        "@kernel @autotune(K: [1, 2]) fn foo() -> i32 { 5 } "
+        "fn main() -> i32 { foo() }",
+    )
+    assert rc == 5, f"@kernel + @autotune(K: [1,2]) should yield 5; got {rc}"
+
+
 def test_bootstrap_kovc_continue_self_host():
     """K1.AD (2026-05-25): `continue` restarts the innermost
     enclosing loop. Probe walks x 1..10 and skips counting
