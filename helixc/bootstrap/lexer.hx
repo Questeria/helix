@@ -230,14 +230,23 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut value: i32 = 0;
     // Detect a `0x` / `0X` prefix. We need at least two more bytes
     // and the first must be `0`; otherwise fall through to decimal.
+    // K1.AQ (2026-05-25): also detect `0b` (binary) and `0o` (octal).
+    // Underscores `_` are accepted as no-op separators in any base
+    // (matches Rust's 1_000_000 / 0b1010_1010 conventions).
     let mut is_hex: i32 = 0;
+    let mut is_bin: i32 = 0;
+    let mut is_oct: i32 = 0;
     if p + 1 < end {
         let c0 = __arena_get(p);
         let c1 = __arena_get(p + 1);
         if c0 == 48 {
-            // 'x' = 120, 'X' = 88
+            // 'x'=120, 'X'=88, 'b'=98, 'B'=66, 'o'=111, 'O'=79
             if c1 == 120 { is_hex = 1; }
-            else { if c1 == 88 { is_hex = 1; } };
+            else { if c1 == 88 { is_hex = 1; }
+            else { if c1 == 98 { is_bin = 1; }
+            else { if c1 == 66 { is_bin = 1; }
+            else { if c1 == 111 { is_oct = 1; }
+            else { if c1 == 79 { is_oct = 1; } } } } } };
         };
     };
     if is_hex == 1 {
@@ -252,6 +261,8 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                 if is_digit(b) == 1 {
                     value = value * 16 + (b - 48);
                     p = p + 1;
+                } else { if b == 95 {           // K1.AQ: '_' separator
+                    p = p + 1;
                 } else { if b >= 97 {
                     if b <= 102 {
                         value = value * 16 + (b - 87);
@@ -263,7 +274,46 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                         p = p + 1;
                     } else { keep_h = 0; }
                 } else { keep_h = 0; }};
-                };
+                }};
+            };
+        }
+    } else { if is_bin == 1 {
+        // K1.AQ: 0b binary literal. Digits 0 or 1; underscores skipped.
+        p = p + 2;     // consume `0b`
+        let mut keep_b: i32 = 1;
+        while keep_b == 1 {
+            if p >= end {
+                keep_b = 0;
+            } else {
+                let b = __arena_get(p);
+                if b == 48 {                    // '0'
+                    value = value * 2;
+                    p = p + 1;
+                } else { if b == 49 {           // '1'
+                    value = value * 2 + 1;
+                    p = p + 1;
+                } else { if b == 95 {           // '_' separator
+                    p = p + 1;
+                } else { keep_b = 0; }}};
+            };
+        }
+    } else { if is_oct == 1 {
+        // K1.AQ: 0o octal literal. Digits 0..7; underscores skipped.
+        p = p + 2;     // consume `0o`
+        let mut keep_o: i32 = 1;
+        while keep_o == 1 {
+            if p >= end {
+                keep_o = 0;
+            } else {
+                let b = __arena_get(p);
+                if b >= 48 {                    // '0'..
+                    if b <= 55 {                // ..'7'
+                        value = value * 8 + (b - 48);
+                        p = p + 1;
+                    } else { if b == 95 {       // '_' separator
+                        p = p + 1;
+                    } else { keep_o = 0; }};
+                } else { keep_o = 0; };
             };
         }
     } else {
@@ -276,12 +326,14 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                 if is_digit(b) == 1 {
                     value = value * 10 + (b - 48);
                     p = p + 1;
+                } else { if b == 95 {           // K1.AQ: '_' separator
+                    p = p + 1;
                 } else {
                     keep = 0;
-                };
+                }};
             };
         }
-    }
+    }}}
     // Phase 1.10 float-literal lookahead: if we hit `.` AND the next
     // byte is a digit, this is a float (e.g. `1.5`). Switch to float
     // lexing — keep consuming digits and emit TK_FLOATLIT (tag 26).

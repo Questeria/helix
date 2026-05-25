@@ -8202,6 +8202,28 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_int_literal_forms_self_host():
+    """K1.AQ (2026-05-25): binary (0b), octal (0o), and
+    underscore-separated integer literals (1_000_000) now lex
+    correctly. Previously only decimal + 0x hex worked.
+    Underscores are accepted as no-op separators in any base
+    (matches Rust's 1_000 / 0b1010_1010 / 0xFF_FF conventions).
+    Pinned via 5 sub-probes."""
+    cases = [
+        ("bin_lit",        "0b101010",                                          42),
+        ("bin_underscore", "0b10_1010",                                         42),
+        ("oct_lit",        "0o52",                                              42),
+        ("oct_underscore", "0o5_2",                                             42),
+        ("dec_underscore", "1_000_000 - 999_958",                               42),
+    ]
+    for name, expr, expected in cases:
+        rc = _kovc_self_host_compile_and_run(
+            f"int_lit_{name}",
+            f"fn main() -> i32 {{ {expr} }}",
+        )
+        assert rc == expected, f"{name} ({expr}): expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_block_comment_self_host():
     """K1.AP (2026-05-25): block comments `/* ... */` now work
     in the lexer. Previously only `//` line comments were
