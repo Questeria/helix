@@ -5136,6 +5136,481 @@ def test_stage206r_register_helper_function_is_idempotent():
     assert emitter.module_globals == {"__helix_arena_base"}
 
 
+# ==========================================================================
+# Stage 206-R chunk — QUOTE / SPLICE / MODIFY (+ reflection cells)
+# Final 206-R chunk. AGI metaprogramming primitives over a 64-cell
+# i64 reflection-state array. QUOTE: pure inline `add i32 0,
+# <handle>` (compile-time ast_handle mod NUM_CELLS). SPLICE: 3-block
+# helper, bounds-checked load, returns 0 on OOB. MODIFY: 4-block
+# helper takes a verifier function pointer, returns 1 on accepted-
+# store, 0 on OOB or verifier-reject. REFLECT_HASH unimplemented in
+# both backends — lands in the catchall fail-closed.
+# ==========================================================================
+def test_stage206r_num_cells_matches_x86_backend():
+    """`_HELIX_NUM_CELLS` (64) must match
+    `x86_64.py::HELIX_NUM_CELLS` — Stage 207 parity gate compares
+    both backends against this single overflow point."""
+    from helixc.backend import x86_64
+    assert llvm_ir._HELIX_NUM_CELLS == x86_64.HELIX_NUM_CELLS
+
+
+def test_stage206r_emit_quote_inlines_handle_mod_num_cells():
+    """QUOTE materialises `ast_handle % NUM_CELLS` as a pure
+    `add i32 0, <handle>` inline emission — matches x86's
+    `handle = int(op.attrs.get("ast_handle", 0)) % HELIX_NUM_CELLS`
+    at line 4473."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    # ast_handle 100 → 100 % 64 = 36.
+    r = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+               attrs={"ast_handle": 100})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = add i32 0, 36" in ll, ll
+    # QUOTE does NOT touch the state global; SPLICE/MODIFY do.
+    assert "@__helix_state_base" not in ll, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_emit_splice_call():
+    """SPLICE lowers to a single `call i32 @__helix_splice(i32 %h)`."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32())], _i32())
+    r = b.emit(tir.OpKind.SPLICE, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = call i32 @__helix_splice(i32 %v0)" in ll, ll
+    assert ll.count("define internal i32 @__helix_splice(") == 1, ll
+    assert ll.count("@__helix_state_base = internal global") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_emit_modify_call():
+    """MODIFY lowers to `call i32 @__helix_modify(i32 %h, i32 %v,
+    ptr @<verifier>)` — the verifier function pointer is hard-coded
+    by name at the call site."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("verify", [("h", _i32()), ("v", _i32())], _i32())
+    b.ret(b.const_int(1))
+    b.end_function()
+    fn = b.begin_function("f", [("h", _i32()), ("v", _i32())], _i32())
+    h, v = fn.params
+    r = b.emit(tir.OpKind.MODIFY, h, v,
+               result_ty=_i32(), attrs={"verifier_fn": "verify"})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert (f"%v{r.id} = call i32 @__helix_modify("
+            f"i32 %v{h.id}, i32 %v{v.id}, ptr @verify)"
+            in ll), ll
+    assert ll.count("define internal i32 @__helix_modify(") == 1, ll
+
+
+def test_stage206r_splice_helper_text_pinned():
+    """The splice helper's parity-sensitive lines (OOB predicate,
+    sext, GEP element type i64, trunc to i32, phi from entry+load)."""
+    helper = llvm_ir._HELIX_SPLICE_HELPER
+    cells = llvm_ir._HELIX_NUM_CELLS
+    assert "%neg = icmp slt i32 %handle, 0" in helper, helper
+    assert f"%big = icmp sge i32 %handle, {cells}" in helper, helper
+    assert "%oob = or i1 %neg, %big" in helper, helper
+    assert "%handle_i64 = sext i32 %handle to i64" in helper, helper
+    assert ("getelementptr inbounds i64, ptr @__helix_state_base, "
+            "i64 %handle_i64" in helper), helper
+    assert "%loaded = load i64, ptr %slot_ptr, align 8" in helper, helper
+    assert "%trunc = trunc i64 %loaded to i32" in helper, helper
+    assert ("%result = phi i32 [ 0, %entry ], [ %trunc, %load ]"
+            in helper), helper
+
+
+def test_stage206r_modify_helper_text_pinned():
+    """The modify helper's parity-sensitive lines: bounds, verifier
+    call through %verifier function pointer, conditional store
+    (i32 sext to i64 to match cell width), three-way phi at exit."""
+    helper = llvm_ir._HELIX_MODIFY_HELPER
+    cells = llvm_ir._HELIX_NUM_CELLS
+    assert "%neg = icmp slt i32 %handle, 0" in helper, helper
+    assert f"%big = icmp sge i32 %handle, {cells}" in helper, helper
+    assert ("%accepted = call i32 %verifier(i32 %handle, "
+            "i32 %new_value)" in helper), helper
+    assert "%ok = icmp ne i32 %accepted, 0" in helper, helper
+    assert "%handle_i64 = sext i32 %handle to i64" in helper, helper
+    assert "%value_i64 = sext i32 %new_value to i64" in helper, helper
+    assert "store i64 %value_i64, ptr %slot_ptr, align 8" in helper, helper
+    # 3-way phi: 0 from entry (OOB), 0 from verify (rejected),
+    # 1 from apply (stored).
+    assert ("%result = phi i32 [ 0, %entry ], [ 0, %verify ], "
+            "[ 1, %apply ]" in helper), helper
+
+
+def test_stage206r_splice_helper_has_three_blocks():
+    helper = llvm_ir._HELIX_SPLICE_HELPER
+    for label in ("entry:", "load:", "exit:"):
+        assert f"\n{label}\n" in helper, (label, helper)
+
+
+def test_stage206r_modify_helper_has_four_blocks():
+    helper = llvm_ir._HELIX_MODIFY_HELPER
+    for label in ("entry:", "verify:", "apply:", "exit:"):
+        assert f"\n{label}\n" in helper, (label, helper)
+
+
+def test_stage206r_splice_oob_returns_zero_no_load():
+    """The OOB path branches `entry -> exit` directly; no load
+    instruction lives outside the `load:` block. Parallel to the
+    arena helpers' atomic-on-overflow invariant."""
+    helper = llvm_ir._HELIX_SPLICE_HELPER
+    entry_block = helper.split("load:")[0]
+    assert "load i64" not in entry_block, entry_block
+    exit_block = helper.split("exit:")[1]
+    assert "load i64" not in exit_block, exit_block
+
+
+def test_stage206r_modify_oob_skips_verifier_and_store():
+    """OOB path skips BOTH the verifier call AND the store — they
+    live only in the `verify:` and `apply:` blocks respectively.
+    Without this, an OOB handle could trigger the verifier (e.g. if
+    the verifier reads cell state) — UB."""
+    helper = llvm_ir._HELIX_MODIFY_HELPER
+    entry_block = helper.split("verify:")[0]
+    assert "call i32 %verifier" not in entry_block, entry_block
+    assert "store i64" not in entry_block, entry_block
+    exit_block = helper.split("exit:")[1]
+    assert "call i32 %verifier" not in exit_block, exit_block
+    assert "store i64" not in exit_block, exit_block
+
+
+def test_stage206r_state_globals_emitted_once():
+    """A module using all three (QUOTE / SPLICE / MODIFY) plus
+    multiple call sites emits ONE state global + each helper once."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("v", [("h", _i32()), ("x", _i32())], _i32())
+    b.ret(b.const_int(1))
+    b.end_function()
+    fn = b.begin_function("f", [("v", _i32())], _i32())
+    h1 = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+                attrs={"ast_handle": 0})
+    h2 = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+                attrs={"ast_handle": 1})
+    b.emit(tir.OpKind.SPLICE, h1, result_ty=_i32())
+    b.emit(tir.OpKind.SPLICE, h2, result_ty=_i32())
+    m = b.emit(tir.OpKind.MODIFY, h1, fn.params[0],
+               result_ty=_i32(), attrs={"verifier_fn": "v"})
+    b.ret(m)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert ll.count("@__helix_state_base = internal global") == 1, ll
+    assert ll.count("define internal i32 @__helix_splice(") == 1, ll
+    assert ll.count("define internal i32 @__helix_modify(") == 1, ll
+    # 2 inline `add i32 0, N` quotes, 2 splice calls, 1 modify call.
+    assert ll.count("add i32 0, ") == 2, ll
+    assert ll.count("call i32 @__helix_splice(") == 2, ll
+    assert ll.count("call i32 @__helix_modify(") == 1, ll
+    assert llvm_ir.mock_validate_ll(ll) == []
+
+
+def test_stage206r_state_global_not_emitted_when_unused():
+    """QUOTE alone does NOT pull in the state global — only SPLICE
+    and MODIFY do (QUOTE is a pure inline `add`)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+               attrs={"ast_handle": 0})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert "@__helix_state_base" not in ll, ll
+    assert "define internal i32 @__helix_splice(" not in ll, ll
+    assert "define internal i32 @__helix_modify(" not in ll, ll
+
+
+def test_stage206r_quote_rejects_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("x", _i32())], _i32())
+    r = b.emit(tir.OpKind.QUOTE, fn.params[0], result_ty=_i32(),
+               attrs={"ast_handle": 0})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="QUOTE takes no operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_quote_rejects_non_i32_result():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], tir.TIRScalar("i64"))
+    r = b.emit(tir.OpKind.QUOTE, result_ty=tir.TIRScalar("i64"),
+               attrs={"ast_handle": 0})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="QUOTE result has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_quote_rejects_non_int_ast_handle():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+               attrs={"ast_handle": "not-an-int"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="int 'ast_handle' attr"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_splice_rejects_zero_operands():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.SPLICE, result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="SPLICE takes one operand"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_splice_rejects_non_i32_handle():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.SPLICE, fn.params[0], result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="SPLICE handle has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_splice_rejects_non_i32_value_kind():
+    """f32 / f64 SPLICE variants are NOT yet lowered — reject loudly
+    so the future polymorphic-helper migration is visible."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32())], _i32())
+    r = b.emit(tir.OpKind.SPLICE, fn.params[0], result_ty=_i32(),
+               attrs={"value_kind": "f64"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="SPLICE value_kind 'f64' is not yet"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_modify_canonical_one_operand_rejected():
+    """The CANONICAL MODIFY form (with verifier_fn string attr)
+    requires exactly 2 operands; 1 with verifier_fn set is
+    malformed."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32())], _i32())
+    r = b.emit(tir.OpKind.MODIFY, fn.params[0], result_ty=_i32(),
+               attrs={"verifier_fn": "v"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="canonical MODIFY .*takes two operands"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_modify_legacy_3op_truthy_check():
+    """Audit-fix HIGH-1: MODIFY with no verifier_fn attr and 3
+    operands lowers to a runtime truthy check on operand[2] — the
+    legacy form x86_64.py supports at line 4538-4548. Without this
+    branch, programs using the dynamic-verifier form would compile
+    on x86 but fail on LLVM (a real parity divergence)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("h", _i32()), ("v", _i32()), ("c", _i32())], _i32())
+    r = b.emit(tir.OpKind.MODIFY,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # Truthy check + zext.
+    assert (f"%v{r.id}.is_ne = icmp ne i32 %v{fn.params[2].id}, 0"
+            in ll), ll
+    assert (f"%v{r.id} = zext i1 %v{r.id}.is_ne to i32"
+            in ll), ll
+    # No __helix_modify helper pulled in (legacy form is inline).
+    assert "define internal i32 @__helix_modify" not in ll, ll
+    # No state global either — legacy form doesn't touch cells.
+    assert "@__helix_state_base" not in ll, ll
+
+
+def test_stage206r_modify_legacy_lt_3op_returns_zero():
+    """Audit-fix HIGH-1: MODIFY with no verifier_fn and fewer than
+    3 operands degrades to `result = 0` (matches x86 line 4549-
+    4550)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32()), ("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.MODIFY, fn.params[0], fn.params[1],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = add i32 0, 0" in ll, ll
+    assert "define internal i32 @__helix_modify" not in ll, ll
+
+
+def test_stage206r_modify_legacy_rejects_non_i32_operand2():
+    """The legacy form's truthy check requires operand[2] to be
+    i32 (mirrors x86's `mov eax, [slot]` 32-bit load)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function(
+        "f", [("h", _i32()), ("v", _i32()),
+              ("c", tir.TIRScalar("i64"))], _i32())
+    r = b.emit(tir.OpKind.MODIFY,
+               fn.params[0], fn.params[1], fn.params[2],
+               result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="legacy verifier operand has LLVM type i64"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_quote_rejects_bool_ast_handle():
+    """Audit-fix MEDIUM-1: a bool ast_handle would silently wrap
+    to 0/1 (since `True % 64 == 1`) — reject explicitly with
+    `type(...) is int` for consistency with the CONST_INT
+    discipline."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+               attrs={"ast_handle": True})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="int 'ast_handle'"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_quote_negative_handle_wraps_to_valid_cell():
+    """A negative ast_handle wraps via Python `%` semantics into
+    [0, NUM_CELLS) — matches x86_64.py line 4473's
+    `int(...) % HELIX_NUM_CELLS`. Both backends use the same
+    Python modulo (non-negative result for non-negative divisor)."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    # -5 % 64 == 59
+    r = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+               attrs={"ast_handle": -5})
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    assert f"%v{r.id} = add i32 0, 59" in ll, ll
+
+
+def test_stage206r_modify_rejects_empty_verifier_fn():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32()), ("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.MODIFY, fn.params[0], fn.params[1],
+               result_ty=_i32(), attrs={"verifier_fn": ""})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="non-empty 'verifier_fn'"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_modify_rejects_non_i32_value_kind():
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    fn = b.begin_function("f", [("h", _i32()), ("v", _i32())], _i32())
+    r = b.emit(tir.OpKind.MODIFY, fn.params[0], fn.params[1],
+               result_ty=_i32(),
+               attrs={"verifier_fn": "v", "value_kind": "f64"})
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="MODIFY value_kind 'f64' is not yet"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_reflect_hash_lands_in_catchall():
+    """REFLECT_HASH is unimplemented in BOTH backends (x86 has no
+    arm; LLVM uses the general catchall). The catchall must
+    name the unsupported op kind."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    r = b.emit(tir.OpKind.REFLECT_HASH, result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    with pytest.raises(llvm_ir.LLVMEmitError,
+                       match="agi.reflect_hash"):
+        llvm_ir.emit_module(mod)
+
+
+def test_stage206r_quote_splice_round_trip_arithmetic():
+    """The slot arithmetic in QUOTE / SPLICE matches: QUOTE
+    materialises handle = ast_handle % NUM_CELLS; SPLICE indexes
+    `state[handle]` directly (no offset). A QUOTE result fed to
+    SPLICE addresses the same cell that MODIFY would write to."""
+    mod = tir.Module()
+    b = tir.IRBuilder(mod)
+    b.begin_function("f", [], _i32())
+    h = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+               attrs={"ast_handle": 7})
+    r = b.emit(tir.OpKind.SPLICE, h, result_ty=_i32())
+    b.ret(r)
+    b.end_function()
+    ll = llvm_ir.emit_module(mod)
+    # QUOTE emits the constant; SPLICE calls the helper.
+    assert f"%v{h.id} = add i32 0, 7" in ll, ll
+    assert (f"%v{r.id} = call i32 @__helix_splice(i32 %v{h.id})"
+            in ll), ll
+
+
+def test_stage206r_quote_splice_modify_is_deterministic():
+    def build():
+        mod = tir.Module()
+        b = tir.IRBuilder(mod)
+        b.begin_function("v", [("h", _i32()), ("x", _i32())], _i32())
+        b.ret(b.const_int(1))
+        b.end_function()
+        fn = b.begin_function("f", [("v", _i32())], _i32())
+        h = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
+                   attrs={"ast_handle": 0})
+        b.emit(tir.OpKind.SPLICE, h, result_ty=_i32())
+        m = b.emit(tir.OpKind.MODIFY, h, fn.params[0],
+                   result_ty=_i32(), attrs={"verifier_fn": "v"})
+        b.ret(m)
+        b.end_function()
+        return mod
+    assert llvm_ir.emit_module(build()) == llvm_ir.emit_module(build())
+
+
+def test_stage206r_state_globals_shared_constant():
+    """`_HELIX_STATE_GLOBALS` is referenced by both SPLICE and
+    MODIFY helpers — single source of truth."""
+    assert llvm_ir._HELIX_STATE_GLOBALS == ("__helix_state_base",)
+    for name in ("__helix_splice", "__helix_modify"):
+        spec = llvm_ir._HELPER_FUNCTIONS[name]
+        assert spec.module_globals is llvm_ir._HELIX_STATE_GLOBALS, (
+            name, spec.module_globals)
+
+
 def test_stage206r_trace_globals_shared_constant():
     """`_HELIX_TRACE_GLOBALS` is referenced by the trace_event
     helper — single source of truth for the (count, buf) pair so a

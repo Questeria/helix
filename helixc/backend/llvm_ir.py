@@ -90,8 +90,23 @@ Supported so far (Stages 200, 202-204):
     closed, no allocation/syscall — matches x86). fn_ids are
     interned per-module by `_intern_trace_fn_ids` in module-walk
     order — `emit_module` builds the table BEFORE constructing the
-    per-fn emitters and shares it across all of them. Other PRINT
-    kinds (read_file_to_arena, QUOTE-family) are later chunks.
+    per-fn emitters and shares it across all of them.
+  - AGI metaprogramming (Stage 206-R): `QUOTE` materialises a
+    compile-time reflection-cell handle in [0, NUM_CELLS) as a
+    pure `add i32 0, <handle>` (the `ast_handle` attr mod
+    NUM_CELLS); `SPLICE` reads cell[handle] via the bounds-checked
+    `@__helix_splice(i32) -> i32` helper (3 blocks, returns 0 on
+    OOB); `MODIFY` bounds-checks handle, calls a user-supplied
+    verifier(handle, new_value), and conditionally stores via the
+    `@__helix_modify(i32, i32, ptr) -> i32` helper (4 blocks,
+    returns 1 on accepted-store, 0 on OOB or verifier-reject). Both
+    SPLICE / MODIFY share the `@__helix_state_base = [NUM_CELLS x
+    i64]` cell array (matches x86's `__helix_state_base` BSS
+    region). Only `value_kind == "i32"` is lowered today; f32 / f64
+    variants raise loudly (Stage 207 polymorphic-helper follow-up).
+    `REFLECT_HASH` is a placeholder in TIR with no x86 lowering
+    either — it lands in the LLVM catchall fail-closed, matching
+    x86's NotImplementedError.
 
 Anything outside that set — structs, floats, the wider op surface —
 is REJECTED with a loud `LLVMEmitError`,
@@ -393,6 +408,20 @@ _HELIX_TRACE_CAP = 1024
 _HELIX_READ_FILE_BUF_SIZE = 0x100000
 
 
+# Reflection-cell count — must match `x86_64.py::HELIX_NUM_CELLS`.
+# Each cell is i64 (`HELIX_CELL_SIZE = 8` on x86). QUOTE materialises
+# a handle in [0, NUM_CELLS) at compile time (via `ast_handle %
+# NUM_CELLS`); SPLICE loads from `@__helix_state_base[handle]`;
+# MODIFY conditionally stores after a user-supplied verifier
+# function approves. A handle outside [0, NUM_CELLS) returns 0 from
+# SPLICE / fails MODIFY (matches x86's bounds-check semantics).
+_HELIX_NUM_CELLS = 64
+
+# Shared module-globals tuple for the reflection cells (parallel to
+# `_HELIX_ARENA_GLOBALS` / `_HELIX_TRACE_GLOBALS`).
+_HELIX_STATE_GLOBALS: tuple[str, ...] = ("__helix_state_base",)
+
+
 # The PRINT op's `_kind` attribute names a sub-operation; this is
 # the closed set the LLVM backend currently lowers. A single source
 # of truth across the dispatch check (`if print_kind not in ...`)
@@ -682,6 +711,16 @@ _HELIX_TRACE_COUNT_GLOBAL_DEF = (
 _HELIX_TRACE_BUF_GLOBAL_DEF = (
     f"@__helix_trace_buf = internal global "
     f"[{_HELIX_TRACE_CAP * 2} x i32] zeroinitializer, align 4")
+
+
+# Reflection-cell state: `[NUM_CELLS x i64] zeroinitializer`. Each
+# cell is 8 bytes (matches `x86_64.py::HELIX_CELL_SIZE = 8`). SPLICE
+# reads one cell; MODIFY conditionally writes one (after the user's
+# verifier function approves). x86's layout is the same array, in
+# the binary's writable region (line 4903-4907 of x86_64.py).
+_HELIX_STATE_BASE_GLOBAL_DEF = (
+    f"@__helix_state_base = internal global "
+    f"[{_HELIX_NUM_CELLS} x i64] zeroinitializer, align 8")
 
 # `__helix_arena_push(i32) -> i32`: push one i32 value to the arena;
 # return the new slot's index, or -1 on overflow. Mirrors
@@ -985,6 +1024,84 @@ exit:
 }}"""
 
 
+# `__helix_splice(i32 handle) -> i32`: load cell[handle] as i32
+# (truncated from i64). Out-of-bounds handle (negative when
+# interpreted signed, or >= NUM_CELLS) returns 0. Mirrors
+# `x86_64.py::SPLICE` (line ~4477) for the default i32 value_kind.
+# Three blocks (entry / load / exit). The phi at exit returns 0
+# from entry (the OOB path) and the truncated load from load.
+#
+# NOTE (Stage 207 parity): x86 also handles `value_kind == "f64"`
+# at the same op site (returns the full i64 instead of truncating);
+# the LLVM helper only handles the i32 default. The op handler
+# rejects non-i32 value_kind explicitly — supporting f32/f64 would
+# require either a polymorphic helper or per-kind variants and is
+# deferred to a follow-up chunk.
+_HELIX_SPLICE_HELPER = f"""\
+define internal i32 @__helix_splice(i32 %handle) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %load
+
+load:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %loaded = load i64, ptr %slot_ptr, align 8
+  %trunc = trunc i64 %loaded to i32
+  br label %exit
+
+exit:
+  %result = phi i32 [ 0, %entry ], [ %trunc, %load ]
+  ret i32 %result
+}}"""
+
+
+# `__helix_modify(i32 handle, i32 new_value, ptr verifier) -> i32`:
+# bounds-check handle; call verifier(handle, new_value); if the
+# verifier returns non-zero AND the handle is in bounds, store
+# new_value (sign-extended to i64) into cell[handle] and return 1;
+# else return 0. Mirrors `x86_64.py::MODIFY` (line ~4529) for the
+# default i32 value_kind.
+#
+# The verifier is a user-supplied function — its name is hard-coded
+# at the LLVM call site as a function pointer (`ptr @<verifier>`).
+# The helper itself is verifier-agnostic; the call goes through the
+# `%verifier` argument so one helper definition serves every MODIFY
+# call site in the module.
+#
+# Four blocks (entry / verify / apply / exit). On bounds failure,
+# entry branches DIRECTLY to exit (skipping verifier + store);
+# matches x86's "OOB never reaches verifier" semantics (line 4554-
+# 4565). Exit phi: 0 from entry (OOB), 0 from verify (rejected),
+# 1 from apply (accepted-store).
+_HELIX_MODIFY_HELPER = f"""\
+define internal i32 @__helix_modify(i32 %handle, i32 %new_value, ptr %verifier) {{
+entry:
+  %neg = icmp slt i32 %handle, 0
+  %big = icmp sge i32 %handle, {_HELIX_NUM_CELLS}
+  %oob = or i1 %neg, %big
+  br i1 %oob, label %exit, label %verify
+
+verify:
+  %accepted = call i32 %verifier(i32 %handle, i32 %new_value)
+  %ok = icmp ne i32 %accepted, 0
+  br i1 %ok, label %apply, label %exit
+
+apply:
+  %handle_i64 = sext i32 %handle to i64
+  %slot_ptr = getelementptr inbounds i64, ptr @__helix_state_base, i64 %handle_i64
+  %value_i64 = sext i32 %new_value to i64
+  store i64 %value_i64, ptr %slot_ptr, align 8
+  br label %exit
+
+exit:
+  %result = phi i32 [ 0, %entry ], [ 0, %verify ], [ 1, %apply ]
+  ret i32 %result
+}}"""
+
+
 # Private authority dict — mutated only at module init. The public
 # `_HELPER_FUNCTIONS` is a `MappingProxyType` view (immutable from
 # outside the module), mirroring the MLIR-side authority pattern at
@@ -1070,6 +1187,18 @@ _HELPER_FUNCTIONS_AUTHORITY: dict[str, _HelperFunctionSpec] = {
         module_globals=(),
         helper_deps=("__helix_arena_push",),
     ),
+    "__helix_splice": _HelperFunctionSpec(
+        definition=_HELIX_SPLICE_HELPER,
+        ret_ty="i32",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
+    "__helix_modify": _HelperFunctionSpec(
+        definition=_HELIX_MODIFY_HELPER,
+        ret_ty="i32",
+        ffi_declares=(),
+        module_globals=_HELIX_STATE_GLOBALS,
+    ),
 }
 
 _HELPER_FUNCTIONS: Mapping[str, _HelperFunctionSpec] = MappingProxyType(
@@ -1094,6 +1223,10 @@ _MODULE_GLOBALS_AUTHORITY: dict[str, _ModuleGlobalSpec] = {
     "__helix_trace_buf": _ModuleGlobalSpec(
         name="__helix_trace_buf",
         definition=_HELIX_TRACE_BUF_GLOBAL_DEF,
+    ),
+    "__helix_state_base": _ModuleGlobalSpec(
+        name="__helix_state_base",
+        definition=_HELIX_STATE_BASE_GLOBAL_DEF,
     ),
 }
 
@@ -2645,6 +2778,213 @@ class _FnEmitter:
                     f"i32 {self._ref(left)}, "
                     f"i32 {self._ref(middle)}, "
                     f"i32 {self._ref(right)})")
+        if kind == tir.OpKind.QUOTE:
+            # `quote` returns a stable cell handle in [0, NUM_CELLS)
+            # — the handle is derived at compile time from the
+            # `ast_handle` attr (mod NUM_CELLS, mirroring
+            # x86_64.py::QUOTE line 4473). Pure inline emission: a
+            # single `add i32 0, <handle>` materialises the constant
+            # into the result register; LLVM's instruction combiner
+            # folds it away after isel. No operands; one i32 result.
+            #
+            # The cell array `@__helix_state_base` is NOT registered
+            # here — QUOTE only emits a compile-time constant, it
+            # does not touch the cell array. SPLICE / MODIFY pull
+            # the global in transitively via their `module_globals`.
+            if op.operands:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: QUOTE takes no "
+                    f"operands, got {len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: QUOTE must have "
+                    f"exactly one result, got {len(op.results)}")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} QUOTE result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: QUOTE result has "
+                    f"LLVM type {res_ty}, but a reflection-cell "
+                    f"handle is an i32")
+            ast_handle = op.attrs.get("ast_handle", 0)
+            # `type(...) is int` rejects bool (which is an int
+            # subclass — `isinstance(True, int)` is True). Matches
+            # the CONST_INT discipline: a bool ast_handle wraps to
+            # 0/1 silently, but should fail loudly so a buggy
+            # frontend / hand-built tir.Module is visible. Audit-
+            # fix MEDIUM-1.
+            if type(ast_handle) is not int:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: QUOTE needs an int "
+                    f"'ast_handle' attr (got "
+                    f"{type(ast_handle).__name__})")
+            # Python `%` with non-negative divisor always returns
+            # non-negative — a negative ast_handle wraps into
+            # [0, NUM_CELLS) (matches x86's
+            # `int(...) % HELIX_NUM_CELLS` at line 4473). The wrap
+            # is intentional: the front-end computes a content-
+            # addressed hash that may legally be any int.
+            handle = ast_handle % _HELIX_NUM_CELLS
+            return f"%v{result.id} = add i32 0, {handle}"
+        if kind == tir.OpKind.SPLICE:
+            # `splice` loads cell[handle] as i32. Bounds-check the
+            # handle (negative or >= NUM_CELLS returns 0). One i32
+            # operand, one i32 result.
+            #
+            # Only the i32 value_kind is supported — `f32`/`f64`
+            # variants exist in x86 (line 4523-4527) but lower
+            # differently (return i64 directly). Reject explicitly
+            # so a future polymorphic helper migration is loud.
+            if len(op.operands) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SPLICE takes one "
+                    f"operand (the i32 handle), got "
+                    f"{len(op.operands)}")
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SPLICE must have "
+                    f"exactly one result, got {len(op.results)}")
+            value_kind = op.attrs.get("value_kind", "i32")
+            if value_kind != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SPLICE value_kind "
+                    f"{value_kind!r} is not yet lowered (only 'i32' "
+                    f"so far — f32 / f64 variants are a follow-up "
+                    f"chunk that needs a polymorphic helper)")
+            handle = op.operands[0]
+            handle_ty = _llvm_int_type(
+                handle.ty,
+                ctx=f"function {self.fn.name!r} SPLICE handle")
+            if handle_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SPLICE handle has "
+                    f"LLVM type {handle_ty}, but the helper "
+                    f"`__helix_splice` takes an i32")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} SPLICE result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: SPLICE result has "
+                    f"LLVM type {res_ty}, but the i32 value_kind "
+                    f"yields i32")
+            self._register_helper_function("__helix_splice")
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_splice(i32 {self._ref(handle)})")
+        if kind == tir.OpKind.MODIFY:
+            # `modify` bounds-checks the handle, calls a user-
+            # supplied verifier(handle, new_value), and stores
+            # new_value into cell[handle] if accepted. Two i32
+            # operands (handle, new_value), one i32 result (1 on
+            # accepted-store, 0 on OOB or verifier-reject).
+            #
+            # The verifier name lives in `op.attrs["verifier_fn"]`
+            # and is passed as a function pointer at the call site —
+            # one shared helper, many verifier-specific call sites.
+            # If the verifier function is not defined in the module
+            # at link time LLVM rejects; this op handler does not
+            # cross-check (the per-fn emitter has no module-level
+            # view). NOTE (Stage 207 parity): the verifier's
+            # (i32, i32) -> i32 ABI is not cross-checked at emit
+            # time either — a wrong-arity verifier produces ABI-
+            # mismatch UB at runtime; x86_64.py's `call_rel32` has
+            # the same gap. The Stage 207 parity gate is the
+            # decision-maker for an emit-time cross-check (would
+            # need module-level visibility plumbed into _FnEmitter).
+            if len(op.results) != 1:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: MODIFY must have "
+                    f"exactly one result, got {len(op.results)}")
+            value_kind = op.attrs.get("value_kind", "i32")
+            if value_kind != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: MODIFY value_kind "
+                    f"{value_kind!r} is not yet lowered (only 'i32' "
+                    f"so far — f32 / f64 variants are a follow-up "
+                    f"chunk that needs a polymorphic helper and a "
+                    f"separate ABI for the verifier signature)")
+            verifier_fn = op.attrs.get("verifier_fn")
+            result = op.results[0]
+            res_ty = _llvm_int_type(
+                result.ty,
+                ctx=f"function {self.fn.name!r} MODIFY result")
+            if res_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: MODIFY result has "
+                    f"LLVM type {res_ty}, but the accepted-or-not "
+                    f"flag is an i32")
+            # Legacy fallback (audit-fix HIGH-1, x86 parity): when
+            # `verifier_fn` is missing, the op semantics degrade to
+            # "is operand[2] truthy?" — no bounds check, no actual
+            # cell store, just a 0/1 flag. x86_64.py::MODIFY lines
+            # 4538-4551 handles this fallback for legacy frontend
+            # emissions (e.g. the `modify(h, v, runtime_expr)` form
+            # that lower_ast emits when no verifier function is in
+            # scope). Without this branch, programs that exercise
+            # the legacy form would compile on x86 but fail on LLVM,
+            # producing a real Stage 207 parity divergence.
+            if verifier_fn is None:
+                if len(op.operands) >= 3:
+                    legacy = op.operands[2]
+                    legacy_ty = _llvm_int_type(
+                        legacy.ty,
+                        ctx=(f"function {self.fn.name!r} MODIFY "
+                             f"legacy verifier operand"))
+                    if legacy_ty != "i32":
+                        raise LLVMEmitError(
+                            f"function {self.fn.name!r}: MODIFY "
+                            f"legacy verifier operand has LLVM "
+                            f"type {legacy_ty}, but the truthy "
+                            f"check expects i32")
+                    rid = result.id
+                    is_ne = f"%v{rid}.is_ne"
+                    return (
+                        f"{is_ne} = icmp ne i32 "
+                        f"{self._ref(legacy)}, 0\n"
+                        f"%v{rid} = zext i1 {is_ne} to i32")
+                # Legacy fallback with <3 operands: result = 0
+                # (matches x86 line 4549-4550).
+                return f"%v{result.id} = add i32 0, 0"
+            # Canonical form: 2 operands + non-empty verifier_fn
+            # string attr.
+            if not isinstance(verifier_fn, str) or not verifier_fn:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: MODIFY needs a "
+                    f"non-empty 'verifier_fn' string attr naming "
+                    f"the verifier function (got "
+                    f"{type(verifier_fn).__name__} {verifier_fn!r})")
+            if len(op.operands) != 2:
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: canonical MODIFY "
+                    f"(with verifier_fn) takes two operands (i32 "
+                    f"handle, i32 new_value), got "
+                    f"{len(op.operands)}")
+            handle, new_value = op.operands
+            handle_ty = _llvm_int_type(
+                handle.ty,
+                ctx=f"function {self.fn.name!r} MODIFY handle")
+            if handle_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: MODIFY handle has "
+                    f"LLVM type {handle_ty}, but the helper "
+                    f"`__helix_modify` takes an i32 handle")
+            new_value_ty = _llvm_int_type(
+                new_value.ty,
+                ctx=f"function {self.fn.name!r} MODIFY new_value")
+            if new_value_ty != "i32":
+                raise LLVMEmitError(
+                    f"function {self.fn.name!r}: MODIFY new_value "
+                    f"has LLVM type {new_value_ty}, but the i32 "
+                    f"value_kind takes an i32 new_value")
+            self._register_helper_function("__helix_modify")
+            verifier_global = _llvm_global_name(verifier_fn)
+            return (f"%v{result.id} = call i32 "
+                    f"@__helix_modify(i32 {self._ref(handle)}, "
+                    f"i32 {self._ref(new_value)}, "
+                    f"ptr {verifier_global})")
         if kind in (tir.OpKind.TRACE_ENTRY, tir.OpKind.TRACE_EXIT):
             # `trace.entry` / `trace.exit` append a (fn_id, kind=0/1)
             # event to the trace ring buffer via the void-returning
@@ -2959,8 +3299,9 @@ class _FnEmitter:
             f"TRAP; STR_PTR; STR_BYTE; print_str / print_int / "
             f"write_file / read_file_to_arena PRINT; "
             f"ARENA_PUSH / GET / SET / LEN / PUSH_PAIR / PUSH_TRIPLE; "
-            f"TRACE_ENTRY / TRACE_EXIT; RETURN; BR; COND_BR — "
-            f"floats and structs are later stages)"
+            f"TRACE_ENTRY / TRACE_EXIT; QUOTE / SPLICE / MODIFY; "
+            f"RETURN; BR; COND_BR — REFLECT_HASH + float / struct "
+            f"support are later stages)"
         )
 
 

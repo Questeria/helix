@@ -543,38 +543,54 @@ tests; the fast MLIR slice is 205 passing tests on this machine.
    mutation" diagnostic misattribution) + 1 LOW (kernel-skip in
    pre-pass) all closed.
 
-   **read_file_to_arena — SHIPPED 2026-05-24** (this chunk). The
-   most complex 206-R chunk to date. Adds `_HelperFunctionSpec.helper_deps`
-   for TRANSITIVE helper-call dependencies (read_file_to_arena calls
-   __helix_arena_push in its per-byte push loop); `_register_helper_function`
-   becomes recursive over deps with idempotency via
-   `name in self.helper_functions`; `_check_helper_function_table`
-   adds (a) a body cross-check that every dep appears as a real
-   `call` line and (b) module-load DFS-based CYCLE DETECTION
-   (audit-fix HIGH-1 — without this a true cycle would leak as
-   RecursionError). The body cross-check now strips `;` comments
-   via `_strip_llvm_comment` so a comment-only mention of a call
-   pattern cannot falsely satisfy the drift guard (audit-fix HIGH-2
-   — same tightening applied to the existing FFI cross-check).
-   The helper itself: 6-block multi-block LLVM (entry / trap /
-   sign_check / loop_header / loop_body / exit). Opens path O_RDONLY,
-   reads up to 1 MiB into a stack buffer, traps via `@llvm.trap()`
-   on truncation (matches x86's `ud2`), sign-clamps nread, pushes
-   each byte to the shared arena. Four Stage 207 parity-gate notes
-   documented inline (open / read / close / arena_push contract
-   gaps mirrored from x86_64.py). Polish landed:
-   `_SUPPORTED_PRINT_KINDS` frozenset constant (single source of
-   truth for the dispatch + error-message); `_validate_path_attr`
-   shared helper for the NUL-rejection guard (was duplicated
-   between write_file and read_file_to_arena).
+   **read_file_to_arena — SHIPPED 2026-05-24** (commit b3c9546).
+   Adds `_HelperFunctionSpec.helper_deps` for TRANSITIVE helper-call
+   dependencies. `_register_helper_function` becomes recursive with
+   idempotency-via-set; `_check_helper_function_table` adds body
+   cross-check + DFS-based CYCLE DETECTION (audit HIGH-1). Body
+   cross-check now strips `;` comments via `_strip_llvm_comment`
+   (audit HIGH-2). The helper is 6 blocks: opens O_RDONLY, reads
+   up to 1 MiB, traps via `@llvm.trap()` on truncation (matches
+   x86's `ud2`), sign-clamps nread, per-byte push to shared arena.
+   Four Stage 207 parity notes inline. Polish landed:
+   `_SUPPORTED_PRINT_KINDS` frozenset constant, `_validate_path_attr`
+   shared helper.
 
-   **Next residual ops (in priority order)**: QUOTE / SPLICE /
-   MODIFY / REFLECT_HASH (metaprogramming — needs reflection-cells
-   infrastructure). Parity fixture currently points at QUOTE
-   (the simplest still-uncovered residual). After QUOTE-family
-   lands, all 206-R additive prep is DONE and Stage 221 (the
-   destructive x86_64.py cutover) can proceed once the user
-   green-lights it.
+   **QUOTE / SPLICE / MODIFY — SHIPPED 2026-05-24** (this chunk —
+   the FINAL 206-R chunk). AGI metaprogramming primitives + new
+   `@__helix_state_base = [64 x i64]` reflection-cells global
+   (matches x86's HELIX_NUM_CELLS=64, HELIX_CELL_SIZE=8). QUOTE:
+   pure inline `add i32 0, <ast_handle % NUM_CELLS>` (compile-
+   time constant; bool ast_handle rejected via `type(...) is int`
+   matching CONST_INT discipline; negative handles wrap into
+   [0,NUM_CELLS) via Python `%` matching x86 exactly). SPLICE:
+   3-block helper, bounds-checked i64 load + trunc to i32,
+   returns 0 on OOB. MODIFY: 4-block helper takes
+   `(i32 handle, i32 new_value, ptr verifier)` — bounds-check,
+   call verifier through function pointer, conditional store,
+   3-way exit phi (0/0/1). MODIFY also has a LEGACY FALLBACK
+   (audit HIGH-1) for the 3-operand-no-verifier_fn form that
+   x86_64.py supports — emits inline `icmp ne i32 %op2, 0; zext`
+   instead of the helper call. Without this branch, programs
+   using the dynamic-verifier form would compile on x86 but fail
+   on LLVM (real parity divergence — existing test_codegen.py:4779
+   would break post-cutover). Only i32 value_kind lowered; f32/f64
+   variants raise loudly (deferred to a polymorphic-helper follow-
+   up). REFLECT_HASH unimplemented in BOTH backends — lands in
+   the LLVM catchall fail-closed, matching x86's
+   NotImplementedError.
+
+   **ALL 206-R ADDITIVE PREP IS NOW DONE.** Stage 221 cutover
+   (destructive: retires `x86_64.py` behind a flag, then removes)
+   becomes ready when the user green-lights it. The cron worker
+   MUST NOT auto-start Stage 221.
+
+   The remaining "x86 lowers, LLVM doesn't" cases are deferred-
+   FEATURE shapes (float / struct support; the f32/f64 value_kind
+   variants of SPLICE/MODIFY; REFLECT_HASH which is also
+   unimplemented in x86) — not 206-R residual ops. The parity
+   fixture points at f64 SPLICE to keep the UNCOVERED test
+   meaningful.
 
 When `v3.0.0` is tagged, v3.0 is done.
 

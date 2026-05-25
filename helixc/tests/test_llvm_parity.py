@@ -85,35 +85,36 @@ def _two_function_module() -> tir.Module:
 
 
 def _print_int_module() -> tir.Module:
-    """`main` with a QUOTE op — a Stage 206-R residual op the LLVM
-    backend does not yet lower (x86_64 does). The canonical
-    UNCOVERED case.
+    """`main` with an f64 SPLICE — every 206-R OPCODE is now lowered
+    on both backends, so the canonical UNCOVERED case has migrated
+    to a deferred-FEATURE shape: the f64 `value_kind` variant of
+    SPLICE (and the f64 return type generally). x86 lowers floats;
+    the LLVM backend rejects f64 at the return-type / value-kind
+    check.
 
     HISTORY: this helper has been repointed several times as 206-R
     chunks land:
-      - originally: print_int — lowered 2026-05-24 (commit c7b7cec)
-        via the `@__helix_print_int` internal helper.
-      - then: write_file — lowered (commit ac366c6) inline via libc
-        open/write/close.
-      - then: TRACE_ENTRY — lowered (this chunk) via the
-        `@__helix_trace_event` void helper + ring buffer.
-      - now: QUOTE — still residual; the AGI metaprogramming family
-        (QUOTE / SPLICE / MODIFY / REFLECT_HASH) is the last 206-R
-        group, gated on AST/cell infrastructure.
+      - originally: print_int — lowered 2026-05-24 (c7b7cec).
+      - then: write_file — lowered (ac366c6).
+      - then: TRACE_ENTRY — lowered (7ce6280).
+      - then: QUOTE — lowered (this chunk).
+      - now: f64 SPLICE / float arithmetic generally — the last
+        deferred-feature UNCOVERED shape. All 206-R additive prep
+        is DONE; the remaining "x86 lowers, LLVM doesn't" cases
+        are float / struct support (Phase F follow-ups or post-
+        Stage-221 cleanup).
 
     The function name stays `_print_int_module` to avoid renaming
-    every call site (the name names a ROLE — "the residual-op
-    fixture" — not the specific op).
-
-    NOTE: if a future chunk lowers QUOTE, repoint this helper at the
-    next still-residual op (SPLICE / MODIFY / REFLECT_HASH) so the
-    UNCOVERED tests stay meaningful."""
+    every call site — it names a ROLE ("residual UNCOVERED
+    fixture"), not the specific op."""
     mod = tir.Module()
     b = tir.IRBuilder(mod)
-    b.begin_function("main", [], _i32())
-    h = b.emit(tir.OpKind.QUOTE, result_ty=_i32(),
-               attrs={"ast_handle": 0})
-    b.ret(h)
+    b.begin_function("main", [], tir.TIRScalar("f64"))
+    h = b.const_int(0)
+    r = b.emit(tir.OpKind.SPLICE, h,
+               result_ty=tir.TIRScalar("f64"),
+               attrs={"value_kind": "f64"})
+    b.ret(r)
     b.end_function()
     return mod
 
@@ -352,20 +353,24 @@ def test_check_parity_match_multi_function():
 
 
 def test_check_parity_uncovered_print_int():
-    """A QUOTE op (a Stage 206-R residual op) -> UNCOVERED: the
-    x86_64 backend compiles it, the LLVM backend fails closed
-    loudly. NOT a parity defect — the gate accepts it.
+    """An f64-typed function (UNCOVERED by the LLVM backend) -> the
+    x86_64 backend compiles it, the LLVM backend fails closed loudly
+    at the return-type check. NOT a parity defect — the gate
+    accepts it.
 
     HISTORY: the canonical UNCOVERED case has migrated through
-    print_int -> write_file -> TRACE_ENTRY -> QUOTE as each
-    206-R chunk landed; the diagnostic check follows the fixture."""
+    print_int -> write_file -> TRACE_ENTRY -> QUOTE -> f64 SPLICE
+    as each 206-R chunk landed and the last 206-R op shipped. The
+    fixture role ("residual UNCOVERED") is preserved even as the
+    specific shape moves from "missing op" to "missing feature
+    family" (float support)."""
     r = llvm_parity.check_parity(_print_int_module(), "print_int")
     assert r.verdict() is ParityVerdict.UNCOVERED
     assert r.x86_compiled
     assert not r.llvm_emitted and r.llvm_failed_closed
     assert not r.is_parity_defect()
-    # the diagnostic names the uncovered op so the residual is visible
-    assert any("agi.quote" in d.lower() for d in r.detail), r.detail
+    # the diagnostic names the deferred feature so the residual is visible
+    assert any("f64" in d.lower() for d in r.detail), r.detail
 
 
 def test_check_parity_error_when_no_main():
