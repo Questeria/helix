@@ -844,6 +844,18 @@ fn emit_lea_rdi_rip_placeholder() -> i32 {
     disp_slot
 }
 
+// K1.AE (2026-05-25): lea rsi, [rip + disp32] (placeholder) -- 7
+// bytes (48 8D 35 + 4-byte disp). ModRM byte 0x35 = mod 00 / reg
+// 110 (rsi) / rm 101 ([rip+disp32]). Used by panic("msg") to load
+// the message buffer pointer into rsi for the sys_write syscall.
+// Returns the arena slot index of the disp bytes for backpatching.
+fn emit_lea_rsi_rip_placeholder() -> i32 {
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0x35);
+    let disp_slot = __arena_len();
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    disp_slot
+}
+
 // ret — 1 byte (C3).
 fn emit_ret() -> i32 { emit_byte(0xC3); 1 }
 
@@ -3747,6 +3759,49 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // emit_print_int_body for the byte layout. Returns 0 in eax.
         let arg_idx = __arena_get(args_head + 1);
         emit_print_int_body(arg_idx, bind_state, patch_state, bn_state)
+    } else { if is_panic_name(name_s, name_l) == 1 {
+        // K1.AE (2026-05-25): panic("msg") -- print the message to
+        // stderr via sys_write, then ud2-trap. Mirrors Python's
+        // helixc panic codegen ("panic[id]: msg\n" + sys_exit).
+        // Bootstrap omits the "panic[id]: " prefix for simplicity --
+        // just the message body + trap. panic_pass (kovc.hx:2662)
+        // has already validated that args_head points to exactly 1
+        // AST_ARG whose payload is AST_STR_LIT (tag 25); we re-check
+        // here defensively in case the validator was skipped.
+        let arg_idx_p = __arena_get(args_head + 1);
+        let arg_tag_p = __arena_get(arg_idx_p);
+        if arg_tag_p != 25 {
+            // Defensive: shouldn't reach (panic_pass would have
+            // emitted diag 28501 with aux=2). Emit a bare ud2 so
+            // the K2 binary still fails loudly.
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s_p = __arena_get(arg_idx_p + 1);
+            let body_l_p = __arena_get(arg_idx_p + 2);
+            // lea rsi, [rip + msg_disp] -- registers the placeholder
+            // with the str_table so the linker fills in the offset
+            // to the actual string bytes emitted into rodata.
+            let msg_disp_slot = emit_lea_rsi_rip_placeholder();
+            str_table_add(bn_state, msg_disp_slot, body_s_p, body_l_p);
+            // mov edi, 2 (fd=stderr) -- 5 bytes (BF + 4-byte imm32)
+            emit_byte(0xBF); emit_byte(0x02);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // mov edx, body_l_p (len) -- 5 bytes (BA + 4-byte imm32)
+            emit_byte(0xBA);
+            emit_u32_le(body_l_p);
+            // mov eax, 1 (sys_write) -- 5 bytes (B8 + imm32)
+            emit_byte(0xB8); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            // syscall -- 2 bytes (0F 05)
+            emit_byte(0x0F); emit_byte(0x05);
+            // ud2 -- 2 bytes (0F 0B). Could use sys_exit instead but
+            // ud2 also raises SIGILL = rc 132, distinctive enough.
+            emit_byte(0x0F); emit_byte(0x0B);
+            // Total: 7 (lea rsi) + 5 (mov edi) + 5 (mov edx) + 5
+            //        (mov eax) + 2 (syscall) + 2 (ud2) = 26 bytes
+            26
+        }
     } else { if kovc_byte_eq(name_s, name_l, bn_read_file_to_arena_s(bn_state), 18) == 1 {
         // read_file_to_arena(path: STRLIT) -> i32 (bytes_read).
         // First arg MUST be AST_STR_LIT. We inspect args_head's
@@ -4378,7 +4433,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D Option A (2026-05-25): +1 brace closes the new print_int arm
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE (2026-05-25): +1 brace each closes print_int + panic arms
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

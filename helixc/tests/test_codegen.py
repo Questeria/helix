@@ -8202,6 +8202,65 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_panic_prints_message_self_host():
+    """K1.AE (2026-05-25): panic("msg") now emits the message
+    text to stderr via sys_write(2, ptr, len) before the ud2
+    trap. Mirrors Python's panic codegen ("panic[id]: msg\\n"
+    to stderr + sys_exit). The bootstrap omits the "panic[id]: "
+    prefix for simplicity but emits the message body verbatim --
+    parity-relevant property is "user sees the panic message",
+    which now holds in both compilers."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    in_path = "/tmp/sh_panic_msg_in.hx"
+    out_path = "/tmp/sh_panic_msg_out.bin"
+    k2_src = 'fn main() -> i32 { panic("kaboom!"); 0 }'
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"printf %s {repr(k2_src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 132, (
+        f"panic should still SIGILL (rc=132); got {run_k2.returncode}"
+    )
+    assert b"kaboom!" in run_k2.stderr, (
+        f"panic message should reach stderr; got stderr={run_k2.stderr!r}"
+    )
+
+
 def test_bootstrap_kovc_panic_unreachable_after_self_host():
     """K1.F-discovery batch 20 (2026-05-25): code after a panic
     must never execute. Probe wraps panic in an if-then so the
