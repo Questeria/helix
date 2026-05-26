@@ -11555,6 +11555,72 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
                 mk_node(69, safe_disc, sub_head, e_idx_pre)
             }}
         } else {
+            // K1.DP (2026-05-26): tuple-struct destructure pattern
+            // `Point(a, b)` -- an IDENT directly followed by `(` and
+            // the IDENT is a registered struct (added to struct_tab
+            // via K1.BN's tuple-struct parser). Real Rust code:
+            //   struct Pt(i32, i32);
+            //   match p { Pt(a, b) => ... }
+            // Previously SIGILL'd (rc=132) because the IDENT was
+            // treated as a plain bind name, leaving the `(a, b)` in
+            // the token stream where the surrounding match-arm parser
+            // misaligned.
+            //
+            // Fix: detect IDENT-then-`(` BEFORE the bare-IDENT bind
+            // fallback, when the IDENT matches a registered struct.
+            // Consume the IDENT, `(`, and the comma-separated sub-
+            // patterns, then `)`. Emit a PAT_TUPLE (tag 70) carrying
+            // the sub-pattern chain -- same shape as a `()` tuple
+            // pattern, leveraging the bootstrap's positional-layout
+            // convention for tuple structs (also set by K1.BN).
+            //
+            // The bootstrap is type-erased; field-count validation
+            // against the struct declaration is deferred to a later
+            // semantic chunk.
+            let s_idx_tsp = struct_tab_lookup_idx(sb, id_s, id_l);
+            let is_tuple_struct_pat = if s_idx_tsp >= 0 {
+                if t1_pre == 3 { 1 } else { 0 }
+            } else { 0 };
+            if is_tuple_struct_pat == 1 {
+                cur_advance(sb);             // consume IDENT (struct name)
+                cur_advance(sb);             // consume '('
+                // Empty tuple-struct pattern `Foo()` -- arity 0.
+                let pt_first_tsp = tok_tag(tok_base, cur_get(sb));
+                if pt_first_tsp == 4 {
+                    cur_advance(sb);         // consume ')'
+                    mk_node(70, 0, 0, 0)
+                } else {
+                    let first_pat_tsp = parse_pattern(tok_base, sb);
+                    let mut sub_head_tsp: i32 = mk_node(51, first_pat_tsp, 0, 0);
+                    let mut tail_idx_tsp: i32 = sub_head_tsp;
+                    let mut arity_tsp: i32 = 1;
+                    let mut keep_tsp: i32 = 1;
+                    while keep_tsp == 1 {
+                        let at_tsp = tok_tag(tok_base, cur_get(sb));
+                        if at_tsp == 4 {     // ')'
+                            keep_tsp = 0;
+                        } else { if at_tsp == 13 {   // ','
+                            cur_advance(sb);
+                            let next_t_tsp = tok_tag(tok_base, cur_get(sb));
+                            if next_t_tsp == 4 {     // trailing comma
+                                keep_tsp = 0;
+                            } else {
+                                let next_pat_tsp = parse_pattern(tok_base, sb);
+                                let new_node_tsp = mk_node(51, next_pat_tsp, 0, 0);
+                                __arena_set(tail_idx_tsp + 2, new_node_tsp);
+                                tail_idx_tsp = new_node_tsp;
+                                arity_tsp = arity_tsp + 1;
+                            };
+                        } else { if at_tsp == 0 {    // EOF safety
+                            keep_tsp = 0;
+                        } else {
+                            keep_tsp = 0;
+                        }}};
+                    }
+                    cur_advance(sb);         // consume ')'
+                    mk_node(70, arity_tsp, sub_head_tsp, 0)
+                }
+            } else {
             // K1.AJ (2026-05-25): PatStruct pre-check. IDENT followed
             // by LBRACE AND the IDENT matches a registered struct ->
             // parse as a struct destructure (`Point { x, y }`).
@@ -11647,6 +11713,7 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
                     parse_pattern(tok_base, sb);
                 };
                 mk_node(65, id_s, id_l, 0)
+            }
             }
         }}
     } else { if t == 3 {

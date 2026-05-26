@@ -8245,6 +8245,64 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_tuple_struct_pattern_self_host():
+    """K1.DP (2026-05-26): tuple-struct destructure pattern
+    `Pt(a, b)` in match arms. Real Rust uses tuple structs for
+    newtype-style data + pattern destructuring:
+
+      struct Point(i32, i32);
+      match p { Point(x, y) => use(x, y) }
+
+      struct Wrapper<T>(T);
+      match w { Wrapper(inner) => unwrap(inner) }
+
+    Previously SIGILL'd (rc=132) because parse_pattern_atom's
+    IDENT branch had three special-cases (wildcard, enum-variant
+    path `Foo::Bar`, struct destructure `Foo { ... }`) but no
+    handler for `Foo(args)` -- where Foo is a registered tuple
+    struct (added to struct_tab via K1.BN's tuple-struct parser).
+    The IDENT was treated as a plain bind name, leaving the
+    `(a, b)` in the token stream where the surrounding match-arm
+    parser misaligned.
+
+    Fix: in parse_pattern_atom's IDENT branch, BEFORE the bare-
+    IDENT bind fallback, add an `is_tuple_struct_pat` check: if
+    the IDENT is in struct_tab AND the next token is `(`, parse
+    the destructure as `IDENT ( sub_pat, sub_pat, ... )`. Emit
+    PAT_TUPLE (tag 70) carrying the sub-pattern chain -- same
+    shape as `()` tuple pattern, leveraging the bootstrap's
+    positional-layout convention for tuple structs (also set by
+    K1.BN).
+
+    The bootstrap is type-erased; field-count validation against
+    the struct declaration is deferred to a later semantic chunk.
+
+    5 sub-probes (wildcard, bind, 1-tuple, 3-tuple, mixed-wild-
+    bind) + 7 regression-guards covering plain patterns, tuple
+    literal pattern, unit pattern, ref pattern, struct {} pattern,
+    plain let."""
+    cases = [
+        # K1.DP new cases
+        ("tuple_struct_pat_wild",   "struct P(i32, i32); fn main() -> i32 { match P(1, 2) { P(_, _) => 42 } }",                    42),
+        ("tuple_struct_pat_bind",   "struct P(i32, i32); fn main() -> i32 { match P(1, 2) { P(a, b) => 42 } }",                    42),
+        ("tuple_struct_pat_one",    "struct W(i32); fn main() -> i32 { match W(42) { W(x) => 42 } }",                              42),
+        ("tuple_struct_pat_three",  "struct T(i32, i32, i32); fn main() -> i32 { match T(1, 2, 3) { T(a, b, c) => 42 } }",         42),
+        ("tuple_struct_with_wild",  "struct P(i32, i32); fn main() -> i32 { match P(1, 2) { P(_, x) => 42 } }",                    42),
+
+        # Regression-guards
+        ("plain_lit",               "fn main() -> i32 { match 5 { 5 => 42, _ => 0 } }",                                             42),
+        ("plain_wild",              "fn main() -> i32 { match 5 { _ => 42 } }",                                                     42),
+        ("tuple_lit_pat",           "fn main() -> i32 { match (1, 2) { (a, b) => 42 } }",                                          42),
+        ("unit_pat",                "fn main() -> i32 { match () { () => 42 } }",                                                   42),
+        ("ref_pat",                 "fn main() -> i32 { match 42 { &x => 42, _ => 0 } }",                                          42),
+        ("struct_pat_braced",       "struct P { x: i32, y: i32 } fn main() -> i32 { match (P { x: 1, y: 2 }) { P { x, y } => 42 } }", 42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                                          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"tup_struct_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unit_pattern_self_host():
     """K1.DO (2026-05-26): empty tuple / unit pattern `()` in
     match arms and other pattern positions. Real Rust uses this
