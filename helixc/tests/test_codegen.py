@@ -8245,6 +8245,62 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_let_else_self_host():
+    """K1.CN (2026-05-26): let-else `let x = expr else { ... };`
+    (Rust 1.65+). Common idiom for early-return when a pattern
+    doesn't match:
+
+      let Some(x) = opt else { return; };
+      let x = 42 else { panic!(); };
+
+    The bootstrap treats every let as "always matching" (since
+    real pattern matching isn't implemented), so the else block is
+    dead code. Skip it.
+
+    Previously `let x = 42 else { return 0; }; x` returned 0
+    instead of 42. Trace: the let-handler's blind
+    `cur_advance(sb); // ';'` consumed `else` thinking it was `;`,
+    then parse_expr for the body parsed the `{ return 0; }` block
+    -- which executes `return 0;` and exits the function.
+
+    Fix: in the let-handler, after parse_expr_basic(value) and
+    the K1.CA range absorber, peek for `else` IDENT (via byte_eq
+    against kw_else_s/n). If matched, consume `else`, then if the
+    next token is `{` (LBRACE = 5), consume `{ ... }` brace-
+    balanced. The let then proceeds normally to consume `;` and
+    parse the body.
+
+    Combines cleanly with the K1.CC tuple-pattern and K1.CJ
+    variant-pattern forks (tested via let_else_with_tuple_pat).
+
+    6 sub-probes (return, panic, empty, nested-blocks, tuple-pat,
+    annotated) + 8 regression-guards including plain if-with-else,
+    if-let-else (must NOT be affected since it has its own handler
+    in parse_primary), plain block, and prior K1.* features."""
+    cases = [
+        # K1.CN new cases
+        ("with_return",      "fn main() -> i32 { let x = 42 else { return 0; }; x }",                          42),
+        ("with_panic",       "fn main() -> i32 { let x = 42 else { panic!(); }; x }",                          42),
+        ("empty_else",       "fn main() -> i32 { let x = 42 else { }; x }",                                     42),
+        ("nested_blocks",    "fn main() -> i32 { let x = 42 else { { return 0; } }; x }",                      42),
+        ("tuple_pat",        "fn main() -> i32 { let (a, b) = (1, 2) else { return 0; }; 42 }",                42),
+        ("with_annot",       "fn main() -> i32 { let x: i32 = 42 else { return 0; }; x }",                     42),
+
+        # Regression-guards: if/else, if-let/else, plain block, and prior K1.* features
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("plain_mut_let",    "fn main() -> i32 { let mut x = 40; x = 42; x }",                                  42),
+        ("if_with_else",     "fn main() -> i32 { if 1 == 1 { 42 } else { 0 } }",                                42),
+        ("if_let_unchanged", "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("plain_block",      "fn main() -> i32 { { 42 } }",                                                     42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("macro_call",       'fn main() -> i32 { println!("hi"); 42 }',                                         42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"let_else_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_tuple_struct_ctor_self_host():
     """K1.CM (2026-05-26): tuple-struct constructor call `P(args)`
     where P is a registered tuple struct (declared by K1.BN's

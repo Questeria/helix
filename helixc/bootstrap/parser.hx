@@ -3720,6 +3720,53 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     let _disc_lc = parse_expr_basic(tok_base, sb);
                 };
             };
+            // K1.CN (2026-05-26): let-else `let x = expr else { ... };`
+            // (Rust 1.65+). The `else` block runs when the pattern
+            // doesn't match; it must diverge (return / panic / break /
+            // continue). The bootstrap treats every let as "always
+            // matching" (since we don't do real pattern matching), so
+            // the else block is dead code -- skip it.
+            //
+            // Without this, the let-handler's `cur_advance(sb); // ';'`
+            // (a few lines below) would blindly consume `else` thinking
+            // it was the `;`, and then `parse_expr` for the body would
+            // parse the `{ return 0; }` block as the let body -- which
+            // executes `return 0;` and exits the function.
+            //
+            // Detection: post-RHS cursor sits on `else` IDENT (3-byte:
+            // bytes 101, 108, 115, 101 — handled by kw_else_s/n via
+            // byte_eq). If matched, consume `else`, then if the next
+            // token is `{` (LBRACE = 5), consume `{ ... }` brace-
+            // balanced.
+            let else_tok_cn = cur_get(sb);
+            if tok_tag(tok_base, else_tok_cn) == 2 {
+                let else_s_cn = tok_p2(tok_base, else_tok_cn);
+                let else_l_cn = tok_p3(tok_base, else_tok_cn);
+                if byte_eq(else_s_cn, else_l_cn, kw_else_s(sb), kw_else_n(sb)) == 1 {
+                    cur_advance(sb);                 // consume 'else'
+                    if tok_tag(tok_base, cur_get(sb)) == 5 {
+                        cur_advance(sb);             // consume '{'
+                        let mut e_depth_cn: i32 = 1;
+                        while e_depth_cn > 0 {
+                            let et_cn = tok_tag(tok_base, cur_get(sb));
+                            if et_cn == 5 {
+                                e_depth_cn = e_depth_cn + 1;
+                                cur_advance(sb);
+                            } else { if et_cn == 6 {
+                                e_depth_cn = e_depth_cn - 1;
+                                if e_depth_cn > 0 {
+                                    cur_advance(sb);
+                                };
+                            } else { if et_cn == 0 {
+                                e_depth_cn = 0;      // EOF safety
+                            } else {
+                                cur_advance(sb);
+                            }}};
+                        }
+                        cur_advance(sb);             // consume '}'
+                    };
+                };
+            };
             // Audit 28.8 cycle 2 B:C2: when no type annotation was
             // present (let_ty_tag still < 0), infer from the value's
             // root AST tag whether the binding is trivially-i32 or
