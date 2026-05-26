@@ -1,8 +1,15 @@
 # Helix v3.0 — Handoff
 
-**Last updated:** 2026-05-24 · **Repo:** `C:/Projects/Kovostov-Native` ·
+**Last updated:** 2026-05-26 · **Repo:** `C:/Projects/Kovostov-Native` ·
 **Branch:** `main` (verify live state with `git status --short --branch`
 and `git log -1 --oneline`)
+
+> **HARD CONSTRAINT (user directive 2026-05-26):** At v1.0 release,
+> the project must contain **zero non-Helix runtime code**. Python
+> helixc must be deleted (K4 mandatory, not optional). GPU/MLIR/Tile
+> ops must be ported to the bootstrap — they cannot stay in Python
+> forever. Full text + verification criteria in
+> [`docs/K_BOOTSTRAP_HARD_CONSTRAINT.md`](K_BOOTSTRAP_HARD_CONSTRAINT.md).
 
 This is the orientation document for whoever continues the Helix v3.0
 compiler rewrite. Read it first, then `docs/V3_PLAN.md` (the full plan
