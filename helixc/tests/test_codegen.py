@@ -8245,6 +8245,71 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_generic_impl_block_self_host():
+    """K1.DD (2026-05-26): `<T>` generic params on impl block.
+    Real Rust source uses generic impls pervasively:
+
+      impl<T> Box<T> { ... }
+      impl<'a, T> Foo<'a, T> { ... }
+      impl<T: Sized> Bar<T> { ... }
+      impl<T> Trait for Box<T> { ... }
+
+    Previously TIMEOUT because parse_impl_block consumed `impl`
+    then immediately tried to parse the first IDENT as either a
+    trait (Trait-for-Target form) or target. The `<` was
+    mis-consumed and the parser cascade hung.
+
+    Three-part fix in parse_impl_block:
+
+    (1) After the `impl` keyword consume, peek for `<` (TK_LT = 16).
+        If matched, consume the entire `<...>` block depth-balanced.
+        This captures the impl's OWN generic params (`impl<T>`).
+
+    (2) After the first IDENT consume, peek for `<` again. If
+        matched, consume the entire `<...>` block depth-balanced.
+        This captures the first-IDENT's OWN generic args
+        (`impl<T> B<T>` -- the `<T>` AFTER `B`). Without this,
+        the existing trait-for-target branch mis-consumed `<` as
+        `for` and `T` as the target type, hanging.
+
+    (3) After the target IDENT consume (in trait-for-target form),
+        peek for `<` again. If matched, consume `<...>`
+        depth-balanced. This captures the target type's OWN
+        generic args (`impl<T> Trait for Box<T>`).
+
+    All three skips use the same depth-balanced pattern as K1.T:
+    TK_LT (16) increments depth; TK_GT (17) decrements by 1;
+    TK_RSHIFT (31, `>>`) decrements by 2; TK_EOF (0) bails.
+
+    The bootstrap is type-erased; generic params on impl blocks
+    are syntactic acceptance only.
+
+    6 sub-probes (single param, bounded, where, lifetime, two
+    params, trait-for-impl) + 6 regression-guards (plain inherent
+    impl, plain trait-for impl, K1.CD where-no-generic, and
+    prior K1.* features)."""
+    cases = [
+        # K1.DD new cases
+        ("impl_gen_t",              "struct B<T> { x: T } impl<T> B<T> { fn val() -> i32 { 42 } } fn main() -> i32 { 42 }",                42),
+        ("impl_gen_bound",          "struct B<T> { x: T } impl<T: Sized> B<T> { fn val() -> i32 { 42 } } fn main() -> i32 { 42 }",        42),
+        ("impl_gen_where",          "struct B<T> { x: T } impl<T> B<T> where T: Sized { fn val() -> i32 { 42 } } fn main() -> i32 { 42 }", 42),
+        ("impl_gen_lifetime",       "struct S<'a> { x: i32 } impl<'a> S<'a> { fn val() -> i32 { 42 } } fn main() -> i32 { 42 }",          42),
+        ("impl_two_generic_params", "struct P<T, U> { x: T, y: U } impl<T, U> P<T, U> { fn val() -> i32 { 42 } } fn main() -> i32 { 42 }", 42),
+        ("impl_gen_for_trait",      "trait Tr {} struct B<T> { x: T } impl<T> Tr for B<T> {} fn main() -> i32 { 42 }",                    42),
+
+        # Regression-guards: inherent and trait-for impls without generics
+        ("plain_inherent_impl",     "struct P; impl P { fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",                              42),
+        ("plain_trait_for_impl",    "trait Tr {} struct P; impl Tr for P {} fn main() -> i32 { 42 }",                                     42),
+        ("impl_where_no_generic",   "struct P; impl P where i32: Sized { fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",             42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                                                  42),
+        ("range_let",               "fn main() -> i32 { let r = 0..=5; 42 }",                                                              42),
+        ("for_loop",                "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",                             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"gen_impl_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_generic_enum_decl_self_host():
     """K1.DC (2026-05-26): `<T>` generic params on enum decl. Real
     Rust source uses generic enums pervasively:

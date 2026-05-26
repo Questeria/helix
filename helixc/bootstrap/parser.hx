@@ -9675,6 +9675,41 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
 // its rewritten methods are emitted via the standard fn-list path.
 fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'impl' IDENT
+    // K1.DD (2026-05-26): optional `<T>` generic params on impl
+    // block. Real Rust source uses generic impls pervasively:
+    //   impl<T> Box<T> { ... }
+    //   impl<'a, T> Foo<'a, T> { ... }
+    //   impl<T: Sized> Bar<T> { ... }
+    // After consuming `impl`, peek for `<` (TK_LT = 16); if
+    // matched, consume the entire `<...>` block depth-balanced
+    // (handles nested generics, lifetimes, bounds). The bootstrap
+    // is type-erased so the generic params are discarded.
+    if tok_tag(tok_base, cur_get(sb)) == 16 {
+        cur_advance(sb);                     // consume '<'
+        let mut g_depth_dd: i32 = 1;
+        while g_depth_dd > 0 {
+            let gt_dd = tok_tag(tok_base, cur_get(sb));
+            if gt_dd == 16 {
+                g_depth_dd = g_depth_dd + 1;
+                cur_advance(sb);
+            } else { if gt_dd == 17 {
+                g_depth_dd = g_depth_dd - 1;
+                if g_depth_dd > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dd == 31 {
+                g_depth_dd = g_depth_dd - 2;
+                if g_depth_dd > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dd == 0 {
+                g_depth_dd = 0;
+            } else {
+                cur_advance(sb);
+            }}}};
+        }
+        cur_advance(sb);                     // consume final '>'
+    };
     // K1.BF (2026-05-26): support BOTH `impl Trait for Type { ... }`
     // and inherent `impl Type { ... }`. The first IDENT after `impl`
     // is either the trait name (Trait-for-Target form) or the target
@@ -9690,6 +9725,38 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     let first_s = tok_p2(tok_base, first_tok);
     let first_l = tok_p3(tok_base, first_tok);
     cur_advance(sb);                         // consume first IDENT
+    // K1.DD (2026-05-26): if the first IDENT is followed by `<` (its
+    // own generic args, e.g., `impl<T> B<T> ...` -- the `<T>` after `B`),
+    // consume those generics first. Then the after_first peek sees
+    // the real next token (`for` IDENT for trait-for-target, `{` for
+    // inherent). Without this, the existing trait-for-target branch
+    // mis-consumed `<` as `for` and `T` as the target type, hanging.
+    if tok_tag(tok_base, cur_get(sb)) == 16 {
+        cur_advance(sb);                     // consume '<'
+        let mut g_depth_dd3: i32 = 1;
+        while g_depth_dd3 > 0 {
+            let gt_dd3 = tok_tag(tok_base, cur_get(sb));
+            if gt_dd3 == 16 {
+                g_depth_dd3 = g_depth_dd3 + 1;
+                cur_advance(sb);
+            } else { if gt_dd3 == 17 {
+                g_depth_dd3 = g_depth_dd3 - 1;
+                if g_depth_dd3 > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dd3 == 31 {
+                g_depth_dd3 = g_depth_dd3 - 2;
+                if g_depth_dd3 > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dd3 == 0 {
+                g_depth_dd3 = 0;
+            } else {
+                cur_advance(sb);
+            }}}};
+        }
+        cur_advance(sb);                     // consume final '>'
+    };
     let after_first = tok_tag(tok_base, cur_get(sb));
     let mut trait_s: i32 = 0;
     let mut trait_l: i32 = 0;
@@ -9736,6 +9803,37 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
         // clause skip below will consume it.
     };
     let target_tag = ty_ident_to_tag(target_s, target_l);
+    // K1.DD (2026-05-26): optional `<...>` generic args on the
+    // target type (e.g. `impl<T> Box<T> {}` -- the `<T>` after `Box`).
+    // After K1.DD's `impl<T>` generic-param skip + target IDENT
+    // consume, the target type's own `<...>` may still follow. Skip
+    // depth-balanced.
+    if tok_tag(tok_base, cur_get(sb)) == 16 {
+        cur_advance(sb);                     // consume '<'
+        let mut g_depth_dd2: i32 = 1;
+        while g_depth_dd2 > 0 {
+            let gt_dd2 = tok_tag(tok_base, cur_get(sb));
+            if gt_dd2 == 16 {
+                g_depth_dd2 = g_depth_dd2 + 1;
+                cur_advance(sb);
+            } else { if gt_dd2 == 17 {
+                g_depth_dd2 = g_depth_dd2 - 1;
+                if g_depth_dd2 > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dd2 == 31 {
+                g_depth_dd2 = g_depth_dd2 - 2;
+                if g_depth_dd2 > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dd2 == 0 {
+                g_depth_dd2 = 0;
+            } else {
+                cur_advance(sb);
+            }}}};
+        }
+        cur_advance(sb);                     // consume final '>'
+    };
     // K1.CD (2026-05-26): optional `where` clause skip between the
     // target type (or trait-for-target tail) and the body LBRACE.
     // Mirrors the K1.O fn-decl where-skip pattern. The bootstrap is
