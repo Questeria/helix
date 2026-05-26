@@ -1652,6 +1652,47 @@ fn consume_vis_modifiers(tok_base: i32, sb: i32) -> i32 {
                 };
             } else { if is_kw_extern_ident(s, l) == 1 {
                 cur_advance(sb);
+                // K1.BQ (2026-05-26): `extern crate NAME;` (Rust 2015-
+                // style crate import). Peek for the 5-byte IDENT
+                // "crate" (99, 114, 97, 116, 101) right after the
+                // `extern` keyword. If found, consume tokens up to
+                // and including the terminating `;` as a no-op. The
+                // bootstrap has no crate-resolution runtime; the
+                // crate name is accepted-and-ignored. This is
+                // separate from `extern "ABI"` (which has a STRLIT
+                // after extern) and from extern blocks (K1.BJ).
+                let pt_ec = tok_tag(tok_base, cur_get(sb));
+                if pt_ec == 2 {
+                    let ec_tok = cur_get(sb);
+                    let ec_s = tok_p2(tok_base, ec_tok);
+                    let ec_l = tok_p3(tok_base, ec_tok);
+                    let is_crate = if ec_l == 5 {
+                        if __arena_get(ec_s) == 99 {
+                            if __arena_get(ec_s + 1) == 114 {
+                                if __arena_get(ec_s + 2) == 97 {
+                                    if __arena_get(ec_s + 3) == 116 {
+                                        if __arena_get(ec_s + 4) == 101 { 1 } else { 0 }
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 };
+                    if is_crate == 1 {
+                        // Consume tokens until ';' (or EOF).
+                        let mut keep_ec: i32 = 1;
+                        while keep_ec == 1 {
+                            let ect = tok_tag(tok_base, cur_get(sb));
+                            if ect == 12 {
+                                cur_advance(sb);     // consume ';'
+                                keep_ec = 0;
+                            } else { if ect == 0 {
+                                keep_ec = 0;
+                            } else {
+                                cur_advance(sb);
+                            }};
+                        };
+                    };
+                };
                 // Optional ABI string literal: `extern "C" fn ...`.
                 let nt = tok_tag(tok_base, cur_get(sb));
                 if nt == 25 {                    // TK_STRLIT

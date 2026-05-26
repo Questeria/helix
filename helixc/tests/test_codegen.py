@@ -8245,6 +8245,33 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_extern_crate_self_host():
+    """K1.BQ (2026-05-26): `extern crate name;` (Rust 2015-style
+    crate import) accepted as no-op. consume_vis_modifiers's
+    extern arm now peeks for the 5-byte IDENT "crate" right
+    after the `extern` keyword. If found, consume tokens up
+    to and including the terminating `;` -- the bootstrap has
+    no crate-resolution runtime, so the import is accepted-
+    and-ignored.
+
+    Distinct from:
+      - `extern "C" fn ...`  (K1.AV / K1.AZ)
+      - `extern "C" { ... }` (K1.BJ)
+      - `extern fn ...`      (K1.AV)
+
+    4 sub-probes: bare crate, crate with alias, crate then
+    fn, multiple crate imports."""
+    cases = [
+        ("bare",         "extern crate std; fn main() -> i32 { 42 }",                                                           42),
+        ("with_alias",   "extern crate std as core; fn main() -> i32 { 42 }",                                                   42),
+        ("then_fn",      "extern crate std; fn helper() -> i32 { 42 } fn main() -> i32 { helper() }",                           42),
+        ("multi",        "extern crate std; extern crate alloc; fn main() -> i32 { 42 }",                                       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"extern_crate_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_trait_decl_extras_self_host():
     """K1.BP (2026-05-26): trait decl now tolerates everything
     between the trait name and the opening `{`: generic params
