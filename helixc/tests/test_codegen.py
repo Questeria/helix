@@ -8245,6 +8245,61 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_lifetime_in_let_amp_self_host():
+    """K1.CS (2026-05-26): lifetime IDENT in `&'lt T` let-type
+    position. Mirror of K1.CR for the let-binding type annotation:
+
+      let x: &'static i32 = ...;
+      let y: &'a mut i32 = ...;
+
+    Previously failed (rc=132) because K1.S's `&T` handler in
+    let-type position consumed the lifetime IDENT as the type
+    IDENT, leaving the real type IDENT unread. Trips on the next
+    token.
+
+    Fix: in K1.S's `&T` arm, after consuming `&` and BEFORE the
+    existing optional-`mut` check, peek for the two-consecutive-
+    IDENT pattern. If current is IDENT and next is ALSO IDENT
+    (or `mut`), the current is a lifetime annotation -- consume
+    it, UNLESS current itself is `mut` (in which case the
+    existing mut check handles it).
+
+    The four-case enumeration matches K1.CR:
+      `&T`         single IDENT -> type. No skip.
+      `&mut T`     `mut` then IDENT -> mut check fires.
+      `&'lt T`     IDENT-IDENT (first not mut) -> lifetime skip.
+      `&'lt mut T` IDENT-`mut`-IDENT -> lifetime skip + mut + type.
+
+    5 sub-probes + 8 regression-guards including K1.S without
+    lifetime, K1.CR fn-param `&'lt T` confirmed unchanged, and
+    prior K1.* features."""
+    cases = [
+        # K1.CS new cases
+        ("amp_static",       'fn main() -> i32 { let s: &\'static i32 = 42; 42 }',                              42),
+        ("amp_a",            'fn main() -> i32 { let s: &\'a i32 = 42; 42 }',                                   42),
+        ("amp_mut_a",        'fn main() -> i32 { let mut x = 0; let s: &\'a mut i32 = 42; 42 }',                42),
+        ("amp_static_use",   'fn main() -> i32 { let s: &\'static i32 = 42; s }',                              42),
+        ("amp_a_mut",        'fn main() -> i32 { let s: &\'a mut i32 = 42; 42 }',                              42),
+
+        # Regression-guards: K1.S without lifetime
+        ("plain_amp_t",      "fn main() -> i32 { let x: &i32 = 42; 42 }",                                       42),
+        ("plain_amp_mut_t",  "fn main() -> i32 { let x: &mut i32 = 42; 42 }",                                   42),
+        ("plain_typed",      "fn main() -> i32 { let x: i32 = 42; x }",                                         42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+
+        # K1.CR fn-param `&'lt T` unchanged
+        ("k1_cr_unchanged",  "fn id(s: &'static i32) -> i32 { 0 } fn main() -> i32 { id(0); 42 }",              42),
+
+        # Other regression-guards
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"let_lt_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_lifetime_in_amp_param_self_host():
     """K1.CR (2026-05-26): lifetime IDENT in `&'lt T` /
     `&'lt mut T` fn-param type. Extends K1.CQ (lex-time lifetime

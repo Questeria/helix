@@ -3561,7 +3561,34 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     // K1.S (2026-05-25): `&T` or `&mut T` -- TyRef.
                     // Consume the `&`, optionally consume `mut`,
                     // then consume the type IDENT. Type-erased.
+                    //
+                    // K1.CS (2026-05-26): support optional lifetime
+                    // IDENT in `&'lt T` / `&'lt mut T` -- mirror of
+                    // K1.CR for the let-type position. After K1.CQ
+                    // lex transform, `'static` becomes a plain IDENT.
+                    // If we see two consecutive IDENTs after `&` AND
+                    // the first is NOT `mut`, the first is a lifetime
+                    // annotation -- consume it so the existing mut
+                    // + type IDENT consume picks up the right tokens.
                     cur_advance(sb);    // consume '&'
+                    if tok_tag(tok_base, cur_get(sb)) == 2 {
+                        if tok_tag(tok_base, cur_get(sb) + 1) == 2 {
+                            let lt_s_cs = tok_p2(tok_base, cur_get(sb));
+                            let lt_l_cs = tok_p3(tok_base, cur_get(sb));
+                            // Don't consume if it's `mut` -- existing
+                            // mut check below handles it.
+                            let is_mut_lt_cs = if lt_l_cs == 3 {
+                                if __arena_get(lt_s_cs) == 109 {
+                                    if __arena_get(lt_s_cs + 1) == 117 {
+                                        if __arena_get(lt_s_cs + 2) == 116 { 1 } else { 0 }
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 };
+                            if is_mut_lt_cs == 0 {
+                                cur_advance(sb);    // consume lifetime IDENT
+                            };
+                        };
+                    };
                     let after_amp = cur_get(sb);
                     let aa_tag = tok_tag(tok_base, after_amp);
                     if aa_tag == 2 {
