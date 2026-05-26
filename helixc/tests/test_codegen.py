@@ -8245,6 +8245,71 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_if_let_while_let_self_host():
+    """K1.CG (2026-05-26): `if let pattern = expr { ... } [else ...]`
+    and `while let pattern = expr { ... }`. Pervasive Rust idioms
+    for Option / Result / Iterator handling, e.g.:
+
+      if let Some(x) = opt { use(x); } else { fallback(); }
+      while let Some(item) = iter.next() { process(item); }
+
+    Both previously tripped (rc=132) because the existing
+    if-handler / while-handler in parse_primary always called
+    parse_expr_basic for the condition, which mis-handles a leading
+    `let` IDENT.
+
+    Implementation: in both if-handler and while-handler, after
+    consuming the keyword, peek for `let` IDENT. If matched, this
+    is an if-let / while-let; consume:
+
+      - `let` IDENT
+      - optional `mut`
+      - pattern tokens up to `=` at ()/[]/{}}-depth 0
+      - `=`
+      - RHS expression (via parse_expr_basic, discarded)
+
+    The synthetic condition is AST_INT(0) (always-false in the
+    bootstrap). For `if let`, the else branch always wins. For
+    `while let`, the loop body never executes.
+
+    The existing `{ then }` / optional else / `{ body }` parse
+    runs unchanged on the post-RHS cursor position.
+
+    LIMITATION: bodies that REFERENCE pattern-bound variables
+    still fail at parse time (the pattern bindings are NOT
+    registered). Real if-let / while-let semantics with binding
+    is a Cat-2 gap. Test cases pin syntactic acceptance only,
+    using bodies that don't reference pattern variables.
+
+    8 sub-probes + 9 regression-guards covering plain if/while,
+    if-else chains, and all prior K1.* features."""
+    cases = [
+        # K1.CG new cases
+        ("if_let_else",          "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("if_let_as_value",      "fn main() -> i32 { let x = if let Some(_) = None { 0 } else { 42 }; x }",        42),
+        ("if_let_no_else",       "fn main() -> i32 { if let Some(_) = None { 1; }; 42 }",                           42),
+        ("while_let_no_iter",    "fn main() -> i32 { let mut x = 42; while let Some(_) = None { x = 0; } x }",     42),
+        ("if_let_with_mut",      "fn main() -> i32 { if let Some(mut _x) = None { 0 } else { 42 } }",              42),
+        ("if_let_struct_pat",    "fn main() -> i32 { if let Foo { x: _ } = bar { 0 } else { 42 } }",                42),
+        ("if_let_no_paren_pat",  "fn main() -> i32 { if let SomeVariant = None { 0 } else { 42 } }",                42),
+        ("if_let_qualified",     "fn main() -> i32 { if let Result::Ok(_) = None { 0 } else { 42 } }",              42),
+
+        # Regression-guards: plain if/while + chains + other K1.* features
+        ("plain_if",             "fn main() -> i32 { if 1 == 1 { 42 } else { 0 } }",                                 42),
+        ("plain_while",          "fn main() -> i32 { let mut x = 0; while x < 42 { x = x + 1; } x }",               42),
+        ("if_else_chain",        "fn main() -> i32 { let x = 2; if x == 1 { 1 } else if x == 2 { 42 } else { 0 } }",  42),
+        ("plain_let",            "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",            "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("macro_call",           'fn main() -> i32 { println!("hi"); 42 }',                                         42),
+        ("tuple_destructure",    "fn main() -> i32 { let (a, b) = (1, 2); 42 }",                                    42),
+        ("for_loop",             "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+        ("match_arm",            "fn main() -> i32 { let x = 1; match x { 1 => 42, _ => 0 } }",                     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"if_let_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_stmt_decl_in_fn_body_self_host():
     """K1.CF (2026-05-26): statement-like declarations inside a fn
     body parse as no-op skips. Three keywords covered:

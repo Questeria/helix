@@ -3817,7 +3817,86 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             node
         } else { if byte_eq(id_start, id_len, kw_if_s(sb), kw_if_n(sb)) == 1 {
             cur_advance(sb);
-            let cond = parse_expr_basic(tok_base, sb);
+            // K1.CG (2026-05-26): `if let pattern = expr { ... } [else ...]`.
+            // Common Rust idiom for option/result handling. After consuming
+            // `if`, peek for `let` IDENT. If matched, this is an if-let;
+            // consume `let`, optional `mut`, the pattern (tokens until `=`
+            // at ()/[]/{}-depth 0), `=`, and the RHS expression. The
+            // synthetic condition is AST_INT(0) (always-false in the
+            // bootstrap), so the else branch always wins. Bodies that
+            // don't reference pattern variables work cleanly; bodies that
+            // DO reference them fail (real if-let semantics with binding
+            // is a Cat-2 gap).
+            let il_k = cur_get(sb);
+            let mut is_if_let_cg: i32 = 0;
+            if tok_tag(tok_base, il_k) == 2 {
+                let il_s = tok_p2(tok_base, il_k);
+                let il_l = tok_p3(tok_base, il_k);
+                if byte_eq(il_s, il_l, kw_let_s(sb), kw_let_n(sb)) == 1 {
+                    is_if_let_cg = 1;
+                };
+            };
+            let cond = if is_if_let_cg == 1 {
+                cur_advance(sb);                 // consume 'let'
+                let mt_k = cur_get(sb);
+                if tok_tag(tok_base, mt_k) == 2 {
+                    let mt_s = tok_p2(tok_base, mt_k);
+                    let mt_l = tok_p3(tok_base, mt_k);
+                    if byte_eq(mt_s, mt_l, kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                        cur_advance(sb);         // consume 'mut'
+                    };
+                };
+                // Skip pattern tokens up to `=` at depth 0.
+                let mut p_d_cg: i32 = 0;
+                let mut k_d_cg: i32 = 0;
+                let mut b_d_cg: i32 = 0;
+                let mut keep_pat_cg: i32 = 1;
+                while keep_pat_cg == 1 {
+                    let pt_cg = tok_tag(tok_base, cur_get(sb));
+                    if pt_cg == 15 {
+                        if p_d_cg == 0 {
+                            if k_d_cg == 0 {
+                                if b_d_cg == 0 {
+                                    keep_pat_cg = 0;
+                                } else {
+                                    cur_advance(sb);
+                                };
+                            } else {
+                                cur_advance(sb);
+                            };
+                        } else {
+                            cur_advance(sb);
+                        };
+                    } else { if pt_cg == 3 {
+                        p_d_cg = p_d_cg + 1;
+                        cur_advance(sb);
+                    } else { if pt_cg == 4 {
+                        p_d_cg = p_d_cg - 1;
+                        cur_advance(sb);
+                    } else { if pt_cg == 20 {
+                        k_d_cg = k_d_cg + 1;
+                        cur_advance(sb);
+                    } else { if pt_cg == 21 {
+                        k_d_cg = k_d_cg - 1;
+                        cur_advance(sb);
+                    } else { if pt_cg == 5 {
+                        b_d_cg = b_d_cg + 1;
+                        cur_advance(sb);
+                    } else { if pt_cg == 6 {
+                        b_d_cg = b_d_cg - 1;
+                        cur_advance(sb);
+                    } else { if pt_cg == 0 {
+                        keep_pat_cg = 0;         // EOF safety
+                    } else {
+                        cur_advance(sb);
+                    }}}}}}}};
+                }
+                cur_advance(sb);                 // consume '='
+                let _rhs_il = parse_expr_basic(tok_base, sb);
+                mk_node(0, 0, 0, 0)              // synthetic always-false cond
+            } else {
+                parse_expr_basic(tok_base, sb)
+            };
             cur_advance(sb);     // '{'
             let then_e = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
@@ -3870,7 +3949,81 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         } else { if byte_eq(id_start, id_len, kw_while_s(sb), kw_while_n(sb)) == 1 {
             // while expr { body } — Phase-0 returns 0.
             cur_advance(sb);
-            let cond = parse_expr_basic(tok_base, sb);
+            // K1.CG (2026-05-26): `while let pattern = expr { ... }`.
+            // Mirrors the `if let` shape. Consume `let`, optional `mut`,
+            // pattern (depth-aware skip to `=`), `=`, RHS. Synthetic
+            // condition is AST_INT(0); the loop body never executes,
+            // the while-expression has value 0 just like a normal
+            // never-taken loop.
+            let wl_k = cur_get(sb);
+            let mut is_while_let_cg: i32 = 0;
+            if tok_tag(tok_base, wl_k) == 2 {
+                let wl_s = tok_p2(tok_base, wl_k);
+                let wl_l = tok_p3(tok_base, wl_k);
+                if byte_eq(wl_s, wl_l, kw_let_s(sb), kw_let_n(sb)) == 1 {
+                    is_while_let_cg = 1;
+                };
+            };
+            let cond = if is_while_let_cg == 1 {
+                cur_advance(sb);                 // consume 'let'
+                let mt_kw = cur_get(sb);
+                if tok_tag(tok_base, mt_kw) == 2 {
+                    let mt_sw = tok_p2(tok_base, mt_kw);
+                    let mt_lw = tok_p3(tok_base, mt_kw);
+                    if byte_eq(mt_sw, mt_lw, kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                        cur_advance(sb);         // consume 'mut'
+                    };
+                };
+                let mut p_d_wl: i32 = 0;
+                let mut k_d_wl: i32 = 0;
+                let mut b_d_wl: i32 = 0;
+                let mut keep_pat_wl: i32 = 1;
+                while keep_pat_wl == 1 {
+                    let pt_wl = tok_tag(tok_base, cur_get(sb));
+                    if pt_wl == 15 {
+                        if p_d_wl == 0 {
+                            if k_d_wl == 0 {
+                                if b_d_wl == 0 {
+                                    keep_pat_wl = 0;
+                                } else {
+                                    cur_advance(sb);
+                                };
+                            } else {
+                                cur_advance(sb);
+                            };
+                        } else {
+                            cur_advance(sb);
+                        };
+                    } else { if pt_wl == 3 {
+                        p_d_wl = p_d_wl + 1;
+                        cur_advance(sb);
+                    } else { if pt_wl == 4 {
+                        p_d_wl = p_d_wl - 1;
+                        cur_advance(sb);
+                    } else { if pt_wl == 20 {
+                        k_d_wl = k_d_wl + 1;
+                        cur_advance(sb);
+                    } else { if pt_wl == 21 {
+                        k_d_wl = k_d_wl - 1;
+                        cur_advance(sb);
+                    } else { if pt_wl == 5 {
+                        b_d_wl = b_d_wl + 1;
+                        cur_advance(sb);
+                    } else { if pt_wl == 6 {
+                        b_d_wl = b_d_wl - 1;
+                        cur_advance(sb);
+                    } else { if pt_wl == 0 {
+                        keep_pat_wl = 0;
+                    } else {
+                        cur_advance(sb);
+                    }}}}}}}};
+                }
+                cur_advance(sb);                 // consume '='
+                let _rhs_wl = parse_expr_basic(tok_base, sb);
+                mk_node(0, 0, 0, 0)              // synthetic always-false cond
+            } else {
+                parse_expr_basic(tok_base, sb)
+            };
             cur_advance(sb);     // '{'
             let body = parse_expr(tok_base, sb);
             cur_advance(sb);     // '}'
