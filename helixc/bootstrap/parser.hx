@@ -8602,6 +8602,16 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let gtt = tok_tag(tok_base, cur_get(sb));
             if gtt == 17 {                      // '>' end
                 keep_g = 0;
+            } else { if gtt == 31 {             // K1.DE: '>>' end (nested generic
+                                                // closed both inner AND outer
+                                                // in one token, e.g.
+                                                // `<F: Iterator<Item = i32>>`).
+                                                // Stop here; the outer
+                                                // `cur_advance(sb)` past this
+                                                // while-loop consumes the
+                                                // `>>` token (covers both
+                                                // `>`s in one go).
+                keep_g = 0;
             } else { if gtt == 13 {             // ','
                 cur_advance(sb);
             } else { if gtt == 0 {              // EOF safety
@@ -8625,6 +8635,142 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                         let bt = tok_tag(tok_base, cur_get(sb));
                         if bt == 2 {                          // trait-name IDENT
                             cur_advance(sb);
+                            // K1.DE (2026-05-26): optional `(...)` paren
+                            // args for Fn/FnMut/FnOnce trait bounds, e.g.
+                            // `F: Fn() -> i32` or `F: Fn(i32, i32) -> i32`.
+                            // Previously the bound loop only consumed
+                            // IDENT/+ and stopped at `(`, leaving the
+                            // outer generic-param loop to mis-consume
+                            // the paren and hang. Depth-balanced skip.
+                            if tok_tag(tok_base, cur_get(sb)) == 3 {
+                                cur_advance(sb);              // consume '('
+                                let mut pa_de: i32 = 1;
+                                while pa_de > 0 {
+                                    let pat = tok_tag(tok_base, cur_get(sb));
+                                    if pat == 3 {
+                                        pa_de = pa_de + 1;
+                                        cur_advance(sb);
+                                    } else { if pat == 4 {
+                                        pa_de = pa_de - 1;
+                                        if pa_de > 0 {
+                                            cur_advance(sb);
+                                        };
+                                    } else { if pat == 0 {
+                                        pa_de = 0;
+                                    } else {
+                                        cur_advance(sb);
+                                    } } };
+                                }
+                                cur_advance(sb);              // consume final ')'
+                            };
+                            // K1.DE (2026-05-26): optional `<...>` generic
+                            // args after trait name, e.g. `T: Iterator<Item = i32>`.
+                            // Depth-balanced; handles nested `>` via TK_RSHIFT
+                            // (31) split as -2. Mirrors K1.T let-type pattern.
+                            if tok_tag(tok_base, cur_get(sb)) == 16 {
+                                cur_advance(sb);              // consume '<'
+                                let mut ga_de: i32 = 1;
+                                while ga_de > 0 {
+                                    let gat = tok_tag(tok_base, cur_get(sb));
+                                    if gat == 16 {
+                                        ga_de = ga_de + 1;
+                                        cur_advance(sb);
+                                    } else { if gat == 17 {
+                                        ga_de = ga_de - 1;
+                                        if ga_de > 0 {
+                                            cur_advance(sb);
+                                        };
+                                    } else { if gat == 31 {
+                                        ga_de = ga_de - 2;
+                                        if ga_de > 0 {
+                                            cur_advance(sb);
+                                        };
+                                    } else { if gat == 0 {
+                                        ga_de = 0;
+                                    } else {
+                                        cur_advance(sb);
+                                    } } } };
+                                }
+                                // K1.DE: only consume single `>` here.
+                                // If `>>` closed both inner AND outer
+                                // generic-param list in one token, leave
+                                // it for the outer parse_fn_decl loop
+                                // (which has a `>>` terminator branch
+                                // also added in K1.DE).
+                                if tok_tag(tok_base, cur_get(sb)) == 17 {
+                                    cur_advance(sb);
+                                };
+                            };
+                            // K1.DE (2026-05-26): optional `-> ReturnType`
+                            // after Fn-trait paren args (e.g.
+                            // `F: Fn() -> i32`). Two-token sequence:
+                            // TK_MINUS (8) then TK_GT (17). Consume the
+                            // return-type expression token-by-token,
+                            // stopping at `+` (bound continues), `,`
+                            // (next generic param), `>` (end generics),
+                            // `>>` (end nested generics), or EOF. Track
+                            // paren/bracket/angle depth so embedded
+                            // `>` / `,` inside `Box<Foo, Bar>` don't
+                            // terminate prematurely.
+                            if tok_tag(tok_base, cur_get(sb)) == 8 {
+                                cur_advance(sb);              // consume '-'
+                                cur_advance(sb);              // consume '>'
+                                let mut rt_done_de: i32 = 0;
+                                let mut rt_de: i32 = 0;
+                                while rt_done_de == 0 {
+                                    let rtt = tok_tag(tok_base, cur_get(sb));
+                                    if rtt == 0 {
+                                        rt_done_de = 1;
+                                    } else { if rt_de == 0 {
+                                        // At depth==0: stop on `+`/`,`/`>`/`>>`.
+                                        if rtt == 7 {
+                                            rt_done_de = 1;
+                                        } else { if rtt == 13 {
+                                            rt_done_de = 1;
+                                        } else { if rtt == 17 {
+                                            rt_done_de = 1;
+                                        } else { if rtt == 31 {
+                                            rt_done_de = 1;
+                                        } else {
+                                            // Track depth-openers.
+                                            if rtt == 3 {
+                                                rt_de = rt_de + 1;
+                                            };
+                                            if rtt == 20 {
+                                                rt_de = rt_de + 1;
+                                            };
+                                            if rtt == 16 {
+                                                rt_de = rt_de + 1;
+                                            };
+                                            cur_advance(sb);
+                                        } } } };
+                                    } else {
+                                        // Inside nested structure.
+                                        if rtt == 3 {
+                                            rt_de = rt_de + 1;
+                                        };
+                                        if rtt == 20 {
+                                            rt_de = rt_de + 1;
+                                        };
+                                        if rtt == 16 {
+                                            rt_de = rt_de + 1;
+                                        };
+                                        if rtt == 4 {
+                                            rt_de = rt_de - 1;
+                                        };
+                                        if rtt == 21 {
+                                            rt_de = rt_de - 1;
+                                        };
+                                        if rtt == 17 {
+                                            rt_de = rt_de - 1;
+                                        };
+                                        if rtt == 31 {
+                                            rt_de = rt_de - 2;
+                                        };
+                                        cur_advance(sb);
+                                    } };
+                                }
+                            };
                         } else { if bt == 7 {                 // '+'
                             cur_advance(sb);
                         } else {
@@ -8632,7 +8778,7 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                         } };
                     }
                 };
-            }}};
+            }}}};
         }
         // Stage 28.11 INC-1 cycle-3 polish (cycle-2 code-review F-4
         // conf 75): DEFERRED-KNOWN breadcrumb — this fn-generic loop

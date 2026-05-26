@@ -8245,6 +8245,81 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_fn_trait_bound_self_host():
+    """K1.DE (2026-05-26): `Fn(...) -> Ret` trait bound and
+    `Trait<AssocTy = T>` generic args in generic-param bound.
+    Real Rust source uses Fn-trait bounds pervasively wherever
+    a fn takes a closure:
+
+      fn apply<F: Fn() -> i32>(f: F) -> i32 { ... }
+      fn apply<F: Fn(i32, i32) -> i32>(f: F) -> i32 { ... }
+      fn apply<F: FnMut() -> i32>(f: F) -> i32 { ... }
+      fn apply<I: Iterator<Item = i32>>(it: I) -> i32 { ... }
+
+    Previously TIMEOUT because parse_fn_decl's Stage-8.5C bound
+    loop only consumed IDENT/`+` tokens and stopped at `(`, `<`,
+    or `-`. The outer generic-param loop then mis-consumed those
+    tokens as generic-param IDENTs and the parser hung.
+
+    Three-part fix in parse_fn_decl's bound loop:
+
+    (1) After the trait-name IDENT consume, peek for `(` (TK_LPAREN
+        = 3). If matched, consume the `(...)` block depth-balanced.
+        This handles `Fn() / Fn(i32) / Fn(i32, i32) / FnMut() /
+        FnOnce()`.
+
+    (2) After the trait-name IDENT (and any paren args), peek for
+        `<` (TK_LT = 16). If matched, consume the `<...>` block
+        depth-balanced (handles nested `>>` via TK_RSHIFT = 31
+        split as -2). When the inner `<...>` overshoots via `>>`
+        that closes both inner AND outer generic-param list, leave
+        the `>>` token for the outer loop. This handles
+        `Iterator<Item = i32>`, `Foo<A, B>`, etc.
+
+    (3) After the trait-name IDENT (and any paren or angle args),
+        peek for `-` (TK_MINUS = 8). If matched, consume `-` and
+        `>` and the return-type expression token-by-token with
+        depth-tracking (paren/bracket/angle). Stop at `+`/`,`/`>`/
+        `>>`/EOF at depth==0. This handles `-> i32`, `-> Box<i32>`,
+        `-> (T, U)`, etc.
+
+    Plus a one-line outer-loop fix: parse_fn_decl's generic-param
+    loop now also stops on TK_RSHIFT (31), letting the K1.DE inner
+    `<...>` skip leave a `>>` token for the outer to consume in one
+    cur_advance (covering both `>`s at once).
+
+    8 sub-probes (Fn no-arg, Fn arg, FnMut, FnOnce, Fn two-args, Fn
+    no-ret, Iterator<Item = i32>, Fn + Sized) + 8 regression-guards
+    (plain bounds, multi-bounds, no bound, two params, where, plain
+    let/range/for)."""
+    cases = [
+        # K1.DE new cases
+        ("fn_no_arg_bound",       "fn apply<F: Fn() -> i32>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",                    42),
+        ("fn_arg_bound",          "fn apply<F: Fn(i32) -> i32>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",                 42),
+        ("fnmut_bound",           "fn apply<F: FnMut() -> i32>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",                 42),
+        ("fnonce_bound",          "fn apply<F: FnOnce() -> i32>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",                42),
+        ("fn_two_args",           "fn apply<F: Fn(i32, i32) -> i32>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",            42),
+        ("fn_no_ret",             "fn apply<F: Fn(i32)>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",                        42),
+        ("iter_assoc_ty",         "fn apply<I: Iterator<Item = i32>>(it: I) -> i32 { 42 } fn main() -> i32 { 42 }",          42),
+        ("fn_with_plus_sized",    "fn apply<F: Fn() -> i32 + Sized>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",            42),
+
+        # Regression-guards: plain bounds unchanged
+        ("plain_sized_bound",     "fn id<T: Sized>(x: T) -> i32 { 42 } fn main() -> i32 { 42 }",                              42),
+        ("plain_two_bounds",      "fn id<T: Sized + Clone>(x: T) -> i32 { 42 } fn main() -> i32 { 42 }",                     42),
+        ("plain_no_bound",        "fn id<T>(x: T) -> i32 { 42 } fn main() -> i32 { 42 }",                                    42),
+        ("plain_two_params",      "fn pair<T, U>(a: T, b: U) -> i32 { 42 } fn main() -> i32 { 42 }",                         42),
+        ("plain_with_where",      "fn id<T>(x: T) -> i32 where T: Sized { 42 } fn main() -> i32 { 42 }",                    42),
+
+        # Other regression-guards
+        ("plain_let",             "fn main() -> i32 { let x = 42; x }",                                                       42),
+        ("range_let",             "fn main() -> i32 { let r = 0..=5; 42 }",                                                   42),
+        ("for_loop",              "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",                  42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"fn_trait_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_generic_impl_block_self_host():
     """K1.DD (2026-05-26): `<T>` generic params on impl block.
     Real Rust source uses generic impls pervasively:
