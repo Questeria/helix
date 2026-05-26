@@ -8245,6 +8245,75 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_fn_param_tuple_type_self_host():
+    """K1.DI (2026-05-26): tuple type `(T1, T2)` in fn-param
+    position. Real Rust source uses tuple-typed fn params for
+    pair/triple-passing functions:
+
+      fn add_pair(p: (i32, i32)) -> i32 { ... }
+      fn rgb(c: (u8, u8, u8)) -> u32 { ... }
+      fn with_meta(v: i32, meta: (i32, i32)) -> i32 { ... }
+
+    Previously TIMEOUT because K1.BI handled the SINGLE
+    parenthesized case `(T)` (one IDENT between parens) but not
+    the MULTI-element tuple case `(T1, T2, ...)`. The K1.BI path
+    consumed `(`, expected one IDENT, then consumed `)` -- but
+    multi-element tuples have a `,` after the first IDENT, so the
+    IDENT-then-`)` flow broke: the IDENT consume picked up T1,
+    then K1.BI tried to consume `)` but found `,`. The parser
+    state was misaligned and downstream parsing hung.
+
+    Fix: lookahead-based detection in parse_fn_decl's param-type
+    position. Before K1.BI's `(` peek, scan tokens depth-balanced
+    from the `(` position checking whether a `,` appears at
+    depth-1 BEFORE the matching `)`. If yes, the type is a multi-
+    element tuple -- consume the entire `(...)` block depth-
+    balanced and set a `tuple_consumed_di` flag. The IDENT read
+    and K1.BI `)`-consume are both gated on this flag (mirroring
+    K1.CV's `slice_consumed_cv` pattern for `&[T]`).
+
+    The bootstrap is type-erased; tuple param types are accepted
+    syntactically and discarded. Note: CALLING a tuple-typed fn
+    (e.g. `f((1, 2))`) is a separate Phase-0 codegen gap and
+    SIGILLs (rc=132) because the bootstrap's call-site machinery
+    doesn't yet pack a tuple literal into the calling-convention
+    slots. K1.DI is parser-only: declarations parse cleanly so
+    K2 self-hosted source compilation unblocks, even if the
+    call-site semantics are deferred. The test cases therefore
+    don't exercise tuple-typed fn calls; the existing test for
+    AST_TUPLE_LIT codegen (K1.F) covers the inner-tuple-literal
+    expression path.
+
+    7 sub-probes + 9 regression-guards covering K1.BI single-
+    paren, plain fn params, slices, refs, let/for-loop."""
+    cases = [
+        # K1.DI new cases (declaration-only -- call-site is a separate gap)
+        ("tuple_pair",              "fn f(x: (i32, i32)) -> i32 { 42 } fn main() -> i32 { 42 }",                       42),
+        ("tuple_three",             "fn f(x: (i32, i32, i32)) -> i32 { 42 } fn main() -> i32 { 42 }",                  42),
+        ("tuple_after_named",       "fn f(z: i32, x: (i32, i32)) -> i32 { 42 } fn main() -> i32 { 42 }",               42),
+        ("tuple_before_named",      "fn f(x: (i32, i32), z: i32) -> i32 { 42 } fn main() -> i32 { 42 }",               42),
+        ("tuple_mixed_types",       "fn f(x: (i32, f32)) -> i32 { 42 } fn main() -> i32 { 42 }",                       42),
+        ("tuple_trailing_comma",    "fn f(x: (i32,)) -> i32 { 42 } fn main() -> i32 { 42 }",                            42),
+        ("nested_tuple",            "fn f(x: ((i32, i32), i32)) -> i32 { 42 } fn main() -> i32 { 42 }",                42),
+
+        # K1.BI single-paren still works
+        ("paren_i32",               "fn p(x: (i32)) -> i32 { 42 } fn main() -> i32 { p(42); 42 }",                     42),
+        ("paren_f32",               "fn p(x: (f32)) -> i32 { 42 } fn main() -> i32 { p(0.0); 42 }",                    42),
+        ("two_paren_args",          "fn p(a: (i32), b: i32) -> i32 { a + b } fn main() -> i32 { p(40, 2) }",           42),
+
+        # Other regression-guards
+        ("plain_fn_param",          "fn f(x: i32) -> i32 { 42 } fn main() -> i32 { f(0); 42 }",                        42),
+        ("plain_two_args",          "fn f(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { f(20, 22) }",            42),
+        ("amp_ref_param",           "fn f(x: &i32) -> i32 { 42 } fn main() -> i32 { 42 }",                              42),
+        ("slice_param",             "fn f(x: &[i32]) -> i32 { 42 } fn main() -> i32 { 42 }",                            42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("for_loop",                "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"tuple_ty_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_at_binding_pattern_self_host():
     """K1.DH (2026-05-26): `name @ inner_pat` at-binding pattern
     in match arms. Real Rust uses this to bind a value to a name

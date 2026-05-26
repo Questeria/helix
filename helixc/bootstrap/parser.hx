@@ -8963,6 +8963,68 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);                 // consume ']'
                 slice_consumed_cv = 1;
             };
+            // K1.DI (2026-05-26): tuple parameter type `fn f(x: (T1, T2))`.
+            // K1.BI handled the SINGLE `(T)` parenthesized case but not
+            // the MULTI-element tuple. Detect by lookahead: from the `(`
+            // token, walk forward depth-balanced (paren / bracket /
+            // angle) and check whether a `,` (TK_COMMA = 13) appears at
+            // depth-1 BEFORE the matching `)` closes the outer paren.
+            // If yes, it's a tuple -- consume the entire `(...)` block
+            // depth-balanced and set tuple_consumed_di = 1 so the IDENT
+            // read and K1.BI `)`-consume below are both skipped. The
+            // bootstrap is type-erased; the inner types are accepted-
+            // and-discarded.
+            let mut tuple_consumed_di: i32 = 0;
+            if slice_consumed_cv == 0 {
+                if tok_tag(tok_base, cur_get(sb)) == 3 {
+                    // Lookahead: is there a `,` at depth-1 before `)`?
+                    let lp_tok_di = cur_get(sb);
+                    let mut peek_off: i32 = 1;
+                    let mut peek_depth: i32 = 1;
+                    let mut found_comma: i32 = 0;
+                    while peek_depth > 0 {
+                        let pkt = tok_tag(tok_base, lp_tok_di + peek_off);
+                        if pkt == 3 {
+                            peek_depth = peek_depth + 1;
+                        } else { if pkt == 4 {
+                            peek_depth = peek_depth - 1;
+                        } else { if pkt == 13 {
+                            if peek_depth == 1 {
+                                found_comma = 1;
+                                peek_depth = 0;     // exit lookahead
+                            };
+                        } else { if pkt == 0 {
+                            peek_depth = 0;          // EOF safety
+                        } else {
+                            // ordinary token, continue
+                        } } } };
+                        peek_off = peek_off + 1;
+                    }
+                    if found_comma == 1 {
+                        // It's a tuple. Consume the entire `(...)` block.
+                        cur_advance(sb);             // consume '('
+                        let mut td_di: i32 = 1;
+                        while td_di > 0 {
+                            let tdt = tok_tag(tok_base, cur_get(sb));
+                            if tdt == 3 {
+                                td_di = td_di + 1;
+                                cur_advance(sb);
+                            } else { if tdt == 4 {
+                                td_di = td_di - 1;
+                                if td_di > 0 {
+                                    cur_advance(sb);
+                                };
+                            } else { if tdt == 0 {
+                                td_di = 0;
+                            } else {
+                                cur_advance(sb);
+                            } } };
+                        }
+                        cur_advance(sb);             // consume final ')'
+                        tuple_consumed_di = 1;
+                    };
+                };
+            };
             // K1.BI (2026-05-26): peek for `(` (TK_LPAREN=3) as a
             // parenthesized parameter type (`fn p(x: (i32)) -> ...`).
             // In Rust `(T)` is the same as bare `T` (only `(T,)` with
@@ -8973,10 +9035,14 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             //
             // K1.CV: gate on slice_consumed_cv -- if slice was
             // consumed, no type IDENT remains, skip these steps.
+            // K1.DI: also gate on tuple_consumed_di -- if a multi-
+            // element tuple was consumed above, no IDENT remains.
             let lparen_seen = if slice_consumed_cv == 0 {
-                if tok_tag(tok_base, cur_get(sb)) == 3 {
-                    cur_advance(sb);     // consume '('
-                    1
+                if tuple_consumed_di == 0 {
+                    if tok_tag(tok_base, cur_get(sb)) == 3 {
+                        cur_advance(sb);     // consume '('
+                        1
+                    } else { 0 }
                 } else { 0 }
             } else { 0 };
             // Capture the type IDENT bytes to determine if it's "f32"
@@ -8984,10 +9050,13 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // follow-on: this lets fn(a: f32, b: f32) -> f32 { a + b }
             // bind a and b with type=f32 so is_f32_expr resolves through
             // them and AST_ADD dispatches to SSE.
+            // K1.DI: also gate on tuple_consumed_di -- if a tuple was
+            // consumed by the lookahead path above, no IDENT remains.
+            let skip_ident_read = if slice_consumed_cv == 1 { 1 } else { if tuple_consumed_di == 1 { 1 } else { 0 } };
             let ty_tok = cur_get(sb);
-            let ty_s = if slice_consumed_cv == 0 { tok_p2(tok_base, ty_tok) } else { 0 };
-            let ty_l = if slice_consumed_cv == 0 { tok_p3(tok_base, ty_tok) } else { 0 };
-            if slice_consumed_cv == 0 {
+            let ty_s = if skip_ident_read == 0 { tok_p2(tok_base, ty_tok) } else { 0 };
+            let ty_l = if skip_ident_read == 0 { tok_p3(tok_base, ty_tok) } else { 0 };
+            if skip_ident_read == 0 {
                 cur_advance(sb);     // type IDENT
             };
             // K1.BI (2026-05-26): if we consumed an opening `(` above,
