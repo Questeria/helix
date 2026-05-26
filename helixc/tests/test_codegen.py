@@ -8210,6 +8210,26 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_paren_param_ty_self_host():
+    """K1.BI (2026-05-26): `fn p(x: (T)) -> ...` parenthesized
+    parameter type accepted. In Rust `(T)` is the same as
+    bare `T` (only `(T,)` with trailing comma makes a 1-tuple).
+    The bootstrap is type-erased so the parens collapse away.
+
+    parse_fn_decl's param-type position now peeks for TK_LPAREN
+    (3) before reading the type IDENT; consume `(`, read IDENT
+    normally, consume the matching `)`. Mirrors K1.BE which did
+    the same at the return-type position. 3 sub-probes."""
+    cases = [
+        ("paren_i32",     "fn p(x: (i32)) -> i32 { x } fn main() -> i32 { p(42) }",                                                       42),
+        ("paren_f32",     "fn p(x: (f32)) -> i32 { 42 } fn main() -> i32 { p(0.0) }",                                                     42),
+        ("multi_param",   "fn p(a: (i32), b: i32) -> i32 { a + b } fn main() -> i32 { p(40, 2) }",                                        42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"paren_param_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_f16_literal_self_host():
     """K1.BH (2026-05-26): `_f16` literal suffix accepted as
     bf16-shaped. The bootstrap treats f16 as 16-bit storage

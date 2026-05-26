@@ -7556,6 +7556,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     };
                 };
             };
+            // K1.BI (2026-05-26): peek for `(` (TK_LPAREN=3) as a
+            // parenthesized parameter type (`fn p(x: (i32)) -> ...`).
+            // In Rust `(T)` is the same as bare `T` (only `(T,)` with
+            // trailing comma is a 1-tuple). Consume `(` so the next
+            // token is the inner type IDENT; the closing `)` is
+            // consumed AFTER the IDENT read below. Mirrors K1.BE's
+            // ret-ty handling at the parameter-type position.
+            let lparen_seen = if tok_tag(tok_base, cur_get(sb)) == 3 {
+                cur_advance(sb);     // consume '('
+                1
+            } else { 0 };
             // Capture the type IDENT bytes to determine if it's "f32"
             // (or "f64", treated the same in bootstrap codegen). Step 5c
             // follow-on: this lets fn(a: f32, b: f32) -> f32 { a + b }
@@ -7565,6 +7576,13 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let ty_s = tok_p2(tok_base, ty_tok);
             let ty_l = tok_p3(tok_base, ty_tok);
             cur_advance(sb);     // type IDENT
+            // K1.BI (2026-05-26): if we consumed an opening `(` above,
+            // consume the matching `)` now. The IDENT between them is
+            // captured as ty_tok normally; the parens are syntactic
+            // grouping only.
+            if lparen_seen == 1 {
+                cur_advance(sb);     // consume ')'
+            };
             // Audit fix (Stage 1 cycle): all 3 bytes must match exactly.
             // Strict: 'f32' (102 51 50) → 1; 'f64' (102 54 52) → 2;
             // 'i64' (105 54 52) → 3; 'i32' (105 51 50) → 0; else 0.
