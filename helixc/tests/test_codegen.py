@@ -8245,6 +8245,71 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_nested_fn_decl_self_host():
+    """K1.CE (2026-05-26): nested fn-decl inside a fn body parses
+    as a no-op skip. Common Rust idiom for helper functions scoped
+    to one parent fn:
+
+      fn main() -> i32 {
+          fn helper(x: i32) -> i32 { x + 1 }
+          42
+      }
+
+    The bootstrap does NOT hoist nested fns to top-level, so the
+    nested name remains uncallable -- this is purely syntactic
+    acceptance, used by patterns where the body tail expression
+    does NOT reference the nested fn (calling the nested name from
+    the body would still fail at runtime with SIGILL because the
+    symbol was never emitted).
+
+    Implementation: at parse_primary entry, peek for the 3-token
+    pattern `fn` IDENT (bytes 102,110, length 2) followed by IDENT
+    (fn name) followed by `(` (TK_LPAREN = 3). On match, consume
+    the entire nested fn:
+
+      - `fn` IDENT (the keyword)
+      - name IDENT
+      - `(` ... `)` (param list, paren-balanced)
+      - skip tokens up to body `{` or terminator `;` (covers
+        `-> RET` return type and any `where` clause)
+      - if `;`: fn prototype, consume and done
+      - if `{`: consume `{` ... `}` (body, brace-balanced) and done
+
+    Looped: while the post-skip cursor again starts with a
+    nested-fn pattern, consume it too. Without the loop, back-to-
+    back nested fns like `fn a() {} fn b() {} 42` only skip the
+    first; the second mis-parses as `fn` IDENT var-ref.
+
+    Must run BEFORE the K1.BC `move` check and the existing
+    parse_primary arms because `fn` is an IDENT (tag 2) with these
+    specific bytes -- the existing IDENT cascade does not have an
+    `fn` keyword arm.
+
+    5 sub-probes (4 nested-fn forms + 1 with body-arg) + 8
+    regression-guards across K1.CA/CB/CC/CD coverage."""
+    cases = [
+        # K1.CE new cases
+        ("then_int_tail",     "fn main() -> i32 { fn helper() -> i32 { 0 } 42 }",                                  42),
+        ("then_let_tail",     "fn main() -> i32 { fn helper() -> i32 { 0 } let x = 42; x }",                       42),
+        ("no_ret_ty",         "fn main() -> i32 { fn helper() { } 42 }",                                            42),
+        ("back_to_back",      "fn main() -> i32 { fn a() -> i32 { 1 } fn b() -> i32 { 2 } 42 }",                    42),
+        ("with_body_param",   "fn main() -> i32 { fn helper(x: i32) -> i32 { x + 1 } 42 }",                         42),
+
+        # Regression-guards: top-level fns + other K1.* features
+        ("top_level_fn",      "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                            42),
+        ("plain_let",         "fn main() -> i32 { let x = 42; x }",                                                42),
+        ("range_let",         "fn main() -> i32 { let r = 0..=5; 42 }",                                            42),
+        ("macro_call",        'fn main() -> i32 { println!("hi"); 42 }',                                           42),
+        ("tuple_destructure", "fn main() -> i32 { let (a, b) = (1, 2); 42 }",                                      42),
+        ("impl_where",        "struct P; impl P where i32: Sized { fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",     42),
+        ("for_loop",          "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",           42),
+        ("match_arm",         "fn main() -> i32 { let x = 1; match x { 1 => 42, _ => 0 } }",                       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"nested_fn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_impl_where_clause_self_host():
     """K1.CD (2026-05-26): `where` clause skip in impl-block header.
     Common in real Rust source for constraining generic impls

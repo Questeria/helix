@@ -2681,6 +2681,118 @@ fn is_kw_move_ident(id_s: i32, id_l: i32) -> i32 {
 }
 
 fn parse_primary(tok_base: i32, sb: i32) -> i32 {
+    // K1.CE (2026-05-26): nested fn-decl inside a fn body. Pattern:
+    // `fn IDENT ( ... ) ... { body }`. Common Rust idiom for
+    // helpers scoped to one parent fn. The bootstrap does NOT hoist
+    // nested fns to top-level, so the nested name remains uncallable
+    // -- this is purely syntactic acceptance, used by patterns where
+    // the nested fn isn't referenced by the body's tail expression.
+    //
+    // Detection: leading IDENT bytes are "fn" (2-byte: 102, 110)
+    // AND the next token is an IDENT (the fn name) AND the token
+    // after that is `(` (TK_LPAREN = 3). On match, consume the
+    // entire nested fn decl -- IDENT `fn`, name IDENT, `( ... )`
+    // depth-balanced, optional `-> RET` (consume up to `{` or `;`),
+    // `{` balanced-body `}` (or `;` for fn prototype). The existing
+    // parse_primary logic then continues with the post-fn cursor
+    // position to evaluate the next expression.
+    //
+    // Must run BEFORE the K1.BC `move` check and all other arms
+    // because `fn` is an IDENT (tag 2) but with these specific
+    // bytes, NOT a keyword the existing IDENT cascade knows about.
+    //
+    // Loops while consecutive nested fns are detected -- patterns
+    // like `fn a() {} fn b() {} 42` skip BOTH fn decls before the
+    // tail expression. Without the loop, only the first nested fn
+    // gets consumed and the second mis-parses as `fn` IDENT var-ref.
+    let mut keep_nested_fn_ce: i32 = 1;
+    while keep_nested_fn_ce == 1 {
+        let nfn_k = cur_get(sb);
+        let mut consumed_one_ce: i32 = 0;
+        if tok_tag(tok_base, nfn_k) == 2 {
+            let nfn_s = tok_p2(tok_base, nfn_k);
+            let nfn_l = tok_p3(tok_base, nfn_k);
+            let is_fn_kw_ce = if nfn_l == 2 {
+                if __arena_get(nfn_s) == 102 {
+                    if __arena_get(nfn_s + 1) == 110 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            if is_fn_kw_ce == 1 {
+                let nfn_t1 = tok_tag(tok_base, nfn_k + 1);
+                let nfn_t2 = tok_tag(tok_base, nfn_k + 2);
+                if nfn_t1 == 2 {
+                    if nfn_t2 == 3 {
+                        cur_advance(sb);                 // 'fn'
+                        cur_advance(sb);                 // name IDENT
+                        cur_advance(sb);                 // '('
+                        let mut np_depth_ce: i32 = 1;
+                        while np_depth_ce > 0 {
+                            let npt_ce = tok_tag(tok_base, cur_get(sb));
+                            if npt_ce == 3 {
+                                np_depth_ce = np_depth_ce + 1;
+                                cur_advance(sb);
+                            } else { if npt_ce == 4 {
+                                np_depth_ce = np_depth_ce - 1;
+                                if np_depth_ce > 0 {
+                                    cur_advance(sb);
+                                };
+                            } else { if npt_ce == 0 {
+                                np_depth_ce = 0;
+                            } else {
+                                cur_advance(sb);
+                            }}};
+                        }
+                        cur_advance(sb);                 // ')'
+                        // Skip optional `-> RET` and any where clause
+                        // up to the body `{` or terminator `;`.
+                        let mut keep_ret_ce: i32 = 1;
+                        while keep_ret_ce == 1 {
+                            let rt_ce = tok_tag(tok_base, cur_get(sb));
+                            if rt_ce == 5 {
+                                keep_ret_ce = 0;
+                            } else { if rt_ce == 12 {
+                                keep_ret_ce = 0;
+                            } else { if rt_ce == 0 {
+                                keep_ret_ce = 0;
+                            } else {
+                                cur_advance(sb);
+                            }}};
+                        }
+                        let after_proto_ce = tok_tag(tok_base, cur_get(sb));
+                        if after_proto_ce == 12 {
+                            cur_advance(sb);             // ';' (fn prototype)
+                        } else { if after_proto_ce == 5 {
+                            cur_advance(sb);             // '{' body open
+                            let mut nb_depth_ce: i32 = 1;
+                            while nb_depth_ce > 0 {
+                                let nbt_ce = tok_tag(tok_base, cur_get(sb));
+                                if nbt_ce == 5 {
+                                    nb_depth_ce = nb_depth_ce + 1;
+                                    cur_advance(sb);
+                                } else { if nbt_ce == 6 {
+                                    nb_depth_ce = nb_depth_ce - 1;
+                                    if nb_depth_ce > 0 {
+                                        cur_advance(sb);
+                                    };
+                                } else { if nbt_ce == 0 {
+                                    nb_depth_ce = 0;
+                                } else {
+                                    cur_advance(sb);
+                                }}};
+                            }
+                            cur_advance(sb);             // '}' body close
+                        } else {
+                            // EOF or unexpected -- defensive, do nothing.
+                        }};
+                        consumed_one_ce = 1;
+                    };
+                };
+            };
+        };
+        if consumed_one_ce == 0 {
+            keep_nested_fn_ce = 0;
+        };
+    };
     // K1.BC (2026-05-26): peek for `move` IDENT followed by `|`. If
     // matched, consume `move` so the existing TK_PIPE arm below
     // sees the closure as if there were no modifier. Capture-by-
