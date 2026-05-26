@@ -1729,6 +1729,28 @@ fn is_kw_const_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AW (2026-05-25): match the 6-byte IDENT "static" (bytes
+// 115, 116, 97, 116, 105, 99). Used by parse_top + parse_program
+// to recognize top-level `static N: T = expr;` decls. Syntax-
+// only parity -- the bootstrap consumes the decl but does not
+// register the name, same as const. Common Rust pattern for
+// program-scoped constants that need a memory location.
+fn is_kw_static_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 6 {
+        if __arena_get(id_s) == 115 {
+            if __arena_get(id_s + 1) == 116 {
+                if __arena_get(id_s + 2) == 97 {
+                    if __arena_get(id_s + 3) == 116 {
+                        if __arena_get(id_s + 4) == 105 {
+                            if __arena_get(id_s + 5) == 99 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.Q (2026-05-25): match the 5-byte IDENT "false" (bytes 102,
 // 97, 108, 115, 101). Returns 1 if matched, 0 otherwise.
 fn is_kw_false_ident(id_s: i32, id_l: i32) -> i32 {
@@ -4986,6 +5008,8 @@ fn parse_top(tok_base: i32) -> i32 {
         let is_type = is_kw_type_ident(id_s, id_l);
         // K1.Z (2026-05-25): `const` is also a top-level decl prefix.
         let is_const = is_kw_const_ident(id_s, id_l);
+        // K1.AW (2026-05-25): `static` is also a top-level decl prefix.
+        let is_static = is_kw_static_ident(id_s, id_l);
         // K1.AA (2026-05-25): `agent` is also a top-level decl prefix.
         let is_agent = is_kw_agent_ident(id_s, id_l);
         if is_fn == 1 {
@@ -5006,11 +5030,13 @@ fn parse_top(tok_base: i32) -> i32 {
             parse_program(tok_base, cur_slot)
         } else { if is_const == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_static == 1 {
+            parse_program(tok_base, cur_slot)
         } else { if is_agent == 1 {
             parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}}}}}}}}}
+        }}}}}}}}}}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -5368,6 +5394,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             // K1.Z (2026-05-25): `const X = ...;` is also a top-level
             // no-op decl. Syntax accepted; name not registered.
             let is_const_kw = is_kw_const_ident(s, l);
+            // K1.AW (2026-05-25): `static N = ...;` is also a top-level
+            // no-op decl. Mirrors const exactly.
+            let is_static_kw = is_kw_static_ident(s, l);
             // K1.AA (2026-05-25): `agent Foo { ... }` -- AGI primitive
             // block, no-op at codegen.
             let is_agent_kw = is_kw_agent_ident(s, l);
@@ -5395,12 +5424,15 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_const_kw == 1 {
                 parse_const_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_static_kw == 1 {
+                parse_static_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_agent_kw == 1 {
                 parse_agent_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 keep_decl = 0;
-            }}}}}}}}};
+            }}}}}}}}}};
         } else {
             keep_decl = 0;
         };
@@ -5444,6 +5476,8 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let is_type_kw2 = is_kw_type_ident(s, l);
             // K1.Z (2026-05-25): `const X = ...;` arm for the post-fn loop.
             let is_const_kw2 = is_kw_const_ident(s, l);
+            // K1.AW (2026-05-25): `static N = ...;` arm for the post-fn loop.
+            let is_static_kw2 = is_kw_static_ident(s, l);
             // K1.AA (2026-05-25): `agent Foo { ... }` arm for the post-fn loop.
             let is_agent_kw2 = is_kw_agent_ident(s, l);
             if is_fn_kw2 == 1 {
@@ -5475,13 +5509,16 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_const_kw2 == 1 {
                 parse_const_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_static_kw2 == 1 {
+                parse_static_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_agent_kw2 == 1 {
                 parse_agent_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
                 keep = 0;
-            }}}}}}}}}};
+            }}}}}}}}}}};
         } else {
             keep = 0;
         }};
@@ -8250,6 +8287,28 @@ fn parse_const_decl(tok_base: i32, sb: i32) -> i32 {
             keep_c = 0;
         } else { if ct == 0 {
             keep_c = 0;
+        } else {
+            cur_advance(sb);
+        }};
+    }
+    cur_advance(sb);                         // consume ';'
+    mk_node(54, 0, 0, 0)
+}
+
+// K1.AW (2026-05-25): parse `static N: T = expr;` -- mirrors
+// parse_const_decl. Skip tokens until TK_SEMI; emit AST_STRUCT_DECL
+// (tag 54) as the codegen no-op marker. The name is NOT
+// registered (same Phase-0 limitation as const), so downstream
+// references to N fall through to the var-ref path and trap.
+fn parse_static_decl(tok_base: i32, sb: i32) -> i32 {
+    cur_advance(sb);                         // consume 'static' IDENT
+    let mut keep_st: i32 = 1;
+    while keep_st == 1 {
+        let st = tok_tag(tok_base, cur_get(sb));
+        if st == 12 {
+            keep_st = 0;
+        } else { if st == 0 {
+            keep_st = 0;
         } else {
             cur_advance(sb);
         }};

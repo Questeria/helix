@@ -8210,6 +8210,27 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_static_decl_self_host():
+    """K1.AW (2026-05-25): top-level `static N: T = expr;` is now
+    accepted as a no-op decl, mirroring K1.Z's const-decl
+    pattern. The bootstrap consumes the decl tokens up to and
+    including the trailing `;` and emits AST_STRUCT_DECL (54)
+    as the codegen no-op marker. The name is NOT registered
+    (Phase-0 limitation, same as const), so references to N
+    elsewhere in the source fall through to the var-ref path
+    and trap. 5 sub-probes cover the basic forms."""
+    cases = [
+        ("simple_int",   "static N: i32 = 42; fn main() -> i32 { 42 }",                              42),
+        ("with_neg",     "static M: i32 = -10; fn main() -> i32 { 42 }",                             42),
+        ("multi_static", "static A: i32 = 1; static B: i32 = 2; fn main() -> i32 { 42 }",            42),
+        ("mixed_const",  "const C: i32 = 5; static S: i32 = 9; fn main() -> i32 { 42 }",             42),
+        ("after_fn",     "fn helper() -> i32 { 10 } static G: i32 = 32; fn main() -> i32 { 42 }",   42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"static_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_vis_modifiers_self_host():
     """K1.AV (2026-05-25): pub(crate) / pub(super) / extern /
     extern "C" all accepted as no-op visibility/linkage
