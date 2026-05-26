@@ -8245,6 +8245,69 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_struct_func_update_self_host():
+    """K1.DA (2026-05-26): struct functional-update `..rest`
+    spread syntax. Common Rust idiom for copying defaults from
+    another instance:
+
+      let p = P { a: 40, ..q };
+
+    Previously failed (rc=132) because the named-struct-lit
+    body parser had no `..` arm.
+
+    Fix (two-part):
+
+    (1) In the named-struct-lit body loop, peek for `..` (TK_DOTDOT
+        = 43) BEFORE each field-name capture. If matched, consume
+        `..` and parse the source expression via parse_expr_basic
+        (discarded). Set a `had_spread_da` flag and exit the loop.
+
+    (2) After the loop and `}` consume, if had_spread_da is set,
+        fill any unfilled slots with AST_INT(0) placeholders so
+        the missing-field validation passes and the TUPLE_CONS
+        chain builds with all slots populated.
+
+    (3) Also extend peek_named_struct_lit to return 1 when the
+        first token is `..` (handles `P { ..q }` with no explicit
+        fields), so the body falls into the named path which has
+        the `..` arm.
+
+    LIMITATION: the bootstrap doesn't actually copy field values
+    from the spread source -- unfilled fields are AST_INT(0)
+    placeholders. Programs that depend on actual spread-copied
+    values still get 0. Real spread semantics requires runtime
+    struct-field access which is a Cat-2 gap.
+
+    Test cases pin syntactic acceptance only: tail expressions
+    use values from explicit fields, not from spread-implied
+    ones.
+
+    4 sub-probes (explicit + spread variants) + 8 regression-
+    guards covering plain struct lits, prior K1.* features."""
+    cases = [
+        # K1.DA new cases - explicit field values used (spread ignored)
+        ("update_partial",   "struct P { a: i32, b: i32 } fn main() -> i32 { let q = P { a: 0, b: 0 }; let p = P { a: 40, b: 2, ..q }; p.a + p.b }", 42),
+        ("update_one_field_only", "struct P { a: i32, b: i32 } fn main() -> i32 { let q = P { a: 0, b: 0 }; let p = P { a: 42, ..q }; p.a }",       42),
+        ("update_only_spread", "struct P { a: i32, b: i32 } fn main() -> i32 { let q = P { a: 0, b: 0 }; let p = P { ..q }; 42 }",                  42),
+        ("update_three",      "struct P { a: i32, b: i32, c: i32 } fn main() -> i32 { let q = P { a: 0, b: 0, c: 0 }; let p = P { a: 40, b: 2, ..q }; p.a + p.b }",  42),
+
+        # Regression-guards: plain struct lits unchanged
+        ("plain_struct",     "struct P { a: i32, b: i32 } fn main() -> i32 { let p = P { a: 40, b: 2 }; p.a + p.b }", 42),
+        ("plain_named",      "struct P { x: i32, y: i32 } fn main() -> i32 { let p = P { x: 42, y: 0 }; p.x }",      42),
+
+        # Other regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+        ("range_pat_match",  "fn main() -> i32 { let x = 5; match x { 1..=10 => 42, _ => 0 } }",                42),
+        ("unit_struct",      "struct P; fn main() -> i32 { let p = P; 42 }",                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"func_upd_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_arrow_in_generic_args_self_host():
     """K1.CZ (2026-05-26): `->` arrow inside `<...>` generic args.
     Real Rust source uses fn-pointer / closure types as generic

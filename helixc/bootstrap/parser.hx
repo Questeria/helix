@@ -269,12 +269,18 @@ fn gp_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 fn peek_named_struct_lit(tok_base: i32, sb: i32) -> i32 {
     let c = cur_get(sb);
     let t1 = tok_tag(tok_base, c);
-    if t1 != 2 {
+    // K1.DA (2026-05-26): also recognize a struct lit body that
+    // STARTS with `..` (TK_DOTDOT = 43) for `P { ..rest }` -- the
+    // functional-update spread form with no explicit fields. The
+    // named-path's loop has a `..` arm that handles it.
+    if t1 == 43 {
+        1
+    } else { if t1 != 2 {
         0
     } else {
         let t2 = tok_tag(tok_base, c + 1);
         if t2 == 14 { 1 } else { 0 }
-    }
+    }}
 }
 
 // Stage 28.11 INC-3a cycle-5 polish (cycle-4 type-design F1+F2+F3, MED
@@ -5385,7 +5391,28 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         let mut keep_n: i32 = 1;
                         let mut nf: i32 = 0;
                         let mut named_err: i32 = 0;
+                        // K1.DA (2026-05-26): track whether `..rest`
+                        // spread syntax was seen so missing-field
+                        // validation below knows to fill placeholders.
+                        let mut had_spread_da: i32 = 0;
                         while keep_n == 1 {
+                            // K1.DA: detect `..rest` struct functional
+                            // update spread. Common Rust idiom for
+                            // copying defaults from another instance:
+                            //   let p = P { a: 40, ..q };
+                            // The bootstrap doesn't model actual field
+                            // copying from `q`; we just parse and
+                            // discard the spread expression, then
+                            // fill any missing slots with AST_INT(0)
+                            // below.
+                            let pk_chk_da = cur_get(sb);
+                            let pt_chk_da = tok_tag(tok_base, pk_chk_da);
+                            if pt_chk_da == 43 {
+                                cur_advance(sb);                 // consume '..'
+                                let _disc_spread_da = parse_expr_basic(tok_base, sb);
+                                had_spread_da = 1;
+                                keep_n = 0;
+                            } else {
                             let fk = cur_get(sb);
                             let fname_s = tok_p2(tok_base, fk);
                             let fname_l = tok_p3(tok_base, fk);
@@ -5412,11 +5439,27 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                                     if nt2 == 6 { keep_n = 0; };
                                 } else { keep_n = 0; };
                             }}};
+                            };
                         }
                         if named_err != 0 {
                             mk_node(99, named_err, 0, 0)
                         } else {
                             cur_advance(sb);            // consume `}`
+                            // K1.DA: if spread `..rest` was used,
+                            // pre-fill any unfilled slots with
+                            // AST_INT(0) placeholders. The bootstrap
+                            // doesn't actually read from `rest` -- this
+                            // is syntactic acceptance only.
+                            if had_spread_da == 1 {
+                                let mut fi_da: i32 = 0;
+                                while fi_da < arity {
+                                    if __arena_get(temp_base + fi_da) == 0 - 1 {
+                                        let _placeholder = mk_node(0, 0, 0, 0);
+                                        __arena_set(temp_base + fi_da, _placeholder);
+                                    };
+                                    fi_da = fi_da + 1;
+                                }
+                            };
                             // Validate all slots filled.
                             let mut vi: i32 = 0;
                             let mut missing: i32 = 0;
