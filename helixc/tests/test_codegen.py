@@ -8245,6 +8245,68 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_lifetime_annotations_self_host():
+    """K1.CQ (2026-05-26): Rust lifetime annotations `'a`, `'static`,
+    `'_` etc. lex as silent skips. Common in real Rust source:
+
+      fn id<'a>(s: &'a i32) -> i32 { *s }
+      struct Foo<'a> { x: &'a i32 }
+      impl<'a> Foo<'a> { ... }
+      &'static str
+
+    Previously failed (rc=132) because the lexer's char-literal
+    handler emitted TK_ERR (tag 19) for the lone `'` when not
+    followed by a valid char-lit close at pos+2.
+
+    Fix: in lex_char_lit's `close != 39` branch, if the byte after
+    `'` is alpha (or `_`, since is_alpha covers underscore), treat
+    as a lifetime annotation and silently SKIP the leading `'` --
+    the next lex iteration picks up `a` / `static` / `_` as a
+    normal IDENT. The parser's existing generic-param skip (K1.T)
+    and where-clause skip (K1.O / K1.CD) treat IDENTs inside
+    `<...>` as type-erased no-ops, so lifetime IDENTs flow through.
+
+    The bootstrap is type-erased and doesn't enforce lifetime
+    constraints; this is purely syntactic acceptance.
+
+    LIMITATION: generic-fn calls without turbofish still fail
+    (separate Cat-2 gap). Tests that DECLARE lifetimes but don't
+    CALL the generic fn pass; tests that call use turbofish
+    `::<>` to specify type args explicitly.
+
+    Crucial regression-guard: char literals `'A'`, `'5'`, `'\\n'`
+    must still work. The K1.CQ skip only fires when pos+2 is NOT
+    `'` (the close-quote check); valid char-lits never enter the
+    lifetime branch.
+
+    5 sub-probes (lifetime in struct/impl/fn-with-turbo/underscore/
+    multi-lifetime-in-struct) + 8 regression-guards including all
+    char-literal forms and prior K1.* features."""
+    cases = [
+        # K1.CQ new cases (avoid no-turbofish calls; use decls or turbofish)
+        ("lifetime_in_struct",       "struct S<'a> { x: i32 } fn main() -> i32 { 42 }",                                  42),
+        ("multi_lifetime_struct",    "struct S<'a, 'b> { x: i32 } fn main() -> i32 { 42 }",                              42),
+        ("lifetime_underscore",      "fn id<'_>(x: i32) -> i32 { x } fn main() -> i32 { 42 }",                          42),
+        ("lifetime_and_type_param",  "fn id<'a, T>(x: i32) -> i32 { x } fn main() -> i32 { id::<i32>(42) }",            42),
+        ("lifetime_with_turbofish",  "fn id<'a>(x: i32) -> i32 { x } fn main() -> i32 { id::<>(42) }",                  42),
+
+        # Regression-guards: char literals unchanged
+        ("char_lit_uppercase",   "fn main() -> i32 { let c = 'A'; 42 }",                                                42),
+        ("char_lit_digit",       "fn main() -> i32 { let c = '5'; 42 }",                                                42),
+        ("char_lit_escape_n",    "fn main() -> i32 { let c = '\\n'; 42 }",                                              42),
+        ("char_lit_in_match",    "fn main() -> i32 { let c = 'A'; match c { 'A' => 42, _ => 0 } }",                    42),
+
+        # Other regression-guards
+        ("plain_let",            "fn main() -> i32 { let x = 42; x }",                                                  42),
+        ("plain_fn_call",        "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                              42),
+        ("range_let",            "fn main() -> i32 { let r = 0..=5; 42 }",                                              42),
+        ("for_loop",             "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"lt_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_closure_mut_param_self_host():
     """K1.CP (2026-05-26): `mut` modifier on closure params.
     Common Rust idiom for closures that mutate their param:

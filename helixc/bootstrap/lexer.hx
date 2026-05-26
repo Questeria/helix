@@ -669,8 +669,31 @@ fn lex_char_lit(src_start: i32, src_len: i32, pos: i32) -> i32 {
             // pos+2 (one byte body).
             let close = __arena_get(pos + 2);
             if close != 39 {
-                push_token(19, 0, pos, 1);
-                pos + 1
+                // K1.CQ (2026-05-26): not a valid char-lit. If b1 is
+                // alpha or `_` (a valid IDENT start), treat as a Rust
+                // lifetime annotation (`'a`, `'static`, `'_`, etc.)
+                // and silently SKIP the leading `'` -- the next lex
+                // iteration will pick up `a` / `static` / `_` as a
+                // normal IDENT. The parser's existing generic-param
+                // skip (K1.T) and where-clause skip (K1.O / K1.CD)
+                // treat IDENTs inside `<...>` and `where ...` as
+                // type-erased no-ops, so lifetime IDENTs flow through
+                // without further handling.
+                //
+                // The bootstrap is type-erased and doesn't enforce
+                // lifetime constraints; this is purely syntactic
+                // acceptance so common Rust source (`fn id<'a>(...)`,
+                // `impl<'a> ...`, `&'static str`) parses cleanly.
+                //
+                // For non-alpha b1 (e.g., `'5'` would be a real char-
+                // lit caught above; `' ` whitespace or `''` empty are
+                // never valid Rust and stay as TK_ERR).
+                if is_alpha(b1) == 1 {
+                    pos + 1
+                } else {
+                    push_token(19, 0, pos, 1);
+                    pos + 1
+                }
             } else {
                 push_token(1, b1, pos, 3);
                 pos + 3
