@@ -8519,6 +8519,28 @@ fn parse_use_decl(tok_base: i32, sb: i32) -> i32 {
             keep = 0;
         };
     }
+    // K1.BS (2026-05-26): optional `as ALIAS` after the path.
+    // `use foo::Vec as MyVec;` renames the imported path's last
+    // segment. The bootstrap doesn't resolve imports so the
+    // alias is accepted-and-ignored at the parse level. Peek
+    // for the 2-byte IDENT "as" (97, 115); if matched, consume
+    // it and the following IDENT.
+    let as_pk = cur_get(sb);
+    if tok_tag(tok_base, as_pk) == 2 {
+        let as_s = tok_p2(tok_base, as_pk);
+        let as_l = tok_p3(tok_base, as_pk);
+        let is_as = if as_l == 2 {
+            if __arena_get(as_s) == 97 {
+                if __arena_get(as_s + 1) == 115 { 1 } else { 0 }
+            } else { 0 }
+        } else { 0 };
+        if is_as == 1 {
+            cur_advance(sb);                     // consume 'as' IDENT
+            if tok_tag(tok_base, cur_get(sb)) == 2 {
+                cur_advance(sb);                 // consume alias IDENT
+            };
+        };
+    };
     // Consume the terminating ';' (TK_SEMI = 12). Defensive: tolerate
     // missing ';' to avoid stalling on malformed input.
     let after_t = tok_tag(tok_base, cur_get(sb));

@@ -8245,6 +8245,36 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_use_as_alias_self_host():
+    """K1.BS (2026-05-26): `use path as Alias;` rename accepted.
+    Common Rust pattern for disambiguating two same-named imports
+    (`use foo::Result as FooResult`) or shortening a long path
+    name.
+
+    parse_use_decl previously stopped at the end of the `::` path
+    walker and went straight to the `;` consume. For `use std::vec::Vec
+    as MyVec;` the `as` IDENT and the alias IDENT were left in the
+    stream after the walker; the dispatch cascade choked on `as`
+    when looking for the next decl.
+
+    Fix: between the path walker and the `;` consume, peek for the
+    2-byte IDENT "as" (97, 115). If matched, consume `as` and the
+    following alias IDENT. The bootstrap doesn't resolve imports
+    so the alias is parse-level no-op -- use_tab_add still
+    registers the original path's last segment, not the alias.
+
+    4 sub-probes."""
+    cases = [
+        ("simple",   "use std::vec::Vec as MyVec; fn main() -> i32 { 42 }",                                              42),
+        ("short_path","use foo::Bar as B; fn main() -> i32 { 42 }",                                                      42),
+        ("then_fn",  "use std::vec::Vec as MyVec; fn helper() -> i32 { 42 } fn main() -> i32 { helper() }",              42),
+        ("multi",    "use a::b as c; use d::e as f; fn main() -> i32 { 42 }",                                            42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"use_as_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_external_mod_self_host():
     """K1.BR (2026-05-26): external module declaration `mod
     name;` (no body braces, terminated by `;`). Rust uses this
