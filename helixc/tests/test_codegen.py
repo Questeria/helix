@@ -8210,6 +8210,34 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_extern_block_self_host():
+    """K1.BJ (2026-05-26): `extern "C" { ... }` extern block
+    accepted as a no-op. The bootstrap has no FFI runtime --
+    the declarations inside are syntactically consumed but
+    not registered.
+
+    consume_vis_modifiers's `extern` arm previously assumed
+    the next token after the optional ABI strlit was always a
+    fn-decl modifier (the `extern "C" fn ...` form). For
+    extern BLOCKS (`extern "C" { ... }`) it stopped at the
+    `{`, leaving the `{` for the dispatch cascade to choke on.
+
+    Now after the optional strlit, peek for `{` (TK_LBRACE=5).
+    If present, consume the entire brace-balanced block.
+
+    4 sub-probes: empty block, fn decl inside, static decl
+    inside, multiple decls."""
+    cases = [
+        ("empty",   "extern \"C\" { } fn main() -> i32 { 42 }",                                                                42),
+        ("fn",      "extern \"C\" { fn libfoo() -> i32; } fn main() -> i32 { 42 }",                                            42),
+        ("static",  "extern \"C\" { static FOO: i32; } fn main() -> i32 { 42 }",                                               42),
+        ("multi",   "extern \"C\" { fn a() -> i32; fn b() -> i32; } fn main() -> i32 { 42 }",                                  42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"extern_block_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_paren_param_ty_self_host():
     """K1.BI (2026-05-26): `fn p(x: (T)) -> ...` parenthesized
     parameter type accepted. In Rust `(T)` is the same as

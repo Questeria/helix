@@ -1657,6 +1657,26 @@ fn consume_vis_modifiers(tok_base: i32, sb: i32) -> i32 {
                 if nt == 25 {                    // TK_STRLIT
                     cur_advance(sb);
                 };
+                // K1.BJ (2026-05-26): if `extern "ABI"` is followed
+                // by `{`, this is an extern block (FFI declaration
+                // group), not a modifier on a fn-decl. Consume the
+                // entire brace-balanced block as a no-op. The
+                // bootstrap has no FFI runtime; the declarations
+                // inside are accepted-and-ignored. After the closing
+                // `}` the consume_vis_modifiers loop continues and
+                // exits cleanly (next token typically TK_IDENT for
+                // the following top-level decl).
+                if tok_tag(tok_base, cur_get(sb)) == 5 {
+                    cur_advance(sb);             // consume '{'
+                    let mut depth_e: i32 = 1;
+                    while depth_e > 0 {
+                        let et = tok_tag(tok_base, cur_get(sb));
+                        if et == 5 { depth_e = depth_e + 1; };
+                        if et == 6 { depth_e = depth_e - 1; };
+                        if et == 0 { depth_e = 0; };
+                        cur_advance(sb);
+                    };
+                };
             } else { if is_kw_unsafe_ident(s, l) == 1 {
                 // K1.AY (2026-05-25): `unsafe fn dangerous() { ... }`.
                 // The bootstrap doesn't model unsafe blocks vs safe
