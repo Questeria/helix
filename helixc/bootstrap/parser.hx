@@ -4452,9 +4452,53 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // COLON, COLON, LT (16). Mutually exclusive with is_enum_path
             // since enum requires t3_pre == 2 (IDENT) and turbofish
             // requires t3_pre == 16 (LT). FLAT prefix-trap pattern.
-            let is_turbofish = if t1_pre == 14 {
+            let is_turbofish_raw = if t1_pre == 14 {
                 if t2_pre == 14 { if t3_pre == 16 { 1 } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.DJ (2026-05-26): turbofish `::<T>` on a STRUCT LITERAL
+            // (not a fn call). Shape: `IDENT :: < ... > {`. Real Rust:
+            //   let p = P::<i32> { m: 42 };
+            //   let v = Vec::<i32> { ... };
+            // Previously TIMEOUT because the existing turbofish branch
+            // (line ~4631) unconditionally expects `(args)` after `>`.
+            // For struct-lit shape it found `{` and the downstream call-
+            // args parser hung trying to consume it as call args.
+            //
+            // Fix: scan angle-bracket-balanced from `<` (k+3) to find the
+            // matching `>`. Then peek the token after — if `{` it's a
+            // struct-lit; we suppress the turbofish flag so the path
+            // falls through to the `IDENT<...>` (no `::`) flow. But we
+            // ALSO need to consume the `::` so the cursor at the start
+            // of nt==16 dispatch lands on `<`. Doing that consume
+            // requires a separate `is_turbofish_struct` flag handled
+            // BEFORE the IDENT consume.
+            let is_turbofish_struct = if is_turbofish_raw == 1 {
+                // Angle-bracket-balanced lookahead from k+3 (the `<`).
+                let mut tfs_off: i32 = 4;
+                let mut tfs_depth: i32 = 1;
+                while tfs_depth > 0 {
+                    let tfst = tok_tag(tok_base, k + tfs_off);
+                    if tfst == 16 {
+                        tfs_depth = tfs_depth + 1;
+                    } else { if tfst == 17 {
+                        tfs_depth = tfs_depth - 1;
+                    } else { if tfst == 31 {
+                        tfs_depth = tfs_depth - 2;
+                    } else { if tfst == 0 {
+                        tfs_depth = 0;
+                    } else {
+                        // ordinary token, continue
+                    } } } };
+                    tfs_off = tfs_off + 1;
+                }
+                // tfs_off now points 1 past the closing `>`. Check if
+                // that token is `{` (TK_LBRACE = 5) -> struct lit.
+                let after_gt = tok_tag(tok_base, k + tfs_off);
+                if after_gt == 5 { 1 } else { 0 }
+            } else { 0 };
+            // Mask the turbofish flag when it's actually a struct-lit
+            // so the fn-call turbofish branch doesn't fire.
+            let is_turbofish = if is_turbofish_struct == 1 { 0 } else { is_turbofish_raw };
             // Stage 8.5C: type-namespace call `IDENT::IDENT(args)` where the
             // first IDENT is either a generic-param name (in gp_tab) or one
             // of the canonical scalar type IDENTs (i32/f32/f64/i64/u32/u64).
@@ -4834,6 +4878,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 }
             } else {
             cur_advance(sb);
+            // K1.DJ (2026-05-26): if this IDENT begins a turbofish-style
+            // struct literal `IDENT::<T>{...}` (is_turbofish_struct == 1
+            // determined above by angle-balanced lookahead), consume
+            // the `::` here so the cursor lands at `<`. The existing
+            // `nt == 16` generic-struct branch (line ~5094) then
+            // handles `<T>` and the `{...}` body in a single flow,
+            // identical to the non-turbofish `IDENT<T>{...}` shape.
+            if is_turbofish_struct == 1 {
+                cur_advance(sb);     // consume first ':'
+                cur_advance(sb);     // consume second ':'
+            };
             let next = cur_get(sb);
             let nt = tok_tag(tok_base, next);
             // K1.U (2026-05-25): compound assign `x op= v` detection.

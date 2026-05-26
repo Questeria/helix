@@ -8245,6 +8245,64 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_turbofish_struct_lit_self_host():
+    """K1.DJ (2026-05-26): turbofish `::<T>` prefix on struct
+    literal. Real Rust source uses `::<T>` to disambiguate
+    generic args from the comparison operator when the inferred
+    type isn't enough:
+
+      let p = P::<i32> { m: 42 };
+      let v = Vec::<i32> { ... };
+      let pd = PhantomData::<MyTag> { };
+
+    Previously TIMEOUT because the existing turbofish branch in
+    parse_primary (line ~4631) unconditionally expects `(args)`
+    after the closing `>` -- for fn calls like `id::<i32>(0)`.
+    For struct-lit shape `P::<i32> { m: 42 }`, the closing `>`
+    was followed by `{`, and the downstream call-args parser
+    hung trying to consume the brace block as call args.
+
+    Fix: angle-bracket-balanced lookahead from the `<` token to
+    find the matching closing `>` (handling nested generics via
+    TK_RSHIFT (31) split as -2). Peek the token AFTER the closing
+    `>` -- if it's `{` (TK_LBRACE = 5), the shape is a turbofish
+    struct lit, not a fn call. A new `is_turbofish_struct` flag is
+    set, and the regular `is_turbofish` flag is masked off so the
+    fn-call turbofish branch doesn't fire. Then after the IDENT
+    consume, when `is_turbofish_struct == 1`, the parser consumes
+    the `::` so the cursor lands at `<`. The existing `nt == 16`
+    generic-struct branch (line ~5094) then handles `<T>` and the
+    `{...}` body in a single flow, identical to the non-turbofish
+    `IDENT<T>{...}` shape.
+
+    The bootstrap is type-erased; the turbofish `::<T>` is a
+    syntactic no-op once consumed. Codegen treats `P::<i32> {
+    m: 42 }` identically to `P { m: 42 }` for the parsing flow,
+    with the generic mono path handling the `<T>` substitution
+    (same as the non-turbofish `P<i32> {}` form).
+
+    4 sub-probes + 5 regression-guards covering plain struct lit,
+    generic struct without turbofish, turbofish fn call, let,
+    for-loop."""
+    cases = [
+        # K1.DJ new cases
+        ("turbo_struct_one",        "struct P<T> { m: i32 } fn main() -> i32 { let p = P::<i32> { m: 42 }; 42 }",            42),
+        ("turbo_struct_two",        "struct P<T, U> { m: i32 } fn main() -> i32 { let p = P::<i32, i32> { m: 42 }; 42 }",   42),
+        ("turbo_struct_use_field",  "struct P<T> { m: i32 } fn main() -> i32 { let p = P::<i32> { m: 42 }; p.m }",          42),
+        ("turbo_struct_no_args",    "struct P { m: i32 } fn main() -> i32 { let p = P { m: 42 }; p.m }",                     42),
+
+        # Regression-guards
+        ("turbo_call_fn",           "fn id<T>(x: T) -> i32 { 42 } fn main() -> i32 { id::<i32>(0); 42 }",                    42),
+        ("plain_struct_lit",        "struct P { m: i32 } fn main() -> i32 { let p = P { m: 42 }; p.m }",                     42),
+        ("gen_struct_no_turbo",     "struct P<T> { m: i32 } fn main() -> i32 { let p = P { m: 42 }; p.m }",                  42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                                     42),
+        ("for_loop",                "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",               42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"turbo_struct_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_fn_param_tuple_type_self_host():
     """K1.DI (2026-05-26): tuple type `(T1, T2)` in fn-param
     position. Real Rust source uses tuple-typed fn params for
