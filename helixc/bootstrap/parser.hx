@@ -7669,8 +7669,29 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         // surrounding parse_fn_decl code.
         let rt_first_t = tok_tag(tok_base, cur_get(sb));
         if rt_first_t == 3 {
-            cur_advance(sb); // '('
-            cur_advance(sb); // ')'
+            // K1.AX (2026-05-25): `-> ()` (unit) -- consume '(' ')'.
+            // K1.BE (2026-05-26): `-> (T)` (parenthesized type) --
+            // consume '(', read the IDENT as the ret-ty, consume
+            // ')'. In Rust, `(T)` is syntactically distinct from
+            // a 1-tuple (which requires the trailing comma `(T,)`)
+            // and means the same as bare `T`. The bootstrap is
+            // type-erased so the parens collapse away at codegen.
+            cur_advance(sb);                     // consume '('
+            let inner_t = tok_tag(tok_base, cur_get(sb));
+            if inner_t == 4 {
+                // unit case: '()'
+                cur_advance(sb);                 // consume ')'
+            };
+            if inner_t != 4 {
+                // parenthesized type: '(T)'. Capture the IDENT bytes,
+                // then consume both the IDENT and the closing ')'.
+                let rt_tok = cur_get(sb);
+                rt_s = tok_p2(tok_base, rt_tok);
+                rt_l = tok_p3(tok_base, rt_tok);
+                has_ret_ty = 1;
+                cur_advance(sb);                 // consume type IDENT
+                cur_advance(sb);                 // consume ')'
+            };
         };
         if rt_first_t != 3 {
             // Capture the return-type IDENT bytes the same way AST_PARAM does.

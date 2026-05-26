@@ -8210,6 +8210,25 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_paren_ret_ty_self_host():
+    """K1.BE (2026-05-26): `fn x() -> (T) { ... }` parenthesized
+    return type accepted. In Rust, `(T)` is the same as bare `T`
+    (only `(T,)` with trailing comma makes a 1-tuple). The
+    bootstrap is type-erased so the parens collapse at codegen.
+    Extends K1.AX's `-> ()` LPAREN peek: after consuming `(`,
+    branch on inner token -- `)` for the unit case (K1.AX),
+    otherwise IDENT for the parenthesized-type case (K1.BE),
+    consume IDENT + `)`. 3 sub-probes."""
+    cases = [
+        ("paren_i32",    "fn x() -> (i32) { 42 } fn main() -> i32 { x() }",                                                42),
+        ("paren_f32",    "fn x() -> (f32) { 42 } fn main() -> i32 { x(); 42 }",                                            42),
+        ("multi_fn",     "fn a() -> (i32) { 10 } fn b() -> i32 { 32 } fn main() -> i32 { a() + b() }",                     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"paren_ret_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_amp_mut_param_ty_self_host():
     """K1.BD (2026-05-26): `&T` / `&mut T` as fn-decl param type
     annotation accepted. parse_fn_decl's param-type position
