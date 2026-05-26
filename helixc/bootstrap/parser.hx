@@ -3687,6 +3687,40 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     };
                     cur_advance(sb);    // consume type IDENT
                 } else {
+                    // K1.CW (2026-05-26): `impl T` / `dyn T` in let-type
+                    // position. The bootstrap is type-erased; these
+                    // collapse to bare `T`. Detect leading `impl`
+                    // (4-byte: 105,109,112,108) or `dyn` (3-byte:
+                    // 100,121,110) IDENT and consume it so the
+                    // following IDENT is captured as the type IDENT
+                    // by the bare-path code below.
+                    let pre_mod_tok_cw = cur_get(sb);
+                    if tok_tag(tok_base, pre_mod_tok_cw) == 2 {
+                        let pms_s_cw = tok_p2(tok_base, pre_mod_tok_cw);
+                        let pms_l_cw = tok_p3(tok_base, pre_mod_tok_cw);
+                        let is_impl_cw = if pms_l_cw == 4 {
+                            if __arena_get(pms_s_cw) == 105 {
+                                if __arena_get(pms_s_cw + 1) == 109 {
+                                    if __arena_get(pms_s_cw + 2) == 112 {
+                                        if __arena_get(pms_s_cw + 3) == 108 { 1 } else { 0 }
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 };
+                        let is_dyn_cw = if pms_l_cw == 3 {
+                            if __arena_get(pms_s_cw) == 100 {
+                                if __arena_get(pms_s_cw + 1) == 121 {
+                                    if __arena_get(pms_s_cw + 2) == 110 { 1 } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 };
+                        if is_impl_cw == 1 {
+                            cur_advance(sb);     // consume 'impl' IDENT
+                        };
+                        if is_dyn_cw == 1 {
+                            cur_advance(sb);     // consume 'dyn' IDENT
+                        };
+                    };
                     let lt_tok = cur_get(sb);
                     let lt_s = tok_p2(tok_base, lt_tok);
                     let lt_l = tok_p3(tok_base, lt_tok);

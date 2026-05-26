@@ -8245,6 +8245,55 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_dyn_let_type_self_host():
+    """K1.CW (2026-05-26): `impl T` / `dyn T` in let-type position.
+    Common in real Rust source for opaque/dynamic-dispatch types:
+
+      let x: impl Iterator = ...;
+      let y: dyn Display = ...;
+
+    K1.BV handled `impl Trait` / `dyn Trait` in fn-return; let-type
+    still tripped. The bootstrap is type-erased so these collapse
+    to bare `T`.
+
+    Fix: in the bare-IDENT type-start arm of the let-type
+    annotation path, detect leading `impl` (4-byte: 105, 109, 112,
+    108) or `dyn` (3-byte: 100, 121, 110) IDENT and consume the
+    modifier. The following IDENT is captured as the type IDENT
+    by the existing bare-path code.
+
+    Mirrors K1.BV's same-shape fn-return handling.
+
+    4 sub-probes (impl-sized / dyn-sized / impl-with-use / dyn-with-
+    use) + 10 regression-guards covering all other let-type forms
+    (typed, &T, Box<T>, &[T], *const T, amp_static, K1.BV fn-return
+    impl Trait unchanged) and prior K1.* features."""
+    cases = [
+        # K1.CW new cases
+        ("impl_sized",       "fn main() -> i32 { let x: impl Sized = 42; 42 }",                                  42),
+        ("dyn_sized",        "fn main() -> i32 { let x: dyn Sized = 42; 42 }",                                   42),
+        ("impl_with_use",    "fn main() -> i32 { let x: impl Sized = 42; x }",                                   42),
+        ("dyn_with_use",     "fn main() -> i32 { let x: dyn Sized = 42; x }",                                    42),
+
+        # Regression-guards: all other let-type forms unchanged
+        ("plain_typed",      "fn main() -> i32 { let x: i32 = 42; x }",                                          42),
+        ("plain_amp_t",      "fn main() -> i32 { let x: &i32 = 42; 42 }",                                        42),
+        ("box_t",            "fn main() -> i32 { let x: Box<i32> = 42; 42 }",                                    42),
+        ("amp_slice",        "fn main() -> i32 { let s: &[i32] = 42; 42 }",                                       42),
+        ("ptr_const",        "fn main() -> i32 { let p: *const i32 = 42; 42 }",                                  42),
+        ("amp_static",       'fn main() -> i32 { let s: &\'static i32 = 42; 42 }',                              42),
+        ("fn_ret_impl",      "trait Tr {} fn id() -> impl Tr { 42 } fn main() -> i32 { id(); 42 }",            42),
+
+        # Other regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_dyn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_slice_ptr_fn_param_self_host():
     """K1.CV (2026-05-26): `&[T]` slice ref and `*const T` raw ptr
     in fn-param type. K1.CU brought slice/array refs to let-type;
