@@ -8245,6 +8245,60 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_generic_enum_decl_self_host():
+    """K1.DC (2026-05-26): `<T>` generic params on enum decl. Real
+    Rust source uses generic enums pervasively:
+
+      enum Option<T> { Some(T), None }
+      enum Result<T, E> { Ok(T), Err(E) }
+
+    Previously TIMEOUT because parse_enum_decl consumed the name
+    IDENT then immediately expected `{`, mis-consuming `<` and
+    then looping over unrecognized tokens.
+
+    Two-part fix in parse_enum_decl:
+
+    (1) After the name IDENT consume, peek for `<` (TK_LT = 16).
+        If matched, consume the entire `<...>` block depth-balanced
+        (handles nested generics via the `>>` TK_RSHIFT split as
+        a 2-decrement, same as K1.T let-type).
+
+    (2) Also add an optional `where` clause skip after the generics
+        and before the `{` body, matching the K1.O / K1.CD pattern
+        for fn-decl and impl-block.
+
+    The bootstrap is type-erased; generic params on enum decls are
+    syntactic acceptance only.
+
+    5 sub-probes (one/two/bounded/lifetime/where) + 8 regression-
+    guards covering plain enum, payload variants, struct variants,
+    pub enum, generic struct (K1.T-handled), and prior K1.*
+    features."""
+    cases = [
+        # K1.DC new cases
+        ("one_param",        "enum O<T> { A(T), B } fn main() -> i32 { 42 }",                                    42),
+        ("two_params",       "enum R<T, E> { A(T), B(E) } fn main() -> i32 { 42 }",                              42),
+        ("bounded_param",    "enum O<T: Sized> { A, B } fn main() -> i32 { 42 }",                                42),
+        ("lifetime_param",   "enum O<'a, T> { A(T), B } fn main() -> i32 { 42 }",                                42),
+        ("with_where",       "enum O<T> where T: Sized { A(T), B } fn main() -> i32 { 42 }",                    42),
+
+        # Regression-guards: plain enum forms unchanged
+        ("plain_enum",       "enum E { A, B } fn main() -> i32 { 42 }",                                          42),
+        ("payload",          "enum E { A(i32), B } fn main() -> i32 { 42 }",                                     42),
+        ("struct_variant",   "enum E { A { x: i32 }, B } fn main() -> i32 { 42 }",                              42),
+        ("pub_enum",         "pub enum E { A } fn main() -> i32 { 42 }",                                         42),
+
+        # Other regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+        ("generic_struct",   "struct S<T> { x: T } fn main() -> i32 { 42 }",                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"gen_enum_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_plus_bound_let_type_self_host():
     """K1.DB (2026-05-26): `+ Bound` chain in let-type position.
     Mirror of K1.CX (fn-param `+ Bound`) for let-type. Common

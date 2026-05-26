@@ -9366,6 +9366,68 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
     let name_s = tok_p2(tok_base, nk);
     let name_l = tok_p3(tok_base, nk);
     cur_advance(sb);                         // consume name IDENT
+    // K1.DC (2026-05-26): optional `<T, U, ...>` generic params on
+    // enum decl. Real Rust source uses generic enums (`enum O<T>`,
+    // `enum Result<T, E>`, etc.) pervasively. The bootstrap is
+    // type-erased; consume `<...>` depth-balanced as a no-op so the
+    // following `{` body parses cleanly.
+    if tok_tag(tok_base, cur_get(sb)) == 16 {
+        cur_advance(sb);                     // consume '<'
+        let mut g_depth_dc: i32 = 1;
+        while g_depth_dc > 0 {
+            let gt_dc = tok_tag(tok_base, cur_get(sb));
+            if gt_dc == 16 {
+                g_depth_dc = g_depth_dc + 1;
+                cur_advance(sb);
+            } else { if gt_dc == 17 {
+                g_depth_dc = g_depth_dc - 1;
+                if g_depth_dc > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dc == 31 {
+                g_depth_dc = g_depth_dc - 2;
+                if g_depth_dc > 0 {
+                    cur_advance(sb);
+                };
+            } else { if gt_dc == 0 {
+                g_depth_dc = 0;
+            } else {
+                cur_advance(sb);
+            }}}};
+        }
+        cur_advance(sb);                     // consume final '>'
+    };
+    // K1.DC: optional `where` clause skip on enum decl (mirrors K1.O
+    // / K1.CD pattern). Consume tokens up to (but not including) `{`.
+    if tok_tag(tok_base, cur_get(sb)) == 2 {
+        let we_s = tok_p2(tok_base, cur_get(sb));
+        let we_l = tok_p3(tok_base, cur_get(sb));
+        let is_where_kw_dc = if we_l == 5 {
+            if __arena_get(we_s) == 119 {
+                if __arena_get(we_s + 1) == 104 {
+                    if __arena_get(we_s + 2) == 101 {
+                        if __arena_get(we_s + 3) == 114 {
+                            if __arena_get(we_s + 4) == 101 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 };
+        if is_where_kw_dc == 1 {
+            cur_advance(sb);                 // consume 'where'
+            let mut keep_w_dc: i32 = 1;
+            while keep_w_dc == 1 {
+                let wt_dc = tok_tag(tok_base, cur_get(sb));
+                if wt_dc == 5 {
+                    keep_w_dc = 0;
+                } else { if wt_dc == 0 {
+                    keep_w_dc = 0;
+                } else {
+                    cur_advance(sb);
+                }};
+            }
+        };
+    };
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut variant_count: i32 = 0;
     let mut variants_ptr: i32 = 0;
