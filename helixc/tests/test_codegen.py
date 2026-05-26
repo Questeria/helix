@@ -8245,6 +8245,66 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_stmt_decl_in_fn_body_self_host():
+    """K1.CF (2026-05-26): statement-like declarations inside a fn
+    body parse as no-op skips. Three keywords covered:
+
+      const N: i32 = 42;          // local const
+      static N: i32 = 42;         // local static
+      use std::vec::Vec;          // in-body use stmt
+
+    Top-level forms of these keywords are handled by parse_program
+    (K1.Z for const, K1.AW for static, K1.BM for use). In-body
+    usage previously tripped (rc=132) because parse_primary's IDENT
+    cascade had no arms for them -- the keyword IDENTs fell through
+    to plain-IDENT, mis-parsing `const` / `static` / `use` as var-
+    refs.
+
+    Same shape as K1.CE: detect the keyword at parse_primary entry,
+    consume tokens up to and including the terminating `;`, then
+    let the existing logic continue with the next expression.
+    Looped so consecutive decls like `const A: i32 = 1; const B:
+    i32 = 2; 42` skip BOTH.
+
+    Bytes:
+      "const"  = bytes 99, 111, 110, 115, 116 (length 5)
+      "static" = bytes 115, 116, 97, 116, 105, 99 (length 6)
+      "use"    = bytes 117, 115, 101 (length 3)
+
+    The token-eat is `()/[]/{}`-depth-aware so `;` inside
+    `[T; N]` array types, struct literals, brace-grouped use
+    paths, etc. doesn't terminate the skip prematurely. Also
+    breaks out if a `}` is seen at depth 0 (fn-body close
+    before `;`, defensive).
+
+    6 sub-probes (3 keyword forms + 1 multi + 1 chained + 1
+    brace-path use) + 9 regression-guards across all prior
+    K1.B*/C* coverage."""
+    cases = [
+        # K1.CF new cases
+        ("const",            "fn main() -> i32 { const N: i32 = 42; 42 }",                                          42),
+        ("static",           "fn main() -> i32 { static N: i32 = 42; 42 }",                                         42),
+        ("use",              "fn main() -> i32 { use std::vec::Vec; 42 }",                                          42),
+        ("multi",            "fn main() -> i32 { const A: i32 = 1; const B: i32 = 2; 42 }",                         42),
+        ("then_let",         "fn main() -> i32 { const N: i32 = 42; let x = 42; x }",                               42),
+        ("use_brace_path",   "fn main() -> i32 { use std::collections::{HashMap, BTreeMap}; 42 }",                  42),
+
+        # Regression-guards: top-level forms still work
+        ("top_const",        "const N: i32 = 42; fn main() -> i32 { 42 }",                                          42),
+        ("top_static",       "static N: i32 = 42; fn main() -> i32 { 42 }",                                         42),
+        ("top_use",          "use std::vec::Vec; fn main() -> i32 { 42 }",                                          42),
+        # Other K1.*/CE features unchanged
+        ("nested_fn",        "fn main() -> i32 { fn helper() -> i32 { 0 } 42 }",                                    42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                                  42),
+        ("macro_call",       'fn main() -> i32 { println!("hi"); 42 }',                                             42),
+        ("tuple_destruct",   "fn main() -> i32 { let (a, b) = (1, 2); 42 }",                                        42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"stmt_decl_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_nested_fn_decl_self_host():
     """K1.CE (2026-05-26): nested fn-decl inside a fn body parses
     as a no-op skip. Common Rust idiom for helper functions scoped

@@ -2793,6 +2793,130 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             keep_nested_fn_ce = 0;
         };
     };
+    // K1.CF (2026-05-26): statement-like declaration skip in fn
+    // body. Pattern: `const N: T = expr;`, `static N: T = expr;`,
+    // or `use path::...;` inside a fn body. The bootstrap previously
+    // tripped because parse_primary's IDENT cascade had no arms for
+    // these keywords (top-level forms are handled by parse_program,
+    // but in-expression context fell through to plain-IDENT, which
+    // mis-parsed `const` as a var-ref).
+    //
+    // Same shape as K1.CE: detect the keyword at parse_primary
+    // entry, consume tokens up to and including `;`, then let the
+    // existing logic continue with the next expression. Looped so
+    // patterns like `const A: i32 = 1; const B: i32 = 2; 42` skip
+    // BOTH decls.
+    //
+    // Keywords (each by exact byte match):
+    //   "const"  = bytes 99, 111, 110, 115, 116 (length 5)
+    //   "static" = bytes 115, 116, 97, 116, 105, 99 (length 6)
+    //   "use"    = bytes 117, 115, 101 (length 3)
+    //
+    // The token-eat is paren/bracket/brace-depth-aware so `;`
+    // inside `[T; N]` array types or other nested punctuation
+    // doesn't prematurely terminate the skip.
+    let mut keep_stmt_cf: i32 = 1;
+    while keep_stmt_cf == 1 {
+        let sk_cf = cur_get(sb);
+        let mut consumed_one_cf: i32 = 0;
+        if tok_tag(tok_base, sk_cf) == 2 {
+            let s_s_cf = tok_p2(tok_base, sk_cf);
+            let s_l_cf = tok_p3(tok_base, sk_cf);
+            let is_const_kw = if s_l_cf == 5 {
+                if __arena_get(s_s_cf) == 99 {
+                    if __arena_get(s_s_cf + 1) == 111 {
+                        if __arena_get(s_s_cf + 2) == 110 {
+                            if __arena_get(s_s_cf + 3) == 115 {
+                                if __arena_get(s_s_cf + 4) == 116 { 1 } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            let is_static_kw = if s_l_cf == 6 {
+                if __arena_get(s_s_cf) == 115 {
+                    if __arena_get(s_s_cf + 1) == 116 {
+                        if __arena_get(s_s_cf + 2) == 97 {
+                            if __arena_get(s_s_cf + 3) == 116 {
+                                if __arena_get(s_s_cf + 4) == 105 {
+                                    if __arena_get(s_s_cf + 5) == 99 { 1 } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            let is_use_kw = if s_l_cf == 3 {
+                if __arena_get(s_s_cf) == 117 {
+                    if __arena_get(s_s_cf + 1) == 115 {
+                        if __arena_get(s_s_cf + 2) == 101 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            let is_stmt_kw = is_const_kw + is_static_kw + is_use_kw;
+            if is_stmt_kw > 0 {
+                // Consume tokens to the next `;` at depth 0. Track
+                // ()/[]/{}` depth so `;` inside `[T; N]`, struct
+                // literals, etc., doesn't terminate prematurely.
+                let mut p_depth_cf: i32 = 0;
+                let mut k_depth_cf: i32 = 0;
+                let mut b_depth_cf: i32 = 0;
+                let mut keep_eat_cf: i32 = 1;
+                while keep_eat_cf == 1 {
+                    let et_cf = tok_tag(tok_base, cur_get(sb));
+                    if et_cf == 12 {
+                        // `;`
+                        if p_depth_cf == 0 {
+                            if k_depth_cf == 0 {
+                                if b_depth_cf == 0 {
+                                    cur_advance(sb);     // consume ';'
+                                    keep_eat_cf = 0;
+                                } else {
+                                    cur_advance(sb);
+                                };
+                            } else {
+                                cur_advance(sb);
+                            };
+                        } else {
+                            cur_advance(sb);
+                        };
+                    } else { if et_cf == 3 {
+                        p_depth_cf = p_depth_cf + 1;
+                        cur_advance(sb);
+                    } else { if et_cf == 4 {
+                        p_depth_cf = p_depth_cf - 1;
+                        cur_advance(sb);
+                    } else { if et_cf == 20 {
+                        k_depth_cf = k_depth_cf + 1;
+                        cur_advance(sb);
+                    } else { if et_cf == 21 {
+                        k_depth_cf = k_depth_cf - 1;
+                        cur_advance(sb);
+                    } else { if et_cf == 5 {
+                        b_depth_cf = b_depth_cf + 1;
+                        cur_advance(sb);
+                    } else { if et_cf == 6 {
+                        if b_depth_cf == 0 {
+                            // Hit fn-body close before `;`. Stop without consuming.
+                            keep_eat_cf = 0;
+                        } else {
+                            b_depth_cf = b_depth_cf - 1;
+                            cur_advance(sb);
+                        };
+                    } else { if et_cf == 0 {
+                        // EOF safety
+                        keep_eat_cf = 0;
+                    } else {
+                        cur_advance(sb);
+                    }}}}}}}};
+                }
+                consumed_one_cf = 1;
+            };
+        };
+        if consumed_one_cf == 0 {
+            keep_stmt_cf = 0;
+        };
+    };
     // K1.BC (2026-05-26): peek for `move` IDENT followed by `|`. If
     // matched, consume `move` so the existing TK_PIPE arm below
     // sees the closure as if there were no modifier. Capture-by-
