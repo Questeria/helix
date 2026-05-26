@@ -8245,6 +8245,65 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_dyn_fn_param_self_host():
+    """K1.CX (2026-05-26): `impl T` / `dyn T` modifier + `+ Bound`
+    chain in fn-param type. Real Rust source patterns:
+
+      fn process(it: impl Iterator) -> i32 { ... }
+      fn handle(x: dyn Debug) -> i32 { ... }
+      fn run(x: impl Iterator + Clone + Send) -> i32 { ... }
+
+    Previously failed (TIMEOUT for bare `impl Tr` form, rc=132 for
+    `impl A + B` compound form) because parse_fn_decl's param-type
+    position had no `impl`/`dyn` modifier skip, and no trailing
+    `+ Trait` chain skip.
+
+    Two-part implementation in parse_fn_decl param-type:
+
+    (1) After consuming `:`, peek for `impl` (4-byte: 105, 109,
+        112, 108) or `dyn` (3-byte: 100, 121, 110) IDENT and
+        consume the modifier. The following IDENT is the real
+        type IDENT, captured by the existing chain. Mirrors
+        K1.CW (let-type) and K1.BV (fn-return).
+
+    (2) After the type IDENT consume and the K1.CT `<...>` generic
+        arg skip, add a `+ Trait` chain skip. While the cursor is
+        on `+` (TK_PLUS = 7), consume `+`, then the trait IDENT
+        (optional generic args on that trait via inline K1.CT-
+        shape skip). Loops while chained bounds remain.
+
+    The bootstrap is type-erased; impl/dyn modifier and trait
+    bounds are all syntactic no-ops.
+
+    6 sub-probes (impl/dyn variants + plus-chain forms) + 9
+    regression-guards covering plain params, K1.BD `&T`, K1.CV
+    slice ref, K1.CT `Box<T>`, K1.CW let-type unchanged, K1.BV
+    fn-return unchanged, and prior K1.* features."""
+    cases = [
+        # K1.CX new cases
+        ("impl_tr",          "trait Tr {} fn id(x: impl Tr) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",     42),
+        ("dyn_tr",           "trait Tr {} fn id(x: dyn Tr) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",      42),
+        ("impl_a_plus_b",    "trait A {} trait B {} fn id(x: impl A + B) -> i32 { 42 } fn main() -> i32 { id(0); 42 }", 42),
+        ("dyn_a_plus_b",     "trait A {} trait B {} fn id(x: dyn A + B) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",  42),
+        ("impl_three",       "trait A {} trait B {} trait C {} fn id(x: impl A + B + C) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",  42),
+        ("plain_baseline",   "fn id(x: i32) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",                     42),
+
+        # Regression-guards
+        ("plain_param",      "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                          42),
+        ("amp_param",        "fn id(s: &i32) -> i32 { 0 } fn main() -> i32 { id(&42); 42 }",                    42),
+        ("amp_slice_param",  "fn id(s: &[i32]) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",                   42),
+        ("box_param",        "fn id(x: Box<i32>) -> i32 { 42 } fn main() -> i32 { id(42) }",                    42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("impl_trait_let",   "fn main() -> i32 { let x: impl Sized = 42; 42 }",                                42),
+        ("amp_static",       "fn id(s: &'static i32) -> i32 { 0 } fn main() -> i32 { id(0); 42 }",              42),
+        ("fn_ret_impl",      "trait Tr {} fn id() -> impl Tr { 42 } fn main() -> i32 { id(); 42 }",            42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_dyn_p_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_impl_dyn_let_type_self_host():
     """K1.CW (2026-05-26): `impl T` / `dyn T` in let-type position.
     Common in real Rust source for opaque/dynamic-dispatch types:

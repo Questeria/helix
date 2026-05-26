@@ -8564,6 +8564,39 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let pname_l = tok_p3(tok_base, pname_tok);
             cur_advance(sb);     // param name
             cur_advance(sb);     // ':'
+            // K1.CX (2026-05-26): `impl T` / `dyn T` modifier in
+            // fn-param type. Mirrors K1.CW (let-type) and K1.BV
+            // (fn-return). Detect leading `impl` (4-byte:
+            // 105,109,112,108) or `dyn` (3-byte: 100,121,110) IDENT
+            // and consume the modifier. The following IDENT is the
+            // real type IDENT, picked up by the existing capture
+            // below.
+            if tok_tag(tok_base, cur_get(sb)) == 2 {
+                let pmt_s_cx = tok_p2(tok_base, cur_get(sb));
+                let pmt_l_cx = tok_p3(tok_base, cur_get(sb));
+                let is_impl_cx = if pmt_l_cx == 4 {
+                    if __arena_get(pmt_s_cx) == 105 {
+                        if __arena_get(pmt_s_cx + 1) == 109 {
+                            if __arena_get(pmt_s_cx + 2) == 112 {
+                                if __arena_get(pmt_s_cx + 3) == 108 { 1 } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 };
+                let is_dyn_cx = if pmt_l_cx == 3 {
+                    if __arena_get(pmt_s_cx) == 100 {
+                        if __arena_get(pmt_s_cx + 1) == 121 {
+                            if __arena_get(pmt_s_cx + 2) == 110 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 };
+                if is_impl_cx == 1 {
+                    cur_advance(sb);     // consume 'impl' IDENT
+                };
+                if is_dyn_cx == 1 {
+                    cur_advance(sb);     // consume 'dyn' IDENT
+                };
+            };
             // K1.BD (2026-05-26): peek for `&` (TK_AMP=27) as a
             // reference-type prefix on the param type (`fn p(x: &T)`
             // / `fn p(x: &mut T)`). Consume `&`, then optionally
@@ -8733,6 +8766,57 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 }
                 cur_advance(sb);                 // consume final '>' / '>>'
             };
+            // K1.CX (2026-05-26): optional `+ Trait` chain in
+            // fn-param type. For `impl A + B + C` / `dyn A + B`
+            // forms, consume `+` followed by trait IDENT, repeated
+            // for chained bounds. The bootstrap doesn't model
+            // trait bounds; type-erased no-op.
+            let mut keep_plus_cx: i32 = 1;
+            while keep_plus_cx == 1 {
+                if tok_tag(tok_base, cur_get(sb)) == 7 {
+                    cur_advance(sb);             // consume '+'
+                    // After '+' we may have an optional lifetime
+                    // (`+ 'a`) which K1.CQ lex-time skip already
+                    // collapsed to a bare IDENT. Consume next IDENT
+                    // as the bound name.
+                    if tok_tag(tok_base, cur_get(sb)) == 2 {
+                        cur_advance(sb);         // consume trait IDENT
+                        // Optional generic args on this bound
+                        // (`+ Iterator<Item = i32>`). Reuse the
+                        // K1.CT shape inline.
+                        if tok_tag(tok_base, cur_get(sb)) == 16 {
+                            cur_advance(sb);     // consume '<'
+                            let mut gd_px: i32 = 1;
+                            while gd_px > 0 {
+                                let gt_px = tok_tag(tok_base, cur_get(sb));
+                                if gt_px == 16 {
+                                    gd_px = gd_px + 1;
+                                    cur_advance(sb);
+                                } else { if gt_px == 17 {
+                                    gd_px = gd_px - 1;
+                                    if gd_px > 0 {
+                                        cur_advance(sb);
+                                    };
+                                } else { if gt_px == 31 {
+                                    gd_px = gd_px - 2;
+                                    if gd_px > 0 {
+                                        cur_advance(sb);
+                                    };
+                                } else { if gt_px == 0 {
+                                    gd_px = 0;
+                                } else {
+                                    cur_advance(sb);
+                                }}}};
+                            }
+                            cur_advance(sb);     // consume final '>'
+                        };
+                    } else {
+                        keep_plus_cx = 0;
+                    };
+                } else {
+                    keep_plus_cx = 0;
+                };
+            }
             // Audit fix (Stage 1 cycle): all 3 bytes must match exactly.
             // Strict: 'f32' (102 51 50) → 1; 'f64' (102 54 52) → 2;
             // 'i64' (105 54 52) → 3; 'i32' (105 51 50) → 0; else 0.
