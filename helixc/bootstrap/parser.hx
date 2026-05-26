@@ -1835,6 +1835,29 @@ fn is_kw_const_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.BY (2026-05-26): match the 5-byte IDENT "union" (bytes
+// 117, 110, 105, 111, 110). Used by parse_top + parse_program
+// to recognize top-level `union U { ... }` decls. Routes to
+// parse_struct_decl which is keyword-agnostic (it just does
+// `cur_advance(sb); // consume 'struct' IDENT` -- works
+// identically for `union` since the IDENT is consumed without
+// matching). The bootstrap treats unions as type-erased struct-
+// shaped values; real overlapping-storage semantics is a
+// separate Cat-2 gap.
+fn is_kw_union_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 5 {
+        if __arena_get(id_s) == 117 {
+            if __arena_get(id_s + 1) == 110 {
+                if __arena_get(id_s + 2) == 105 {
+                    if __arena_get(id_s + 3) == 111 {
+                        if __arena_get(id_s + 4) == 110 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.AW (2026-05-25): match the 6-byte IDENT "static" (bytes
 // 115, 116, 97, 116, 105, 99). Used by parse_top + parse_program
 // to recognize top-level `static N: T = expr;` decls. Syntax-
@@ -5184,6 +5207,8 @@ fn parse_top(tok_base: i32) -> i32 {
         let is_const = is_kw_const_ident(id_s, id_l);
         // K1.AW (2026-05-25): `static` is also a top-level decl prefix.
         let is_static = is_kw_static_ident(id_s, id_l);
+        // K1.BY (2026-05-26): `union` is also a top-level decl prefix.
+        let is_union = is_kw_union_ident(id_s, id_l);
         // K1.AA (2026-05-25): `agent` is also a top-level decl prefix.
         let is_agent = is_kw_agent_ident(id_s, id_l);
         if is_fn == 1 {
@@ -5206,11 +5231,13 @@ fn parse_top(tok_base: i32) -> i32 {
             parse_program(tok_base, cur_slot)
         } else { if is_static == 1 {
             parse_program(tok_base, cur_slot)
+        } else { if is_union == 1 {
+            parse_program(tok_base, cur_slot)
         } else { if is_agent == 1 {
             parse_program(tok_base, cur_slot)
         } else {
             parse_expr(tok_base, cur_slot)
-        }}}}}}}}}}}
+        }}}}}}}}}}}}
     } else {
         parse_expr(tok_base, cur_slot)
     }
@@ -5571,6 +5598,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             // K1.AW (2026-05-25): `static N = ...;` is also a top-level
             // no-op decl. Mirrors const exactly.
             let is_static_kw = is_kw_static_ident(s, l);
+            // K1.BY (2026-05-26): `union U { ... }` -- routes to
+            // parse_struct_decl which is keyword-agnostic.
+            let is_union_kw = is_kw_union_ident(s, l);
             // K1.AA (2026-05-25): `agent Foo { ... }` -- AGI primitive
             // block, no-op at codegen.
             let is_agent_kw = is_kw_agent_ident(s, l);
@@ -5601,12 +5631,15 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_static_kw == 1 {
                 parse_static_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_union_kw == 1 {
+                parse_struct_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_agent_kw == 1 {
                 parse_agent_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 keep_decl = 0;
-            }}}}}}}}}};
+            }}}}}}}}}}};
         } else {
             keep_decl = 0;
         };
@@ -5652,6 +5685,8 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             let is_const_kw2 = is_kw_const_ident(s, l);
             // K1.AW (2026-05-25): `static N = ...;` arm for the post-fn loop.
             let is_static_kw2 = is_kw_static_ident(s, l);
+            // K1.BY (2026-05-26): `union U { ... }` arm for the post-fn loop.
+            let is_union_kw2 = is_kw_union_ident(s, l);
             // K1.AA (2026-05-25): `agent Foo { ... }` arm for the post-fn loop.
             let is_agent_kw2 = is_kw_agent_ident(s, l);
             if is_fn_kw2 == 1 {
@@ -5686,13 +5721,16 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
             } else { if is_static_kw2 == 1 {
                 parse_static_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
+            } else { if is_union_kw2 == 1 {
+                parse_struct_decl(tok_base, sb);
+                __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else { if is_agent_kw2 == 1 {
                 parse_agent_decl(tok_base, sb);
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
             } else {
                 __arena_set(sb + 74, 0); __arena_set(sb + 75, 0); __arena_set(sb + 76, 0); __arena_set(sb + 77, 0); __arena_set(sb + 80, 0); __arena_set(sb + 81, 0); __arena_set(sb + 82, 0); __arena_set(sb + 83, 0); __arena_set(sb + 84, 0); __arena_set(sb + 85, 0); __arena_set(sb + 86, 0); __arena_set(sb + 87, 0);
                 keep = 0;
-            }}}}}}}}}}};
+            }}}}}}}}}}}};
         } else {
             keep = 0;
         }};

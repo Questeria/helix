@@ -8245,6 +8245,28 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_union_decl_self_host():
+    """K1.BY (2026-05-26): top-level `union U { ... }` accepted
+    as no-op (routes to parse_struct_decl, which is keyword-
+    agnostic). The bootstrap doesn't model overlapping-storage
+    union semantics; the form is syntactic acceptance only.
+
+    Common Rust pattern for FFI bindings and zero-cost
+    transmutation: `union F { i: u32, f: f32 }`. Distinct from
+    `union` as a regular identifier (Rust contextual keyword).
+
+    4 sub-probes."""
+    cases = [
+        ("two_field",   "union F { i: u32, f: f32 } fn main() -> i32 { 42 }",                                            42),
+        ("multi_field", "union U { a: i32, b: u32, c: f32 } fn main() -> i32 { 42 }",                                    42),
+        ("pub_union",   "pub union F { i: u32 } fn main() -> i32 { 42 }",                                                42),
+        ("mixed_decls", "union F { i: i32 } struct S { x: i32 } fn main() -> i32 { 42 }",                                42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"union_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_double_semi_self_host():
     """K1.BX (2026-05-26): multiple consecutive `;` tokens
     inside a fn body parse cleanly. parse_expr's TK_SEMI
