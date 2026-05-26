@@ -8245,6 +8245,61 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_try_block_self_host():
+    """K1.CO (2026-05-26): `try { ... }` block as transparent
+    value (no-op wrapper). Rust unstable feature; commonly used
+    when ?-propagation is needed in a scoped expression.
+
+      let r = try { compute()? + foo() };
+
+    The bootstrap doesn't model Try semantics (no Result-or-Option
+    wrapping); `try { body }` simply unwraps to the body's value.
+
+    Previously `let x = try { 42 }; x` failed (rc=132) because
+    `try` was treated as a var ref, leaving the `{ 42 }` block
+    unparsed.
+
+    Implementation: new `is_kw_try_ident` helper (3-byte: 116, 114,
+    121) and a new arm in parse_primary's IDENT cascade after
+    `unsafe`. When `try` IDENT is followed by `{` (LBRACE = 5),
+    reuse parse_unsafe -- the structural shape (IDENT-keyword +
+    brace-body, returning the body's value) is identical. When
+    NOT followed by `{`, fall through to var-ref so `try` as a
+    var name still works.
+
+    LIMITATION: real Try semantics (early ?-return from inside
+    the try) is a Cat-2 gap. Bodies that use `?` still fail.
+
+    4 sub-probes (basic, complex, tail, with-let) + 1 regression
+    `try` as var name + 8 regression-guards across K1.AB unsafe
+    and prior K1.* features."""
+    cases = [
+        # K1.CO new cases
+        ("basic",            "fn main() -> i32 { let x = try { 42 }; x }",                                          42),
+        ("complex",          "fn main() -> i32 { let x = try { let y = 21; y + y }; x }",                          42),
+        ("tail",             "fn main() -> i32 { try { 42 } }",                                                      42),
+        ("with_let",         "fn main() -> i32 { let r = try { 42 }; r }",                                          42),
+
+        # Regression-guard: `try` as var name (NOT followed by `{`)
+        ("try_as_var",       "fn main() -> i32 { let try = 42; try }",                                              42),
+
+        # Regression-guard: K1.AB unsafe still works (analogous keyword)
+        ("unsafe_unchanged", "fn main() -> i32 { let x = unsafe { 42 }; x }",                                       42),
+
+        # Other regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                                  42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                              42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                        42),
+        ("macro_call",       'fn main() -> i32 { println!("hi"); 42 }',                                             42),
+        ("let_else",         "fn main() -> i32 { let x = 42 else { return 0; }; x }",                               42),
+        ("tuple_struct",     "struct P(i32, i32); fn main() -> i32 { let p = P(40, 2); 42 }",                       42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"try_block_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_let_else_self_host():
     """K1.CN (2026-05-26): let-else `let x = expr else { ... };`
     (Rust 1.65+). Common idiom for early-return when a pattern

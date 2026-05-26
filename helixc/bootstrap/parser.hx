@@ -1792,6 +1792,24 @@ fn is_kw_unsafe_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.CO (2026-05-26): match the 3-byte IDENT "try" (bytes
+// 116, 114, 121). Used by parse_primary to recognize `try { expr }`
+// as a transparent-value wrapper. Mirrors K1.AB unsafe-block
+// pattern: the bootstrap doesn't model Try semantics (no
+// Result-or-Option wrapping), so `try { body }` simply unwraps to
+// the body's value. Downstream code that depends on real
+// Try-block semantics (early ?-return from inside the try) still
+// fails -- those are separate Cat-2 gaps.
+fn is_kw_try_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 3 {
+        if __arena_get(id_s) == 116 {
+            if __arena_get(id_s + 1) == 114 {
+                if __arena_get(id_s + 2) == 121 { 1 } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.AZ (2026-05-26): match the 5-byte IDENT "async" (bytes
 // 97, 115, 121, 110, 99). Used by consume_vis_modifiers to
 // swallow `async fn ...` at top-level decl positions. The
@@ -4183,6 +4201,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);
                 mk_var_with_capture(sb, id_start, id_len)
             }
+        } else { if is_kw_try_ident(id_start, id_len) == 1 {
+            // K1.CO (2026-05-26): `try { expr }` block (Rust unstable).
+            // Same pattern as K1.AB unsafe -- the bootstrap doesn't
+            // model Try (no Result-or-Option wrapping), so `try { body }`
+            // transparently yields the body's value. Reuses parse_unsafe
+            // since the structural shape (IDENT-keyword + brace-body)
+            // is identical; parse_unsafe consumes the leading IDENT, the
+            // `{`, parses the body via parse_expr, and consumes `}`.
+            // Only matches when the next token after `try` is LBRACE;
+            // bare `try` as a var name still falls through to var-ref.
+            // +1 closing brace at the IDENT sub-cascade closer.
+            let nt_try_co = tok_tag(tok_base, k + 1);
+            if nt_try_co == 5 {
+                parse_unsafe(tok_base, sb)
+            } else {
+                cur_advance(sb);
+                mk_var_with_capture(sb, id_start, id_len)
+            }
         } else { if is_kw_true_ident(id_start, id_len) == 1 {
             // K1.Q (2026-05-25): `true` -- emit AST_INT(1). Chars
             // were the closest precedent (K1.K) but bool lits go
@@ -5352,6 +5388,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // K1.AB (2026-05-25): +1 brace closes the new `unsafe` arm (same algebra as K1.H1)
         }     // K1.AC (2026-05-25): +1 brace closes the new `break` arm (same algebra as K1.AB)
         }     // K1.AD (2026-05-25): +1 brace closes the new `continue` arm (same algebra as K1.AC)
+        }     // K1.CO (2026-05-26): +1 brace closes the new `try` arm (same algebra as K1.AB)
         }     // K1.CB (2026-05-26): +1 brace closes the new macro-call `else { ...existing IDENT body... }` wrapper
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
