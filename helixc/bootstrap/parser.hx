@@ -9520,26 +9520,48 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
     if tok_tag(tok_base, cur_get(sb)) == 16 {
         cur_advance(sb);                     // consume '<'
         let mut g_depth_dc: i32 = 1;
+        // K1.DG (2026-05-26): track previous `-` token (TK_MINUS = 8) so
+        // that the `>` immediately after it is recognized as part of
+        // `->` (a return-type arrow inside a Fn-trait bound, e.g.
+        // `enum E<F: Fn() -> i32>`) rather than the closing `>` of the
+        // generic-param list. Without this, the FIRST `>` of `->` was
+        // mis-treated as the closer, terminating the loop early and
+        // hanging the parser. Mirror of K1.CZ's prev_minus tracking.
+        let mut prev_minus_dc: i32 = 0;
         while g_depth_dc > 0 {
             let gt_dc = tok_tag(tok_base, cur_get(sb));
             if gt_dc == 16 {
                 g_depth_dc = g_depth_dc + 1;
                 cur_advance(sb);
+                prev_minus_dc = 0;
             } else { if gt_dc == 17 {
-                g_depth_dc = g_depth_dc - 1;
-                if g_depth_dc > 0 {
+                if prev_minus_dc == 1 {
+                    // `->` arrow: don't decrement depth; just consume.
                     cur_advance(sb);
+                    prev_minus_dc = 0;
+                } else {
+                    g_depth_dc = g_depth_dc - 1;
+                    if g_depth_dc > 0 {
+                        cur_advance(sb);
+                    };
+                    prev_minus_dc = 0;
                 };
             } else { if gt_dc == 31 {
                 g_depth_dc = g_depth_dc - 2;
                 if g_depth_dc > 0 {
                     cur_advance(sb);
                 };
+                prev_minus_dc = 0;
             } else { if gt_dc == 0 {
                 g_depth_dc = 0;
+            } else { if gt_dc == 8 {
+                // TK_MINUS: arm prev_minus for the next iteration.
+                cur_advance(sb);
+                prev_minus_dc = 1;
             } else {
                 cur_advance(sb);
-            }}}};
+                prev_minus_dc = 0;
+            }}}}};
         }
         cur_advance(sb);                     // consume final '>'
     };

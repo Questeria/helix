@@ -8245,6 +8245,64 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_enum_fn_bound_self_host():
+    """K1.DG (2026-05-26): `->` arrow inside generic-arg list on
+    enum decl. Real Rust source uses Fn-trait bounds on enum
+    generic params for option/result wrappers around closures:
+
+      enum Action<F: Fn() -> i32> { Pending(F), Done(i32) }
+      enum Lazy<F: FnOnce() -> i32> { Forced(i32), Pending(F) }
+
+    Previously TIMEOUT because K1.DC's depth-balanced `<...>` skip
+    in parse_enum_decl mis-treated the `>` of `->` (the Fn-trait
+    return-type arrow) as the closing `>` of the outer generic-
+    param list, terminating the skip loop too early and leaving
+    the rest of the bound expression in the token stream where
+    the variant-body parser would mis-consume it and hang.
+
+    Fix: mirror K1.CZ's `prev_minus` tracking in parse_enum_decl's
+    `<...>` skip. Add a `prev_minus_dc` flag that is set to 1 when
+    a `-` (TK_MINUS = 8) token is consumed. When the next token is
+    `>` (TK_GT = 17) AND prev_minus_dc == 1, the `>` is recognized
+    as part of the `->` arrow rather than the closing `>` — it is
+    consumed normally without decrementing depth. The flag resets
+    after every other token type.
+
+    The bootstrap is type-erased; the entire bound expression
+    (including the Fn-trait paren args, generic args, and arrow
+    return type) is consumed and discarded as a syntactic no-op.
+
+    3 sub-probes (enum_fn_bound, enum_iter_assoc, enum_sized_clone)
+    + 11 regression-guards covering impl/trait/where bounded
+    generics (all pre-existing accident-passes), plain enum,
+    impl<T>, and prior K1.* features."""
+    cases = [
+        # K1.DG new cases
+        ("enum_fn_bound",         "enum E<F: Fn() -> i32> { A(F) } fn main() -> i32 { 42 }",                                42),
+        ("enum_iter_assoc",       "enum E<I: Iterator<Item = i32>> { A(I) } fn main() -> i32 { 42 }",                       42),
+        ("enum_sized_clone",      "enum E<T: Sized + Clone> { A(T) } fn main() -> i32 { 42 }",                              42),
+
+        # Regression-guards: bounded generics on other decls already
+        # worked, but verify K1.DG didn't break them.
+        ("impl_fn_bound",         "struct B<F: Fn() -> i32> { f: F } impl<F: Fn() -> i32> B<F> { fn x() -> i32 { 42 } } fn main() -> i32 { 42 }", 42),
+        ("impl_iter_assoc",       "struct B<I> { it: I } impl<I: Iterator<Item = i32>> B<I> { fn x() -> i32 { 42 } } fn main() -> i32 { 42 }",   42),
+        ("impl_sized",            "struct B<T> { x: T } impl<T: Sized> B<T> { fn x() -> i32 { 42 } } fn main() -> i32 { 42 }",                   42),
+        ("trait_gen_bound",       "trait T<F: Fn() -> i32> {} fn main() -> i32 { 42 }",                                                          42),
+        ("trait_method_gen",      "trait T { fn f<U: Sized>(&self, x: U) -> i32; } fn main() -> i32 { 42 }",                                    42),
+        ("where_fn_bound",        "fn apply<F>(f: F) -> i32 where F: Fn() -> i32 { 42 } fn main() -> i32 { 42 }",                                42),
+        ("where_iter_assoc",      "fn apply<I>(it: I) -> i32 where I: Iterator<Item = i32> { 42 } fn main() -> i32 { 42 }",                      42),
+
+        # Other regression-guards
+        ("plain_enum",            "enum E { A } fn main() -> i32 { 42 }",                                                                         42),
+        ("plain_impl_gen",        "struct B<T> { x: T } impl<T> B<T> { fn val() -> i32 { 42 } } fn main() -> i32 { 42 }",                        42),
+        ("plain_let",             "fn main() -> i32 { let x = 42; x }",                                                                          42),
+        ("plain_for",             "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",                                     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"enum_fn_bound_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_struct_gen_bound_self_host():
     """K1.DF (2026-05-26): trait bounds on struct decl generic
     params, including K1.DE-style `Fn(...) -> Ret` Fn-trait
