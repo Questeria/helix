@@ -8210,6 +8210,33 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_hash_attribute_self_host():
+    """K1.BK (2026-05-26): `#[...]` outer attributes and `#![...]`
+    inner attributes accepted at lex time by skipping the entire
+    bracketed block (and the optional `!`) as if it were a
+    comment. No token emitted; the parser sees a clean stream.
+
+    The bootstrap has no attribute-driven codegen for the Rust
+    family (#[derive(Debug)], #[inline], etc.) -- those are
+    syntactic decoration only, Phase-0 semantic no-op.
+
+    Brackets are depth-counted so nested `#[outer( #[inner] )]`
+    works; EOF-safe if `]` never arrives.
+
+    5 sub-probes covering derive, inline, allow, inner-attr,
+    and a stack of two outer attrs."""
+    cases = [
+        ("derive",       "#[derive(Debug)] struct P { x: i32 } fn main() -> i32 { 42 }",                                                       42),
+        ("inline",       "#[inline] fn fast() -> i32 { 42 } fn main() -> i32 { fast() }",                                                       42),
+        ("allow",        "#[allow(dead_code)] fn unused() -> i32 { 99 } fn main() -> i32 { 42 }",                                              42),
+        ("inner",        "#![allow(dead_code)] fn main() -> i32 { 42 }",                                                                       42),
+        ("stacked",      "#[inline] #[allow(dead_code)] fn fast() -> i32 { 42 } fn main() -> i32 { fast() }",                                 42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"hash_attr_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_extern_block_self_host():
     """K1.BJ (2026-05-26): `extern "C" { ... }` extern block
     accepted as a no-op. The bootstrap has no FFI runtime --

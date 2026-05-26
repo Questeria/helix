@@ -763,6 +763,51 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
         let b = __arena_get(pos);
         if is_whitespace(b) == 1 {
             pos = pos + 1;
+        } else { if b == 35 {
+            // K1.BK (2026-05-26): '#' (byte 35) opens a Rust outer
+            // attribute `#[...]` or inner attribute `#![...]`. The
+            // bootstrap has no attribute-driven codegen for the Rust
+            // attribute family (#[derive(Debug)], #[inline], etc.) --
+            // those are syntactic decoration only, semantically a
+            // no-op in Phase-0. Skip the entire bracketed block (and
+            // the optional `!`) at lex time as if it were a comment;
+            // no token is emitted so the parser sees a clean decl.
+            // EOF-safe: if `]` never arrives, we stop at end-of-input.
+            let mut p_a = pos + 1;
+            if p_a < end {
+                if __arena_get(p_a) == 33 {                  // '!' (inner attr)
+                    p_a = p_a + 1;
+                };
+            };
+            if p_a < end {
+                if __arena_get(p_a) == 91 {                  // '['
+                    p_a = p_a + 1;
+                    let mut depth_a: i32 = 1;
+                    while depth_a > 0 {
+                        if p_a >= end {
+                            depth_a = 0;
+                        } else {
+                            let ab = __arena_get(p_a);
+                            if ab == 91 { depth_a = depth_a + 1; };
+                            if ab == 93 { depth_a = depth_a - 1; };
+                            p_a = p_a + 1;
+                        };
+                    };
+                    pos = p_a;
+                } else {
+                    // '#' not followed by '[' is unexpected; emit it as
+                    // an unknown-byte token so the parser fails loud
+                    // rather than silently mis-parsing. Tag 0 = EOF/
+                    // unknown sentinel which downstream parsers treat
+                    // as end-of-stream -- same fail-loud contract as
+                    // any other unrecognized byte.
+                    push_token(0, 0, pos, 1);
+                    pos = pos + 1;
+                };
+            } else {
+                push_token(0, 0, pos, 1);
+                pos = pos + 1;
+            };
         } else { if b == 47 {
             // Possible '//' line comment, '/*' block comment (K1.AP),
             // else slash punctuation.
@@ -871,7 +916,7 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
                 push_token(pk, 0, pos, 1);
                 pos = pos + 1;
             };
-        }}}}}}}}}};     // K1.K (2026-05-25): +1 close for the new b==39 (char-lit) arm
+        }}}}}}}}}}};     // K1.BK (2026-05-26): +1 close for the new b==35 (`#`) attribute-skip arm
     }
     push_token(0, 0, pos, 0);   // TK_EOF sentinel
     let after = __arena_len();
