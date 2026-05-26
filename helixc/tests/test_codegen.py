@@ -8210,6 +8210,27 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_empty_fn_body_self_host():
+    """K1.AT (2026-05-25): `fn noop() { }` (empty body + no
+    return type) now compiles. Two parser-level fixes:
+    (1) parse_fn_decl peeks for TK_RBRACE immediately after the
+    opening `{` and emits AST_INT(0) as the body if empty;
+    (2) the `-> RetTy` clause is now OPTIONAL -- if the next
+    token after `)` isn't TK_MINUS, default ret_ty = 0 (i32 /
+    unit). Pinned via 4 probes covering empty-no-ret-ty,
+    empty-with-ret-ty, multiple-empty-fns, and side-effect-only
+    fn body."""
+    cases = [
+        ("empty_noret",  "fn noop() { } fn main() -> i32 { noop(); 42 }",                              42),
+        ("empty_iret",   "fn z() -> i32 { } fn main() -> i32 { z() + 42 }",                            42),
+        ("multi_empty",  "fn a() { } fn b() { } fn c() { } fn main() -> i32 { a(); b(); c(); 42 }",    42),
+        ("side_effect",  "fn p(x: i32) { let _ = x + 1; } fn main() -> i32 { p(10); 42 }",             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"empty_fn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_return_bare_self_host():
     """K1.AR (2026-05-25): bare `return;` (no value) now accepted.
     parse_return previously REQUIRED a value expression via

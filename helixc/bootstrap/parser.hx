@@ -7403,14 +7403,29 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         }};
     }
     cur_advance(sb);     // ')'
-    cur_advance(sb);     // '-' (part of '->')
-    cur_advance(sb);     // '>' (the second char of '->')
-    // Capture the return-type IDENT bytes the same way AST_PARAM does.
-    // 'f' first byte (length 3) -> f32 / f64 -> ret_ty = 1.
-    let rt_tok = cur_get(sb);
-    let rt_s = tok_p2(tok_base, rt_tok);
-    let rt_l = tok_p3(tok_base, rt_tok);
-    cur_advance(sb);     // return-type IDENT
+    // K1.AT (2026-05-25): optional `-> RetTy`. The original
+    // bootstrap unconditionally consumed `-`, `>`, ret-type IDENT
+    // which trips `fn noop() { ... }` (unit return) where the
+    // next token after `)` is `{`. Peek for TK_MINUS (8); if
+    // absent, default ret_ty = 0 (i32) and skip the IDENT
+    // capture. The bootstrap is type-erased so the unit return
+    // tag isn't distinguishable from i32 at codegen time
+    // anyway -- both are 4-byte slots.
+    let after_paren_t = tok_tag(tok_base, cur_get(sb));
+    let mut rt_s: i32 = 0;
+    let mut rt_l: i32 = 0;
+    let mut has_ret_ty: i32 = 0;
+    if after_paren_t == 8 {
+        cur_advance(sb); // '-' (part of '->')
+        cur_advance(sb); // '>' (the second char of '->')
+        // Capture the return-type IDENT bytes the same way AST_PARAM does.
+        // 'f' first byte (length 3) -> f32 / f64 -> ret_ty = 1.
+        let rt_tok = cur_get(sb);
+        rt_s = tok_p2(tok_base, rt_tok);
+        rt_l = tok_p3(tok_base, rt_tok);
+        has_ret_ty = 1;
+        cur_advance(sb);     // return-type IDENT
+    };
     // Audit fix (Stage 1 cycle): strict 3-byte type-ident check.
     let ret_ty = if rt_l == 3 {
         let b0 = __arena_get(rt_s);
@@ -7503,7 +7518,17 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         };
     };
     cur_advance(sb);     // '{'
-    let body = parse_expr(tok_base, sb);
+    // K1.AT (2026-05-25): empty fn body `fn noop() { }` peeks for
+    // TK_RBRACE immediately and emits a placeholder AST_INT(0) body
+    // -- parse_expr otherwise traps on the bare '}'. The unit /
+    // i32-default fn returns 0 at runtime, matching the
+    // empty-block-as-zero semantic.
+    let body_t = tok_tag(tok_base, cur_get(sb));
+    let body = if body_t == 6 {
+        mk_node(0, 0, 0, 0)
+    } else {
+        parse_expr(tok_base, sb)
+    };
     cur_advance(sb);     // '}'
     // Audit-14: same overflow issue as AST_LET — packed encoding
     // breaks for arena indices > 65535. Extend to 5 slots: p3 =
