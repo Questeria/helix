@@ -8551,18 +8551,83 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     let mut trait_l: i32 = 0;
     let mut target_s: i32 = first_s;
     let mut target_l: i32 = first_l;
+    // K1.CD (2026-05-26): the inherent-with-where form
+    // `impl Type where T: Bound { ... }` has a `where` IDENT (not
+    // `for` IDENT, not `{`) after the target IDENT. Detect this so
+    // the trait-for-target branch doesn't mis-parse `where` as
+    // `for`. "where" = 5-byte IDENT (bytes 119,104,101,114,101).
+    let mut is_after_where: i32 = 0;
+    if after_first == 2 {
+        let af_s = tok_p2(tok_base, cur_get(sb));
+        let af_l = tok_p3(tok_base, cur_get(sb));
+        if af_l == 5 {
+            if __arena_get(af_s) == 119 {
+                if __arena_get(af_s + 1) == 104 {
+                    if __arena_get(af_s + 2) == 101 {
+                        if __arena_get(af_s + 3) == 114 {
+                            if __arena_get(af_s + 4) == 101 {
+                                is_after_where = 1;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+    };
     if after_first != 5 {
-        // `impl Trait for Type { ... }` form -- first IDENT is the
-        // trait, swap target capture to the IDENT after `for`.
-        trait_s = first_s;
-        trait_l = first_l;
-        cur_advance(sb);                     // consume 'for' IDENT
-        let target_tok = cur_get(sb);
-        target_s = tok_p2(tok_base, target_tok);
-        target_l = tok_p3(tok_base, target_tok);
-        cur_advance(sb);                     // consume target-type IDENT
+        if is_after_where == 0 {
+            // `impl Trait for Type { ... }` form -- first IDENT is the
+            // trait, swap target capture to the IDENT after `for`.
+            trait_s = first_s;
+            trait_l = first_l;
+            cur_advance(sb);                 // consume 'for' IDENT
+            let target_tok = cur_get(sb);
+            target_s = tok_p2(tok_base, target_tok);
+            target_l = tok_p3(tok_base, target_tok);
+            cur_advance(sb);                 // consume target-type IDENT
+        };
+        // If is_after_where == 1, this is the inherent-with-where form:
+        // target_s/target_l are already set from first_s/first_l, the
+        // `where` clause is still ahead of the cursor, and the where-
+        // clause skip below will consume it.
     };
     let target_tag = ty_ident_to_tag(target_s, target_l);
+    // K1.CD (2026-05-26): optional `where` clause skip between the
+    // target type (or trait-for-target tail) and the body LBRACE.
+    // Mirrors the K1.O fn-decl where-skip pattern. The bootstrap is
+    // type-erased so bounds are not enforced -- just consume tokens
+    // up to (but not including) the `{`.
+    let w_k = cur_get(sb);
+    let w_tg = tok_tag(tok_base, w_k);
+    if w_tg == 2 {
+        let w_s = tok_p2(tok_base, w_k);
+        let w_l = tok_p3(tok_base, w_k);
+        let is_where_kw = if w_l == 5 {
+            if __arena_get(w_s) == 119 {
+                if __arena_get(w_s + 1) == 104 {
+                    if __arena_get(w_s + 2) == 101 {
+                        if __arena_get(w_s + 3) == 114 {
+                            if __arena_get(w_s + 4) == 101 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 };
+        if is_where_kw == 1 {
+            cur_advance(sb);                 // consume 'where' IDENT
+            let mut keep_w_cd: i32 = 1;
+            while keep_w_cd == 1 {
+                let wt_cd = tok_tag(tok_base, cur_get(sb));
+                if wt_cd == 5 {
+                    keep_w_cd = 0;
+                } else { if wt_cd == 0 {
+                    keep_w_cd = 0;
+                } else {
+                    cur_advance(sb);
+                }};
+            }
+        };
+    };
     cur_advance(sb);                         // '{'
     // Parse zero-or-more method decls until '}'.
     let mut method_count: i32 = 0;

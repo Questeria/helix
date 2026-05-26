@@ -8245,6 +8245,66 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_where_clause_self_host():
+    """K1.CD (2026-05-26): `where` clause skip in impl-block header.
+    Common in real Rust source for constraining generic impls
+    (`impl<T> Foo<T> where T: Send + Sync { ... }`) and for marker-
+    trait conditional impls. K1.O added `where` skip to fn-decls
+    but impl-blocks still tripped.
+
+    Two distinct problems were entangled:
+
+    (1) Distinguishing `impl Type where ...` (inherent-with-where)
+        from `impl Trait for Type` (trait-for-target). After consuming
+        the first IDENT, parse_impl_block's pre-K1.CD logic checked
+        only whether the next token was `{` (TK_LBRACE = 5); anything
+        else triggered the trait-for-target branch, which then
+        mis-consumed `where` as `for` and the constraint type IDENT
+        as the target. Fix: detect `where` IDENT (5-byte:
+        119,104,101,114,101) BEFORE entering the trait-for-target
+        branch. If matched, the first IDENT is the inherent target,
+        the where-skip handles the rest, and the trait-for-target
+        branch is skipped.
+
+    (2) Skipping the where clause itself. Mirrors the K1.O fn-decl
+        pattern: if the post-target token is the `where` IDENT,
+        consume tokens up to (but not including) the `{`. Applies
+        to both inherent-with-where AND trait-for-target-with-where
+        forms (`impl Trait for Type where T: Bound { ... }`).
+
+    Bounds are not enforced -- the bootstrap is type-erased, so the
+    where clause is purely syntactic acceptance.
+
+    3 new sub-probes + 7 regression-guards. Includes
+    fn_where_clause to confirm K1.O's fn-decl path still works."""
+    cases = [
+        # K1.CD new cases
+        ("impl_inherent_where",
+         "struct P; impl P where i32: Sized { fn get() -> i32 { 42 } } "
+         "fn main() -> i32 { P::get() }",                                                                                                42),
+        ("impl_where_multi_bound",
+         "struct P; impl P where i32: Sized + Clone { fn get() -> i32 { 42 } } "
+         "fn main() -> i32 { P::get() }",                                                                                                42),
+        ("impl_trait_for_where",
+         "trait Tr {} struct P; impl Tr for P where i32: Sized { fn x() -> i32 { 42 } } "
+         "fn main() -> i32 { P::x() }",                                                                                                  42),
+        # Regression-guards
+        ("impl_inherent_no_where",
+         "struct P; impl P { fn get() -> i32 { 42 } } fn main() -> i32 { P::get() }",                                                    42),
+        ("impl_trait_for_no_where",
+         "trait Tr {} struct P; impl Tr for P { fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",                                     42),
+        ("fn_where_clause_still_works",
+         "fn id<T>(x: i32) -> i32 where T: Sized { x } fn main() -> i32 { id::<i32>(42) }",                                              42),
+        ("plain_let",            "fn main() -> i32 { let x = 42; x }",                                                                   42),
+        ("range_let",            "fn main() -> i32 { let r = 0..=5; 42 }",                                                               42),
+        ("macro_call",           'fn main() -> i32 { println!("hi"); 42 }',                                                              42),
+        ("tuple_destructure",    "fn main() -> i32 { let (a, b) = (1, 2); 42 }",                                                         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_where_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_let_tuple_pattern_self_host():
     """K1.CC (2026-05-26): `let (a, b) = expr;` tuple-pattern
     destructure. Common Rust idiom for unpacking tuple returns,
