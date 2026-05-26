@@ -8210,6 +8210,26 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_amp_mut_param_ty_self_host():
+    """K1.BD (2026-05-26): `&T` / `&mut T` as fn-decl param type
+    annotation accepted. parse_fn_decl's param-type position
+    previously expected a bare IDENT; `&` made the parse trip.
+    Now peek for TK_AMP (27) before reading the type IDENT;
+    consume `&`, optionally consume `mut`, then read the
+    underlying type IDENT. The bootstrap is type-erased so refs
+    are runtime-identical to the pointee's slot. K1.S already
+    handled the same forms in parse_let's type annotation; this
+    brings parse_fn_decl param-type to parity. 3 sub-probes."""
+    cases = [
+        ("amp_param",     "fn p(x: &i32) -> i32 { 42 } fn main() -> i32 { let a: i32 = 0; p(&a) }",                            42),
+        ("amp_mut_param", "fn p(x: &mut i32) -> i32 { 42 } fn main() -> i32 { let mut a: i32 = 0; p(&mut a) }",                42),
+        ("multi_amp",     "fn p(x: &i32, y: &mut i32) -> i32 { 42 } fn main() -> i32 { let a: i32 = 1; let mut b: i32 = 2; p(&a, &mut b) }",  42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"amp_param_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_move_closure_self_host():
     """K1.BC (2026-05-26): `move ||` closure modifier accepted as
     parser-level no-op. The bootstrap captures closure vars by

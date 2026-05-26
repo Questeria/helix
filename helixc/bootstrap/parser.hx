@@ -7539,6 +7539,23 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let pname_l = tok_p3(tok_base, pname_tok);
             cur_advance(sb);     // param name
             cur_advance(sb);     // ':'
+            // K1.BD (2026-05-26): peek for `&` (TK_AMP=27) as a
+            // reference-type prefix on the param type (`fn p(x: &T)`
+            // / `fn p(x: &mut T)`). Consume `&`, then optionally
+            // consume `mut` IDENT. The bootstrap is type-erased; refs
+            // don't have a distinct runtime representation -- they
+            // map to the same 4-byte slot as the pointee. K1.S
+            // already handled the same forms inside parse_let's
+            // type-annotation; this brings parse_fn_decl's
+            // parameter-type position to parity.
+            if tok_tag(tok_base, cur_get(sb)) == 27 {
+                cur_advance(sb);     // consume '&'
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                        cur_advance(sb);     // consume 'mut'
+                    };
+                };
+            };
             // Capture the type IDENT bytes to determine if it's "f32"
             // (or "f64", treated the same in bootstrap codegen). Step 5c
             // follow-on: this lets fn(a: f32, b: f32) -> f32 { a + b }
