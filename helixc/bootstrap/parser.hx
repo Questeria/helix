@@ -3653,6 +3653,48 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         cur_advance(sb);    // consume ']'
                     } else {
                         cur_advance(sb);    // consume type IDENT
+                        // K1.DS (2026-05-26): optional `<...>` generic
+                        // args after the `&T` IDENT in let-type position
+                        // (e.g. `&Vec<i32>`, `&Box<dyn Tr>`, `&'a Result
+                        // <T, E>`). K1.S consumed `&` + optional lifetime
+                        // + optional `mut` + the type IDENT. Without
+                        // this skip, the cursor sat on `<` which the
+                        // downstream let parser would mis-treat as the
+                        // start of a comparison or generic-bound, so
+                        // `let v: &Vec<i32> = 0;` SIGILL'd. Mirror of
+                        // K1.T's `<...>` skip pattern with K1.CZ's
+                        // prev_minus tracking for `->` inside generics.
+                        if tok_tag(tok_base, cur_get(sb)) == 16 {
+                            cur_advance(sb);            // consume '<'
+                            let mut g_depth_ds: i32 = 1;
+                            let mut prev_minus_ds: i32 = 0;
+                            while g_depth_ds > 0 {
+                                let gt_ds = tok_tag(tok_base, cur_get(sb));
+                                if gt_ds == 16 {
+                                    g_depth_ds = g_depth_ds + 1;
+                                    prev_minus_ds = 0;
+                                } else { if gt_ds == 17 {
+                                    if prev_minus_ds == 1 {
+                                        prev_minus_ds = 0;
+                                    } else {
+                                        g_depth_ds = g_depth_ds - 1;
+                                    };
+                                } else { if gt_ds == 31 {
+                                    g_depth_ds = g_depth_ds - 2;
+                                    prev_minus_ds = 0;
+                                } else { if gt_ds == 0 {
+                                    g_depth_ds = 0;
+                                } else { if gt_ds == 8 {
+                                    prev_minus_ds = 1;
+                                } else {
+                                    prev_minus_ds = 0;
+                                }}}}};
+                                if g_depth_ds > 0 {
+                                    cur_advance(sb);
+                                };
+                            }
+                            cur_advance(sb);            // consume final '>' / '>>'
+                        };
                     };
                 } else { if type_start_tag == 9 {
                     // K1.S (2026-05-25): `*const T` / `*mut T` / `*T`

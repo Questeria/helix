@@ -8245,6 +8245,56 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_ref_generic_let_type_self_host():
+    """K1.DS (2026-05-26): `<...>` generic args after the IDENT
+    in `&T<...>` / `&'lt T<...>` let-type position. Real Rust
+    code:
+
+      let v: &Vec<i32> = ...;
+      let b: &Box<dyn Tr> = ...;
+      let s: &'static String = ...;
+      let r: &Result<i32, E> = ...;
+
+    Previously SIGILL'd (rc=132) because the K1.S `&T` branch in
+    let-type position consumed `&` + optional lifetime + optional
+    `mut` + the type IDENT, but did NOT apply the K1.T-style
+    `<...>` generic-args skip after the IDENT. So `let v: &Vec
+    <i32> = 0;` left `<i32>` in the token stream, which the
+    downstream let parser would mis-treat as the start of a
+    comparison or generic-bound, breaking parser state.
+
+    Fix: after the K1.S `&T` IDENT consume, peek for `<` (TK_LT =
+    16). If matched, consume the `<...>` block depth-balanced,
+    handling nested `>>` via TK_RSHIFT (31) split as -2 and `->`
+    inside generics via prev_minus tracking (mirror of K1.T's
+    skip pattern with K1.CZ's prev_minus arrow handling).
+
+    The bootstrap is type-erased; the generic args collapse away.
+
+    6 sub-probes (&Vec<i32>, &Box<i32>, &'static Vec<i32>, &Box
+    <dyn T>, no-init `&Vec<i32>;`) + 2 regression-guards (&i32
+    bare, Vec<i32> bare, &[i32] slice ref)."""
+    cases = [
+        # K1.DS new cases
+        ("ref_vec",                 "fn main() -> i32 { let v: &Vec<i32> = 0; 42 }",                                42),
+        ("ref_box",                 "fn main() -> i32 { let v: &Box<i32> = 0; 42 }",                                42),
+        ("ref_no_init_typed",       "fn main() -> i32 { let v: &Vec<i32>; 42 }",                                     42),
+        ("ref_static_vec",          "fn main() -> i32 { let v: &'static Vec<i32> = 0; 42 }",                        42),
+        ("ref_box_dyn",             "trait T {} fn main() -> i32 { let v: &Box<dyn T> = 0; 42 }",                   42),
+        ("ref_result_two_gen",      "fn main() -> i32 { let v: &Result<i32, i32> = 0; 42 }",                       42),
+
+        # Regression-guards
+        ("ref_no_gen",              "fn main() -> i32 { let v: &i32 = &42; 42 }",                                   42),
+        ("vec_no_ref",              "fn main() -> i32 { let v: Vec<i32> = 0; 42 }",                                42),
+        ("ref_arr",                 "fn main() -> i32 { let v: &[i32] = 0; 42 }",                                  42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                          42),
+        ("for_loop",                "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"ref_gen_let_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_amp_return_type_self_host():
     """K1.DR (2026-05-26): `&T` / `&'lt T` / `&mut T` /
     `&'lt mut T` reference return types. Real Rust uses these
