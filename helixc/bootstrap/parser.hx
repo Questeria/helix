@@ -8550,6 +8550,30 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             if lparen_seen == 1 {
                 cur_advance(sb);     // consume ')'
             };
+            // K1.CT (2026-05-26): optional `<...>` generic arg list
+            // after fn-param type IDENT. Mirrors K1.T's let-type
+            // handling. The bootstrap is type-erased, so generic
+            // type args are discarded; we just skip the tokens.
+            if tok_tag(tok_base, cur_get(sb)) == 16 {
+                cur_advance(sb);                 // consume '<'
+                let mut g_depth_ct: i32 = 1;
+                while g_depth_ct > 0 {
+                    let gt_ct = tok_tag(tok_base, cur_get(sb));
+                    if gt_ct == 16 {
+                        g_depth_ct = g_depth_ct + 1;
+                    } else { if gt_ct == 17 {
+                        g_depth_ct = g_depth_ct - 1;
+                    } else { if gt_ct == 31 {
+                        g_depth_ct = g_depth_ct - 2;
+                    } else { if gt_ct == 0 {
+                        g_depth_ct = 0;
+                    } else {} }} };
+                    if g_depth_ct > 0 {
+                        cur_advance(sb);
+                    };
+                }
+                cur_advance(sb);                 // consume final '>' / '>>'
+            };
             // Audit fix (Stage 1 cycle): all 3 bytes must match exactly.
             // Strict: 'f32' (102 51 50) → 1; 'f64' (102 54 52) → 2;
             // 'i64' (105 54 52) → 3; 'i32' (105 51 50) → 0; else 0.
@@ -8714,6 +8738,29 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             rt_l = tok_p3(tok_base, rt_tok);
             has_ret_ty = 1;
             cur_advance(sb);     // return-type IDENT
+            // K1.CT (2026-05-26): optional `<...>` generic arg list
+            // after fn-return type IDENT. Mirrors the K1.T let-type
+            // handling and the K1.CT fn-param-type skip above.
+            if tok_tag(tok_base, cur_get(sb)) == 16 {
+                cur_advance(sb);                 // consume '<'
+                let mut g_depth_rt_ct: i32 = 1;
+                while g_depth_rt_ct > 0 {
+                    let gt_rt_ct = tok_tag(tok_base, cur_get(sb));
+                    if gt_rt_ct == 16 {
+                        g_depth_rt_ct = g_depth_rt_ct + 1;
+                    } else { if gt_rt_ct == 17 {
+                        g_depth_rt_ct = g_depth_rt_ct - 1;
+                    } else { if gt_rt_ct == 31 {
+                        g_depth_rt_ct = g_depth_rt_ct - 2;
+                    } else { if gt_rt_ct == 0 {
+                        g_depth_rt_ct = 0;
+                    } else {} }} };
+                    if g_depth_rt_ct > 0 {
+                        cur_advance(sb);
+                    };
+                }
+                cur_advance(sb);                 // consume final '>' / '>>'
+            };
         };
     };
     // Audit fix (Stage 1 cycle): strict 3-byte type-ident check.

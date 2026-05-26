@@ -8245,6 +8245,64 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_generic_in_fn_signatures_self_host():
+    """K1.CT (2026-05-26): `<...>` generic arg list in fn-param and
+    fn-return types. K1.T handled generic args in let-type position
+    but parse_fn_decl's param-type and return-type paths still
+    tripped on `Box<i32>` / `Vec<i32>` / `Result<i32, ()>` etc.
+
+    Real Rust source uses container/wrapper types in fn signatures
+    constantly:
+      fn make() -> Box<i32> { ... }
+      fn process(v: Vec<i32>) -> i32 { ... }
+      fn run() -> Result<i32, ()> { ... }
+
+    Previously failed (rc=132) because after consuming the type
+    IDENT, the parser fell through to the `, next_param` / `)`
+    expectation with the unconsumed `<` still in the stream.
+
+    Fix: in parse_fn_decl, after the param-type IDENT consume
+    (right after the K1.BI lparen-close) AND after the return-type
+    IDENT consume, add an optional `<...>` skip. Mirrors K1.T's
+    let-type handling with the same depth-tracking for nested
+    generics (`Vec<Box<i32>>`) including the K1.T `>>` -> 2
+    decrement for the lexer's fold of consecutive `>` into TK_RSHIFT.
+
+    Combines cleanly with K1.CR (lifetime in param &T) -- tested
+    by `param_lt_generic` sub-probe with `fn id<'a>(x: &'a Vec<i32>)`.
+
+    10 sub-probes (5 fn-return + 4 fn-param + 1 lifetime+generic) +
+    6 regression-guards covering plain types, K1.T let-type generic
+    unchanged, and prior K1.* features."""
+    cases = [
+        # K1.CT new cases - fn-return
+        ("ret_box",          "fn id() -> Box<i32> { 42 } fn main() -> i32 { id(); 42 }",                        42),
+        ("ret_vec",          "fn id() -> Vec<i32> { 42 } fn main() -> i32 { id(); 42 }",                        42),
+        ("ret_result_two",   "fn id() -> Result<i32, ()> { 42 } fn main() -> i32 { id(); 42 }",                42),
+        ("ret_option",       "fn id() -> Option<i32> { 42 } fn main() -> i32 { id(); 42 }",                    42),
+        ("ret_nested",       "fn id() -> Vec<Box<i32>> { 42 } fn main() -> i32 { id(); 42 }",                  42),
+
+        # K1.CT new cases - fn-param
+        ("param_box",        "fn id(x: Box<i32>) -> i32 { 42 } fn main() -> i32 { id(42) }",                    42),
+        ("param_vec",        "fn id(x: Vec<i32>) -> i32 { 42 } fn main() -> i32 { id(42) }",                    42),
+        ("param_result_two", "fn id(x: Result<i32, ()>) -> i32 { 42 } fn main() -> i32 { id(42) }",            42),
+        ("param_nested",     "fn id(x: Vec<Box<i32>>) -> i32 { 42 } fn main() -> i32 { id(42) }",              42),
+
+        # K1.CR + K1.CT mixed: lifetime + generic
+        ("param_lt_generic", "fn id<'a>(x: &'a Vec<i32>) -> i32 { 42 } fn main() -> i32 { id::<>(0); 42 }",    42),
+
+        # Regression-guards
+        ("plain_ret",        "fn id() -> i32 { 42 } fn main() -> i32 { id() }",                                  42),
+        ("plain_param",      "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                          42),
+        ("k1_t_let_generic", "fn main() -> i32 { let x: Vec<i32> = 42; 42 }",                                    42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"fn_gen_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_lifetime_in_let_amp_self_host():
     """K1.CS (2026-05-26): lifetime IDENT in `&'lt T` let-type
     position. Mirror of K1.CR for the let-binding type annotation:
