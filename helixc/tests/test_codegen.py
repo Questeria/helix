@@ -8245,6 +8245,37 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_dyn_return_ty_self_host():
+    """K1.BV (2026-05-26): `-> impl Trait` and `-> dyn Trait`
+    return-type modifiers accepted. Both wrap a following
+    trait IDENT; the bootstrap is type-erased so they
+    collapse to the trait IDENT (ret_ty defaults to 0).
+
+    parse_fn_decl's ret-ty position previously captured the
+    first IDENT after `->` as the type. For `-> impl Iterator`
+    the IDENT was "impl" and "Iterator" was left dangling --
+    the where/body parse tripped, K2 hung.
+
+    Fix: peek for the 4-byte IDENT "impl" or the 3-byte IDENT
+    "dyn" before the type-IDENT capture. If matched, consume
+    the modifier and proceed to capture the trait IDENT
+    normally. The trait IDENT goes through the existing
+    type-ident resolver which defaults to ret_ty=0 for
+    unrecognized identifiers -- which is exactly what we want
+    for `impl Trait` in a type-erased setting.
+
+    4 sub-probes."""
+    cases = [
+        ("impl_simple",  "fn give() -> impl Iterator { 42 } fn main() -> i32 { give() }",                                    42),
+        ("dyn_simple",   "fn give() -> dyn Iterator { 42 } fn main() -> i32 { give() }",                                     42),
+        ("impl_in_let",  "fn give() -> impl Iterator { 42 } fn main() -> i32 { let x = give(); x }",                          42),
+        ("multi_impl",   "fn a() -> impl Iterator { 10 } fn b() -> impl Iterator { 32 } fn main() -> i32 { a() + b() }",      42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_dyn_ret_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_tuple_return_ty_self_host():
     """K1.BU (2026-05-26): tuple return type `-> (T1, T2)`
     accepted. Unifies the K1.AX (`-> ()`) and K1.BE (`-> (T)`)

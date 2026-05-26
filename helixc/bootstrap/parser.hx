@@ -7776,6 +7776,40 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             };
         };
         if rt_first_t != 3 {
+            // K1.BV (2026-05-26): `-> impl Trait` and `-> dyn Trait`
+            // return-type modifiers. Both wrap a following trait
+            // IDENT; the bootstrap is type-erased so they collapse
+            // away. Peek for the 4-byte IDENT "impl" (105 109 112 108)
+            // or 3-byte "dyn" (100 121 110); if matched, consume the
+            // modifier then proceed to capture the trait IDENT as the
+            // ret-ty bytes. The downstream ret_ty resolver treats
+            // any unrecognized IDENT as ret_ty=0 (i32 default), which
+            // is the correct behavior for type-erased `impl Trait`.
+            let pre_tok = cur_get(sb);
+            let pre_s = tok_p2(tok_base, pre_tok);
+            let pre_l = tok_p3(tok_base, pre_tok);
+            let is_impl_kw = if pre_l == 4 {
+                if __arena_get(pre_s) == 105 {
+                    if __arena_get(pre_s + 1) == 109 {
+                        if __arena_get(pre_s + 2) == 112 {
+                            if __arena_get(pre_s + 3) == 108 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            let is_dyn_kw = if pre_l == 3 {
+                if __arena_get(pre_s) == 100 {
+                    if __arena_get(pre_s + 1) == 121 {
+                        if __arena_get(pre_s + 2) == 110 { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            if is_impl_kw == 1 {
+                cur_advance(sb);                 // consume 'impl' IDENT
+            };
+            if is_dyn_kw == 1 {
+                cur_advance(sb);                 // consume 'dyn' IDENT
+            };
             // Capture the return-type IDENT bytes the same way AST_PARAM does.
             // 'f' first byte (length 3) -> f32 / f64 -> ret_ty = 1.
             let rt_tok = cur_get(sb);
