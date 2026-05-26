@@ -8245,6 +8245,68 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_let_variant_pattern_self_host():
+    """K1.CJ (2026-05-26): enum-variant let-pattern destructure
+    `let Some(_) = expr;` and `let Result::Ok(_) = expr;`. Extends
+    K1.CC (tuple let-pattern) to cover IDENT-prefixed call-shape
+    patterns. Common Rust idiom for accepting a value of a known
+    variant.
+
+    Previously failed (rc=132) because the let-handler took the
+    IDENT `Some` (or first path segment) as the binding name,
+    then mis-consumed `(` as `=`. The fix extends the K1.CC
+    tuple-pattern fork to ALSO detect IDENT-then-`(` (and
+    IDENT::IDENT-then-`(`) at the post-`let`/`mut` cursor; when
+    matched, consume the IDENT (and optional `::IDENT`) plus the
+    paren-balanced `(...)` as a no-op pattern.
+
+    Detection: post-`let`/`mut` cursor sits on IDENT (tag 2) AND
+    either:
+      - next token is `(`  (tag 3)    → IDENT(args) form
+      - next is `:` `:` IDENT `(`     → IDENT::IDENT(args) form
+
+    Same downstream as K1.CC: name_start/name_len set to (0, 0)
+    (no binding registered), the existing type-annotation/`=`/
+    RHS-parse/`;`-consume/body-parse path runs unchanged.
+
+    LIMITATION: bindings introduced by sub-patterns (`Some(x)`)
+    are NOT registered. Bodies that reference them still fail.
+    Real variant-pattern destructuring with binding is a Cat-2
+    gap. Test cases pin syntactic acceptance only, with tail
+    expressions independent of the pattern names.
+
+    LIMITATION: the RHS must be a value the bootstrap can
+    codegen (an INT literal, fn-call, etc.). RHS like `None` --
+    a known-Rust IDENT but not a registered local var or fn --
+    still SIGILLs at codegen.
+
+    5 sub-probes (5 variant forms) + 9 regression-guards
+    covering K1.CC tuple, plain let, K1.CI unit-struct, K1.CG
+    if-let, K1.CH ref pattern."""
+    cases = [
+        # K1.CJ new cases
+        ("some_underscore",   "fn main() -> i32 { let Some(_) = 0; 42 }",                                          42),
+        ("some_named",        "fn main() -> i32 { let Some(_x) = 0; 42 }",                                         42),
+        ("path_variant",      "fn main() -> i32 { let Result::Ok(_) = 0; 42 }",                                    42),
+        ("with_call_rhs",     "fn f() -> i32 { 42 } fn main() -> i32 { let Some(_) = f(); 42 }",                   42),
+        ("multi_arg",         "fn main() -> i32 { let Pair(_, _) = 0; 42 }",                                       42),
+
+        # Regression-guards
+        ("plain_let",         "fn main() -> i32 { let x = 42; x }",                                                42),
+        ("plain_mut_let",     "fn main() -> i32 { let mut x = 40; x = 42; x }",                                    42),
+        ("let_with_annot",    "fn main() -> i32 { let x: i32 = 42; x }",                                           42),
+        ("let_tuple",         "fn main() -> i32 { let (a, b) = (1, 2); 42 }",                                      42),
+        ("range_let",         "fn main() -> i32 { let r = 0..=5; 42 }",                                            42),
+        ("macro_call",        'fn main() -> i32 { println!("hi"); 42 }',                                           42),
+        ("if_let",            "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                      42),
+        ("unit_struct",       "struct P; fn main() -> i32 { let p = P; 42 }",                                      42),
+        ("ref_pattern",       "fn main() -> i32 { let x = 42; match x { ref _r => 42 } }",                         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"variant_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unit_struct_value_self_host():
     """K1.CI (2026-05-26): bare-IDENT reference to a registered
     struct (typically a unit struct like `struct P;`) parses as

@@ -3392,14 +3392,56 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // its value is stored in the AST_LET's value slot but is
             // unreachable.
             //
+            // K1.CJ (2026-05-26): extended to also handle enum-variant
+            // let-patterns like `let Some(_) = None;` and
+            // `let Result::Ok(x) = res;`. The shape is IDENT-then-`(`
+            // (or IDENT::IDENT(args)). Same no-op semantics as the
+            // tuple form: skip the pattern, set name to (0,0), let the
+            // existing flow handle the rest.
+            //
             // Crucial: do NOT call cur_advance for the name IDENT in
             // the tuple-pattern path -- we already consumed past the
             // closing `)`. The cursor is at the optional `: T` (or `=`
             // directly), matching the post-name position of the
             // IDENT-name path.
             let post_mut_t = tok_tag(tok_base, cur_get(sb));
-            let is_tuple_pat = if post_mut_t == 3 { 1 } else { 0 };
+            // K1.CJ: detect variant-style call-pattern `IDENT(` or
+            // `IDENT::IDENT(`. Peek post_mut + next + next-next.
+            let mut is_variant_pat: i32 = 0;
+            if post_mut_t == 2 {
+                let pmv_t1 = tok_tag(tok_base, cur_get(sb) + 1);
+                if pmv_t1 == 3 {
+                    // `IDENT(`
+                    is_variant_pat = 1;
+                } else { if pmv_t1 == 14 {
+                    let pmv_t2 = tok_tag(tok_base, cur_get(sb) + 2);
+                    if pmv_t2 == 14 {
+                        let pmv_t3 = tok_tag(tok_base, cur_get(sb) + 3);
+                        if pmv_t3 == 2 {
+                            let pmv_t4 = tok_tag(tok_base, cur_get(sb) + 4);
+                            if pmv_t4 == 3 {
+                                // `IDENT::IDENT(`
+                                is_variant_pat = 1;
+                            };
+                        };
+                    };
+                }};
+            };
+            let is_tuple_pat = if post_mut_t == 3 { 1 }
+                else { if is_variant_pat == 1 { 1 } else { 0 } };
             if is_tuple_pat == 1 {
+                // For variant pattern, first consume the IDENT(::IDENT)
+                // prefix; then the `(` consume below paren-balances
+                // the args. For tuple pattern (post_mut_t == 3), skip
+                // straight to the `(` consume.
+                if is_variant_pat == 1 {
+                    cur_advance(sb);                 // consume first IDENT
+                    if tok_tag(tok_base, cur_get(sb)) == 14 {
+                        cur_advance(sb);             // consume ':'
+                        cur_advance(sb);             // consume second ':'
+                        cur_advance(sb);             // consume second IDENT
+                    };
+                };
                 cur_advance(sb);                     // consume '('
                 let mut tp_depth: i32 = 1;
                 while tp_depth > 0 {
