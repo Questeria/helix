@@ -11735,6 +11735,29 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
             mk_node(99, 62002, 0, 0)
         }
+    } else { if t == 27 {
+        // K1.DN (2026-05-26): reference pattern `&pat` / `&mut pat` in
+        // match arms. Real Rust uses this to bind through references:
+        //   match &x { &0 => ..., &n => use_n(n), &_ => other }
+        //   match &mut v { &mut x => mutate(x), _ => other }
+        // The bootstrap is type-erased; the `&` (and optional `mut`) is
+        // a syntactic no-op. After consuming `&` (TK_AMP = 27) and any
+        // following `mut` IDENT, recursively parse the inner pattern via
+        // parse_pattern and use its AST node as the arm's pattern. The
+        // matched value is the original (non-dereferenced) scrutinee
+        // since the bootstrap doesn't model reference indirection.
+        cur_advance(sb);                     // consume '&'
+        // Optional 'mut' (3-byte IDENT: 109 117 116).
+        let mut_k_dn = cur_get(sb);
+        if tok_tag(tok_base, mut_k_dn) == 2 {
+            let mut_s_dn = tok_p2(tok_base, mut_k_dn);
+            let mut_l_dn = tok_p3(tok_base, mut_k_dn);
+            if byte_eq(mut_s_dn, mut_l_dn, kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                cur_advance(sb);             // consume 'mut'
+            };
+        };
+        // Recursively parse the inner pattern.
+        parse_pattern(tok_base, sb)
     } else {
         // Audit A2-F6 fix: unknown pattern token used to silently emit
         // PAT_WILDCARD (tag 66), which always matches. The leading token
@@ -11748,7 +11771,7 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         // and continue cleanly until codegen fires the trap.
         cur_advance(sb);
         mk_node(99, 62002, 0, 0)
-    }}}}
+    }}}}}
 }
 
 // Stage 7: parse `match scrut { pat => body, pat => body, ... }`.

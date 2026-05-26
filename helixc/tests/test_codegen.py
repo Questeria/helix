@@ -8245,6 +8245,59 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_ref_pattern_self_host():
+    """K1.DN (2026-05-26): `&pat` / `&mut pat` reference pattern
+    in match arms. Real Rust uses this to bind through references
+    when the scrutinee is itself a reference:
+
+      match &x { &0 => ..., &n => use_n(n), &_ => other }
+      match &mut v { &mut x => mutate(x), _ => other }
+
+    Previously SIGILL'd (rc=132) because parse_pattern_atom had
+    no arm for TK_AMP (27); the unknown-token trap fired with
+    62002.
+
+    Fix: add a TK_AMP arm to parse_pattern_atom that consumes
+    `&` (and optional `mut` IDENT), then recursively calls
+    parse_pattern for the inner pattern and uses its AST node
+    as the arm's pattern. The bootstrap is type-erased; the `&`
+    wrapper is a syntactic no-op.
+
+    Semantics compromise: `&pat` is treated identically to `pat`
+    -- the match runs against the original (non-dereferenced)
+    scrutinee. This is the same over-permissive approach used
+    by K1.CH (`ref` / `ref mut` modifiers) and K1.DH (`name @
+    inner_pat` at-binding). Real reference-pattern semantics
+    with implicit deref would require a new AST node type
+    carrying the inner pattern + ref/mut marker; deferred to a
+    later semantic chunk.
+
+    6 sub-probes (non-matching ref-lit, non-matching ref-range,
+    matching ref-lit, matching ref-wild, matching ref-bind,
+    matching ref-mut) + 6 regression-guards covering plain
+    patterns, at-binding, guard, neg-range, plain let."""
+    cases = [
+        # K1.DN new cases
+        ("ref_lit_nonmatch",        "fn main() -> i32 { match 5 { &7 => 0, _ => 42 } }",                    42),
+        ("ref_range_nonmatch",      "fn main() -> i32 { match 100 { &0..=9 => 0, _ => 42 } }",              42),
+        ("ref_lit_match",           "fn main() -> i32 { match 42 { &42 => 42, _ => 0 } }",                  42),
+        ("ref_wild_match_all",      "fn main() -> i32 { match 42 { &_ => 42, _ => 0 } }",                   42),
+        ("ref_bind_match",          "fn main() -> i32 { match 42 { &x => 42, _ => 0 } }",                   42),
+        ("ref_mut_match",           "fn main() -> i32 { match 42 { &mut x => 42, _ => 0 } }",               42),
+
+        # Regression-guards: existing patterns unchanged
+        ("plain_lit",               "fn main() -> i32 { match 5 { 5 => 42, _ => 0 } }",                     42),
+        ("plain_wild",              "fn main() -> i32 { match 5 { _ => 42 } }",                              42),
+        ("at_binding",              "fn main() -> i32 { match 5 { n @ 0..=9 => 42, _ => 0 } }",             42),
+        ("guard",                   "fn main() -> i32 { match 5 { x if x > 0 => 42, _ => 0 } }",            42),
+        ("neg_range",               "fn main() -> i32 { match -3 { -5..=-1 => 42, _ => 0 } }",              42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"ref_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_neg_range_pattern_self_host():
     """K1.DM (2026-05-26): negative-bound range patterns in match.
     Real Rust uses negative low / high bounds for clamping
