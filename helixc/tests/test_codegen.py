@@ -8210,6 +8210,25 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_pub_struct_field_self_host():
+    """K1.BA (2026-05-26): visibility modifiers on struct fields
+    (`pub x: i32`, `pub(crate) x: i32`) accepted as no-ops. The
+    bootstrap has no visibility model -- the modifier is purely
+    parser-level. parse_struct_decl's field-parsing loop now
+    calls consume_vis_modifiers at each iteration, swallowing
+    any leading pub / extern / unsafe / async tokens before
+    reading the field-name IDENT. 4 sub-probes."""
+    cases = [
+        ("pub_field",      "struct P { pub x: i32 } fn main() -> i32 { let p = P { x: 42 }; p.x }",                              42),
+        ("pub_crate",      "struct P { pub(crate) x: i32 } fn main() -> i32 { let p = P { x: 42 }; p.x }",                        42),
+        ("mixed",          "struct P { pub a: i32, b: i32 } fn main() -> i32 { let p = P { a: 10, b: 32 }; p.a + p.b }",         42),
+        ("multi_pub",      "struct P { pub a: i32, pub b: i32 } fn main() -> i32 { let p = P { a: 10, b: 32 }; p.a + p.b }",     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"pub_field_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_async_fn_modifier_self_host():
     """K1.AZ (2026-05-26): `async fn x() -> i32 { ... }` accepted
     as a parser-level no-op. The bootstrap has no async runtime

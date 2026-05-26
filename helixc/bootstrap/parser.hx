@@ -8564,6 +8564,14 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     let mut fields_ptr: i32 = 0;             // 0 if no fields
     let mut keep: i32 = 1;
     while keep == 1 {
+        // K1.BA (2026-05-26): swallow leading visibility / linkage
+        // modifiers on each field (`pub x: i32`, `pub(crate) x: i32`,
+        // etc.) via the shared consume_vis_modifiers helper. The
+        // bootstrap has no visibility model -- the modifier is a
+        // parser-level no-op. The helper is a safe call even when no
+        // modifier is present (just returns; cursor unchanged) so the
+        // RBRACE / EOF / IDENT cases below still work as before.
+        consume_vis_modifiers(tok_base, sb);
         let tt = tok_tag(tok_base, cur_get(sb));
         if tt == 6 {                         // RBRACE
             keep = 0;
