@@ -8210,6 +8210,32 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_f16_literal_self_host():
+    """K1.BH (2026-05-26): `_f16` literal suffix accepted as
+    bf16-shaped. The bootstrap treats f16 as 16-bit storage
+    identical to bf16 at codegen (arith traps the same way);
+    bit-accurate IEEE 754 half encoding is a separate gap.
+
+    Lexer change parallel to the existing `_bf16` arm:
+    detect '_f16' (4 bytes: '_' 'f' '1' '6') after the
+    numeric digits, advance p by 4, set is_bf16_suffix=1 so
+    the existing token emission path picks it up. Downstream
+    parser + codegen unchanged -- AST_FLOATLIT_BF16 covers
+    both.
+
+    Closes matrix row 56 (`f16` literal) KOVC-MISSING with
+    the bf16-shaped no-op subset, matching the agent audit's
+    recommendation. 3 sub-probes."""
+    cases = [
+        ("f16_lit",        "fn main() -> i32 { let x: f16 = 0.0_f16; 42 }",                         42),
+        ("f16_nonzero",    "fn main() -> i32 { let x: f16 = 3.14_f16; 42 }",                        42),
+        ("bf16_still_ok",  "fn main() -> i32 { let x: bf16 = 0.0_bf16; 42 }",                       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"f16_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_break_with_value_self_host():
     """K1.BG (2026-05-26): `break <value>` propagates the value
     through the loop expression. Previously bare `break` was

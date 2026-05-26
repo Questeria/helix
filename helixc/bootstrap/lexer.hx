@@ -487,6 +487,28 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
             };
         };
     }
+    // K1.BH (2026-05-26): _f16 (4 bytes: '_' 'f' '1' '6'). IEEE 754
+    // half-precision. The bootstrap treats f16 as bf16-shaped for
+    // Phase-0 (both are 16-bit; bit-accurate IEEE 754 half encoding
+    // is a separate gap -- arith traps the same way bf16 arith
+    // does). Reuses is_bf16_suffix so the existing token emission
+    // path covers it; downstream parser + codegen need no change.
+    if p + 3 < end {
+        let g0 = __arena_get(p);
+        if g0 == 95 {                              // '_'
+            let g1 = __arena_get(p + 1);
+            if g1 == 102 {                         // 'f'
+                let g2 = __arena_get(p + 2);
+                if g2 == 49 {                      // '1'
+                    let g3 = __arena_get(p + 3);
+                    if g3 == 54 {                  // '6'
+                        p = p + 4;
+                        is_bf16_suffix = 1;
+                    };
+                };
+            };
+        };
+    }
     if is_float == 1 {
         let flen = p - pos;
         // Step 7a: distinguish f32 (tag 26) from f64 (tag 32) at lex time.
