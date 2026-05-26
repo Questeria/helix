@@ -3777,21 +3777,41 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     if after_id_tag == 16 {
                         cur_advance(sb);    // consume '<'
                         let mut g_depth: i32 = 1;
+                        // K1.CZ (2026-05-26): track whether the previous
+                        // token was `-` (TK_MINUS = 8). If so, a `>`
+                        // token (TK_GT = 17) is part of an `->` arrow
+                        // (return-type in a fn type like `Fn() -> i32`)
+                        // and should NOT decrement g_depth. Without
+                        // this, types like `Box<dyn Fn() -> i32>` close
+                        // the generic at the `>` of `->`, leaving the
+                        // real `i32>` unread.
+                        let mut prev_minus_cz: i32 = 0;
                         while g_depth > 0 {
                             let gt = tok_tag(tok_base, cur_get(sb));
                             if gt == 16 {
                                 g_depth = g_depth + 1;
+                                prev_minus_cz = 0;
                             } else { if gt == 17 {
-                                g_depth = g_depth - 1;
+                                if prev_minus_cz == 1 {
+                                    // `>` is part of `->`, not a closer.
+                                    prev_minus_cz = 0;
+                                } else {
+                                    g_depth = g_depth - 1;
+                                };
                             } else { if gt == 31 {
                                 // K1.T (2026-05-25): the lexer folds
                                 // `>>` into a single TK_RSHIFT token.
                                 // For nested generics `Box<Box<i32>>`
                                 // we treat that as TWO closing `>`s.
                                 g_depth = g_depth - 2;
+                                prev_minus_cz = 0;
                             } else { if gt == 0 {
                                 g_depth = 0;
-                            } else {} }} };
+                            } else { if gt == 8 {
+                                prev_minus_cz = 1;
+                            } else {
+                                prev_minus_cz = 0;
+                            }}}}};
                             if g_depth > 0 {
                                 cur_advance(sb);
                             };
@@ -8749,17 +8769,32 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             if tok_tag(tok_base, cur_get(sb)) == 16 {
                 cur_advance(sb);                 // consume '<'
                 let mut g_depth_ct: i32 = 1;
+                // K1.CZ (2026-05-26): `->` arrow inside generic args
+                // (e.g. `Box<dyn Fn() -> i32>`) -- don't treat the
+                // `>` in `->` as a closing bracket. Track prev_minus
+                // and suppress depth-decrement when matched.
+                let mut prev_minus_ct: i32 = 0;
                 while g_depth_ct > 0 {
                     let gt_ct = tok_tag(tok_base, cur_get(sb));
                     if gt_ct == 16 {
                         g_depth_ct = g_depth_ct + 1;
+                        prev_minus_ct = 0;
                     } else { if gt_ct == 17 {
-                        g_depth_ct = g_depth_ct - 1;
+                        if prev_minus_ct == 1 {
+                            prev_minus_ct = 0;
+                        } else {
+                            g_depth_ct = g_depth_ct - 1;
+                        };
                     } else { if gt_ct == 31 {
                         g_depth_ct = g_depth_ct - 2;
+                        prev_minus_ct = 0;
                     } else { if gt_ct == 0 {
                         g_depth_ct = 0;
-                    } else {} }} };
+                    } else { if gt_ct == 8 {
+                        prev_minus_ct = 1;
+                    } else {
+                        prev_minus_ct = 0;
+                    }}}}};
                     if g_depth_ct > 0 {
                         cur_advance(sb);
                     };
@@ -8987,17 +9022,29 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             if tok_tag(tok_base, cur_get(sb)) == 16 {
                 cur_advance(sb);                 // consume '<'
                 let mut g_depth_rt_ct: i32 = 1;
+                // K1.CZ (2026-05-26): `->` arrow inside generic args.
+                let mut prev_minus_rt_ct: i32 = 0;
                 while g_depth_rt_ct > 0 {
                     let gt_rt_ct = tok_tag(tok_base, cur_get(sb));
                     if gt_rt_ct == 16 {
                         g_depth_rt_ct = g_depth_rt_ct + 1;
+                        prev_minus_rt_ct = 0;
                     } else { if gt_rt_ct == 17 {
-                        g_depth_rt_ct = g_depth_rt_ct - 1;
+                        if prev_minus_rt_ct == 1 {
+                            prev_minus_rt_ct = 0;
+                        } else {
+                            g_depth_rt_ct = g_depth_rt_ct - 1;
+                        };
                     } else { if gt_rt_ct == 31 {
                         g_depth_rt_ct = g_depth_rt_ct - 2;
+                        prev_minus_rt_ct = 0;
                     } else { if gt_rt_ct == 0 {
                         g_depth_rt_ct = 0;
-                    } else {} }} };
+                    } else { if gt_rt_ct == 8 {
+                        prev_minus_rt_ct = 1;
+                    } else {
+                        prev_minus_rt_ct = 0;
+                    }}}}};
                     if g_depth_rt_ct > 0 {
                         cur_advance(sb);
                     };

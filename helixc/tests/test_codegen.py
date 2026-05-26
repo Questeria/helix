@@ -8245,6 +8245,61 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_arrow_in_generic_args_self_host():
+    """K1.CZ (2026-05-26): `->` arrow inside `<...>` generic args.
+    Real Rust source uses fn-pointer / closure types as generic
+    args:
+
+      let f: Box<dyn Fn() -> i32> = ...;
+      let g: Vec<Box<dyn Fn(i32) -> i32>> = ...;
+      fn make() -> Box<dyn Fn() -> i32> { ... }
+
+    Previously failed (rc=132) because K1.T's depth-tracking for
+    `<...>` generic args saw the `>` in `->` (the lexer tokenizes
+    `->` as TK_MINUS + TK_GT) as a closing bracket, closing the
+    generic at the wrong place. The real `>` for `Box<...>` was
+    then left unread, tripping the let / fn body parse.
+
+    Fix: in all three generic-arg-skip sites (K1.T let-type,
+    K1.CT fn-param, K1.CT fn-return), track a `prev_minus` flag.
+    On the `-` token (TK_MINUS = 8), set the flag. On `>`, if the
+    flag is set, DON'T decrement depth -- it's the `>` of `->`.
+    Reset the flag on any other token.
+
+    6 sub-probes (Box<dyn Fn() -> i32> in let / fn-param / fn-ret,
+    multi-arg, void-ret, nested-arrow-generic) + 9 regression-
+    guards covering K1.T plain generics, nested generics
+    (Vec<Box<i32>>), Result<T, E>, fn-sig generics, and prior
+    K1.* features."""
+    cases = [
+        # K1.CZ new cases
+        ("dyn_fn_let",        "fn main() -> i32 { let f: Box<dyn Fn() -> i32> = 42; 42 }",                       42),
+        ("dyn_fn_two_arg",    "fn main() -> i32 { let f: Box<dyn Fn(i32, i32) -> i32> = 42; 42 }",              42),
+        ("dyn_fn_ret_void",   "fn main() -> i32 { let f: Box<dyn Fn() -> ()> = 42; 42 }",                       42),
+        ("dyn_fn_param",      "fn id(f: Box<dyn Fn() -> i32>) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",   42),
+        ("dyn_fn_ret",        "fn id() -> Box<dyn Fn() -> i32> { 42 } fn main() -> i32 { id(); 42 }",          42),
+        ("nested_arrow",      "fn main() -> i32 { let f: Vec<Box<dyn Fn(i32) -> i32>> = 42; 42 }",              42),
+
+        # Regression-guards: K1.T normal generics unchanged
+        ("box_i32",           "fn main() -> i32 { let x: Box<i32> = 42; 42 }",                                  42),
+        ("vec_i32",           "fn main() -> i32 { let x: Vec<i32> = 42; 42 }",                                  42),
+        ("nested_no_arrow",   "fn main() -> i32 { let x: Vec<Box<i32>> = 42; 42 }",                             42),
+        ("result_two",        "fn main() -> i32 { let x: Result<i32, ()> = 42; 42 }",                           42),
+
+        # K1.CT fn-sig generics unchanged
+        ("fn_ret_box",        "fn id() -> Box<i32> { 42 } fn main() -> i32 { id(); 42 }",                       42),
+        ("fn_param_vec",      "fn id(x: Vec<i32>) -> i32 { 42 } fn main() -> i32 { id(42) }",                   42),
+
+        # Other regression-guards
+        ("plain_let",         "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",         "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",            "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"arrow_gen_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_const_fn_modifier_self_host():
     """K1.CY (2026-05-26): `const fn` is a fn-decl modifier, NOT
     a const-decl prefix. Common pattern in real Rust source:
