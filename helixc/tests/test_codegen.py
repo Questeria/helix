@@ -8245,6 +8245,63 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_let_tuple_pattern_self_host():
+    """K1.CC (2026-05-26): `let (a, b) = expr;` tuple-pattern
+    destructure. Common Rust idiom for unpacking tuple returns,
+    coordinate pairs, key-value entries, etc.
+
+    The bootstrap does NOT model multi-binding let or tuple
+    destructuring -- this is pure syntactic acceptance. After
+    consuming `let` and the optional `mut` keyword, the let-handler
+    now peeks for `(` (TK_LPAREN = 3); if found, the tuple pattern
+    is consumed paren-balanced as a no-op (the destructured bindings
+    are NOT registered, so `a` and `b` are unreachable in the body),
+    name_start/name_len are set to (0, 0), and the rest of the
+    existing let flow runs unchanged. The 0-length name never
+    collides with any real var (every real IDENT is non-empty), and
+    the optional `: T` annotation skip / `=` consume / RHS parse /
+    `;` consume / body parse all proceed normally.
+
+    Crucial: the `cur_advance(sb); // name` step is GATED on
+    is_tuple_pat == 0 -- in the tuple path the cursor is already
+    past the closing `)`, so an extra cur_advance would skip a real
+    token.
+
+    The RHS is parsed and evaluated for side effects (a side-effect
+    call in the RHS, e.g., `let (a, b) = (id(1), id(2));`, still
+    fires at runtime), but its value is stored in the AST_LET's
+    value slot under the empty name and is unreachable from the
+    body. Patterns like `let (a, b) = (1, 2); a + b` would still
+    fail because the body can't resolve `a` / `b` -- the test cases
+    pin syntactic acceptance only, using tail expressions that don't
+    reference the destructured vars.
+
+    Real multi-binding tuple destructuring (where the body can
+    actually use `a` and `b`) is a separate Cat-2 semantic gap.
+
+    7 sub-probes (5 tuple forms + 2 type-annotation / call-RHS
+    variants) + 5 regression-guards."""
+    cases = [
+        ("pair",             'fn main() -> i32 { let (a, b) = (1, 2); 42 }',                                       42),
+        ("triple",           'fn main() -> i32 { let (a, b, c) = (1, 2, 3); 42 }',                                 42),
+        ("with_underscore",  'fn main() -> i32 { let (_, _) = (1, 2); 42 }',                                       42),
+        ("one_named",        'fn main() -> i32 { let (_, b) = (1, 2); 42 }',                                       42),
+        ("with_mut",         'fn main() -> i32 { let (mut a, b) = (1, 2); 42 }',                                   42),
+        ("with_annot",       'fn main() -> i32 { let (a, b): (i32, i32) = (1, 2); 42 }',                           42),
+        ("with_call_rhs",    'fn id(x: i32) -> i32 { x } fn main() -> i32 { let (a, b) = (id(1), id(2)); 42 }',    42),
+
+        # Regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                                 42),
+        ("plain_mut_let",    "fn main() -> i32 { let mut x = 40; x = 42; x }",                                     42),
+        ("let_with_annot",   "fn main() -> i32 { let x: i32 = 42; x }",                                            42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                             42),
+        ("macro_let",        'fn main() -> i32 { let v = vec![1, 2, 3]; 42 }',                                     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"tuple_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_ident_bang_macro_self_host():
     """K1.CB (2026-05-26): macro calls `IDENT! (...)`,
     `IDENT! [...]`, and `IDENT! {...}` parse as no-op placeholders.

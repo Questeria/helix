@@ -3142,10 +3142,54 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     cur_advance(sb);
                 };
             };
+            // K1.CC (2026-05-26): tuple-pattern destructure form
+            // `let (a, b) = expr;` (common Rust idiom for unpacking).
+            // After consuming `let` and optional `mut`, peek for `(`
+            // (TK_LPAREN = 3). If found, this is a tuple-pattern
+            // destructure -- consume the paren-balanced pattern as a
+            // no-op (the destructured bindings are NOT registered, so
+            // `a` and `b` are unreachable in the body; this is purely
+            // syntactic acceptance). The let_node is then built with
+            // empty name_start/name_len (both 0), which never collides
+            // with any real var name (every real IDENT is non-empty).
+            // The RHS is still parsed and evaluated for side effects;
+            // its value is stored in the AST_LET's value slot but is
+            // unreachable.
+            //
+            // Crucial: do NOT call cur_advance for the name IDENT in
+            // the tuple-pattern path -- we already consumed past the
+            // closing `)`. The cursor is at the optional `: T` (or `=`
+            // directly), matching the post-name position of the
+            // IDENT-name path.
+            let post_mut_t = tok_tag(tok_base, cur_get(sb));
+            let is_tuple_pat = if post_mut_t == 3 { 1 } else { 0 };
+            if is_tuple_pat == 1 {
+                cur_advance(sb);                     // consume '('
+                let mut tp_depth: i32 = 1;
+                while tp_depth > 0 {
+                    let tpt = tok_tag(tok_base, cur_get(sb));
+                    if tpt == 3 {
+                        tp_depth = tp_depth + 1;
+                        cur_advance(sb);
+                    } else { if tpt == 4 {
+                        tp_depth = tp_depth - 1;
+                        if tp_depth > 0 {
+                            cur_advance(sb);
+                        };
+                    } else { if tpt == 0 {
+                        tp_depth = 0;                // EOF safety
+                    } else {
+                        cur_advance(sb);
+                    }}};
+                }
+                cur_advance(sb);                     // consume ')'
+            };
             let nk = cur_get(sb);
-            let name_start = tok_p2(tok_base, nk);
-            let name_len = tok_p3(tok_base, nk);
-            cur_advance(sb);     // name
+            let name_start = if is_tuple_pat == 1 { 0 } else { tok_p2(tok_base, nk) };
+            let name_len = if is_tuple_pat == 1 { 0 } else { tok_p3(tok_base, nk) };
+            if is_tuple_pat == 0 {
+                cur_advance(sb);     // name
+            };
             // Optional `: T` type annotation. Phase-0 only has `i32`
             // so we silently skip both the colon and the following
             // ident. Without this, `let mut i: i32 = 0` would mis-
