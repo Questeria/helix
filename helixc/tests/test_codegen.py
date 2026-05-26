@@ -8245,6 +8245,72 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_slice_ptr_fn_param_self_host():
+    """K1.CV (2026-05-26): `&[T]` slice ref and `*const T` raw ptr
+    in fn-param type. K1.CU brought slice/array refs to let-type;
+    this brings them to fn-param. K1.S handled `*const T` in let-
+    type; this adds the parallel raw-ptr arm in parse_fn_decl.
+
+    Real Rust patterns unlocked:
+      fn process(buf: &[i32]) -> i32 { ... }
+      fn write(p: *const i32) -> i32 { ... }
+      fn shape(arr: &[i32; 3]) -> i32 { ... }
+
+    Implementation in parse_fn_decl's param-type position:
+
+    (1) New `*` arm AFTER the K1.BD `&T` block. Consume `*`,
+        optional `const` / `mut` IDENT, fall through to the
+        existing type IDENT consume.
+
+    (2) New `[` arm AFTER the `*` arm. Consume `[...]` bracket-
+        balanced. Sets a `slice_consumed_cv` flag that gates the
+        K1.BI lparen check, the type IDENT capture / consume,
+        and (implicitly via `tok_tag != 16` after) the K1.CT
+        generic-arg skip. The bootstrap is type-erased; slices
+        register as untyped (p_ty = 0, i32-shaped).
+
+    (3) K1.CR follow-up: widen the K1.CR lifetime detector to
+        accept any type-starter as the "next" token (IDENT 2,
+        `[` 20, `*` 9, `(` 3). Mirrors the K1.CU widening of
+        K1.CS for let-type.
+
+    LIMITATION: `&'a [T]` in fn-param combined with `<'a>` generic
+    declaration on the same fn is a deeper integration; that
+    specific combo case is documented as a known gap. Other
+    forms (`&[T]`, `&mut [T]`, `&[T; N]`, `*const T`, `*mut T`,
+    `*T`, mixed with regular params) all work.
+
+    8 sub-probes (4 slice/array + 3 ptr + 1 mixed) + 8 regression-
+    guards covering plain types, K1.S let-type unchanged, K1.BD
+    `&T` unchanged, K1.CT `Box<T>` param unchanged, and prior
+    K1.* features."""
+    cases = [
+        # K1.CV new cases - slice/array ref
+        ("amp_slice",        "fn id(s: &[i32]) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",                   42),
+        ("amp_array",        "fn id(s: &[i32; 3]) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",               42),
+        ("amp_mut_slice",    "fn id(s: &mut [i32]) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",               42),
+        ("multi_mixed",      "fn id(a: &[i32], b: i32) -> i32 { b } fn main() -> i32 { id(0, 42) }",            42),
+
+        # K1.CV new cases - raw ptrs
+        ("ptr_const",        "fn id(p: *const i32) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",              42),
+        ("ptr_mut",          "fn id(p: *mut i32) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",                42),
+        ("ptr_bare",         "fn id(p: *i32) -> i32 { 42 } fn main() -> i32 { id(0); 42 }",                    42),
+
+        # Regression-guards
+        ("plain_param",      "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                          42),
+        ("amp_param",        "fn id(s: &i32) -> i32 { 0 } fn main() -> i32 { id(&42); 42 }",                    42),
+        ("amp_mut_param",    "fn id(s: &mut i32) -> i32 { 0 } fn main() -> i32 { let mut x = 0; id(&mut x); 42 }", 42),
+        ("amp_static",       "fn id(s: &'static i32) -> i32 { 0 } fn main() -> i32 { id(0); 42 }",              42),
+        ("box_param",        "fn id(x: Box<i32>) -> i32 { 42 } fn main() -> i32 { id(42) }",                    42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"slice_ptr_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_slice_array_ref_let_type_self_host():
     """K1.CU (2026-05-26): `&[T]` slice ref and `&[T; N]` array ref
     in let-type position. Common Rust types for borrowing arrays

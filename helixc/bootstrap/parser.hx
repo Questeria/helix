@@ -8550,7 +8550,18 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 // the existing mut + type IDENT consume picks up
                 // the right tokens.
                 if tok_tag(tok_base, cur_get(sb)) == 2 {
-                    if tok_tag(tok_base, cur_get(sb) + 1) == 2 {
+                    // K1.CV follow-up: widen lifetime detector to
+                    // accept any type-starter as the "next" token,
+                    // mirroring K1.CS's widening for let-type.
+                    // Type-starters: IDENT (2), `[` (20), `*` (9),
+                    // `(` (3).
+                    let nxt_t_cr = tok_tag(tok_base, cur_get(sb) + 1);
+                    let is_ty_start_cr = if nxt_t_cr == 2 { 1 }
+                        else { if nxt_t_cr == 20 { 1 }
+                        else { if nxt_t_cr == 9 { 1 }
+                        else { if nxt_t_cr == 3 { 1 }
+                        else { 0 } } } };
+                    if is_ty_start_cr == 1 {
                         let lt_s_cr = tok_p2(tok_base, cur_get(sb));
                         let lt_l_cr = tok_p3(tok_base, cur_get(sb));
                         if byte_eq(lt_s_cr, lt_l_cr, kw_mut_s(sb), kw_mut_n(sb)) == 0 {
@@ -8564,6 +8575,72 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     };
                 };
             };
+            // K1.CV (2026-05-26): raw pointer `*const T` / `*mut T`
+            // in fn-param type. Mirrors K1.S's let-type handling.
+            // Consume `*`, then optional `const`/`mut` IDENT. The
+            // following type IDENT consume below picks up T.
+            if tok_tag(tok_base, cur_get(sb)) == 9 {
+                cur_advance(sb);                 // consume '*'
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    let ps_s = tok_p2(tok_base, cur_get(sb));
+                    let ps_l = tok_p3(tok_base, cur_get(sb));
+                    // 5-byte "const" (99,111,110,115,116) or 3-byte
+                    // "mut" (109,117,116) -- consume if matched.
+                    let is_const_kw_cv = if ps_l == 5 {
+                        if __arena_get(ps_s) == 99 {
+                            if __arena_get(ps_s + 1) == 111 {
+                                if __arena_get(ps_s + 2) == 110 {
+                                    if __arena_get(ps_s + 3) == 115 {
+                                        if __arena_get(ps_s + 4) == 116 { 1 } else { 0 }
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 };
+                    let is_mut_kw_cv = if ps_l == 3 {
+                        if __arena_get(ps_s) == 109 {
+                            if __arena_get(ps_s + 1) == 117 {
+                                if __arena_get(ps_s + 2) == 116 { 1 } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 };
+                    if is_const_kw_cv == 1 {
+                        cur_advance(sb);         // consume 'const'
+                    } else { if is_mut_kw_cv == 1 {
+                        cur_advance(sb);         // consume 'mut'
+                    }};
+                };
+            };
+            // K1.CV (2026-05-26): slice/array ref `&[T]` / `&[T; N]`
+            // in fn-param type. After K1.BD consumed `&` (and any
+            // lifetime/mut), the cursor may sit on `[` (TK_LBRACK =
+            // 20). Consume the entire `[...]` block bracket-balanced
+            // as a type-erased no-op. The slice_consumed_cv flag
+            // gates the type-IDENT-consume below so we don't grab
+            // the next `,`/`)` as a fake IDENT.
+            let mut slice_consumed_cv: i32 = 0;
+            if tok_tag(tok_base, cur_get(sb)) == 20 {
+                cur_advance(sb);                 // consume '['
+                let mut sl_d_cv: i32 = 1;
+                while sl_d_cv > 0 {
+                    let sl_t_cv = tok_tag(tok_base, cur_get(sb));
+                    if sl_t_cv == 20 {
+                        sl_d_cv = sl_d_cv + 1;
+                        cur_advance(sb);
+                    } else { if sl_t_cv == 21 {
+                        sl_d_cv = sl_d_cv - 1;
+                        if sl_d_cv > 0 {
+                            cur_advance(sb);
+                        };
+                    } else { if sl_t_cv == 0 {
+                        sl_d_cv = 0;
+                    } else {
+                        cur_advance(sb);
+                    }}};
+                }
+                cur_advance(sb);                 // consume ']'
+                slice_consumed_cv = 1;
+            };
             // K1.BI (2026-05-26): peek for `(` (TK_LPAREN=3) as a
             // parenthesized parameter type (`fn p(x: (i32)) -> ...`).
             // In Rust `(T)` is the same as bare `T` (only `(T,)` with
@@ -8571,9 +8648,14 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // token is the inner type IDENT; the closing `)` is
             // consumed AFTER the IDENT read below. Mirrors K1.BE's
             // ret-ty handling at the parameter-type position.
-            let lparen_seen = if tok_tag(tok_base, cur_get(sb)) == 3 {
-                cur_advance(sb);     // consume '('
-                1
+            //
+            // K1.CV: gate on slice_consumed_cv -- if slice was
+            // consumed, no type IDENT remains, skip these steps.
+            let lparen_seen = if slice_consumed_cv == 0 {
+                if tok_tag(tok_base, cur_get(sb)) == 3 {
+                    cur_advance(sb);     // consume '('
+                    1
+                } else { 0 }
             } else { 0 };
             // Capture the type IDENT bytes to determine if it's "f32"
             // (or "f64", treated the same in bootstrap codegen). Step 5c
@@ -8581,9 +8663,11 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // bind a and b with type=f32 so is_f32_expr resolves through
             // them and AST_ADD dispatches to SSE.
             let ty_tok = cur_get(sb);
-            let ty_s = tok_p2(tok_base, ty_tok);
-            let ty_l = tok_p3(tok_base, ty_tok);
-            cur_advance(sb);     // type IDENT
+            let ty_s = if slice_consumed_cv == 0 { tok_p2(tok_base, ty_tok) } else { 0 };
+            let ty_l = if slice_consumed_cv == 0 { tok_p3(tok_base, ty_tok) } else { 0 };
+            if slice_consumed_cv == 0 {
+                cur_advance(sb);     // type IDENT
+            };
             // K1.BI (2026-05-26): if we consumed an opening `(` above,
             // consume the matching `)` now. The IDENT between them is
             // captured as ty_tok normally; the parens are syntactic
