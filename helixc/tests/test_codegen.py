@@ -6987,9 +6987,17 @@ fn main() -> i32 {{
     write_file_to_arena("{out_path}", elf_start, total)
 }}
 """
+    # K1.AS (2026-05-25): pre-clean any stale output binary from a
+    # previous run with this same `name`. Prevents a flake where
+    # compile_and_run could silently leave the OLD out_path on
+    # disk if the K1 binary's write step failed, and the next
+    # chmod+x'd that stale binary -- which would still execute
+    # but with pre-fix semantics. Cleaning now ensures every
+    # call observes the binary produced by the CURRENT bootstrap
+    # source.
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         f"printf %s {repr(k2_src)} > {in_path}"],
+         f"rm -f {in_path} {out_path}; printf %s {repr(k2_src)} > {in_path}"],
         check=True, timeout=10,
     )
     compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
