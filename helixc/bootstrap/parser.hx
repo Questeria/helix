@@ -1595,6 +1595,76 @@ fn is_kw_pub_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AV (2026-05-25): match the 6-byte IDENT "extern" (bytes
+// 101, 120, 116, 101, 114, 110). Recognized as a no-op linkage
+// modifier before top-level fn decls. Same shape as `pub` --
+// the bootstrap doesn't model FFI linkage; `extern fn foo()` is
+// treated identically to `fn foo()`.
+fn is_kw_extern_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 6 {
+        if __arena_get(id_s) == 101 {
+            if __arena_get(id_s + 1) == 120 {
+                if __arena_get(id_s + 2) == 116 {
+                    if __arena_get(id_s + 3) == 101 {
+                        if __arena_get(id_s + 4) == 114 {
+                            if __arena_get(id_s + 5) == 110 { 1 } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
+// K1.AV (2026-05-25): consume optional leading visibility/linkage
+// modifiers at a top-level decl position. Recognizes:
+//   pub [ ( ... ) ]
+//   extern [ "ABI_STRLIT" ]
+// Multiple modifiers can stack (`pub extern fn ...`). The peeked
+// IDENT is consumed and the cursor advanced; if NO modifier is
+// present, the cursor stays put. Returns 0 (unused). Caller
+// re-fetches the current token after this returns.
+fn consume_vis_modifiers(tok_base: i32, sb: i32) -> i32 {
+    let mut keep_v: i32 = 1;
+    while keep_v == 1 {
+        let kt = tok_tag(tok_base, cur_get(sb));
+        if kt == 2 {
+            let k = cur_get(sb);
+            let s = tok_p2(tok_base, k);
+            let l = tok_p3(tok_base, k);
+            if is_kw_pub_ident(s, l) == 1 {
+                cur_advance(sb);
+                // Optional `(crate)` / `(super)` / `(in path)` -- skip
+                // tokens until the matching `)`. The bootstrap doesn't
+                // model module paths; treat any pub-arg as a no-op.
+                if tok_tag(tok_base, cur_get(sb)) == 3 {
+                    cur_advance(sb);             // consume '('
+                    let mut depth: i32 = 1;
+                    while depth > 0 {
+                        let pt = tok_tag(tok_base, cur_get(sb));
+                        if pt == 3 { depth = depth + 1; };
+                        if pt == 4 { depth = depth - 1; };
+                        if pt == 0 { depth = 0; };  // EOF safety
+                        cur_advance(sb);
+                    };
+                };
+            } else { if is_kw_extern_ident(s, l) == 1 {
+                cur_advance(sb);
+                // Optional ABI string literal: `extern "C" fn ...`.
+                let nt = tok_tag(tok_base, cur_get(sb));
+                if nt == 25 {                    // TK_STRLIT
+                    cur_advance(sb);
+                };
+            } else {
+                keep_v = 0;
+            }};
+        } else {
+            keep_v = 0;
+        };
+    }
+    0
+}
+
 // K1.AC (2026-05-25): match the 5-byte IDENT "break" (bytes
 // 98, 114, 101, 97, 107). Used by parse_primary to recognize
 // `break` as an early loop exit. Emits AST_BREAK (tag 77);
@@ -4893,18 +4963,11 @@ fn parse_top(tok_base: i32) -> i32 {
     // doesn't enforce them, just parses past so kovc.hx and other
     // attribute-decorated source compiles.
     skip_attributes(tok_base, cur_slot);
-    // K1.AU (2026-05-25): swallow optional `pub` modifier at the
-    // very start. Bootstrap has no visibility system; `pub fn`,
-    // `pub struct`, `pub enum`, etc. all behave like the
-    // unprefixed form.
-    let k_pre = cur_get(cur_slot);
-    if tok_tag(tok_base, k_pre) == 2 {
-        let id_s_pre = tok_p2(tok_base, k_pre);
-        let id_l_pre = tok_p3(tok_base, k_pre);
-        if is_kw_pub_ident(id_s_pre, id_l_pre) == 1 {
-            cur_advance(cur_slot);
-        };
-    };
+    // K1.AU + K1.AV (2026-05-25): swallow optional `pub` /
+    // `pub(crate)` / `extern` / `extern "C"` modifiers at the
+    // top-level decl prefix. Bootstrap has no visibility or
+    // linkage system; all such modifiers are syntactic no-ops.
+    consume_vis_modifiers(tok_base, cur_slot);
     let k = cur_get(cur_slot);
     if tok_tag(tok_base, k) == 2 {
         let id_s = tok_p2(tok_base, k);
@@ -5280,20 +5343,15 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
         let kk = cur_get(sb);
         let tt = tok_tag(tok_base, kk);
         if tt == 2 {
-            // K1.AU (2026-05-25): swallow optional `pub` visibility
-            // modifier. The bootstrap has no module-private system,
-            // so `pub` is a no-op everywhere it appears. Re-fetch
-            // the IDENT bytes after consuming `pub` so the keyword
-            // checks below see the actual decl keyword.
-            let mut kk = cur_get(sb);
-            let mut s = tok_p2(tok_base, kk);
-            let mut l = tok_p3(tok_base, kk);
-            if is_kw_pub_ident(s, l) == 1 {
-                cur_advance(sb);   // consume 'pub'
-                kk = cur_get(sb);
-                s = tok_p2(tok_base, kk);
-                l = tok_p3(tok_base, kk);
-            };
+            // K1.AU + K1.AV (2026-05-25): swallow leading visibility /
+            // linkage modifiers (pub, pub(crate), extern, extern "C")
+            // via the shared consume_vis_modifiers helper. Re-fetch
+            // the IDENT bytes after so the keyword cascade fires on
+            // the actual decl keyword.
+            consume_vis_modifiers(tok_base, sb);
+            let kk = cur_get(sb);
+            let s = tok_p2(tok_base, kk);
+            let l = tok_p3(tok_base, kk);
             // FLAT prefix-trap ladder: single-binding chain, no nested
             // if-else statements. Stage 8.5 adds two new prefixes (trait,
             // impl) — handled before falling through to the fn-decl path.
@@ -5349,6 +5407,8 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     }
     // Leading non-fn decls may be followed by attributes for the first fn.
     skip_attributes(tok_base, sb);
+    // K1.AV (2026-05-25): swallow pub/extern before the first fn.
+    consume_vis_modifiers(tok_base, sb);
     let first_fn = parse_fn_decl(tok_base, sb);
     let user_first_node = mk_node(15, first_fn, 0, 0);
     let mut prev_list = user_first_node;
@@ -5362,6 +5422,9 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
     while keep == 1 {
         // Skip any attributes before the next decl.
         skip_attributes(tok_base, sb);
+        // K1.AV (2026-05-25): also swallow pub/extern visibility/
+        // linkage modifiers before the next decl.
+        consume_vis_modifiers(tok_base, sb);
         let k2 = cur_get(sb);
         let t2 = tok_tag(tok_base, k2);
         if t2 == 0 {

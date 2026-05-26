@@ -8210,6 +8210,28 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_vis_modifiers_self_host():
+    """K1.AV (2026-05-25): pub(crate) / pub(super) / extern /
+    extern "C" all accepted as no-op visibility/linkage
+    modifiers, in addition to the bare `pub` from K1.AU.
+    A new consume_vis_modifiers helper handles the prefix
+    consumption (and is called at parse_top + parse_program's
+    leading-decl loop + parse_program's post-fn loop). 5 sub-
+    probes covering pub(crate), pub(super), extern, extern "C",
+    and stacked pub extern "C", plus a multi-decl program."""
+    cases = [
+        ("pub_crate",     "pub(crate) fn main() -> i32 { 42 }",                                                              42),
+        ("pub_super",     "pub(super) fn main() -> i32 { 42 }",                                                              42),
+        ("extern_fn",     "extern fn main() -> i32 { 42 }",                                                                  42),
+        ("extern_c",      'extern "C" fn main() -> i32 { 42 }',                                                              42),
+        ("pub_extern_c",  'pub extern "C" fn main() -> i32 { 42 }',                                                          42),
+        ("multi_decls",   'pub(crate) fn a() -> i32 { 10 } extern "C" fn b() -> i32 { 32 } fn main() -> i32 { a() + b() }',  42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"vis_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_pub_modifier_self_host():
     """K1.AU (2026-05-25): `pub fn`, `pub struct`, `pub enum`, etc.
     are now accepted with the visibility modifier as a no-op
