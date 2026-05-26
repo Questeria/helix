@@ -8210,6 +8210,39 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_inherent_impl_self_host():
+    """K1.BF (2026-05-26): inherent `impl Type { methods }` (no
+    `for Trait`) accepted. parse_impl_block previously consumed
+    `impl Trait for Type {` unconditionally; for `impl Type {`
+    it mis-captured `Type` as the trait, `{` as `for`, and the
+    method's `fn` as target, drifting state and hanging K2.
+
+    Fix peeks the token AFTER the first IDENT:
+      - `{` (TK_LBRACE=5) -> inherent form: first IDENT IS the
+        target; trait_s/trait_l stay 0.
+      - else -> existing Trait-for-Target form: first IDENT is
+        the trait, consume `for` then target IDENT.
+
+    Both forms share the same mangled `Type__method` dispatch
+    via mangle_impl_method, so codegen needs no change.
+
+    3 sub-probes."""
+    cases = [
+        ("plain",        "struct P { v: i32 } impl P { fn val() -> i32 { 42 } } fn main() -> i32 { P::val() }",                                            42),
+        ("multi_fn",     "struct P { v: i32 } impl P { fn a() -> i32 { 10 } fn b() -> i32 { 32 } } fn main() -> i32 { P::a() + P::b() }",                  42),
+        ("decl_unused",  "struct P { v: i32 } impl P { fn val() -> i32 { 99 } } fn main() -> i32 { 42 }",                                                  42),
+        ("self_decl",    "struct P { v: i32 } impl P { fn get(self) -> i32 { 42 } } fn main() -> i32 { 42 }",                                              42),
+    ]
+    # NOTE: `.method()` dispatch with self-param (e.g. `p.get()`) is a
+    # separate gap -- the method-call sugar through `.` operator
+    # doesn't yet route to inherent-impl mangled fns. K1.BF only
+    # unblocks PARSING the inherent-impl block + STATIC-style calls
+    # via `Type::method()`.
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"inherent_impl_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_paren_ret_ty_self_host():
     """K1.BE (2026-05-26): `fn x() -> (T) { ... }` parenthesized
     return type accepted. In Rust, `(T)` is the same as bare `T`

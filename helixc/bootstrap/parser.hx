@@ -8141,17 +8141,37 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
 // its rewritten methods are emitted via the standard fn-list path.
 fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'impl' IDENT
-    // Trait name IDENT.
-    let trait_tok = cur_get(sb);
-    let trait_s = tok_p2(tok_base, trait_tok);
-    let trait_l = tok_p3(tok_base, trait_tok);
-    cur_advance(sb);                         // trait-name IDENT
-    cur_advance(sb);                         // 'for' IDENT
-    // Target type IDENT.
-    let target_tok = cur_get(sb);
-    let target_s = tok_p2(tok_base, target_tok);
-    let target_l = tok_p3(tok_base, target_tok);
-    cur_advance(sb);                         // target-type IDENT
+    // K1.BF (2026-05-26): support BOTH `impl Trait for Type { ... }`
+    // and inherent `impl Type { ... }`. The first IDENT after `impl`
+    // is either the trait name (Trait-for-Target form) or the target
+    // itself (inherent form). Peek the token AFTER the first IDENT:
+    //   - if it's `{` (TK_LBRACE=5), this is the inherent form --
+    //     the first IDENT is the target, trait_s/trait_l stay 0.
+    //   - else it's the existing trait-for-target form -- first IDENT
+    //     is the trait, then `for` keyword, then target IDENT.
+    // Before this fix, `impl Type { ... }` mis-captured `Type` as the
+    // trait, `{` as the `for` keyword, and the first method's `fn`
+    // IDENT as the target name -- parser state drifted, K2 hung.
+    let first_tok = cur_get(sb);
+    let first_s = tok_p2(tok_base, first_tok);
+    let first_l = tok_p3(tok_base, first_tok);
+    cur_advance(sb);                         // consume first IDENT
+    let after_first = tok_tag(tok_base, cur_get(sb));
+    let mut trait_s: i32 = 0;
+    let mut trait_l: i32 = 0;
+    let mut target_s: i32 = first_s;
+    let mut target_l: i32 = first_l;
+    if after_first != 5 {
+        // `impl Trait for Type { ... }` form -- first IDENT is the
+        // trait, swap target capture to the IDENT after `for`.
+        trait_s = first_s;
+        trait_l = first_l;
+        cur_advance(sb);                     // consume 'for' IDENT
+        let target_tok = cur_get(sb);
+        target_s = tok_p2(tok_base, target_tok);
+        target_l = tok_p3(tok_base, target_tok);
+        cur_advance(sb);                     // consume target-type IDENT
+    };
     let target_tag = ty_ident_to_tag(target_s, target_l);
     cur_advance(sb);                         // '{'
     // Parse zero-or-more method decls until '}'.
