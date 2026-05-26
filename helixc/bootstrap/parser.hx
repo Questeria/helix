@@ -11652,6 +11652,26 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
     } else { if t == 3 {
         // LPAREN — tuple pattern (sub_pat1, sub_pat2, ...).
         cur_advance(sb);                     // consume '('
+        // K1.DO (2026-05-26): empty tuple / unit pattern `()`. Real
+        // Rust uses this to match the unit value:
+        //   match () { () => 42 }
+        //   if let () = x { ... }
+        // Without this, the recursive parse_pattern call (line below)
+        // immediately hit `)`, fell through to the unknown-token trap,
+        // and emitted AST_ERR(62002). At codegen, the trap fired with
+        // SIGSEGV (rc=139) when the match scrutinee was actually unit.
+        //
+        // Fix: peek for `)` right after consuming `(`. If matched, the
+        // pattern is empty/unit -- consume `)` and emit PAT_WILDCARD
+        // (tag 66) since unit value is just a 0-byte placeholder; the
+        // wildcard always matches, which is semantically correct for
+        // matching unit (there's only one unit value, so any unit
+        // pattern matches it). The bootstrap doesn't model unit type
+        // distinctly from i32; this is the type-erased fallback.
+        if tok_tag(tok_base, cur_get(sb)) == 4 {
+            cur_advance(sb);                 // consume ')'
+            mk_node(66, 0, 0, 0)             // PAT_WILDCARD
+        } else {
         let first_pat = parse_pattern(tok_base, sb);
         let mut sub_head: i32 = mk_node(51, first_pat, 0, 0);
         let mut tail_idx: i32 = sub_head;
@@ -11681,6 +11701,7 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         }
         cur_advance(sb);                     // consume ')'
         mk_node(70, arity, sub_head, 0)
+        }
     } else { if t == 8 {
         // K1.AO (2026-05-25): negative integer literal pattern.
         // `match x { -7 => ... }` lexes as TK_MINUS + TK_INT (the

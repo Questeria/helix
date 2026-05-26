@@ -8245,6 +8245,60 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_unit_pattern_self_host():
+    """K1.DO (2026-05-26): empty tuple / unit pattern `()` in
+    match arms and other pattern positions. Real Rust uses this
+    to match the unit value:
+
+      match () { () => 42 }
+      if let () = foo() { ... }
+
+    Previously SIGSEGV'd (rc=139) because the t==3 (LPAREN) arm
+    of parse_pattern_atom unconditionally called parse_pattern
+    recursively for the first sub-pattern -- but for empty `()`,
+    that recursive call immediately hit `)` which fell through
+    the unknown-token trap, emitting AST_ERR(62002). Codegen then
+    crashed with SIGSEGV when the malformed AST was traversed.
+
+    Fix: peek for `)` right after consuming `(` in the LPAREN
+    pattern arm. If matched, the pattern is empty/unit -- consume
+    `)` and emit PAT_WILDCARD (tag 66). The wildcard always
+    matches, which is semantically correct for matching unit
+    (there's only one unit value, so any unit pattern matches it).
+    The bootstrap doesn't model unit type distinctly from i32;
+    this is the type-erased fallback.
+
+    3 sub-probes (bare unit, unit + wildcard, plain wildcard
+    fallback) + 11 regression-guards covering tuple patterns
+    (1-arity, 2-arity, with-wildcards, with-bindings), plain
+    literal/wildcard, ref pattern, at-binding, guard, neg-range,
+    plain let."""
+    cases = [
+        # K1.DO new cases
+        ("unit_match",              "fn main() -> i32 { match () { () => 42 } }",                                  42),
+        ("unit_then_wild",          "fn main() -> i32 { match () { () => 42, _ => 0 } }",                          42),
+        ("unit_only_wild_first",    "fn main() -> i32 { match () { _ => 42 } }",                                    42),
+
+        # Regression-guards: existing tuple patterns unchanged
+        ("tuple_pat_one",           "fn main() -> i32 { match (42,) { (x,) => x } }",                              42),
+        ("tuple_pat_two",           "fn main() -> i32 { match (1, 2) { (a, b) => 42 } }",                          42),
+        ("tuple_pat_wild",          "fn main() -> i32 { match (1, 2) { (_, _) => 42 } }",                          42),
+        ("tuple_pat_bind",          "fn main() -> i32 { match (40, 2) { (a, b) => a + b } }",                      42),
+
+        # Other regression-guards
+        ("plain_lit",               "fn main() -> i32 { match 5 { 5 => 42, _ => 0 } }",                             42),
+        ("plain_wild",              "fn main() -> i32 { match 5 { _ => 42 } }",                                     42),
+        ("ref_pat",                 "fn main() -> i32 { match 42 { &x => 42, _ => 0 } }",                          42),
+        ("at_binding",              "fn main() -> i32 { match 5 { n @ 0..=9 => 42, _ => 0 } }",                    42),
+        ("guard",                   "fn main() -> i32 { match 5 { x if x > 0 => 42, _ => 0 } }",                   42),
+        ("neg_range",               "fn main() -> i32 { match -3 { -5..=-1 => 42, _ => 0 } }",                     42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"unit_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_ref_pattern_self_host():
     """K1.DN (2026-05-26): `&pat` / `&mut pat` reference pattern
     in match arms. Real Rust uses this to bind through references
