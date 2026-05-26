@@ -8245,6 +8245,57 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_ref_pattern_modifier_self_host():
+    """K1.CH (2026-05-26): `ref` / `ref mut` pattern modifier in
+    match arms and other pattern positions. Common Rust idiom for
+    by-reference binding:
+
+      match x {
+          ref r       => use_ref(r),       // r: &T
+          ref mut r2  => use_mut(r2),      // r2: &mut T
+      }
+
+    The bootstrap previously tripped (rc=132) because
+    parse_pattern_atom's IDENT path mis-parsed `ref` as a binding
+    name (PAT_BIND), then choked on the following IDENT-binding.
+
+    Implementation: at parse_pattern_atom entry, peek for `ref`
+    IDENT (3-byte: 114, 101, 102). If matched, consume; then peek
+    for `mut` (via byte_eq against kw_mut_s/n) and consume if
+    present. The underlying pattern (typically an IDENT binding)
+    is then parsed by the existing logic.
+
+    The bootstrap is type-erased and does NOT model by-reference
+    binding semantics -- the pattern variable is bound as if there
+    were no `ref` modifier. This is syntactic acceptance only.
+
+    4 sub-probes + 9 regression-guards across all pattern arm
+    forms (wildcard, int lit, range, plain binding) + prior K1.*
+    features."""
+    cases = [
+        # K1.CH new cases
+        ("ref_simple",            "fn main() -> i32 { let x = 42; match x { ref _r => 42 } }",                       42),
+        ("ref_mut",               "fn main() -> i32 { let mut x = 42; match x { ref mut _r => 42 } }",               42),
+        ("ref_in_branch",         "fn main() -> i32 { let x = 7; match x { ref _r => 42 } }",                        42),
+        ("ref_with_wildcard",     "fn main() -> i32 { let x = 0; match x { ref _r => 42, _ => 0 } }",                42),
+
+        # Regression-guards: pattern arms unchanged
+        ("wildcard_pat",          "fn main() -> i32 { let x = 0; match x { _ => 42 } }",                              42),
+        ("int_lit_pat",           "fn main() -> i32 { let x = 1; match x { 1 => 42, _ => 0 } }",                     42),
+        ("binding_pat",           "fn main() -> i32 { let x = 42; match x { y => y } }",                              42),
+        ("range_pat",             "fn main() -> i32 { let x = 5; match x { 1..=10 => 42, _ => 0 } }",                42),
+        # Other K1.* features unchanged
+        ("plain_let",             "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",             "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",                "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("nested_fn",             "fn main() -> i32 { fn helper() -> i32 { 0 } 42 }",                                42),
+        ("for_loop",              "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"ref_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_if_let_while_let_self_host():
     """K1.CG (2026-05-26): `if let pattern = expr { ... } [else ...]`
     and `while let pattern = expr { ... }`. Pervasive Rust idioms

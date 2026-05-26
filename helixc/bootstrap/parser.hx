@@ -10035,6 +10035,39 @@ fn pattern_contains_or(pat_idx: i32) -> i32 {
 // FLAT prefix-trap pattern: single ladder of let-rebinds, no nested
 // if-else statements. Returns the AST node index.
 fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
+    // K1.CH (2026-05-26): leading `ref` / `ref mut` pattern modifier.
+    // Common Rust idiom for by-reference binding in pattern position:
+    //   match x { ref r => ... }       // bind `r` as &T
+    //   match x { ref mut r => ... }   // bind `r` as &mut T
+    // The type-erased bootstrap does NOT model by-reference binding;
+    // this is syntactic acceptance only. After consuming `ref` (and
+    // optional `mut`), the underlying pattern is parsed normally
+    // (most commonly an identifier binding).
+    //
+    // "ref" = 3-byte IDENT (bytes 114, 101, 102).
+    let pre_k_ch = cur_get(sb);
+    if tok_tag(tok_base, pre_k_ch) == 2 {
+        let pre_s_ch = tok_p2(tok_base, pre_k_ch);
+        let pre_l_ch = tok_p3(tok_base, pre_k_ch);
+        let is_ref_kw = if pre_l_ch == 3 {
+            if __arena_get(pre_s_ch) == 114 {
+                if __arena_get(pre_s_ch + 1) == 101 {
+                    if __arena_get(pre_s_ch + 2) == 102 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 };
+        if is_ref_kw == 1 {
+            cur_advance(sb);                     // consume 'ref'
+            let mt_k_ch = cur_get(sb);
+            if tok_tag(tok_base, mt_k_ch) == 2 {
+                let mt_s_ch = tok_p2(tok_base, mt_k_ch);
+                let mt_l_ch = tok_p3(tok_base, mt_k_ch);
+                if byte_eq(mt_s_ch, mt_l_ch, kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                    cur_advance(sb);             // consume 'mut'
+                };
+            };
+        };
+    };
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
     if t == 1 {
