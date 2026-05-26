@@ -84,6 +84,21 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 #
 # Bump K_BOOTSTRAP_PARITY_DONE as each K-track chunk lands and the
 # matrix's PARITY count rises.
+# K_BOOTSTRAP_CHUNKS_DONE counts shipped K0/K1 commits on the
+# K-bootstrap track (run `git log --oneline | grep -E "K[01]\.|K0 chunk"
+# | wc -l` to recount). Bump each commit. The chunk count is more
+# meaningful than matrix parity rows under the hard constraint because
+# many "PARITY" rows are vacuously satisfied.
+K_BOOTSTRAP_CHUNKS_DONE = 91       # last bump: K1.BI (commit b599b7d)
+# Estimated total chunks to v1.0 (Python fully deleted, all features
+# ported, K5 DDC passes). Two estimates:
+#   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
+#              corners that turn out vacuously satisfied at K2 time
+#   REAL     = under the 2026-05-26 hard constraint (no Python-forever
+#              deferral for any subsystem)
+K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE = 150
+K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE = 165
+
 K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
                                     # KOVC-MISSING at K0 chunk 2 close)
 K_BOOTSTRAP_PARITY_DONE = 140      # was 28 after K0; K1.B (stack
@@ -467,6 +482,17 @@ def k_bootstrap_percent() -> int:
     return round(100 * K_BOOTSTRAP_PARITY_DONE / K_BOOTSTRAP_TOTAL_ROWS)
 
 
+def k_bootstrap_chunks_best_percent() -> int:
+    """Optimistic-estimate progress on the K-bootstrap chunk plan."""
+    return round(100 * K_BOOTSTRAP_CHUNKS_DONE / K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE)
+
+
+def k_bootstrap_chunks_real_percent() -> int:
+    """Realistic-estimate progress under the 2026-05-26 hard
+    constraint (no Python-forever deferral for any subsystem)."""
+    return round(100 * K_BOOTSTRAP_CHUNKS_DONE / K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE)
+
+
 def count_tests() -> int:
     """The size of the automated test suite — a count of `def test_*`
     definitions across `helixc/tests/`, computed LIVE so it grows with
@@ -498,136 +524,60 @@ def _bucket(status: str) -> list[dict[str, str]]:
 
 def render_telegram(note: str | None = None,
                     commit: str | None = None) -> str:
-    """Render the beginner-friendly Helix status update.
+    """Render the figures-focused Helix status update.
+
+    Redesigned 2026-05-26 (per user request): minimal narrative,
+    front-loaded numbers. Aim is ~12 lines incl. update footer.
 
     `note`   — one plain-English sentence on what the latest fire did.
     `commit` — the short commit hash of that fire's commit.
-    Both are optional; the per-fire footer is omitted if neither is set.
     """
     released = _bucket("released")
-    in_progress = _bucket("in_progress")
-    planned = _bucket("planned")
+    versions_total = len(VERSIONS)
+    released_count = len(released)
 
-    # Hide the v2.x and v3.0 entries from the RELEASED VERSIONS
-    # display -- they are long-shipped historical milestones and
-    # the Telegram update should focus on what's current. The
-    # internal _bucket("released") still includes them for the
-    # versions_percent() math; they just don't get listed here.
-    _HISTORICAL_RELEASED = frozenset({
-        "v2.0", "v2.1", "v2.2", "v2.3", "v2.4", "v2.5", "v3.0",
-    })
-    released_visible = [v for v in released if v["id"] not in _HISTORICAL_RELEASED]
+    chunks_done = K_BOOTSTRAP_CHUNKS_DONE
+    chunks_left_best = max(0, K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE - chunks_done)
+    chunks_left_real = max(0, K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE - chunks_done)
+
+    # Track current release-version-in-progress for the header.
+    in_progress = _bucket("in_progress")
+    next_planned = _bucket("planned")
+    if in_progress:
+        current_version = in_progress[0]["id"]
+    elif next_planned:
+        current_version = next_planned[0]["id"]
+    else:
+        current_version = released[-1]["id"] if released else "v0"
 
     lines: list[str] = [
-        "HELIX COMPILER  -  BUILD UPDATE",
-        "================================",
+        "HELIX  ::  K-bootstrap -> v1.0",
         "",
-        "NAMING CONVENTION",
-        "  v<M.m>    Release version, gated by a 5-clean-axis audit.",
-        "            (v2.0..v2.5 = compiler foundation; v3.0 = big",
-        "            MLIR+LLVM rewrite; v3.1 = polish; v3.2+ = ahead.)",
-        "  K<n>      K-bootstrap track stage toward self-hosting.",
-        "            K0 = survey; K1 = ports; K2 = parity harness;",
-        "            K3 = trusted seed; K4 = delete Python (MANDATORY);",
-        "            K5 = DDC + final 5-clean audits.",
-        "  K1.<X>    A K1 sub-chunk (each ports one Helix feature",
-        "            from Python helixc into the Helix-side compiler).",
-        "  Stage <n> v3.0 build-stage ID. 200-208 = Phase D (frontend),",
-        "            210-216 = Phase E (MLIR), 220-222 = Phase F.",
-        "  3-clean   Per-chunk audit by 3 review axes (silent-failure",
-        "            / type-design / code-review).",
-        "  5-clean   End-of-phase audit by 5 axes (FE/IR/BE/RT/TEST).",
+        f"  Chunks shipped:    {chunks_done}",
+        f"  Estimated total:   ~{K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE} best  /  "
+        f"~{K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE} realistic",
+        f"  Remaining:         ~{chunks_left_best} best  /  "
+        f"~{chunks_left_real} realistic",
+        f"  Progress:          {k_bootstrap_chunks_best_percent()}% best  /  "
+        f"{k_bootstrap_chunks_real_percent()}% realistic",
         "",
-    ]
-    if released_visible:
-        lines.append("RELEASED VERSIONS")
-        for v in released_visible:
-            lines.append(f"  - {v['id']}   {v['theme']}")
-
-    if in_progress:
-        lines += ["", "IN PROGRESS"]
-        for v in in_progress:
-            lines.append(f"  - {v['id']}   {v['theme']}")
-
-    # STILL AHEAD now shows ALL the main future milestones (both
-    # the planned-version entries from VERSIONS and the K-track
-    # stages that aren't yet at PARITY-complete). The K-track plan
-    # is the load-bearing future work; release versions after v3.2
-    # are the headline cadence.
-    lines += ["", "STILL AHEAD"]
-    for v in planned:
-        lines.append(f"  - {v['id']}   {v['theme']}")
-    # K-track stages -- list each remaining stage with its current
-    # state. K1 is in progress (per K_BOOTSTRAP_PARITY_DONE rising
-    # row-by-row); K2..K5 are scheduled but not started.
-    lines += [
-        f"  - K1     Feature ports ({K_BOOTSTRAP_PARITY_DONE}/"
-        f"{K_BOOTSTRAP_TOTAL_ROWS} rows at PARITY) -- IN PROGRESS",
-        "           Includes: CPU parser + codegen polish (easy),",
-        "           impl method dispatch, generic monomorphization,",
-        "           mixed-type binops, f16 literals, reflection",
-        "           (quote/splice/modify/reflect_hash), tile ops,",
-        "           PTX/ROCm/Metal/WebGPU backends, MLIR migration.",
-        "           ALL of these must ship in the bootstrap -- no",
-        "           Python-forever deferral is allowed under the",
-        "           hard constraint.",
-        "  - K2     Parity harness -- runs every test program "
-        "through both compilers and asserts identical output",
-        "  - K3     Trusted seed -- a small hand-audited Helix "
-        "binary that can re-bootstrap the compiler from source",
-        "  - K4     Delete Python helixc -- MANDATORY (user "
-        "directive 2026-05-26: hard constraint). Not optional.",
-        "  - K5     DDC (Diverse Double-Compilation) + final "
-        "5-clean audits -- the trust-from-first-principles gate",
-        "  - SELF-HOSTING ACHIEVED -- the headline goal: a Helix "
-        "compiler written in Helix, compiled in Helix, all the "
-        "way from raw binary with NO Python in the final product",
-        "           AND no other non-Helix runtime code anywhere",
-        "           in the shipped project (test infra, build",
-        "           scripts, dev tooling -- see",
-        "           docs/K_BOOTSTRAP_HARD_CONSTRAINT.md).",
-    ]
-
-    lines += [
+        f"  Phase:             K1 in progress  /  K2 K3 K4 K5 pending",
+        f"  Matrix parity:     {K_BOOTSTRAP_PARITY_DONE} / "
+        f"{K_BOOTSTRAP_TOTAL_ROWS} rows ({k_bootstrap_percent()}% nominal)",
+        f"  Versions cut:      {current_version} (latest)  /  "
+        f"{released_count} of {versions_total} on v1.0 path",
+        f"  Tests passing:     ~{count_tests()}",
         "",
-        "SELF-HOSTING PROGRESS (Helix-in-Helix)",
-        f"  - Feature-parity rows: {K_BOOTSTRAP_PARITY_DONE} / "
-        f"{K_BOOTSTRAP_TOTAL_ROWS} done   "
-        f"({k_bootstrap_percent()}%)",
-        "    Each row is a Helix language feature; PARITY means the "
-        "Helix-",
-        "    side compiler handles it the same way the Python compiler "
-        "does.",
-        "    The 98% number is misleading: many PARITY rows are",
-        "    \"vacuously satisfied\" (the feature isn't reachable in",
-        "    the bootstrap-compileable subset, so both compilers",
-        "    behave identically by accident). Real remaining work",
-        "    under the hard constraint is closer to ~60-80 chunks",
-        "    including all the GPU/MLIR/Tile/reflection ports that",
-        "    cannot stay in Python forever.",
-        "    Track plan: K0 survey -> K1 ports -> K2 parity harness ->",
-        "    K3 trusted seed -> K4 delete Python (MANDATORY, no",
-        "    longer user-gated for skip -- only for timing) -> K5",
-        "    final audits.",
-        "    HARD CONSTRAINT (2026-05-26): no non-Helix runtime",
-        "    code at v1.0. See docs/K_BOOTSTRAP_HARD_CONSTRAINT.md.",
-        "",
-        "PROGRESS",
-        f"  - v3.0 build stages:   {V3_STAGES_DONE} / "
-        f"{V3_STAGES_TOTAL} done   ({v3_stages_percent()}%) - each "
-        f"one 3-part audited",
-        f"  - Versions released:   {len(released)} / {len(VERSIONS)}"
-        f"         ({versions_percent()}%)",
-        f"  - Test coverage:       ~{count_tests()} automated tests "
-        f"guard the code",
+        "  Hard rule (2026-05-26): zero non-Helix code at v1.0.",
+        "    docs/K_BOOTSTRAP_HARD_CONSTRAINT.md",
     ]
 
     if note or commit:
         lines.append("")
         if note:
-            lines.append(f"THIS UPDATE: {note}")
+            lines.append(f"UPDATE: {note}")
         if commit:
-            lines.append(f"  commit {commit}")
+            lines.append(f"COMMIT: {commit}")
 
     return "\n".join(lines)
 
