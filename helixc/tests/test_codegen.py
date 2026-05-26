@@ -8245,6 +8245,65 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_const_fn_modifier_self_host():
+    """K1.CY (2026-05-26): `const fn` is a fn-decl modifier, NOT
+    a const-decl prefix. Common pattern in real Rust source:
+
+      const fn add(a: i32, b: i32) -> i32 { a + b }
+      pub const fn make() -> i32 { 42 }
+
+    Previously TIMEOUT because parse_const_decl (K1.Z) consumed
+    `const` then ran a skip-to-`;` loop. For `const fn ...`, no
+    `;` exists before the fn body — the loop consumed the entire
+    fn decl + body + everything beyond until EOF or a real `;`
+    elsewhere, corrupting parse state.
+
+    Fix: at parse_const_decl entry, after consuming `const`, peek
+    for `fn` IDENT (2-byte: 102, 110). If matched, return
+    immediately as a no-op marker -- parse_top will dispatch the
+    next `fn` IDENT to parse_fn_decl normally. Otherwise (true
+    `const N: T = expr;` form), proceed with the existing skip-
+    to-`;` loop.
+
+    The bootstrap doesn't enforce const-fn semantics (compile-time
+    evaluability); syntactic acceptance only.
+
+    Combines cleanly with all other fn-decl modifiers (K1.AU pub,
+    K1.AV pub(crate), K1.AY unsafe, K1.AZ async, K1.BJ extern) --
+    see pub_const_fn sub-probe.
+
+    3 sub-probes (const-fn / pub-const-fn / const-fn-no-args) +
+    11 regression-guards covering plain const decls, all other
+    fn modifiers (unsafe / async / extern / pub combinations),
+    and prior K1.* features."""
+    cases = [
+        # K1.CY new cases
+        ("const_fn",         "const fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { add(40, 2) }",     42),
+        ("pub_const_fn",     "pub const fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { add(40, 2) }", 42),
+        ("const_fn_no_args", "const fn forty_two() -> i32 { 42 } fn main() -> i32 { forty_two() }",              42),
+
+        # Regression-guards: plain const decls still work (K1.Z)
+        ("plain_const",      "const N: i32 = 42; fn main() -> i32 { 42 }",                                       42),
+        ("const_with_expr",  "const X: i32 = 1 + 41; fn main() -> i32 { 42 }",                                   42),
+
+        # Regression-guards: other fn modifiers unchanged
+        ("unsafe_fn",        "unsafe fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { 42 }",          42),
+        ("async_fn",         "async fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { 42 }",           42),
+        ("extern_fn",        'extern "C" fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { 42 }',     42),
+        ("pub_extern_fn",    'pub extern "C" fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { 42 }', 42),
+        ("pub_async_fn",     "pub async fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { 42 }",      42),
+
+        # Other regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+        ("plain_static",     "static N: i32 = 42; fn main() -> i32 { 42 }",                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"const_fn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_impl_dyn_fn_param_self_host():
     """K1.CX (2026-05-26): `impl T` / `dyn T` modifier + `+ Bound`
     chain in fn-param type. Real Rust source patterns:

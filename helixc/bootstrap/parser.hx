@@ -9939,18 +9939,41 @@ fn parse_agent_decl(tok_base: i32, sb: i32) -> i32 {
 // lookup hook in parse_primary, which can land as a follow-up.
 fn parse_const_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'const' IDENT
-    let mut keep_c: i32 = 1;
-    while keep_c == 1 {
-        let ct = tok_tag(tok_base, cur_get(sb));
-        if ct == 12 {
-            keep_c = 0;
-        } else { if ct == 0 {
-            keep_c = 0;
-        } else {
-            cur_advance(sb);
-        }};
-    }
-    cur_advance(sb);                         // consume ';'
+    // K1.CY (2026-05-26): `const fn` is a fn-decl modifier, NOT a
+    // const-decl prefix. Peek for `fn` IDENT (2-byte: 102, 110)
+    // after `const`. If matched, return immediately as a no-op so
+    // parse_top can dispatch the next `fn` IDENT to parse_fn_decl
+    // normally. Without this, the skip-to-`;` loop below would
+    // consume the entire fn-decl + body (and beyond, until a real
+    // `;` somewhere), corrupting the parse state and causing a
+    // hang or trap.
+    let nxt_tok_cy = cur_get(sb);
+    let mut is_const_fn_cy: i32 = 0;
+    if tok_tag(tok_base, nxt_tok_cy) == 2 {
+        let nxt_s_cy = tok_p2(tok_base, nxt_tok_cy);
+        let nxt_l_cy = tok_p3(tok_base, nxt_tok_cy);
+        if nxt_l_cy == 2 {
+            if __arena_get(nxt_s_cy) == 102 {
+                if __arena_get(nxt_s_cy + 1) == 110 {
+                    is_const_fn_cy = 1;
+                };
+            };
+        };
+    };
+    if is_const_fn_cy == 0 {
+        let mut keep_c: i32 = 1;
+        while keep_c == 1 {
+            let ct = tok_tag(tok_base, cur_get(sb));
+            if ct == 12 {
+                keep_c = 0;
+            } else { if ct == 0 {
+                keep_c = 0;
+            } else {
+                cur_advance(sb);
+            }};
+        }
+        cur_advance(sb);                     // consume ';'
+    };
     mk_node(54, 0, 0, 0)
 }
 
