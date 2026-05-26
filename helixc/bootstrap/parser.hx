@@ -2564,7 +2564,37 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
     }
 }
 
+// K1.BC (2026-05-26): match the 4-byte IDENT "move" (bytes
+// 109, 111, 118, 101). Used by parse_primary to recognize the
+// `move ||` closure modifier. The bootstrap captures closure
+// vars by value already (cl_capture_tab persists copies via
+// the captures_persist region), so `move` is a parser-level
+// no-op -- the semantic is identical to a non-move closure.
+fn is_kw_move_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 4 {
+        if __arena_get(id_s) == 109 {
+            if __arena_get(id_s + 1) == 111 {
+                if __arena_get(id_s + 2) == 118 {
+                    if __arena_get(id_s + 3) == 101 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 fn parse_primary(tok_base: i32, sb: i32) -> i32 {
+    // K1.BC (2026-05-26): peek for `move` IDENT followed by `|`. If
+    // matched, consume `move` so the existing TK_PIPE arm below
+    // sees the closure as if there were no modifier. Capture-by-
+    // value is already the bootstrap's default closure semantic.
+    let mv_k = cur_get(sb);
+    if tok_tag(tok_base, mv_k) == 2 {
+        if is_kw_move_ident(tok_p2(tok_base, mv_k), tok_p3(tok_base, mv_k)) == 1 {
+            if tok_tag(tok_base, mv_k + 1) == 28 {  // next tok is TK_PIPE
+                cur_advance(sb);                     // consume 'move' IDENT
+            };
+        };
+    };
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
     if t == 5 {

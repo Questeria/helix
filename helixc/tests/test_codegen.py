@@ -8210,6 +8210,24 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_move_closure_self_host():
+    """K1.BC (2026-05-26): `move ||` closure modifier accepted as
+    parser-level no-op. The bootstrap captures closure vars by
+    value already (cl_capture_tab + captures_persist), so the
+    `move` keyword adds no semantic meaning. parse_primary now
+    peeks for `move` IDENT followed by TK_PIPE before falling
+    through to the existing TK_PIPE closure dispatch; if found,
+    consume `move` and continue normally. 3 sub-probes."""
+    cases = [
+        ("plain",   "fn main() -> i32 { let f = move || 42; f() }",                                          42),
+        ("capture", "fn main() -> i32 { let x: i32 = 42; let f = move || x; f() }",                          42),
+        ("arg_use", "fn main() -> i32 { let x: i32 = 40; let f = move |y: i32| x + y; f(2) }",                42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"move_cl_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_mut_param_self_host():
     """K1.BB (2026-05-26): `fn p(mut x: i32) { ... }` accepted as
     parser-level no-op. The bootstrap is type-erased and stores
