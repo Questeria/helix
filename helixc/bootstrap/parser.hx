@@ -8351,6 +8351,16 @@ fn parse_mod_decl(tok_base: i32, sb: i32, prefix_s: i32, prefix_l: i32) -> i32 {
     let mname_s = tok_p2(tok_base, nk);
     let mname_l = tok_p3(tok_base, nk);
     cur_advance(sb);                             // consume mod-name IDENT
+    // K1.BR (2026-05-26): external module declaration `mod name;`
+    // (Rust uses this to defer to a file `name.rs` / `name/mod.rs`).
+    // The bootstrap has no filesystem module loader -- the form is
+    // accepted-and-ignored. Peek for TK_SEMI (12) before consuming
+    // `{`; if found, consume `;` and return the no-op marker
+    // without walking an inner-items loop.
+    if tok_tag(tok_base, cur_get(sb)) == 12 {
+        cur_advance(sb);                         // consume ';'
+        return mk_node(54, 0, 0, 0);
+    };
     cur_advance(sb);                             // consume '{' (LBRACE = 5)
     // Build the new prefix `<prefix>__<mname>` (or just `<mname>` if no
     // prefix yet) once into the arena so we can pass (new_prefix_s, new_l)

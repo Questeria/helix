@@ -8245,6 +8245,38 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_external_mod_self_host():
+    """K1.BR (2026-05-26): external module declaration `mod
+    name;` (no body braces, terminated by `;`). Rust uses this
+    form to defer the module body to a sibling file -- e.g.
+    `mod foo;` resolves to `foo.rs` or `foo/mod.rs` at compile
+    time.
+
+    The bootstrap has no filesystem module loader; the form is
+    accepted-and-ignored at the parse level.
+
+    parse_mod_decl previously consumed `{` unconditionally
+    after the mod-name IDENT. For `mod external;`, the `;`
+    tripped the brace consume, leaving `;` in the stream and
+    K2 hung when the dispatch cascade got confused.
+
+    Fix: peek for TK_SEMI before the `{` consume; if found,
+    consume `;` and return the no-op marker early without
+    entering the inner-items walker.
+
+    4 sub-probes: bare external mod, then-fn, multiple
+    external mods, pub external mod."""
+    cases = [
+        ("bare",        "mod external; fn main() -> i32 { 42 }",                                                       42),
+        ("then_fn",     "mod external; fn helper() -> i32 { 42 } fn main() -> i32 { helper() }",                       42),
+        ("multi",       "mod foo; mod bar; mod baz; fn main() -> i32 { 42 }",                                          42),
+        ("pub_external","pub mod external; fn main() -> i32 { 42 }",                                                   42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"external_mod_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_extern_crate_self_host():
     """K1.BQ (2026-05-26): `extern crate name;` (Rust 2015-style
     crate import) accepted as no-op. consume_vis_modifiers's
