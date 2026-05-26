@@ -8210,6 +8210,24 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_mut_param_self_host():
+    """K1.BB (2026-05-26): `fn p(mut x: i32) { ... }` accepted as
+    parser-level no-op. The bootstrap is type-erased and stores
+    params in freely-reassignable slots already (no immutable-
+    parameter enforcement in Phase-0), so the `mut` modifier is
+    purely syntactic acceptance. parse_fn_decl's param loop now
+    peeks for the "mut" IDENT before reading the param-name
+    IDENT; if found, consume it. 3 sub-probes."""
+    cases = [
+        ("plain",    "fn p(mut x: i32) -> i32 { x } fn main() -> i32 { p(42) }",                                                 42),
+        ("multi",    "fn p(mut a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { p(40, 2) }",                                  42),
+        ("all_mut",  "fn p(mut a: i32, mut b: i32) -> i32 { a + b } fn main() -> i32 { p(20, 22) }",                             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"mut_param_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_pub_struct_field_self_host():
     """K1.BA (2026-05-26): visibility modifiers on struct fields
     (`pub x: i32`, `pub(crate) x: i32`) accepted as no-ops. The

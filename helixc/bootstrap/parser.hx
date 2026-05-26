@@ -7495,6 +7495,15 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         } else { if pt == 13 {
             cur_advance(sb);     // ','
         } else {
+            // K1.BB (2026-05-26): swallow leading `mut` on a parameter
+            // (`fn p(mut x: i32) { ... }`). The bootstrap is type-
+            // erased and stores params in slots that are freely re-
+            // assignable already, so the modifier is purely syntactic.
+            if tok_tag(tok_base, cur_get(sb)) == 2 {
+                if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                    cur_advance(sb);     // consume 'mut' IDENT
+                };
+            };
             let pname_tok = cur_get(sb);
             let pname_s = tok_p2(tok_base, pname_tok);
             let pname_l = tok_p3(tok_base, pname_tok);
