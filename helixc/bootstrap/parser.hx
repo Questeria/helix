@@ -2887,6 +2887,57 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     } else { if t == 2 {
         let id_start = tok_p2(tok_base, k);
         let id_len = tok_p3(tok_base, k);
+        // K1.CB (2026-05-26): macro call -- `IDENT! (...)`,
+        // `IDENT! [...]`, or `IDENT! {...}`. Common Rust constructs:
+        // println!, vec!, panic!, assert_eq!, dbg!, format!, eprintln!,
+        // etc. The bootstrap does not model macros; this is syntactic
+        // acceptance only. Consume IDENT, `!`, opening delimiter, then
+        // depth-balanced tokens to the matching closing delimiter, and
+        // the closing delimiter itself. Return AST_INT(0) as the
+        // placeholder value. Must precede ALL other IDENT-specific
+        // dispatch (grad_rev_all, grad, let/if/match keyword cascade,
+        // and the bare-IDENT call/var path) because the macro tail
+        // (`! (` / `! [` / `! {`) is distinctive and shouldn't be
+        // shadowed by any IDENT-name comparison.
+        //
+        // Tokens: `!` = TK_NOT = 18; `(` = TK_LPAREN = 3;
+        // `[` = TK_LBRACK = 20; `{` = TK_LBRACE = 5; `)` = TK_RPAREN = 4;
+        // `]` = TK_RBRACK = 21; `}` = TK_RBRACE = 6.
+        let mac_t1 = tok_tag(tok_base, k + 1);
+        let mac_t2 = tok_tag(tok_base, k + 2);
+        let is_macro_open = if mac_t2 == 3 { 1 }
+            else { if mac_t2 == 20 { 1 }
+            else { if mac_t2 == 5 { 1 } else { 0 } }};
+        let is_macro_call = if mac_t1 == 18 {
+            if is_macro_open == 1 { 1 } else { 0 }
+        } else { 0 };
+        if is_macro_call == 1 {
+            cur_advance(sb);                     // consume IDENT
+            cur_advance(sb);                     // consume '!'
+            let close_t_cb = if mac_t2 == 3 { 4 }
+                else { if mac_t2 == 20 { 21 }
+                else { 6 }};
+            cur_advance(sb);                     // consume opening delim
+            let mut m_depth_cb: i32 = 1;
+            while m_depth_cb > 0 {
+                let mt_cb = tok_tag(tok_base, cur_get(sb));
+                if mt_cb == mac_t2 {
+                    m_depth_cb = m_depth_cb + 1;
+                    cur_advance(sb);
+                } else { if mt_cb == close_t_cb {
+                    m_depth_cb = m_depth_cb - 1;
+                    if m_depth_cb > 0 {
+                        cur_advance(sb);
+                    };
+                } else { if mt_cb == 0 {
+                    m_depth_cb = 0;              // EOF safety
+                } else {
+                    cur_advance(sb);
+                }}};
+            }
+            cur_advance(sb);                     // consume closing delim
+            mk_node(0, 0, 0, 0)
+        } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
         // IDENT "grad_rev_all" is 12 bytes (103,114,97,100,95,114,101,
@@ -4696,6 +4747,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         }     // K1.AB (2026-05-25): +1 brace closes the new `unsafe` arm (same algebra as K1.H1)
         }     // K1.AC (2026-05-25): +1 brace closes the new `break` arm (same algebra as K1.AB)
         }     // K1.AD (2026-05-25): +1 brace closes the new `continue` arm (same algebra as K1.AC)
+        }     // K1.CB (2026-05-26): +1 brace closes the new macro-call `else { ...existing IDENT body... }` wrapper
     } else { if t == 3 {
         // Stage 4 iteration A: tuple literal vs parenthesized expr.
         // After the inner expr, peek for TK_COMMA (13). If found, this

@@ -8245,6 +8245,72 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_ident_bang_macro_self_host():
+    """K1.CB (2026-05-26): macro calls `IDENT! (...)`,
+    `IDENT! [...]`, and `IDENT! {...}` parse as no-op placeholders.
+    Common Rust constructs: println!, vec!, panic!, assert_eq!,
+    dbg!, format!, eprintln!, thread_local!, etc. Real Rust source
+    uses macros pervasively (every println!, every vec! literal,
+    every test's assert*!) so without this chunk a huge fraction
+    of real source trips the parser.
+
+    The bootstrap does not model macro expansion -- this is pure
+    syntactic acceptance. parse_primary's IDENT (t == 2) arm now
+    checks at entry whether the IDENT is followed by `!` (TK_NOT =
+    18) and then an opening delimiter `(` (TK_LPAREN = 3),
+    `[` (TK_LBRACK = 20), or `{` (TK_LBRACE = 5). If so, the entire
+    span -- IDENT, `!`, opening delim, depth-balanced contents,
+    closing delim -- is consumed, and AST_INT(0) is returned as
+    the placeholder value.
+
+    NOTE: the placeholder's "value" is always 0. Patterns like
+    `let x = dbg!(42); x` parse cleanly but the program's result
+    is 0 (the let stored the placeholder), not 42 (which would
+    require real macro expansion). The test cases below pin
+    *syntactic* acceptance only -- the program's overall result
+    comes from a tail expression that does not depend on the
+    macro's "return value".
+
+    Closing brace cascade: the new macro-detection arm wraps the
+    entire existing IDENT body (lines 2887-4698) in
+    `if is_macro_call { ... } else { ...existing... }`, which adds
+    one new close brace at the IDENT-cascade closer.
+
+    Tokens:
+      `!` = TK_NOT    = 18
+      `(` = TK_LPAREN =  3   `)` = TK_RPAREN =  4
+      `[` = TK_LBRACK = 20   `]` = TK_RBRACK = 21
+      `{` = TK_LBRACE =  5   `}` = TK_RBRACE =  6
+
+    8 sub-probes (3 paren-delim, 2 brack-delim, 2 brace-delim,
+    1 nested-macro) + 4 regression-guards."""
+    cases = [
+        # paren-delim macros
+        ("println_str",      'fn main() -> i32 { println!("hi"); 42 }',                                            42),
+        ("println_noarg",    'fn main() -> i32 { println!(); 42 }',                                                42),
+        ("assert_eq_two",    'fn main() -> i32 { assert_eq!(1, 1); 42 }',                                          42),
+        # brack-delim macros
+        ("vec_simple",       'fn main() -> i32 { let v = vec![1, 2, 3]; 42 }',                                     42),
+        ("vec_repeat",       'fn main() -> i32 { let v = vec![0; 10]; 42 }',                                       42),
+        # brace-delim macros
+        ("thread_local",     'fn main() -> i32 { thread_local!{ static X: i32 = 0; }; 42 }',                       42),
+        # multi-arg + format-string
+        ("printf_multi",     'fn main() -> i32 { println!("{} + {} = {}", 1, 2, 3); 42 }',                         42),
+        # nested macros
+        ("nested",           'fn main() -> i32 { let v = vec![vec![1, 2], vec![3, 4]]; 42 }',                      42),
+
+        # Regression-guards: plain calls, ne comparison, for-loops,
+        # range-of-7 still work.
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                                 42),
+        ("plain_fn_call",    "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                             42),
+        ("ne_compare",       "fn main() -> i32 { if 1 != 2 { 42 } else { 0 } }",                                   42),
+        ("for_range",        "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",            42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"macro_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_range_expr_in_let_self_host():
     """K1.CA (2026-05-26): range expressions in let-RHS position
     parse cleanly. Real Rust source uses range literals for
