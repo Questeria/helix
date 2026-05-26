@@ -8245,6 +8245,63 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_tuple_struct_ctor_self_host():
+    """K1.CM (2026-05-26): tuple-struct constructor call `P(args)`
+    where P is a registered tuple struct (declared by K1.BN's
+    `struct P(i32, i32);` syntax). Real Rust source uses tuple
+    structs pervasively (NewType wrappers, marker types with
+    payload, etc.).
+
+    Previously failed (rc=132) because parse_primary's IDENT-then-
+    `(` dispatch built AST_CALL for P, then codegen SIGILLed
+    looking up P as a fn.
+
+    Fix: in the nt == 3 (call) branch of parse_primary's IDENT
+    cascade, peek struct_tab_lookup_idx FIRST. If matched, parse
+    the args into a TUPLE_CONS chain (tag 51 cells) and emit
+    AST_TUPLE_LIT (tag 50) -- mirroring the K1.AJ struct-lit
+    `Pt { x: 10 }` path but for positional args. The existing
+    closure-call / __enum_payload / fn-call dispatch is bypassed
+    for matched structs.
+
+    Edge case: empty tuple-struct call `P()` is handled
+    specifically -- emits AST_TUPLE_LIT(0, 0, 0).
+
+    Arity validation is INTENTIONALLY skipped because K1.BN
+    (tuple-struct decl) does NOT populate struct_tab field_count
+    for tuple structs (it stays at 0). Real arity tracking is a
+    follow-up that extends K1.BN to count the paren-list fields.
+
+    set_last_struct_idx is called so the surrounding let-handler
+    can register the var as struct-typed (sharing the K1.AJ
+    struct-lit binding path).
+
+    5 sub-probes (pair, single, three-arg, in-assign, empty) +
+    8 regression-guards covering plain fn calls, unit struct,
+    struct field lit, and prior K1.* features."""
+    cases = [
+        # K1.CM new cases
+        ("pair",             "struct P(i32, i32); fn main() -> i32 { let p = P(40, 2); 42 }",                   42),
+        ("single",           "struct W(i32); fn main() -> i32 { let w = W(42); 42 }",                           42),
+        ("three_arg",        "struct T(i32, i32, i32); fn main() -> i32 { let t = T(10, 20, 12); 42 }",        42),
+        ("in_assign",        "struct P(i32, i32); fn main() -> i32 { let p = P(1, 2); 42 }",                   42),
+        ("empty",            "struct E(); fn main() -> i32 { let e = E(); 42 }",                                42),
+
+        # Regression-guards
+        ("plain_fn_call",    "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                          42),
+        ("plain_fn_two",     "fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { add(40, 2) }",         42),
+        ("unit_struct",      "struct P; fn main() -> i32 { let p = P; 42 }",                                    42),
+        ("struct_field_lit", "struct Pt { x: i32, y: i32 } fn main() -> i32 { let p = Pt { x: 42, y: 0 }; p.x }", 42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("macro_call",       'fn main() -> i32 { println!("hi"); 42 }',                                         42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"tuple_ctor_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_match_leading_bar_self_host():
     """K1.CL (2026-05-26): optional leading `|` in match arm
     patterns (rustfmt style). rustfmt formats long match arms

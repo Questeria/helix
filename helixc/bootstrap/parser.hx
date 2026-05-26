@@ -4621,6 +4621,69 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     mk_node(11, id_start, id_len, value)
                 }
             } else { if nt == 3 {
+                // K1.CM (2026-05-26): tuple-struct constructor call
+                // `P(arg1, arg2)` where P is a registered tuple struct
+                // (declared by K1.BN's `struct P(i32, i32);` syntax).
+                // Build AST_TUPLE_LIT (tag 50) instead of AST_CALL --
+                // tuple structs lower to positional tuples, sharing
+                // the existing AST_TUPLE_LIT / AST_TUPLE_FIELD codegen
+                // path. Mirrors the K1.AJ struct-lit `Pt { x: 10 }`
+                // path but for positional args.
+                //
+                // Check struct_tab_lookup_idx FIRST so the closure-call
+                // / fn-call dispatch below is bypassed for matched
+                // structs. If unmatched, fall through to the existing
+                // call logic.
+                let ts_idx_cm = struct_tab_lookup_idx(sb, id_start, id_len);
+                let ts_arity_cm = if ts_idx_cm >= 0 {
+                    let ts_entry = struct_tab_base(sb) + ts_idx_cm * 4;
+                    __arena_get(ts_entry + 2)
+                } else { 0 - 1 };
+                if ts_idx_cm >= 0 {
+                    cur_advance(sb);                     // consume '('
+                    // Empty tuple-struct `P()` -- arity 0.
+                    let ts_first = tok_tag(tok_base, cur_get(sb));
+                    if ts_first == 4 {
+                        cur_advance(sb);                 // consume ')'
+                        set_last_struct_idx(sb, ts_idx_cm);
+                        mk_node(50, 0, 0, 0)
+                    } else {
+                        let ts_first_v = parse_expr_basic(tok_base, sb);
+                        let mut ts_head: i32 = mk_node(51, ts_first_v, 0, 0);
+                        let mut ts_tail: i32 = ts_head;
+                        let mut ts_n: i32 = 1;
+                        let mut ts_keep: i32 = 1;
+                        while ts_keep == 1 {
+                            let ts_t = tok_tag(tok_base, cur_get(sb));
+                            if ts_t == 13 {              // ','
+                                cur_advance(sb);
+                                let ts_t2 = tok_tag(tok_base, cur_get(sb));
+                                if ts_t2 == 4 {           // trailing ','
+                                    ts_keep = 0;
+                                } else {
+                                    let ts_v = parse_expr_basic(tok_base, sb);
+                                    let ts_new = mk_node(51, ts_v, 0, 0);
+                                    __arena_set(ts_tail + 2, ts_new);
+                                    ts_tail = ts_new;
+                                    ts_n = ts_n + 1;
+                                };
+                            } else {
+                                ts_keep = 0;
+                            };
+                        }
+                        cur_advance(sb);                 // consume ')'
+                        set_last_struct_idx(sb, ts_idx_cm);
+                        // NOTE: arity validation skipped. K1.BN
+                        // (tuple-struct decl) does NOT populate
+                        // struct_tab field_count for tuple structs --
+                        // it stays at 0. Validating ts_n != ts_arity_cm
+                        // would falsely trap every multi-arg tuple-
+                        // struct constructor. Real arity tracking is a
+                        // follow-up that extends K1.BN to count the
+                        // paren-list fields.
+                        mk_node(50, ts_n, ts_head, 0)
+                    }
+                } else {
                 // CALL: name(arg1, arg2, ...). Args become AST_ARG
                 // linked list; head index goes in CALL.p3 (or 0 if
                 // no args).
@@ -4756,6 +4819,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     }
                 }
                 }     // Stage 9: close `if cl_entry_idx >= 0 { ... } else { ... }`
+                }     // K1.CM (2026-05-26): close `if ts_idx_cm >= 0 { ... } else { ...existing call dispatch... }`
             } else { if nt == 16 {
                 // Stage 28.11 INC-3b.2: IDENT followed by `<` may be
                 // either (a) a generic struct use `Pt<i32> { 10, 32 }`
