@@ -1905,6 +1905,20 @@ fn parse_expr(tok_base: i32, sb: i32) -> i32 {
         else { if first_tag == 12 { 1 } else { 0 }}}};
     if kt == 12 {     // 12 = TK_SEMI
         cur_advance(sb);
+        // K1.BX (2026-05-26): tolerate multiple consecutive `;`s as
+        // a no-op statement separator. Real Rust source occasionally
+        // emits `;;` (e.g., after macro expansion or empty-statement
+        // separators); the bootstrap previously tripped on the
+        // second `;` because parse_expr_basic doesn't know how to
+        // start a value parse from TK_SEMI.
+        let mut keep_extra_semi: i32 = 1;
+        while keep_extra_semi == 1 {
+            if tok_tag(tok_base, cur_get(sb)) == 12 {
+                cur_advance(sb);                 // consume extra ';'
+            } else {
+                keep_extra_semi = 0;
+            };
+        }
         // Don't chain `;` if the next token signals end-of-block
         // (the `;` was just a terminator after a statement-like
         // expression). End-of-block tokens: `}` (6), EOF (0), `)` (4).
@@ -3343,6 +3357,21 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_set(sb + 59, 0);
             };
             cur_advance(sb);     // ';'
+            // K1.BX (2026-05-26): skip any additional consecutive
+            // `;` tokens before the body parse. Pairs with the
+            // parse_expr `;` handler that already chains extra
+            // semis, but the let path consumes the FIRST `;` itself
+            // and then calls parse_expr; if the body starts with a
+            // second `;`, parse_expr_basic trips because it can't
+            // start a value parse from TK_SEMI.
+            let mut keep_let_semi: i32 = 1;
+            while keep_let_semi == 1 {
+                if tok_tag(tok_base, cur_get(sb)) == 12 {
+                    cur_advance(sb);                 // consume extra ';'
+                } else {
+                    keep_let_semi = 0;
+                };
+            }
             let body = parse_expr(tok_base, sb);
             // Audit-14: AST_LET / AST_LET_MUT used to pack
             // `value_idx * 65536 + body_idx` into p3, but arena

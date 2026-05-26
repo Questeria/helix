@@ -8245,6 +8245,31 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_double_semi_self_host():
+    """K1.BX (2026-05-26): multiple consecutive `;` tokens
+    inside a fn body parse cleanly. parse_expr's TK_SEMI
+    handler previously recursed into parse_expr after one
+    `;`; if the next token was also `;`, parse_expr_basic
+    tripped because it doesn't know how to start a value
+    parse from TK_SEMI.
+
+    Fix: after consuming a `;`, run a while loop that
+    consumes any additional consecutive `;` tokens before
+    deciding whether to chain a recursive parse or stop at
+    `}` / EOF / `)`.
+
+    4 sub-probes."""
+    cases = [
+        ("two",       "fn main() -> i32 { let x = 42;; x }",                                       42),
+        ("three",     "fn main() -> i32 { let x = 42;;; x }",                                      42),
+        ("between",   "fn main() -> i32 { let a = 1;; let b = 41;; a + b }",                       42),
+        ("trailing",  "fn main() -> i32 { let x = 42;;; }",                                        0),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"double_semi_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_leading_semi_in_body_self_host():
     """K1.BW (2026-05-26): leading `;` tokens in a fn body
     are skipped. `fn p() { ; }`, `fn p() { ;;; }`, and
