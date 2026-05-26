@@ -8245,6 +8245,67 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_struct_amp_field_self_host():
+    """K1.DU (2026-05-26): `&T` (with optional lifetime + mut) and
+    `<...>` generic args in struct field type position. Real Rust
+    uses these for borrowing references stored in structs:
+
+      struct S { v: &'static str }
+      struct S<'a> { v: &'a i32 }
+      struct S { v: &Vec<i32> }
+      struct S { v: &Box<dyn T> }
+      struct S { v: HashMap<K, V> }
+
+    Previously SIGILL'd / hung (TIMEOUT) because the field-type
+    parser unconditionally consumed an IDENT. For `&T` shape, the
+    cursor at `&` (TK_AMP = 27) was not consumed, the IDENT
+    consume grabbed `&` as junk, and downstream parsing broke.
+    For `Vec<i32>` shape, the IDENT was captured but the `<i32>`
+    was left in the stream where the field-loop's next iteration
+    mis-treated `<` as the start of a new field.
+
+    Two-part fix in parse_struct_decl's field-loop:
+
+      (1) Before the field-type IDENT capture, peek for TK_AMP (27).
+          If matched, consume `&` + optional lifetime IDENT (one
+          IDENT before the type IDENT if it's not `mut`) + optional
+          `mut` IDENT. Mirror of K1.DR / K1.DT `&T` handling.
+
+      (2) After the field-type IDENT capture, peek for `<` (TK_LT =
+          16). If matched, consume `<...>` depth-balanced with K1.CZ
+          prev_minus tracking for `->` inside generics. Mirror of
+          K1.DS / K1.DT pattern.
+
+    The bootstrap is type-erased; `&T` and generic args collapse
+    away. The IDENT bytes captured before the `<...>` skip are
+    used for struct_tab_lookup_idx so nested struct types still
+    resolve correctly.
+
+    8 sub-probes + 5 regression-guards covering plain field types,
+    no-field unit struct, plain let."""
+    cases = [
+        # K1.DU new cases
+        ("struct_amp_i32",          "struct S { v: &i32 } fn main() -> i32 { 42 }",                                          42),
+        ("struct_amp_static",       "struct S { v: &'static i32 } fn main() -> i32 { 42 }",                                  42),
+        ("struct_amp_lt",           "struct S<'a> { v: &'a i32 } fn main() -> i32 { 42 }",                                   42),
+        ("struct_amp_mut",          "struct S { v: &mut i32 } fn main() -> i32 { 42 }",                                      42),
+        ("struct_amp_vec",          "struct S { v: &Vec<i32> } fn main() -> i32 { 42 }",                                     42),
+        ("struct_amp_box_dyn",      "trait T {} struct S { v: &Box<dyn T> } fn main() -> i32 { 42 }",                        42),
+        ("struct_static_str",       "struct S { v: &'static str } fn main() -> i32 { 42 }",                                  42),
+        ("struct_two_fields_amp",   "struct S { a: &i32, b: i32 } fn main() -> i32 { 42 }",                                  42),
+
+        # Regression-guards
+        ("struct_i32_field",        "struct S { v: i32 } fn main() -> i32 { 42 }",                                            42),
+        ("struct_vec_field",        "struct S { v: Vec<i32> } fn main() -> i32 { 42 }",                                       42),
+        ("struct_box_field",        "struct S { v: Box<i32> } fn main() -> i32 { 42 }",                                       42),
+        ("struct_no_field",         "struct M; fn main() -> i32 { 42 }",                                                       42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                                     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"struct_amp_field_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_impl_method_amp_ret_self_host():
     """K1.DT (2026-05-26): `&T` (with optional lifetime + mut) and
     optional `<...>` generic args after the type IDENT in impl-

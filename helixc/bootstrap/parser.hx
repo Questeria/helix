@@ -11204,12 +11204,89 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             let f_name_l = tok_p3(tok_base, fk);
             cur_advance(sb);                 // field-name IDENT
             cur_advance(sb);                 // ':' (COLON = 14)
+            // K1.DU (2026-05-26): `&T` / `&'lt T` / `&mut T` /
+            // `&'lt mut T` in struct field type. Real Rust uses
+            // these for borrowing references stored in structs:
+            //   struct S { v: &'static str }
+            //   struct S { v: &Vec<i32> }
+            //   struct S<'a> { v: &'a i32 }
+            //
+            // Previously SIGILL'd / hung (TIMEOUT) because the
+            // field-type parser unconditionally consumed an IDENT.
+            // For `&T` shape, the cursor at `&` (TK_AMP = 27) was
+            // not consumed, the IDENT consume grabbed `&` as junk,
+            // and downstream parsing broke.
+            //
+            // Fix: mirror K1.DR/K1.DT `&T` handling. Before the IDENT
+            // capture, peek for TK_AMP (27). If matched, consume `&`
+            // + optional lifetime IDENT + optional `mut` IDENT. The
+            // following IDENT capture then picks up the actual type
+            // IDENT.
+            if tok_tag(tok_base, cur_get(sb)) == 27 {
+                cur_advance(sb);             // consume '&'
+                // Optional lifetime IDENT.
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    let nxt_t_du = tok_tag(tok_base, cur_get(sb) + 1);
+                    let is_ty_start_du = if nxt_t_du == 2 { 1 }
+                        else { if nxt_t_du == 20 { 1 }
+                        else { if nxt_t_du == 9 { 1 }
+                        else { if nxt_t_du == 3 { 1 }
+                        else { 0 } } } };
+                    if is_ty_start_du == 1 {
+                        let lt_s_du = tok_p2(tok_base, cur_get(sb));
+                        let lt_l_du = tok_p3(tok_base, cur_get(sb));
+                        if byte_eq(lt_s_du, lt_l_du, kw_mut_s(sb), kw_mut_n(sb)) == 0 {
+                            cur_advance(sb); // consume lifetime IDENT
+                        };
+                    };
+                };
+                // Optional `mut` IDENT.
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                        cur_advance(sb);     // consume 'mut'
+                    };
+                };
+            };
             // Iter D: capture type IDENT bytes BEFORE advancing so we
             // can resolve nested struct types via struct_tab_lookup_idx.
             let tk = cur_get(sb);
             let t_s = tok_p2(tok_base, tk);
             let t_l = tok_p3(tok_base, tk);
             cur_advance(sb);                 // consume type IDENT
+            // K1.DU (2026-05-26): optional `<...>` generic args after
+            // the field-type IDENT (e.g. `v: &Vec<i32>` or
+            // `m: HashMap<K, V>`). Mirror of K1.DS / K1.DT pattern.
+            if tok_tag(tok_base, cur_get(sb)) == 16 {
+                cur_advance(sb);             // consume '<'
+                let mut g_depth_du: i32 = 1;
+                let mut prev_minus_du: i32 = 0;
+                while g_depth_du > 0 {
+                    let gt_du = tok_tag(tok_base, cur_get(sb));
+                    if gt_du == 16 {
+                        g_depth_du = g_depth_du + 1;
+                        prev_minus_du = 0;
+                    } else { if gt_du == 17 {
+                        if prev_minus_du == 1 {
+                            prev_minus_du = 0;
+                        } else {
+                            g_depth_du = g_depth_du - 1;
+                        };
+                    } else { if gt_du == 31 {
+                        g_depth_du = g_depth_du - 2;
+                        prev_minus_du = 0;
+                    } else { if gt_du == 0 {
+                        g_depth_du = 0;
+                    } else { if gt_du == 8 {
+                        prev_minus_du = 1;
+                    } else {
+                        prev_minus_du = 0;
+                    }}}}};
+                    if g_depth_du > 0 {
+                        cur_advance(sb);
+                    };
+                }
+                cur_advance(sb);             // consume final '>' / '>>'
+            };
             // Stage 28.11 INCREMENT 3a: field-type encoding for
             // generic structs. If the field type IDENT matches a
             // generic-param name registered in gp_tab during the
