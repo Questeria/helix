@@ -8210,6 +8210,40 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_break_with_value_self_host():
+    """K1.BG (2026-05-26): `break <value>` propagates the value
+    through the loop expression. Previously bare `break` was
+    the only accepted form (K1.AC), and the loop expression
+    always evaluated to 0 because the end_label landed on a
+    trailing `mov eax, 0`.
+
+    Parser change: parse_break peeks for TK_SEMI / TK_RBRACE
+    after `break`; if absent, parse_expr_basic captures the
+    value into AST_BREAK's p1 slot.
+
+    Codegen changes:
+      - AST_BREAK with p1 != 0 evals the value expr into rax
+        before the jmp. With p1 == 0 emits `mov eax, 0` so
+        bare `break;` matches the fall-through default.
+      - AST_WHILE splits the loop exit into two labels: the
+        cond-false fall-through still hits `mov eax, 0`, but
+        break-jumps now target end_label AFTER the mov so the
+        eval'd value in rax survives across the loop exit.
+
+    4 sub-probes pinning the new semantics and the
+    fall-through default.
+    """
+    cases = [
+        ("simple_val",   "fn main() -> i32 { let x = loop { break 42; }; x }",                                                    42),
+        ("expr_val",     "fn main() -> i32 { let x = loop { break 40 + 2; }; x }",                                                42),
+        ("cond_break",   "fn main() -> i32 { let mut i: i32 = 0; let x = loop { if i == 42 { break i; }; i = i + 1; }; x }",       42),
+        ("bare_break",   "fn main() -> i32 { let mut x: i32 = 0; loop { x = 42; break; }; x }",                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"break_val_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_inherent_impl_self_host():
     """K1.BF (2026-05-26): inherent `impl Type { methods }` (no
     `for Trait`) accepted. parse_impl_block previously consumed

@@ -6870,10 +6870,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let je_disp = emit_je_rel32_placeholder();
         let n_body = emit_ast_code(p2, bind_state, patch_state, bn_state);
         let jmp_disp = emit_jmp_rel32_placeholder();
-        let end_label = __arena_len();
-        patch_rel32(je_disp, end_label);
+        // K1.BG (2026-05-26): split loop-exit into two labels so
+        // `break <value>` preserves rax across the exit:
+        //   fallthrough_label: cond=false lands here, runs `mov eax,0`
+        //   end_label:         break targets here, AFTER the mov
+        // For bare `break;` AST_BREAK emits `mov eax, 0` itself so
+        // the fall-through and bare-break paths produce identical
+        // values (0) when no explicit break-value was supplied.
+        let fallthrough_label = __arena_len();
+        patch_rel32(je_disp, fallthrough_label);
         patch_rel32(jmp_disp, loop_top);
-        // K1.AC: walk + patch the break-chain (target = end_label).
+        let n_zero = emit_ast_int(0);
+        let end_label = __arena_len();
+        // K1.AC: walk + patch the break-chain (target = end_label,
+        // which is now AFTER the fall-through mov eax, 0).
         let mut bk_cur: i32 = bn_break_chain_head_s(bn_state);
         while bk_cur != 0 {
             let bk_pos = __arena_get(bk_cur);
@@ -6891,7 +6901,6 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             ct_cur = ct_next;
         }
         bn_set_continue_chain_head_s(bn_state, saved_cont_head);
-        let n_zero = emit_ast_int(0);
         n_cond + n_test + 6 + n_body + 5 + n_zero
     } else { if t == 77 {
         // K1.AC (2026-05-25): AST_BREAK -- emit `jmp rel32`
@@ -6900,18 +6909,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // chain at loop-end-codegen and patches each jmp_pos to
         // its end_label. The chain cell layout is two arena
         // slots: cell+0 = jmp_pos, cell+1 = next (0 = end).
+        //
+        // K1.BG (2026-05-26): if p1 != 0, eval the break value
+        // into rax BEFORE the jmp so the loop expression sees
+        // it after the break-chain backpatch (the AST_WHILE end
+        // label now sits AFTER the fall-through `mov eax, 0`).
+        // For bare `break;` (p1 == 0) emit `mov eax, 0` to
+        // leave the loop value at 0 like the fall-through case.
+        let n_val = if p1 == 0 {
+            emit_ast_int(0)
+        } else {
+            emit_ast_code(p1, bind_state, patch_state, bn_state)
+        };
         let jmp_pos = emit_jmp_rel32_placeholder();
         let cell_addr = __arena_len();
         let prev_head = bn_break_chain_head_s(bn_state);
         __arena_push(jmp_pos);
         __arena_push(prev_head);
         bn_set_break_chain_head_s(bn_state, cell_addr);
-        // Return value is meaningless (execution never reaches the
-        // code after a break) but emit_ast_int(0) keeps the
-        // byte-count bookkeeping consistent with other arms that
-        // return a value -- AST_WHILE doesn't need an extra mov
-        // because the jmp transfers control unconditionally.
-        5
+        n_val + 5
     } else { if t == 78 {
         // K1.AD (2026-05-25): AST_CONTINUE -- emit `jmp rel32`
         // placeholder; record (jmp_pos, prev_head) onto the

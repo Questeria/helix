@@ -9386,12 +9386,41 @@ fn parse_loop(tok_base: i32, sb: i32) -> i32 {
 // enclosing loop. Emits AST_BREAK (tag 77); codegen in kovc.hx
 // walks a per-loop chain on bn_state slot 157 (moved from 122
 // by K1.AD) and patches each jmp to the AST_WHILE's end_label.
-// Phase-0 form is bare `break` only (no `break <value>`); the
-// optional-value form is a separate gap. Mirrors parse_loop's
-// terseness.
+//
+// K1.BG (2026-05-26): now accepts the optional value form
+// `break <expr>` so `let x = loop { break 42; }` evaluates
+// to 42. Peek the token after 'break': if it's a terminator
+// (TK_SEMI=12, TK_RBRACE=6), emit AST_BREAK with p1=0 (the
+// no-value form, codegen emits `mov eax, 0` for the value
+// slot). Otherwise parse_expr_basic for the value -- store
+// in p1. parse_expr_basic (not parse_expr) avoids absorbing
+// the trailing `;` into the break value.
 fn parse_break(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                              // consume 'break' IDENT
-    mk_node(77, 0, 0, 0)
+    // K1.BG (2026-05-26): bare `break` is signaled by any of these
+    // terminator-like tokens immediately after the keyword:
+    //   TK_SEMI    (12)  -- `break;`
+    //   TK_RBRACE  (6)   -- `break }`
+    //   TK_COMMA   (13)  -- `break,` (inside a match arm tail)
+    //   TK_RPAREN  (4)   -- `break )` (rare, inside paren expr)
+    //   TK_EOF     (0)   -- safety net
+    // Anything else -> parse the value expression with parse_expr_basic
+    // (NOT parse_expr -- avoid absorbing trailing `;` into the value).
+    let after_t = tok_tag(tok_base, cur_get(sb));
+    if after_t == 12 {
+        mk_node(77, 0, 0, 0)
+    } else { if after_t == 6 {
+        mk_node(77, 0, 0, 0)
+    } else { if after_t == 13 {
+        mk_node(77, 0, 0, 0)
+    } else { if after_t == 4 {
+        mk_node(77, 0, 0, 0)
+    } else { if after_t == 0 {
+        mk_node(77, 0, 0, 0)
+    } else {
+        let value = parse_expr_basic(tok_base, sb);
+        mk_node(77, value, 0, 0)
+    }}}}}
 }
 
 // K1.AD (2026-05-25): `continue` -- restart innermost enclosing
