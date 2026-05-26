@@ -8245,6 +8245,57 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_prefixed_string_literals_self_host():
+    """K1.CK (2026-05-26): prefixed string literals `b"..."`,
+    `r"..."`, `c"..."` parse as regular string literals. Common
+    in Rust source for byte strings (`b"GET /\\r\\n"`), raw
+    strings (`r"C:\\path"`), and Rust 2021+ C strings.
+
+    Previously failed (rc=132) because the lexer treated the
+    prefix byte (`b`, `r`, `c`) as a 1-byte IDENT and the
+    following `"..."` as a separate STRLIT. The parser then
+    tripped on IDENT-then-STRLIT in expression position.
+
+    Implementation: in the main lex loop, when the current byte
+    is alphabetic AND matches `b` (98) / `r` (114) / `c` (99)
+    AND the next byte is `"` (34), call lex_string at `pos + 1`
+    to skip the prefix. The result is a regular TK_STRLIT (tag
+    25) with body bytes verbatim. The bootstrap does NOT
+    distinguish byte / raw / cstring kinds; this is syntactic
+    acceptance only.
+
+    LIMITATION: raw strings with `#` hashes (`r#"..."#`) are
+    NOT supported. Real Rust raw-string escaping with arbitrary
+    quote nesting is a separate Cat-2 gap.
+
+    5 sub-probes (3 prefix kinds + 2 short / single-char) + 8
+    regression-guards covering plain strings, plain `b`/`r`/`c`
+    IDENTs (must still work as var names when NOT followed by
+    `"`), and prior K1.* features."""
+    cases = [
+        # K1.CK new cases
+        ("byte_str",         'fn main() -> i32 { let s = b"hello"; 42 }',                                       42),
+        ("raw_str",          'fn main() -> i32 { let s = r"hello"; 42 }',                                       42),
+        ("c_str",            'fn main() -> i32 { let s = c"hello"; 42 }',                                       42),
+        ("byte_empty",       'fn main() -> i32 { let s = b""; 42 }',                                            42),
+        ("raw_single_char",  'fn main() -> i32 { let s = r"a"; 42 }',                                           42),
+
+        # Regression-guards: plain `b`/`r`/`c` as var names still work
+        ("plain_string",     'fn main() -> i32 { let s = "hello"; 42 }',                                        42),
+        ("plain_b_var",      "fn main() -> i32 { let b = 42; b }",                                              42),
+        ("plain_r_var",      "fn main() -> i32 { let r = 42; r }",                                              42),
+        ("plain_c_var",      "fn main() -> i32 { let c = 42; c }",                                              42),
+        # Other K1.* features unchanged
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("macro_call",       'fn main() -> i32 { println!("hi"); 42 }',                                         42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"pfx_str_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_let_variant_pattern_self_host():
     """K1.CJ (2026-05-26): enum-variant let-pattern destructure
     `let Some(_) = expr;` and `let Result::Ok(_) = expr;`. Extends

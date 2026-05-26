@@ -829,7 +829,33 @@ fn lex(src_start: i32, src_len: i32) -> i32 {
         } else { if is_digit(b) == 1 {
             pos = lex_int(src_start, src_len, pos);
         } else { if is_alpha(b) == 1 {
-            pos = lex_ident(src_start, src_len, pos);
+            // K1.CK (2026-05-26): prefixed string literals
+            // `b"..."` (byte string), `r"..."` (raw string), and
+            // `c"..."` (C string, Rust 2021+). The prefix is a
+            // single alphabetic byte that is IMMEDIATELY followed
+            // by `"` (no space between). Without this special-
+            // casing, `b` / `r` / `c` lex as 1-byte IDENTs and the
+            // following `"..."` lexes as a separate STRLIT, which
+            // makes the parser trip when it sees IDENT-then-STRLIT
+            // in expression position. The bootstrap does not model
+            // byte / raw / cstring distinctions; they all decay to
+            // TK_STRLIT (tag 25) with the body bytes verbatim.
+            //
+            // Detection: b == 98 ('b') OR b == 114 ('r') OR
+            // b == 99 ('c'); AND the next byte exists; AND the
+            // next byte is 34 ('"'). On match, skip the prefix
+            // byte by passing pos+1 to lex_string.
+            let next_byte_ck = if pos + 1 < end { __arena_get(pos + 1) } else { 0 };
+            let is_str_pfx_kw = if next_byte_ck == 34 {
+                if b == 98 { 1 }
+                else { if b == 114 { 1 }
+                else { if b == 99 { 1 } else { 0 } } }
+            } else { 0 };
+            if is_str_pfx_kw == 1 {
+                pos = lex_string(src_start, src_len, pos + 1);
+            } else {
+                pos = lex_ident(src_start, src_len, pos);
+            };
         } else { if b == 34 {
             // '"' — string literal.
             pos = lex_string(src_start, src_len, pos);
