@@ -8245,6 +8245,67 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_unit_struct_value_self_host():
+    """K1.CI (2026-05-26): bare-IDENT reference to a registered
+    struct (typically a unit struct like `struct P;`) parses as
+    AST_INT(0) placeholder. Common Rust idiom:
+
+      struct P;
+      let p = P;             // unit-struct instantiation
+      impl P { fn new() -> P { P } }   // returning P value
+
+    Previously failed (rc=132) because parse_primary's bottom
+    var-ref fall-through called mk_var_with_capture, which emits
+    AST_VAR(P). Codegen then SIGILLed because P isn't a registered
+    local var or fn name.
+
+    Fix: at the bottom var-ref fall-through (after all the special
+    enum / turbofish / typed-call / path-call / nt==16 / nt==5
+    branches), peek struct_tab_lookup_idx. If the IDENT matches a
+    registered struct, emit AST_INT(0) as the unit-struct value
+    placeholder. The surrounding let-binding then registers the
+    var as i32-typed (val_tag = AST_INT = 0). Subsequent uses
+    treat it as i32 (value 0). Real struct-value semantics (where
+    field access on a struct works post-binding) is a Cat-2 gap.
+
+    NOTE: fns DECLARED with struct return type but emitting
+    AST_INT(0) (e.g., `fn id() -> P { P }` called as `id()`) still
+    fail because of ABI mismatch in the return path. That's a
+    deeper Cat-2 issue beyond this chunk. The test cases pin the
+    cases where the placeholder is consumed in let-binding or
+    direct expression context.
+
+    The var-ref path inside other arms (nt==16, nt==5 fallthrough,
+    etc.) is unchanged because those arms have specific semantics
+    where unit-struct interpretation would be wrong (e.g., nt==5
+    is `IDENT {` for struct lit; nt==16 is `IDENT <` for generic).
+
+    4 sub-probes + 9 regression-guards covering var-refs and
+    struct lits + all prior K1.* features."""
+    cases = [
+        # K1.CI new cases
+        ("in_let",               "struct P; fn main() -> i32 { let p = P; 42 }",                                    42),
+        ("in_impl_method",       "struct P; impl P { fn new() -> P { P } } fn main() -> i32 { let p = P::new(); 42 }", 42),
+        ("two_structs",          "struct A; struct B; fn main() -> i32 { let a = A; let b = B; 42 }",               42),
+        ("then_expr",            "struct P; fn main() -> i32 { let _p = P; let x = 42; x }",                        42),
+
+        # Regression-guards: var refs and struct lits unchanged
+        ("plain_var",            "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("plain_fn_call",        "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(42) }",                          42),
+        ("struct_lit",           "struct Pt { x: i32, y: i32 } fn main() -> i32 { let p = Pt { x: 42, y: 0 }; p.x }", 42),
+        # All prior K1.* features unchanged
+        ("range_let",            "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",               "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("nested_fn",            "fn main() -> i32 { fn helper() -> i32 { 0 } 42 }",                                42),
+        ("for_loop",             "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+        ("ref_pattern",          "fn main() -> i32 { let x = 42; match x { ref _r => 42 } }",                       42),
+        ("macro_call",           'fn main() -> i32 { println!("hi"); 42 }',                                         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"unit_struct_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_ref_pattern_modifier_self_host():
     """K1.CH (2026-05-26): `ref` / `ref mut` pattern modifier in
     match arms and other pattern positions. Common Rust idiom for

@@ -5166,7 +5166,26 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 }
             } else {
                 // Var ref
-                mk_var_with_capture(sb, id_start, id_len)
+                // K1.CI (2026-05-26): if the IDENT matches a
+                // registered struct (typically a unit struct
+                // like `struct P;`), emit AST_INT(0) as the
+                // unit-struct value placeholder. The bootstrap
+                // is type-erased and doesn't distinguish unit /
+                // tuple / payload structs at the AST level, so
+                // unit-struct usages like `let p = P;` and
+                // `fn new() -> P { P }` previously SIGILLed at
+                // codegen because P isn't a registered local
+                // var. The placeholder lets the surrounding
+                // let-binding / fn-return succeed; the variable
+                // is now i32-typed with value 0. Real struct-
+                // value semantics (field access on a unit struct
+                // is itself a no-op) is a separate Cat-2 gap.
+                let unit_s_idx_ci = struct_tab_lookup_idx(sb, id_start, id_len);
+                if unit_s_idx_ci >= 0 {
+                    mk_node(0, 0, 0, 0)
+                } else {
+                    mk_var_with_capture(sb, id_start, id_len)
+                }
             }}}}     // Stage 28.11 INC-3b.2: extra `}` closes the new nt==16 branch
             }     // K1.U (2026-05-25): +1 brace closes the new compound_op wrapper around the inner nt-dispatch
             }}}}}     // Stage 8.5C + Stage 10: extra '}}' closes is_typed_call_active + is_path_call wrappers
