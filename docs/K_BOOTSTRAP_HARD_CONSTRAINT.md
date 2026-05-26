@@ -127,6 +127,38 @@ Specifically:
    "Python actually deleted". K4 is intentionally a manual
    step.
 
+## Parser-saturation milestone (2026-05-26, K_BOOTSTRAP_CHUNKS_DONE=156)
+
+As of K1.DV (commit `c3096b7`), the bootstrap parser's surface for
+**type-binding positions** is closed. The `&T` + `<...>` template
+(reference type with optional lifetime + mut, plus optional generic
+args after the type IDENT) is consistently applied across all 6
+parser sites where a type can appear:
+
+  1. **K1.S / K1.DS** — let-type position (`let v: &Vec<i32>`).
+  2. **K1.BD / K1.CT** — top-level fn-param type (`fn f(v: &Vec<i32>)`).
+  3. **K1.DR** — top-level fn-return type (`fn f() -> &Vec<i32>`).
+  4. **K1.DT** — impl-method-return type (`impl S { fn x() -> &Vec<i32> }`).
+  5. **K1.DU** — struct field type (`struct S { v: &Vec<i32> }`).
+  6. **K1.DV** — impl-method-param type (`impl S { fn x(v: &Vec<i32>) }`).
+  7. **K1.BN-extra** — enum variant payload type (`enum E { A(&Vec<i32>) }`)
+     was already covered by K1.BN's paren-balanced scan.
+
+Verification probes (2026-05-26 post-K1.DV) covering 23 separate
+type-position shapes — including `&T`, `&'static T`, `&mut T`,
+`&'lt T`, `&Vec<T>`, `&Box<dyn T>`, `Vec<&T>`, `(&T, &T)`, HRTB
+`for<'a> Fn(&'a T)`, `impl A + B`, `&Self`, nested generics — all
+PASS. Probes for adjacent shapes (match patterns, decl bounds,
+trait method decls, enum/struct/union/trait variations) also all
+PASS.
+
+**Implication for the loop**: parser-side K1.* chunks have hit
+diminishing returns. The next leverage point for "Python-ready-to-
+delete" is the 12 Category-2 semantic gaps named at the top of this
+document, not further parser surface coverage. K2 (parity harness)
+running over a real-source corpus is also the gate that will
+surface what remaining parser corners (if any) actually matter.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)
