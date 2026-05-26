@@ -528,7 +528,7 @@ def render_telegram(note: str | None = None,
         "            MLIR+LLVM rewrite; v3.1 = polish; v3.2+ = ahead.)",
         "  K<n>      K-bootstrap track stage toward self-hosting.",
         "            K0 = survey; K1 = ports; K2 = parity harness;",
-        "            K3 = trusted seed; K4 = delete Python (gated);",
+        "            K3 = trusted seed; K4 = delete Python (MANDATORY);",
         "            K5 = DDC + final 5-clean audits.",
         "  K1.<X>    A K1 sub-chunk (each ports one Helix feature",
         "            from Python helixc into the Helix-side compiler).",
@@ -563,17 +563,29 @@ def render_telegram(note: str | None = None,
     lines += [
         f"  - K1     Feature ports ({K_BOOTSTRAP_PARITY_DONE}/"
         f"{K_BOOTSTRAP_TOTAL_ROWS} rows at PARITY) -- IN PROGRESS",
+        "           Includes: CPU parser + codegen polish (easy),",
+        "           impl method dispatch, generic monomorphization,",
+        "           mixed-type binops, f16 literals, reflection",
+        "           (quote/splice/modify/reflect_hash), tile ops,",
+        "           PTX/ROCm/Metal/WebGPU backends, MLIR migration.",
+        "           ALL of these must ship in the bootstrap -- no",
+        "           Python-forever deferral is allowed under the",
+        "           hard constraint.",
         "  - K2     Parity harness -- runs every test program "
         "through both compilers and asserts identical output",
         "  - K3     Trusted seed -- a small hand-audited Helix "
         "binary that can re-bootstrap the compiler from source",
-        "  - K4     Delete Python helixc (USER-GATED -- continuous "
-        "audits run at K4 until the green light)",
+        "  - K4     Delete Python helixc -- MANDATORY (user "
+        "directive 2026-05-26: hard constraint). Not optional.",
         "  - K5     DDC (Diverse Double-Compilation) + final "
         "5-clean audits -- the trust-from-first-principles gate",
         "  - SELF-HOSTING ACHIEVED -- the headline goal: a Helix "
         "compiler written in Helix, compiled in Helix, all the "
         "way from raw binary with NO Python in the final product",
+        "           AND no other non-Helix runtime code anywhere",
+        "           in the shipped project (test infra, build",
+        "           scripts, dev tooling -- see",
+        "           docs/K_BOOTSTRAP_HARD_CONSTRAINT.md).",
     ]
 
     lines += [
@@ -586,9 +598,19 @@ def render_telegram(note: str | None = None,
         "Helix-",
         "    side compiler handles it the same way the Python compiler "
         "does.",
+        "    The 98% number is misleading: many PARITY rows are",
+        "    \"vacuously satisfied\" (the feature isn't reachable in",
+        "    the bootstrap-compileable subset, so both compilers",
+        "    behave identically by accident). Real remaining work",
+        "    under the hard constraint is closer to ~60-80 chunks",
+        "    including all the GPU/MLIR/Tile/reflection ports that",
+        "    cannot stay in Python forever.",
         "    Track plan: K0 survey -> K1 ports -> K2 parity harness ->",
-        "    K3 trusted seed -> K4 delete Python (gated) -> K5 final "
-        "audits.",
+        "    K3 trusted seed -> K4 delete Python (MANDATORY, no",
+        "    longer user-gated for skip -- only for timing) -> K5",
+        "    final audits.",
+        "    HARD CONSTRAINT (2026-05-26): no non-Helix runtime",
+        "    code at v1.0. See docs/K_BOOTSTRAP_HARD_CONSTRAINT.md.",
         "",
         "PROGRESS",
         f"  - v3.0 build stages:   {V3_STAGES_DONE} / "
