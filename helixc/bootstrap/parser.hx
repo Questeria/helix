@@ -11452,9 +11452,26 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
             let pek = cur_get(sb);
             let pet = tok_tag(tok_base, pek);
             let inclusive = if pet == 15 { cur_advance(sb); 1 } else { 0 };
-            let hk = cur_get(sb);
-            let hi = tok_p1(tok_base, hk);
-            cur_advance(sb);                 // consume hi INT
+            // K1.DM (2026-05-26): the high bound of a range pattern can
+            // be a negative literal (`-5..=-1`, `0..=-1` would be empty
+            // but parses; common in real code like `i32::MIN..=-1`).
+            // Detect TK_MINUS (8) on the high-bound side and consume
+            // both `-` and the INT, negating the value. Mirrors K1.AO's
+            // negative-literal-pattern handling but inline here for the
+            // hi-bound position.
+            let hi_first_t = tok_tag(tok_base, cur_get(sb));
+            let hi = if hi_first_t == 8 {
+                cur_advance(sb);             // consume '-'
+                let hk_neg = cur_get(sb);
+                let hi_abs = tok_p1(tok_base, hk_neg);
+                cur_advance(sb);             // consume hi INT
+                0 - hi_abs
+            } else {
+                let hk = cur_get(sb);
+                let hi_val = tok_p1(tok_base, hk);
+                cur_advance(sb);             // consume hi INT
+                hi_val
+            };
             mk_node(67, v, hi, inclusive)
         } else {
             mk_node(64, v, 0, 0)
@@ -11672,14 +11689,48 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         // minus; if found, consume both tokens and emit AST_PAT_LIT
         // (tag 64) with the NEGATED value. Else fall through to
         // the unknown-token trap.
+        //
+        // K1.DM (2026-05-26): after consuming `-INT`, peek for `..`
+        // (TK_DOTDOT = 43). If matched, this is a negative-low
+        // range pattern (`-5..=10` or `-5..=-1`); consume the rest
+        // of the range body (optional `=` for inclusive, then a
+        // high bound that itself may be `-INT` or plain `INT`)
+        // and emit AST_PAT_RANGE. Mirror of the K1.L range path
+        // in the `t == 1` branch above.
         let next_tk = tok_tag(tok_base, k + 1);
         if next_tk == 1 {
             cur_advance(sb);                 // consume '-'
             let n_k = cur_get(sb);
             let n_val = tok_p1(tok_base, n_k);
             cur_advance(sb);                 // consume INT
-            // PAT_LIT (tag 64) p1 = signed value. Negate via 0 - n.
-            mk_node(64, 0 - n_val, 0, 0)
+            let lo_signed = 0 - n_val;
+            // K1.DM: range continuation?
+            let dd_t = tok_tag(tok_base, cur_get(sb));
+            if dd_t == 43 {
+                cur_advance(sb);             // consume `..`
+                let eq_t = tok_tag(tok_base, cur_get(sb));
+                let inclusive_dm = if eq_t == 15 {
+                    cur_advance(sb);
+                    1
+                } else { 0 };
+                let hi_first_t_dm = tok_tag(tok_base, cur_get(sb));
+                let hi_dm = if hi_first_t_dm == 8 {
+                    cur_advance(sb);         // consume '-'
+                    let hk_neg = cur_get(sb);
+                    let hi_abs = tok_p1(tok_base, hk_neg);
+                    cur_advance(sb);         // consume hi INT
+                    0 - hi_abs
+                } else {
+                    let hk = cur_get(sb);
+                    let hi_val = tok_p1(tok_base, hk);
+                    cur_advance(sb);         // consume hi INT
+                    hi_val
+                };
+                mk_node(67, lo_signed, hi_dm, inclusive_dm)
+            } else {
+                // Plain negative literal pattern (K1.AO).
+                mk_node(64, lo_signed, 0, 0)
+            }
         } else {
             cur_advance(sb);
             mk_node(99, 62002, 0, 0)

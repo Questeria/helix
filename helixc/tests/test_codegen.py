@@ -8245,6 +8245,69 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_neg_range_pattern_self_host():
+    """K1.DM (2026-05-26): negative-bound range patterns in match.
+    Real Rust uses negative low / high bounds for clamping
+    patterns like `i32::MIN..=-1` (all-negatives), `-127..=127`
+    (i8 range), `-1..=1` (small-signed range):
+
+      match x { -5..=-1 => "negative small", _ => "other" }
+      match x { -5..=0 => "non-positive small", _ => "other" }
+
+    Previously SIGILL'd (rc=132) for both:
+      (a) negative low bound: `-5..=N` -- the TK_MINUS at the lo
+          position fell through K1.AO's negative-literal handler,
+          which emitted PAT_LIT (tag 64) and returned WITHOUT
+          checking for a following `..` range continuation.
+      (b) negative high bound: `N..=-1` -- the K1.L hi-bound
+          consume assumed plain TK_INT and consumed only one token,
+          mis-aligning when the high bound was TK_MINUS + TK_INT.
+
+    Fix in parse_pattern_atom:
+
+      Part 1 (high-bound, t==1 INT-lo branch): after the `..=`
+      consume, peek for TK_MINUS (8). If matched, consume `-INT`
+      and use the negated value as the high bound. Else consume
+      plain INT (existing behavior).
+
+      Part 2 (low-bound, t==8 TK_MINUS branch): after K1.AO's
+      `-INT` consume, peek for `..` (TK_DOTDOT = 43). If matched,
+      this is a range pattern, not a bare negative literal.
+      Consume the `..` (and optional `=` for inclusive), then the
+      high bound (which itself may be TK_MINUS + TK_INT or plain
+      INT). Emit AST_PAT_RANGE (tag 67) with the signed low,
+      signed high, and inclusive flag.
+
+    5 sub-probes (neg-lo/pos-hi, neg-lo/neg-hi, pos-lo/neg-hi
+    empty, zero-lo/neg-hi empty, neg-neg exclusive) + 8
+    regression-guards covering existing range patterns (positive
+    bounds, plain literal patterns, at-binding, guard, let,
+    for-loop)."""
+    cases = [
+        # K1.DM new cases
+        ("neg_lo_pos_hi",           "fn main() -> i32 { match -3 { -5..=0 => 42, _ => 0 } }",                       42),
+        ("neg_lo_neg_hi",           "fn main() -> i32 { match -3 { -5..=-1 => 42, _ => 0 } }",                      42),
+        ("pos_lo_neg_hi_empty",     "fn main() -> i32 { match 0 { 5..=-1 => 0, _ => 42 } }",                        42),
+        ("zero_lo_neg_hi_empty",    "fn main() -> i32 { match 0 { 0..=-1 => 0, _ => 42 } }",                        42),
+        ("neg_neg_exclusive",       "fn main() -> i32 { match -3 { -5..0 => 42, _ => 0 } }",                        42),
+
+        # Regression-guards: existing range patterns unchanged
+        ("pos_pos_inclusive",       "fn main() -> i32 { match 5 { 0..=9 => 42, _ => 0 } }",                          42),
+        ("pos_pos_exclusive",       "fn main() -> i32 { match 5 { 0..10 => 42, _ => 0 } }",                          42),
+        ("plain_lit_neg",           "fn main() -> i32 { match -5 { -5 => 42, _ => 0 } }",                            42),
+        ("plain_lit_pos",           "fn main() -> i32 { match 5 { 5 => 42, _ => 0 } }",                              42),
+        ("at_binding",              "fn main() -> i32 { match 5 { n @ 0..=9 => 42, _ => 0 } }",                      42),
+        ("guard",                   "fn main() -> i32 { match 5 { x if x > 0 => 42, _ => 0 } }",                     42),
+
+        # Other regression-guards
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                             42),
+        ("for_loop",                "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"neg_range_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_match_arm_guard_self_host():
     """K1.DL (2026-05-26): `match { pat if cond => body }` arm
     guard clause. Real Rust uses guards to narrow a match arm
