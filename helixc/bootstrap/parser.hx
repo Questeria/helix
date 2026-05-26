@@ -3825,6 +3825,52 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         cur_advance(sb);    // consume final '>' / '>>'
                     };
                     };     // K1.X (2026-05-25): close the is_fn_ty else-branch wrapping the bare-IDENT + generic-args path
+                    // K1.DB (2026-05-26): optional `+ Trait` chain in
+                    // let-type bare-IDENT path. Mirror of K1.CX for
+                    // fn-param. While the cursor is on `+` (TK_PLUS = 7),
+                    // consume `+`, then the trait IDENT (optional
+                    // generic args via inline K1.CT-shape skip), and
+                    // optional lifetime ('a was K1.CQ-collapsed to a
+                    // bare IDENT). Loops while chained bounds remain.
+                    let mut keep_plus_db: i32 = 1;
+                    while keep_plus_db == 1 {
+                        if tok_tag(tok_base, cur_get(sb)) == 7 {
+                            cur_advance(sb);             // consume '+'
+                            if tok_tag(tok_base, cur_get(sb)) == 2 {
+                                cur_advance(sb);         // consume trait IDENT
+                                if tok_tag(tok_base, cur_get(sb)) == 16 {
+                                    cur_advance(sb);     // consume '<'
+                                    let mut gd_dbp: i32 = 1;
+                                    while gd_dbp > 0 {
+                                        let gt_dbp = tok_tag(tok_base, cur_get(sb));
+                                        if gt_dbp == 16 {
+                                            gd_dbp = gd_dbp + 1;
+                                            cur_advance(sb);
+                                        } else { if gt_dbp == 17 {
+                                            gd_dbp = gd_dbp - 1;
+                                            if gd_dbp > 0 {
+                                                cur_advance(sb);
+                                            };
+                                        } else { if gt_dbp == 31 {
+                                            gd_dbp = gd_dbp - 2;
+                                            if gd_dbp > 0 {
+                                                cur_advance(sb);
+                                            };
+                                        } else { if gt_dbp == 0 {
+                                            gd_dbp = 0;
+                                        } else {
+                                            cur_advance(sb);
+                                        }}}};
+                                    }
+                                    cur_advance(sb);     // consume '>'
+                                };
+                            } else {
+                                keep_plus_db = 0;
+                            };
+                        } else {
+                            keep_plus_db = 0;
+                        };
+                    }
                 }}}};     // K1.Y (2026-05-25): +1 close for the new TK_LPAREN tuple-type arm
             };
             // Register the typed binding (only when the annotation produced

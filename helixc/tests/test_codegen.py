@@ -8245,6 +8245,62 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_plus_bound_let_type_self_host():
+    """K1.DB (2026-05-26): `+ Bound` chain in let-type position.
+    Mirror of K1.CX (fn-param `+ Bound`) for let-type. Common
+    Rust patterns:
+
+      let x: impl Iterator + Clone + Send = ...;
+      let y: dyn Display + Debug = ...;
+
+    Previously failed (rc=132 for 3-trait chains, accidentally
+    passed for 2-trait via mis-consume) because the let-type
+    bare-IDENT path didn't skip `+ Bound` chains.
+
+    Fix: in the K1.S/K1.X bare-IDENT branch of let-type, after the
+    type IDENT consume and the K1.T `<...>` generic-arg skip, add
+    a `+ Trait` chain skip that loops while `+` (TK_PLUS = 7) is
+    current. Each iteration:
+
+      - Consume `+`.
+      - Consume the trait IDENT.
+      - Optionally consume `<...>` generic args (inline K1.CT-shape
+        depth-tracking).
+
+    The bootstrap is type-erased; trait bounds are syntactic
+    acceptance only.
+
+    4 sub-probes + 8 regression-guards covering K1.CW impl/dyn
+    let-type, K1.S basic, K1.T generic, K1.CU slice ref,
+    K1.CX fn-param +Bound unchanged, and prior K1.* features."""
+    cases = [
+        # K1.DB new cases
+        ("impl_a_plus_b",    "trait A {} trait B {} fn main() -> i32 { let x: impl A + B = 42; 42 }",          42),
+        ("dyn_a_plus_b",     "trait A {} trait B {} fn main() -> i32 { let x: dyn A + B = 42; 42 }",            42),
+        ("impl_three",       "trait A {} trait B {} trait C {} fn main() -> i32 { let x: impl A + B + C = 42; 42 }", 42),
+        ("bare_trait_bound", "trait A {} fn main() -> i32 { let x: A = 42; 42 }",                                42),
+
+        # Regression-guards: K1.CW impl/dyn let-type unchanged
+        ("impl_sized",       "fn main() -> i32 { let x: impl Sized = 42; 42 }",                                  42),
+
+        # Other let-type forms unchanged
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("amp_t",            "fn main() -> i32 { let x: &i32 = 42; 42 }",                                       42),
+        ("box_t",            "fn main() -> i32 { let x: Box<i32> = 42; 42 }",                                   42),
+        ("amp_slice",        "fn main() -> i32 { let s: &[i32] = 42; 42 }",                                     42),
+
+        # K1.CX fn-param `+ Bound` unchanged
+        ("k1_cx_unchanged",  "trait A {} trait B {} fn id(x: impl A + B) -> i32 { 42 } fn main() -> i32 { id(0); 42 }", 42),
+
+        # Other regression-guards
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"plus_bound_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_struct_func_update_self_host():
     """K1.DA (2026-05-26): struct functional-update `..rest`
     spread syntax. Common Rust idiom for copying defaults from
