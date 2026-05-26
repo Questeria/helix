@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 158      # last bump: K2.B
+K_BOOTSTRAP_CHUNKS_DONE = 159      # last bump: K2.C (matrix-sync)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -99,9 +99,28 @@ K_BOOTSTRAP_CHUNKS_DONE = 158      # last bump: K2.B
 K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE = 150
 K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE = 165
 
-K_BOOTSTRAP_TOTAL_ROWS = 143      # matrix total (28 PARITY + 115
-                                    # KOVC-MISSING at K0 chunk 2 close)
-K_BOOTSTRAP_PARITY_DONE = 140      # was 28 after K0; K1.B (stack
+K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
+                                    # actual table count is 84 explicit
+                                    # `| PARITY |` + 42 `FUNCTIONAL
+                                    # PARITY` (inline in status col) +
+                                    # 18 `| KOVC-MISSING |` = 144 rows
+                                    # with a status column. The earlier
+                                    # 143 was the K0-chunk estimate.
+K_BOOTSTRAP_PARITY_DONE = 126      # matrix-sync 2026-05-26 K2.C:
+                                    # 84 PARITY + 42 FUNCTIONAL PARITY
+                                    # = 126 closed. The 140 prior was
+                                    # inflated by ~14 (K1.* parser
+                                    # chunks bumped this counter for
+                                    # syntax-only wins; the matrix
+                                    # status column still tracks the
+                                    # semantic-parity question). Real
+                                    # remaining work: 18 KOVC-MISSING
+                                    # rows = the Category-2 semantic
+                                    # gaps named in
+                                    # docs/K_BOOTSTRAP_HARD_CONSTRAINT.md.
+                                    # historical bump trail follows
+                                    # (kept verbatim for audit):
+                                    # was 28 after K0; K1.B (stack
                                     # args > 6) made it 29; K1.C
                                     # (return statement) made it 30;
                                     # K1.D-impl (print_int) made it 31;

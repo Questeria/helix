@@ -270,19 +270,32 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 
 ## 17. Coverage tally
 
-Rough count from the matrix above, post K0 + K1.B + K1.C
-shipping (live count tracked in `scripts/helix_status.py`'s
-`K_BOOTSTRAP_PARITY_DONE`):
+Live count (re-tallied 2026-05-26 K2.C matrix-sync; canonical
+mirror is `scripts/helix_status.py`'s `K_BOOTSTRAP_PARITY_DONE` +
+`K_BOOTSTRAP_TOTAL_ROWS`):
 
 | Bucket | Count | Notes |
 |--------|-------|-------|
-| **PARITY** (kovc.hx matches Python) | ~30 rows | +2 since K0: K1.B (stack args > 6) + K1.C (return) |
-| **KOVC-MISSING** (Python has it, kovc.hx does not) | ~113 rows | -2 since K0 |
+| **PARITY** (explicit `\| PARITY \|` in status col) | 84 rows | K0 baseline 28 + 56 K1.* parser-syntax closures |
+| **FUNCTIONAL PARITY** (inline `✅ FUNCTIONAL PARITY` in status col) | 42 rows | discovery-batch retro-flips (architectural / vacuous parity) |
+| **KOVC-MISSING** | 18 rows | the Category-2 semantic gaps (see `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md`) |
 | **PYTHON-MISSING** (kovc.hx has it but Python doesn't) | 0 | |
 | **UNKNOWN** (survey uncertain) | 0 | resolved K0 chunk 2 |
 
+Total status-bearing rows: **144** (84 + 42 + 18).
+
 The K-bootstrap percentage in the Telegram status update is
-computed live from these counts: `30 / 143 ≈ 21%`.
+computed live from these counts: `126 / 144 ≈ 88%`.
+
+**Honest read**: the 84 explicit PARITY rows are real parser-
++codegen wins. The 42 FUNCTIONAL PARITY rows are mostly
+vacuously satisfied — they pass because the bootstrap doesn't
+USE the feature (e.g., AD passes are no-ops because no program
+the bootstrap accepts uses `grad`). The remaining 18 KOVC-MISSING
+rows are the genuine semantic gaps that block Python-ready-to-
+delete: reflection (×7), tile ops (×4), GPU backends (×2),
+mixed-type binops (×2), and one each of f16, impl methods, MLIR
+substrate, trace events.
 
 The bulk of Helix's surface — types beyond scalars, control flow
 beyond if/while, all patterns, all aggregates, all metaprogramming,
