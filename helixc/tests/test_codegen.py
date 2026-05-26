@@ -8210,6 +8210,24 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_unit_return_type_self_host():
+    """K1.AX (2026-05-25): `fn x() -> () { ... }` (explicit unit
+    return type) now compiles. Previously parse_fn_decl
+    unconditionally consumed an IDENT after `->`, but `()` is a
+    TK_LPAREN+TK_RPAREN pair (the 0-tuple type), not an IDENT.
+    The fix peeks for TK_LPAREN after `->` and consumes the `()`
+    pair instead of an IDENT, leaving ret_ty=0 (unit collapses
+    to i32 in the type-erased bootstrap). 3 sub-probes."""
+    cases = [
+        ("noop",        "fn noop() -> () { } fn main() -> i32 { noop(); 42 }",                         42),
+        ("multi_unit",  "fn a() -> () { } fn b() -> () { } fn main() -> i32 { a(); b(); 42 }",         42),
+        ("mixed_ret",   "fn u() -> () { } fn n() -> i32 { 21 } fn main() -> i32 { u(); n() + n() }",   42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"unit_ret_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_static_decl_self_host():
     """K1.AW (2026-05-25): top-level `static N: T = expr;` is now
     accepted as a no-op decl, mirroring K1.Z's const-decl

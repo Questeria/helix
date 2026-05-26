@@ -7557,13 +7557,29 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     if after_paren_t == 8 {
         cur_advance(sb); // '-' (part of '->')
         cur_advance(sb); // '>' (the second char of '->')
-        // Capture the return-type IDENT bytes the same way AST_PARAM does.
-        // 'f' first byte (length 3) -> f32 / f64 -> ret_ty = 1.
-        let rt_tok = cur_get(sb);
-        rt_s = tok_p2(tok_base, rt_tok);
-        rt_l = tok_p3(tok_base, rt_tok);
-        has_ret_ty = 1;
-        cur_advance(sb);     // return-type IDENT
+        // K1.AX (2026-05-25): explicit unit return `fn x() -> () { ... }`.
+        // Peek for TK_LPAREN (3) -- the start of the 0-tuple unit type
+        // `()`. If present, consume `(` and `)` and skip the IDENT
+        // capture (rt_s/rt_l/has_ret_ty stay at their zero defaults,
+        // so ret_ty resolves to 0 / unit, indistinguishable from i32
+        // at codegen in the type-erased bootstrap). Two single-arm
+        // IFs gated on the same condition rather than a nested
+        // if-else, mirroring the flat-control-flow style of the
+        // surrounding parse_fn_decl code.
+        let rt_first_t = tok_tag(tok_base, cur_get(sb));
+        if rt_first_t == 3 {
+            cur_advance(sb); // '('
+            cur_advance(sb); // ')'
+        };
+        if rt_first_t != 3 {
+            // Capture the return-type IDENT bytes the same way AST_PARAM does.
+            // 'f' first byte (length 3) -> f32 / f64 -> ret_ty = 1.
+            let rt_tok = cur_get(sb);
+            rt_s = tok_p2(tok_base, rt_tok);
+            rt_l = tok_p3(tok_base, rt_tok);
+            has_ret_ty = 1;
+            cur_advance(sb);     // return-type IDENT
+        };
     };
     // Audit fix (Stage 1 cycle): strict 3-byte type-ident check.
     let ret_ty = if rt_l == 3 {
