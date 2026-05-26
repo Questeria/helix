@@ -8245,6 +8245,54 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_match_leading_bar_self_host():
+    """K1.CL (2026-05-26): optional leading `|` in match arm
+    patterns (rustfmt style). rustfmt formats long match arms
+    with each alternative on its own line, prefixed by `|` for
+    visual alignment:
+
+      match x {
+          | Some(1)
+          | Some(2) => 42,
+          _ => 0,
+      }
+
+    Previously failed (rc=132) because parse_pattern expected the
+    first alt directly; a leading `|` reached parse_pattern_atom,
+    which has no TK_PIPE (28) arm.
+
+    Fix: at parse_pattern entry, peek for TK_PIPE (28). If matched,
+    consume as a no-op. The existing OR-chain logic below handles
+    the actual pattern and any subsequent `|`-separated alts
+    unchanged.
+
+    4 sub-probes (leading-only, leading-then-or, leading-then-
+    range, single-arm-leading) + 9 regression-guards covering
+    plain match, OR-pattern, wildcard, range arm, ref-pattern,
+    and prior K1.* features."""
+    cases = [
+        # K1.CL new cases
+        ("leading_bar",          "fn main() -> i32 { let x = 1; match x { | 1 => 42, _ => 0 } }",                   42),
+        ("leading_bar_or",       "fn main() -> i32 { let x = 2; match x { | 1 | 2 => 42, _ => 0 } }",               42),
+        ("leading_then_range",   "fn main() -> i32 { let x = 5; match x { | 1..=10 => 42, _ => 0 } }",              42),
+        ("only_arm_leading",     "fn main() -> i32 { let x = 0; match x { | _ => 42 } }",                            42),
+
+        # Regression-guards
+        ("plain_match",          "fn main() -> i32 { let x = 1; match x { 1 => 42, _ => 0 } }",                     42),
+        ("or_pattern",           "fn main() -> i32 { let x = 2; match x { 1 | 2 => 42, _ => 0 } }",                 42),
+        ("wildcard",             "fn main() -> i32 { let x = 0; match x { _ => 42 } }",                              42),
+        ("range_arm",            "fn main() -> i32 { let x = 5; match x { 1..=10 => 42, _ => 0 } }",                 42),
+        ("ref_pat",              "fn main() -> i32 { let x = 42; match x { ref _r => 42 } }",                       42),
+        ("plain_let",            "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",            "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("if_let",               "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                    42),
+        ("for_loop",             "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"match_lbar_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_prefixed_string_literals_self_host():
     """K1.CK (2026-05-26): prefixed string literals `b"..."`,
     `r"..."`, `c"..."` parse as regular string literals. Common

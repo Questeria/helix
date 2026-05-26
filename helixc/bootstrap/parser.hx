@@ -9869,6 +9869,22 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
 // or-patterns to `||` chains of tests; bootstrap codegen will do the
 // same at the IR level (see emit_pat_or, Stage 28.10 INCREMENT 3).
 fn parse_pattern(tok_base: i32, sb: i32) -> i32 {
+    // K1.CL (2026-05-26): optional leading `|` (rustfmt style for
+    // OR-patterns). rustfmt formats long match arms with each
+    // alternative on its own line prefixed by `|` for visual
+    // alignment:
+    //   match x {
+    //       | Some(1)
+    //       | Some(2) => 42,
+    //       _ => 0,
+    //   }
+    // The leading `|` is purely cosmetic. Peek for TK_PIPE (28)
+    // before parsing the first alt; if matched, consume. The
+    // existing OR-chain logic below handles the actual pattern
+    // and any subsequent `|`-separated alts unchanged.
+    if tok_tag(tok_base, cur_get(sb)) == 28 {
+        cur_advance(sb);                     // consume leading '|'
+    };
     let first = parse_pattern_atom(tok_base, sb);
     let nk = cur_get(sb);
     let nt = tok_tag(tok_base, nk);
