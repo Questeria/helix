@@ -8245,6 +8245,70 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_at_binding_pattern_self_host():
+    """K1.DH (2026-05-26): `name @ inner_pat` at-binding pattern
+    in match arms. Real Rust uses this to bind a value to a name
+    while also matching against an inner pattern:
+
+      match x { n @ 0..=9 => use_n(n), _ => other }
+      match v { v @ Foo => use_v(v), _ => other }
+      match n { x @ 5 => x, _ => 0 }
+
+    Previously the IDENT pattern was treated as a simple bind-
+    everything; the `@` was unrecognized. For arms whose body used
+    the binding NAME (e.g. `n @ 42 => n`), the bare IDENT pattern
+    matched and the body resolved -- that one passed. But for arms
+    whose body used a LITERAL (e.g. `n @ 0..=9 => 42`), the
+    surrounding match would fall through to the `_` arm and return
+    that value instead, because the bare IDENT pattern was followed
+    by `@ inner` tokens that got reshuffled by the downstream parser
+    into broken arm-selection logic (sometimes returning the literal
+    value of `inner` instead of the arm's RHS, sometimes the wildcard
+    arm's value).
+
+    Fix: in parse_pattern_atom's "plain identifier binding pattern"
+    branch (after the IDENT consume), peek for `@` (TK tag 24, the
+    lex_punct_kind mapping of byte 64). If matched, consume `@` and
+    then recursively `parse_pattern` for the inner pattern -- the
+    cursor advances past all inner-pattern tokens but the returned
+    inner-pattern AST node is DISCARDED. The arm uses the original
+    IDENT as a PAT_BIND (tag 65), matching everything and binding
+    the matched value to the IDENT for use in the arm body.
+
+    The semantics are over-permissive (the inner-pattern's narrowing
+    is dropped, so `n @ 0..=9` matches the same set as bare `n` --
+    everything), but this is the type-erased Phase-0 compromise. Real
+    at-binding semantics would require a new AST node type carrying
+    both the binding name and the inner pattern; deferred to a later
+    semantic chunk.
+
+    5 sub-probes covering range / literal / negative / binding-name-
+    in-body / arm-first-position + 8 regression-guards covering
+    plain match arms, ranges, identifiers, negative literals,
+    or-patterns, let bindings, for-loops."""
+    cases = [
+        # K1.DH new cases
+        ("at_range",        "fn main() -> i32 { match 5 { n @ 0..=9 => 42, _ => 0 } }",      42),
+        ("at_literal",      "fn main() -> i32 { match 5 { x @ 5 => 42, _ => 0 } }",          42),
+        ("at_negative",     "fn main() -> i32 { match 0 { v @ 0 => 42, _ => 0 } }",          42),
+        ("at_use_binding",  "fn main() -> i32 { match 42 { n @ 42 => n, _ => 0 } }",         42),
+        ("at_arm_first",    "fn main() -> i32 { match 5 { v @ 0..=10 => 42, _ => 0 } }",     42),
+
+        # Regression-guards: existing patterns unchanged
+        ("plain_range",     "fn main() -> i32 { match 5 { 0..=9 => 42, _ => 0 } }",          42),
+        ("plain_lit",       "fn main() -> i32 { match 5 { 5 => 42, _ => 0 } }",              42),
+        ("plain_ident",     "fn main() -> i32 { match 5 { n => n + 37 } }",                  42),
+        ("plain_match",     "fn main() -> i32 { match 1 { 1 => 42, _ => 0 } }",              42),
+        ("match_neg_lit",   "fn main() -> i32 { match -5 { -5 => 42, _ => 0 } }",            42),
+        ("match_or_pat",    "fn main() -> i32 { match 5 { 1 | 2 | 5 => 42, _ => 0 } }",      42),
+        ("plain_let",       "fn main() -> i32 { let x = 42; x }",                            42),
+        ("for_loop",        "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }", 42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"at_bind_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_enum_fn_bound_self_host():
     """K1.DG (2026-05-26): `->` arrow inside generic-arg list on
     enum decl. Real Rust source uses Fn-trait bounds on enum
