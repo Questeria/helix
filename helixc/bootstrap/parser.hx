@@ -4572,6 +4572,15 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         // is a tuple literal — build a TUPLE_CONS chain. Otherwise it's
         // a normal parenthesized expr.
         cur_advance(sb);
+        // K1.BT (2026-05-26): the unit literal `()` -- TK_RPAREN (4)
+        // immediately after the opening `(`. Consume the `)` and
+        // return AST_INT(0). In the type-erased bootstrap, unit
+        // collapses to 0 (a 4-byte slot like i32). Real unit-vs-i32
+        // type distinction is a separate gap.
+        if tok_tag(tok_base, cur_get(sb)) == 4 {
+            cur_advance(sb);                     // consume ')'
+            return mk_node(0, 0, 0, 0);
+        };
         let inner = parse_expr(tok_base, sb);
         let nk = cur_get(sb);
         let nt = tok_tag(tok_base, nk);

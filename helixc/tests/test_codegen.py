@@ -8245,6 +8245,34 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_unit_literal_self_host():
+    """K1.BT (2026-05-26): the unit literal `()` as an
+    expression. parse_primary's `(` arm previously assumed
+    a non-empty body, calling parse_expr on the inner. For
+    `()` the cursor sat on `)` immediately and parse_expr
+    mis-handled the empty content.
+
+    Fix: after consuming the opening `(`, peek for TK_RPAREN
+    (4). If present, consume `)` and return AST_INT(0)
+    via early return -- in the type-erased bootstrap, unit
+    collapses to 0 (a 4-byte slot like i32).
+
+    Pairs with K1.AX (`-> ()` return type) and K1.BI (`(T)`
+    parenthesized type) which already handled the type-side
+    of unit; this chunk handles the value-side.
+
+    4 sub-probes."""
+    cases = [
+        ("bare",          "fn main() -> i32 { let u = (); 42 }",                                                 42),
+        ("typed",         "fn main() -> i32 { let u: () = (); 42 }",                                              42),
+        ("unit_ret",      "fn p() -> () { () } fn main() -> i32 { p(); 42 }",                                     42),
+        ("seq_with_unit", "fn main() -> i32 { (); (); 42 }",                                                      42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"unit_lit_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_use_as_alias_self_host():
     """K1.BS (2026-05-26): `use path as Alias;` rename accepted.
     Common Rust pattern for disambiguating two same-named imports
