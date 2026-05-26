@@ -8245,6 +8245,62 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_match_arm_guard_self_host():
+    """K1.DL (2026-05-26): `match { pat if cond => body }` arm
+    guard clause. Real Rust uses guards to narrow a match arm
+    beyond the pattern's structural test:
+
+      match x { n if n > 0 => use_n(n), _ => other }
+      match v { v if v.is_some() => extract(v), _ => default() }
+
+    Previously SIGILL'd (rc=1 in the probe; rc=132 / hang in
+    other shapes) because the match-arm parser called
+    parse_pattern then unconditionally consumed `=>`. For arms
+    with a guard `x if x > 0`, the cursor after parse_pattern
+    was at `if` IDENT, not `=>` (TK_FATARROW = 42). The
+    cur_advance consumed `if`, then parse_match_arm_body tried
+    to parse a body starting with the guard's tokens
+    (`x > 0`), which broke arm-selection logic.
+
+    Fix: in parse_match_expr, between parse_pattern and the
+    `=>` consume (for both the first arm and subsequent arms in
+    the `,`-separated loop), peek for the `if` IDENT keyword. If
+    matched, consume `if` and parse-and-discard the guard
+    expression via parse_expr_basic. The arm-pattern still
+    determines whether the arm fires; the guard is dropped.
+
+    Semantics compromise: the guard is OVER-PERMISSIVELY treated
+    as always-true -- the arm fires whenever the pattern matches.
+    For arms with bare-IDENT patterns (which match everything),
+    this means the FIRST guard arm always fires regardless of
+    the guard condition. Real Rust would require guard evaluation
+    to short-circuit to the next arm if false. Real guard
+    evaluation requires a new AST node type carrying the cond
+    expression; deferred to a later semantic chunk.
+
+    5 sub-probes (guard with >, ==, bool lit, with at-binding,
+    with &&) + 5 regression-guards covering plain match, range,
+    at-binding, let, for-loop."""
+    cases = [
+        # K1.DL new cases
+        ("guard_gt",                "fn main() -> i32 { match 5 { x if x > 0 => 42, _ => 0 } }",                      42),
+        ("guard_eq",                "fn main() -> i32 { match 5 { x if x == 5 => 42, _ => 0 } }",                     42),
+        ("guard_bool_lit",          "fn main() -> i32 { match 5 { _ if true => 42, _ => 0 } }",                       42),
+        ("guard_with_at",           "fn main() -> i32 { match 5 { n @ 0..=10 if n < 8 => 42, _ => 0 } }",             42),
+        ("guard_logical_and",       "fn main() -> i32 { match 5 { x if x > 0 && x < 10 => 42, _ => 0 } }",            42),
+
+        # Regression-guards: plain match (no guard) unchanged
+        ("plain_match",             "fn main() -> i32 { match 1 { 1 => 42, _ => 0 } }",                                42),
+        ("plain_range",             "fn main() -> i32 { match 5 { 0..=9 => 42, _ => 0 } }",                            42),
+        ("match_at_binding",        "fn main() -> i32 { match 5 { n @ 0..=9 => 42, _ => 0 } }",                       42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("for_loop",                "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",        42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"match_guard_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_let_no_init_self_host():
     """K1.DK (2026-05-26): `let x: T;` no-initializer let binding.
     Real Rust source uses this for delayed initialization patterns

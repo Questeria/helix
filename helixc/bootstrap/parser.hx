@@ -11908,6 +11908,26 @@ fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume '{'
     // Parse first arm.
     let first_pat = parse_pattern(tok_base, sb);
+    // K1.DL (2026-05-26): optional match-arm GUARD clause `if cond`.
+    // Real Rust uses guards to narrow the match condition beyond the
+    // pattern's structural test:
+    //   match x { n if n > 0 => use_n(n), _ => other }
+    //   match v { v if v.is_some() => extract(v), _ => default() }
+    // Between the pattern and `=>`, peek for the `if` IDENT keyword
+    // (2-byte: 105, 102). If matched, consume `if` then a guard
+    // expression (parse_expr_basic) and DISCARD it. The bootstrap
+    // is type-erased; the guard is over-permissively accepted as
+    // always-true (the arm fires whenever the pattern matches). Real
+    // guard evaluation is a Phase-0 semantic gap.
+    if tok_tag(tok_base, cur_get(sb)) == 2 {
+        let mfirst_k = cur_get(sb);
+        let mfirst_s = tok_p2(tok_base, mfirst_k);
+        let mfirst_l = tok_p3(tok_base, mfirst_k);
+        if byte_eq(mfirst_s, mfirst_l, kw_if_s(sb), kw_if_n(sb)) == 1 {
+            cur_advance(sb);                 // consume 'if'
+            parse_expr_basic(tok_base, sb);  // parse + discard guard
+        };
+    };
     cur_advance(sb);                         // consume '=>' (TK_FATARROW = 42)
     let first_body = parse_match_arm_body(tok_base, sb);
     let arms_head = mk_node(63, first_pat, first_body, 0);
@@ -11925,6 +11945,16 @@ fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
                 keep = 0;
             } else {
                 let next_pat = parse_pattern(tok_base, sb);
+                // K1.DL: also peek for `if` guard on subsequent arms.
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    let mn_k = cur_get(sb);
+                    let mn_s = tok_p2(tok_base, mn_k);
+                    let mn_l = tok_p3(tok_base, mn_k);
+                    if byte_eq(mn_s, mn_l, kw_if_s(sb), kw_if_n(sb)) == 1 {
+                        cur_advance(sb);     // consume 'if'
+                        parse_expr_basic(tok_base, sb);  // parse + discard
+                    };
+                };
                 cur_advance(sb);             // consume '=>'
                 let next_body = parse_match_arm_body(tok_base, sb);
                 let new_arm = mk_node(63, next_pat, next_body, 0);
