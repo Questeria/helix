@@ -8694,9 +8694,21 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     // implicitly depend on this contract. If a future arena-bounds
     // policy traps on OOB or emits non-zero sentinels, these advance
     // sites + the RBRACE consume need explicit EOF guards.
-    cur_advance(sb);                         // consume '{' (LBRACE = 5)
+    // K1.BL (2026-05-26): unit struct `struct Marker;` (semicolon-
+    // terminated, no `{...}` block). Peek for TK_SEMI before
+    // consuming the opening `{`; if found, consume the `;` and
+    // skip the field-loop + closing `}` entirely. field_count and
+    // fields_ptr stay at 0, which is the correct shape for a
+    // zero-field struct. Common Rust pattern for marker/phantom
+    // types like `struct Marker;` or `struct Pixel;`.
     let mut field_count: i32 = 0;
     let mut fields_ptr: i32 = 0;             // 0 if no fields
+    let is_unit_struct = if tok_tag(tok_base, cur_get(sb)) == 12 { 1 } else { 0 };
+    if is_unit_struct == 1 {
+        cur_advance(sb);                     // consume ';'
+    };
+    if is_unit_struct == 0 {
+    cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut keep: i32 = 1;
     while keep == 1 {
         // K1.BA (2026-05-26): swallow leading visibility / linkage
@@ -8771,6 +8783,7 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         }};
     }
     cur_advance(sb);                         // consume '}' (RBRACE = 6)
+    };  // K1.BL (2026-05-26): close the `if is_unit_struct == 0` block
     // Stage 28.11 INC-3b: BEFORE struct_tab_add and BEFORE the exit-
     // reset of gp_tab below, capture the gp_count and build a
     // mk_node(76, name_s, name_l, next) chain of gp_names. Mirrors

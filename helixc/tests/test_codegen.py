@@ -8210,6 +8210,39 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_unit_struct_self_host():
+    """K1.BL (2026-05-26): unit struct `struct Marker;`
+    (semicolon-terminated, no `{...}` block) accepted.
+    Common Rust pattern for marker / phantom / sentinel types.
+
+    parse_struct_decl previously assumed every struct decl
+    used the brace-block form. For `struct Marker;` the
+    unconditional `{` consume tripped on the `;` token,
+    leaving parser state misaligned and hanging K2.
+
+    Fix peeks for TK_SEMI (12) before consuming `{`. If
+    present, consume the `;` and skip both the field-loop
+    and the closing `}` consume. field_count / fields_ptr
+    stay at 0 -- the correct shape for a zero-field struct.
+
+    4 sub-probes: bare unit struct, unit struct + use, unit
+    struct + impl block, multiple unit structs."""
+    # NOTE: using a unit struct name as a value expression
+    # (`let _m = Marker;`) is a SEPARATE gap -- the parser
+    # currently treats the IDENT as a var-ref, not a unit-struct
+    # construction. K1.BL only unblocks the PARSE of the decl
+    # itself plus impl methods accessible via `Marker::method()`.
+    cases = [
+        ("bare",       "struct Marker; fn main() -> i32 { 42 }",                                                                42),
+        ("with_impl",  "struct Marker; impl Marker { fn val() -> i32 { 42 } } fn main() -> i32 { Marker::val() }",              42),
+        ("multi",      "struct A; struct B; struct C; fn main() -> i32 { 42 }",                                                  42),
+        ("after_other_decl", "fn helper() -> i32 { 42 } struct Marker; fn main() -> i32 { helper() }",                          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"unit_struct_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_hash_attribute_self_host():
     """K1.BK (2026-05-26): `#[...]` outer attributes and `#![...]`
     inner attributes accepted at lex time by skipping the entire
