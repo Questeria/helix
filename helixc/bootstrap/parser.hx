@@ -10599,6 +10599,15 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             let gtt = tok_tag(tok_base, cur_get(sb));
             if gtt == 17 {                   // TK_GT = `>` end
                 keep_g = 0;
+            } else { if gtt == 31 {          // K1.DF: TK_RSHIFT (>>)
+                                             // closing both inner AND
+                                             // outer generic-param list
+                                             // in one token. Stop here;
+                                             // post-loop `cur_advance`
+                                             // consumes the `>>` (both
+                                             // `>`s at once). Mirrors
+                                             // K1.DE in parse_fn_decl.
+                keep_g = 0;
             } else { if gtt == 13 {          // COMMA
                 cur_advance(sb);
             } else { if gtt == 2 {           // TK_IDENT — capture
@@ -10612,6 +10621,146 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
                 let gp_l = tok_p3(tok_base, gk);
                 gp_tab_add(sb, gp_s, gp_l);
                 cur_advance(sb);
+                // K1.DF (2026-05-26): optional trait bound
+                // `: TraitName (+ Trait2)*` after the generic-param
+                // IDENT. Mirrors parse_fn_decl's Stage-8.5C bound
+                // loop (with the K1.DE Fn-trait extensions). Real
+                // Rust uses this pervasively:
+                //   struct B<T: Sized> { ... }
+                //   struct B<F: Fn() -> i32> { ... }
+                //   struct B<I: Iterator<Item = i32>> { ... }
+                // The bootstrap is type-erased; bounds are accepted
+                // syntactically and discarded.
+                if tok_tag(tok_base, cur_get(sb)) == 14 {     // ':'
+                    cur_advance(sb);                          // consume ':'
+                    let mut keep_b_df: i32 = 1;
+                    while keep_b_df == 1 {
+                        let bt_df = tok_tag(tok_base, cur_get(sb));
+                        if bt_df == 2 {                       // trait-name IDENT
+                            cur_advance(sb);
+                            // K1.DF: optional `(...)` paren args for
+                            // Fn/FnMut/FnOnce trait bounds.
+                            if tok_tag(tok_base, cur_get(sb)) == 3 {
+                                cur_advance(sb);              // consume '('
+                                let mut pa_df: i32 = 1;
+                                while pa_df > 0 {
+                                    let pat_df = tok_tag(tok_base, cur_get(sb));
+                                    if pat_df == 3 {
+                                        pa_df = pa_df + 1;
+                                        cur_advance(sb);
+                                    } else { if pat_df == 4 {
+                                        pa_df = pa_df - 1;
+                                        if pa_df > 0 {
+                                            cur_advance(sb);
+                                        };
+                                    } else { if pat_df == 0 {
+                                        pa_df = 0;
+                                    } else {
+                                        cur_advance(sb);
+                                    } } };
+                                }
+                                cur_advance(sb);              // consume final ')'
+                            };
+                            // K1.DF: optional `<...>` generic args
+                            // after trait name (e.g. Iterator<Item=i32>).
+                            // Depth-balanced; leaves `>>` for outer
+                            // loop if it overshoots both inner+outer.
+                            if tok_tag(tok_base, cur_get(sb)) == 16 {
+                                cur_advance(sb);              // consume '<'
+                                let mut ga_df: i32 = 1;
+                                while ga_df > 0 {
+                                    let gat_df = tok_tag(tok_base, cur_get(sb));
+                                    if gat_df == 16 {
+                                        ga_df = ga_df + 1;
+                                        cur_advance(sb);
+                                    } else { if gat_df == 17 {
+                                        ga_df = ga_df - 1;
+                                        if ga_df > 0 {
+                                            cur_advance(sb);
+                                        };
+                                    } else { if gat_df == 31 {
+                                        ga_df = ga_df - 2;
+                                        if ga_df > 0 {
+                                            cur_advance(sb);
+                                        };
+                                    } else { if gat_df == 0 {
+                                        ga_df = 0;
+                                    } else {
+                                        cur_advance(sb);
+                                    } } } };
+                                }
+                                // Only consume single `>` here; if
+                                // `>>` overshot, leave for outer loop
+                                // (handled via gtt==31 branch above).
+                                if tok_tag(tok_base, cur_get(sb)) == 17 {
+                                    cur_advance(sb);
+                                };
+                            };
+                            // K1.DF: optional `-> ReturnType` after
+                            // Fn-trait paren args.
+                            if tok_tag(tok_base, cur_get(sb)) == 8 {
+                                cur_advance(sb);              // consume '-'
+                                cur_advance(sb);              // consume '>'
+                                let mut rt_done_df: i32 = 0;
+                                let mut rt_df: i32 = 0;
+                                while rt_done_df == 0 {
+                                    let rtt_df = tok_tag(tok_base, cur_get(sb));
+                                    if rtt_df == 0 {
+                                        rt_done_df = 1;
+                                    } else { if rt_df == 0 {
+                                        if rtt_df == 7 {
+                                            rt_done_df = 1;
+                                        } else { if rtt_df == 13 {
+                                            rt_done_df = 1;
+                                        } else { if rtt_df == 17 {
+                                            rt_done_df = 1;
+                                        } else { if rtt_df == 31 {
+                                            rt_done_df = 1;
+                                        } else {
+                                            if rtt_df == 3 {
+                                                rt_df = rt_df + 1;
+                                            };
+                                            if rtt_df == 20 {
+                                                rt_df = rt_df + 1;
+                                            };
+                                            if rtt_df == 16 {
+                                                rt_df = rt_df + 1;
+                                            };
+                                            cur_advance(sb);
+                                        } } } };
+                                    } else {
+                                        if rtt_df == 3 {
+                                            rt_df = rt_df + 1;
+                                        };
+                                        if rtt_df == 20 {
+                                            rt_df = rt_df + 1;
+                                        };
+                                        if rtt_df == 16 {
+                                            rt_df = rt_df + 1;
+                                        };
+                                        if rtt_df == 4 {
+                                            rt_df = rt_df - 1;
+                                        };
+                                        if rtt_df == 21 {
+                                            rt_df = rt_df - 1;
+                                        };
+                                        if rtt_df == 17 {
+                                            rt_df = rt_df - 1;
+                                        };
+                                        if rtt_df == 31 {
+                                            rt_df = rt_df - 2;
+                                        };
+                                        cur_advance(sb);
+                                    } };
+                                }
+                            };
+                        } else { if bt_df == 7 {              // '+'
+                            cur_advance(sb);
+                        } else {
+                            keep_b_df = 0;
+                        } };
+                    }
+                };
             } else {
                 // Stage 28.11 INC-1 cycle-2 SF-1/SF-3 fix: any token
                 // other than IDENT/COMMA/GT exits the loop WITHOUT
@@ -10619,7 +10768,7 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
                 // (5/6), nested `<` (16), operators, literals, etc.
                 // The post-loop guard below handles the cursor.
                 keep_g = 0;
-            }}};
+            }}}};
         }
         // Stage 28.11 INC-1 cycle-2 SF-2 fix: only advance past `>`
         // if the cursor actually points at one. EOF-mid-list or
@@ -10627,8 +10776,15 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         // where the LBRACE advance below (or a downstream field
         // parser) will land an error loudly instead of silently
         // misaligning the token stream.
+        // K1.DF (2026-05-26): also consume `>>` (TK_RSHIFT = 31) as
+        // a generic-list closer — covers nested-generic cases like
+        // `struct B<F: Fn() -> i32>` where the inner Fn-bound `<>`
+        // (if any) ends at the same position as the outer `>`.
         if tok_tag(tok_base, cur_get(sb)) == 17 {
             cur_advance(sb);                 // consume '>'
+        };
+        if tok_tag(tok_base, cur_get(sb)) == 31 {
+            cur_advance(sb);                 // K1.DF: consume '>>'
         };
     };
     // Stage 28.11 INC-1 cycle-3 polish (cycle-2 silent-failure RE-2,

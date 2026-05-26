@@ -8245,6 +8245,83 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_struct_gen_bound_self_host():
+    """K1.DF (2026-05-26): trait bounds on struct decl generic
+    params, including K1.DE-style `Fn(...) -> Ret` Fn-trait
+    bounds and `Trait<Assoc = T>` associated-type bounds. Real
+    Rust source uses bounded struct generics pervasively:
+
+      struct B<T: Sized> { x: T }
+      struct B<F: Fn() -> i32> { f: F }
+      struct B<I: Iterator<Item = i32>> { it: I }
+
+    Previously TIMEOUT on the Fn-trait shape because
+    parse_struct_decl's Stage-28.11-INC-1 generic-param loop
+    only accepted IDENT / COMMA / GT — even `:` exited the loop
+    silently, leaving the rest of the bound expression as garbage
+    that the field-parser would mis-consume in various creative
+    ways, sometimes hanging on long bound expressions.
+
+    Mirror of K1.DE applied to parse_struct_decl's loop:
+
+    (1) After the generic-param IDENT capture + gp_tab_add, peek
+        for `:` (TK_COLON = 14). If matched, enter a bound-parsing
+        sub-loop that consumes trait-name IDENTs and `+` chains.
+
+    (2) After each trait-name IDENT in the bound loop, peek for:
+        - `(` (TK_LPAREN = 3) → consume `(...)` depth-balanced
+          (Fn/FnMut/FnOnce paren args).
+        - `<` (TK_LT = 16) → consume `<...>` depth-balanced
+          (Iterator<Item = i32>); leave `>>` overshoot for outer.
+        - `-` (TK_MINUS = 8) → consume `-`, `>`, and the return-
+          type expression token-by-token with depth-tracking.
+
+    (3) Outer struct-generic loop also handles TK_RSHIFT (31) as
+        a terminator (mirroring K1.DE's outer-loop fix), and the
+        post-loop closer-consume also accepts `>>`.
+
+    The bootstrap is type-erased; bounds on struct generic params
+    are syntactic acceptance only — the generic-param IDENT is
+    still gp_tab-tracked for field-type encoding (Stage 28.11 INC-2),
+    but the bound is discarded.
+
+    7 sub-probes + 11 regression-guards covering plain struct,
+    generic struct, two-param generics, Sized bound (pre-existing
+    accident-pass), unit struct, tuple struct, generic struct
+    field-access, K1.DE fn-bound (regression check), and prior
+    K1.* features."""
+    cases = [
+        # K1.DF new cases
+        ("struct_gen_fn_bound",         "struct B<F: Fn() -> i32> { f: F } fn main() -> i32 { 42 }",                                 42),
+        ("struct_gen_fn_arg_bound",     "struct B<F: Fn(i32) -> i32> { f: F } fn main() -> i32 { 42 }",                              42),
+        ("struct_gen_fnmut_bound",      "struct B<F: FnMut() -> i32> { f: F } fn main() -> i32 { 42 }",                              42),
+        ("struct_gen_iter_assoc",       "struct B<I: Iterator<Item = i32>> { it: I } fn main() -> i32 { 42 }",                       42),
+        ("struct_gen_plus_chain",       "struct B<T: Send + Sync> { x: T } fn main() -> i32 { 42 }",                                 42),
+        ("struct_gen_two_bound_params", "struct P<T: Sized, U: Sized> { x: T, y: U } fn main() -> i32 { 42 }",                       42),
+        ("struct_gen_lifetime_bound",   "struct S<'a, T: 'a> { x: T } fn main() -> i32 { 42 }",                                      42),
+
+        # Regression-guards: plain struct decl forms unchanged
+        ("plain_struct",                "struct S { x: i32 } fn main() -> i32 { 42 }",                                                42),
+        ("plain_gen_struct",            "struct S<T> { x: T } fn main() -> i32 { 42 }",                                              42),
+        ("plain_gen_two_params",        "struct P<T, U> { x: T, y: U } fn main() -> i32 { 42 }",                                     42),
+        ("plain_gen_sized_bound",       "struct S<T: Sized> { x: T } fn main() -> i32 { 42 }",                                       42),
+        ("plain_unit_struct",           "struct M; fn main() -> i32 { 42 }",                                                          42),
+        ("plain_tuple_struct",          "struct P(i32, i32); fn main() -> i32 { 42 }",                                                42),
+        ("plain_gen_use",               "struct B<T> { x: T } fn main() -> i32 { let b: B<i32> = B { x: 42 }; b.x }",                42),
+
+        # K1.DE still works (parse_fn_decl bound loop unchanged)
+        ("k1_de_fn_bound",              "fn apply<F: Fn() -> i32>(f: F) -> i32 { 42 } fn main() -> i32 { 42 }",                      42),
+
+        # Other regression-guards
+        ("plain_let",                   "fn main() -> i32 { let x = 42; x }",                                                          42),
+        ("range_let",                   "fn main() -> i32 { let r = 0..=5; 42 }",                                                      42),
+        ("for_loop",                    "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",                     42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"struct_gen_bound_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_fn_trait_bound_self_host():
     """K1.DE (2026-05-26): `Fn(...) -> Ret` trait bound and
     `Trait<AssocTy = T>` generic args in generic-param bound.
