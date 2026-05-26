@@ -1620,10 +1620,12 @@ fn is_kw_extern_ident(id_s: i32, id_l: i32) -> i32 {
 // modifiers at a top-level decl position. Recognizes:
 //   pub [ ( ... ) ]
 //   extern [ "ABI_STRLIT" ]
-// Multiple modifiers can stack (`pub extern fn ...`). The peeked
-// IDENT is consumed and the cursor advanced; if NO modifier is
-// present, the cursor stays put. Returns 0 (unused). Caller
-// re-fetches the current token after this returns.
+//   unsafe   (K1.AY 2026-05-25: as `unsafe fn` modifier)
+// Multiple modifiers can stack (`pub extern fn ...`,
+// `pub unsafe fn ...`, etc.). The peeked IDENT is consumed and
+// the cursor advanced; if NO modifier is present, the cursor
+// stays put. Returns 0 (unused). Caller re-fetches the current
+// token after this returns.
 fn consume_vis_modifiers(tok_base: i32, sb: i32) -> i32 {
     let mut keep_v: i32 = 1;
     while keep_v == 1 {
@@ -1655,9 +1657,20 @@ fn consume_vis_modifiers(tok_base: i32, sb: i32) -> i32 {
                 if nt == 25 {                    // TK_STRLIT
                     cur_advance(sb);
                 };
+            } else { if is_kw_unsafe_ident(s, l) == 1 {
+                // K1.AY (2026-05-25): `unsafe fn dangerous() { ... }`.
+                // The bootstrap doesn't model unsafe blocks vs safe
+                // code -- every operation is "safe" in the Phase-0
+                // sense -- so this is purely syntactic acceptance.
+                // The standalone `unsafe { block }` expression form
+                // is handled separately in parse_primary (K1.AB) and
+                // is not reached here because consume_vis_modifiers
+                // only runs at top-level decl positions, never
+                // inside fn bodies.
+                cur_advance(sb);
             } else {
                 keep_v = 0;
-            }};
+            }}};
         } else {
             keep_v = 0;
         };

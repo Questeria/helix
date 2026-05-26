@@ -8210,6 +8210,26 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_unsafe_fn_modifier_self_host():
+    """K1.AY (2026-05-25): `unsafe fn dangerous() -> i32 { ... }`
+    (the `unsafe` keyword as an outer fn-decl modifier, not the
+    `unsafe { block }` expression form K1.AB already handled).
+    The bootstrap doesn't model safe vs unsafe -- every op is
+    "safe" in the Phase-0 sense -- so this is purely syntactic
+    acceptance. consume_vis_modifiers grew a third arm next to
+    `pub` / `extern` to swallow the keyword before parse_fn_decl
+    sees the `fn` IDENT. 4 sub-probes."""
+    cases = [
+        ("plain",         "unsafe fn dangerous() -> i32 { 42 } fn main() -> i32 { dangerous() }",                                            42),
+        ("pub_unsafe",    "pub unsafe fn dangerous() -> i32 { 42 } fn main() -> i32 { dangerous() }",                                        42),
+        ("extern_unsafe", "extern \"C\" unsafe fn dangerous() -> i32 { 42 } fn main() -> i32 { dangerous() }",                               42),
+        ("multi_unsafe",  "unsafe fn a() -> i32 { 10 } unsafe fn b() -> i32 { 32 } fn main() -> i32 { a() + b() }",                          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"unsafe_fn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unit_return_type_self_host():
     """K1.AX (2026-05-25): `fn x() -> () { ... }` (explicit unit
     return type) now compiles. Previously parse_fn_decl
