@@ -8245,6 +8245,40 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_tuple_struct_self_host():
+    """K1.BN (2026-05-26): tuple struct `struct Pt(i32, i32);`
+    (paren-list of positional field types terminated with `;`).
+    Common Rust pattern for newtypes (`struct Meters(i32);`)
+    and lightweight pair / triple wrappers (`struct Color(u8,
+    u8, u8);`).
+
+    parse_struct_decl previously assumed every struct decl
+    used the brace-block (K1.* default) or the unit-semicolon
+    (K1.BL) form. For the paren form, the unconditional `{`
+    consume tripped on `(`, the field-loop ate parser state,
+    and K2 hung at runtime on any program declaring a tuple
+    struct.
+
+    Fix: in the post-name peek (already split by K1.BL into
+    unit-vs-not), add a third arm for TK_LPAREN (3). Consume
+    the entire paren-balanced field-list as a syntactic
+    no-op, then consume the trailing `;`. Field positions are
+    NOT registered -- positional access (`pt.0`, `pt.1`) is a
+    separate gap that K1.BN intentionally doesn't address.
+
+    4 sub-probes: 2-field, 1-field newtype, 3-field, with
+    other decls."""
+    cases = [
+        ("two_field",   "struct Pt(i32, i32); fn main() -> i32 { 42 }",                                                          42),
+        ("newtype",     "struct Meters(i32); fn main() -> i32 { 42 }",                                                            42),
+        ("three_field", "struct Color(i32, i32, i32); fn main() -> i32 { 42 }",                                                   42),
+        ("mixed_decls", "struct Pt(i32, i32); struct Color { r: i32 } fn main() -> i32 { 42 }",                                   42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"tuple_struct_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unit_struct_self_host():
     """K1.BL (2026-05-26): unit struct `struct Marker;`
     (semicolon-terminated, no `{...}` block) accepted.

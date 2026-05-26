@@ -8728,13 +8728,42 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     // fields_ptr stay at 0, which is the correct shape for a
     // zero-field struct. Common Rust pattern for marker/phantom
     // types like `struct Marker;` or `struct Pixel;`.
+    //
+    // K1.BN (2026-05-26): tuple struct `struct Pt(i32, i32);`
+    // (paren-list of positional field types terminated with `;`).
+    // Consume the entire `(...)` paren block as a syntactic no-op
+    // then consume `;`. The fields are accepted-and-ignored;
+    // field_count / fields_ptr stay at 0 since the bootstrap
+    // doesn't yet model positional-field access (`pt.0`, `pt.1`).
+    // Real positional-field support is a separate gap. K1.BN
+    // only unblocks the parse so Rust source with tuple structs
+    // doesn't hang K2.
     let mut field_count: i32 = 0;
     let mut fields_ptr: i32 = 0;             // 0 if no fields
-    let is_unit_struct = if tok_tag(tok_base, cur_get(sb)) == 12 { 1 } else { 0 };
+    let post_name_t = tok_tag(tok_base, cur_get(sb));
+    let is_unit_struct = if post_name_t == 12 { 1 } else { 0 };
+    let is_tuple_struct = if post_name_t == 3 { 1 } else { 0 };
     if is_unit_struct == 1 {
         cur_advance(sb);                     // consume ';'
     };
-    if is_unit_struct == 0 {
+    if is_tuple_struct == 1 {
+        cur_advance(sb);                     // consume '('
+        let mut depth_ts: i32 = 1;
+        while depth_ts > 0 {
+            let tst = tok_tag(tok_base, cur_get(sb));
+            if tst == 3 { depth_ts = depth_ts + 1; };
+            if tst == 4 { depth_ts = depth_ts - 1; };
+            if tst == 0 { depth_ts = 0; };
+            cur_advance(sb);
+        };
+        // After the matching ')', expect ';' (defensive: tolerate
+        // missing semi -- same shape as parse_use_decl's tail).
+        if tok_tag(tok_base, cur_get(sb)) == 12 {
+            cur_advance(sb);                 // consume ';'
+        };
+    };
+    let skip_brace_body = if is_unit_struct == 1 { 1 } else { if is_tuple_struct == 1 { 1 } else { 0 } };
+    if skip_brace_body == 0 {
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -8810,7 +8839,7 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         }};
     }
     cur_advance(sb);                         // consume '}' (RBRACE = 6)
-    };  // K1.BL (2026-05-26): close the `if is_unit_struct == 0` block
+    };  // K1.BL/BN (2026-05-26): close the `if skip_brace_body == 0` block
     // Stage 28.11 INC-3b: BEFORE struct_tab_add and BEFORE the exit-
     // reset of gp_tab below, capture the gp_count and build a
     // mk_node(76, name_s, name_l, next) chain of gp_names. Mirrors
