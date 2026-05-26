@@ -8245,6 +8245,54 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_closure_mut_param_self_host():
+    """K1.CP (2026-05-26): `mut` modifier on closure params.
+    Common Rust idiom for closures that mutate their param:
+
+      let f = |mut x: i32| { x += 1; x };
+
+    The bootstrap is type-erased and doesn't track mutability;
+    `mut` on a closure param is a no-op modifier. Mirrors K1.BB
+    which added `mut` to fn params.
+
+    Previously failed (rc=132) because parse_closure_lit's param
+    loop expected an IDENT directly; the leading `mut` IDENT was
+    treated as the param name, then the actual name IDENT was
+    mis-parsed as the `: T` annotation start.
+
+    Fix: before capturing the param-name IDENT, peek for `mut`
+    (via byte_eq against kw_mut_s/n). If matched, consume.
+
+    Combines cleanly with all closure forms: `|mut x|`,
+    `|mut x: i32|`, `|mut x, y|`, `|mut x, mut y|`, etc.
+
+    5 sub-probes (mut-single, mut-no-type, mut-multi-first,
+    mut-multi-both, mut-only-second) + 8 regression-guards
+    covering plain closures, move closure, and prior K1.*
+    features."""
+    cases = [
+        # K1.CP new cases
+        ("mut_single",       "fn main() -> i32 { let f = |mut x: i32| x; f(42) }",                              42),
+        ("mut_no_type",      "fn main() -> i32 { let f = |mut x| x; f(42) }",                                   42),
+        ("mut_multi_first",  "fn main() -> i32 { let f = |mut x: i32, y: i32| x + y; f(40, 2) }",              42),
+        ("mut_multi_both",   "fn main() -> i32 { let f = |mut x, mut y| x + y; f(40, 2) }",                    42),
+        ("mut_only_second",  "fn main() -> i32 { let f = |x: i32, mut y: i32| x + y; f(40, 2) }",              42),
+
+        # Regression-guards
+        ("plain_typed_arg",  "fn main() -> i32 { let f = |x: i32| x; f(42) }",                                  42),
+        ("plain_no_arg",     "fn main() -> i32 { let f = || 42; f() }",                                          42),
+        ("two_args",         "fn main() -> i32 { let f = |x, y| x + y; f(40, 2) }",                              42),
+        ("block_body",       "fn main() -> i32 { let f = || { 42 }; f() }",                                      42),
+        ("move_closure",     "fn main() -> i32 { let f = move || 42; f() }",                                    42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                              42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                          42),
+        ("try_block",        "fn main() -> i32 { let x = try { 42 }; x }",                                       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"cl_mut_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_try_block_self_host():
     """K1.CO (2026-05-26): `try { ... }` block as transparent
     value (no-op wrapper). Rust unstable feature; commonly used

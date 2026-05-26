@@ -2471,6 +2471,20 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
             } else { if pt == 0 {                // EOF safety
                 keep_p = 0;
             } else {
+                // K1.CP (2026-05-26): optional `mut` modifier on
+                // closure params. `|mut x| ...` is identical to
+                // `|x| ...` for the type-erased bootstrap; consume
+                // the `mut` keyword if present so the actual param
+                // IDENT is the next token. Mirrors K1.BB which added
+                // `mut` to fn params.
+                let pre_mut_t_cp = tok_tag(tok_base, cur_get(sb));
+                if pre_mut_t_cp == 2 {
+                    let pre_mut_s_cp = tok_p2(tok_base, cur_get(sb));
+                    let pre_mut_l_cp = tok_p3(tok_base, cur_get(sb));
+                    if byte_eq(pre_mut_s_cp, pre_mut_l_cp, kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                        cur_advance(sb);         // consume 'mut'
+                    };
+                };
                 // Expect IDENT for param name.
                 let pk = cur_get(sb);
                 let p_s = tok_p2(tok_base, pk);
