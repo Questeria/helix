@@ -10043,10 +10043,84 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
     cur_advance(sb);                         // ')'
     cur_advance(sb);                         // '-' part of '->'
     cur_advance(sb);                         // '>' part of '->'
+    // K1.DT (2026-05-26): `&T` / `&'lt T` / `&mut T` / `&'lt mut T`
+    // in impl-method return type. Real Rust uses these for borrowed
+    // return values from methods:
+    //   impl S { fn get(&self) -> &i32 { &self.v } }
+    //   impl S { fn name(&self) -> &'static str { "..." } }
+    //   impl S { fn data(&self) -> &Vec<i32> { &self.data } }
+    //
+    // Previously SIGILL'd / hung (TIMEOUT for many shapes) because the
+    // parse_impl_method return-type parser unconditionally consumed an
+    // IDENT after `->`. For the `&T` shape, the cursor at `&` (TK_AMP
+    // = 27) was not consumed, the IDENT consume grabbed `&` as junk,
+    // and downstream parsing/codegen broke.
+    //
+    // Fix: mirror K1.DR's fn-return `&T` handling. After consuming
+    // `->`, peek for TK_AMP (27). If matched, consume `&` plus
+    // optional lifetime IDENT + optional `mut` IDENT.
+    if tok_tag(tok_base, cur_get(sb)) == 27 {
+        cur_advance(sb);                     // consume '&'
+        // Optional lifetime IDENT.
+        if tok_tag(tok_base, cur_get(sb)) == 2 {
+            let nxt_t_dt = tok_tag(tok_base, cur_get(sb) + 1);
+            let is_ty_start_dt = if nxt_t_dt == 2 { 1 }
+                else { if nxt_t_dt == 20 { 1 }
+                else { if nxt_t_dt == 9 { 1 }
+                else { if nxt_t_dt == 3 { 1 }
+                else { 0 } } } };
+            if is_ty_start_dt == 1 {
+                let lt_s_dt = tok_p2(tok_base, cur_get(sb));
+                let lt_l_dt = tok_p3(tok_base, cur_get(sb));
+                if byte_eq(lt_s_dt, lt_l_dt, kw_mut_s(sb), kw_mut_n(sb)) == 0 {
+                    cur_advance(sb);         // consume lifetime IDENT
+                };
+            };
+        };
+        // Optional `mut` IDENT.
+        if tok_tag(tok_base, cur_get(sb)) == 2 {
+            if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                cur_advance(sb);             // consume 'mut'
+            };
+        };
+    };
     let rt_tok = cur_get(sb);
     let rt_s = tok_p2(tok_base, rt_tok);
     let rt_l = tok_p3(tok_base, rt_tok);
     cur_advance(sb);                         // return-type IDENT
+    // K1.DT: optional `<...>` generic args after the return-type IDENT.
+    // Mirrors K1.DS pattern. Handles `Vec<i32>`, `Box<dyn T>`, etc.
+    if tok_tag(tok_base, cur_get(sb)) == 16 {
+        cur_advance(sb);                     // consume '<'
+        let mut g_depth_dt: i32 = 1;
+        let mut prev_minus_dt: i32 = 0;
+        while g_depth_dt > 0 {
+            let gt_dt = tok_tag(tok_base, cur_get(sb));
+            if gt_dt == 16 {
+                g_depth_dt = g_depth_dt + 1;
+                prev_minus_dt = 0;
+            } else { if gt_dt == 17 {
+                if prev_minus_dt == 1 {
+                    prev_minus_dt = 0;
+                } else {
+                    g_depth_dt = g_depth_dt - 1;
+                };
+            } else { if gt_dt == 31 {
+                g_depth_dt = g_depth_dt - 2;
+                prev_minus_dt = 0;
+            } else { if gt_dt == 0 {
+                g_depth_dt = 0;
+            } else { if gt_dt == 8 {
+                prev_minus_dt = 1;
+            } else {
+                prev_minus_dt = 0;
+            }}}}};
+            if g_depth_dt > 0 {
+                cur_advance(sb);
+            };
+        }
+        cur_advance(sb);                     // consume final '>' / '>>'
+    };
     let is_self_rt = if rt_l == 4 {
         let s0 = __arena_get(rt_s);
         let s1 = __arena_get(rt_s + 1);

@@ -8245,6 +8245,65 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_method_amp_ret_self_host():
+    """K1.DT (2026-05-26): `&T` (with optional lifetime + mut) and
+    optional `<...>` generic args after the type IDENT in impl-
+    method return type position. Real Rust uses these for
+    borrowed return values from methods:
+
+      impl S { fn get(&self) -> &i32 { &self.v } }
+      impl S { fn name(&self) -> &'static str { "..." } }
+      impl S { fn data(&self) -> &Vec<i32> { &self.data } }
+      impl S { fn x() -> Box<i32> { 0 } }
+
+    Previously SIGILL'd / hung (TIMEOUT) because parse_impl_method's
+    return-type parser was minimal: just `-`, `>`, IDENT, `{`. No
+    handling for `&T` prefix or `<...>` generic args after the IDENT.
+    For `&T` shape, the cursor at `&` (TK_AMP = 27) was not consumed
+    so the IDENT consume grabbed `&` as junk. For `Vec<i32>` shape,
+    the IDENT consume grabbed `Vec` correctly but the `<i32>` was
+    left in the token stream where the body parser would mis-treat
+    it as the start of a `{` body block, hanging.
+
+    Two-part fix:
+
+      (1) Before the return-type IDENT consume, peek for TK_AMP (27).
+          If matched, consume `&` + optional lifetime IDENT (one
+          IDENT before the type IDENT if it's not `mut`) + optional
+          `mut` IDENT. Mirror of K1.DR's fn-return `&T` handling.
+
+      (2) After the return-type IDENT consume, peek for `<` (TK_LT =
+          16). If matched, consume `<...>` depth-balanced with K1.CZ
+          prev_minus tracking for `->` inside generics. Mirror of
+          K1.DS pattern.
+
+    The bootstrap is type-erased; `&T` and generic args collapse away
+    at codegen.
+
+    8 sub-probes + 4 regression-guards covering plain i32/self
+    return, fn-decl `&` return, plain let."""
+    cases = [
+        # K1.DT new cases
+        ("method_amp_i32",          "struct S; impl S { fn x() -> &i32 { let v = 42; &v } } fn main() -> i32 { 42 }",                          42),
+        ("method_amp_static",       "struct S; impl S { fn x() -> &'static i32 { let v = 42; &v } } fn main() -> i32 { 42 }",                 42),
+        ("method_amp_lt",           "struct S; impl S { fn x<'a>() -> &'a i32 { let v = 42; &v } } fn main() -> i32 { 42 }",                  42),
+        ("method_amp_mut",          "struct S; impl S { fn x() -> &mut i32 { let mut v = 42; &mut v } } fn main() -> i32 { 42 }",             42),
+        ("method_amp_vec",          "struct S; impl S { fn x() -> &Vec<i32> { 0 } } fn main() -> i32 { 42 }",                                  42),
+        ("method_amp_box_dyn",      "trait T {} struct S; impl S { fn x() -> &Box<dyn T> { 0 } } fn main() -> i32 { 42 }",                    42),
+        ("method_vec_no_amp",       "struct S; impl S { fn x() -> Vec<i32> { 0 } } fn main() -> i32 { 42 }",                                   42),
+        ("method_box_no_amp",       "struct S; impl S { fn x() -> Box<i32> { 0 } } fn main() -> i32 { 42 }",                                   42),
+
+        # Regression-guards
+        ("method_i32_ret",          "struct S; impl S { fn x() -> i32 { 42 } } fn main() -> i32 { S::x() }",                                   42),
+        ("method_self_ret",         "struct S; impl S { fn new() -> Self { S } } fn main() -> i32 { 42 }",                                     42),
+        ("fn_decl_amp_ret",         "fn f() -> &i32 { let v = 42; &v } fn main() -> i32 { 42 }",                                                42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                                                       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_amp_ret_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_ref_generic_let_type_self_host():
     """K1.DS (2026-05-26): `<...>` generic args after the IDENT
     in `&T<...>` / `&'lt T<...>` let-type position. Real Rust
