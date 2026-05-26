@@ -1668,9 +1668,18 @@ fn consume_vis_modifiers(tok_base: i32, sb: i32) -> i32 {
                 // only runs at top-level decl positions, never
                 // inside fn bodies.
                 cur_advance(sb);
+            } else { if is_kw_async_ident(s, l) == 1 {
+                // K1.AZ (2026-05-26): `async fn fetch() { ... }`.
+                // The bootstrap has no async runtime / state-machine
+                // transform -- treat the keyword as a parser-level
+                // no-op so Rust sources with `async fn` parse.
+                // Semantic execution is undefined (callers of an
+                // async fn get the body's return value directly,
+                // not a Future). Syntactic acceptance only.
+                cur_advance(sb);
             } else {
                 keep_v = 0;
-            }}};
+            }}}};
         } else {
             keep_v = 0;
         };
@@ -1715,6 +1724,29 @@ fn is_kw_unsafe_ident(id_s: i32, id_l: i32) -> i32 {
                         if __arena_get(id_s + 4) == 102 {
                             if __arena_get(id_s + 5) == 101 { 1 } else { 0 }
                         } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
+// K1.AZ (2026-05-26): match the 5-byte IDENT "async" (bytes
+// 97, 115, 121, 110, 99). Used by consume_vis_modifiers to
+// swallow `async fn ...` at top-level decl positions. The
+// bootstrap has no async runtime / executor / state-machine
+// transform -- the keyword is accepted as a parser-level
+// no-op so Rust sources with async fns can at least be
+// parsed. Semantic execution is undefined; callers of an
+// async fn get whatever the body returns directly, not a
+// Future. Used only for parser-level acceptance.
+fn is_kw_async_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 5 {
+        if __arena_get(id_s) == 97 {
+            if __arena_get(id_s + 1) == 115 {
+                if __arena_get(id_s + 2) == 121 {
+                    if __arena_get(id_s + 3) == 110 {
+                        if __arena_get(id_s + 4) == 99 { 1 } else { 0 }
                     } else { 0 }
                 } else { 0 }
             } else { 0 }

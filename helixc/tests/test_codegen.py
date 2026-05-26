@@ -8210,6 +8210,25 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_async_fn_modifier_self_host():
+    """K1.AZ (2026-05-26): `async fn x() -> i32 { ... }` accepted
+    as a parser-level no-op. The bootstrap has no async runtime
+    / state-machine transform; the keyword is consumed by
+    consume_vis_modifiers (4th arm next to pub / extern /
+    unsafe) so Rust sources with async fns at least parse.
+    Semantic execution is undefined -- callers receive the
+    body's value directly, not a Future. 4 sub-probes."""
+    cases = [
+        ("plain",        "async fn fetch() -> i32 { 42 } fn main() -> i32 { fetch() }",                                                  42),
+        ("pub_async",    "pub async fn fetch() -> i32 { 42 } fn main() -> i32 { fetch() }",                                              42),
+        ("async_unsafe", "async unsafe fn fetch() -> i32 { 42 } fn main() -> i32 { fetch() }",                                           42),
+        ("multi_async",  "async fn a() -> i32 { 10 } async fn b() -> i32 { 32 } fn main() -> i32 { a() + b() }",                          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"async_fn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unsafe_fn_modifier_self_host():
     """K1.AY (2026-05-25): `unsafe fn dangerous() -> i32 { ... }`
     (the `unsafe` keyword as an outer fn-decl modifier, not the
