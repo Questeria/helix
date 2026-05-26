@@ -8245,6 +8245,44 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_struct_like_enum_variant_self_host():
+    """K1.BO (2026-05-26): struct-like enum variant `B { x: i32 }`
+    accepted. Common Rust pattern -- e.g. `enum Shape { Circle {
+    radius: f32 }, Rect { w: f32, h: f32 } }`. Combined with
+    tuple variants (`A(i32)`) and unit variants (`C`), this
+    completes the enum-variant form coverage at parse time.
+
+    parse_enum_decl's variant loop previously only handled bare
+    variants and tuple variants (`A(T1, T2)`). For struct-like
+    variants, the `{` after the variant name was unhandled --
+    the loop fell through to push the variant with arity=0 and
+    left `{` in the stream, leading to nonsense parsing of the
+    field list as more variant names.
+
+    Fix: in the post-name peek, add a TK_LBRACE (5) arm
+    parallel to the existing TK_LPAREN (3) arm. Consume the
+    entire brace-balanced field-list as a syntactic no-op
+    (depth-counted, EOF-safe).
+
+    Real struct-variant codegen (construction via `E::B { x: 1 }`,
+    field access on a bound variant) is a separate gap. K1.BO
+    only unblocks the parse so enums with struct-like variants
+    no longer hang K2.
+
+    4 sub-probes: single struct variant, mixed (tuple + struct +
+    unit), multi-field struct variant, multiple struct
+    variants."""
+    cases = [
+        ("single",       "enum E { B { x: i32 } } fn main() -> i32 { 42 }",                                                         42),
+        ("mixed_three",  "enum E { A(i32), B { x: i32 }, C } fn main() -> i32 { 42 }",                                              42),
+        ("multi_field",  "enum E { Rect { w: i32, h: i32, d: i32 } } fn main() -> i32 { 42 }",                                       42),
+        ("two_struct",   "enum E { A { x: i32 }, B { y: i32, z: i32 } } fn main() -> i32 { 42 }",                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"enum_struct_var_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_tuple_struct_self_host():
     """K1.BN (2026-05-26): tuple struct `struct Pt(i32, i32);`
     (paren-list of positional field types terminated with `;`).

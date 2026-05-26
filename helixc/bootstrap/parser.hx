@@ -7993,6 +7993,26 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
                 }
                 cur_advance(sb);             // consume ')'
             };
+            // K1.BO (2026-05-26): struct-like variant `B { x: i32, ... }`.
+            // Consume the entire brace-balanced block as a syntactic
+            // no-op. The fields are accepted-and-ignored; arity stays
+            // at 0 since the bootstrap doesn't yet model named-field
+            // access on enum variants. Real struct-variant codegen
+            // (construction via `E::B { x: 1 }`, field access through
+            // a binding) is a separate gap. K1.BO only unblocks the
+            // parse so Rust source with `enum E { ..., B { x: T },
+            // ... }` doesn't hang K2.
+            if after_name_t == 5 {           // '{'
+                cur_advance(sb);             // consume '{'
+                let mut depth_ev: i32 = 1;
+                while depth_ev > 0 {
+                    let evt = tok_tag(tok_base, cur_get(sb));
+                    if evt == 5 { depth_ev = depth_ev + 1; };
+                    if evt == 6 { depth_ev = depth_ev - 1; };
+                    if evt == 0 { depth_ev = 0; };
+                    cur_advance(sb);
+                };
+            };
             // Push variant entry: (name_s, name_l, arity, discriminant).
             // Capture variants_ptr from the FIRST push so subsequent
             // variants append after it.
