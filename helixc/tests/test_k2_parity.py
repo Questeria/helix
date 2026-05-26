@@ -43,6 +43,7 @@ import pytest
 # Future K2.* chunks expand this list (and eventually replace it with
 # a directory of .hx files).
 K2_CORPUS = [
+    # ---- K2.A starter (10) ----
     ("p01_basic_return",         "fn main() -> i32 { 42 }", 42),
     ("p02_let_int",              "fn main() -> i32 { let x = 42; x }", 42),
     ("p03_arith",                "fn main() -> i32 { 20 + 22 }", 42),
@@ -53,6 +54,29 @@ K2_CORPUS = [
     ("p08_tuple_field",          "fn main() -> i32 { let t = (42, 0); t.0 }", 42),
     ("p09_fn_call",              "fn f() -> i32 { 42 } fn main() -> i32 { f() }", 42),
     ("p10_neg_then_add",         "fn main() -> i32 { let x = -10 + 52; x }", 42),
+    # ---- K2.B expansion: arithmetic / control-flow / value-flow (15) ----
+    ("p11_sub",                  "fn main() -> i32 { 100 - 58 }", 42),
+    ("p12_mul",                  "fn main() -> i32 { 6 * 7 }", 42),
+    ("p13_div",                  "fn main() -> i32 { 84 / 2 }", 42),
+    ("p14_mod",                  "fn main() -> i32 { 142 % 100 }", 42),
+    ("p15_chained_let",          "fn main() -> i32 { let a = 10; let b = a + 5; let c = b * 2; c + 12 }", 42),
+    ("p16_if_else_if",           "fn main() -> i32 { let x = 2; if x == 1 { 1 } else if x == 2 { 42 } else { 99 } }", 42),
+    ("p17_nested_if",            "fn main() -> i32 { let x = 10; if x > 5 { if x < 20 { 42 } else { 0 } } else { 0 } }", 42),
+    ("p18_struct_two_fields",    "struct P { x: i32, y: i32 } fn main() -> i32 { let p = P { x: 20, y: 22 }; p.x + p.y }", 42),
+    ("p19_tuple_two_fields",     "fn main() -> i32 { let t = (20, 22); t.0 + t.1 }", 42),
+    ("p20_match_three_arms",     "fn main() -> i32 { let x = 2; match x { 1 => 0, 2 => 42, _ => 99 } }", 42),
+    ("p21_multi_param_fn",       "fn add(a: i32, b: i32) -> i32 { a + b } fn main() -> i32 { add(20, 22) }", 42),
+    # NOTE: K2.B initially tried `for i in 1..=5 { ... }` here. The
+    # bootstrap kovc accepts it (per K1.L), but the Python helixc
+    # parser does NOT -- it errors at "expected LBRACE (got DOTDOTEQ
+    # '..=')". This is a Python-side gap that K2 surfaces. For the
+    # K2.B green-shipping corpus we use the exclusive variant; a
+    # future K2.* chunk can re-introduce the inclusive form once
+    # Python helixc gains parity (or once Python is deleted at K4).
+    ("p22_for_exclusive_offset", "fn main() -> i32 { let mut s = 0; for i in 1..6 { s = s + i; } s + 27 }", 42),
+    ("p23_for_mul_in_body",      "fn main() -> i32 { let mut s = 0; for _ in 0..6 { s = s + 7; } s }", 42),
+    ("p24_recursive_fact",       "fn fact(n: i32) -> i32 { if n <= 1 { 1 } else { n * fact(n - 1) } } fn main() -> i32 { fact(5) - 78 }", 42),
+    ("p25_cmp_gt",               "fn main() -> i32 { let x = 100; if x > 50 { 42 } else { 0 } }", 42),
 ]
 
 
@@ -96,16 +120,20 @@ def test_k2_parity(name: str, src: str, expected_rc: int):
 
 
 def test_k2_corpus_size():
-    """Sanity check: corpus has at least 10 entries at K2.A.
+    """Sanity check: corpus has at least 25 entries at K2.B.
 
     Future K2.* chunks expand the corpus. This test guards against
     accidental shrinkage. The growth ratchet is one-way: each K2.*
-    chunk strictly increases the lower bound (e.g., K2.B might bump
-    to 20, K2.C to 40, etc.) until a credible "K2 green over a real-
-    source corpus" threshold is reached.
+    chunk strictly increases the lower bound. History:
+
+      - K2.A bumped to >= 10 (starter scaffold).
+      - K2.B bumped to >= 25 (arithmetic / control-flow / value-flow).
+
+    Subsequent K2.* chunks will continue raising it until a credible
+    "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 10, (
-        f"K2.A corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 25, (
+        f"K2.B corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
