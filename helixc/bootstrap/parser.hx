@@ -3571,8 +3571,19 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     // annotation -- consume it so the existing mut
                     // + type IDENT consume picks up the right tokens.
                     cur_advance(sb);    // consume '&'
+                    // K1.CS lifetime detection: if current is IDENT
+                    // and next is a type-starter (IDENT, `[`, `*`,
+                    // `(`), the current is a lifetime annotation.
+                    // K1.CU follow-up: extended to also accept `[`
+                    // (TK_LBRACK = 20) for `&'a [T]` slice ref.
                     if tok_tag(tok_base, cur_get(sb)) == 2 {
-                        if tok_tag(tok_base, cur_get(sb) + 1) == 2 {
+                        let nxt_t_cs = tok_tag(tok_base, cur_get(sb) + 1);
+                        let is_ty_start_cs = if nxt_t_cs == 2 { 1 }
+                            else { if nxt_t_cs == 20 { 1 }
+                            else { if nxt_t_cs == 9 { 1 }
+                            else { if nxt_t_cs == 3 { 1 }
+                            else { 0 } } } };
+                        if is_ty_start_cs == 1 {
                             let lt_s_cs = tok_p2(tok_base, cur_get(sb));
                             let lt_l_cs = tok_p3(tok_base, cur_get(sb));
                             // Don't consume if it's `mut` -- existing
@@ -3606,7 +3617,37 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             cur_advance(sb);    // consume 'mut'
                         };
                     };
-                    cur_advance(sb);    // consume type IDENT
+                    // K1.CU (2026-05-26): `&[T]` slice ref or
+                    // `&[T; N]` array ref. After consuming `&` (and
+                    // optional lifetime + optional `mut`), peek for
+                    // `[` (TK_LBRACK = 20). If matched, consume the
+                    // entire `[...]` block bracket-balanced as a
+                    // type-erased no-op. Without this, the type
+                    // IDENT consume below would grab `[` as if it
+                    // were the type name and trip the parser.
+                    if tok_tag(tok_base, cur_get(sb)) == 20 {
+                        cur_advance(sb);    // consume '['
+                        let mut sl_d_cu: i32 = 1;
+                        while sl_d_cu > 0 {
+                            let sl_t_cu = tok_tag(tok_base, cur_get(sb));
+                            if sl_t_cu == 20 {
+                                sl_d_cu = sl_d_cu + 1;
+                                cur_advance(sb);
+                            } else { if sl_t_cu == 21 {
+                                sl_d_cu = sl_d_cu - 1;
+                                if sl_d_cu > 0 {
+                                    cur_advance(sb);
+                                };
+                            } else { if sl_t_cu == 0 {
+                                sl_d_cu = 0;
+                            } else {
+                                cur_advance(sb);
+                            }}};
+                        }
+                        cur_advance(sb);    // consume ']'
+                    } else {
+                        cur_advance(sb);    // consume type IDENT
+                    };
                 } else { if type_start_tag == 9 {
                     // K1.S (2026-05-25): `*const T` / `*mut T` / `*T`
                     // -- TyPtr. Consume `*`, optionally consume

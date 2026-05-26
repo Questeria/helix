@@ -8245,6 +8245,68 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_slice_array_ref_let_type_self_host():
+    """K1.CU (2026-05-26): `&[T]` slice ref and `&[T; N]` array ref
+    in let-type position. Common Rust types for borrowing arrays
+    and slices:
+
+      let s: &[i32] = &arr;
+      let r: &[i32; 3] = &fixed;
+      let l: &'a [i32] = ...;
+
+    Previously failed (rc=132) because K1.S's `&T` handler in
+    let-type position expected an IDENT after the `&` (and any
+    optional lifetime + mut). When the type-position byte was `[`
+    (TK_LBRACK = 20), the type IDENT consume picked up `[` as if
+    it were the type name and tripped the next parse step.
+
+    Fix (two-part):
+
+    (1) In K1.S's `&T` arm, after consuming `&` and optional
+        lifetime + optional `mut`, peek for `[`. If matched,
+        consume the entire `[...]` block bracket-balanced as a
+        type-erased no-op. Handles both `&[T]` (slice) and
+        `&[T; N]` (array ref) uniformly.
+
+    (2) Extend the K1.CS lifetime-IDENT detector. Previously it
+        only fired when current is IDENT AND next is also IDENT.
+        Now it also fires when next is `[` (TK_LBRACK = 20),
+        `*` (9), or `(` (3) -- any type-starter. This lets
+        `&'a [T]` correctly identify `'a` as the lifetime and
+        `[T]` as the underlying type.
+
+    The bootstrap is type-erased; this is purely syntactic
+    acceptance for `&[T]` shapes in let-type. Slice / array
+    semantics (indexing, len, etc.) on the binding still require
+    other work.
+
+    5 sub-probes (slice/array/mut-slice/lt-slice/lt-mut-array) +
+    9 regression-guards covering K1.S basics, K1.R array type,
+    K1.CS lifetime ref, and prior K1.* features."""
+    cases = [
+        # K1.CU new cases
+        ("slice_i32",        "fn main() -> i32 { let s: &[i32] = 42; 42 }",                                       42),
+        ("array_i32",        "fn main() -> i32 { let s: &[i32; 3] = 42; 42 }",                                    42),
+        ("mut_slice",        "fn main() -> i32 { let s: &mut [i32] = 42; 42 }",                                   42),
+        ("lt_slice",         "fn main() -> i32 { let s: &'a [i32] = 42; 42 }",                                    42),
+        ("lt_mut_array",     "fn main() -> i32 { let s: &'a mut [i32; 5] = 42; 42 }",                             42),
+
+        # Regression-guards
+        ("plain_amp_t",      "fn main() -> i32 { let x: &i32 = 42; 42 }",                                         42),
+        ("plain_amp_mut_t",  "fn main() -> i32 { let x: &mut i32 = 42; 42 }",                                     42),
+        ("plain_typed",      "fn main() -> i32 { let x: i32 = 42; x }",                                           42),
+        ("static_unchanged", 'fn main() -> i32 { let s: &\'static i32 = 42; 42 }',                                42),
+        ("array_type_let",   "fn main() -> i32 { let arr: [i32; 3] = [1, 2, 42]; arr[2] }",                       42),
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                                42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                            42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",           42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                      42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"slice_arr_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_generic_in_fn_signatures_self_host():
     """K1.CT (2026-05-26): `<...>` generic arg list in fn-param and
     fn-return types. K1.T handled generic args in let-type position
