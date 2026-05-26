@@ -8210,6 +8210,41 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_use_glob_brace_self_host():
+    """K1.BM (2026-05-26): `use foo::*;` (glob import) and
+    `use foo::{a, b, c};` (brace group) accepted by the
+    parser. Both are syntactic no-ops in the bootstrap -- no
+    actual import resolution happens (the use-table tracks
+    mangled paths for matching but doesn't materialize
+    bindings from external modules).
+
+    Previously parse_use_decl's path-walker only accepted
+    `::IDENT` chunks. For `::*` the TK_STAR token wasn't an
+    IDENT, the loop exited but left `*` and `;` in the
+    stream; the dispatch cascade then choked.
+
+    Fix: in the `::` arm, after consuming the two colons,
+    branch on the next token:
+      - TK_IDENT (2)  -> existing path-segment handling
+      - TK_STAR (9)   -> glob import, consume `*`, end loop
+      - TK_LBRACE (5) -> brace group, consume `{...}` depth-
+                         balanced, end loop
+      - else          -> stop (defensive, same as before)
+
+    5 sub-probes: glob, brace single, brace multi, super
+    glob, std glob."""
+    cases = [
+        ("glob",          "use std::vec::*; fn main() -> i32 { 42 }",                                                                42),
+        ("brace_single",  "use std::vec::{Vec}; fn main() -> i32 { 42 }",                                                            42),
+        ("brace_multi",   "use std::collections::{HashMap, BTreeMap, HashSet}; fn main() -> i32 { 42 }",                              42),
+        ("super_glob",    "mod inner { pub fn x() -> i32 { 42 } } use inner::*; fn main() -> i32 { 42 }",                            42),
+        ("crate_brace",   "use crate::{foo, bar}; fn main() -> i32 { 42 }",                                                          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"use_glob_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unit_struct_self_host():
     """K1.BL (2026-05-26): unit struct `struct Marker;`
     (semicolon-terminated, no `{...}` block) accepted.

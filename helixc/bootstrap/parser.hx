@@ -8394,7 +8394,8 @@ fn parse_use_decl(tok_base: i32, sb: i32) -> i32 {
             if nt == 14 {
                 cur_advance(sb);                 // first ':'
                 cur_advance(sb);                 // second ':'
-                // Next must be an IDENT (segment name).
+                // Next must be an IDENT (segment name), `*` (glob),
+                // or `{` (brace group). K1.BM (2026-05-26).
                 let sk = cur_get(sb);
                 let st = tok_tag(tok_base, sk);
                 if st == 2 {
@@ -8411,9 +8412,35 @@ fn parse_use_decl(tok_base: i32, sb: i32) -> i32 {
                     total_l = total_l + 2 + s_l;
                     last_seg_s = s_s;
                     last_seg_l = s_l;
+                } else { if st == 9 {
+                    // K1.BM (2026-05-26): glob import `::*`. Consume
+                    // the `*` (TK_STAR=9) and end the path-walker.
+                    // The bootstrap doesn't model import resolution
+                    // -- the glob is a no-op like the rest of the
+                    // path: registered in use_tab but never consulted
+                    // beyond mangled-name handling.
+                    cur_advance(sb);             // consume '*'
+                    keep = 0;
+                } else { if st == 5 {
+                    // K1.BM (2026-05-26): brace group `::{a, b, c}`.
+                    // Consume the entire brace-balanced block as a
+                    // syntactic no-op (same shape as the extern
+                    // block handling in consume_vis_modifiers). The
+                    // bootstrap doesn't model multi-import resolution
+                    // so the items inside are accepted-and-ignored.
+                    cur_advance(sb);             // consume '{'
+                    let mut depth_u: i32 = 1;
+                    while depth_u > 0 {
+                        let ut = tok_tag(tok_base, cur_get(sb));
+                        if ut == 5 { depth_u = depth_u + 1; };
+                        if ut == 6 { depth_u = depth_u - 1; };
+                        if ut == 0 { depth_u = 0; };
+                        cur_advance(sb);
+                    };
+                    keep = 0;
                 } else {
                     keep = 0;
-                };
+                }}};
             } else {
                 keep = 0;
             };
