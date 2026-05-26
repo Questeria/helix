@@ -8245,6 +8245,70 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_range_expr_in_let_self_host():
+    """K1.CA (2026-05-26): range expressions in let-RHS position
+    parse cleanly. Real Rust source uses range literals for
+    iteration bounds, slicing, and pattern construction. All six
+    range forms must be syntactically accepted:
+
+      let r = 0..5;     // exclusive range (start..end)
+      let r = 0..=5;    // inclusive range (start..=end)
+      let r = 5..;      // range-from (start..)
+      let r = ..5;      // range-to    (..end)
+      let r = ..=5;     // range-to inclusive (..=end)
+      let r = ..;       // full range  (..)
+
+    Implementation: two-site change. parse_primary gains a TK_DOTDOT
+    (43) prefix arm at entry that consumes the `..` / `..=` and any
+    following end expression, returning AST_INT(0) as the placeholder
+    value (the bootstrap does not model runtime range types). The
+    let-handler in parse_primary gains a postfix range absorber
+    immediately after `let value = parse_expr_basic(...)`: if the
+    next token is `..`, consume it, optionally consume `=`, and
+    optionally parse and discard the end expression.
+
+    Terminators that mean "no end expression": TK_SEMI (12),
+    TK_RBRACE (6), TK_RPAREN (4), TK_RBRACK (21), TK_COMMA (13),
+    TK_EOF (0).
+
+    Replaces an accidental "PASS" behavior for `let r = 0..5;` and
+    `let r = 5..;`: the let-handler's `cur_advance(sb); // ';'`
+    blindly consumed any token at the cursor (it doesn't check the
+    tag), so `..` was eaten silently and the body parse picked up
+    after it. `let r = 0..=5;` failed because the lazy consume left
+    the body parse pointing at `=` with no parse arm. This chunk
+    replaces the accidental behavior with deterministic absorption.
+
+    Crucial regression-guard: parse_for at line 9706 uses its own
+    explicit `cur_advance(sb); // consume '..'` after parsing the
+    start expression via parse_expr_basic. The parse_primary prefix
+    arm fires when `..` is the LEADING token of an expression --
+    it cannot fire inside a for-loop because parse_for parses the
+    start (an INT literal in the common case) via parse_expr_basic
+    first, which routes through parse_add -> parse_unary ->
+    parse_primary FOR THE START EXPRESSION, then returns up. The
+    `..` token is only seen by parse_for's explicit consume, NOT
+    by a recursive parse_primary call. Verified by the for_loop_*
+    sub-probes here.
+
+    6 + 2 sub-probes (6 new range forms, 2 for-loop regression-
+    guards)."""
+    cases = [
+        ("exclusive",     "fn main() -> i32 { let r = 0..5; 42 }",                                                  42),
+        ("inclusive",     "fn main() -> i32 { let r = 0..=5; 42 }",                                                 42),
+        ("from",          "fn main() -> i32 { let r = 5..; 42 }",                                                   42),
+        ("to_exclusive",  "fn main() -> i32 { let r = ..5; 42 }",                                                   42),
+        ("to_inclusive",  "fn main() -> i32 { let r = ..=5; 42 }",                                                  42),
+        ("full",          "fn main() -> i32 { let r = ..; 42 }",                                                    42),
+        # Regression-guards: for-loops still parse and execute
+        ("for_excl",      "fn main() -> i32 { let mut s = 0; for i in 0..4 { s = s + i; } s + 36 }",                42),
+        ("for_incl",      "fn main() -> i32 { let mut s = 0; for i in 0..=3 { s = s + i; } s + 36 }",               42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"range_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_impl_non_fn_items_self_host():
     """K1.BZ (2026-05-26): non-fn items inside an impl block
     (associated consts, associated types) accepted as no-op

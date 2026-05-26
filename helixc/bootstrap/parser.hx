@@ -2695,7 +2695,42 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
     };
     let k = cur_get(sb);
     let t = tok_tag(tok_base, k);
-    if t == 5 {
+    if t == 43 {
+        // K1.CA (2026-05-26): prefix range expression `..end`,
+        // `..=end`, or `..`. Common Rust forms: `let r = ..5;`
+        // (range-to), `let r = ..=5;` (inclusive range-to), and
+        // `let r = ..;` (full range, e.g., slice all elements).
+        // The bootstrap has no runtime range type -- this is
+        // syntactic acceptance only. Consume `..`, optionally
+        // consume `=` for the inclusive form, optionally parse
+        // and discard an end expression (anything that doesn't
+        // start with a terminator). Return AST_INT(0) as the
+        // placeholder value. Pairs with the K1.CA postfix range
+        // absorber in the let-RHS path (handles `0..5`, `0..=5`,
+        // `5..`).
+        //
+        // Terminator tokens that mean "no end expression": TK_SEMI
+        // (12), TK_RBRACE (6), TK_RPAREN (4), TK_RBRACK (21),
+        // TK_COMMA (13), TK_EOF (0). Anything else is parsed via
+        // parse_expr_basic and discarded.
+        cur_advance(sb);                     // consume '..'
+        let eq_tok_ca = cur_get(sb);
+        if tok_tag(tok_base, eq_tok_ca) == 15 {
+            cur_advance(sb);                 // consume '='
+        };
+        let nxt_ca = cur_get(sb);
+        let nxt_t_ca = tok_tag(tok_base, nxt_ca);
+        let is_term_ca = if nxt_t_ca == 12 { 1 }
+            else { if nxt_t_ca == 6 { 1 }
+            else { if nxt_t_ca == 4 { 1 }
+            else { if nxt_t_ca == 21 { 1 }
+            else { if nxt_t_ca == 13 { 1 }
+            else { if nxt_t_ca == 0 { 1 } else { 0 } }}}}};
+        if is_term_ca == 0 {
+            let _disc_ca = parse_expr_basic(tok_base, sb);
+        };
+        mk_node(0, 0, 0, 0)
+    } else { if t == 5 {
         // K1.AM (2026-05-25): brace-block as expression --
         // `let x = { let y = 1; y + 2 }`. parse_primary previously
         // had no LBRACE arm, so the block-as-value form (common in
@@ -3269,6 +3304,49 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // value uses parse_expr_basic so the `;` after the
             // value belongs to the let-terminator, not a sequencer.
             let value = parse_expr_basic(tok_base, sb);
+            // K1.CA (2026-05-26): postfix range absorber. After
+            // parsing the let RHS, if the next token is `..`
+            // (TK_DOTDOT = 43), consume it as a no-op range
+            // operator. Optionally consume a following `=` for the
+            // inclusive `..=` form. Then, if a value-start follows
+            // (anything that is NOT a terminator: `;` 12, `}` 6,
+            // `)` 4, `]` 21, `,` 13, EOF 0), parse and discard the
+            // end expression. The bootstrap does not model ranges;
+            // this is syntactic acceptance only so common Rust
+            // patterns `let r = 0..5;`, `let r = 0..=5;`, and
+            // `let r = 5..;` parse cleanly. Pairs with the K1.CA
+            // prefix-range arm in parse_primary (handles `..5`,
+            // `..=5`, `..`).
+            //
+            // BEFORE THIS CHUNK: `let r = 0..5;` "passed"
+            // accidentally because the let-handler's
+            // `cur_advance(sb); // ';'` blindly consumed the `..`
+            // token (it doesn't check the tag), leaving `5; 42`
+            // to be parsed as the body sequence — which yielded
+            // 42 from `fn main()`'s tail. `let r = 0..=5;` and
+            // friends FAILED because the lazy consume left the
+            // body parse pointing at `=` or `..` with no parse
+            // arm, tripping the parser. This fix replaces the
+            // accidental behavior with a deterministic absorber.
+            let dot_tok_ca = cur_get(sb);
+            if tok_tag(tok_base, dot_tok_ca) == 43 {
+                cur_advance(sb);             // consume '..'
+                let eq_tok_lc = cur_get(sb);
+                if tok_tag(tok_base, eq_tok_lc) == 15 {
+                    cur_advance(sb);         // consume '='
+                };
+                let nxt_lc = cur_get(sb);
+                let nxt_t_lc = tok_tag(tok_base, nxt_lc);
+                let is_term_lc = if nxt_t_lc == 12 { 1 }
+                    else { if nxt_t_lc == 6 { 1 }
+                    else { if nxt_t_lc == 4 { 1 }
+                    else { if nxt_t_lc == 21 { 1 }
+                    else { if nxt_t_lc == 13 { 1 }
+                    else { if nxt_t_lc == 0 { 1 } else { 0 } }}}}};
+                if is_term_lc == 0 {
+                    let _disc_lc = parse_expr_basic(tok_base, sb);
+                };
+            };
             // Audit 28.8 cycle 2 B:C2: when no type annotation was
             // present (let_ty_tag still < 0), infer from the value's
             // root AST tag whether the binding is trivially-i32 or
@@ -4763,7 +4841,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         } else {
             mk_node(99, t, 0, 0)
         }
-    }}}}}}}}}}}}}}}}}     // Stage 9 + K1.AM: +1 '}' for the new t == 5 (LBRACE-block) wrapper
+    }}}}}}}}}}}}}}}}}}     // K1.CA (2026-05-26): +1 '}' for the new t == 43 (TK_DOTDOT prefix-range) wrapper
 }
 
 // Stage 5 Iter B: struct_table region — 12 slots = 3 entries x 4 fields
