@@ -8245,6 +8245,59 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_amp_return_type_self_host():
+    """K1.DR (2026-05-26): `&T` / `&'lt T` / `&mut T` /
+    `&'lt mut T` reference return types. Real Rust uses these
+    for borrowed return values:
+
+      fn first(v: &[i32]) -> &i32 { &v[0] }
+      fn name() -> &'static str { "..." }
+      fn get_mut(&mut self) -> &mut T { &mut self.field }
+
+    Previously SIGILL'd (rc=132) because the K1.BV/K1.AT return-
+    type parser unconditionally consumed an IDENT (or `(` paren
+    form). For the `&T` shape, the cursor at `&` (TK_AMP = 27)
+    was not consumed, the IDENT consume grabbed `&` as junk, and
+    downstream codegen broke.
+
+    Fix: mirror K1.CR's fn-param `&'lt T` handling. After consuming
+    `->`, peek for TK_AMP (27). If matched, consume `&` plus
+    optional lifetime IDENT (one IDENT before the type IDENT if
+    it's not `mut`) plus optional `mut` IDENT. The subsequent
+    K1.BV impl/dyn detection and the IDENT-capture below then
+    pick up the actual type IDENT.
+
+    The bootstrap is type-erased; `&T` collapses to the underlying
+    T's ret-ty tag (or 0/i32 default). Real reference-return
+    semantics with lifetime tracking are a Phase-1 type-design gap.
+
+    5 sub-probes (`&T`, `&'static T`, `&'a T`, `&mut T`,
+    `&'a mut T`) + 7 regression-guards covering plain ret-types
+    (i32, paren, unit, impl, dyn) and `&T` in fn-param / let-
+    type position."""
+    cases = [
+        # K1.DR new cases (declaration-only)
+        ("amp_t_ret",               "fn f() -> &i32 { let v = 42; &v } fn main() -> i32 { 42 }",                       42),
+        ("amp_static_ret",          "fn f() -> &'static i32 { let v = 42; &v } fn main() -> i32 { 42 }",               42),
+        ("amp_lt_ret",              "fn f<'a>() -> &'a i32 { let v = 42; &v } fn main() -> i32 { 42 }",                42),
+        ("amp_mut_ret",             "fn f() -> &mut i32 { let mut v = 42; &mut v } fn main() -> i32 { 42 }",           42),
+        ("amp_lt_mut_ret",          "fn f<'a>() -> &'a mut i32 { let mut v = 42; &mut v } fn main() -> i32 { 42 }",    42),
+
+        # Regression-guards: existing ret-types unchanged
+        ("plain_i32_ret",           "fn f() -> i32 { 42 } fn main() -> i32 { f() }",                                    42),
+        ("paren_ret",               "fn f() -> (i32) { 42 } fn main() -> i32 { 42 }",                                   42),
+        ("unit_ret",                "fn f() -> () { } fn main() -> i32 { 42 }",                                          42),
+        ("impl_ret",                "trait T {} fn f() -> impl T { 42 } fn main() -> i32 { 42 }",                       42),
+        ("dyn_ret",                 "trait T {} fn f() -> Box<dyn T> { 0 } fn main() -> i32 { 42 }",                    42),
+        ("amp_param",               "fn f(x: &i32) -> i32 { 42 } fn main() -> i32 { 42 }",                              42),
+        ("amp_static_let",          "fn main() -> i32 { let x: &'static i32 = &42; 42 }",                              42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                              42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"amp_ret_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_rest_pattern_self_host():
     """K1.DQ (2026-05-26): `..` rest pattern in tuple/struct
     patterns. Real Rust uses `..` to skip the middle / leading /

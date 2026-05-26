@@ -9361,6 +9361,57 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             };
         };
         if rt_first_t != 3 {
+            // K1.DR (2026-05-26): `&T` / `&'lt T` / `&mut T` /
+            // `&'lt mut T` reference return types. Real Rust uses
+            // these for borrowed return values:
+            //   fn first(v: &[i32]) -> &i32 { &v[0] }
+            //   fn name() -> &'static str { "..." }
+            //   fn get_mut(&mut self) -> &mut T { &mut self.field }
+            //
+            // Previously SIGILL'd (rc=132) because the K1.BV/K1.AT
+            // return-type parser unconditionally consumed an IDENT
+            // (or `(` paren form). For the `&T` shape, the cursor at
+            // `&` (TK_AMP = 27) was not consumed, the IDENT consume
+            // grabbed `&` as junk, and downstream codegen broke.
+            //
+            // Fix: mirror K1.CR's fn-param `&'lt T` handling. After
+            // consuming `->`, peek for TK_AMP (27). If matched,
+            // consume `&` plus optional lifetime IDENT (one IDENT
+            // before the type IDENT if it's not `mut`) plus optional
+            // `mut` IDENT. The subsequent K1.BV impl/dyn detection
+            // and the IDENT-capture below then pick up the actual
+            // type IDENT.
+            //
+            // The bootstrap is type-erased; `&T` collapses to the
+            // underlying T's ret-ty tag (or 0/i32 default). Real
+            // reference-return semantics with lifetime tracking are
+            // a Phase-1 type-design gap.
+            if tok_tag(tok_base, cur_get(sb)) == 27 {
+                cur_advance(sb);                 // consume '&'
+                // Optional lifetime IDENT (if followed by a
+                // type-starter and the first IDENT is not `mut`).
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    let nxt_t_dr = tok_tag(tok_base, cur_get(sb) + 1);
+                    let is_ty_start_dr = if nxt_t_dr == 2 { 1 }
+                        else { if nxt_t_dr == 20 { 1 }
+                        else { if nxt_t_dr == 9 { 1 }
+                        else { if nxt_t_dr == 3 { 1 }
+                        else { 0 } } } };
+                    if is_ty_start_dr == 1 {
+                        let lt_s_dr = tok_p2(tok_base, cur_get(sb));
+                        let lt_l_dr = tok_p3(tok_base, cur_get(sb));
+                        if byte_eq(lt_s_dr, lt_l_dr, kw_mut_s(sb), kw_mut_n(sb)) == 0 {
+                            cur_advance(sb);     // consume lifetime IDENT
+                        };
+                    };
+                };
+                // Optional `mut` IDENT.
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                        cur_advance(sb);         // consume 'mut'
+                    };
+                };
+            };
             // K1.BV (2026-05-26): `-> impl Trait` and `-> dyn Trait`
             // return-type modifiers. Both wrap a following trait
             // IDENT; the bootstrap is type-erased so they collapse
