@@ -11823,6 +11823,27 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
             mk_node(99, 62002, 0, 0)
         }
+    } else { if t == 43 {
+        // K1.DQ (2026-05-26): `..` rest pattern in tuple / slice / struct
+        // patterns. Real Rust uses this to skip the middle / leading /
+        // trailing elements of a fixed-shape match:
+        //   match (1, 2, 3) { (a, .., b) => ... }
+        //   match (1, 2, 3) { (.., b) => ... }
+        //   match (1, 2, 3) { (a, ..) => ... }
+        //   match [1, 2, 3] { [a, ..] => ... }
+        //
+        // Previously SIGILL'd (rc=132) because parse_pattern_atom had
+        // no arm for TK_DOTDOT (43); the unknown-token trap fired with
+        // 62002, and downstream codegen crashed on the malformed AST.
+        //
+        // Fix: consume `..` and emit PAT_WILDCARD (tag 66). The
+        // wildcard pattern matches anything, which is the type-erased
+        // semantic equivalent of "rest" -- the bootstrap doesn't model
+        // sub-element binding via `..`. Real `..`-rest semantics with
+        // proper sub-element exclusion / sub-slice binding require a
+        // new AST node type; deferred to a later semantic chunk.
+        cur_advance(sb);                     // consume `..`
+        mk_node(66, 0, 0, 0)                 // PAT_WILDCARD
     } else { if t == 27 {
         // K1.DN (2026-05-26): reference pattern `&pat` / `&mut pat` in
         // match arms. Real Rust uses this to bind through references:
@@ -11859,7 +11880,7 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
         // and continue cleanly until codegen fires the trap.
         cur_advance(sb);
         mk_node(99, 62002, 0, 0)
-    }}}}}
+    }}}}}}
 }
 
 // Stage 7: parse `match scrut { pat => body, pat => body, ... }`.

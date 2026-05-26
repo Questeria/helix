@@ -8245,6 +8245,56 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_rest_pattern_self_host():
+    """K1.DQ (2026-05-26): `..` rest pattern in tuple/struct
+    patterns. Real Rust uses `..` to skip the middle / leading /
+    trailing elements of a fixed-shape match:
+
+      match (1, 2, 3) { (a, .., b) => use(a, b) }
+      match (1, 2, 3) { (.., b) => use(b) }
+      match (1, 2, 3) { (a, ..) => use(a) }
+      match arr { [first, ..] => ... }
+
+    Previously SIGILL'd (rc=132) because parse_pattern_atom had
+    no arm for TK_DOTDOT (43); the unknown-token trap fired with
+    62002, and downstream codegen crashed on the malformed AST.
+
+    Fix: add a TK_DOTDOT arm to parse_pattern_atom that consumes
+    `..` and emits PAT_WILDCARD (tag 66). The wildcard pattern
+    matches anything, which is the type-erased semantic
+    equivalent of "rest" -- the bootstrap doesn't model sub-
+    element binding via `..`. Real `..`-rest semantics with
+    proper sub-element exclusion / sub-slice binding require a
+    new AST node type; deferred to a later semantic chunk.
+
+    5 sub-probes (middle, leading, trailing, only-rest, rest
+    with literal) + 9 regression-guards covering plain patterns,
+    tuple pattern, ref pattern, at-binding, tuple-struct, guard,
+    neg-range, unit, plain let."""
+    cases = [
+        # K1.DQ new cases
+        ("tup_rest_middle",         "fn main() -> i32 { match (1, 2, 3) { (a, .., b) => 42 } }",                    42),
+        ("tup_rest_lead",           "fn main() -> i32 { match (1, 2, 3) { (.., b) => 42 } }",                       42),
+        ("tup_rest_trail",          "fn main() -> i32 { match (1, 2, 3) { (a, ..) => 42 } }",                       42),
+        ("tup_rest_only",           "fn main() -> i32 { match (1, 2, 3) { (..) => 42 } }",                          42),
+        ("tup_rest_with_lit",       "fn main() -> i32 { match (1, 2, 3) { (1, ..) => 42, _ => 0 } }",               42),
+
+        # Regression-guards
+        ("plain_tup_pat",           "fn main() -> i32 { match (1, 2) { (a, b) => 42 } }",                            42),
+        ("plain_lit",               "fn main() -> i32 { match 5 { 5 => 42, _ => 0 } }",                              42),
+        ("ref_pat",                 "fn main() -> i32 { match 42 { &x => 42, _ => 0 } }",                            42),
+        ("at_binding",              "fn main() -> i32 { match 5 { n @ 0..=9 => 42, _ => 0 } }",                      42),
+        ("tuple_struct_pat",        "struct P(i32, i32); fn main() -> i32 { match P(1, 2) { P(a, b) => 42 } }",      42),
+        ("guard",                   "fn main() -> i32 { match 5 { x if x > 0 => 42, _ => 0 } }",                     42),
+        ("neg_range",               "fn main() -> i32 { match -3 { -5..=-1 => 42, _ => 0 } }",                       42),
+        ("unit_pat",                "fn main() -> i32 { match () { () => 42 } }",                                     42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                            42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"rest_pat_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_tuple_struct_pattern_self_host():
     """K1.DP (2026-05-26): tuple-struct destructure pattern
     `Pt(a, b)` in match arms. Real Rust uses tuple structs for
