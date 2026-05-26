@@ -7913,9 +7913,22 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);     // '{'
     // K1.AT (2026-05-25): empty fn body `fn noop() { }` peeks for
     // TK_RBRACE immediately and emits a placeholder AST_INT(0) body
-    // -- parse_expr otherwise traps on the bare '}'. The unit /
-    // i32-default fn returns 0 at runtime, matching the
-    // empty-block-as-zero semantic.
+    // -- parse_expr otherwise traps on the bare '}'.
+    //
+    // K1.BW (2026-05-26): also handle the bare-semicolon-only form
+    // `fn p() { ; }` -- skip leading TK_SEMI tokens (statement
+    // terminators with no preceding statement) before peeking for
+    // TK_RBRACE. Rust accepts arbitrarily-many leading `;`s before
+    // the actual body content; the bootstrap previously tripped on
+    // the very first `;` as the body's first token.
+    let mut keep_lead_semi: i32 = 1;
+    while keep_lead_semi == 1 {
+        if tok_tag(tok_base, cur_get(sb)) == 12 {
+            cur_advance(sb);                     // consume ';'
+        } else {
+            keep_lead_semi = 0;
+        };
+    }
     let body_t = tok_tag(tok_base, cur_get(sb));
     let body = if body_t == 6 {
         mk_node(0, 0, 0, 0)

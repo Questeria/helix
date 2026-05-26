@@ -8245,6 +8245,31 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_leading_semi_in_body_self_host():
+    """K1.BW (2026-05-26): leading `;` tokens in a fn body
+    are skipped. `fn p() { ; }`, `fn p() { ;;; }`, and
+    `fn p() { ;;; 42 }` all parse cleanly. Rust accepts
+    arbitrarily-many leading `;` statement-terminators
+    before the actual body content -- the bootstrap
+    previously tripped on the first `;` as the body's first
+    token, leaving parse_expr to mis-handle it.
+
+    parse_fn_decl now runs a while loop that consumes any
+    leading TK_SEMI (12) tokens before peeking for TK_RBRACE
+    (K1.AT empty-body) or parsing the body expression.
+
+    4 sub-probes."""
+    cases = [
+        ("single",     "fn p() { ; } fn main() -> i32 { p(); 42 }",                                                42),
+        ("multi",      "fn p() { ;;; } fn main() -> i32 { p(); 42 }",                                              42),
+        ("leading",    "fn p() -> i32 { ; 42 } fn main() -> i32 { p() }",                                         42),
+        ("multi_then", "fn p() -> i32 { ;;; 42 } fn main() -> i32 { p() }",                                       42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"lead_semi_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_impl_dyn_return_ty_self_host():
     """K1.BV (2026-05-26): `-> impl Trait` and `-> dyn Trait`
     return-type modifiers accepted. Both wrap a following
