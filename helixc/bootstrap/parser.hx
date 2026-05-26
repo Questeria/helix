@@ -7757,28 +7757,22 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         // surrounding parse_fn_decl code.
         let rt_first_t = tok_tag(tok_base, cur_get(sb));
         if rt_first_t == 3 {
-            // K1.AX (2026-05-25): `-> ()` (unit) -- consume '(' ')'.
-            // K1.BE (2026-05-26): `-> (T)` (parenthesized type) --
-            // consume '(', read the IDENT as the ret-ty, consume
-            // ')'. In Rust, `(T)` is syntactically distinct from
-            // a 1-tuple (which requires the trailing comma `(T,)`)
-            // and means the same as bare `T`. The bootstrap is
-            // type-erased so the parens collapse away at codegen.
+            // K1.AX / K1.BE / K1.BU (unified, 2026-05-26): `-> ()`,
+            // `-> (T)`, and `-> (T1, T2, ...)` all consumed via a
+            // single paren-balanced scan. The IDENT capture path
+            // that K1.BE used previously is dropped -- the
+            // type-erased bootstrap defaults the ret_ty to 0
+            // (i32 / unit) for any parenthesized form. Real
+            // multi-value-return semantics for tuple returns are
+            // a separate gap; this chunk only unblocks the parse.
             cur_advance(sb);                     // consume '('
-            let inner_t = tok_tag(tok_base, cur_get(sb));
-            if inner_t == 4 {
-                // unit case: '()'
-                cur_advance(sb);                 // consume ')'
-            };
-            if inner_t != 4 {
-                // parenthesized type: '(T)'. Capture the IDENT bytes,
-                // then consume both the IDENT and the closing ')'.
-                let rt_tok = cur_get(sb);
-                rt_s = tok_p2(tok_base, rt_tok);
-                rt_l = tok_p3(tok_base, rt_tok);
-                has_ret_ty = 1;
-                cur_advance(sb);                 // consume type IDENT
-                cur_advance(sb);                 // consume ')'
+            let mut depth_tr: i32 = 1;
+            while depth_tr > 0 {
+                let trt = tok_tag(tok_base, cur_get(sb));
+                if trt == 3 { depth_tr = depth_tr + 1; };
+                if trt == 4 { depth_tr = depth_tr - 1; };
+                if trt == 0 { depth_tr = 0; };
+                cur_advance(sb);
             };
         };
         if rt_first_t != 3 {

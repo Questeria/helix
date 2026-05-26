@@ -8245,6 +8245,40 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_tuple_return_ty_self_host():
+    """K1.BU (2026-05-26): tuple return type `-> (T1, T2)`
+    accepted. Unifies the K1.AX (`-> ()`) and K1.BE (`-> (T)`)
+    handling under a single paren-balanced consume in the
+    ret-ty position. The bootstrap is type-erased; the
+    parenthesized form (whether `()`, `(T)`, or `(T1, T2, ...)`)
+    defaults ret_ty to 0 (i32 / unit) at codegen.
+
+    Real multi-value-return semantics for tuple returns is a
+    separate Cat-2 gap -- the bootstrap currently treats a
+    tuple-returning fn as returning a single i32-shaped value.
+    K1.BU only unblocks the parse so Rust source with tuple
+    returns no longer hangs K2.
+
+    The single-IDENT capture path K1.BE used was dropped --
+    `fn x() -> (i32)` and `fn x() -> i32` now produce the same
+    codegen shape (both default to ret_ty=0).
+
+    4 sub-probes."""
+    # NOTE: calling a tuple-return fn (vs declaring one without
+    # calling) is a SEPARATE Cat-2 gap -- the bootstrap currently
+    # treats the tuple-typed return as a single i32-shaped slot.
+    # K1.BU only unblocks the PARSE so the decl no longer hangs K2.
+    cases = [
+        ("two_field_decl",    "fn pair() -> (i32, i32) { (40, 2) } fn main() -> i32 { 42 }",                                          42),
+        ("three_field_decl",  "fn triple() -> (i32, i32, i32) { (1, 2, 3) } fn main() -> i32 { 42 }",                                  42),
+        ("mixed_decl",        "fn mixed() -> (i32, f32) { (40, 2.0) } fn main() -> i32 { 42 }",                                       42),
+        ("simple_body",       "fn pair() -> (i32, i32) { 42 } fn main() -> i32 { pair() }",                                            42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"tuple_ret_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_unit_literal_self_host():
     """K1.BT (2026-05-26): the unit literal `()` as an
     expression. parse_primary's `(` arm previously assumed
