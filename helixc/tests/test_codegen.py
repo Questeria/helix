@@ -8245,6 +8245,44 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_non_fn_items_self_host():
+    """K1.BZ (2026-05-26): non-fn items inside an impl block
+    (associated consts, associated types) accepted as no-op
+    by skipping to `;`. Common Rust pattern:
+
+      struct P;
+      impl P {
+        const N: i32 = 42;
+        type Output = i32;
+        fn val() -> i32 { Self::N }
+      }
+
+    parse_impl_block previously called parse_impl_method
+    unconditionally for every non-RBRACE token; for non-fn
+    items (`const N: i32 = 42`, `type Output = i32`), the
+    parse_impl_method call mis-handled the leading `const` /
+    `type` IDENT, K2 hung at runtime.
+
+    Fix: in the impl-block loop, first call
+    consume_vis_modifiers (covers `pub fn`, `pub const`, etc.),
+    then peek the next IDENT. If it's `fn`, call
+    parse_impl_method as before; otherwise consume tokens up
+    to and including the terminating `;` as a no-op. Real
+    associated-const / associated-type semantics is a
+    separate Cat-2 gap.
+
+    4 sub-probes."""
+    cases = [
+        ("assoc_const",     "struct P; impl P { const N: i32 = 42; fn val() -> i32 { 42 } } fn main() -> i32 { P::val() }",                          42),
+        ("assoc_type",      "struct P; impl P { type Output = i32; fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",                              42),
+        ("const_and_fn",    "struct P; impl P { const N: i32 = 100; const M: i32 = 200; fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",         42),
+        ("pub_const",       "struct P; impl P { pub const N: i32 = 100; fn x() -> i32 { 42 } } fn main() -> i32 { P::x() }",                         42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_nonfn_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_union_decl_self_host():
     """K1.BY (2026-05-26): top-level `union U { ... }` accepted
     as no-op (routes to parse_struct_decl, which is keyword-

@@ -8394,12 +8394,52 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     let mut method_count: i32 = 0;
     let mut keep: i32 = 1;
     while keep == 1 {
+        // K1.BZ (2026-05-26): swallow leading vis/linkage modifiers
+        // (`pub fn`, `pub(crate) fn`, `unsafe fn`, etc.) before the
+        // fn-keyword check. Also tolerate non-fn items by skipping
+        // them until the next `;` -- `const N: T = expr;`,
+        // `type Alias = T;`, etc. inside an impl block are now
+        // accepted as no-ops. Real associated-const / associated-
+        // type semantics is a separate Cat-2 gap.
+        consume_vis_modifiers(tok_base, sb);
         let tt = tok_tag(tok_base, cur_get(sb));
         if tt == 6 {                         // RBRACE
             keep = 0;
         } else { if tt == 0 {                // EOF safety
             keep = 0;
         } else {
+            // K1.BZ: if the IDENT isn't `fn`, skip until `;` -- this
+            // covers `const N: T = expr;`, `type Alias = T;`, and
+            // any other non-fn item the bootstrap doesn't yet model.
+            // Peek the IDENT's first byte: `fn` starts with 102 ('f')
+            // length 2; any 2-byte IDENT starting with 'f' followed
+            // by 'n' (110) is fn. For anything else, consume to `;`.
+            let item_k = cur_get(sb);
+            let item_s = tok_p2(tok_base, item_k);
+            let item_l = tok_p3(tok_base, item_k);
+            let is_fn_item = if item_l == 2 {
+                if __arena_get(item_s) == 102 {
+                    if __arena_get(item_s + 1) == 110 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            if is_fn_item == 0 {
+                // Non-fn impl-item: consume up to `;` as no-op.
+                let mut keep_ni: i32 = 1;
+                while keep_ni == 1 {
+                    let nit = tok_tag(tok_base, cur_get(sb));
+                    if nit == 12 {
+                        cur_advance(sb);     // consume ';'
+                        keep_ni = 0;
+                    } else { if nit == 6 {
+                        keep_ni = 0;
+                    } else { if nit == 0 {
+                        keep_ni = 0;
+                    } else {
+                        cur_advance(sb);
+                    }}};
+                };
+            };
+            if is_fn_item == 1 {
             // Expect `fn IDENT(...) -> RET { ... }`. parse_impl_method
             // consumes the entire decl + body + closing '}'.
             let fn_node = parse_impl_method(tok_base, sb, target_s, target_l, target_tag);
@@ -8415,6 +8455,7 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
                 set_impl_pending_tail(sb, list_node);
             };
             method_count = method_count + 1;
+            };
         } };
     }
     cur_advance(sb);                         // consume final '}'
