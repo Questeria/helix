@@ -10014,10 +10014,78 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
             } else {
                 // Standard `name: T` form. Consume ':' and the type IDENT.
                 cur_advance(sb);             // ':'
+                // K1.DV (2026-05-26): `&T` / `&'lt T` / `&mut T` /
+                // `&'lt mut T` in impl-method param type. Real Rust:
+                //   impl S { fn x(v: &Vec<i32>) -> i32 { ... } }
+                //   impl S { fn x(s: &'static str) -> i32 { ... } }
+                // Previously SIGILL'd (rc=132) because parse_impl_method's
+                // param-type parser was minimal: just IDENT capture, no
+                // `&T` prefix or `<...>` generic args handling. Mirror of
+                // K1.DR / K1.DT / K1.DU `&T` template applied to impl-
+                // method param site.
+                if tok_tag(tok_base, cur_get(sb)) == 27 {
+                    cur_advance(sb);         // consume '&'
+                    // Optional lifetime IDENT.
+                    if tok_tag(tok_base, cur_get(sb)) == 2 {
+                        let nxt_t_dv = tok_tag(tok_base, cur_get(sb) + 1);
+                        let is_ty_start_dv = if nxt_t_dv == 2 { 1 }
+                            else { if nxt_t_dv == 20 { 1 }
+                            else { if nxt_t_dv == 9 { 1 }
+                            else { if nxt_t_dv == 3 { 1 }
+                            else { 0 } } } };
+                        if is_ty_start_dv == 1 {
+                            let lt_s_dv = tok_p2(tok_base, cur_get(sb));
+                            let lt_l_dv = tok_p3(tok_base, cur_get(sb));
+                            if byte_eq(lt_s_dv, lt_l_dv, kw_mut_s(sb), kw_mut_n(sb)) == 0 {
+                                cur_advance(sb); // consume lifetime IDENT
+                            };
+                        };
+                    };
+                    // Optional `mut` IDENT.
+                    if tok_tag(tok_base, cur_get(sb)) == 2 {
+                        if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
+                            cur_advance(sb); // consume 'mut'
+                        };
+                    };
+                };
                 let ty_tok = cur_get(sb);
                 let ty_s_raw = tok_p2(tok_base, ty_tok);
                 let ty_l_raw = tok_p3(tok_base, ty_tok);
                 cur_advance(sb);             // type IDENT
+                // K1.DV: optional `<...>` generic args after the param-type
+                // IDENT (e.g. `Vec<i32>`, `Box<dyn T>`). Mirror of K1.DS
+                // / K1.DT / K1.DU pattern.
+                if tok_tag(tok_base, cur_get(sb)) == 16 {
+                    cur_advance(sb);         // consume '<'
+                    let mut g_depth_dv: i32 = 1;
+                    let mut prev_minus_dv: i32 = 0;
+                    while g_depth_dv > 0 {
+                        let gt_dv = tok_tag(tok_base, cur_get(sb));
+                        if gt_dv == 16 {
+                            g_depth_dv = g_depth_dv + 1;
+                            prev_minus_dv = 0;
+                        } else { if gt_dv == 17 {
+                            if prev_minus_dv == 1 {
+                                prev_minus_dv = 0;
+                            } else {
+                                g_depth_dv = g_depth_dv - 1;
+                            };
+                        } else { if gt_dv == 31 {
+                            g_depth_dv = g_depth_dv - 2;
+                            prev_minus_dv = 0;
+                        } else { if gt_dv == 0 {
+                            g_depth_dv = 0;
+                        } else { if gt_dv == 8 {
+                            prev_minus_dv = 1;
+                        } else {
+                            prev_minus_dv = 0;
+                        }}}}};
+                        if g_depth_dv > 0 {
+                            cur_advance(sb);
+                        };
+                    }
+                    cur_advance(sb);         // consume final '>' / '>>'
+                };
                 // `Self` substitution: if the type IDENT is "Self" (4 bytes
                 // 83 101 108 102), use target_tag directly.
                 let is_self_ty = if ty_l_raw == 4 {

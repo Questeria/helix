@@ -8245,6 +8245,72 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_method_amp_param_self_host():
+    """K1.DV (2026-05-26): `&T` (with optional lifetime + mut) and
+    `<...>` generic args in impl-method param type position. Real
+    Rust uses these for borrowing references as method arguments:
+
+      impl S { fn print(&self, v: &Vec<i32>) -> i32 { ... } }
+      impl S { fn store(&mut self, s: &'static str) -> i32 { ... } }
+      impl S { fn process(b: &Box<dyn T>) -> i32 { ... } }
+      impl S { fn x(v: Vec<i32>) -> i32 { ... } }
+
+    Previously SIGILL'd (rc=132) because parse_impl_method's param-
+    type parser was minimal: just IDENT capture for the `name: T`
+    form, no handling for `&T` prefix or `<...>` generic args
+    after the IDENT. For `&T` shape, the cursor at `&` (TK_AMP =
+    27) was not consumed, the IDENT consume grabbed `&` as junk,
+    and downstream parsing broke. For `Vec<i32>` shape, the IDENT
+    was captured but the `<i32>` was left in the stream where
+    the next param-loop iteration mis-treated `<` as the start
+    of a new param.
+
+    Two-part fix in parse_impl_method's param-loop's `name: T`
+    branch:
+
+      (1) After the `:` consume, peek for TK_AMP (27). If matched,
+          consume `&` + optional lifetime IDENT + optional `mut`
+          IDENT. Mirror of K1.DR / K1.DT / K1.DU `&T` template.
+
+      (2) After the type IDENT consume, peek for `<` (TK_LT = 16).
+          If matched, consume `<...>` depth-balanced with K1.CZ
+          prev_minus tracking for `->` inside generics. Mirror of
+          K1.DS / K1.DT / K1.DU pattern.
+
+    The bootstrap is type-erased; `&T` and generic args collapse
+    away. `Self` substitution still works for the type IDENT
+    bytes after the optional `&` + lifetime + mut prefix.
+
+    7 sub-probes + 5 regression-guards covering plain i32 param,
+    no-args method, self arg, struct field access, plain let.
+
+    This is the 5th parser site to receive the `&T` + `<...>`
+    template (K1.DR fn-return, K1.DS let-type, K1.DT impl-method-
+    return, K1.DU struct-field, K1.DV impl-method-param). The
+    parser surface for borrowed-reference types is now consistent
+    across every binding/return position."""
+    cases = [
+        # K1.DV new cases
+        ("method_amp_i32_param",    "struct S; impl S { fn x(v: &i32) -> i32 { 42 } } fn main() -> i32 { 42 }",                          42),
+        ("method_amp_static",       "struct S; impl S { fn x(v: &'static i32) -> i32 { 42 } } fn main() -> i32 { 42 }",                  42),
+        ("method_amp_lt",           "struct S; impl S { fn x<'a>(v: &'a i32) -> i32 { 42 } } fn main() -> i32 { 42 }",                   42),
+        ("method_amp_mut",          "struct S; impl S { fn x(v: &mut i32) -> i32 { 42 } } fn main() -> i32 { 42 }",                      42),
+        ("method_amp_vec",          "struct S; impl S { fn x(v: &Vec<i32>) -> i32 { 42 } } fn main() -> i32 { 42 }",                     42),
+        ("method_amp_box_dyn",      "trait T {} struct S; impl S { fn x(v: &Box<dyn T>) -> i32 { 42 } } fn main() -> i32 { 42 }",        42),
+        ("method_vec_no_amp",       "struct S; impl S { fn x(v: Vec<i32>) -> i32 { 42 } } fn main() -> i32 { 42 }",                       42),
+
+        # Regression-guards
+        ("method_i32_param",        "struct S; impl S { fn x(v: i32) -> i32 { 42 } } fn main() -> i32 { 42 }",                            42),
+        ("method_no_args",          "struct S; impl S { fn x() -> i32 { 42 } } fn main() -> i32 { S::x() }",                              42),
+        ("method_self_arg",         "struct S; impl S { fn x(self) -> i32 { 42 } } fn main() -> i32 { 42 }",                              42),
+        ("method_self_field",       "struct S { v: i32 } fn main() -> i32 { let s = S { v: 42 }; s.v }",                                  42),
+        ("plain_let",               "fn main() -> i32 { let x = 42; x }",                                                                 42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"impl_amp_param_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_struct_amp_field_self_host():
     """K1.DU (2026-05-26): `&T` (with optional lifetime + mut) and
     `<...>` generic args in struct field type position. Real Rust
