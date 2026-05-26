@@ -8473,6 +8473,23 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // parameter-type position to parity.
             if tok_tag(tok_base, cur_get(sb)) == 27 {
                 cur_advance(sb);     // consume '&'
+                // K1.CR (2026-05-26): optional lifetime IDENT in
+                // `&'lt T` / `&'lt mut T` param-type position. After
+                // K1.CQ lex transform, `'static` becomes a plain
+                // IDENT `static` (etc.). If we see two consecutive
+                // IDENTs after `&` AND the first is NOT `mut`, the
+                // first is a lifetime annotation -- consume it so
+                // the existing mut + type IDENT consume picks up
+                // the right tokens.
+                if tok_tag(tok_base, cur_get(sb)) == 2 {
+                    if tok_tag(tok_base, cur_get(sb) + 1) == 2 {
+                        let lt_s_cr = tok_p2(tok_base, cur_get(sb));
+                        let lt_l_cr = tok_p3(tok_base, cur_get(sb));
+                        if byte_eq(lt_s_cr, lt_l_cr, kw_mut_s(sb), kw_mut_n(sb)) == 0 {
+                            cur_advance(sb);     // consume lifetime IDENT
+                        };
+                    };
+                };
                 if tok_tag(tok_base, cur_get(sb)) == 2 {
                     if byte_eq(tok_p2(tok_base, cur_get(sb)), tok_p3(tok_base, cur_get(sb)), kw_mut_s(sb), kw_mut_n(sb)) == 1 {
                         cur_advance(sb);     // consume 'mut'

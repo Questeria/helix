@@ -8245,6 +8245,67 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_lifetime_in_amp_param_self_host():
+    """K1.CR (2026-05-26): lifetime IDENT in `&'lt T` /
+    `&'lt mut T` fn-param type. Extends K1.CQ (lex-time lifetime
+    skip) with K1.BD's `&T` param-type handler. Common in real
+    Rust borrowing source:
+
+      fn id(s: &'static i32) -> i32 { ... }
+      fn id<'a>(s: &'a mut i32) -> i32 { ... }
+      fn id<'a, 'b>(x: &'a i32, y: &'b i32) -> i32 { ... }
+
+    After K1.CQ's lex transform, `'static` becomes a plain IDENT
+    `static` (etc.). K1.BD's `&T` handler then mis-consumed the
+    lifetime IDENT as the type IDENT, leaving the real type IDENT
+    unread -- the parser tripped on the next param's `:` or the
+    closing `)`.
+
+    Fix: after consuming `&` (and BEFORE the existing optional-
+    `mut` check), peek for the two-consecutive-IDENT pattern. If
+    current is IDENT and next is ALSO IDENT (or `mut`), the
+    current IDENT is a lifetime annotation -- consume it, UNLESS
+    current itself is `mut` (in which case the existing mut check
+    handles it).
+
+    The 4-case enumeration:
+      `&T`          single IDENT -> type. No skip.
+      `&mut T`      `mut` then IDENT -> mut check fires.
+      `&'lt T`      IDENT-IDENT (first not mut) -> lifetime skip.
+      `&'lt mut T`  IDENT-`mut`-IDENT -> lifetime skip, then mut
+                    check, then type.
+
+    Combines with K1.CQ to cover the full lifetime story in
+    parameter types. K1.S (let-type position) is unchanged --
+    a separate follow-up can mirror the same logic there.
+
+    5 sub-probes (single/multi/mut variants) + 8 regression-guards
+    covering `&T`, `&mut T`, plain `T`, and prior K1.* features."""
+    cases = [
+        # K1.CR new cases
+        ("amp_static",       "fn id(s: &'static i32) -> i32 { 0 } fn main() -> i32 { id(0); 42 }",                  42),
+        ("amp_a",            "fn id<'a>(s: &'a i32) -> i32 { 0 } fn main() -> i32 { id::<>(0); 42 }",               42),
+        ("amp_mut_static",   "fn id(s: &'static mut i32) -> i32 { 0 } fn main() -> i32 { id(0); 42 }",              42),
+        ("amp_a_mut",        "fn id<'a>(s: &'a mut i32) -> i32 { 0 } fn main() -> i32 { id::<>(0); 42 }",           42),
+        ("two_lifetimes",    "fn id<'a, 'b>(s: &'a i32, t: &'b i32) -> i32 { 0 } fn main() -> i32 { id::<>(0, 0); 42 }",  42),
+
+        # Regression-guards: K1.BD `&T` and `&mut T` unchanged
+        ("plain_amp_t",      "fn id(s: &i32) -> i32 { 0 } fn main() -> i32 { id(&42); 42 }",                        42),
+        ("plain_amp_mut_t",  "fn id(s: &mut i32) -> i32 { 0 } fn main() -> i32 { let mut x = 0; id(&mut x); 42 }", 42),
+        ("plain_t",          "fn id(s: i32) -> i32 { s } fn main() -> i32 { id(42) }",                              42),
+
+        # Other regression-guards
+        ("plain_let",        "fn main() -> i32 { let x = 42; x }",                                                  42),
+        ("range_let",        "fn main() -> i32 { let r = 0..=5; 42 }",                                              42),
+        ("for_loop",         "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",             42),
+        ("if_let",           "fn main() -> i32 { if let Some(_) = None { 0 } else { 42 } }",                        42),
+        ("macro_call",       'fn main() -> i32 { println!("hi"); 42 }',                                             42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"amp_lt_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_lifetime_annotations_self_host():
     """K1.CQ (2026-05-26): Rust lifetime annotations `'a`, `'static`,
     `'_` etc. lex as silent skips. Common in real Rust source:
