@@ -1580,6 +1580,21 @@ fn is_kw_continue_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K1.AU (2026-05-25): match the 3-byte IDENT "pub" (bytes
+// 112, 117, 98). Recognized as a no-op visibility modifier
+// before top-level fn/struct/enum/etc. decls. The bootstrap
+// has no visibility system; every top-level decl is reachable
+// from any module.
+fn is_kw_pub_ident(id_s: i32, id_l: i32) -> i32 {
+    if id_l == 3 {
+        if __arena_get(id_s) == 112 {
+            if __arena_get(id_s + 1) == 117 {
+                if __arena_get(id_s + 2) == 98 { 1 } else { 0 }
+            } else { 0 }
+        } else { 0 }
+    } else { 0 }
+}
+
 // K1.AC (2026-05-25): match the 5-byte IDENT "break" (bytes
 // 98, 114, 101, 97, 107). Used by parse_primary to recognize
 // `break` as an early loop exit. Emits AST_BREAK (tag 77);
@@ -4878,6 +4893,18 @@ fn parse_top(tok_base: i32) -> i32 {
     // doesn't enforce them, just parses past so kovc.hx and other
     // attribute-decorated source compiles.
     skip_attributes(tok_base, cur_slot);
+    // K1.AU (2026-05-25): swallow optional `pub` modifier at the
+    // very start. Bootstrap has no visibility system; `pub fn`,
+    // `pub struct`, `pub enum`, etc. all behave like the
+    // unprefixed form.
+    let k_pre = cur_get(cur_slot);
+    if tok_tag(tok_base, k_pre) == 2 {
+        let id_s_pre = tok_p2(tok_base, k_pre);
+        let id_l_pre = tok_p3(tok_base, k_pre);
+        if is_kw_pub_ident(id_s_pre, id_l_pre) == 1 {
+            cur_advance(cur_slot);
+        };
+    };
     let k = cur_get(cur_slot);
     if tok_tag(tok_base, k) == 2 {
         let id_s = tok_p2(tok_base, k);
@@ -5253,8 +5280,20 @@ fn parse_program(tok_base: i32, sb: i32) -> i32 {
         let kk = cur_get(sb);
         let tt = tok_tag(tok_base, kk);
         if tt == 2 {
-            let s = tok_p2(tok_base, kk);
-            let l = tok_p3(tok_base, kk);
+            // K1.AU (2026-05-25): swallow optional `pub` visibility
+            // modifier. The bootstrap has no module-private system,
+            // so `pub` is a no-op everywhere it appears. Re-fetch
+            // the IDENT bytes after consuming `pub` so the keyword
+            // checks below see the actual decl keyword.
+            let mut kk = cur_get(sb);
+            let mut s = tok_p2(tok_base, kk);
+            let mut l = tok_p3(tok_base, kk);
+            if is_kw_pub_ident(s, l) == 1 {
+                cur_advance(sb);   // consume 'pub'
+                kk = cur_get(sb);
+                s = tok_p2(tok_base, kk);
+                l = tok_p3(tok_base, kk);
+            };
             // FLAT prefix-trap ladder: single-binding chain, no nested
             // if-else statements. Stage 8.5 adds two new prefixes (trait,
             // impl) — handled before falling through to the fn-decl path.

@@ -8210,6 +8210,26 @@ def test_bootstrap_kovc_panic_traps_self_host():
     )
 
 
+def test_bootstrap_kovc_pub_modifier_self_host():
+    """K1.AU (2026-05-25): `pub fn`, `pub struct`, `pub enum`, etc.
+    are now accepted with the visibility modifier as a no-op
+    (the bootstrap has no module-private system). Two parser-
+    level changes: parse_top consumes leading `pub` after
+    skip_attributes; parse_program also re-fetches the IDENT
+    after consuming `pub` so the keyword-detection cascade fires
+    on the actual decl keyword. 5 sub-probes."""
+    cases = [
+        ("pub_fn_main",   "pub fn main() -> i32 { 42 }",                                                42),
+        ("pub_struct",    "pub struct P { x: i32 } fn main() -> i32 { 42 }",                            42),
+        ("pub_fn_call",   "pub fn add1(x: i32) -> i32 { x + 1 } fn main() -> i32 { add1(41) }",         42),
+        ("mixed_pub",     "pub fn a() -> i32 { 10 } fn b() -> i32 { 32 } fn main() -> i32 { a() + b() }", 42),
+        ("pub_enum",      "pub enum E { A, B } fn main() -> i32 { 42 }",                                42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"pub_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_empty_fn_body_self_host():
     """K1.AT (2026-05-25): `fn noop() { }` (empty body + no
     return type) now compiles. Two parser-level fixes:
