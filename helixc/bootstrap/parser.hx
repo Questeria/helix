@@ -8595,6 +8595,26 @@ fn parse_trait_decl(tok_base: i32, sb: i32) -> i32 {
     let name_s = tok_p2(tok_base, nk);
     let name_l = tok_p3(tok_base, nk);
     cur_advance(sb);                         // consume trait name IDENT
+    // K1.BP (2026-05-26): tolerate everything between the trait name
+    // and the opening `{`: generic params `<T, U>`, supertype bounds
+    // `: Bar + Baz`, `where T: Bound` clauses. Skip tokens until
+    // either `{` (the body opener) or `;` (the rare trait-without-
+    // body form `trait Marker;`). EOF-safe via the 0 sentinel.
+    let mut keep_pre: i32 = 1;
+    while keep_pre == 1 {
+        let pt = tok_tag(tok_base, cur_get(sb));
+        if pt == 5 {                         // LBRACE -- body opener
+            keep_pre = 0;
+        } else { if pt == 12 {               // TK_SEMI -- bodyless trait
+            cur_advance(sb);                 // consume ';'
+            trait_tab_add(sb, name_s, name_l);
+            return mk_node(54, 0, 0, 0);
+        } else { if pt == 0 {                // EOF safety
+            keep_pre = 0;
+        } else {
+            cur_advance(sb);
+        }}};
+    }
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
     // Brace-balance scan: consume tokens until the matching '}'. Most
     // trait bodies in Phase-0 are flat (no nested {} since methods are

@@ -8245,6 +8245,36 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_trait_decl_extras_self_host():
+    """K1.BP (2026-05-26): trait decl now tolerates everything
+    between the trait name and the opening `{`: generic params
+    `<T, U>`, supertype bounds `: Bar + Baz`, `where` clauses.
+    Also handles the bodyless form `trait Marker;`.
+
+    parse_trait_decl previously assumed the trait body opener
+    `{` came immediately after the trait name IDENT. For real
+    Rust source like `trait Hash: Sized {}` or `trait Iterator
+    where Self: Sized {}`, the parser tripped on the `:` or
+    `where` token.
+
+    Fix: skip tokens between the name and `{` defensively. If
+    `;` is encountered instead, treat as bodyless trait (no
+    brace-balance scan needed); return AST_STRUCT_DECL marker.
+
+    5 sub-probes: supertype, multi-supertype, where clause,
+    generic params, bodyless."""
+    cases = [
+        ("supertype",      "trait Foo: Sized { } fn main() -> i32 { 42 }",                                                             42),
+        ("multi_super",    "trait Foo: Sized + Copy + Clone { } fn main() -> i32 { 42 }",                                              42),
+        ("where_clause",   "trait Foo where Self: Sized { } fn main() -> i32 { 42 }",                                                  42),
+        ("generic_params", "trait Foo<T> { } fn main() -> i32 { 42 }",                                                                 42),
+        ("bodyless",       "trait Marker; fn main() -> i32 { 42 }",                                                                    42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"trait_extras_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_struct_like_enum_variant_self_host():
     """K1.BO (2026-05-26): struct-like enum variant `B { x: i32 }`
     accepted. Common Rust pattern -- e.g. `enum Shape { Circle {
