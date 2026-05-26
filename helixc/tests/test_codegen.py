@@ -8245,6 +8245,66 @@ def test_bootstrap_kovc_use_glob_brace_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_let_no_init_self_host():
+    """K1.DK (2026-05-26): `let x: T;` no-initializer let binding.
+    Real Rust source uses this for delayed initialization patterns
+    (typically followed by branched assignments before first use):
+
+      let x: i32;
+      if cond { x = 1; } else { x = 0; }
+      use_x(x);
+
+      let mut v: Vec<i32>;
+      v = build_vec();
+
+    Previously SIGILL'd (rc=132) because the let-parser
+    unconditionally consumed `=` after the type annotation and
+    then parsed a value expression. For the no-init shape, the
+    cursor after the type was at `;` (TK_SEMI = 12), not `=`
+    (TK_EQ = 15) -- the cur_advance consumed `;`, and the
+    subsequent parse_expr_basic tripped on the next statement.
+
+    Fix: peek for `;` BEFORE the `=` consume. If matched, this is
+    a no-init let -- skip both the `=` consume and the value
+    parse, substituting AST_INT(0) as the placeholder value. The
+    binding name is still registered for downstream resolution;
+    codegen emits a 4-byte slot initialized to 0, which is
+    acceptable for Phase-0 semantics (uninitialized memory == 0
+    in the bootstrap's zero-init model).
+
+    Note: Rust's flow analysis would normally reject reads from
+    an uninitialized binding before first assignment; the bootstrap
+    doesn't model flow analysis, so this is over-permissive --
+    `let x: i32; use_x(x)` compiles cleanly with x=0. Real
+    use-before-init rejection is a Phase-1 type-design gap.
+
+    7 sub-probes covering i32/f32/Box/Vec/&T/tuple/mut + 7
+    regression-guards covering with-init forms (i32/Box/typed/
+    range), plain let, mut let, for-loop."""
+    cases = [
+        # K1.DK new cases
+        ("no_init_i32",         "fn main() -> i32 { let x: i32; 42 }",                                              42),
+        ("no_init_f32",         "fn main() -> i32 { let x: f32; 42 }",                                              42),
+        ("no_init_box",         "fn main() -> i32 { let x: Box<i32>; 42 }",                                         42),
+        ("no_init_vec",         "fn main() -> i32 { let x: Vec<i32>; 42 }",                                         42),
+        ("no_init_amp_t",       "fn main() -> i32 { let x: &i32; 42 }",                                             42),
+        ("no_init_tuple",       "fn main() -> i32 { let x: (i32, i32); 42 }",                                       42),
+        ("no_init_mut",         "fn main() -> i32 { let mut x: i32; 42 }",                                          42),
+
+        # Regression-guards: with-init forms unchanged
+        ("with_init_i32",       "fn main() -> i32 { let x: i32 = 42; x }",                                          42),
+        ("with_init_box",       "fn main() -> i32 { let x: Box<i32> = 0; 42 }",                                     42),
+        ("plain_let",           "fn main() -> i32 { let x = 42; x }",                                                42),
+        ("typed_let",           "fn main() -> i32 { let x: i32 = 42; x }",                                          42),
+        ("mut_let",             "fn main() -> i32 { let mut x = 0; x = 42; x }",                                    42),
+        ("range_let",           "fn main() -> i32 { let r = 0..=5; 42 }",                                            42),
+        ("for_loop",            "fn main() -> i32 { let mut s = 0; for i in 0..7 { s = s + i; } s + 21 }",          42),
+    ]
+    for name, src, expected in cases:
+        rc = _kovc_self_host_compile_and_run(f"let_no_init_{name}", src)
+        assert rc == expected, f"{name}: expected {expected}, got {rc}"
+
+
 def test_bootstrap_kovc_turbofish_struct_lit_self_host():
     """K1.DJ (2026-05-26): turbofish `::<T>` prefix on struct
     literal. Real Rust source uses `::<T>` to disambiguate

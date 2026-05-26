@@ -3879,10 +3879,37 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             if let_ty_tag >= 0 {
                 var_type_tab_add(sb, name_start, name_len, let_ty_tag);
             };
-            cur_advance(sb);     // '='
+            // K1.DK (2026-05-26): `let x: T;` no-initializer form. Real
+            // Rust supports declaring a binding without an immediate
+            // value; the binding is uninitialized until first assigned
+            // (a flow-analysis gate; not modeled in the bootstrap):
+            //   let x: i32;
+            //   let v: Vec<i32>;
+            // Previously SIGILL'd because the let-parser unconditionally
+            // consumed `=` then parsed a value expression. For no-init
+            // shape, the cursor is at `;` (TK_SEMI = 12) instead of `=`
+            // (TK_EQ = 15); the cur_advance consumed `;`, and
+            // parse_expr_basic then tripped on the next statement.
+            //
+            // Fix: peek for `;` BEFORE the `=` consume. If matched, this
+            // is a no-init let -- skip the `=` consume and the value
+            // parse, and substitute AST_INT(0) as the placeholder value.
+            // The binding name is still registered above; codegen emits
+            // a 4-byte slot initialized to 0, which is acceptable for
+            // Phase-0 semantics (uninitialized memory == 0 in the
+            // bootstrap's zero-init model). The `;` consume below the
+            // value parse picks up the same `;` token.
+            let no_init_dk = if tok_tag(tok_base, cur_get(sb)) == 12 { 1 } else { 0 };
+            if no_init_dk == 0 {
+                cur_advance(sb);     // '='
+            };
             // value uses parse_expr_basic so the `;` after the
             // value belongs to the let-terminator, not a sequencer.
-            let value = parse_expr_basic(tok_base, sb);
+            let value = if no_init_dk == 1 {
+                mk_node(0, 0, 0, 0)     // AST_INT(0) placeholder
+            } else {
+                parse_expr_basic(tok_base, sb)
+            };
             // K1.CA (2026-05-26): postfix range absorber. After
             // parsing the let RHS, if the next token is `..`
             // (TK_DOTDOT = 43), consume it as a no-op range
