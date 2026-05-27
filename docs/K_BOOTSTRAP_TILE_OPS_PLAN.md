@@ -151,13 +151,39 @@ the loop can be unrolled or kept as a runtime loop.
 
 ## 6. Chunk sequence
 
-### K1.F23 — TILE_ZEROS builtin (1-2 chunks)
-1. `K1.F23` — add `__tile_zeros` parser-side detection + arena-allocation
-   codegen. Test: `let t = __tile_zeros(4, 4); t` returns a non-zero
-   arena offset; loading any cell returns 0.
-2. `K1.F23b` — wire `Tile::<T, N, M>::zeros()` parse-time rewrite to
-   `AST_CALL(__tile_zeros, [N, M])`. Test: full Rust-style construction
-   works.
+### K1.F23 — DISCOVERY FINDING — multi-fn arena access is broken
+1. `K1.F23` (2026-05-27, this commit) — landed two isolation probes:
+   - Probe A: `__arena_push`/`__arena_set`/`__arena_get` round-trip
+     in main() directly. **PASSES.**
+   - Probe B: same round-trip with `__arena_push` moved into a helper
+     fn. **FAILS with SIGILL (rc=132).**
+   This blocks the user-fn-based tile_zeros approach (Option C in §4)
+   for Phase-0 -- the helper fn pattern is unusable.
+   Hypotheses (to investigate in a follow-up chunk): arena_base patch-
+   table tied to main()'s code section; fn_table_lookup off for non-
+   main fns; bind_state pollution between the helper compile and
+   main's compile.
+   Pin test: `test_bootstrap_kovc_k1f23_arena_helper_fn_known_broken_
+   self_host` asserts the current broken rc=132; flip to rc=7 once
+   fixed.
+
+### K1.F23b — investigate + fix multi-fn arena access defect (BLOCKER)
+- Trace the codegen path for a 2-fn program where the helper fn calls
+  __arena_push. Compare against single-fn main calling __arena_push.
+- Identify the divergent codegen / patch-table / fn-call mechanism.
+- Fix the defect, flip the K1.F23 known-broken test's expectation.
+- Without this, NO higher-level tile-op user-fn pattern works.
+
+### K1.F23c — TILE_ZEROS builtin (FALLBACK plan if K1.F23b is hard)
+Alternative path: implement `__tile_zeros` as a BUILTIN with inline
+codegen (cursor-bump trick: read arena cursor, add N*M, write back; the
+arena's BSS-zero init means new cells are already 0). This bypasses the
+multi-fn defect entirely but adds ~30-50 bytes of inline asm.
+
+### K1.F23d — Tile syntax sugar (gated on F23b or F23c)
+- Wire `Tile::<T, N, M>::zeros()` parse-time rewrite to
+  `AST_CALL(__tile_zeros, [N, M])` or the user-fn equivalent.
+- Test: full Rust-style construction works.
 
 ### K1.F24 — TILE_ADD elementwise (1-2 chunks)
 1. `K1.F24` — `__tile_add(a, b, dst, N, M)` builtin. Loops elementwise.

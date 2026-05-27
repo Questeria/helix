@@ -8787,6 +8787,78 @@ def test_bootstrap_kovc_k1f22k_assert_ne_macro_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f23_arena_set_get_probe_self_host():
+    """K1.F23 isolation probe A: basic __arena_push + __arena_set +
+    __arena_get round-trip in main(), no helper fn, no loop. Verifies
+    the building blocks for the tile_zeros user-fn pattern work
+    individually.
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "k1f23_arena_roundtrip",
+        'fn main() -> i32 { let t = __arena_push(0); __arena_set(t, 7); __arena_get(t) }',
+    )
+    assert rc == 7, (
+        f"K1.F23 probe A: expected rc=7 (round-trip via __arena_set+get); "
+        f"got {rc}. If rc=132, the arena primitives are not callable from "
+        f"K2 binaries OR the slot indexing is off."
+    )
+
+
+def test_bootstrap_kovc_k1f23_arena_helper_fn_known_broken_self_host():
+    """K1.F23 (2026-05-27): K-BOOTSTRAP DEFECT FINDING.
+
+    The user-fn-based tile_zeros path (Phase-0 plan Option C in
+    docs/K_BOOTSTRAP_TILE_OPS_PLAN.md) is BLOCKED by a bootstrap
+    multi-fn arena-access defect: when a non-main fn calls
+    `__arena_push`, the resulting K2 binary SIGILLs at runtime.
+
+    Probe A (above) verifies that `__arena_push` works from main()
+    directly. THIS probe verifies that the same primitive call from
+    a HELPER fn traps -- isolating the defect.
+
+    Reproduction:
+      fn helper() -> i32 { __arena_push(0) }
+      fn main() -> i32 { let t = helper(); __arena_set(t, 7); __arena_get(t) }
+      Expected: rc=7 (round-trip via the helper's allocation).
+      Actual:   rc=132 (SIGILL).
+
+    Hypotheses (to investigate in a follow-up chunk):
+      - The arena_base patch-table entry might be tied to main()'s
+        code section; the helper's lea-rip placeholder may not resolve.
+      - The K2 binary's code section may not include the helper fn
+        body, or fn_table_lookup may be off for non-main fns.
+      - Some bind_state / patch_state pollution between the helper
+        compile and main's compile.
+
+    Until fixed, the Phase-0 tile-ops implementation must either:
+      (a) Fix the multi-fn arena-access defect (a separate K1.F23b
+          investigation chunk), OR
+      (b) Implement tile_zeros as a BUILTIN whose codegen is emitted
+          inline at the call site (no helper fn needed). This requires
+          adding `__tile_zeros` to bn_state slots + a try_emit_builtin_call
+          branch that does cursor-bump or unrolled __arena_push N*M times.
+
+    This test PINS the current broken behavior (rc=132) so the future
+    fix can flip the expectation. K2 self-host green even with the
+    defect; only multi-fn-with-arena programs are affected.
+    """
+    src = (
+        'fn helper() -> i32 { __arena_push(0) }\n'
+        'fn main() -> i32 { let t = helper(); __arena_set(t, 7); __arena_get(t) }\n'
+    )
+    rc = _kovc_self_host_compile_and_run(
+        "k1f23_arena_helper_fn_known_broken",
+        src,
+    )
+    # Current broken behavior: SIGILL (rc=132). Flip to rc=7 after the fix.
+    assert rc == 132, (
+        f"K1.F23 known-broken probe: expected the current broken "
+        f"rc=132 (SIGILL via multi-fn arena access defect); got {rc}. "
+        f"If rc=7, THE DEFECT IS FIXED -- great! Update this test to "
+        f"assert rc=7 and the K1.F23 chunk's findings doc."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +
