@@ -8787,6 +8787,103 @@ def test_bootstrap_kovc_k1f22k_assert_ne_macro_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f24c_while_let_mut_in_helper_self_host():
+    """K1.F24c isolation probe: does `while` + `let mut` work inside
+    a non-main fn? K1.F23b probes G and H verified arena READ/SET
+    work from helpers but had NO loop. This probe adds the loop +
+    mutable counter to find if THAT's the issue.
+
+    `helper(n)` computes 0+1+...+(n-1) via a while loop with let-mut
+    counter. For n=4, returns 0+1+2+3 = 6.
+    """
+    src = (
+        'fn helper(n: i32) -> i32 {\n'
+        '    let mut i: i32 = 0;\n'
+        '    let mut sum: i32 = 0;\n'
+        '    while i < n {\n'
+        '        sum = sum + i;\n'
+        '        i = i + 1;\n'
+        '    }\n'
+        '    sum\n'
+        '}\n'
+        '\n'
+        'fn main() -> i32 { helper(4) }\n'
+    )
+    rc = _kovc_self_host_compile_and_run(
+        "k1f24c_while_let_mut_in_helper",
+        src,
+    )
+    # SURPRISE FINDING (2026-05-27): even pure while+let-mut in a
+    # helper fn SIGILLs in K2 self-host. NO arena access involved.
+    # This makes the K-bootstrap defect WAY broader than the tile-ops
+    # blocker: helper-fn codegen for {while, let-mut, assign} combos
+    # is broken. Pinned via rc==132 assertion.
+    assert rc == 132, (
+        f"K1.F24c known-broken: expected rc=132 (SIGILL); got {rc}. "
+        f"If rc=6, the helper-fn while+let-mut defect was fixed."
+    )
+
+
+def test_bootstrap_kovc_k1f24c_tile_add_via_user_fn_self_host():
+    """K1.F24c (2026-05-27): WORKAROUND for the K1.F24b multi-cell-
+    cursor-bump-write defect. Instead of providing __tile_add as a
+    bootstrap-builtin (which the K1.F24 attempt found is in the
+    broken-codegen cell), demonstrate that the SAME computation
+    can be expressed as a user-fn using only __arena_get and
+    __arena_set primitives. Both confirmed working from helper-fn
+    context per K1.F23b probes G (arena_len/get) and H (arena_set).
+
+    Scenario:
+      a = [3, 5, 7, 11]    (4 cells)
+      b = [10, 20, 30, 40]
+      helper_tile_add walks the cells, computes dst[i] = a[i] + b[i].
+      return dst[0] + dst[1] + dst[2] + dst[3] = 126
+
+    If this passes, tile-ops are TRACTABLE via user-fn composition
+    of working primitives, no broken-builtin involved.
+    """
+    src = (
+        'fn helper_tile_add(a: i32, b: i32, dst: i32, count: i32) -> i32 {\n'
+        '    let mut i: i32 = 0;\n'
+        '    while i < count {\n'
+        '        let va: i32 = __arena_get(a + i);\n'
+        '        let vb: i32 = __arena_get(b + i);\n'
+        '        __arena_set(dst + i, va + vb);\n'
+        '        i = i + 1;\n'
+        '    }\n'
+        '    0\n'
+        '}\n'
+        '\n'
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 3);\n'
+        '    __arena_set(a + 1, 5);\n'
+        '    __arena_set(a + 2, 7);\n'
+        '    __arena_set(a + 3, 11);\n'
+        '    __arena_set(b, 10);\n'
+        '    __arena_set(b + 1, 20);\n'
+        '    __arena_set(b + 2, 30);\n'
+        '    __arena_set(b + 3, 40);\n'
+        '    helper_tile_add(a, b, dst, 4);\n'
+        '    __arena_get(dst) + __arena_get(dst + 1) + __arena_get(dst + 2) + __arena_get(dst + 3)\n'
+        '}\n'
+    )
+    rc = _kovc_self_host_compile_and_run(
+        "k1f24c_tile_add_user_fn",
+        src,
+    )
+    # Pinned broken: depends on the while+let-mut-in-helper defect
+    # (above). Expected to flip when that defect is fixed.
+    assert rc == 132, (
+        f"K1.F24c known-broken: expected rc=132 (SIGILL via the "
+        f"helper-fn while+let-mut defect); got {rc}. If rc=126, the "
+        f"K-bootstrap helper-fn defects were resolved and user-fn "
+        f"tile_add works."
+    )
+
+
 def test_bootstrap_kovc_k1f24b_two_arg_builtin_pair_known_broken_self_host():
     """K1.F24b (2026-05-27): K-BOOTSTRAP DEFECT FINDING (broader than
     K1.F23): 2-arg `__arena_push_pair` (K1.AF) SIGILLs via K2 self-host.
