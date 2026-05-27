@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 266      # last bump: K1.F31 -- assert_eq!(IDENT, INT_LIT) form. Real Rust very often writes `assert_eq!(x, 5)`; pre-F31 this fell through to K1.CB no-op-skip and silently ate the assert. Sibling of K1.F22j with AST_INT on the right (instead of AST_VAR). 7-token shape. K3.S reject still applies to IDENT operand. Also unifies the K1.F22j IDENT-side BoolLit reject to use is_any_reserved_kw_ident (defense-in-depth, extends K3.S coverage). Test: assert_eq!(x, 5) when x=5 -> rc=11, assert_eq!(x, 7) when x=5 -> rc=132. K1.F22j/k regressions intact.
+K_BOOTSTRAP_CHUNKS_DONE = 267      # last bump: K1.F32 -- assert_ne!(IDENT, INT_LIT) form. Sibling of K1.F31 with AST_NE (tag 21) and "!=" in panic message. Real Rust idiomatically writes `assert_ne!(x, 0)`. 7-token shape. K3.S reject on IDENT operand. Also unifies K1.F22k's BoolLit reject to is_any_reserved_kw_ident (matches K1.F31's same unify of K1.F22j). Tests: assert_ne!(x, 7) when x=5 -> rc=11 (assert holds, operands differ), assert_ne!(x, 5) when x=5 -> rc=132 (operands match, assert breaks). K1.F22k regression intact (same 3-test pass batch).
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

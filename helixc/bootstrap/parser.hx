@@ -3816,6 +3816,9 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Same 7-token shape as assert_eq! (mac_t2..mac_t6) and same
             // K3.Q-style reject of BoolLit operands. The only difference
             // from is_assert_eq_form is the IDENT-name-macro it gates on.
+            // K1.F32 (2026-05-27): unified reject to is_any_reserved_kw_ident
+            // (extends K3.S coverage; defense-in-depth, no behavior change
+            // since the wider helper subsumes is_kw_true/false).
             let is_assert_ne_form = if is_assert_ne_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
                     if mac_t5 == 2 { if mac_t6 == 4 {
@@ -3823,11 +3826,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         let ane_a_opnd_l = tok_p3(tok_base, k + 3);
                         let ane_b_opnd_s = tok_p2(tok_base, k + 5);
                         let ane_b_opnd_l = tok_p3(tok_base, k + 5);
-                        if is_kw_true_ident(ane_a_opnd_s, ane_a_opnd_l) == 1 { 0 }
-                        else { if is_kw_false_ident(ane_a_opnd_s, ane_a_opnd_l) == 1 { 0 }
-                        else { if is_kw_true_ident(ane_b_opnd_s, ane_b_opnd_l) == 1 { 0 }
-                        else { if is_kw_false_ident(ane_b_opnd_s, ane_b_opnd_l) == 1 { 0 }
-                        else { 1 } } } }
+                        if is_any_reserved_kw_ident(ane_a_opnd_s, ane_a_opnd_l) == 1 { 0 }
+                        else { if is_any_reserved_kw_ident(ane_b_opnd_s, ane_b_opnd_l) == 1 { 0 }
+                        else { 1 } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F32 (2026-05-27): assert_ne!(IDENT, INT_LIT) shape -- 7 tokens.
+            // Sibling of K1.F31 (assert_eq!(IDENT, INT_LIT)); AST_NE cond
+            // instead of AST_EQ, "!=" in the panic message instead of "==".
+            // Real Rust very often writes `assert_ne!(x, 0)`.
+            let is_assert_ne_ident_int_form = if is_assert_ne_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
+                    if mac_t5 == 1 { if mac_t6 == 4 {
+                        let aneii_a_opnd_s = tok_p2(tok_base, k + 3);
+                        let aneii_a_opnd_l = tok_p3(tok_base, k + 3);
+                        if is_any_reserved_kw_ident(aneii_a_opnd_s, aneii_a_opnd_l) == 1 { 0 }
+                        else { 1 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             // K1.F28 (2026-05-27): shape guard for dbg!(IDENT). 5-token
@@ -4304,6 +4318,44 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let ane_else = mk_node(16, ane_panic_name_s, 5, ane_args_head);
                 mk_node(7, ane_cond, ane_then, ane_else)
+            } else { if is_assert_ne_ident_int_form == 1 {
+                // K1.F32 (2026-05-27): assert_ne!(IDENT, INT_LIT) form.
+                // Sibling of K1.F31; AST_NE cond (tag 21) instead of
+                // AST_EQ (tag 20), "!=" in panic message instead of "==".
+                // 7-token consumption (assert_ne, !, (, IDENT, comma,
+                // INT, )). K3.S reject applies to the IDENT operand.
+                let aneii_a_s = tok_p2(tok_base, k + 3);
+                let aneii_a_l = tok_p3(tok_base, k + 3);
+                let aneii_b_val = tok_p1(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert_ne)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // INT (b)
+                cur_advance(sb);           // )
+                let aneii_var_a = mk_node(1, aneii_a_s, aneii_a_l, 0);
+                let aneii_int_b = mk_node(0, aneii_b_val, 0, 0);
+                let aneii_cond = mk_node(21, aneii_var_a, aneii_int_b, 0);  // AST_NE
+                let aneii_then = mk_node(0, 0, 0, 0);                        // AST_INT(0)
+                // Push "assertion failed: !=" message bytes (20 chars).
+                let aneii_msg_s = __arena_push(97);                          // 'a'
+                __arena_push(115); __arena_push(115);                        // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                __arena_push(32);                                            // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                __arena_push(58);                                            // ':'
+                __arena_push(32);                                            // ' '
+                __arena_push(33); __arena_push(61);                          // '!' '='
+                let aneii_str_ast = mk_node(25, aneii_msg_s, 20, 0);
+                let aneii_args_head = mk_node(17, aneii_str_ast, 0, 0);
+                let aneii_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let aneii_else = mk_node(16, aneii_panic_name_s, 5, aneii_args_head);
+                mk_node(7, aneii_cond, aneii_then, aneii_else)
             } else { if is_dbg_ident_form == 1 {
                 // K1.F28 (2026-05-27): dbg!(IDENT) passthrough. Synthesize
                 // AST_VAR(IDENT_bytes) -- the macro wrapper is dropped and
@@ -4398,7 +4450,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form)
+            }}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

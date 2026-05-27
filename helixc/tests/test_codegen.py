@@ -9994,6 +9994,46 @@ def test_bootstrap_kovc_k1f31_assert_eq_ident_int_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f32_assert_ne_ident_int_self_host():
+    """K1.F32 (2026-05-27): `assert_ne!(IDENT, INT_LIT)` macro form.
+
+    Sibling of K1.F31; AST_NE cond (tag 21) instead of AST_EQ (tag 20)
+    and `!=` in the panic message instead of `==`. Real Rust idiomatically
+    writes `assert_ne!(x, 0)` for "must not be the sentinel" checks.
+
+    Shape: assert_ne, !, (, IDENT, comma, INT, ) -- 7 tokens.
+
+    Synthesis: AST_IF(cond=AST_NE(AST_VAR(a), AST_INT(b_val)),
+                      then=AST_INT(0),
+                      else=AST_CALL(panic, "assertion failed: !=")).
+
+    Pass case fires when operands DIFFER (assert_ne semantics), fail case
+    fires when they MATCH.
+
+    Differential:
+      pass: x=5, assert_ne!(x, 7) -> rc=11 (operands differ, assert holds)
+      fail: x=5, assert_ne!(x, 5) -> rc=132 (operands match, assert breaks)
+    """
+    src_pass = 'fn main() -> i32 { let x: i32 = 5; assert_ne!(x, 7); 11 }'
+    rc_pass = _kovc_self_host_compile_and_run("k1f32_aneii_pass", src_pass)
+    assert rc_pass == 11, (
+        f"K1.F32 assert_ne!(x, 7) when x=5: expected rc=11 (operands "
+        f"differ, AST_NE true, then-arm runs); got {rc_pass}. If rc=0: "
+        f"macro fell through to K1.CB no-op-skip. If rc=132: the cond_ne "
+        f"branch was inverted."
+    )
+
+    src_fail = 'fn main() -> i32 { let x: i32 = 5; assert_ne!(x, 5); 11 }'
+    rc_fail = _kovc_self_host_compile_and_run("k1f32_aneii_fail", src_fail)
+    assert rc_fail == 132, (
+        f"K1.F32 assert_ne!(x, 5) when x=5: expected rc=132 (operands "
+        f"match, AST_NE false, panic fires); got {rc_fail}. If rc=11: "
+        f"the cond_ne branch was inverted (it ran the THEN arm when "
+        f"operands matched). If rc=0: macro fell through to K1.CB "
+        f"no-op-skip; K1.F32 detection or synthesis broken."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.
