@@ -897,8 +897,20 @@ fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
 // K1.F7 (2026-05-27): const_tab accessors. Cap = 16 entries; each
 // entry = 3 slots (name_s, name_l, value_ast_idx). Populated by
 // parse_const_decl, queried by parse_primary's IDENT path.
-fn const_tab_base(sb: i32) -> i32 { __arena_get(sb + 94) }
-fn const_tab_count(sb: i32) -> i32 { __arena_get(sb + 95) }
+//
+// K3.A audit-fix (2026-05-27): the original K1.F7 stored
+// const_tab base/count at sb+94/sb+95. The silent-failure audit
+// caught a HIGH collision -- param_array_name(sb, idx=2) maps to
+// `sb + 90 + 2*2 = sb + 94` and `sb + 91 + 2*2 = sb + 95`. With
+// 3+ params under an AD differentiation pass (which writes via
+// set_param_array_name), const_tab metadata would be overwritten
+// silently and every later const lookup would walk garbage memory.
+// Moved to sb+122/sb+123 -- past the bucket_array range
+// (sb+106..sb+121) and outside param_array_name's idx-0..7 range
+// (sb+90..sb+105). parse_top pre-allocates slots 96..123 below
+// so these are guaranteed-zero on entry.
+fn const_tab_base(sb: i32) -> i32 { __arena_get(sb + 122) }
+fn const_tab_count(sb: i32) -> i32 { __arena_get(sb + 123) }
 fn const_tab_add(sb: i32, name_s: i32, name_l: i32, value_idx: i32) -> i32 {
     let count = const_tab_count(sb);
     if count >= 16 {
@@ -909,7 +921,7 @@ fn const_tab_add(sb: i32, name_s: i32, name_l: i32, value_idx: i32) -> i32 {
         __arena_set(entry, name_s);
         __arena_set(entry + 1, name_l);
         __arena_set(entry + 2, value_idx);
-        __arena_set(sb + 95, count + 1);
+        __arena_set(sb + 123, count + 1);
         count
     }
 }
@@ -6369,13 +6381,39 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0); __arena_push(0);
     // K1.H1-deadcode (2026-05-25): slots 92/93 = loop keyword (start, len).
     __arena_push(0); __arena_push(0);
-    // K1.F7 (2026-05-27): slots 94/95 = const_tab base/count. The
-    // table is keyed by const-name byte-string and stores
-    // (name_s, name_l, value_ast_idx) triples (3 slots / entry,
-    // cap=16). Populated by parse_const_decl, queried by
-    // parse_primary's IDENT path so `const X: T = N;` followed by
-    // a `X` reference downstream emits N's AST inline.
+    // K1.F7 (2026-05-27) + K3.A (2026-05-27): const_tab metadata
+    // moved from slots 94/95 (which collide with
+    // param_array_name(idx=2) under AD differentiation passes --
+    // silent-failure audit found this HIGH) to slots 122/123. Slots
+    // 96..123 below are pre-allocated zero placeholders so const_tab
+    // sits in a slot range past param_array (90..105) and
+    // bucket_array head/count (106..121).
+    //
+    // The 96..105 slot range is param_array_name (idx 0..7 with
+    // 2-slot stride); 106..113 = bucket_array_head; 114..121 =
+    // bucket_array_count. All three tables write via __arena_set on
+    // those exact offsets at AD-differentiation time -- so const_tab
+    // CANNOT live anywhere inside 90..121. 122/123 is the first
+    // safe pair.
+    //
+    // Slots 94/95 stay reserved (legacy K1.F7 placeholder, also
+    // happens to be where param_array_name(idx=2) writes -- so
+    // these slots double up as AD scratch, consistent with the
+    // K1.G/K1.H1 'in'/'loop' kw slots at 90..93 also doubling as
+    // param_array idx 0/1 scratch -- pre-existing pattern).
     __arena_push(0); __arena_push(0);
+    // K3.A (2026-05-27): pre-allocate slots 96..123 (28 slots).
+    // The first 16 (96..111) sit within the param_array/bucket_array
+    // dynamic write range; the last 12 (112..123) include the const_
+    // tab base/count pair at 122/123. All zero on entry; the dynamic
+    // writers (set_param_array_name / set_bucket_array_head / _count)
+    // and parse_top's region-allocation block below take it from
+    // there.
+    let mut k3a_pad: i32 = 0;
+    while k3a_pad < 28 {
+        __arena_push(0);
+        k3a_pad = k3a_pad + 1;
+    }
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -6434,19 +6472,23 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 78, sgp_base);
     __arena_set(cur_slot + 79, 0);
-    // K1.F7 (2026-05-27): const_tab region (48 slots, 16 entries x 3
-    // fields). Each entry = (name_s, name_l, value_ast_idx). The
-    // value_ast_idx is the AST node index of the const decl's
-    // value expression -- parse_primary inlines that AST when the
-    // const name is referenced.
+    // K1.F7 (2026-05-27) + K3.A (2026-05-27): const_tab region (48
+    // slots, 16 entries x 3 fields). Each entry = (name_s, name_l,
+    // value_ast_idx). The value_ast_idx is the AST node index of
+    // the const decl's value expression -- parse_primary inlines
+    // that AST when the const name is referenced.
+    //
+    // Region BASE POINTER moved from sb+94 to sb+122 (and count
+    // from sb+95 to sb+123) by K3.A to escape the
+    // param_array_name(idx=2) collision at sb+94/95.
     let const_base = __arena_push(0);
     let mut cti: i32 = 1;
     while cti < 48 {
         __arena_push(0);
         cti = cti + 1;
     }
-    __arena_set(cur_slot + 94, const_base);
-    __arena_set(cur_slot + 95, 0);
+    __arena_set(cur_slot + 122, const_base);
+    __arena_set(cur_slot + 123, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
