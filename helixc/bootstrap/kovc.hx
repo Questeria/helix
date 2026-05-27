@@ -1423,13 +1423,17 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let r = expr_type(p2, bind_state, bn_state);
         if l == r { l } else { if l == 3 { if r == 0 { 3 } else { 0 } } else { if l == 0 { if r == 3 { 3 } else { 0 } } else { 0 } } }
     } else { if t == 5 {                              // AST_DIV
+        // K1.F8c: same widening rule as ADD/SUB/MUL for both
+        // i64<->i32 directions; codegen sign-extends and emits a
+        // 64-bit idiv, so the result is i64.
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
-        if l == r { l } else { 0 }
+        if l == r { l } else { if l == 3 { if r == 0 { 3 } else { 0 } } else { if l == 0 { if r == 3 { 3 } else { 0 } } else { 0 } } }
     } else { if t == 24 {                             // AST_MOD
+        // K1.F8c: same widening rule as DIV.
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
-        if l == r { l } else { 0 }
+        if l == r { l } else { if l == 3 { if r == 0 { 3 } else { 0 } } else { if l == 0 { if r == 3 { 3 } else { 0 } } else { 0 } } }
     } else { if t == 28 {                             // AST_BAND
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
@@ -6030,7 +6034,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { if l_u64 == 1 {
             if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() }}};
+        } else {
+            // K1.F8c: when l isn't 64-bit but r is i64, use 64-bit copy.
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -6039,13 +6046,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Speedup #4 wire-in: bf16 trap id = 5001 (AST_DIV * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(5001) } else { if r_bf == 1 { emit_trap_with_id(5001) } else {
             // Speedup #4 wire-in: AST_DIV mixed-type trap ids 5010-5051.
-            // Adds u32 mismatch (5050/5051) on top of the binary-arith pattern.
+            // K1.F8c (2026-05-27) closed both i64<->i32 mismatch directions
+            // (5020 + 5021) via signed widening; idiv reads the dividend
+            // from rdx:rax and the divisor from r/m, so widening rcx (i32->
+            // i64) lets us share the 64-bit idiv path with i64+i64.
             if l_d == 1 {
                 if r_d == 1 { emit_divsd() } else { emit_trap_with_id(5010) }
             } else { if r_d == 1 { emit_trap_with_id(5011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_idiv_rax_rcx_64() } else { emit_trap_with_id(5020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(5021) } else {
+                    // K1.F8c forward: i64 / i32 -- sign-ext rcx, 64-bit idiv.
+                    if r_i64 == 1 { emit_idiv_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_idiv_rax_rcx_64() }
+                } else { if r_i64 == 1 {
+                    // K1.F8c reverse: i32 / i64 -- sign-ext rax, 64-bit idiv.
+                    emit_movsxd_rax_eax() + emit_idiv_rax_rcx_64()
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_div_rax_rcx_64_u() } else { emit_trap_with_id(5030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(5031) } else {
@@ -6094,7 +6108,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else { if l_u64 == 1 {
             if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-        } else { emit_mov_ecx_eax() }}};
+        } else {
+            // K1.F8c: when l isn't 64-bit but r is i64, use 64-bit copy.
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+        }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -6104,13 +6121,21 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // 24010: any-d (no SSE remainder; this also covers l_d=1+r_d=1).
             // 24040: any-f (no SSE remainder).
             // 24050/24051: u32 mismatch.
+            // K1.F8c (2026-05-27) closed both i64<->i32 mismatch directions
+            // (24020 + 24021) via signed widening; imod uses 64-bit idiv
+            // (cqo + idiv rcx + mov rax, rdx), so widening rcx (i32->i64)
+            // lets us reuse the 64-bit imod path.
             if l_d == 1 {
                 // f64 % f64 → ud2 (no SSE remainder); mixed → ud2.
                 emit_trap_with_id(24010)
             } else { if r_d == 1 { emit_trap_with_id(24011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_trap_with_id(24020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(24021) } else {
+                    // K1.F8c forward: i64 % i32 -- sign-ext rcx, 64-bit imod.
+                    if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_imod_rax_rcx_64() }
+                } else { if r_i64 == 1 {
+                    // K1.F8c reverse: i32 % i64 -- sign-ext rax, 64-bit imod.
+                    emit_movsxd_rax_eax() + emit_imod_rax_rcx_64()
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_imod_rax_rcx_64_u() } else { emit_trap_with_id(24030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(24031) } else {
