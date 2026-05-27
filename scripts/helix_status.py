@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 264      # last bump: K3.V -- READ-side close of audit HIGH-1 for __tile_add. Adds 42 bytes (21 bytes each for a_off and b_off) after the K3.U dst guard. Trap-ids: 24002 (a OOB), 24003 (b OOB). __tile_add body grows 80 -> 122. Tests verify: normal (3+10=13), a_off=99999999 traps, b_off=99999999 traps. __tile_sub/__tile_mul/__tile_matmul still need READ-side bounds (K3.W candidate -- mechanical mirror of K3.V pattern). Audit HIGH-1 is now: write-side fully closed; read-side closed for add only
+K_BOOTSTRAP_CHUNKS_DONE = 265      # last bump: K3.W -- finishes READ-side close of audit HIGH-1 across __tile_sub/__tile_mul/__tile_matmul. Mirrors K3.V pattern. Trap-ids: 25002/25003 (sub a/b), 26002/26003 (mul a/b), 27003/27004 (matmul a/b). Matmul uses `add esi, 4` imm8 (3 bytes) instead of `add esi, ecx` (2 bytes) since count is hardcoded post-K3.R; matmul check is 22 bytes per offset, 44 total. Body sizes: sub 80 -> 122 (+42), mul 81 -> 123 (+42), matmul 200 -> 244 (+44). Test verifies 9 cases (3 ops x {normal, a-OOB, b-OOB}); all pass. AUDIT HIGH-1 FULLY CLOSED across all 4 tile ops on both WRITE and READ sides. All 4 audit findings now closed (HIGH-1, MEDIUM-1, MEDIUM-2, LOW)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

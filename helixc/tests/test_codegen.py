@@ -9718,6 +9718,80 @@ def test_bootstrap_kovc_k3v_tile_add_read_bounds_self_host():
     )
 
 
+def test_bootstrap_kovc_k3w_tile_sub_mul_matmul_read_bounds_self_host():
+    """K3.W (2026-05-27): READ-side close of audit HIGH-1 for the
+    remaining 3 tile ops. Mirrors K3.V's __tile_add pattern to
+    __tile_sub, __tile_mul, __tile_matmul.
+
+    Trap-ids:
+      __tile_sub a OOB: 25002    __tile_sub b OOB: 25003
+      __tile_mul a OOB: 26002    __tile_mul b OOB: 26003
+      __tile_matmul a OOB: 27003 __tile_matmul b OOB: 27004
+
+    Body growth:
+      __tile_sub: 80 -> 122 (+42)
+      __tile_mul: 81 -> 123 (+42)
+      __tile_matmul: 200 -> 244 (+44; uses `add esi, 4` imm8 since
+        count is hardcoded post-K3.R N=2 guard)
+
+    Audit HIGH-1 fully closed across all 4 ops after this chunk.
+
+    Tests: 9 cases (3 ops × {normal, a-OOB, b-OOB}).
+    """
+    cases = [
+        # (op, a_set, b_set, count_arg, expected_normal_rc)
+        ("__tile_sub", 20, 7, "4", 13),
+        ("__tile_mul", 4, 3, "4", 12),
+        ("__tile_matmul", 1, 5, "2", 5),
+    ]
+    for op, a_val, b_val, count_arg, expected in cases:
+        # Normal: all in bounds.
+        rc_ok = _kovc_self_host_compile_and_run(
+            f"k3w_{op.lstrip('_')}_normal",
+            'fn main() -> i32 {\n'
+            f'    let a: i32 = __tile_zeros(2, 2);\n'
+            f'    let b: i32 = __tile_zeros(2, 2);\n'
+            f'    let dst: i32 = __tile_zeros(2, 2);\n'
+            f'    __arena_set(a, {a_val});\n'
+            f'    __arena_set(b, {b_val});\n'
+            f'    {op}(a, b, dst, {count_arg});\n'
+            f'    __arena_get(dst)\n'
+            f'}}\n',
+        )
+        assert rc_ok == expected, (
+            f"K3.W {op} normal regression: expected rc={expected}; "
+            f"got {rc_ok}. If 132: a guard fired incorrectly."
+        )
+
+        # a OOB.
+        rc_a = _kovc_self_host_compile_and_run(
+            f"k3w_{op.lstrip('_')}_a_oob",
+            'fn main() -> i32 {\n'
+            '    let b: i32 = __tile_zeros(2, 2);\n'
+            '    let dst: i32 = __tile_zeros(2, 2);\n'
+            f'    {op}(99999999, b, dst, {count_arg});\n'
+            '    0\n'
+            '}\n',
+        )
+        assert rc_a == 132, (
+            f"K3.W {op} a-OOB: expected rc=132; got {rc_a}."
+        )
+
+        # b OOB.
+        rc_b = _kovc_self_host_compile_and_run(
+            f"k3w_{op.lstrip('_')}_b_oob",
+            'fn main() -> i32 {\n'
+            '    let a: i32 = __tile_zeros(2, 2);\n'
+            '    let dst: i32 = __tile_zeros(2, 2);\n'
+            f'    {op}(a, 99999999, dst, {count_arg});\n'
+            '    0\n'
+            '}\n',
+        )
+        assert rc_b == 132, (
+            f"K3.W {op} b-OOB: expected rc=132; got {rc_b}."
+        )
+
+
 def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     """K1.F28 (2026-05-27): `dbg!(IDENT)` macro expansion as a
     PASSTHROUGH. In Rust, `dbg!(expr)` prints "[file:line] expr = value"

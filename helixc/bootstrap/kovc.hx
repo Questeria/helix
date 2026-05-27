@@ -4795,6 +4795,19 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_u32_le(helix_arena_cap());
         emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
         emit_trap_with_id(25001);                                                // __tile_sub dst OOB
+        // K3.W (2026-05-27): READ-side bounds for a_off and b_off.
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);     // mov esi, [rsp+16] (a_off)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(25002);                                                // sub a OOB
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x08);     // mov esi, [rsp+8] (b_off)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(25003);                                                // sub b OOB
         let disp_slot_ts = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_ts, arena_base_s, 18);
         emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
@@ -4815,7 +4828,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_ts + np0_ts + n1_ts + np1_ts + n2_ts + np2_ts + n3_ts + 80
+        n0_ts + np0_ts + n1_ts + np1_ts + n2_ts + np2_ts + n3_ts + 122
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_mul_s(bn_state), 10) == 1 {
         // K1.F26 (2026-05-27): __tile_mul(a, b, dst, count) elementwise
         // multiplication. Mirrors __tile_add/__tile_sub but uses
@@ -4847,6 +4860,19 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_u32_le(helix_arena_cap());
         emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
         emit_trap_with_id(26001);                                                // __tile_mul dst OOB
+        // K3.W (2026-05-27): READ-side bounds for a_off and b_off.
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);     // mov esi, [rsp+16] (a_off)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(26002);                                                // mul a OOB
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x08);     // mov esi, [rsp+8] (b_off)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(26003);                                                // mul b OOB
         let disp_slot_tm = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_tm, arena_base_s, 18);
         emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
@@ -4867,7 +4893,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_tm + np0_tm + n1_tm + np1_tm + n2_tm + np2_tm + n3_tm + 81
+        n0_tm + np0_tm + n1_tm + np1_tm + n2_tm + np2_tm + n3_tm + 123
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_matmul_s(bn_state), 13) == 1 {
         // K1.F27 (2026-05-27): __tile_matmul(a, b, dst, N) for 2x2 only.
         // Fully unrolled (no loops). N is currently ignored (assumed 2).
@@ -4934,6 +4960,22 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_u32_le(helix_arena_cap());                                          //                     (4 more bytes of imm32)
         emit_byte(0x76); emit_byte(0x07);                                       // jbe +7 (skip trap if dst_off+4 <= cap)
         emit_trap_with_id(27002);                                                // 7 bytes -- dst OOB trap
+        // K3.W (2026-05-27): READ-side bounds for a_off and b_off. Matmul
+        // hardcodes count=4 (per K3.R N=2 guard) so we use `add esi, 4`
+        // (3 bytes imm8) instead of `add esi, ecx` (2 bytes). 22 bytes per
+        // check x 2 = 44 bytes added. Trap-ids 27003 (a OOB), 27004 (b OOB).
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);     // mov esi, [rsp+16] (a_off)
+        emit_byte(0x83); emit_byte(0xC6); emit_byte(0x04);                      // add esi, 4
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(27003);                                                // matmul a OOB
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x08);     // mov esi, [rsp+8] (b_off)
+        emit_byte(0x83); emit_byte(0xC6); emit_byte(0x04);                      // add esi, 4
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(27004);                                                // matmul b OOB
         let disp_slot_mm = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_mm, arena_base_s, 18);
 
@@ -4984,8 +5026,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        // K3.R: 167 -> 179 (+12 for N != 2 guard). K3.T: 179 -> 200 (+21 for dst bounds).
-        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 200
+        // K3.R: 167 -> 179 (+12). K3.T: 179 -> 200 (+21 dst). K3.W: 200 -> 244 (+44 a/b reads).
+        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 244
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
