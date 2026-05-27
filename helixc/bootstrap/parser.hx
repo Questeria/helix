@@ -3575,6 +3575,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F28 (2026-05-27): dbg! detection. 3-char IDENT "dbg" =
+            // bytes 100 98 103. The `dbg!(expr)` macro in Rust prints
+            // "[file:line] expr = value" to stderr and returns the value.
+            // K1.F28 ships a PASSTHROUGH form: dbg!(IDENT) expands to
+            // AST_VAR(IDENT) directly -- no print side effect, but the
+            // expression's value is preserved. Programs using dbg! for
+            // debug-print parse and run correctly; the debug-print is
+            // suppressed (Phase-0 contract). Future K1.F28b will add the
+            // stderr print side effect via an eprintln-style synth.
+            let is_dbg_name_macro = if id_len == 3 {
+                let db0 = __arena_get(id_start);
+                let db1 = __arena_get(id_start + 1);
+                let db2 = __arena_get(id_start + 2);
+                if db0 == 100 { if db1 == 98 { if db2 == 103 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             // K1.F22h (2026-05-27): unreachable!() detection. 11-char
             // IDENT "unreachable" = bytes 117 110 114 101 97 99 104 97
             // 98 108 101. Zero-arg sibling -- synthesized message is
@@ -3756,6 +3772,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         else { if is_kw_false_ident(ane_b_opnd_s, ane_b_opnd_l) == 1 { 0 }
                         else { 1 } } } }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F28 (2026-05-27): shape guard for dbg!(IDENT). 5-token
+            // shape: IDENT, !, (, IDENT, ). Same K3.Q-style reject of
+            // bool-lit operands ("true"/"false" bytes-tagged-as-TK_IDENT)
+            // to avoid the AST_VAR-on-keyword-bytes silent-miscompile.
+            // bool-lit dbg! forms fall through to K1.CB no-op-skip
+            // (compile-time bool-lit dbg passthrough is a future
+            // refinement; the value 1/0 would be the result).
+            let is_dbg_ident_form = if is_dbg_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 4 {
+                    let dbg_opnd_s = tok_p2(tok_base, k + 3);
+                    let dbg_opnd_l = tok_p3(tok_base, k + 3);
+                    if is_kw_true_ident(dbg_opnd_s, dbg_opnd_l) == 1 { 0 }
+                    else { if is_kw_false_ident(dbg_opnd_s, dbg_opnd_l) == 1 { 0 }
+                    else { 1 } }
+                } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             if is_panic_str_form == 1 {
                 // Capture the STR_LIT body bytes from the k+3 token.
@@ -4132,6 +4164,22 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let ane_else = mk_node(16, ane_panic_name_s, 5, ane_args_head);
                 mk_node(7, ane_cond, ane_then, ane_else)
+            } else { if is_dbg_ident_form == 1 {
+                // K1.F28 (2026-05-27): dbg!(IDENT) passthrough. Synthesize
+                // AST_VAR(IDENT_bytes) -- the macro wrapper is dropped and
+                // the inner identifier's value becomes the expression's
+                // value. Phase-0 contract: no debug-print side effect; the
+                // stderr "[file:line] expr = value" output is deferred to
+                // K1.F28b. 5-token consumption shape (dbg, !, (, IDENT, )).
+                let dbg_id_tok = k + 3;
+                let dbg_id_s = tok_p2(tok_base, dbg_id_tok);
+                let dbg_id_l = tok_p3(tok_base, dbg_id_tok);
+                cur_advance(sb);             // IDENT (dbg)
+                cur_advance(sb);             // !
+                cur_advance(sb);             // (
+                cur_advance(sb);             // IDENT (operand)
+                cur_advance(sb);             // )
+                mk_node(1, dbg_id_s, dbg_id_l, 0)  // AST_VAR(operand)
             } else { if is_unreach_empty_form == 1 {
                 // K1.F22h: synthesize AST_CALL(panic,
                 // "internal error: entered unreachable code").
@@ -4197,7 +4245,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1 (is_assert_ne_form)
+            }}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

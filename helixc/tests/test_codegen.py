@@ -9451,6 +9451,45 @@ def test_bootstrap_kovc_k1f27_tile_matmul_2x2_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
+    """K1.F28 (2026-05-27): `dbg!(IDENT)` macro expansion as a
+    PASSTHROUGH. In Rust, `dbg!(expr)` prints "[file:line] expr = value"
+    to stderr and returns the value. K1.F28 ships the passthrough form:
+    the macro wrapper is dropped at parse time and the inner identifier
+    becomes the expression value. Phase-0 contract: no stderr print
+    side effect (deferred to K1.F28b which would add an eprintln-style
+    synth).
+
+    Mirrors the K1.F22 family detection pattern (id_len + per-byte
+    comparison for "dbg" = 100 98 103). Shape guard: dbg, !, (, IDENT, ).
+    K3.Q-style reject of bool-lit operands ("true"/"false") to avoid
+    the AST_VAR-on-keyword-bytes silent miscompile.
+
+    Tests:
+      1. dbg!(x) where x = 42 -> rc = 42.
+      2. dbg!(y) + 50 where y = 100 -> rc = 150 (uses the passthrough
+         result in a compound expression).
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f28_dbg_simple",
+        'fn main() -> i32 { let x: i32 = 42; dbg!(x) }',
+    )
+    assert rc1 == 42, (
+        f"K1.F28 simple: expected rc=42 (dbg!(x) passthrough where x=42); "
+        f"got {rc1}. If rc=0: macro fell through to K1.CB no-op-skip "
+        f"instead of synthesizing AST_VAR."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f28_dbg_compound",
+        'fn main() -> i32 { let y: i32 = 100; let z: i32 = dbg!(y) + 50; z }',
+    )
+    assert rc2 == 150, (
+        f"K1.F28 compound: expected rc=150 (dbg!(y=100) + 50); "
+        f"got {rc2}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.
