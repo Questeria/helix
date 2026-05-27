@@ -2150,6 +2150,25 @@ fn install_builtin_names() -> i32 {
     __arena_push(114); __arena_push(95); __arena_push(108); __arena_push(110);
     __arena_set(bn_state + 171, s_psln);
 
+    // K3.O (2026-05-27): relocate the str_table region. The original
+    // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
+    // at 57+, so we couldn't simply bump the cap in-place. K3.O
+    // allocates a FRESH 192-slot region here (64 entries × 3 i32)
+    // and rewrites slot 8 (str_state.table_base) to point at it.
+    // The original 9..56 region is now unused (small waste, no
+    // collision concern). The K3.N audit flagged the 16-entry cap as
+    // a silent-overflow risk now that K1.F22c made it 2x easier to
+    // hit (panic 3 entries + each println! 2 entries -> 1 panic + 7
+    // println! = exact 17). 64-entry cap gives ~4x headroom over
+    // K1.F22c's worst case.
+    let s_strtbl = __arena_push(0);
+    let mut st: i32 = 0;
+    while st < 191 {
+        __arena_push(0);
+        st = st + 1;
+    }
+    __arena_set(bn_state + 8, s_strtbl);
+
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
     __arena_push(101); __arena_push(110); __arena_push(97); __arena_push(95);
@@ -3691,7 +3710,18 @@ fn str_table_base(b: i32) -> i32 { __arena_get(b + 8) }
 // paths, but the failure is local to those calls, not catastrophic.
 fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
     let top = str_top(b);
-    if top >= 16 {
+    // K3.O (2026-05-27): cap bumped 16 -> 64. K3.N audit flagged the
+    // pre-existing silent-overflow risk: panic uses 3 entries +
+    // each println! adds 2; a program with 1 panic + 7+ println!s
+    // would have hit the 16-entry cap (str_table_add returns -1
+    // which all callers ignore, leaving the next sys_write site
+    // with an unpatched LEA at displacement 0 -- silent miscompile).
+    // K3.O reallocates the str_table region in install_builtin_names
+    // (fresh 192-slot region after slot 171, set via slot 8) so the
+    // new cap of 64 entries has 64*3 = 192 slots without colliding
+    // the pre-existing bn_state layout. 4x headroom over the K1.F22c
+    // worst-case.
+    if top >= 64 {
         0 - 1
     } else {
         let base = str_table_base(b);

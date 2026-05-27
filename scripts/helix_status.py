@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 226      # last bump: K3.N -- 2-axis audit on K1.F22b + K1.F22c batch (silent-failure + combined type-design + code-reviewer) NO HIGH, NO must-fix-MEDIUM. Slot 171 collision-free, byte-sequence identical in both push sites, 50-byte codegen verified, panic! regression unaffected. NINTH cleanly-audited batch (K3.E/F/H/I/J/K/L/M/N)
+K_BOOTSTRAP_CHUNKS_DONE = 227      # last bump: K3.O -- audit-fix from K3.N LOW: bump str_table cap 16 -> 64 by relocating to a fresh 192-slot region at end of install_builtin_names (slot 8 rewritten to point at the new region; original 9..56 region now unused). Closes the silent-overflow risk (panic 3 + 7 println! = 17 entries used to overflow). New probe emits 10 println!s = 20 entries
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

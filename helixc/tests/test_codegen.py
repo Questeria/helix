@@ -7734,6 +7734,44 @@ def test_bootstrap_kovc_k1f22b_println_macro_expansion_self_host():
     )
 
 
+def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
+    """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
+    entry cap as a silent-overflow risk: panic uses 3 entries +
+    each println! adds 2, so a program with 1 panic + 7+ println!s
+    would have silently overflowed the cap. K3.O bumps the cap to
+    64 by relocating the str_state region to a fresh 192-slot block
+    at the end of install_builtin_names.
+
+    This probe exercises the bumped headroom by emitting 10
+    println!s (= 20 str_table entries, well past the old cap of 16
+    but comfortably under the new 64). Pre-K3.O: rc=42 but stdout
+    would have either silently corrupted (LEA disp 0 from str_table_
+    add returning -1) or omitted lines. Post-K3.O: stdout has all
+    10 lines with their newlines.
+    """
+    src = (
+        "fn main() -> i32 { "
+        + " ".join([f'println!("L{i}");' for i in range(10)])
+        + " 42 }"
+    )
+    rc, stdout = _kovc_self_host_compile_and_run_with_stdout(
+        "k3o_str_table_10_println",
+        src,
+    )
+    assert rc == 42, (
+        f"K3.O 10-println cap probe: expected rc=42 (the trailing 42 "
+        f"is the final expression value); got {rc}. If rc!=42, the "
+        f"str_table relocation broke the existing single-print path."
+    )
+    expected = b"".join([f"L{i}\n".encode() for i in range(10)])
+    assert stdout == expected, (
+        f"K3.O 10-println cap probe: expected stdout == {expected!r} "
+        f"(10 lines each with trailing newline); got stdout={stdout!r}. "
+        f"If stdout is truncated, the old cap-16 silent-overflow is "
+        f"still in force despite the bump."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
