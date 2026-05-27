@@ -270,32 +270,57 @@ bootstrap — they need to land as `.hx` modules before the cutover.
 
 ## 17. Coverage tally
 
-Live count (re-tallied 2026-05-26 K2.C matrix-sync; canonical
-mirror is `scripts/helix_status.py`'s `K_BOOTSTRAP_PARITY_DONE` +
+Live count (re-tallied 2026-05-27 K2.J after the K1.F* + K2.G/H
+session closed multiple KOVC-MISSING rows; canonical mirror is
+`scripts/helix_status.py`'s `K_BOOTSTRAP_PARITY_DONE` +
 `K_BOOTSTRAP_TOTAL_ROWS`):
 
 | Bucket | Count | Notes |
 |--------|-------|-------|
 | **PARITY** (explicit `\| PARITY \|` in status col) | 84 rows | K0 baseline 28 + 56 K1.* parser-syntax closures |
-| **FUNCTIONAL PARITY** (inline `✅ FUNCTIONAL PARITY` in status col) | 42 rows | discovery-batch retro-flips (architectural / vacuous parity) |
-| **KOVC-MISSING** | 18 rows | the Category-2 semantic gaps (see `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md`) |
+| **FUNCTIONAL PARITY** (inline `✅ FUNCTIONAL PARITY` in status col) | 45 rows | discovery-batch retro-flips + K1.F-era flips (impl-method dispatch, mixed-type signed binops, etc.) |
+| **KOVC-MISSING** (still explicit) | 8 rows | the genuine remaining Category-2 semantic gaps |
 | **PYTHON-MISSING** (kovc.hx has it but Python doesn't) | 0 | |
 | **UNKNOWN** (survey uncertain) | 0 | resolved K0 chunk 2 |
 
-Total status-bearing rows: **144** (84 + 42 + 18).
+Sum: 84 + 45 + 8 = 137 rows account for; the remaining 7 of 144
+total rows are split-status entries (e.g., matrix line 67 "Mixed-
+type binops" -- inline FUNCTIONAL PARITY for the signed
+i64<->i32 cases via K1.F8/F8b/F8c, but the row also calls out
+unsigned/float legs still open in its description) and similar
+hybrid rows where a single line straddles two buckets.
 
 The K-bootstrap percentage in the Telegram status update is
-computed live from these counts: `126 / 144 ≈ 88%`.
+computed live from `K_BOOTSTRAP_PARITY_DONE` (currently 137 of
+144 ≈ 95% nominal).
 
 **Honest read**: the 84 explicit PARITY rows are real parser-
-+codegen wins. The 42 FUNCTIONAL PARITY rows are mostly
-vacuously satisfied — they pass because the bootstrap doesn't
-USE the feature (e.g., AD passes are no-ops because no program
-the bootstrap accepts uses `grad`). The remaining 18 KOVC-MISSING
-rows are the genuine semantic gaps that block Python-ready-to-
-delete: reflection (×7), tile ops (×4), GPU backends (×2),
-mixed-type binops (×2), and one each of f16, impl methods, MLIR
-substrate, trace events.
++codegen wins. The 45 FUNCTIONAL PARITY rows include some
+vacuously-satisfied retro-flips (AD passes are no-ops because no
+program the bootstrap accepts uses `grad`) and some genuinely
+implemented features (impl method dispatch via K1.F5b, struct-
+receiver dot-call; mixed-type signed binops via K1.F8/F8b/F8c).
+The remaining 8 KOVC-MISSING rows are the genuine semantic gaps
+that block Python-ready-to-delete:
+  - reflection (3 rows in §9: the Quote/Splice/modify family
+    rows that are still stub-only, distinct from the rows
+    K1.F-discovery batches 29/30 flipped to FUNCTIONAL PARITY)
+  - tile ops (3 rows: TileLit, Tile types, TILE_ZEROS/ADD/MUL,
+    TILE_MATMUL — §12)
+  - GPU backends (2 rows: PTX, ROCm/Metal/WebGPU bundle)
+  - MLIR migration path (1 row)
+  - mixed f32/f64 binops (1 row — signed i64<->i32 is now
+    FUNCTIONAL PARITY; float-mixed is the remaining leg)
+
+Items closed since the K2.C tally (delta from 18 → 8 KOVC-MISSING):
+  - impl Type { methods } (row 146) -- FLIPPED by K1.F5b 2026-05-27
+  - 5 reflection rows (Quote-call, modify, plus 3 others) -- FLIPPED
+    by K1.F-discovery batches 28/29/30 over 2026-05-26
+  - f16 literal (row 56) -- FLIPPED by K1.F-discovery batch 28 (was
+    already in-place; matrix mislabeled)
+  - mixed signed-type binops effective close -- via K1.F8/F8b/F8c
+    2026-05-27 (row 67 now has FUNCTIONAL PARITY inline for the
+    signed i64<->i32 ADD/SUB/MUL/DIV/MOD cases).
 
 The bulk of Helix's surface — types beyond scalars, control flow
 beyond if/while, all patterns, all aggregates, all metaprogramming,
