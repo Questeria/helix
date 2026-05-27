@@ -160,6 +160,23 @@ K2_CORPUS = [
     ("p75_const_in_if_cond",     "const Z: i32 = 0; fn main() -> i32 { if Z == 0 { 42 } else { 0 } }", 42),
     ("p76_const_across_fns",     "const ANS: i32 = 42; fn helper() -> i32 { ANS } fn main() -> i32 { helper() }", 42),
     ("p77_const_used_twice",     "const X: i32 = 42; fn doubled() -> i32 { X + X } fn main() -> i32 { doubled() - X }", 42),
+    # K2.H (2026-05-27): mixed-type binop probes pinning the K1.F8 +
+    # K1.F8b closures. ADD/SUB/MUL on signed i64<->i32 in both
+    # directions, plus a couple integration shapes. Python helixc
+    # handles all via implicit conversion; bootstrap via the new
+    # movsxd widening helpers in kovc.hx (emit_movsxd_rcx_ecx for
+    # the i64+i32 forward direction, emit_movsxd_rax_eax for the
+    # i32+i64 reverse direction). expr_type returns i64 for both
+    # tag pairs (3, 0) and (0, 3) so the body-vs-ret-ty trap 14001
+    # stays silent on these `-> i64 { ... }` returns.
+    ("p78_i64_add_i32",          "fn main() -> i64 { 30_i64 + 12 }", 42),
+    ("p79_i64_sub_i32",          "fn main() -> i64 { 54_i64 - 12 }", 42),
+    ("p80_i64_mul_i32",          "fn main() -> i64 { 6_i64 * 7 }", 42),
+    ("p81_i32_add_i64",          "fn main() -> i64 { 30 + 12_i64 }", 42),
+    ("p82_i32_sub_i64",          "fn main() -> i64 { 54 - 12_i64 }", 42),
+    ("p83_i32_mul_i64",          "fn main() -> i64 { 6 * 7_i64 }", 42),
+    ("p84_i64_add_arith_i32",    "fn main() -> i64 { 30_i64 + (6 * 2) }", 42),
+    ("p85_i64_sub_large",        "fn main() -> i64 { 100_i64 - 58 }", 42),
 ]
 
 
@@ -221,14 +238,16 @@ def test_k2_corpus_size():
       - K2.G bumped to >= 77 (const-name resolution probes pinning
         the K1.F7 close: bare use, arithmetic, in let-RHS, in if-
         cond, across fn calls, used-twice).
+      - K2.H bumped to >= 85 (mixed-type i64<->i32 ADD/SUB/MUL,
+        both directions, pinning the K1.F8 + K1.F8b closures).
 
     (K2.C was the matrix-parity counter sync -- no corpus change.)
 
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 77, (
-        f"K2.G corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 85, (
+        f"K2.H corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
