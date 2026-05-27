@@ -9213,6 +9213,97 @@ def test_bootstrap_kovc_k1f24j_tile_add_multi_cell_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f25_tile_sub_single_cell_self_host():
+    """K1.F25 (2026-05-27): __tile_sub(a, b, dst, count) elementwise
+    subtraction. Mirrors K1.F24j __tile_add codegen with one byte change:
+    the inner `add esi, [rax+rdi*4+4]` (opcode 03) becomes
+    `sub esi, [rax+rdi*4+4]` (opcode 2B). Same SIB encoding, same
+    4-byte instruction length, so all displacements stay identical.
+
+    Single-cell probe: a[0]=20, b[0]=7, dst[0]=a[0]-b[0]=13. Verifies
+    the subtract op-flip lands correctly. 3-run K1.F24d retry discipline.
+
+    Tile ops Phase-0: __tile_zeros + __tile_add + __tile_sub now real.
+    Remaining: __tile_mul (slightly different -- imul opcode is 3 bytes,
+    so the loop body byte count changes and rel8 displacements shift)
+    and __tile_matmul (much more involved -- 2D nested loop with a
+    reduction accumulator).
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 20);\n'
+        '    __arena_set(b, 7);\n'
+        '    __tile_sub(a, b, dst, 4);\n'
+        '    __arena_get(dst)\n'
+        '}\n'
+    )
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f25_sub_single_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    assert 13 in results, (
+        f"K1.F25 single-cell: expected rc=13 (20-7) in at least one of "
+        f"3 runs; got {results}. If rc=132: SIGILL (regression). If "
+        f"all = {results[0]} but != 13: codegen miscompile."
+    )
+
+
+def test_bootstrap_kovc_k1f25_tile_sub_multi_cell_self_host():
+    """K1.F25 multi-cell verification (using values + sums that stay < 256
+    to avoid the pre-existing __arena_get-i32-narrowing-to-u8 defect
+    that K1.F25 surfaced).
+
+    Program: a=[80, 70, 60, 50], b=[10, 20, 30, 40], count=4.
+    Expected: dst=[70, 50, 30, 10], sum=160 (< 256, fits in u8 if the
+    bootstrap narrows everything; gives correct 160 either way).
+
+    NOTE: K1.F25 surfaced (but did not fix) a pre-existing bootstrap
+    defect where __arena_get(x) results, when used in a sum expression
+    that overflows u8, get narrowed (e.g., a[0]+a[1]+a[2]+a[3] with
+    50+100+150+200=500 returns 244 = 500 mod 256). The defect is NOT
+    in __tile_sub itself (single-cell reads of dst[i] return correct
+    values) but in how the bootstrap's expression-type inference treats
+    __arena_get results. Documented for a future chunk (K1.F26).
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 80);\n'
+        '    __arena_set(a + 1, 70);\n'
+        '    __arena_set(a + 2, 60);\n'
+        '    __arena_set(a + 3, 50);\n'
+        '    __arena_set(b, 10);\n'
+        '    __arena_set(b + 1, 20);\n'
+        '    __arena_set(b + 2, 30);\n'
+        '    __arena_set(b + 3, 40);\n'
+        '    __tile_sub(a, b, dst, 4);\n'
+        '    __arena_get(dst) + __arena_get(dst + 1) + __arena_get(dst + 2) + __arena_get(dst + 3)\n'
+        '}\n'
+    )
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f25_sub_multi_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    # Expected: 70 + 50 + 30 + 10 = 160 (fits in u8).
+    assert 160 in results, (
+        f"K1.F25 multi-cell: expected rc=160 (sum 70+50+30+10 over 4 "
+        f"elementwise-subtracted cells, all values < 256 to dodge the "
+        f"pre-existing __arena_get-narrowing defect) in at least one "
+        f"of 3 runs; got {results}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

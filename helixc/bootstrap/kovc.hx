@@ -2039,6 +2039,10 @@ fn install_builtin_names() -> i32 {
     // Slot reservation kept so the next attempt (K1.F24b) lands at
     // the same slot index without renumbering.
     __arena_push(0);      // slot 175: (reserved for __tile_add, codegen deferred)
+    // K1.F25 (2026-05-27): slot 176 = "__tile_sub" name offset.
+    // Phase-0 tile primitive: elementwise subtraction loop (mirror of
+    // __tile_add with sub opcode 2B instead of add opcode 03).
+    __arena_push(0);      // slot 176: __tile_sub name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2214,6 +2218,15 @@ fn install_builtin_names() -> i32 {
     __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
     __arena_push(97); __arena_push(100); __arena_push(100);
     __arena_set(bn_state + 175, s_ta);
+
+    // K1.F25 (2026-05-27): "__tile_sub" name bytes (10 chars: 95 95
+    // 116 105 108 101 95 115 117 98). Stored at slot 176.
+    // Elementwise subtraction (mirrors __tile_add codegen with sub
+    // opcode 2B instead of add opcode 03).
+    let s_tsub = __arena_push(95); __arena_push(95); __arena_push(116);
+    __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
+    __arena_push(115); __arena_push(117); __arena_push(98);
+    __arena_set(bn_state + 176, s_tsub);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3728,6 +3741,8 @@ fn bn_eprint_str_s(b: i32) -> i32 { __arena_get(b + 173) }
 fn bn_tile_zeros_s(b: i32) -> i32 { __arena_get(b + 174) }
 // K1.F24e (2026-05-27): re-attempt accessor.
 fn bn_tile_add_s(b: i32) -> i32 { __arena_get(b + 175) }
+// K1.F25 (2026-05-27): __tile_sub accessor (slot 176).
+fn bn_tile_sub_s(b: i32) -> i32 { __arena_get(b + 176) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4693,6 +4708,50 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
         n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 60
+    } else { if kovc_byte_eq(name_s, name_l, bn_tile_sub_s(bn_state), 10) == 1 {
+        // K1.F25 (2026-05-27): __tile_sub(a, b, dst, count) elementwise
+        // subtraction. Mirrors __tile_add (K1.F24j) with one byte change:
+        // the inner `add esi, [rax+rdi*4+4]` (opcode 03) becomes
+        // `sub esi, [rax+rdi*4+4]` (opcode 2B). Same SIB encoding, same
+        // 4-byte instruction length -- no displacement adjustment needed.
+        // Result: dst[i] = a[i] - b[i] for i in [0, count).
+        let a0_ts = __arena_get(args_head + 1);
+        let next1_ts = __arena_get(args_head + 2);
+        let a1_ts = __arena_get(next1_ts + 1);
+        let next2_ts = __arena_get(next1_ts + 2);
+        let a2_ts = __arena_get(next2_ts + 1);
+        let next3_ts = __arena_get(next2_ts + 2);
+        let a3_ts = __arena_get(next3_ts + 1);
+        let n0_ts = emit_ast_code(a0_ts, bind_state, patch_state, bn_state);
+        let np0_ts = emit_push_rax();
+        let n1_ts = emit_ast_code(a1_ts, bind_state, patch_state, bn_state);
+        let np1_ts = emit_push_rax();
+        let n2_ts = emit_ast_code(a2_ts, bind_state, patch_state, bn_state);
+        let np2_ts = emit_push_rax();
+        let n3_ts = emit_ast_code(a3_ts, bind_state, patch_state, bn_state);
+        // setup (11 bytes):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax
+        let disp_slot_ts = emit_lea_rax_rip_placeholder();                      // 7 bytes
+        patch_table_add(patch_state, disp_slot_ts, arena_base_s, 18);
+        emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
+        // loop_start (43 bytes):
+        emit_byte(0x39); emit_byte(0xCA);                                       // cmp edx, ecx
+        emit_byte(0x7D); emit_byte(0x27);                                       // jge +39
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);  // mov rsi, [rsp+16]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD6);                      // add rsi, rdx
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB0); emit_byte(0x04);     // mov esi, [rax+rsi*4+4] (a[i])
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD7);                      // add rdi, rdx
+        emit_byte(0x2B); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // sub esi, [rax+rdi*4+4]  (esi -= b[i]) -- the K1.F25 op-flip
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD7);                      // add rdi, rdx
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // mov [rax+rdi*4+4], esi
+        emit_byte(0xFF); emit_byte(0xC2);                                       // inc edx
+        emit_byte(0xEB); emit_byte(0xD5);                                       // jmp -43 (back to loop_start)
+        // end (6 bytes):
+        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
+        emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
+        n0_ts + np0_ts + n1_ts + np1_ts + n2_ts + np2_ts + n3_ts + 60
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -5393,7 +5452,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
