@@ -3551,6 +3551,30 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22k (2026-05-27): assert_ne!(IDENT, IDENT) detection.
+            // 9-char IDENT "assert_ne" = bytes 97 115 115 101 114 116
+            // 95 110 101 (last two bytes differ from assert_eq: 'n' 'e'
+            // vs 'e' 'q'). Sibling of K1.F22j -- synthesizes
+            // AST_IF(cond=AST_NE(AST_VAR(a), AST_VAR(b)), ...) with
+            // tag 21 (AST_NE) instead of 20 (AST_EQ). SCOPE: single-
+            // IDENT operands only; same K3.Q-style reject of BoolLit
+            // operands.
+            let is_assert_ne_name_macro = if id_len == 9 {
+                let rb0 = __arena_get(id_start);
+                let rb1 = __arena_get(id_start + 1);
+                let rb2 = __arena_get(id_start + 2);
+                let rb3 = __arena_get(id_start + 3);
+                let rb4 = __arena_get(id_start + 4);
+                let rb5 = __arena_get(id_start + 5);
+                let rb6 = __arena_get(id_start + 6);
+                let rb7 = __arena_get(id_start + 7);
+                let rb8 = __arena_get(id_start + 8);
+                if rb0 == 97 { if rb1 == 115 { if rb2 == 115 {
+                    if rb3 == 101 { if rb4 == 114 { if rb5 == 116 {
+                    if rb6 == 95 { if rb7 == 110 { if rb8 == 101 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             // K1.F22h (2026-05-27): unreachable!() detection. 11-char
             // IDENT "unreachable" = bytes 117 110 114 101 97 99 104 97
             // 98 108 101. Zero-arg sibling -- synthesized message is
@@ -3712,6 +3736,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         else { if is_kw_false_ident(aeq_a_opnd_s, aeq_a_opnd_l) == 1 { 0 }
                         else { if is_kw_true_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
                         else { if is_kw_false_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
+                        else { 1 } } } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F22k (2026-05-27): shape guard for assert_ne!(IDENT, IDENT).
+            // Same 7-token shape as assert_eq! (mac_t2..mac_t6) and same
+            // K3.Q-style reject of BoolLit operands. The only difference
+            // from is_assert_eq_form is the IDENT-name-macro it gates on.
+            let is_assert_ne_form = if is_assert_ne_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let ane_a_opnd_s = tok_p2(tok_base, k + 3);
+                        let ane_a_opnd_l = tok_p3(tok_base, k + 3);
+                        let ane_b_opnd_s = tok_p2(tok_base, k + 5);
+                        let ane_b_opnd_l = tok_p3(tok_base, k + 5);
+                        if is_kw_true_ident(ane_a_opnd_s, ane_a_opnd_l) == 1 { 0 }
+                        else { if is_kw_false_ident(ane_a_opnd_s, ane_a_opnd_l) == 1 { 0 }
+                        else { if is_kw_true_ident(ane_b_opnd_s, ane_b_opnd_l) == 1 { 0 }
+                        else { if is_kw_false_ident(ane_b_opnd_s, ane_b_opnd_l) == 1 { 0 }
                         else { 1 } } } }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
@@ -4048,6 +4090,48 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let aeq_else = mk_node(16, aeq_panic_name_s, 5, aeq_args_head);
                 mk_node(7, aeq_cond, aeq_then, aeq_else)
+            } else { if is_assert_ne_form == 1 {
+                // K1.F22k: synthesize AST_IF(cond=AST_NE(AST_VAR(a),
+                // AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic,
+                // "assertion failed: !=")). Sibling of K1.F22j with
+                // AST_NE (tag 21) instead of AST_EQ (tag 20). Same
+                // 7-token consumption shape.
+                let ane_a_tok = k + 3;
+                let ane_a_s = tok_p2(tok_base, ane_a_tok);
+                let ane_a_l = tok_p3(tok_base, ane_a_tok);
+                let ane_b_tok = k + 5;
+                let ane_b_s = tok_p2(tok_base, ane_b_tok);
+                let ane_b_l = tok_p3(tok_base, ane_b_tok);
+                cur_advance(sb);           // IDENT (assert_ne)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let ane_var_a = mk_node(1, ane_a_s, ane_a_l, 0);
+                let ane_var_b = mk_node(1, ane_b_s, ane_b_l, 0);
+                let ane_cond = mk_node(21, ane_var_a, ane_var_b, 0);  // AST_NE
+                let ane_then = mk_node(0, 0, 0, 0);                    // AST_INT(0)
+                // Push "assertion failed: !=" message bytes (20 chars):
+                //   a s s e r t i o n SP f a i l e d : SP ! =
+                let ane_msg_s = __arena_push(97);                          // 'a'
+                __arena_push(115); __arena_push(115);                      // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);   // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);   // 'i' 'o' 'n'
+                __arena_push(32);                                          // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);    // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);   // 'l' 'e' 'd'
+                __arena_push(58);                                          // ':'
+                __arena_push(32);                                          // ' '
+                __arena_push(33); __arena_push(61);                        // '!' '='
+                let ane_str_ast = mk_node(25, ane_msg_s, 20, 0);
+                let ane_args_head = mk_node(17, ane_str_ast, 0, 0);
+                let ane_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let ane_else = mk_node(16, ane_panic_name_s, 5, ane_args_head);
+                mk_node(7, ane_cond, ane_then, ane_else)
             } else { if is_unreach_empty_form == 1 {
                 // K1.F22h: synthesize AST_CALL(panic,
                 // "internal error: entered unreachable code").
@@ -4113,7 +4197,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1 (is_assert_eq_bool_lit_form)
+            }}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1 (is_assert_ne_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

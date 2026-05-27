@@ -8726,6 +8726,67 @@ def test_bootstrap_kovc_k1f22j2_bool_lit_assert_eq_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f22k_assert_ne_macro_self_host():
+    """K1.F22k (2026-05-27): two-arg inequality-comparison macro.
+    `assert_ne!(IDENT, IDENT)` parser-side rewrites to
+    AST_IF(cond=AST_NE(AST_VAR(a), AST_VAR(b)), then=AST_INT(0),
+    else=AST_CALL(panic, "assertion failed: !=")).
+
+    Sibling of K1.F22j -- same shape, AST_NE (tag 21) substituted for
+    AST_EQ (tag 20). Same SCOPE: single-IDENT operands only; BoolLit
+    operands rejected (forces fall-through to K1.CB no-op-skip).
+    A future K1.F22k2 chunk can add the bool-lit compile-time fold
+    sibling.
+
+    Probes:
+      Pass: let a: i32 = 1; let b: i32 = 2; assert_ne!(a, b); 7 -> rc=7.
+      Fail: let a: i32 = 42; let b: i32 = 42; assert_ne!(a, b); 7 -> rc=132,
+            stderr contains "assertion failed".
+
+    Regression: assert_eq!(IDENT, IDENT) and assert!(IDENT) still work.
+    """
+    # Probe 1: passing -- a != b.
+    rc_pass = _kovc_self_host_compile_and_run(
+        "k1f22k_ne_pass",
+        'fn main() -> i32 { let a: i32 = 1; let b: i32 = 2; assert_ne!(a, b); 7 }',
+    )
+    assert rc_pass == 7, (
+        f"K1.F22k assert_ne!(a=1, b=2): expected rc=7 (no panic; "
+        f"trailing 7 is the fn return); got {rc_pass}."
+    )
+
+    # Probe 2: failing -- a == b, panics.
+    rc_fail = _kovc_self_host_compile_and_run(
+        "k1f22k_ne_fail",
+        'fn main() -> i32 { let a: i32 = 42; let b: i32 = 42; assert_ne!(a, b); 7 }',
+    )
+    assert rc_fail == 132, (
+        f"K1.F22k assert_ne!(a=42, b=42): expected rc=132 (SIGILL via "
+        f"panic+ud2); got {rc_fail}. If rc=7 the AST_NE cond was "
+        f"inverted (treated as EQ)."
+    )
+
+    # Probe 3 (regression): assert_eq!(a, b) still works.
+    rc_eq = _kovc_self_host_compile_and_run(
+        "k1f22k_assert_eq_regression",
+        'fn main() -> i32 { let a: i32 = 42; let b: i32 = 42; assert_eq!(a, b); 9 }',
+    )
+    assert rc_eq == 9, (
+        f"K1.F22k regression: assert_eq!(a=42, b=42) expected rc=9; "
+        f"got {rc_eq}. K1.F22j may have been shadowed."
+    )
+
+    # Probe 4 (regression): assert!(x=1) still works.
+    rc_a = _kovc_self_host_compile_and_run(
+        "k1f22k_assert_ident_regression",
+        'fn main() -> i32 { let x: i32 = 1; assert!(x); 5 }',
+    )
+    assert rc_a == 5, (
+        f"K1.F22k regression: assert!(x=1) expected rc=5; got {rc_a}. "
+        f"K1.F22i may have been broken."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +

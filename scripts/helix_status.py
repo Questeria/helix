@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 237      # last bump: K1.F22j2 -- compile-time bool-lit assert_eq! constant-folding (4 sub-cases). Extends K1.F22i2's pattern to assert_eq! with BOTH operands BoolLit: (t,t) and (f,f) -> AST_INT(0); (t,f) and (f,t) -> AST_CALL(panic, "assertion failed: =="). NEW is_assert_eq_bool_lit_form detector matches when BOTH operands match is_kw_true_ident OR is_kw_false_ident. Mixed forms (one bool-lit + one IDENT) still fall through to K1.CB. Fixed ordering: mac_t5/t6 declared BEFORE the detector now. Tests verify all 4 sub-cases; K1.F22j IDENT regression intact
+K_BOOTSTRAP_CHUNKS_DONE = 238      # last bump: K1.F22k -- assert_ne!(IDENT, IDENT) macro. Sibling of K1.F22j swapping AST_NE (tag 21) for AST_EQ (tag 20). Same 7-token shape `IDENT ! ( IDENT , IDENT )` with same K3.Q-style BoolLit reject. Synthesizes AST_IF(cond=AST_NE(AST_VAR(a), AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic, "assertion failed: !=")). 9-byte IDENT "assert_ne" detection differs from "assert_eq" only in last two bytes (110 101 vs 101 113). Tests verify assert_ne!(a=1, b=2) passes (rc=7), assert_ne!(a=42, b=42) panics (rc=132); K1.F22j and K1.F22i regression intact
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
