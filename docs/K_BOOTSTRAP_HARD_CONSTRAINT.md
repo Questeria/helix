@@ -159,6 +159,63 @@ document, not further parser surface coverage. K2 (parity harness)
 running over a real-source corpus is also the gate that will
 surface what remaining parser corners (if any) actually matter.
 
+## Loop velocity disciplines (added 2026-05-26 post-K1.E1 retro)
+
+The K1.E1 investigation arc (5 ticks: E1 → E1-investigate → E1a-
+correct → E1b-probe-trapid → E1c-localize → E1-fix) was a real
+fix but cost more ticks than necessary. Speed-up disciplines
+adopted going forward:
+
+1. **Disassemble before theorizing.** For any codegen / runtime
+   bug, the FIRST probe is `xxd` on the produced binary, not
+   source-reading. K1.E1b (machine-code dump) collapsed the
+   "where does it misroute" question instantly after multiple
+   wrong source-only theories. Default move on every K1.E*-
+   investigate: dump the bytes first.
+
+2. **Quarantine pre-existing failures with explicit skip
+   markers.** Don't let a known-broken legacy test gate the
+   loop's perception of "is anything new broken". Each
+   quarantine MUST cite the open chunk ID (e.g.
+   "K1.E2 OPEN: ..."), point at the doc carry-over entry, and
+   have an obvious "remove this skip to re-enable" path. K2
+   corpus carries the parity-coverage load while the legacy
+   test is quarantined.
+
+3. **Batch mirror-pattern chunks.** Every cache-invalidating
+   change to `lexer.hx`/`parser.hx`/`kovc.hx` triggers a
+   ~30-60s bootstrap rebuild. The K1.DR through K1.DV chunks
+   (the &T + <...> template across 6 type-binding sites)
+   could have been ONE commit instead of six. Mirror-pattern
+   = same logical change applied at multiple call sites
+   simultaneously → bundle.
+
+4. **Probe early with binary dispatch.** Test minimal reductions
+   FIRST (`fn main() -> i64 { 42_i64 }` not the full corpus
+   item), then expand only when the minimal case localizes.
+   The K2.D corpus surfaced the i64 bug via a complex sub
+   expression that masked the actual root cause; a single-
+   literal probe would have isolated it in tick 1.
+
+5. **Parallel subagent execution for independent ports.**
+   The pending GPU-backends row in the matrix is 4 independent
+   targets (PTX, ROCm, Metal, WebGPU). Reflection is 4
+   independent ops (quote, splice, modify, reflect_hash). When
+   a Category-2 row decomposes into N independent ports,
+   spawn N parallel subagents in isolated worktrees rather
+   than serializing.
+
+6. **Variable tick cadence by chunk class.** Parser-syntax
+   chunks (K1.*) are small, well-bounded, and complete in
+   <5 min. Codegen/runtime chunks need full corpus rerun
+   (~10 min). Don't run the 12-min cron uniformly — small
+   chunks could ship every 6 min, big ones every 20 min.
+   Future work: chunk-class-aware cron.
+
+These disciplines were retrospectively learned from the K1.E1
+arc. Future investigation ticks should consult this section
+before defaulting to source-reading or single-tick chunks.
+
 ## Pre-existing Category-2 carry-overs (discovered 2026-05-26 K2.D)
 
 The K2 corpus expansion runs surfaced two existing failures that
@@ -364,6 +421,35 @@ recent K1.* parser work:
    row in the matrix moves from "⚠️ codegen traps" to genuinely
    broken-only-on-i64+i32-mismatch — same-type i64 arith now
    works end-to-end.
+
+4. **K1.E2 — 256-let depth-204 wrong-value bug (NEW, opened
+   2026-05-26 K1.E1-fix tick).** Exposed by the K1.E1 fix
+   passing the previously-failing i64-i64 assertion in
+   `test_bootstrap_kovc_full_pipeline_arithmetic`, which let
+   the test reach a previously-unreached 256-let-binding
+   assertion. Pattern:
+
+   ```
+   let b000=0; let b001=1; ...; let b{N-1}={N-1}; b042
+   ```
+
+   At N <= 200: returns 42 correctly.
+   At N >= 204: returns **1 universally**, regardless of which
+   bn variable the body picks (b000 → 1, b042 → 1, b203 → 1,
+   etc.). So the body isn't doing a lookup at all — it's
+   emitting something that produces 1 in eax unconditionally.
+
+   The value `1` is suspicious of a compare-then-set or
+   trap-id-not-yet-flushed pattern. Not yet localized:
+   - bind_state cap is 512 (not 204) — not the cause
+   - bind_alloc_offset trap fires at off >= 4096 (= 512 lets)
+   - var_type_tab cap is 8, but that's parser type-tracking
+     for closure captures, not value lookup
+   - parser doesn't appear to have a depth-204 cap on its face
+
+   The bug is deeper than K1.E1 was and needs its own dedicated
+   investigation arc. Deferred to K1.E2 chunk. Doesn't block
+   K2 corpus (no item nears 200 lets) or other Category-2 work.
 
    **Bug B — bare-expression i64 sub returns LHS (rc=100):**
    `100_i64 - 58_i64` returns 100, not 42. The bootstrap is

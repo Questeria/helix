@@ -119,6 +119,34 @@ K2_CORPUS = [
     ("p53_struct_field_extract", "struct C { v: i32 } fn main() -> i32 { let c = C { v: 42 }; let v = c.v; v }", 42),
     ("p54_tuple_3_fields",       "fn main() -> i32 { let t = (10, 20, 12); t.0 + t.1 + t.2 }", 42),
     ("p55_complex_let_expr",     "fn main() -> i32 { let a = 6; let b = 7; let c = a * b; c }", 42),
+    # ---- K2.F expansion: typed-int suffixes (now unblocked by K1.E1-fix) + edge cases (15) ----
+    ("p56_i64_return",           "fn main() -> i64 { 42_i64 }", 42),
+    # NOTE: K2.F first tried `fn main() -> i32 { 100_i64 - 58_i64 }`
+    # here -- but the bootstrap correctly SIGILLs that shape, because
+    # the body emits an i64 (width 8) and the declared return is i32
+    # (width 4). The K1.E1 width-class trap at kovc.hx:7367 catches
+    # this as a real silent-narrowing risk (post-K1.E1 fix, that trap
+    # is doing its job). Use the matching-type variant: `-> i64 { ... }`
+    # so body and return widths agree.
+    ("p57_i64_arith_full",       "fn main() -> i64 { 100_i64 - 58_i64 }", 42),
+    ("p58_i64_let_in_i32",       "fn main() -> i32 { let x = 42_i64; x }", 42),
+    ("p59_u32_return",           "fn main() -> u32 { 42_u32 }", 42),
+    ("p60_u32_arith_in_i32",     "fn main() -> i32 { 20_u32 + 22_u32 }", 42),
+    # i8 / i16 narrow integer returns: matching-type (body and ret
+    # both i8 or i16). The bootstrap width-class trap (K1.E1 fix) now
+    # correctly catches narrowing mismatches like `-> i32 { 42_i8 }`,
+    # so use matching-width variants here. Exit code is the low byte
+    # of rax either way, so 42_i8 maps to exit 42.
+    ("p61_i8_match",             "fn main() -> i8 { 42_i8 }", 42),
+    ("p62_i16_match",            "fn main() -> i16 { 42_i16 }", 42),
+    ("p63_underscore_sep",       "fn main() -> i32 { 1_000_000 - 999_958 }", 42),
+    ("p64_underscore_in_i64",    "fn main() -> i64 { 1_000_000_i64 - 999_958_i64 }", 42),
+    ("p65_arith_paren_groups",   "fn main() -> i32 { (10 + 11) + (10 + 11) }", 42),
+    ("p66_div_then_mul",         "fn main() -> i32 { (84 / 2) }", 42),
+    ("p67_signed_neg_in_arith",  "fn main() -> i32 { -10 + 52 }", 42),
+    ("p68_let_inside_let_value", "fn main() -> i32 { let x = { let y = 21; y + y }; x + 0 }", 42),
+    ("p69_zero_iter_for",        "fn main() -> i32 { let mut s = 42; for _ in 0..0 { s = 0; } s }", 42),
+    ("p70_if_in_arith",          "fn main() -> i32 { (if true { 20 } else { 0 }) + 22 }", 42),
 ]
 
 
@@ -162,7 +190,7 @@ def test_k2_parity(name: str, src: str, expected_rc: int):
 
 
 def test_k2_corpus_size():
-    """Sanity check: corpus has at least 55 entries at K2.E.
+    """Sanity check: corpus has at least 70 entries at K2.F.
 
     Future K2.* chunks expand the corpus. This test guards against
     accidental shrinkage. The growth ratchet is one-way: each K2.*
@@ -174,14 +202,17 @@ def test_k2_corpus_size():
         compound assign / while / nested struct / enum / etc.).
       - K2.E bumped to >= 55 (arrays / match shapes / block-exprs /
         recursion / zero-iter while / multi-let-chain / etc.).
+      - K2.F bumped to >= 70 (typed-int suffixes _i64 / _u32 / _i8 /
+        _i16 unblocked by K1.E1-fix, plus underscore-separator
+        variants and arith edge cases).
 
     (K2.C was the matrix-parity counter sync -- no corpus change.)
 
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 55, (
-        f"K2.E corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 70, (
+        f"K2.F corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
