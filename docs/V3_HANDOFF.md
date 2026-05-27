@@ -727,6 +727,85 @@ acknowledgement** per the same gate that protected Stage 221a/221b.
 When `v3.1.0` is tagged, the cleanup track closes. The
 K-bootstrap track begins per `docs/HELIX_K_BOOTSTRAP_MASTER_PLAN.md`.
 
+## 4b. K-bootstrap track (active 2026-05-27)
+
+`v3.1.0` tagged (commit `e9e7ccb`). The K-bootstrap track is the
+active workstream per the 2026-05-26 hard constraint -- bootstrap
+must reach feature parity AND the parity harness must be green
+AND a trusted seed must exist before the user can K4 (delete
+Python helixc/). See `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md` for
+the loop-stop criterion (Python-ready-to-delete state + 5
+consecutive clean audits).
+
+State at handoff (commit `09559bc`):
+
+- **`K_BOOTSTRAP_CHUNKS_DONE = 184`** (in `scripts/helix_status.py`),
+  **`K_BOOTSTRAP_PARITY_DONE = 137`** / 144 matrix rows.
+- **K2 parity corpus**: 85 entries across `helixc/tests/test_k2_parity.py`
+  (last full run 78/78 PASS at HEAD `1679a27`; the corpus grew to
+  85 in K2.G + K2.H since that run -- next full run pinged).
+- **Category-2 closures shipped this session** (chronological):
+  - **K1.F5b** (commit `b5fee4a`) -- struct-receiver method-call
+    dispatch (`p.get()`). Three-layer fix: `parse_primary` new
+    `is_struct_method` branch, `parse_impl_block` target_tag =
+    100+struct_idx, `parse_impl_method` bare-self in
+    var_struct_tab.
+  - **K1.F6** (commit `0e33046`) -- field-store mutation
+    (`p.x = v`). New AST tag 79 = AST_FIELD_STORE, codegen mirrors
+    AST_TUPLE_FIELD read side, parse_expr_basic detects single `=`
+    after AST_TUPLE_FIELD lhs.
+  - **K1.F7** (commit `9788f29`) -- const-name resolution.
+    16-entry const_tab (sb+94/95 + 48-slot region),
+    parse_const_decl structured parse (skip `: TY`, parse value,
+    register), mk_var_with_capture inlines stored value AST.
+  - **K1.F8 / F8b / F8c** (commits `1679a27`, `27d2986`,
+    `c846744`) -- mixed-type binops i64<->i32 widening across
+    ADD/SUB/MUL/DIV/MOD, both directions. Two new helpers
+    `emit_movsxd_rcx_ecx` / `_rax_eax`; mov-rcx step refactored
+    to use 64-bit copy when r is 64-bit; expr_type returns 3
+    (i64) for (3,0) and (0,3) tag pairs.
+  - **K2.G** (commit `40a7d5a`) -- parity corpus 70 -> 77, pinning
+    K1.F7 const-name in both compilers.
+  - **K2.H** (commit `542ea1e`) -- parity corpus 77 -> 85, pinning
+    K1.F8/F8b mixed-type binops in both compilers.
+  - **K2.I / K2.J / K2.K** (commits `2a9da91`, `3a5b146`, `09559bc`)
+    -- doc-only chunks (Category-2 closure-progress table, matrix
+    coverage-tally sync, §16 Backends reconciled with the hard
+    constraint).
+
+- **K1.F8d pending** (in `runtime/memory/handoff` task #230): same
+  movsxd pattern extended to unsigned u64<->u32 mixed-type binops.
+  Staged twice 2026-05-27; reverted both times because WSL was
+  unreliable during validation (baseline `fn main() -> i32 { 42 }`
+  returned rc=132 or the wsl printf setup command timed out).
+  Code design is a straight extension of K1.F8b/F8c (zero-ext via
+  mov_ecx_eax already correct for unsigned, no movsxd; expr_type
+  adds (9,6) and (6,9) cases). Ships next WSL-clean tick.
+
+- **Genuine remaining KOVC-MISSING (8 rows)**: 3 reflection rows,
+  3 tile-op rows (TileLit, Tile types, TILE_ZEROS family +
+  TILE_MATMUL), 2 GPU backend rows (PTX + ROCm/Metal/WebGPU
+  bundle), 1 MLIR-migration row, 1 mixed-f32/f64 binops row.
+  Plus 2 rows reclassified to DEFERRED-NOT-VACUOUS by K2.K
+  (MLIR substrate + Backend Protocol, both latent until the
+  GPU port).
+
+- **Next priorities** (in approximate dependency order):
+  - K1.F8d -- unsigned mixed-type binops (small, WSL-gated)
+  - Mixed-f32/f64 mixed-type binops (small-medium; closes the
+    last leg of matrix row 67)
+  - Generic monomorphization (large; closes matrix row 137)
+  - Reflection real semantics (medium; closes 3 KOVC-MISSING
+    rows)
+  - Trace events real impl (small-medium)
+  - Macro expansion (large; closes K1.CB sub-gap)
+  - Tile ops + GPU backends + MLIR (the big multi-tick blocks)
+
+The cron `2e2b825e` fires every 12 minutes. The loop's per-chunk
+discipline: implement -> test -> commit -> push -> Telegram, with
+the 3-axis audit when scope justifies and the WSL-flake protocol
+documented in the loop prompt (skip-and-retry if baseline fails).
+
 ## 5. The working discipline (follow this)
 
 - **One coherent chunk per work unit.** A stage is built in small
