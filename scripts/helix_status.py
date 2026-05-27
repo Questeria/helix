@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 189      # last bump: K2.M -- parity corpus 85 -> 93 (unsigned mixed-type pins K1.F8d)
+K_BOOTSTRAP_CHUNKS_DONE = 190      # last bump: K3.C -- audit-fix MEDIUM-1, const_tab cap 16 -> 64
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

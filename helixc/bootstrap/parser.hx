@@ -894,26 +894,34 @@ fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
         mk_node(1, id_s, id_l, 0)
     }
 }
-// K1.F7 (2026-05-27): const_tab accessors. Cap = 16 entries; each
-// entry = 3 slots (name_s, name_l, value_ast_idx). Populated by
-// parse_const_decl, queried by parse_primary's IDENT path.
+// K1.F7 (2026-05-27): const_tab accessors. Cap = 64 entries (K3.C
+// audit-fix 2026-05-27 bumped from 16); each entry = 3 slots
+// (name_s, name_l, value_ast_idx). Populated by parse_const_decl,
+// queried by parse_primary's IDENT path.
 //
 // K3.A audit-fix (2026-05-27): the original K1.F7 stored
 // const_tab base/count at sb+94/sb+95. The silent-failure audit
 // caught a HIGH collision -- param_array_name(sb, idx=2) maps to
-// `sb + 90 + 2*2 = sb + 94` and `sb + 91 + 2*2 = sb + 95`. With
-// 3+ params under an AD differentiation pass (which writes via
-// set_param_array_name), const_tab metadata would be overwritten
-// silently and every later const lookup would walk garbage memory.
-// Moved to sb+122/sb+123 -- past the bucket_array range
-// (sb+106..sb+121) and outside param_array_name's idx-0..7 range
-// (sb+90..sb+105). parse_top pre-allocates slots 96..123 below
-// so these are guaranteed-zero on entry.
+// `sb + 90 + 2*2 = sb + 94` and `sb + 91 + 2*2 = sb + 95`. Moved
+// to sb+122/sb+123 -- past the bucket_array range (sb+106..sb+121)
+// and outside param_array_name's idx-0..7 range (sb+90..sb+105).
+// parse_top pre-allocates slots 96..123 below so these are
+// guaranteed-zero on entry.
+//
+// K3.C audit-fix (2026-05-27, MEDIUM-1): cap bumped 16 -> 64.
+// The original cap-16 silently dropped the 17th entry (caller
+// at parse_const_decl discarded the const_tab_add return value)
+// -- any downstream reference to the dropped name then fell to
+// AST_VAR + undefined-binding trap 76003 with no clue that the
+// root cause was cap-exceeded. 64 entries gives 4x headroom; the
+// bootstrap self-host source uses <10 consts, so practical
+// overflow is effectively ruled out. Surface-the-overflow with a
+// distinct trap id remains a future audit follow-up.
 fn const_tab_base(sb: i32) -> i32 { __arena_get(sb + 122) }
 fn const_tab_count(sb: i32) -> i32 { __arena_get(sb + 123) }
 fn const_tab_add(sb: i32, name_s: i32, name_l: i32, value_idx: i32) -> i32 {
     let count = const_tab_count(sb);
-    if count >= 16 {
+    if count >= 64 {
         0 - 1
     } else {
         let base = const_tab_base(sb);
@@ -6472,18 +6480,19 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 78, sgp_base);
     __arena_set(cur_slot + 79, 0);
-    // K1.F7 (2026-05-27) + K3.A (2026-05-27): const_tab region (48
-    // slots, 16 entries x 3 fields). Each entry = (name_s, name_l,
-    // value_ast_idx). The value_ast_idx is the AST node index of
-    // the const decl's value expression -- parse_primary inlines
-    // that AST when the const name is referenced.
+    // K1.F7 (2026-05-27) + K3.A (2026-05-27) + K3.C (2026-05-27):
+    // const_tab region (192 slots, 64 entries x 3 fields). Each
+    // entry = (name_s, name_l, value_ast_idx). The value_ast_idx
+    // is the AST node index of the const decl's value expression
+    // -- parse_primary inlines that AST when the const name is
+    // referenced.
     //
-    // Region BASE POINTER moved from sb+94 to sb+122 (and count
-    // from sb+95 to sb+123) by K3.A to escape the
-    // param_array_name(idx=2) collision at sb+94/95.
+    // Region BASE POINTER stored at sb+122 (count at sb+123) by
+    // K3.A to escape the param_array_name(idx=2) collision at
+    // sb+94/95. K3.C bumped cap 16 -> 64 (region grew 48 -> 192).
     let const_base = __arena_push(0);
     let mut cti: i32 = 1;
-    while cti < 48 {
+    while cti < 192 {
         __arena_push(0);
         cti = cti + 1;
     }
