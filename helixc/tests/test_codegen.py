@@ -8804,7 +8804,135 @@ def test_bootstrap_kovc_k1f23_arena_set_get_probe_self_host():
     )
 
 
-def test_bootstrap_kovc_k1f23_arena_helper_fn_known_broken_self_host():
+def test_bootstrap_kovc_k1f23b_multi_fn_defect_probes_self_host():
+    """K1.F23b (2026-05-27): investigation probes for the K1.F23
+    defect (multi-fn arena access traps SIGILL).
+
+    Five probes narrow whether the defect is:
+      (a) __arena_push-specific (per-builtin),
+      (b) all-builtins-from-helper (general builtin issue),
+      (c) lea-rip patch-table issue for arena_base across fn boundaries,
+      (d) plain multi-fn (no builtins) is also broken,
+      (e) helper-with-args / helper-with-let combinations break.
+
+    Each probe is a tiny self-host run; the assertion pins the
+    observed behavior. The pattern of pass/fail localizes the defect.
+
+    Probe C: plain multi-fn, no builtins, no params.
+    Probe D: helper with local let.
+    Probe E: helper with int param.
+    Probe F: helper calls print_int (a different builtin than __arena_push;
+             stdout to fd=1).
+    Probe G: helper calls __arena_len (reads arena_base, doesn't write).
+    """
+    # Probe C: plain multi-fn, no builtins.
+    rc_c = _kovc_self_host_compile_and_run(
+        "k1f23b_probe_c_plain_multifn",
+        'fn helper() -> i32 { 7 } fn main() -> i32 { helper() }',
+    )
+
+    # Probe D: helper with local let.
+    rc_d = _kovc_self_host_compile_and_run(
+        "k1f23b_probe_d_helper_let",
+        'fn helper() -> i32 { let a: i32 = 5; a + 2 } fn main() -> i32 { helper() }',
+    )
+
+    # Probe E: helper with int param.
+    rc_e = _kovc_self_host_compile_and_run(
+        "k1f23b_probe_e_helper_param",
+        'fn helper(x: i32) -> i32 { x + 1 } fn main() -> i32 { helper(6) }',
+    )
+
+    # Probe F: helper calls print_int (a different builtin -- writes to stdout,
+    # doesn't touch arena_base).
+    rc_f = _kovc_self_host_compile_and_run(
+        "k1f23b_probe_f_helper_print_int",
+        'fn helper() -> i32 { print_int(42); 7 } fn main() -> i32 { helper() }',
+    )
+
+    # Probe G: helper calls __arena_len (reads [arena_base] but doesn't write).
+    rc_g = _kovc_self_host_compile_and_run(
+        "k1f23b_probe_g_helper_arena_len",
+        'fn helper() -> i32 { __arena_len() } fn main() -> i32 { helper() }',
+    )
+
+    # Probe H: helper calls __arena_set (the OTHER arena-WRITE builtin).
+    # Main pre-allocates a slot via main-context __arena_push (which we
+    # know works), then helper writes to that slot. If H also SIGILLs,
+    # the defect is "all arena-writes from helper" not just __arena_push.
+    rc_h = _kovc_self_host_compile_and_run(
+        "k1f23b_probe_h_helper_arena_set",
+        'fn helper(t: i32) -> i32 { __arena_set(t, 7); 0 } fn main() -> i32 { let t: i32 = __arena_push(0); helper(t); __arena_get(t) }',
+    )
+
+    # Collect findings and assert with diagnostic. NB: we don't know which
+    # probes pass or fail until we run -- this test just observes and pins.
+    # The pattern of pass/fail is the OUTPUT of this investigation chunk.
+    findings = {
+        "C_plain_multifn": rc_c,
+        "D_helper_let": rc_d,
+        "E_helper_param": rc_e,
+        "F_helper_print_int": rc_f,
+        "G_helper_arena_len": rc_g,
+        "H_helper_arena_set": rc_h,
+    }
+    # Make findings visible in test output regardless of pass/fail by
+    # asserting a known-shape outcome. For investigation, we accept any
+    # outcome; the test PASSES if all expected-good probes pass (C/D/E)
+    # AND a deterministic outcome for F/G (either both pass or fail
+    # consistently with the K1.F23 finding).
+    assert rc_c == 7, (
+        f"K1.F23b probe C (plain multi-fn): expected rc=7; got "
+        f"{rc_c}. ALL probes: {findings}. If C fails, the multi-fn "
+        f"defect is more fundamental than the K1.F23 arena-specific "
+        f"finding suggests."
+    )
+    assert rc_d == 7, (
+        f"K1.F23b probe D (helper + let): expected rc=7; got "
+        f"{rc_d}. ALL probes: {findings}."
+    )
+    assert rc_e == 7, (
+        f"K1.F23b probe E (helper + param): expected rc=7; got "
+        f"{rc_e}. ALL probes: {findings}."
+    )
+    # F and G are the discovery probes -- their outcomes localize the
+    # defect. We pin them with a relaxed assertion that documents both
+    # the known-broken and (eventual) fixed states.
+    assert rc_f in (0, 7, 132), (
+        f"K1.F23b probe F (helper calls print_int): unexpected rc "
+        f"{rc_f} (expected one of 0, 7, 132). ALL probes: {findings}."
+    )
+    assert rc_g in (0, 7, 132), (
+        f"K1.F23b probe G (helper calls __arena_len): unexpected rc "
+        f"{rc_g} (expected one of 0, 7, 132). ALL probes: {findings}."
+    )
+    assert rc_h in (0, 7, 132), (
+        f"K1.F23b probe H (helper calls __arena_set): unexpected rc "
+        f"{rc_h} (expected one of 0, 7, 132). ALL probes: {findings}."
+    )
+    # Surface findings via an unconditional assertion that records
+    # the current observed pattern (so the test output documents it).
+    # Update the expected dict here when investigating; the assertion
+    # FAILS the test if findings drift, forcing re-investigation.
+    expected = {
+        "C_plain_multifn": 7,
+        "D_helper_let": 7,
+        "E_helper_param": 7,
+        "F_helper_print_int": 7,    # confirmed: print_int from helper works
+        "G_helper_arena_len": 0,    # confirmed: __arena_len from helper works
+        "H_helper_arena_set": 7,    # confirmed: __arena_set from helper WORKS too
+        # The K1.F23 defect is specific to __arena_push (cursor-bump).
+        # __arena_set with explicit index argument works correctly from
+        # helper context. The fix should target __arena_push's cursor
+        # manipulation (mov ecx, [rax] -> bounds-check -> mov [rax+rcx*4+4]
+        # -> inc ecx -> mov [rax], ecx) rather than all arena writes.
+    }
+    assert findings == expected, (
+        f"K1.F23b: findings drift -- actual {findings} vs expected "
+        f"{expected}. Update `expected` dict in the test source AND "
+        f"the K_BOOTSTRAP_TILE_OPS_PLAN.md investigation entry to "
+        f"reflect the new observed pattern."
+    )
     """K1.F23 (2026-05-27): K-BOOTSTRAP DEFECT FINDING.
 
     The user-fn-based tile_zeros path (Phase-0 plan Option C in

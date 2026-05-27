@@ -167,12 +167,46 @@ the loop can be unrolled or kept as a runtime loop.
    self_host` asserts the current broken rc=132; flip to rc=7 once
    fixed.
 
-### K1.F23b — investigate + fix multi-fn arena access defect (BLOCKER)
-- Trace the codegen path for a 2-fn program where the helper fn calls
-  __arena_push. Compare against single-fn main calling __arena_push.
-- Identify the divergent codegen / patch-table / fn-call mechanism.
-- Fix the defect, flip the K1.F23 known-broken test's expectation.
-- Without this, NO higher-level tile-op user-fn pattern works.
+### K1.F23b — investigation update (defect localized; fix pending)
+The K1.F23 finding ("multi-fn arena access traps SIGILL") is **narrower
+than initially thought**. K1.F23b probes (6 sub-probes total) localize:
+
+  | Probe | Source shape | Result |
+  |-------|--------------|--------|
+  | C | plain multi-fn, no builtins | rc=7 ✓ works |
+  | D | helper with `let` | rc=7 ✓ works |
+  | E | helper with int param | rc=7 ✓ works |
+  | F | helper calls `print_int` | rc=7 ✓ works |
+  | G | helper calls `__arena_len` (read-only) | rc=0 ✓ works |
+  | H | helper calls `__arena_set` (indexed write) | rc=7 ✓ works |
+  | B (K1.F23) | helper calls `__arena_push` (cursor-bump write) | rc=132 ✗ BROKEN |
+
+**Only `__arena_push` fails from helper context.** All other builtins
+including the arena WRITE (`__arena_set`) work correctly. The defect
+is specifically in the cursor-bump portion of `__arena_push` codegen
+(kovc.hx ~line 4193): the `mov ecx, [rax]` -> bounds-check -> `mov
+[rax+rcx*4+4], edx` -> `inc ecx` -> `mov [rax], ecx` sequence misfires
+in helper-fn context.
+
+Hypotheses (still open; require instruction-level instrumentation):
+  - The relative-jump targets (`jb +7`, `jmp +12`) compute correctly
+    in main's code section but mis-target in helper's code section.
+  - The cursor-bump section's interaction with the helper's prologue/
+    epilogue clobbers a register.
+  - Some interaction between __arena_push's 37-byte body and the K2
+    binary's per-fn code-region layout.
+
+Pinned via `test_bootstrap_kovc_k1f23b_multi_fn_defect_probes_self_host`
+(asserts the full findings dict; failure means defect pattern drifted).
+
+### K1.F23b-fix — fix the localized __arena_push helper defect (BLOCKER)
+- Capture the emitted bytes for both the main-context and helper-context
+  `__arena_push(0)` calls; binary-diff to spot the divergence.
+- Likely fix scope: small. The codegen byte sequence is fixed; what
+  changes is the surrounding context. Most likely a register-clobber
+  or jmp-offset bug.
+- Without this, NO higher-level tile-op user-fn pattern using
+  __arena_push in helpers works.
 
 ### K1.F23c — TILE_ZEROS builtin (FALLBACK plan if K1.F23b is hard)
 Alternative path: implement `__tile_zeros` as a BUILTIN with inline
