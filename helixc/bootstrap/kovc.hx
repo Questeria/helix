@@ -2014,6 +2014,13 @@ fn install_builtin_names() -> i32 {
     // bootstrap's println! actually emits the newline that the K1.F22b
     // Phase-0 contract had documented as deferred.
     __arena_push(0);      // slot 171: print_str_ln name offset
+    // K1.F22d (2026-05-27): slot 172 = "eprint_str_ln" name offset.
+    // Stderr (fd=2) variant of print_str_ln. Paired with the
+    // K1.F22d eprintln!("msg") macro expansion -- mirrors K1.F22c
+    // codegen but emits `mov edi, 2` instead of `mov edi, 1` in both
+    // sys_write blocks (message + newline). The byte content is the
+    // same; only the fd selector differs.
+    __arena_push(0);      // slot 172: eprint_str_ln name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2149,6 +2156,15 @@ fn install_builtin_names() -> i32 {
     __arena_push(116); __arena_push(95); __arena_push(115); __arena_push(116);
     __arena_push(114); __arena_push(95); __arena_push(108); __arena_push(110);
     __arena_set(bn_state + 171, s_psln);
+
+    // K1.F22d (2026-05-27): "eprint_str_ln" name bytes (13 chars: 101
+    // 112 114 105 110 116 95 115 116 114 95 108 110). Stored at slot
+    // 172. Stderr variant of print_str_ln.
+    let s_epsln = __arena_push(101); __arena_push(112); __arena_push(114);
+    __arena_push(105); __arena_push(110); __arena_push(116); __arena_push(95);
+    __arena_push(115); __arena_push(116); __arena_push(114); __arena_push(95);
+    __arena_push(108); __arena_push(110);
+    __arena_set(bn_state + 172, s_epsln);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3652,6 +3668,8 @@ fn bn_mangle_scratch(b: i32) -> i32 { __arena_get(b + 170) }
 // synthesized AST_CALL uses these bytes so the codegen handler
 // emits print_str + newline.
 fn bn_print_str_ln_s(b: i32) -> i32 { __arena_get(b + 171) }
+// K1.F22d (2026-05-27): "eprint_str_ln" stderr variant of K1.F22c.
+fn bn_eprint_str_ln_s(b: i32) -> i32 { __arena_get(b + 172) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4424,6 +4442,42 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             // Total: 24 (msg) + 24 (nl) + 2 (xor) = 50 bytes.
             50
         }
+    } else { if kovc_byte_eq(name_s, name_l, bn_eprint_str_ln_s(bn_state), 13) == 1 {
+        // K1.F22d (2026-05-27): eprint_str_ln("msg") -- stderr variant
+        // of K1.F22c print_str_ln. Identical codegen except both
+        // sys_writes target fd=2 (stderr) instead of fd=1 (stdout).
+        // Paired with the K1.F22d eprintln!("msg") macro expansion.
+        let arg_epsln = __arena_get(args_head + 1);
+        let arg_tag_epsln = __arena_get(arg_epsln);
+        if arg_tag_epsln != 25 {
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s_epsln = __arena_get(arg_epsln + 1);
+            let body_l_epsln = __arena_get(arg_epsln + 2);
+            // Message sys_write to fd=2 (24 bytes).
+            let emsg_disp_slot = emit_lea_rsi_rip_placeholder();
+            str_table_add(bn_state, emsg_disp_slot, body_s_epsln, body_l_epsln);
+            emit_byte(0xBF); emit_byte(0x02);                    // mov edi, 2 (stderr)
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0xBA);
+            emit_u32_le(body_l_epsln);
+            emit_byte(0xB8); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0x0F); emit_byte(0x05);
+            // Newline sys_write to fd=2 (24 bytes).
+            let enl_disp_slot = emit_lea_rsi_rip_placeholder();
+            str_table_add(bn_state, enl_disp_slot, bn_panic_newline_s(bn_state), 1);
+            emit_byte(0xBF); emit_byte(0x02);                    // mov edi, 2 (stderr)
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0xBA); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0xB8); emit_byte(0x01);
+            emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+            emit_byte(0x0F); emit_byte(0x05);
+            emit_byte(0x31); emit_byte(0xC0);
+            50
+        }
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -5124,7 +5178,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

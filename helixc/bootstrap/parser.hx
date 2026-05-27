@@ -3405,6 +3405,25 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22d (2026-05-27): eprintln!(STR) detection. 8-char
+            // IDENT "eprintln" = bytes 101 112 114 105 110 116 108 110.
+            // Stderr variant of println!. Routes through the new
+            // eprint_str_ln builtin (fd=2).
+            let is_eprintln_name_macro = if id_len == 8 {
+                let eb0 = __arena_get(id_start);
+                let eb1 = __arena_get(id_start + 1);
+                let eb2 = __arena_get(id_start + 2);
+                let eb3 = __arena_get(id_start + 3);
+                let eb4 = __arena_get(id_start + 4);
+                let eb5 = __arena_get(id_start + 5);
+                let eb6 = __arena_get(id_start + 6);
+                let eb7 = __arena_get(id_start + 7);
+                if eb0 == 101 { if eb1 == 112 { if eb2 == 114 {
+                    if eb3 == 105 { if eb4 == 110 { if eb5 == 116 {
+                    if eb6 == 108 { if eb7 == 110 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             let mac_t3 = tok_tag(tok_base, k + 3);
             let mac_t4 = tok_tag(tok_base, k + 4);
             let is_panic_str_form = if is_panic_name_macro == 1 {
@@ -3412,6 +3431,10 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             let is_println_str_form = if is_println_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            let is_eprintln_str_form = if is_eprintln_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
                 else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
@@ -3461,6 +3484,29 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(116); __arena_push(114); __arena_push(95);
                 __arena_push(108); __arena_push(110);
                 mk_node(16, pl_name_s, 12, pl_args_head)
+            } else { if is_eprintln_str_form == 1 {
+                // K1.F22d: synthesize AST_CALL(eprint_str_ln, str_arg).
+                // Stderr variant of println!. Same token-consumption
+                // shape; only the synthesized name differs (13 chars
+                // "eprint_str_ln" instead of 12 chars "print_str_ln").
+                let epl_str_tok = k + 3;
+                let epl_str_body_s = tok_p2(tok_base, epl_str_tok);
+                let epl_str_body_l = tok_p3(tok_base, epl_str_tok);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                let epl_str_ast = mk_node(25, epl_str_body_s, epl_str_body_l, 0);
+                let epl_args_head = mk_node(17, epl_str_ast, 0, 0);
+                // Push "eprint_str_ln" name bytes (13 chars: 101 112
+                // 114 105 110 116 95 115 116 114 95 108 110).
+                let epl_name_s = __arena_push(101);
+                __arena_push(112); __arena_push(114); __arena_push(105);
+                __arena_push(110); __arena_push(116); __arena_push(95);
+                __arena_push(115); __arena_push(116); __arena_push(114);
+                __arena_push(95); __arena_push(108); __arena_push(110);
+                mk_node(16, epl_name_s, 13, epl_args_head)
             } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'
@@ -3487,7 +3533,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting
+            }}}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting; K1.F22d: +1 more for is_eprintln_str_form
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

@@ -7734,6 +7734,82 @@ def test_bootstrap_kovc_k1f22b_println_macro_expansion_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f22d_eprintln_macro_expansion_self_host():
+    """K1.F22d (2026-05-27): stderr variant of K1.F22b/c println!.
+    `eprintln!("msg")` parser-side rewrites to AST_CALL(eprint_str_ln,
+    str_arg). The new eprint_str_ln builtin (bn_state slot 172, 13
+    chars) emits the message + trailing newline via sys_write to fd=2
+    (stderr) instead of fd=1 (stdout).
+
+    Probes:
+      eprintln!("err"); 42
+        Pre-K1.F22d: K1.CB no-op-skip. stderr empty.
+        Post-K1.F22d: stderr contains "err\\n", stdout empty.
+
+      Regression: println!("out") still goes to STDOUT (not shadowed by
+      the eprintln! arm).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    # Direct subprocess to get both stdout AND stderr.
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    name = "k1f22d_eprintln_err"
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.bin"
+    src = 'fn main() -> i32 { eprintln!("err"); 42 }'
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path}; printf %s {repr(src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 42, (
+        f"K1.F22d eprintln!: expected rc=42; got {run_k2.returncode}. "
+        f"stdout={run_k2.stdout!r}, stderr={run_k2.stderr!r}."
+    )
+    assert run_k2.stderr == b"err\n", (
+        f"K1.F22d eprintln! stderr probe: expected stderr == b'err\\n' "
+        f"(message + newline via eprint_str_ln to fd=2); got "
+        f"stderr={run_k2.stderr!r}, stdout={run_k2.stdout!r}."
+    )
+    assert run_k2.stdout == b"", (
+        f"K1.F22d eprintln! stdout probe: expected stdout EMPTY "
+        f"(eprintln! should write to stderr only, not stdout); got "
+        f"stdout={run_k2.stdout!r}."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +
