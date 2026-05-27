@@ -3621,6 +3621,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
                 else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F29 (2026-05-27): zero-arg panic!() form -- mirror of K1.F22g
+            // todo!(). 4-token shape: panic, !, (, ). Mac_t2 = LPAREN (3),
+            // mac_t3 = RPAREN (4). Synthesizes a panic call with the
+            // Rust-stdlib default message for zero-arg panic!: "explicit
+            // panic" (14 chars: 101 120 112 108 105 99 105 116 32 112 97
+            // 110 105 99).
+            let is_panic_empty_form = if is_panic_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 4 { 1 }
+                else { 0 } } else { 0 }
+            } else { 0 };
             let is_println_str_form = if is_println_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
                 else { 0 } } else { 0 } } else { 0 }
@@ -3908,6 +3918,32 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(110); __arena_push(116); __arena_push(95);
                 __arena_push(115); __arena_push(116); __arena_push(114);
                 mk_node(16, ep_name_s, 10, ep_args_head)
+            } else { if is_panic_empty_form == 1 {
+                // K1.F29 (2026-05-27): zero-arg panic!() -- mirror of
+                // K1.F22g todo!(). Synthesizes AST_CALL(panic, "explicit
+                // panic"). 4-token consumption (IDENT, !, (, )). The
+                // Rust-stdlib default message for zero-arg panic!() is
+                // "explicit panic" (14 chars: 101 120 112 108 105 99 105
+                // 116 32 112 97 110 105 99).
+                cur_advance(sb);                 // consume IDENT (panic)
+                cur_advance(sb);                 // consume '!'
+                cur_advance(sb);                 // consume '('
+                cur_advance(sb);                 // consume ')'
+                let pe_msg_s = __arena_push(101);        // 'e'
+                __arena_push(120); __arena_push(112);    // 'x' 'p'
+                __arena_push(108); __arena_push(105);    // 'l' 'i'
+                __arena_push(99); __arena_push(105);     // 'c' 'i'
+                __arena_push(116);                       // 't'
+                __arena_push(32);                        // ' '
+                __arena_push(112); __arena_push(97);     // 'p' 'a'
+                __arena_push(110); __arena_push(105);    // 'n' 'i'
+                __arena_push(99);                        // 'c'
+                let pe_str_ast = mk_node(25, pe_msg_s, 14, 0);
+                let pe_args_head = mk_node(17, pe_str_ast, 0, 0);
+                let pe_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                mk_node(16, pe_panic_name_s, 5, pe_args_head)
             } else { if is_todo_empty_form == 1 {
                 // K1.F22g: synthesize AST_CALL(panic, "not yet implemented").
                 // First ZERO-arg macro (shape `IDENT ! ( )` with no
@@ -4245,7 +4281,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form)
+            }}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

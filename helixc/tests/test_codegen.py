@@ -9490,6 +9490,37 @@ def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f29_panic_empty_form_self_host():
+    """K1.F29 (2026-05-27): zero-arg `panic!()` form. Mirror of
+    K1.F22g todo!() with a different synthesized message ("explicit
+    panic" -- the Rust-stdlib default for `panic!` with no arguments).
+
+    Shape: panic, !, (, ) -- 4 tokens. mac_t2 = LPAREN (3),
+    mac_t3 = RPAREN (4).
+
+    Synthesis: AST_CALL(panic, "explicit panic"). Routes through the
+    same panic codegen path (K1.AE/AH/AI prefix + msg + newline + ud2).
+
+    The pre-K1.F29 K1.CB no-op-skip path would have returned AST_INT(0),
+    so rc=0. Post-K1.F29 the panic fires and the binary traps with
+    SIGILL (exit code 132).
+
+    Differential check: rc=132 (panic fires) vs rc=0 (no-op-skip
+    fell through, macro NOT expanded). The presence of the "explicit
+    panic" message bytes on stderr further confirms the synthesis,
+    but the rc differential is sufficient evidence.
+    """
+    src = 'fn main() -> i32 { panic!() }'
+    rc = _kovc_self_host_compile_and_run("k1f29_panic_empty", src)
+    assert rc == 132, (
+        f"K1.F29 panic!(): expected rc=132 (SIGILL from ud2 trap after "
+        f"the 'explicit panic' message print); got {rc}. If rc=0: the "
+        f"macro fell through to K1.CB no-op-skip instead of synthesizing "
+        f"the AST_CALL(panic, ...). If rc != 132 and != 0: a different "
+        f"miscompile."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

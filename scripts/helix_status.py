@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 257      # last bump: K1.F28 -- shipped dbg!(IDENT) macro as PASSTHROUGH form. Macro wrapper dropped at parse time; inner identifier becomes the expression value. Phase-0 contract: no stderr "[file:line] expr = value" print side effect (deferred to K1.F28b). Mirrors K1.F22 family detector + shape guard pattern with K3.Q-style bool-lit reject. Tests: dbg!(x) where x=42 returns 42; let z = dbg!(y=100) + 50; returns 150. Macros row gains another entry (panic!/println!/eprintln!/print!/eprint!/todo!/unimplemented!/unreachable!/assert!/assert_eq!/assert_ne! plus now dbg!). Brace cascade in parser.hx: +1 (13 -> 14 closing braces in the macro arm)
+K_BOOTSTRAP_CHUNKS_DONE = 258      # last bump: K1.F29 -- shipped zero-arg panic!() macro form. Mirror of K1.F22g todo!() with the Rust-stdlib default zero-arg message "explicit panic" (14 chars). 4-token shape (panic, !, (, )); synthesizes AST_CALL(panic, "explicit panic") which routes through the K1.AE/AH/AI panic codegen (prefix + msg + newline + ud2 trap). Pre-K1.F29 panic!() fell through to K1.CB no-op-skip returning rc=0; post-K1.F29 it traps with rc=132. Differential rc test pins the behavior. Brace cascade in parser.hx: +1 (14 -> 15)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
