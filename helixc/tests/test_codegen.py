@@ -8787,6 +8787,51 @@ def test_bootstrap_kovc_k1f22k_assert_ne_macro_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f23c_tile_zeros_builtin_self_host():
+    """K1.F23c (2026-05-27): __tile_zeros(N, M) builtin via cursor-bump.
+
+    Bypasses the K1.F23 helper-context defect by emitting the
+    cursor-bump codegen INLINE at the call site (used in main()
+    scope directly). Returns the OLD cursor as the tile's base
+    offset; advances cursor by N*M. Skips per-cell zero-init --
+    BSS-zero on Linux means new cells start at 0.
+
+    Probes:
+      Probe 1: __tile_zeros(2, 2) returns a positive arena offset.
+        Cells initially read as 0 (BSS-zero).
+      Probe 2: write + read round-trip via __arena_set/get on the
+        allocated cells.
+      Probe 3: two tiles allocated back-to-back have distinct
+        offsets (cursor advances each call).
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f23c_tile_zeros_cell0",
+        'fn main() -> i32 { let t: i32 = __tile_zeros(2, 2); __arena_get(t) }',
+    )
+    assert rc1 == 0, (
+        f"K1.F23c probe 1: expected rc=0 (cell 0 of fresh tile is "
+        f"BSS-zero); got {rc1}."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f23c_tile_zeros_roundtrip",
+        'fn main() -> i32 { let t: i32 = __tile_zeros(2, 2); __arena_set(t, 7); __arena_set(t + 1, 11); __arena_get(t) + __arena_get(t + 1) }',
+    )
+    assert rc2 == 18, (
+        f"K1.F23c probe 2: expected rc=18 (7 + 11 from the two "
+        f"allocated cells); got {rc2}."
+    )
+
+    rc3 = _kovc_self_host_compile_and_run(
+        "k1f23c_tile_zeros_two_tiles",
+        'fn main() -> i32 { let a: i32 = __tile_zeros(2, 2); let b: i32 = __tile_zeros(2, 2); b - a }',
+    )
+    assert rc3 == 4, (
+        f"K1.F23c probe 3: expected rc=4 (second tile's offset is 4 "
+        f"cells past the first since 2*2=4); got {rc3}."
+    )
+
+
 def test_bootstrap_kovc_k1f23_arena_set_get_probe_self_host():
     """K1.F23 isolation probe A: basic __arena_push + __arena_set +
     __arena_get round-trip in main(), no helper fn, no loop. Verifies

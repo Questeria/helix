@@ -2028,6 +2028,12 @@ fn install_builtin_names() -> i32 {
     // `mov edi, 1`. Completes the print/eprint x newline/no-newline
     // 2x2 grid (print/println/eprint/eprintln).
     __arena_push(0);      // slot 173: eprint_str name offset
+    // K1.F23c (2026-05-27): slot 174 = "__tile_zeros" name offset.
+    // Allocates an N*M-cell region in the arena via cursor-bump:
+    // reads the arena cursor, advances it by N*M, writes back. Returns
+    // the OLD cursor (the tile's base offset). Skips per-cell zero-init
+    // -- BSS-zero on Linux means new cells start at 0.
+    __arena_push(0);      // slot 174: __tile_zeros name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2182,6 +2188,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(105); __arena_push(110); __arena_push(116); __arena_push(95);
     __arena_push(115); __arena_push(116); __arena_push(114);
     __arena_set(bn_state + 173, s_eps);
+
+    // K1.F23c (2026-05-27): "__tile_zeros" name bytes (12 chars: 95 95
+    // 116 105 108 101 95 122 101 114 111 115). Stored at slot 174.
+    // Phase-0 tile primitive: cursor-bump allocation of N*M arena slots,
+    // returning the old cursor as the tile's base offset.
+    let s_tz = __arena_push(95); __arena_push(95); __arena_push(116);
+    __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
+    __arena_push(122); __arena_push(101); __arena_push(114); __arena_push(111);
+    __arena_push(115);
+    __arena_set(bn_state + 174, s_tz);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3690,6 +3706,10 @@ fn bn_eprint_str_ln_s(b: i32) -> i32 { __arena_get(b + 172) }
 // K1.F22f (2026-05-27): "eprint_str" no-newline stderr variant of
 // K1.AK print_str. Builtin name offset stored at slot 173.
 fn bn_eprint_str_s(b: i32) -> i32 { __arena_get(b + 173) }
+// K1.F23c (2026-05-27): "__tile_zeros" cursor-bump tile allocator.
+// Returns the old cursor as the tile's base offset; advances cursor
+// by N*M. Builtin name offset stored at slot 174.
+fn bn_tile_zeros_s(b: i32) -> i32 { __arena_get(b + 174) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4534,6 +4554,51 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             // to K1.AK print_str; only the edi=2 byte differs).
             26
         }
+    } else { if kovc_byte_eq(name_s, name_l, bn_tile_zeros_s(bn_state), 12) == 1 {
+        // K1.F23c (2026-05-27): __tile_zeros(N, M) -> arena offset of
+        // an N*M-cell region. Cursor-bump allocator:
+        //   1. eval N, push; eval M -> eax.
+        //   2. ecx = M; pop rax -> rax = N.
+        //   3. imul eax, ecx -> eax = N*M (signed 32-bit; small values).
+        //   4. ecx = N*M.
+        //   5. lea rax, [arena_base]; edx = [rax] (old cursor).
+        //   6. push rdx (save old cursor for return).
+        //   7. edx += ecx (new cursor); cmp edx, CAP; jb in_bounds.
+        //   8. bounds-fail: mov eax, -1; add rsp, 8 (discard); jmp end.
+        //   9. in_bounds: mov [rax], edx; pop rax (return old cursor).
+        //  10. end:
+        // Skips per-cell zero-init -- BSS-zero on Linux means new
+        // cells start at 0. Phase-0 substrate for TILE_ZEROS (and the
+        // tile-ops family more broadly). Bypasses the K1.F23 helper-
+        // context defect because it's used directly in main() scope.
+        let a0_tz = __arena_get(args_head + 1);
+        let next_arg_tz = __arena_get(args_head + 2);
+        let a1_tz = __arena_get(next_arg_tz + 1);
+        let n0_tz = emit_ast_code(a0_tz, bind_state, patch_state, bn_state);
+        let np_tz = emit_push_rax();
+        let n1_tz = emit_ast_code(a1_tz, bind_state, patch_state, bn_state);
+        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax (M)
+        emit_byte(0x58);                                    // pop rax (N)
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); // imul eax, ecx (N*M)
+        emit_byte(0x89); emit_byte(0xC1);                  // mov ecx, eax (N*M)
+        let disp_slot_tz = emit_lea_rax_rip_placeholder(); // 7 bytes
+        patch_table_add(patch_state, disp_slot_tz, arena_base_s, 18);
+        emit_byte(0x8B); emit_byte(0x10);                  // mov edx, [rax] (old cursor)
+        emit_byte(0x52);                                    // push rdx (save)
+        emit_byte(0x01); emit_byte(0xCA);                  // add edx, ecx (new cursor)
+        emit_byte(0x81); emit_byte(0xFA);                  // cmp edx, CAP (6 bytes)
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x73); emit_byte(0x05);                  // jae bounds_fail (skip in_bounds = 5 bytes)
+        // in_bounds (5 bytes ahead of jae fall-through):
+        emit_byte(0x89); emit_byte(0x10);                  // mov [rax], edx (update cursor)
+        emit_byte(0x58);                                    // pop rax (return old cursor)
+        emit_byte(0xEB); emit_byte(0x09);                  // jmp end (skip bounds_fail = 9 bytes)
+        // bounds_fail (9 bytes ahead of jmp end fall-through):
+        emit_byte(0xB8); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);  // mov eax, -1 (5 bytes)
+        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x08); // add rsp, 8 (discard saved; 4 bytes)
+        // end:
+        // Byte count after args: 2+1+3+2 (arith pack) + 7 (lea) + 2+1+2+6+2 (cursor + check) + 2+1+2 (in_bounds) + 5+4 (bounds_fail) = 42 bytes
+        n0_tz + np_tz + n1_tz + 2 + 1 + 3 + 2 + 7 + 2 + 1 + 2 + 6 + 2 + 2 + 1 + 2 + 5 + 4
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -5234,7 +5299,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
