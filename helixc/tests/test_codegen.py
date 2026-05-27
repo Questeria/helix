@@ -7879,6 +7879,123 @@ def test_bootstrap_kovc_k1f22e_print_macro_expansion_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f22f_eprint_macro_expansion_self_host():
+    """K1.F22f (2026-05-27): stderr no-newline variant. `eprint!("msg")`
+    parser-side rewrites to AST_CALL(eprint_str, str_arg). The new
+    eprint_str builtin (bn_state slot 173, 10 chars) emits message
+    via sys_write to fd=2 (stderr) with NO trailing newline. Completes
+    the print/eprint x newline/no-newline 2x2 grid.
+
+    Probes:
+      eprint!("err"); 42
+        stderr=="err" (NO newline), stdout=="" (not stdout), rc=42.
+
+    Regression: eprintln! still emits "err\\n" via K1.F22d's
+    eprint_str_ln (verifies K1.F22f doesn't shadow eprintln!).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    # Probe 1: eprint!("err"); 42 -> stderr="err" (NO newline).
+    name = "k1f22f_eprint_no_nl"
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.bin"
+    src = 'fn main() -> i32 { eprint!("err"); 42 }'
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path}; printf %s {repr(src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 42, (
+        f"K1.F22f eprint!: expected rc=42; got {run_k2.returncode}. "
+        f"stdout={run_k2.stdout!r}, stderr={run_k2.stderr!r}."
+    )
+    assert run_k2.stderr == b"err", (
+        f"K1.F22f eprint! stderr no-newline probe: expected stderr "
+        f"== b'err' (message ONLY, NO newline -- the eprint!() "
+        f"contract); got stderr={run_k2.stderr!r}, stdout="
+        f"{run_k2.stdout!r}. If stderr==b'err\\n', the K1.F22f "
+        f"synthesis incorrectly routed through eprint_str_ln."
+    )
+    assert run_k2.stdout == b"", (
+        f"K1.F22f eprint! stdout-empty probe: expected stdout EMPTY "
+        f"(eprint! should write to stderr only); got stdout="
+        f"{run_k2.stdout!r}."
+    )
+
+    # Probe 2: regression -- eprintln!("err") still emits "err\\n".
+    name2 = "k1f22f_eprintln_regression"
+    in_path2 = f"/tmp/sh_{name2}_in.hx"
+    out_path2 = f"/tmp/sh_{name2}_out.bin"
+    src2 = 'fn main() -> i32 { eprintln!("err"); 42 }'
+    k1_main2 = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path2}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path2}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path2} {out_path2}; printf %s {repr(src2)} > {in_path2}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main2)
+    run_k2_r = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path2} && {out_path2}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2_r.returncode == 42, (
+        f"K1.F22f eprintln regression: expected rc=42; got "
+        f"{run_k2_r.returncode}. stderr={run_k2_r.stderr!r}."
+    )
+    assert run_k2_r.stderr == b"err\n", (
+        f"K1.F22f eprintln regression: expected stderr == b'err\\n' "
+        f"(K1.F22d eprint_str_ln still emits newline); got "
+        f"stderr={run_k2_r.stderr!r}. If stderr==b'err' (no newline), "
+        f"K1.F22f shadowed the eprintln! detection."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +

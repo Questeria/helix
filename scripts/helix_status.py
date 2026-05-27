@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 229      # last bump: K1.F22e -- no-newline stdout variant: print!("msg") parser-side rewrites to AST_CALL(print_str, str_arg) inside K1.CB. Routes through the EXISTING K1.AK print_str builtin (slot 163, 9 chars) -- no new builtin needed. 5-byte IDENT "print" match (112 114 105 110 116). Test verifies stdout=="hi" with NO newline (the Rust print!() contract), and println!("out") still emits the trailing newline via K1.F22c print_str_ln (regression)
+K_BOOTSTRAP_CHUNKS_DONE = 230      # last bump: K1.F22f -- stderr no-newline variant: eprint!("msg") parser-side rewrites to AST_CALL(eprint_str, str_arg). New eprint_str builtin at bn_state slot 173 (10 chars; codegen is K1.AK print_str with `mov edi, 2` instead of `mov edi, 1`). 6-byte IDENT "eprint" match (101 112 114 105 110 116). Test verifies stderr=="err" with NO newline + stdout EMPTY; eprintln!("err") regression probe still emits stderr=="err\\n". Completes the print/eprint x newline/no-newline 2x2 grid: print/println/eprint/eprintln all expand at parse time
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
