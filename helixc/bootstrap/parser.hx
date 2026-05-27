@@ -3644,6 +3644,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 1 } }
                 } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F22i2 (2026-05-27): bool-lit assert! detection. The
+            // K3.Q reject above forces BoolLit operands away from the
+            // AST_VAR-based synth path (which would have miscompiled to
+            // unbound-name lookup). K1.F22i2 catches the bool-lit case
+            // and constant-folds at parse time:
+            //   assert!(true)  -> AST_INT(0)        (compile-time pass)
+            //   assert!(false) -> AST_CALL(panic, "assertion failed")
+            // -- matching the Rust `assert!` semantic for compile-time-
+            // known operands.
+            let is_assert_bool_lit_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 4 {
+                    let alit_opnd_s = tok_p2(tok_base, k + 3);
+                    let alit_opnd_l = tok_p3(tok_base, k + 3);
+                    if is_kw_true_ident(alit_opnd_s, alit_opnd_l) == 1 { 1 }
+                    else { if is_kw_false_ident(alit_opnd_s, alit_opnd_l) == 1 { 1 }
+                    else { 0 } }
+                } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             // K1.F22j (2026-05-27): shape guard for assert_eq!(IDENT, IDENT).
             // 7-token shape: IDENT, !, (, IDENT, ',', IDENT, ).
             //   mac_t2 = TK_LPAREN (3)
@@ -3847,6 +3865,41 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(97); __arena_push(110); __arena_push(105);
                 __arena_push(99);
                 mk_node(16, ui_panic_name_s, 5, ui_args_head)
+            } else { if is_assert_bool_lit_form == 1 {
+                // K1.F22i2: compile-time fold for bool-lit assert!.
+                // assert!(true)  -> AST_INT(0)         (compile-time pass)
+                // assert!(false) -> AST_CALL(panic, "assertion failed")
+                // -- matches Rust's assert! semantic for compile-time-
+                // known operands. The K3.Q reject in is_assert_ident_form
+                // ensures BoolLit operands don't reach the AST_VAR path.
+                let alit_tok = k + 3;
+                let alit_s = tok_p2(tok_base, alit_tok);
+                let alit_l = tok_p3(tok_base, alit_tok);
+                let alit_is_true = is_kw_true_ident(alit_s, alit_l);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (true/false)
+                cur_advance(sb);           // )
+                if alit_is_true == 1 {
+                    mk_node(0, 0, 0, 0)    // AST_INT(0) -- pass
+                } else {
+                    // assert!(false): synthesize the same panic call
+                    // K1.F22i's else-branch builds at runtime.
+                    let aif_msg_s = __arena_push(97);                          // 'a'
+                    __arena_push(115); __arena_push(115);                      // 's' 's'
+                    __arena_push(101); __arena_push(114); __arena_push(116);   // 'e' 'r' 't'
+                    __arena_push(105); __arena_push(111); __arena_push(110);   // 'i' 'o' 'n'
+                    __arena_push(32);                                          // ' '
+                    __arena_push(102); __arena_push(97); __arena_push(105);    // 'f' 'a' 'i'
+                    __arena_push(108); __arena_push(101); __arena_push(100);   // 'l' 'e' 'd'
+                    let aif_str_ast = mk_node(25, aif_msg_s, 16, 0);
+                    let aif_args_head = mk_node(17, aif_str_ast, 0, 0);
+                    let aif_panic_name_s = __arena_push(112);
+                    __arena_push(97); __arena_push(110); __arena_push(105);
+                    __arena_push(99);
+                    mk_node(16, aif_panic_name_s, 5, aif_args_head)
+                }
             } else { if is_assert_ident_form == 1 {
                 // K1.F22i: synthesize AST_IF(cond=AST_VAR(IDENT),
                 // then=AST_INT(0), else=AST_CALL(panic, "assertion failed")).
@@ -3988,7 +4041,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1 (is_assert_eq_form)
+            }}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1 (is_assert_bool_lit_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

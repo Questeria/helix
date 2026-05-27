@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 235      # last bump: K3.Q -- audit-fix from K3.P MEDIUM: K1.F22i/j shape guards now reject BoolLit operands (`true`/`false` 4-byte/5-byte IDENT match via is_kw_true_ident / is_kw_false_ident helpers). The bootstrap lexer tags true/false as TK_IDENT, so the pre-fix shape guards matched and synthesized AST_VAR("true") / AST_VAR("false") -- a silent miscompile (unbound name at codegen). Post-fix: the macro falls through to K1.CB no-op-skip, consistent with the K1.F22 family's "unhandled form silently no-ops" convention. Closes the only MEDIUM finding from K3.P; F22d-F22j now audit-clean
+K_BOOTSTRAP_CHUNKS_DONE = 236      # last bump: K1.F22i2 -- compile-time bool-lit assert! constant-folding. Supersedes K3.Q's interim silent-skip behavior with proper Rust semantics: assert!(true) -> AST_INT(0) (compile-time pass); assert!(false) -> AST_CALL(panic, "assertion failed") (compile-time-known panic). The K3.Q reject in is_assert_ident_form stays; a NEW is_assert_bool_lit_form arm catches the BoolLit case explicitly and folds at parse time. First compile-time constant-folding pattern in a macro arm. Tests verify rc=42 for true-fold and rc=132 + stderr panic message for false-fold; K1.F22i runtime-cond regression intact
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

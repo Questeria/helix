@@ -8473,17 +8473,21 @@ def test_bootstrap_kovc_k3q_bool_lit_assert_reject_self_host():
         f"unbound-name silent-miscompile regressed (K3.P MEDIUM-1)."
     )
 
+    # K1.F22i2 (2026-05-27): assert!(false) NOW compile-time-folds to
+    # AST_CALL(panic, "assertion failed") rather than silently skipping
+    # via K1.CB. This supersedes the K3.Q interim behavior and matches
+    # Rust's assert!(false) semantic. K3.Q's reject in is_assert_ident_form
+    # remains in place (so the BoolLit operand never synthesizes AST_VAR);
+    # the new is_assert_bool_lit_form arm catches the case explicitly.
     rc2 = _kovc_self_host_compile_and_run(
         "k3q_assert_false_skip",
         'fn main() -> i32 { assert!(false); 42 }',
     )
-    assert rc2 == 42, (
-        f"K3.Q assert!(false): expected rc=42 (K1.CB no-op-skip; "
-        f"`assert!(false)` does NOT runtime-panic in this scope -- "
-        f"the K1.F22 family's convention is to silently drop unhandled "
-        f"forms); got {rc2}. If rc=132 the test got the right RC for "
-        f"the wrong reason -- AST_VAR(\"false\") unbound-name still "
-        f"miscompiles."
+    assert rc2 == 132, (
+        f"K1.F22i2 assert!(false): expected rc=132 (compile-time-folded "
+        f"panic via the K1.F22i2 bool-lit arm); got {rc2}. If rc=42, "
+        f"K1.F22i2 didn't catch the BoolLit operand and the macro "
+        f"silent-no-op'd via K1.CB (K3.Q interim behavior)."
     )
 
     rc3 = _kovc_self_host_compile_and_run(
@@ -8523,6 +8527,119 @@ def test_bootstrap_kovc_k3q_bool_lit_assert_reject_self_host():
     assert rc_eq == 7, (
         f"K3.Q regression: assert_eq!(a=42, b=42) expected rc=7; got "
         f"{rc_eq}. K1.F22j may have been broken by the K3.Q guard."
+    )
+
+
+def test_bootstrap_kovc_k1f22i2_bool_lit_assert_self_host():
+    """K1.F22i2 (2026-05-27): compile-time bool-lit assert! constant-
+    folding. Upgrades the K3.Q interim silent-skip behavior to
+    proper Rust semantics:
+
+      assert!(true)  -> AST_INT(0)         (compile-time pass, no-op)
+      assert!(false) -> AST_CALL(panic, "assertion failed")
+                                            (compile-time-known panic)
+
+    The K3.Q reject in is_assert_ident_form remains so BoolLit
+    operands don't synthesize AST_VAR. The new is_assert_bool_lit_form
+    catches the bool-lit case explicitly and folds at parse time.
+
+    SCOPE: only `assert!(IDENT-tagged true/false)`. `assert!(true || x)`,
+    `assert_eq!(true, false)`, multi-arg variants, and compound
+    expressions remain unhandled (fall through to K1.CB no-op-skip).
+
+    Probes:
+      assert!(true); 42 -> rc=42 (compile-time fold to AST_INT(0);
+        trailing 42 is the fn's return).
+      assert!(false); 42 -> rc=132 (compile-time-folded panic; ud2
+        traps; trailing 42 never reached).
+      stderr should contain "assertion failed" for the false case.
+
+    Regression: assert!(x=1)/assert!(x=0) still routed through K1.F22i;
+    assert_eq!(a, b) still routed through K1.F22j.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    # Probe 1: assert!(true) folds to AST_INT(0).
+    rc_t = _kovc_self_host_compile_and_run(
+        "k1f22i2_assert_true_fold",
+        'fn main() -> i32 { assert!(true); 42 }',
+    )
+    assert rc_t == 42, (
+        f"K1.F22i2 assert!(true): expected rc=42 (compile-time pass "
+        f"via AST_INT(0); trailing 42 is the fn return); got {rc_t}."
+    )
+
+    # Probe 2: assert!(false) folds to compile-time panic; stderr
+    # check for "assertion failed".
+    name_f = "k1f22i2_assert_false_panic"
+    in_path = f"/tmp/sh_{name_f}_in.hx"
+    out_path = f"/tmp/sh_{name_f}_out.bin"
+    src_f = 'fn main() -> i32 { assert!(false); 42 }'
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path}; printf %s {repr(src_f)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 132, (
+        f"K1.F22i2 assert!(false): expected rc=132 (compile-time "
+        f"panic); got {run_k2.returncode}. stderr={run_k2.stderr!r}."
+    )
+    assert b"assertion failed" in run_k2.stderr, (
+        f"K1.F22i2 assert!(false) message probe: expected stderr to "
+        f"contain b'assertion failed' (the synthesized panic body); "
+        f"got stderr={run_k2.stderr!r}."
+    )
+
+    # Regression: assert!(IDENT) still routed through K1.F22i.
+    rc_p = _kovc_self_host_compile_and_run(
+        "k1f22i2_assert_ident_pass",
+        'fn main() -> i32 { let x: i32 = 1; assert!(x); 7 }',
+    )
+    assert rc_p == 7, (
+        f"K1.F22i2 regression: assert!(x=1) expected rc=7; got {rc_p}. "
+        f"K1.F22i runtime-cond path may have been broken."
+    )
+    rc_pf = _kovc_self_host_compile_and_run(
+        "k1f22i2_assert_ident_fail",
+        'fn main() -> i32 { let x: i32 = 0; assert!(x); 7 }',
+    )
+    assert rc_pf == 132, (
+        f"K1.F22i2 regression: assert!(x=0) expected rc=132; got "
+        f"{rc_pf}. K1.F22i runtime-cond panic may have been broken."
     )
 
 
