@@ -2000,6 +2000,41 @@ fn is_kw_false_ident(id_s: i32, id_l: i32) -> i32 {
     } else { 0 }
 }
 
+// K3.S (2026-05-27): generalized reserved-keyword IDENT detector.
+// The bootstrap lexer tags 15 reserved-but-soft keywords as TK_IDENT
+// (the parser dispatches by NAME, not by a distinct token tag): true,
+// false, type, agent, continue, pub, extern, break, unsafe, try, async,
+// const, union, static, move. Macros like dbg!(IDENT) and assert!(IDENT)
+// synthesize AST_VAR(IDENT_bytes); if those bytes match a reserved kw,
+// the downstream codegen resolves to UNBOUND-name -> silent miscompile
+// to AST_INT(0). The K3.Q precedent guarded only true/false in K1.F22i;
+// silent-failure-hunter audit on the K1.F28 batch (audit MEDIUM-2) flagged
+// the broader risk. K3.S generalizes: macro arms that synthesize AST_VAR
+// from an IDENT now reject via is_any_reserved_kw_ident.
+//
+// is_kw_move_ident is forward-declared at line 2871 (the function-decl
+// order: declared near move-closure parsing, but reachable from here via
+// the bootstrap's fn-table; the actual byte-pattern check is identical
+// regardless of declaration order).
+fn is_any_reserved_kw_ident(id_s: i32, id_l: i32) -> i32 {
+    if is_kw_true_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_false_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_type_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_agent_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_continue_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_pub_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_extern_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_break_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_unsafe_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_try_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_async_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_const_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_union_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_static_ident(id_s, id_l) == 1 { 1 }
+    else { if is_kw_move_ident(id_s, id_l) == 1 { 1 }
+    else { 0 } } } } } } } } } } } } } } }
+}
+
 // --------------------------------------------------------------
 // Forward-style state-passing parser. Each function takes only
 // tok_base + state_base; arena slots store the rest.
@@ -3794,9 +3829,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 4 {
                     let dbg_opnd_s = tok_p2(tok_base, k + 3);
                     let dbg_opnd_l = tok_p3(tok_base, k + 3);
-                    if is_kw_true_ident(dbg_opnd_s, dbg_opnd_l) == 1 { 0 }
-                    else { if is_kw_false_ident(dbg_opnd_s, dbg_opnd_l) == 1 { 0 }
-                    else { 1 } }
+                    // K3.S (2026-05-27): generalized reserved-keyword reject.
+                    // Pre-K3.S the guard only rejected "true"/"false"; the
+                    // silent-failure-hunter audit MEDIUM-2 flagged that
+                    // dbg!(continue), dbg!(break), dbg!(pub), dbg!(unsafe)
+                    // etc. also synthesize AST_VAR(keyword_bytes) which
+                    // resolves to unbound-name = AST_INT(0) at codegen
+                    // (silent miscompile to 0). K3.S routes through the
+                    // 15-keyword helper for full coverage.
+                    if is_any_reserved_kw_ident(dbg_opnd_s, dbg_opnd_l) == 1 { 0 }
+                    else { 1 }
                 } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             // K1.F30 (2026-05-27): dbg!(INT_LIT) shape -- sibling of K1.F28

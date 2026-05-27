@@ -9547,6 +9547,58 @@ def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     )
 
 
+def test_bootstrap_kovc_k3s_dbg_reserved_kw_reject_self_host():
+    """K3.S (2026-05-27): silent-failure-hunter audit MEDIUM-2 fix.
+    K1.F28's K3.Q-style guard rejected ONLY `true`/`false` from
+    dbg!(IDENT). Other reserved keywords that the lexer tags as
+    TK_IDENT (type, agent, continue, pub, extern, break, unsafe, try,
+    async, const, union, static, move) silently miscompiled to 0
+    because the AST_VAR(kw_bytes) synthesis resolved to unbound-name
+    -> AST_INT(0) at codegen.
+
+    K3.S adds a unified `is_any_reserved_kw_ident` helper covering
+    all 15 keywords and routes the dbg shape guard through it.
+    Reserved-kw forms now fall through to K1.CB no-op-skip
+    (returning AST_INT(0) explicitly via the macro-skip path) instead
+    of via the silent-miscompile-via-unbound-AST_VAR path.
+
+    Observable behavior for reserved-kw operands is the same (both
+    paths return 0), but the K3.S path is type-safe + documented;
+    the pre-K3.S path was a documented-as-undefined corner that
+    silently produced 0 via an unbound-name silent miscompile.
+
+    Tests:
+      1. dbg!(true); 7 -- true reject; macro skipped; returns 7.
+      2. dbg!(false); 11 -- false reject; macro skipped; returns 11.
+      3. dbg!(x) where x=42 -- normal IDENT still passes; rc=42.
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k3s_dbg_true_kw_skip",
+        'fn main() -> i32 { dbg!(true); 7 }',
+    )
+    assert rc1 == 7, (
+        f"K3.S dbg!(true) reject: expected rc=7 (macro no-op-skipped, "
+        f"main returns 7); got {rc1}."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k3s_dbg_false_kw_skip",
+        'fn main() -> i32 { dbg!(false); 11 }',
+    )
+    assert rc2 == 11, (
+        f"K3.S dbg!(false) reject: expected rc=11; got {rc2}."
+    )
+
+    rc3 = _kovc_self_host_compile_and_run(
+        "k3s_dbg_normal_passes",
+        'fn main() -> i32 { let x: i32 = 42; dbg!(x) }',
+    )
+    assert rc3 == 42, (
+        f"K3.S regression: dbg!(x) with normal IDENT should still "
+        f"pass; got rc={rc3}."
+    )
+
+
 def test_bootstrap_kovc_k1f30_dbg_int_literal_self_host():
     """K1.F30 (2026-05-27): `dbg!(INT_LIT)` passthrough -- sibling of
     K1.F28 dbg!(IDENT). 5-token shape (dbg, !, (, INT, )). Synthesizes
