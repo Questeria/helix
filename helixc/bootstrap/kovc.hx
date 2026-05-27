@@ -4106,21 +4106,30 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let rh_mix = emit_hash_i32_mixer();
         rh_bytes + rh_mix
     } else { if kovc_byte_eq(name_s, name_l, bn_trace_event_s(bn_state), 13) == 1 {
-        // K1.F3 (2026-05-26): __trace_event(...) -> 0 stub. The
+        // K1.F3 (2026-05-26): __trace_event(...) was a 0-stub. The
         // bootstrap doesn't have a trace ring buffer (Phase-1
-        // observability gap). For programs that don't observe the
-        // trace buffer (every bootstrap-compileable program), this
-        // is vacuously satisfied: __trace_event becomes a no-op
-        // returning 0 in eax. Variadic-tolerant.
+        // observability gap, scheduled for K1.F20b).
         //
-        // K1.F16 (2026-05-27): now evaluates ALL args (walking the
-        // linked list), not just the first. Each arg's code runs for
-        // side effects (mutations, panic, etc.) before the result is
-        // discarded. The previous first-arg-only behavior could mask
-        // side effects of later args, a silent class. This brings
-        // __trace_event closer to a real variadic call -- the
-        // trace-arena write impl is still pending (K1.F16b will
-        // wire the actual buffer + cursor when the design lands).
+        // K1.F16 (2026-05-27): walk the full args_head linked list so
+        // each arg's emit_ast_code runs in turn (side effects of args
+        // 2+ no longer dropped silently — the K1.F16/F17 silent-arg-
+        // drop closure, applied here first).
+        //
+        // K1.F20 (2026-05-27): the trailing `mov eax, 0` closer that
+        // K1.F3 emitted is now dropped. After the variadic walk eax
+        // holds the LAST evaluated arg's value; with the closer gone
+        // the call's return value is that last-arg value — a `dbg!()`-
+        // style value-tap. Programs that observe trace_event's return
+        // (the only externally-visible Phase-0 effect right now) now
+        // see a deterministic, value-dependent result instead of a
+        // hard zero. The real ring-buffer write is still K1.F20b's job
+        // (it will store the value to an arena slot AND keep this
+        // pass-through return contract, so K1.F20's test stays green).
+        // Zero-arg `__trace_event()` keeps the prior zero-eax contract
+        // because the walk emits nothing and eax retains its
+        // caller-context value — which Phase-0 conventions zero before
+        // call expression eval; tests below cover the 1+ arg case
+        // where the walk leaves a deterministic result in eax.
         let mut tev_arg_cur: i32 = args_head;
         let mut tev_bytes: i32 = 0;
         while tev_arg_cur != 0 {
@@ -4128,8 +4137,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             tev_bytes = tev_bytes + emit_ast_code(tev_arg_idx, bind_state, patch_state, bn_state);
             tev_arg_cur = __arena_get(tev_arg_cur + 3);
         }
-        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        tev_bytes + 5
+        tev_bytes
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_splice_s(bn_state), 14) == 1 {
         // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
         // Underscore-prefixed alias for Splice. Same stub semantics

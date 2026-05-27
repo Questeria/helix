@@ -518,7 +518,7 @@ through the K2 parity harness where applicable.
 | tile ops (TILE_ZEROS/ADD/SUB/MUL/MATMUL) | ❌ OPEN | No tile codegen in bootstrap. Matrix rows 197-199 KOVC-MISSING. |
 | GPU backends (PTX + ROCm + Metal + WebGPU) | ❌ OPEN | All four backend rows 200-201 KOVC-MISSING. |
 | MLIR migration path | ❌ OPEN | v3.0 Phase E shipped on Python side (Stages 210-216); bootstrap port pending. Matrix row 202 KOVC-MISSING. |
-| trace events | ⚠️ STUB | __trace_event slot 165 (K1.F3 2026-05-27, variadic-tolerant no-op stub); real trace-arena impl pending. |
+| trace events | ⚠️ PARTIAL | __trace_event slot 165 (K1.F3 2026-05-26 register + variadic walk; K1.F20 2026-05-27 drops the trailing mov-eax-0 closer so the call returns the last walked arg's value — a dbg!()-style value-tap rather than a hard 0-stub). Programs that observe trace_event's return now see a deterministic, value-dependent result. Real trace-arena ring-buffer write (with a paired __trace_read read-side) is the K1.F20b followup before this row fully closes. |
 | macros | ⚠️ PARSER-ONLY | `IDENT!(...)` parses as no-op call (K1.CB 2026-05-26); no macro expansion. |
 
 Also closed this session: K2 parity corpus grew 70 → 119 entries

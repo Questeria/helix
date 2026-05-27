@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 212      # last bump: K1.F19 -- reflect_hash + __helix_reflect_hash upgraded from K1.F2 0-stub to the real FNV-style mixer shared with __hash_i32 (new emit_hash_i32_mixer helper). 2 new permanent self-host probes pin hash(1)=75 and hash(42)=179
+K_BOOTSTRAP_CHUNKS_DONE = 213      # last bump: K1.F20 -- __trace_event drops the K1.F3 trailing mov-eax-0 closer; call now returns the last walked arg's value (a dbg!()-style value-tap, since args walk LIFO so last-emitted is the first source arg). 2 new self-host probes pin 1-arg=99 and 3-arg=1 (LIFO ordering). The real trace ring-buffer write is K1.F20b's followup
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

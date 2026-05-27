@@ -7315,6 +7315,61 @@ def test_bootstrap_kovc_k1f19_reflect_hash_real_mixer_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f20_trace_event_passthrough_self_host():
+    """K1.F20 (2026-05-27): __trace_event(args...) now returns the
+    value of the LAST evaluated arg (a dbg!()-style value-tap) instead
+    of always returning 0.
+
+    K1.F3 (2026-05-26) emitted a closing `mov eax, 0` so the call
+    returned 0 regardless of args. K1.F20 drops that closer; the
+    K1.F16 variadic walk's last `emit_ast_code` already leaves the
+    last arg's value in eax, so removing the closer is the entire
+    change. A real trace-arena ring-buffer write is the K1.F20b
+    followup — but that write will keep the same pass-through return
+    contract, so this test pins K1.F20 and stays valid through K1.F20b.
+
+    Test cases:
+
+      __trace_event(99):
+        Single-arg case. The walk emits AST_INT(99)'s code (mov eax,
+        99 = 5 bytes), then returns. With the K1.F20 closer dropped,
+        eax = 99 at return. rc = 99 & 0xFF = 99.
+
+      __trace_event(1, 2, 7):
+        Multi-arg case. The bootstrap's call-args linked list is built
+        LIFO: args_head is the LAST source arg (here 7); the next-
+        pointer at slot+3 walks BACKWARD toward the first. So the walk
+        emits AST_INT(7), then AST_INT(2), then AST_INT(1); each emit
+        overwrites eax. After the walk eax = 1 (the FIRST source arg's
+        value, the last to be emitted). rc = 1. This pins the LIFO
+        walk convention along with the K1.F20 closer drop.
+
+    Both probes were rc=0 on K1.F3 master.
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f20_trace_event_one_arg",
+        "fn main() -> i32 { __trace_event(99) }",
+    )
+    assert rc1 == 99, (
+        f"K1.F20 __trace_event(99): expected exit code 99 (the last "
+        f"arg's value after the K1.F16 walk, with the K1.F3 mov-eax-0 "
+        f"closer dropped); got {rc1}. If rc=0, the K1.F3 0-stub "
+        f"regressed; if neither 0 nor 99, the variadic walk is broken."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f20_trace_event_three_args",
+        "fn main() -> i32 { __trace_event(1, 2, 7) }",
+    )
+    assert rc2 == 1, (
+        f"K1.F20 __trace_event(1, 2, 7): expected exit code 1 (the "
+        f"FIRST source arg, since the args linked list walks LIFO "
+        f"and the K1.F16 loop emits 7 -> 2 -> 1, leaving 1 in eax); "
+        f"got {rc2}. If rc=7, the walk is FIFO contrary to existing "
+        f"convention; if rc=0, K1.F20 regressed."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
