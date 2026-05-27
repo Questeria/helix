@@ -9255,21 +9255,29 @@ def test_bootstrap_kovc_k1f25_tile_sub_single_cell_self_host():
 
 
 def test_bootstrap_kovc_k1f25_tile_sub_multi_cell_self_host():
-    """K1.F25 multi-cell verification (using values + sums that stay < 256
-    to avoid the pre-existing __arena_get-i32-narrowing-to-u8 defect
-    that K1.F25 surfaced).
+    """K1.F25 multi-cell verification.
 
-    Program: a=[80, 70, 60, 50], b=[10, 20, 30, 40], count=4.
-    Expected: dst=[70, 50, 30, 10], sum=160 (< 256, fits in u8 if the
-    bootstrap narrows everything; gives correct 160 either way).
+    NOTE [K1.F26 CORRECTION, 2026-05-27 same-day]: K1.F25's commit
+    message claimed an "__arena_get u8-narrowing" defect existed.
+    K1.F26 investigation showed this was MISTAKEN. The truncation is
+    purely the LINUX KERNEL: `sys_exit(N)` only returns the low 8
+    bits of N to the parent process. So when a test program returns
+    1050 in eax, the parent sees exit code 1050 & 0xFF = 26. The
+    bootstrap and __arena_get are both correct -- the actual value
+    in the binary's eax IS 1050, the kernel just truncates the wait4
+    status. This is documented in `man 3 exit`: "the least significant
+    byte of status... shall be available to a waiting parent process".
 
-    NOTE: K1.F25 surfaced (but did not fix) a pre-existing bootstrap
-    defect where __arena_get(x) results, when used in a sum expression
-    that overflows u8, get narrowed (e.g., a[0]+a[1]+a[2]+a[3] with
-    50+100+150+200=500 returns 244 = 500 mod 256). The defect is NOT
-    in __tile_sub itself (single-cell reads of dst[i] return correct
-    values) but in how the bootstrap's expression-type inference treats
-    __arena_get results. Documented for a future chunk (K1.F26).
+    Implication: tests using pytest exit-code-only verification cannot
+    distinguish values that differ only in their upper bytes. Tests
+    that need to verify > 255 results must use stdout (via __print_int
+    or similar) instead of the exit code. The K1.F22b
+    `_kovc_self_host_compile_and_run_with_stdout` helper exists for
+    exactly this case.
+
+    Program (still valid, all values < 256 individually + sum < 256):
+      a=[80, 70, 60, 50], b=[10, 20, 30, 40], count=4
+      dst=[70, 50, 30, 10], sum=160 (fits in u8)
     """
     src = (
         'fn main() -> i32 {\n'
@@ -9298,9 +9306,91 @@ def test_bootstrap_kovc_k1f25_tile_sub_multi_cell_self_host():
     # Expected: 70 + 50 + 30 + 10 = 160 (fits in u8).
     assert 160 in results, (
         f"K1.F25 multi-cell: expected rc=160 (sum 70+50+30+10 over 4 "
-        f"elementwise-subtracted cells, all values < 256 to dodge the "
-        f"pre-existing __arena_get-narrowing defect) in at least one "
+        f"elementwise-subtracted cells, all values < 256 to stay within "
+        f"the kernel exit-code-u8 truncation envelope) in at least one "
         f"of 3 runs; got {results}."
+    )
+
+
+def test_bootstrap_kovc_k1f26_tile_mul_single_cell_self_host():
+    """K1.F26 (2026-05-27): __tile_mul(a, b, dst, count) elementwise
+    multiplication. Same loop scaffold as K1.F24j __tile_add but with
+    `imul esi, [rax+rdi*4+4]` (opcode 0F AF, 5 bytes) replacing
+    `add esi, [rax+rdi*4+4]` (opcode 03, 4 bytes). This shifts the
+    loop body from 43 to 44 bytes; jge displacement goes from +39 to
+    +40 and jmp displacement from -43 to -44.
+
+    Single-cell: a[0]=4, b[0]=3, dst[0]=12 (3/3 runs).
+
+    Tile ops Phase-0 status after this chunk: 4 of 5 real.
+      __tile_zeros, __tile_add, __tile_sub, __tile_mul shipped.
+      Remaining: __tile_matmul (2D nested loop with reduction
+      accumulator -- structurally different from the elementwise ops).
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 4);\n'
+        '    __arena_set(b, 3);\n'
+        '    __tile_mul(a, b, dst, 4);\n'
+        '    __arena_get(dst)\n'
+        '}\n'
+    )
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f26_mul_single_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    assert 12 in results, (
+        f"K1.F26 single-cell: expected rc=12 (4*3) in at least one of "
+        f"3 runs; got {results}."
+    )
+
+
+def test_bootstrap_kovc_k1f26_tile_mul_multi_cell_self_host():
+    """K1.F26 multi-cell verification of the imul-based loop body.
+
+    Program: a=[2, 3, 4, 5], b=[6, 7, 8, 9], count=4.
+    Expected: dst=[12, 21, 32, 45], sum=110 (< 256, fits in u8 to
+    avoid kernel exit-code truncation per the K1.F26 correction).
+
+    Verifies the loop counter, SIB-indexed reads, and SIB-indexed
+    writes all work across multiple imul iterations. Loop body is
+    44 bytes (vs add/sub's 43); rel8 displacements correctly shift.
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 2);\n'
+        '    __arena_set(a + 1, 3);\n'
+        '    __arena_set(a + 2, 4);\n'
+        '    __arena_set(a + 3, 5);\n'
+        '    __arena_set(b, 6);\n'
+        '    __arena_set(b + 1, 7);\n'
+        '    __arena_set(b + 2, 8);\n'
+        '    __arena_set(b + 3, 9);\n'
+        '    __tile_mul(a, b, dst, 4);\n'
+        '    __arena_get(dst) + __arena_get(dst + 1) + __arena_get(dst + 2) + __arena_get(dst + 3)\n'
+        '}\n'
+    )
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f26_mul_multi_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    # Expected: 12 + 21 + 32 + 45 = 110 (< 256, fits in u8 exit code).
+    assert 110 in results, (
+        f"K1.F26 multi-cell: expected rc=110 (sum 12+21+32+45 over 4 "
+        f"elementwise-multiplied cells) in at least one of 3 runs; "
+        f"got {results}."
     )
 
 

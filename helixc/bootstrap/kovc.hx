@@ -2043,6 +2043,12 @@ fn install_builtin_names() -> i32 {
     // Phase-0 tile primitive: elementwise subtraction loop (mirror of
     // __tile_add with sub opcode 2B instead of add opcode 03).
     __arena_push(0);      // slot 176: __tile_sub name offset
+    // K1.F26 (2026-05-27): slot 177 = "__tile_mul" name offset.
+    // Phase-0 tile primitive: elementwise multiplication. The imul
+    // r32, r/m32 instruction has a 2-byte opcode (0F AF) making the
+    // loop body 44 bytes instead of __tile_add's 43, so jge/jmp rel8
+    // displacements shift by 1 (+40 and -44).
+    __arena_push(0);      // slot 177: __tile_mul name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2227,6 +2233,15 @@ fn install_builtin_names() -> i32 {
     __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
     __arena_push(115); __arena_push(117); __arena_push(98);
     __arena_set(bn_state + 176, s_tsub);
+
+    // K1.F26 (2026-05-27): "__tile_mul" name bytes (10 chars: 95 95
+    // 116 105 108 101 95 109 117 108). Stored at slot 177.
+    // Elementwise multiplication; imul opcode is 0F AF (2-byte),
+    // making the loop body 44 bytes vs __tile_add's 43.
+    let s_tmul = __arena_push(95); __arena_push(95); __arena_push(116);
+    __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
+    __arena_push(109); __arena_push(117); __arena_push(108);
+    __arena_set(bn_state + 177, s_tmul);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3743,6 +3758,8 @@ fn bn_tile_zeros_s(b: i32) -> i32 { __arena_get(b + 174) }
 fn bn_tile_add_s(b: i32) -> i32 { __arena_get(b + 175) }
 // K1.F25 (2026-05-27): __tile_sub accessor (slot 176).
 fn bn_tile_sub_s(b: i32) -> i32 { __arena_get(b + 176) }
+// K1.F26 (2026-05-27): __tile_mul accessor (slot 177).
+fn bn_tile_mul_s(b: i32) -> i32 { __arena_get(b + 177) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4752,6 +4769,51 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
         n0_ts + np0_ts + n1_ts + np1_ts + n2_ts + np2_ts + n3_ts + 60
+    } else { if kovc_byte_eq(name_s, name_l, bn_tile_mul_s(bn_state), 10) == 1 {
+        // K1.F26 (2026-05-27): __tile_mul(a, b, dst, count) elementwise
+        // multiplication. Mirrors __tile_add/__tile_sub but uses
+        // imul r32, r/m32 (opcode 0F AF) which is 2-byte opcode + ModRM
+        // + SIB + disp8 = 5 bytes (vs 4 bytes for add/sub). Loop body
+        // grows from 43 to 44 bytes; jge/jmp rel8 displacements shift
+        // from +39/-43 to +40/-44.
+        // Result: dst[i] = a[i] * b[i] for i in [0, count).
+        let a0_tm = __arena_get(args_head + 1);
+        let next1_tm = __arena_get(args_head + 2);
+        let a1_tm = __arena_get(next1_tm + 1);
+        let next2_tm = __arena_get(next1_tm + 2);
+        let a2_tm = __arena_get(next2_tm + 1);
+        let next3_tm = __arena_get(next2_tm + 2);
+        let a3_tm = __arena_get(next3_tm + 1);
+        let n0_tm = emit_ast_code(a0_tm, bind_state, patch_state, bn_state);
+        let np0_tm = emit_push_rax();
+        let n1_tm = emit_ast_code(a1_tm, bind_state, patch_state, bn_state);
+        let np1_tm = emit_push_rax();
+        let n2_tm = emit_ast_code(a2_tm, bind_state, patch_state, bn_state);
+        let np2_tm = emit_push_rax();
+        let n3_tm = emit_ast_code(a3_tm, bind_state, patch_state, bn_state);
+        // setup (11 bytes):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax
+        let disp_slot_tm = emit_lea_rax_rip_placeholder();                      // 7 bytes
+        patch_table_add(patch_state, disp_slot_tm, arena_base_s, 18);
+        emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
+        // loop_start (44 bytes):
+        emit_byte(0x39); emit_byte(0xCA);                                       // cmp edx, ecx
+        emit_byte(0x7D); emit_byte(0x28);                                       // jge +40 (was +39 for add)
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);  // mov rsi, [rsp+16]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD6);                      // add rsi, rdx
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB0); emit_byte(0x04);     // mov esi, [rax+rsi*4+4] (a[i])
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD7);                      // add rdi, rdx
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);  // imul esi, [rax+rdi*4+4] -- the K1.F26 op (5 bytes instead of 4)
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD7);                      // add rdi, rdx
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // mov [rax+rdi*4+4], esi
+        emit_byte(0xFF); emit_byte(0xC2);                                       // inc edx
+        emit_byte(0xEB); emit_byte(0xD4);                                       // jmp -44 (was -43 for add)
+        // end (6 bytes):
+        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
+        emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
+        n0_tm + np0_tm + n1_tm + np1_tm + n2_tm + np2_tm + n3_tm + 61
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -5452,7 +5514,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
