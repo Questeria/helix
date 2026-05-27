@@ -221,6 +221,21 @@ K2_CORPUS = [
     ("p105_i32_le_i64",          "fn main() -> i32 { if 30 <= 60_i64 { 42 } else { 0 } }", 42),
     ("p106_i64_ge_i32",          "fn main() -> i32 { if 60_i64 >= 30 { 42 } else { 0 } }", 42),
     ("p107_i32_ge_i64",          "fn main() -> i32 { if 60 >= 30_i64 { 42 } else { 0 } }", 42),
+    # K1.F13 (2026-05-27): u64<->u32 comparison widening across all 6
+    # ops (LT/GT/EQ/NE/LE/GE) in both directions. Mirror of K1.F8d's
+    # u64<->u32 binop widening, applied to comparisons.
+    ("p108_u64_lt_u32",          "fn main() -> i32 { if 30_u64 < 60_u32 { 42 } else { 0 } }", 42),
+    ("p109_u32_lt_u64",          "fn main() -> i32 { if 30_u32 < 60_u64 { 42 } else { 0 } }", 42),
+    ("p110_u64_gt_u32",          "fn main() -> i32 { if 60_u64 > 30_u32 { 42 } else { 0 } }", 42),
+    ("p111_u32_gt_u64",          "fn main() -> i32 { if 60_u32 > 30_u64 { 42 } else { 0 } }", 42),
+    ("p112_u64_eq_u32",          "fn main() -> i32 { if 42_u64 == 42_u32 { 42 } else { 0 } }", 42),
+    ("p113_u32_eq_u64",          "fn main() -> i32 { if 42_u32 == 42_u64 { 42 } else { 0 } }", 42),
+    ("p114_u64_ne_u32",          "fn main() -> i32 { if 42_u64 != 0_u32 { 42 } else { 0 } }", 42),
+    ("p115_u32_ne_u64",          "fn main() -> i32 { if 42_u32 != 0_u64 { 42 } else { 0 } }", 42),
+    ("p116_u64_le_u32",          "fn main() -> i32 { if 30_u64 <= 60_u32 { 42 } else { 0 } }", 42),
+    ("p117_u32_le_u64",          "fn main() -> i32 { if 30_u32 <= 60_u64 { 42 } else { 0 } }", 42),
+    ("p118_u64_ge_u32",          "fn main() -> i32 { if 60_u64 >= 30_u32 { 42 } else { 0 } }", 42),
+    ("p119_u32_ge_u64",          "fn main() -> i32 { if 60_u32 >= 30_u64 { 42 } else { 0 } }", 42),
 ]
 
 
@@ -292,8 +307,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 107, (
-        f"K2.O corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 119, (
+        f"K2.P corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
