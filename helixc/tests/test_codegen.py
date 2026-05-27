@@ -7022,6 +7022,57 @@ fn main() -> i32 {{
     return run_k2.returncode
 
 
+def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
+    """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
+    that returns (rc, stdout_bytes) instead of just rc. Needed for
+    macros that have stdout-only side effects (println! prints but
+    returns 0; rc-only tests can't distinguish K1.F22b expansion from
+    the K1.CB no-op-skip)."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.bin"
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path}; printf %s {repr(k2_src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    return run_k2.returncode, run_k2.stdout
+
+
 def test_bootstrap_kovc_match_int_arms_self_host():
     """K1.F-discovery (2026-05-25): the matrix listed `match` +
     patterns as KOVC-MISSING. Direct probe through the bootstrap
@@ -7602,17 +7653,80 @@ def test_bootstrap_kovc_k1f22_panic_macro_expansion_self_host():
         f"rc=other, the panic codegen is broken downstream."
     )
 
-    # Regression: K1.CB's no-op contract for non-panic macros still
-    # holds (println! / vec! / assert_eq! etc. shouldn't expand).
-    rc_println = _kovc_self_host_compile_and_run(
-        "k1f22_println_macro_still_noop",
-        'fn main() -> i32 { println!("hello"); 42 }',
+    # K1.F22b (2026-05-27): println! now ALSO expands to print_str,
+    # so the old K1.F22 regression probe asserting "println! stays
+    # no-op" is replaced by the K1.F22b probes below. The rc=42
+    # check still passes (print_str returns 0, the trailing `42`
+    # gives the final value), but the meaningful side effect
+    # (stdout output) is now observable.
+
+
+def test_bootstrap_kovc_k1f22b_println_macro_expansion_self_host():
+    """K1.F22b (2026-05-27): extend the K1.F22 parse-time-rewrite
+    pattern to also detect `println!("msg")` and synthesize
+    AST_CALL(print_str, str_arg). Routes through the existing
+    K1.AK print_str codegen which emits sys_write to stdout and
+    returns 0 in eax. Bootstrap-only contract: NO trailing newline
+    (print_str doesn't emit one; full Rust println! emit-newline
+    is a K1.F22c followup once a print_newline builtin lands).
+
+    The rc-only test doesn't distinguish K1.F22b expansion from
+    the K1.CB no-op-skip (both end with `; 42` returning 42, since
+    print_str also returns 0). The probes here use the new
+    `_kovc_self_host_compile_and_run_with_stdout` helper to check
+    that the message ACTUALLY lands on stdout.
+
+      Probe 1: println!("hi"); 42
+        Pre-K1.F22b: K1.CB no-op-skip. Stdout empty. rc=42.
+        Post-K1.F22b: print_str("hi") emits "hi" to stdout. rc=42.
+
+      Probe 2: println!("a"); println!("b"); 42
+        Pre-K1.F22b: Stdout empty.
+        Post-K1.F22b: "ab" on stdout (no newlines per the Phase-0
+        contract). rc=42.
+
+      Probe 3 (regression): panic!("oops") still SIGILLs (rc=132).
+        Verifies K1.F22b doesn't accidentally suppress the K1.F22
+        panic! expansion.
+    """
+    rc1, stdout1 = _kovc_self_host_compile_and_run_with_stdout(
+        "k1f22b_println_single",
+        'fn main() -> i32 { println!("hi"); 42 }',
     )
-    assert rc_println == 42, (
-        f"K1.F22 narrow-scope regression: expected exit code 42 "
-        f"(println!(...) still a no-op-skip per K1.CB; only panic! "
-        f"is special-cased); got {rc_println}. If rc=132, K1.F22 "
-        f"over-expanded -- the panic-name guard misfired."
+    assert rc1 == 42, (
+        f"K1.F22b println!(\"hi\"); 42: expected exit code 42 "
+        f"(print_str returns 0, trailing 42 is the final value); "
+        f"got {rc1}. stdout={stdout1!r}."
+    )
+    assert b"hi" in stdout1, (
+        f"K1.F22b println! stdout probe: expected 'hi' on stdout; "
+        f"got stdout={stdout1!r}. If stdout is empty, the K1.F22b "
+        f"expansion didn't fire and println! reverted to K1.CB "
+        f"no-op-skip."
+    )
+
+    rc2, stdout2 = _kovc_self_host_compile_and_run_with_stdout(
+        "k1f22b_println_multi",
+        'fn main() -> i32 { println!("a"); println!("b"); 42 }',
+    )
+    assert rc2 == 42, (
+        f"K1.F22b two-println probe: expected rc=42; got {rc2}. "
+        f"stdout={stdout2!r}."
+    )
+    assert b"ab" in stdout2, (
+        f"K1.F22b two-println probe: expected 'ab' (no newlines "
+        f"between -- Phase-0 contract) on stdout; got stdout={stdout2!r}."
+    )
+
+    # Regression: panic! still SIGILLs (K1.F22b didn't break K1.F22).
+    rc3 = _kovc_self_host_compile_and_run(
+        "k1f22b_panic_still_traps",
+        'fn main() -> i32 { panic!("nope"); 42 }',
+    )
+    assert rc3 == 132, (
+        f"K1.F22b regression: expected panic!(\"nope\") to still "
+        f"SIGILL with rc=132 (K1.F22 expansion intact); got {rc3}. "
+        f"If rc=42, K1.F22 regressed via K1.F22b shadowing."
     )
 
 

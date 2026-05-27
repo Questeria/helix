@@ -3383,9 +3383,35 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22b (2026-05-27): println!(STR) detection. 7-char
+            // IDENT "println" = bytes 112 114 105 110 116 108 110.
+            // Same shape rules as panic!(STR) -- single STR_LIT arg.
+            // Routes through the existing print_str builtin codegen
+            // (K1.AK) so the message lands on stdout. Bootstrap-only
+            // contract: NO trailing newline (print_str doesn't add
+            // one; full Rust println! emit-newline is a K1.F22c
+            // followup once a print_newline builtin lands).
+            let is_println_name_macro = if id_len == 7 {
+                let lb0 = __arena_get(id_start);
+                let lb1 = __arena_get(id_start + 1);
+                let lb2 = __arena_get(id_start + 2);
+                let lb3 = __arena_get(id_start + 3);
+                let lb4 = __arena_get(id_start + 4);
+                let lb5 = __arena_get(id_start + 5);
+                let lb6 = __arena_get(id_start + 6);
+                if lb0 == 112 { if lb1 == 114 { if lb2 == 105 {
+                    if lb3 == 110 { if lb4 == 116 { if lb5 == 108 {
+                    if lb6 == 110 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             let mac_t3 = tok_tag(tok_base, k + 3);
             let mac_t4 = tok_tag(tok_base, k + 4);
             let is_panic_str_form = if is_panic_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            let is_println_str_form = if is_println_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
                 else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
@@ -3409,6 +3435,28 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(97); __arena_push(110); __arena_push(105); __arena_push(99);
                 // Build AST_CALL(name=panic, args_head=str_arg).
                 mk_node(16, panic_name_s, 5, panic_args_head)
+            } else { if is_println_str_form == 1 {
+                // K1.F22b: synthesize AST_CALL(print_str, str_arg).
+                // Same token-consumption shape as panic!. Routes through
+                // the K1.AK print_str codegen which emits sys_write to
+                // stdout, returns 0 in eax.
+                let pl_str_tok = k + 3;
+                let pl_str_body_s = tok_p2(tok_base, pl_str_tok);
+                let pl_str_body_l = tok_p3(tok_base, pl_str_tok);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                let pl_str_ast = mk_node(25, pl_str_body_s, pl_str_body_l, 0);
+                let pl_args_head = mk_node(17, pl_str_ast, 0, 0);
+                // Push "print_str" name bytes (9 chars: 112 114 105
+                // 110 116 95 115 116 114).
+                let pl_name_s = __arena_push(112);
+                __arena_push(114); __arena_push(105); __arena_push(110);
+                __arena_push(116); __arena_push(95); __arena_push(115);
+                __arena_push(116); __arena_push(114);
+                mk_node(16, pl_name_s, 9, pl_args_head)
             } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'
@@ -3435,7 +3483,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }
+            }}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
