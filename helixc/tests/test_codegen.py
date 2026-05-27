@@ -9647,6 +9647,77 @@ def test_bootstrap_kovc_k3u_tile_elementwise_dst_bounds_self_host():
         )
 
 
+def test_bootstrap_kovc_k3v_tile_add_read_bounds_self_host():
+    """K3.V (2026-05-27): READ-side close of audit HIGH-1 for __tile_add.
+    K3.T/U closed the WRITE-side (dst_off + count vs cap). K3.V adds
+    READ-side bounds checks on a_off and b_off so OOB reads also trap
+    instead of returning garbage.
+
+    Added 42 bytes after the K3.U dst guard (21 bytes for a_off + 21
+    for b_off). Per-op identifiable trap-ids:
+      __tile_add a OOB: 24002
+      __tile_add b OOB: 24003
+
+    Body grows: __tile_add 80 -> 122 bytes.
+
+    K3.V applies to __tile_add only this chunk. K3.W candidate to
+    mirror to __tile_sub/__tile_mul/__tile_matmul.
+
+    Tests:
+      1. Normal: rc=13 (regression).
+      2. a_off=99999999: trap with rc=132.
+      3. b_off=99999999: trap with rc=132.
+    """
+    # 1. Normal
+    rc1 = _kovc_self_host_compile_and_run(
+        "k3v_tadd_normal",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 3);\n'
+        '    __arena_set(b, 10);\n'
+        '    __tile_add(a, b, dst, 4);\n'
+        '    __arena_get(dst)\n'
+        '}\n',
+    )
+    assert rc1 == 13, (
+        f"K3.V regression: normal __tile_add (a,b,dst from tile_zeros) "
+        f"should still work (3+10=13); got {rc1}. If rc=132 with no OOB "
+        f"input: a K3.V guard fired for an in-bounds value (off-by-one)."
+    )
+
+    # 2. a_off OOB
+    rc2 = _kovc_self_host_compile_and_run(
+        "k3v_tadd_a_oob",
+        'fn main() -> i32 {\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __tile_add(99999999, b, dst, 4);\n'
+        '    0\n'
+        '}\n',
+    )
+    assert rc2 == 132, (
+        f"K3.V a-OOB: expected rc=132 (SIGILL from trap-id 24002); "
+        f"got {rc2}."
+    )
+
+    # 3. b_off OOB
+    rc3 = _kovc_self_host_compile_and_run(
+        "k3v_tadd_b_oob",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __tile_add(a, 99999999, dst, 4);\n'
+        '    0\n'
+        '}\n',
+    )
+    assert rc3 == 132, (
+        f"K3.V b-OOB: expected rc=132 (SIGILL from trap-id 24003); "
+        f"got {rc3}."
+    )
+
+
 def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     """K1.F28 (2026-05-27): `dbg!(IDENT)` macro expansion as a
     PASSTHROUGH. In Rust, `dbg!(expr)` prints "[file:line] expr = value"

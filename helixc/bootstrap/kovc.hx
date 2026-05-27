@@ -4729,6 +4729,21 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_u32_le(helix_arena_cap());                                          //   imm32
         emit_byte(0x76); emit_byte(0x07);                                       // jbe +7 (skip trap if in bounds)
         emit_trap_with_id(24001);                                                // 7B -- __tile_add dst OOB
+        // K3.V (2026-05-27): close READ-side of audit HIGH-1. Add bounds
+        // checks on a_off and b_off so OOB reads also trap loud (was: garbage
+        // values in result). Trap-ids 24002 (a) and 24003 (b). +42 bytes here.
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);     // mov esi, [rsp+16] (a_off; 4B)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx     (a_off + count)
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(24002);                                                // a OOB trap
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x08);     // mov esi, [rsp+8]  (b_off; 4B)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(24003);                                                // b OOB trap
         let disp_slot_ta = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_ta, arena_base_s, 18);
         emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
@@ -4749,7 +4764,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 80
+        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 122
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_sub_s(bn_state), 10) == 1 {
         // K1.F25 (2026-05-27): __tile_sub(a, b, dst, count) elementwise
         // subtraction. Mirrors __tile_add (K1.F24j) with one byte change:
