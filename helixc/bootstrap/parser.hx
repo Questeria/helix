@@ -3436,10 +3436,13 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // Build AST_CALL(name=panic, args_head=str_arg).
                 mk_node(16, panic_name_s, 5, panic_args_head)
             } else { if is_println_str_form == 1 {
-                // K1.F22b: synthesize AST_CALL(print_str, str_arg).
-                // Same token-consumption shape as panic!. Routes through
-                // the K1.AK print_str codegen which emits sys_write to
-                // stdout, returns 0 in eax.
+                // K1.F22b: synthesize AST_CALL for the println! expansion.
+                // Same token-consumption shape as panic!.
+                // K1.F22c (2026-05-27): route through the new
+                // `print_str_ln` builtin (12 chars) instead of plain
+                // `print_str` (9 chars), so the synthesized call emits
+                // the message PLUS a trailing newline -- closing the
+                // K1.F22b Phase-0 contract gap "no trailing newline yet".
                 let pl_str_tok = k + 3;
                 let pl_str_body_s = tok_p2(tok_base, pl_str_tok);
                 let pl_str_body_l = tok_p3(tok_base, pl_str_tok);
@@ -3450,13 +3453,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);
                 let pl_str_ast = mk_node(25, pl_str_body_s, pl_str_body_l, 0);
                 let pl_args_head = mk_node(17, pl_str_ast, 0, 0);
-                // Push "print_str" name bytes (9 chars: 112 114 105
-                // 110 116 95 115 116 114).
+                // Push "print_str_ln" name bytes (12 chars: 112 114 105
+                // 110 116 95 115 116 114 95 108 110).
                 let pl_name_s = __arena_push(112);
                 __arena_push(114); __arena_push(105); __arena_push(110);
                 __arena_push(116); __arena_push(95); __arena_push(115);
-                __arena_push(116); __arena_push(114);
-                mk_node(16, pl_name_s, 9, pl_args_head)
+                __arena_push(116); __arena_push(114); __arena_push(95);
+                __arena_push(108); __arena_push(110);
+                mk_node(16, pl_name_s, 12, pl_args_head)
             } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'

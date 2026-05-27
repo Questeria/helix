@@ -7694,15 +7694,17 @@ def test_bootstrap_kovc_k1f22b_println_macro_expansion_self_host():
         'fn main() -> i32 { println!("hi"); 42 }',
     )
     assert rc1 == 42, (
-        f"K1.F22b println!(\"hi\"); 42: expected exit code 42 "
-        f"(print_str returns 0, trailing 42 is the final value); "
+        f"K1.F22b/c println!(\"hi\"); 42: expected exit code 42 "
+        f"(print_str_ln returns 0, trailing 42 is the final value); "
         f"got {rc1}. stdout={stdout1!r}."
     )
-    assert b"hi" in stdout1, (
-        f"K1.F22b println! stdout probe: expected 'hi' on stdout; "
-        f"got stdout={stdout1!r}. If stdout is empty, the K1.F22b "
-        f"expansion didn't fire and println! reverted to K1.CB "
-        f"no-op-skip."
+    # K1.F22c (2026-05-27): println! now emits the trailing newline
+    # via the new print_str_ln builtin. stdout = "hi\n".
+    assert stdout1 == b"hi\n", (
+        f"K1.F22c println! trailing newline probe: expected stdout "
+        f"== b'hi\\n' (message + newline via print_str_ln); got "
+        f"stdout={stdout1!r}. If stdout==b'hi' (no newline), the "
+        f"K1.F22c print_str_ln route regressed to plain print_str."
     )
 
     rc2, stdout2 = _kovc_self_host_compile_and_run_with_stdout(
@@ -7710,12 +7712,14 @@ def test_bootstrap_kovc_k1f22b_println_macro_expansion_self_host():
         'fn main() -> i32 { println!("a"); println!("b"); 42 }',
     )
     assert rc2 == 42, (
-        f"K1.F22b two-println probe: expected rc=42; got {rc2}. "
+        f"K1.F22b/c two-println probe: expected rc=42; got {rc2}. "
         f"stdout={stdout2!r}."
     )
-    assert b"ab" in stdout2, (
-        f"K1.F22b two-println probe: expected 'ab' (no newlines "
-        f"between -- Phase-0 contract) on stdout; got stdout={stdout2!r}."
+    # K1.F22c: two println!s now produce two newlines.
+    assert stdout2 == b"a\nb\n", (
+        f"K1.F22c two-println probe: expected stdout == b'a\\nb\\n' "
+        f"(each println! emits a trailing newline); got "
+        f"stdout={stdout2!r}."
     )
 
     # Regression: panic! still SIGILLs (K1.F22b didn't break K1.F22).

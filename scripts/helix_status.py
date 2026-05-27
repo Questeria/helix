@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 224      # last bump: K1.F22b -- extend K1.F22 macro pattern: println!("msg") -> print_str("msg") at parse-time. Bootstrap-only contract (no trailing newline; the print_newline followup is K1.F22c). New _kovc_self_host_compile_and_run_with_stdout helper returns (rc, stdout) since print_str returns 0 (rc-only would not distinguish from K1.CB no-op-skip). 3 new probes pin: println!("hi") emits "hi"; two-println emits "ab" (no newline between); panic!() still SIGILLs (K1.F22 regression)
+K_BOOTSTRAP_CHUNKS_DONE = 225      # last bump: K1.F22c -- new print_str_ln builtin (bn_state slot 171, 12 chars; codegen emits message sys_write + newline sys_write = 50 bytes). K1.F22b println! parser-side expansion now routes through print_str_ln. Tests updated: stdout==b"hi\\n" and stdout==b"a\\nb\\n". Closes the K1.F22b "no trailing newline" Phase-0 contract gap
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
