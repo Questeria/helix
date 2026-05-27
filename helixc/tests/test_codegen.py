@@ -9451,6 +9451,63 @@ def test_bootstrap_kovc_k1f27_tile_matmul_2x2_self_host():
     )
 
 
+def test_bootstrap_kovc_k3r_tile_matmul_n_guard_self_host():
+    """K3.R (2026-05-27): silent-failure-hunter audit MEDIUM-1 fix.
+    __tile_matmul accepted N != 2 silently pre-K3.R (the K1.F27 codegen
+    hardcodes 2x2 and ignored the N argument), causing a silent
+    miscompile when callers passed N != 2. K3.R adds a 12-byte runtime
+    guard at the top of the matmul body:
+
+      cmp ecx, 2     (3 bytes)
+      je +7          (2 bytes -- skip trap if N==2)
+      emit_trap_with_id(27001)   (7 bytes -- mov eax, 27001; ud2)
+
+    matmul body grows 167 -> 179 bytes.
+
+    Probe pair:
+      - __tile_matmul(..., 2): runs as before (no trap)
+      - __tile_matmul(..., 3): now traps with SIGILL (rc=132) instead
+        of silently writing a 2x2 result into a tile the user expected
+        to be 3x3
+    """
+    # N = 2: still works (no trap).
+    src_ok = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 1);\n'
+        '    __arena_set(b, 5);\n'
+        '    __tile_matmul(a, b, dst, 2);\n'
+        '    __arena_get(dst)\n'
+        '}\n'
+    )
+    rc_ok = _kovc_self_host_compile_and_run("k3r_matmul_n2_ok", src_ok)
+    assert rc_ok == 5, (
+        f"K3.R N=2 regression: __tile_matmul with N=2 should still "
+        f"work (dst[0] = a[0]*b[0] + a[1]*b[2] = 1*5 + 0*0 = 5); "
+        f"got rc={rc_ok}. If rc=132: the K3.R guard fired for N=2 "
+        f"(off-by-one in the je displacement)."
+    )
+
+    # N = 3: trap fires (was silent 2x2 result pre-K3.R).
+    src_trap = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __tile_matmul(a, b, dst, 3);\n'
+        '    0\n'
+        '}\n'
+    )
+    rc_trap = _kovc_self_host_compile_and_run("k3r_matmul_n3_trap", src_trap)
+    assert rc_trap == 132, (
+        f"K3.R N=3 guard: __tile_matmul with N != 2 should trap "
+        f"(SIGILL = rc=132); got rc={rc_trap}. If rc=0: the guard "
+        f"didn't fire (audit MEDIUM-1 still open)."
+    )
+
+
 def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     """K1.F28 (2026-05-27): `dbg!(IDENT)` macro expansion as a
     PASSTHROUGH. In Rust, `dbg!(expr)` prints "[file:line] expr = value"

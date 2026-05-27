@@ -4866,8 +4866,16 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_mm = emit_ast_code(a2_mm, bind_state, patch_state, bn_state);
         let np2_mm = emit_push_rax();
         let n3_mm = emit_ast_code(a3_mm, bind_state, patch_state, bn_state);
-        // setup (9 bytes):
-        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (N, unused for 2x2)
+        // setup (21 bytes -- was 9; K3.R added 12 for the N != 2 guard):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (N captured)
+        // K3.R (2026-05-27): runtime guard rejecting N != 2 with trap-id 27001.
+        // Silent-failure-hunter MEDIUM-1: pre-K3.R, __tile_matmul accepted N=3
+        // (or any value) and silently produced a 2x2 result while the user
+        // expected NxN, leaving dst[4..N*N) BSS-zero. Now we fail-closed with
+        // a recognizable trap-id so callsite errors surface immediately.
+        emit_byte(0x83); emit_byte(0xF9); emit_byte(0x02);                      // cmp ecx, 2     (3 bytes)
+        emit_byte(0x74); emit_byte(0x07);                                       // je +7 (skip trap if N==2)
+        emit_trap_with_id(27001);                                                // 7 bytes -- N != 2 trap
         let disp_slot_mm = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_mm, arena_base_s, 18);
 
@@ -4918,7 +4926,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 167
+        // K3.R (2026-05-27): byte count grew 167 -> 179 (+12 for N != 2 guard).
+        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 179
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
