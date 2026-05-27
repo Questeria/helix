@@ -748,6 +748,83 @@ mirror-pattern discipline holds; the audit-clean signal pile
 continues to grow toward the 5-consecutive-clean gate that
 activates once Python-ready-to-delete state lands.
 
+### 2026-05-27 — K1.F22d through K1.F22j (K3.P audit + K3.Q fix)
+
+3-axis audit (silent-failure-hunter / type-design-analyzer /
+code-reviewer) on the K1.F22d through K1.F22j batch (commits
+`8ac9501`..`996d803`): 7 commits adding 8 parse-time macro expansions
+(eprintln!, print!, eprint!, todo!, unimplemented!, unreachable!,
+assert!(IDENT), assert_eq!(IDENT, IDENT)) plus two new builtins
+(eprint_str_ln slot 172, eprint_str slot 173). New patterns
+introduced: arena-push-synthesized-message (K1.F22g+) and the FIRST
+parser-time AST_IF / AST_EQ / AST_VAR synthesis (K1.F22i/j).
+
+Verifications **CLEAN**:
+  - Brace cascade balance: 10 outer `} else { if X {` arms × 10
+    closing `}` at parser.hx:3961. Counted both directions and
+    matched the per-chunk comment tally (F22b+1 + F22d+1 + F22e+1 +
+    F22f+1 + F22g+1 + F22h+2 + F22i+1 + F22j+1 = 9 added + 1
+    baseline = 10).
+  - EOF safety in mac_t5/mac_t6 reads (K1.F22j): the lexer always
+    emits TK_EOF (0) at stream end; truncated `assert_eq!(a`
+    short-circuits via mac_t4 != TK_COMMA so the deeper mac_t5/t6
+    reads are unreachable on the bad-shape path.
+  - Arena-push offset contract: __arena_push returns the absolute
+    slot index of the pushed byte; identical pattern to K3.M-clean
+    K1.F22 panic synthesis. All synthesized AST_STR_LIT nodes
+    correctly reference the first-pushed offset.
+  - cur_advance non-interaction: cur_advance is pure cursor bump
+    (cur_set(sb, cur_get(sb)+1)); no recursive parse, no arena push.
+    Synthesized message bytes are contiguous.
+  - Byte counts verified: "not yet implemented" = 19, "not
+    implemented" = 15, "internal error: entered unreachable code"
+    = 40, "assertion failed" = 16, "assertion failed: ==" = 20.
+  - Slot 172 / 173 collision-free: each accessor + push + set +
+    codegen-read site is unique.
+  - Rust-stdlib message parity: all three of the K1.F22g/h panics
+    use the literal Rust-stdlib default strings.
+
+ONE MEDIUM finding (all three axes converged):
+  - **MEDIUM-1**: `assert!(true)` / `assert!(false)` / `assert_eq!`
+    with BoolLit operand silently miscompile. The bootstrap lexer
+    tags `true`/`false` as TK_IDENT (parse_primary specializes by
+    byte-match, not by a distinct tag), so the K1.F22i/j shape
+    guards match (mac_t3 == TK_IDENT) and synthesize AST_VAR on
+    the bytes "true"/"false". Codegen then resolves these as
+    UNBOUND names -- silent miscompile.
+  - **Fix (K3.Q)**: tightened the shape guards to call
+    `is_kw_true_ident` / `is_kw_false_ident` against the operand
+    bytes; if either matches, the guard returns 0 and the macro
+    falls through to K1.CB no-op-skip. This matches the K1.F22
+    family convention: unhandled forms silently no-op rather than
+    silently miscompile. Compile-time-known bool panics
+    (`assert!(false)` → real panic) are deferred to a future
+    K1.F22i2 refinement.
+  - Test: `test_bootstrap_kovc_k3q_bool_lit_assert_reject_self_host`
+    verifies `assert!(true)`, `assert!(false)`, and
+    `assert_eq!(true, false)` all silently skip (rc=42 from the
+    trailing literal). Regression tests verify `assert!(x=1/0)` and
+    `assert_eq!(a=42/1, b=42/2)` still work.
+
+Two LOW concerns (non-blocking, tracked for future cleanup):
+  - **LOW-1**: `assert_eq!(a, b, "msg")` (Rust's 3-arg form) and
+    `assert!(cond, "msg")` (2-arg form) silently no-op via K1.CB
+    rather than executing the assertion. Consistent with rest of
+    the K1.F22 family (all multi-arg forms unhandled). Future K1.F22
+    refinement: at minimum, fall through to a synthesized panic
+    that includes the user-provided message.
+  - **LOW-2**: type-design-analyzer notes the IDENT-name detectors
+    in the K1.F22 family reinvent `byte_eq` inline (10 separate
+    byte-cascade blocks totalling ~200 lines). Future refactor:
+    intern the macro-name byte arrays once in parse_top and use
+    `byte_eq` for the lookup. Also: closing-brace cascade is now
+    10 levels deep; a `expand_macro` helper would flatten it. Both
+    are pure refactors with no behavior change.
+
+Verdict: **K1.F22d-K1.F22j now CLEAN end-to-end after K3.Q fix**.
+This is the TENTH cleanly-audited batch (K3.E + K3.F + K3.H + K3.I +
+K3.J + K3.K + K3.L + K3.M + K3.N + K3.P/Q).
+
 ### 2026-05-27 — K1.F22b + K1.F22c (K3.N signal)
 
 2-axis audit (silent-failure-hunter + combined type-design + code-

@@ -3623,9 +3623,26 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // the single-IDENT-condition form: mac_t2 = LPAREN (3),
             // mac_t3 = TK_IDENT (2), mac_t4 = RPAREN (4). Compound
             // expression forms have mac_t4 != 4 and fall through.
+            //
+            // K3.Q (2026-05-27 audit-fix): reject when the operand
+            // IDENT bytes match "true" or "false". The bootstrap lexer
+            // tags `true`/`false` as TK_IDENT (parse_primary specializes
+            // them by byte-match, not by a distinct token tag); without
+            // this reject, `assert!(true)` would synthesize AST_VAR on
+            // the bytes "true", which codegen resolves as an UNBOUND
+            // name -- a silent-miscompile (audit K3.P MEDIUM-1). Reject
+            // forces fall-through to K1.CB no-op-skip, matching the
+            // rest of the K1.F22 family's "unhandled form silently
+            // no-ops" convention. Compile-time bool-lit panics remain a
+            // future K1.F22i2 refinement.
             let is_assert_ident_form = if is_assert_name_macro == 1 {
-                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 4 { 1 }
-                else { 0 } } else { 0 } } else { 0 }
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 4 {
+                    let assert_opnd_s = tok_p2(tok_base, k + 3);
+                    let assert_opnd_l = tok_p3(tok_base, k + 3);
+                    if is_kw_true_ident(assert_opnd_s, assert_opnd_l) == 1 { 0 }
+                    else { if is_kw_false_ident(assert_opnd_s, assert_opnd_l) == 1 { 0 }
+                    else { 1 } }
+                } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             // K1.F22j (2026-05-27): shape guard for assert_eq!(IDENT, IDENT).
             // 7-token shape: IDENT, !, (, IDENT, ',', IDENT, ).
@@ -3634,12 +3651,25 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             //   mac_t4 = TK_COMMA  (13)
             //   mac_t5 = TK_IDENT  (2)  <- the right operand
             //   mac_t6 = TK_RPAREN (4)
+            //
+            // K3.Q (2026-05-27 audit-fix): reject when EITHER operand's
+            // IDENT bytes match "true" or "false" -- same BoolLit
+            // silent-miscompile risk as is_assert_ident_form above.
             let mac_t5 = tok_tag(tok_base, k + 5);
             let mac_t6 = tok_tag(tok_base, k + 6);
             let is_assert_eq_form = if is_assert_eq_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
-                    if mac_t5 == 2 { if mac_t6 == 4 { 1 }
-                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let aeq_a_opnd_s = tok_p2(tok_base, k + 3);
+                        let aeq_a_opnd_l = tok_p3(tok_base, k + 3);
+                        let aeq_b_opnd_s = tok_p2(tok_base, k + 5);
+                        let aeq_b_opnd_l = tok_p3(tok_base, k + 5);
+                        if is_kw_true_ident(aeq_a_opnd_s, aeq_a_opnd_l) == 1 { 0 }
+                        else { if is_kw_false_ident(aeq_a_opnd_s, aeq_a_opnd_l) == 1 { 0 }
+                        else { if is_kw_true_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
+                        else { if is_kw_false_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
+                        else { 1 } } } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             if is_panic_str_form == 1 {
                 // Capture the STR_LIT body bytes from the k+3 token.

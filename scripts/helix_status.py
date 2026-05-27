@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 234      # last bump: K1.F22j -- two-arg comparison macro: assert_eq!(IDENT, IDENT) parser-side rewrites to AST_IF(cond=AST_EQ(AST_VAR(a), AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic, "assertion failed: ==")). Builds on K1.F22i's AST_IF substrate; adds AST_EQ (tag 20) as the comparison. 9-byte IDENT "assert_eq" detection (97 115 115 101 114 116 95 101 113); shape `IDENT ! ( IDENT , IDENT )` (7 tokens, checks mac_t2..mac_t6). SCOPE: single-IDENT operands only. Tests verify assert_eq!(a=42, b=42) passes (rc=7), assert_eq!(a=1, b=2) panics (rc=132) with "assertion failed" in stderr
+K_BOOTSTRAP_CHUNKS_DONE = 235      # last bump: K3.Q -- audit-fix from K3.P MEDIUM: K1.F22i/j shape guards now reject BoolLit operands (`true`/`false` 4-byte/5-byte IDENT match via is_kw_true_ident / is_kw_false_ident helpers). The bootstrap lexer tags true/false as TK_IDENT, so the pre-fix shape guards matched and synthesized AST_VAR("true") / AST_VAR("false") -- a silent miscompile (unbound name at codegen). Post-fix: the macro falls through to K1.CB no-op-skip, consistent with the K1.F22 family's "unhandled form silently no-ops" convention. Closes the only MEDIUM finding from K3.P; F22d-F22j now audit-clean
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

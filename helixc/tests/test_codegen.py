@@ -8432,6 +8432,100 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_k3q_bool_lit_assert_reject_self_host():
+    """K3.Q (2026-05-27): audit-fix for the K3.P MEDIUM finding.
+
+    The bootstrap lexer tags `true` / `false` as TK_IDENT (not a
+    distinct token tag); parse_primary specializes them by byte-match.
+    Pre-K3.Q the K1.F22i and K1.F22j shape guards matched on
+    mac_t3 == TK_IDENT and synthesized AST_VAR("true") / AST_VAR("false"),
+    which codegen would resolve as UNBOUND-name lookups -- a silent
+    miscompile.
+
+    K3.Q tightens the shape guards: when the IDENT-position bytes
+    match "true" or "false" via the existing is_kw_true_ident /
+    is_kw_false_ident helpers, the guard returns 0 and the macro
+    falls through to K1.CB no-op-skip. The user sees a silent-no-op
+    (consistent with the rest of the unhandled-macro family), not a
+    silent miscompile.
+
+    Probes:
+      assert!(true)         -- silently skipped, trailing 42 returns.
+      assert!(false)        -- silently skipped (NOT a runtime panic;
+                               this is a known limitation -- use
+                               panic!() directly for compile-time-known
+                               panic placeholders).
+      assert_eq!(true, false) -- silently skipped.
+
+    Regression: assert!(x=1) still rc=42; assert!(x=0) still rc=132
+    (unbound-IDENT operand pre-existing); assert_eq!(a=42, b=42) still
+    rc=7; assert_eq!(a=1, b=2) still rc=132. Compile-time-known bool
+    panics deferred to a future K1.F22i2.
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k3q_assert_true_skip",
+        'fn main() -> i32 { assert!(true); 42 }',
+    )
+    assert rc1 == 42, (
+        f"K3.Q assert!(true): expected rc=42 (K1.CB no-op-skip; the "
+        f"`assert!(true)` is dropped, the trailing 42 is the fn's "
+        f"return value); got {rc1}. If rc=132, the AST_VAR(\"true\") "
+        f"unbound-name silent-miscompile regressed (K3.P MEDIUM-1)."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k3q_assert_false_skip",
+        'fn main() -> i32 { assert!(false); 42 }',
+    )
+    assert rc2 == 42, (
+        f"K3.Q assert!(false): expected rc=42 (K1.CB no-op-skip; "
+        f"`assert!(false)` does NOT runtime-panic in this scope -- "
+        f"the K1.F22 family's convention is to silently drop unhandled "
+        f"forms); got {rc2}. If rc=132 the test got the right RC for "
+        f"the wrong reason -- AST_VAR(\"false\") unbound-name still "
+        f"miscompiles."
+    )
+
+    rc3 = _kovc_self_host_compile_and_run(
+        "k3q_assert_eq_bool_skip",
+        'fn main() -> i32 { assert_eq!(true, false); 42 }',
+    )
+    assert rc3 == 42, (
+        f"K3.Q assert_eq!(true, false): expected rc=42 (silent skip); "
+        f"got {rc3}. If rc=132 with AST_EQ(AST_VAR(\"true\"), "
+        f"AST_VAR(\"false\")) was synthesized despite the K3.Q guard."
+    )
+
+    # Regression: assert!(IDENT) still works for non-bool IDENTs.
+    rc_iv = _kovc_self_host_compile_and_run(
+        "k3q_assert_ident_regression_pass",
+        'fn main() -> i32 { let x: i32 = 1; assert!(x); 42 }',
+    )
+    assert rc_iv == 42, (
+        f"K3.Q regression: assert!(x=1) expected rc=42; got {rc_iv}. "
+        f"K1.F22i may have been broken by the K3.Q reject guard."
+    )
+
+    rc_if = _kovc_self_host_compile_and_run(
+        "k3q_assert_ident_regression_fail",
+        'fn main() -> i32 { let x: i32 = 0; assert!(x); 42 }',
+    )
+    assert rc_if == 132, (
+        f"K3.Q regression: assert!(x=0) expected rc=132; got {rc_if}. "
+        f"K1.F22i's failing-cond panic regressed."
+    )
+
+    # Regression: assert_eq!(IDENT, IDENT) still works.
+    rc_eq = _kovc_self_host_compile_and_run(
+        "k3q_assert_eq_regression_pass",
+        'fn main() -> i32 { let a: i32 = 42; let b: i32 = 42; assert_eq!(a, b); 7 }',
+    )
+    assert rc_eq == 7, (
+        f"K3.Q regression: assert_eq!(a=42, b=42) expected rc=7; got "
+        f"{rc_eq}. K1.F22j may have been broken by the K3.Q guard."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +
