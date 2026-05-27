@@ -7058,6 +7058,47 @@ def test_bootstrap_kovc_pat_tuple_destructure_self_host():
     assert rc == 7, f"expected K2 exit 7 (3+4 from (a,b) bind); got {rc}"
 
 
+def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
+    """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
+    comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
+
+    Like the K1.F9 mixed-arith probes, the K2 parity corpus skips
+    these because Python helixc's IR-lowering does not symmetrically
+    accept the same surface form bootstrap kovc accepts here. A
+    bootstrap-only self-host test pins the K1.F14 closure.
+
+    Pattern: l in rax (f32 zero-ext or f64 full), r in rcx (f64 full
+    via patched mov-rcx, or f32 low-32 via emit_mov_ecx_eax). Forward
+    case widens r via emit_cvt_f32_in_rcx_to_f64; reverse case widens
+    l via emit_cvt_f32_in_rax_to_f64; both then dispatch to the
+    existing emit_ssen_*_dbl helpers (ucomisd).
+
+    Both directions tested with predicate-true comparisons that
+    materialize 42 via if/else; the bool/i32 result fits the i32
+    return type without f64->i32 cvttsd2si conversion.
+    """
+    cases = [
+        ("k1f14_lt_fwd", "30.0_f64 < 60.0_f32"),
+        ("k1f14_gt_fwd", "60.0_f64 > 30.0_f32"),
+        ("k1f14_eq_fwd", "42.0_f64 == 42.0_f32"),
+        ("k1f14_ne_fwd", "42.0_f64 != 0.0_f32"),
+        ("k1f14_le_fwd", "30.0_f64 <= 60.0_f32"),
+        ("k1f14_ge_fwd", "60.0_f64 >= 30.0_f32"),
+        ("k1f14_lt_rev", "30.0_f32 < 60.0_f64"),
+        ("k1f14_gt_rev", "60.0_f32 > 30.0_f64"),
+        ("k1f14_eq_rev", "42.0_f32 == 42.0_f64"),
+        ("k1f14_ne_rev", "42.0_f32 != 0.0_f64"),
+        ("k1f14_le_rev", "30.0_f32 <= 60.0_f64"),
+        ("k1f14_ge_rev", "60.0_f32 >= 30.0_f64"),
+    ]
+    for name, predicate in cases:
+        rc = _kovc_self_host_compile_and_run(
+            name,
+            f"fn main() -> i32 {{ if {predicate} {{ 42 }} else {{ 0 }} }}",
+        )
+        assert rc == 42, f"K1.F14 {name}: expected 42, got {rc}"
+
+
 def test_bootstrap_kovc_k1f9_mixed_f32_f64_self_host():
     """K1.F9 + K1.F9-fix (2026-05-27): mixed f32/f64 widening across
     ADD/SUB/MUL/DIV in both directions, plus the regression case for

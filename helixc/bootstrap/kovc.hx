@@ -6677,12 +6677,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else {
-                   // K1.F11 + K1.F13 (2026-05-27): when l isn't 64-bit
-                   // but r IS 64-bit (i64 or u64), use 64-bit copy so
-                   // rcx has the full 8-byte bit pattern for the
-                   // reverse-direction widening. Mirrors K1.F8b/F8d's
-                   // mov-rcx legs for AST_ADD.
-                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+                   // K1.F11 + K1.F13 + K1.F14 (2026-05-27): when l isn't
+                   // 64-bit but r IS 64-bit (i64, u64, or f64), use
+                   // 64-bit copy so rcx has the full 8-byte bit pattern
+                   // for the reverse-direction widening. Mirrors K1.F8b/
+                   // F8d/F9-fix's mov-rcx legs for AST_ADD.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
                }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
@@ -6700,8 +6700,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // type tag 0) ensures u32/u8/i8/u16/i16/f32/bf16 still
             // trap loudly instead of silently misinterpreting bits.
             if l_d == 1 {
-                if r_d == 1 { emit_ssen_lt_dbl() } else { emit_trap_with_id(6010) }
-            } else { if r_d == 1 { emit_trap_with_id(6011) } else {
+                // K1.F14 (2026-05-27): f64<->f32 LT forward widening.
+                if r_d == 1 {
+                    emit_ssen_lt_dbl()
+                } else {
+                    let r_t6f = expr_type(p2, bind_state, bn_state);
+                    if r_t6f == 1 {
+                        emit_cvt_f32_in_rcx_to_f64() + emit_ssen_lt_dbl()
+                    } else {
+                        emit_trap_with_id(6010)
+                    }
+                }
+            } else { if r_d == 1 {
+                // K1.F14: f64<->f32 LT reverse widening.
+                let l_t6f = expr_type(p1, bind_state, bn_state);
+                if l_t6f == 1 {
+                    emit_cvt_f32_in_rax_to_f64() + emit_ssen_lt_dbl()
+                } else {
+                    emit_trap_with_id(6011)
+                }
+            } else {
                 if l_i64 == 1 {
                     // K1.F11: i64 < i32 -- widen rcx, then 64-bit cmp.
                     if r_i64 == 1 {
@@ -6780,9 +6798,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else {
-                   // K1.F12 + K1.F13 (2026-05-27): mirror K1.F11/F8d's
-                   // mov-rcx r_i64 + r_u64 legs.
-                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+                   // K1.F12 + K1.F13 + K1.F14 (2026-05-27): mirror K1.F11/
+                   // F8d/F9-fix's mov-rcx r_i64 + r_u64 + r_d legs.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
                }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
@@ -6796,8 +6814,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // Speedup #4 wire-in: AST_GT mixed-type trap ids 19010-19051.
             // K1.F12 (2026-05-27): close i64<->i32 GT widening (mirror K1.F11).
             if l_d == 1 {
-                if r_d == 1 { emit_ssen_gt_dbl() } else { emit_trap_with_id(19010) }
-            } else { if r_d == 1 { emit_trap_with_id(19011) } else {
+                // K1.F14 (2026-05-27): f64<->f32 GT forward widening.
+                if r_d == 1 {
+                    emit_ssen_gt_dbl()
+                } else {
+                    let r_t19f = expr_type(p2, bind_state, bn_state);
+                    if r_t19f == 1 {
+                        emit_cvt_f32_in_rcx_to_f64() + emit_ssen_gt_dbl()
+                    } else {
+                        emit_trap_with_id(19010)
+                    }
+                }
+            } else { if r_d == 1 {
+                // K1.F14: f64<->f32 GT reverse widening.
+                let l_t19f = expr_type(p1, bind_state, bn_state);
+                if l_t19f == 1 {
+                    emit_cvt_f32_in_rax_to_f64() + emit_ssen_gt_dbl()
+                } else {
+                    emit_trap_with_id(19011)
+                }
+            } else {
                 if l_i64 == 1 {
                     if r_i64 == 1 {
                         emit_gt_rax_rcx_64()
@@ -6869,9 +6905,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else {
-                   // K1.F12 + K1.F13 (2026-05-27): mirror K1.F11/F8d's
-                   // mov-rcx r_i64 + r_u64 legs.
-                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+                   // K1.F12 + K1.F13 + K1.F14 (2026-05-27): mirror K1.F11/
+                   // F8d/F9-fix's mov-rcx r_i64 + r_u64 + r_d legs.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
                }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
@@ -6881,8 +6917,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // Speedup #4 wire-in: AST_EQ mixed-type trap ids 20010-20041.
             // K1.F12 (2026-05-27): close i64<->i32 EQ widening (mirror K1.F11).
             if l_d == 1 {
-                if r_d == 1 { emit_ssen_eq_dbl() } else { emit_trap_with_id(20010) }
-            } else { if r_d == 1 { emit_trap_with_id(20011) } else {
+                // K1.F14 (2026-05-27): f64<->f32 EQ forward widening.
+                if r_d == 1 {
+                    emit_ssen_eq_dbl()
+                } else {
+                    let r_t20f = expr_type(p2, bind_state, bn_state);
+                    if r_t20f == 1 {
+                        emit_cvt_f32_in_rcx_to_f64() + emit_ssen_eq_dbl()
+                    } else {
+                        emit_trap_with_id(20010)
+                    }
+                }
+            } else { if r_d == 1 {
+                // K1.F14: f64<->f32 EQ reverse widening.
+                let l_t20f = expr_type(p1, bind_state, bn_state);
+                if l_t20f == 1 {
+                    emit_cvt_f32_in_rax_to_f64() + emit_ssen_eq_dbl()
+                } else {
+                    emit_trap_with_id(20011)
+                }
+            } else {
                 if l_i64 == 1 {
                     if r_i64 == 1 {
                         emit_eq_rax_rcx_64()
@@ -6950,9 +7004,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else {
-                   // K1.F12 + K1.F13 (2026-05-27): mirror K1.F11/F8d's
-                   // mov-rcx r_i64 + r_u64 legs.
-                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+                   // K1.F12 + K1.F13 + K1.F14 (2026-05-27): mirror K1.F11/
+                   // F8d/F9-fix's mov-rcx r_i64 + r_u64 + r_d legs.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
                }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
@@ -6962,8 +7016,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // Speedup #4 wire-in: AST_NE mixed-type trap ids 21010-21041.
             // K1.F12 (2026-05-27): close i64<->i32 NE widening (mirror K1.F11).
             if l_d == 1 {
-                if r_d == 1 { emit_ssen_ne_dbl() } else { emit_trap_with_id(21010) }
-            } else { if r_d == 1 { emit_trap_with_id(21011) } else {
+                // K1.F14 (2026-05-27): f64<->f32 NE forward widening.
+                if r_d == 1 {
+                    emit_ssen_ne_dbl()
+                } else {
+                    let r_t21f = expr_type(p2, bind_state, bn_state);
+                    if r_t21f == 1 {
+                        emit_cvt_f32_in_rcx_to_f64() + emit_ssen_ne_dbl()
+                    } else {
+                        emit_trap_with_id(21010)
+                    }
+                }
+            } else { if r_d == 1 {
+                // K1.F14: f64<->f32 NE reverse widening.
+                let l_t21f = expr_type(p1, bind_state, bn_state);
+                if l_t21f == 1 {
+                    emit_cvt_f32_in_rax_to_f64() + emit_ssen_ne_dbl()
+                } else {
+                    emit_trap_with_id(21011)
+                }
+            } else {
                 if l_i64 == 1 {
                     if r_i64 == 1 {
                         emit_ne_rax_rcx_64()
@@ -7029,9 +7101,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else {
-                   // K1.F12 + K1.F13 (2026-05-27): mirror K1.F11/F8d's
-                   // mov-rcx r_i64 + r_u64 legs.
-                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+                   // K1.F12 + K1.F13 + K1.F14 (2026-05-27): mirror K1.F11/
+                   // F8d/F9-fix's mov-rcx r_i64 + r_u64 + r_d legs.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
                }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
@@ -7045,8 +7117,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // Speedup #4 wire-in: AST_LE mixed-type trap ids 22010-22051.
             // K1.F12 (2026-05-27): close i64<->i32 LE widening (mirror K1.F11).
             if l_d == 1 {
-                if r_d == 1 { emit_ssen_le_dbl() } else { emit_trap_with_id(22010) }
-            } else { if r_d == 1 { emit_trap_with_id(22011) } else {
+                // K1.F14 (2026-05-27): f64<->f32 LE forward widening.
+                if r_d == 1 {
+                    emit_ssen_le_dbl()
+                } else {
+                    let r_t22f = expr_type(p2, bind_state, bn_state);
+                    if r_t22f == 1 {
+                        emit_cvt_f32_in_rcx_to_f64() + emit_ssen_le_dbl()
+                    } else {
+                        emit_trap_with_id(22010)
+                    }
+                }
+            } else { if r_d == 1 {
+                // K1.F14: f64<->f32 LE reverse widening.
+                let l_t22f = expr_type(p1, bind_state, bn_state);
+                if l_t22f == 1 {
+                    emit_cvt_f32_in_rax_to_f64() + emit_ssen_le_dbl()
+                } else {
+                    emit_trap_with_id(22011)
+                }
+            } else {
                 if l_i64 == 1 {
                     if r_i64 == 1 {
                         emit_le_rax_rcx_64()
@@ -7116,9 +7206,9 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else {
-                   // K1.F12 + K1.F13 (2026-05-27): mirror K1.F11/F8d's
-                   // mov-rcx r_i64 + r_u64 legs.
-                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+                   // K1.F12 + K1.F13 + K1.F14 (2026-05-27): mirror K1.F11/
+                   // F8d/F9-fix's mov-rcx r_i64 + r_u64 + r_d legs.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
                }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
@@ -7132,8 +7222,26 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // Speedup #4 wire-in: AST_GE mixed-type trap ids 23010-23051.
             // K1.F12 (2026-05-27): close i64<->i32 GE widening (mirror K1.F11).
             if l_d == 1 {
-                if r_d == 1 { emit_ssen_ge_dbl() } else { emit_trap_with_id(23010) }
-            } else { if r_d == 1 { emit_trap_with_id(23011) } else {
+                // K1.F14 (2026-05-27): f64<->f32 GE forward widening.
+                if r_d == 1 {
+                    emit_ssen_ge_dbl()
+                } else {
+                    let r_t23f = expr_type(p2, bind_state, bn_state);
+                    if r_t23f == 1 {
+                        emit_cvt_f32_in_rcx_to_f64() + emit_ssen_ge_dbl()
+                    } else {
+                        emit_trap_with_id(23010)
+                    }
+                }
+            } else { if r_d == 1 {
+                // K1.F14: f64<->f32 GE reverse widening.
+                let l_t23f = expr_type(p1, bind_state, bn_state);
+                if l_t23f == 1 {
+                    emit_cvt_f32_in_rax_to_f64() + emit_ssen_ge_dbl()
+                } else {
+                    emit_trap_with_id(23011)
+                }
+            } else {
                 if l_i64 == 1 {
                     if r_i64 == 1 {
                         emit_ge_rax_rcx_64()
