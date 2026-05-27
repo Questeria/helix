@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 221      # last bump: K3.L -- silent-failure audit-fix: the 6 reflection/trace stub variadic walks (reflect_hash, trace_event, trace_last, helix_splice, helix_modify, helix_reflect_hash) all read slot+3 for the next-ptr but the parser's parse_call_args + count_args both set/read slot+2. The walks exited after iter 1 -- the K1.F16 silent-arg-drop closure was incomplete. K3.L corrects all 6 sites to slot+2; K1.F20 multi-arg test expectation updated rc=1 -> rc=7 (FIFO walk, last source arg)
+K_BOOTSTRAP_CHUNKS_DONE = 222      # last bump: K1.F22 -- the bootstrap's FIRST real macro expansion. panic!("msg") rewrites at parse-time inside K1.CB to AST_CALL(panic, str_arg) using the existing panic builtin codegen (K1.AE/AH/AI). Narrow scope: only exact panic!(STR); other macros still no-op-skip. K_BOOTSTRAP_HARD_CONSTRAINT.md macros row flips from PARSER-ONLY to PARTIAL
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

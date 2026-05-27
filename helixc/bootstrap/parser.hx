@@ -3358,6 +3358,58 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             if is_macro_open == 1 { 1 } else { 0 }
         } else { 0 };
         if is_macro_call == 1 {
+            // K1.F22 (2026-05-27): real macro expansion for the
+            // common case `panic!("msg")`. Detect IDENT == "panic"
+            // (5 bytes 112 97 110 105 99) + mac_t2 == LPAREN (3)
+            // + tok at k+3 is TK_STR (25) + tok at k+4 is RPAREN (4).
+            // If matched, expand to AST_CALL(panic, str_arg) using
+            // the existing panic builtin codegen (K1.AE/K1.AH/K1.AI:
+            // sys_write the message then ud2-trap, exiting with
+            // SIGILL = rc 132). This is the bootstrap's FIRST real
+            // macro expansion -- all other IDENT!(...) calls
+            // continue to fall through to the K1.CB no-op-skip path
+            // below. The expansion is conservative: it requires the
+            // exact `panic!(STR)` shape; multi-arg panic!("fmt", x)
+            // (Rust-style) still hits the no-op path until a more
+            // general macro engine lands.
+            let is_panic_name_macro = if id_len == 5 {
+                let pb0 = __arena_get(id_start);
+                let pb1 = __arena_get(id_start + 1);
+                let pb2 = __arena_get(id_start + 2);
+                let pb3 = __arena_get(id_start + 3);
+                let pb4 = __arena_get(id_start + 4);
+                if pb0 == 112 { if pb1 == 97 { if pb2 == 110 {
+                    if pb3 == 105 { if pb4 == 99 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            let mac_t3 = tok_tag(tok_base, k + 3);
+            let mac_t4 = tok_tag(tok_base, k + 4);
+            let is_panic_str_form = if is_panic_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            if is_panic_str_form == 1 {
+                // Capture the STR_LIT body bytes from the k+3 token.
+                let str_tok = k + 3;
+                let str_body_s = tok_p2(tok_base, str_tok);
+                let str_body_l = tok_p3(tok_base, str_tok);
+                // Consume IDENT, '!', '(', STR_LIT, ')'.
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                // Build AST_STR_LIT(body_s, body_l) for the arg payload.
+                let str_ast = mk_node(25, str_body_s, str_body_l, 0);
+                // Build AST_ARG (tag 17) wrapping the str.
+                let panic_args_head = mk_node(17, str_ast, 0, 0);
+                // Push "panic" name bytes to the arena (5 chars).
+                let panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105); __arena_push(99);
+                // Build AST_CALL(name=panic, args_head=str_arg).
+                mk_node(16, panic_name_s, 5, panic_args_head)
+            } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'
             let close_t_cb = if mac_t2 == 3 { 4 }
@@ -3383,6 +3435,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
+            }
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

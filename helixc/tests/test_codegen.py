@@ -7558,6 +7558,64 @@ def test_bootstrap_kovc_k1f21_generic_bare_call_fallback_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f22_panic_macro_expansion_self_host():
+    """K1.F22 (2026-05-27): the bootstrap's FIRST real macro expansion
+    -- `panic!("msg")` rewrites at parse-time to `panic("msg")` AST_CALL,
+    using the existing panic builtin codegen (K1.AE: sys_write the
+    message, then ud2 trap; K1.AH adds the prefix; K1.AI adds the
+    trailing newline).
+
+    Before K1.F22: K1.CB's IDENT!(...) handler treats panic!(...) as a
+    no-op-skip that returns AST_INT(0). A program `panic!("oops"); 42`
+    returns 42 because the panic never fires.
+
+    After K1.F22: the parser detects the exact `panic!(STR)` shape
+    inside K1.CB's is_macro_call branch (id_len=5 + bytes "panic"
+    + mac_t2=LPAREN + k+3=TK_STR + k+4=RPAREN), synthesizes an AST_CALL
+    with name="panic" (5 bytes pushed to the arena) and a single AST_ARG
+    wrapping the AST_STR_LIT. Codegen then dispatches via is_panic_name
+    -> the existing panic codegen. The K2 binary emits sys_write then
+    ud2; running it gives SIGILL = exit code 132.
+
+    Probe:
+      fn main() -> i32 { panic!("oops"); 42 }
+        Pre-K1.F22: rc=42 (the no-op + the trailing 42 expression).
+        Post-K1.F22: rc=132 (SIGILL from the expanded panic's ud2;
+        the `; 42` after never executes).
+
+    The K1.F22 scope is intentionally narrow: only the `panic!(STR)`
+    shape with a SINGLE string literal arg. Multi-arg Rust-style
+    `panic!("fmt: {}", x)` still hits the K1.CB no-op-skip until a
+    more general macro engine lands. Other IDENT!(...) macros
+    (println!, vec!, assert_eq!, etc.) also continue to no-op.
+    """
+    # Primary probe: panic! actually traps.
+    rc = _kovc_self_host_compile_and_run(
+        "k1f22_panic_macro_traps",
+        'fn main() -> i32 { panic!("oops"); 42 }',
+    )
+    assert rc == 132, (
+        f"K1.F22 panic!(\"oops\") expansion: expected exit code 132 "
+        f"(SIGILL from the expanded panic's ud2 trap; the `; 42` after "
+        f"never executes); got {rc}. If rc=42, the K1.F22 expansion "
+        f"didn't fire and panic! reverted to K1.CB's no-op-skip. If "
+        f"rc=other, the panic codegen is broken downstream."
+    )
+
+    # Regression: K1.CB's no-op contract for non-panic macros still
+    # holds (println! / vec! / assert_eq! etc. shouldn't expand).
+    rc_println = _kovc_self_host_compile_and_run(
+        "k1f22_println_macro_still_noop",
+        'fn main() -> i32 { println!("hello"); 42 }',
+    )
+    assert rc_println == 42, (
+        f"K1.F22 narrow-scope regression: expected exit code 42 "
+        f"(println!(...) still a no-op-skip per K1.CB; only panic! "
+        f"is special-cased); got {rc_println}. If rc=132, K1.F22 "
+        f"over-expanded -- the panic-name guard misfired."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
