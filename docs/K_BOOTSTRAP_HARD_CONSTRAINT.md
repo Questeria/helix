@@ -589,6 +589,37 @@ const_tab/param_array slot collision) that no behavioral test
 would have surfaced until the first AD-differentiating program
 under load.
 
+### 2026-05-27 — K1.F11/F12/F13/F14 mixed-cmp batch (K3.F signal)
+
+Inline silent-failure audit run on commits `dea596c..1fa6507`
+(K1.F11 LT + K1.F12 GT/EQ/NE/LE/GE + K1.F13 u64<->u32 cmp + K1.F14
+f64<->f32 cmp). Verified by a fail-closed probe test pinning
+SIGILL (rc=132) on 6 representative non-exact-type pairings that
+the K3.B-style "exactly-i32/u32/f32" guard MUST trap on:
+
+  - i64 < u32 → trap 6020 (signed/unsigned mismatch on r)
+  - u32 < i64 → trap 6021 (mirror on l)
+  - u64 < i32 → trap 6030 (signed vs unsigned)
+  - i32 < u64 → trap 6031 (mirror)
+  - f64 < i32 → trap 6010 (int-as-float-bits silent miscompile)
+  - i32 < f64 → trap 6011 (mirror)
+
+All 6 fail-closed paths fire as designed. The new permanent test
+`test_bootstrap_kovc_k1f11_14_exactly_type_guard_self_host` in
+test_codegen.py pins the closure.
+
+Verdict: **NO HIGH, NO must-fix-MEDIUM** for the silent-failure
+axis. The type-design and code-review axes were NOT
+independently dispatched (mirror-pattern batch over already-
+audit-clean K1.F8/F8b/F8d/F9 template) and remain a
+follow-up if scope justifies; the silent-failure axis is the
+load-bearing one for widening correctness.
+
+This is the SECOND cleanly-audited code batch from this loop.
+The 5-clean counter for the eventual loop-stop gate stays at 0
+until Python-ready-to-delete is reached; this signal is logged
+toward the long-term audit-clean history.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)

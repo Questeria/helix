@@ -7058,6 +7058,55 @@ def test_bootstrap_kovc_pat_tuple_destructure_self_host():
     assert rc == 7, f"expected K2 exit 7 (3+4 from (a,b) bind); got {rc}"
 
 
+def test_bootstrap_kovc_k1f11_14_exactly_type_guard_self_host():
+    """K3.F (2026-05-27): audit-clean fail-closed verification for the
+    K1.F11/F12/F13/F14 mixed-type comparison widening batch.
+
+    The K3.B audit discipline requires the widening guard to fail-
+    closed when the non-64-bit operand is NOT exactly the expected
+    type (i32 for signed, u32 for unsigned, f32 for float). Without
+    this guard, u32/u8/u16/i8/i16/f32/bf16 mixed with i64 would be
+    silently sign-extended (when they should be zero-extended or
+    rejected) -- a silent-failure class the K3.B fix originally
+    closed for K1.F8.
+
+    This test probes 6 fail-closed paths in the K1.F11-F14 batch:
+      - i64 < u32  -- trap 6020 (signed/unsigned mismatch on r)
+      - u32 < i64  -- trap 6021 (signed/unsigned mismatch on l)
+      - u64 < i32  -- trap 6030 (signed i32 vs unsigned u64)
+      - i32 < u64  -- trap 6031 (mirror)
+      - f64 < i32  -- trap 6010 (int treated as float-bits would
+                                  silently miscompile)
+      - i32 < f64  -- trap 6011 (mirror)
+
+    Each program must SIGILL (exit code 132 = 128+SIGILL) instead of
+    completing with a silent miscompile (rc=42 or rc=0).
+
+    Audit-clean signal recorded for K1.F11-F14 batch in
+    K_BOOTSTRAP_HARD_CONSTRAINT.md after this test passes.
+    """
+    cases = [
+        ("k3f_audit_i64_lt_u32", "if 30_i64 < 60_u32 { 42 } else { 0 }"),
+        ("k3f_audit_u32_lt_i64", "if 30_u32 < 60_i64 { 42 } else { 0 }"),
+        ("k3f_audit_u64_lt_i32", "if 30_u64 < 60 { 42 } else { 0 }"),
+        ("k3f_audit_i32_lt_u64", "if 30 < 60_u64 { 42 } else { 0 }"),
+        ("k3f_audit_f64_lt_i32", "if 30.0_f64 < 60 { 42 } else { 0 }"),
+        ("k3f_audit_i32_lt_f64", "if 30 < 60.0_f64 { 42 } else { 0 }"),
+    ]
+    for name, predicate in cases:
+        rc = _kovc_self_host_compile_and_run(
+            name,
+            f"fn main() -> i32 {{ {predicate} }}",
+        )
+        # rc=132 = SIGILL from ud2 in emit_trap_with_id. Confirms
+        # the K3.B-style guard fired (any rc != 132 would indicate a
+        # silent-failure bug class).
+        assert rc == 132, (
+            f"K3.F audit {name}: expected trap (rc=132); got rc={rc}. "
+            f"Bug class: K3.B-style exactly-type guard missed the case."
+        )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
