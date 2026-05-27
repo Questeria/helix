@@ -3221,6 +3221,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let body_l = tok_p3(tok_base, k);
         cur_advance(sb);
         mk_node(42, body_s, body_l, 0)
+    } else { if t == 44 {
+        // K1.F15 (2026-05-27): TK_FLOATLIT_F16 (tag 44) -> AST_FLOATLIT_
+        // F16 (tag 80). Codegen at t==80 in kovc.hx parses the f32 bits
+        // via parse_float_bits then calls f32_to_f16_bits to produce
+        // the IEEE-754 half-precision (1+5+10) bit pattern. Distinct
+        // from bf16 (1+8+7) so f16 literals get the right bits.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
+        cur_advance(sb);
+        mk_node(80, body_s, body_l, 0)
     } else { if t == 32 {
         // Step 7b: TK_FLOATLIT_F64 (tag 32) -> AST_FLOATLIT_F64 (tag 34).
         // Distinct from AST_FLOATLIT (tag 27, f32) so codegen can branch
@@ -6046,7 +6056,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         } else {
             mk_node(99, t, 0, 0)
         }
-    }}}}}}}}}}}}}}}}}}     // K1.CA (2026-05-26): +1 '}' for the new t == 43 (TK_DOTDOT prefix-range) wrapper
+    }}}}}}}}}}}}}}}}}}}     // K1.CA (2026-05-26): +1 '}' for t == 43 wrapper; K1.F15 (2026-05-27): +1 '}' for t == 44 (TK_FLOATLIT_F16) wrapper
 }
 
 // Stage 5 Iter B: struct_table region — 12 slots = 3 entries x 4 fields

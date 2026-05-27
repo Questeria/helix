@@ -1382,6 +1382,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 40 { 11 }                          // AST_INTLIT_I16 (Stage 2.5c)
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
+    else { if t == 80 { 4 }                           // AST_FLOATLIT_F16 (K1.F15 2026-05-27) -- 16-bit shape; arith traps via is_bf16_expr predicate (same handling as bf16)
     else { if t == 50 { 3 }                            // AST_TUPLE_LIT (Stage 4) — 64-bit pointer (treat as i64 for storage)
     else { if t == 52 {
         // AST_TUPLE_FIELD (Stage 4 iter B). Stage 5 Iter D: p3 == 1 marks
@@ -1526,7 +1527,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -4922,6 +4923,57 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
     digits
 }
 
+// K1.F15 (2026-05-27): IEEE-754 single-precision (f32) to half-
+// precision (f16) bit-pattern conversion. f32 layout: 1 sign + 8 exp
+// (bias 127) + 23 mantissa. f16 layout: 1 sign + 5 exp (bias 15)
+// + 10 mantissa. The conversion truncates the bottom 13 mantissa
+// bits (no rounding -- Phase-0 simplification; round-to-nearest-even
+// is a future audit follow-up). Subnormals flush to +/-0. Overflow
+// goes to +/-Inf. NaN goes to canonical f16 NaN (quiet, sign-
+// preserved).
+//
+// Constants used (kept as decimal to avoid hex literal limits):
+//   2147483647 = 2^31 - 1 (max positive i32, used as sign-strip mask)
+//   8388608    = 2^23     (f32 mantissa width)
+//   8388607    = 2^23 - 1 (f32 mantissa mask)
+//   32768      = 2^15     (f16 sign-bit position)
+//   31744      = 31 * 2^10 (f16 exp-all-1s pattern, used for Inf)
+//   32256      = 31744 + 2^9 (f16 canonical-NaN pattern)
+//   1024       = 2^10     (f16 exp-bit position)
+//   8192       = 2^13     (f16 mantissa-truncation divisor)
+fn f32_to_f16_bits(f32bits: i32) -> i32 {
+    let sign = if f32bits < 0 { 1 } else { 0 };
+    // Strip sign by AND-mask with 0x7FFFFFFF.
+    let unsigned_bits = f32bits & 2147483647;
+    let exp32_raw = (unsigned_bits / 8388608) & 255;
+    let mant32 = unsigned_bits & 8388607;
+    // Special: zero (subnormals also flush via this guard).
+    if exp32_raw == 0 {
+        sign * 32768
+    } else { if exp32_raw == 255 {
+        // Inf or NaN.
+        if mant32 == 0 {
+            (sign * 32768) + 31744
+        } else {
+            (sign * 32768) + 32256
+        }
+    } else {
+        // Normal number: rebias exp from 127 to 15.
+        let unbiased = exp32_raw - 127;
+        if unbiased > 15 {
+            // f16 overflow -> +/-Inf.
+            (sign * 32768) + 31744
+        } else { if unbiased < 0 - 14 {
+            // f16 underflow -> +/-0 (subnormals flushed for Phase-0).
+            sign * 32768
+        } else {
+            let exp16 = unbiased + 15;
+            let mant16 = mant32 / 8192;
+            (sign * 32768) + (exp16 * 1024) + mant16
+        }}
+    }}
+}
+
 fn parse_float_bits(p1: i32, p2: i32) -> i32 {
     let mut i: i32 = 0;
     let mut int_part: i32 = 0;
@@ -5684,6 +5736,19 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             let bits = parse_float_bits(p1, p2);
             let bf16_bits = bits & 0 - 65536;
             emit_ast_int(bf16_bits)
+        }
+    } else { if t == 80 {
+        // K1.F15 (2026-05-27): AST_FLOATLIT_F16 (tag 80). IEEE-754
+        // half-precision = 1 sign + 5 exp (bias 15) + 10 mantissa.
+        // Compute f32 bits via parse_float_bits, then convert to f16
+        // via f32_to_f16_bits (signed-int arithmetic, no hex/shifts).
+        // Speedup #4 wire-in: f16 lit overflow trap id 80002 (mirror
+        // of 42002 for bf16).
+        let digits = count_float_digits(p1, p2);
+        if digits > 9 { emit_trap_with_id(80002) } else {
+            let bits = parse_float_bits(p1, p2);
+            let f16_bits = f32_to_f16_bits(bits);
+            emit_ast_int(f16_bits)
         }
     } else { if t == 27 {
         // AST_FLOATLIT (Phase 1.10 step 3d, f32). Phase 1.10 step 7b
@@ -7911,7 +7976,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 for AST_FIELD_STORE
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 AST_FIELD_STORE; K1.F15: +1 AST_FLOATLIT_F16 (tag 80)
 }
 
 // --------------------------------------------------------------

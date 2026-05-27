@@ -413,6 +413,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let mut is_i16_suffix: i32 = 0;
     let mut is_u16_suffix: i32 = 0;
     let mut is_bf16_suffix: i32 = 0;
+    let mut is_f16_suffix: i32 = 0;
     if p + 3 < end {
         let b0 = __arena_get(p);
         if b0 == 95 {   // '_'
@@ -520,11 +521,13 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         };
     }
     // K1.BH (2026-05-26): _f16 (4 bytes: '_' 'f' '1' '6'). IEEE 754
-    // half-precision. The bootstrap treats f16 as bf16-shaped for
-    // Phase-0 (both are 16-bit; bit-accurate IEEE 754 half encoding
-    // is a separate gap -- arith traps the same way bf16 arith
-    // does). Reuses is_bf16_suffix so the existing token emission
-    // path covers it; downstream parser + codegen need no change.
+    // half-precision. K1.F15 (2026-05-27) splits the lex path from
+    // bf16 so codegen can emit the true f16 bit pattern (1+5+10)
+    // instead of the bf16-shaped truncation (1+8+7). Sets a separate
+    // is_f16_suffix flag and emits token tag 44 (TK_FLOATLIT_F16)
+    // -- distinct from tag 41 (TK_FLOATLIT_BF16). Parser routes
+    // tag 44 to AST_FLOATLIT_F16 (tag 80); codegen at t==80 uses the
+    // new f32_to_f16_bits helper (see kovc.hx).
     if p + 3 < end {
         let g0 = __arena_get(p);
         if g0 == 95 {                              // '_'
@@ -535,7 +538,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                     let g3 = __arena_get(p + 3);
                     if g3 == 54 {                  // '6'
                         p = p + 4;
-                        is_bf16_suffix = 1;
+                        is_f16_suffix = 1;
                     };
                 };
             };
@@ -547,9 +550,19 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         // Stage 1.5: _bf16 suffix → token tag 41 (TK_FLOATLIT_BF16).
         // Parser routes to AST_FLOATLIT_BF16 (tag 42); codegen masks
         // low 16 mantissa bits.
-        let tk = if is_bf16_suffix == 1 { 41 }
-                 else { if is_f64_suffix == 1 { 32 } else { 26 } };
+        // K1.F15 (2026-05-27): _f16 suffix → token tag 44 (TK_FLOATLIT_
+        // F16). Parser routes to AST_FLOATLIT_F16 (tag 80); codegen
+        // calls f32_to_f16_bits to encode IEEE-754 half-precision.
+        let tk = if is_f16_suffix == 1 { 44 }
+                 else { if is_bf16_suffix == 1 { 41 }
+                 else { if is_f64_suffix == 1 { 32 } else { 26 } } };
         push_token(tk, pos, pos, flen);
+    } else { if is_f16_suffix == 1 {
+        // K1.F15 (2026-05-27): _f16 suffix on a non-float number (e.g.,
+        // `42_f16`). Emit TK_FLOATLIT_F16; floatlit machinery handles
+        // the integer-shape gracefully.
+        let flen = p - pos;
+        push_token(44, pos, pos, flen);
     } else { if is_bf16_suffix == 1 {
         // bf16 suffix on a non-float number (e.g., `42_bf16`). Treat
         // as a bf16 literal — emit the same token. Parser/codegen will
@@ -603,7 +616,7 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                  else { if is_i16_suffix == 1 { 38 }
                  else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } } };
         push_token(tk, value, pos, length);
-    } };
+    } } };  // K1.F15: +1 brace for new is_f16_suffix outer arm
     p
 }
 
