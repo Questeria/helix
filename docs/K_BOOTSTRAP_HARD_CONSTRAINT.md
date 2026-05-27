@@ -527,6 +527,48 @@ field-store mutation, const-name resolution). Mixed-type binops
 is mostly closed (signed i64↔i32 for all five arith ops); the
 unsigned u64↔u32 leg lands the next WSL-clean tick.
 
+## Audit-clean signals (pre-stop-criterion tracking)
+
+Per the loop-stop criterion, the 5-consecutive-clean-audits counter
+only ACTIVATES at the Python-ready-to-delete state. Until then,
+individual per-chunk audits still run when scope justifies, and
+the audit-clean signal is tracked here as evidence the loop's
+discipline is converging.
+
+### 2026-05-27 — K3.A through K3.D + K1.F8d (5-chunk batch)
+
+silent-failure-hunter audit run on commits `d4b2c33..fbd42f1`:
+
+  - **K3.A** (`d4b2c33`) — move const_tab off the sb+94/95 collision
+    with `param_array_name(idx=2)`.
+  - **K3.B** (`70c2d15`) — gate K1.F8 widening on exactly-i32
+    (expr_type == 0) so u32/f32/bf16 + i64 etc. trap instead of
+    silently misinterpreting bits.
+  - **K1.F8d** (`76af5dc`) — extend mixed-type widening to unsigned
+    u64<->u32 across all five arith ops.
+  - **K3.C** (`b61c4ef`) — bump const_tab cap 16 → 64 (region
+    48 → 192 slots) to eliminate practical-overflow risk.
+  - **K3.D** (`fbd42f1`) — AST_FIELD_STORE width-mismatch trap
+    (id 79001) before the 32-bit store, when val_ty is 3/9/2.
+
+Verdict: **NO HIGH, NO must-fix-MEDIUM**. All five chunks pass
+scrutiny.
+
+One pre-existing observation noted (out of scope for this audit
+batch, will be addressed in a follow-up): `const_tab_add` still
+returns -1 on cap-exceeded and `parse_const_decl` still discards
+that return value. K3.C reduced practical risk by 4x; the
+audit-recommended "surface the overflow with a distinct trap id"
+remains as a deferred enhancement.
+
+This is the FIRST cleanly-audited code batch from this session's
+K-bootstrap loop. The discipline path -- 3-axis audit per chunk
+when scope justifies, fix immediately, document remainder --
+proved its value when the audit caught HIGH-1 (silent
+const_tab/param_array slot collision) that no behavioral test
+would have surfaced until the first AD-differentiating program
+under load.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)
