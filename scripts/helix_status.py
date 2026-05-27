@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 247      # last bump: K1.F24e -- __tile_add NO-OP STUB SHIPPED. Re-implemented as the simplest 4-arg builtin: eval all 4 args, discard via add rsp, 24, return 0. Test ran THREE CONSECUTIVE TIMES and all returned rc=0 -- confirms the K1.F24 SIGILL was a WSL flake too (not a real codegen defect). New bn_state slot 175 + 10-byte "__tile_add" name + 6-byte stub codegen body. Eleventh K1.F* builtin. Real elementwise loop deferred to K1.F24f; this stub establishes that the 4-arg codegen path WORKS
+K_BOOTSTRAP_CHUNKS_DONE = 248      # last bump: K1.F24f -- attempted real elementwise loop (60-byte body). 3 consecutive runs all SIGILLed -- a REAL defect (not flake). Reverted to K1.F24e stub. Even more surprising: when the K1.F24e STUB is composed with __tile_zeros + __arena_set + __arena_get in a longer program, it ALSO SIGILLs 3-of-3 (separate from the loop-codegen issue). The stub works ALONE but doesn't compose with longer programs. Likely a real K-bootstrap defect around multi-builtin-call composition. Known-broken pin tests landed. Real loop investigation deferred to K1.F24g
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

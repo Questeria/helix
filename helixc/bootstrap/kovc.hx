@@ -4618,10 +4618,14 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // Byte count after args: 2+1+3+2 (arith pack) + 7 (lea) + 2+1+2+6+2 (cursor + check) + 2+1+2 (in_bounds) + 5+4 (bounds_fail) = 42 bytes
         n0_tz + np_tz + n1_tz + 2 + 1 + 3 + 2 + 7 + 2 + 1 + 2 + 6 + 2 + 2 + 1 + 2 + 5 + 4
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_add_s(bn_state), 10) == 1 {
-        // K1.F24e (2026-05-27): __tile_add(a, b, dst, count) no-op
-        // STUB. Eval all 4 args, discard the 3 pushed values via
-        // add rsp, 24, return 0. Real elementwise loop deferred to
-        // K1.F24f after the stub's stability is confirmed.
+        // K1.F24e (2026-05-27): __tile_add(a, b, dst, count) NO-OP STUB.
+        // K1.F24f (2026-05-27 same-day): attempted to ship the real
+        // elementwise add loop (60-byte body with [rsp+disp8] reads
+        // for offsets, SIB-indexed cell access). 3 consecutive runs
+        // all returned rc=132 (SIGILL) -- a REAL defect (not a WSL
+        // flake; 3 consecutive failures rules that out). The exact
+        // codegen byte sequence is preserved in the K1.F24f commit
+        // for future investigation. Reverted to the stub for now.
         let a0_ta = __arena_get(args_head + 1);
         let next1_ta = __arena_get(args_head + 2);
         let a1_ta = __arena_get(next1_ta + 1);
@@ -4636,9 +4640,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_ta = emit_ast_code(a2_ta, bind_state, patch_state, bn_state);
         let np2_ta = emit_push_rax();
         let n3_ta = emit_ast_code(a3_ta, bind_state, patch_state, bn_state);
-        // Stack clean + return 0:
-        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);  // add rsp, 24 (4 bytes)
-        emit_byte(0x31); emit_byte(0xC0);                                     // xor eax, eax (2 bytes)
+        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
+        emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
         n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 6
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
