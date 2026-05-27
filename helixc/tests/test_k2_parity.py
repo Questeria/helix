@@ -236,6 +236,17 @@ K2_CORPUS = [
     ("p117_u32_le_u64",          "fn main() -> i32 { if 30_u32 <= 60_u64 { 42 } else { 0 } }", 42),
     ("p118_u64_ge_u32",          "fn main() -> i32 { if 60_u64 >= 30_u32 { 42 } else { 0 } }", 42),
     ("p119_u32_ge_u64",          "fn main() -> i32 { if 60_u32 >= 30_u64 { 42 } else { 0 } }", 42),
+    # K2.R (2026-05-27): integration probes that exercise the K1.F8*
+    # mixed-type binop closures AND the K1.F11-F14 mixed-type
+    # comparison closures TOGETHER (compound expressions where the
+    # binop result feeds a comparison or vice versa). These pin
+    # cross-chunk integration that single-op probes can't catch.
+    ("p120_i64plusi32_lt_i64",   "fn main() -> i32 { if (30_i64 + 12) < 60_i64 { 42 } else { 0 } }", 42),
+    ("p121_i32plusi64_gt_i32",   "fn main() -> i32 { if (30 + 12_i64) > 30 { 42 } else { 0 } }", 42),
+    ("p122_u64plusu32_eq_u64",   "fn main() -> i32 { if (30_u64 + 12_u32) == 42_u64 { 42 } else { 0 } }", 42),
+    ("p123_i64sub_lt_i32",       "fn main() -> i32 { if (100_i64 - 60_i64) < 50 { 42 } else { 0 } }", 42),
+    ("p124_logand_mixed_cmp",    "fn main() -> i32 { if (30_i64 < 60) && (40 > 30_i64) { 42 } else { 0 } }", 42),
+    ("p125_logor_mixed_cmp",     "fn main() -> i32 { if (30_i64 > 99) || (40 > 30_i64) { 42 } else { 0 } }", 42),
 ]
 
 
@@ -307,8 +318,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 119, (
-        f"K2.P corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 125, (
+        f"K2.R corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
