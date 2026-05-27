@@ -8787,6 +8787,72 @@ def test_bootstrap_kovc_k1f22k_assert_ne_macro_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f24b_two_arg_builtin_pair_known_broken_self_host():
+    """K1.F24b (2026-05-27): K-BOOTSTRAP DEFECT FINDING (broader than
+    K1.F23): 2-arg `__arena_push_pair` (K1.AF) SIGILLs via K2 self-host.
+
+    The original K1.AF chunk added the __arena_push_pair builtin
+    codegen and was presumably tested via Python helixc's compile-and-
+    run path (which has different codegen than the bootstrap). The K2
+    self-host path (where bootstrap kovc.hx generates the binary)
+    SIGILLs at runtime when this 2-arg cursor-bump-with-multi-cell-
+    write builtin is called from main.
+
+    Combined with the K1.F23 / K1.F23b / K1.F24 findings:
+      - __arena_push (1-arg cursor-bump WRITE)        : works in main, broken in helper.
+      - __arena_set (2-arg indexed-write NO bump)     : works in both.
+      - __arena_get / __arena_len (READ only)         : works in both.
+      - __arena_push_pair (2-arg cursor-bump+2)        : BROKEN even in main (this finding).
+      - __arena_push_triple (3-arg cursor-bump+3)      : BROKEN even in main (this finding).
+      - __tile_zeros (2-arg cursor-bump+N*M, no writes): works in main (K1.F23c).
+      - __tile_add (4-arg, no cursor bump)             : BROKEN as stub (K1.F24).
+
+    Pattern: builtins that emit MULTIPLE cell WRITES via the
+    cursor-bump path appear broken in K2 self-host. __tile_zeros
+    works because it skips per-cell writes (BSS-zero assumption).
+    __arena_push works because it writes only ONE cell. Multi-cell
+    writes via the pair/triple cursor-bump pattern misfire.
+
+    Pinned via rc==132 assertion. Flip to expected value when the
+    K1.F24c root-cause fix lands.
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let off: i32 = __arena_push_pair(17, 23);\n'
+        '    __arena_get(off) + __arena_get(off + 1)\n'
+        '}\n'
+    )
+    rc = _kovc_self_host_compile_and_run(
+        "k1f24b_arena_push_pair_known_broken",
+        src,
+    )
+    # Pin current broken behavior: SIGILL.
+    assert rc == 132, (
+        f"K1.F24b known-broken probe: expected rc=132 (SIGILL); got "
+        f"{rc}. If rc=40, the multi-cell cursor-bump defect was fixed "
+        f"-- update this test to assert rc=40 and the K1.F24c chunk."
+    )
+
+
+def test_bootstrap_kovc_k1f24b_three_arg_builtin_triple_known_broken_self_host():
+    """K1.F24b (2026-05-27): same finding for `__arena_push_triple`
+    (K1.AG, 3-arg variant). Pins the broken state."""
+    src = (
+        'fn main() -> i32 {\n'
+        '    let off: i32 = __arena_push_triple(7, 11, 13);\n'
+        '    __arena_get(off) + __arena_get(off + 1) + __arena_get(off + 2)\n'
+        '}\n'
+    )
+    rc = _kovc_self_host_compile_and_run(
+        "k1f24b_arena_push_triple_known_broken",
+        src,
+    )
+    assert rc == 132, (
+        f"K1.F24b known-broken probe (triple): expected rc=132 (SIGILL); "
+        f"got {rc}. If rc=31, the defect was fixed."
+    )
+
+
 def test_bootstrap_kovc_k1f24_tile_add_attempt_reverted_self_host():
     """K1.F24-attempt (2026-05-27): the __tile_add builtin codegen
     was drafted (4-arg elementwise add via runtime loop, then a

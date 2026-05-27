@@ -167,6 +167,46 @@ the loop can be unrolled or kept as a runtime loop.
    self_host` asserts the current broken rc=132; flip to rc=7 once
    fixed.
 
+### K1.F24b — BIGGER DEFECT FOUND: multi-cell cursor-bump writes broken in K2 self-host
+
+Probing the K1.F24 SIGILL further uncovered that the existing
+**__arena_push_pair (K1.AF, 2-arg) and __arena_push_triple (K1.AG,
+3-arg) builtins ALSO SIGILL via K2 self-host**, even from main()
+scope (not just helper context).
+
+Updated finding table:
+
+  | Builtin | Args | Cursor bump | Writes | K2 self-host |
+  |---------|------|-------------|--------|--------------|
+  | __arena_len | 0 | none | none | ✓ works |
+  | __arena_push | 1 | +1 | 1 cell | ✓ main, ✗ helper |
+  | __arena_set | 2 | none | 1 cell | ✓ works |
+  | __arena_get | 1 | none | none | ✓ works |
+  | __arena_push_pair | 2 | +2 | 2 cells | ✗ BROKEN (NEW) |
+  | __arena_push_triple | 3 | +3 | 3 cells | ✗ BROKEN (NEW) |
+  | __tile_zeros | 2 | +N*M | 0 (BSS-zero) | ✓ works (K1.F23c) |
+  | __tile_add (stub) | 4 | none | 0 (stub) | ✗ BROKEN (K1.F24 attempt) |
+  | print_int | 1 | none | none | ✓ works |
+
+Pattern: builtins that emit MULTI-CELL CURSOR-BUMP WRITES misfire
+in K2 self-host. __tile_zeros works because it skips per-cell
+writes; __arena_push works because it writes only ONE cell;
+__arena_set works because it has no cursor bump. The combination
+of (multi-cell write + cursor bump) is the broken cell.
+
+Implication: __arena_push_pair / __arena_push_triple may never
+have been tested via K2 self-host before -- they were verified
+via Python helixc compile-and-run only.
+
+Pinned via test_bootstrap_kovc_k1f24b_two_arg_builtin_pair_known_broken
++ test_bootstrap_kovc_k1f24b_three_arg_builtin_triple_known_broken
+(both assert rc==132).
+
+K1.F24c will need to investigate the multi-cell-cursor-bump
+codegen pattern. Likely fix: examine the byte sequence emitted by
+__arena_push_pair vs __arena_push (1-arg works) and binary-diff
+the divergence.
+
 ### K1.F23b — investigation update (defect localized; fix pending)
 The K1.F23 finding ("multi-fn arena access traps SIGILL") is **narrower
 than initially thought**. K1.F23b probes (6 sub-probes total) localize:
