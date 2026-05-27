@@ -494,6 +494,39 @@ because both compilers must accept every corpus item. They are
 NOT bootstrap bugs. Item (1) IS a bootstrap bug that has been
 dormant in test_codegen.py.
 
+## Category-2 closure progress (2026-05-27)
+
+Snapshot of the Category-2 list from `## Autonomous-loop stop
+criterion` after the K1.F* batch shipped 2026-05-27. The status
+reflects what's mergeable into main (`origin/main`) and verified
+through the K2 parity harness where applicable.
+
+| Category-2 item | Status | Closing chunk(s) |
+|-----------------|--------|------------------|
+| impl method dispatch | ✅ **CLOSED** | K1.F5b — struct-receiver `p.get()` dispatch + parse_impl_block target_tag = 100+struct_idx + parse_impl_method bare-self in var_struct_tab |
+| field-store mutation | ✅ **CLOSED** | K1.F6 — AST_FIELD_STORE (tag 79) emitted by parse_expr_basic when lhs is AST_TUPLE_FIELD + `=`; codegen mirrors read side via push/pop/`mov [rcx+off], eax` |
+| const-name resolution | ✅ **CLOSED** | K1.F7 — sb-slot const_tab (94/95) + accessor helpers + parse_const_decl structured parse + mk_var_with_capture inlines the stored value AST |
+| mixed-type binops (signed i64↔i32, ADD/SUB/MUL/DIV/MOD) | ✅ **CLOSED** | K1.F8 (forward i64+i32), K1.F8b (reverse i32+i64), K1.F8c (DIV/MOD both directions); 2 new helpers `emit_movsxd_rcx_ecx` / `_rax_eax`; expr_type returns 3 (i64) for both `(3,0)` and `(0,3)` |
+| mixed-type binops (unsigned u64↔u32) | ⏳ **WIP** | K1.F8d staged twice (this and prior tick); reverted both times because WSL was unreliable during validation. Code design is a copy-paste of K1.F8b/F8c (zero-ext via mov_ecx_eax already correct for unsigned, no movsxd needed; expr_type adds (9,6) and (6,9) cases). Ships next WSL-clean tick. |
+| generic monomorphization | ❌ OPEN | Type erasure works for i32-shaped T (K1.F-discovery batch 27 via turbofish); full monomorphization for non-i32 T is the gap. |
+| f16 bit-accurate | ❌ OPEN | _f16 lexes as bf16-shaped (K1.BH 2026-05-26); IEEE-754 half-precision bit pattern not yet emitted. |
+| reflection (quote/splice/modify/reflect_hash) | ⚠️ STUB | Builtins registered at bn_state slots 118-120 + 164-168 (K1.F2/F3/F4 2026-05-26 + 2026-05-27); real semantics (writing reflection cells, hash computation) still pending. |
+| tile ops (TILE_ZEROS/ADD/SUB/MUL/MATMUL) | ❌ OPEN | No tile codegen in bootstrap. Matrix rows 197-199 KOVC-MISSING. |
+| GPU backends (PTX + ROCm + Metal + WebGPU) | ❌ OPEN | All four backend rows 200-201 KOVC-MISSING. |
+| MLIR migration path | ❌ OPEN | v3.0 Phase E shipped on Python side (Stages 210-216); bootstrap port pending. Matrix row 202 KOVC-MISSING. |
+| trace events | ⚠️ STUB | __trace_event slot 165 (K1.F3 2026-05-27, variadic-tolerant no-op stub); real trace-arena impl pending. |
+| macros | ⚠️ PARSER-ONLY | `IDENT!(...)` parses as no-op call (K1.CB 2026-05-26); no macro expansion. |
+
+Also closed this session: K2 parity corpus grew 70 → 85 entries
+across K2.G (const-name probes) + K2.H (mixed-type binop probes),
+pinning the K1.F7/F8/F8b/F8c closures across BOTH compilers.
+
+Three of the user's enumerated Category-2 items are now fully
+**CLOSED** end-to-end and parity-pinned (impl method dispatch,
+field-store mutation, const-name resolution). Mixed-type binops
+is mostly closed (signed i64↔i32 for all five arith ops); the
+unsigned u64↔u32 leg lands the next WSL-clean tick.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)
