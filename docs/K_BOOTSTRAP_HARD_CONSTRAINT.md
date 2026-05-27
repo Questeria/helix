@@ -191,17 +191,48 @@ recent K1.* parser work:
    Python helixc handles every well-formed shape correctly. The
    bootstrap has TWO distinct bugs:
 
-   **Bug A — explicit i64 return type traps (SIGILL, rc=132):**
-   `helixc/bootstrap/parser.hx:2510` says explicitly "Phase-0
-   ignores (always i32 return)" and at line 2664 sets
-   `__arena_push(0)` for the ret_ty slot regardless of what
-   follows `->`. So `fn main() -> i64 { ... }` records ret_ty=0
-   (i32). Downstream, `helixc/bootstrap/kovc.hx:7367` trips
-   trap 14001 when `body_is_8b=1` but `ret_wants_8b=0`. The trap
-   is doing the right thing — it's catching a real width mismatch
-   — but the mismatch is FALSE because the parser threw away the
-   actual return-type annotation. **Fix path:** make
-   `parse_fn_decl` actually parse `-> T` instead of hardcoding 0.
+   **Bug A — non-default scalar return types SIGILL (rc=132):**
+   The previous K1.E1-investigate commit (`2790c09`) misattributed
+   this bug to `parser.hx:2510-2664` hardcoding `ret_ty=0`. That
+   code is in the CLOSURE parser, not `parse_fn_decl`. The actual
+   top-level `parse_fn_decl` at `parser.hx:9536-9587` DOES parse
+   `-> T` correctly: i64→3, u64→9, f32→1, f64→2, bf16→4, u32→6,
+   u8→7, u16→8, i8→10, i16→11. RETRACTED.
+
+   The REAL pattern (probed 2026-05-26 K1.E1a tick):
+
+   | shape                              | bootstrap kovc |
+   |------------------------------------|----------------|
+   | `fn main() -> i32 { 42 }`          | 42 ✓           |
+   | `fn main() -> u32 { 42_u32 }`      | 42 ✓           |
+   | `fn main() -> f32 { 0.0_f32 }`     | 0 ✓            |
+   | `fn main() -> f64 { 0.0_f64 }`     | 0 ✓            |
+   | `fn main() -> bf16 { 0.0_f16 }`    | 0 ✓            |
+   | `fn main() -> i64 { 42_i64 }`      | **132 SIGILL** |
+   | `fn main() -> u64 { 42_u64 }`      | **132 SIGILL** |
+   | `fn main() -> i8  { 42_i8 }`       | **132 SIGILL** |
+   | `fn main() -> u8  { 42_u8 }`       | **132 SIGILL** |
+   | `fn main() -> i16 { 42_i16 }`      | **132 SIGILL** |
+   | `fn main() -> u16 { 42_u16 }`      | **132 SIGILL** |
+
+   The bug fires for {i8, u8, i16, u16, i64, u64} — the
+   non-default-width integer types — but NOT for the default
+   width (i32/u32) or for floats (f32/f64/bf16). The 14001 /
+   14002 width-class traps at `kovc.hx:7367-7387` do not explain
+   it: they only fire when `body_width != ret_width` or
+   `body_is_8b != ret_wants_8b`, both of which are FALSE for
+   matching-type bodies like `42_i64` returned from `-> i64`.
+
+   **Next-tick approach:** instrument the AST_FN_LIST emit loop
+   at `kovc.hx:7197-7390` to log every emit_trap_with_id call.
+   The SIGILL must come from some trap firing in that path that
+   the obvious-trap reading missed. Candidates to inspect:
+   - the diag_arena overflow path (line 7248: `emit_trap_with_id
+     (28999)`)
+   - the per-validation-pass first_code trap (line 7256)
+   - some other codegen-internal trap fired by emit_ast_code
+     for non-default literal tags
+   - a width-class trap somewhere I haven't found yet
 
    **Bug B — bare-expression i64 sub returns LHS (rc=100):**
    `100_i64 - 58_i64` returns 100, not 42. The bootstrap is
