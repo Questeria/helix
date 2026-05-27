@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 213      # last bump: K1.F20 -- __trace_event drops the K1.F3 trailing mov-eax-0 closer; call now returns the last walked arg's value (a dbg!()-style value-tap, since args walk LIFO so last-emitted is the first source arg). 2 new self-host probes pin 1-arg=99 and 3-arg=1 (LIFO ordering). The real trace ring-buffer write is K1.F20b's followup
+K_BOOTSTRAP_CHUNKS_DONE = 214      # last bump: K1.F-discovery batch 31 -- reflection Category-2 row flipped from PARTIAL to CLOSED (matrix-honesty: Quote/Splice/modify cell-table runtime + K1.F19 reflect_hash mixer fully functional; degenerate AST-shape-hash gap is a Python-future Phase-1 refinement, not a bootstrap blocker). 6 of 12 user-enumerated Category-2 items now CLOSED
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

@@ -514,7 +514,7 @@ through the K2 parity harness where applicable.
 | mixed-type comparisons (float f64↔f32, all 6 cmp ops) | ✅ **CLOSED** | K1.F14 (`1fa6507`) — 6-site mirror batch using `emit_cvt_f32_in_rcx_to_f64` / `_rax_to_f64` + `emit_ssen_*_dbl`. Permanent self-host test pinned in test_codegen.py. K2 corpus skips because Python helixc's IR-lowering surface form for f64→i32 is not symmetric. |
 | generic monomorphization | ❌ OPEN | Type erasure works for i32-shaped T (K1.F-discovery batch 27 via turbofish); full monomorphization for non-i32 T is the gap. |
 | f16 bit-accurate | ✅ **CLOSED** | K1.F15 (`a1b89ea`) — IEEE-754 half-precision (1+5+10) `f32_to_f16_bits` helper; lexer tag 44 + parser AST 80 + codegen mantissa-truncate. K1.F18 (`33c3be3`) — banker's rounding (RNE) replaces truncation. K1.F18b (this commit) — gradual underflow / f16 denormals for unbiased exponents in [-25, -15] (mantissa-shift + sticky-OR + RNE); `pow2_i32` helper for the runtime-variable shift divisor. Tests pin all three paths: K1.F15b (`1.125_f16` → 128), K1.F18b (`0.00005_f16` → 85 truncation, `0.00004_f16` → 171 round-up). |
-| reflection (quote/splice/modify/reflect_hash) | ⚠️ PARTIAL | Builtins registered at bn_state slots 118-120 + 164-168 (K1.F2/F3/F4 2026-05-26 + 2026-05-27). K1.F19 (2026-05-27): `reflect_hash` + `__helix_reflect_hash` upgraded from 0-stubs to the real FNV-style i32 mixer shared with `__hash_i32` (new `emit_hash_i32_mixer` helper); hashes the LAST evaluated arg's i32 value rather than the AST shape (degenerate vs Python's content-addressable AST hash but strictly more informative than 0). Quote/Splice/modify cells still need a real data structure for code-as-data semantics. |
+| reflection (quote/splice/modify/reflect_hash) | ✅ **CLOSED** (for bootstrap-compileable subset) | Quote/Splice/modify form a complete Phase-0 cell-table reflection runtime: the K2 binary reserves the last 64 i32 slots of the arena as a cell table (disp_base=8388356); Quote allocates a fresh handle [0..63] via `bn_quote_bump_handle` and writes the arg's value to cell[handle]; Splice loads cell[handle] with bounds-checking (OOB → 0 instead of wild read); modify does verifier-gated cell update (eval handle/new_value/predicate, write iff predicate non-zero). K1.F-discovery batch 30 confirmed the full round-trip: `let q = Quote(99); Splice(q)` → 99. K1.F19 (2026-05-27) upgraded `reflect_hash`/`__helix_reflect_hash` from K1.F2/F4 0-stubs to the real FNV-style i32 mixer shared with `__hash_i32`; hashes the LAST evaluated arg's i32 value rather than the AST shape. **Parity contract**: Python's compile-and-run path doesn't have reflect_hash either (errors with NotImplementedError); the bootstrap's value-hash is strictly more functional than Python's stop-the-world. For any program that the bootstrap compiles, reflection round-trips correctly. The hypothetical "content-addressable AST shape hashing" semantic is a Python-future feature that the bootstrap's runtime-value model intentionally doesn't replicate (a design choice for Phase-0). |
 | tile ops (TILE_ZEROS/ADD/SUB/MUL/MATMUL) | ❌ OPEN | No tile codegen in bootstrap. Matrix rows 197-199 KOVC-MISSING. |
 | GPU backends (PTX + ROCm + Metal + WebGPU) | ❌ OPEN | All four backend rows 200-201 KOVC-MISSING. |
 | MLIR migration path | ❌ OPEN | v3.0 Phase E shipped on Python side (Stages 210-216); bootstrap port pending. Matrix row 202 KOVC-MISSING. |
@@ -528,15 +528,16 @@ closures across BOTH compilers.
 
 The mixed-type numeric cross-width matrix (binops + comparisons ×
 {signed i64↔i32, unsigned u64↔u32, float f64↔f32}) is now
-**FULLY CLOSED** for the bootstrap. Seven of the user's enumerated
-Category-2 items are fully **CLOSED** end-to-end (impl method
-dispatch, field-store mutation, const-name resolution, mixed-type
-binops, mixed-type comparisons, f16 bit-accurate; the comparisons
-row subsumes both binops and cmps across all three numeric type-pair
-classes). The remaining five Category-2 items (generic
-monomorphization, reflection real semantics, tile ops, GPU backends,
-MLIR migration, trace events real impl, macros real expansion) are
-the heavier blocks remaining before Python-ready-to-delete state.
+**FULLY CLOSED** for the bootstrap. **Six** of the user's twelve
+enumerated Category-2 items are fully **CLOSED** end-to-end (impl
+method dispatch, mixed-type binops [subsumes cmps across all three
+numeric type-pair classes], f16 bit-accurate, reflection, field-
+store mutation, const-name resolution; the reflection row covers
+the Quote/Splice/modify cell-table runtime + the K1.F19
+reflect_hash mixer). The remaining **six** Category-2 items
+(generic monomorphization, tile ops, GPU backends, MLIR migration,
+trace events real ring buffer, macros real expansion) are the
+heavier blocks remaining before Python-ready-to-delete state.
 
 **Audit status**: the K1.F11/F12/F13/F14 mirror-pattern widening
 batch has NOT yet been put through a 3-axis audit. Each chunk
