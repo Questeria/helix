@@ -7381,6 +7381,23 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n_val = emit_ast_code(val_node, bind_state, patch_state, bn_state);
         // pop rcx (0x59, 1 byte)
         emit_byte(0x59);
+        // K3.D audit-fix (2026-05-27, MEDIUM-2): when field_p3 == 0 the
+        // store is 32-bit `mov [rcx+off], eax`. If the value expr has
+        // a 64-bit type (i64=3, u64=9, f64=2), the high 32 bits in
+        // rax get silently dropped. Pre-K3.D this was undetected;
+        // post-K3.D the codegen emits trap 79001 BEFORE the store so
+        // the bug surfaces loudly. The struct-ptr (field_p3 == 1) path
+        // uses REX.W and is unaffected.
+        let n_width_trap = if field_p3 == 0 {
+            let val_ty = expr_type(val_node, bind_state, bn_state);
+            if val_ty == 3 {
+                emit_trap_with_id(79001)
+            } else { if val_ty == 9 {
+                emit_trap_with_id(79001)
+            } else { if val_ty == 2 {
+                emit_trap_with_id(79001)
+            } else { 0 } } }
+        } else { 0 };
         let n_store = if field_p3 == 1 {
             // mov [rcx + disp8], rax  (REX.W: 48 89 41 disp8 = 4 bytes)
             emit_byte(0x48); emit_byte(0x89); emit_byte(0x41); emit_byte(off);
@@ -7390,7 +7407,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_byte(0x89); emit_byte(0x41); emit_byte(off);
             3
         };
-        n_pre_trap + n_inner + n_push + n_val + 1 + n_store
+        n_pre_trap + n_inner + n_push + n_val + 1 + n_width_trap + n_store
     } else { if t == 25 {
         // AST_STR_LIT used as a value. Phase-0: strings are only
         // meaningful as the FIRST arg of a file builtin (handled in
