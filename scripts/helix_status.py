@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 232      # last bump: K1.F22h -- two zero-arg sibling macros batched: unimplemented!() -> panic "not implemented" (15 chars; Rust stdlib default); unreachable!() -> panic "internal error: entered unreachable code" (40 chars; Rust stdlib default). Both reuse the K1.F22g arena-push-synthesized-message substrate; only the IDENT detection (13 bytes "unimplemented" / 11 bytes "unreachable") and the per-macro message bytes differ. Tests verify rc=132 + the expected message strings on stderr; K1.F22g todo!() and K1.F22 panic!() regressions intact
+K_BOOTSTRAP_CHUNKS_DONE = 233      # last bump: K1.F22i -- FIRST conditional macro: assert!(IDENT) parser-side rewrites to AST_IF(cond=AST_VAR(IDENT), then=AST_INT(0), else=AST_CALL(panic, "assertion failed")). First time the bootstrap synthesizes an AST_IF (tag 7) at parse time. 6-byte IDENT "assert" detection (97 115 115 101 114 116); shape `IDENT ! ( IDENT )` distinguishes from arg-bearing forms. SCOPE limited to single-IDENT cond -- assert!(x == 5) etc. fall through. Tests verify assert!(x=1) passes (rc=42), assert!(x=0) panics (rc=132) with "assertion failed" in stderr
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

@@ -3507,6 +3507,27 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22i (2026-05-27): assert!(IDENT) detection. 6-char
+            // IDENT "assert" = bytes 97 115 115 101 114 116. FIRST
+            // conditional macro -- synthesizes an AST_IF (tag 7)
+            // wrapping a panic. SCOPE for this chunk: only the
+            // single-IDENT condition form `assert!(IDENT)`. The general
+            // expression form `assert!(expr)` (e.g. `assert!(x == 5)`,
+            // `assert!(some_fn(x))`) falls through to the K1.CB
+            // no-op-skip until a future chunk wires parse_expr recursion
+            // into the macro arm.
+            let is_assert_name_macro = if id_len == 6 {
+                let ab0 = __arena_get(id_start);
+                let ab1 = __arena_get(id_start + 1);
+                let ab2 = __arena_get(id_start + 2);
+                let ab3 = __arena_get(id_start + 3);
+                let ab4 = __arena_get(id_start + 4);
+                let ab5 = __arena_get(id_start + 5);
+                if ab0 == 97 { if ab1 == 115 { if ab2 == 115 {
+                    if ab3 == 101 { if ab4 == 114 { if ab5 == 116 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             // K1.F22h (2026-05-27): unreachable!() detection. 11-char
             // IDENT "unreachable" = bytes 117 110 114 101 97 99 104 97
             // 98 108 101. Zero-arg sibling -- synthesized message is
@@ -3574,6 +3595,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let is_unreach_empty_form = if is_unreach_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 4 { 1 }
                 else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F22i (2026-05-27): shape guard for assert!(IDENT) --
+            // the single-IDENT-condition form: mac_t2 = LPAREN (3),
+            // mac_t3 = TK_IDENT (2), mac_t4 = RPAREN (4). Compound
+            // expression forms have mac_t4 != 4 and fall through.
+            let is_assert_ident_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 4 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             if is_panic_str_form == 1 {
                 // Capture the STR_LIT body bytes from the k+3 token.
@@ -3751,6 +3780,41 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(97); __arena_push(110); __arena_push(105);
                 __arena_push(99);
                 mk_node(16, ui_panic_name_s, 5, ui_args_head)
+            } else { if is_assert_ident_form == 1 {
+                // K1.F22i: synthesize AST_IF(cond=AST_VAR(IDENT),
+                // then=AST_INT(0), else=AST_CALL(panic, "assertion failed")).
+                // FIRST conditional macro and first time the bootstrap
+                // synthesizes an AST_IF at parse time. Scope: single-IDENT
+                // cond only. The k+3 token is the IDENT being asserted;
+                // we read its byte offset+length via tok_p2/tok_p3 and
+                // build an AST_VAR (tag 1) referencing those bytes.
+                let asrt_var_tok = k + 3;
+                let asrt_var_s = tok_p2(tok_base, asrt_var_tok);
+                let asrt_var_l = tok_p3(tok_base, asrt_var_tok);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (cond var)
+                cur_advance(sb);           // )
+                let asrt_cond = mk_node(1, asrt_var_s, asrt_var_l, 0);
+                let asrt_then = mk_node(0, 0, 0, 0);    // AST_INT(0)
+                // Push "assertion failed" message bytes (16 chars: a s
+                // s e r t i o n ' ' f a i l e d).
+                let af_msg_s = __arena_push(97);                          // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                let af_str_ast = mk_node(25, af_msg_s, 16, 0);
+                let af_args_head = mk_node(17, af_str_ast, 0, 0);
+                let af_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let asrt_else = mk_node(16, af_panic_name_s, 5, af_args_head);
+                // AST_IF: tag 7, p1=cond, p2=then, p3=else.
+                mk_node(7, asrt_cond, asrt_then, asrt_else)
             } else { if is_unreach_empty_form == 1 {
                 // K1.F22h: synthesize AST_CALL(panic,
                 // "internal error: entered unreachable code").
@@ -3816,7 +3880,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2 (is_unimpl_empty_form, is_unreach_empty_form)
+            }}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1 (is_assert_ident_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
