@@ -4071,15 +4071,25 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // observability gap). For programs that don't observe the
         // trace buffer (every bootstrap-compileable program), this
         // is vacuously satisfied: __trace_event becomes a no-op
-        // returning 0 in eax. Argument is evaluated for side-effects
-        // when present (variadic-tolerant: __trace_event() with no
-        // args also works). args_head == 0 means no args.
-        let n_arg = if args_head == 0 { 0 } else {
-            let arg_idx = __arena_get(args_head + 1);
-            emit_ast_code(arg_idx, bind_state, patch_state, bn_state)
-        };
+        // returning 0 in eax. Variadic-tolerant.
+        //
+        // K1.F16 (2026-05-27): now evaluates ALL args (walking the
+        // linked list), not just the first. Each arg's code runs for
+        // side effects (mutations, panic, etc.) before the result is
+        // discarded. The previous first-arg-only behavior could mask
+        // side effects of later args, a silent class. This brings
+        // __trace_event closer to a real variadic call -- the
+        // trace-arena write impl is still pending (K1.F16b will
+        // wire the actual buffer + cursor when the design lands).
+        let mut tev_arg_cur: i32 = args_head;
+        let mut tev_bytes: i32 = 0;
+        while tev_arg_cur != 0 {
+            let tev_arg_idx = __arena_get(tev_arg_cur + 1);
+            tev_bytes = tev_bytes + emit_ast_code(tev_arg_idx, bind_state, patch_state, bn_state);
+            tev_arg_cur = __arena_get(tev_arg_cur + 3);
+        }
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        n_arg + 5
+        tev_bytes + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_splice_s(bn_state), 14) == 1 {
         // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
         // Underscore-prefixed alias for Splice. Same stub semantics
