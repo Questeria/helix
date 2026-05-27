@@ -5858,16 +5858,34 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else { if r_d == 1 { emit_trap_with_id(2011) } else {
                 if l_i64 == 1 {
                     // K1.F8 (2026-05-27): mixed i64 + i32 -- sign-extend
-                    // rcx (which holds the i32, zero-extended by the
-                    // earlier 32-bit mov) and then 64-bit add.
-                    if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_add_rax_rcx_64() }
+                    // rcx and then 64-bit add. K3.B audit-fix
+                    // (2026-05-27): only widen when r is EXACTLY i32
+                    // (expr_type tag 0); for u32/u8/i8/u16/i16/f32/bf16
+                    // the prior 32-bit mov + sign-extend would
+                    // misinterpret bits (signed reading of unsigned
+                    // values >= 2^31, or float bit patterns as int).
+                    // Trap instead.
+                    if r_i64 == 1 {
+                        emit_add_rax_rcx_64()
+                    } else {
+                        let r_t = expr_type(p2, bind_state, bn_state);
+                        if r_t == 0 {
+                            emit_movsxd_rcx_ecx() + emit_add_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(2020)
+                        }
+                    }
                 } else { if r_i64 == 1 {
                     // K1.F8b (2026-05-27): mixed i32 + i64 -- sign-
-                    // extend rax (which holds the i32, zero-extended
-                    // by the prior eval+pop), then 64-bit add. The
-                    // mov-rcx step (above) was patched to use 64-bit
-                    // copy when r_i64=1 so rcx has the full i64.
-                    emit_movsxd_rax_eax() + emit_add_rax_rcx_64()
+                    // extend rax then 64-bit add. K3.B audit-fix:
+                    // only widen when l is EXACTLY i32; trap for
+                    // u32/u8/u16/i8/i16/f32/bf16 mismatches.
+                    let l_t = expr_type(p1, bind_state, bn_state);
+                    if l_t == 0 {
+                        emit_movsxd_rax_eax() + emit_add_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(2021)
+                    }
                 } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_add_rax_rcx_64() } else { emit_trap_with_id(2030) }
@@ -5918,14 +5936,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 if r_d == 1 { emit_subsd() } else { emit_trap_with_id(3010) }
             } else { if r_d == 1 { emit_trap_with_id(3011) } else {
                 if l_i64 == 1 {
-                    // K1.F8 (2026-05-27): mixed i64 - i32 -- sign-extend
-                    // rcx (i32 -> i64), then 64-bit sub.
-                    if r_i64 == 1 { emit_sub_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_sub_rax_rcx_64() }
+                    // K1.F8 + K3.B audit-fix: gate on r EXACTLY i32.
+                    if r_i64 == 1 {
+                        emit_sub_rax_rcx_64()
+                    } else {
+                        let r_t = expr_type(p2, bind_state, bn_state);
+                        if r_t == 0 {
+                            emit_movsxd_rcx_ecx() + emit_sub_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(3020)
+                        }
+                    }
                 } else { if r_i64 == 1 {
-                    // K1.F8b: mixed i32 - i64 -- sign-extend rax, then
-                    // 64-bit sub. rcx already has the full i64 from the
-                    // patched mov-rcx step above.
-                    emit_movsxd_rax_eax() + emit_sub_rax_rcx_64()
+                    // K1.F8b + K3.B audit-fix: gate on l EXACTLY i32.
+                    let l_t = expr_type(p1, bind_state, bn_state);
+                    if l_t == 0 {
+                        emit_movsxd_rax_eax() + emit_sub_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(3021)
+                    }
                 } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_sub_rax_rcx_64() } else { emit_trap_with_id(3030) }
@@ -5981,17 +6010,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 if r_d == 1 { emit_mulsd() } else { emit_trap_with_id(4010) }
             } else { if r_d == 1 { emit_trap_with_id(4011) } else {
                 if l_i64 == 1 {
-                    // K1.F8 (2026-05-27): mixed i64 * i32 -- sign-extend
-                    // rcx (i32 -> i64), then 64-bit imul. `imul rax, rcx`
-                    // (REX.W) yields the low 64 bits of the product;
-                    // signed vs unsigned diverge only in the high 64
-                    // bits / overflow flags, which we don't consume.
-                    if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_imul_rax_rcx_64() }
+                    // K1.F8 + K3.B audit-fix: gate on r EXACTLY i32.
+                    if r_i64 == 1 {
+                        emit_imul_rax_rcx_64()
+                    } else {
+                        let r_t = expr_type(p2, bind_state, bn_state);
+                        if r_t == 0 {
+                            emit_movsxd_rcx_ecx() + emit_imul_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(4020)
+                        }
+                    }
                 } else { if r_i64 == 1 {
-                    // K1.F8b: mixed i32 * i64 -- sign-extend rax, then
-                    // 64-bit imul. Low 64 bits of the product is shared
-                    // for signed/unsigned semantics.
-                    emit_movsxd_rax_eax() + emit_imul_rax_rcx_64()
+                    // K1.F8b + K3.B audit-fix: gate on l EXACTLY i32.
+                    let l_t = expr_type(p1, bind_state, bn_state);
+                    if l_t == 0 {
+                        emit_movsxd_rax_eax() + emit_imul_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(4021)
+                    }
                 } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_imul_rax_rcx_64() } else { emit_trap_with_id(4030) }
@@ -6054,11 +6091,27 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 if r_d == 1 { emit_divsd() } else { emit_trap_with_id(5010) }
             } else { if r_d == 1 { emit_trap_with_id(5011) } else {
                 if l_i64 == 1 {
-                    // K1.F8c forward: i64 / i32 -- sign-ext rcx, 64-bit idiv.
-                    if r_i64 == 1 { emit_idiv_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_idiv_rax_rcx_64() }
+                    // K1.F8c forward + K3.B gate: i64 / i32 only when
+                    // r is EXACTLY i32.
+                    if r_i64 == 1 {
+                        emit_idiv_rax_rcx_64()
+                    } else {
+                        let r_t = expr_type(p2, bind_state, bn_state);
+                        if r_t == 0 {
+                            emit_movsxd_rcx_ecx() + emit_idiv_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(5020)
+                        }
+                    }
                 } else { if r_i64 == 1 {
-                    // K1.F8c reverse: i32 / i64 -- sign-ext rax, 64-bit idiv.
-                    emit_movsxd_rax_eax() + emit_idiv_rax_rcx_64()
+                    // K1.F8c reverse + K3.B gate: i32 / i64 only when l
+                    // is EXACTLY i32.
+                    let l_t = expr_type(p1, bind_state, bn_state);
+                    if l_t == 0 {
+                        emit_movsxd_rax_eax() + emit_idiv_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(5021)
+                    }
                 } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_div_rax_rcx_64_u() } else { emit_trap_with_id(5030) }
@@ -6130,11 +6183,27 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 emit_trap_with_id(24010)
             } else { if r_d == 1 { emit_trap_with_id(24011) } else {
                 if l_i64 == 1 {
-                    // K1.F8c forward: i64 % i32 -- sign-ext rcx, 64-bit imod.
-                    if r_i64 == 1 { emit_imod_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_imod_rax_rcx_64() }
+                    // K1.F8c forward + K3.B gate: i64 % i32 only when
+                    // r is EXACTLY i32.
+                    if r_i64 == 1 {
+                        emit_imod_rax_rcx_64()
+                    } else {
+                        let r_t = expr_type(p2, bind_state, bn_state);
+                        if r_t == 0 {
+                            emit_movsxd_rcx_ecx() + emit_imod_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(24020)
+                        }
+                    }
                 } else { if r_i64 == 1 {
-                    // K1.F8c reverse: i32 % i64 -- sign-ext rax, 64-bit imod.
-                    emit_movsxd_rax_eax() + emit_imod_rax_rcx_64()
+                    // K1.F8c reverse + K3.B gate: i32 % i64 only when l
+                    // is EXACTLY i32.
+                    let l_t = expr_type(p1, bind_state, bn_state);
+                    if l_t == 0 {
+                        emit_movsxd_rax_eax() + emit_imod_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(24021)
+                    }
                 } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_imod_rax_rcx_64_u() } else { emit_trap_with_id(24030) }
