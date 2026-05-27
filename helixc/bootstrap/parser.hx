@@ -3812,6 +3812,21 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         else { 1 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F33 (2026-05-27): assert_eq!(INT_LIT, IDENT) -- the operand-
+            // flipped mirror of K1.F31. Real Rust sometimes writes
+            // `assert_eq!(5, x)` instead of `assert_eq!(x, 5)`. Same 7-token
+            // shape; mac_t3 = TK_INT (1), mac_t4 = TK_COMMA (13), mac_t5 =
+            // TK_IDENT (2), mac_t6 = TK_RPAREN (4). K3.S reject on the IDENT
+            // operand (now at k+5 instead of k+3).
+            let is_assert_eq_int_ident_form = if is_assert_eq_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 1 { if mac_t4 == 13 {
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let aeqiif_b_opnd_s = tok_p2(tok_base, k + 5);
+                        let aeqiif_b_opnd_l = tok_p3(tok_base, k + 5);
+                        if is_any_reserved_kw_ident(aeqiif_b_opnd_s, aeqiif_b_opnd_l) == 1 { 0 }
+                        else { 1 }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             // K1.F22k (2026-05-27): shape guard for assert_ne!(IDENT, IDENT).
             // Same 7-token shape as assert_eq! (mac_t2..mac_t6) and same
             // K3.Q-style reject of BoolLit operands. The only difference
@@ -3841,6 +3856,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         let aneii_a_opnd_s = tok_p2(tok_base, k + 3);
                         let aneii_a_opnd_l = tok_p3(tok_base, k + 3);
                         if is_any_reserved_kw_ident(aneii_a_opnd_s, aneii_a_opnd_l) == 1 { 0 }
+                        else { 1 }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F34 (2026-05-27): assert_ne!(INT_LIT, IDENT) -- operand-flipped
+            // mirror of K1.F32. Pair with K1.F33 (the assert_eq! flip).
+            let is_assert_ne_int_ident_form = if is_assert_ne_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 1 { if mac_t4 == 13 {
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let aneiif_b_opnd_s = tok_p2(tok_base, k + 5);
+                        let aneiif_b_opnd_l = tok_p3(tok_base, k + 5);
+                        if is_any_reserved_kw_ident(aneiif_b_opnd_s, aneiif_b_opnd_l) == 1 { 0 }
                         else { 1 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
@@ -4276,6 +4302,44 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let aeqii_else = mk_node(16, aeqii_panic_name_s, 5, aeqii_args_head);
                 mk_node(7, aeqii_cond, aeqii_then, aeqii_else)
+            } else { if is_assert_eq_int_ident_form == 1 {
+                // K1.F33 (2026-05-27): assert_eq!(INT_LIT, IDENT) form,
+                // operand-flipped mirror of K1.F31. Same synthesis shape;
+                // the LHS is now AST_INT and the RHS is AST_VAR. AST_EQ is
+                // symmetric so swapping the operands keeps semantics.
+                // 7-token consumption (assert_eq, !, (, INT, comma, IDENT, )).
+                let aeqif_a_val = tok_p1(tok_base, k + 3);
+                let aeqif_b_s = tok_p2(tok_base, k + 5);
+                let aeqif_b_l = tok_p3(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert_eq)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // INT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let aeqif_int_a = mk_node(0, aeqif_a_val, 0, 0);
+                let aeqif_var_b = mk_node(1, aeqif_b_s, aeqif_b_l, 0);
+                let aeqif_cond = mk_node(20, aeqif_int_a, aeqif_var_b, 0);  // AST_EQ
+                let aeqif_then = mk_node(0, 0, 0, 0);                        // AST_INT(0)
+                // Push "assertion failed: ==" message bytes (20 chars).
+                let aeqif_msg_s = __arena_push(97);                          // 'a'
+                __arena_push(115); __arena_push(115);                        // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                __arena_push(32);                                            // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                __arena_push(58);                                            // ':'
+                __arena_push(32);                                            // ' '
+                __arena_push(61); __arena_push(61);                          // '=' '='
+                let aeqif_str_ast = mk_node(25, aeqif_msg_s, 20, 0);
+                let aeqif_args_head = mk_node(17, aeqif_str_ast, 0, 0);
+                let aeqif_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let aeqif_else = mk_node(16, aeqif_panic_name_s, 5, aeqif_args_head);
+                mk_node(7, aeqif_cond, aeqif_then, aeqif_else)
             } else { if is_assert_ne_form == 1 {
                 // K1.F22k: synthesize AST_IF(cond=AST_NE(AST_VAR(a),
                 // AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic,
@@ -4356,6 +4420,42 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let aneii_else = mk_node(16, aneii_panic_name_s, 5, aneii_args_head);
                 mk_node(7, aneii_cond, aneii_then, aneii_else)
+            } else { if is_assert_ne_int_ident_form == 1 {
+                // K1.F34 (2026-05-27): assert_ne!(INT_LIT, IDENT) form,
+                // operand-flipped mirror of K1.F32. AST_NE is symmetric so
+                // swapping operands keeps semantics. 7-token consumption.
+                let aneif_a_val = tok_p1(tok_base, k + 3);
+                let aneif_b_s = tok_p2(tok_base, k + 5);
+                let aneif_b_l = tok_p3(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert_ne)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // INT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let aneif_int_a = mk_node(0, aneif_a_val, 0, 0);
+                let aneif_var_b = mk_node(1, aneif_b_s, aneif_b_l, 0);
+                let aneif_cond = mk_node(21, aneif_int_a, aneif_var_b, 0);  // AST_NE
+                let aneif_then = mk_node(0, 0, 0, 0);                        // AST_INT(0)
+                // Push "assertion failed: !=" message bytes (20 chars).
+                let aneif_msg_s = __arena_push(97);                          // 'a'
+                __arena_push(115); __arena_push(115);                        // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                __arena_push(32);                                            // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                __arena_push(58);                                            // ':'
+                __arena_push(32);                                            // ' '
+                __arena_push(33); __arena_push(61);                          // '!' '='
+                let aneif_str_ast = mk_node(25, aneif_msg_s, 20, 0);
+                let aneif_args_head = mk_node(17, aneif_str_ast, 0, 0);
+                let aneif_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let aneif_else = mk_node(16, aneif_panic_name_s, 5, aneif_args_head);
+                mk_node(7, aneif_cond, aneif_then, aneif_else)
             } else { if is_dbg_ident_form == 1 {
                 // K1.F28 (2026-05-27): dbg!(IDENT) passthrough. Synthesize
                 // AST_VAR(IDENT_bytes) -- the macro wrapper is dropped and
@@ -4450,7 +4550,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form)
+            }}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

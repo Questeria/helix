@@ -10034,6 +10034,56 @@ def test_bootstrap_kovc_k1f32_assert_ne_ident_int_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f33_k1f34_assert_int_ident_self_host():
+    """K1.F33 + K1.F34 (2026-05-27): operand-flipped mirrors of K1.F31/F32.
+
+    K1.F33: assert_eq!(INT_LIT, IDENT). Real Rust sometimes writes
+            `assert_eq!(5, x)` instead of `assert_eq!(x, 5)`.
+    K1.F34: assert_ne!(INT_LIT, IDENT). Sibling for assert_ne!.
+
+    AST_EQ and AST_NE are symmetric so the operand swap is pure
+    convenience -- semantics are identical to K1.F31/F32. The shape
+    guard does require the swap detection (otherwise the macro falls
+    through to K1.CB no-op-skip).
+
+    Shape: assert_eq/ne, !, (, INT, comma, IDENT, ) -- 7 tokens.
+    """
+    # K1.F33 -- assert_eq!(INT, IDENT)
+    rc_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f33_aeqif_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert_eq!(5, x); 11 }',
+    )
+    assert rc_eq_pass == 11, (
+        f"K1.F33 assert_eq!(5, x) when x=5: expected rc=11 (operands "
+        f"equal, then-arm runs); got {rc_eq_pass}."
+    )
+    rc_eq_fail = _kovc_self_host_compile_and_run(
+        "k1f33_aeqif_fail",
+        'fn main() -> i32 { let x: i32 = 5; assert_eq!(7, x); 11 }',
+    )
+    assert rc_eq_fail == 132, (
+        f"K1.F33 assert_eq!(7, x) when x=5: expected rc=132 (operands "
+        f"differ, panic fires); got {rc_eq_fail}."
+    )
+    # K1.F34 -- assert_ne!(INT, IDENT)
+    rc_ne_pass = _kovc_self_host_compile_and_run(
+        "k1f34_aneif_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert_ne!(7, x); 11 }',
+    )
+    assert rc_ne_pass == 11, (
+        f"K1.F34 assert_ne!(7, x) when x=5: expected rc=11 (operands "
+        f"differ, assert holds); got {rc_ne_pass}."
+    )
+    rc_ne_fail = _kovc_self_host_compile_and_run(
+        "k1f34_aneif_fail",
+        'fn main() -> i32 { let x: i32 = 5; assert_ne!(5, x); 11 }',
+    )
+    assert rc_ne_fail == 132, (
+        f"K1.F34 assert_ne!(5, x) when x=5: expected rc=132 (operands "
+        f"match, panic fires); got {rc_ne_fail}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

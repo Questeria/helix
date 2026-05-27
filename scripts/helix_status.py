@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 267      # last bump: K1.F32 -- assert_ne!(IDENT, INT_LIT) form. Sibling of K1.F31 with AST_NE (tag 21) and "!=" in panic message. Real Rust idiomatically writes `assert_ne!(x, 0)`. 7-token shape. K3.S reject on IDENT operand. Also unifies K1.F22k's BoolLit reject to is_any_reserved_kw_ident (matches K1.F31's same unify of K1.F22j). Tests: assert_ne!(x, 7) when x=5 -> rc=11 (assert holds, operands differ), assert_ne!(x, 5) when x=5 -> rc=132 (operands match, assert breaks). K1.F22k regression intact (same 3-test pass batch).
+K_BOOTSTRAP_CHUNKS_DONE = 268      # last bump: K1.F33+F34 batch -- operand-flipped mirrors of K1.F31/F32. Real Rust sometimes writes `assert_eq!(5, x)` (instead of `assert_eq!(x, 5)`) and similarly for assert_ne!. AST_EQ and AST_NE are symmetric so swapping operands keeps semantics; shape guards detect the swap (mac_t3=TK_INT(1), mac_t5=TK_IDENT(2) instead of mac_t3=TK_IDENT(2), mac_t5=TK_INT(1)). 7-token shape unchanged. K3.S reject applies to the IDENT operand (now at k+5 instead of k+3). Demonstrates the batching-speedup principle from the recent strategic discussion (2 mechanical sibling chunks shipped as one coherent batch commit). Tests: 4 sub-cases per macro covering pass/fail in both swap directions. K1.F31/F32 regressions intact.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
