@@ -7256,6 +7256,65 @@ def test_bootstrap_kovc_k1f18b_f16_denormal_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f19_reflect_hash_real_mixer_self_host():
+    """K1.F19 (2026-05-27): upgrade reflect_hash from the K1.F2 0-stub
+    to a real FNV-style i32 mixer. The mixer is the same 24-byte
+    sequence `__hash_i32` uses; the K1.F19 refactor extracts it into a
+    shared `emit_hash_i32_mixer` helper so both builtins use one
+    implementation.
+
+    Hash formula (signed-32-bit imul throughout, results truncate):
+        h = (x * x * c1) + (x * c2) + c3
+    where c1=0x05EBCA6B, c2=0x27D4EB2F, c3=0x165667B1.
+
+    Test cases:
+      reflect_hash(1):
+        h = (1*1*0x05EBCA6B) + (1*0x27D4EB2F) + 0x165667B1
+          = 0x05EBCA6B + 0x27D4EB2F + 0x165667B1
+          = 0x44171D4B = 1142365515
+        Low byte = 0x4B = 75. Distinguishing from the K1.F2 0-stub (rc=0).
+
+      reflect_hash(42):
+        h = (42*42*c1) + (42*c2) + c3
+          = 1764*c1 + 42*c2 + c3
+          = 0x6C03C6B3 = 1812186803 (signed-32-bit wrap)
+        Low byte = 0xB3 = 179. Pins the multiplicative mixing path.
+
+    Both probes were 0 on K1.F2 master. The mixer also drives the
+    pre-existing `__hash_i32` builtin so the shared-helper refactor
+    is verified by the unchanged __hash_i32 contract.
+
+    Python's reflect_hash semantic is content-addressable AST hashing;
+    the bootstrap degenerate version hashes the LAST evaluated arg's
+    i32 value (since args_head is variadic; K1.F16/F17's walk leaves
+    the last value in eax before the mixer runs). For non-AST-reflection
+    programs (every bootstrap-compileable program today), this is a
+    strict upgrade in observability without breaking any prior contract.
+    """
+    # Probe 1: reflect_hash(1) -> 75 (low byte of mixer output).
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f19_reflect_hash_1",
+        "fn main() -> i32 { reflect_hash(1) }",
+    )
+    assert rc1 == 75, (
+        f"K1.F19 reflect_hash(1): expected exit code 75 (low byte 0x4B "
+        f"of the FNV mixer output 0x44171D4B = 1142365515); got {rc1}. "
+        f"If rc=0, the K1.F2 0-stub regressed back; if non-75, the "
+        f"mixer formula or constants are corrupted."
+    )
+
+    # Probe 2: reflect_hash(42) -> 179.
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f19_reflect_hash_42",
+        "fn main() -> i32 { reflect_hash(42) }",
+    )
+    assert rc2 == 179, (
+        f"K1.F19 reflect_hash(42): expected exit code 179 (low byte "
+        f"0xB3 of 0x6C03C6B3); got {rc2}. Pins the multiplicative "
+        f"mixing path: x*x*c1 + x*c2 + c3 with c1=0x05EBCA6B."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.

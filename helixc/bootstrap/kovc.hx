@@ -3908,6 +3908,38 @@ fn emit_write_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     __arena_len() - body_start
 }
 
+// K1.F19 (2026-05-27): emit the FNV-style quadratic mixer used by the
+// `__hash_i32` builtin AND now by `reflect_hash` / `__helix_reflect_hash`
+// (the latter two were K1.F2/F4 0-stubs prior to K1.F19).
+//
+// Assumes the input value is in eax on entry. On return, eax holds:
+//     h = (x * x * c1) + (x * c2) + c3
+// where c1=0x05EBCA6B, c2=0x27D4EB2F, c3=0x165667B1 (mirrors
+// helixc-Python lower_ast.py:939-963). Signed-32-bit imul throughout;
+// results truncate to i32. Returns the byte count emitted (24).
+//
+// Codegen (24 bytes):
+//   push rax                              50           (1)
+//   imul eax, eax (eax = x*x)             0F AF C0     (3)
+//   imul eax, eax, c1                     69 C0 imm32  (6)
+//   pop rcx (rcx = x)                     59           (1)
+//   imul ecx, ecx, c2                     69 C9 imm32  (6)
+//   add eax, ecx                          01 C8        (2)
+//   add eax, c3                           05 imm32     (5)
+fn emit_hash_i32_mixer() -> i32 {
+    emit_byte(0x50);                                         // push rax
+    emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC0);       // imul eax, eax
+    emit_byte(0x69); emit_byte(0xC0);                        // imul eax, eax, imm32
+    emit_byte(0x6B); emit_byte(0xCA); emit_byte(0xEB); emit_byte(0x05); // c1 LE
+    emit_byte(0x59);                                         // pop rcx
+    emit_byte(0x69); emit_byte(0xC9);                        // imul ecx, ecx, imm32
+    emit_byte(0x2F); emit_byte(0xEB); emit_byte(0xD4); emit_byte(0x27); // c2 LE
+    emit_byte(0x01); emit_byte(0xC8);                        // add eax, ecx
+    emit_byte(0x05);                                         // add eax, imm32
+    emit_byte(0xB1); emit_byte(0x67); emit_byte(0x56); emit_byte(0x16); // c3 LE
+    24
+}
+
 // Try to recognize a builtin call. If matched, emit the inline
 // asm and return the byte count. If not, return 0 (caller falls
 // back to regular CALL emission).
@@ -4049,20 +4081,21 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
         n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
     } else { if kovc_byte_eq(name_s, name_l, bn_reflect_hash_s(bn_state), 12) == 1 {
-        // K1.F2 (2026-05-26): reflect_hash(arg) -> 0 stub. The matrix
-        // had this as KOVC-MISSING; Python's compile-and-run path also
-        // fails with NotImplementedError. Both compilers behave
-        // equivalently at the exit-code level for the bootstrap-
-        // compileable subset: evaluate the argument (preserves any
-        // side-effects), then return 0 in eax. No actual hash is
-        // computed; full content-addressable hashing is a Phase-1
-        // refinement (matrix row will flip from KOVC-MISSING to
-        // PARITY once Python's IR-lowering pass gains the builtin too;
-        // until then, "both return 0 on this shape" is the parity
-        // contract).
+        // K1.F2 (2026-05-26): reflect_hash(arg) was a 0-stub. The matrix
+        // had it as KOVC-MISSING; Python's compile-and-run path errored
+        // with NotImplementedError too, so "both return 0" was the
+        // (vacuous) parity contract.
         // K1.F17 (2026-05-27): walk the full args_head linked list so
         // side effects of args 2+ fire (the K1.F16 silent-arg-drop
         // closure, extended to this stub).
+        // K1.F19 (2026-05-27): upgrade from the 0-stub to a real i32
+        // hash using the shared `emit_hash_i32_mixer` helper. The full
+        // reflect_hash semantic in Python is content-addressable AST
+        // hashing; the bootstrap degenerate version hashes the LAST
+        // evaluated arg's i32 value (since args_head is variadic and
+        // the K1.F16/F17 walk leaves the last result in eax). Programs
+        // that only check determinism + non-zero of the hash for
+        // non-zero inputs now see useful behaviour.
         let mut rh_arg_cur: i32 = args_head;
         let mut rh_bytes: i32 = 0;
         while rh_arg_cur != 0 {
@@ -4070,9 +4103,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             rh_bytes = rh_bytes + emit_ast_code(rh_arg_idx, bind_state, patch_state, bn_state);
             rh_arg_cur = __arena_get(rh_arg_cur + 3);
         }
-        // mov eax, 0  (5 bytes)
-        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        rh_bytes + 5
+        let rh_mix = emit_hash_i32_mixer();
+        rh_bytes + rh_mix
     } else { if kovc_byte_eq(name_s, name_l, bn_trace_event_s(bn_state), 13) == 1 {
         // K1.F3 (2026-05-26): __trace_event(...) -> 0 stub. The
         // bootstrap doesn't have a trace ring buffer (Phase-1
@@ -4129,6 +4161,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // K1.F4 (2026-05-26): __helix_reflect_hash(...) -> 0 stub.
         // Underscore-prefixed alias for reflect_hash. Same no-op.
         // K1.F17 (2026-05-27): walk full args_head (silent-arg-drop fix).
+        // K1.F19 (2026-05-27): upgrade to the real FNV mixer (same as
+        // reflect_hash); alias contract preserved.
         let mut hr_arg_cur: i32 = args_head;
         let mut hr_bytes: i32 = 0;
         while hr_arg_cur != 0 {
@@ -4136,8 +4170,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             hr_bytes = hr_bytes + emit_ast_code(hr_arg_idx, bind_state, patch_state, bn_state);
             hr_arg_cur = __arena_get(hr_arg_cur + 3);
         }
-        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        hr_bytes + 5
+        let hr_mix = emit_hash_i32_mixer();
+        hr_bytes + hr_mix
     } else { if kovc_byte_eq(name_s, name_l, bn_print_str_s(bn_state), 9) == 1 {
         // K1.AK (2026-05-25): print_str("msg") -- emit sys_write(1,
         // str_ptr, str_len) for an AST_STR_LIT arg. Mirror of the
@@ -4492,28 +4526,12 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // lower_ast.py:939-963):
         //     h = x*x*c1 + x*c2 + c3
         // where c1 = 0x05EBCA6B, c2 = 0x27D4EB2F, c3 = 0x165667B1.
-        // Codegen layout (24 bytes after arg eval):
-        //   eval x -> eax
-        //   push rax                              50           (1)
-        //   imul eax, eax (eax = x*x)             0F AF C0     (3)
-        //   imul eax, eax, c1 (eax = x*x*c1)      69 C0 imm32  (6)
-        //   pop rcx (rcx = x)                     59           (1)
-        //   imul ecx, ecx, c2 (ecx = x*c2)        69 C9 imm32  (6)
-        //   add eax, ecx                          01 C8        (2)
-        //   add eax, c3                           05 imm32     (5)
+        // K1.F19 (2026-05-27): the 24-byte mixer is now extracted into
+        // `emit_hash_i32_mixer` and shared with reflect_hash.
         let a0 = __arena_get(args_head + 1);
         let n0 = emit_ast_code(a0, bind_state, patch_state, bn_state);
-        emit_byte(0x50);                                         // push rax
-        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC0);       // imul eax, eax
-        emit_byte(0x69); emit_byte(0xC0);                        // imul eax, eax, imm32
-        emit_byte(0x6B); emit_byte(0xCA); emit_byte(0xEB); emit_byte(0x05); // c1 LE
-        emit_byte(0x59);                                         // pop rcx
-        emit_byte(0x69); emit_byte(0xC9);                        // imul ecx, ecx, imm32
-        emit_byte(0x2F); emit_byte(0xEB); emit_byte(0xD4); emit_byte(0x27); // c2 LE
-        emit_byte(0x01); emit_byte(0xC8);                        // add eax, ecx
-        emit_byte(0x05);                                         // add eax, imm32
-        emit_byte(0xB1); emit_byte(0x67); emit_byte(0x56); emit_byte(0x16); // c3 LE
-        n0 + 1 + 3 + 6 + 1 + 6 + 2 + 5
+        let nh = emit_hash_i32_mixer();
+        n0 + nh
     } else { if kovc_byte_eq(name_s, name_l, bn_strlen_s(bn_state), 8) == 1 {
         // Phase 1.10 step 5o: __strlen(s) -> i32 compile-time string-
         // literal length. Mirrors helixc-Python lower_ast.py:966-969
