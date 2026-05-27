@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 238      # last bump: K1.F22k -- assert_ne!(IDENT, IDENT) macro. Sibling of K1.F22j swapping AST_NE (tag 21) for AST_EQ (tag 20). Same 7-token shape `IDENT ! ( IDENT , IDENT )` with same K3.Q-style BoolLit reject. Synthesizes AST_IF(cond=AST_NE(AST_VAR(a), AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic, "assertion failed: !=")). 9-byte IDENT "assert_ne" detection differs from "assert_eq" only in last two bytes (110 101 vs 101 113). Tests verify assert_ne!(a=1, b=2) passes (rc=7), assert_ne!(a=42, b=42) panics (rc=132); K1.F22j and K1.F22i regression intact
+K_BOOTSTRAP_CHUNKS_DONE = 239      # last bump: K1.F23-discovery -- tile-ops port plan. Strategic pivot from macros to the heavier Category-2 OPEN block (tile ops). Reads Python helixc/ir/tile_ir.py (14 TileOpKind ops + scalar passthrough + GPU primitives), identifies a Phase-0 CPU-baseline minimum viable subset (5 ops: TILE_ZEROS / TILE_ADD / TILE_SUB / TILE_MUL / TILE_MATMUL on i32), and writes docs/K_BOOTSTRAP_TILE_OPS_PLAN.md (~280 lines). Plan settles design choices (Option C: tiles-as-arena-offsets, no new AST tags), enumerates the chunk sequence (K1.F23..K1.F27 over ~8 chunks for Phase-0), and defers GPU/HBM/Reduce/Transpose/Reshape to the GPU-backends track. Realistic total tile-ops cost: ~25-30 chunks
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
