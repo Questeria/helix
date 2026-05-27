@@ -3460,6 +3460,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22g (2026-05-27): todo!() detection. 4-char IDENT
+            // "todo" = bytes 116 111 100 111. ZERO-arg macro -- shape
+            // is `IDENT ! ( )` not `IDENT ! ( STR )`. Synthesizes a
+            // panic with the fixed message "not yet implemented".
+            // FIRST zero-arg macro and first time the bootstrap pushes
+            // SYNTHESIZED message bytes (not a token-referenced STR_LIT).
+            // id_len==4 distinguishes from other macro names already
+            // covered (panic/print/println/eprint/eprintln are 5+ chars).
+            let is_todo_name_macro = if id_len == 4 {
+                let tb0 = __arena_get(id_start);
+                let tb1 = __arena_get(id_start + 1);
+                let tb2 = __arena_get(id_start + 2);
+                let tb3 = __arena_get(id_start + 3);
+                if tb0 == 116 { if tb1 == 111 { if tb2 == 100 {
+                    if tb3 == 111 { 1 }
+                    else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             let mac_t3 = tok_tag(tok_base, k + 3);
             let mac_t4 = tok_tag(tok_base, k + 4);
             let is_panic_str_form = if is_panic_name_macro == 1 {
@@ -3485,6 +3503,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let is_eprint_str_form = if is_eprint_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
                 else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F22g (2026-05-27): shape guard for todo!() -- empty
+            // parens. Tokens after the IDENT!: mac_t2 = TK_LPAREN (3),
+            // mac_t3 = TK_RPAREN (4). No mac_t4 check needed (whatever
+            // follows the `)` is the next statement).
+            let is_todo_empty_form = if is_todo_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 4 { 1 }
+                else { 0 } } else { 0 }
             } else { 0 };
             if is_panic_str_form == 1 {
                 // Capture the STR_LIT body bytes from the k+3 token.
@@ -3605,6 +3631,39 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(110); __arena_push(116); __arena_push(95);
                 __arena_push(115); __arena_push(116); __arena_push(114);
                 mk_node(16, ep_name_s, 10, ep_args_head)
+            } else { if is_todo_empty_form == 1 {
+                // K1.F22g: synthesize AST_CALL(panic, "not yet implemented").
+                // First ZERO-arg macro (shape `IDENT ! ( )` with no
+                // STR_LIT between the parens). Routes through the K1.F22
+                // panic codegen path (K1.AE/AH/AI prefix + msg + newline
+                // + ud2). The message bytes are SYNTHESIZED here (pushed
+                // directly into the arena) rather than referenced from a
+                // tok-table STR_LIT -- the first time the bootstrap does
+                // this for a macro expansion.
+                cur_advance(sb);                 // consume IDENT
+                cur_advance(sb);                 // consume '!'
+                cur_advance(sb);                 // consume '('
+                cur_advance(sb);                 // consume ')'  (4 advances, not 5)
+                // Push "not yet implemented" message bytes (19 chars:
+                // 110 111 116 32 121 101 116 32 105 109 112 108 101 109
+                // 101 110 116 101 100). Each byte is one arena slot per
+                // the kovc_byte_eq one-byte-per-i32-slot convention.
+                let td_msg_s = __arena_push(110);        // 'n'
+                __arena_push(111); __arena_push(116);    // 'o' 't'
+                __arena_push(32);                        // ' '
+                __arena_push(121); __arena_push(101); __arena_push(116);  // 'y' 'e' 't'
+                __arena_push(32);                        // ' '
+                __arena_push(105); __arena_push(109); __arena_push(112);  // 'i' 'm' 'p'
+                __arena_push(108); __arena_push(101); __arena_push(109);  // 'l' 'e' 'm'
+                __arena_push(101); __arena_push(110); __arena_push(116);  // 'e' 'n' 't'
+                __arena_push(101); __arena_push(100);                     // 'e' 'd'
+                let td_str_ast = mk_node(25, td_msg_s, 19, 0);
+                let td_args_head = mk_node(17, td_str_ast, 0, 0);
+                // Push "panic" name bytes (5 chars: 112 97 110 105 99).
+                let td_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                mk_node(16, td_panic_name_s, 5, td_args_head)
             } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'
@@ -3631,7 +3690,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting; K1.F22d: +1 more for is_eprintln_str_form; K1.F22e: +1 more for is_print_str_form; K1.F22f: +1 more for is_eprint_str_form
+            }}}}}}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting; K1.F22d: +1 more for is_eprintln_str_form; K1.F22e: +1 more for is_print_str_form; K1.F22f: +1 more for is_eprint_str_form; K1.F22g: +1 more for is_todo_empty_form
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

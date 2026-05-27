@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 230      # last bump: K1.F22f -- stderr no-newline variant: eprint!("msg") parser-side rewrites to AST_CALL(eprint_str, str_arg). New eprint_str builtin at bn_state slot 173 (10 chars; codegen is K1.AK print_str with `mov edi, 2` instead of `mov edi, 1`). 6-byte IDENT "eprint" match (101 112 114 105 110 116). Test verifies stderr=="err" with NO newline + stdout EMPTY; eprintln!("err") regression probe still emits stderr=="err\\n". Completes the print/eprint x newline/no-newline 2x2 grid: print/println/eprint/eprintln all expand at parse time
+K_BOOTSTRAP_CHUNKS_DONE = 231      # last bump: K1.F22g -- FIRST zero-arg macro: todo!() parser-side rewrites to AST_CALL(panic, str_arg) where str_arg holds the parser-synthesized bytes "not yet implemented" (19 chars). First time the bootstrap pushes a SYNTHESIZED string message into the arena (not just a tok-table-referenced STR_LIT). Routes through the existing K1.F22 panic codegen path (K1.AE/AH/AI). 4-byte IDENT "todo" match (116 111 100 111); shape `IDENT ! ( )` distinguishes from arg-bearing macros. Test verifies rc=132, stderr contains 'not yet implemented' AND the 'panic[28501]: ' prefix; panic!("oops") regression intact
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

@@ -7996,6 +7996,99 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_k1f22g_todo_macro_expansion_self_host():
+    """K1.F22g (2026-05-27): FIRST zero-arg macro and first time the
+    bootstrap pushes a SYNTHESIZED string message into the arena (not
+    a tok-table-referenced STR_LIT body). `todo!()` parser-side
+    rewrites to AST_CALL(panic, str_arg) where str_arg holds the
+    parser-synthesized bytes "not yet implemented" (19 chars). The
+    panic routes through the existing K1.AE/AH/AI codegen path so the
+    final output on stderr is the standard panic format:
+    "panic[28501]: not yet implemented\\n", then ud2 -> SIGILL (rc=132).
+
+    Probes:
+      todo!()  -- rc=132, stderr contains "not yet implemented".
+
+    Regression: panic!("oops") still SIGILLs with its original message.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    # Probe: todo!() panics with the synthesized message on stderr.
+    name = "k1f22g_todo_empty"
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.bin"
+    src = 'fn main() -> i32 { todo!() }'
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path}; printf %s {repr(src)} > {in_path}"],
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    assert run_k2.returncode == 132, (
+        f"K1.F22g todo!(): expected rc=132 (SIGILL via panic+ud2); "
+        f"got {run_k2.returncode}. stderr={run_k2.stderr!r}, "
+        f"stdout={run_k2.stdout!r}. If rc=0 or 42, K1.F22g detection "
+        f"failed and K1.CB no-op-skipped instead."
+    )
+    assert b"not yet implemented" in run_k2.stderr, (
+        f"K1.F22g message probe: expected stderr to contain "
+        f"b'not yet implemented' (the parser-synthesized panic body); "
+        f"got stderr={run_k2.stderr!r}. If the synthesized bytes are "
+        f"missing or corrupted, the K1.F22g arena push order is wrong."
+    )
+    assert b"panic[28501]:" in run_k2.stderr, (
+        f"K1.F22g panic-prefix probe: expected stderr to contain "
+        f"the K1.AH 'panic[28501]: ' prefix; got "
+        f"stderr={run_k2.stderr!r}. If missing, the synthesized "
+        f"AST_CALL didn't route through the panic codegen."
+    )
+
+    # Regression: K1.F22 panic!("oops") still works -- the
+    # K1.F22g detection didn't shadow it.
+    rc_p = _kovc_self_host_compile_and_run(
+        "k1f22g_panic_still_works",
+        'fn main() -> i32 { panic!("oops"); 42 }',
+    )
+    assert rc_p == 132, (
+        f"K1.F22g regression: expected panic!(\"oops\") to still "
+        f"SIGILL with rc=132 (K1.F22 expansion intact); got {rc_p}. "
+        f"If rc=42, K1.F22 regressed via K1.F22g shadowing."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +
