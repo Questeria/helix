@@ -507,7 +507,11 @@ through the K2 parity harness where applicable.
 | field-store mutation | ✅ **CLOSED** | K1.F6 — AST_FIELD_STORE (tag 79) emitted by parse_expr_basic when lhs is AST_TUPLE_FIELD + `=`; codegen mirrors read side via push/pop/`mov [rcx+off], eax` |
 | const-name resolution | ✅ **CLOSED** | K1.F7 — sb-slot const_tab (94/95) + accessor helpers + parse_const_decl structured parse + mk_var_with_capture inlines the stored value AST |
 | mixed-type binops (signed i64↔i32, ADD/SUB/MUL/DIV/MOD) | ✅ **CLOSED** | K1.F8 (forward i64+i32), K1.F8b (reverse i32+i64), K1.F8c (DIV/MOD both directions); 2 new helpers `emit_movsxd_rcx_ecx` / `_rax_eax`; expr_type returns 3 (i64) for both `(3,0)` and `(0,3)` |
-| mixed-type binops (unsigned u64↔u32) | ⏳ **WIP** | K1.F8d staged twice (this and prior tick); reverted both times because WSL was unreliable during validation. Code design is a copy-paste of K1.F8b/F8c (zero-ext via mov_ecx_eax already correct for unsigned, no movsxd needed; expr_type adds (9,6) and (6,9) cases). Ships next WSL-clean tick. |
+| mixed-type binops (unsigned u64↔u32) | ✅ **CLOSED** | K1.F8d (`76af5dc`) — ADD/SUB/MUL/DIV/MOD across both directions; zero-ext via `mov_ecx_eax` already correct for unsigned (no movsxd needed); expr_type adds (9,6) and (6,9) cases. K3.B-style exactly-u32 (tag-6) guard ensures non-u32 operands still trap. |
+| mixed-type binops (float f32↔f64) | ✅ **CLOSED** | K1.F9 (`f290393`, partial) — ADD/SUB/MUL/DIV in both directions via SSE `cvtss2sd` widening (2 new helpers `emit_cvt_f32_in_rax_to_f64` + `_rcx_*`); K1.F9-fix (`8ea2f66`) closed the documented ADD-reverse miscompile by adding the missing `r_d == 1` leg to AST_ADD's mov-rcx step (SUB/MUL/DIV already had it). MOD still traps by design (no SSE remainder instruction). Permanent self-host test pinned in test_codegen.py. |
+| mixed-type comparisons (signed i64↔i32, all 6 cmp ops) | ✅ **CLOSED** | K1.F11 (`dea596c`, LT) + K1.F12 (`d3444a0`, GT/EQ/NE/LE/GE batch); K2 corpus 97→107 (10 new parity probes); both compilers agree. EQ/NE reuse i64 helpers (signedness-agnostic). |
+| mixed-type comparisons (unsigned u64↔u32, all 6 cmp ops) | ✅ **CLOSED** | K1.F13 (`a34de20`) — 6-site mirror batch across LT/GT/EQ/NE/LE/GE; K2 corpus 107→119 (12 new parity probes). Exactly-u32 guard. |
+| mixed-type comparisons (float f64↔f32, all 6 cmp ops) | ✅ **CLOSED** | K1.F14 (`1fa6507`) — 6-site mirror batch using `emit_cvt_f32_in_rcx_to_f64` / `_rax_to_f64` + `emit_ssen_*_dbl`. Permanent self-host test pinned in test_codegen.py. K2 corpus skips because Python helixc's IR-lowering surface form for f64→i32 is not symmetric. |
 | generic monomorphization | ❌ OPEN | Type erasure works for i32-shaped T (K1.F-discovery batch 27 via turbofish); full monomorphization for non-i32 T is the gap. |
 | f16 bit-accurate | ❌ OPEN | _f16 lexes as bf16-shaped (K1.BH 2026-05-26); IEEE-754 half-precision bit pattern not yet emitted. |
 | reflection (quote/splice/modify/reflect_hash) | ⚠️ STUB | Builtins registered at bn_state slots 118-120 + 164-168 (K1.F2/F3/F4 2026-05-26 + 2026-05-27); real semantics (writing reflection cells, hash computation) still pending. |
@@ -517,15 +521,31 @@ through the K2 parity harness where applicable.
 | trace events | ⚠️ STUB | __trace_event slot 165 (K1.F3 2026-05-27, variadic-tolerant no-op stub); real trace-arena impl pending. |
 | macros | ⚠️ PARSER-ONLY | `IDENT!(...)` parses as no-op call (K1.CB 2026-05-26); no macro expansion. |
 
-Also closed this session: K2 parity corpus grew 70 → 85 entries
-across K2.G (const-name probes) + K2.H (mixed-type binop probes),
-pinning the K1.F7/F8/F8b/F8c closures across BOTH compilers.
+Also closed this session: K2 parity corpus grew 70 → 119 entries
+across K2.G–K2.P (const-name probes + mixed-type binop probes +
+mixed-type comparison probes), pinning the K1.F7/F8*/F11/F12/F13
+closures across BOTH compilers.
 
-Three of the user's enumerated Category-2 items are now fully
-**CLOSED** end-to-end and parity-pinned (impl method dispatch,
-field-store mutation, const-name resolution). Mixed-type binops
-is mostly closed (signed i64↔i32 for all five arith ops); the
-unsigned u64↔u32 leg lands the next WSL-clean tick.
+The mixed-type numeric cross-width matrix (binops + comparisons ×
+{signed i64↔i32, unsigned u64↔u32, float f64↔f32}) is now
+**FULLY CLOSED** for the bootstrap. Six of the user's enumerated
+Category-2 items are fully **CLOSED** end-to-end (impl method
+dispatch, field-store mutation, const-name resolution, mixed-type
+binops, mixed-type comparisons; the last subsumes both binops and
+cmps across all three numeric type-pair classes). The remaining
+six Category-2 items (generic monomorphization, f16 bit-accurate,
+reflection real semantics, tile ops, GPU backends, MLIR migration,
+trace events real impl, macros real expansion) are the heavier
+blocks remaining before Python-ready-to-delete state.
+
+**Audit status**: the K1.F11/F12/F13/F14 mirror-pattern widening
+batch has NOT yet been put through a 3-axis audit. Each chunk
+follows a single mechanical template (the K1.F8b/F8d/F9-fix
+mov-rcx leg + K3.B-style exactly-type guard) that has already
+been audit-clean for the binop variant. A batched audit on the
+4 commits is queued as a follow-up tick; until then the closure
+table marks them ✅ but the audit-clean counter for the 5-clean
+gate stays at 0 (resets on the first HIGH or must-fix finding).
 
 ## Audit-clean signals (pre-stop-criterion tracking)
 
