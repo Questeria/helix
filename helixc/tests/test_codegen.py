@@ -8089,6 +8089,129 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_k1f22h_unimplemented_unreachable_macros_self_host():
+    """K1.F22h (2026-05-27): two more zero-arg fixed-message panics
+    sharing the K1.F22g arena-push-synthesized-message substrate:
+
+      unimplemented!() -> panic "not implemented" (15 chars, Rust stdlib
+        default for unimplemented!).
+      unreachable!()   -> panic "internal error: entered unreachable
+        code" (40 chars, Rust stdlib default for unreachable!).
+
+    Both detect their IDENT name by length+bytes (13 / 11 chars) and
+    shape `IDENT ! ( )`. Synthesize AST_CALL(panic, str_arg) with the
+    fixed message pushed into the arena byte-by-byte, then route through
+    K1.F22's panic codegen (K1.AE/AH/AI prefix + msg + newline + ud2).
+
+    Regression: K1.F22g todo!() and K1.F22 panic!() still SIGILL with
+    their original messages (verifies K1.F22h doesn't shadow them).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    def _run_panic_probe(name, src):
+        """Build the K2 binary for src, run it, return (rc, stderr, stdout)."""
+        in_path = f"/tmp/sh_{name}_in.hx"
+        out_path = f"/tmp/sh_{name}_out.bin"
+        k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"rm -f {in_path} {out_path}; printf %s {repr(src)} > {in_path}"],
+            check=True, timeout=10,
+        )
+        compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+        rk = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"chmod +x {out_path} && {out_path}"],
+            capture_output=True, timeout=10,
+        )
+        return rk.returncode, rk.stderr, rk.stdout
+
+    # Probe 1: unimplemented!()
+    rc_u, stderr_u, _ = _run_panic_probe(
+        "k1f22h_unimpl",
+        'fn main() -> i32 { unimplemented!() }',
+    )
+    assert rc_u == 132, (
+        f"K1.F22h unimplemented!: expected rc=132; got {rc_u}. "
+        f"stderr={stderr_u!r}. If rc=0/42, the K1.F22h detection "
+        f"failed and K1.CB no-op-skipped."
+    )
+    assert b"not implemented" in stderr_u, (
+        f"K1.F22h unimplemented! message probe: expected stderr to "
+        f"contain b'not implemented'; got stderr={stderr_u!r}. If "
+        f"absent or corrupted, the K1.F22h arena push order is wrong."
+    )
+    assert b"panic[28501]:" in stderr_u, (
+        f"K1.F22h unimplemented! panic-prefix probe: expected the "
+        f"K1.AH 'panic[28501]: ' prefix; got stderr={stderr_u!r}."
+    )
+
+    # Probe 2: unreachable!()
+    rc_r, stderr_r, _ = _run_panic_probe(
+        "k1f22h_unreach",
+        'fn main() -> i32 { unreachable!() }',
+    )
+    assert rc_r == 132, (
+        f"K1.F22h unreachable!: expected rc=132; got {rc_r}. "
+        f"stderr={stderr_r!r}."
+    )
+    assert b"internal error: entered unreachable code" in stderr_r, (
+        f"K1.F22h unreachable! message probe: expected stderr to "
+        f"contain b'internal error: entered unreachable code'; got "
+        f"stderr={stderr_r!r}. If absent or corrupted, the 40-byte "
+        f"arena push for the unreachable message has a typo."
+    )
+
+    # Probe 3 (regression): todo!() still emits "not yet implemented"
+    # -- verifies K1.F22h doesn't shadow K1.F22g.
+    rc_t, stderr_t, _ = _run_panic_probe(
+        "k1f22h_todo_regression",
+        'fn main() -> i32 { todo!() }',
+    )
+    assert rc_t == 132 and b"not yet implemented" in stderr_t, (
+        f"K1.F22h regression: todo!() expected rc=132 + stderr "
+        f"containing 'not yet implemented'; got rc={rc_t}, "
+        f"stderr={stderr_t!r}. K1.F22g may have been shadowed."
+    )
+
+    # Probe 4 (regression): panic!("oops") still SIGILLs.
+    rc_p = _kovc_self_host_compile_and_run(
+        "k1f22h_panic_still_works",
+        'fn main() -> i32 { panic!("oops"); 42 }',
+    )
+    assert rc_p == 132, (
+        f"K1.F22h regression: panic!(\"oops\") expected rc=132; got "
+        f"{rc_p}. K1.F22 may have been shadowed by K1.F22h."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +

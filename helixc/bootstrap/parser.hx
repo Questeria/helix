@@ -3478,6 +3478,59 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22h (2026-05-27): unimplemented!() detection. 13-char
+            // IDENT "unimplemented" = bytes 117 110 105 109 112 108 101
+            // 109 101 110 116 101 100. Zero-arg sibling of todo!() -- the
+            // synthesized panic message is "not implemented" (15 chars,
+            // the Rust-stdlib default for `unimplemented!`). id_len==13
+            // distinguishes from todo (4), unreachable (11) and all
+            // other macro names.
+            let is_unimpl_name_macro = if id_len == 13 {
+                let ub0 = __arena_get(id_start);
+                let ub1 = __arena_get(id_start + 1);
+                let ub2 = __arena_get(id_start + 2);
+                let ub3 = __arena_get(id_start + 3);
+                let ub4 = __arena_get(id_start + 4);
+                let ub5 = __arena_get(id_start + 5);
+                let ub6 = __arena_get(id_start + 6);
+                let ub7 = __arena_get(id_start + 7);
+                let ub8 = __arena_get(id_start + 8);
+                let ub9 = __arena_get(id_start + 9);
+                let ub10 = __arena_get(id_start + 10);
+                let ub11 = __arena_get(id_start + 11);
+                let ub12 = __arena_get(id_start + 12);
+                if ub0 == 117 { if ub1 == 110 { if ub2 == 105 {
+                    if ub3 == 109 { if ub4 == 112 { if ub5 == 108 {
+                    if ub6 == 101 { if ub7 == 109 { if ub8 == 101 {
+                    if ub9 == 110 { if ub10 == 116 { if ub11 == 101 {
+                    if ub12 == 100 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            // K1.F22h (2026-05-27): unreachable!() detection. 11-char
+            // IDENT "unreachable" = bytes 117 110 114 101 97 99 104 97
+            // 98 108 101. Zero-arg sibling -- synthesized message is
+            // "internal error: entered unreachable code" (40 chars, the
+            // Rust-stdlib default for `unreachable!`).
+            let is_unreach_name_macro = if id_len == 11 {
+                let nb0 = __arena_get(id_start);
+                let nb1 = __arena_get(id_start + 1);
+                let nb2 = __arena_get(id_start + 2);
+                let nb3 = __arena_get(id_start + 3);
+                let nb4 = __arena_get(id_start + 4);
+                let nb5 = __arena_get(id_start + 5);
+                let nb6 = __arena_get(id_start + 6);
+                let nb7 = __arena_get(id_start + 7);
+                let nb8 = __arena_get(id_start + 8);
+                let nb9 = __arena_get(id_start + 9);
+                let nb10 = __arena_get(id_start + 10);
+                if nb0 == 117 { if nb1 == 110 { if nb2 == 114 {
+                    if nb3 == 101 { if nb4 == 97 { if nb5 == 99 {
+                    if nb6 == 104 { if nb7 == 97 { if nb8 == 98 {
+                    if nb9 == 108 { if nb10 == 101 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             let mac_t3 = tok_tag(tok_base, k + 3);
             let mac_t4 = tok_tag(tok_base, k + 4);
             let is_panic_str_form = if is_panic_name_macro == 1 {
@@ -3509,6 +3562,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // mac_t3 = TK_RPAREN (4). No mac_t4 check needed (whatever
             // follows the `)` is the next statement).
             let is_todo_empty_form = if is_todo_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 4 { 1 }
+                else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F22h (2026-05-27): shape guards for unimplemented!()
+            // and unreachable!() -- both zero-arg, same `( )` shape.
+            let is_unimpl_empty_form = if is_unimpl_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 4 { 1 }
+                else { 0 } } else { 0 }
+            } else { 0 };
+            let is_unreach_empty_form = if is_unreach_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 4 { 1 }
                 else { 0 } } else { 0 }
             } else { 0 };
@@ -3664,6 +3727,69 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(97); __arena_push(110); __arena_push(105);
                 __arena_push(99);
                 mk_node(16, td_panic_name_s, 5, td_args_head)
+            } else { if is_unimpl_empty_form == 1 {
+                // K1.F22h: synthesize AST_CALL(panic, "not implemented").
+                // Sibling of K1.F22g todo!() -- same substrate, different
+                // synthesized message (15 chars: the Rust-stdlib default
+                // for unimplemented!).
+                cur_advance(sb);                 // IDENT
+                cur_advance(sb);                 // !
+                cur_advance(sb);                 // (
+                cur_advance(sb);                 // )
+                // Push "not implemented" (15 chars: 110 111 116 32 105
+                // 109 112 108 101 109 101 110 116 101 100).
+                let ui_msg_s = __arena_push(110);                         // 'n'
+                __arena_push(111); __arena_push(116);                     // 'o' 't'
+                __arena_push(32);                                         // ' '
+                __arena_push(105); __arena_push(109); __arena_push(112);  // 'i' 'm' 'p'
+                __arena_push(108); __arena_push(101); __arena_push(109);  // 'l' 'e' 'm'
+                __arena_push(101); __arena_push(110); __arena_push(116);  // 'e' 'n' 't'
+                __arena_push(101); __arena_push(100);                     // 'e' 'd'
+                let ui_str_ast = mk_node(25, ui_msg_s, 15, 0);
+                let ui_args_head = mk_node(17, ui_str_ast, 0, 0);
+                let ui_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                mk_node(16, ui_panic_name_s, 5, ui_args_head)
+            } else { if is_unreach_empty_form == 1 {
+                // K1.F22h: synthesize AST_CALL(panic,
+                // "internal error: entered unreachable code").
+                // Sibling of K1.F22g todo!() -- same substrate, longer
+                // synthesized message (40 chars: the Rust-stdlib default
+                // for unreachable!).
+                cur_advance(sb);                 // IDENT
+                cur_advance(sb);                 // !
+                cur_advance(sb);                 // (
+                cur_advance(sb);                 // )
+                // Push "internal error: entered unreachable code" (40
+                // chars: i n t e r n a l SP e r r o r ':' SP e n t e r
+                // e d SP u n r e a c h a b l e SP c o d e).
+                let ur_msg_s = __arena_push(105);                         // 'i'
+                __arena_push(110); __arena_push(116); __arena_push(101);  // 'n' 't' 'e'
+                __arena_push(114); __arena_push(110); __arena_push(97);   // 'r' 'n' 'a'
+                __arena_push(108);                                        // 'l'
+                __arena_push(32);                                         // ' '
+                __arena_push(101); __arena_push(114); __arena_push(114);  // 'e' 'r' 'r'
+                __arena_push(111); __arena_push(114);                     // 'o' 'r'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(101); __arena_push(110); __arena_push(116);  // 'e' 'n' 't'
+                __arena_push(101); __arena_push(114); __arena_push(101);  // 'e' 'r' 'e'
+                __arena_push(100);                                        // 'd'
+                __arena_push(32);                                         // ' '
+                __arena_push(117); __arena_push(110); __arena_push(114);  // 'u' 'n' 'r'
+                __arena_push(101); __arena_push(97); __arena_push(99);    // 'e' 'a' 'c'
+                __arena_push(104); __arena_push(97); __arena_push(98);    // 'h' 'a' 'b'
+                __arena_push(108); __arena_push(101);                     // 'l' 'e'
+                __arena_push(32);                                         // ' '
+                __arena_push(99); __arena_push(111); __arena_push(100);   // 'c' 'o' 'd'
+                __arena_push(101);                                        // 'e'
+                let ur_str_ast = mk_node(25, ur_msg_s, 40, 0);
+                let ur_args_head = mk_node(17, ur_str_ast, 0, 0);
+                let ur_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                mk_node(16, ur_panic_name_s, 5, ur_args_head)
             } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'
@@ -3690,7 +3816,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting; K1.F22d: +1 more for is_eprintln_str_form; K1.F22e: +1 more for is_print_str_form; K1.F22f: +1 more for is_eprint_str_form; K1.F22g: +1 more for is_todo_empty_form
+            }}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2 (is_unimpl_empty_form, is_unreach_empty_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

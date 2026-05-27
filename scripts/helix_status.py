@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 231      # last bump: K1.F22g -- FIRST zero-arg macro: todo!() parser-side rewrites to AST_CALL(panic, str_arg) where str_arg holds the parser-synthesized bytes "not yet implemented" (19 chars). First time the bootstrap pushes a SYNTHESIZED string message into the arena (not just a tok-table-referenced STR_LIT). Routes through the existing K1.F22 panic codegen path (K1.AE/AH/AI). 4-byte IDENT "todo" match (116 111 100 111); shape `IDENT ! ( )` distinguishes from arg-bearing macros. Test verifies rc=132, stderr contains 'not yet implemented' AND the 'panic[28501]: ' prefix; panic!("oops") regression intact
+K_BOOTSTRAP_CHUNKS_DONE = 232      # last bump: K1.F22h -- two zero-arg sibling macros batched: unimplemented!() -> panic "not implemented" (15 chars; Rust stdlib default); unreachable!() -> panic "internal error: entered unreachable code" (40 chars; Rust stdlib default). Both reuse the K1.F22g arena-push-synthesized-message substrate; only the IDENT detection (13 bytes "unimplemented" / 11 bytes "unreachable") and the per-macro message bytes differ. Tests verify rc=132 + the expected message strings on stderr; K1.F22g todo!() and K1.F22 panic!() regressions intact
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
