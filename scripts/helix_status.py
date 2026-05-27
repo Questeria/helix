@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 206      # last bump: K1.F17 -- variadic walk extended to 4 more reflection/trace stubs (mirror batch)
+K_BOOTSTRAP_CHUNKS_DONE = 207      # last bump: K2.T -- matrix-honesty sweep (row 70 KOVC-MISSING -> PARITY; rows 67/76 updated with K1.F8c-F9 + F11-F14 refs)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -106,8 +106,17 @@ K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # 18 `| KOVC-MISSING |` = 144 rows
                                     # with a status column. The earlier
                                     # 143 was the K0-chunk estimate.
-K_BOOTSTRAP_PARITY_DONE = 137      # K1.F8b 2026-05-27: Mixed-type
-                                    # binops row inline status flipped
+K_BOOTSTRAP_PARITY_DONE = 138      # K2.T 2026-05-27: matrix-honesty
+                                    # sweep flipped row 70 ("Mixed f32/
+                                    # f64 arithmetic") from KOVC-MISSING
+                                    # to FUNCTIONAL PARITY (K1.F9 +
+                                    # K1.F9-fix closed it). 137 -> 138.
+                                    # Row 67 (Mixed-type binops) also
+                                    # expanded to note u64<->u32 + float
+                                    # closures. Row 76 (Comparisons)
+                                    # noted mixed-type cmp closure
+                                    # (K1.F11-F14). K1.F8b 2026-05-27:
+                                    # Mixed-type binops row inline status flipped
                                     # to FUNCTIONAL PARITY for the
                                     # signed i64<->i32 ADD/SUB/MUL
                                     # cases (BOTH directions). 136 -> 137
