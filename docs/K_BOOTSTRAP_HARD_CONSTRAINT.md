@@ -631,6 +631,65 @@ The 5-clean counter for the eventual loop-stop gate stays at 0
 until Python-ready-to-delete is reached; this signal is logged
 toward the long-term audit-clean history.
 
+### 2026-05-27 — K1.F15 + K1.F15b + K1.F16 + K1.F17 (K3.H signal)
+
+Inline silent-failure audit run on commits `a1b89ea..4cc2c48`
++ `45a0d0e` (K1.F15 f16 bit-accurate codegen, K1.F15b permanent
+bit-pattern test, K1.F16 __trace_event variadic walk, K1.F17 4-
+stub variadic walk batch). The audit-discipline question for
+each: do the changes introduce new silent-failure classes, and
+do they correctly close the ones they target?
+
+K1.F15 (f16 bit-accurate, 3-file change across lexer/parser/
+codegen + new f32_to_f16_bits helper):
+  - Lex disjointness: `_bf16` matcher (5 bytes from p) advances
+    `p = p + 5` on match; `_f16` matcher (4 bytes from p) runs
+    SECOND; the b1 byte check ('b' vs 'f') makes the matchers
+    structurally disjoint. No cross-contamination risk.
+  - Parser routing: t==44 -> AST tag 80 is a fresh mapping with
+    no overlap (verified by Bash `grep ' t == 44 \| t == 80'`
+    showing only the new arms).
+  - f32_to_f16_bits coverage: zero/subnormal flush, Inf/NaN
+    preserved, overflow -> +/-Inf, underflow -> +/-0, normal
+    rebias 127->15. Truncating mantissa (no round-to-nearest-
+    even) is a documented Phase-0 limitation; not a silent
+    failure (deterministic and per-spec).
+  - expr_type tag 80 -> 4 (bf16) so arith traps via is_bf16_
+    expr (verified by direct reading of expr_type cascade);
+    same trap class as bf16, no silent-arith-on-half class.
+
+K1.F15b: 2-assert permanent test. 1.125_f16 -> rc=128 (low byte
+of 0x3C80); 1.125_bf16 -> rc=0 (low byte of 0x3F900000, bf16
+in high half). Distinguishable values confirm the encoding is
+genuinely IEEE-754 half-precision, not bf16-shaped truncation.
+
+K1.F16 + K1.F17 (5-stub variadic walk batch):
+  - Same template at 5 sites: walk args_head linked list via
+    `cur = __arena_get(cur + 3)` next-pointer; accumulate byte
+    count. Each site uses a distinct 2-char variable prefix
+    (tev_, rh_, hs_, hm_, hr_) so the let-bindings don't shadow
+    across the shared emit_ast_code scope.
+  - Closes silent-arg-drop class: a 3-arg call's args 2+ were
+    previously evaluated only via the first arg's emit, then
+    dropped from the emit stream. Now each arg's evaluation
+    runs in turn for side effects (mutations, panic, prints).
+  - 9 probes across K1.F16 (4) + K1.F17 (5): 0-arg, 1-arg, 3-
+    arg variants per stub, all rc=42 PASS. No new fail-closed
+    paths introduced; the stub returns 0 in eax via the final
+    `mov eax, 0` as before.
+
+Verdict: **NO HIGH, NO must-fix-MEDIUM**. 14 probes across the
+4 chunks all green. Mantissa-rounding gap in f32_to_f16_bits
+is documented Phase-0 limitation (truncate is per-spec a
+legal but not-IEEE-default rounding mode; round-to-nearest-
+even is a deferred-correctness item, NOT a silent-failure
+class).
+
+This is the THIRD cleanly-audited code batch from this loop
+(after K3.E covering K3.A-D + K1.F8d, and K3.F covering K1.F11-
+F14). The audit-clean signal pile is growing as the K1.F*
+mirror-pattern discipline holds.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)
