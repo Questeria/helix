@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 222      # last bump: K1.F22 -- the bootstrap's FIRST real macro expansion. panic!("msg") rewrites at parse-time inside K1.CB to AST_CALL(panic, str_arg) using the existing panic builtin codegen (K1.AE/AH/AI). Narrow scope: only exact panic!(STR); other macros still no-op-skip. K_BOOTSTRAP_HARD_CONSTRAINT.md macros row flips from PARSER-ONLY to PARTIAL
+K_BOOTSTRAP_CHUNKS_DONE = 223      # last bump: K3.M -- 2-axis audit on K1.F22 (silent-failure-hunter + combined type-design + code-reviewer) NO HIGH, NO must-fix-MEDIUM. Token-consumption arithmetic, arena-push timing, shape-guard exclusivity, byte-sequence + tag-number verification, brace balance, codegen compat, test coverage -- all clean. EIGHTH cleanly-audited batch (K3.E/F/H/I/J/K/L/M)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

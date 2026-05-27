@@ -748,6 +748,58 @@ mirror-pattern discipline holds; the audit-clean signal pile
 continues to grow toward the 5-consecutive-clean gate that
 activates once Python-ready-to-delete state lands.
 
+### 2026-05-27 — K1.F22 (K3.M signal)
+
+2-axis audit (silent-failure-hunter / combined type-design + code-
+reviewer) dispatched on commit `1ef4252` (K1.F22 panic!("msg") macro
+real expansion -- the bootstrap's first real macro). Findings:
+
+**silent-failure-hunter**: CLEAN. NO HIGH, NO must-fix-MEDIUM.
+  - Token-consumption arithmetic verified: 5 cur_advance(sb) calls
+    match the 5-token shape `IDENT ! ( STR )`. The fall-through
+    K1.CB no-op-skip path consumes the same 5 tokens (3 pre-loop
+    + 1 in-loop + 1 post-loop) -- cursor positions agree.
+  - Arena-push timing safe: parse_top (where K1.F22 fires) runs
+    BEFORE emit_elf_for_ast_to_path; the ELF byte stream hasn't
+    started yet, so the 5 `__arena_push` calls for "panic" name
+    bytes don't corrupt the code region.
+  - Token-tag numbers verified against lexer.hx: TK_NOT=18,
+    TK_LPAREN=3, TK_STRLIT=25, TK_RPAREN=4. The guard
+    `mac_t2==3 && mac_t3==25 && mac_t4==4` is conservative; bare
+    `panic!()`, `panic!(x)`, `panic!("fmt", x)` all fall through
+    to no-op-skip.
+  - No multi-IDENT collision: plain `panic(...)` (no `!`) fails
+    the `is_macro_call` outer gate and routes through the regular
+    AST_CALL path. K1.F22 only fires on literal `panic ! ( STR )`.
+  - Codegen arg validation compatible: panic codegen at
+    kovc.hx:4337-4356 reads `args_head + 1` -> arg expr, expects
+    AST_STR_LIT (tag 25), reads body_s/body_l from slot+1/+2.
+    K1.F22's synthesized chain `mk_node(25,...) -> mk_node(17,...) ->
+    mk_node(16,...)` satisfies every expectation.
+
+**type-design + code-reviewer**: CLEAN. NO HIGH, NO must-fix-MEDIUM.
+  - "panic" byte sequence (112 97 110 105 99) verified: 'p'=112,
+    'a'=97, 'n'=110, 'i'=105, 'c'=99. IDENT-match check + arena-
+    push sequence both use the same bytes in the same order.
+  - AST tag numbers verified against parser.hx:30-70 documentation:
+    AST_INT=0, AST_STR_LIT=25, AST_ARG=17, AST_CALL=16.
+  - Slot conventions match the K3.L fix: AST_ARG slot+1=expr,
+    slot+2=next; AST_CALL slot+1=name_s, slot+2=name_l,
+    slot+3=args_head. K1.F22 builds via these slots correctly.
+  - Brace structure balanced: K1.F22 adds one `if-else` cascade
+    inside `is_macro_call == 1`, preserving the outer if-else
+    pairing.
+  - Test coverage adequate: `panic!("oops"); 42` -> rc=132 pins
+    the full pipeline end-to-end; `println!("hello"); 42` -> rc=42
+    pins that the panic-name guard isn't over-eager.
+
+Verdict: **K1.F22 CLEAN end-to-end**. NO HIGH, NO must-fix-MEDIUM
+on either axis. This is the EIGHTH cleanly-audited code batch
+(K3.E + K3.F + K3.H + K3.I + K3.J + K3.K + K3.L + K3.M). The
+audit-discipline pattern continues to verify both the existing
+closures and the new parse-time-rewrite pattern that K1.F22
+establishes for future macro expansions.
+
 ### 2026-05-27 — K1.F16/F17/F20b walks (K3.L silent-arg-drop fix)
 
 Discovered post-K3.K via direct code reading: the 6 reflection/trace
