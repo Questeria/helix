@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 215      # last bump: K1.F20b -- trace_event now writes the last walked arg's value to arena slot CAP-65 (disp 8388352); new __trace_last() builtin reads it back. Depth-1 observable trace runtime (slot at bn_state+169). 3 new self-host probes pin write+read=42, last-write-wins=99, BSS-zero=0
+K_BOOTSTRAP_CHUNKS_DONE = 216      # last bump: K2.U -- sync V3_HANDOFF.md section 4b with current state (was stale at chunks=202; now at 215) + matrix-honesty pass on the __trace_event row (refreshed annotation with K1.F20/F20b ring buffer + __trace_last). 7 of 12 Category-2 items now CLOSED end-to-end
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

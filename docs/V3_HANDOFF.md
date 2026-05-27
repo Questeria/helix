@@ -737,13 +737,18 @@ Python helixc/). See `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md` for
 the loop-stop criterion (Python-ready-to-delete state + 5
 consecutive clean audits).
 
-State at handoff (commit `3cc24ab`, 2026-05-27 mid-session):
+State at handoff (commit `5e0621f`, 2026-05-27 evening; the K-track
+has continued from the K2.S sync on `3cc24ab` through K1.F15/F18/
+F18b/F19/F20/F20b + matrix-honesty passes):
 
-- **`K_BOOTSTRAP_CHUNKS_DONE = 202`** (in `scripts/helix_status.py`).
-  **`K_BOOTSTRAP_PARITY_DONE = 137`** / 144 matrix rows.
+- **`K_BOOTSTRAP_CHUNKS_DONE = 215`** (in `scripts/helix_status.py`).
+  **`K_BOOTSTRAP_PARITY_DONE = 138`** / 144 matrix rows.
 - **K2 parity corpus**: 125 entries across `helixc/tests/test_k2_parity.py`
   (grew 85 -> 125 across K2.M/N/O/P/R; all 125 PASS the parity-gate
-  in the most recent representative-item smoke).
+  in the most recent representative-item smoke). Additional probes for
+  K1.F18b/F19/F20/F20b are pinned in test_codegen.py as bootstrap-only
+  self-host probes (Python's compile-and-run path doesn't symmetrically
+  accept those literals/builtins, so the K2 corpus skips them).
 - **Category-2 closures shipped this session** (chronological,
   state as of commit `3cc24ab`):
   - **K1.F5b** (`b5fee4a`) -- struct-receiver method-call dispatch.
@@ -801,28 +806,56 @@ State at handoff (commit `3cc24ab`, 2026-05-27 mid-session):
     re-open candidate if a Phase-1 architecture provides a
     cleaner parser/codegen state-plumbing seam.
 
-- **Category-2 closure status**: 6 of 12 items fully CLOSED:
+- **Category-2 closures shipped post-K2.S** (chronological):
+  - **K1.F15** (`a1b89ea`) -- f16 bit-accurate codegen (IEEE-754
+    half-precision 1+5+10) via new `f32_to_f16_bits` helper.
+  - **K1.F15b** (`45a0d0e`) -- permanent f16 bit-pattern test
+    distinguishing IEEE-754 half from bf16-shaped truncation.
+  - **K1.F16 / K1.F17** (`a6d631c` / `4cc2c48`) -- variadic walk
+    for 5 reflection/trace stubs (silent-arg-drop closure).
+  - **K1.F18** (`33c3be3`) -- f32_to_f16_bits round-to-nearest-
+    even (banker's rounding) replacing K1.F15's mantissa truncate.
+  - **K1.F18b** (`8966159`) -- f32_to_f16_bits gradual underflow /
+    f16 denormals for unbiased [-25, -15]; mantissa-shift + sticky-
+    OR + RNE; new `pow2_i32` helper.
+  - **K1.F19** (`fabbbab`) -- reflect_hash + __helix_reflect_hash
+    upgraded from 0-stubs to the real FNV mixer shared with
+    __hash_i32 (new `emit_hash_i32_mixer` helper).
+  - **K1.F20** (`5be68a0`) -- __trace_event drops the K1.F3 trailing
+    mov-eax-0 closer; call now returns the last walked arg's value
+    (LIFO walk, so it's the first source arg for n-arg calls).
+  - **K1.F20b** (`5e0621f`) -- __trace_event writes the last walked
+    value to arena slot CAP-65 (disp 8388352, one below the Quote
+    cell-table); new __trace_last() builtin at slot 169 reads it
+    back. Depth-1 last-write-wins observable trace runtime.
+
+- **Matrix-honesty doc passes**:
+  - **K2.T** (`a459eca`) -- flipped mixed-type matrix rows from
+    KOVC-MISSING to PARITY (numeric cross-width fully closed).
+  - **K1.F-discovery batch 31** (`2ac790e`) -- reflection
+    Category-2 row from PARTIAL to CLOSED (Quote/Splice/modify
+    cell-table runtime + K1.F19 mixer fully cover the bootstrap-
+    compileable subset; AST-shape-hash semantic is a Python-
+    future design choice).
+
+- **Category-2 closure status**: 7 of 12 items fully CLOSED:
     1. impl method dispatch (K1.F5b)
     2. field-store mutation (K1.F6)
     3. const-name resolution (K1.F7)
-    4. mixed-type binops -- ALL three type-pair classes (K1.F8*/F9*)
-    5. mixed-type comparisons -- ALL three type-pair classes
-       (K1.F11/F12/F13/F14) -- though comparisons aren't listed as
-       a separate Category-2 item by the user, the closure-progress
-       table tracks them as part of the broader mixed-type matrix
-    6. (the closure-progress table also implicitly closes the
-       comparison leg as part of #4's expanded scope)
-  REMAINING 6: generic monomorphization, f16 bit-accurate,
-  reflection real semantics, tile ops, GPU backends, MLIR
-  migration, trace events real impl, macros real expansion.
+    4. mixed-type binops -- ALL three type-pair classes (K1.F8*/F9*).
+       The mixed-comparisons leg (K1.F11/F12/F13/F14) is subsumed
+       under the user's combined "mixed-type binops" Category-2 item.
+    5. f16 bit-accurate (K1.F15 + K1.F18 RNE + K1.F18b denormals)
+    6. reflection (Quote/Splice/modify cell-table + K1.F19
+       reflect_hash mixer)
+    7. trace events (K1.F20 value-tap + K1.F20b depth-1 ring +
+       __trace_last read side)
+  REMAINING 5: generic monomorphization, tile ops, GPU backends,
+  MLIR migration, macros real expansion.
 
 - **Next priorities** (in approximate dependency order):
-  - f16 bit-accurate (split _f16 from _bf16 + emit IEEE-754 half)
-  - Trace events real impl (trace arena + __trace_event writer)
-  - Reflection real semantics (Quote/Splice/modify/reflect_hash
-    cells + hash computation)
-  - Generic monomorphization (track type substitutions across
-    call sites)
+  - Generic monomorphization (bare-call fallback `id(42)` ->
+    `id__i32` resolution; non-i32 T support)
   - Macros real expansion (token templating)
   - Tile ops + GPU backends + MLIR (the big multi-tick blocks)
   - K3 trusted-seed bootstrap (per HELIX_K_BOOTSTRAP_MASTER_PLAN.md;
