@@ -2049,6 +2049,12 @@ fn install_builtin_names() -> i32 {
     // loop body 44 bytes instead of __tile_add's 43, so jge/jmp rel8
     // displacements shift by 1 (+40 and -44).
     __arena_push(0);      // slot 177: __tile_mul name offset
+    // K1.F27 (2026-05-27): slot 178 = "__tile_matmul" name offset.
+    // Phase-0 tile primitive: 2x2 square matrix multiplication, fully
+    // unrolled (no loops). Signature: __tile_matmul(a, b, dst, N).
+    // N must be 2 for the current 2x2 codegen; the value is currently
+    // ignored. Future chunk generalizes to arbitrary N via loops.
+    __arena_push(0);      // slot 178: __tile_matmul name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2242,6 +2248,15 @@ fn install_builtin_names() -> i32 {
     __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
     __arena_push(109); __arena_push(117); __arena_push(108);
     __arena_set(bn_state + 177, s_tmul);
+
+    // K1.F27 (2026-05-27): "__tile_matmul" name bytes (13 chars: 95 95
+    // 116 105 108 101 95 109 97 116 109 117 108). Stored at slot 178.
+    // 2x2 square matmul. Unrolled (no loops).
+    let s_tmm = __arena_push(95); __arena_push(95); __arena_push(116);
+    __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
+    __arena_push(109); __arena_push(97); __arena_push(116);
+    __arena_push(109); __arena_push(117); __arena_push(108);
+    __arena_set(bn_state + 178, s_tmm);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3760,6 +3775,8 @@ fn bn_tile_add_s(b: i32) -> i32 { __arena_get(b + 175) }
 fn bn_tile_sub_s(b: i32) -> i32 { __arena_get(b + 176) }
 // K1.F26 (2026-05-27): __tile_mul accessor (slot 177).
 fn bn_tile_mul_s(b: i32) -> i32 { __arena_get(b + 177) }
+// K1.F27 (2026-05-27): __tile_matmul accessor (slot 178). 13-char name.
+fn bn_tile_matmul_s(b: i32) -> i32 { __arena_get(b + 178) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4814,6 +4831,94 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
         n0_tm + np0_tm + n1_tm + np1_tm + n2_tm + np2_tm + n3_tm + 61
+    } else { if kovc_byte_eq(name_s, name_l, bn_tile_matmul_s(bn_state), 13) == 1 {
+        // K1.F27 (2026-05-27): __tile_matmul(a, b, dst, N) for 2x2 only.
+        // Fully unrolled (no loops). N is currently ignored (assumed 2).
+        // Computes: dst[i*2+j] = sum over k of (a[i*2+k] * b[k*2+j]).
+        //
+        // a-cell byte disps: a[0]=+4, a[1]=+8, a[2]=+12, a[3]=+16
+        // b-cell byte disps: b[0]=+4, b[1]=+8, b[2]=+12, b[3]=+16
+        // dst-cell byte disps: same pattern
+        //
+        // Per dst cell (38 bytes):
+        //   mov rdi, [rsp+16]               ; rdi = a_off    (5)
+        //   mov esi, [rax+rdi*4+disp_a0]    ; esi = a[2i]    (4)
+        //   mov edx, [rax+rdi*4+disp_a1]    ; edx = a[2i+1]  (4)
+        //   mov rdi, [rsp+8]                ; rdi = b_off    (5)
+        //   imul esi, [rax+rdi*4+disp_b0]   ; esi *= b[j]    (5)
+        //   imul edx, [rax+rdi*4+disp_b1]   ; edx *= b[2+j]  (5)
+        //   add esi, edx                    ; esi = result   (2)
+        //   mov rdi, [rsp]                  ; rdi = dst_off  (4)
+        //   mov [rax+rdi*4+disp_dst], esi   ; store          (4)
+        //
+        // Total body: 4 cells * 38B = 152B. + setup 9B + cleanup 6B = 167B.
+        let a0_mm = __arena_get(args_head + 1);
+        let next1_mm = __arena_get(args_head + 2);
+        let a1_mm = __arena_get(next1_mm + 1);
+        let next2_mm = __arena_get(next1_mm + 2);
+        let a2_mm = __arena_get(next2_mm + 1);
+        let next3_mm = __arena_get(next2_mm + 2);
+        let a3_mm = __arena_get(next3_mm + 1);
+        let n0_mm = emit_ast_code(a0_mm, bind_state, patch_state, bn_state);
+        let np0_mm = emit_push_rax();
+        let n1_mm = emit_ast_code(a1_mm, bind_state, patch_state, bn_state);
+        let np1_mm = emit_push_rax();
+        let n2_mm = emit_ast_code(a2_mm, bind_state, patch_state, bn_state);
+        let np2_mm = emit_push_rax();
+        let n3_mm = emit_ast_code(a3_mm, bind_state, patch_state, bn_state);
+        // setup (9 bytes):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (N, unused for 2x2)
+        let disp_slot_mm = emit_lea_rax_rip_placeholder();                      // 7 bytes
+        patch_table_add(patch_state, disp_slot_mm, arena_base_s, 18);
+
+        // ---- dst[0] = a[0]*b[0] + a[1]*b[2] ----  (38 bytes)
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x10);  // mov rdi, [rsp+16]
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // mov esi, [rax+rdi*4+4]   (a[0])
+        emit_byte(0x8B); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x08);     // mov edx, [rax+rdi*4+8]   (a[1])
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);  // imul esi, [rax+rdi*4+4]   (b[0])
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x0C);  // imul edx, [rax+rdi*4+12]  (b[2])
+        emit_byte(0x01); emit_byte(0xD6);                                       // add esi, edx
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // mov [rax+rdi*4+4], esi   (dst[0])
+
+        // ---- dst[1] = a[0]*b[1] + a[1]*b[3] ----
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x10);  // mov rdi, [rsp+16]
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // mov esi, [rax+rdi*4+4]
+        emit_byte(0x8B); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x08);     // mov edx, [rax+rdi*4+8]
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x08);  // imul esi, [rax+rdi*4+8]   (b[1])
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x10);  // imul edx, [rax+rdi*4+16]  (b[3])
+        emit_byte(0x01); emit_byte(0xD6);                                       // add esi, edx
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x08);     // mov [rax+rdi*4+8], esi   (dst[1])
+
+        // ---- dst[2] = a[2]*b[0] + a[3]*b[2] ----
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x10);  // mov rdi, [rsp+16]
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x0C);     // mov esi, [rax+rdi*4+12]  (a[2])
+        emit_byte(0x8B); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x10);     // mov edx, [rax+rdi*4+16]  (a[3])
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);  // imul esi, [rax+rdi*4+4]
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x0C);  // imul edx, [rax+rdi*4+12]
+        emit_byte(0x01); emit_byte(0xD6);                                       // add esi, edx
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x0C);     // mov [rax+rdi*4+12], esi  (dst[2])
+
+        // ---- dst[3] = a[2]*b[1] + a[3]*b[3] ----
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x10);  // mov rdi, [rsp+16]
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x0C);     // mov esi, [rax+rdi*4+12]
+        emit_byte(0x8B); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x10);     // mov edx, [rax+rdi*4+16]
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x08);  // imul esi, [rax+rdi*4+8]
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0x54); emit_byte(0xB8); emit_byte(0x10);  // imul edx, [rax+rdi*4+16]
+        emit_byte(0x01); emit_byte(0xD6);                                       // add esi, edx
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x10);     // mov [rax+rdi*4+16], esi  (dst[3])
+
+        // end (6 bytes):
+        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
+        emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
+        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 167
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -5514,7 +5619,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul); +K1.F27: 1 more arm (__tile_matmul)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

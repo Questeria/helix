@@ -9394,6 +9394,63 @@ def test_bootstrap_kovc_k1f26_tile_mul_multi_cell_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f27_tile_matmul_2x2_self_host():
+    """K1.F27 (2026-05-27): __tile_matmul(a, b, dst, N) for 2x2 square
+    matrices, fully unrolled (no loops). N is currently ignored;
+    codegen assumes N=2.
+
+    Math: A = [[1, 2], [3, 4]], B = [[5, 6], [7, 8]]
+          C = A * B = [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
+                    = [[19, 22], [43, 50]]
+    Cells stored row-major: dst[0]=19, dst[1]=22, dst[2]=43, dst[3]=50.
+
+    Sum = 19+22+43+50 = 134 (fits in u8 exit-code envelope).
+
+    This completes Tile Phase-0 (5 of 5 ops real):
+      __tile_zeros, __tile_add, __tile_sub, __tile_mul, __tile_matmul.
+
+    Limitations of this initial ship (future K1.F27b generalization):
+      - 2x2 only (N parameter currently ignored)
+      - i32 cells only (no f32/f64 yet)
+      - Fully unrolled (no loop -- arbitrary N would need 3 nested loops
+        with rel8/rel32 displacement management)
+
+    Codegen: ~167 bytes after args (4 dst cells * 38B + 9B setup + 6B end).
+    3-run K1.F24d retry discipline.
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 1);\n'
+        '    __arena_set(a + 1, 2);\n'
+        '    __arena_set(a + 2, 3);\n'
+        '    __arena_set(a + 3, 4);\n'
+        '    __arena_set(b, 5);\n'
+        '    __arena_set(b + 1, 6);\n'
+        '    __arena_set(b + 2, 7);\n'
+        '    __arena_set(b + 3, 8);\n'
+        '    __tile_matmul(a, b, dst, 2);\n'
+        '    __arena_get(dst) + __arena_get(dst + 1) + __arena_get(dst + 2) + __arena_get(dst + 3)\n'
+        '}\n'
+    )
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f27_matmul_2x2_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    # Expected: 19+22+43+50 = 134.
+    assert 134 in results, (
+        f"K1.F27 2x2 matmul: expected rc=134 (sum 19+22+43+50 of C=A*B "
+        f"where A=[[1,2],[3,4]], B=[[5,6],[7,8]]) in at least one of 3 "
+        f"runs; got {results}. If rc=11 in all 3 (1*5+2*3=11): the "
+        f"matmul codegen got the indexing wrong. If rc=132: SIGILL."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.
