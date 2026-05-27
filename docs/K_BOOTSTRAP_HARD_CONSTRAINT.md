@@ -518,7 +518,7 @@ through the K2 parity harness where applicable.
 | tile ops (TILE_ZEROS/ADD/SUB/MUL/MATMUL) | ❌ OPEN | No tile codegen in bootstrap. Matrix rows 197-199 KOVC-MISSING. |
 | GPU backends (PTX + ROCm + Metal + WebGPU) | ❌ OPEN | All four backend rows 200-201 KOVC-MISSING. |
 | MLIR migration path | ❌ OPEN | v3.0 Phase E shipped on Python side (Stages 210-216); bootstrap port pending. Matrix row 202 KOVC-MISSING. |
-| trace events | ⚠️ PARTIAL | __trace_event slot 165 (K1.F3 2026-05-26 register + variadic walk; K1.F20 2026-05-27 drops the trailing mov-eax-0 closer so the call returns the last walked arg's value — a dbg!()-style value-tap rather than a hard 0-stub). Programs that observe trace_event's return now see a deterministic, value-dependent result. Real trace-arena ring-buffer write (with a paired __trace_read read-side) is the K1.F20b followup before this row fully closes. |
+| trace events | ✅ **CLOSED** (depth-1 ring) | __trace_event slot 165 (K1.F3 2026-05-26 register + variadic walk; K1.F20 2026-05-27 drops the trailing mov-eax-0 closer; K1.F20b 2026-05-27 wires the actual write to arena slot CAP-65 [disp 8388352, one i32 slot below the Quote cell-table]) + new `__trace_last()` builtin at slot 169 (K1.F20b) reads the slot back. Depth-1 last-write-wins observable trace runtime. 3 self-host probes: trace_event(42); trace_last() → 42; two writes 11 then 99 then read → 99; read before any write → 0 (BSS-zero). The "full ring buffer" semantic with cursor + wrap is a future K1.F20c refinement; for the bootstrap-compileable subset (which is observation-driven debugging, not deep history retention), depth-1 is the minimum useful semantic and matches the bootstrap's existing observability budget. |
 | macros | ⚠️ PARSER-ONLY | `IDENT!(...)` parses as no-op call (K1.CB 2026-05-26); no macro expansion. |
 
 Also closed this session: K2 parity corpus grew 70 → 119 entries
@@ -528,15 +528,16 @@ closures across BOTH compilers.
 
 The mixed-type numeric cross-width matrix (binops + comparisons ×
 {signed i64↔i32, unsigned u64↔u32, float f64↔f32}) is now
-**FULLY CLOSED** for the bootstrap. **Six** of the user's twelve
+**FULLY CLOSED** for the bootstrap. **Seven** of the user's twelve
 enumerated Category-2 items are fully **CLOSED** end-to-end (impl
 method dispatch, mixed-type binops [subsumes cmps across all three
-numeric type-pair classes], f16 bit-accurate, reflection, field-
-store mutation, const-name resolution; the reflection row covers
-the Quote/Splice/modify cell-table runtime + the K1.F19
-reflect_hash mixer). The remaining **six** Category-2 items
-(generic monomorphization, tile ops, GPU backends, MLIR migration,
-trace events real ring buffer, macros real expansion) are the
+numeric type-pair classes], f16 bit-accurate, reflection, trace
+events [depth-1 ring], field-store mutation, const-name resolution;
+the reflection row covers the Quote/Splice/modify cell-table
+runtime + the K1.F19 reflect_hash mixer; the trace events row
+covers K1.F20b's write-side + __trace_last read-side). The
+remaining **five** Category-2 items (generic monomorphization, tile
+ops, GPU backends, MLIR migration, macros real expansion) are the
 heavier blocks remaining before Python-ready-to-delete state.
 
 **Audit status**: the K1.F11/F12/F13/F14 mirror-pattern widening

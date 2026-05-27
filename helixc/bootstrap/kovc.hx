@@ -1986,6 +1986,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(0);      // slot 166: __helix_splice name offset
     __arena_push(0);      // slot 167: __helix_modify name offset
     __arena_push(0);      // slot 168: __helix_reflect_hash name offset
+    // K1.F20b (2026-05-27): slot 169 = "__trace_last" name offset.
+    // Paired with the new depth-1 trace slot at arena[CAP-65]
+    // (disp 8388352, one i32 slot below the Quote cell-table at
+    // disp_base 8388356). __trace_event writes the LAST walked
+    // arg's value to that slot before returning; __trace_last
+    // reads it back. Makes trace_event observably distinguish
+    // from a no-op stub (K1.F20 left it as a value-tap return-
+    // contract upgrade only; K1.F20b adds the actual store +
+    // read side).
+    __arena_push(0);      // slot 169: __trace_last name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2081,6 +2091,15 @@ fn install_builtin_names() -> i32 {
     __arena_push(101); __arena_push(99); __arena_push(116); __arena_push(95);
     __arena_push(104); __arena_push(97); __arena_push(115); __arena_push(104);
     __arena_set(bn_state + 168, s_hrh);
+
+    // K1.F20b (2026-05-27): "__trace_last" (12 chars: 95 95 116 114
+    // 97 99 101 95 108 97 115 116). Read-side of the K1.F20b depth-1
+    // trace slot. Codegen: lea rax, [arena_base]; mov eax,
+    // [rax + 8388352]. Stored at slot 169.
+    let s_tl = __arena_push(95); __arena_push(95); __arena_push(116); __arena_push(114);
+    __arena_push(97); __arena_push(99); __arena_push(101); __arena_push(95);
+    __arena_push(108); __arena_push(97); __arena_push(115); __arena_push(116);
+    __arena_set(bn_state + 169, s_tl);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3552,6 +3571,9 @@ fn bn_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 164) }
 // simple offset getter that try_emit_builtin_call consults to
 // recognize the call site.
 fn bn_trace_event_s(b: i32) -> i32 { __arena_get(b + 165) }
+// K1.F20b (2026-05-27): name slot for __trace_last() (read-side of
+// the depth-1 trace slot). See install_builtin_names for the bytes.
+fn bn_trace_last_s(b: i32) -> i32 { __arena_get(b + 169) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4106,30 +4128,28 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let rh_mix = emit_hash_i32_mixer();
         rh_bytes + rh_mix
     } else { if kovc_byte_eq(name_s, name_l, bn_trace_event_s(bn_state), 13) == 1 {
-        // K1.F3 (2026-05-26): __trace_event(...) was a 0-stub. The
-        // bootstrap doesn't have a trace ring buffer (Phase-1
-        // observability gap, scheduled for K1.F20b).
+        // K1.F3 (2026-05-26): __trace_event(...) was a 0-stub.
+        // K1.F16 (2026-05-27): walk the full args_head linked list.
+        // K1.F20 (2026-05-27): dropped the trailing mov-eax-0 closer
+        //   so the call returns the LAST walked arg's value.
+        // K1.F20b (2026-05-27): the real depth-1 ring-buffer impl.
+        //   After the variadic walk eax holds the last walked arg's
+        //   value (which the bootstrap's LIFO args linked list makes
+        //   the FIRST source arg for n-arg calls; same value-tap
+        //   contract as K1.F20). We now ALSO write that value to a
+        //   fixed arena slot at disp 8388352 (one i32 slot below the
+        //   Quote cell-table at 8388356), so __trace_last() can read
+        //   it back. The value-tap return contract from K1.F20 is
+        //   preserved -- the store doesn't modify eax.
         //
-        // K1.F16 (2026-05-27): walk the full args_head linked list so
-        // each arg's emit_ast_code runs in turn (side effects of args
-        // 2+ no longer dropped silently — the K1.F16/F17 silent-arg-
-        // drop closure, applied here first).
-        //
-        // K1.F20 (2026-05-27): the trailing `mov eax, 0` closer that
-        // K1.F3 emitted is now dropped. After the variadic walk eax
-        // holds the LAST evaluated arg's value; with the closer gone
-        // the call's return value is that last-arg value — a `dbg!()`-
-        // style value-tap. Programs that observe trace_event's return
-        // (the only externally-visible Phase-0 effect right now) now
-        // see a deterministic, value-dependent result instead of a
-        // hard zero. The real ring-buffer write is still K1.F20b's job
-        // (it will store the value to an arena slot AND keep this
-        // pass-through return contract, so K1.F20's test stays green).
-        // Zero-arg `__trace_event()` keeps the prior zero-eax contract
-        // because the walk emits nothing and eax retains its
-        // caller-context value — which Phase-0 conventions zero before
-        // call expression eval; tests below cover the 1+ arg case
-        // where the walk leaves a deterministic result in eax.
+        //   Codegen sequence after the variadic walk (17 bytes new):
+        //     89 C1                mov ecx, eax     (save last value)
+        //     <lea rax, [arena_base]>     7 bytes (RIP-relative
+        //                                          placeholder; patched)
+        //     89 88 disp32         mov [rax + 8388352], ecx  (6 bytes)
+        //     89 C8                mov eax, ecx     (restore eax for
+        //                                            value-tap return)
+        let arena_base_s = bn_helix_arena_base_s(bn_state);
         let mut tev_arg_cur: i32 = args_head;
         let mut tev_bytes: i32 = 0;
         while tev_arg_cur != 0 {
@@ -4137,7 +4157,34 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             tev_bytes = tev_bytes + emit_ast_code(tev_arg_idx, bind_state, patch_state, bn_state);
             tev_arg_cur = __arena_get(tev_arg_cur + 3);
         }
-        tev_bytes
+        // K1.F20b store: write last value (still in eax) to trace slot.
+        emit_byte(0x89); emit_byte(0xC1);                   // mov ecx, eax
+        let disp_slot = emit_lea_rax_rip_placeholder();     // 7 bytes
+        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+        emit_byte(0x89); emit_byte(0x88);                   // mov [rax + disp32], ecx
+        emit_u32_le(8388352);                               // 4 bytes -> 6-byte instr
+        emit_byte(0x89); emit_byte(0xC8);                   // mov eax, ecx (restore)
+        tev_bytes + 2 + 7 + 6 + 2
+    } else { if kovc_byte_eq(name_s, name_l, bn_trace_last_s(bn_state), 12) == 1 {
+        // K1.F20b (2026-05-27): __trace_last() -> i32. Read the value
+        // K1.F20b's __trace_event most-recently stored to arena slot
+        // CAP-65 (disp 8388352, one i32 slot below the Quote cell-
+        // table). Returns 0 if no __trace_event has fired yet (BSS-
+        // zeroed at load time).
+        //
+        // Args: zero-arg variant; any args passed are silently ignored
+        // (Phase-0 simplicity; matches the existing reflect_hash /
+        // trace_event variadic-tolerance convention).
+        //
+        // Codegen (13 bytes):
+        //   <lea rax, [arena_base]>     7-byte placeholder
+        //   8B 80 disp32                mov eax, [rax + 8388352]   (6 bytes)
+        let arena_base_s_tl = bn_helix_arena_base_s(bn_state);
+        let disp_slot_tl = emit_lea_rax_rip_placeholder();
+        patch_table_add(patch_state, disp_slot_tl, arena_base_s_tl, 18);
+        emit_byte(0x8B); emit_byte(0x80);                   // mov eax, [rax + disp32]
+        emit_u32_le(8388352);
+        7 + 6
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_splice_s(bn_state), 14) == 1 {
         // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
         // Underscore-prefixed alias for Splice. Same stub semantics
@@ -4915,7 +4962,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

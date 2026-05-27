@@ -7370,6 +7370,70 @@ def test_bootstrap_kovc_k1f20_trace_event_passthrough_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f20b_trace_ring_buffer_self_host():
+    """K1.F20b (2026-05-27): __trace_event now writes the last walked
+    arg's value to a fixed arena slot (CAP-65 = disp 8388352, one i32
+    slot below the Quote cell-table at 8388356), and the new
+    `__trace_last()` builtin reads that slot back.
+
+    This converts trace_event from K1.F20's value-tap-only stub into a
+    real depth-1 observable trace runtime. Programs can now write a
+    value with `__trace_event(x)` and read it back with
+    `__trace_last()` -- the simplest observable trace semantic that
+    advances the trace-events Category-2 row beyond PARTIAL.
+
+    Probes:
+
+      __trace_event(42); __trace_last():
+        trace_event(42) writes 42 to disp 8388352, returns 42 (value-tap
+        contract from K1.F20 preserved). trace_last() reads the slot,
+        returns 42. Exit code 42.
+
+      __trace_event(11); __trace_event(99); __trace_last():
+        Two trace_events in sequence -- the second OVERWRITES the slot
+        (depth-1, not a ring). trace_last() returns the most-recent
+        value, 99. Pins the "last value wins" semantic.
+
+      __trace_last() with no prior trace_event:
+        Reads the slot when it's still BSS-zero (no writes yet). Returns
+        0. Confirms the slot starts zero (rather than e.g. uninitialised
+        garbage that'd flake across runs).
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f20b_trace_read_after_one_write",
+        "fn main() -> i32 { __trace_event(42); __trace_last() }",
+    )
+    assert rc1 == 42, (
+        f"K1.F20b __trace_event(42); __trace_last(): expected exit "
+        f"code 42 (trace_event writes 42 to slot, trace_last reads "
+        f"back 42); got {rc1}. If rc=0, the store didn't happen "
+        f"(K1.F20b regressed to value-tap-only); if non-{{0,42}} the "
+        f"slot disp or arena_base patching is broken."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f20b_trace_last_wins",
+        "fn main() -> i32 { __trace_event(11); __trace_event(99); __trace_last() }",
+    )
+    assert rc2 == 99, (
+        f"K1.F20b last-write-wins probe: expected exit code 99 (the "
+        f"second trace_event overwrites the slot, trace_last returns "
+        f"the most-recent value); got {rc2}. If rc=11, the slot is "
+        f"append-only or the store address is wrong."
+    )
+
+    rc3 = _kovc_self_host_compile_and_run(
+        "k1f20b_trace_last_bss_zero",
+        "fn main() -> i32 { __trace_last() }",
+    )
+    assert rc3 == 0, (
+        f"K1.F20b BSS-zero probe: expected exit code 0 (slot starts "
+        f"zero before any trace_event); got {rc3}. Non-zero suggests "
+        f"the slot disp lands inside a region the K2 runtime "
+        f"populates at startup (which would flake across runs)."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
