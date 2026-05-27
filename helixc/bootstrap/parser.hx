@@ -3799,6 +3799,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 1 } }
                 } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F30 (2026-05-27): dbg!(INT_LIT) shape -- sibling of K1.F28
+            // dbg!(IDENT). 5-token shape: dbg, !, (, INT, ). The INT_LIT
+            // token (TK_INT == 1) carries the integer value as its tok_p1
+            // payload (per parser.hx:3201-3204 -- AST_INT parse uses
+            // `let v = tok_p1(tok_base, k)`). Synthesis: AST_INT(value).
+            // Phase-0 passthrough; no debug-print side effect.
+            let is_dbg_int_form = if is_dbg_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 1 { if mac_t4 == 4 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             if is_panic_str_form == 1 {
                 // Capture the STR_LIT body bytes from the k+3 token.
                 let str_tok = k + 3;
@@ -4216,6 +4226,19 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);             // IDENT (operand)
                 cur_advance(sb);             // )
                 mk_node(1, dbg_id_s, dbg_id_l, 0)  // AST_VAR(operand)
+            } else { if is_dbg_int_form == 1 {
+                // K1.F30 (2026-05-27): dbg!(INT_LIT) passthrough. Synthesize
+                // AST_INT(value) where value is the TK_INT token's tok_p1
+                // payload. 5-token consumption (dbg, !, (, INT, )). Sibling
+                // of K1.F28's dbg!(IDENT) arm.
+                let dbg_int_tok = k + 3;
+                let dbg_int_val = tok_p1(tok_base, dbg_int_tok);
+                cur_advance(sb);             // IDENT (dbg)
+                cur_advance(sb);             // !
+                cur_advance(sb);             // (
+                cur_advance(sb);             // INT (operand)
+                cur_advance(sb);             // )
+                mk_node(0, dbg_int_val, 0, 0)  // AST_INT(value)
             } else { if is_unreach_empty_form == 1 {
                 // K1.F22h: synthesize AST_CALL(panic,
                 // "internal error: entered unreachable code").
@@ -4281,7 +4304,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form)
+            }}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

@@ -9490,6 +9490,43 @@ def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f30_dbg_int_literal_self_host():
+    """K1.F30 (2026-05-27): `dbg!(INT_LIT)` passthrough -- sibling of
+    K1.F28 dbg!(IDENT). 5-token shape (dbg, !, (, INT, )). Synthesizes
+    AST_INT(value) where value is the TK_INT token's tok_p1 payload.
+
+    Initial implementation read from tok_p2 by analogy with TK_STRLIT's
+    "payload" field, which surfaced a real bootstrap-internal token-
+    layout fact: TK_INT's value is in tok_p1 (per parse_primary's
+    `let v = tok_p1(tok_base, k)` at parser.hx:3202), while TK_STRLIT's
+    body_byte_start is in tok_p2. K1.F30 commit message records the
+    one-liner correction.
+
+    Tests:
+      1. dbg!(42) -> rc = 42.
+      2. dbg!(7) + dbg!(3) -> rc = 10 (compound, two distinct AST_INT
+         literals in one expression).
+    """
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f30_dbg_int_literal",
+        'fn main() -> i32 { dbg!(42) }',
+    )
+    assert rc1 == 42, (
+        f"K1.F30 dbg!(42): expected rc=42; got {rc1}. If rc=24: the "
+        f"tok_p2 (byte_start) was read instead of tok_p1 (value). "
+        f"If rc=0: macro fell through to K1.CB no-op-skip."
+    )
+
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f30_dbg_int_compound",
+        'fn main() -> i32 { dbg!(7) + dbg!(3) }',
+    )
+    assert rc2 == 10, (
+        f"K1.F30 dbg!(7) + dbg!(3): expected rc=10 (compound sum of "
+        f"two AST_INT literals); got {rc2}."
+    )
+
+
 def test_bootstrap_kovc_k1f29_panic_empty_form_self_host():
     """K1.F29 (2026-05-27): zero-arg `panic!()` form. Mirror of
     K1.F22g todo!() with a different synthesized message ("explicit

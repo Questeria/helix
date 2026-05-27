@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 258      # last bump: K1.F29 -- shipped zero-arg panic!() macro form. Mirror of K1.F22g todo!() with the Rust-stdlib default zero-arg message "explicit panic" (14 chars). 4-token shape (panic, !, (, )); synthesizes AST_CALL(panic, "explicit panic") which routes through the K1.AE/AH/AI panic codegen (prefix + msg + newline + ud2 trap). Pre-K1.F29 panic!() fell through to K1.CB no-op-skip returning rc=0; post-K1.F29 it traps with rc=132. Differential rc test pins the behavior. Brace cascade in parser.hx: +1 (14 -> 15)
+K_BOOTSTRAP_CHUNKS_DONE = 259      # last bump: K1.F30 -- shipped dbg!(INT_LIT) macro passthrough form (sibling of K1.F28 dbg!(IDENT)). 5-token shape (dbg, !, (, INT, )); synthesizes AST_INT(value). Surfaced a real bootstrap-internal fact: TK_INT's value lives in tok_p1 NOT tok_p2 (initial attempt read tok_p2 and got the byte_start of the literal in source, e.g., dbg!(42) returned 24 = byte position of '4'). Per parser.hx:3201-3204, parse_primary's AST_INT arm uses `let v = tok_p1(tok_base, k)`; payload field convention differs across token kinds (TK_STRLIT uses tok_p2 for byte_start, TK_INT uses tok_p1 for value). One-liner fix. Tests: dbg!(42)=42, dbg!(7)+dbg!(3)=10. Brace cascade: +1 (15 -> 16)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
