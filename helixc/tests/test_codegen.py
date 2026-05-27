@@ -8319,6 +8319,119 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_k1f22j_assert_eq_macro_self_host():
+    """K1.F22j (2026-05-27): two-arg comparison macro.
+    `assert_eq!(IDENT, IDENT)` parser-side rewrites to
+    AST_IF(cond=AST_EQ(AST_VAR(a), AST_VAR(b)), then=AST_INT(0),
+    else=AST_CALL(panic, "assertion failed: ==")).
+
+    Builds on K1.F22i's AST_IF substrate (tag 7) and adds AST_EQ
+    (tag 20) as the comparison cond. SCOPE: single-IDENT operands
+    only. Compound expressions like `assert_eq!(f(a), b)` or
+    `assert_eq!(a + 1, b)` fall through to the K1.CB no-op-skip.
+
+    Probes:
+      Pass: let a: i32 = 42; let b: i32 = 42; assert_eq!(a, b); 7 -> rc=7.
+      Fail: let a: i32 = 1; let b: i32 = 2; assert_eq!(a, b); 7 -> rc=132,
+            stderr contains "assertion failed".
+
+    Regression: assert!(x) and panic!("oops") still work.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+
+    def _run_probe(name, src):
+        in_path = f"/tmp/sh_{name}_in.hx"
+        out_path = f"/tmp/sh_{name}_out.bin"
+        k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+        subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"rm -f {in_path} {out_path}; printf %s {repr(src)} > {in_path}"],
+            check=True, timeout=10,
+        )
+        compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+        rk = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             f"chmod +x {out_path} && {out_path}"],
+            capture_output=True, timeout=10,
+        )
+        return rk.returncode, rk.stderr, rk.stdout
+
+    # Probe 1: passing -- a == b (both 42), no panic.
+    rc_pass, stderr_pass, _ = _run_probe(
+        "k1f22j_assert_eq_pass",
+        'fn main() -> i32 { let a: i32 = 42; let b: i32 = 42; assert_eq!(a, b); 7 }',
+    )
+    assert rc_pass == 7, (
+        f"K1.F22j assert_eq!(a=42, b=42): expected rc=7 (no panic, "
+        f"trailing 7 is the fn's return); got {rc_pass}. stderr="
+        f"{stderr_pass!r}. If rc=132, the AST_EQ cond was inverted "
+        f"(treated as NE)."
+    )
+
+    # Probe 2: failing -- a != b, panics with "assertion failed".
+    rc_fail, stderr_fail, _ = _run_probe(
+        "k1f22j_assert_eq_fail",
+        'fn main() -> i32 { let a: i32 = 1; let b: i32 = 2; assert_eq!(a, b); 7 }',
+    )
+    assert rc_fail == 132, (
+        f"K1.F22j assert_eq!(a=1, b=2): expected rc=132 (SIGILL via "
+        f"panic+ud2); got {rc_fail}. stderr={stderr_fail!r}. If rc=7, "
+        f"the AST_EQ cond was always-true or the else-branch was "
+        f"never emitted."
+    )
+    assert b"assertion failed" in stderr_fail, (
+        f"K1.F22j assert_eq! message probe: expected stderr to "
+        f"contain b'assertion failed'; got stderr={stderr_fail!r}."
+    )
+
+    # Probe 3 (regression): assert!(x=1) still works.
+    rc_a, stderr_a, _ = _run_probe(
+        "k1f22j_assert_regression",
+        'fn main() -> i32 { let x: i32 = 1; assert!(x); 42 }',
+    )
+    assert rc_a == 42, (
+        f"K1.F22j regression: assert!(x=1) expected rc=42; got {rc_a}. "
+        f"stderr={stderr_a!r}. K1.F22i may have been shadowed."
+    )
+
+    # Probe 4 (regression): panic!("oops") still SIGILLs.
+    rc_p = _kovc_self_host_compile_and_run(
+        "k1f22j_panic_still_works",
+        'fn main() -> i32 { panic!("oops"); 42 }',
+    )
+    assert rc_p == 132, (
+        f"K1.F22j regression: panic!(\"oops\") expected rc=132; got "
+        f"{rc_p}. K1.F22 may have been shadowed."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +

@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 233      # last bump: K1.F22i -- FIRST conditional macro: assert!(IDENT) parser-side rewrites to AST_IF(cond=AST_VAR(IDENT), then=AST_INT(0), else=AST_CALL(panic, "assertion failed")). First time the bootstrap synthesizes an AST_IF (tag 7) at parse time. 6-byte IDENT "assert" detection (97 115 115 101 114 116); shape `IDENT ! ( IDENT )` distinguishes from arg-bearing forms. SCOPE limited to single-IDENT cond -- assert!(x == 5) etc. fall through. Tests verify assert!(x=1) passes (rc=42), assert!(x=0) panics (rc=132) with "assertion failed" in stderr
+K_BOOTSTRAP_CHUNKS_DONE = 234      # last bump: K1.F22j -- two-arg comparison macro: assert_eq!(IDENT, IDENT) parser-side rewrites to AST_IF(cond=AST_EQ(AST_VAR(a), AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic, "assertion failed: ==")). Builds on K1.F22i's AST_IF substrate; adds AST_EQ (tag 20) as the comparison. 9-byte IDENT "assert_eq" detection (97 115 115 101 114 116 95 101 113); shape `IDENT ! ( IDENT , IDENT )` (7 tokens, checks mac_t2..mac_t6). SCOPE: single-IDENT operands only. Tests verify assert_eq!(a=42, b=42) passes (rc=7), assert_eq!(a=1, b=2) panics (rc=132) with "assertion failed" in stderr
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
