@@ -4130,25 +4130,33 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
     } else { if kovc_byte_eq(name_s, name_l, bn_trace_event_s(bn_state), 13) == 1 {
         // K1.F3 (2026-05-26): __trace_event(...) was a 0-stub.
         // K1.F16 (2026-05-27): walk the full args_head linked list.
-        // K1.F20 (2026-05-27): dropped the trailing mov-eax-0 closer
-        //   so the call returns the LAST walked arg's value.
-        // K1.F20b (2026-05-27): the real depth-1 ring-buffer impl.
-        //   After the variadic walk eax holds the last walked arg's
-        //   value (which the bootstrap's LIFO args linked list makes
-        //   the FIRST source arg for n-arg calls; same value-tap
-        //   contract as K1.F20). We now ALSO write that value to a
-        //   fixed arena slot at disp 8388352 (one i32 slot below the
-        //   Quote cell-table at 8388356), so __trace_last() can read
-        //   it back. The value-tap return contract from K1.F20 is
-        //   preserved -- the store doesn't modify eax.
+        // K1.F20 (2026-05-27): dropped the trailing mov-eax-0 closer.
+        // K1.F20b (2026-05-27): added the depth-1 ring-buffer store at
+        //   arena slot CAP-65 (disp 8388352).
+        // K3.J (2026-05-27, audit-fix-MEDIUM-1): the K1.F20b store
+        //   was unconditional. For ZERO-arg `__trace_event()` the walk
+        //   emits nothing and eax holds whatever the caller-context
+        //   expression left there -- which the prior code's hand-waved
+        //   "Phase-0 conventions zero before call eval" was NOT actually
+        //   true. The unconditional store would write that residue to
+        //   the trace slot, silently corrupting __trace_last's read.
+        //   Fix: gate the store on args_head != 0. For zero-arg
+        //   trace_event, emit a deterministic `xor eax, eax` so the
+        //   call returns 0 (matching the K1.F3 spirit) and skip the
+        //   slot write entirely (preserving prior trace_event's
+        //   recorded value untouched -- "zero-arg trace_event is a
+        //   true no-op").
         //
-        //   Codegen sequence after the variadic walk (17 bytes new):
-        //     89 C1                mov ecx, eax     (save last value)
+        //   N-arg codegen (17 bytes after the walk):
+        //     89 C1               mov ecx, eax     (save last value)
         //     <lea rax, [arena_base]>     7 bytes (RIP-relative
         //                                          placeholder; patched)
-        //     89 88 disp32         mov [rax + 8388352], ecx  (6 bytes)
-        //     89 C8                mov eax, ecx     (restore eax for
-        //                                            value-tap return)
+        //     89 88 disp32        mov [rax + 8388352], ecx  (6 bytes)
+        //     89 C8               mov eax, ecx     (restore eax for
+        //                                           value-tap return)
+        //
+        //   0-arg codegen (2 bytes total):
+        //     31 C0               xor eax, eax     (return 0)
         let arena_base_s = bn_helix_arena_base_s(bn_state);
         let mut tev_arg_cur: i32 = args_head;
         let mut tev_bytes: i32 = 0;
@@ -4157,14 +4165,21 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             tev_bytes = tev_bytes + emit_ast_code(tev_arg_idx, bind_state, patch_state, bn_state);
             tev_arg_cur = __arena_get(tev_arg_cur + 3);
         }
-        // K1.F20b store: write last value (still in eax) to trace slot.
-        emit_byte(0x89); emit_byte(0xC1);                   // mov ecx, eax
-        let disp_slot = emit_lea_rax_rip_placeholder();     // 7 bytes
-        patch_table_add(patch_state, disp_slot, arena_base_s, 18);
-        emit_byte(0x89); emit_byte(0x88);                   // mov [rax + disp32], ecx
-        emit_u32_le(8388352);                               // 4 bytes -> 6-byte instr
-        emit_byte(0x89); emit_byte(0xC8);                   // mov eax, ecx (restore)
-        tev_bytes + 2 + 7 + 6 + 2
+        if args_head == 0 {
+            // K3.J: zero-arg trace_event -> deterministic 0 return,
+            // no slot write (preserves prior recorded value).
+            emit_byte(0x31); emit_byte(0xC0);               // xor eax, eax
+            2
+        } else {
+            // K1.F20b store: write last value (still in eax) to trace slot.
+            emit_byte(0x89); emit_byte(0xC1);                   // mov ecx, eax
+            let disp_slot = emit_lea_rax_rip_placeholder();     // 7 bytes
+            patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+            emit_byte(0x89); emit_byte(0x88);                   // mov [rax + disp32], ecx
+            emit_u32_le(8388352);                               // 4 bytes -> 6-byte instr
+            emit_byte(0x89); emit_byte(0xC8);                   // mov eax, ecx (restore)
+            tev_bytes + 2 + 7 + 6 + 2
+        }
     } else { if kovc_byte_eq(name_s, name_l, bn_trace_last_s(bn_state), 12) == 1 {
         // K1.F20b (2026-05-27): __trace_last() -> i32. Read the value
         // K1.F20b's __trace_event most-recently stored to arena slot
@@ -4172,19 +4187,33 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // table). Returns 0 if no __trace_event has fired yet (BSS-
         // zeroed at load time).
         //
-        // Args: zero-arg variant; any args passed are silently ignored
-        // (Phase-0 simplicity; matches the existing reflect_hash /
-        // trace_event variadic-tolerance convention).
+        // K3.J (2026-05-27, audit-fix-LOW-2): the original K1.F20b
+        // version silently dropped any args passed -- inconsistent
+        // with the K1.F16/F17 silent-arg-drop closure pattern used by
+        // every other variadic-tolerant reflection/trace builtin
+        // (reflect_hash, __trace_event, __helix_*). Now walk args_head
+        // first so side effects of args fire, then load the trace slot.
+        // Zero-arg case still works (the walk emits nothing); non-zero-
+        // arg case now preserves the K1.F17 side-effect-preservation
+        // contract.
         //
-        // Codegen (13 bytes):
+        // Codegen (variable; 13 bytes + side-effect arg bytes):
+        //   <walk args_head, emit each arg's code for side effects>
         //   <lea rax, [arena_base]>     7-byte placeholder
         //   8B 80 disp32                mov eax, [rax + 8388352]   (6 bytes)
+        let mut tl_arg_cur: i32 = args_head;
+        let mut tl_arg_bytes: i32 = 0;
+        while tl_arg_cur != 0 {
+            let tl_arg_idx = __arena_get(tl_arg_cur + 1);
+            tl_arg_bytes = tl_arg_bytes + emit_ast_code(tl_arg_idx, bind_state, patch_state, bn_state);
+            tl_arg_cur = __arena_get(tl_arg_cur + 3);
+        }
         let arena_base_s_tl = bn_helix_arena_base_s(bn_state);
         let disp_slot_tl = emit_lea_rax_rip_placeholder();
         patch_table_add(patch_state, disp_slot_tl, arena_base_s_tl, 18);
         emit_byte(0x8B); emit_byte(0x80);                   // mov eax, [rax + disp32]
         emit_u32_le(8388352);
-        7 + 6
+        tl_arg_bytes + 7 + 6
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_splice_s(bn_state), 14) == 1 {
         // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
         // Underscore-prefixed alias for Splice. Same stub semantics

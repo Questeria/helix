@@ -748,6 +748,61 @@ mirror-pattern discipline holds; the audit-clean signal pile
 continues to grow toward the 5-consecutive-clean gate that
 activates once Python-ready-to-delete state lands.
 
+### 2026-05-27 — K1.F19 + K1.F20 + K1.F20b + K3.J (K3.J signal)
+
+Full 3-axis audit (silent-failure-hunter / type-design-analyzer /
+code-reviewer) dispatched on commits `fabbbab` (K1.F19) + `5be68a0`
+(K1.F20) + `5e0621f` (K1.F20b). Findings:
+
+**silent-failure-hunter**:
+  - **MEDIUM-1** -- K1.F20b's depth-1 store was unconditional. For
+    zero-arg `__trace_event()` the while-walk emits nothing, eax
+    holds caller-context residue (no convention zeros eax pre-call),
+    and the store would write that residue to the trace slot --
+    silently corrupting `__trace_last`'s read. Fixed by K3.J:
+    gate the store on `args_head != 0`; zero-arg emits a
+    deterministic `xor eax, eax` instead, preserving any prior
+    recorded value untouched.
+  - **LOW-2** -- `__trace_last(args)` silently dropped passed args
+    (didn't walk args_head), inconsistent with the K1.F17 silent-
+    arg-drop closure used by every other variadic-tolerant builtin.
+    Fixed by K3.J: walk args_head first, then load the trace slot.
+    Side effects of args now fire as the convention promises.
+
+**type-design-analyzer**: NO HIGH, NO must-fix-MEDIUM. 4 LOW notes
+(documented Phase-0 simplifications + pre-existing patterns):
+pow2_i32's range-bound contract is comment-encoded rather than type-
+encoded (caller-gated to n in [14, 24]); emit_hash_i32_mixer's
+register-state-as-side-channel matches the existing emit_* idiom;
+__trace_last's variadic-tolerance choice was inconsistent (fixed in
+K3.J); bn_state's flat-i32 slot scheme has no structural invariants
+(pre-existing, not introduced by this batch).
+
+**code-reviewer**: CLEAN. NO HIGH, NO must-fix-MEDIUM. K1.F18b
+mantissa-shift math hand-verified (0.00005_f16 -> mant10=853, low
+byte 85; 0.00004_f16 -> mant10=683 round-up, low byte 171). K1.F19
+24-byte mixer byte sequence verified line-by-line including little-
+endian constants (c1=0x05EBCA6B, c2=0x27D4EB2F, c3=0x165667B1).
+K1.F20b ModRM bytes verified (0x88 for `mov [rax+disp], ecx`,
+0x80 for `mov eax, [rax+disp]`). Slot 169 + disp 8388352
+reservations confirmed unique (no collision with cell table at
+8388356-8388608).
+
+K3.J ships both audit fixes in one batch with 2 new permanent
+probes:
+  - `__trace_event(77); __trace_event(); __trace_last()` -> 77
+    (pins MEDIUM-1 fix: zero-arg trace_event preserves prior slot)
+  - `__trace_last(__trace_event(99)); __trace_last()` -> 99
+    (pins LOW-2 fix: trace_last's arg trace_event(99) fires and
+    writes the slot)
+
+Verdict: **K1.F19/F20/F20b CLEAN end-to-end after K3.J**. NO HIGH,
+NO must-fix-MEDIUM across all three axes. This is the FIFTH
+cleanly-audited code batch (K3.E/F/H/I/J). The mirror-pattern
+discipline continues to find LOW-severity convention drift and
+the discipline of running the audit + immediately fixing the
+findings holds.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)

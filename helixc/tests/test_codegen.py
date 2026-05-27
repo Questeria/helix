@@ -7434,6 +7434,75 @@ def test_bootstrap_kovc_k1f20b_trace_ring_buffer_self_host():
     )
 
 
+def test_bootstrap_kovc_k3j_trace_audit_fixes_self_host():
+    """K3.J (2026-05-27): close two K1.F20b audit findings:
+
+      MEDIUM-1 -- zero-arg __trace_event() corrupts the trace slot.
+        The K1.F20b store was unconditional; for zero-arg calls eax
+        holds caller-context residue, written silently to the slot.
+        Fix: gate the store on args_head != 0; emit xor-eax-eax for
+        deterministic 0 return on zero-arg calls (and don't disturb
+        the prior recorded trace value).
+
+      LOW-2 -- __trace_last(args) silently drops side effects.
+        Other variadic-tolerant builtins (reflect_hash, __trace_event,
+        __helix_*) walk args_head for side-effect preservation per
+        the K1.F17 closure. __trace_last was the exception. Fix:
+        walk args_head first, then load the trace slot.
+
+    Probe A (MEDIUM-1 fix):
+      __trace_event(77); __trace_event(); __trace_last()
+        After K3.J: trace_event(77) stores 77 to slot; trace_event()
+        is a no-op (slot still 77); trace_last() reads 77.
+        Pre-K3.J: trace_event() would have overwritten the slot with
+        whatever eax held -- often not 77.
+
+    Probe B (LOW-2 fix):
+      let mut x = 5; let _ = __trace_last(__trace_event(99)); x
+        After K3.J: __trace_event(99) is evaluated as the arg to
+        __trace_last -- it writes 99 to the trace slot and returns 99.
+        __trace_last then reads the slot (=99) but its result is bound
+        to _. The fn returns x=5.
+        Pre-K3.J: __trace_last would have skipped its arg entirely;
+        __trace_event(99) wouldn't fire; slot would be 0; same final
+        return value (x=5) BUT the missing side-effect would be hidden.
+
+      This probe pins "args evaluated for side effects" by structuring
+      the program so the SAME final return value comes from a different
+      execution path under the two semantics -- specifically, by also
+      probing trace_last AFTER:
+        __trace_last(__trace_event(99));   __trace_last()
+        Under K3.J: first call writes 99 + reads, second call just
+        reads -> 99.
+        Pre-K3.J: __trace_event never fired -> slot still 0 ->
+        second call -> 0.
+    """
+    rc_a = _kovc_self_host_compile_and_run(
+        "k3j_zero_arg_trace_event_preserves_slot",
+        "fn main() -> i32 { __trace_event(77); __trace_event(); __trace_last() }",
+    )
+    assert rc_a == 77, (
+        f"K3.J MEDIUM-1 fix probe: expected exit code 77 (the prior "
+        f"trace_event(77) stored 77; the subsequent zero-arg "
+        f"trace_event() should NOT overwrite the slot); got {rc_a}. "
+        f"If rc != 77, the K1.F20b unconditional-store regression is "
+        f"back -- zero-arg trace_event is corrupting the slot."
+    )
+
+    rc_b = _kovc_self_host_compile_and_run(
+        "k3j_trace_last_evaluates_args_for_side_effects",
+        "fn main() -> i32 { __trace_last(__trace_event(99)); __trace_last() }",
+    )
+    assert rc_b == 99, (
+        f"K3.J LOW-2 fix probe: expected exit code 99 (the first "
+        f"trace_last call evaluates its arg __trace_event(99) for "
+        f"side effects -- which writes 99 to the slot; the second "
+        f"trace_last reads the slot = 99); got {rc_b}. If rc=0, the "
+        f"trace_last arg was silently dropped -- trace_event(99) "
+        f"never fired -- slot still BSS-zero. K1.F17 regression."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
