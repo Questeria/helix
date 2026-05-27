@@ -9508,6 +9508,64 @@ def test_bootstrap_kovc_k3r_tile_matmul_n_guard_self_host():
     )
 
 
+def test_bootstrap_kovc_k3t_tile_matmul_dst_bounds_self_host():
+    """K3.T (2026-05-27): partial close of silent-failure-hunter HIGH-1.
+    Adds a runtime dst-bounds check to __tile_matmul: if dst_off + 4 >
+    helix_arena_cap() (= 2097152), trap with id 27002.
+
+    Pre-K3.T: matmul wrote 4 dst cells unchecked. A bogus dst_off
+    (e.g., 99999999, not from __tile_zeros) would either corrupt arena
+    cells past the tile (silent miscompile) or write past mapped BSS
+    (SIGSEGV).
+
+    Post-K3.T: dst_off + 4 > cap triggers an explicit trap-id 27002
+    SIGILL at the start of the matmul body, before any write.
+
+    NOTE: a_off and b_off READS remain unchecked (audit HIGH-1
+    partial close). The other 3 elementwise tile ops (add/sub/mul)
+    also remain unchecked. K3.U candidate to close the rest.
+
+    Tests:
+      1. Normal matmul (dst from __tile_zeros): unchanged behavior.
+      2. dst_off = 99999999: trap fires with rc=132.
+    """
+    # 1. Normal matmul: dst_off from __tile_zeros is safely in bounds.
+    rc_ok = _kovc_self_host_compile_and_run(
+        "k3t_matmul_normal_dst",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 1);\n'
+        '    __arena_set(b, 5);\n'
+        '    __tile_matmul(a, b, dst, 2);\n'
+        '    __arena_get(dst)\n'
+        '}\n',
+    )
+    assert rc_ok == 5, (
+        f"K3.T normal-path regression: expected rc=5 (dst[0] = "
+        f"a[0]*b[0] = 1*5); got {rc_ok}. If rc=132: the bounds "
+        f"check fired for an in-bounds dst_off (off-by-one in the "
+        f"jbe rel8 displacement OR wrong CAP imm32)."
+    )
+
+    # 2. dst_off = 99999999: should trap (way above cap=2097152).
+    rc_trap = _kovc_self_host_compile_and_run(
+        "k3t_matmul_dst_oob",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    __tile_matmul(a, b, 99999999, 2);\n'
+        '    0\n'
+        '}\n',
+    )
+    assert rc_trap == 132, (
+        f"K3.T dst-OOB: expected rc=132 (SIGILL from trap-id 27002 "
+        f"when dst_off + 4 > 2097152); got {rc_trap}. If rc=0: the "
+        f"bounds check didn't fire."
+    )
+
+
 def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     """K1.F28 (2026-05-27): `dbg!(IDENT)` macro expansion as a
     PASSTHROUGH. In Rust, `dbg!(expr)` prints "[file:line] expr = value"

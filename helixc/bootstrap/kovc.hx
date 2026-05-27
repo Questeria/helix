@@ -4866,7 +4866,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_mm = emit_ast_code(a2_mm, bind_state, patch_state, bn_state);
         let np2_mm = emit_push_rax();
         let n3_mm = emit_ast_code(a3_mm, bind_state, patch_state, bn_state);
-        // setup (21 bytes -- was 9; K3.R added 12 for the N != 2 guard):
+        // setup (42 bytes -- was 9; K3.R +12 for N!=2 guard; K3.T +21 for dst bounds):
         emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (N captured)
         // K3.R (2026-05-27): runtime guard rejecting N != 2 with trap-id 27001.
         // Silent-failure-hunter MEDIUM-1: pre-K3.R, __tile_matmul accepted N=3
@@ -4876,6 +4876,27 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x83); emit_byte(0xF9); emit_byte(0x02);                      // cmp ecx, 2     (3 bytes)
         emit_byte(0x74); emit_byte(0x07);                                       // je +7 (skip trap if N==2)
         emit_trap_with_id(27001);                                                // 7 bytes -- N != 2 trap
+        // K3.T (2026-05-27): runtime dst-bounds check on __tile_matmul (partial
+        // close of silent-failure-hunter HIGH-1). Pre-K3.T the matmul wrote 4
+        // dst cells at [arena_base + (dst_off+i)*4 + 4] for i in 0..4 with NO
+        // check that dst_off+4 stayed inside the arena. If the caller passed
+        // a bogus dst_off (e.g., not from __tile_zeros, or out-of-range), the
+        // writes corrupted arena cells past the tile or wrote past the mapped
+        // BSS page (SIGSEGV at best, silent neighbor-cell corruption at worst).
+        // K3.T checks `dst_off + 4 <= helix_arena_cap()` (= 2097152). NOTE: a_off
+        // and b_off READ unchecked (the writes are the corruption risk; READS
+        // of OOB just produce garbage that the user sees in the result). The
+        // a_off/b_off side and the other tile ops (add/sub/mul) remain part of
+        // open HIGH-1 surface, deferred to K3.U.
+        //
+        // Sequence (21 bytes): load dst_off from [rsp], +4, cmp vs cap, jbe past
+        // trap, trap-id 27002.
+        emit_byte(0x8B); emit_byte(0x34); emit_byte(0x24);                      // mov esi, [rsp]      (3 bytes -- dst_off)
+        emit_byte(0x83); emit_byte(0xC6); emit_byte(0x04);                      // add esi, 4          (3 bytes)
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP imm32  (6 bytes -- opcode/ModRM)
+        emit_u32_le(helix_arena_cap());                                          //                     (4 more bytes of imm32)
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7 (skip trap if dst_off+4 <= cap)
+        emit_trap_with_id(27002);                                                // 7 bytes -- dst OOB trap
         let disp_slot_mm = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_mm, arena_base_s, 18);
 
@@ -4926,8 +4947,8 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        // K3.R (2026-05-27): byte count grew 167 -> 179 (+12 for N != 2 guard).
-        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 179
+        // K3.R: 167 -> 179 (+12 for N != 2 guard). K3.T: 179 -> 200 (+21 for dst bounds).
+        n0_mm + np0_mm + n1_mm + np1_mm + n2_mm + np2_mm + n3_mm + 200
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
