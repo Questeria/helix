@@ -7008,9 +7008,25 @@ fn main() -> i32 {{
     # but with pre-fix semantics. Cleaning now ensures every
     # call observes the binary produced by the CURRENT bootstrap
     # source.
+    #
+    # K1.F24i (2026-05-27): SOURCE-WRITE BUG FIX. The previous form
+    # `printf %s {repr(k2_src)} > {in_path}` corrupted multi-line
+    # sources: repr() escapes newlines to `\n` (two chars), and
+    # `printf %s` writes the format string verbatim WITHOUT expanding
+    # escapes. So multi-line k2_src ended up on disk as ONE line with
+    # literal `\n` separators. The lexer then choked and validation
+    # emitted trap-id 19 from main's prologue -- producing a SIGILL
+    # exit (132) that LOOKED like a codegen defect but was really
+    # a helper bug. The K1.F24g/K1.F24h "3-tile SIGILL" findings
+    # were entirely artifacts of this -- 3-tile SINGLE-LINE source
+    # returns rc=8 correctly (verified 3/3 runs).
+    #
+    # Fix: pipe source via stdin to `cat > in_path` -- this preserves
+    # all bytes including newlines, with no shell-level escaping.
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         f"rm -f {in_path} {out_path}; printf %s {repr(k2_src)} > {in_path}"],
+         f"rm -f {in_path} {out_path} && cat > {in_path}"],
+        input=k2_src.encode("utf-8"),
         check=True, timeout=10,
     )
     compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
@@ -7059,9 +7075,13 @@ fn main() -> i32 {{
     write_file_to_arena("{out_path}", elf_start, total)
 }}
 """
+    # K1.F24i (2026-05-27): use stdin pipe instead of printf %s repr
+    # to preserve multi-line sources verbatim (see helper above for full
+    # rationale; the printf %s {repr()} form corrupted newlines).
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
-         f"rm -f {in_path} {out_path}; printf %s {repr(k2_src)} > {in_path}"],
+         f"rm -f {in_path} {out_path} && cat > {in_path}"],
+        input=k2_src.encode("utf-8"),
         check=True, timeout=10,
     )
     compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
@@ -9127,7 +9147,26 @@ def test_bootstrap_kovc_k1f24f_tile_add_real_loop_known_broken_self_host():
 
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
-    SIGILL. K1.F24f shows that the full chain (3 × __tile_zeros + 2 ×
+    SIGILL.
+
+    NOTE [K1.F24i CORRECTION, 2026-05-27 same-day]: this test's
+    ORIGINAL narrative (3 successive __tile_zeros calls cause SIGILL)
+    was an artifact of a test-helper bug in `_kovc_self_host_compile_
+    and_run`. The helper used `printf %s {repr(k2_src)}` which
+    corrupted multi-line sources -- repr() escapes newlines to
+    backslash-n (two chars), and printf %s writes the format string
+    VERBATIM without expanding escapes, so multi-line sources ended
+    up on disk as ONE LINE with literal `\\n` separators. The lexer
+    choked and validation emitted trap-id 19 from main's prologue,
+    producing rc=132 SIGILL that looked like a codegen defect but
+    was really a helper bug. Post-helper-fix (K1.F24i: stdin pipe
+    instead of printf), all 4 probes return their expected values
+    3/3 cleanly. The "3-tile defect" never existed.
+
+    Test preserved as a record of the false-positive episode and a
+    regression-prevention probe for the helper fix.
+
+    K1.F24f shows that the full chain (3 × __tile_zeros + 2 ×
     __arena_set + __tile_add stub + __arena_get) SIGILLs 3-of-3, even
     when the __tile_add codegen is the K1.F24e no-op stub. K1.F23c
     probe 2 shows that 1 × __tile_zeros + 2 × __arena_set + 2 × __arena_get
@@ -9283,7 +9322,17 @@ def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
 
 def test_bootstrap_kovc_k1f24h_tile_zeros_axis_isolation_self_host():
     """K1.F24h (2026-05-27): isolate which AXIS triggers the K1.F24g
-    3-tile defect. K1.F24g showed 3 × __tile_zeros(2, 2) with lets + subtract
+    3-tile defect.
+
+    NOTE [K1.F24i CORRECTION, 2026-05-27 same-day]: the K1.F24g
+    "3-tile SIGILL" this test was bisecting NEVER EXISTED. It was a
+    test-helper bug (printf %s {repr()} corrupting multi-line sources;
+    fixed in K1.F24i with stdin pipe). Both H1 (1x1 cells with lets)
+    and H2 (2x2 cells discarded) trivially work post-fix; the
+    "NEITHER AXIS A NOR B is the lone trigger" conclusion was the
+    correct answer to the WRONG question. Test preserved as
+    regression-prevention; both probes now return their expected
+    values 3/3 cleanly. K1.F24g showed 3 × __tile_zeros(2, 2) with lets + subtract
     SIGILLs 3/3 while 2 × __tile_zeros(2, 2) + lets + subtract works (per
     K1.F23c probe 3). Two main candidates remain:
 
@@ -9417,6 +9466,108 @@ def test_bootstrap_kovc_k1f24h_tile_zeros_axis_isolation_self_host():
 
     # Surface narrative via stdout for pytest -s/-v inspection.
     print(summary_str)
+
+
+def test_bootstrap_kovc_k1f24i_multiline_source_regression_self_host():
+    """K1.F24i (2026-05-27): MAJOR CORRECTION + helper fix +
+    regression-prevention test.
+
+    The K1.F24g / K1.F24h "3-tile __tile_zeros SIGILL" findings were
+    ENTIRELY false positives caused by a bug in the test helper.
+
+    Root cause:
+      `_kovc_self_host_compile_and_run` wrote the source to /tmp via
+      `printf %s {repr(k2_src)} > {in_path}`. repr() escapes newlines
+      to backslash-n (two characters); `printf %s` writes the format
+      string verbatim WITHOUT expanding escapes. So multi-line k2_src
+      ended up on disk as ONE LINE with literal `\\n` separators.
+      The lexer then choked on the backslash, validation emitted
+      trap-id 19 from main's prologue, and the binary SIGILL'd with
+      exit 132 -- looking exactly like a codegen defect but actually
+      a helper bug.
+
+    Evidence (captured during K1.F24i investigation):
+      - K1.F24g P1 (3 x __tile_zeros, multi-line source): 3/3 SIGILL
+      - Same source SINGLE-LINE: 3/3 rc=8 (correct!)
+      - Disassembled 2-tile multi-line binary: 37 bytes of code,
+        ending in `mov eax, 0x13; ud2` (= emit_trap_with_id(19))
+        -- the bootstrap detected a validation error and traps,
+        never even reaching the tile codegen.
+      - After helper fix (stdin pipe instead of printf): all 4
+        K1.F24g probes return their expected values 3/3.
+
+    Helper fix:
+      Use stdin pipe (`cat > in_path` with `input=k2_src.encode()`)
+      instead of `printf %s {repr()}`. Preserves all bytes verbatim
+      with no shell-level escaping.
+
+    THIS test prevents regression by verifying that a multi-line
+    source produces the SAME result as the semantically-equivalent
+    single-line source.
+    """
+    # Multi-line program with 3 __tile_zeros calls + arena_set/get +
+    # __tile_add stub + __arena_get -- the K1.F24g P4 program. Pre-fix
+    # this returned 3/3 rc=132 SIGILL; post-fix it returns 3/3 rc=0.
+    multiline_src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 3);\n'
+        '    __arena_set(b, 10);\n'
+        '    __tile_add(a, b, dst, 4);\n'
+        '    __arena_get(dst)\n'
+        '}\n'
+    )
+    # Semantically-identical single-line program.
+    singleline_src = (
+        'fn main() -> i32 { '
+        'let a: i32 = __tile_zeros(2, 2); '
+        'let b: i32 = __tile_zeros(2, 2); '
+        'let dst: i32 = __tile_zeros(2, 2); '
+        '__arena_set(a, 3); '
+        '__arena_set(b, 10); '
+        '__tile_add(a, b, dst, 4); '
+        '__arena_get(dst) '
+        '}'
+    )
+
+    # 3-run K1.F24d retry discipline for both forms.
+    multiline_results = [
+        _kovc_self_host_compile_and_run(f"k1f24i_multiline_r{i}", multiline_src)
+        for i in range(3)
+    ]
+    singleline_results = [
+        _kovc_self_host_compile_and_run(f"k1f24i_singleline_r{i}", singleline_src)
+        for i in range(3)
+    ]
+
+    # Both should produce the same result. With the __tile_add stub
+    # (current state), dst remains BSS-zero, so __arena_get(dst) = 0.
+    # Pre-fix: multi-line would 3/3 SIGILL while single-line 3/3 rc=0.
+    # Post-fix: both should 3/3 rc=0 (or both flake the same way).
+    expected = 0
+    assert expected in multiline_results, (
+        f"K1.F24i regression: multi-line source returned {multiline_results}; "
+        f"expected at least one rc={expected}. Helper bug may have regressed: "
+        f"multi-line sources need to preserve newlines through the WSL bridge."
+    )
+    assert expected in singleline_results, (
+        f"K1.F24i sanity: single-line source returned {singleline_results}; "
+        f"expected at least one rc={expected}. Single-line should always work."
+    )
+
+    # Strong invariant: multi-line and single-line MUST produce the same
+    # mode result (both work, both flake). If they diverge, the helper
+    # fix is incomplete.
+    multiline_works = expected in multiline_results
+    singleline_works = expected in singleline_results
+    assert multiline_works == singleline_works, (
+        f"K1.F24i divergence: multi-line ({multiline_results}) and "
+        f"single-line ({singleline_results}) sources should behave "
+        f"identically through the helper. They don't -- the helper "
+        f"fix may have regressed."
+    )
 
 
 def test_bootstrap_kovc_k1f24e_tile_add_stub_three_runs_self_host():
