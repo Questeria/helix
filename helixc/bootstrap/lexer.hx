@@ -326,8 +326,40 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
                 if is_digit(b) == 1 {
                     value = value * 10 + (b - 48);
                     p = p + 1;
-                } else { if b == 95 {           // K1.AQ: '_' separator
-                    p = p + 1;
+                } else { if b == 95 {           // '_' separator
+                    // K1.E1d-fix (2026-05-26): only treat '_' as a
+                    // digit-separator when the NEXT byte is also a
+                    // decimal digit. If it's anything else (e.g. the
+                    // start of an `_i64` / `_u32` / `_f32` / `_bf16`
+                    // type suffix), STOP the digit loop here so the
+                    // suffix-detection cascade below sees `_` as its
+                    // first byte. K1.AQ originally introduced the
+                    // `_`-as-separator semantic but unconditionally
+                    // consumed it -- which silently swallowed the
+                    // leading `_` of every typed-suffix literal,
+                    // so the lexer tagged `42_i64` as plain TK_INTLIT
+                    // (tag 1) instead of TK_INTLIT_I64 (tag 33).
+                    // Downstream that meant the parser produced
+                    // AST_INT (tag 0) instead of AST_INTLIT_I64
+                    // (tag 35), and codegen emitted 5-byte
+                    // `mov eax, imm32` instead of 10-byte
+                    // `movabs rax, imm64` -- which the width-class
+                    // trap then correctly flagged as a width
+                    // mismatch, raising SIGILL for any `fn main() ->
+                    // i64 { ... }`-shape program. The 1-byte
+                    // lookahead here restores the separator
+                    // semantic for `1_000_000` while keeping
+                    // `42_i64`'s suffix visible.
+                    if p + 1 < end {
+                        let nxt = __arena_get(p + 1);
+                        if is_digit(nxt) == 1 {
+                            p = p + 1;
+                        } else {
+                            keep = 0;
+                        };
+                    } else {
+                        keep = 0;
+                    };
                 } else {
                     keep = 0;
                 }};

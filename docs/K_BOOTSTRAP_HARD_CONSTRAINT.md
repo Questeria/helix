@@ -316,6 +316,55 @@ recent K1.* parser work:
    what tag the parser actually produces — 35 (correct, bug
    elsewhere) or 0 (bug confirmed at parser).
 
+   **K1.E1-fix CLOSED (2026-05-26):** root cause located by
+   close re-reading of `lex_int` at `lexer.hx:329`. The K1.AQ
+   chunk (binary/octal/underscore numeric literals) added
+   `if b == 95 { p = p + 1; }` to the decimal-digit loop — but
+   unconditionally. For input `42_i64`, the loop reads `4`, `2`,
+   then sees `_` and consumes it BEFORE the suffix-detection
+   cascade at line 384 can recognize `_i64`. After consuming,
+   p points at `i` (105), not `_`; the suffix-detect then
+   fails its `b0 == 95` check and never matches. The lexer
+   emits TK_INTLIT (tag 1) for the value 42 instead of
+   TK_INTLIT_I64 (tag 33). Downstream chain plays out exactly
+   as the bytes showed.
+
+   **Fix:** at `lexer.hx:329`, only consume `_` as a digit-
+   separator if the NEXT byte is also a decimal digit. If the
+   next byte is anything else (the start of a type suffix or
+   end of input), stop the digit loop so the suffix-detect
+   sees `_` as its first byte. 7-line change, preserves the
+   `1_000_000` use case (next byte is a digit → separator),
+   restores `42_i64` recognition (next byte is `i` → not a
+   digit → stop, suffix-detect catches it).
+
+   **Verified:** all 6 SIGILL'ing return types now return 42:
+   - `fn main() -> i64 { 42_i64 }`           →  42 ✓
+   - `fn main() -> i64 { 100_i64 - 58_i64 }` →  42 ✓ (the
+     dormant 3-week-old K2.D regression)
+   - `fn main() -> u64 { 42_u64 }`           →  42 ✓
+   - `fn main() -> i8 { 42_i8 }`             →  42 ✓
+   - `fn main() -> i16 { 42_i16 }`           →  42 ✓
+   - `fn main() -> u8 { 42_u8 }`             →  42 ✓
+   - `fn main() -> u16 { 42_u16 }`           →  42 ✓
+   - `fn main() -> i32 { 1_000_000 - 999_958 }` → 42 ✓
+     (regression check: underscore-as-separator still works)
+
+   K2 corpus full run: 56/56 PASS, no regressions.
+
+   The traps at `kovc.hx:7367/7385` (14001/14002) remain in
+   place — they're still doing real work (catching genuine
+   width mismatches). With the lex fix, they no longer fire
+   on legitimate same-type i64/u64/i8/u8/i16/u16 bodies because
+   the AST tag is now correct and expr_type returns the right
+   value.
+
+   This closes the K1.E1 dormant-i64 bug (carry-over #1 above)
+   in a single 7-line fix. The Category-2 "mixed-type binops"
+   row in the matrix moves from "⚠️ codegen traps" to genuinely
+   broken-only-on-i64+i32-mismatch — same-type i64 arith now
+   works end-to-end.
+
    **Bug B — bare-expression i64 sub returns LHS (rc=100):**
    `100_i64 - 58_i64` returns 100, not 42. The bootstrap is
    reading just the LHS literal and dropping the rest. AST_SUB
