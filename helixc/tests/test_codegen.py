@@ -9082,29 +9082,34 @@ def test_bootstrap_kovc_k1f24b_three_arg_builtin_triple_known_broken_self_host()
     )
 
 
-def test_bootstrap_kovc_k1f24_tile_add_attempt_reverted_self_host():
-    """K1.F24-attempt (2026-05-27): the __tile_add builtin codegen
-    was drafted (4-arg elementwise add via runtime loop, then a
-    no-op stub fallback) and REVERTED -- both variants SIGILLed at
-    runtime even for the minimal `__tile_add(1, 2, 3, 4); 0` probe.
-    Root cause not yet localized; binary-diff against working builtins
-    needed in a future K1.F24b chunk.
+def test_bootstrap_kovc_k1f24e_tile_add_stub_three_runs_self_host():
+    """K1.F24e (2026-05-27): re-attempt the __tile_add no-op stub
+    with 3-CONSECUTIVE-RUN methodology. If all 3 return rc=0, the
+    K1.F24 SIGILL finding was a WSL flake (per the K1.F24d lesson).
+    If any run returns rc!=0 consistently, the stub IS broken and
+    needs codegen investigation.
 
-    Current state: __tile_add is NOT a recognized builtin name. The
-    bootstrap's fn-lookup fallback runs and fails to find a user fn
-    named __tile_add. This test PINS the current behavior by verifying
-    that `__tile_zeros(2, 2)` (the K1.F23c-shipped builtin) still
-    works -- a regression probe for K1.F23c that K1.F24's attempt
-    didn't accidentally damage.
+    Stub behavior: __tile_add(a, b, dst, count) evaluates all 4
+    args, discards the 3 pushed values, returns 0. No actual tile
+    computation. The real elementwise loop ships in a future K1.F24f
+    chunk after stub stability is confirmed.
     """
-    rc = _kovc_self_host_compile_and_run(
-        "k1f24_attempt_revert_pin",
-        'fn main() -> i32 { let t: i32 = __tile_zeros(2, 2); __arena_get(t) }',
-    )
-    assert rc == 0, (
-        f"K1.F24 regression: __tile_zeros(2, 2) should still work "
-        f"(K1.F23c regression after the K1.F24 attempt-and-revert); "
-        f"got {rc}. K1.F23c may have been damaged by the K1.F24 work."
+    src = 'fn main() -> i32 { __tile_add(1, 2, 3, 4); 0 }'
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f24e_tile_add_stub_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    # All 3 should be rc=0 if codegen is correct.
+    assert all(r == 0 for r in results), (
+        f"K1.F24e 3-run stability: expected all 3 runs to return "
+        f"rc=0 (no-op stub); got {results}. "
+        f"If consistent rc=132 across 3 runs, the codegen IS broken "
+        f"(WSL is stable; 3 consecutive flakes are improbable). "
+        f"If mixed (e.g. [0, 132, 0]), WSL flake -- the code is "
+        f"likely OK but the test is flake-prone."
     )
 
 

@@ -2204,11 +2204,16 @@ fn install_builtin_names() -> i32 {
     __arena_push(115);
     __arena_set(bn_state + 174, s_tz);
 
-    // K1.F24-attempt (2026-05-27): slot 175 reserved but the name push
-    // and codegen branch were reverted after persistent SIGILL during
-    // initial implementation attempts (both runtime-loop and no-op-stub
-    // variants traps; root cause not yet localized -- needs binary
-    // diff of the emitted bytes against working builtins).
+    // K1.F24e (2026-05-27): re-attempt at slot 175 with 3-run
+    // methodology. The K1.F24 SIGILL was attributed to a real
+    // codegen defect but K1.F24d showed the recent "defects" were
+    // WSL flakes. Re-shipping as the no-op stub variant; if 3
+    // consecutive runs return rc=0, the K1.F24 finding was ALSO
+    // a flake and the codegen path works fine.
+    let s_ta = __arena_push(95); __arena_push(95); __arena_push(116);
+    __arena_push(105); __arena_push(108); __arena_push(101); __arena_push(95);
+    __arena_push(97); __arena_push(100); __arena_push(100);
+    __arena_set(bn_state + 175, s_ta);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3721,9 +3726,8 @@ fn bn_eprint_str_s(b: i32) -> i32 { __arena_get(b + 173) }
 // Returns the old cursor as the tile's base offset; advances cursor
 // by N*M. Builtin name offset stored at slot 174.
 fn bn_tile_zeros_s(b: i32) -> i32 { __arena_get(b + 174) }
-// K1.F24-attempt (2026-05-27): bn_tile_add_s accessor REMOVED -- the
-// codegen attempt SIGILLed and was reverted. Slot 175 reserved for
-// the future K1.F24b retry.
+// K1.F24e (2026-05-27): re-attempt accessor.
+fn bn_tile_add_s(b: i32) -> i32 { __arena_get(b + 175) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4613,6 +4617,29 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end:
         // Byte count after args: 2+1+3+2 (arith pack) + 7 (lea) + 2+1+2+6+2 (cursor + check) + 2+1+2 (in_bounds) + 5+4 (bounds_fail) = 42 bytes
         n0_tz + np_tz + n1_tz + 2 + 1 + 3 + 2 + 7 + 2 + 1 + 2 + 6 + 2 + 2 + 1 + 2 + 5 + 4
+    } else { if kovc_byte_eq(name_s, name_l, bn_tile_add_s(bn_state), 10) == 1 {
+        // K1.F24e (2026-05-27): __tile_add(a, b, dst, count) no-op
+        // STUB. Eval all 4 args, discard the 3 pushed values via
+        // add rsp, 24, return 0. Real elementwise loop deferred to
+        // K1.F24f after the stub's stability is confirmed.
+        let a0_ta = __arena_get(args_head + 1);
+        let next1_ta = __arena_get(args_head + 2);
+        let a1_ta = __arena_get(next1_ta + 1);
+        let next2_ta = __arena_get(next1_ta + 2);
+        let a2_ta = __arena_get(next2_ta + 1);
+        let next3_ta = __arena_get(next2_ta + 2);
+        let a3_ta = __arena_get(next3_ta + 1);
+        let n0_ta = emit_ast_code(a0_ta, bind_state, patch_state, bn_state);
+        let np0_ta = emit_push_rax();
+        let n1_ta = emit_ast_code(a1_ta, bind_state, patch_state, bn_state);
+        let np1_ta = emit_push_rax();
+        let n2_ta = emit_ast_code(a2_ta, bind_state, patch_state, bn_state);
+        let np2_ta = emit_push_rax();
+        let n3_ta = emit_ast_code(a3_ta, bind_state, patch_state, bn_state);
+        // Stack clean + return 0:
+        emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);  // add rsp, 24 (4 bytes)
+        emit_byte(0x31); emit_byte(0xC0);                                     // xor eax, eax (2 bytes)
+        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 6
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
@@ -5313,7 +5340,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
