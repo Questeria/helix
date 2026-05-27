@@ -4719,8 +4719,16 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_ta = emit_ast_code(a2_ta, bind_state, patch_state, bn_state);
         let np2_ta = emit_push_rax();
         let n3_ta = emit_ast_code(a3_ta, bind_state, patch_state, bn_state);
-        // setup (11 bytes):
-        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax
+        // setup (31 bytes after K3.U: 11 base + 20 dst-bounds guard):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (count)
+        // K3.U (2026-05-27): dst-bounds guard. Trap-id 24001. Mirrors the
+        // K3.T pattern. Tests dst_off + count <= helix_arena_cap() (2097152).
+        emit_byte(0x8B); emit_byte(0x34); emit_byte(0x24);                      // mov esi, [rsp] (dst_off; 3B)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx (dst_off + count; 2B)
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP (6B opcode+ModRM)
+        emit_u32_le(helix_arena_cap());                                          //   imm32
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7 (skip trap if in bounds)
+        emit_trap_with_id(24001);                                                // 7B -- __tile_add dst OOB
         let disp_slot_ta = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_ta, arena_base_s, 18);
         emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
@@ -4741,7 +4749,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 60
+        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 80
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_sub_s(bn_state), 10) == 1 {
         // K1.F25 (2026-05-27): __tile_sub(a, b, dst, count) elementwise
         // subtraction. Mirrors __tile_add (K1.F24j) with one byte change:
@@ -4763,8 +4771,15 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_ts = emit_ast_code(a2_ts, bind_state, patch_state, bn_state);
         let np2_ts = emit_push_rax();
         let n3_ts = emit_ast_code(a3_ts, bind_state, patch_state, bn_state);
-        // setup (11 bytes):
-        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax
+        // setup (31 bytes after K3.U: 11 base + 20 dst-bounds guard):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (count)
+        // K3.U (2026-05-27): dst-bounds guard. Trap-id 25001.
+        emit_byte(0x8B); emit_byte(0x34); emit_byte(0x24);                      // mov esi, [rsp] (dst_off)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(25001);                                                // __tile_sub dst OOB
         let disp_slot_ts = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_ts, arena_base_s, 18);
         emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
@@ -4785,7 +4800,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_ts + np0_ts + n1_ts + np1_ts + n2_ts + np2_ts + n3_ts + 60
+        n0_ts + np0_ts + n1_ts + np1_ts + n2_ts + np2_ts + n3_ts + 80
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_mul_s(bn_state), 10) == 1 {
         // K1.F26 (2026-05-27): __tile_mul(a, b, dst, count) elementwise
         // multiplication. Mirrors __tile_add/__tile_sub but uses
@@ -4808,8 +4823,15 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_tm = emit_ast_code(a2_tm, bind_state, patch_state, bn_state);
         let np2_tm = emit_push_rax();
         let n3_tm = emit_ast_code(a3_tm, bind_state, patch_state, bn_state);
-        // setup (11 bytes):
-        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax
+        // setup (31 bytes after K3.U: 11 base + 20 dst-bounds guard):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax (count)
+        // K3.U (2026-05-27): dst-bounds guard. Trap-id 26001.
+        emit_byte(0x8B); emit_byte(0x34); emit_byte(0x24);                      // mov esi, [rsp] (dst_off)
+        emit_byte(0x01); emit_byte(0xCE);                                       // add esi, ecx
+        emit_byte(0x81); emit_byte(0xFE);                                       // cmp esi, CAP
+        emit_u32_le(helix_arena_cap());
+        emit_byte(0x76); emit_byte(0x07);                                       // jbe +7
+        emit_trap_with_id(26001);                                                // __tile_mul dst OOB
         let disp_slot_tm = emit_lea_rax_rip_placeholder();                      // 7 bytes
         patch_table_add(patch_state, disp_slot_tm, arena_base_s, 18);
         emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
@@ -4830,7 +4852,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_tm + np0_tm + n1_tm + np1_tm + n2_tm + np2_tm + n3_tm + 61
+        n0_tm + np0_tm + n1_tm + np1_tm + n2_tm + np2_tm + n3_tm + 81
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_matmul_s(bn_state), 13) == 1 {
         // K1.F27 (2026-05-27): __tile_matmul(a, b, dst, N) for 2x2 only.
         // Fully unrolled (no loops). N is currently ignored (assumed 2).

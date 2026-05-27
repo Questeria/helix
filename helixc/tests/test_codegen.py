@@ -9566,6 +9566,87 @@ def test_bootstrap_kovc_k3t_tile_matmul_dst_bounds_self_host():
     )
 
 
+def test_bootstrap_kovc_k3u_tile_elementwise_dst_bounds_self_host():
+    """K3.U (2026-05-27): full close of silent-failure-hunter HIGH-1.
+    Adds dst-bounds guards to __tile_add, __tile_sub, __tile_mul,
+    mirroring the K3.T pattern shipped on __tile_matmul.
+
+    Each op gets a 20-byte runtime check inserted right after the
+    `mov ecx, eax` that captures count:
+      mov esi, [rsp]                ; dst_off (3 bytes)
+      add esi, ecx                  ; dst_off + count (2 bytes)
+      cmp esi, helix_arena_cap()   ; vs 2097152 (6 bytes)
+      jbe +7                        ; skip trap if in bounds (2 bytes)
+      emit_trap_with_id(N)          ; 7 bytes -- N is per-op:
+                                    ;   __tile_add: 24001
+                                    ;   __tile_sub: 25001
+                                    ;   __tile_mul: 26001
+
+    Each body grows by 20 bytes:
+      __tile_add: 60 -> 80
+      __tile_sub: 60 -> 80
+      __tile_mul: 61 -> 81
+
+    Pre-K3.U: all three elementwise ops wrote dst[i] for i in 0..count
+    without checking dst_off + count <= arena_cap. Bogus dst_off (e.g.,
+    99999999) silently corrupted arena cells past the tile or wrote
+    past mapped BSS (SIGSEGV).
+
+    Post-K3.U: dst_off + count > cap traps with op-specific trap-id.
+
+    Audit HIGH-1 is now CLOSED for all 4 tile ops on the WRITE side.
+    READ-side bounds (a_off, b_off + count) remain unchecked across
+    all ops -- a separate close, lower-priority because reads of OOB
+    arena cells just produce garbage data rather than corrupting state.
+    """
+    # 3 ops × {normal, OOB} = 6 cases.
+    cases = [
+        # (op, normal_src_template, oob_src_template, normal_expected, op_trap_msg)
+        ("__tile_add", 3, 10, 13, "24001"),
+        ("__tile_sub", 20, 7, 13, "25001"),
+        ("__tile_mul", 4, 3, 12, "26001"),
+    ]
+    for op, a_val, b_val, expected, trap_id in cases:
+        # Normal: dst from __tile_zeros, in bounds.
+        src_ok = (
+            f'fn main() -> i32 {{\n'
+            f'    let a: i32 = __tile_zeros(2, 2);\n'
+            f'    let b: i32 = __tile_zeros(2, 2);\n'
+            f'    let dst: i32 = __tile_zeros(2, 2);\n'
+            f'    __arena_set(a, {a_val});\n'
+            f'    __arena_set(b, {b_val});\n'
+            f'    {op}(a, b, dst, 4);\n'
+            f'    __arena_get(dst)\n'
+            f'}}\n'
+        )
+        rc_ok = _kovc_self_host_compile_and_run(
+            f"k3u_normal_{op.lstrip('_')}", src_ok,
+        )
+        assert rc_ok == expected, (
+            f"K3.U normal-path regression on {op}: expected rc={expected}; "
+            f"got {rc_ok}. If rc=132: the bounds check fired for an "
+            f"in-bounds dst (off-by-one in jbe disp OR wrong CAP imm32)."
+        )
+
+        # OOB: dst_off = 99999999, way above cap=2097152.
+        src_oob = (
+            f'fn main() -> i32 {{\n'
+            f'    let a: i32 = __tile_zeros(2, 2);\n'
+            f'    let b: i32 = __tile_zeros(2, 2);\n'
+            f'    {op}(a, b, 99999999, 4);\n'
+            f'    0\n'
+            f'}}\n'
+        )
+        rc_oob = _kovc_self_host_compile_and_run(
+            f"k3u_oob_{op.lstrip('_')}", src_oob,
+        )
+        assert rc_oob == 132, (
+            f"K3.U dst-OOB on {op}: expected rc=132 (SIGILL from "
+            f"trap-id {trap_id}); got {rc_oob}. If rc=0 or some other "
+            f"value: the bounds check didn't fire."
+        )
+
+
 def test_bootstrap_kovc_k1f28_dbg_macro_passthrough_self_host():
     """K1.F28 (2026-05-27): `dbg!(IDENT)` macro expansion as a
     PASSTHROUGH. In Rust, `dbg!(expr)` prints "[file:line] expr = value"
