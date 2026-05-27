@@ -737,13 +737,43 @@ Python helixc/). See `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md` for
 the loop-stop criterion (Python-ready-to-delete state + 5
 consecutive clean audits).
 
-State at handoff (commit `86676cb`, 2026-05-27 late-evening; the
-K-track has continued from the K2.U sync on `cf2e858` through K3.J
-audit-fix, K1.F21 generic-bare-call fallback, K3.K K1.F21 audit-
-clean, and K2.V findings on K2 corpus growth-stall):
+State at handoff (commit `256544e`, 2026-05-27 late-evening; the
+K-track has continued from K1.F22 macro-expansion family through
+the K1.F23c/K1.F24j/K1.F25/K1.F26/K1.F27 tile-ops Phase-0 closure):
 
-- **`K_BOOTSTRAP_CHUNKS_DONE = 219`** (in `scripts/helix_status.py`).
+- **`K_BOOTSTRAP_CHUNKS_DONE = 255`** (in `scripts/helix_status.py`).
   **`K_BOOTSTRAP_PARITY_DONE = 138`** / 144 matrix rows.
+- **TILE OPS PHASE-0 ROW CLOSED** (K1.F23c -> K1.F27): all 5 tile
+  ops shipped in the bootstrap as REAL codegen (not stubs):
+  - `__tile_zeros(N, M)` (K1.F23c, slot 174): inline cursor-bump
+    allocator. Returns OLD cursor; advances by N*M cells. ~42 bytes.
+  - `__tile_add(a, b, dst, count)` (K1.F24j, slot 175): elementwise
+    add loop. 60 bytes after args.
+  - `__tile_sub(a, b, dst, count)` (K1.F25, slot 176): 1-byte op-flip
+    of __tile_add (opcode 2B vs 03). 60 bytes.
+  - `__tile_mul(a, b, dst, count)` (K1.F26, slot 177): imul opcode
+    (0F AF, 5 bytes) widens loop body to 44 bytes; jge +40, jmp -44.
+    61 bytes.
+  - `__tile_matmul(a, b, dst, N)` (K1.F27, slot 178): 2x2 square
+    matmul, fully unrolled (no loops). N parameter currently
+    ignored; future K1.F27b generalizes to NxN via 3 nested loops.
+    167 bytes.
+- **K1.F24i HELPER FIX** (commit `5fb3712`): the K1.F24g/h "3-tile
+  __tile_zeros SIGILL" findings were false positives caused by a
+  bug in `_kovc_self_host_compile_and_run`. `printf %s {repr()}`
+  corrupted multi-line sources into one line with literal `\\n`.
+  Fixed via stdin pipe (`cat > in_path` with `input=src.encode()`).
+  This unblocked K1.F24j (real elementwise add loop) and the rest
+  of the tile-ops family.
+- **K1.F26 EXIT-CODE-U8 CORRECTION** (commit `cc8dbc3`): K1.F25's
+  commit claimed an "__arena_get u8-narrowing defect". That was
+  MISTAKEN. The actual cause: the Linux kernel truncates exit codes
+  to 8 bits (POSIX `man 3 exit`). When a test program returns 1050
+  in eax, sys_exit(1050) makes the parent's wait4 see 1050 & 0xFF
+  = 26. Bootstrap and __arena_get are both correct.  Implication:
+  K2 tests verifying > 255 results must use stdout (the
+  `_kovc_self_host_compile_and_run_with_stdout` helper) instead of
+  the exit code.
 - **K2 parity corpus**: 125 entries across `helixc/tests/test_k2_parity.py`
   (grew 85 -> 125 across K2.M/N/O/P/R; all 125 PASS the parity-gate
   in the most recent representative-item smoke). **K2.V (2026-05-27)
