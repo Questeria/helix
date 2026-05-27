@@ -5853,12 +5853,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else { if l_u64 == 1 {
             if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
         } else {
-            // K1.F8b + K1.F8d (2026-05-27): when l isn't 64-bit but r
-            // IS 64-bit (i64 or u64), use 64-bit copy. K1.F8b handled
-            // the i64 leg; K1.F8d adds u64 so u32 + u64 widening
-            // works (zero-ext via prior 32-bit mov of l is
-            // unsigned-correct).
-            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } }
+            // K1.F8b + K1.F8d + K1.F9-fix (2026-05-27): when l isn't
+            // 64-bit but r IS 64-bit (i64, u64, or f64), use 64-bit
+            // copy. K1.F8b handled the i64 leg; K1.F8d adds u64; the
+            // K1.F9-fix adds the f64 leg so `f32 + f64` widening sees
+            // the full f64 bit pattern in rcx for the cvtss2sd-then-
+            // addsd sequence (K1.F9 already added this leg to SUB/MUL/
+            // DIV; the original K1.F9 commit missed AST_ADD here,
+            // producing the documented ADD-reverse miscompile).
+            if r_i64 == 1 { emit_mov_rcx_rax_64() } else { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() } } }
         }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);

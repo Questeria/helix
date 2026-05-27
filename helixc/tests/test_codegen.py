@@ -7058,6 +7058,81 @@ def test_bootstrap_kovc_pat_tuple_destructure_self_host():
     assert rc == 7, f"expected K2 exit 7 (3+4 from (a,b) bind); got {rc}"
 
 
+def test_bootstrap_kovc_k1f9_mixed_f32_f64_self_host():
+    """K1.F9 + K1.F9-fix (2026-05-27): mixed f32/f64 widening across
+    ADD/SUB/MUL/DIV in both directions, plus the regression case for
+    the K1.F9-fix to AST_ADD's mov-rcx step.
+
+    K1.F9 (the original commit) added the SSE cvtss2sd in-place f32
+    -> f64 widening helpers (emit_cvt_f32_in_rax/rcx_to_f64) and
+    patched the ADD/SUB/MUL/DIV codegen paths to use them when one
+    operand is f32 and the other f64. It also extended the mov-rcx
+    final-else to use a 64-bit copy when r_d=1 (so rcx has the full
+    f64 bit pattern, not truncated to 32 bits).
+
+    The original K1.F9 commit MISSED the `r_d == 1` leg in AST_ADD's
+    mov-rcx step (SUB/MUL/DIV all got it). Result: `f32 + f64` saw a
+    truncated f64 in rcx and produced wrong sums (low 32 of the f64
+    bit pattern). K1.F9-fix adds the missing leg so AST_ADD matches
+    its sibling binops.
+
+    The fn body uses `__f64_to_i32` (cvttsd2si) to materialize the
+    expected exit code -- `as i32` is a parser-only no-op (K1.N) so
+    it cannot perform the runtime f64 -> i32 conversion. The K2
+    parity corpus skips these probes because Python helixc's IR-
+    lowering rejects `__f64_to_i32` in arbitrary call positions
+    (it's only resolved on the `compile_and_exec` path); a bootstrap-
+    only self-host test pins the closure instead.
+
+    MOD is NOT covered: no SSE remainder instruction, so f32/f64 MOD
+    still traps (trap id 24010/24011) by design.
+    """
+    # Forward direction: f64 op f32 -- l_d=1, r_f32 widened to f64 in rcx.
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_fwd_f64_add_f32",
+        "fn main() -> i32 { __f64_to_i32(30.0_f64 + 12.0_f32) }",
+    )
+    assert rc == 42, f"K1.F9 fwd f64+f32: expected 42, got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_fwd_f64_sub_f32",
+        "fn main() -> i32 { __f64_to_i32(54.0_f64 - 12.0_f32) }",
+    )
+    assert rc == 42, f"K1.F9 fwd f64-f32: expected 42, got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_fwd_f64_mul_f32",
+        "fn main() -> i32 { __f64_to_i32(6.0_f64 * 7.0_f32) }",
+    )
+    assert rc == 42, f"K1.F9 fwd f64*f32: expected 42, got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_fwd_f64_div_f32",
+        "fn main() -> i32 { __f64_to_i32(84.0_f64 / 2.0_f32) }",
+    )
+    assert rc == 42, f"K1.F9 fwd f64/f32: expected 42, got {rc}"
+    # Reverse direction: f32 op f64 -- l_f32 widened to f64 in rax;
+    # rcx must hold the full 64 bits of the f64 (the K1.F9-fix mov-rcx
+    # `r_d == 1` leg for AST_ADD; SUB/MUL/DIV already had it in K1.F9).
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_rev_f32_add_f64",
+        "fn main() -> i32 { __f64_to_i32(30.0_f32 + 12.0_f64) }",
+    )
+    assert rc == 42, f"K1.F9-fix rev f32+f64: expected 42, got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_rev_f32_sub_f64",
+        "fn main() -> i32 { __f64_to_i32(54.0_f32 - 12.0_f64) }",
+    )
+    assert rc == 42, f"K1.F9 rev f32-f64: expected 42, got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_rev_f32_mul_f64",
+        "fn main() -> i32 { __f64_to_i32(6.0_f32 * 7.0_f64) }",
+    )
+    assert rc == 42, f"K1.F9 rev f32*f64: expected 42, got {rc}"
+    rc = _kovc_self_host_compile_and_run(
+        "k1f9_rev_f32_div_f64",
+        "fn main() -> i32 { __f64_to_i32(84.0_f32 / 2.0_f64) }",
+    )
+    assert rc == 42, f"K1.F9 rev f32/f64: expected 42, got {rc}"
+
+
 def test_bootstrap_kovc_struct_literal_and_field_self_host():
     """K1.F-discovery: the matrix listed `StructLit` as KOVC-
     MISSING. Direct probe shows struct literals fold to AST_TUPLE_

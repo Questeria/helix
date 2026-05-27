@@ -192,6 +192,14 @@ K2_CORPUS = [
     ("p91_u32_add_u64",          "fn main() -> u64 { 30_u32 + 12_u64 }", 42),
     ("p92_u32_sub_u64",          "fn main() -> u64 { 54_u32 - 12_u64 }", 42),
     ("p93_u32_mul_u64",          "fn main() -> u64 { 6_u32 * 7_u64 }", 42),
+    # Mixed f32/f64 binops (K1.F9 + K1.F9-fix) are NOT added to the K2
+    # parity corpus because the obvious surface form
+    # `__f64_to_i32(f32 + f64)` is rejected by Python helixc's
+    # IR-lowering (`unknown function '__f64_to_i32'`) -- the call is
+    # only resolved by the front end in `compile_and_exec` paths the
+    # K2 harness does not use. A bootstrap-only self-host test pins
+    # the K1.F9-fix closure instead -- see test_bootstrap_kovc_k1f9_
+    # mixed_f32_f64_self_host in test_codegen.py.
 ]
 
 
