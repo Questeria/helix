@@ -1379,6 +1379,12 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     } else { if t == 11 {                             // AST_ASSIGN
         let value_idx = __arena_get(idx + 3);
         expr_type(value_idx, bind_state, bn_state)
+    } else { if t == 79 {                             // AST_FIELD_STORE
+        // K1.F6 (2026-05-27): the assignment-result-IS-value rule
+        // applies to field-store too; eax holds the assigned value
+        // post-store, so the expression's type is the value's type.
+        // Mirrors AST_ASSIGN. p2 = value expr index.
+        expr_type(p2, bind_state, bn_state)
     } else { if t == 9 {                              // AST_NEG
         expr_type(p1, bind_state, bn_state)
     } else { if t == 26 {                             // AST_BNOT
@@ -1483,7 +1489,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -2739,6 +2745,14 @@ fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
             // expr), p3=is_struct (not expr). Walk only p1.
             walk_for_panic(p1, diag_state);
             0
+        } else { if t == 79 {
+            // K1.F6 (2026-05-27): AST_FIELD_STORE: p1=AST_TUPLE_FIELD
+            // (recursive walk picks up its own inner expr), p2=value
+            // expr. Walk both so panic(...) calls nested in either
+            // path are surfaced.
+            walk_for_panic(p1, diag_state);
+            walk_for_panic(p2, diag_state);
+            0
         } else { if t == 53 {
             // AST_INDEX: p1=value (expr), p2=idx (expr).
             walk_for_panic(p1, diag_state);
@@ -2779,7 +2793,7 @@ fn walk_for_panic(idx: i32, diag_state: i32) -> i32 {
                 walk_for_panic(p2, diag_state);
             };
             0
-        }}}}}}}}}}}}}}
+        }}}}}}}}}}}}}}}
     }
 }
 
@@ -3114,6 +3128,12 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
             // AST_TUPLE_FIELD: only p1 is an expr.
             walk_for_deprecated(p1, dep_tab, diag_state);
             0
+        } else { if t == 79 {
+            // K1.F6 (2026-05-27): AST_FIELD_STORE: p1=AST_TUPLE_FIELD
+            // (recursive walk picks up its inner), p2=value expr.
+            walk_for_deprecated(p1, dep_tab, diag_state);
+            walk_for_deprecated(p2, dep_tab, diag_state);
+            0
         } else { if t == 53 {
             // AST_INDEX: p1=value, p2=idx, both exprs.
             walk_for_deprecated(p1, dep_tab, diag_state);
@@ -3151,7 +3171,7 @@ fn walk_for_deprecated(idx: i32, dep_tab: i32, diag_state: i32) -> i32 {
                 walk_for_deprecated(p2, dep_tab, diag_state);
             };
             0
-        }}}}}}}}}}}}}}
+        }}}}}}}}}}}}}}}
     }
 }
 
@@ -7070,6 +7090,50 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         __arena_push(prev_head_ct);
         bn_set_continue_chain_head_s(bn_state, cell_addr_ct);
         5
+    } else { if t == 79 {
+        // K1.F6 (2026-05-27): AST_FIELD_STORE -- `p.x = v` writes
+        // the value into the field's slot. p1 = lhs (AST_TUPLE_FIELD
+        // node from parse_unary's postfix loop), p2 = value expr,
+        // p3 = unused.
+        //
+        // Codegen mirrors AST_TUPLE_FIELD's READ side (kovc.hx:5496+):
+        //   1. eval inner_expr (the chained `.field` LHS) -> rax = ptr
+        //   2. push rax (save struct ptr)
+        //   3. eval value_expr -> eax (value)
+        //   4. pop rcx (rcx = saved struct ptr)
+        //   5. mov [rcx + field_idx*8], eax    (3 bytes, scalar)
+        //      or mov [rcx + field_idx*8], rax (4 bytes, REX.W; struct
+        //      ptr-typed field with field_p3==1)
+        // After the store, eax still holds the assigned value -- the
+        // AST_ASSIGN result-IS-value convention (kovc.hx:6705-6707)
+        // applies to AST_FIELD_STORE the same way.
+        //
+        // Disp8 wrap guard (trap 52002): mirrors the READ side's
+        // 52001. p2 > 15 traps before the wrapping store.
+        let field_node = p1;
+        let val_node = p2;
+        let inner_expr = __arena_get(field_node + 1);
+        let field_idx = __arena_get(field_node + 2);
+        let field_p3 = __arena_get(field_node + 3);
+        let off = field_idx * 8;
+        let n_pre_trap = if field_idx > 15 {
+            emit_trap_with_id(52002)
+        } else { 0 };
+        let n_inner = emit_ast_code(inner_expr, bind_state, patch_state, bn_state);
+        let n_push = emit_push_rax();
+        let n_val = emit_ast_code(val_node, bind_state, patch_state, bn_state);
+        // pop rcx (0x59, 1 byte)
+        emit_byte(0x59);
+        let n_store = if field_p3 == 1 {
+            // mov [rcx + disp8], rax  (REX.W: 48 89 41 disp8 = 4 bytes)
+            emit_byte(0x48); emit_byte(0x89); emit_byte(0x41); emit_byte(off);
+            4
+        } else {
+            // mov [rcx + disp8], eax  (89 41 disp8 = 3 bytes)
+            emit_byte(0x89); emit_byte(0x41); emit_byte(off);
+            3
+        };
+        n_pre_trap + n_inner + n_push + n_val + 1 + n_store
     } else { if t == 25 {
         // AST_STR_LIT used as a value. Phase-0: strings are only
         // meaningful as the FIRST arg of a file builtin (handled in
@@ -7117,7 +7181,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
         emit_trap_with_id(99001)
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2 braces for AST_BREAK + AST_CONTINUE arms
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 for AST_FIELD_STORE
 }
 
 // --------------------------------------------------------------

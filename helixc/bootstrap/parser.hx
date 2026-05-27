@@ -2037,7 +2037,30 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb); cur_advance(sb);
             let rhs = parse_bitwise(tok_base, sb);
             mk_arith_fold(20, lhs, rhs)
-        } else { lhs }
+        } else {
+            // K1.F6 (2026-05-27): field-store `p.x = v` (single `=`).
+            // After parse_bitwise returns an AST_TUPLE_FIELD (the
+            // postfix loop in parse_unary emitted one on a `.IDENT`
+            // chain), the trailing `=` reaches here. If matched,
+            // consume the `=`, parse the value, and emit
+            // AST_FIELD_STORE (tag 79) with p1 = lhs (the field
+            // node), p2 = value. Mirrors the bare-var assignment
+            // path in parse_primary (parser.hx:5074), but at this
+            // postfix level so chained `p.inner.v = 7` also stores
+            // correctly -- the lhs holds the chained-access tree.
+            //
+            // Sub-gap from the K1.F-discovery batch 8 row note
+            // (matrix line 116): field-store assignment `p.x = 7`
+            // fell through this branch as a no-op `lhs` return,
+            // leaving the `=` token unconsumed and downstream
+            // parsing tripping.
+            let lhs_tag_fs = __arena_get(lhs);
+            if lhs_tag_fs == 52 {
+                cur_advance(sb);                // consume `=`
+                let store_val = parse_expr_basic(tok_base, sb);
+                mk_node(79, lhs, store_val, 0)
+            } else { lhs }
+        }
     } else { if t == 18 {
         if t2 == 15 {
             // `!=`
