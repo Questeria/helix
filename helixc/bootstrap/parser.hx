@@ -865,6 +865,18 @@ fn cl_var_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
 // the overflow as AST_ERR(76002) so codegen emits a hard trap for the
 // VAR site that didn't get registered.
 fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
+    // K1.F7 (2026-05-27): const-name resolution. If the IDENT
+    // matches a `const NAME = EXPR ;` decl previously registered in
+    // const_tab, return the stored value AST directly (no AST_VAR,
+    // no capture-recording -- consts are compile-time-known
+    // immediates, not runtime bindings). This closes the
+    // K1.Z sub-gap noted on matrix line 128: the const decl
+    // parsed fine but the name went nowhere; any downstream
+    // reference failed at codegen as an undefined binding.
+    let const_val_idx = const_tab_lookup(sb, id_s, id_l);
+    if const_val_idx >= 0 {
+        return const_val_idx;
+    };
     let active = cl_active(sb);
     let mut cap_overflow: i32 = 0;
     if active == 1 {
@@ -881,6 +893,43 @@ fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
     } else {
         mk_node(1, id_s, id_l, 0)
     }
+}
+// K1.F7 (2026-05-27): const_tab accessors. Cap = 16 entries; each
+// entry = 3 slots (name_s, name_l, value_ast_idx). Populated by
+// parse_const_decl, queried by parse_primary's IDENT path.
+fn const_tab_base(sb: i32) -> i32 { __arena_get(sb + 94) }
+fn const_tab_count(sb: i32) -> i32 { __arena_get(sb + 95) }
+fn const_tab_add(sb: i32, name_s: i32, name_l: i32, value_idx: i32) -> i32 {
+    let count = const_tab_count(sb);
+    if count >= 16 {
+        0 - 1
+    } else {
+        let base = const_tab_base(sb);
+        let entry = base + count * 3;
+        __arena_set(entry, name_s);
+        __arena_set(entry + 1, name_l);
+        __arena_set(entry + 2, value_idx);
+        __arena_set(sb + 95, count + 1);
+        count
+    }
+}
+fn const_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let base = const_tab_base(sb);
+    let count = const_tab_count(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < count {
+        let entry = base + i * 3;
+        let ns = __arena_get(entry);
+        let nl = __arena_get(entry + 1);
+        if byte_eq(name_s, name_l, ns, nl) == 1 {
+            found = __arena_get(entry + 2);
+            i = count;
+        } else {
+            i = i + 1;
+        };
+    }
+    found
 }
 fn var_type_tab_add(sb: i32, name_s: i32, name_l: i32, ty_tag: i32) -> i32 {
     let count = var_type_tab_count(sb);
@@ -6320,6 +6369,13 @@ fn parse_top(tok_base: i32) -> i32 {
     __arena_push(0); __arena_push(0);
     // K1.H1-deadcode (2026-05-25): slots 92/93 = loop keyword (start, len).
     __arena_push(0); __arena_push(0);
+    // K1.F7 (2026-05-27): slots 94/95 = const_tab base/count. The
+    // table is keyed by const-name byte-string and stores
+    // (name_s, name_l, value_ast_idx) triples (3 slots / entry,
+    // cap=16). Populated by parse_const_decl, queried by
+    // parse_primary's IDENT path so `const X: T = N;` followed by
+    // a `X` reference downstream emits N's AST inline.
+    __arena_push(0); __arena_push(0);
     install_keywords(cur_slot);
     var_struct_tab_init(cur_slot);
     var_enum_tab_init(cur_slot);
@@ -6378,6 +6434,19 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 78, sgp_base);
     __arena_set(cur_slot + 79, 0);
+    // K1.F7 (2026-05-27): const_tab region (48 slots, 16 entries x 3
+    // fields). Each entry = (name_s, name_l, value_ast_idx). The
+    // value_ast_idx is the AST node index of the const decl's
+    // value expression -- parse_primary inlines that AST when the
+    // const name is referenced.
+    let const_base = __arena_push(0);
+    let mut cti: i32 = 1;
+    while cti < 48 {
+        __arena_push(0);
+        cti = cti + 1;
+    }
+    __arena_set(cur_slot + 94, const_base);
+    __arena_set(cur_slot + 95, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -10889,14 +10958,15 @@ fn parse_agent_decl(tok_base: i32, sb: i32) -> i32 {
     mk_node(54, 0, 0, 0)
 }
 
-// K1.Z (2026-05-25): parse `const NAME [: TY] = EXPR ;`. Caller
-// has verified the cursor sits on the `const` IDENT. Consumes the
-// entire decl up to and including the trailing `;`. Returns
-// AST_STRUCT_DECL (tag 54) -- codegen no-op. The NAME is NOT
-// registered anywhere, so user code that references the const
-// downstream will fail at codegen time as an undefined var. This
-// is syntax-only parity; full support needs a const_tab + IDENT
-// lookup hook in parse_primary, which can land as a follow-up.
+// K1.Z (2026-05-25) + K1.F7 (2026-05-27): parse `const NAME [: TY] =
+// EXPR ;`. Caller has verified the cursor sits on the `const` IDENT.
+// Consumes the entire decl up to and including the trailing `;`.
+// Returns AST_STRUCT_DECL (tag 54) -- codegen no-op. The K1.F7
+// update REGISTERS the const in const_tab so `const X: T = N;`
+// followed by a downstream `X` reference inlines the value AST
+// (parse_primary's IDENT path queries the table BEFORE falling
+// through to AST_VAR). Pre-K1.F7 the name went nowhere and any
+// reference to X failed at codegen as an undefined binding.
 fn parse_const_decl(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'const' IDENT
     // K1.CY (2026-05-26): `const fn` is a fn-decl modifier, NOT a
@@ -10921,18 +10991,91 @@ fn parse_const_decl(tok_base: i32, sb: i32) -> i32 {
         };
     };
     if is_const_fn_cy == 0 {
-        let mut keep_c: i32 = 1;
-        while keep_c == 1 {
-            let ct = tok_tag(tok_base, cur_get(sb));
-            if ct == 12 {
-                keep_c = 0;
-            } else { if ct == 0 {
-                keep_c = 0;
-            } else {
-                cur_advance(sb);
-            }};
-        }
-        cur_advance(sb);                     // consume ';'
+        // K1.F7 (2026-05-27): structured parse path -- capture the
+        // const NAME bytes, skip the optional `: TY` annotation
+        // (depth-balanced to handle generic args `Box<T>`), consume
+        // `=`, parse the value expression, register in const_tab,
+        // then consume `;`.
+        //
+        // The previous K1.Z path was a blind skip-to-`;` loop; it
+        // still serves as the fallback when the structured parse
+        // can't fit (the name IDENT shape diverges from expected).
+        let name_tok_f7 = cur_get(sb);
+        let name_tag_f7 = tok_tag(tok_base, name_tok_f7);
+        if name_tag_f7 == 2 {
+            let name_s_f7 = tok_p2(tok_base, name_tok_f7);
+            let name_l_f7 = tok_p3(tok_base, name_tok_f7);
+            cur_advance(sb);                 // consume NAME IDENT
+            // Optional `: TY` -- depth-balance angle brackets so
+            // generic args like `: Box<T>` get fully skipped. TK_COLON
+            // = 14; TK_EQ = 15; TK_LT = 16; TK_GT = 17.
+            if tok_tag(tok_base, cur_get(sb)) == 14 {
+                cur_advance(sb);             // ':'
+                let mut keep_ty_f7: i32 = 1;
+                let mut g_depth_f7: i32 = 0;
+                while keep_ty_f7 == 1 {
+                    let tt_f7 = tok_tag(tok_base, cur_get(sb));
+                    if tt_f7 == 16 {
+                        g_depth_f7 = g_depth_f7 + 1;
+                        cur_advance(sb);
+                    } else { if tt_f7 == 17 {
+                        if g_depth_f7 > 0 {
+                            g_depth_f7 = g_depth_f7 - 1;
+                            cur_advance(sb);
+                        } else {
+                            keep_ty_f7 = 0;
+                        };
+                    } else { if tt_f7 == 15 {
+                        if g_depth_f7 == 0 {
+                            keep_ty_f7 = 0;
+                        } else {
+                            cur_advance(sb);
+                        };
+                    } else { if tt_f7 == 12 {
+                        keep_ty_f7 = 0;
+                    } else { if tt_f7 == 0 {
+                        keep_ty_f7 = 0;
+                    } else {
+                        cur_advance(sb);
+                    }}}}};
+                }
+            };
+            // Consume `=` and parse the value AST.
+            if tok_tag(tok_base, cur_get(sb)) == 15 {
+                cur_advance(sb);             // '='
+                let value_idx_f7 = parse_expr_basic(tok_base, sb);
+                const_tab_add(sb, name_s_f7, name_l_f7, value_idx_f7);
+            };
+            // Skip any leftover tokens up to the trailing `;`.
+            let mut keep_skip_f7: i32 = 1;
+            while keep_skip_f7 == 1 {
+                let st_f7 = tok_tag(tok_base, cur_get(sb));
+                if st_f7 == 12 {
+                    keep_skip_f7 = 0;
+                } else { if st_f7 == 0 {
+                    keep_skip_f7 = 0;
+                } else {
+                    cur_advance(sb);
+                }};
+            }
+            cur_advance(sb);                 // consume ';'
+        } else {
+            // Fallback: skip-to-`;` (matches the pre-K1.F7 behavior
+            // when the const decl's name shape doesn't fit). The
+            // const stays unregistered in this rare path.
+            let mut keep_c: i32 = 1;
+            while keep_c == 1 {
+                let ct = tok_tag(tok_base, cur_get(sb));
+                if ct == 12 {
+                    keep_c = 0;
+                } else { if ct == 0 {
+                    keep_c = 0;
+                } else {
+                    cur_advance(sb);
+                }};
+            }
+            cur_advance(sb);                 // consume ';'
+        };
     };
     mk_node(54, 0, 0, 0)
 }
