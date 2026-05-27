@@ -147,6 +147,19 @@ K2_CORPUS = [
     ("p68_let_inside_let_value", "fn main() -> i32 { let x = { let y = 21; y + y }; x + 0 }", 42),
     ("p69_zero_iter_for",        "fn main() -> i32 { let mut s = 42; for _ in 0..0 { s = 0; } s }", 42),
     ("p70_if_in_arith",          "fn main() -> i32 { (if true { 20 } else { 0 }) + 22 }", 42),
+    # K2.G (2026-05-27): const-name resolution probes. Pins the K1.F7
+    # close (const_tab + IDENT lookup hook in mk_var_with_capture).
+    # Both compilers handle these uniformly; Python via its normal
+    # name-resolution + const-table; bootstrap via const_tab_lookup
+    # returning the stored value AST at every reference site (the
+    # const is inlined per reference).
+    ("p71_const_bare_use",       "const X: i32 = 42; fn main() -> i32 { X }", 42),
+    ("p72_const_arith",          "const A: i32 = 30; const B: i32 = 12; fn main() -> i32 { A + B }", 42),
+    ("p73_const_in_let_rhs",     "const N: i32 = 42; fn main() -> i32 { let x = N; x }", 42),
+    ("p74_const_times_lit",      "const T: i32 = 6; fn main() -> i32 { T * 7 }", 42),
+    ("p75_const_in_if_cond",     "const Z: i32 = 0; fn main() -> i32 { if Z == 0 { 42 } else { 0 } }", 42),
+    ("p76_const_across_fns",     "const ANS: i32 = 42; fn helper() -> i32 { ANS } fn main() -> i32 { helper() }", 42),
+    ("p77_const_used_twice",     "const X: i32 = 42; fn doubled() -> i32 { X + X } fn main() -> i32 { doubled() - X }", 42),
 ]
 
 
@@ -205,14 +218,17 @@ def test_k2_corpus_size():
       - K2.F bumped to >= 70 (typed-int suffixes _i64 / _u32 / _i8 /
         _i16 unblocked by K1.E1-fix, plus underscore-separator
         variants and arith edge cases).
+      - K2.G bumped to >= 77 (const-name resolution probes pinning
+        the K1.F7 close: bare use, arithmetic, in let-RHS, in if-
+        cond, across fn calls, used-twice).
 
     (K2.C was the matrix-parity counter sync -- no corpus change.)
 
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 70, (
-        f"K2.F corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 77, (
+        f"K2.G corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
