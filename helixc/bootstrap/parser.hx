@@ -2277,13 +2277,26 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                     // Token positions: pk = '.', pk+1 = method IDENT, pk+2 = '('.
                     let prim_tag_pre = __arena_get(prim);
                     let mut method_lhs_ty: i32 = 0 - 1;
+                    // K1.F5b (2026-05-27): also detect a STRUCT-typed
+                    // LHS so `p.get()` (where `p` is registered in
+                    // var_struct_tab) routes through the struct method-
+                    // call branch below. Scalar lookup wins on tie: a
+                    // var registered in BOTH tables (shouldn't happen
+                    // today, but defensive) gets the scalar branch.
+                    let mut method_lhs_struct: i32 = 0 - 1;
                     if prim_tag_pre == 1 {
                         let pv_s = __arena_get(prim + 1);
                         let pv_l = __arena_get(prim + 2);
                         method_lhs_ty = var_type_tab_lookup(sb, pv_s, pv_l);
+                        if method_lhs_ty < 0 {
+                            method_lhs_struct = var_struct_tab_lookup(sb, pv_s, pv_l);
+                        };
                     };
                     let lparen_tag = tok_tag(tok_base, pk + 2);
                     let is_method_call = if method_lhs_ty >= 0 {
+                        if lparen_tag == 3 { 1 } else { 0 }
+                    } else { 0 };
+                    let is_struct_method = if method_lhs_struct >= 0 {
                         if lparen_tag == 3 { 1 } else { 0 }
                     } else { 0 };
                     if is_method_call == 1 {
@@ -2331,6 +2344,52 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                         // Emit AST_CALL (tag 16) with mangled name + args_head.
                         prim = mk_node(16, mang_s, mang_l, args_head);
                         cur_struct_idx = 0 - 1;
+                    } else { if is_struct_method == 1 {
+                    // K1.F5b (2026-05-27): STRUCT-receiver method-call
+                    // sugar. Mirror of the SCALAR branch above, but
+                    // the LHS is a struct-typed var (registered in
+                    // var_struct_tab by `let p = P{...}` or by a
+                    // struct-typed fn parameter). The mangled name
+                    // uses the struct's NAME bytes from struct_tab —
+                    // ty_tag_push_name only knows the scalar tags
+                    // (0=i32, 1=f32, ...), so for a struct we read
+                    // the recorded type-name bytes directly.
+                    let m_s = tok_p2(tok_base, pk + 1);
+                    let m_l = tok_p3(tok_base, pk + 1);
+                    // struct_tab stride is 4 (name_s, name_l, arity,
+                    // fields_ptr); offsets 0/1 are the type-name
+                    // bytes recorded when `struct P { ... }` was
+                    // parsed.
+                    let s_entry = struct_tab_base(sb) + method_lhs_struct * 4;
+                    let s_name_s = __arena_get(s_entry);
+                    let s_name_l = __arena_get(s_entry + 1);
+                    let mang_s = mangle_impl_method(s_name_s, s_name_l, m_s, m_l);
+                    let mang_l = s_name_l + 2 + m_l;
+                    // Consume `.`, method IDENT, `(`.
+                    cur_advance(sb);                       // '.'
+                    cur_advance(sb);                       // method IDENT
+                    cur_advance(sb);                       // '('
+                    // Build args list (parallel to SCALAR branch).
+                    let first_arg = mk_node(17, prim, 0, 0);
+                    let mut args_head: i32 = first_arg;
+                    let mut prev_arg: i32 = first_arg;
+                    let mut a_keep: i32 = 1;
+                    while a_keep == 1 {
+                        let at = tok_tag(tok_base, cur_get(sb));
+                        if at == 4 {                        // ')'
+                            a_keep = 0;
+                        } else { if at == 13 {              // ','
+                            cur_advance(sb);
+                        } else {
+                            let arg_expr = parse_expr_basic(tok_base, sb);
+                            let new_arg = mk_node(17, arg_expr, 0, 0);
+                            __arena_set(prev_arg + 2, new_arg);
+                            prev_arg = new_arg;
+                        } };
+                    }
+                    cur_advance(sb);                       // ')'
+                    prim = mk_node(16, mang_s, mang_l, args_head);
+                    cur_struct_idx = 0 - 1;
                     } else {
                     // Stage 5 Iter B: `.IDENT` named field access.
                     // Iter D: cur_struct_idx may already be set from a
@@ -2397,7 +2456,7 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                             };
                         } else { keep_p = 0; };
                     } else { keep_p = 0; };
-                    };       // end Stage 8.5 method-call-else (field-access)
+                    }; };    // end K1.F5b struct-method-else (field-access); end Stage 8.5 method-call-else
                 } else { keep_p = 0; }};
             } else { if pt == 20 {                     // TK_LBRACK
                 cur_advance(sb);                       // skip '['
@@ -10004,6 +10063,19 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
                 // Bare `self`: type = target_tag.
                 let new_param = mk_node(18, pname_s, pname_l, 0);
                 __arena_push(target_tag);
+                // K1.F5b (2026-05-27): if target is a struct (target_tag
+                // encoded as 100+struct_idx via the parse_impl_block
+                // fix), register `self` in var_struct_tab so that field
+                // access on it (`self.v`) resolves to a field offset.
+                // Mirrors parse_fn_decl's struct-param registration at
+                // parser.hx:9405. Scalar-target receivers skip this —
+                // their self is i32-shaped, registered nowhere extra.
+                let n_self_struct = if target_tag >= 100 {
+                    if target_tag < 200 {
+                        var_struct_tab_add(sb, pname_s, pname_l, target_tag - 100)
+                    } else { 0 }
+                } else { 0 };
+                let _drop_self_struct = n_self_struct;
                 if params_head == 0 {
                     params_head = new_param;
                     prev_param = new_param;
@@ -10356,7 +10428,22 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
         // `where` clause is still ahead of the cursor, and the where-
         // clause skip below will consume it.
     };
-    let target_tag = ty_ident_to_tag(target_s, target_l);
+    // K1.F5b (2026-05-27): for a struct-typed receiver (target IDENT
+    // is a registered struct, not a scalar), encode the target_tag
+    // as `100 + struct_idx` — matches the parser convention
+    // documented in kovc.hx:6808-6815 ("Stage 5 Iter C: skip the trap
+    // when expected_ty == 15 ... parser encoded p_ty=100+struct_idx,
+    // pre-pass clamped to 15"). Without this, `impl P { fn get(self)
+    // ...}` registered self with target_tag=0 (i32, ty_ident_to_tag's
+    // default for unknown idents), and the type-mismatch trap fired
+    // at the call site comparing struct-receiver vs i32 self.
+    let scalar_target_tag = ty_ident_to_tag(target_s, target_l);
+    let struct_target_idx = struct_tab_lookup_idx(sb, target_s, target_l);
+    let target_tag = if struct_target_idx >= 0 {
+        100 + struct_target_idx
+    } else {
+        scalar_target_tag
+    };
     // K1.DD (2026-05-26): optional `<...>` generic args on the
     // target type (e.g. `impl<T> Box<T> {}` -- the `<T>` after `Box`).
     // After K1.DD's `impl<T>` generic-param skip + target IDENT

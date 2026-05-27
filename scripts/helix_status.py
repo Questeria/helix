@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 173      # last bump: K1.F5-discovery (impl-method)
+K_BOOTSTRAP_CHUNKS_DONE = 174      # last bump: K1.F5b -- struct-method-call dispatch fix
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -106,7 +106,12 @@ K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # 18 `| KOVC-MISSING |` = 144 rows
                                     # with a status column. The earlier
                                     # 143 was the K0-chunk estimate.
-K_BOOTSTRAP_PARITY_DONE = 135      # K1.F3+F4: __trace_event +
+K_BOOTSTRAP_PARITY_DONE = 136      # K1.F5b 2026-05-27: impl Type
+                                    # { methods } row flipped KOVC-
+                                    # MISSING -> FUNCTIONAL PARITY (the
+                                    # struct-receiver dot-call dispatch
+                                    # `p.get()` now works). 135 -> 136
+                                    # (+1 row). The previous K1.F3+F4: __trace_event +
                                     # __helix_splice + __helix_modify +
                                     # __helix_reflect_hash all added
                                     # as no-op stubs at slots 165-168.
