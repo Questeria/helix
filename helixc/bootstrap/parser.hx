@@ -3793,11 +3793,23 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         let aeq_a_opnd_l = tok_p3(tok_base, k + 3);
                         let aeq_b_opnd_s = tok_p2(tok_base, k + 5);
                         let aeq_b_opnd_l = tok_p3(tok_base, k + 5);
-                        if is_kw_true_ident(aeq_a_opnd_s, aeq_a_opnd_l) == 1 { 0 }
-                        else { if is_kw_false_ident(aeq_a_opnd_s, aeq_a_opnd_l) == 1 { 0 }
-                        else { if is_kw_true_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
-                        else { if is_kw_false_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
-                        else { 1 } } } }
+                        if is_any_reserved_kw_ident(aeq_a_opnd_s, aeq_a_opnd_l) == 1 { 0 }
+                        else { if is_any_reserved_kw_ident(aeq_b_opnd_s, aeq_b_opnd_l) == 1 { 0 }
+                        else { 1 } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F31 (2026-05-27): assert_eq!(IDENT, INT_LIT) shape -- 7 tokens.
+            // mac_t3 = TK_IDENT (2), mac_t4 = TK_COMMA (13), mac_t5 = TK_INT (1),
+            // mac_t6 = TK_RPAREN (4). Synthesis: AST_IF(AST_EQ(AST_VAR(a),
+            // AST_INT(b)), then=0, else=panic). Same K3.S reject on the IDENT
+            // operand to avoid the AST_VAR-on-keyword silent miscompile.
+            let is_assert_eq_ident_int_form = if is_assert_eq_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
+                    if mac_t5 == 1 { if mac_t6 == 4 {
+                        let aeqii_a_opnd_s = tok_p2(tok_base, k + 3);
+                        let aeqii_a_opnd_l = tok_p3(tok_base, k + 3);
+                        if is_any_reserved_kw_ident(aeqii_a_opnd_s, aeqii_a_opnd_l) == 1 { 0 }
+                        else { 1 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             // K1.F22k (2026-05-27): shape guard for assert_ne!(IDENT, IDENT).
@@ -4210,6 +4222,46 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let aeq_else = mk_node(16, aeq_panic_name_s, 5, aeq_args_head);
                 mk_node(7, aeq_cond, aeq_then, aeq_else)
+            } else { if is_assert_eq_ident_int_form == 1 {
+                // K1.F31 (2026-05-27): assert_eq!(IDENT, INT_LIT) form.
+                // Synthesizes AST_IF(cond=AST_EQ(AST_VAR(a), AST_INT(b_val)),
+                //                    then=AST_INT(0),
+                //                    else=AST_CALL(panic, "assertion failed: ==")).
+                // Sibling of K1.F22j; AST_INT on the right side instead of
+                // AST_VAR. 7-token consumption (assert_eq, !, (, IDENT, comma,
+                // INT, )). K3.S reject applies to the IDENT operand.
+                let aeqii_a_s = tok_p2(tok_base, k + 3);
+                let aeqii_a_l = tok_p3(tok_base, k + 3);
+                let aeqii_b_val = tok_p1(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert_eq)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // INT (b)
+                cur_advance(sb);           // )
+                let aeqii_var_a = mk_node(1, aeqii_a_s, aeqii_a_l, 0);
+                let aeqii_int_b = mk_node(0, aeqii_b_val, 0, 0);
+                let aeqii_cond = mk_node(20, aeqii_var_a, aeqii_int_b, 0);  // AST_EQ
+                let aeqii_then = mk_node(0, 0, 0, 0);                        // AST_INT(0)
+                // Push "assertion failed: ==" message bytes (20 chars).
+                let aeqii_msg_s = __arena_push(97);                          // 'a'
+                __arena_push(115); __arena_push(115);                        // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                __arena_push(32);                                            // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                __arena_push(58);                                            // ':'
+                __arena_push(32);                                            // ' '
+                __arena_push(61); __arena_push(61);                          // '=' '='
+                let aeqii_str_ast = mk_node(25, aeqii_msg_s, 20, 0);
+                let aeqii_args_head = mk_node(17, aeqii_str_ast, 0, 0);
+                let aeqii_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let aeqii_else = mk_node(16, aeqii_panic_name_s, 5, aeqii_args_head);
+                mk_node(7, aeqii_cond, aeqii_then, aeqii_else)
             } else { if is_assert_ne_form == 1 {
                 // K1.F22k: synthesize AST_IF(cond=AST_NE(AST_VAR(a),
                 // AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic,
@@ -4346,7 +4398,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form)
+            }}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

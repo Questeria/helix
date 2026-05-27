@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 265      # last bump: K3.W -- finishes READ-side close of audit HIGH-1 across __tile_sub/__tile_mul/__tile_matmul. Mirrors K3.V pattern. Trap-ids: 25002/25003 (sub a/b), 26002/26003 (mul a/b), 27003/27004 (matmul a/b). Matmul uses `add esi, 4` imm8 (3 bytes) instead of `add esi, ecx` (2 bytes) since count is hardcoded post-K3.R; matmul check is 22 bytes per offset, 44 total. Body sizes: sub 80 -> 122 (+42), mul 81 -> 123 (+42), matmul 200 -> 244 (+44). Test verifies 9 cases (3 ops x {normal, a-OOB, b-OOB}); all pass. AUDIT HIGH-1 FULLY CLOSED across all 4 tile ops on both WRITE and READ sides. All 4 audit findings now closed (HIGH-1, MEDIUM-1, MEDIUM-2, LOW)
+K_BOOTSTRAP_CHUNKS_DONE = 266      # last bump: K1.F31 -- assert_eq!(IDENT, INT_LIT) form. Real Rust very often writes `assert_eq!(x, 5)`; pre-F31 this fell through to K1.CB no-op-skip and silently ate the assert. Sibling of K1.F22j with AST_INT on the right (instead of AST_VAR). 7-token shape. K3.S reject still applies to IDENT operand. Also unifies the K1.F22j IDENT-side BoolLit reject to use is_any_reserved_kw_ident (defense-in-depth, extends K3.S coverage). Test: assert_eq!(x, 5) when x=5 -> rc=11, assert_eq!(x, 7) when x=5 -> rc=132. K1.F22j/k regressions intact.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

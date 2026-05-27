@@ -9951,6 +9951,49 @@ def test_bootstrap_kovc_k1f29_panic_empty_form_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f31_assert_eq_ident_int_self_host():
+    """K1.F31 (2026-05-27): `assert_eq!(IDENT, INT_LIT)` macro form.
+
+    Sibling of K1.F22j (`assert_eq!(IDENT, IDENT)`) with AST_INT on
+    the right side instead of AST_VAR. Real Rust code very often
+    writes `assert_eq!(x, 5)`.
+
+    Shape: assert_eq, !, (, IDENT, comma, INT, ) -- 7 tokens.
+    mac_t2=LPAREN(3), mac_t3=IDENT(2), mac_t4=COMMA(13),
+    mac_t5=TK_INT(1), mac_t6=RPAREN(4).
+
+    Synthesis: AST_IF(cond=AST_EQ(AST_VAR(a), AST_INT(b_val)),
+                      then=AST_INT(0),
+                      else=AST_CALL(panic, "assertion failed: ==")).
+
+    K3.S reject still applies to the IDENT operand. A keyword-named
+    operand (e.g. `true`, `false`) routes through the bool-lit
+    constant-folding path or falls to K1.CB no-op-skip.
+
+    Differential check:
+      pass case  (x=5, assert_eq!(x, 5)):  rc=11 (trailing 11 returned)
+      fail case  (x=5, assert_eq!(x, 7)):  rc=132 (SIGILL from ud2)
+    """
+    src_pass = 'fn main() -> i32 { let x: i32 = 5; assert_eq!(x, 5); 11 }'
+    rc_pass = _kovc_self_host_compile_and_run("k1f31_aeqii_pass", src_pass)
+    assert rc_pass == 11, (
+        f"K1.F31 assert_eq!(x, 5) when x=5: expected rc=11 (assert passes, "
+        f"fn returns trailing 11); got {rc_pass}. If rc=0: the K1.CB "
+        f"no-op-skip path swallowed the macro instead of K1.F31 synthesis. "
+        f"If rc=132: the cond_eq branch was inverted."
+    )
+
+    src_fail = 'fn main() -> i32 { let x: i32 = 5; assert_eq!(x, 7); 11 }'
+    rc_fail = _kovc_self_host_compile_and_run("k1f31_aeqii_fail", src_fail)
+    assert rc_fail == 132, (
+        f"K1.F31 assert_eq!(x, 7) when x=5: expected rc=132 (SIGILL from "
+        f"ud2 after 'assertion failed: ==' panic prints); got {rc_fail}. "
+        f"If rc=11: the cond_eq branch was inverted (it ran the THEN arm "
+        f"when operands differed). If rc=0: macro fell through to K1.CB "
+        f"no-op-skip; K1.F31 detection or synthesis broken."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.
