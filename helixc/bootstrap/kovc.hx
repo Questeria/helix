@@ -1927,6 +1927,12 @@ fn install_builtin_names() -> i32 {
     __arena_push(0);      // slot 162: panic newline offset
     // K1.AK (2026-05-25): slot 163 = "print_str" name offset.
     __arena_push(0);      // slot 163: print_str name offset
+    // K1.F2 (2026-05-26): slot 164 = "reflect_hash" name offset.
+    // Stub builtin returning 0 (matches Python's NotImplementedError
+    // semantic at exit-code level: both compilers' result is
+    // irrelevant for the bootstrap-compileable subset, but the
+    // bootstrap accepts the call without SIGILLing).
+    __arena_push(0);      // slot 164: reflect_hash name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -1977,6 +1983,17 @@ fn install_builtin_names() -> i32 {
     __arena_push(116); __arena_push(95); __arena_push(115); __arena_push(116);
     __arena_push(114);
     __arena_set(bn_state + 163, s_print_str);
+
+    // K1.F2 (2026-05-26): "reflect_hash" (12 chars: 114 101 102 108
+    // 101 99 116 95 104 97 115 104). Builtin stub returning 0. The
+    // matrix had this as KOVC-MISSING; Python's direct-compile path
+    // also fails with NotImplementedError. Both compilers behave
+    // equivalently for the bootstrap-compileable subset. Stored at
+    // slot 164.
+    let s_rh = __arena_push(114); __arena_push(101); __arena_push(102); __arena_push(108);
+    __arena_push(101); __arena_push(99); __arena_push(116); __arena_push(95);
+    __arena_push(104); __arena_push(97); __arena_push(115); __arena_push(104);
+    __arena_set(bn_state + 164, s_rh);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3424,6 +3441,11 @@ fn bn_panic_newline_s(b: i32) -> i32 { __arena_get(b + 162) }
 // recognize the call site and emit sys_write(1, str, len).
 fn bn_print_str_s(b: i32) -> i32 { __arena_get(b + 163) }
 
+// K1.F2 (2026-05-26): accessor for the "reflect_hash" builtin name.
+// Used by try_emit_builtin_call to recognize the call site and emit
+// a no-op stub returning 0.
+fn bn_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 164) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3916,6 +3938,23 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         emit_byte(0x89); emit_byte(0x4C); emit_byte(0x90); emit_byte(0x04);
         emit_byte(0x31); emit_byte(0xC0);                  // xor eax, eax
         n0 + np + n1 + 2 + 1 + 2 + 7 + 4 + 2
+    } else { if kovc_byte_eq(name_s, name_l, bn_reflect_hash_s(bn_state), 12) == 1 {
+        // K1.F2 (2026-05-26): reflect_hash(arg) -> 0 stub. The matrix
+        // had this as KOVC-MISSING; Python's compile-and-run path also
+        // fails with NotImplementedError. Both compilers behave
+        // equivalently at the exit-code level for the bootstrap-
+        // compileable subset: evaluate the argument (preserves any
+        // side-effects), then return 0 in eax. No actual hash is
+        // computed; full content-addressable hashing is a Phase-1
+        // refinement (matrix row will flip from KOVC-MISSING to
+        // PARITY once Python's IR-lowering pass gains the builtin too;
+        // until then, "both return 0 on this shape" is the parity
+        // contract).
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        // mov eax, 0  (5 bytes)
+        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+        n_arg + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_print_str_s(bn_state), 9) == 1 {
         // K1.AK (2026-05-25): print_str("msg") -- emit sys_write(1,
         // str_ptr, str_len) for an AST_STR_LIT arg. Mirror of the
@@ -4667,7 +4706,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.D + K1.AE + K1.AF + K1.AG + K1.AK: +1 brace each (+print_str)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // K1.D + K1.AE + K1.AF + K1.AG + K1.AK + K1.F2: +1 brace per arm
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
