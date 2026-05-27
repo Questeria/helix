@@ -737,18 +737,26 @@ Python helixc/). See `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md` for
 the loop-stop criterion (Python-ready-to-delete state + 5
 consecutive clean audits).
 
-State at handoff (commit `5e0621f`, 2026-05-27 evening; the K-track
-has continued from the K2.S sync on `3cc24ab` through K1.F15/F18/
-F18b/F19/F20/F20b + matrix-honesty passes):
+State at handoff (commit `86676cb`, 2026-05-27 late-evening; the
+K-track has continued from the K2.U sync on `cf2e858` through K3.J
+audit-fix, K1.F21 generic-bare-call fallback, K3.K K1.F21 audit-
+clean, and K2.V findings on K2 corpus growth-stall):
 
-- **`K_BOOTSTRAP_CHUNKS_DONE = 215`** (in `scripts/helix_status.py`).
+- **`K_BOOTSTRAP_CHUNKS_DONE = 219`** (in `scripts/helix_status.py`).
   **`K_BOOTSTRAP_PARITY_DONE = 138`** / 144 matrix rows.
 - **K2 parity corpus**: 125 entries across `helixc/tests/test_k2_parity.py`
   (grew 85 -> 125 across K2.M/N/O/P/R; all 125 PASS the parity-gate
-  in the most recent representative-item smoke). Additional probes for
-  K1.F18b/F19/F20/F20b are pinned in test_codegen.py as bootstrap-only
-  self-host probes (Python's compile-and-run path doesn't symmetrically
-  accept those literals/builtins, so the K2 corpus skips them).
+  in the most recent representative-item smoke). **K2.V (2026-05-27)
+  finding**: the K2 corpus growth is now constrained by INVERSE-PARITY
+  -- the recent K1.F18b/F19/F20/F20b/F21 closures are
+  BOOTSTRAP-ONLY (Python's compile_and_run frontend doesn't accept the
+  syntax, e.g., `fn id<T>(...)` generic-fn decl raises ParseError on
+  Python). Attempts to add those probes to K2 fail Python's sanity
+  step before the parity comparison. They're pinned as bootstrap-only
+  self-host probes in test_codegen.py instead. The bootstrap is now
+  MORE functional than Python's compile_and_run path for this growing
+  set of features (a positive signal for the eventual Python-deletion
+  but a constraint on K2 corpus expansion).
 - **Category-2 closures shipped this session** (chronological,
   state as of commit `3cc24ab`):
   - **K1.F5b** (`b5fee4a`) -- struct-receiver method-call dispatch.
@@ -837,8 +845,22 @@ F18b/F19/F20/F20b + matrix-honesty passes):
     cell-table runtime + K1.F19 mixer fully cover the bootstrap-
     compileable subset; AST-shape-hash semantic is a Python-
     future design choice).
+  - **K3.J** (`9991a33`) -- 3-axis audit-fix batch on K1.F19/F20/
+    F20b: MEDIUM-1 zero-arg __trace_event slot corruption +
+    LOW-2 __trace_last silent-arg-drop, both closed; K3.J
+    audit-clean signal recorded (5th cleanly-audited batch).
+  - **K1.F21** (`11865c0`) -- generic-bare-call name resolution
+    fallback. Bare `id(42)` -- where mono produced `id__i32`
+    from a turbofish elsewhere -- now resolves via the backpatch-
+    time mangled-name lookup using a new 64-slot scratch at
+    bn_state slot 170. Closes matrix-row-137 i32 bare-call leg.
+  - **K3.K** (`86676cb`) -- 3-axis audit on K1.F21: NO HIGH /
+    NO must-fix-MEDIUM; convergent SOFT-MEDIUM doc-drift fix on
+    the "+ safety" headroom comment (gate is exact-fit, not
+    safety-margin). K3.K signal = 6th cleanly-audited batch.
 
-- **Category-2 closure status**: 7 of 12 items fully CLOSED:
+- **Category-2 closure status**: 7 of 12 items fully CLOSED + 1
+  PARTIAL:
     1. impl method dispatch (K1.F5b)
     2. field-store mutation (K1.F6)
     3. const-name resolution (K1.F7)
@@ -850,18 +872,24 @@ F18b/F19/F20/F20b + matrix-honesty passes):
        reflect_hash mixer)
     7. trace events (K1.F20 value-tap + K1.F20b depth-1 ring +
        __trace_last read side)
-  REMAINING 5: generic monomorphization, tile ops, GPU backends,
+  PARTIAL: generic monomorphization (K1.F-discovery batch 27
+       turbofish + K1.F21 bare-call i32 fallback both close the
+       i32-shaped-T leg; non-i32 T bare calls still trap pending
+       K1.F21b parse-time type inference).
+  REMAINING 4 fully OPEN: tile ops, GPU backends,
   MLIR migration, macros real expansion.
 
 - **Next priorities** (in approximate dependency order):
-  - Generic monomorphization (bare-call fallback `id(42)` ->
-    `id__i32` resolution; non-i32 T support)
-  - Macros real expansion (token templating)
+  - K1.F21b -- generic monomorphization parse-time type inference
+    (close the non-i32 T bare-call gap; partial closure already in
+    via K1.F21 for the i32 default)
+  - Macros real expansion (token templating; the K1.CB no-op
+    handler is the parse-time hook)
   - Tile ops + GPU backends + MLIR (the big multi-tick blocks)
   - K3 trusted-seed bootstrap (per HELIX_K_BOOTSTRAP_MASTER_PLAN.md;
     "several cron iterations, possibly weeks")
 
-- **Audit-clean log**: 2 audited batches so far (K3.A-D + K1.F8d in
+- **Audit-clean log**: 6 audited batches so far (K3.E + K3.F + K3.H +
   K3.E, and K1.F11-F14 in K3.F). The 5-clean-audit counter for the
   loop-stop gate activates only at Python-ready-to-delete state;
   these signals log toward the long-term history. See

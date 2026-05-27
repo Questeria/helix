@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 219      # last bump: K3.K -- 3-axis audit on K1.F21 (silent-failure / type-design / code-review) found NO HIGH, NO must-fix-MEDIUM; one SOFT-MEDIUM doc-drift ("4 bytes of headroom" but actual gate is exact-fit). K3.K fixes the inline comments to say "exact fit". SIXTH cleanly-audited batch (K3.E/F/H/I/J/K)
+K_BOOTSTRAP_CHUNKS_DONE = 220      # last bump: K2.V -- V3_HANDOFF.md section 4b sync to current state (was at K2.U/K1.F20b, now updated through K3.J/K1.F21/K3.K) + finding: K2 corpus growth is INVERSE-PARITY stalled (recent K1.F18b/F19/F20b/F21 closures are bootstrap-only; Python's compile_and_run frontend doesn't accept the syntax)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
