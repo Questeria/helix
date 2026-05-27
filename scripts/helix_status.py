@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 178      # last bump: K1.F8 -- mixed i64+i32 widening, ADD/SUB/MUL one direction
+K_BOOTSTRAP_CHUNKS_DONE = 179      # last bump: K1.F8b -- reverse direction i32+i64 widening, ADD/SUB/MUL
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -106,7 +106,12 @@ K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # 18 `| KOVC-MISSING |` = 144 rows
                                     # with a status column. The earlier
                                     # 143 was the K0-chunk estimate.
-K_BOOTSTRAP_PARITY_DONE = 136      # K1.F5b 2026-05-27: impl Type
+K_BOOTSTRAP_PARITY_DONE = 137      # K1.F8b 2026-05-27: Mixed-type
+                                    # binops row inline status flipped
+                                    # to FUNCTIONAL PARITY for the
+                                    # signed i64<->i32 ADD/SUB/MUL
+                                    # cases (BOTH directions). 136 -> 137
+                                    # (+1 row). K1.F5b 2026-05-27: impl Type
                                     # { methods } row flipped KOVC-
                                     # MISSING -> FUNCTIONAL PARITY (the
                                     # struct-receiver dot-call dispatch
