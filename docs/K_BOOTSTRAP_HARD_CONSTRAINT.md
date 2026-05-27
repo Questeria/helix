@@ -748,6 +748,59 @@ mirror-pattern discipline holds; the audit-clean signal pile
 continues to grow toward the 5-consecutive-clean gate that
 activates once Python-ready-to-delete state lands.
 
+### 2026-05-27 — K1.F22b + K1.F22c (K3.N signal)
+
+2-axis audit (silent-failure-hunter + combined type-design + code-
+reviewer) on commits `ee569dc` (K1.F22b println! macro + stdout-
+capture helper) and `6ddf7e0` (K1.F22c print_str_ln builtin +
+println! trailing newline). Both axes **CLEAN**: NO HIGH, NO
+must-fix-MEDIUM.
+
+Audit confirmations:
+  - Slot 171 collision-free: bn_state +171 has 4 sites (push/set in
+    install_builtin_names, accessor bn_print_str_ln_s, read in the
+    new codegen arm). Slot 170 was the prior K1.F21 boundary.
+  - "print_str_ln" byte sequence identical in BOTH push sites
+    (install_builtin_names + parser K1.F22b expansion): 112 114
+    105 110 116 95 115 116 114 95 108 110 (12 bytes).
+  - 50-byte codegen sequence verified instruction-by-instruction:
+    24-byte message sys_write + 24-byte newline sys_write + 2-byte
+    xor-eax-eax. Constants correct (fd=1, len=1, sys_write=1).
+  - K1.F22b println! parse-time synthesis shape parallel to K1.F22
+    panic!: id_len-prefix byte-by-byte IDENT match, mac_t2/3/4
+    shape guard, 5 cur_advance calls, mk_node(25)/(17)/(16) chain,
+    only difference is name byte count (12 vs 5).
+  - Tighter stdout exact-match assertions (== b"hi\n" vs `in`
+    substring) catch both missing newlines AND unexpected chatter.
+  - K1.F22 panic! regression unaffected: K1.F22c only touches the
+    println! branch, not the panic detection path.
+  - Cascade brace counts: kovc.hx end-of-function went 46 -> 47
+    (+1 for the new arm, comment annotation correct). Parser.hx
+    K1.F22b nested if-else cascade balances.
+  - bn_panic_newline_s reuse for fd=1 newline: shared 1-byte content,
+    different fd selector; str_table_add doesn't dedupe so each
+    site gets its own .data copy. No silent aliasing.
+  - Stdout-capture helper `_kovc_self_host_compile_and_run_with_stdout`
+    is bytewise-identical to `_kovc_self_host_compile_and_run`
+    except for the final return shape. Currently safe; LOW future
+    drift risk.
+
+2 LOW informational notes (neither blocking):
+  - str_table cap-16: pre-existing concern. panic uses 3 entries
+    (prefix/msg/newline); each println! adds 2 (msg/newline). A
+    program with 1 panic + 7+ println!s would silently overflow
+    (cap returns -1 from str_table_add; downstream emits wrong
+    displacement). Not introduced by K1.F22c but the new arm makes
+    hitting it 2x easier. K3 audit-fix candidate (separate chunk).
+  - Helper duplication: `_kovc_self_host_compile_and_run_with_stdout`
+    duplicates ~30 lines of the existing helper. Future refactor
+    candidate to share the compile-path body.
+
+Verdict: **K1.F22b + K1.F22c CLEAN end-to-end**. This is the NINTH
+cleanly-audited batch (K3.E + K3.F + K3.H + K3.I + K3.J + K3.K +
+K3.L + K3.M + K3.N). The parse-time-rewrite macro pattern's two
+additional shapes both verify clean.
+
 ### 2026-05-27 — K1.F22 (K3.M signal)
 
 2-axis audit (silent-failure-hunter / combined type-design + code-

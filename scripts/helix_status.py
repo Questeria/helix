@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 225      # last bump: K1.F22c -- new print_str_ln builtin (bn_state slot 171, 12 chars; codegen emits message sys_write + newline sys_write = 50 bytes). K1.F22b println! parser-side expansion now routes through print_str_ln. Tests updated: stdout==b"hi\\n" and stdout==b"a\\nb\\n". Closes the K1.F22b "no trailing newline" Phase-0 contract gap
+K_BOOTSTRAP_CHUNKS_DONE = 226      # last bump: K3.N -- 2-axis audit on K1.F22b + K1.F22c batch (silent-failure + combined type-design + code-reviewer) NO HIGH, NO must-fix-MEDIUM. Slot 171 collision-free, byte-sequence identical in both push sites, 50-byte codegen verified, panic! regression unaffected. NINTH cleanly-audited batch (K3.E/F/H/I/J/K/L/M/N)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
