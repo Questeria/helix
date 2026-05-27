@@ -8490,14 +8490,20 @@ def test_bootstrap_kovc_k3q_bool_lit_assert_reject_self_host():
         f"silent-no-op'd via K1.CB (K3.Q interim behavior)."
     )
 
+    # K1.F22j2 (2026-05-27): assert_eq!(true, false) NOW compile-time
+    # folds to AST_CALL(panic, "assertion failed: ==") rather than
+    # silently skipping. K3.Q's reject in is_assert_eq_form stays so
+    # BoolLit operands don't synthesize AST_VAR; the new
+    # is_assert_eq_bool_lit_form catches the all-bool-lit case.
     rc3 = _kovc_self_host_compile_and_run(
         "k3q_assert_eq_bool_skip",
         'fn main() -> i32 { assert_eq!(true, false); 42 }',
     )
-    assert rc3 == 42, (
-        f"K3.Q assert_eq!(true, false): expected rc=42 (silent skip); "
-        f"got {rc3}. If rc=132 with AST_EQ(AST_VAR(\"true\"), "
-        f"AST_VAR(\"false\")) was synthesized despite the K3.Q guard."
+    assert rc3 == 132, (
+        f"K1.F22j2 assert_eq!(true, false): expected rc=132 (compile-"
+        f"time-folded panic via the K1.F22j2 bool-lit-pair arm); got "
+        f"{rc3}. If rc=42, K1.F22j2 didn't catch the BoolLit pair and "
+        f"the macro silent-no-op'd via K1.CB (K3.Q interim behavior)."
     )
 
     # Regression: assert!(IDENT) still works for non-bool IDENTs.
@@ -8640,6 +8646,83 @@ fn main() -> i32 {{
     assert rc_pf == 132, (
         f"K1.F22i2 regression: assert!(x=0) expected rc=132; got "
         f"{rc_pf}. K1.F22i runtime-cond panic may have been broken."
+    )
+
+
+def test_bootstrap_kovc_k1f22j2_bool_lit_assert_eq_self_host():
+    """K1.F22j2 (2026-05-27): compile-time bool-lit assert_eq!
+    constant-folding. Extends K1.F22i2's pattern to assert_eq! when
+    BOTH operands are BoolLit (true or false). Four sub-cases:
+
+      (true,  true)  -> AST_INT(0)                         (pass)
+      (false, false) -> AST_INT(0)                         (pass)
+      (true,  false) -> AST_CALL(panic, "assertion failed: ==")
+      (false, true)  -> AST_CALL(panic, "assertion failed: ==")
+
+    The K3.Q reject in is_assert_eq_form keeps either-bool-lit
+    operand forms out of the AST_VAR-based path. is_assert_eq_bool_lit_form
+    requires BOTH operands to be bool-lit; mixed forms (one bool-lit
+    + one IDENT) still fall through to K1.CB no-op-skip.
+
+    Regression: assert_eq!(IDENT, IDENT) (K1.F22j runtime-cond path)
+    still works.
+    """
+    # All four sub-cases:
+    rc_tt = _kovc_self_host_compile_and_run(
+        "k1f22j2_tt",
+        'fn main() -> i32 { assert_eq!(true, true); 11 }',
+    )
+    assert rc_tt == 11, (
+        f"K1.F22j2 assert_eq!(true, true): expected rc=11 (compile-"
+        f"time fold to AST_INT(0); trailing 11 is the fn return); "
+        f"got {rc_tt}."
+    )
+
+    rc_ff = _kovc_self_host_compile_and_run(
+        "k1f22j2_ff",
+        'fn main() -> i32 { assert_eq!(false, false); 11 }',
+    )
+    assert rc_ff == 11, (
+        f"K1.F22j2 assert_eq!(false, false): expected rc=11 (compile-"
+        f"time fold to AST_INT(0)); got {rc_ff}."
+    )
+
+    rc_tf = _kovc_self_host_compile_and_run(
+        "k1f22j2_tf",
+        'fn main() -> i32 { assert_eq!(true, false); 11 }',
+    )
+    assert rc_tf == 132, (
+        f"K1.F22j2 assert_eq!(true, false): expected rc=132 (compile-"
+        f"time panic via ud2); got {rc_tf}. If rc=11, the cond_eq "
+        f"branch was inverted."
+    )
+
+    rc_ft = _kovc_self_host_compile_and_run(
+        "k1f22j2_ft",
+        'fn main() -> i32 { assert_eq!(false, true); 11 }',
+    )
+    assert rc_ft == 132, (
+        f"K1.F22j2 assert_eq!(false, true): expected rc=132; got "
+        f"{rc_ft}."
+    )
+
+    # Regression: assert_eq!(IDENT, IDENT) runtime-cond path intact.
+    rc_iv = _kovc_self_host_compile_and_run(
+        "k1f22j2_ident_regression_pass",
+        'fn main() -> i32 { let a: i32 = 42; let b: i32 = 42; assert_eq!(a, b); 7 }',
+    )
+    assert rc_iv == 7, (
+        f"K1.F22j2 regression: assert_eq!(a=42, b=42) expected rc=7; "
+        f"got {rc_iv}. K1.F22j runtime-cond path may have been broken."
+    )
+
+    rc_if = _kovc_self_host_compile_and_run(
+        "k1f22j2_ident_regression_fail",
+        'fn main() -> i32 { let a: i32 = 1; let b: i32 = 2; assert_eq!(a, b); 7 }',
+    )
+    assert rc_if == 132, (
+        f"K1.F22j2 regression: assert_eq!(a=1, b=2) expected rc=132; "
+        f"got {rc_if}. K1.F22j runtime-cond panic may have been broken."
     )
 
 

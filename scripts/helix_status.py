@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 236      # last bump: K1.F22i2 -- compile-time bool-lit assert! constant-folding. Supersedes K3.Q's interim silent-skip behavior with proper Rust semantics: assert!(true) -> AST_INT(0) (compile-time pass); assert!(false) -> AST_CALL(panic, "assertion failed") (compile-time-known panic). The K3.Q reject in is_assert_ident_form stays; a NEW is_assert_bool_lit_form arm catches the BoolLit case explicitly and folds at parse time. First compile-time constant-folding pattern in a macro arm. Tests verify rc=42 for true-fold and rc=132 + stderr panic message for false-fold; K1.F22i runtime-cond regression intact
+K_BOOTSTRAP_CHUNKS_DONE = 237      # last bump: K1.F22j2 -- compile-time bool-lit assert_eq! constant-folding (4 sub-cases). Extends K1.F22i2's pattern to assert_eq! with BOTH operands BoolLit: (t,t) and (f,f) -> AST_INT(0); (t,f) and (f,t) -> AST_CALL(panic, "assertion failed: =="). NEW is_assert_eq_bool_lit_form detector matches when BOTH operands match is_kw_true_ident OR is_kw_false_ident. Mixed forms (one bool-lit + one IDENT) still fall through to K1.CB. Fixed ordering: mac_t5/t6 declared BEFORE the detector now. Tests verify all 4 sub-cases; K1.F22j IDENT regression intact
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

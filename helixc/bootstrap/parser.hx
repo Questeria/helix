@@ -3675,6 +3675,32 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // silent-miscompile risk as is_assert_ident_form above.
             let mac_t5 = tok_tag(tok_base, k + 5);
             let mac_t6 = tok_tag(tok_base, k + 6);
+            // K1.F22j2 (2026-05-27): bool-lit assert_eq! detection.
+            // Both operands must be BoolLit (`true` or `false` byte-
+            // tagged-as-TK_IDENT). The K3.Q reject below on assert_eq!
+            // forces BoolLit operands away from the AST_VAR/AST_EQ
+            // path; K1.F22j2 catches the case and folds at parse time:
+            //   assert_eq!(true,  true)  -> AST_INT(0)         (pass)
+            //   assert_eq!(false, false) -> AST_INT(0)         (pass)
+            //   assert_eq!(true,  false) -> AST_CALL(panic, "assertion failed: ==")
+            //   assert_eq!(false, true)  -> AST_CALL(panic, "assertion failed: ==")
+            // Mixed forms (one bool-lit + one IDENT) still fall through
+            // (K3.Q reject of EITHER operand keeps is_assert_eq_form
+            // disabled; this guard only fires when BOTH are bool-lit).
+            let is_assert_eq_bool_lit_form = if is_assert_eq_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let aeql_a_s = tok_p2(tok_base, k + 3);
+                        let aeql_a_l = tok_p3(tok_base, k + 3);
+                        let aeql_b_s = tok_p2(tok_base, k + 5);
+                        let aeql_b_l = tok_p3(tok_base, k + 5);
+                        let aeql_a_bool = if is_kw_true_ident(aeql_a_s, aeql_a_l) == 1 { 1 }
+                            else { if is_kw_false_ident(aeql_a_s, aeql_a_l) == 1 { 1 } else { 0 } };
+                        let aeql_b_bool = if is_kw_true_ident(aeql_b_s, aeql_b_l) == 1 { 1 }
+                            else { if is_kw_false_ident(aeql_b_s, aeql_b_l) == 1 { 1 } else { 0 } };
+                        if aeql_a_bool == 1 { if aeql_b_bool == 1 { 1 } else { 0 } } else { 0 }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             let is_assert_eq_form = if is_assert_eq_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
                     if mac_t5 == 2 { if mac_t6 == 4 {
@@ -3935,6 +3961,52 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 let asrt_else = mk_node(16, af_panic_name_s, 5, af_args_head);
                 // AST_IF: tag 7, p1=cond, p2=then, p3=else.
                 mk_node(7, asrt_cond, asrt_then, asrt_else)
+            } else { if is_assert_eq_bool_lit_form == 1 {
+                // K1.F22j2: compile-time fold for bool-lit assert_eq!.
+                // Both operands are known to be `true` or `false`
+                // (is_kw_true_ident / is_kw_false_ident matched). Four
+                // sub-cases:
+                //   (true,  true)  -> AST_INT(0)
+                //   (false, false) -> AST_INT(0)
+                //   (true,  false) -> panic
+                //   (false, true)  -> panic
+                let aelf_a_tok = k + 3;
+                let aelf_b_tok = k + 5;
+                let aelf_a_s = tok_p2(tok_base, aelf_a_tok);
+                let aelf_a_l = tok_p3(tok_base, aelf_a_tok);
+                let aelf_b_s = tok_p2(tok_base, aelf_b_tok);
+                let aelf_b_l = tok_p3(tok_base, aelf_b_tok);
+                let aelf_a_is_true = is_kw_true_ident(aelf_a_s, aelf_a_l);
+                let aelf_b_is_true = is_kw_true_ident(aelf_b_s, aelf_b_l);
+                cur_advance(sb);           // IDENT (assert_eq)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                if aelf_a_is_true == aelf_b_is_true {
+                    mk_node(0, 0, 0, 0)    // AST_INT(0) -- both bools equal
+                } else {
+                    // Operands differ; synthesize a panic call with the
+                    // K1.F22j "assertion failed: ==" message (20 bytes).
+                    let aelfp_msg_s = __arena_push(97);                          // 'a'
+                    __arena_push(115); __arena_push(115);                        // 's' 's'
+                    __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                    __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                    __arena_push(32);                                            // ' '
+                    __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                    __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                    __arena_push(58);                                            // ':'
+                    __arena_push(32);                                            // ' '
+                    __arena_push(61); __arena_push(61);                          // '=' '='
+                    let aelfp_str_ast = mk_node(25, aelfp_msg_s, 20, 0);
+                    let aelfp_args_head = mk_node(17, aelfp_str_ast, 0, 0);
+                    let aelfp_panic_name_s = __arena_push(112);
+                    __arena_push(97); __arena_push(110); __arena_push(105);
+                    __arena_push(99);
+                    mk_node(16, aelfp_panic_name_s, 5, aelfp_args_head)
+                }
             } else { if is_assert_eq_form == 1 {
                 // K1.F22j: synthesize AST_IF(cond=AST_EQ(AST_VAR(a),
                 // AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic,
@@ -4041,7 +4113,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1 (is_assert_bool_lit_form)
+            }}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1 (is_assert_eq_bool_lit_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
