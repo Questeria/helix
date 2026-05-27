@@ -6757,7 +6757,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-               } else { emit_mov_ecx_eax() }}};
+               } else {
+                   // K1.F12 (2026-05-27): mirror K1.F11's mov-rcx r_i64 leg.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -6768,12 +6771,29 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Speedup #4 wire-in: bf16 trap id = 19001 (AST_GT * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(19001) } else { if r_bf == 1 { emit_trap_with_id(19001) } else {
             // Speedup #4 wire-in: AST_GT mixed-type trap ids 19010-19051.
+            // K1.F12 (2026-05-27): close i64<->i32 GT widening (mirror K1.F11).
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_gt_dbl() } else { emit_trap_with_id(19010) }
             } else { if r_d == 1 { emit_trap_with_id(19011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_gt_rax_rcx_64() } else { emit_trap_with_id(19020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(19021) } else {
+                    if r_i64 == 1 {
+                        emit_gt_rax_rcx_64()
+                    } else {
+                        let r_t19 = expr_type(p2, bind_state, bn_state);
+                        if r_t19 == 0 {
+                            emit_movsxd_rcx_ecx() + emit_gt_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(19020)
+                        }
+                    }
+                } else { if r_i64 == 1 {
+                    let l_t19 = expr_type(p1, bind_state, bn_state);
+                    if l_t19 == 0 {
+                        emit_movsxd_rax_eax() + emit_gt_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(19021)
+                    }
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_gt_rax_rcx_64_u() } else { emit_trap_with_id(19030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(19031) } else {
@@ -6808,19 +6828,39 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-               } else { emit_mov_ecx_eax() }}};
+               } else {
+                   // K1.F12 (2026-05-27): mirror K1.F11's mov-rcx r_i64 leg.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap id = 20001 (AST_EQ * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(20001) } else { if r_bf == 1 { emit_trap_with_id(20001) } else {
             // Speedup #4 wire-in: AST_EQ mixed-type trap ids 20010-20041.
+            // K1.F12 (2026-05-27): close i64<->i32 EQ widening (mirror K1.F11).
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_eq_dbl() } else { emit_trap_with_id(20010) }
             } else { if r_d == 1 { emit_trap_with_id(20011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_eq_rax_rcx_64() } else { emit_trap_with_id(20020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(20021) } else {
+                    if r_i64 == 1 {
+                        emit_eq_rax_rcx_64()
+                    } else {
+                        let r_t20 = expr_type(p2, bind_state, bn_state);
+                        if r_t20 == 0 {
+                            emit_movsxd_rcx_ecx() + emit_eq_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(20020)
+                        }
+                    }
+                } else { if r_i64 == 1 {
+                    let l_t20 = expr_type(p1, bind_state, bn_state);
+                    if l_t20 == 0 {
+                        emit_movsxd_rax_eax() + emit_eq_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(20021)
+                    }
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_eq_rax_rcx_64() } else { emit_trap_with_id(20030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(20031) } else {
@@ -6851,19 +6891,39 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-               } else { emit_mov_ecx_eax() }}};
+               } else {
+                   // K1.F12 (2026-05-27): mirror K1.F11's mov-rcx r_i64 leg.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
         // Speedup #4 wire-in: bf16 trap id = 21001 (AST_NE * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(21001) } else { if r_bf == 1 { emit_trap_with_id(21001) } else {
             // Speedup #4 wire-in: AST_NE mixed-type trap ids 21010-21041.
+            // K1.F12 (2026-05-27): close i64<->i32 NE widening (mirror K1.F11).
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_ne_dbl() } else { emit_trap_with_id(21010) }
             } else { if r_d == 1 { emit_trap_with_id(21011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_ne_rax_rcx_64() } else { emit_trap_with_id(21020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(21021) } else {
+                    if r_i64 == 1 {
+                        emit_ne_rax_rcx_64()
+                    } else {
+                        let r_t21 = expr_type(p2, bind_state, bn_state);
+                        if r_t21 == 0 {
+                            emit_movsxd_rcx_ecx() + emit_ne_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(21020)
+                        }
+                    }
+                } else { if r_i64 == 1 {
+                    let l_t21 = expr_type(p1, bind_state, bn_state);
+                    if l_t21 == 0 {
+                        emit_movsxd_rax_eax() + emit_ne_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(21021)
+                    }
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_ne_rax_rcx_64() } else { emit_trap_with_id(21030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(21031) } else {
@@ -6892,7 +6952,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-               } else { emit_mov_ecx_eax() }}};
+               } else {
+                   // K1.F12 (2026-05-27): mirror K1.F11's mov-rcx r_i64 leg.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -6903,12 +6966,29 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Speedup #4 wire-in: bf16 trap id = 22001 (AST_LE * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(22001) } else { if r_bf == 1 { emit_trap_with_id(22001) } else {
             // Speedup #4 wire-in: AST_LE mixed-type trap ids 22010-22051.
+            // K1.F12 (2026-05-27): close i64<->i32 LE widening (mirror K1.F11).
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_le_dbl() } else { emit_trap_with_id(22010) }
             } else { if r_d == 1 { emit_trap_with_id(22011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_le_rax_rcx_64() } else { emit_trap_with_id(22020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(22021) } else {
+                    if r_i64 == 1 {
+                        emit_le_rax_rcx_64()
+                    } else {
+                        let r_t22 = expr_type(p2, bind_state, bn_state);
+                        if r_t22 == 0 {
+                            emit_movsxd_rcx_ecx() + emit_le_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(22020)
+                        }
+                    }
+                } else { if r_i64 == 1 {
+                    let l_t22 = expr_type(p1, bind_state, bn_state);
+                    if l_t22 == 0 {
+                        emit_movsxd_rax_eax() + emit_le_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(22021)
+                    }
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_le_rax_rcx_64_u() } else { emit_trap_with_id(22030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(22031) } else {
@@ -6941,7 +7021,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-               } else { emit_mov_ecx_eax() }}};
+               } else {
+                   // K1.F12 (2026-05-27): mirror K1.F11's mov-rcx r_i64 leg.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -6952,12 +7035,29 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Speedup #4 wire-in: bf16 trap id = 23001 (AST_GE * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(23001) } else { if r_bf == 1 { emit_trap_with_id(23001) } else {
             // Speedup #4 wire-in: AST_GE mixed-type trap ids 23010-23051.
+            // K1.F12 (2026-05-27): close i64<->i32 GE widening (mirror K1.F11).
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_ge_dbl() } else { emit_trap_with_id(23010) }
             } else { if r_d == 1 { emit_trap_with_id(23011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_ge_rax_rcx_64() } else { emit_trap_with_id(23020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(23021) } else {
+                    if r_i64 == 1 {
+                        emit_ge_rax_rcx_64()
+                    } else {
+                        let r_t23 = expr_type(p2, bind_state, bn_state);
+                        if r_t23 == 0 {
+                            emit_movsxd_rcx_ecx() + emit_ge_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(23020)
+                        }
+                    }
+                } else { if r_i64 == 1 {
+                    let l_t23 = expr_type(p1, bind_state, bn_state);
+                    if l_t23 == 0 {
+                        emit_movsxd_rax_eax() + emit_ge_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(23021)
+                    }
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_ge_rax_rcx_64_u() } else { emit_trap_with_id(23030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(23031) } else {

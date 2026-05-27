@@ -208,6 +208,19 @@ K2_CORPUS = [
     ("p95_i64_lt_i32_false",     "fn main() -> i32 { if 60_i64 < 30 { 0 } else { 42 } }", 42),
     ("p96_i32_lt_i64_true",      "fn main() -> i32 { if 30 < 60_i64 { 42 } else { 0 } }", 42),
     ("p97_i32_lt_i64_false",     "fn main() -> i32 { if 60 < 30_i64 { 0 } else { 42 } }", 42),
+    # K1.F12 (2026-05-27): the K1.F11 LT widening pattern mirror-
+    # applied to GT/EQ/NE/LE/GE (the remaining 5 comparison ops).
+    # Both compilers agree.
+    ("p98_i64_gt_i32",           "fn main() -> i32 { if 60_i64 > 30 { 42 } else { 0 } }", 42),
+    ("p99_i32_gt_i64",           "fn main() -> i32 { if 60 > 30_i64 { 42 } else { 0 } }", 42),
+    ("p100_i64_eq_i32",          "fn main() -> i32 { if 42_i64 == 42 { 42 } else { 0 } }", 42),
+    ("p101_i32_eq_i64",          "fn main() -> i32 { if 42 == 42_i64 { 42 } else { 0 } }", 42),
+    ("p102_i64_ne_i32",          "fn main() -> i32 { if 42_i64 != 0 { 42 } else { 0 } }", 42),
+    ("p103_i32_ne_i64",          "fn main() -> i32 { if 42 != 0_i64 { 42 } else { 0 } }", 42),
+    ("p104_i64_le_i32",          "fn main() -> i32 { if 30_i64 <= 60 { 42 } else { 0 } }", 42),
+    ("p105_i32_le_i64",          "fn main() -> i32 { if 30 <= 60_i64 { 42 } else { 0 } }", 42),
+    ("p106_i64_ge_i32",          "fn main() -> i32 { if 60_i64 >= 30 { 42 } else { 0 } }", 42),
+    ("p107_i32_ge_i64",          "fn main() -> i32 { if 60 >= 30_i64 { 42 } else { 0 } }", 42),
 ]
 
 
@@ -279,8 +292,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 97, (
-        f"K2.N corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 107, (
+        f"K2.O corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )

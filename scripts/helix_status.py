@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 195      # last bump: K1.F11 -- mixed i64<->i32 LT widening (mirror of K1.F8/F8b for AST_LT) + K2.N corpus
+K_BOOTSTRAP_CHUNKS_DONE = 196      # last bump: K1.F12 -- mixed i64<->i32 widening for GT/EQ/NE/LE/GE (5-site mirror batch) + K2.O corpus
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
