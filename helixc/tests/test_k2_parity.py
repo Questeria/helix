@@ -103,6 +103,22 @@ K2_CORPUS = [
     ("p38_match_block_arm",      "fn main() -> i32 { let x = 1; match x { 1 => { let y = 21; y + 21 }, _ => 0 } }", 42),
     ("p39_for_compound_assign",  "fn main() -> i32 { let mut s = 0; for _ in 0..6 { s += 7; } s }", 42),
     ("p40_chained_call",         "fn id(x: i32) -> i32 { x } fn main() -> i32 { id(id(id(42))) }", 42),
+    # ---- K2.E expansion: arrays / match shapes / block-exprs / recursion (15) ----
+    ("p41_array_index",          "fn main() -> i32 { let a = [10, 20, 30]; a[1] + 22 }", 42),
+    ("p42_array_sum_idx",        "fn main() -> i32 { let a = [10, 20, 12]; a[0] + a[1] + a[2] }", 42),
+    ("p43_match_or_arm",         "fn main() -> i32 { let x = 2; match x { 1 | 2 | 3 => 42, _ => 0 } }", 42),
+    ("p44_match_wildcard",       "fn main() -> i32 { let x = 99; match x { 0 => 0, _ => 42 } }", 42),
+    ("p45_block_expr_let",       "fn main() -> i32 { let x = { let y = 21; y + y }; x }", 42),
+    ("p46_three_let_chain",      "fn main() -> i32 { let a = 1; let b = 2; let c = 3; (a + b + c) * 7 }", 42),
+    ("p47_mul_chain",            "fn main() -> i32 { 2 * 3 * 7 }", 42),
+    ("p48_add_left_assoc",       "fn main() -> i32 { 10 + 12 + 20 }", 42),
+    ("p49_double_fn",            "fn double(x: i32) -> i32 { x * 2 } fn main() -> i32 { double(21) }", 42),
+    ("p50_fib_recursive",        "fn fib(n: i32) -> i32 { if n <= 1 { n } else { fib(n-1) + fib(n-2) } } fn main() -> i32 { fib(8) + 21 }", 42),
+    ("p51_while_zero_iter",      "fn main() -> i32 { let mut i = 0; while i < 0 { i = i + 1; } 42 }", 42),
+    ("p52_if_let_value",         "fn main() -> i32 { let x = 100; let y = if x > 0 { 42 } else { 99 }; y }", 42),
+    ("p53_struct_field_extract", "struct C { v: i32 } fn main() -> i32 { let c = C { v: 42 }; let v = c.v; v }", 42),
+    ("p54_tuple_3_fields",       "fn main() -> i32 { let t = (10, 20, 12); t.0 + t.1 + t.2 }", 42),
+    ("p55_complex_let_expr",     "fn main() -> i32 { let a = 6; let b = 7; let c = a * b; c }", 42),
 ]
 
 
@@ -146,7 +162,7 @@ def test_k2_parity(name: str, src: str, expected_rc: int):
 
 
 def test_k2_corpus_size():
-    """Sanity check: corpus has at least 40 entries at K2.D.
+    """Sanity check: corpus has at least 55 entries at K2.E.
 
     Future K2.* chunks expand the corpus. This test guards against
     accidental shrinkage. The growth ratchet is one-way: each K2.*
@@ -156,14 +172,16 @@ def test_k2_corpus_size():
       - K2.B bumped to >= 25 (arithmetic / control-flow / value-flow).
       - K2.D bumped to >= 40 (comparison ops / booleans / chars /
         compound assign / while / nested struct / enum / etc.).
+      - K2.E bumped to >= 55 (arrays / match shapes / block-exprs /
+        recursion / zero-iter while / multi-let-chain / etc.).
 
     (K2.C was the matrix-parity counter sync -- no corpus change.)
 
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 40, (
-        f"K2.D corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 55, (
+        f"K2.E corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )

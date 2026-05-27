@@ -175,6 +175,43 @@ recent K1.* parser work:
    Treat as a dedicated multi-tick chunk; ship pure-i32 corpus
    items in the meantime.
 
+   **K1.E1 investigation status (2026-05-26 K2.E tick):** code-
+   path inspection finds the chain intact ON PAPER:
+   - `lexer.hx:412` — `_i64` suffix sets `is_i64_suffix = 1`,
+     emits `TK_INTLIT_I64` (tag 33).
+   - `parser.hx:3083` — TK_INTLIT_I64 → `mk_node(35, v, 0, 0)`
+     (AST_INTLIT_I64).
+   - `kovc.hx:1345` — `expr_type` returns 3 for tag 35.
+   - `kovc.hx:1509` — `is_i64_expr` returns 1 when expr_type == 3.
+   - `kovc.hx:5295` — AST_INTLIT_I64 emit: `movabs rax, imm64`
+     with `hi32 = -1 if p1 < 0 else 0` (correct sign-extend).
+   - `kovc.hx:5704-5746` — AST_SUB dispatch: pushes LHS, evaluates
+     RHS, `mov rcx, rax (REX.W)` (preserving 64 bits) when both
+     ops are i64, pops LHS back into rax, then `sub rax, rcx
+     (REX.W)`.
+
+   Every link looks correct yet the runtime result is the LHS
+   unchanged. The actual divergence must be at runtime — possible
+   causes to investigate in the next K1.E1 tick:
+   - The `push rax` / `pop rax` sequence may be emitting the
+     32-bit variants in some path, losing the high 32 bits.
+   - The `emit_mov_rcx_rax_64` may not fire (e.g., the
+     conditional cascade returns a different branch than expected
+     when `l_i64 == 1 && r_i64 == 1`).
+   - The bootstrap's "expression mode" wrapper (the demo `main()`
+     auto-generation for naked-expression inputs like `100_i64 -
+     58_i64`) may force the result into i32 truncation BEFORE the
+     sub is encoded.
+
+   Next-tick approach (one of):
+   (a) Add a `__trap_with_id` after `emit_sub_rax_rcx_64` returns
+       to confirm that emit path was taken.
+   (b) Disassemble the binary produced for `100_i64 - 58_i64`
+       and inspect the actual machine code emitted.
+   (c) Write the same expression as a full `fn main() -> i64 {
+       100_i64 - 58_i64 }` (bypassing expression-mode auto-wrap)
+       and see if THAT works.
+
 2. **Python helixc char-literal IR-lowering** raises
    `NotImplementedError: char literal not yet supported in IR
    lowering at <pos>`. The bootstrap kovc accepts char literals
