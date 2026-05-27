@@ -6676,7 +6676,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let nm = if l_d == 1 { if r_d == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_i64 == 1 { if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
                } else { if l_u64 == 1 { if r_u64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
-               } else { emit_mov_ecx_eax() }}};
+               } else {
+                   // K1.F11 (2026-05-27): when l isn't 64-bit but r IS
+                   // 64-bit (i64), use 64-bit copy so rcx has the full
+                   // i64 bit pattern for the reverse-direction widening
+                   // (i32 < i64 widens l via movsxd_rax_eax, then 64-bit
+                   // cmp). Mirrors K1.F8b's mov-rcx leg for AST_ADD.
+                   if r_i64 == 1 { emit_mov_rcx_rax_64() } else { emit_mov_ecx_eax() }
+               }}};
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
@@ -6687,12 +6694,37 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // Speedup #4 wire-in: bf16 trap id = 6001 (AST_LT * 1000 + 1).
         let na = if l_bf == 1 { emit_trap_with_id(6001) } else { if r_bf == 1 { emit_trap_with_id(6001) } else {
             // Speedup #4 wire-in: AST_LT mixed-type trap ids 6010-6051.
+            // K1.F11 (2026-05-27): close mixed-type i64<->i32 LT
+            // widening. Both directions sign-extend the i32 side and
+            // emit a 64-bit cmp. K3.B-style exactly-i32 guard (expr_
+            // type tag 0) ensures u32/u8/i8/u16/i16/f32/bf16 still
+            // trap loudly instead of silently misinterpreting bits.
             if l_d == 1 {
                 if r_d == 1 { emit_ssen_lt_dbl() } else { emit_trap_with_id(6010) }
             } else { if r_d == 1 { emit_trap_with_id(6011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_lt_rax_rcx_64() } else { emit_trap_with_id(6020) }
-                } else { if r_i64 == 1 { emit_trap_with_id(6021) } else {
+                    // K1.F11: i64 < i32 -- widen rcx, then 64-bit cmp.
+                    if r_i64 == 1 {
+                        emit_lt_rax_rcx_64()
+                    } else {
+                        let r_t6 = expr_type(p2, bind_state, bn_state);
+                        if r_t6 == 0 {
+                            emit_movsxd_rcx_ecx() + emit_lt_rax_rcx_64()
+                        } else {
+                            emit_trap_with_id(6020)
+                        }
+                    }
+                } else { if r_i64 == 1 {
+                    // K1.F11 reverse: i32 < i64 -- widen rax, then 64-
+                    // bit cmp. rcx already has full 64 bits from the
+                    // patched mov-rcx step's r_i64 leg above.
+                    let l_t6 = expr_type(p1, bind_state, bn_state);
+                    if l_t6 == 0 {
+                        emit_movsxd_rax_eax() + emit_lt_rax_rcx_64()
+                    } else {
+                        emit_trap_with_id(6021)
+                    }
+                } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_lt_rax_rcx_64_u() } else { emit_trap_with_id(6030) }
                     } else { if r_u64 == 1 { emit_trap_with_id(6031) } else {

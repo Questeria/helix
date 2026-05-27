@@ -200,6 +200,14 @@ K2_CORPUS = [
     # K2 harness does not use. A bootstrap-only self-host test pins
     # the K1.F9-fix closure instead -- see test_bootstrap_kovc_k1f9_
     # mixed_f32_f64_self_host in test_codegen.py.
+    # K1.F11 (2026-05-27): mixed i64<->i32 LT widening pinned in both
+    # directions. Both compilers should agree (Python helixc handles
+    # mixed-int widening; bootstrap kovc widens via movsxd then 64-bit
+    # cmp).
+    ("p94_i64_lt_i32_true",      "fn main() -> i32 { if 30_i64 < 60 { 42 } else { 0 } }", 42),
+    ("p95_i64_lt_i32_false",     "fn main() -> i32 { if 60_i64 < 30 { 0 } else { 42 } }", 42),
+    ("p96_i32_lt_i64_true",      "fn main() -> i32 { if 30 < 60_i64 { 42 } else { 0 } }", 42),
+    ("p97_i32_lt_i64_false",     "fn main() -> i32 { if 60 < 30_i64 { 0 } else { 42 } }", 42),
 ]
 
 
@@ -271,8 +279,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 93, (
-        f"K2.M corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 97, (
+        f"K2.N corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
