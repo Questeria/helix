@@ -175,42 +175,57 @@ recent K1.* parser work:
    Treat as a dedicated multi-tick chunk; ship pure-i32 corpus
    items in the meantime.
 
-   **K1.E1 investigation status (2026-05-26 K2.E tick):** code-
-   path inspection finds the chain intact ON PAPER:
-   - `lexer.hx:412` — `_i64` suffix sets `is_i64_suffix = 1`,
-     emits `TK_INTLIT_I64` (tag 33).
-   - `parser.hx:3083` — TK_INTLIT_I64 → `mk_node(35, v, 0, 0)`
-     (AST_INTLIT_I64).
-   - `kovc.hx:1345` — `expr_type` returns 3 for tag 35.
-   - `kovc.hx:1509` — `is_i64_expr` returns 1 when expr_type == 3.
-   - `kovc.hx:5295` — AST_INTLIT_I64 emit: `movabs rax, imm64`
-     with `hi32 = -1 if p1 < 0 else 0` (correct sign-extend).
-   - `kovc.hx:5704-5746` — AST_SUB dispatch: pushes LHS, evaluates
-     RHS, `mov rcx, rax (REX.W)` (preserving 64 bits) when both
-     ops are i64, pops LHS back into rax, then `sub rax, rcx
-     (REX.W)`.
+   **K1.E1 investigation (2026-05-26 K2.E + K2.F-investigate ticks):**
+   Probed five shapes through both compilers:
 
-   Every link looks correct yet the runtime result is the LHS
-   unchanged. The actual divergence must be at runtime — possible
-   causes to investigate in the next K1.E1 tick:
-   - The `push rax` / `pop rax` sequence may be emitting the
-     32-bit variants in some path, losing the high 32 bits.
-   - The `emit_mov_rcx_rax_64` may not fire (e.g., the
-     conditional cascade returns a different branch than expected
-     when `l_i64 == 1 && r_i64 == 1`).
-   - The bootstrap's "expression mode" wrapper (the demo `main()`
-     auto-generation for naked-expression inputs like `100_i64 -
-     58_i64`) may force the result into i32 truncation BEFORE the
-     sub is encoded.
+   | shape                                       | Python helixc | bootstrap kovc |
+   |---------------------------------------------|---------------|----------------|
+   | `100 - 58` (bare i32 expr)                  | (parser err)  | 42 ✓           |
+   | `fn main() -> i32 { 100 - 58 }`             | 42 ✓          | 42 ✓           |
+   | `100_i64` (bare i64 literal)                | (parser err)  | 100 ✓          |
+   | `fn main() -> i64 { 100_i64 }`              | 100 ✓         | **132 SIGILL** |
+   | `fn main() -> i32 { 100_i64 }`              | 100 ✓         | 100 ✓          |
+   | `fn main() -> i64 { 100_i64 - 58_i64 }`     | 42 ✓          | **132 SIGILL** |
+   | bare `100_i64 - 58_i64`                     | (parser err)  | **100 (wrong)**|
 
-   Next-tick approach (one of):
-   (a) Add a `__trap_with_id` after `emit_sub_rax_rcx_64` returns
-       to confirm that emit path was taken.
-   (b) Disassemble the binary produced for `100_i64 - 58_i64`
-       and inspect the actual machine code emitted.
-   (c) Write the same expression as a full `fn main() -> i64 {
-       100_i64 - 58_i64 }` (bypassing expression-mode auto-wrap)
-       and see if THAT works.
+   Python helixc handles every well-formed shape correctly. The
+   bootstrap has TWO distinct bugs:
+
+   **Bug A — explicit i64 return type traps (SIGILL, rc=132):**
+   `helixc/bootstrap/parser.hx:2510` says explicitly "Phase-0
+   ignores (always i32 return)" and at line 2664 sets
+   `__arena_push(0)` for the ret_ty slot regardless of what
+   follows `->`. So `fn main() -> i64 { ... }` records ret_ty=0
+   (i32). Downstream, `helixc/bootstrap/kovc.hx:7367` trips
+   trap 14001 when `body_is_8b=1` but `ret_wants_8b=0`. The trap
+   is doing the right thing — it's catching a real width mismatch
+   — but the mismatch is FALSE because the parser threw away the
+   actual return-type annotation. **Fix path:** make
+   `parse_fn_decl` actually parse `-> T` instead of hardcoding 0.
+
+   **Bug B — bare-expression i64 sub returns LHS (rc=100):**
+   `100_i64 - 58_i64` returns 100, not 42. The bootstrap is
+   reading just the LHS literal and dropping the rest. AST_SUB
+   dispatch in kovc.hx LOOKS right on paper (verified in K2.E
+   tick). Possible causes:
+   - The parse_expr binop chain may not loop back to consume
+     `- 58_i64` after consuming an AST_INTLIT_I64.
+   - The bootstrap's "legacy / single-fn" emit branch at
+     `kovc.hx:7457-7461` runs `emit_ast_code(resolved_root)`
+     followed by `emit_epilogue + emit_exit_with_eax`. If
+     resolved_root is just the LHS AST_INTLIT_I64 (parser
+     dropped the rest), exit code = 100 is exactly what we'd
+     see.
+
+   **Fix path for Bug B:** instrument parse_expr to log what
+   it returns for the i64-i64 input, or write a tiny AST-dump
+   harness that prints the root AST after parsing.
+
+   Bug A is the higher-leverage close — the parser-side ret_ty
+   parsing unblocks ALL explicit-return-type i64/u64/f64 fn
+   declarations in the bootstrap. Recommended ordering: close
+   Bug A first as its own chunk (K1.E1a), then investigate Bug B
+   (K1.E1b) with the AST-dump probe.
 
 2. **Python helixc char-literal IR-lowering** raises
    `NotImplementedError: char literal not yet supported in IR
