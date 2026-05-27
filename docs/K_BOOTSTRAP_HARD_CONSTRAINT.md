@@ -271,6 +271,51 @@ recent K1.* parser work:
    actually routing to tag-0. The fix is most likely a 1-2 line
    change.
 
+   **K1.E1c-localize findings (2026-05-26):** probed six more
+   fn shapes to isolate where SIGILL fires:
+
+   | shape                                            | rc  |
+   |--------------------------------------------------|-----|
+   | `fn main() -> i32 { 42_i64 }`                    |  42 |
+   | `fn main() -> i32 { (42_i64) }`                  |  42 |
+   | `fn main() -> i32 { 42_i64 + 0_i64 }`            |  42 |
+   | `fn main() -> i32 { let x = 42_i64; x }`         |  42 |
+   | `fn main() -> i64 { 42_i64 + 0_i64 }`            | 132 |
+   | `fn main() -> i64 { let x = 42_i64; x }`         | 132 |
+   | `fn main() -> i64 { id() }` (id() -> i64)        | 132 |
+
+   **Pattern: SIGILL is conditional on `fn_ret_ty ∈ {i64, u64,
+   i8, u8, i16, u16}` — the declared return type, NOT the body
+   shape.** Any body in an `-> i32` fn works, even when the body
+   itself is `42_i64`. Any body in an `-> i64` fn SIGILLs.
+
+   This makes sense given the K1.E1b machine-code dump: the body
+   emit is going through the AST_INT (tag-0) path (5-byte
+   `mov eax, imm32`), even when the literal is `_i64`-suffixed.
+   When `fn_ret_ty = 0` (i32), the body's i32-emit matches the
+   declared width and the 14001/14002 traps stay quiet. When
+   `fn_ret_ty = 3` (i64), there's a width mismatch and both
+   traps fire.
+
+   So **the parser is producing AST_INT (tag 0) for `42_i64`,
+   not AST_INTLIT_I64 (tag 35)**, despite `parser.hx:3073-3083`
+   reading correctly on its face. Either:
+   - the lexer is emitting TK_INTLIT (tag 1) not TK_INTLIT_I64
+     (tag 33), so parser hits the t==1 branch at parser.hx:3039
+     and emits tag 0; or
+   - some AST post-processing pass rewrites tag 35 to tag 0; or
+   - `tok_p1` returns the wrong value for tag-33 tokens.
+
+   The traps fire CORRECTLY — they're catching real silent
+   data-loss. The bug is the parser/lexer side losing the i64
+   tag.
+
+   **Next-tick probe (K1.E1d):** write a Helix program that
+   reads `42_i64` as source, lexes + parses it, and returns
+   `__arena_get(ast_root)` as the exit code. That will tell us
+   what tag the parser actually produces — 35 (correct, bug
+   elsewhere) or 0 (bug confirmed at parser).
+
    **Bug B — bare-expression i64 sub returns LHS (rc=100):**
    `100_i64 - 58_i64` returns 100, not 42. The bootstrap is
    reading just the LHS literal and dropping the rest. AST_SUB
