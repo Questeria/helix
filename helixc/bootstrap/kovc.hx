@@ -2114,10 +2114,17 @@ fn install_builtin_names() -> i32 {
     // K1.F21 (2026-05-27): 64-slot mangle scratch region for the
     // generic-bare-call name resolution fallback. Each slot holds one
     // byte (per the kovc_byte_eq one-byte-per-i32-slot convention).
-    // Cap of 64 covers names up to 59 bytes long + the 5-byte "__i32"
-    // suffix; the backpatch loop guards target_name_l < 60 before
-    // mangling. Reserved BEFORE the ELF region grows so a backpatch-
-    // time mangle write doesn't corrupt the code byte stream.
+    // Cap of 64 EXACTLY covers names up to 59 bytes long + the 5-byte
+    // "__i32" suffix (max write at scratch[59+4] = scratch[63] = the
+    // 64th slot; an exact fit, NOT a safety-margin reserve). The
+    // backpatch loop's `target_name_l < 60` guard makes the fit
+    // bounds-safe; bumping the cap is the K1.F21b refinement if real
+    // user-program identifiers ever approach 60 chars (K3.K
+    // 2026-05-27 audit fix to the K1.F21 doc-drift: the original
+    // comment said "leaves 4 bytes of headroom" -- it does not; the
+    // gate is exact-fit, which is safe but not a safety margin).
+    // Reserved BEFORE the ELF region grows so a backpatch-time
+    // mangle write doesn't corrupt the code byte stream.
     let s_scratch = __arena_push(0);
     let mut sc: i32 = 0;
     while sc < 63 {
@@ -8701,7 +8708,10 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             // Scratch buffer is at bn_mangle_scratch(bn_state); 64 slots,
             // pre-allocated in install_builtin_names BEFORE the ELF code
             // region grows so this write doesn't corrupt the byte stream.
-            // Gated on target_name_l < 60 (leaving room for "__i32" + safety).
+            // Gated on target_name_l < 60: max write at scratch[59+4] =
+            // scratch[63] = the 64th slot, an exact fit. K3.K 2026-05-27
+            // audit-fix: the original phrasing claimed safety margin --
+            // it's exact-fit-safe, no margin.
             let final_target_offset = if target_offset >= 0 {
                 target_offset
             } else { if target_name_l < 60 {

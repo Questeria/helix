@@ -748,6 +748,68 @@ mirror-pattern discipline holds; the audit-clean signal pile
 continues to grow toward the 5-consecutive-clean gate that
 activates once Python-ready-to-delete state lands.
 
+### 2026-05-27 — K1.F21 (K3.K signal)
+
+Full 3-axis audit dispatched on commit `11865c0` (K1.F21 -- generic-
+bare-call name resolution fallback). Findings:
+
+**silent-failure-hunter**: CLEAN. NO HIGH, NO must-fix-MEDIUM.
+  - Verified the scratch buffer's stale-byte residue across patch-
+    loop iterations is harmless (kovc_byte_eq length-equality short-
+    circuit prevents stale bytes from leaking).
+  - Gate `target_name_l < 60` is correct: max write at scratch[63]
+    fits within the 64-slot region.
+  - Zero / negative target_name_l falls through to ud2 (the LOUD
+    path, not silent).
+  - fn_table_lookup ordering footgun (user defines both `fn id<T>`
+    and explicit `fn id__i32` -> first-match dispatch) is pre-
+    existing in the turbofish path; K1.F21 inherits, doesn't
+    introduce. LOW.
+  - Typo-collision risk (`frobnicate(x)` silently resolving to a
+    coincidentally-existing `frobnicate__i32`) requires the user to
+    have already used the same name with turbofish in this program;
+    mostly theoretical, pre-existing for turbofish too. LOW.
+
+**type-design-analyzer**: NO HIGH, NO must-fix-MEDIUM. One SOFT-MEDIUM:
+  - The K1.F21 inline comment claimed "+ safety" / "leaves 4 bytes
+    of headroom"; at max target_name_l=59 the write fills exactly
+    scratch[0..63], leaving 0 headroom past the suffix's last byte.
+    The implementation IS safe (exact fit); the documentation
+    overstated the margin. K3.K fixes the comments to say "EXACTLY"
+    / "exact fit, no safety-margin reserve".
+  - Other notes: slot 170 collision-free; bn_mangle_scratch contract
+    consistent with existing one-byte-per-i32-slot bn_state pattern;
+    `__i32` byte sequence (95 95 105 51 50) matches the existing
+    builtin name installations (line 2231 __i32_to_f32; line 2394
+    __i32_to_f64) and the parser's turbofish mangler (parser.hx
+    1519-1566).
+
+**code-reviewer**: CLEAN. NO HIGH, NO must-fix-MEDIUM.
+  - 64-slot allocation: 1 pre-loop push + 63 in-loop = 64; gate at
+    < 60 → max write scratch[63] = exact fit. Off-by-one safe.
+  - Slot 170 numbering verified unique: only two writes
+    (placeholder + scratch offset at line 2127); one read site
+    (bn_mangle_scratch accessor at line 3605).
+  - `__i32` byte sequence cross-checked against parser.hx and other
+    builtin installations -- identical.
+  - Probe correctness: `let _ = id::<i32>(99); id(42)` -- the
+    let-discard parses; bare call resolves via the K1.F21 fallback;
+    rc=42 verified passing.
+  - The same SOFT-MEDIUM noted above on the doc-drift "+ safety"
+    phrasing. Resolved in K3.K.
+
+K3.K ships the documentation correction (both the install_builtin_
+names inline comment and the patch_table loop comment) so the
+phrasing accurately reflects exact-fit semantics rather than an
+imagined safety margin. The implementation gate `target_name_l < 60`
+is unchanged -- the audit confirmed it's bounds-safe.
+
+Verdict: **K1.F21 CLEAN end-to-end after K3.K doc-drift fix**. NO
+HIGH, NO must-fix-MEDIUM across all three axes. This is the SIXTH
+cleanly-audited code batch (K3.E/F/H/I/J/K). The mirror-pattern
+discipline continues to find LOW-severity convention drift; the
+discipline of running the audit + immediately fixing findings holds.
+
 ### 2026-05-27 — K1.F19 + K1.F20 + K1.F20b + K3.J (K3.J signal)
 
 Full 3-axis audit (silent-failure-hunter / type-design-analyzer /
