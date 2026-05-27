@@ -7810,6 +7810,75 @@ fn main() -> i32 {{
     )
 
 
+def test_bootstrap_kovc_k1f22e_print_macro_expansion_self_host():
+    """K1.F22e (2026-05-27): no-newline stdout variant of K1.F22b/c.
+    `print!("msg")` parser-side rewrites to AST_CALL(print_str, str_arg).
+    Routes through the EXISTING K1.AK print_str builtin (slot 163,
+    9 chars) -- no new builtin needed. Contract: message lands on
+    stdout EXACTLY as written, with NO trailing newline (the precise
+    Rust print!() semantic).
+
+    Probes:
+      print!("hi"); 42 -- stdout==b"hi" (NO newline), rc=42.
+      print!("a"); print!("b"); 42 -- stdout==b"ab" (concatenated, no
+                  newlines anywhere), rc=42.
+
+    Regression: println!("out") still emits trailing newline via
+    K1.F22c print_str_ln (verify K1.F22e doesn't shadow K1.F22b/c).
+    """
+    rc1, stdout1 = _kovc_self_host_compile_and_run_with_stdout(
+        "k1f22e_print_single",
+        'fn main() -> i32 { print!("hi"); 42 }',
+    )
+    assert rc1 == 42, (
+        f"K1.F22e print!(\"hi\"); 42: expected exit code 42 "
+        f"(print_str returns 0, trailing 42 is the final value); "
+        f"got {rc1}. stdout={stdout1!r}."
+    )
+    # K1.F22e contract: NO trailing newline (the distinguishing
+    # difference from K1.F22b/c println!). If stdout==b"hi\n", the
+    # synthesis routed through print_str_ln instead of plain print_str.
+    assert stdout1 == b"hi", (
+        f"K1.F22e print! no-newline probe: expected stdout == b'hi' "
+        f"(message only, no trailing newline -- the Rust print!() "
+        f"contract); got stdout={stdout1!r}. If stdout==b'hi\\n', the "
+        f"K1.F22e synthesis incorrectly routed through print_str_ln."
+    )
+
+    rc2, stdout2 = _kovc_self_host_compile_and_run_with_stdout(
+        "k1f22e_print_multi",
+        'fn main() -> i32 { print!("a"); print!("b"); 42 }',
+    )
+    assert rc2 == 42, (
+        f"K1.F22e two-print probe: expected rc=42; got {rc2}. "
+        f"stdout={stdout2!r}."
+    )
+    # Two print!s concatenate with NO newlines anywhere.
+    assert stdout2 == b"ab", (
+        f"K1.F22e two-print concat probe: expected stdout == b'ab' "
+        f"(each print! emits ONLY its message, no newlines); got "
+        f"stdout={stdout2!r}."
+    )
+
+    # Regression: K1.F22c println! still emits the trailing newline.
+    # If K1.F22e accidentally shadowed K1.F22b/c (e.g. by matching
+    # IDENT length wrong), println! would lose its newline.
+    rc3, stdout3 = _kovc_self_host_compile_and_run_with_stdout(
+        "k1f22e_println_regression",
+        'fn main() -> i32 { println!("out"); 42 }',
+    )
+    assert rc3 == 42, (
+        f"K1.F22e println! regression probe: expected rc=42; got "
+        f"{rc3}. stdout={stdout3!r}."
+    )
+    assert stdout3 == b"out\n", (
+        f"K1.F22e println! regression: expected stdout == b'out\\n' "
+        f"(K1.F22c print_str_ln still emits the trailing newline); got "
+        f"stdout={stdout3!r}. If stdout==b'out', K1.F22e shadowed the "
+        f"println! detection."
+    )
+
+
 def test_bootstrap_kovc_k3o_str_table_cap_64_self_host():
     """K3.O (2026-05-27): the K3.N audit flagged the str_table 16-
     entry cap as a silent-overflow risk: panic uses 3 entries +

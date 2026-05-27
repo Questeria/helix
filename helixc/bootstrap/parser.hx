@@ -3424,6 +3424,25 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 }
             } else { 0 };
+            // K1.F22e (2026-05-27): print!(STR) detection. 5-char
+            // IDENT "print" = bytes 112 114 105 110 116. No-newline
+            // variant of K1.F22b's println!. Routes through the existing
+            // K1.AK print_str builtin (slot 163, 9 chars) so the message
+            // lands on stdout WITHOUT a trailing newline -- the exact
+            // contract of Rust's print!(). id_len==5 exactly distinguishes
+            // it from println! (7), eprint! (6, future), eprintln! (8),
+            // and the bare print_str identifier (9, no `!`).
+            let is_print_name_macro = if id_len == 5 {
+                let pb0p = __arena_get(id_start);
+                let pb1p = __arena_get(id_start + 1);
+                let pb2p = __arena_get(id_start + 2);
+                let pb3p = __arena_get(id_start + 3);
+                let pb4p = __arena_get(id_start + 4);
+                if pb0p == 112 { if pb1p == 114 { if pb2p == 105 {
+                    if pb3p == 110 { if pb4p == 116 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 }
+            } else { 0 };
             let mac_t3 = tok_tag(tok_base, k + 3);
             let mac_t4 = tok_tag(tok_base, k + 4);
             let is_panic_str_form = if is_panic_name_macro == 1 {
@@ -3435,6 +3454,13 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             let is_eprintln_str_form = if is_eprintln_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
+                else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F22e (2026-05-27): shape guard for print!(STR_LIT) -- the
+            // mac_t2/3/4 cascade matches the same single-STR-arg shape
+            // used by panic!/println!/eprintln!.
+            let is_print_str_form = if is_print_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 25 { if mac_t4 == 4 { 1 }
                 else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
@@ -3507,6 +3533,31 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(115); __arena_push(116); __arena_push(114);
                 __arena_push(95); __arena_push(108); __arena_push(110);
                 mk_node(16, epl_name_s, 13, epl_args_head)
+            } else { if is_print_str_form == 1 {
+                // K1.F22e: synthesize AST_CALL(print_str, str_arg).
+                // No-newline stdout variant -- the message lands on
+                // stdout exactly as written, with NO trailing newline.
+                // Routes through the existing K1.AK print_str builtin
+                // (bn_state slot 163, 9 chars "print_str"); no new
+                // builtin needed. Same 5-token-consumption shape as
+                // panic!/println!/eprintln!.
+                let p_str_tok = k + 3;
+                let p_str_body_s = tok_p2(tok_base, p_str_tok);
+                let p_str_body_l = tok_p3(tok_base, p_str_tok);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                cur_advance(sb);
+                let p_str_ast = mk_node(25, p_str_body_s, p_str_body_l, 0);
+                let p_args_head = mk_node(17, p_str_ast, 0, 0);
+                // Push "print_str" name bytes (9 chars: 112 114 105 110
+                // 116 95 115 116 114).
+                let p_name_s = __arena_push(112);
+                __arena_push(114); __arena_push(105); __arena_push(110);
+                __arena_push(116); __arena_push(95);  __arena_push(115);
+                __arena_push(116); __arena_push(114);
+                mk_node(16, p_name_s, 9, p_args_head)
             } else {
             cur_advance(sb);                     // consume IDENT
             cur_advance(sb);                     // consume '!'
@@ -3533,7 +3584,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting; K1.F22d: +1 more for is_eprintln_str_form
+            }}}}     // K1.F22b: +1 brace for the new is_println_str_form cascade nesting; K1.F22d: +1 more for is_eprintln_str_form; K1.F22e: +1 more for is_print_str_form
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
