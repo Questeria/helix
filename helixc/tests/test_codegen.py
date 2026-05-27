@@ -9103,19 +9103,22 @@ def test_bootstrap_kovc_k1f24b_three_arg_builtin_triple_known_broken_self_host()
 
 
 def test_bootstrap_kovc_k1f24f_tile_add_real_loop_known_broken_self_host():
-    """K1.F24f (2026-05-27): the real elementwise add loop codegen
-    (60 bytes; preserved in commit history) SIGILLs CONSISTENTLY
-    across 3 consecutive runs -- a REAL defect, NOT a WSL flake.
+    """K1.F24f (2026-05-27): the real elementwise add loop codegen.
 
-    Surprisingly, even the K1.F24e stub composed with __tile_zeros +
-    __arena_set + __arena_get in this longer program ALSO SIGILLs 3-of-3
-    (separate from the loop-codegen defect). The two issues may be
-    independent OR may share a root cause around how multiple builtin
-    calls compose in K2-self-host.
+    NOTE [K1.F24j CORRECTION, 2026-05-27 same-day]: this test was
+    originally pinned as KNOWN-BROKEN (rc==132 expected) based on
+    "3/3 SIGILL with the real elementwise loop." K1.F24i revealed
+    that those failures were artifacts of the WSL multi-line helper
+    bug (printf %s {repr()} corrupting newlines on disk), NOT a real
+    codegen defect. K1.F24j restored the real elementwise loop, and
+    the test now passes with rc==13 (3+10=13 since a[0]=3, b[0]=10,
+    dst[0]=a[0]+b[0]=13; other dst cells are BSS-zero and __arena_get
+    reads dst[0]).
 
-    Pinned at rc==132 for now. Investigation in K1.F24g: bisect the
-    `let a = __tile_zeros(...); ... __tile_add(...); __arena_get(...)`
-    chain to find which combination triggers the SIGILL.
+    The flake-tolerant pin {0, 13, 132} is retained so any future
+    WSL flake (still possible per K1.F24d) doesn't break the test;
+    but the EXPECTED value is now 13. A new K1.F24j strict test
+    verifies the multi-element loop body.
     """
     src = (
         'fn main() -> i32 {\n'
@@ -9142,6 +9145,71 @@ def test_bootstrap_kovc_k1f24f_tile_add_real_loop_known_broken_self_host():
         f"K1.F24f known-broken: unexpected rc values; got {results}. "
         f"Expected: 132 (current broken behavior), 0 (stub fix), or "
         f"13 (real loop ships)."
+    )
+    # K1.F24j (2026-05-27): with the real loop shipped, rc=13 is now
+    # the EXPECTED value (3+10=13 from cell 0). Verify at least one
+    # of the 3 runs hits 13.
+    assert 13 in results, (
+        f"K1.F24j regression: real elementwise loop should produce "
+        f"rc=13 in at least one of 3 runs (cell 0 = a[0]+b[0] = "
+        f"3+10 = 13); got {results}. WSL may be flaking, or the "
+        f"loop codegen regressed."
+    )
+
+
+def test_bootstrap_kovc_k1f24j_tile_add_multi_cell_self_host():
+    """K1.F24j (2026-05-27): strict multi-cell verification of the
+    real elementwise __tile_add loop shipped in K1.F24j. Tests that
+    the loop iterates count times correctly:
+
+    Program:
+      a = __tile_zeros(2, 2);  // 4 cells
+      b = __tile_zeros(2, 2);
+      dst = __tile_zeros(2, 2);
+      a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4;
+      b[0] = 10; b[1] = 20; b[2] = 30; b[3] = 40;
+      __tile_add(a, b, dst, 4);
+      // dst[0]=11, dst[1]=22, dst[2]=33, dst[3]=44
+      return dst[0] + dst[1] + dst[2] + dst[3];  // = 11+22+33+44 = 110
+
+    The loop counter / SIB-indexed reads / writes need to all work
+    correctly across multiple iterations. A loop bug that only writes
+    cell 0 (e.g., the i increment is broken) would give 11. A bug
+    that reads/writes wrong cells would give some other wrong sum.
+
+    3-run K1.F24d retry discipline.
+    """
+    src = (
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 1);\n'
+        '    __arena_set(a + 1, 2);\n'
+        '    __arena_set(a + 2, 3);\n'
+        '    __arena_set(a + 3, 4);\n'
+        '    __arena_set(b, 10);\n'
+        '    __arena_set(b + 1, 20);\n'
+        '    __arena_set(b + 2, 30);\n'
+        '    __arena_set(b + 3, 40);\n'
+        '    __tile_add(a, b, dst, 4);\n'
+        '    __arena_get(dst) + __arena_get(dst + 1) + __arena_get(dst + 2) + __arena_get(dst + 3)\n'
+        '}\n'
+    )
+    results = []
+    for run_i in range(3):
+        rc = _kovc_self_host_compile_and_run(
+            f"k1f24j_multi_cell_run{run_i}",
+            src,
+        )
+        results.append(rc)
+    # Expected: 11 + 22 + 33 + 44 = 110.
+    assert 110 in results, (
+        f"K1.F24j multi-cell: expected rc=110 (sum 11+22+33+44 over "
+        f"4 elementwise-added cells) in at least one of 3 runs; "
+        f"got {results}. If rc=11 in all 3: only cell 0 is processed "
+        f"(loop counter broken). If rc=132 in all 3: SIGILL (codegen "
+        f"defect). If mixed: WSL flake (rerun)."
     )
 
 
@@ -9542,11 +9610,12 @@ def test_bootstrap_kovc_k1f24i_multiline_source_regression_self_host():
         for i in range(3)
     ]
 
-    # Both should produce the same result. With the __tile_add stub
-    # (current state), dst remains BSS-zero, so __arena_get(dst) = 0.
-    # Pre-fix: multi-line would 3/3 SIGILL while single-line 3/3 rc=0.
-    # Post-fix: both should 3/3 rc=0 (or both flake the same way).
-    expected = 0
+    # Both should produce the same result. With K1.F24j real __tile_add
+    # loop shipped, dst[0] = a[0] + b[0] = 3 + 10 = 13.
+    # Pre-K1.F24i-fix: multi-line would 3/3 SIGILL while single-line 3/3
+    # rc=0 (with then-stub) or rc=13 (with real loop).
+    # Post-fix: both should 3/3 rc=13 (or both flake the same way).
+    expected = 13
     assert expected in multiline_results, (
         f"K1.F24i regression: multi-line source returned {multiline_results}; "
         f"expected at least one rc={expected}. Helper bug may have regressed: "

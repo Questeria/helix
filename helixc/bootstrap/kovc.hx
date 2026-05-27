@@ -4618,14 +4618,44 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // Byte count after args: 2+1+3+2 (arith pack) + 7 (lea) + 2+1+2+6+2 (cursor + check) + 2+1+2 (in_bounds) + 5+4 (bounds_fail) = 42 bytes
         n0_tz + np_tz + n1_tz + 2 + 1 + 3 + 2 + 7 + 2 + 1 + 2 + 6 + 2 + 2 + 1 + 2 + 5 + 4
     } else { if kovc_byte_eq(name_s, name_l, bn_tile_add_s(bn_state), 10) == 1 {
-        // K1.F24e (2026-05-27): __tile_add(a, b, dst, count) NO-OP STUB.
-        // K1.F24f (2026-05-27 same-day): attempted to ship the real
-        // elementwise add loop (60-byte body with [rsp+disp8] reads
-        // for offsets, SIB-indexed cell access). 3 consecutive runs
-        // all returned rc=132 (SIGILL) -- a REAL defect (not a WSL
-        // flake; 3 consecutive failures rules that out). The exact
-        // codegen byte sequence is preserved in the K1.F24f commit
-        // for future investigation. Reverted to the stub for now.
+        // K1.F24j (2026-05-27): __tile_add(a, b, dst, count) REAL
+        // elementwise add loop. Restores the 60-byte body originally
+        // attempted in K1.F24f. K1.F24f saw 3/3 SIGILL and reverted
+        // to the K1.F24e stub, but K1.F24i revealed the SIGILL was
+        // a TEST-HELPER bug (multi-line source corruption via
+        // printf %s {repr()}), not a codegen defect. With the helper
+        // fixed (K1.F24i: stdin pipe), the real loop should work.
+        //
+        // Stack layout after the 4 arg evals:
+        //   [rsp+16] = a_off (i32 zero-extended to 64)
+        //   [rsp+8]  = b_off
+        //   [rsp]    = dst_off
+        //   eax      = count
+        //
+        // Body (60 bytes after args):
+        //   setup (11B):
+        //     89 C1                mov ecx, eax           (count -> ecx)
+        //     48 8D 05 ?? ?? ?? ??  lea rax, [arena_base] (patch_table)
+        //     31 D2                xor edx, edx           (i = 0)
+        //   loop_start (rel0):
+        //     39 CA                cmp edx, ecx
+        //     7D 27                jge +39 -> end
+        //     48 8B 74 24 10       mov rsi, [rsp+16]      (a_off)
+        //     48 01 D6             add rsi, rdx           (a_off + i)
+        //     8B 74 B0 04          mov esi, [rax+rsi*4+4] (a[i])
+        //     48 8B 7C 24 08       mov rdi, [rsp+8]       (b_off)
+        //     48 01 D7             add rdi, rdx           (b_off + i)
+        //     03 74 B8 04          add esi, [rax+rdi*4+4] (esi += b[i])
+        //     48 8B 3C 24          mov rdi, [rsp]         (dst_off)
+        //     48 01 D7             add rdi, rdx           (dst_off + i)
+        //     89 74 B8 04          mov [rax+rdi*4+4], esi (dst[i] = esi)
+        //     FF C2                inc edx
+        //     EB D5                jmp -43 -> loop_start
+        //   end:
+        //     48 83 C4 18          add rsp, 24            (discard 3 pushes)
+        //     31 C0                xor eax, eax           (return 0)
+        //
+        // Counts: setup=11, loop_body=43, end=6 -> total 60.
         let a0_ta = __arena_get(args_head + 1);
         let next1_ta = __arena_get(args_head + 2);
         let a1_ta = __arena_get(next1_ta + 1);
@@ -4640,9 +4670,29 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let n2_ta = emit_ast_code(a2_ta, bind_state, patch_state, bn_state);
         let np2_ta = emit_push_rax();
         let n3_ta = emit_ast_code(a3_ta, bind_state, patch_state, bn_state);
+        // setup (11 bytes):
+        emit_byte(0x89); emit_byte(0xC1);                                       // mov ecx, eax
+        let disp_slot_ta = emit_lea_rax_rip_placeholder();                      // 7 bytes
+        patch_table_add(patch_state, disp_slot_ta, arena_base_s, 18);
+        emit_byte(0x31); emit_byte(0xD2);                                       // xor edx, edx
+        // loop_start (43 bytes):
+        emit_byte(0x39); emit_byte(0xCA);                                       // cmp edx, ecx
+        emit_byte(0x7D); emit_byte(0x27);                                       // jge +39
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);  // mov rsi, [rsp+16]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD6);                      // add rsi, rdx
+        emit_byte(0x8B); emit_byte(0x74); emit_byte(0xB0); emit_byte(0x04);     // mov esi, [rax+rsi*4+4]
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08);  // mov rdi, [rsp+8]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD7);                      // add rdi, rdx
+        emit_byte(0x03); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // add esi, [rax+rdi*4+4]
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x3C); emit_byte(0x24);     // mov rdi, [rsp]
+        emit_byte(0x48); emit_byte(0x01); emit_byte(0xD7);                      // add rdi, rdx
+        emit_byte(0x89); emit_byte(0x74); emit_byte(0xB8); emit_byte(0x04);     // mov [rax+rdi*4+4], esi
+        emit_byte(0xFF); emit_byte(0xC2);                                       // inc edx
+        emit_byte(0xEB); emit_byte(0xD5);                                       // jmp -43 (back to loop_start)
+        // end (6 bytes):
         emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x18);     // add rsp, 24
         emit_byte(0x31); emit_byte(0xC0);                                       // xor eax, eax
-        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 6
+        n0_ta + np0_ta + n1_ta + np1_ta + n2_ta + np2_ta + n3_ta + 60
     } else { if is_print_int_name(name_s, name_l) == 1 {
         // K1.D-impl (2026-05-25): print_int(n) emits inline asm for
         // ASCII conversion + write(1, buf, len) syscall. See
