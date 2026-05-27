@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 171      # last bump: K1.F2 (reflect_hash stub)
+K_BOOTSTRAP_CHUNKS_DONE = 172      # last bump: K1.F3+F4 (4 builtins batched)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -106,7 +106,12 @@ K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # 18 `| KOVC-MISSING |` = 144 rows
                                     # with a status column. The earlier
                                     # 143 was the K0-chunk estimate.
-K_BOOTSTRAP_PARITY_DONE = 131      # K1.F2: reflect_hash bootstrap
+K_BOOTSTRAP_PARITY_DONE = 135      # K1.F3+F4: __trace_event +
+                                    # __helix_splice + __helix_modify +
+                                    # __helix_reflect_hash all added
+                                    # as no-op stubs at slots 165-168.
+                                    # 131 -> 135 (+4 rows).
+                                    # K1.F2: reflect_hash bootstrap
                                     # builtin no-op stub at slot 164.
                                     # 130 -> 131.
                                     # K1.F-discovery batch 29:

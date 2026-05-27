@@ -1933,6 +1933,15 @@ fn install_builtin_names() -> i32 {
     // irrelevant for the bootstrap-compileable subset, but the
     // bootstrap accepts the call without SIGILLing).
     __arena_push(0);      // slot 164: reflect_hash name offset
+    // K1.F3+F4 (2026-05-26): slots 165-168 = batched reflection-
+    // family no-op stubs. Same pattern as K1.F2 -- each evaluates its
+    // argument for side effects then returns 0 in eax. Closes 4 more
+    // KOVC-MISSING rows that the audit batches (28+30) confirmed are
+    // BOTH-PARTIAL in Python.
+    __arena_push(0);      // slot 165: __trace_event name offset
+    __arena_push(0);      // slot 166: __helix_splice name offset
+    __arena_push(0);      // slot 167: __helix_modify name offset
+    __arena_push(0);      // slot 168: __helix_reflect_hash name offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -1994,6 +2003,40 @@ fn install_builtin_names() -> i32 {
     __arena_push(101); __arena_push(99); __arena_push(116); __arena_push(95);
     __arena_push(104); __arena_push(97); __arena_push(115); __arena_push(104);
     __arena_set(bn_state + 164, s_rh);
+
+    // K1.F3 (2026-05-26): "__trace_event" (13 chars: 95 95 116 114
+    // 97 99 101 95 101 118 101 110 116). Stored at slot 165.
+    let s_te = __arena_push(95); __arena_push(95); __arena_push(116); __arena_push(114);
+    __arena_push(97); __arena_push(99); __arena_push(101); __arena_push(95);
+    __arena_push(101); __arena_push(118); __arena_push(101); __arena_push(110);
+    __arena_push(116);
+    __arena_set(bn_state + 165, s_te);
+
+    // K1.F4 (2026-05-26): "__helix_splice" (14 chars: 95 95 104 101
+    // 108 105 120 95 115 112 108 105 99 101). Stored at slot 166.
+    let s_hs = __arena_push(95); __arena_push(95); __arena_push(104); __arena_push(101);
+    __arena_push(108); __arena_push(105); __arena_push(120); __arena_push(95);
+    __arena_push(115); __arena_push(112); __arena_push(108); __arena_push(105);
+    __arena_push(99); __arena_push(101);
+    __arena_set(bn_state + 166, s_hs);
+
+    // K1.F4 (2026-05-26): "__helix_modify" (14 chars: 95 95 104 101
+    // 108 105 120 95 109 111 100 105 102 121). Stored at slot 167.
+    let s_hm = __arena_push(95); __arena_push(95); __arena_push(104); __arena_push(101);
+    __arena_push(108); __arena_push(105); __arena_push(120); __arena_push(95);
+    __arena_push(109); __arena_push(111); __arena_push(100); __arena_push(105);
+    __arena_push(102); __arena_push(121);
+    __arena_set(bn_state + 167, s_hm);
+
+    // K1.F4 (2026-05-26): "__helix_reflect_hash" (20 chars: 95 95 104
+    // 101 108 105 120 95 114 101 102 108 101 99 116 95 104 97 115 104).
+    // Stored at slot 168.
+    let s_hrh = __arena_push(95); __arena_push(95); __arena_push(104); __arena_push(101);
+    __arena_push(108); __arena_push(105); __arena_push(120); __arena_push(95);
+    __arena_push(114); __arena_push(101); __arena_push(102); __arena_push(108);
+    __arena_push(101); __arena_push(99); __arena_push(116); __arena_push(95);
+    __arena_push(104); __arena_push(97); __arena_push(115); __arena_push(104);
+    __arena_set(bn_state + 168, s_hrh);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3446,6 +3489,15 @@ fn bn_print_str_s(b: i32) -> i32 { __arena_get(b + 163) }
 // a no-op stub returning 0.
 fn bn_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 164) }
 
+// K1.F3+F4 (2026-05-26): accessors for the batched no-op reflection/
+// trace builtins. Same pattern as bn_reflect_hash_s -- each is a
+// simple offset getter that try_emit_builtin_call consults to
+// recognize the call site.
+fn bn_trace_event_s(b: i32) -> i32 { __arena_get(b + 165) }
+fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
+fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
+fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
+
 // K1.AD (2026-05-25): bn_state slot 158 holds the head of the
 // continue-chain. Same layout as break: linked list of
 // (jmp_pos, next) cells pushed onto the arena. AST_WHILE walks
@@ -3953,6 +4005,43 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let arg_idx = __arena_get(args_head + 1);
         let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
         // mov eax, 0  (5 bytes)
+        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+        n_arg + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_trace_event_s(bn_state), 13) == 1 {
+        // K1.F3 (2026-05-26): __trace_event(...) -> 0 stub. The
+        // bootstrap doesn't have a trace ring buffer (Phase-1
+        // observability gap). For programs that don't observe the
+        // trace buffer (every bootstrap-compileable program), this
+        // is vacuously satisfied: __trace_event becomes a no-op
+        // returning 0 in eax. Argument is evaluated for side-effects
+        // when present (variadic-tolerant: __trace_event() with no
+        // args also works). args_head == 0 means no args.
+        let n_arg = if args_head == 0 { 0 } else {
+            let arg_idx = __arena_get(args_head + 1);
+            emit_ast_code(arg_idx, bind_state, patch_state, bn_state)
+        };
+        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+        n_arg + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_helix_splice_s(bn_state), 14) == 1 {
+        // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
+        // Underscore-prefixed alias for Splice. Same stub semantics
+        // as Quote/Splice/modify/reflect_hash.
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+        n_arg + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_helix_modify_s(bn_state), 14) == 1 {
+        // K1.F4 (2026-05-26): __helix_modify(...) -> 0 stub.
+        // Underscore-prefixed alias for modify. Same no-op contract.
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+        n_arg + 5
+    } else { if kovc_byte_eq(name_s, name_l, bn_helix_reflect_hash_s(bn_state), 20) == 1 {
+        // K1.F4 (2026-05-26): __helix_reflect_hash(...) -> 0 stub.
+        // Underscore-prefixed alias for reflect_hash. Same no-op.
+        let arg_idx = __arena_get(args_head + 1);
+        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
         n_arg + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_print_str_s(bn_state), 9) == 1 {
@@ -4706,7 +4795,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // K1.D + K1.AE + K1.AF + K1.AG + K1.AK + K1.F2: +1 brace per arm
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
