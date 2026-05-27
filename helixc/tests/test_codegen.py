@@ -7503,6 +7503,59 @@ def test_bootstrap_kovc_k3j_trace_audit_fixes_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f21_generic_bare_call_fallback_self_host():
+    """K1.F21 (2026-05-27): close matrix-row-137 limitation. Bare
+    call `id(42)` to a generic fn -- where mono produced `id__i32`
+    from a turbofish call elsewhere -- previously SIGILL'd (rc=132).
+    K1.F21 adds a backpatch-time fallback: on fn_table_lookup miss,
+    try the i32-monomorphized mangled name `<target>__i32`.
+
+    The fallback uses a pre-allocated 64-slot scratch region at
+    bn_mangle_scratch (slot 170) -- reserved BEFORE the ELF code
+    region in install_builtin_names so the backpatch-time write
+    doesn't corrupt the code byte stream.
+
+    Test program structure:
+      fn id<T>(x: T) -> T { x }
+      fn main() -> i32 {
+          let _ = id::<i32>(99);  // turbofish: mono produces id__i32
+          id(42)                   // bare call: K1.F21 fallback to id__i32
+      }
+
+    Pre-K1.F21: the bare `id(42)` call fails fn_table_lookup (only
+    `id__i32` is in the table; bare `id` is the skipped template).
+    The patch loop emits ud2; main SIGILLs at runtime; rc=132.
+
+    Post-K1.F21: the lookup miss falls through to the mangled
+    fallback; finds `id__i32`; resolves the call. Main returns 42.
+
+    Non-i32 T still traps (the fallback always tries __i32 only):
+      fn id<T>(x: T) -> T { x }
+      fn main() -> i32 {
+          let _ = id::<u64>(99);  // mono produces id__u64 only
+          id(42)                   // bare call: tries id__i32, MISS -> ud2
+      }
+    Pre-K1.F21: rc=132 (ud2). Post-K1.F21: rc=132 (still ud2;
+    fallback only handles i32). The non-i32 case is a future
+    K1.F21b refinement (full type-inference at parse time).
+    """
+    # Primary probe: bare-call generic-fn resolves to i32 mono.
+    rc = _kovc_self_host_compile_and_run(
+        "k1f21_bare_call_generic_fn_i32",
+        "fn id<T>(x: T) -> T { x } fn main() -> i32 { let _ = id::<i32>(99); id(42) }",
+    )
+    assert rc == 42, (
+        f"K1.F21 generic bare-call fallback: expected exit code 42 "
+        f"(`id(42)` resolves to `id__i32` via the K1.F21 backpatch-"
+        f"time mangled-name fallback, after `id::<i32>(99)` triggered "
+        f"mono to produce the id__i32 concrete clone); got {rc}. "
+        f"If rc=132, the fallback didn't fire (or the mangle scratch "
+        f"is corrupting the ELF stream). If rc=99, the bare call "
+        f"resolved to the turbofish call's clone but returned the "
+        f"wrong arg's value."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.

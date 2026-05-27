@@ -1996,6 +1996,16 @@ fn install_builtin_names() -> i32 {
     // contract upgrade only; K1.F20b adds the actual store +
     // read side).
     __arena_push(0);      // slot 169: __trace_last name offset
+    // K1.F21 (2026-05-27): slot 170 = mangle scratch offset (pointer
+    // into the arena where a 64-slot byte-buffer lives for building
+    // generic-mono mangled names like `id__i32` at backpatch time).
+    // Used by the patch_table backpatch loop in emit_elf_for_ast_to_
+    // path: when a bare call's name lookup fails (`id(42)` where the
+    // mono pass produced `id__i32`), copy the bare name to scratch,
+    // append "__i32", and retry the lookup. This closes the matrix-
+    // row-137 limitation "BARE call id(42) requires type inference
+    // and FAILS in bootstrap".
+    __arena_push(0);      // slot 170: mangle scratch offset
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2100,6 +2110,21 @@ fn install_builtin_names() -> i32 {
     __arena_push(97); __arena_push(99); __arena_push(101); __arena_push(95);
     __arena_push(108); __arena_push(97); __arena_push(115); __arena_push(116);
     __arena_set(bn_state + 169, s_tl);
+
+    // K1.F21 (2026-05-27): 64-slot mangle scratch region for the
+    // generic-bare-call name resolution fallback. Each slot holds one
+    // byte (per the kovc_byte_eq one-byte-per-i32-slot convention).
+    // Cap of 64 covers names up to 59 bytes long + the 5-byte "__i32"
+    // suffix; the backpatch loop guards target_name_l < 60 before
+    // mangling. Reserved BEFORE the ELF region grows so a backpatch-
+    // time mangle write doesn't corrupt the code byte stream.
+    let s_scratch = __arena_push(0);
+    let mut sc: i32 = 0;
+    while sc < 63 {
+        __arena_push(0);
+        sc = sc + 1;
+    }
+    __arena_set(bn_state + 170, s_scratch);
 
     // "__arena_get"
     let s1 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -3574,6 +3599,11 @@ fn bn_trace_event_s(b: i32) -> i32 { __arena_get(b + 165) }
 // K1.F20b (2026-05-27): name slot for __trace_last() (read-side of
 // the depth-1 trace slot). See install_builtin_names for the bytes.
 fn bn_trace_last_s(b: i32) -> i32 { __arena_get(b + 169) }
+// K1.F21 (2026-05-27): mangle scratch offset (an arena slot index
+// where a 64-slot byte-buffer lives for backpatch-time generic-mono
+// name mangling). Used by emit_elf_for_ast_to_path's patch_table loop
+// when a bare call's name lookup fails to fall back to <name>__i32.
+fn bn_mangle_scratch(b: i32) -> i32 { __arena_get(b + 170) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -8662,8 +8692,36 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             let target_name_s = __arena_get(entry + 1);
             let target_name_l = __arena_get(entry + 2);
             let target_offset = fn_table_lookup(fn_state, target_name_s, target_name_l);
-            if target_offset >= 0 {
-                let disp = target_offset - (disp_slot + 4);
+            // K1.F21 (2026-05-27): on lookup miss, try the i32-monomorphized
+            // mangled name `<target>__i32`. Closes matrix-row-137 limitation:
+            // bare call `id(42)` -- where mono produced `id__i32` from a
+            // turbofish call elsewhere -- previously SIGILL'd (returns
+            // rc=132); now resolves to the i32 mono clone. Non-i32 T bare
+            // calls still trap (the fallback assumes T=i32 default).
+            // Scratch buffer is at bn_mangle_scratch(bn_state); 64 slots,
+            // pre-allocated in install_builtin_names BEFORE the ELF code
+            // region grows so this write doesn't corrupt the byte stream.
+            // Gated on target_name_l < 60 (leaving room for "__i32" + safety).
+            let final_target_offset = if target_offset >= 0 {
+                target_offset
+            } else { if target_name_l < 60 {
+                let scratch = bn_mangle_scratch(bn_state);
+                let mut mi: i32 = 0;
+                while mi < target_name_l {
+                    __arena_set(scratch + mi, __arena_get(target_name_s + mi));
+                    mi = mi + 1;
+                }
+                __arena_set(scratch + target_name_l + 0, 95);  // '_'
+                __arena_set(scratch + target_name_l + 1, 95);  // '_'
+                __arena_set(scratch + target_name_l + 2, 105); // 'i'
+                __arena_set(scratch + target_name_l + 3, 51);  // '3'
+                __arena_set(scratch + target_name_l + 4, 50);  // '2'
+                fn_table_lookup(fn_state, scratch, target_name_l + 5)
+            } else {
+                0 - 1
+            }};
+            if final_target_offset >= 0 {
+                let disp = final_target_offset - (disp_slot + 4);
                 patch_u32_le(disp_slot, disp);
             } else {
                 // ud2 = 0F 0B; pad remaining 3 bytes with NOP (90).

@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 217      # last bump: K3.J -- audit-fix the K1.F20b trace_event MEDIUM-1 (zero-arg slot corruption) + LOW-2 (trace_last silent-arg-drop); 2 new probes pin both fixes; K3.J audit-clean signal records FIFTH cleanly-audited batch (K1.F19+F20+F20b) with NO HIGH NO must-fix-MEDIUM on all 3 axes
+K_BOOTSTRAP_CHUNKS_DONE = 218      # last bump: K1.F21 -- generic-bare-call name resolution fallback. Bare `id(42)` (where mono produced `id__i32` from a turbofish call elsewhere) now resolves via a backpatch-time mangled-name lookup using a new 64-slot scratch at bn_state slot 170. Closes matrix-row-137 bare-call limitation for i32-shaped T. Non-i32 T still traps (K1.F21b followup)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
