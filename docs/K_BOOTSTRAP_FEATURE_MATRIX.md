@@ -64,7 +64,7 @@ iterates.
 |---------|--------|-----------|--------|
 | `+ - * /` (i32 same-type) | ✅ | ✅ | PARITY |
 | `%` (modulo) | ✅ | ✅ (AST_MOD, tag 24) | PARITY |
-| Mixed-type binops (e.g. i64+i32) | ✅ (implicit conversion) | ⚠️ (codegen traps ud2) | KOVC-MISSING |
+| Mixed-type binops (e.g. i64+i32) | ✅ (implicit conversion) | ⚠️ (one direction closed; reverse traps) | KOVC-MISSING (K1.F8 2026-05-27 PARTIAL CLOSE: ADD / SUB / MUL all sign-extend the i32 operand to i64 and emit a 64-bit op when l_i64=1 and r_i64=0. Two new helpers emit_movsxd_rcx_ecx / _rax_eax (3 bytes each, REX.W 63 + ModRM). expr_type updated to return tag 3 (i64) for `(3, 0)` operand-tag pairs so the body-vs-ret-ty trap 14001 doesn't fire on `-> i64 { i64 + i32 }`. Verified by 5 self-host probes (i64+i32, i64-i32, i64*i32, plus regression for i64+i64 and i32+i32). The REVERSE direction (l_i32 + r_i64) still traps 2021/3021/4021 because the upstream mov-rcx step uses a 32-bit copy when l isn't 64-bit, losing the high 32 of r's i64 in rax; closing it needs the mov-rcx step refactored to copy 64-bit when EITHER operand is 64-bit. Float / unsigned mixed paths also still trap. Row stays KOVC-MISSING for the not-yet-closed directions.) |
 | Float arithmetic (f32) | ✅ | ✅ (via `__fadd/sub/mul/div/neg` SSE builtins) | PARITY |
 | Float arithmetic (f64) | ✅ | ✅ | PARITY |
 | Mixed f32/f64 arithmetic | ✅ | ⚠️ (traps) | KOVC-MISSING |

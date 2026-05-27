@@ -300,6 +300,16 @@ fn emit_imul_eax_ecx() -> i32 { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1
 fn emit_add_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x01); emit_byte(0xC8); 3 }
 fn emit_sub_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x29); emit_byte(0xC8); 3 }
 fn emit_imul_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); 4 }
+// K1.F8 (2026-05-27): sign-extend the 32-bit-low half of a 64-bit
+// register into its full 64-bit form. Used by AST_ADD / AST_SUB /
+// AST_MUL when one operand is i64 and the other is i32: the i32-
+// shaped operand sits zero-extended after the prior 32-bit move,
+// movsxd promotes it to a sign-correct 64-bit value before the
+// 64-bit op. Encoding:
+//   48 63 C9   movsxd rcx, ecx
+//   48 63 C0   movsxd rax, eax
+fn emit_movsxd_rcx_ecx() -> i32 { emit_byte(0x48); emit_byte(0x63); emit_byte(0xC9); 3 }
+fn emit_movsxd_rax_eax() -> i32 { emit_byte(0x48); emit_byte(0x63); emit_byte(0xC0); 3 }
 
 // K-bootstrap K1.A — rsp imm32 adjust helpers. The foundation for
 // SysV stack-arg passing (K1.B), future `unsafe`-block stack
@@ -1394,23 +1404,24 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     } else { if t == 33 {                             // AST_SHR
         expr_type(p1, bind_state, bn_state)
     } else { if t == 2 {                              // AST_ADD
-        // Mismatched binary-op operands fall back to 0 (i32). This is
-        // safe because the per-op codegen dispatch in emit_ast_code
-        // emits ud2 on every (i64 op i32), (f32 op i32), etc. mixed
-        // case — the expr_type return value is consumed by upstream
-        // consumers (val_ty stamping, AST_RET trap) which are
-        // unaffected since the wrapping context already trapped.
+        // Mismatched binary-op operands fall back to 0 (i32) EXCEPT for
+        // the K1.F8 (2026-05-27) i64+i32 widening: when l = i64 (tag 3)
+        // and r = i32 (tag 0), the codegen now sign-extends rcx and
+        // emits a 64-bit add, so the result is i64. expr_type returns
+        // 3 to match. The reverse direction (l = i32, r = i64) still
+        // traps in codegen and stays at the 0-fall-back. Other mixed
+        // (f32/f64, signed/unsigned width, etc.) still fall to 0.
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
-        if l == r { l } else { 0 }
+        if l == r { l } else { if l == 3 { if r == 0 { 3 } else { 0 } } else { 0 } }
     } else { if t == 3 {                              // AST_SUB
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
-        if l == r { l } else { 0 }
+        if l == r { l } else { if l == 3 { if r == 0 { 3 } else { 0 } } else { 0 } }
     } else { if t == 4 {                              // AST_MUL
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
-        if l == r { l } else { 0 }
+        if l == r { l } else { if l == 3 { if r == 0 { 3 } else { 0 } } else { 0 } }
     } else { if t == 5 {                              // AST_DIV
         let l = expr_type(p1, bind_state, bn_state);
         let r = expr_type(p2, bind_state, bn_state);
@@ -5831,7 +5842,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 if r_d == 1 { emit_addsd() } else { emit_trap_with_id(2010) }
             } else { if r_d == 1 { emit_trap_with_id(2011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_trap_with_id(2020) }
+                    // K1.F8 (2026-05-27): mixed i64 + i32 -- sign-extend
+                    // rcx (which holds the i32, zero-extended by the
+                    // earlier 32-bit mov) and then 64-bit add. Closes
+                    // the trap 2020 KOVC-MISSING for the l_i64=1 +
+                    // r_i32 direction. The reverse direction (l_i32 +
+                    // r_i64) still traps (2021) until the mov-rcx
+                    // step is refactored to copy 64-bit when EITHER
+                    // operand is 64-bit -- that's a follow-up tick.
+                    if r_i64 == 1 { emit_add_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_add_rax_rcx_64() }
                 } else { if r_i64 == 1 { emit_trap_with_id(2021) } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_add_rax_rcx_64() } else { emit_trap_with_id(2030) }
@@ -5877,7 +5896,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 if r_d == 1 { emit_subsd() } else { emit_trap_with_id(3010) }
             } else { if r_d == 1 { emit_trap_with_id(3011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_sub_rax_rcx_64() } else { emit_trap_with_id(3020) }
+                    // K1.F8 (2026-05-27): mixed i64 - i32 -- sign-extend
+                    // rcx (i32 -> i64), then 64-bit sub. See AST_ADD's
+                    // 2020 site for the rationale + the deferred
+                    // reverse-direction follow-up.
+                    if r_i64 == 1 { emit_sub_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_sub_rax_rcx_64() }
                 } else { if r_i64 == 1 { emit_trap_with_id(3021) } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_sub_rax_rcx_64() } else { emit_trap_with_id(3030) }
@@ -5928,7 +5951,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 if r_d == 1 { emit_mulsd() } else { emit_trap_with_id(4010) }
             } else { if r_d == 1 { emit_trap_with_id(4011) } else {
                 if l_i64 == 1 {
-                    if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_trap_with_id(4020) }
+                    // K1.F8 (2026-05-27): mixed i64 * i32 -- sign-extend
+                    // rcx (i32 -> i64), then 64-bit imul. `imul rax, rcx`
+                    // (REX.W) yields the low 64 bits of the product;
+                    // signed vs unsigned diverge only in the high 64
+                    // bits / overflow flags, which we don't consume.
+                    if r_i64 == 1 { emit_imul_rax_rcx_64() } else { emit_movsxd_rcx_ecx() + emit_imul_rax_rcx_64() }
                 } else { if r_i64 == 1 { emit_trap_with_id(4021) } else {
                     if l_u64 == 1 {
                         if r_u64 == 1 { emit_imul_rax_rcx_64() } else { emit_trap_with_id(4030) }
