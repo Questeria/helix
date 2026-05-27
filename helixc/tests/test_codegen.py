@@ -9125,6 +9125,162 @@ def test_bootstrap_kovc_k1f24f_tile_add_real_loop_known_broken_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
+    """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
+    SIGILL. K1.F24f shows that the full chain (3 × __tile_zeros + 2 ×
+    __arena_set + __tile_add stub + __arena_get) SIGILLs 3-of-3, even
+    when the __tile_add codegen is the K1.F24e no-op stub. K1.F23c
+    probe 2 shows that 1 × __tile_zeros + 2 × __arena_set + 2 × __arena_get
+    works (rc=18). Something between those two compositions triggers
+    the SIGILL.
+
+    Four progressive probes, each with 3-run K1.F24d retry discipline.
+    A probe is treated as REAL-broken only if all 3 runs SIGILL (132).
+    A single rc=132 inside 3 runs is a WSL flake.
+
+      P1: 3 × __tile_zeros only, no I/O ops. Tests that 3 successive
+          cursor-bumps in main() compose. Expected rc=8 (third tile
+          offset is 8: 2*2 + 2*2 cells past the first).
+      P2: 2 × __tile_zeros + __arena_set + __arena_get (NO __tile_add).
+          Tests 2 tiles + 2 generic-builtin-calls. Expected rc=5.
+      P3: 3 × __tile_zeros + 2 × __arena_set + 1 × __arena_get
+          (NO __tile_add). Tests the K1.F24f program MINUS __tile_add.
+          Expected rc=10.
+      P4: full K1.F24f program with __tile_add stub. Expected rc=0
+          (BSS-zero dst, stub doesn't write); current behavior rc=132.
+
+    The first probe where all 3 runs are rc=132 localizes the defect.
+    The bisect outcome is reported via the assertion message (visible
+    in pytest -v output) regardless of pass/fail.
+    """
+    SIGILL = 132
+    results_summary = {}
+
+    def run_3x(label, src, expected):
+        rs = []
+        for run_i in range(3):
+            rc = _kovc_self_host_compile_and_run(
+                f"k1f24g_{label}_run{run_i}", src
+            )
+            rs.append(rc)
+        results_summary[label] = {
+            "results": rs,
+            "expected": expected,
+            "works_at_least_once": expected in rs,
+            "always_sigill": all(r == SIGILL for r in rs),
+        }
+        return rs
+
+    # P1: 3 × __tile_zeros, no I/O.
+    run_3x(
+        "p1_three_tile_zeros_only",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let c: i32 = __tile_zeros(2, 2);\n'
+        '    c - a\n'
+        '}\n',
+        expected=8,
+    )
+
+    # P2: 2 × __tile_zeros + 1 __arena_set + 1 __arena_get (no __tile_add).
+    run_3x(
+        "p2_two_tiles_set_get",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(b, 5);\n'
+        '    __arena_get(b)\n'
+        '}\n',
+        expected=5,
+    )
+
+    # P3: 3 × __tile_zeros + 2 __arena_set + 1 __arena_get (no __tile_add).
+    run_3x(
+        "p3_three_tiles_two_sets_one_get",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let c: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 3);\n'
+        '    __arena_set(b, 10);\n'
+        '    __arena_get(b)\n'
+        '}\n',
+        expected=10,
+    )
+
+    # P4: full K1.F24f program with __tile_add stub.
+    run_3x(
+        "p4_full_with_tile_add_stub",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(2, 2);\n'
+        '    let b: i32 = __tile_zeros(2, 2);\n'
+        '    let dst: i32 = __tile_zeros(2, 2);\n'
+        '    __arena_set(a, 3);\n'
+        '    __arena_set(b, 10);\n'
+        '    __tile_add(a, b, dst, 4);\n'
+        '    __arena_get(dst)\n'
+        '}\n',
+        expected=0,
+    )
+
+    # Find first probe that ALWAYS SIGILLs (3-of-3) -- the defect localizer.
+    probe_order = [
+        "p1_three_tile_zeros_only",
+        "p2_two_tiles_set_get",
+        "p3_three_tiles_two_sets_one_get",
+        "p4_full_with_tile_add_stub",
+    ]
+    first_broken = None
+    for label in probe_order:
+        if results_summary[label]["always_sigill"]:
+            first_broken = label
+            break
+
+    # Build human-readable summary for the assertion message.
+    summary_lines = ["K1.F24g bisect results:"]
+    for label in probe_order:
+        info = results_summary[label]
+        if info["always_sigill"]:
+            marker = "BROKEN (3/3 SIGILL)"
+        elif info["works_at_least_once"]:
+            marker = "OK"
+        else:
+            marker = "DRIFT (no expected value, no consistent SIGILL)"
+        summary_lines.append(
+            f"  {label}: results={info['results']}, "
+            f"expected={info['expected']}, status={marker}"
+        )
+    summary_lines.append(
+        f"First-broken: {first_broken if first_broken else '(none)'}"
+    )
+    summary_str = "\n".join(summary_lines)
+
+    # K1.F24g initial finding (2026-05-27): ALL 4 probes -- including P1
+    # (3 × __tile_zeros alone, no I/O, no chain composition) -- SIGILL 3/3
+    # deterministically. The 2-tile baseline (K1.F23c probe 3:
+    # `let a = __tile_zeros(2,2); let b = __tile_zeros(2,2); b - a`) WORKS
+    # (rc=4 reliably). The defect threshold is therefore at 3 successive
+    # __tile_zeros calls in the same main() body, NOT at the multi-builtin
+    # chain composition (P2/P3/P4) as originally hypothesized.
+    #
+    # Flake-tolerant pin: each probe is either always-sigill (broken pin)
+    # or works-at-least-once (recovered). True mixed-drift (rc value
+    # neither expected nor SIGILL) would indicate a new state and fail.
+    # The bisect outcome is exposed via the assertion message regardless.
+    for label in probe_order:
+        info = results_summary[label]
+        is_consistent = info["always_sigill"] or info["works_at_least_once"]
+        assert is_consistent, (
+            f"K1.F24g drift in {label}: results={info['results']} "
+            f"are neither all-SIGILL (current broken pin) nor "
+            f"works-at-least-once (recovered state).\n{summary_str}"
+        )
+
+    # Surface bisect outcome via stdout for pytest -s / -v inspection.
+    print(summary_str)
+
+
 def test_bootstrap_kovc_k1f24e_tile_add_stub_three_runs_self_host():
     """K1.F24e — stub-stability sanity check (preserved). Verifies
     that the no-op stub still works after the K1.F24f revert.
