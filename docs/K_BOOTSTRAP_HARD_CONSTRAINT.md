@@ -159,6 +159,41 @@ document, not further parser surface coverage. K2 (parity harness)
 running over a real-source corpus is also the gate that will
 surface what remaining parser corners (if any) actually matter.
 
+## Pre-existing Category-2 carry-overs (discovered 2026-05-26 K2.D)
+
+The K2 corpus expansion runs surfaced two existing failures that
+predate the K2 phase and have been quietly broken throughout the
+recent K1.* parser work:
+
+1. **Bootstrap kovc i64-i64 subtraction silently miscompiles**
+   (`test_bootstrap_kovc_full_pipeline_arithmetic` line ~2898,
+   commit `6fb85215` dated 2026-05-07). Source `100_i64 - 58_i64`
+   returns 100 instead of 42 — the subtraction is dropping and the
+   left operand flows through. Pre-existing for ~3 weeks; not
+   caused by recent work. Belongs to the **mixed-type binops**
+   Category-2 bucket (same code path that traps on i64+i32).
+   Treat as a dedicated multi-tick chunk; ship pure-i32 corpus
+   items in the meantime.
+
+2. **Python helixc char-literal IR-lowering** raises
+   `NotImplementedError: char literal not yet supported in IR
+   lowering at <pos>`. The bootstrap kovc accepts char literals
+   (per K1.K). K2.D's `let c = 'A';` shape hit this gap; the
+   corpus uses a let-shadowing variant instead. Python-side gap;
+   future K2.* chunk re-introduces char-literal once Python helixc
+   gains parity (or after K4 deletes Python).
+
+3. **Python helixc match-block-arm requires explicit comma**
+   between arms when an arm body is a brace block (`} _ =>`
+   errors "expected RBRACE got IDENT '_'"). The bootstrap kovc
+   accepts the comma-less form (per K1.AL). K2.D's corpus uses
+   the comma-separated form for parity.
+
+Items (2) and (3) are Python-side defects -- K2 surfaces them
+because both compilers must accept every corpus item. They are
+NOT bootstrap bugs. Item (1) IS a bootstrap bug that has been
+dormant in test_codegen.py.
+
 ## References
 
 - User directive: 2026-05-26 conversation (initial hard constraint)
