@@ -2034,6 +2034,11 @@ fn install_builtin_names() -> i32 {
     // the OLD cursor (the tile's base offset). Skips per-cell zero-init
     // -- BSS-zero on Linux means new cells start at 0.
     __arena_push(0);      // slot 174: __tile_zeros name offset
+    // K1.F24-attempt (2026-05-27): slot 175 reserved for "__tile_add"
+    // but the codegen attempt SIGILLed even in no-op-stub form.
+    // Slot reservation kept so the next attempt (K1.F24b) lands at
+    // the same slot index without renumbering.
+    __arena_push(0);      // slot 175: (reserved for __tile_add, codegen deferred)
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2198,6 +2203,12 @@ fn install_builtin_names() -> i32 {
     __arena_push(122); __arena_push(101); __arena_push(114); __arena_push(111);
     __arena_push(115);
     __arena_set(bn_state + 174, s_tz);
+
+    // K1.F24-attempt (2026-05-27): slot 175 reserved but the name push
+    // and codegen branch were reverted after persistent SIGILL during
+    // initial implementation attempts (both runtime-loop and no-op-stub
+    // variants traps; root cause not yet localized -- needs binary
+    // diff of the emitted bytes against working builtins).
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3710,6 +3721,9 @@ fn bn_eprint_str_s(b: i32) -> i32 { __arena_get(b + 173) }
 // Returns the old cursor as the tile's base offset; advances cursor
 // by N*M. Builtin name offset stored at slot 174.
 fn bn_tile_zeros_s(b: i32) -> i32 { __arena_get(b + 174) }
+// K1.F24-attempt (2026-05-27): bn_tile_add_s accessor REMOVED -- the
+// codegen attempt SIGILLed and was reverted. Slot 175 reserved for
+// the future K1.F24b retry.
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }

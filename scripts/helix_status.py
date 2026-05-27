@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 242      # last bump: K1.F23c -- __tile_zeros builtin via cursor-bump (bypasses the K1.F23 helper-fn defect; works in main scope). New bn_state slot 174 + 12-byte "__tile_zeros" name + 42-byte codegen body: imul N*M, lea arena_base, cursor-bump with bounds check, return old cursor as tile base offset. Skips per-cell zero-init -- BSS-zero. Tests: 3 probes verifying alloc returns 0-cells, round-trip via __arena_set/get works, and two back-to-back allocations have offsets 4 apart. This is the Phase-0 tile-allocator substrate; tile_add/tile_matmul are follow-on chunks
+K_BOOTSTRAP_CHUNKS_DONE = 243      # last bump: K1.F24-attempt-and-revert -- drafted __tile_add(a, b, dst, count) as a 4-arg elementwise-add builtin with runtime loop, then a no-op stub fallback. BOTH variants SIGILLed at runtime even for the minimal probe `__tile_add(1, 2, 3, 4); 0`. Root cause unknown -- 4-arg builtin codegen or args-on-stack interaction with arg-eval-pop sequence. REVERTED kovc.hx changes (slot 175 kept reserved for future re-attempt; name push, accessor, codegen branch all removed). Plan doc to be updated. Future K1.F24b chunk needs binary-diff investigation against working builtins (__arena_set has similar structure but only 2 args)
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

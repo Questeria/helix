@@ -8787,6 +8787,32 @@ def test_bootstrap_kovc_k1f22k_assert_ne_macro_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f24_tile_add_attempt_reverted_self_host():
+    """K1.F24-attempt (2026-05-27): the __tile_add builtin codegen
+    was drafted (4-arg elementwise add via runtime loop, then a
+    no-op stub fallback) and REVERTED -- both variants SIGILLed at
+    runtime even for the minimal `__tile_add(1, 2, 3, 4); 0` probe.
+    Root cause not yet localized; binary-diff against working builtins
+    needed in a future K1.F24b chunk.
+
+    Current state: __tile_add is NOT a recognized builtin name. The
+    bootstrap's fn-lookup fallback runs and fails to find a user fn
+    named __tile_add. This test PINS the current behavior by verifying
+    that `__tile_zeros(2, 2)` (the K1.F23c-shipped builtin) still
+    works -- a regression probe for K1.F23c that K1.F24's attempt
+    didn't accidentally damage.
+    """
+    rc = _kovc_self_host_compile_and_run(
+        "k1f24_attempt_revert_pin",
+        'fn main() -> i32 { let t: i32 = __tile_zeros(2, 2); __arena_get(t) }',
+    )
+    assert rc == 0, (
+        f"K1.F24 regression: __tile_zeros(2, 2) should still work "
+        f"(K1.F23c regression after the K1.F24 attempt-and-revert); "
+        f"got {rc}. K1.F23c may have been damaged by the K1.F24 work."
+    )
+
+
 def test_bootstrap_kovc_k1f23c_tile_zeros_builtin_self_host():
     """K1.F23c (2026-05-27): __tile_zeros(N, M) builtin via cursor-bump.
 
