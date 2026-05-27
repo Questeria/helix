@@ -177,6 +177,21 @@ K2_CORPUS = [
     ("p83_i32_mul_i64",          "fn main() -> i64 { 6 * 7_i64 }", 42),
     ("p84_i64_add_arith_i32",    "fn main() -> i64 { 30_i64 + (6 * 2) }", 42),
     ("p85_i64_sub_large",        "fn main() -> i64 { 100_i64 - 58 }", 42),
+    # K2.M (2026-05-27): unsigned mixed-type binop probes pinning the
+    # K1.F8d closure (u64<->u32 widening across ADD/SUB/MUL/DIV/MOD).
+    # Both compilers handle these via the same pattern: zero-extension
+    # of the u32 side to u64, then 64-bit op. Bootstrap uses mov_ecx_eax
+    # (zero-ext implicit) + the appropriate REX.W op (add/sub/imul/
+    # div_u/imod_u). K3.B's exactly-u32 (tag-6) guard ensures non-u32
+    # operands trap loudly instead of silently miscompiling.
+    ("p86_u64_add_u32",          "fn main() -> u64 { 30_u64 + 12_u32 }", 42),
+    ("p87_u64_sub_u32",          "fn main() -> u64 { 54_u64 - 12_u32 }", 42),
+    ("p88_u64_mul_u32",          "fn main() -> u64 { 6_u64 * 7_u32 }", 42),
+    ("p89_u64_div_u32",          "fn main() -> u64 { 84_u64 / 2_u32 }", 42),
+    ("p90_u64_mod_u32",          "fn main() -> u64 { 142_u64 % 100_u32 }", 42),
+    ("p91_u32_add_u64",          "fn main() -> u64 { 30_u32 + 12_u64 }", 42),
+    ("p92_u32_sub_u64",          "fn main() -> u64 { 54_u32 - 12_u64 }", 42),
+    ("p93_u32_mul_u64",          "fn main() -> u64 { 6_u32 * 7_u64 }", 42),
 ]
 
 
@@ -240,14 +255,16 @@ def test_k2_corpus_size():
         cond, across fn calls, used-twice).
       - K2.H bumped to >= 85 (mixed-type i64<->i32 ADD/SUB/MUL,
         both directions, pinning the K1.F8 + K1.F8b closures).
+      - K2.M bumped to >= 93 (unsigned mixed-type u64<->u32
+        ADD/SUB/MUL/DIV/MOD, both directions, pinning K1.F8d).
 
     (K2.C was the matrix-parity counter sync -- no corpus change.)
 
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 85, (
-        f"K2.H corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 93, (
+        f"K2.M corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
