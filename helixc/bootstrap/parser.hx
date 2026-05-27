@@ -894,10 +894,10 @@ fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
         mk_node(1, id_s, id_l, 0)
     }
 }
-// K1.F7 (2026-05-27): const_tab accessors. Cap = 64 entries (K3.C
-// audit-fix 2026-05-27 bumped from 16); each entry = 3 slots
-// (name_s, name_l, value_ast_idx). Populated by parse_const_decl,
-// queried by parse_primary's IDENT path.
+// K1.F7 (2026-05-27): const_tab accessors. Cap = 512 entries (K3.G
+// audit-fix 2026-05-27, bumped from K3.C's 64, originally 16); each
+// entry = 3 slots (name_s, name_l, value_ast_idx). Populated by
+// parse_const_decl, queried by parse_primary's IDENT path.
 //
 // K3.A audit-fix (2026-05-27): the original K1.F7 stored
 // const_tab base/count at sb+94/sb+95. The silent-failure audit
@@ -913,15 +913,26 @@ fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
 // at parse_const_decl discarded the const_tab_add return value)
 // -- any downstream reference to the dropped name then fell to
 // AST_VAR + undefined-binding trap 76003 with no clue that the
-// root cause was cap-exceeded. 64 entries gives 4x headroom; the
-// bootstrap self-host source uses <10 consts, so practical
-// overflow is effectively ruled out. Surface-the-overflow with a
-// distinct trap id remains a future audit follow-up.
+// root cause was cap-exceeded.
+//
+// K3.G audit-fix (2026-05-27, MEDIUM-3): cap bumped 64 -> 512
+// (region 192 -> 1536 slots). The K3.C 64-cap gave 4x headroom over
+// realistic bootstrap usage (<10 consts) but the audit-recommended
+// "surface the overflow with a distinct trap id" required state
+// plumbing across the parser/codegen boundary that doesn't cleanly
+// fit Phase-0's architecture (parse_top has many exit paths; the
+// sb scratch slots are not directly accessible from kovc.hx
+// codegen). 512-cap pushes practical overflow risk to ~50x
+// headroom (any real Helix program with >512 consts at one scope
+// is implausible; even monstrously generated code would split
+// across modules), making the MEDIUM-3 surfacing effectively a
+// dead-letter concern in practice. The arena cost is 1344 extra
+// slots (~5KB out of ~131KB arena), well within budget.
 fn const_tab_base(sb: i32) -> i32 { __arena_get(sb + 122) }
 fn const_tab_count(sb: i32) -> i32 { __arena_get(sb + 123) }
 fn const_tab_add(sb: i32, name_s: i32, name_l: i32, value_idx: i32) -> i32 {
     let count = const_tab_count(sb);
-    if count >= 64 {
+    if count >= 512 {
         0 - 1
     } else {
         let base = const_tab_base(sb);
@@ -6480,8 +6491,8 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 78, sgp_base);
     __arena_set(cur_slot + 79, 0);
-    // K1.F7 (2026-05-27) + K3.A (2026-05-27) + K3.C (2026-05-27):
-    // const_tab region (192 slots, 64 entries x 3 fields). Each
+    // K1.F7 (2026-05-27) + K3.A + K3.C + K3.G (all 2026-05-27):
+    // const_tab region (1536 slots, 512 entries x 3 fields). Each
     // entry = (name_s, name_l, value_ast_idx). The value_ast_idx
     // is the AST node index of the const decl's value expression
     // -- parse_primary inlines that AST when the const name is
@@ -6489,10 +6500,12 @@ fn parse_top(tok_base: i32) -> i32 {
     //
     // Region BASE POINTER stored at sb+122 (count at sb+123) by
     // K3.A to escape the param_array_name(idx=2) collision at
-    // sb+94/95. K3.C bumped cap 16 -> 64 (region grew 48 -> 192).
+    // sb+94/95. K3.C bumped cap 16 -> 64 (region grew 48 -> 192);
+    // K3.G bumped cap 64 -> 512 (region 192 -> 1536) to push
+    // practical-overflow risk effectively to zero (MEDIUM-3 fix).
     let const_base = __arena_push(0);
     let mut cti: i32 = 1;
-    while cti < 192 {
+    while cti < 1536 {
         __arena_push(0);
         cti = cti + 1;
     }

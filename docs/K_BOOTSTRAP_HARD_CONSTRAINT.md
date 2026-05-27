@@ -577,9 +577,20 @@ scrutiny.
 One pre-existing observation noted (out of scope for this audit
 batch, will be addressed in a follow-up): `const_tab_add` still
 returns -1 on cap-exceeded and `parse_const_decl` still discards
-that return value. K3.C reduced practical risk by 4x; the
-audit-recommended "surface the overflow with a distinct trap id"
-remains as a deferred enhancement.
+that return value. K3.C reduced practical risk by 4x.
+
+**K3.G (2026-05-27) pragmatic close**: cap bumped 64 -> 512 (region
+192 -> 1536 slots; ~5KB of the ~131KB arena). The audit-recommended
+"surface the overflow with a distinct trap id" required state
+plumbing across the parser/codegen boundary that doesn't cleanly fit
+Phase-0's architecture (parse_top has many exit paths; sb scratch
+slots are not directly accessible from kovc.hx codegen). 512-cap
+pushes practical overflow risk to ~50x headroom over the realistic
+<10 consts the bootstrap source uses; even monstrously generated
+code would split across modules before hitting 512 top-level consts
+at one scope. MEDIUM-3 is effectively closed in practice; the
+explicit trap-id surfacing remains a re-open candidate if a Phase-1
+architecture provides a cleaner state-plumbing seam.
 
 This is the FIRST cleanly-audited code batch from this session's
 K-bootstrap loop. The discipline path -- 3-axis audit per chunk
