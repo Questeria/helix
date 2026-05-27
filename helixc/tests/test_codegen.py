@@ -9281,6 +9281,144 @@ def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     print(summary_str)
 
 
+def test_bootstrap_kovc_k1f24h_tile_zeros_axis_isolation_self_host():
+    """K1.F24h (2026-05-27): isolate which AXIS triggers the K1.F24g
+    3-tile defect. K1.F24g showed 3 × __tile_zeros(2, 2) with lets + subtract
+    SIGILLs 3/3 while 2 × __tile_zeros(2, 2) + lets + subtract works (per
+    K1.F23c probe 3). Two main candidates remain:
+
+      AXIS A: cell count / N*M arithmetic (e.g., the 3rd call's cursor
+              advance to 12 trips something).
+      AXIS B: let-binding slot allocation at 3 sequential lets (the let
+              codegen for a tile_zeros RHS might allocate something
+              breaking on the 3rd let).
+
+    H1 discriminates AXIS A: 3 × __tile_zeros(1, 1) (cells: 1 each, cursor
+       advance: 0->1->2->3). If H1 works, AXIS A is in play (the cells
+       count / cursor-advance arithmetic matters). If H1 fails, AXIS A
+       is NOT the cause -- the bug doesn't care about N*M.
+
+    H2 discriminates AXIS B: 3 × __tile_zeros(2, 2) but the call results
+       are DISCARDED (no `let` bindings). If H2 works, AXIS B is in play
+       (let-slot allocation specifically interacts with tile_zeros). If
+       H2 fails, AXIS B is NOT the cause -- the bug isn't about let.
+
+    Each probe uses 3-run K1.F24d retry discipline. Flake-tolerant: any
+    rc=expected counts as "works". 3/3 SIGILL counts as "broken pin".
+    Mixed-drift (non-expected, non-SIGILL) fails the test as a surprise.
+    """
+    SIGILL = 132
+    results_summary = {}
+
+    def run_3x(label, src, expected):
+        rs = []
+        for run_i in range(3):
+            rc = _kovc_self_host_compile_and_run(
+                f"k1f24h_{label}_run{run_i}", src
+            )
+            rs.append(rc)
+        results_summary[label] = {
+            "results": rs,
+            "expected": expected,
+            "works_at_least_once": expected in rs,
+            "always_sigill": all(r == SIGILL for r in rs),
+        }
+        return rs
+
+    # H1: 3 × __tile_zeros(1, 1) with lets + subtract. Cell count = 1
+    # each; cursor advances 0 -> 1 -> 2 -> 3. `c - a` = 2.
+    run_3x(
+        "h1_three_tile_zeros_1x1_cells",
+        'fn main() -> i32 {\n'
+        '    let a: i32 = __tile_zeros(1, 1);\n'
+        '    let b: i32 = __tile_zeros(1, 1);\n'
+        '    let c: i32 = __tile_zeros(1, 1);\n'
+        '    c - a\n'
+        '}\n',
+        expected=2,
+    )
+
+    # H2: 3 × __tile_zeros(2, 2) DISCARDED (no lets), return literal 42.
+    # Removes the let-binding axis entirely; the calls still execute
+    # because builtins always emit (no DCE in the bootstrap).
+    run_3x(
+        "h2_three_tile_zeros_discarded",
+        'fn main() -> i32 {\n'
+        '    __tile_zeros(2, 2);\n'
+        '    __tile_zeros(2, 2);\n'
+        '    __tile_zeros(2, 2);\n'
+        '    42\n'
+        '}\n',
+        expected=42,
+    )
+
+    # Find first probe that ALWAYS SIGILLs (3-of-3) -- the defect axis.
+    probe_order = ["h1_three_tile_zeros_1x1_cells", "h2_three_tile_zeros_discarded"]
+    h1_broken = results_summary["h1_three_tile_zeros_1x1_cells"]["always_sigill"]
+    h2_broken = results_summary["h2_three_tile_zeros_discarded"]["always_sigill"]
+
+    # AXIS narrative -- which candidate the bisect localized:
+    if not h1_broken and h2_broken:
+        narrative = (
+            "AXIS A IN PLAY: 1x1 cells (3 calls) WORKS. The 3-tile bug is "
+            "sensitive to cell count / N*M cursor advancement. The 2x2 case "
+            "advancing cursor by 12 cells trips something that 1x1 (advance "
+            "by 3) avoids."
+        )
+    elif h1_broken and not h2_broken:
+        narrative = (
+            "AXIS B IN PLAY: 3 discarded tile_zeros calls (no lets) WORKS. "
+            "The bug is in the let-binding codegen interaction with tile_zeros "
+            "results. 3 sequential lets binding tile_zeros returns triggers it."
+        )
+    elif h1_broken and h2_broken:
+        narrative = (
+            "NEITHER AXIS A NOR B is the lone trigger. Both H1 (1x1 cells, "
+            "lets retained) and H2 (2x2 cells, no lets) fail 3/3. The bug is "
+            "in the __tile_zeros codegen itself on the 3rd call -- not in "
+            "cell-count arithmetic or let-slot allocation. Likely candidates "
+            "remaining: 3rd patch_table entry resolution to arena_base, OR "
+            "instruction-sequence interaction (jae/jmp rel8 displacement "
+            "interference, push/pop rdx stack walk across 3 bodies)."
+        )
+    else:
+        narrative = (
+            "BOTH H1 and H2 WORK. The original K1.F24g P1 failure is more "
+            "narrowly conditional than expected. Possibly: 1x1 cells + lets "
+            "OR 2x2 cells with no lets BOTH avoid the trigger, but the specific "
+            "combination of (lets retained × 2x2 cells × 3 calls) trips it."
+        )
+
+    summary_lines = [f"K1.F24h axis isolation: {narrative}"]
+    for label in probe_order:
+        info = results_summary[label]
+        if info["always_sigill"]:
+            marker = "BROKEN (3/3 SIGILL)"
+        elif info["works_at_least_once"]:
+            marker = "OK"
+        else:
+            marker = "DRIFT (no expected value, no consistent SIGILL)"
+        summary_lines.append(
+            f"  {label}: results={info['results']}, "
+            f"expected={info['expected']}, status={marker}"
+        )
+    summary_str = "\n".join(summary_lines)
+
+    # Flake-tolerant pin per K1.F24d/K1.F24g pattern: each probe is either
+    # always-SIGILL or works-at-least-once. Mixed-drift fails.
+    for label in probe_order:
+        info = results_summary[label]
+        is_consistent = info["always_sigill"] or info["works_at_least_once"]
+        assert is_consistent, (
+            f"K1.F24h drift in {label}: results={info['results']} "
+            f"are neither all-SIGILL (broken pin) nor works-at-least-once "
+            f"(recovered).\n{summary_str}"
+        )
+
+    # Surface narrative via stdout for pytest -s/-v inspection.
+    print(summary_str)
+
+
 def test_bootstrap_kovc_k1f24e_tile_add_stub_three_runs_self_host():
     """K1.F24e — stub-stability sanity check (preserved). Verifies
     that the no-op stub still works after the K1.F24f revert.
