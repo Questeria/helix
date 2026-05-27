@@ -7107,6 +7107,73 @@ def test_bootstrap_kovc_k1f11_14_exactly_type_guard_self_host():
         )
 
 
+def test_bootstrap_kovc_k1f15_f16_bit_pattern_self_host():
+    """K1.F15b (2026-05-27): pin the f16 bit pattern is genuinely IEEE-754
+    half-precision (1+5+10), not the bf16-shaped truncation that the
+    K1.BH first-cut did.
+
+    The f16 literal codegen emits emit_ast_int(f16_bits) -- the bits
+    live in eax. __bits_of_f32 is an identity bitcast (no extra
+    bytes; same eax) typed as i32, so the function body returns the
+    bit pattern as i32 without tripping the body-vs-ret-ty width
+    mismatch trap.
+
+    Verification values (low byte distinguishes f16 from bf16 since
+    both 1.0 and 2.0 have low byte 0 in either encoding -- we need
+    a value with mantissa bits below position 8):
+
+      1.125_f16:
+        binary 1.001 -> fractional bit at 2^-3 -> mantissa bit 7 of
+        the 10-bit field (bit 9 = 2^-1, bit 8 = 2^-2, bit 7 = 2^-3) ->
+        mantissa = 2^7 = 128.
+        Exp(1.125) unbiased = 0, biased = 15.
+        bits = (0 << 15) | (15 << 10) | 128 = 15360 + 128 = 15488 = 0x3C80
+        Low byte: 0x80 = 128
+
+      vs 1.125_bf16 (storage convention in bootstrap differs):
+        The K1.F2 bf16 codegen takes f32(1.125) = 0x3F900000 and
+        AND-masks with 0xFFFF0000 (`bits & 0 - 65536`), yielding
+        0x3F900000 -- the bf16 bits live in the TOP 16 of a 32-bit
+        i32 slot, with the low 16 zeroed. So __bits_of_f32(1.125_bf16)
+        returns 0x3F900000 in eax, low byte = 0x00 = 0.
+        (This is a bootstrap-specific storage convention: bf16 is
+        i32-shaped with bits in the high half, while f16 is i32-
+        shaped with bits in the low half. Both are 4-byte slots; the
+        bit-position difference matters only for raw __bits_of_f32
+        extraction. Arith on either traps via is_bf16_expr.)
+
+    So the expected bootstrap exit code for `__bits_of_f32(1.125_f16)`
+    is 128 (low byte of 0x3C80) and for `__bits_of_f32(1.125_bf16)`
+    is 0 (low byte of 0x3F900000). Different values prove the f16
+    path uses the new f32_to_f16_bits helper rather than the bf16
+    mask-and-shift-up.
+    """
+    # 1.125_f16: confirm low byte = 128 (IEEE-754 half, not bf16-truncated).
+    rc = _kovc_self_host_compile_and_run(
+        "k1f15b_1p125_f16",
+        "fn main() -> i32 { __bits_of_f32(1.125_f16) }",
+    )
+    # Bit pattern is 15488 = 0x3C80. Linux exit code = rc & 0xFF = 0x80 = 128.
+    assert rc == 128, (
+        f"K1.F15b 1.125_f16 bits: expected exit code 128 (low byte of 0x3C80, "
+        f"the IEEE-754 half pattern); got {rc}. If rc=144 the bootstrap "
+        f"regressed to bf16-shaped bits."
+    )
+
+    # Regression: 1.125_bf16 stores bits in the top 16 of i32 (low 16
+    # cleared via mask). Bit pattern 0x3F900000; low byte = 0x00 = 0.
+    # Distinguishes the bf16 storage convention from f16's low-16
+    # convention (which gave 128 above).
+    rc_bf = _kovc_self_host_compile_and_run(
+        "k1f15b_1p125_bf16",
+        "fn main() -> i32 { __bits_of_f32(1.125_bf16) }",
+    )
+    assert rc_bf == 0, (
+        f"K1.F15b 1.125_bf16 bits regression: expected 0 (low byte of "
+        f"0x3F900000, with bf16 bits in the high half); got {rc_bf}."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
