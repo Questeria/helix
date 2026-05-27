@@ -4962,11 +4962,18 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
 // K1.F15 (2026-05-27): IEEE-754 single-precision (f32) to half-
 // precision (f16) bit-pattern conversion. f32 layout: 1 sign + 8 exp
 // (bias 127) + 23 mantissa. f16 layout: 1 sign + 5 exp (bias 15)
-// + 10 mantissa. The conversion truncates the bottom 13 mantissa
-// bits (no rounding -- Phase-0 simplification; round-to-nearest-even
-// is a future audit follow-up). Subnormals flush to +/-0. Overflow
-// goes to +/-Inf. NaN goes to canonical f16 NaN (quiet, sign-
-// preserved).
+// + 10 mantissa.
+//
+// K1.F18 (2026-05-27): the K1.F15 first-cut truncated the bottom 13
+// mantissa bits. K1.F18 implements IEEE-754 round-to-nearest-even
+// (banker's rounding): the round bit is bit 12 (the highest dropped
+// bit), the sticky is OR of bits 0..11; on tie (round=1, sticky=0)
+// round-to-even ties to the LSB of mant16. A mantissa carry into
+// the exponent is handled (mant16==1024 -> wrap mant16=0, exp16+=1,
+// check exp16 overflow -> +/-Inf).
+//
+// Subnormals still flush to +/-0 (Phase-0 simplification; gradual-
+// underflow / denormals is a future K1.F18b chunk).
 //
 // Constants used (kept as decimal to avoid hex literal limits):
 //   2147483647 = 2^31 - 1 (max positive i32, used as sign-strip mask)
@@ -4977,6 +4984,8 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
 //   32256      = 31744 + 2^9 (f16 canonical-NaN pattern)
 //   1024       = 2^10     (f16 exp-bit position)
 //   8192       = 2^13     (f16 mantissa-truncation divisor)
+//   4096       = 2^12     (round-bit position, MSB of dropped bits)
+//   4095       = 2^12 - 1 (sticky mask, bits 0..11)
 fn f32_to_f16_bits(f32bits: i32) -> i32 {
     let sign = if f32bits < 0 { 1 } else { 0 };
     // Strip sign by AND-mask with 0x7FFFFFFF.
@@ -5004,8 +5013,32 @@ fn f32_to_f16_bits(f32bits: i32) -> i32 {
             sign * 32768
         } else {
             let exp16 = unbiased + 15;
-            let mant16 = mant32 / 8192;
-            (sign * 32768) + (exp16 * 1024) + mant16
+            let mant16_trunc = mant32 / 8192;
+            // K1.F18: round-to-nearest-even.
+            let round_bit = (mant32 / 4096) & 1;
+            let sticky_nonzero = if (mant32 & 4095) != 0 { 1 } else { 0 };
+            let round_up = if round_bit == 0 {
+                0
+            } else { if sticky_nonzero == 1 {
+                1
+            } else {
+                // round_bit==1, sticky==0: tie -> round to even.
+                mant16_trunc & 1
+            }};
+            let mant16_rounded = mant16_trunc + round_up;
+            // Mantissa carry: if rounded==1024, mant overflows into exp.
+            if mant16_rounded >= 1024 {
+                let exp16_carry = exp16 + 1;
+                if exp16_carry >= 31 {
+                    // Carry caused exp overflow -> +/-Inf.
+                    (sign * 32768) + 31744
+                } else {
+                    // mant wraps to 0, exp bumps by 1.
+                    (sign * 32768) + (exp16_carry * 1024)
+                }
+            } else {
+                (sign * 32768) + (exp16 * 1024) + mant16_rounded
+            }
         }}
     }}
 }

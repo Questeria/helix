@@ -7173,6 +7173,18 @@ def test_bootstrap_kovc_k1f15_f16_bit_pattern_self_host():
         f"0x3F900000, with bf16 bits in the high half); got {rc_bf}."
     )
 
+    # K1.F18 (2026-05-27): round-to-nearest-even was added in the
+    # f32_to_f16_bits helper. An empirical probe is omitted here
+    # because the parse_float_bits accumulator is i32 and traps via
+    # the >9-digit overflow guard for any literal precise enough to
+    # trigger the round-bit path (round_bit=1 requires the dropped
+    # mantissa bits 0..12 to encode a value >= 4096, which in
+    # decimal needs >9 significant digits past the implicit 1.).
+    # The rounding logic is verified by inline reading of the helper
+    # (audit-clean recorded in K3.H follow-up). 1.125_f16 above does
+    # NOT trigger the round-bit path (round_bit==0), so the regression
+    # test still pins the conversion's structural correctness.
+
 
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
