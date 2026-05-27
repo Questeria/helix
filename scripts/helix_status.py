@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 210      # last bump: K1.F18 -- f32_to_f16_bits round-to-nearest-even (banker's rounding) added; K1.F15b regression still green
+K_BOOTSTRAP_CHUNKS_DONE = 211      # last bump: K1.F18b -- f32_to_f16_bits gradual underflow / f16 denormals (mantissa-shift + sticky-OR + RNE); 2 new permanent self-host probes pin truncation + round-up paths
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

@@ -4959,6 +4959,22 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
     digits
 }
 
+// K1.F18b helper (2026-05-27): compute 2^n by repeated doubling.
+// Used by the f16 gradual-underflow branch to derive the
+// runtime-variable mantissa-shift divisor (n in [14, 24] for the f16
+// denormal range). The caller MUST gate n to avoid i32 overflow
+// (n <= 30 fits; the denormal branch's `unbiased < -25` cutoff above
+// keeps n <= 24).
+fn pow2_i32(n: i32) -> i32 {
+    let mut p: i32 = 1;
+    let mut i: i32 = 0;
+    while i < n {
+        p = p * 2;
+        i = i + 1;
+    }
+    p
+}
+
 // K1.F15 (2026-05-27): IEEE-754 single-precision (f32) to half-
 // precision (f16) bit-pattern conversion. f32 layout: 1 sign + 8 exp
 // (bias 127) + 23 mantissa. f16 layout: 1 sign + 5 exp (bias 15)
@@ -4972,27 +4988,37 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
 // the exponent is handled (mant16==1024 -> wrap mant16=0, exp16+=1,
 // check exp16 overflow -> +/-Inf).
 //
-// Subnormals still flush to +/-0 (Phase-0 simplification; gradual-
-// underflow / denormals is a future K1.F18b chunk).
+// K1.F18b (2026-05-27): IEEE-754 gradual underflow / denormals. For
+// unbiased exponent in [-25, -15] the value is too small for an f16
+// normal but representable as an f16 denormal mant10 * 2^-24. The
+// algorithm re-attaches the f32 hidden mantissa bit, divides by a
+// runtime-variable 2^(-unbiased-1) to position the LSB at 2^-24,
+// then applies the same RNE/sticky rounding pattern as the normal
+// branch. A round-up that carries to mant10==1024 promotes the
+// result to the smallest f16 normal (exp16=1, mant10=0). For
+// unbiased < -25 the value is below the smallest-denormal round-up
+// threshold and flushes to +/-0.
 //
 // Constants used (kept as decimal to avoid hex literal limits):
 //   2147483647 = 2^31 - 1 (max positive i32, used as sign-strip mask)
-//   8388608    = 2^23     (f32 mantissa width)
+//   8388608    = 2^23     (f32 mantissa width / hidden-bit value)
 //   8388607    = 2^23 - 1 (f32 mantissa mask)
 //   32768      = 2^15     (f16 sign-bit position)
 //   31744      = 31 * 2^10 (f16 exp-all-1s pattern, used for Inf)
 //   32256      = 31744 + 2^9 (f16 canonical-NaN pattern)
-//   1024       = 2^10     (f16 exp-bit position)
-//   8192       = 2^13     (f16 mantissa-truncation divisor)
-//   4096       = 2^12     (round-bit position, MSB of dropped bits)
-//   4095       = 2^12 - 1 (sticky mask, bits 0..11)
+//   1024       = 2^10     (f16 exp-bit position; also denormal->normal promotion threshold)
+//   8192       = 2^13     (f16 mantissa-truncation divisor, normal path)
+//   4096       = 2^12     (round-bit position, MSB of dropped bits, normal path)
+//   4095       = 2^12 - 1 (sticky mask, bits 0..11, normal path)
 fn f32_to_f16_bits(f32bits: i32) -> i32 {
     let sign = if f32bits < 0 { 1 } else { 0 };
     // Strip sign by AND-mask with 0x7FFFFFFF.
     let unsigned_bits = f32bits & 2147483647;
     let exp32_raw = (unsigned_bits / 8388608) & 255;
     let mant32 = unsigned_bits & 8388607;
-    // Special: zero (subnormals also flush via this guard).
+    // Special: zero (f32 subnormals also flush via this guard since they
+    // have exp32_raw==0; their f32-denormal value is below f16's smallest
+    // denormal 2^-24, so flushing is correct).
     if exp32_raw == 0 {
         sign * 32768
     } else { if exp32_raw == 255 {
@@ -5003,15 +5029,53 @@ fn f32_to_f16_bits(f32bits: i32) -> i32 {
             (sign * 32768) + 32256
         }
     } else {
-        // Normal number: rebias exp from 127 to 15.
+        // Normal f32 number: rebias exp from 127 to 15 if it fits.
         let unbiased = exp32_raw - 127;
         if unbiased > 15 {
             // f16 overflow -> +/-Inf.
             (sign * 32768) + 31744
-        } else { if unbiased < 0 - 14 {
-            // f16 underflow -> +/-0 (subnormals flushed for Phase-0).
+        } else { if unbiased < 0 - 25 {
+            // K1.F18b: deep underflow. Even with round-up, the value
+            // is below 0.5 * 2^-24 (the smallest-denormal tie point),
+            // so RNE flushes to +/-0.
             sign * 32768
+        } else { if unbiased < 0 - 14 {
+            // K1.F18b: gradual underflow. unbiased in [-25, -15].
+            // Re-attach the f32 hidden bit so the leading-1 is at
+            // bit 23, then shift right by `shift = -unbiased - 1` to
+            // position the LSB at 2^-24 (the f16 denormal LSB).
+            // shift ranges over [14, 24]; divisor = 2^shift fits in
+            // i32 (max 2^24 = 16777216). Round bit is at position
+            // shift-1; sticky is OR of bits 0..shift-2.
+            let mant_with_lead = mant32 + 8388608;
+            let shift = (0 - unbiased) - 1;
+            let divisor = pow2_i32(shift);
+            let mant10_trunc = mant_with_lead / divisor;
+            let round_bit_pos = divisor / 2;
+            let round_bit_d = (mant_with_lead / round_bit_pos) & 1;
+            let sticky_mask = round_bit_pos - 1;
+            let sticky_nonzero_d = if (mant_with_lead & sticky_mask) != 0 { 1 } else { 0 };
+            let round_up_d = if round_bit_d == 0 {
+                0
+            } else { if sticky_nonzero_d == 1 {
+                1
+            } else {
+                // tie -> round to even (LSB of denormal mantissa)
+                mant10_trunc & 1
+            }};
+            let mant10_rounded = mant10_trunc + round_up_d;
+            // Carry: rounded == 1024 means the rounded value crossed
+            // the denormal-to-normal boundary; encode as smallest f16
+            // normal (exp16=1, mant10=0) which has the same numeric
+            // value (1024 * 2^-24 == 1.0 * 2^-14).
+            if mant10_rounded >= 1024 {
+                (sign * 32768) + 1024
+            } else {
+                (sign * 32768) + mant10_rounded
+            }
         } else {
+            // Normal-number computation: rebias exp 127 -> 15 and
+            // truncate mantissa from 23 bits to 10 with RNE rounding.
             let exp16 = unbiased + 15;
             let mant16_trunc = mant32 / 8192;
             // K1.F18: round-to-nearest-even.
@@ -5039,7 +5103,7 @@ fn f32_to_f16_bits(f32bits: i32) -> i32 {
             } else {
                 (sign * 32768) + (exp16 * 1024) + mant16_rounded
             }
-        }}
+        }}}
     }}
 }
 

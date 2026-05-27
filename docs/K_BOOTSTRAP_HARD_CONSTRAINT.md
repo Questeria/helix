@@ -513,7 +513,7 @@ through the K2 parity harness where applicable.
 | mixed-type comparisons (unsigned u64↔u32, all 6 cmp ops) | ✅ **CLOSED** | K1.F13 (`a34de20`) — 6-site mirror batch across LT/GT/EQ/NE/LE/GE; K2 corpus 107→119 (12 new parity probes). Exactly-u32 guard. |
 | mixed-type comparisons (float f64↔f32, all 6 cmp ops) | ✅ **CLOSED** | K1.F14 (`1fa6507`) — 6-site mirror batch using `emit_cvt_f32_in_rcx_to_f64` / `_rax_to_f64` + `emit_ssen_*_dbl`. Permanent self-host test pinned in test_codegen.py. K2 corpus skips because Python helixc's IR-lowering surface form for f64→i32 is not symmetric. |
 | generic monomorphization | ❌ OPEN | Type erasure works for i32-shaped T (K1.F-discovery batch 27 via turbofish); full monomorphization for non-i32 T is the gap. |
-| f16 bit-accurate | ❌ OPEN | _f16 lexes as bf16-shaped (K1.BH 2026-05-26); IEEE-754 half-precision bit pattern not yet emitted. |
+| f16 bit-accurate | ✅ **CLOSED** | K1.F15 (`a1b89ea`) — IEEE-754 half-precision (1+5+10) `f32_to_f16_bits` helper; lexer tag 44 + parser AST 80 + codegen mantissa-truncate. K1.F18 (`33c3be3`) — banker's rounding (RNE) replaces truncation. K1.F18b (this commit) — gradual underflow / f16 denormals for unbiased exponents in [-25, -15] (mantissa-shift + sticky-OR + RNE); `pow2_i32` helper for the runtime-variable shift divisor. Tests pin all three paths: K1.F15b (`1.125_f16` → 128), K1.F18b (`0.00005_f16` → 85 truncation, `0.00004_f16` → 171 round-up). |
 | reflection (quote/splice/modify/reflect_hash) | ⚠️ STUB | Builtins registered at bn_state slots 118-120 + 164-168 (K1.F2/F3/F4 2026-05-26 + 2026-05-27); real semantics (writing reflection cells, hash computation) still pending. |
 | tile ops (TILE_ZEROS/ADD/SUB/MUL/MATMUL) | ❌ OPEN | No tile codegen in bootstrap. Matrix rows 197-199 KOVC-MISSING. |
 | GPU backends (PTX + ROCm + Metal + WebGPU) | ❌ OPEN | All four backend rows 200-201 KOVC-MISSING. |
@@ -528,15 +528,15 @@ closures across BOTH compilers.
 
 The mixed-type numeric cross-width matrix (binops + comparisons ×
 {signed i64↔i32, unsigned u64↔u32, float f64↔f32}) is now
-**FULLY CLOSED** for the bootstrap. Six of the user's enumerated
+**FULLY CLOSED** for the bootstrap. Seven of the user's enumerated
 Category-2 items are fully **CLOSED** end-to-end (impl method
 dispatch, field-store mutation, const-name resolution, mixed-type
-binops, mixed-type comparisons; the last subsumes both binops and
-cmps across all three numeric type-pair classes). The remaining
-six Category-2 items (generic monomorphization, f16 bit-accurate,
-reflection real semantics, tile ops, GPU backends, MLIR migration,
-trace events real impl, macros real expansion) are the heavier
-blocks remaining before Python-ready-to-delete state.
+binops, mixed-type comparisons, f16 bit-accurate; the comparisons
+row subsumes both binops and cmps across all three numeric type-pair
+classes). The remaining five Category-2 items (generic
+monomorphization, reflection real semantics, tile ops, GPU backends,
+MLIR migration, trace events real impl, macros real expansion) are
+the heavier blocks remaining before Python-ready-to-delete state.
 
 **Audit status**: the K1.F11/F12/F13/F14 mirror-pattern widening
 batch has NOT yet been put through a 3-axis audit. Each chunk
@@ -689,6 +689,62 @@ This is the THIRD cleanly-audited code batch from this loop
 (after K3.E covering K3.A-D + K1.F8d, and K3.F covering K1.F11-
 F14). The audit-clean signal pile is growing as the K1.F*
 mirror-pattern discipline holds.
+
+### 2026-05-27 — K1.F18 + K1.F18b (K3.I signal)
+
+Inline silent-failure audit run on commit `33c3be3` (K1.F18 banker's
+rounding for f32_to_f16_bits) + this commit (K1.F18b gradual
+underflow / f16 denormals). The audit-discipline question for each:
+do the changes introduce new silent-failure classes, and do they
+correctly close the ones they target?
+
+K1.F18 (RNE for the normal-number branch):
+  - Round bit = (mant32 / 4096) & 1; sticky = (mant32 & 4095) != 0.
+    Both derived from the 13-bit drop boundary at the f32->f16
+    mantissa truncation. Verified by 1.125_f16 still rounding to
+    mant16=128 (round_bit=0 for that value, so the new arith is a
+    structural no-op there — K1.F15b regression passes unchanged).
+  - Mantissa carry: mant16_rounded >= 1024 wraps mant16=0 and
+    exp16+=1 (correct rebias). Carry-induced exp overflow
+    (exp16_carry >= 31) -> +/-Inf, sign-preserved. No silent
+    misclassification of overflow.
+
+K1.F18b (gradual underflow / f16 denormals):
+  - Cutoff at unbiased < -25 -> sign * 32768 (deep underflow flush;
+    RNE can't even round up to smallest denormal at 2^-25's tie
+    point, so this is mathematically a single-path flush). The
+    cutoff also keeps `pow2_i32(shift)` from overflowing i32 for
+    shift > 30.
+  - Denormal range -25 <= unbiased <= -15: shift = -unbiased - 1
+    in [14, 24]; divisor = pow2_i32(shift) is exact in i32 (max
+    2^24 = 16777216, fits comfortably). mant10_trunc =
+    mant_with_lead / divisor; round_bit at position shift-1;
+    sticky is OR of bits below. The round-up-to-smallest-normal
+    carry (mant10_rounded >= 1024 -> exp16=1, mant10=0) is
+    representation-preserving (1024 * 2^-24 == 1.0 * 2^-14).
+  - 2-probe test pinning (`0.00005_f16` -> 85 truncation,
+    `0.00004_f16` -> 171 round-up) hits both the non-rounding and
+    sticky-OR round-up paths. Both rc were 0 (flushed) on K1.F18
+    master.
+
+  - pow2_i32 helper: pure while-loop integer doubling; no overflow
+    paths since caller gates shift <= 24. No global state, no I/O,
+    no traps — risk-free additive.
+
+Verdict: **NO HIGH, NO must-fix-MEDIUM**. f16 bit-accurate is now
+**fully CLOSED** (lex disjoint + parser route + codegen with RNE
+for normals + gradual-underflow for denormals). The K1.F18 normal-
+path rounding mirrors the K1.F18b denormal-path rounding (same
+round-bit / sticky / tie-to-even pattern), and K1.F18b's gating
+(`< -25` deep-flush, `< -14` denormal, `else` normal) makes the
+three regions mutually exclusive by construction.
+
+This is the FOURTH cleanly-audited code batch from this loop (K3.E
+covered K3.A-D + K1.F8d; K3.F covered K1.F11-F14; K3.H covered
+K1.F15/F15b/F16/F17; K3.I now covers K1.F18 + K1.F18b). The
+mirror-pattern discipline holds; the audit-clean signal pile
+continues to grow toward the 5-consecutive-clean gate that
+activates once Python-ready-to-delete state lands.
 
 ## References
 

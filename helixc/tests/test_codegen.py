@@ -7186,6 +7186,76 @@ def test_bootstrap_kovc_k1f15_f16_bit_pattern_self_host():
     # test still pins the conversion's structural correctness.
 
 
+def test_bootstrap_kovc_k1f18b_f16_denormal_self_host():
+    """K1.F18b (2026-05-27): IEEE-754 gradual underflow / f16 denormals.
+
+    Before K1.F18b, any f32 with unbiased exponent < -14 flushed to
+    +/-0 when converted to f16. K1.F18b restores the proper f16-
+    denormal representation for unbiased exponents in [-25, -15], so
+    values in [~2^-25, 2^-14) now produce a non-zero f16 bit pattern.
+    unbiased < -25 still flushes.
+
+    The two probes below were chosen so the bootstrap's
+    parse_float_bits (a small-iteration-count, low-overflow-risk
+    integer reconstruction) reproduces the expected f32 bits, and so
+    K1.F18b's denormal formula then yields a distinguishing non-zero
+    low byte. Deeper-iteration literals like 0.0000005_f16 would also
+    hit denormals in principle, but they expose a pre-existing
+    parse_float_bits arithmetic divergence at 20+ halvings (low byte
+    132 != Python-trace 0 on master), out of K1.F18b's scope.
+
+      0.00005_f16 (truncation-only denormal):
+        parse_float_bits -> unbiased=-15, mant32=5592405 (alternating-
+          bit residual pattern from v_scaled=5 over threshold=3, the
+          closest-truncated 2^-15-fit).
+        K1.F18b: shift = 14, divisor = 16384.
+          mant_with_lead = 13981013.
+          mant10_trunc = 853, round_bit_pos = 8192.
+          round_bit = (13981013/8192) & 1 = 1706 & 1 = 0 -> no round-up.
+          mant10_rounded = 853. bits = 853 = 0x355. Low byte = 0x55 = 85.
+
+      0.00004_f16 (RNE round-up denormal):
+        parse_float_bits -> unbiased=-15, mant32=2796202.
+        K1.F18b: shift = 14, divisor = 16384.
+          mant_with_lead = 11184810.
+          mant10_trunc = 682, round_bit_pos = 8192.
+          round_bit = (11184810/8192) & 1 = 1365 & 1 = 1.
+          sticky_nonzero = (11184810 & 8191) = 2730 != 0 -> 1.
+          round_up = 1; mant10_rounded = 683. bits = 683 = 0x2AB. Low byte = 0xAB = 171.
+
+    Both probes were 0 (flush) on K1.F18 master; both are non-zero
+    on K1.F18b. The round-up probe also exercises the RNE sticky-OR
+    path, the heart of K1.F18b's value over a plain truncation.
+
+    Both also confirm the f16 storage convention: the bit pattern
+    lives in the LOW 16 of the i32 slot, so the low byte equals the
+    denormal mantissa low byte (mant10 & 0xFF).
+    """
+    # Probe 1: truncation-only denormal (round_bit=0).
+    rc1 = _kovc_self_host_compile_and_run(
+        "k1f18b_5em5_f16",
+        "fn main() -> i32 { __bits_of_f32(0.00005_f16) }",
+    )
+    assert rc1 == 85, (
+        f"K1.F18b 0.00005_f16 (unbiased=-15 denormal, mant10=853): "
+        f"expected exit code 85 (low byte 0x55 of bits 0x0355); got "
+        f"{rc1}. If rc=0, the f16 codegen regressed to K1.F18 "
+        f"flush-to-zero subnormal behavior."
+    )
+
+    # Probe 2: RNE round-up denormal (round_bit=1, sticky=1).
+    rc2 = _kovc_self_host_compile_and_run(
+        "k1f18b_4em5_f16",
+        "fn main() -> i32 { __bits_of_f32(0.00004_f16) }",
+    )
+    assert rc2 == 171, (
+        f"K1.F18b 0.00004_f16 (unbiased=-15 denormal, round-up to "
+        f"mant10=683): expected exit code 171 (low byte 0xAB of bits "
+        f"0x02AB); got {rc2}. If rc=0, the denormal path flushed; if "
+        f"rc=170, the RNE sticky-OR round-up failed."
+    )
+
+
 def test_bootstrap_kovc_k1f14_mixed_f32_f64_cmp_self_host():
     """K1.F14 (2026-05-27): mixed f64<->f32 widening across all 6
     comparison operators (LT/GT/EQ/NE/LE/GE) in both directions.
