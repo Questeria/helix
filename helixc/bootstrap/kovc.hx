@@ -4060,11 +4060,19 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // PARITY once Python's IR-lowering pass gains the builtin too;
         // until then, "both return 0 on this shape" is the parity
         // contract).
-        let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        // K1.F17 (2026-05-27): walk the full args_head linked list so
+        // side effects of args 2+ fire (the K1.F16 silent-arg-drop
+        // closure, extended to this stub).
+        let mut rh_arg_cur: i32 = args_head;
+        let mut rh_bytes: i32 = 0;
+        while rh_arg_cur != 0 {
+            let rh_arg_idx = __arena_get(rh_arg_cur + 1);
+            rh_bytes = rh_bytes + emit_ast_code(rh_arg_idx, bind_state, patch_state, bn_state);
+            rh_arg_cur = __arena_get(rh_arg_cur + 3);
+        }
         // mov eax, 0  (5 bytes)
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        n_arg + 5
+        rh_bytes + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_trace_event_s(bn_state), 13) == 1 {
         // K1.F3 (2026-05-26): __trace_event(...) -> 0 stub. The
         // bootstrap doesn't have a trace ring buffer (Phase-1
@@ -4094,24 +4102,42 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
         // Underscore-prefixed alias for Splice. Same stub semantics
         // as Quote/Splice/modify/reflect_hash.
-        let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        // K1.F17 (2026-05-27): walk full args_head (silent-arg-drop fix).
+        let mut hs_arg_cur: i32 = args_head;
+        let mut hs_bytes: i32 = 0;
+        while hs_arg_cur != 0 {
+            let hs_arg_idx = __arena_get(hs_arg_cur + 1);
+            hs_bytes = hs_bytes + emit_ast_code(hs_arg_idx, bind_state, patch_state, bn_state);
+            hs_arg_cur = __arena_get(hs_arg_cur + 3);
+        }
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        n_arg + 5
+        hs_bytes + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_modify_s(bn_state), 14) == 1 {
         // K1.F4 (2026-05-26): __helix_modify(...) -> 0 stub.
         // Underscore-prefixed alias for modify. Same no-op contract.
-        let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        // K1.F17 (2026-05-27): walk full args_head (silent-arg-drop fix).
+        let mut hm_arg_cur: i32 = args_head;
+        let mut hm_bytes: i32 = 0;
+        while hm_arg_cur != 0 {
+            let hm_arg_idx = __arena_get(hm_arg_cur + 1);
+            hm_bytes = hm_bytes + emit_ast_code(hm_arg_idx, bind_state, patch_state, bn_state);
+            hm_arg_cur = __arena_get(hm_arg_cur + 3);
+        }
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        n_arg + 5
+        hm_bytes + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_reflect_hash_s(bn_state), 20) == 1 {
         // K1.F4 (2026-05-26): __helix_reflect_hash(...) -> 0 stub.
         // Underscore-prefixed alias for reflect_hash. Same no-op.
-        let arg_idx = __arena_get(args_head + 1);
-        let n_arg = emit_ast_code(arg_idx, bind_state, patch_state, bn_state);
+        // K1.F17 (2026-05-27): walk full args_head (silent-arg-drop fix).
+        let mut hr_arg_cur: i32 = args_head;
+        let mut hr_bytes: i32 = 0;
+        while hr_arg_cur != 0 {
+            let hr_arg_idx = __arena_get(hr_arg_cur + 1);
+            hr_bytes = hr_bytes + emit_ast_code(hr_arg_idx, bind_state, patch_state, bn_state);
+            hr_arg_cur = __arena_get(hr_arg_cur + 3);
+        }
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
-        n_arg + 5
+        hr_bytes + 5
     } else { if kovc_byte_eq(name_s, name_l, bn_print_str_s(bn_state), 9) == 1 {
         // K1.AK (2026-05-25): print_str("msg") -- emit sys_write(1,
         // str_ptr, str_len) for an AST_STR_LIT arg. Mirror of the
