@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 167      # last bump: K2.F + speed-up disciplines
+K_BOOTSTRAP_CHUNKS_DONE = 168      # last bump: K1.F-discovery batch 28
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -106,7 +106,11 @@ K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # 18 `| KOVC-MISSING |` = 144 rows
                                     # with a status column. The earlier
                                     # 143 was the K0-chunk estimate.
-K_BOOTSTRAP_PARITY_DONE = 126      # matrix-sync 2026-05-26 K2.C:
+K_BOOTSTRAP_PARITY_DONE = 127      # K1.F-discovery batch 28: f16
+                                    # row flipped to FUNCTIONAL PARITY
+                                    # (both compilers return 42 for
+                                    # `let x = 1.0_f16; 42`). Was 126.
+                                    # matrix-sync 2026-05-26 K2.C:
                                     # 84 PARITY + 42 FUNCTIONAL PARITY
                                     # = 126 closed. The 140 prior was
                                     # inflated by ~14 (K1.* parser
