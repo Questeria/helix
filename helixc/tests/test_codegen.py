@@ -7336,13 +7336,15 @@ def test_bootstrap_kovc_k1f20_trace_event_passthrough_self_host():
         eax = 99 at return. rc = 99 & 0xFF = 99.
 
       __trace_event(1, 2, 7):
-        Multi-arg case. The bootstrap's call-args linked list is built
-        LIFO: args_head is the LAST source arg (here 7); the next-
-        pointer at slot+3 walks BACKWARD toward the first. So the walk
-        emits AST_INT(7), then AST_INT(2), then AST_INT(1); each emit
-        overwrites eax. After the walk eax = 1 (the FIRST source arg's
-        value, the last to be emitted). rc = 1. This pins the LIFO
-        walk convention along with the K1.F20 closer drop.
+        Multi-arg case. The parser builds the call-args linked list
+        FIFO: args_head = AST_ARG(1); next-ptr at slot+2 -> AST_ARG(2)
+        -> AST_ARG(7) -> 0. K3.L (2026-05-27) audit-fix changed the
+        walks from slot+3 (always 0, exited after iter 1) to slot+2
+        (real next-ptr). After K3.L, the walk emits AST_INT(1), then
+        AST_INT(2), then AST_INT(7); each emit overwrites eax. After
+        the walk eax = 7 (the LAST source arg's value, the last to be
+        emitted). rc = 7. This pins the K1.F16 variadic-walk closure's
+        ACTUAL semantic now that the silent-arg-drop bug is fixed.
 
     Both probes were rc=0 on K1.F3 master.
     """
@@ -7361,12 +7363,12 @@ def test_bootstrap_kovc_k1f20_trace_event_passthrough_self_host():
         "k1f20_trace_event_three_args",
         "fn main() -> i32 { __trace_event(1, 2, 7) }",
     )
-    assert rc2 == 1, (
-        f"K1.F20 __trace_event(1, 2, 7): expected exit code 1 (the "
-        f"FIRST source arg, since the args linked list walks LIFO "
-        f"and the K1.F16 loop emits 7 -> 2 -> 1, leaving 1 in eax); "
-        f"got {rc2}. If rc=7, the walk is FIFO contrary to existing "
-        f"convention; if rc=0, K1.F20 regressed."
+    assert rc2 == 7, (
+        f"K1.F20 / K3.L __trace_event(1, 2, 7): expected exit code 7 "
+        f"(the LAST source arg, after the K3.L fix that made the K1.F16 "
+        f"walk actually iterate via slot+2 next-ptr; pre-K3.L the walk "
+        f"used slot+3 which was always 0, exiting after the first arg "
+        f"and giving rc=1); got {rc2}. If rc=1, the K3.L fix regressed."
     )
 
 

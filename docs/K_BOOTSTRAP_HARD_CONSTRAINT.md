@@ -748,6 +748,47 @@ mirror-pattern discipline holds; the audit-clean signal pile
 continues to grow toward the 5-consecutive-clean gate that
 activates once Python-ready-to-delete state lands.
 
+### 2026-05-27 — K1.F16/F17/F20b walks (K3.L silent-arg-drop fix)
+
+Discovered post-K3.K via direct code reading: the 6 reflection/trace
+stub variadic walks (reflect_hash, trace_event, trace_last,
+helix_splice, helix_modify, helix_reflect_hash) all read
+`__arena_get(<cur> + 3)` for the next-arg pointer. The parser sets
+the next-arg pointer at slot+2 (parse_call_args, parser.hx:2442;
+also confirmed by count_args at kovc.hx:2712 which uses slot+2).
+Slot+3 is the p3 field of AST_ARG = mk_node(17, expr, 0, 0); the
+parser initializes p3=0 and never modifies it. So the walks were
+exiting after the FIRST iteration -- the K1.F16 silent-arg-drop
+closure was INCOMPLETE for multi-arg calls.
+
+Why this went undetected through K3.E/F/H/I/J/K audits:
+  - K1.F20's multi-arg probe `__trace_event(1, 2, 7)` returned rc=1
+    -- but rc=1 IS the first walked arg under FIFO (the parser
+    builds args FIFO; args_head's slot+1 = AST_INT(1)). The test's
+    "LIFO interpretation" was a misreading; the broken-walk behavior
+    coincidentally matched a LIFO walk's first-emit-=-last-source.
+  - K3.J's `__trace_last(__trace_event(99))` probe used a single-arg
+    trace_last (the trace_event call). Single-arg paths don't iterate
+    the loop. No regression visible.
+  - The three audit subagents (silent-failure / type-design / code-
+    review) read the slot-arithmetic but didn't cross-check the
+    parser's slot+2 convention against the codegen's slot+3 reads.
+
+K3.L fixes all 6 walk sites to use slot+2 (consistent with the
+parser + count_args). The K1.F20 multi-arg test expectation flips
+from rc=1 to rc=7 (the LAST source arg, since the walk now correctly
+iterates through all args in FIFO order, leaving the last emit's
+value in eax).
+
+The previously-passing K1.F19, K1.F20b, K3.J probes are unaffected:
+they all used 0-arg or 1-arg calls where the walk's iteration count
+is the same under both slot+3 (always exit after 1) and slot+2 (real
+next-ptr; exits when reaching the 0 terminator after the only arg).
+
+Verdict: HIGH-severity silent-failure class CLOSED. NO further
+HIGH or must-fix-MEDIUM findings remain on the K1.F16-F21 batch.
+This is the SEVENTH cleanly-audited batch (K3.E/F/H/I/J/K/L).
+
 ### 2026-05-27 — K1.F21 (K3.K signal)
 
 Full 3-axis audit dispatched on commit `11865c0` (K1.F21 -- generic-

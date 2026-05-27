@@ -4160,7 +4160,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         while rh_arg_cur != 0 {
             let rh_arg_idx = __arena_get(rh_arg_cur + 1);
             rh_bytes = rh_bytes + emit_ast_code(rh_arg_idx, bind_state, patch_state, bn_state);
-            rh_arg_cur = __arena_get(rh_arg_cur + 3);
+            rh_arg_cur = __arena_get(rh_arg_cur + 2);
         }
         let rh_mix = emit_hash_i32_mixer();
         rh_bytes + rh_mix
@@ -4200,7 +4200,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         while tev_arg_cur != 0 {
             let tev_arg_idx = __arena_get(tev_arg_cur + 1);
             tev_bytes = tev_bytes + emit_ast_code(tev_arg_idx, bind_state, patch_state, bn_state);
-            tev_arg_cur = __arena_get(tev_arg_cur + 3);
+            tev_arg_cur = __arena_get(tev_arg_cur + 2);
         }
         if args_head == 0 {
             // K3.J: zero-arg trace_event -> deterministic 0 return,
@@ -4243,7 +4243,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         while tl_arg_cur != 0 {
             let tl_arg_idx = __arena_get(tl_arg_cur + 1);
             tl_arg_bytes = tl_arg_bytes + emit_ast_code(tl_arg_idx, bind_state, patch_state, bn_state);
-            tl_arg_cur = __arena_get(tl_arg_cur + 3);
+            tl_arg_cur = __arena_get(tl_arg_cur + 2);
         }
         let arena_base_s_tl = bn_helix_arena_base_s(bn_state);
         let disp_slot_tl = emit_lea_rax_rip_placeholder();
@@ -4261,7 +4261,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         while hs_arg_cur != 0 {
             let hs_arg_idx = __arena_get(hs_arg_cur + 1);
             hs_bytes = hs_bytes + emit_ast_code(hs_arg_idx, bind_state, patch_state, bn_state);
-            hs_arg_cur = __arena_get(hs_arg_cur + 3);
+            hs_arg_cur = __arena_get(hs_arg_cur + 2);
         }
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
         hs_bytes + 5
@@ -4274,7 +4274,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         while hm_arg_cur != 0 {
             let hm_arg_idx = __arena_get(hm_arg_cur + 1);
             hm_bytes = hm_bytes + emit_ast_code(hm_arg_idx, bind_state, patch_state, bn_state);
-            hm_arg_cur = __arena_get(hm_arg_cur + 3);
+            hm_arg_cur = __arena_get(hm_arg_cur + 2);
         }
         emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
         hm_bytes + 5
@@ -4289,7 +4289,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         while hr_arg_cur != 0 {
             let hr_arg_idx = __arena_get(hr_arg_cur + 1);
             hr_bytes = hr_bytes + emit_ast_code(hr_arg_idx, bind_state, patch_state, bn_state);
-            hr_arg_cur = __arena_get(hr_arg_cur + 3);
+            hr_arg_cur = __arena_get(hr_arg_cur + 2);
         }
         let hr_mix = emit_hash_i32_mixer();
         hr_bytes + hr_mix
