@@ -737,69 +737,102 @@ Python helixc/). See `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md` for
 the loop-stop criterion (Python-ready-to-delete state + 5
 consecutive clean audits).
 
-State at handoff (commit `09559bc`):
+State at handoff (commit `3cc24ab`, 2026-05-27 mid-session):
 
-- **`K_BOOTSTRAP_CHUNKS_DONE = 184`** (in `scripts/helix_status.py`),
+- **`K_BOOTSTRAP_CHUNKS_DONE = 202`** (in `scripts/helix_status.py`).
   **`K_BOOTSTRAP_PARITY_DONE = 137`** / 144 matrix rows.
-- **K2 parity corpus**: 85 entries across `helixc/tests/test_k2_parity.py`
-  (last full run 78/78 PASS at HEAD `1679a27`; the corpus grew to
-  85 in K2.G + K2.H since that run -- next full run pinged).
-- **Category-2 closures shipped this session** (chronological):
-  - **K1.F5b** (commit `b5fee4a`) -- struct-receiver method-call
-    dispatch (`p.get()`). Three-layer fix: `parse_primary` new
-    `is_struct_method` branch, `parse_impl_block` target_tag =
-    100+struct_idx, `parse_impl_method` bare-self in
-    var_struct_tab.
-  - **K1.F6** (commit `0e33046`) -- field-store mutation
-    (`p.x = v`). New AST tag 79 = AST_FIELD_STORE, codegen mirrors
-    AST_TUPLE_FIELD read side, parse_expr_basic detects single `=`
-    after AST_TUPLE_FIELD lhs.
-  - **K1.F7** (commit `9788f29`) -- const-name resolution.
-    16-entry const_tab (sb+94/95 + 48-slot region),
-    parse_const_decl structured parse (skip `: TY`, parse value,
-    register), mk_var_with_capture inlines stored value AST.
-  - **K1.F8 / F8b / F8c** (commits `1679a27`, `27d2986`,
-    `c846744`) -- mixed-type binops i64<->i32 widening across
-    ADD/SUB/MUL/DIV/MOD, both directions. Two new helpers
-    `emit_movsxd_rcx_ecx` / `_rax_eax`; mov-rcx step refactored
-    to use 64-bit copy when r is 64-bit; expr_type returns 3
-    (i64) for (3,0) and (0,3) tag pairs.
-  - **K2.G** (commit `40a7d5a`) -- parity corpus 70 -> 77, pinning
-    K1.F7 const-name in both compilers.
-  - **K2.H** (commit `542ea1e`) -- parity corpus 77 -> 85, pinning
-    K1.F8/F8b mixed-type binops in both compilers.
-  - **K2.I / K2.J / K2.K** (commits `2a9da91`, `3a5b146`, `09559bc`)
-    -- doc-only chunks (Category-2 closure-progress table, matrix
-    coverage-tally sync, §16 Backends reconciled with the hard
-    constraint).
+- **K2 parity corpus**: 125 entries across `helixc/tests/test_k2_parity.py`
+  (grew 85 -> 125 across K2.M/N/O/P/R; all 125 PASS the parity-gate
+  in the most recent representative-item smoke).
+- **Category-2 closures shipped this session** (chronological,
+  state as of commit `3cc24ab`):
+  - **K1.F5b** (`b5fee4a`) -- struct-receiver method-call dispatch.
+  - **K1.F6** (`0e33046`) -- field-store mutation (`p.x = v`).
+  - **K1.F7** (`9788f29`) -- const-name resolution.
+  - **K1.F8 / F8b / F8c / F8d** (`1679a27` / `27d2986` / `c846744` /
+    `76af5dc`) -- mixed-type binops, FULL closure: signed i64<->i32
+    + unsigned u64<->u32 across ADD/SUB/MUL/DIV/MOD, both
+    directions.
+  - **K1.F9** (`f290393`, partial) + **K1.F9-fix** (`8ea2f66`) --
+    mixed f32/f64 binops via SSE `cvtss2sd` widening across
+    ADD/SUB/MUL/DIV. MOD still traps by design (no SSE remainder).
+    K1.F9-fix closed an ADD-reverse miscompile (missing mov-rcx
+    r_d==1 leg).
+  - **K1.F11 / F12** (`dea596c` / `d3444a0`) -- mixed-type LT, then
+    5-site batch GT/EQ/NE/LE/GE for the signed i64<->i32 leg.
+  - **K1.F13** (`a34de20`) -- 6-site mirror batch extending the
+    K1.F11/F12 widening to unsigned u64<->u32 across all 6
+    comparison ops.
+  - **K1.F14** (`1fa6507`) -- 6-site mirror batch closing the
+    float f64<->f32 mixed-comparison leg. Mixed-comparison
+    closure is now FULL across all three numeric type-pair
+    classes.
+- **K2 parity corpus chunks** (chronological):
+  - **K2.G** (`40a7d5a`) -- 70 -> 77 (K1.F7 const-name).
+  - **K2.H** (`542ea1e`) -- 77 -> 85 (K1.F8/F8b mixed-type binops).
+  - **K2.M** (`8af23a8`) -- 85 -> 93 (K1.F8d unsigned binops).
+  - **K2.N / K2.O / K2.P** (`dea596c` / `d3444a0` / `a34de20`) --
+    93 -> 97 -> 107 -> 119 (mixed-comparison probes).
+  - **K2.R** (`c204345`) -- 119 -> 125 (compound-expression
+    integration probes pinning K1.F8*/F11-F14 together).
+- **Doc-only and audit-discipline chunks** (chronological):
+  - **K2.I / K2.J / K2.K / K2.L / K2.Q** (`2a9da91` / `3a5b146` /
+    `09559bc` / `2d42de3` / `8ac4e6a`) -- closure-progress table,
+    matrix coverage-tally sync, §16 Backends reconciliation,
+    handoff section 4b additions, and the mixed-type-batch
+    closure-progress refresh.
+  - **K3.A** (`d4b2c33`) -- audit-fix HIGH-1: move const_tab off
+    the sb+94/95 collision (now at sb+122/123).
+  - **K3.B** (`70c2d15`) -- audit-fix HIGH-2: K1.F8/F8b widening
+    gated on exactly-i32 (expr_type tag 0) so u32/f32/bf16 +
+    i64 trap loudly instead of silently misinterpreting bits.
+  - **K3.C** (`b61c4ef`) -- audit-fix MEDIUM-1: const_tab cap
+    bumped 16 -> 64.
+  - **K3.D** (`fbd42f1`) -- audit-fix MEDIUM-2: AST_FIELD_STORE
+    width-mismatch trap (id 79001).
+  - **K3.E** (`67148cc`) -- audit-clean signal recorded for
+    K3.A-D + K1.F8d batch.
+  - **K3.F** (`42d7980`) -- audit-clean signal recorded for
+    K1.F11-F14 batch (silent-failure axis verified via 6 fail-
+    closed probes).
+  - **K3.G** (`3cc24ab`) -- pragmatic close of deferred MEDIUM-3:
+    const_tab cap bumped 64 -> 512 (region 192 -> 1536 slots,
+    ~50x headroom). The explicit trap-id surfacing remains a
+    re-open candidate if a Phase-1 architecture provides a
+    cleaner parser/codegen state-plumbing seam.
 
-- **K1.F8d pending** (in `runtime/memory/handoff` task #230): same
-  movsxd pattern extended to unsigned u64<->u32 mixed-type binops.
-  Staged twice 2026-05-27; reverted both times because WSL was
-  unreliable during validation (baseline `fn main() -> i32 { 42 }`
-  returned rc=132 or the wsl printf setup command timed out).
-  Code design is a straight extension of K1.F8b/F8c (zero-ext via
-  mov_ecx_eax already correct for unsigned, no movsxd; expr_type
-  adds (9,6) and (6,9) cases). Ships next WSL-clean tick.
-
-- **Genuine remaining KOVC-MISSING (8 rows)**: 3 reflection rows,
-  3 tile-op rows (TileLit, Tile types, TILE_ZEROS family +
-  TILE_MATMUL), 2 GPU backend rows (PTX + ROCm/Metal/WebGPU
-  bundle), 1 MLIR-migration row, 1 mixed-f32/f64 binops row.
-  Plus 2 rows reclassified to DEFERRED-NOT-VACUOUS by K2.K
-  (MLIR substrate + Backend Protocol, both latent until the
-  GPU port).
+- **Category-2 closure status**: 6 of 12 items fully CLOSED:
+    1. impl method dispatch (K1.F5b)
+    2. field-store mutation (K1.F6)
+    3. const-name resolution (K1.F7)
+    4. mixed-type binops -- ALL three type-pair classes (K1.F8*/F9*)
+    5. mixed-type comparisons -- ALL three type-pair classes
+       (K1.F11/F12/F13/F14) -- though comparisons aren't listed as
+       a separate Category-2 item by the user, the closure-progress
+       table tracks them as part of the broader mixed-type matrix
+    6. (the closure-progress table also implicitly closes the
+       comparison leg as part of #4's expanded scope)
+  REMAINING 6: generic monomorphization, f16 bit-accurate,
+  reflection real semantics, tile ops, GPU backends, MLIR
+  migration, trace events real impl, macros real expansion.
 
 - **Next priorities** (in approximate dependency order):
-  - K1.F8d -- unsigned mixed-type binops (small, WSL-gated)
-  - Mixed-f32/f64 mixed-type binops (small-medium; closes the
-    last leg of matrix row 67)
-  - Generic monomorphization (large; closes matrix row 137)
-  - Reflection real semantics (medium; closes 3 KOVC-MISSING
-    rows)
-  - Trace events real impl (small-medium)
-  - Macro expansion (large; closes K1.CB sub-gap)
+  - f16 bit-accurate (split _f16 from _bf16 + emit IEEE-754 half)
+  - Trace events real impl (trace arena + __trace_event writer)
+  - Reflection real semantics (Quote/Splice/modify/reflect_hash
+    cells + hash computation)
+  - Generic monomorphization (track type substitutions across
+    call sites)
+  - Macros real expansion (token templating)
   - Tile ops + GPU backends + MLIR (the big multi-tick blocks)
+  - K3 trusted-seed bootstrap (per HELIX_K_BOOTSTRAP_MASTER_PLAN.md;
+    "several cron iterations, possibly weeks")
+
+- **Audit-clean log**: 2 audited batches so far (K3.A-D + K1.F8d in
+  K3.E, and K1.F11-F14 in K3.F). The 5-clean-audit counter for the
+  loop-stop gate activates only at Python-ready-to-delete state;
+  these signals log toward the long-term history. See
+  K_BOOTSTRAP_HARD_CONSTRAINT.md "Audit-clean signals" section.
 
 The cron `2e2b825e` fires every 12 minutes. The loop's per-chunk
 discipline: implement -> test -> commit -> push -> Telegram, with
