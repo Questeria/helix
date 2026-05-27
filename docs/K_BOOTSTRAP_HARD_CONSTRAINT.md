@@ -223,16 +223,53 @@ recent K1.* parser work:
    `body_is_8b != ret_wants_8b`, both of which are FALSE for
    matching-type bodies like `42_i64` returned from `-> i64`.
 
-   **Next-tick approach:** instrument the AST_FN_LIST emit loop
-   at `kovc.hx:7197-7390` to log every emit_trap_with_id call.
-   The SIGILL must come from some trap firing in that path that
-   the obvious-trap reading missed. Candidates to inspect:
-   - the diag_arena overflow path (line 7248: `emit_trap_with_id
-     (28999)`)
-   - the per-validation-pass first_code trap (line 7256)
-   - some other codegen-internal trap fired by emit_ast_code
-     for non-default literal tags
-   - a width-class trap somewhere I haven't found yet
+   **K1.E1b-probe finding (2026-05-26):** captured the binary
+   the bootstrap emits for `fn main() -> i64 { 42_i64 }`,
+   dumped the `.text` section, decoded the bytes:
+
+   ```
+   0x1000: e8 09 00 00 00            call <main>      ; _start stub
+   0x1005: 89 c7                     mov edi, eax
+   0x1007: b8 3c 00 00 00            mov eax, 60      ; sys_exit
+   0x100c: 0f 05                     syscall
+   0x100e: 55  48 89 e5  48 81 ec ...                 ; main prologue
+   0x1019: b8 2a 00 00 00            mov eax, 42      ; body (5 bytes!)
+   0x101e: b8 b1 36 00 00            mov eax, 14001
+   0x1023: 0f 0b                     ud2              ; trap 14001
+   0x1025: b8 b2 36 00 00            mov eax, 14002
+   0x102a: 0f 0b                     ud2              ; trap 14002
+   0x102c: 48 89 ec  5d  c3          ; epilogue + ret
+   ```
+
+   **The body emit is 5-byte `mov eax, 42`, NOT the expected
+   10-byte `movabs rax, 42` (`48 b8 2a 00 00 00 00 00 00 00`).**
+   That's the i32 emit path (`emit_ast_int` from kovc.hx:5310),
+   not the i64 emit path (`emit_movabs_rax_imm64` from
+   kovc.hx:5302).
+
+   The 14001 + 14002 traps then BOTH fire CORRECTLY: the
+   body is genuinely emitting an i32 (width 4), but the
+   declared return type is i64 (width 8). The traps are doing
+   exactly what they're designed to do. The bug is upstream:
+   AST_INTLIT_I64 (tag 35) is being routed to the AST_INT
+   (tag 0) emit path somewhere — either:
+   (i)  the parser is producing AST_INT (tag 0) instead of
+        AST_INTLIT_I64 (tag 35) for `42_i64`, OR
+   (ii) kovc.hx's tag-35 dispatch falls through to the i32
+        path when self-host compiles itself (a meta-bug:
+        kovc.hx's source has the right code, but the
+        Python-compiled bootstrap binary mishandles it).
+
+   Same pattern applies to i8/u8/i16/u16/u64 — their narrow/wide
+   literal AST tags (39/37/40/41/38) also route to the i32 emit,
+   and the width-class trap catches the mismatch every time.
+
+   **Fix path:** trace `_i64`-suffixed literal lex+parse+emit
+   chain end-to-end in a probe. The lexer emits TK_INTLIT_I64
+   tag 33 → parser at parser.hx:3083 emits mk_node(35, ...) →
+   kovc.hx:5294 should dispatch on tag 35. Find which link is
+   actually routing to tag-0. The fix is most likely a 1-2 line
+   change.
 
    **Bug B — bare-expression i64 sub returns LHS (rc=100):**
    `100_i64 - 58_i64` returns 100, not 42. The bootstrap is
