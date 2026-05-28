@@ -9631,9 +9631,9 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 50 {               // 16 var triples (slots 2..49) + 2:
-        __arena_push(0);         // K1.M8: slot 50 = next_pred,
-        i = i + 1;               //        slot 51 = next_label
+    while i < 52 {               // 16 var triples (2..49) + 4 counters:
+        __arena_push(0);         // 50=next_pred, 51=next_label,
+        i = i + 1;               // 52=next_rd, 53=cur_fn_idx (K1.M10)
     }
     bse
 }
@@ -9642,6 +9642,7 @@ fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab + 1, 0);    // var_count = 0
     __arena_set(vtab + 50, 0);   // K1.M8: next_pred = 0
     __arena_set(vtab + 51, 0);   // K1.M8: next_label = 0
+    __arena_set(vtab + 52, 0);   // K1.M10: next_rd = 0
     0
 }
 fn ptx_alloc_reg(vtab: i32) -> i32 {
@@ -9659,6 +9660,13 @@ fn ptx_alloc_pred(vtab: i32) -> i32 {
 fn ptx_alloc_label(vtab: i32) -> i32 {
     let r = __arena_get(vtab + 51);
     __arena_set(vtab + 51, r + 1);
+    r
+}
+// K1.M10: allocate a fresh 64-bit address register index (%rdN), used
+// for global-memory pointers + address arithmetic.
+fn ptx_alloc_rd(vtab: i32) -> i32 {
+    let r = __arena_get(vtab + 52);
+    __arena_set(vtab + 52, r + 1);
     r
 }
 fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32) -> i32 {
@@ -9737,9 +9745,11 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_while(node, vtab)
     } else { if tag == 11 {
         emit_ptx_assign(node, vtab)
+    } else { if tag == 53 {
+        emit_ptx_index_load(node, vtab)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -10010,6 +10020,121 @@ fn emit_ptx_assign(node: i32, vtab: i32) -> i32 {
     rx
 }
 
+// K1.M10: small emit helpers -- "    " indent, "%rN", "%rdN".
+fn emit_ptx_indent() -> i32 {
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    0
+}
+fn emit_ptx_r(n: i32) -> i32 {
+    emit_ptx_byte(37); emit_ptx_byte(114);   // "%r"
+    emit_ptx_decimal(n);
+    0
+}
+fn emit_ptx_rd(n: i32) -> i32 {
+    emit_ptx_byte(37); emit_ptx_byte(114); emit_ptx_byte(100);   // "%rd"
+    emit_ptx_decimal(n);
+    0
+}
+
+// K1.M10: resolve a name to its 0-based kernel-parameter index by
+// walking the AST_PARAM list (fn_idx slot 4 = params_head; each
+// AST_PARAM: name in slots 1/2, next in slot 3). Returns -1 if not a
+// param. Used by index loads to find the base pointer (.param .b64).
+fn ptx_param_index(fn_idx: i32, name_s: i32, name_l: i32) -> i32 {
+    let mut p = __arena_get(fn_idx + 4);
+    let mut idx: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while p != 0 {
+        if kovc_byte_eq(name_s, name_l, __arena_get(p + 1), __arena_get(p + 2)) == 1 {
+            if found < 0 { found = idx; };
+        };
+        idx = idx + 1;
+        p = __arena_get(p + 3);
+    }
+    found
+}
+
+// K1.M10: lower a global-memory LOAD a[i] (AST_INDEX = tag 53; base in
+// slot 1 -- an AST_VAR naming a kernel param; index in slot 2). Emits
+// the standard CUDA load: load the param pointer, convert to the global
+// address space, compute base + i*4 (i32 elems), then ld.global.u32.
+// ptxas-validated. Returns the %r holding the loaded value.
+fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
+    let base = __arena_get(node + 1);
+    let idx_node = __arena_get(node + 2);
+    let fn_idx = __arena_get(vtab + 53);
+    let pidx = ptx_param_index(fn_idx, __arena_get(base + 1),
+                               __arena_get(base + 2));
+    let ri = emit_ptx_expr(idx_node, vtab);
+    // "    ld.param.u64 %rd<rdb>, [param_<pidx>];\n"
+    let rdb = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(46);
+    emit_ptx_byte(117); emit_ptx_byte(54); emit_ptx_byte(52);
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdb);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(95);
+    emit_ptx_decimal(pidx);
+    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    cvta.to.global.u64 %rd<rdg>, %rd<rdb>;\n"
+    let rdg = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);
+    emit_ptx_byte(97); emit_ptx_byte(46); emit_ptx_byte(116);
+    emit_ptx_byte(111); emit_ptx_byte(46); emit_ptx_byte(103);
+    emit_ptx_byte(108); emit_ptx_byte(111); emit_ptx_byte(98);
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(46);
+    emit_ptx_byte(117); emit_ptx_byte(54); emit_ptx_byte(52);
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdg);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdb);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    mul.wide.s32 %rd<rdo>, %r<ri>, 4;\n"
+    let rdo = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
+    emit_ptx_byte(46); emit_ptx_byte(119); emit_ptx_byte(105);
+    emit_ptx_byte(100); emit_ptx_byte(101); emit_ptx_byte(46);
+    emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ri);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(52);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    add.s64 %rd<rda>, %rd<rdg>, %rd<rdo>;\n"
+    let rda = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(54);
+    emit_ptx_byte(52); emit_ptx_byte(32);
+    emit_ptx_rd(rda);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdg);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    ld.global.u32 %r<rdst>, [%rd<rda>];\n"
+    let rdst = ptx_alloc_reg(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
+    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
+    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+    emit_ptx_rd(rda);
+    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+    rdst
+}
+
 // K1.M6 (2026-05-28): is this call name the byte-string "thread_idx"
 // (10 chars: t h r e a d _ i d x)? Flat accumulator compare (the
 // kovc_byte_eq idiom) against the hardcoded ASCII codes.
@@ -10208,6 +10333,8 @@ fn emit_ptx_entry(fn_idx: i32, vtab: i32) -> i32 {
     // (add/sub/mul) -- see emit_ptx_expr. The result register is
     // discarded (a PTX kernel is void; later chunks add stores).
     ptx_vtab_reset(vtab);
+    __arena_set(vtab + 53, fn_idx);   // K1.M10: stash fn_idx so index
+                                      // loads can resolve param pointers
     emit_ptx_expr(__arena_get(fn_idx + 3), vtab);
     // "    ret;\n"  (4-space indent, matches Python emit_kernel)
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);

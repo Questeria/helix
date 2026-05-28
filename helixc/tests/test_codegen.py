@@ -7529,6 +7529,48 @@ def test_bootstrap_ptx_while_loop():
         )
 
 
+def test_bootstrap_ptx_global_load():
+    """K1.M10 (2026-05-28): MEMORY LOAD a[i]. A @kernel reads
+    a[thread_idx()] from global memory. The parser ALREADY produces
+    AST_INDEX (tag 53) for `a[i]`, so this is pure-additive in the
+    emitter: resolve `a` to its kernel param (.param .b64), load the
+    pointer (ld.param.u64), convert to the global address space (cvta),
+    compute base + i*4, and ld.global.u32 -- the canonical CUDA load.
+    ptxas-validated (real SASS). Direct tile-IR -> PTX, NO MLIR, and NO
+    parser change."""
+    src = ("@kernel fn k(a: i32) -> i32 { let i: i32 = thread_idx(); "
+           "a[i] }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_gload", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k(.param .b64 param_0)\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    ld.param.u64 %rd0, [param_0];\n"
+        + b"    cvta.to.global.u64 %rd1, %rd0;\n"
+        + b"    mul.wide.s32 %rd2, %r0, 4;\n"
+        + b"    add.s64 %rd3, %rd1, %rd2;\n"
+        + b"    ld.global.u32 %r1, [%rd3];\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_gload.cubin "
+             "/tmp/sh_ptx_gload_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected global-load PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
