@@ -7401,6 +7401,42 @@ def test_bootstrap_ptx_global_index():
         )
 
 
+def test_bootstrap_ptx_scalar_cmp():
+    """K1.M8 (2026-05-28): comparison-as-value. `x < 3` (a let-bound var,
+    not constant-folded) lowers to setp.lt.s32 into a predicate then
+    selp.b32 to reify a 0/1 into a register (matching the AST semantics
+    that comparisons return 0/1). Mirrors Python ptx.py SCALAR_CMP.
+    ptxas-validated (real SASS). Direct tile-IR -> PTX, NO MLIR."""
+    src = "@kernel fn k() -> i32 { let x: i32 = 5; x < 3 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_scmp", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 5;\n"
+        + b"    mov.s32 %r1, 3;\n"
+        + b"    setp.lt.s32 %p0, %r0, %r1;\n"
+        + b"    selp.b32 %r2, 1, 0, %p0;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_scmp.cubin "
+             "/tmp/sh_ptx_scmp_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected cmp PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

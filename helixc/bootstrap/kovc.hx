@@ -9631,20 +9631,28 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 48 {               // 16 vars * 3 slots
-        __arena_push(0);
-        i = i + 1;
+    while i < 50 {               // 16 var triples (slots 2..49) + 2:
+        __arena_push(0);         // K1.M8: slot 50 = next_pred,
+        i = i + 1;               //        slot 51 = next_label
     }
     bse
 }
 fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab, 0);        // next_reg = 0
     __arena_set(vtab + 1, 0);    // var_count = 0
+    __arena_set(vtab + 50, 0);   // K1.M8: next_pred = 0
+    __arena_set(vtab + 51, 0);   // K1.M8: next_label = 0
     0
 }
 fn ptx_alloc_reg(vtab: i32) -> i32 {
     let r = __arena_get(vtab);
     __arena_set(vtab, r + 1);
+    r
+}
+// K1.M8: allocate a fresh predicate register index (%pN), per-kernel.
+fn ptx_alloc_pred(vtab: i32) -> i32 {
+    let r = __arena_get(vtab + 50);
+    __arena_set(vtab + 50, r + 1);
     r
 }
 fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32) -> i32 {
@@ -9705,9 +9713,21 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_neg(node, vtab)
     } else { if tag == 16 {
         emit_ptx_call(node, vtab)
+    } else { if tag == 6 {
+        emit_ptx_cmp(node, vtab, 0)
+    } else { if tag == 19 {
+        emit_ptx_cmp(node, vtab, 1)
+    } else { if tag == 20 {
+        emit_ptx_cmp(node, vtab, 2)
+    } else { if tag == 21 {
+        emit_ptx_cmp(node, vtab, 3)
+    } else { if tag == 22 {
+        emit_ptx_cmp(node, vtab, 4)
+    } else { if tag == 23 {
+        emit_ptx_cmp(node, vtab, 5)
     } else {
         0 - 1
-    }}}}}}}}}
+    }}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -9773,6 +9793,62 @@ fn emit_ptx_neg(node: i32, vtab: i32) -> i32 {
     // ", %r" + A
     emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
     emit_ptx_byte(114); emit_ptx_decimal(a);
+    // ";\n"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    r
+}
+
+// K1.M8 (2026-05-28): emit the 2-char setp condition mnemonic for cc
+// (0=lt 1=gt 2=eq 3=ne 4=le 5=ge). Flat -- exactly one fires.
+fn emit_ptx_cc(cc: i32) -> i32 {
+    if cc == 0 { emit_ptx_byte(108); emit_ptx_byte(116); };   // lt
+    if cc == 1 { emit_ptx_byte(103); emit_ptx_byte(116); };   // gt
+    if cc == 2 { emit_ptx_byte(101); emit_ptx_byte(113); };   // eq
+    if cc == 3 { emit_ptx_byte(110); emit_ptx_byte(101); };   // ne
+    if cc == 4 { emit_ptx_byte(108); emit_ptx_byte(101); };   // le
+    if cc == 5 { emit_ptx_byte(103); emit_ptx_byte(101); };   // ge
+    0
+}
+
+// K1.M8: lower a comparison (AST_LT/GT/EQ/NE/LE/GE) to a 0/1 value in
+// a register: "setp.<cc>.s32 %pP, %rA, %rB" then "selp.b32 %rR, 1, 0,
+// %pP". Matches the AST semantics (comparisons reify 0/1) and fits the
+// value-returning emit_ptx_expr model. ptxas-validated form.
+fn emit_ptx_cmp(node: i32, vtab: i32, cc: i32) -> i32 {
+    let la = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let ra = emit_ptx_expr(__arena_get(node + 2), vtab);
+    let p = ptx_alloc_pred(vtab);
+    let r = ptx_alloc_reg(vtab);
+    // "    setp."
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(115); emit_ptx_byte(101);
+    emit_ptx_byte(116); emit_ptx_byte(112); emit_ptx_byte(46);
+    emit_ptx_cc(cc);
+    // ".s32 %p" + P
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(112);
+    emit_ptx_decimal(p);
+    // ", %r" + A
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(la);
+    // ", %r" + B
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(ra);
+    // ";\n"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    selp.b32 %r" + R
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(115); emit_ptx_byte(101);
+    emit_ptx_byte(108); emit_ptx_byte(112); emit_ptx_byte(46);
+    emit_ptx_byte(98); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(r);
+    // ", 1, 0, %p" + P
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(49);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(48);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(112); emit_ptx_decimal(p);
     // ";\n"
     emit_ptx_byte(59); emit_ptx_byte(10);
     r
