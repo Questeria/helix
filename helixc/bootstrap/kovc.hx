@@ -9820,6 +9820,74 @@ fn emit_ptx_tid_x(ridx: i32) -> i32 {
     0
 }
 
+// K1.M7 (2026-05-28): block_idx() -> %ctaid.x (CTA/block index) and
+// block_dim() -> %ntid.x (threads-per-block). With thread_idx() these
+// compute the canonical global thread index
+// `block_idx()*block_dim() + thread_idx()` that every grid-stride
+// kernel uses. Mirrors Python lower_ast.py block_idx/block_dim.
+fn ptx_name_is_block_idx(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 9 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 98 { ok = 0; };    // b
+        if __arena_get(name_s + 1) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 2) != 111 { ok = 0; };   // o
+        if __arena_get(name_s + 3) != 99 { ok = 0; };    // c
+        if __arena_get(name_s + 4) != 107 { ok = 0; };   // k
+        if __arena_get(name_s + 5) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 6) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 7) != 100 { ok = 0; };   // d
+        if __arena_get(name_s + 8) != 120 { ok = 0; };   // x
+        ok
+    }
+}
+fn ptx_name_is_block_dim(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 9 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 98 { ok = 0; };    // b
+        if __arena_get(name_s + 1) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 2) != 111 { ok = 0; };   // o
+        if __arena_get(name_s + 3) != 99 { ok = 0; };    // c
+        if __arena_get(name_s + 4) != 107 { ok = 0; };   // k
+        if __arena_get(name_s + 5) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 6) != 100 { ok = 0; };   // d
+        if __arena_get(name_s + 7) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 8) != 109 { ok = 0; };   // m
+        ok
+    }
+}
+fn emit_ptx_mov_ctaid_x(ridx: i32) -> i32 {
+    // "    mov.u32 %r" + N + ", %ctaid.x;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
+    emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(117);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(ridx);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(99); emit_ptx_byte(116); emit_ptx_byte(97);
+    emit_ptx_byte(105); emit_ptx_byte(100); emit_ptx_byte(46);
+    emit_ptx_byte(120); emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+fn emit_ptx_mov_ntid_x(ridx: i32) -> i32 {
+    // "    mov.u32 %r" + N + ", %ntid.x;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
+    emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(117);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(ridx);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(110); emit_ptx_byte(116); emit_ptx_byte(105);
+    emit_ptx_byte(100); emit_ptx_byte(46); emit_ptx_byte(120);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+
 // K1.M6: lower an AST_CALL (tag 16; name in slots 1/2, args_head in
 // slot 3). For now only the thread_idx() kernel builtin is recognised
 // -> mov.u32 %rN, %tid.x (no args). Other calls are unsupported in the
@@ -9831,9 +9899,17 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         let r = ptx_alloc_reg(vtab);
         emit_ptx_tid_x(r);
         r
+    } else { if ptx_name_is_block_idx(name_s, name_l) == 1 {
+        let r = ptx_alloc_reg(vtab);
+        emit_ptx_mov_ctaid_x(r);
+        r
+    } else { if ptx_name_is_block_dim(name_s, name_l) == 1 {
+        let r = ptx_alloc_reg(vtab);
+        emit_ptx_mov_ntid_x(r);
+        r
     } else {
         0 - 1
-    }
+    }}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:

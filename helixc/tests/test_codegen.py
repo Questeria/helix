@@ -7360,6 +7360,47 @@ def test_bootstrap_ptx_thread_idx():
         )
 
 
+def test_bootstrap_ptx_global_index():
+    """K1.M7 (2026-05-28): block_idx() -> %ctaid.x and block_dim() ->
+    %ntid.x (CTA index and threads-per-block). Combined with
+    thread_idx() and scalar arithmetic, a @kernel computes the CANONICAL
+    global thread index `block_idx()*block_dim() + thread_idx()` -- the
+    foundation of every grid-stride GPU kernel. Mirrors Python
+    lower_ast.py. ptxas-validated (real SASS). Direct tile-IR -> PTX,
+    NO MLIR."""
+    src = ("@kernel fn k() -> i32 { let b: i32 = block_idx(); "
+           "let d: i32 = block_dim(); let t: i32 = thread_idx(); "
+           "b * d + t }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_gidx", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %ctaid.x;\n"
+        + b"    mov.u32 %r1, %ntid.x;\n"
+        + b"    mov.u32 %r2, %tid.x;\n"
+        + b"    mul.lo.s32 %r3, %r0, %r1;\n"
+        + b"    add.s32 %r4, %r3, %r2;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_gidx.cubin "
+             "/tmp/sh_ptx_gidx_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected global-index PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
