@@ -362,6 +362,21 @@ K2_CORPUS = [
     ("p194_deep_recursion",      "fn sumto(n:i32)->i32{ if n==0 {0} else {n+sumto(n-1)} } fn main() -> i32 { sumto(50) - 1233 }", 42),
     ("p195_multi_seq",           "fn main() -> i32 { let a=1; let b=2; let c=3; let d=36; a+b+c+d }", 42),
     ("p196_neg_in_match",        "fn main() -> i32 { let x = 0 - 1; match x { 0 => 0, _ => 42 } }", 42),
+    # Safe-hardening S1 (2026-05-28): cross 200. 9 more both-compiler-parity
+    # shapes -- binary literal, hex-in-op, 6-param fn, bool struct field,
+    # shift+arith, 5-param fn, enum-discriminant arith, struct-param multiply
+    # (rc 74), deep addition. (Probe also found struct-RETURNING fn `fn()->P`
+    # is both-broken: Python NotImplementedError + bootstrap SIGSEGV -- a
+    # non-deletion-blocking both-lack gap like A4/A5, not parity-able.)
+    ("p197_binary_lit",          "fn main() -> i32 { 0b101010 }", 42),
+    ("p198_hex_in_op",           "fn main() -> i32 { 0x28 + 2 }", 42),
+    ("p199_fn6params",           "fn add6(a:i32,b:i32,c:i32,d:i32,e:i32,f:i32)->i32{a+b+c+d+e+f} fn main() -> i32 { add6(7,7,7,7,7,7) }", 42),
+    ("p200_bool_in_struct",      "struct S { flag:bool, val:i32 } fn main() -> i32 { let s = S{flag:true,val:42}; if s.flag { s.val } else { 0 } }", 42),
+    ("p201_mixed_shift",         "fn main() -> i32 { (1 << 5) + 10 }", 42),
+    ("p202_fn5params",           "fn f(a:i32,b:i32,c:i32,d:i32,e:i32)->i32{a*b+c*d+e} fn main() -> i32 { f(4,9,2,2,2) }", 42),
+    ("p203_enum_disc_arith",     "enum C { R, G, B } fn main() -> i32 { let c = C::G; let n = match c { C::R=>0, C::G=>40, C::B=>1 }; n + 2 }", 42),
+    ("p204_struct_param_mul",    "struct P { x:i32, y:i32 } fn dist(p: P) -> i32 { p.x * p.x + p.y * p.y } fn main() -> i32 { dist(P{x:3,y:33}) }", 74),
+    ("p205_deep_arith",          "fn main() -> i32 { 1+2+3+4+5+6+7+8+6 }", 42),
 ]
 
 
@@ -433,7 +448,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 196, (
+    assert len(K2_CORPUS) >= 205, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
