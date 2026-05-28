@@ -9699,9 +9699,13 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_binop(node, vtab, 1)
     } else { if tag == 4 {
         emit_ptx_binop(node, vtab, 2)
+    } else { if tag == 5 {
+        emit_ptx_binop(node, vtab, 3)
+    } else { if tag == 9 {
+        emit_ptx_neg(node, vtab)
     } else {
         0 - 1
-    }}}}}}
+    }}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -9725,13 +9729,18 @@ fn emit_ptx_binop(node: i32, vtab: i32, opc: i32) -> i32 {
         emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);
         emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
         emit_ptx_byte(50);
-    } else {
+    } else { if opc == 2 {
         // "mul.lo.s32"
         emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
         emit_ptx_byte(46); emit_ptx_byte(108); emit_ptx_byte(111);
         emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
         emit_ptx_byte(50);
-    }};
+    } else {
+        // "div.s32"
+        emit_ptx_byte(100); emit_ptx_byte(105); emit_ptx_byte(118);
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+        emit_ptx_byte(50);
+    }}};
     // " %r" + D
     emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
     emit_ptx_decimal(r);
@@ -9741,6 +9750,27 @@ fn emit_ptx_binop(node: i32, vtab: i32, opc: i32) -> i32 {
     // ", %r" + B
     emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
     emit_ptx_byte(114); emit_ptx_decimal(ra);
+    // ";\n"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    r
+}
+
+// K1.M5e (2026-05-28): emit a scalar negate "    neg.s32 %rD, %rA;".
+// Lowers the inner expr, allocates a result register, returns it.
+// AST_NEG (tag 9, inner in slot 1). Mirrors Python ptx.py SCALAR_NEG.
+fn emit_ptx_neg(node: i32, vtab: i32) -> i32 {
+    let a = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let r = ptx_alloc_reg(vtab);
+    // "    neg.s32 %r" + D
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(110); emit_ptx_byte(101);
+    emit_ptx_byte(103); emit_ptx_byte(46); emit_ptx_byte(115);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(r);
+    // ", %r" + A
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(a);
     // ";\n"
     emit_ptx_byte(59); emit_ptx_byte(10);
     r

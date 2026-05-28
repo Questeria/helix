@@ -7283,6 +7283,47 @@ def test_bootstrap_ptx_scalar_mul():
     )
 
 
+def test_bootstrap_ptx_scalar_div():
+    """K1.M5e (2026-05-28): scalar divide -- `x / 3` lowers to div.s32
+    (Python ptx.py emit_op SCALAR_DIV / binop opc 3). Direct tile-IR ->
+    PTX, NO MLIR."""
+    src = "@kernel fn k() -> i32 { let x: i32 = 12; x / 3 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_sdiv", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 12;\n"
+        + b"    mov.s32 %r1, 3;\n"
+        + b"    div.s32 %r2, %r0, %r1;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
+def test_bootstrap_ptx_scalar_neg():
+    """K1.M5e: scalar negate -- `-x` (a let-bound var, not constant-
+    folded) lowers to AST_NEG -> neg.s32 (Python ptx.py SCALAR_NEG).
+    Direct tile-IR -> PTX, NO MLIR."""
+    src = "@kernel fn k() -> i32 { let x: i32 = 5; -x }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_sneg", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 5;\n"
+        + b"    neg.s32 %r1, %r0;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
 def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
     """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
     that returns (rc, stdout_bytes) instead of just rc. Needed for
