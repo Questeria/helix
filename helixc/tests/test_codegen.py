@@ -5087,6 +5087,23 @@ def test_bootstrap_generics_bare_call_multi():
     assert rc == 42, f"bare call first(42,7): bootstrap rc={rc}, expected 42"
 
 
+def test_bootstrap_fnptr_name_as_value():
+    """A2a (2026-05-28): a function name used as a VALUE (`let g = dbl`)
+    no longer SIGILLs. The bootstrap had no fn-pointer value concept --
+    an unbound name in expression position trapped (id 1001 -> exit 132).
+    AST_VAR codegen now treats a name that is a registered user fn as a
+    function reference: `lea rax, [rip+disp]` to its code label (resolved
+    at backpatch like a CALL). The address flows as a value; calling
+    through it (indirect call) is A2b. A genuine typo still traps. Python
+    helixc NotImplementedErrors on fn-typed values, so this is a bootstrap-
+    only pin (the bootstrap will EXCEED Python once A2b lands). Here g is
+    bound to dbl's address and the program returns 7 (no crash)."""
+    rc = _kovc_self_host_compile_and_run(
+        "a2a_fnname_as_value",
+        "fn dbl(x: i32) -> i32 { x * 2 } fn main() -> i32 { let g = dbl; 7 }")
+    assert rc == 7, f"fn-name-as-value let g=dbl: bootstrap rc={rc}, expected 7"
+
+
 def test_bootstrap_closure():
     """K1.M32 (2026-05-28): closures run in the bootstrap kovc -- a let-
     bound lambda `|x: i32| x + 1` called as f(41) -> 42. NOTE: Python

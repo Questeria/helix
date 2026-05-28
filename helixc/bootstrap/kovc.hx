@@ -1688,6 +1688,35 @@ fn fn_type_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
     ty
 }
 
+// A2a (2026-05-28): presence check for a user fn name. fn_type_table_lookup
+// returns the ret_ty (0 both for a miss AND for a fn returning i32), so it
+// cannot distinguish "not a fn" from "fn -> i32". This returns 1 iff the
+// name is a registered user fn, 0 otherwise. Used by AST_VAR codegen to
+// decide whether an unbound name is a function reference (emit a fn-pointer
+// lea) versus a genuine typo (trap). The fn_type_table is fully populated
+// by the pre-codegen fn_type_table_init pass, so forward refs resolve too.
+@pure
+fn fn_type_table_has(state: i32, name_start: i32, name_len: i32) -> i32 {
+    let top = __arena_get(state);
+    let table_base = __arena_get(state + 1);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    while i < top {
+        if found == 0 {
+            let entry = table_base + i * 5;
+            let ns = __arena_get(entry);
+            let nl = __arena_get(entry + 1);
+            if kovc_byte_eq(ns, nl, name_start, name_len) == 1 {
+                found = 1;
+            };
+            i = i + 1;
+        } else {
+            i = top;
+        };
+    }
+    found
+}
+
 // Stage 1.7: lookup the packed_param_tys + param_count for a fn name.
 // Returns (packed_param_tys * 8) + param_count packed into a single i32
 // — caller unpacks via `count = ret & 7` and `packed = ret >> 3`.
@@ -8372,7 +8401,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // on unbound reads.
         let off = bind_lookup(bind_state, p1, p2);
         if off == 0 {
-            emit_trap_with_id(1001)
+            // A2a (2026-05-28): fn-name-as-value (function pointer). An
+            // unbound name that is a registered user fn is a reference to
+            // that function: emit `lea rax, [rip+disp]` to its code label,
+            // resolved at backpatch via the patch table (identical rel32
+            // mechanism to a CALL). rax then holds the fn's runtime address.
+            // A genuinely-undefined name still traps (id 1001) -- we must
+            // NOT lea-patch it, because the K1.F21 backpatch ud2-fallback
+            // assumes a CALL (E8) site and would corrupt a lea into garbage
+            // rather than a clean trap. The fn-pointer VALUE flows; calling
+            // through it (indirect call) is A2b.
+            let fts_v = bn_fn_type_state(bn_state);
+            let is_fnref = if fts_v == 0 { 0 } else { fn_type_table_has(fts_v, p1, p2) };
+            if is_fnref == 1 {
+                let fnref_slot = emit_lea_rax_rip_placeholder();
+                patch_table_add(patch_state, fnref_slot, p1, p2);
+                7
+            } else {
+                emit_trap_with_id(1001)
+            }
         } else {
             let ty = bind_lookup_type(bind_state, p1, p2);
             // 8-byte types (f64=2, i64=3, u64=9) use 64-bit load to preserve
