@@ -89,15 +89,101 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 289      # last bump: K3.Z -- audit-clean signal for K1.F47-F52 + partition-table extension. PER-BATCH 3-AXIS AUDIT 6-OF-6 CLEAN: silent-failure-hunter CLEAN (verification matrix all 6 arms), type-design-analyzer 6-of-6 CLEAN / 0 HIGH/MEDIUM/LOW, code-reviewer CLEAN (no high-confidence issues, all 9 focus points pass). Second consecutive fully-clean per-batch audit (K3.Y on F41-F46 was the first). Extended the K3.Y partition table to cover F47-F52 too (the (IDENT, IDENT) shape mirror). 12-chunk assert! comparison family F41-F52 now both feature-complete AND audit-clean. No fix needed -- pure docs + status record.
+K_BOOTSTRAP_CHUNKS_DONE = 290      # last bump: K2.W -- Python-deletion-readiness checklist baked into every Telegram + chunk estimates re-baselined (150/165 -> 400/440 reflecting the macro-saturation phase + remaining GPU/MLIR work). Per-bucket model with 16 buckets: 9 done, 4 partial (impl-dispatch, generic-monomorph, K2-green; plus the macro bucket is fully done now), 5 pending (GPU/MLIR/K3-seed/5-clean-audit-gate). Weighted percent 66% complete. User-facing visibility into "how close to Python deletion" surface this tick after user request.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
 #              corners that turn out vacuously satisfied at K2 time
 #   REAL     = under the 2026-05-26 hard constraint (no Python-forever
 #              deferral for any subsystem)
-K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE = 150
-K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE = 165
+K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE = 400  # K2.W 2026-05-27 re-estimate after
+                                          # macro saturation phase (K1.F22-F52
+                                          # closed 30 chunks); GPU + MLIR are
+                                          # the remaining big buckets, each
+                                          # multi-chunk (~40-60 each).
+K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE = 440  # Same K2.W re-estimate under hard
+                                          # constraint (no Python-forever).
+
+# K2.W (2026-05-27): Python-deletion-readiness bucket model. Each bucket
+# is one Category-1 syntax/semantic gap or Category-2 platform port that
+# must close before Python helixc can be deleted (K4). Status values:
+#   "done"    : feature-complete + audit-clean
+#   "partial" : at least one shipped chunk but not feature-complete
+#   "pending" : zero chunks shipped, scoping not yet done
+# Percent: done = 1.0, partial = 0.5, pending = 0.0; weighted average.
+# This is the canonical list per the loop prompt's Python-ready-to-delete
+# definition + the 2026-05-26 hard constraint.
+PYTHON_DELETION_BUCKETS = [
+    {"name": "Macros (assert/print/dbg/panic/todo family)",
+     "status": "done",
+     "note": "K1.F22-F52 saturated; assert!-cmp family closed F41-F52 audit-clean"},
+    {"name": "Mixed-type int binops (i64<->i32, u64<->u32)",
+     "status": "done",
+     "note": "K1.F8/F8b/F8c/F8d, K3.A/B audit-fixes"},
+    {"name": "Mixed-type float binops (f32<->f64)",
+     "status": "done",
+     "note": "K1.F9"},
+    {"name": "f16/bf16 bit-accurate",
+     "status": "done",
+     "note": "K1.F18b gradual underflow / denormals"},
+    {"name": "Reflection (reflect_hash, quote, splice, modify)",
+     "status": "done",
+     "note": "K1.F2/F3/F4/F19 (FNV mixer)"},
+    {"name": "Trace events (trace_event, __trace_last)",
+     "status": "done",
+     "note": "K1.F20/F20b ring-buffer"},
+    {"name": "Tile ops (zeros, add, sub, mul, matmul)",
+     "status": "done",
+     "note": "K1.F23c-F27 + K3.R-W audit fixes (bounds-check both write+read)"},
+    {"name": "Field-store mutation (p.x = v)",
+     "status": "done",
+     "note": "K1.F6"},
+    {"name": "Const-name resolution",
+     "status": "done",
+     "note": "K1.F7 (const_tab + mk_var_with_capture hook)"},
+    {"name": "Impl-method dispatch (full)",
+     "status": "partial",
+     "note": "K1.F5b localized fix shipped; comprehensive dispatch pending (~10 chunks)"},
+    {"name": "Generic monomorphization (full)",
+     "status": "partial",
+     "note": "K1.F21 generic-bare-call fallback; full monomorph pending (~10 chunks)"},
+    {"name": "K2 parity harness fully green",
+     "status": "partial",
+     "note": "138/144 nominal rows; macros structural-gap (Python !) recorded; ~5-10 cleanup chunks"},
+    {"name": "GPU backends in bootstrap (PTX, ROCm, Metal, WebGPU)",
+     "status": "pending",
+     "note": "All 4 backends still Python-only; ~40-60 chunks each"},
+    {"name": "MLIR migration in bootstrap",
+     "status": "pending",
+     "note": "helixc/ir/mlir/ Python (Stage 211-216) not yet ported; ~30-50 chunks"},
+    {"name": "K3 trusted-seed bootstrap",
+     "status": "pending",
+     "note": "Binary-from-source seed; ~5-10 chunks"},
+    {"name": "5 consecutive clean END-OF-PHASE 5-axis audits",
+     "status": "pending",
+     "note": "Stop-criterion gate; FE/IR/BE/RT/TEST sweep, repeat 5x"},
+]
+
+
+def python_deletion_percent() -> int:
+    """Weighted progress toward Python-ready-to-delete state.
+    done=1.0, partial=0.5, pending=0.0. Counts buckets, not chunks."""
+    score = 0.0
+    for b in PYTHON_DELETION_BUCKETS:
+        if b["status"] == "done":
+            score += 1.0
+        elif b["status"] == "partial":
+            score += 0.5
+    return round(100 * score / len(PYTHON_DELETION_BUCKETS))
+
+
+def python_deletion_checklist_lines() -> list[str]:
+    """Render the Python-deletion checklist as Telegram-friendly lines."""
+    symbols = {"done": "[x]", "partial": "[~]", "pending": "[ ]"}
+    out = []
+    for b in PYTHON_DELETION_BUCKETS:
+        out.append(f"  {symbols[b['status']]} {b['name']}")
+    return out
 
 K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # actual table count is 84 explicit
@@ -625,7 +711,10 @@ def render_telegram(note: str | None = None,
         "",
         "  Hard rule (2026-05-26): zero non-Helix code at v1.0.",
         "    docs/K_BOOTSTRAP_HARD_CONSTRAINT.md",
+        "",
+        f"BEFORE PYTHON DELETION ({python_deletion_percent()}% complete):",
     ]
+    lines.extend(python_deletion_checklist_lines())
 
     if note or commit:
         lines.append("")
