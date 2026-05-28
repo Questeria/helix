@@ -347,6 +347,21 @@ K2_CORPUS = [
     ("p182_shl_to_sign_bit",     "fn main() -> i32 { 1 << 31 }", 0),
     ("p183_ashr_negative",       "fn main() -> i32 { let x = 0 - 8; x >> 1 }", 252),
     ("p184_signed_mul_neg",      "fn main() -> i32 { let x = 0 - 6; x * 7 }", 214),
+    # Safe-hardening S3 dry-run audit (2026-05-28): FE/parser + composite
+    # axis CLEAN -- 12 deep-nesting / many-arm / multi-field shapes all
+    # byte-identical Python<->bootstrap. Folded in as p185-p196.
+    ("p185_nested_if6",          "fn main() -> i32 { let x = 6; if x>0 { if x>1 { if x>2 { if x>3 { if x>4 { if x>5 { 42 } else {0} } else {0} } else {0} } else {0} } else {0} } else {0} }", 42),
+    ("p186_match8",              "fn main() -> i32 { let x = 7; match x { 0=>0,1=>1,2=>2,3=>3,4=>4,5=>5,6=>6,7=>42,_=>99 } }", 42),
+    ("p187_struct5",             "struct P { a:i32, b:i32, c:i32, d:i32, e:i32 } fn main() -> i32 { let p = P{a:10,b:10,c:10,d:10,e:2}; p.a+p.b+p.c+p.d+p.e }", 42),
+    ("p188_enum_payload2",       "enum E { A(i32), B(i32), C } fn main() -> i32 { let e = E::B(42); match e { E::A(n)=>n, E::B(n)=>n, E::C=>0 } }", 42),
+    ("p189_nested_calls5",       "fn inc(x:i32)->i32{x+1} fn main() -> i32 { inc(inc(inc(inc(inc(37))))) }", 42),
+    ("p190_mixed_prec",          "fn main() -> i32 { 2 + 3 * 4 - 10 / 2 + 33 }", 42),
+    ("p191_array10",             "fn main() -> i32 { let a = [0,1,2,3,42,5,6,7,8,9]; a[4] }", 42),
+    ("p192_while_nested_if",     "fn main() -> i32 { let mut s = 0; let mut i = 0; while i < 10 { if i % 2 == 0 { s = s + i; } i = i + 1; } s + 22 }", 42),
+    ("p193_const_arith",         "const K: i32 = 40; fn main() -> i32 { K + 2 }", 42),
+    ("p194_deep_recursion",      "fn sumto(n:i32)->i32{ if n==0 {0} else {n+sumto(n-1)} } fn main() -> i32 { sumto(50) - 1233 }", 42),
+    ("p195_multi_seq",           "fn main() -> i32 { let a=1; let b=2; let c=3; let d=36; a+b+c+d }", 42),
+    ("p196_neg_in_match",        "fn main() -> i32 { let x = 0 - 1; match x { 0 => 0, _ => 42 } }", 42),
 ]
 
 
@@ -418,7 +433,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 184, (
+    assert len(K2_CORPUS) >= 196, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
