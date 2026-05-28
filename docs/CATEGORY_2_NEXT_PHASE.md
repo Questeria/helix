@@ -42,22 +42,53 @@ non-PARITY rows. For each:
 appropriate; bootstrap-only self-host test otherwise.
 
 #### P1.2 — Impl-method dispatch (full) (~10 chunks)
-**Current**: K1.F5b shipped struct-receiver `.method()` dispatch via
-`mangle_impl_method`. Limited to direct-receiver shapes.
+**Current** (post-K1.F5c 2026-05-27): K1.F5b shipped struct-VAR receiver
+dispatch. K1.F5c extended to struct-LITERAL receiver via the
+`last_struct_idx(sb)` side-channel. Remaining 9 gaps probed this tick:
 
-**Gaps to close** (each its own chunk):
-1. `expr.method()` where `expr` is a non-let-bound return value
-   (e.g., `foo().method()`). Currently falls through to field-access
-   path.
-2. Chained methods `a.method1().method2()`.
-3. `impl Trait for Struct` (vs inherent impl) — trait-method dispatch.
-4. `impl<T> S<T> { fn ... }` generic-impl monomorphization.
-5. Method-call on a struct literal `P { x: 1 }.method()`.
-6. Method on `&self` / `&mut self` receiver (refs).
-7. Static method call `Type::method(args)` (associated fn).
-8. `Self` type in impl-method return position.
-9. Default impl methods inherited from trait.
-10. Default method called on impl that overrides it.
+**Gap probe results (K2.Z 2026-05-27, post-K1.F5c shipped 09bdc3e):**
+- ✅ #5 Struct-literal receiver `P { x: 1 }.method()` — DONE (K1.F5c).
+- ❌ #1+#2 Chained / non-let-bound receiver — `a.chain1().chain2()`
+  returns rc=132 SIGILL. Substrate gap: prim after K1.F5b synthesis
+  is AST_CALL (tag 16); the postfix-loop method-call PRE-CHECK at
+  parser.hx:2416 only matches AST_VAR (1) and AST_TUPLE_LIT (50, K1.F5c).
+  Fix needs a `last_call_ret_struct_idx` side-channel SET when the
+  mangled-name resolves to a fn whose return type is a struct. That
+  requires a fn-name → return-type lookup table (currently absent;
+  fn-return tracking only happens implicitly for the body-vs-ret-ty
+  trap K1.E1). Lift estimate: ~3 chunks (build fn-ret-tab, wire write
+  at fn-decl time, wire read at K1.F5b synthesis).
+- ❌ #6 `&self` receiver — `impl P { fn read(&self) -> i32 { ... } }`
+  timed out (likely infinite-loop in parser or codegen). Substrate
+  gap: the `&self` syntax probably parses (K1.CR lifetime + ref skip),
+  but the method-call site doesn't take a reference of the receiver
+  before passing as first arg. Lift estimate: ~2 chunks (parse, then
+  ref-of-Self codegen which is a no-op since bootstrap doesn't have
+  refs — pass-by-value).
+- ❌ #7+#8 `Self::make() -> Self` static method + Self return — rc=139
+  SIGSEGV. `P::make()` syntax not detected at the call site; `Self`
+  return type not resolved. Lift: ~3 chunks.
+- ⏳ #3 Trait dispatch — needs trait infrastructure (separate bucket).
+- ⏳ #4 Generic-impl monomorphization — overlaps with P1.3 generic.
+- ⏳ #9/#10 Default impls — needs trait infra (overlaps with #3).
+
+**Reordered P1.2 chunk plan (post-probe):**
+1. K1.F5c ✅ — struct-literal receiver. SHIPPED 09bdc3e.
+2. K1.F5d — fn-name→ret-ty table substrate.
+3. K1.F5e — wire fn-ret-tab write at fn-decl time; populate from
+   parse_fn_decl's return-type slot.
+4. K1.F5f — wire fn-ret-tab read at K1.F5b synthesis; set
+   last_call_ret_struct_idx if return is a struct.
+5. K1.F5g — extend method-call PRE-CHECK to match AST_CALL prim_tag
+   when last_call_ret_struct_idx >= 0. Closes #1 + #2 together.
+6. K1.F5h — &self parse-side: allow `&self` as first impl-method param.
+7. K1.F5i — &self codegen: pass-by-value since bootstrap doesn't have
+   refs. Closes #6.
+8. K1.F5j — `Self::method(args)` static call detection at parse_primary.
+9. K1.F5k — `Self` type resolution in impl-method return position
+   (substitute the impl's target struct name).
+10. (Defer #3/#4/#9/#10 to bucket reorganization — these need trait
+    infra which is its own multi-chunk arc.)
 
 **Test pattern**: bootstrap-only self-host tests since several of
 these shapes also push Python's frontend hard (likely K2-incompatible).
