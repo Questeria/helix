@@ -2245,7 +2245,16 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);                // consume `=`
                 let store_val = parse_expr_basic(tok_base, sb);
                 mk_node(79, lhs, store_val, 0)
-            } else { lhs }
+            } else { if lhs_tag_fs == 53 {
+                // K1.M10c (2026-05-28): indexed store `a[i] = v`. lhs is
+                // AST_INDEX (tag 53: base in slot1, index in slot2).
+                // Mirror the field-store path above -> AST_INDEX_STORE
+                // (tag 55, p1 = the index node, p2 = value). Previously
+                // this fell through, dropping the `=` (parse trip).
+                cur_advance(sb);                // consume `=`
+                let store_val = parse_expr_basic(tok_base, sb);
+                mk_node(55, lhs, store_val, 0)
+            } else { lhs }}
         }
     } else { if t == 18 {
         if t2 == 15 {

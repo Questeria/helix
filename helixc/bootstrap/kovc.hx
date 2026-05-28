@@ -9747,9 +9747,11 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_assign(node, vtab)
     } else { if tag == 53 {
         emit_ptx_index_load(node, vtab)
+    } else { if tag == 55 {
+        emit_ptx_index_store(node, vtab)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -10133,6 +10135,88 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     emit_ptx_rd(rda);
     emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
     rdst
+}
+
+// K1.M10c: lower a global-memory STORE a[i] = v (AST_INDEX_STORE = tag
+// 55; slot 1 = the AST_INDEX node [base, index], slot 2 = value).
+// Value is lowered first, then the same address computation as the
+// load, then "st.global.u32 [%rdAddr], %rVal". ptxas-validated.
+// Statement -- returns -1.
+fn emit_ptx_index_store(node: i32, vtab: i32) -> i32 {
+    let idx_node = __arena_get(node + 1);
+    let base = __arena_get(idx_node + 1);
+    let idx_inner = __arena_get(idx_node + 2);
+    let val_node = __arena_get(node + 2);
+    let fn_idx = __arena_get(vtab + 53);
+    let pidx = ptx_param_index(fn_idx, __arena_get(base + 1),
+                               __arena_get(base + 2));
+    let rv = emit_ptx_expr(val_node, vtab);
+    let ri = emit_ptx_expr(idx_inner, vtab);
+    // "    ld.param.u64 %rd<rdb>, [param_<pidx>];\n"
+    let rdb = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(46);
+    emit_ptx_byte(117); emit_ptx_byte(54); emit_ptx_byte(52);
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdb);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(95);
+    emit_ptx_decimal(pidx);
+    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    cvta.to.global.u64 %rd<rdg>, %rd<rdb>;\n"
+    let rdg = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);
+    emit_ptx_byte(97); emit_ptx_byte(46); emit_ptx_byte(116);
+    emit_ptx_byte(111); emit_ptx_byte(46); emit_ptx_byte(103);
+    emit_ptx_byte(108); emit_ptx_byte(111); emit_ptx_byte(98);
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(46);
+    emit_ptx_byte(117); emit_ptx_byte(54); emit_ptx_byte(52);
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdg);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdb);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    mul.wide.s32 %rd<rdo>, %r<ri>, 4;\n"
+    let rdo = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
+    emit_ptx_byte(46); emit_ptx_byte(119); emit_ptx_byte(105);
+    emit_ptx_byte(100); emit_ptx_byte(101); emit_ptx_byte(46);
+    emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ri);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(52);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    add.s64 %rd<rda>, %rd<rdg>, %rd<rdo>;\n"
+    let rda = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(54);
+    emit_ptx_byte(52); emit_ptx_byte(32);
+    emit_ptx_rd(rda);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdg);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    st.global.u32 [%rd<rda>], %r<rv>;\n"
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(116); emit_ptx_byte(46);
+    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
+    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
+    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32); emit_ptx_byte(91);
+    emit_ptx_rd(rda);
+    emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rv);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0 - 1
 }
 
 // K1.M6 (2026-05-28): is this call name the byte-string "thread_idx"

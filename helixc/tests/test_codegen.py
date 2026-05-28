@@ -7619,6 +7619,49 @@ def test_bootstrap_ptx_two_load_add():
         )
 
 
+def test_bootstrap_ptx_global_store():
+    """K1.M10c (2026-05-28): MEMORY STORE out[i] = v. Required the first
+    parser.hx change in the GPU work -- the postfix `[i]` produced
+    AST_INDEX (tag 53) but the trailing `=` was dropped; now it builds
+    AST_INDEX_STORE (tag 55), mirroring the field-store path. The
+    emitter lowers the value, computes base + i*4 (param pointer ->
+    cvta -> address), then st.global.u32 [addr], val -- the write half
+    of every GPU kernel. ptxas-validated (real SASS). Direct tile-IR ->
+    PTX, NO MLIR."""
+    src = ("@kernel fn k(out: i32) -> i32 { let i: i32 = thread_idx(); "
+           "out[i] = 7 }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_gstore", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k(.param .b64 param_0)\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    mov.s32 %r1, 7;\n"
+        + b"    ld.param.u64 %rd0, [param_0];\n"
+        + b"    cvta.to.global.u64 %rd1, %rd0;\n"
+        + b"    mul.wide.s32 %rd2, %r0, 4;\n"
+        + b"    add.s64 %rd3, %rd1, %rd2;\n"
+        + b"    st.global.u32 [%rd3], %r1;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_gstore.cubin "
+             "/tmp/sh_ptx_gstore_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected global-store PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
