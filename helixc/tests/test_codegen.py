@@ -7280,6 +7280,25 @@ def test_bootstrap_struct_field_store_self_host():
         )
 
 
+def test_bootstrap_parser_exceeds_python_self_host():
+    """S3 parser audit (2026-05-28): two more bootstrap-exceeds-Python parser
+    cases (deletion-favorable). (1) Extra/empty statements `let x = 42;; x`:
+    the bootstrap accepts the doubled `;` and returns 42; Python helixc
+    ParseErrors. (2) Char literals `let c = 'A'; 42`: the bootstrap parses
+    the char literal and returns 42; Python helixc NotImplementedErrors.
+    Both are bootstrap-only pins (not K2-parity-able since Python errors).
+    The bootstrap's front-end is strictly more permissive/capable here."""
+    cases = [
+        ("extra_semis", "fn main() -> i32 { let x = 42;; x }", 42),
+        ("char_lit",    "fn main() -> i32 { let c = 'A'; 42 }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(f"px_{name}", src)
+        assert rc == exp, (
+            f"parser-exceeds-python {name}: bootstrap rc={rc}, expected {exp}"
+        )
+
+
 def _kovc_self_host_emit_ptx(name: str, k2_src: str,
                              emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles

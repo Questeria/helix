@@ -395,6 +395,19 @@ K2_CORPUS = [
     ("p212_interleaved_stores",  "fn main() -> i32 { let mut a = [0,0,0]; a[0] = 10; a[2] = 20; a[1] = 12; a[0]+a[1]+a[2] }", 42),
     ("p213_big_match12",         "fn main() -> i32 { let x = 11; match x { 0=>0,1=>1,2=>2,3=>3,4=>4,5=>5,6=>6,7=>7,8=>8,9=>9,10=>10,11=>42,_=>99 } }", 42),
     ("p214_arr_2d_flat",         "fn main() -> i32 { let mut a = [0,0,0,0]; let r = 1; let c = 1; a[r*2+c] = 42; a[3] }", 42),
+    # S3 parser/FE audit (2026-05-28): FE axis CLEAN -- 9 parser-robustness
+    # shapes all both-compiler-parity. (Probe also found extra-`;;` and char
+    # literals are bootstrap-exceeds-Python cases -> pinned bootstrap-only.)
+    # p215-p223:
+    ("p215_trailing_comma_args", "fn add(a:i32,b:i32)->i32{a+b} fn main() -> i32 { add(40, 2,) }", 42),
+    ("p216_trailing_comma_arr",  "fn main() -> i32 { let a = [40,2,]; a[0]+a[1] }", 42),
+    ("p217_trailing_comma_struct","struct P { x:i32, y:i32 } fn main() -> i32 { let p = P{x:40,y:2,}; p.x+p.y }", 42),
+    ("p218_line_comment_mid",    "fn main() -> i32 { let x = 42; // c\n x }", 42),
+    ("p219_empty_block",         "fn main() -> i32 { {}; 42 }", 42),
+    ("p220_double_neg",          "fn main() -> i32 { let x = 0 - (0 - 42); x }", 42),
+    ("p221_deeply_paren",        "fn main() -> i32 { (((((((42))))))) }", 42),
+    ("p222_nested_block_comment","fn main() -> i32 { /* a /* b */ c */ 42 }", 42),
+    ("p223_block_expr_value",    "fn main() -> i32 { let x = { let y = 40; y + 2 }; x }", 42),
 ]
 
 
@@ -466,7 +479,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 214, (
+    assert len(K2_CORPUS) >= 223, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
