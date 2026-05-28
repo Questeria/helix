@@ -7185,6 +7185,34 @@ fn main() -> i32 {{
     return run_k2.returncode
 
 
+def test_bootstrap_self_host_lexer_hx():
+    """PHASE C / C1 (2026-05-28): SELF-HOST FIXPOINT -- leg 1 (lexer.hx).
+
+    The bootstrap kovc (itself built by Python helixc) compiles its OWN
+    lexer.hx source -- 1029 lines / ~43.7 KB -- all the way through:
+    lex + parse + emit_elf succeed, producing a ~20 KB ELF, and the
+    emitted binary's Demo main exits with the SAME code as the
+    Python-compiled lexer.hx. i.e. the self-hosted bootstrap compiles
+    its smallest own source file with byte-behavior PARITY to the
+    Python reference -- the first leg of the K2 Phase-3 fixpoint
+    (kovc compiling kovc). No cap overflow, no unsupported construct.
+
+    Legs 2 (parser.hx) and 3 (kovc.hx) are larger and may hit fixed
+    caps; this pins that leg 1 is clean.
+    """
+    import os
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    py_rc = compile_and_run(lexer)
+    boot_rc = _kovc_self_host_compile_and_run("c1_selfhost_lexer", lexer)
+    assert boot_rc == py_rc, (
+        f"self-host lexer.hx: bootstrap-compiled rc={boot_rc} != "
+        f"Python-compiled rc={py_rc} -- a self-host codegen divergence."
+    )
+
+
 def _kovc_self_host_emit_ptx(name: str, k2_src: str,
                              emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
