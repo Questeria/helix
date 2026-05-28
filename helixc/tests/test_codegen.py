@@ -10084,6 +10084,70 @@ def test_bootstrap_kovc_k1f33_k1f34_assert_int_ident_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f35_k1f36_assert_ident_bool_self_host():
+    """K1.F35 + K1.F36 (2026-05-27): assert_eq/ne!(IDENT, BOOL_LIT) mixed form.
+
+    Pre-F35/F36 this fell through to K1.CB no-op-skip because:
+      - K1.F22j (IDENT/IDENT) rejected `true`/`false` operands via K3.Q guard.
+      - K1.F22j2 (BOOL/BOOL fold) required BOTH sides bool-lit.
+      - K1.F31/F33 require TK_INT, not bool-lit IDENT.
+
+    Real Rust idiomatically writes `assert_eq!(flag, true)` for "must be set"
+    checks. The synthesis constant-folds the bool to AST_INT(0 or 1):
+      AST_IF(AST_EQ(AST_VAR(a), AST_INT(b)), then=0, else=panic).
+
+    Bool-lit value at compile-time: true -> 1, false -> 0. The runtime
+    compare is then AST_VAR(a) == 1 (or == 0) just like Rust's bool->int
+    representation.
+
+    Note this is COMPILE-TIME-FOLDED on the bool side. K1.F22j2 was a
+    DOUBLE fold (both sides). F35/F36 fold only the bool operand.
+    """
+    # K1.F35 -- assert_eq!(flag, true) where flag=1 (true)
+    rc_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f35_aeqib_pass",
+        'fn main() -> i32 { let flag: i32 = 1; assert_eq!(flag, true); 11 }',
+    )
+    assert rc_eq_pass == 11, (
+        f"K1.F35 assert_eq!(flag, true) when flag=1: expected rc=11 "
+        f"(flag matches AST_INT(1) constant-fold of true); got {rc_eq_pass}."
+    )
+    rc_eq_fail = _kovc_self_host_compile_and_run(
+        "k1f35_aeqib_fail",
+        'fn main() -> i32 { let flag: i32 = 0; assert_eq!(flag, true); 11 }',
+    )
+    assert rc_eq_fail == 132, (
+        f"K1.F35 assert_eq!(flag, true) when flag=0: expected rc=132 "
+        f"(panic, flag != AST_INT(1)); got {rc_eq_fail}."
+    )
+    # K1.F35 false variant
+    rc_eq_false_pass = _kovc_self_host_compile_and_run(
+        "k1f35_aeqib_false_pass",
+        'fn main() -> i32 { let flag: i32 = 0; assert_eq!(flag, false); 11 }',
+    )
+    assert rc_eq_false_pass == 11, (
+        f"K1.F35 assert_eq!(flag, false) when flag=0: expected rc=11; "
+        f"got {rc_eq_false_pass}."
+    )
+    # K1.F36 -- assert_ne!(flag, false) where flag=1
+    rc_ne_pass = _kovc_self_host_compile_and_run(
+        "k1f36_aneib_pass",
+        'fn main() -> i32 { let flag: i32 = 1; assert_ne!(flag, false); 11 }',
+    )
+    assert rc_ne_pass == 11, (
+        f"K1.F36 assert_ne!(flag, false) when flag=1: expected rc=11 "
+        f"(flag differs from AST_INT(0)); got {rc_ne_pass}."
+    )
+    rc_ne_fail = _kovc_self_host_compile_and_run(
+        "k1f36_aneib_fail",
+        'fn main() -> i32 { let flag: i32 = 0; assert_ne!(flag, false); 11 }',
+    )
+    assert rc_ne_fail == 132, (
+        f"K1.F36 assert_ne!(flag, false) when flag=0: expected rc=132 "
+        f"(panic, flag matches AST_INT(0)); got {rc_ne_fail}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.
