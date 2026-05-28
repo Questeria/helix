@@ -7117,12 +7117,16 @@ _PTX_REG_BLOCK = (
 )
 
 
-def _ptx_entry(sig: bytes) -> bytes:
-    """One PTX .entry block: signature + register-file decls + ret."""
+def _ptx_entry(sig: bytes, body_const: int = 0) -> bytes:
+    """One PTX .entry block: signature + register-file decls + the
+    body's SCALAR_CONST_INT lowering (mov.s32 %r0, <const>) + ret.
+    body_const defaults to 0 -- the `{ 0 }` body of the M1-M4 fixtures
+    (K1.M5b lowers an integer-literal body to mov.s32 %r0, <val>)."""
     return (
         b".visible .entry " + sig + b"\n"
         b"{\n"
         + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, " + str(body_const).encode() + b";\n"
         + b"    ret;\n"
         b"}\n"
     )
@@ -7193,6 +7197,21 @@ def test_bootstrap_ptx_kernel_params():
     expected = _PTX_HEADER + _ptx_entry(
         b"k(.param .b64 param_0, .param .b64 param_1)"
     )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
+def test_bootstrap_ptx_scalar_const():
+    """K1.M5b (2026-05-28): FIRST real kernel-BODY lowering. A scalar
+    integer-literal body lowers to SCALAR_CONST_INT -> `mov.s32 %r0,
+    <val>;` (mirrors Python ptx.py emit_op SCALAR_CONST_INT),
+    materializing the constant into a register before `ret`. This is
+    the step from "valid empty kernel" to "kernel that computes".
+    Direct tile-IR -> PTX, NO MLIR (docs/MLIR_NOT_NEEDED_DECISION.md)."""
+    src = "@kernel fn k() -> i32 { 7 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_sconst", src)
+    expected = _PTX_HEADER + _ptx_entry(b"k()", 7)
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
     )

@@ -9520,6 +9520,23 @@ fn emit_ptx_byte(b: i32) -> i32 {
     0
 }
 
+// K1.M5b (2026-05-28): emit a signed decimal integer as ASCII.
+// Recursive -- high-order digits first, then the last digit; a
+// leading '-' for negatives. (Phase-0 has no string formatting; the
+// bootstrap is itself recursive-descent, so recursion is fine.)
+fn emit_ptx_decimal(n: i32) -> i32 {
+    if n < 0 {
+        emit_ptx_byte(45);             // '-'
+        emit_ptx_decimal(0 - n)
+    } else {
+        if n >= 10 {
+            emit_ptx_decimal(n / 10);
+        };
+        emit_ptx_byte(48 + (n % 10));  // last digit
+        0
+    }
+}
+
 // K1.M5a (2026-05-28): the common prefix/suffix of a PTX register-
 // file declaration line. Each line is "    .reg <type:<7><class><256>;"
 // -- prefix = "    .reg " (4-space indent), suffix = "<256>;\n".
@@ -9642,6 +9659,25 @@ fn emit_ptx_entry(fn_idx: i32) -> i32 {
     emit_ptx_byte(123); emit_ptx_byte(10);
     // K1.M5a: register-file declarations (foundation for op lowering).
     emit_ptx_reg_block();
+    // K1.M5b: lower the kernel body's terminal scalar. If it is an
+    // integer literal (AST_INT = tag 0; value in slot 1), materialize
+    // it into %r0 via the SCALAR_CONST_INT lowering -- "    mov.s32
+    // %r0, <val>;" (mirrors Python ptx.py emit_op SCALAR_CONST_INT).
+    // Non-literal bodies are not lowered yet (M5c+); they fall through
+    // to ret-only.
+    let kbody = __arena_get(fn_idx + 3);
+    if __arena_get(kbody) == 0 {
+        // "    mov.s32 %r0, "
+        emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+        emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
+        emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(115);
+        emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+        emit_ptx_byte(37); emit_ptx_byte(114); emit_ptx_byte(48);
+        emit_ptx_byte(44); emit_ptx_byte(32);
+        emit_ptx_decimal(__arena_get(kbody + 1));
+        // ";\n"
+        emit_ptx_byte(59); emit_ptx_byte(10);
+    };
     // "    ret;\n"  (4-space indent, matches Python emit_kernel)
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
     emit_ptx_byte(32); emit_ptx_byte(114); emit_ptx_byte(101);
