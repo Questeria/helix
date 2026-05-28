@@ -8126,6 +8126,37 @@ def test_bootstrap_ptx_auto_cpu():
     )
 
 
+def test_bootstrap_wgsl_empty_kernel():
+    """K1.M18 (2026-05-28): FIRST non-NVIDIA GPU backend -- WebGPU / WGSL.
+    The bootstrap emits a WGSL compute-shader module (@compute
+    @workgroup_size + fn entry + @builtin(local_invocation_id)) for a
+    @kernel fn, BYTE-MATCHING Python helixc/backend/webgpu.py's
+    empty-kernel output (header + emit_kernel_stub, incl. the U+2014 EM
+    DASH). WGSL runs on ANY GPU via the portable WebGPU standard
+    (NVIDIA/AMD/Apple/Intel) -- directly serving the north-star "AI on any
+    GPU incl non-NVIDIA". Direct Helix -> WGSL text, NO MLIR, NO LLVM.
+    (No local naga/wgpu validator -> exact byte-match vs the Python
+    emitter is the check.)"""
+    src = "@kernel fn k() -> i32 { 0 }\n"
+    wgsl = _kovc_self_host_emit_ptx("wgsl_empty", src,
+                                    emit_fn="emit_wgsl_for_ast_to_path")
+    expected = (
+        "// Helix-emitted WGSL — spec wgsl-2024\n"
+        "// Workgroup size default: 64\n"
+        "\n"
+        "@compute @workgroup_size(64)\n"
+        "fn k(\n"
+        "    @builtin(local_invocation_id) local_id: vec3<u32>\n"
+        ") {\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+    ).encode("utf-8")
+    assert wgsl == expected, (
+        f"WGSL mismatch:\n got={wgsl!r}\nwant={expected!r}"
+    )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

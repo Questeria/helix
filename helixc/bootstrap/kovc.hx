@@ -10896,6 +10896,152 @@ fn emit_auto_for_ast_to_path(ast_root: i32) -> i32 {
     }
 }
 
+// K1.M18 (2026-05-28): FIRST non-NVIDIA GPU backend -- WebGPU / WGSL
+// (the browser-portable shader IR that runs on ANY GPU: NVIDIA, AMD,
+// Apple, Intel). Direct Helix -> WGSL text, NO MLIR / NO LLVM. Mirrors
+// Python helixc/backend/webgpu.py emit_module_header + emit_kernel_stub.
+// The WGSL module preamble (2 comment lines documenting the spec level +
+// default workgroup size, then a blank). The "--" is a U+2014 EM DASH
+// (UTF-8 226 128 148), matching the Python emitter byte-for-byte.
+fn emit_wgsl_header() -> i32 {
+    // "// Helix-emitted WGSL " + EM_DASH + " spec wgsl-2024\n"
+    emit_ptx_byte(47); emit_ptx_byte(47); emit_ptx_byte(32);   // "// "
+    emit_ptx_byte(72); emit_ptx_byte(101); emit_ptx_byte(108);
+    emit_ptx_byte(105); emit_ptx_byte(120);                    // "Helix"
+    emit_ptx_byte(45);                                         // "-"
+    emit_ptx_byte(101); emit_ptx_byte(109); emit_ptx_byte(105);
+    emit_ptx_byte(116); emit_ptx_byte(116); emit_ptx_byte(101);
+    emit_ptx_byte(100);                                        // "emitted"
+    emit_ptx_byte(32);
+    emit_ptx_byte(87); emit_ptx_byte(71); emit_ptx_byte(83);
+    emit_ptx_byte(76);                                         // "WGSL"
+    emit_ptx_byte(32);
+    emit_ptx_byte(226); emit_ptx_byte(128); emit_ptx_byte(148); // EM DASH
+    emit_ptx_byte(32);
+    emit_ptx_byte(115); emit_ptx_byte(112); emit_ptx_byte(101);
+    emit_ptx_byte(99);                                         // "spec"
+    emit_ptx_byte(32);
+    emit_ptx_byte(119); emit_ptx_byte(103); emit_ptx_byte(115);
+    emit_ptx_byte(108); emit_ptx_byte(45); emit_ptx_byte(50);
+    emit_ptx_byte(48); emit_ptx_byte(50); emit_ptx_byte(52);   // "wgsl-2024"
+    emit_ptx_byte(10);
+    // "// Workgroup size default: 64\n"
+    emit_ptx_byte(47); emit_ptx_byte(47); emit_ptx_byte(32);   // "// "
+    emit_ptx_byte(87); emit_ptx_byte(111); emit_ptx_byte(114);
+    emit_ptx_byte(107); emit_ptx_byte(103); emit_ptx_byte(114);
+    emit_ptx_byte(111); emit_ptx_byte(117); emit_ptx_byte(112); // "Workgroup"
+    emit_ptx_byte(32);
+    emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(122);
+    emit_ptx_byte(101);                                        // "size"
+    emit_ptx_byte(32);
+    emit_ptx_byte(100); emit_ptx_byte(101); emit_ptx_byte(102);
+    emit_ptx_byte(97); emit_ptx_byte(117); emit_ptx_byte(108);
+    emit_ptx_byte(116); emit_ptx_byte(58);                     // "default:"
+    emit_ptx_byte(32);
+    emit_ptx_byte(54); emit_ptx_byte(52);                      // "64"
+    emit_ptx_byte(10);
+    emit_ptx_byte(10);                                         // blank line
+    0
+}
+// K1.M18: emit ONE WGSL @compute entry for a @kernel fn (real source
+// name from slots 1/2). Body is the empty-kernel skeleton (`return;`) --
+// mirrors Python webgpu.py emit_kernel_stub for a no-op kernel. Later
+// chunks emit the real body (storage buffers, tile ops). The fixed
+// workgroup_size(64) matches Python DEFAULT_WORKGROUP_SIZE.
+fn emit_wgsl_kernel(fn_idx: i32) -> i32 {
+    // "@compute @workgroup_size(64)\n"
+    emit_ptx_byte(64); emit_ptx_byte(99); emit_ptx_byte(111);
+    emit_ptx_byte(109); emit_ptx_byte(112); emit_ptx_byte(117);
+    emit_ptx_byte(116); emit_ptx_byte(101);                    // "@compute"
+    emit_ptx_byte(32);
+    emit_ptx_byte(64); emit_ptx_byte(119); emit_ptx_byte(111);
+    emit_ptx_byte(114); emit_ptx_byte(107); emit_ptx_byte(103);
+    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(117);
+    emit_ptx_byte(112); emit_ptx_byte(95); emit_ptx_byte(115);
+    emit_ptx_byte(105); emit_ptx_byte(122); emit_ptx_byte(101); // "@workgroup_size"
+    emit_ptx_byte(40); emit_ptx_byte(54); emit_ptx_byte(52);
+    emit_ptx_byte(41);                                         // "(64)"
+    emit_ptx_byte(10);
+    // "fn " + <name> + "(\n"
+    emit_ptx_byte(102); emit_ptx_byte(110); emit_ptx_byte(32); // "fn "
+    let kname_s = __arena_get(fn_idx + 1);
+    let kname_l = __arena_get(fn_idx + 2);
+    let mut ki: i32 = 0;
+    while ki < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + ki));
+        ki = ki + 1;
+    }
+    emit_ptx_byte(40); emit_ptx_byte(10);                      // "(\n"
+    // "    @builtin(local_invocation_id) local_id: vec3<u32>\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(64); emit_ptx_byte(98); emit_ptx_byte(117);
+    emit_ptx_byte(105); emit_ptx_byte(108); emit_ptx_byte(116);
+    emit_ptx_byte(105); emit_ptx_byte(110);                    // "@builtin"
+    emit_ptx_byte(40);                                         // "("
+    emit_ptx_byte(108); emit_ptx_byte(111); emit_ptx_byte(99);
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(95);
+    emit_ptx_byte(105); emit_ptx_byte(110); emit_ptx_byte(118);
+    emit_ptx_byte(111); emit_ptx_byte(99); emit_ptx_byte(97);
+    emit_ptx_byte(116); emit_ptx_byte(105); emit_ptx_byte(111);
+    emit_ptx_byte(110); emit_ptx_byte(95); emit_ptx_byte(105);
+    emit_ptx_byte(100);                                        // "local_invocation_id"
+    emit_ptx_byte(41);                                         // ")"
+    emit_ptx_byte(32);
+    emit_ptx_byte(108); emit_ptx_byte(111); emit_ptx_byte(99);
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(95);
+    emit_ptx_byte(105); emit_ptx_byte(100); emit_ptx_byte(58); // "local_id:"
+    emit_ptx_byte(32);
+    emit_ptx_byte(118); emit_ptx_byte(101); emit_ptx_byte(99);
+    emit_ptx_byte(51); emit_ptx_byte(60); emit_ptx_byte(117);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(62);   // "vec3<u32>"
+    emit_ptx_byte(10);
+    // ") {\n"
+    emit_ptx_byte(41); emit_ptx_byte(32); emit_ptx_byte(123);
+    emit_ptx_byte(10);
+    // "    return;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
+    emit_ptx_byte(117); emit_ptx_byte(114); emit_ptx_byte(110);
+    emit_ptx_byte(59);                                         // "return;"
+    emit_ptx_byte(10);
+    // "}\n\n"
+    emit_ptx_byte(125); emit_ptx_byte(10); emit_ptx_byte(10);
+    0
+}
+// K1.M18: top-level WGSL emitter. Header once, then one @compute entry
+// per @kernel fn (mirrors emit_ptx_for_ast_to_path's structure + Python
+// webgpu.py emit_module). 0 kernels -> emits nothing (returns 0).
+fn emit_wgsl_for_ast_to_path(ast_root: i32) -> i32 {
+    let mut kernel_count: i32 = 0;
+    if __arena_get(ast_root) == 15 {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                kernel_count = kernel_count + 1;
+            };
+            walk = __arena_get(walk + 2);
+        }
+    };
+    if kernel_count == 0 {
+        0
+    } else {
+        let start = __arena_len();
+        emit_wgsl_header();
+        let mut walk2: i32 = ast_root;
+        while walk2 != 0 {
+            let fn_idx = __arena_get(walk2 + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                emit_wgsl_kernel(fn_idx);
+            };
+            walk2 = __arena_get(walk2 + 2);
+        }
+        __arena_len() - start
+    }
+}
+
 // --------------------------------------------------------------
 // Demo: build a tiny AST_INT(42) by hand, compile it, write the
 // resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the
