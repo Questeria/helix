@@ -135,20 +135,31 @@ these shapes also push Python's frontend hard (likely K2-incompatible).
 **Current**: K1.F21 generic-bare-call name-resolution fallback ships
 the simplest case. Comprehensive monomorphization needs more.
 
+**Probe findings (K2.AC 2026-05-28)**: items 4 and 5 already work
+in bootstrap. Both are bootstrap-only superset features (Python
+errors at parse-time on `fn f<A, B>` and `fn f<T: Trait>` — same
+structural pattern as macros, tile ops, impl-block-self).
+
 **Gaps to close**:
-1. Turbofish `f::<T>(args)` already works (K1.F-discovery batch 27).
+1. Turbofish `f::<T>(args)` already works (K1.F-discovery batch 27). [DONE]
 2. Generic struct instantiation `let p = Pair::<i32>{a, b}` — currently
-   uses K1.DJ turbofish + generic-param scalar marker.
+   uses K1.DJ turbofish + generic-param scalar marker. [DONE]
 3. Generic-param-typed FIELD instantiation (Stage 28.11 INC-3a marks
-   200+ but INC-3b's use-site monomorphization is incomplete).
-4. Multi-param generics `fn f<A, B>(...)`.
-5. Bounded generics `fn f<T: Trait>(x: T)`.
-6. Generic-fn calling generic-fn (param substitution chain).
-7. Where-clause monomorphization.
-8. Const-generic params `fn f<const N: usize>()`.
+   200+ but INC-3b's use-site monomorphization is incomplete). [PARTIAL]
+4. Multi-param generics `fn f<A, B>(...)` — `pair<i32,i32>(42, 7)`
+   returns 42 in bootstrap; Python ParseError. **BOOTSTRAP-ONLY DONE.**
+5. Bounded generics `fn f<T: Trait>(x: T)` — `add<i32>(42, 0)` returns
+   42 in bootstrap; Python ParseError. **BOOTSTRAP-ONLY DONE.**
+6. Generic-fn calling generic-fn (param substitution chain). [PROBE]
+7. Where-clause monomorphization — K1.O parses, doesn't enforce. [PARTIAL]
+8. Const-generic params `fn f<const N: usize>()`. [PROBE]
 9. Lifetime-only generics `fn f<'a>(x: &'a T)` — currently parses as
-   K1.CR/CS skip.
-10. Generic-impl monomorphization (overlaps with P1.2.4).
+   K1.CR/CS skip; bootstrap rc=132 per earlier probe. [PENDING]
+10. Generic-impl monomorphization (overlaps with P1.2.4). [PENDING]
+
+**Status**: 4 of 10 items now DONE (1, 2, 4, 5); 2 PARTIAL (3, 7);
+3 PENDING (8 probe, 9, 10); 1 still PROBE (6). Bucket is much closer
+to feature-complete than the original "PARTIAL" label suggested.
 
 **Substrate**: extends `struct_tab` Stage 28.11 INC-3a marker model
 (200+ markers for generic-params); INC-3b is the open use-site work.

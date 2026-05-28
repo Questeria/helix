@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 301      # last bump: K2.AB -- struct-by-value RETURN ABI is the deeper blocker for chained methods. Investigated kovc.hx AST_CALL codegen (line 8541): fn_type_table tracks param types but no fn_ret_type_table for return types. AST_CALL returns rax via SysV ABI but kovc.hx may sign/zero-extend from eax afterward, truncating 8-byte struct-pointer returns. Closing chained methods needs: (1) fn_ret_type_table substrate, (2) REX.W return-value handling for struct returns, (3) let-binding type-stamp wires var_struct_tab_add when fn return is struct. Multi-chunk K1.F5g2+ arc; needs trap-id probe like K1.E1's i64-bug pattern. Documented in docs/CATEGORY_2_NEXT_PHASE.md P1.2 section. Pivoting next tick to a different bucket (P1.3 generic monomorph or P2 GPU/MLIR scoping) for velocity.
+K_BOOTSTRAP_CHUNKS_DONE = 302      # last bump: K2.AC -- P1.3 generic monomorph probe findings. Probed items #4 (multi-param `fn pair<A, B>`) and #5 (bounded `fn add<T: Copy>`) -- both WORK in bootstrap (rc=42 from `pair::<i32,i32>(42,7)` and `add::<i32>(42,0)`); Python helixc errors at parse time on both shapes. So 2 more P1.3 items are bootstrap-only-DONE (joining #1 turbofish and #2 generic-struct from earlier discoveries). Updated CATEGORY_2_NEXT_PHASE.md P1.3 section: 4 of 10 items now DONE (1, 2, 4, 5); 2 PARTIAL (3 gp-field, 7 where-clause); 3 PENDING (8 const-gen, 9 lifetime-only, 10 generic-impl); 1 PROBE (6 generic-fn-calling-generic-fn). Updated PYTHON_DELETION_BUCKETS note for generic monomorph to reflect the now-much-closer-to-complete state.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -146,7 +146,7 @@ PYTHON_DELETION_BUCKETS = [
      "note": "K1.F5b localized fix shipped; comprehensive dispatch pending (~10 chunks)"},
     {"name": "Generic monomorphization (full)",
      "status": "partial",
-     "note": "K1.F21 generic-bare-call fallback; full monomorph pending (~10 chunks)"},
+     "note": "K1.F21 + turbofish + generic-struct + multi-param + bounded all work in bootstrap (4/10 done, mostly bootstrap-only-superset); 3 PENDING (const-generics, lifetime-only, generic-impl); 2 PARTIAL (gp-field use-sites, where-clauses)"},
     {"name": "K2 parity harness fully green",
      "status": "partial",
      "note": "138/144 nominal rows; macros structural-gap (Python !) recorded; ~5-10 cleanup chunks"},
