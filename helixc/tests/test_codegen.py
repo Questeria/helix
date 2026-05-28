@@ -5035,6 +5035,30 @@ def test_bootstrap_impl_method_dispatch():
         )
 
 
+def test_bootstrap_generics_struct_and_turbofish():
+    """K1.M28 (2026-05-28): generic monomorphization in the bootstrap --
+    a generic STRUCT (Box<T>) and a TURBOFISH call (id::<i32>(42)) both
+    compile + run correctly via self-host. NOTE: Python helixc cannot
+    PARSE generic syntax at all (ParseError on `<T>`), so the bootstrap
+    EXCEEDS Python here (3rd such finding after M21 GPU + M27 impl-method)
+    -> not K2-parity-able; bootstrap-only pin. KNOWN GAP (deliberately NOT
+    pinned here): a BARE generic-fn call without turbofish (e.g. `id(42)`)
+    currently MISCOMPILES to SIGILL (exit 132) -- bare-call type inference
+    is the next generics fix. Deletion-parity for generics is met anyway
+    (Python supports zero generics)."""
+    cases = [
+        ("m28_generic_struct",
+         "struct Box<T> { v: T } fn main() -> i32 { let b = Box { v: 42 }; b.v }", 42),
+        ("m28_turbofish",
+         "fn id<T>(x: T) -> T { x } fn main() -> i32 { id::<i32>(42) }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(name, src)
+        assert rc == exp, (
+            f"generics {name}: bootstrap rc={rc}, expected {exp}"
+        )
+
+
 def test_bootstrap_kovc_inline_write_file_to_arena():
     """kovc.hx self-hosted file builtin: write_file_to_arena emits a
     file from arena bytes. Drive the bootstrap pipeline with a source
