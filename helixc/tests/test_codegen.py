@@ -7105,36 +7105,48 @@ fn main() -> i32 {
         f"got rc={run_k2.returncode}, stderr={run_k2.stderr!r}")
 
 
-def _kovc_self_host_compile_and_run(name: str, k2_src: str) -> int:
-    """K1.F-discovery test helper (2026-05-25): compile `k2_src` via
-    the full P0 -> K1 -> K2 bootstrap chain and return the K2 exit
-    code. Each `name` gets its own /tmp/sh_<name>_in.hx and
-    /tmp/sh_<name>_out.bin to avoid cross-test collision.
+_SELF_HOST_DRIVER_CACHE = {}  # driver-source-hash -> (driver_wsl, in_path, out_path)
 
-    Used by the K1.F-discovery batch tests that flip stale matrix
-    entries (match arms, bare tuple patterns, struct literals,
-    enum variants) to PARITY -- they all exercise the same
-    bootstrap chain, so the helper drops duplication.
-    """
-    import os, subprocess
-    proj = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    lexer = open(os.path.join(
-        proj, "helixc", "bootstrap", "lexer.hx")).read()
+
+def _compile_src_to_elf(src: str, optimize: bool = True) -> bytes:
+    """compile_and_run's pipeline, but return the ELF bytes WITHOUT running."""
+    prog = parse(src, include_stdlib=True)
+    flatten_modules(prog)
+    flatten_impls(prog)
+    monomorphize(prog)
+    grad_pass(prog)
+    mod = lower(prog)
+    from helixc.backend.ptx import validate_kernel_tile_lowering
+    validate_kernel_tile_lowering(mod)
+    if optimize:
+        fold_module(mod)
+        cse_module(mod)
+        dce_module(mod)
+        fdce_module(mod)
+    return compile_module_to_elf(mod)
+
+
+def _self_host_driver():
+    """PERF (2026-05-28): build the K1 self-host driver ELF ONCE per session
+    (per bootstrap-source hash) and reuse it for every k2_src in a run -- the
+    Python-compile of the ~thousands-line lexer+parser+kovc driver dominated
+    self-host test time (~13s/test). Returns (driver_wsl, in_path, out_path).
+
+    The driver reads a FIXED per-worker in_path and writes a FIXED out_path, so
+    the SAME ELF compiles every program. Cache key is the hash of the full driver
+    source, so ANY edit to lexer/parser/kovc.hx rebuilds it (correctness). Paths
+    are namespaced by PYTEST_XDIST_WORKER so parallel workers don't collide."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    in_path = f"/tmp/sh_drv_{worker}_in.hx"
+    out_path = f"/tmp/sh_drv_{worker}_out.bin"
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer = open(os.path.join(proj, "helixc", "bootstrap", "lexer.hx")).read()
     lexer_no_main = lexer.rsplit(
-        "// --------------------------------------------------------------\n// Demo:",
-        1,
-    )[0]
-    parser_body = open(os.path.join(
-        proj, "helixc", "bootstrap", "parser.hx")).read()
-    kovc = open(os.path.join(
-        proj, "helixc", "bootstrap", "kovc.hx")).read()
+        "// --------------------------------------------------------------\n// Demo:", 1)[0]
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(proj, "helixc", "bootstrap", "kovc.hx")).read()
     kovc_lib = kovc.rsplit(
-        "// --------------------------------------------------------------\n// Demo:",
-        1,
-    )[0]
-    in_path = f"/tmp/sh_{name}_in.hx"
-    out_path = f"/tmp/sh_{name}_out.bin"
+        "// --------------------------------------------------------------\n// Demo:", 1)[0]
     k1_main = f"""
 fn main() -> i32 {{
     let src_start = __arena_len();
@@ -7147,36 +7159,54 @@ fn main() -> i32 {{
     write_file_to_arena("{out_path}", elf_start, total)
 }}
 """
-    # K1.AS (2026-05-25): pre-clean any stale output binary from a
-    # previous run with this same `name`. Prevents a flake where
-    # compile_and_run could silently leave the OLD out_path on
-    # disk if the K1 binary's write step failed, and the next
-    # chmod+x'd that stale binary -- which would still execute
-    # but with pre-fix semantics. Cleaning now ensures every
-    # call observes the binary produced by the CURRENT bootstrap
-    # source.
-    #
-    # K1.F24i (2026-05-27): SOURCE-WRITE BUG FIX. The previous form
-    # `printf %s {repr(k2_src)} > {in_path}` corrupted multi-line
-    # sources: repr() escapes newlines to `\n` (two chars), and
-    # `printf %s` writes the format string verbatim WITHOUT expanding
-    # escapes. So multi-line k2_src ended up on disk as ONE line with
-    # literal `\n` separators. The lexer then choked and validation
-    # emitted trap-id 19 from main's prologue -- producing a SIGILL
-    # exit (132) that LOOKED like a codegen defect but was really
-    # a helper bug. The K1.F24g/K1.F24h "3-tile SIGILL" findings
-    # were entirely artifacts of this -- 3-tile SINGLE-LINE source
-    # returns rc=8 correctly (verified 3/3 runs).
-    #
-    # Fix: pipe source via stdin to `cat > in_path` -- this preserves
-    # all bytes including newlines, with no shell-level escaping.
+    driver_src = lexer_no_main + parser_body + kovc_lib + k1_main
+    import hashlib
+    h = hashlib.sha256(driver_src.encode("utf-8")).hexdigest()[:16]
+    cached = _SELF_HOST_DRIVER_CACHE.get(h)
+    if cached is None:
+        elf = _compile_src_to_elf(driver_src)
+        out_dir = os.path.join(proj, "helixc", "tests", "_tmp")
+        os.makedirs(out_dir, exist_ok=True)
+        drv_path = os.path.join(out_dir, f"sh_driver_{worker}_{h}.bin")
+        with open(drv_path, "wb") as f:
+            f.write(elf)
+        os.chmod(drv_path, 0o755)
+        cached = (_win_to_wsl(drv_path), in_path, out_path)
+        _SELF_HOST_DRIVER_CACHE[h] = cached
+    return cached
+
+
+def _kovc_self_host_compile_and_run(name: str, k2_src: str) -> int:
+    """K1.F-discovery test helper (2026-05-25): compile `k2_src` via the full
+    P0 -> K1 -> K2 bootstrap chain and return the K2 exit code.
+
+    PERF (2026-05-28): the K1 driver (Python-compiled lexer+parser+kovc) is now
+    built once per session via _self_host_driver() and reused (cache keyed on the
+    bootstrap-source hash), instead of recompiling the ~thousands-line driver on
+    every call. `name` is retained for signature/log compatibility but no longer
+    namespaces the /tmp paths (the driver uses fixed per-worker paths; pytest runs
+    tests sequentially within a worker, so there is no collision).
+    """
+    import subprocess
+    driver_wsl, in_path, out_path = _self_host_driver()
+    # Write k2_src to the (fixed, per-worker) in_path and clear any stale
+    # out_path. cat-via-stdin preserves all bytes incl. newlines -- K1.F24i: the
+    # old `printf %s` form corrupted multi-line sources into one line with
+    # literal `\n`, which lexed wrong and SIGILL'd (a helper bug, not codegen).
     subprocess.run(
         ["wsl", "-e", "bash", "-c",
          f"rm -f {in_path} {out_path} && cat > {in_path}"],
         input=k2_src.encode("utf-8"),
         check=True, timeout=10,
     )
-    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    # Run the CACHED driver ELF: it lexes+parses+emit_elf in_path -> out_path.
+    # (Was: recompile the whole lexer+parser+kovc driver via compile_and_run on
+    # every call -- now built once per source-hash in _self_host_driver().)
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {driver_wsl} && {driver_wsl}"],
+        timeout=30,
+    )
     run_k2 = subprocess.run(
         ["wsl", "-e", "bash", "-c",
          f"chmod +x {out_path} && {out_path}"],
