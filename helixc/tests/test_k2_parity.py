@@ -419,6 +419,19 @@ K2_CORPUS = [
     ("p229_u32_cmp",             "fn main() -> i32 { let x: u32 = 100; if x > 50 { 42 } else { 0 } }", 42),
     ("p230_u8_wrap",             "fn main() -> i32 { let x: u8 = 250; let y: u8 = 48; x + y }", 42),
     ("p231_i64_mul",             "fn main() -> i32 { let x: i64 = 6; let y: i64 = 7; x * y }", 42),
+    # S3 enum/match-depth audit (2026-05-28): axis CLEAN -- 9 rich enum/match
+    # shapes all both-compiler-parity, incl. 8-variant enum, wildcard
+    # binding, match-on-fn-call, MULTI-PAYLOAD enum `E::P(a,b)`, struct
+    # holding an enum field, and 3-level nested match. p232-p240:
+    ("p232_enum8",               "enum E { A, B, C, D, F, G, H, I } fn main() -> i32 { let e = E::F; match e { E::A=>0, E::B=>1, E::C=>2, E::D=>3, E::F=>42, E::G=>6, E::H=>7, E::I=>8 } }", 42),
+    ("p233_match_wild_bind",     "fn main() -> i32 { let x = 99; match x { 0 => 0, n => n - 57 } }", 42),
+    ("p234_match_fn_call",       "fn f() -> i32 { 3 } fn main() -> i32 { match f() { 1=>1, 3=>42, _=>0 } }", 42),
+    ("p235_enum_payload_arith",  "enum E { A(i32), B(i32) } fn main() -> i32 { let e = E::A(40); match e { E::A(x) => x + 2, E::B(x) => x } }", 42),
+    ("p236_match_subexpr",       "fn main() -> i32 { let x = 2; 40 + match x { 2 => 2, _ => 0 } }", 42),
+    ("p237_fn_return_match",     "fn cl(x:i32)->i32{ match x { 0=>0, _=>42 } } fn main() -> i32 { cl(5) }", 42),
+    ("p238_nested_match3",       "fn main() -> i32 { let a=1; let b=2; let c=3; match a { 1 => match b { 2 => match c { 3 => 42, _=>0 }, _=>0 }, _=>0 } }", 42),
+    ("p239_struct_enum_field",   "enum C { R, G } struct S { c: C, v: i32 } fn main() -> i32 { let s = S{c:C::G, v:42}; s.v }", 42),
+    ("p240_enum_multi_payload",  "enum E { P(i32, i32) } fn main() -> i32 { let e = E::P(40, 2); match e { E::P(a, b) => a + b } }", 42),
 ]
 
 
@@ -490,7 +503,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 231, (
+    assert len(K2_CORPUS) >= 240, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
