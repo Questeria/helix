@@ -89,20 +89,29 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 309      # last bump: K1.F5k -- CRITICAL regression fix: DISABLE the chained-method substrate (K1.F5d/e/f/g/j). ROOT CAUSE: the sb scratch-state region is sized to slots 0..123 (parse_top allocation block). K1.F5d wrote sb+74 (collided with next_fn_is_ckpt), K1.F5e wrote sb+76/77 (collided with next_fn_is_trace/unwind) -- corrupting fn-attribute state during parse. K1.F5j relocated to sb+124+, which OVERFLOWED the sb-region end and corrupted downstream arena state. Both bugs broke 18-52 K1.F* tests (caught by the K2.AH parallel sweep -- the speed-up paid for itself by catching a silent multi-test regression). K1.F5k disables init+write+read (substrate unused until K1.F5g2 struct-return codegen lands anyway); accessor fns remain as dead code. Verified: K1.F5c + K1.F31 + 5 previously-failing tests all PASS post-disable with fresh WSL. LESSON: new sb-slots must extend the parse_top allocation block AND avoid the 0..123 occupied range; grep "sb + N)" (with close-paren) not "sb + N" to catch existing accessors.
+K_BOOTSTRAP_CHUNKS_DONE = 310      # last bump: K2.AI -- MLIR port-surface survey + estimate revision. helixc/ir/mlir/ is 15,360 LOC across 8 files (backends.py 6373, validate.py 6156, emit.py 1123, parity.py 622, mapping.py 386, toolchain.py 384, helix_dialect.py 297). The P2.1 MLIR + P2.2 GPU port is the DOMINANT remaining cost -- far larger than the prior 400/440 estimate implied. Revised: BEST 400->470, REAL 440->560 (309 done + ~250 remaining for P2.1+P2.2+P1-tail+K3+audit-gate). Recorded the K1.F5d-j slot-collision post-mortem lesson in CATEGORY_2_NEXT_PHASE.md. Smallest MLIR entry remains helix_dialect.py (297 LOC). Baseline-green regression running in background (b7xd313yj); result processed next tick. -- CRITICAL regression fix: DISABLE the chained-method substrate (K1.F5d/e/f/g/j). ROOT CAUSE: the sb scratch-state region is sized to slots 0..123 (parse_top allocation block). K1.F5d wrote sb+74 (collided with next_fn_is_ckpt), K1.F5e wrote sb+76/77 (collided with next_fn_is_trace/unwind) -- corrupting fn-attribute state during parse. K1.F5j relocated to sb+124+, which OVERFLOWED the sb-region end and corrupted downstream arena state. Both bugs broke 18-52 K1.F* tests (caught by the K2.AH parallel sweep -- the speed-up paid for itself by catching a silent multi-test regression). K1.F5k disables init+write+read (substrate unused until K1.F5g2 struct-return codegen lands anyway); accessor fns remain as dead code. Verified: K1.F5c + K1.F31 + 5 previously-failing tests all PASS post-disable with fresh WSL. LESSON: new sb-slots must extend the parse_top allocation block AND avoid the 0..123 occupied range; grep "sb + N)" (with close-paren) not "sb + N" to catch existing accessors.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
 #              corners that turn out vacuously satisfied at K2 time
 #   REAL     = under the 2026-05-26 hard constraint (no Python-forever
 #              deferral for any subsystem)
-K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE = 400  # K2.W 2026-05-27 re-estimate after
-                                          # macro saturation phase (K1.F22-F52
-                                          # closed 30 chunks); GPU + MLIR are
-                                          # the remaining big buckets, each
-                                          # multi-chunk (~40-60 each).
-K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE = 440  # Same K2.W re-estimate under hard
-                                          # constraint (no Python-forever).
+K_BOOTSTRAP_CHUNKS_BEST_ESTIMATE = 470  # K2.AI 2026-05-28 re-estimate after
+                                          # surveying the MLIR port surface:
+                                          # helixc/ir/mlir/ is 15,360 LOC
+                                          # (backends.py 6373 + validate.py
+                                          # 6156 dominate). Even with mock-path
+                                          # deferrals, the P2.1 MLIR + P2.2 GPU
+                                          # ports are larger than the prior
+                                          # 400 estimate. BEST assumes heavy
+                                          # mock-path/test-scaffold deferral.
+K_BOOTSTRAP_CHUNKS_REAL_ESTIMATE = 560  # K2.AI: under the hard constraint
+                                          # (full MLIR+GPU port, no Python-
+                                          # forever), ~170-250 chunks remain
+                                          # for P2.1+P2.2 alone. 309 done +
+                                          # ~250 remaining ~= 560. The MLIR
+                                          # 15k-LOC surface is the dominant
+                                          # cost; GPU backends (4x) are next.
 
 # K2.W (2026-05-27): Python-deletion-readiness bucket model. Each bucket
 # is one Category-1 syntax/semantic gap or Category-2 platform port that

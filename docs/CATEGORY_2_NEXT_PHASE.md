@@ -230,6 +230,47 @@ the highest-impact remaining sub-gap.
 These are multi-chunk arcs with per-arc audits. Each starts with a
 scope/feasibility chunk before any code lands.
 
+### K1.F5d-j POST-MORTEM (K2.AI 2026-05-28)
+
+The chained-method substrate (K1.F5d/e/f/g/j) was a net-negative arc:
+6 commits to add substrate + 1 (K1.F5k) to disable it, with zero net
+feature progress. Two bugs:
+1. sb-slot collision: K1.F5d/e allocated sb+74/76/77 which were already
+   next_fn_is_ckpt/trace/unwind -- silently corrupted fn-attribute state.
+2. sb-region overflow: K1.F5j relocated to sb+124+, past the sb-region
+   end (sized 0..123 in parse_top) -- corrupted downstream arena.
+Broke 18-52 K1.F* tests. Caught by the K2.AH parallel sweep.
+
+PREVENTION RULES (now in the loop prompt):
+- New sb-slots MUST extend the parse_top allocation block past 123.
+- grep "sb + N)" (close-paren) to find existing accessors, not "sb + N".
+- After parser.hx shared-state changes, run SEQUENTIAL regression across
+  macro+tile families (the parallel -n4 sweep corrupts WSL under load --
+  discovery-only, never gate on it).
+- Prefer feature work that doesn't touch sb-scratch slots.
+
+### MLIR PORT SURFACE SURVEY (K2.AI 2026-05-28)
+
+helixc/ir/mlir/ is **15,360 LOC** across 8 files:
+  backends.py      6373   (tile-IR -> 5 backend target emission)
+  validate.py      6156   (mock-path + real-path validators)
+  emit.py          1123   (module/func.func text emission)
+  parity.py         622   (MLIR-vs-tile-IR parity gate)
+  mapping.py        386   (TileIR op -> MLIR dialect op map)
+  toolchain.py      384   (mlir-translate wrapper)
+  helix_dialect.py  297   (small custom helix dialect)
+
+This is the DOMINANT remaining cost. Even with mock-path deferral
+(the real-MLIR-binding paths can stay stubbed on this binding-less
+dev machine), the structural port is ~100-150 chunks for MLIR plus
+~80-150 for the 4 GPU backends. Total P2.1+P2.2 ~= 170-300 chunks.
+
+REVISED ESTIMATE: BEST 470 / REAL 560 total (was 400/440). The macro
++ P1 phases were the cheap part; the platform ports are the bulk.
+
+Smallest MLIR entry point: helix_dialect.py (297 LOC) -> port the
+dialect data model first (arena-backed tables, no sb-slots needed).
+
 #### P2.1 — MLIR migration in bootstrap (~30–50 chunks)
 **Current**: helixc/ir/mlir/ Python files implement Stage 211-216 of
 v3.0 (toolchain, mapping, helix_dialect, validate, emit, parity-gate).
