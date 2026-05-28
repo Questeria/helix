@@ -247,6 +247,14 @@ K2_CORPUS = [
     ("p123_i64sub_lt_i32",       "fn main() -> i32 { if (100_i64 - 60_i64) < 50 { 42 } else { 0 } }", 42),
     ("p124_logand_mixed_cmp",    "fn main() -> i32 { if (30_i64 < 60) && (40 > 30_i64) { 42 } else { 0 } }", 42),
     ("p125_logor_mixed_cmp",     "fn main() -> i32 { if (30_i64 > 99) || (40 > 30_i64) { 42 } else { 0 } }", 42),
+    # K2.S (2026-05-28): bitwise-op parity probes -- the corpus had NO
+    # bitwise coverage. Both compilers support &/|/^/<</>> (see the
+    # bitwise tests in test_codegen.py compile_and_run). Each result = 42.
+    ("p126_bitand",              "fn main() -> i32 { 250 & 42 }", 42),
+    ("p127_bitor",               "fn main() -> i32 { 32 | 10 }", 42),
+    ("p128_bitxor",              "fn main() -> i32 { 52 ^ 30 }", 42),
+    ("p129_shl",                 "fn main() -> i32 { 21 << 1 }", 42),
+    ("p130_shr",                 "fn main() -> i32 { 84 >> 1 }", 42),
 ]
 
 
@@ -318,8 +326,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 125, (
-        f"K2.R corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 130, (
+        f"K2.S corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
