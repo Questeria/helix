@@ -70,6 +70,15 @@ Revised estimate (down from K2.AI's 470/560):
 - BEST ~400, REAL ~470 (removing the ~100-150 MLIR-port chunks;
   keeping GPU-direct-emission + P1 tail + K3 + audit gate).
 
+## RATIFIED BY USER (2026-05-28)
+
+The user reviewed this decision and approved the direct-to-chip path:
+"If you can skip the middle man and talk directly to the chip that is
+amazing and the best option." The user-overridable flag below is now
+RESOLVED in favor of direct emission. The loop proceeds on direct
+GPU emission; the MLIR substrate is NOT ported (deleted at K4). No
+further re-litigation needed.
+
 ## Caveat / user-decision flag
 
 This is an ARCHITECTURAL decision that changes the v1.0 shape: the
