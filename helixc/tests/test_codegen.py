@@ -8190,6 +8190,42 @@ def test_bootstrap_wgsl_params():
     )
 
 
+def test_bootstrap_wgsl_elementwise():
+    """K1.M23 (2026-05-28): the FIRST REAL non-NVIDIA GPU kernel -- a full
+    WebGPU/WGSL elementwise add. `out[i] = a[i] + b[i]` lowers to storage
+    buffers + a @compute entry + a real body: `let i = gid.x;` (global
+    thread index) + `out[i] = a[i] + b[i];`. WGSL is high-level so the body
+    is near-source (no registers). This is NET-NEW vs the Python WebGPU
+    backend, which stubs all ops (@@HELIX-STUB) -- a genuine AI-compute
+    kernel for ANY GPU (NVIDIA/AMD/Apple/Intel) via the portable WebGPU
+    standard. NO CUDA, NO MLIR, NO LLVM. No local naga validator -> the
+    check is a spec-correct byte-match of valid WGSL-2024."""
+    src = ("@kernel fn k(out: f32, a: f32, b: f32) { "
+           "let i: i32 = thread_idx(); out[i] = a[i] + b[i] }\n")
+    wgsl = _kovc_self_host_emit_ptx("wgsl_ew", src,
+                                    emit_fn="emit_wgsl_for_ast_to_path")
+    expected = (
+        "// Helix-emitted WGSL — spec wgsl-2024\n"
+        "// Workgroup size default: 64\n"
+        "\n"
+        "@group(0) @binding(0) var<storage, read_write> out: array<f32>;\n"
+        "@group(0) @binding(1) var<storage, read_write> a: array<f32>;\n"
+        "@group(0) @binding(2) var<storage, read_write> b: array<f32>;\n"
+        "@compute @workgroup_size(64)\n"
+        "fn k(\n"
+        "    @builtin(global_invocation_id) gid: vec3<u32>\n"
+        ") {\n"
+        "    let i = gid.x;\n"
+        "    out[i] = a[i] + b[i];\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+    ).encode("utf-8")
+    assert wgsl == expected, (
+        f"WGSL elementwise mismatch:\n got={wgsl!r}\nwant={expected!r}"
+    )
+
+
 def test_bootstrap_msl_empty_kernel():
     """K1.M19 (2026-05-28): SECOND non-NVIDIA GPU backend -- Apple Metal /
     MSL. The bootstrap emits a Metal compute kernel (#include

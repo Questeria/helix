@@ -11009,6 +11009,90 @@ fn emit_wgsl_kernel_empty(fn_idx: i32) -> i32 {
     emit_ptx_byte(125); emit_ptx_byte(10); emit_ptx_byte(10);
     0
 }
+// K1.M23: lower one WGSL expression (high-level text -- NO registers).
+// AST_INT->decimal; AST_VAR->name; AST_CALL->"gid.x" (thread_idx, the M23
+// kernel builtin); AST_INDEX a[i]->expr(base)+"["+expr(index)+"]"; binop
+// 2/3/4/5 -> expr(l)+" +|-|*|/ "+expr(r). Recursive.
+fn emit_wgsl_expr(node: i32) -> i32 {
+    let tag = __arena_get(node);
+    if tag == 0 {
+        emit_ptx_decimal(__arena_get(node + 1));
+        0
+    } else { if tag == 1 {
+        let ns = __arena_get(node + 1);
+        let nl = __arena_get(node + 2);
+        let mut i: i32 = 0;
+        while i < nl {
+            emit_ptx_byte(__arena_get(ns + i));
+            i = i + 1;
+        }
+        0
+    } else { if tag == 16 {
+        // thread_idx() -> the global thread index "gid.x"
+        emit_ptx_byte(103); emit_ptx_byte(105); emit_ptx_byte(100);
+        emit_ptx_byte(46); emit_ptx_byte(120);                   // "gid.x"
+        0
+    } else { if tag == 53 {
+        emit_wgsl_expr(__arena_get(node + 1));   // base name
+        emit_ptx_byte(91);                        // "["
+        emit_wgsl_expr(__arena_get(node + 2));   // index
+        emit_ptx_byte(93);                        // "]"
+        0
+    } else {
+        // binop: 2=ADD 3=SUB 4=MUL 5=DIV -> infix WGSL operator
+        emit_wgsl_expr(__arena_get(node + 1));
+        emit_ptx_byte(32);
+        if tag == 2 { emit_ptx_byte(43); };       // "+"
+        if tag == 3 { emit_ptx_byte(45); };       // "-"
+        if tag == 4 { emit_ptx_byte(42); };       // "*"
+        if tag == 5 { emit_ptx_byte(47); };       // "/"
+        emit_ptx_byte(32);
+        emit_wgsl_expr(__arena_get(node + 2));
+        0
+    }}}}
+}
+// K1.M23: lower a WGSL body statement. AST_LET -> "    let <name> = <val>;"
+// then recurse continuation; AST_INDEX_STORE -> "    <base>[<idx>] = <v>;";
+// AST_SEQ -> both. Empty/const bodies (AST_INT etc.) emit nothing (so the
+// M22 `{ 0 }` params kernel stays byte-identical). The `: type` annotation
+// is dropped (WGSL infers). Recursive (mutual with emit_wgsl_expr).
+fn emit_wgsl_stmt(node: i32) -> i32 {
+    let tag = __arena_get(node);
+    if tag == 8 {
+        emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+        emit_ptx_byte(32);
+        emit_ptx_byte(108); emit_ptx_byte(101); emit_ptx_byte(116);
+        emit_ptx_byte(32);                                       // "let "
+        let ns = __arena_get(node + 1);
+        let nl = __arena_get(node + 2);
+        let mut i: i32 = 0;
+        while i < nl {
+            emit_ptx_byte(__arena_get(ns + i));
+            i = i + 1;
+        }
+        emit_ptx_byte(32); emit_ptx_byte(61); emit_ptx_byte(32); // " = "
+        emit_wgsl_expr(__arena_get(node + 4));                   // value
+        emit_ptx_byte(59); emit_ptx_byte(10);                    // ";\n"
+        emit_wgsl_stmt(__arena_get(node + 3))                    // continuation
+    } else { if tag == 55 {
+        let idx_node = __arena_get(node + 1);
+        emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+        emit_ptx_byte(32);
+        emit_wgsl_expr(__arena_get(idx_node + 1));               // base
+        emit_ptx_byte(91);                                       // "["
+        emit_wgsl_expr(__arena_get(idx_node + 2));               // index
+        emit_ptx_byte(93);                                       // "]"
+        emit_ptx_byte(32); emit_ptx_byte(61); emit_ptx_byte(32); // " = "
+        emit_wgsl_expr(__arena_get(node + 2));                   // value
+        emit_ptx_byte(59); emit_ptx_byte(10);                    // ";\n"
+        0
+    } else { if tag == 13 {
+        emit_wgsl_stmt(__arena_get(node + 1));
+        emit_wgsl_stmt(__arena_get(node + 2))
+    } else {
+        0
+    }}}
+}
 // K1.M22: emit one WGSL storage-buffer binding for a kernel param --
 // "@group(0) @binding(<idx>) var<storage, read_write> <name>: array<f32>;".
 // Positional binding index. Phase-0: array<f32> (the AI elementwise/tile
@@ -11114,6 +11198,10 @@ fn emit_wgsl_kernel_params(fn_idx: i32) -> i32 {
     // ") {\n"
     emit_ptx_byte(41); emit_ptx_byte(32); emit_ptx_byte(123);
     emit_ptx_byte(10);
+    // K1.M23: lower the kernel body (AST_FN_DECL slot 3) to WGSL stmts,
+    // then the trailing return. Empty/const bodies (e.g. `{ 0 }`) emit
+    // nothing -> the M22 wgsl_params kernel stays byte-identical.
+    emit_wgsl_stmt(__arena_get(fn_idx + 3));
     // "    return;\n"
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
     emit_ptx_byte(32);
