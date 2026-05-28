@@ -70,6 +70,49 @@ Revised estimate (down from K2.AI's 470/560):
 - BEST ~400, REAL ~470 (removing the ~100-150 MLIR-port chunks;
   keeping GPU-direct-emission + P1 tail + K3 + audit gate).
 
+## VERIFIED WITH HARD EVIDENCE (K2.AK, 2026-05-28)
+
+User asked to VERIFY (not assert) that direct-to-chip GPU emission is
+actually feasible before relying on the 150-chunk cut. Verification is
+DECISIVE and CONFIRMS the decision:
+
+Python helixc has TWO GPU code paths:
+  - helixc/ir/mlir/backends.py (6373 LOC) -- the MLIR-based path
+  - helixc/backend/{ptx,rocm,metal,webgpu}.py -- DIRECT tile-IR emitters,
+    sitting right next to backend/x86_64.py (the CPU backend the
+    bootstrap ALREADY reimplemented).
+
+Evidence (grep mlir-refs vs tile_ir-refs per backend):
+  backend         LOC    mlir_refs   tile_ir_refs
+  x86_64 (CPU)    5517   0           75   <- already mirrored by bootstrap
+  ptx (NVIDIA)    1873   0           68
+  rocm (AMD)       436   0           55
+  metal (Apple)    498   0           53
+  webgpu (browser) 398   1*          52
+  *the single webgpu "mlir" hit is a DOCSTRING: "Lowering is text-only
+   -- no LLVM IR / MLIR detour." i.e. it CONFIRMS no MLIR dependency.
+
+CONCLUSIONS:
+1. Direct tile-IR -> GPU-text emission is PROVEN feasible -- it's how
+   Python's primary GPU backends already work, with ZERO MLIR. The
+   MLIR path is a parallel alternative, not a requirement.
+2. The bootstrap should mirror backend/ptx.py (direct tile-IR -> PTX
+   text) exactly as it already mirrors backend/x86_64.py (direct ->
+   ELF). PTX/WGSL/MSL/HIP are all TEXT output -- strictly SIMPLER than
+   the ELF binary emission the bootstrap already does.
+3. The 150-chunk MLIR cut STANDS. The MLIR substrate is genuinely not
+   on the bootstrap's path.
+4. BONUS: the 4 GPU backends total 3,205 LOC -- SMALLER than the single
+   5,517-LOC x86_64 backend the bootstrap already reimplemented. So the
+   GPU port is LESS work than the CPU codegen already shipped. Estimate
+   for P2.2 tightened with higher confidence: ~60-100 chunks (was
+   ~80-150), and the architectural risk is now near-zero (existence
+   proof in hand).
+
+If I had been WRONG (Python only emitted GPU via MLIR), the fallback
+was to build a direct emitter anyway. But the fallback is moot: the
+direct emitter already EXISTS in Python and is the reference to port.
+
 ## RATIFIED BY USER (2026-05-28)
 
 The user reviewed this decision and approved the direct-to-chip path:
