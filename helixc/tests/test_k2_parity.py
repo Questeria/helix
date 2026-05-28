@@ -408,6 +408,17 @@ K2_CORPUS = [
     ("p221_deeply_paren",        "fn main() -> i32 { (((((((42))))))) }", 42),
     ("p222_nested_block_comment","fn main() -> i32 { /* a /* b */ c */ 42 }", 42),
     ("p223_block_expr_value",    "fn main() -> i32 { let x = { let y = 40; y + 2 }; x }", 42),
+    # S3 type-system audit (2026-05-28): typed-int axis CLEAN -- 8 u8/u16/
+    # i16/u32/i64 shapes (incl. u8 wraparound 250+48->42 and i64 arithmetic)
+    # all both-compiler-parity. p224-p231:
+    ("p224_u32_div",             "fn main() -> i32 { let x: u32 = 84; let y: u32 = 2; x / y }", 42),
+    ("p225_u8_arith",            "fn main() -> i32 { let x: u8 = 40; let y: u8 = 2; x + y }", 42),
+    ("p226_u16_arith",           "fn main() -> i32 { let x: u16 = 21; x + x }", 42),
+    ("p227_i16_arith",           "fn main() -> i32 { let x: i16 = 40; let y: i16 = 2; x + y }", 42),
+    ("p228_i64_small",           "fn main() -> i32 { let x: i64 = 21; let y: i64 = 21; x + y }", 42),
+    ("p229_u32_cmp",             "fn main() -> i32 { let x: u32 = 100; if x > 50 { 42 } else { 0 } }", 42),
+    ("p230_u8_wrap",             "fn main() -> i32 { let x: u8 = 250; let y: u8 = 48; x + y }", 42),
+    ("p231_i64_mul",             "fn main() -> i32 { let x: i64 = 6; let y: i64 = 7; x * y }", 42),
 ]
 
 
@@ -479,7 +490,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 223, (
+    assert len(K2_CORPUS) >= 231, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
