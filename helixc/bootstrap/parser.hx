@@ -2502,21 +2502,16 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                         };
                     };
                     // K1.F5g (2026-05-28): extend to AST_CALL prim_tag --
-                    // closes chained methods (`a.chain1().chain2()`) and
-                    // non-let-bound receivers (`foo().method()`). The AST_CALL
-                    // node carries the mangled-name bytes in slots p1/p2
-                    // (name_s, name_l) and args in slot p3 (per mk_node(16,
-                    // mang_s, mang_l, args_head) calls). Look up the name
-                    // in fn_ret_struct_tab; if found, that's our receiver's
-                    // struct_idx. Empty table or non-matching name -> -1,
-                    // falls through to field-access branch (matches pre-F5g
-                    // behavior).
-                    if prim_tag_pre == 16 {
-                        let f5g_name_s = __arena_get(prim + 1);
-                        let f5g_name_l = __arena_get(prim + 2);
-                        let f5g_struct_idx = fn_ret_struct_tab_lookup(sb, f5g_name_s, f5g_name_l);
-                        if f5g_struct_idx >= 0 { method_lhs_struct = f5g_struct_idx; };
-                    };
+                    // K1.F5k (2026-05-28 audit-fix): DISABLED. The fn_ret_
+                    // struct_tab is gated off (see install_keywords +
+                    // parse_fn_decl K1.F5k notes). Re-enable when K1.F5g2
+                    // codegen lands.
+                    // if prim_tag_pre == 16 {
+                    //     let f5g_name_s = __arena_get(prim + 1);
+                    //     let f5g_name_l = __arena_get(prim + 2);
+                    //     let f5g_struct_idx = fn_ret_struct_tab_lookup(sb, f5g_name_s, f5g_name_l);
+                    //     if f5g_struct_idx >= 0 { method_lhs_struct = f5g_struct_idx; };
+                    // };
                     // K1.F5c (2026-05-27): extend to STRUCT-LITERAL receiver.
                     // `P { x: 1 }.method()` — prim_tag_pre is AST_TUPLE_LIT
                     // (tag 50, also used for struct literals). The struct
@@ -8487,14 +8482,23 @@ fn cl_tabs_init(sb: i32) -> i32 {
 // --------------------------------------------------------------
 fn install_keywords(sb: i32) -> i32 {
     // K1.F5d (2026-05-27): init the last_call_ret_struct_idx side-channel
-    // slot to -1 (no struct return tracked). K1.F5j (2026-05-28 audit-
-    // fix): MOVED slot from sb+74 to sb+124 -- original collided with
-    // closure-clearing scratch path at parser.hx:9230-9239.
-    __arena_set(sb + 124, 0 - 1);
+    // slot to -1. K1.F5j tried sb+124 -- but the sb-region is only sized
+    // to slots 0..123 per parse_top's allocation block. Writing sb+124
+    // OVERFLOWS the sb-region and corrupts downstream arena state.
+    // K1.F5k (2026-05-28 final audit-fix): the entire chained-method
+    // substrate is DISABLED. Accessor functions remain as dead code (no
+    // callers) for future K1.F5g2+ to revive after extending the sb-region.
+    // __arena_set(sb + 124, 0 - 1);
     // K1.F5e (2026-05-28): init the fn_ret_struct_tab (96-slot region for
     // 32 (name_s, name_l, struct_idx) entries). Empty at start; populated
     // by K1.F5f at fn-decl exit.
-    fn_ret_struct_tab_init(sb);
+    // K1.F5k (2026-05-28 audit-fix): DISABLED. The fn_ret_struct_tab_init
+    // call pushed 96 zero-slots into the arena BEFORE the keyword strings,
+    // which disrupted some invariant downstream (K1.F5c started failing
+    // post-K1.F5j sweep). Until K1.F5g2 unblocks the chained-method codegen
+    // anyway, the substrate is unused -- safer to disable than carry a
+    // hidden corruption risk. Re-enable when K1.F5g2 lands.
+    // fn_ret_struct_tab_init(sb);
     let let_s = __arena_push(108); __arena_push(101); __arena_push(116);
     __arena_set(sb + 1, let_s);
     __arena_set(sb + 2, 3);
@@ -12087,14 +12091,15 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let ret_ty_post_struct = if rt_struct_idx >= 0 { 100 + rt_struct_idx } else { ret_ty };
     let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty_post_struct };
     // K1.F5f (2026-05-28): register fn-name -> return-struct-idx in
-    // fn_ret_struct_tab if this fn returns a struct. The encoding from
-    // ret_ty_post_struct above is 100 + struct_idx when rt_struct_idx >= 0;
-    // generic-param returns (200+) are NOT registered (they're not concrete
-    // struct types). Future K1.F5g reads this table from the method-call
-    // PRE-CHECK to enable chained-method dispatch (`a.chain1().chain2()`).
-    if rt_struct_idx >= 0 {
-        let _f5f_added = fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx);
-    };
+    // fn_ret_struct_tab if this fn returns a struct.
+    // K1.F5k (2026-05-28 audit-fix): DISABLED -- same rationale as the init
+    // disable in install_keywords. The fn_ret_struct_tab_add call writes
+    // to sb+125/126, which (combined with the init disable) leaves stale
+    // garbage in those slots. Safer to gate the write. Re-enable as a pair
+    // with the init when K1.F5g2 codegen lands.
+    // if rt_struct_idx >= 0 {
+    //     let _f5f_added = fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx);
+    // };
     // K1.O (2026-05-25): optional `where T: Bound, U: Bound2` clause
     // after the return type and before the body LBRACE. Bounds are
     // not enforced in the type-erased bootstrap -- just consume all
