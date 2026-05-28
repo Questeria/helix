@@ -10347,6 +10347,54 @@ def test_bootstrap_kovc_k1f43_k1f44_assert_eq_ne_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f45_k1f46_assert_le_ge_self_host():
+    """K1.F45 + K1.F46 (2026-05-27): assert!(IDENT <= INT_LIT) /
+    assert!(IDENT >= INT_LIT). Closes the assert! comparison family for
+    all 6 ops (==, !=, <, >, <=, >=) on the (IDENT, INT_LIT) shape.
+
+    8-token shape via 2-char op lex (TK_LT TK_EQ / TK_GT TK_EQ).
+    AST_LE=22, AST_GE=23.
+
+    Real Rust: `assert!(idx <= len)`, `assert!(x >= 0)`.
+    """
+    rc_le_pass = _kovc_self_host_compile_and_run(
+        "k1f45_alei_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert!(x <= 10); 11 }',
+    )
+    assert rc_le_pass == 11
+    rc_le_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f45_alei_eq_pass",
+        'fn main() -> i32 { let x: i32 = 10; assert!(x <= 10); 11 }',
+    )
+    assert rc_le_eq_pass == 11, (
+        f"K1.F45 assert!(x <= 10) when x=10: expected rc=11 (boundary "
+        f"holds); got {rc_le_eq_pass}. If rc=132: AST_LE confused with AST_LT."
+    )
+    rc_le_fail = _kovc_self_host_compile_and_run(
+        "k1f45_alei_fail",
+        'fn main() -> i32 { let x: i32 = 15; assert!(x <= 10); 11 }',
+    )
+    assert rc_le_fail == 132
+    rc_ge_pass = _kovc_self_host_compile_and_run(
+        "k1f46_agei_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert!(x >= 0); 11 }',
+    )
+    assert rc_ge_pass == 11
+    rc_ge_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f46_agei_eq_pass",
+        'fn main() -> i32 { let x: i32 = 0; assert!(x >= 0); 11 }',
+    )
+    assert rc_ge_eq_pass == 11, (
+        f"K1.F46 assert!(x >= 0) when x=0: expected rc=11 (boundary "
+        f"holds); got {rc_ge_eq_pass}. If rc=132: AST_GE confused with AST_GT."
+    )
+    rc_ge_fail = _kovc_self_host_compile_and_run(
+        "k1f46_agei_fail",
+        'fn main() -> i32 { let x: i32 = -3; assert!(x >= 0); 11 }',
+    )
+    assert rc_ge_fail == 132
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

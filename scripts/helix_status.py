@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 279      # last bump: K1.F43+F44 batch -- assert!(IDENT == INT_LIT) and assert!(IDENT != INT_LIT). 8-token shapes (the structural finding from K1.F41 commit: `==` lexes as TK_EQ TK_EQ, `!=` lexes as TK_BANG TK_EQ). Added mac_t7 declaration to the IDENT! arm prelude. AST_EQ=20, AST_NE=21; reuses K1.F22j/K1.F22k 20-byte panic messages. Real Rust `assert!(x == 0)`, `assert!(rc != 0)`. Tests pass; K1.F41 regression intact. Chunks-since-last-TG = 4 (last TG at 4c4cf99 counter 275, now 279). Below 5-threshold, TG skipped this tick.
+K_BOOTSTRAP_CHUNKS_DONE = 281      # last bump: K1.F45+F46 batch -- assert!(IDENT <= INT_LIT) / assert!(IDENT >= INT_LIT). Closes the 6-op assert! comparison family (==, !=, <, >, <=, >=) on the (IDENT, INT_LIT) shape. 8-token shapes; AST_LE=22, AST_GE=23. Boundary tests verify AST_LE vs AST_LT semantics distinct (x=10 against x<=10 → pass; x>10 → fail). MILESTONE: 6-op assert! family complete. Telegram fires (milestone + 6 chunks since last TG at 4c4cf99).
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
