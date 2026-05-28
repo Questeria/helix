@@ -318,6 +318,22 @@ K2_CORPUS = [
     ("p164_const_global",        "const N: i32 = 42; fn main() -> i32 { N }", 42),
     ("p165_array_idx_const",     "fn main() -> i32 { let a = [42, 0, 0, 0, 0]; a[0] }", 42),
     ("p166_div_combo",           "fn main() -> i32 { let x = 200; (x / 4) - 8 }", 42),
+    # Safe-hardening (2026-05-28): 12 more both-compiler-parity shapes --
+    # nested match, array-elems-as-args, boolean logic (&& !), mul chain,
+    # paren precedence, bool-var-in-if, double negate, sumto recursion,
+    # 4-variant enum match, mod/div branch, shift-right, xor.
+    ("p167_nested_match",        "fn main() -> i32 { let x = 2; let y = 3; match x { 1 => 0, 2 => match y { 3 => 42, _ => 1 }, _ => 0 } }", 42),
+    ("p168_array_args",          "fn sum3(a: i32, b: i32, c: i32) -> i32 { a + b + c } fn main() -> i32 { let arr = [20, 15, 7]; sum3(arr[0], arr[1], arr[2]) }", 42),
+    ("p169_bool_logic",          "fn main() -> i32 { let a = true; let b = false; if a && !b { 42 } else { 0 } }", 42),
+    ("p170_mul_chain",           "fn main() -> i32 { 2 * 3 * 7 }", 42),
+    ("p171_paren_prec",          "fn main() -> i32 { (2 + 5) * 6 }", 42),
+    ("p172_bool_var_if",         "fn main() -> i32 { let x = 5; let y = x > 3; if y { 42 } else { 0 } }", 42),
+    ("p173_neg_negate",          "fn main() -> i32 { let x = 10 - 52; 0 - x }", 42),
+    ("p174_sumto",               "fn sumto(n: i32) -> i32 { if n == 0 { 0 } else { n + sumto(n-1) } } fn main() -> i32 { sumto(8) + 6 }", 42),
+    ("p175_enum4_match",         "enum D { N, E, S, W } fn main() -> i32 { let d = D::S; match d { D::N => 1, D::E => 2, D::S => 42, D::W => 4 } }", 42),
+    ("p176_mod_div",             "fn main() -> i32 { let x = 84; if x % 2 == 0 { x / 2 } else { 0 } }", 42),
+    ("p177_shift_right",         "fn main() -> i32 { let x = 168; x >> 2 }", 42),
+    ("p178_xor",                 "fn main() -> i32 { 40 ^ 2 }", 42),
 ]
 
 
@@ -389,7 +405,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 166, (
+    assert len(K2_CORPUS) >= 178, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
