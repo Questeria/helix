@@ -383,6 +383,18 @@ K2_CORPUS = [
     # These were NOT parity-able before the fix; now pinned as parity guards.
     ("p206_array_store_const",   "fn main() -> i32 { let mut a = [1,2,3]; a[0] = 42; a[0] }", 42),
     ("p207_array_store_loop",    "fn main() -> i32 { let mut a = [0,0,0,0,0,0]; let mut i = 0; while i < 6 { a[i] = 7; i = i + 1; } let mut s = 0; let mut j = 0; while j < 6 { s = s + a[j]; j = j + 1; } s }", 42),
+    # S3 write-path audit (2026-05-28): the array-store fix (a6bbe82) holds
+    # across complex store patterns -- all both-compiler-parity. (The probe
+    # also found struct field STORE is a Python-side bug where the bootstrap
+    # is correct -> pinned bootstrap-only, not here; and struct-copy-mutate
+    # is both-broken.) p208-p214:
+    ("p208_arr_computed_idx",    "fn main() -> i32 { let mut a = [0,0,0,0,0]; let i = 2; a[i+1] = 42; a[3] }", 42),
+    ("p209_arr_computed_val",    "fn main() -> i32 { let mut a = [0,0,0]; let mut i = 0; while i < 3 { a[i] = i*14; i = i+1; } a[1]+a[2] }", 42),
+    ("p210_arr_accumulator",     "fn main() -> i32 { let mut a = [0]; let mut i = 0; while i < 6 { a[0] = a[0] + 7; i = i+1; } a[0] }", 42),
+    ("p211_arr_store_use_same",  "fn main() -> i32 { let mut a = [0,0]; a[0] = 20; a[1] = a[0] + 22; a[1] }", 42),
+    ("p212_interleaved_stores",  "fn main() -> i32 { let mut a = [0,0,0]; a[0] = 10; a[2] = 20; a[1] = 12; a[0]+a[1]+a[2] }", 42),
+    ("p213_big_match12",         "fn main() -> i32 { let x = 11; match x { 0=>0,1=>1,2=>2,3=>3,4=>4,5=>5,6=>6,7=>7,8=>8,9=>9,10=>10,11=>42,_=>99 } }", 42),
+    ("p214_arr_2d_flat",         "fn main() -> i32 { let mut a = [0,0,0,0]; let r = 1; let c = 1; a[r*2+c] = 42; a[3] }", 42),
 ]
 
 
@@ -454,7 +466,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 207, (
+    assert len(K2_CORPUS) >= 214, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."

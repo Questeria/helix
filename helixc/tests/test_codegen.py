@@ -7255,6 +7255,31 @@ def test_bootstrap_array_indexed_store():
         )
 
 
+def test_bootstrap_struct_field_store_self_host():
+    """S3 audit finding (2026-05-28): the bootstrap EXCEEDS Python on
+    struct field STORE. `let mut p = P{x:0}; p.x = 42; p.x` correctly
+    returns 42 in the bootstrap, but Python helixc returns 0 -- it does
+    NOT persist the field write (a real Python-side bug; the two-field
+    case `p.x=40; p.y=2; p.x+p.y` gives 40 in Python vs the correct 42 in
+    the bootstrap). This is the 6th 'bootstrap is more correct than
+    Python' case (after generics/fn-ptr/tuple/closure/GPU): deletion-
+    favorable -- deleting the buggy Python loses nothing. Bootstrap-only
+    pin (not K2-parity-able, since py != kc and py is the wrong one).
+    NOTE: we do NOT fix Python (K4 deletes it); we pin that the bootstrap
+    is correct."""
+    cases = [
+        ("one_field", "struct P { x:i32 } fn main() -> i32 { let mut p = P{x:0}; p.x = 42; p.x }", 42),
+        ("two_field", "struct P { x:i32, y:i32 } fn main() -> i32 { let mut p = P{x:40,y:0}; p.y = 2; p.x + p.y }", 42),
+        ("in_loop",   "struct P { x:i32 } fn main() -> i32 { let mut p = P{x:0}; let mut i = 0; while i < 6 { p.x = p.x + 7; i = i + 1; } p.x }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(f"sfs_{name}", src)
+        assert rc == exp, (
+            f"struct field store {name}: bootstrap rc={rc}, expected {exp} "
+            f"(bootstrap is correct here; Python helixc has the bug)"
+        )
+
+
 def _kovc_self_host_emit_ptx(name: str, k2_src: str,
                              emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
