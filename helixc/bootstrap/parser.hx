@@ -178,8 +178,8 @@ fn set_last_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 19, v); 0 }
 // -1 = "no struct return tracked". Substrate-only for K1.F5d --
 // not yet wired anywhere. See docs/CATEGORY_2_NEXT_PHASE.md for the
 // K1.F5d-g closure plan.
-fn last_call_ret_struct_idx(sb: i32) -> i32 { __arena_get(sb + 74) }
-fn set_last_call_ret_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 74, v); 0 }
+fn last_call_ret_struct_idx(sb: i32) -> i32 { __arena_get(sb + 124) }
+fn set_last_call_ret_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 124, v); 0 }
 // K1.F5e (2026-05-28): fn_ret_struct_tab -- fn-name -> return-struct-idx
 // mapping. Future K1.F5f wires WRITE at parse_fn_decl exit when ret_ty is
 // 100+struct_idx (struct return). K1.F5g wires READ at method-call
@@ -187,14 +187,14 @@ fn set_last_call_ret_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 74, v
 //
 // Schema: 3-slot entries (name_s, name_l, struct_idx) packed in arena.
 // Capacity 32 entries (96 slots). sb+76 = base offset, sb+77 = count.
-fn fn_ret_struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 76) }
-fn fn_ret_struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 77) }
+fn fn_ret_struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 125) }
+fn fn_ret_struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 126) }
 fn fn_ret_struct_tab_init(sb: i32) -> i32 {
     let base = __arena_push(0);
     let mut i: i32 = 1;
     while i < 96 { __arena_push(0); i = i + 1; }
-    __arena_set(sb + 76, base);
-    __arena_set(sb + 77, 0);
+    __arena_set(sb + 125, base);
+    __arena_set(sb + 126, 0);
     0
 }
 fn fn_ret_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
@@ -206,7 +206,7 @@ fn fn_ret_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> 
         __arena_set(off, name_s);
         __arena_set(off + 1, name_l);
         __arena_set(off + 2, struct_idx);
-        __arena_set(sb + 77, c + 1);
+        __arena_set(sb + 126, c + 1);
         c
     }
 }
@@ -8487,9 +8487,10 @@ fn cl_tabs_init(sb: i32) -> i32 {
 // --------------------------------------------------------------
 fn install_keywords(sb: i32) -> i32 {
     // K1.F5d (2026-05-27): init the last_call_ret_struct_idx side-channel
-    // slot to -1 (no struct return tracked). Future K1.F5e/g will write
-    // and read this slot to enable chained method-call dispatch.
-    __arena_set(sb + 74, 0 - 1);
+    // slot to -1 (no struct return tracked). K1.F5j (2026-05-28 audit-
+    // fix): MOVED slot from sb+74 to sb+124 -- original collided with
+    // closure-clearing scratch path at parser.hx:9230-9239.
+    __arena_set(sb + 124, 0 - 1);
     // K1.F5e (2026-05-28): init the fn_ret_struct_tab (96-slot region for
     // 32 (name_s, name_l, struct_idx) entries). Empty at start; populated
     // by K1.F5f at fn-decl exit.
