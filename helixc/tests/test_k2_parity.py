@@ -334,6 +334,19 @@ K2_CORPUS = [
     ("p176_mod_div",             "fn main() -> i32 { let x = 84; if x % 2 == 0 { x / 2 } else { 0 } }", 42),
     ("p177_shift_right",         "fn main() -> i32 { let x = 168; x >> 2 }", 42),
     ("p178_xor",                 "fn main() -> i32 { 40 ^ 2 }", 42),
+    # Safe-hardening S3 dry-run audit (2026-05-28): the BE/RT axis is CLEAN
+    # on signed/overflow/shift edge cases -- Python helixc and the bootstrap
+    # produce byte-identical x86 semantics. Pinning the 6 subtlest as
+    # permanent parity guards (non-42 expected exit codes = the exact
+    # wrap/truncation value is the assertion): i32 overflow wrap, signed
+    # division truncation toward zero, signed modulo sign, shift-left to the
+    # sign bit, arithmetic right shift on a negative, signed multiply.
+    ("p179_overflow_wrap",       "fn main() -> i32 { 2147483647 + 1 }", 0),
+    ("p180_signed_div_trunc",    "fn main() -> i32 { let x = 0 - 7; x / 2 }", 253),
+    ("p181_signed_mod_sign",     "fn main() -> i32 { let x = 0 - 7; x % 2 }", 255),
+    ("p182_shl_to_sign_bit",     "fn main() -> i32 { 1 << 31 }", 0),
+    ("p183_ashr_negative",       "fn main() -> i32 { let x = 0 - 8; x >> 1 }", 252),
+    ("p184_signed_mul_neg",      "fn main() -> i32 { let x = 0 - 6; x * 7 }", 214),
 ]
 
 
@@ -405,7 +418,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 178, (
+    assert len(K2_CORPUS) >= 184, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
