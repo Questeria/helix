@@ -72,6 +72,54 @@ dispatch. K1.F5c extended to struct-LITERAL receiver via the
 - ⏳ #4 Generic-impl monomorphization — overlaps with P1.3 generic.
 - ⏳ #9/#10 Default impls — needs trait infra (overlaps with #3).
 
+**K2.AE 2026-05-28 SYSTEMATIC PROBE SWEEP** — clarifies the
+"bootstrap-only superset" pattern's scope:
+
+The pattern gives K2-PARITY-VACUOUS closure (parity harness passes
+because Python fails first). It does NOT automatically give
+Python-deletion-DONE closure — for that, the BOOTSTRAP must actually
+implement the shape semantically (not just no-op skip), since after
+K4 the bootstrap IS the v1.0 compiler for real-world Rust code.
+
+Sweep results on remaining bucket items (Python `compile_and_run`):
+
+  P1.2 impl-method dispatch:
+    #3 trait dispatch (`trait T;` / `impl T for S`)        Python parse-err
+    #4 generic-impl (`impl<T> S<T>`)                       Python parse-err
+    #7 Type::method static (`S::make()`)                   Python parse-err
+    #9/#10 default-impl / override                         (untested; likely
+                                                            also parse-err since
+                                                            trait blocks unsupported)
+
+  P1.3 generic monomorphization:
+    #3 gp-field use-sites (`P::<i32>{v}.v`)                Python parse-err
+    #7 where-clause enforcement                            Python parse-err
+    #10 generic-impl monomorph                             Python parse-err
+
+  P2.1 MLIR migration (@kernel decls):
+    @kernel non-unit returns                               Python RUNTIME err
+    (Python DOES parse @kernel, but errors at PTX lowering for non-unit)
+
+  P2.2 GPU PTX backend:
+    @kernel @autotune                                      Python RUNTIME err
+    (same as P2.1 — runtime-side, not parse-side)
+
+INTERPRETATION:
+  - P1.2 #3, #4, #7 + P1.3 #3, #7, #10 are K2-PARITY-VACUOUS. The K2
+    parity gate will pass on these shapes (Python errors first).
+    But for the bootstrap to be a production compiler post-K4, it
+    needs to actually IMPLEMENT them. Re-probe bootstrap-side on
+    each in future ticks to determine "DONE vs PENDING per bootstrap"
+    independently of the parity vacuum.
+
+  - P2.1 + P2.2 fail Python at RUNTIME, not parse. So they're NOT
+    K2-parity-vacuous in the same way. Both compilers must handle
+    the parse (Python does); the GPU/MLIR substrate is the real gap.
+
+Speed-up implication: the bootstrap-only-superset pattern remains
+real for K2-parity closures, but doesn't shrink the actual implementation
+work for Python-deletion. The chunk-count estimate stays ~150-235.
+
 **STRUCTURAL FINDING (K2.AA 2026-05-28 update):** the impl-block
 self-receiver syntax (`impl P { fn read(self) ... }` and `&self`)
 is BOOTSTRAP-ONLY territory — Python helixc raises `ParseError:
