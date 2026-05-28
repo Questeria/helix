@@ -262,6 +262,10 @@ K2_CORPUS = [
     ("p131_nested_match",        "fn main() -> i32 { let x = 2; match x { 1 => 0, 2 => match x { 2 => 42, _ => 1 }, _ => 9 } }", 42),
     ("p132_arith_precedence",    "fn main() -> i32 { 2 + 3 * 7 + 19 }", 42),
     ("p133_array5_const_sum",    "fn main() -> i32 { let a = [6, 7, 8, 9, 12]; a[0] + a[1] + a[2] + a[3] + a[4] }", 42),
+    # K2.U (2026-05-28, M32 probe): enum WITH payload + match binding. p37
+    # covered payload-less enums; this adds a data-carrying variant E::A(i32)
+    # and a binding arm `E::A(n) => n`. Both compilers agree (PARITY).
+    ("p134_enum_payload",        "enum E { A(i32), B } fn main() -> i32 { let e = E::A(42); match e { E::A(n) => n, E::B => 0 } }", 42),
 ]
 
 
@@ -333,8 +337,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 133, (
-        f"K2.T corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 134, (
+        f"K2.U corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )

@@ -5059,6 +5059,18 @@ def test_bootstrap_generics_struct_and_turbofish():
         )
 
 
+def test_bootstrap_closure():
+    """K1.M32 (2026-05-28): closures run in the bootstrap kovc -- a let-
+    bound lambda `|x: i32| x + 1` called as f(41) -> 42. NOTE: Python
+    helixc cannot PARSE the `|...|` closure syntax (ParseError: expected
+    expression, got PIPE), so the bootstrap EXCEEDS Python here (4th such
+    finding after M21 GPU + M27 impl-method + M28 generics) -> not
+    K2-parity-able; bootstrap-only pin toward Python-deletion."""
+    rc = _kovc_self_host_compile_and_run(
+        "m32_closure", "fn main() -> i32 { let f = |x: i32| x + 1; f(41) }")
+    assert rc == 42, f"closure: bootstrap rc={rc}, expected 42"
+
+
 def test_bootstrap_kovc_inline_write_file_to_arena():
     """kovc.hx self-hosted file builtin: write_file_to_arena emits a
     file from arena bytes. Drive the bootstrap pipeline with a source
