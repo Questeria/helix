@@ -10864,6 +10864,38 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
     }
 }
 
+// K1.M17 (2026-05-28): does the module contain any @kernel fn? Walks the
+// AST_FN_LIST (tag 15; node slot+1 = fn_idx, slot+2 = next) checking
+// is_kernel (AST_FN_DECL slot 14) -- the same walk emit_ptx_for_ast_to_path
+// uses, factored out so the output-mode dispatcher can route.
+fn ast_has_kernel(ast_root: i32) -> i32 {
+    let mut found: i32 = 0;
+    if __arena_get(ast_root) == 15 {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                found = 1;
+            };
+            walk = __arena_get(walk + 2);
+        }
+    };
+    found
+}
+// K1.M17: output-mode dispatcher -- emit GPU PTX when the program has a
+// @kernel, else x86_64 ELF. The bridge from "two separate emitters" to a
+// driver that picks the right target: a real compiler entry calls THIS.
+// Both emitters write into the arena + return the byte count; the caller
+// writes the file. Like a host toolchain routing .cu -> ptx vs .c -> elf,
+// but with NO CUDA / NO MLIR -- direct Helix -> chip on either path.
+fn emit_auto_for_ast_to_path(ast_root: i32) -> i32 {
+    if ast_has_kernel(ast_root) == 1 {
+        emit_ptx_for_ast_to_path(ast_root)
+    } else {
+        emit_elf_for_ast_to_path(ast_root)
+    }
+}
+
 // --------------------------------------------------------------
 // Demo: build a tiny AST_INT(42) by hand, compile it, write the
 // resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the

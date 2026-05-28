@@ -7038,7 +7038,8 @@ fn main() -> i32 {{
     return run_k2.returncode
 
 
-def _kovc_self_host_emit_ptx(name: str, k2_src: str) -> bytes:
+def _kovc_self_host_emit_ptx(name: str, k2_src: str,
+                             emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
     `k2_src` through the P0 -> K1 bootstrap chain, but instead of
     emit_elf_for_ast_to_path (x86_64 ELF binary) it invokes the new
@@ -7078,7 +7079,7 @@ fn main() -> i32 {{
     let tok_base = __arena_len();
     lex(src_start, src_len);
     let ast_root = parse_top(tok_base);
-    let total = emit_ptx_for_ast_to_path(ast_root);
+    let total = {emit_fn}(ast_root);
     let ptx_start = __arena_len() - total;
     write_file_to_arena("{out_path}", ptx_start, total)
 }}
@@ -8095,6 +8096,34 @@ def test_bootstrap_ptx_tile_matmul():
             f"ptxas rejected tile-matmul PTX (rc={r.returncode}): "
             f"{r.stdout.decode(errors='replace')}"
         )
+
+
+def test_bootstrap_ptx_auto_kernel():
+    """K1.M17 (2026-05-28): the output-mode dispatcher
+    emit_auto_for_ast_to_path routes a program CONTAINING a @kernel to the
+    GPU PTX emitter (vs x86_64 ELF). Proves the bootstrap auto-picks the
+    right target -- the bridge toward a real compiler driver. Same @kernel
+    as empty_kernel, so emit_auto must produce byte-identical PTX. NO
+    MLIR, NO CUDA."""
+    src = "@kernel fn k() -> i32 { 0 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_autok", src,
+                                   emit_fn="emit_auto_for_ast_to_path")
+    expected = _PTX_HEADER + _ptx_entry(b"k()")
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
+def test_bootstrap_ptx_auto_cpu():
+    """K1.M17 (2026-05-28): the dispatcher routes a NON-kernel program to
+    the x86_64 ELF emitter. A plain `fn main()` has no @kernel, so
+    emit_auto_for_ast_to_path emits an ELF binary (magic \\x7fELF), not
+    PTX -- confirming the @kernel-detection switch picks the CPU target."""
+    out = _kovc_self_host_emit_ptx("ptx_autocpu", "fn main() -> i32 { 0 }\n",
+                                   emit_fn="emit_auto_for_ast_to_path")
+    assert out[:4] == b"\x7fELF", (
+        f"expected ELF magic for a non-kernel program, got {out[:16]!r}"
+    )
 
 
 def _ptxas_available() -> bool:
