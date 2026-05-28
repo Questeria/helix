@@ -3772,6 +3772,29 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Mixed forms (one bool-lit + one IDENT) still fall through
             // (K3.Q reject of EITHER operand keeps is_assert_eq_form
             // disabled; this guard only fires when BOTH are bool-lit).
+            //
+            // === ASSERT-FAMILY DETECTOR CASCADE INVARIANT (K3.X audit doc) ===
+            // The assert_eq! detectors below (is_assert_eq_*_form) overlap on
+            // token-shape at the syntactic level (both K1.F22j and K1.F35/F37
+            // match `mac_t3==2, mac_t5==2`). Semantic disjointness is enforced
+            // via the *narrowing predicates*:
+            //   K1.F22j (general IDENT/IDENT): rejects when EITHER operand is
+            //     reserved-kw (incl. true/false) via is_any_reserved_kw_ident.
+            //   K1.F22j2 (BOTH-bool fold): requires BOTH operands bool-lit.
+            //   K1.F35 (IDENT/BOOL):  requires a NOT bool-lit AND b IS bool.
+            //   K1.F37 (BOOL/IDENT):  requires a IS bool AND b NOT bool-lit.
+            //   K1.F31 (IDENT/INT) / K1.F33 (INT/IDENT) / K1.F39 (INT/INT):
+            //     disambiguated by mac_t3/mac_t5 tag values (1=TK_INT vs
+            //     2=TK_IDENT) which are mutually exclusive at the token level.
+            // Dispatch order in parse_primary's IDENT! cascade does NOT
+            // matter for correctness (the predicates partition the input
+            // space), but is kept as: F22j2 -> F22j -> F31 -> F33 -> F35 ->
+            // F37 -> F39 -> ne mirror -> dbg/etc. Same mirror for assert_ne!.
+            // If a future chunk adds a new assert_eq! shape, ensure its
+            // predicate either includes a fresh tag check that the existing
+            // arms lack, OR an exclusive semantic check (operand is or isn't
+            // a specific kw class). Sibling assert_ne! arms follow the same
+            // partitioning, just gated on is_assert_ne_name_macro.
             let is_assert_eq_bool_lit_form = if is_assert_eq_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
                     if mac_t5 == 2 { if mac_t6 == 4 {
@@ -4514,8 +4537,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // time fold. Both operands are TK_INT; their values come from
                 // tok_p1 (per parse_primary AST_INT extraction). Equal -> emit
                 // AST_INT(0); unequal -> emit the full panic call.
-                let aeqii_a_val = tok_p1(tok_base, k + 3);
-                let aeqii_b_val = tok_p1(tok_base, k + 5);
+                // K3.X audit-fix (2026-05-27): renamed locals from aeqii_*
+                // (which collided visually with K1.F31's IDENT/INT aeqii_*
+                // locals) to aeqnn_* (n=numeric) to disambiguate INT/INT
+                // from IDENT/INT at sight. Different `else if` arm scopes
+                // so behavior was unchanged; this is a maintainer-clarity
+                // rename only.
+                let aeqnn_a_val = tok_p1(tok_base, k + 3);
+                let aeqnn_b_val = tok_p1(tok_base, k + 5);
                 cur_advance(sb);           // IDENT (assert_eq)
                 cur_advance(sb);           // !
                 cur_advance(sb);           // (
@@ -4523,11 +4552,11 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);           // ,
                 cur_advance(sb);           // INT (b)
                 cur_advance(sb);           // )
-                if aeqii_a_val == aeqii_b_val {
+                if aeqnn_a_val == aeqnn_b_val {
                     mk_node(0, 0, 0, 0)    // AST_INT(0) -- both ints equal
                 } else {
                     // Operands differ at compile time; synthesize panic.
-                    let aeqiip_msg_s = __arena_push(97);                         // 'a'
+                    let aeqnnp_msg_s = __arena_push(97);                         // 'a'
                     __arena_push(115); __arena_push(115);                        // 's' 's'
                     __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
                     __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
@@ -4537,12 +4566,12 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     __arena_push(58);                                            // ':'
                     __arena_push(32);                                            // ' '
                     __arena_push(61); __arena_push(61);                          // '=' '='
-                    let aeqiip_str_ast = mk_node(25, aeqiip_msg_s, 20, 0);
-                    let aeqiip_args_head = mk_node(17, aeqiip_str_ast, 0, 0);
-                    let aeqiip_panic_name_s = __arena_push(112);
+                    let aeqnnp_str_ast = mk_node(25, aeqnnp_msg_s, 20, 0);
+                    let aeqnnp_args_head = mk_node(17, aeqnnp_str_ast, 0, 0);
+                    let aeqnnp_panic_name_s = __arena_push(112);
                     __arena_push(97); __arena_push(110); __arena_push(105);
                     __arena_push(99);
-                    mk_node(16, aeqiip_panic_name_s, 5, aeqiip_args_head)
+                    mk_node(16, aeqnnp_panic_name_s, 5, aeqnnp_args_head)
                 }
             } else { if is_assert_ne_form == 1 {
                 // K1.F22k: synthesize AST_IF(cond=AST_NE(AST_VAR(a),
@@ -4738,8 +4767,11 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 // K1.F40 (2026-05-27): assert_ne!(INT_LIT, INT_LIT) compile-
                 // time fold. Inverse of K1.F39: equal operands -> panic,
                 // differing operands -> AST_INT(0).
-                let aneii_a_val = tok_p1(tok_base, k + 3);
-                let aneii_b_val = tok_p1(tok_base, k + 5);
+                // K3.X audit-fix (2026-05-27): renamed locals from aneii_*
+                // (collided with K1.F32's IDENT/INT aneii_*) to anenn_*
+                // (n=numeric). Sibling of the aeqii->aeqnn rename above.
+                let anenn_a_val = tok_p1(tok_base, k + 3);
+                let anenn_b_val = tok_p1(tok_base, k + 5);
                 cur_advance(sb);           // IDENT (assert_ne)
                 cur_advance(sb);           // !
                 cur_advance(sb);           // (
@@ -4747,10 +4779,10 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);           // ,
                 cur_advance(sb);           // INT (b)
                 cur_advance(sb);           // )
-                if aneii_a_val == aneii_b_val {
+                if anenn_a_val == anenn_b_val {
                     // Operands equal at compile time; synthesize panic (with
                     // "assertion failed: !=" message, 20 bytes).
-                    let aneiip_msg_s = __arena_push(97);                         // 'a'
+                    let anennp_msg_s = __arena_push(97);                         // 'a'
                     __arena_push(115); __arena_push(115);                        // 's' 's'
                     __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
                     __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
@@ -4760,12 +4792,12 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     __arena_push(58);                                            // ':'
                     __arena_push(32);                                            // ' '
                     __arena_push(33); __arena_push(61);                          // '!' '='
-                    let aneiip_str_ast = mk_node(25, aneiip_msg_s, 20, 0);
-                    let aneiip_args_head = mk_node(17, aneiip_str_ast, 0, 0);
-                    let aneiip_panic_name_s = __arena_push(112);
+                    let anennp_str_ast = mk_node(25, anennp_msg_s, 20, 0);
+                    let anennp_args_head = mk_node(17, anennp_str_ast, 0, 0);
+                    let anennp_panic_name_s = __arena_push(112);
                     __arena_push(97); __arena_push(110); __arena_push(105);
                     __arena_push(99);
-                    mk_node(16, aneiip_panic_name_s, 5, aneiip_args_head)
+                    mk_node(16, anennp_panic_name_s, 5, anennp_args_head)
                 } else {
                     mk_node(0, 0, 0, 0)    // AST_INT(0) -- ints differ, ne holds
                 }
