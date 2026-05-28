@@ -7324,6 +7324,42 @@ def test_bootstrap_ptx_scalar_neg():
     )
 
 
+def test_bootstrap_ptx_thread_idx():
+    """K1.M6 (2026-05-28): the thread_idx() builtin -- the entry point to
+    every data-parallel GPU kernel -- lowers to "mov.u32 %rN, %tid.x;"
+    (reading the hardware thread-index special register), matching the
+    Helix surface (lower_ast.py thread_idx -> THREAD_IDX) and Python
+    ptx.py. A @kernel binding `let i = thread_idx()` emits the %tid.x
+    read. Direct tile-IR -> PTX, NO MLIR. Also ptxas-validated (the
+    %tid.x sreg read assembles to real SASS)."""
+    src = "@kernel fn k() -> i32 { let i: i32 = thread_idx(); i }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_tid", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    # Prove the %tid.x read assembles to real GPU machine code.
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_tid.cubin "
+             "/tmp/sh_ptx_tid_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected thread_idx PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

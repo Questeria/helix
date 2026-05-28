@@ -9703,9 +9703,11 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_binop(node, vtab, 3)
     } else { if tag == 9 {
         emit_ptx_neg(node, vtab)
+    } else { if tag == 16 {
+        emit_ptx_call(node, vtab)
     } else {
         0 - 1
-    }}}}}}}}
+    }}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -9774,6 +9776,64 @@ fn emit_ptx_neg(node: i32, vtab: i32) -> i32 {
     // ";\n"
     emit_ptx_byte(59); emit_ptx_byte(10);
     r
+}
+
+// K1.M6 (2026-05-28): is this call name the byte-string "thread_idx"
+// (10 chars: t h r e a d _ i d x)? Flat accumulator compare (the
+// kovc_byte_eq idiom) against the hardcoded ASCII codes.
+fn ptx_name_is_thread_idx(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 10 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 1) != 104 { ok = 0; };   // h
+        if __arena_get(name_s + 2) != 114 { ok = 0; };   // r
+        if __arena_get(name_s + 3) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 4) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 5) != 100 { ok = 0; };   // d
+        if __arena_get(name_s + 6) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 7) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 8) != 100 { ok = 0; };   // d
+        if __arena_get(name_s + 9) != 120 { ok = 0; };   // x
+        ok
+    }
+}
+
+// K1.M6: emit a THREAD_IDX x-dim read "    mov.u32 %rN, %tid.x;" --
+// the hardware thread-index special register, the entry point to
+// every data-parallel kernel. Mirrors Python ptx.py THREAD_IDX
+// (sreg "tid", dim x). %tid.x is a u32 sreg; we read it into a .b32 reg.
+fn emit_ptx_tid_x(ridx: i32) -> i32 {
+    // "    mov.u32 %r" + N
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
+    emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(117);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(ridx);
+    // ", %tid.x;\n"
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(116); emit_ptx_byte(105); emit_ptx_byte(100);
+    emit_ptx_byte(46); emit_ptx_byte(120); emit_ptx_byte(59);
+    emit_ptx_byte(10);
+    0
+}
+
+// K1.M6: lower an AST_CALL (tag 16; name in slots 1/2, args_head in
+// slot 3). For now only the thread_idx() kernel builtin is recognised
+// -> mov.u32 %rN, %tid.x (no args). Other calls are unsupported in the
+// GPU path yet (return -1; later chunks add __tile_* + block_idx etc.).
+fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
+    let name_s = __arena_get(node + 1);
+    let name_l = __arena_get(node + 2);
+    if ptx_name_is_thread_idx(name_s, name_l) == 1 {
+        let r = ptx_alloc_reg(vtab);
+        emit_ptx_tid_x(r);
+        r
+    } else {
+        0 - 1
+    }
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
