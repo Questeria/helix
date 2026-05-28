@@ -432,6 +432,18 @@ K2_CORPUS = [
     ("p238_nested_match3",       "fn main() -> i32 { let a=1; let b=2; let c=3; match a { 1 => match b { 2 => match c { 3 => 42, _=>0 }, _=>0 }, _=>0 } }", 42),
     ("p239_struct_enum_field",   "enum C { R, G } struct S { c: C, v: i32 } fn main() -> i32 { let s = S{c:C::G, v:42}; s.v }", 42),
     ("p240_enum_multi_payload",  "enum E { P(i32, i32) } fn main() -> i32 { let e = E::P(40, 2); match e { E::P(a, b) => a + b } }", 42),
+    # S3 fresh-micro-surface audit (2026-05-28): 8 clean-parity shapes
+    # p241-p248. (Same probe found a REAL bootstrap bug -- `if !(<paren>)`
+    # always takes the then-branch -- root-caused + fix pending next tick;
+    # NOT added here since it's a divergence, see helix_status note.)
+    ("p241_bool_xor",            "fn main() -> i32 { let a = true; let b = false; if a ^ b { 42 } else { 0 } }", 42),
+    ("p242_while_complex_cond",  "fn main() -> i32 { let mut i = 0; let mut s = 0; while i < 10 && s < 100 { s = s + i; i = i + 1; } s - 3 }", 42),
+    ("p243_const_in_calc",       "const SZ: i32 = 6; fn main() -> i32 { SZ * 7 }", 42),
+    ("p244_multi_shadow",        "fn main() -> i32 { let x = 1; let x = x + 10; let x = x + 10; let x = x + 21; x }", 42),
+    ("p245_large_lit_boundary",  "fn main() -> i32 { let x = 1073741824; x - 1073741782 }", 42),
+    ("p246_mod_pow2",            "fn main() -> i32 { 170 % 128 }", 42),
+    ("p247_div_pow2",            "fn main() -> i32 { 1344 / 32 }", 42),
+    ("p248_bool_and_or_mix",     "fn main() -> i32 { if (true || false) && (false || true) { 42 } else { 0 } }", 42),
 ]
 
 
@@ -503,7 +515,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 240, (
+    assert len(K2_CORPUS) >= 248, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
