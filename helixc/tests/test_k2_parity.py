@@ -303,6 +303,21 @@ K2_CORPUS = [
     ("p154_precedence",          "fn main() -> i32 { 2 + 4 * 10 }", 42),
     ("p155_div",                 "fn main() -> i32 { 420 / 10 }", 42),
     ("p156_square_fn",           "fn sq(x: i32) -> i32 { x * x } fn main() -> i32 { sq(6) + 6 }", 42),
+    # PHASE B cont. (2026-05-28): 10 more both-compiler-parity shapes,
+    # crossing the ~160 credible-gate target -- enum-with-payload match,
+    # multi-arm int match, 3-field struct, boolean not, chained &&
+    # comparison, factorial recursion, hex literal, const global, const-
+    # index array, div combo.
+    ("p157_enum_payload",        "enum E { A(i32), B } fn main() -> i32 { let e = E::A(42); match e { E::A(n) => n, E::B => 0 } }", 42),
+    ("p158_match_int",           "fn main() -> i32 { let x = 3; match x { 1 => 10, 2 => 20, 3 => 42, _ => 0 } }", 42),
+    ("p159_struct3",             "struct P { a: i32, b: i32, c: i32 } fn main() -> i32 { let p = P{a:20,b:15,c:7}; p.a + p.b + p.c }", 42),
+    ("p160_bool_not",            "fn main() -> i32 { let b = false; if !b { 42 } else { 0 } }", 42),
+    ("p161_chained_cmp",         "fn main() -> i32 { let x = 5; if 0 < x && x < 10 && x != 7 { 42 } else { 0 } }", 42),
+    ("p162_factorial",           "fn fact(n: i32) -> i32 { if n <= 1 { 1 } else { n * fact(n-1) } } fn main() -> i32 { fact(5) - 78 }", 42),
+    ("p163_hex_lit",             "fn main() -> i32 { 0x2a }", 42),
+    ("p164_const_global",        "const N: i32 = 42; fn main() -> i32 { N }", 42),
+    ("p165_array_idx_const",     "fn main() -> i32 { let a = [42, 0, 0, 0, 0]; a[0] }", 42),
+    ("p166_div_combo",           "fn main() -> i32 { let x = 200; (x / 4) - 8 }", 42),
 ]
 
 
@@ -374,7 +389,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 156, (
+    assert len(K2_CORPUS) >= 166, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
