@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 298      # last bump: K1.F5e -- fn_ret_struct_tab substrate for chained-method dispatch. Adds (1) sb+76 base + sb+77 count for a 96-slot region (32 entries x 3 slots: name_s, name_l, struct_idx). (2) fn_ret_struct_tab_init / _add / _lookup helpers. (3) Init call wired in install_keywords. (4) No writes/reads yet -- K1.F5f wires the WRITE at parse_fn_decl exit when ret_ty_final is 100+struct_idx; K1.F5g wires the READ at method-call PRE-CHECK to enable `a.chain1().chain2()` and `foo().method()` shapes. K1.F5c + K1.F5h regression intact. Substrate-only; next tick (K1.F5f) wires the WRITE site.
+K_BOOTSTRAP_CHUNKS_DONE = 299      # last bump: K1.F5f -- wire the fn_ret_struct_tab WRITE at parse_fn_decl exit. After ret_ty_final is computed, if rt_struct_idx >= 0 (fn returns a struct), call fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx). The lookup table is now populated as fn-decls are parsed; future K1.F5g extends the method-call PRE-CHECK to read it. K1.F5c + K1.F5h + impl_method 5-test regression batch passes (no behavior change on existing paths -- the write site is silent until K1.F5g wires the read).
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

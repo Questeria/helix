@@ -12069,6 +12069,15 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     let rt_struct_idx = struct_tab_lookup_idx(sb, rt_s, rt_l);
     let ret_ty_post_struct = if rt_struct_idx >= 0 { 100 + rt_struct_idx } else { ret_ty };
     let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty_post_struct };
+    // K1.F5f (2026-05-28): register fn-name -> return-struct-idx in
+    // fn_ret_struct_tab if this fn returns a struct. The encoding from
+    // ret_ty_post_struct above is 100 + struct_idx when rt_struct_idx >= 0;
+    // generic-param returns (200+) are NOT registered (they're not concrete
+    // struct types). Future K1.F5g reads this table from the method-call
+    // PRE-CHECK to enable chained-method dispatch (`a.chain1().chain2()`).
+    if rt_struct_idx >= 0 {
+        let _f5f_added = fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx);
+    };
     // K1.O (2026-05-25): optional `where T: Bound, U: Bound2` clause
     // after the return type and before the body LBRACE. Bounds are
     // not enforced in the type-erased bootstrap -- just consume all
