@@ -7299,6 +7299,50 @@ def test_bootstrap_parser_exceeds_python_self_host():
         )
 
 
+def test_bootstrap_generics_exceed_python_self_host():
+    """S3 generics audit (2026-05-28): GENERICS are a broad bootstrap-exceeds-
+    Python axis. Python helixc ParseErrors on ALL generic syntax -- `struct
+    Box<T>`, `fn id<T>`, `enum Opt<T>`, `impl<T>` -- it has no generics at all.
+    The bootstrap compiles them correctly. This is strongly deletion-favorable:
+    deleting Python loses generics it never had. Bootstrap-only pins (not
+    K2-parity-able, since the Python path can't parse the source).
+
+    KNOWN LIMITATION (deferred, NOT a regression): a generic field whose type is
+    ITSELF a generic instantiation -- `struct Box<T>{v:T}; let b = Box{v: Box{v:
+    42}}; b.v.v` -- stably SIGILLs (rc 132). The non-generic equivalent
+    (`Outer{Inner{v}}.i.v`) works (rc 42). Root cause is the Stage 28.11 INC-3a
+    marker (parser.hx ~2679): a generic-param-typed field carries `200+gp_idx`
+    and is treated as SCALAR (4-byte) pending the INC-3b use-site
+    monomorphization, so the nested `.v.v` mis-reads. This is a documented
+    multi-step feature gap (INC-3b), beyond Python's capability either way --
+    flagged for an attended fix, not chased unattended here."""
+    works = [
+        ("box_single", "struct Box<T> { v: T } fn main() -> i32 { let b = Box { v: 42 }; b.v }", 42),
+        ("box_two",    "struct Box<T> { v: T } fn main() -> i32 { let a = Box { v: 40 }; let b = Box { v: 2 }; a.v + b.v }", 42),
+        ("pair2",      "struct Pair<A, B> { a: A, b: B } fn main() -> i32 { let p = Pair { a: 40, b: 2 }; p.a + p.b }", 42),
+        ("pair_swap",  "struct Pair<A, B> { a: A, b: B } fn main() -> i32 { let p = Pair { a: 2, b: 40 }; p.b + p.a }", 42),
+        ("fn_id",      "fn id<T>(x: T) -> T { x } fn main() -> i32 { id(40) + id(2) }", 42),
+        ("struct_arg", "struct Box<T> { v: T } fn unwrap(b: Box<i32>) -> i32 { b.v } fn main() -> i32 { unwrap(Box { v: 42 }) }", 42),
+        ("gen_enum",   "enum Opt<T> { Some(T), None } fn main() -> i32 { let o = Opt::Some(42); match o { Opt::Some(x) => x, Opt::None => 0 } }", 42),
+        ("gen_method", "struct Box<T> { v: T } impl<T> Box<T> { fn get(self) -> T { self.v } } fn main() -> i32 { let b = Box { v: 42 }; b.get() }", 42),
+        ("box_mut",    "struct Box<T> { v: T } fn main() -> i32 { let mut b = Box { v: 0 }; b.v = 42; b.v }", 42),
+    ]
+    # retry-on-132: the self-host harness has a known intermittent WSL SIGILL
+    # (rc 132) on tiny programs; none of these shapes legitimately return 132
+    # (all expect 42), so retrying only on 132 absorbs the env flake without
+    # masking a real failure (a real one is a stable wrong VALUE).
+    for name, src, exp in works:
+        rc = _kovc_self_host_compile_and_run(f"genx_{name}", src)
+        tries = 0
+        while rc == 132 and rc != exp and tries < 2:
+            tries = tries + 1
+            rc = _kovc_self_host_compile_and_run(f"genx_{name}_r{tries}", src)
+        assert rc == exp, (
+            f"generics-exceed-python {name}: bootstrap rc={rc}, expected {exp} "
+            f"(Python helixc ParseErrors on this generic syntax)"
+        )
+
+
 def test_bootstrap_if_not_paren_self_host():
     """S3 audit fix (2026-05-28): `if !(<expr>) { .. } else { .. }` always took
     the THEN-branch in the bootstrap (real both-compiler divergence: Python
