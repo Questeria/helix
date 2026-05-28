@@ -6545,6 +6545,38 @@ fn emit_match_dispatch(scrut_idx: i32, arms_head: i32,
     n_scrut + n_store + n_arms + n_trap
 }
 
+// S3 audit fix (2026-05-28): CPU/ELF codegen for AST_INDEX_STORE (tag 55),
+// `a[i] = v`. emit_ast_code had NO tag-55 arm on the CPU path (only the PTX
+// and WGSL emitters did), so `a[i] = v` fell through to the unhandled-tag
+// trap (id 99001) -> SIGILL, while Python helixc compiled it correctly -- a
+// real both-compiler divergence the S3 dry-run audit found. Node layout
+// (K1.M10c): node+1 = AST_INDEX [base, index]; node+2 = value. Arrays are
+// 8-byte-strided tuple-lits (see tags 50/53); element addr = base + index*8,
+// stored as a 4-byte write (matching the 4-byte element read in tag 53).
+// Factored out so the emit_ast_code dispatch arm stays shallow.
+fn emit_index_store_cpu(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
+    let idx_node = __arena_get(idx + 1);
+    let base_expr = __arena_get(idx_node + 1);
+    let index_expr = __arena_get(idx_node + 2);
+    let value_expr = __arena_get(idx + 2);
+    // value -> rax, push (deepest on stack)
+    let n_val = emit_ast_code(value_expr, bind_state, patch_state, bn_state);
+    let n_vpush = emit_push_rax();
+    // base -> rax, push (top of stack)
+    let n_base = emit_ast_code(base_expr, bind_state, patch_state, bn_state);
+    let n_bpush = emit_push_rax();
+    // index -> eax
+    let n_idx = emit_ast_code(index_expr, bind_state, patch_state, bn_state);
+    emit_byte(0x89); emit_byte(0xC1);                 // mov ecx, eax  (idx)
+    emit_byte(0x58);                                  // pop rax       (base)
+    emit_byte(0x6B); emit_byte(0xC9); emit_byte(0x08);// imul ecx,ecx,8 (idx*8)
+    emit_byte(0x48); emit_byte(0x01); emit_byte(0xC8);// add rax, rcx  (elem addr)
+    emit_byte(0x5A);                                  // pop rdx       (value)
+    emit_byte(0x89); emit_byte(0x10);                 // mov [rax], edx (4-byte store)
+    emit_byte(0x89); emit_byte(0xD0);                 // mov eax, edx  (expr result)
+    n_val + n_vpush + n_base + n_bpush + n_idx + 14
+}
+
 fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
@@ -9040,7 +9072,17 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // returns 0. Lex/parse errors that produce AST_ERR cause the
         // resulting binary to SIGILL — clear signal vs. silent 0.
         // Speedup #4 wire-in: AST_ERR / unhandled-tag trap id 99001.
-        emit_trap_with_id(99001)
+        // S3 audit fix (2026-05-28): handle AST_INDEX_STORE (tag 55),
+        // `a[i] = v`, on the CPU/ELF path here -- just before the
+        // unhandled-tag trap -- via emit_index_store_cpu. Previously
+        // unhandled -> SIGILL, while Python helixc compiled it (a real
+        // both-compiler divergence found by the S3 dry-run audit). The
+        // if/else is brace-balanced so the dispatch cascade is unchanged.
+        if t == 55 {
+            emit_index_store_cpu(idx, bind_state, patch_state, bn_state)
+        } else {
+            emit_trap_with_id(99001)
+        }
     }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 AST_FIELD_STORE; K1.F15: +1 AST_FLOATLIT_F16 (tag 80)
 }
 

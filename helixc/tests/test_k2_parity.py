@@ -377,6 +377,12 @@ K2_CORPUS = [
     ("p203_enum_disc_arith",     "enum C { R, G, B } fn main() -> i32 { let c = C::G; let n = match c { C::R=>0, C::G=>40, C::B=>1 }; n + 2 }", 42),
     ("p204_struct_param_mul",    "struct P { x:i32, y:i32 } fn dist(p: P) -> i32 { p.x * p.x + p.y * p.y } fn main() -> i32 { dist(P{x:3,y:33}) }", 74),
     ("p205_deep_arith",          "fn main() -> i32 { 1+2+3+4+5+6+7+8+6 }", 42),
+    # S3 audit BUG-FIX (2026-05-28): array indexed-STORE `a[i]=v` was broken
+    # on the bootstrap CPU path (SIGILL) while Python compiled it -- a real
+    # divergence found by the dry-run audit, now fixed (emit_index_store_cpu).
+    # These were NOT parity-able before the fix; now pinned as parity guards.
+    ("p206_array_store_const",   "fn main() -> i32 { let mut a = [1,2,3]; a[0] = 42; a[0] }", 42),
+    ("p207_array_store_loop",    "fn main() -> i32 { let mut a = [0,0,0,0,0,0]; let mut i = 0; while i < 6 { a[i] = 7; i = i + 1; } let mut s = 0; let mut j = 0; while j < 6 { s = s + a[j]; j = j + 1; } s }", 42),
 ]
 
 
@@ -448,7 +454,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 205, (
+    assert len(K2_CORPUS) >= 207, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."

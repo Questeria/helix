@@ -7233,6 +7233,28 @@ def test_bootstrap_fn_type_table_over_256():
     )
 
 
+def test_bootstrap_array_indexed_store():
+    """S3 audit fix (2026-05-28): array indexed-store `a[i] = v` on the
+    CPU/ELF path. emit_ast_code had no AST_INDEX_STORE (tag 55) arm on the
+    CPU path (only the PTX/WGSL emitters did), so `a[i] = v` fell through to
+    the unhandled-tag trap -> SIGILL (132), even for a CONSTANT index. Python
+    helixc compiled it correctly, so this was a real both-compiler divergence
+    surfaced by the S3 dry-run audit. Now fixed via emit_index_store_cpu
+    (element addr = base + index*8, 4-byte store, mirroring the tag-53 read).
+    Covers constant index, variable index, and loop fill+sum."""
+    cases = [
+        ("const", "fn main() -> i32 { let mut a = [1,2,3]; a[0] = 42; a[0] }", 42),
+        ("var",   "fn main() -> i32 { let mut a = [1,2,3]; let i = 0; a[i] = 42; a[i] }", 42),
+        ("loop",  "fn main() -> i32 { let mut a = [0,0,0]; let mut i = 0; while i < 3 { a[i] = 14; i = i + 1; } a[0]+a[1]+a[2] }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(f"arr_store_{name}", src)
+        assert rc == exp, (
+            f"array indexed-store {name}: bootstrap rc={rc}, expected {exp} "
+            f"(pre-fix this SIGILL'd at 132 -- no CPU AST_INDEX_STORE arm)"
+        )
+
+
 def _kovc_self_host_emit_ptx(name: str, k2_src: str,
                              emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
