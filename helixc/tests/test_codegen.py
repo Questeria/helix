@@ -5007,6 +5007,34 @@ def test_stage15_tile_matmul_2x2():
     ) == 2, "Stage 15F: tile_matmul(ones2x2, ones2x2).get(0, 1) -> 2.0_f32"
 
 
+def test_bootstrap_impl_method_dispatch():
+    """K1.M27 (2026-05-28): impl-method dispatch runs in the bootstrap
+    kovc -- a method call on a struct value, a method with an extra arg,
+    and a method calling another method (self.a()). All compile + run to
+    the right exit code via the self-host chain. NOTE: these CANNOT be K2
+    parity-corpus entries because Python helixc cannot even PARSE the bare
+    `(self)` receiver (ParseError: expected COLON) -- the bootstrap
+    EXCEEDS Python here (parallel to the M21 GPU finding). Bootstrap-only
+    pin of the impl-method-dispatch capability toward Python-deletion."""
+    cases = [
+        ("m27_method_noarg",
+         "struct P { v: i32 } impl P { fn get(self) -> i32 { self.v } } "
+         "fn main() -> i32 { let p = P { v: 42 }; p.get() }", 42),
+        ("m27_method_arg",
+         "struct P { v: i32 } impl P { fn add(self, k: i32) -> i32 { self.v + k } } "
+         "fn main() -> i32 { let p = P { v: 40 }; p.add(2) }", 42),
+        ("m27_method_to_method",
+         "struct P { v: i32 } impl P { fn a(self) -> i32 { self.v } "
+         "fn b(self) -> i32 { self.a() + 2 } } "
+         "fn main() -> i32 { let p = P { v: 40 }; p.b() }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(name, src)
+        assert rc == exp, (
+            f"impl-method {name}: bootstrap rc={rc}, expected {exp}"
+        )
+
+
 def test_bootstrap_kovc_inline_write_file_to_arena():
     """kovc.hx self-hosted file builtin: write_file_to_arena emits a
     file from arena bytes. Drive the bootstrap pipeline with a source
