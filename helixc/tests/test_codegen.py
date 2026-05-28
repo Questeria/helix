@@ -7093,6 +7093,72 @@ fn main() -> i32 {{
     return run_k2.returncode, run_k2.stdout
 
 
+def _kovc_self_host_compile_and_run_full(name: str, k2_src: str):
+    """K2.AF (2026-05-28): trap-id capture helper. Returns (rc, stdout,
+    stderr) so codegen-debugging probes can see the panic trap-id and
+    message directly instead of inferring from rc alone.
+
+    Speeds up debugging multi-tick codegen arcs (K1.F5g2+ struct-return
+    investigation, K1.F31-F40 audit family pattern) by collapsing the
+    typical 3-5-probe "isolate the failing trap" loop to one probe.
+
+    Bootstrap's panic mechanism (K1.AE/AH/AI) writes the trap-id and
+    "panic[id]: message\\n" to stderr before ud2-ing. Capturing stderr
+    gives the EXACT trap-id of the codegen failure, which maps directly
+    to the bad emit site via kovc.hx's trap-id reservation comments
+    (e.g. 14001 = body-vs-ret-ty mismatch, 19xxx = AST_GT, 24xxx = tile
+    arith add, etc.).
+
+    Identical to _kovc_self_host_compile_and_run_with_stdout but
+    captures stderr too. Safe drop-in for any existing test that wants
+    fuller debug context.
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.bin"
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", elf_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path} && cat > {in_path}"],
+        input=k2_src.encode("utf-8"),
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    run_k2 = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"chmod +x {out_path} && {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    return run_k2.returncode, run_k2.stdout, run_k2.stderr
+
+
 def test_bootstrap_kovc_match_int_arms_self_host():
     """K1.F-discovery (2026-05-25): the matrix listed `match` +
     patterns as KOVC-MISSING. Direct probe through the bootstrap
