@@ -10461,6 +10461,49 @@ def test_bootstrap_kovc_k1f49_k1f50_assert_eq_ne_ident_ident_self_host():
     assert rc_ne_fail == 132
 
 
+def test_bootstrap_kovc_k1f51_k1f52_assert_le_ge_ident_ident_self_host():
+    """K1.F51 + K1.F52 (2026-05-27): assert!(IDENT <= IDENT) /
+    assert!(IDENT >= IDENT). CLOSES the assert! comparison family
+    for both operand shapes (IDENT/INT_LIT and IDENT/IDENT) across
+    all 6 ops = 12 chunks F41-F52.
+
+    Real Rust: `assert!(idx <= len)`, `assert!(actual >= expected)`.
+    Boundary tests verify AST_LE/GE include equality.
+    """
+    rc_le_pass = _kovc_self_host_compile_and_run(
+        "k1f51_aled_pass",
+        'fn main() -> i32 { let a: i32 = 3; let b: i32 = 10; assert!(a <= b); 11 }',
+    )
+    assert rc_le_pass == 11
+    rc_le_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f51_aled_eq_pass",
+        'fn main() -> i32 { let a: i32 = 10; let b: i32 = 10; assert!(a <= b); 11 }',
+    )
+    assert rc_le_eq_pass == 11, (
+        f"K1.F51 boundary: a=10,b=10 assert!(a<=b) should pass; got {rc_le_eq_pass}."
+    )
+    rc_le_fail = _kovc_self_host_compile_and_run(
+        "k1f51_aled_fail",
+        'fn main() -> i32 { let a: i32 = 15; let b: i32 = 10; assert!(a <= b); 11 }',
+    )
+    assert rc_le_fail == 132
+    rc_ge_pass = _kovc_self_host_compile_and_run(
+        "k1f52_aged_pass",
+        'fn main() -> i32 { let a: i32 = 10; let b: i32 = 3; assert!(a >= b); 11 }',
+    )
+    assert rc_ge_pass == 11
+    rc_ge_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f52_aged_eq_pass",
+        'fn main() -> i32 { let a: i32 = 5; let b: i32 = 5; assert!(a >= b); 11 }',
+    )
+    assert rc_ge_eq_pass == 11
+    rc_ge_fail = _kovc_self_host_compile_and_run(
+        "k1f52_aged_fail",
+        'fn main() -> i32 { let a: i32 = 3; let b: i32 = 10; assert!(a >= b); 11 }',
+    )
+    assert rc_ge_fail == 132
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

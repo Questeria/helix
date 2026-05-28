@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 286      # last bump: K1.F49+F50 batch -- assert!(IDENT == IDENT) and assert!(IDENT != IDENT). 8-token shape with both operands IDENT (real Rust `assert!(a == b)`). AST_EQ=20, AST_NE=21. Disjoint from K1.F43/F44 (IDENT/INT) via mac_t6 (TK_IDENT=2 here, TK_INT=1 there). 20-byte panic message (==/!=). Continues building the (IDENT, IDENT) family. K1.F51+F52 (<=/>=) next will close the family.
+K_BOOTSTRAP_CHUNKS_DONE = 288      # last bump: K1.F51+F52 batch -- assert!(IDENT <= IDENT) / assert!(IDENT >= IDENT). CLOSES THE ASSERT! COMPARISON FAMILY across both operand shapes (IDENT/INT_LIT in F41-F46 + IDENT/IDENT in F47-F52) for all 6 ops -- 12 chunks F41-F52. AST_LE=22, AST_GE=23. Boundary tests verify equality-inclusion. MILESTONE: 6-op-x-2-shape assert! family complete. Telegram fires.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
