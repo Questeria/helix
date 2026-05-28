@@ -3813,6 +3813,28 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         if aeql_a_bool == 1 { if aeql_b_bool == 1 { 1 } else { 0 } } else { 0 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // === K1.F41-F46 PARTITION TABLE (K3.Y audit-doc 2026-05-27) ===
+            // The 6 detectors below cover assert!(IDENT OP INT_LIT) for the
+            // 6 comparison ops. All gated on is_assert_name_macro == 1 AND
+            // K3.S reserved-kw reject on the IDENT operand at k+3.
+            //
+            //   Macro      | mac_t4 | mac_t5 | mac_t6 | mac_t7 | tokens | AST | msg-len
+            //   ---------- | ------ | ------ | ------ | ------ | ------ | --- | -------
+            //   F41 `<`    | LT(16) | INT(1) | RP(4)  |   --   |   7    | 6   |   19
+            //   F42 `>`    | GT(17) | INT(1) | RP(4)  |   --   |   7    | 19  |   19
+            //   F43 `==`   | EQ(15) | EQ(15) | INT(1) | RP(4)  |   8    | 20  |   20
+            //   F44 `!=`   | BG(18) | EQ(15) | INT(1) | RP(4)  |   8    | 21  |   20
+            //   F45 `<=`   | LT(16) | EQ(15) | INT(1) | RP(4)  |   8    | 22  |   20
+            //   F46 `>=`   | GT(17) | EQ(15) | INT(1) | RP(4)  |   8    | 23  |   20
+            //
+            // CRITICAL DISJOINTNESS: F41/F45 share mac_t4=LT(16); F42/F46
+            // share mac_t4=GT(17). Mutually exclusive via mac_t5: 7-token
+            // forms have mac_t5=TK_INT(1); 8-token forms have mac_t5=TK_EQ(15).
+            //
+            // INT_LIT operand value: at tok_p1(k+5) for 7-token, tok_p1(k+6)
+            // for 8-token. Synthesis arm advances 7 or 8 times accordingly.
+            // === END PARTITION TABLE ===
+            //
             // K1.F41 (2026-05-27): assert!(IDENT < INT_LIT). Real Rust idiom
             // for ordered-check asserts: `assert!(len < cap)`, `assert!(x < 10)`.
             // 7-token shape: IDENT(assert), !, (, IDENT, TK_LT(16), INT, ).
