@@ -7238,6 +7238,51 @@ def test_bootstrap_ptx_let_chain():
     )
 
 
+def test_bootstrap_ptx_scalar_add():
+    """K1.M5d (2026-05-28): scalar arithmetic. `x + 2` (a let-bound var
+    plus a const -- NOT constant-folded) lowers via the recursive
+    expression emitter + the var->register environment: the let's const
+    materializes into %r0, the literal 2 into %r1, then add.s32 %r2,
+    %r0, %r1 (mirrors Python ptx.py emit_op SCALAR_ADD). Direct tile-IR
+    -> PTX, NO MLIR."""
+    src = "@kernel fn k() -> i32 { let x: i32 = 5; x + 2 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_sadd", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 5;\n"
+        + b"    mov.s32 %r1, 2;\n"
+        + b"    add.s32 %r2, %r0, %r1;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
+def test_bootstrap_ptx_scalar_mul():
+    """K1.M5d: scalar multiply -- `x * 3` lowers to mul.lo.s32 (Python
+    ptx.py SCALAR_MUL), proving the binop opcode selector reuses the
+    same operand-lowering path. Direct tile-IR -> PTX, NO MLIR."""
+    src = "@kernel fn k() -> i32 { let x: i32 = 5; x * 3 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_smul", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 5;\n"
+        + b"    mov.s32 %r1, 3;\n"
+        + b"    mul.lo.s32 %r2, %r0, %r1;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
 def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
     """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
     that returns (rc, stdout_bytes) instead of just rc. Needed for

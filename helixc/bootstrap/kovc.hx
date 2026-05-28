@@ -9620,6 +9620,132 @@ fn emit_ptx_mov_const(ridx: i32, val: i32) -> i32 {
     0
 }
 
+// K1.M5d (2026-05-28): variable->register environment for kernel-body
+// expression lowering. A fixed-cap table (16 vars) living in the arena
+// BEFORE the PTX output region (allocated by ptx_vtab_init in
+// emit_ptx_for_ast_to_path), so its slots are NEVER part of the
+// emitted .ptx text. Layout: slot 0 = next_reg (per-kernel register
+// counter), slot 1 = var_count, then 16 * (name_s, name_l, ridx)
+// triples. Reset per kernel. (`reg` is a Helix keyword -> `ridx`.)
+fn ptx_vtab_init() -> i32 {
+    let bse = __arena_push(0);   // slot 0: next_reg
+    __arena_push(0);             // slot 1: var_count
+    let mut i: i32 = 0;
+    while i < 48 {               // 16 vars * 3 slots
+        __arena_push(0);
+        i = i + 1;
+    }
+    bse
+}
+fn ptx_vtab_reset(vtab: i32) -> i32 {
+    __arena_set(vtab, 0);        // next_reg = 0
+    __arena_set(vtab + 1, 0);    // var_count = 0
+    0
+}
+fn ptx_alloc_reg(vtab: i32) -> i32 {
+    let r = __arena_get(vtab);
+    __arena_set(vtab, r + 1);
+    r
+}
+fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32) -> i32 {
+    let vc = __arena_get(vtab + 1);
+    if vc < 16 {
+        let bse = vtab + 2 + vc * 3;
+        __arena_set(bse, name_s);
+        __arena_set(bse + 1, name_l);
+        __arena_set(bse + 2, ridx);
+        __arena_set(vtab + 1, vc + 1);
+    };
+    0
+}
+fn ptx_vtab_lookup(vtab: i32, name_s: i32, name_l: i32) -> i32 {
+    // Return the ridx of the latest matching binding (shadowing) or -1.
+    let vc = __arena_get(vtab + 1);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < vc {
+        let bse = vtab + 2 + i * 3;
+        if kovc_byte_eq(name_s, name_l, __arena_get(bse), __arena_get(bse + 1)) == 1 {
+            found = __arena_get(bse + 2);
+        };
+        i = i + 1;
+    }
+    found
+}
+
+// K1.M5d: recursively lower a kernel-body scalar expression to PTX,
+// returning the register index holding its result. AST_INT (tag 0 ->
+// mov.s32), AST_VAR (tag 1 -> resolve via the var table), AST_LET (tag
+// 8 -> lower value [slot 4], bind name->reg, lower continuation [slot
+// 3]), AST_ADD/SUB/MUL (tags 2/3/4 -> emit_ptx_binop). Unsupported
+// nodes return -1 with no emit (extended later). Mirrors x86_64
+// emit_ast_code but targets PTX text. Mutually recursive with
+// emit_ptx_binop (forward ref -- same support the parser relies on).
+fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
+    let tag = __arena_get(node);
+    if tag == 0 {
+        let r = ptx_alloc_reg(vtab);
+        emit_ptx_mov_const(r, __arena_get(node + 1));
+        r
+    } else { if tag == 1 {
+        ptx_vtab_lookup(vtab, __arena_get(node + 1), __arena_get(node + 2))
+    } else { if tag == 8 {
+        let vr = emit_ptx_expr(__arena_get(node + 4), vtab);
+        ptx_vtab_add(vtab, __arena_get(node + 1), __arena_get(node + 2), vr);
+        emit_ptx_expr(__arena_get(node + 3), vtab)
+    } else { if tag == 2 {
+        emit_ptx_binop(node, vtab, 0)
+    } else { if tag == 3 {
+        emit_ptx_binop(node, vtab, 1)
+    } else { if tag == 4 {
+        emit_ptx_binop(node, vtab, 2)
+    } else {
+        0 - 1
+    }}}}}}
+}
+
+// K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
+// (opc 0=add, 1=sub, 2=mul.lo). Lowers both operands first (so their
+// movs precede the op), allocates the result register, returns it.
+// Mirrors Python ptx.py emit_op SCALAR_ADD/SUB/MUL.
+fn emit_ptx_binop(node: i32, vtab: i32, opc: i32) -> i32 {
+    let la = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let ra = emit_ptx_expr(__arena_get(node + 2), vtab);
+    let r = ptx_alloc_reg(vtab);
+    // "    " indent
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    if opc == 0 {
+        // "add.s32"
+        emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+        emit_ptx_byte(50);
+    } else { if opc == 1 {
+        // "sub.s32"
+        emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+        emit_ptx_byte(50);
+    } else {
+        // "mul.lo.s32"
+        emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
+        emit_ptx_byte(46); emit_ptx_byte(108); emit_ptx_byte(111);
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+        emit_ptx_byte(50);
+    }};
+    // " %r" + D
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(r);
+    // ", %r" + A
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(la);
+    // ", %r" + B
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(ra);
+    // ";\n"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    r
+}
+
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
 //   .visible .entry <name>()
 //   {
@@ -9628,7 +9754,7 @@ fn emit_ptx_mov_const(ridx: i32, val: i32) -> i32 {
 // <name> is the fn's real source name (slots 1/2 = name_start/len),
 // same source-byte read the bootstrap's `main` detection uses. The
 // body/params are still stubbed (K1.M4+ add .param / .reg / ops).
-fn emit_ptx_entry(fn_idx: i32) -> i32 {
+fn emit_ptx_entry(fn_idx: i32, vtab: i32) -> i32 {
     // ".visible .entry " (prefix; the real entry name follows)
     emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(105);
     emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(98);
@@ -9678,27 +9804,13 @@ fn emit_ptx_entry(fn_idx: i32) -> i32 {
     emit_ptx_byte(123); emit_ptx_byte(10);
     // K1.M5a: register-file declarations (foundation for op lowering).
     emit_ptx_reg_block();
-    // K1.M5b/M5c: lower the kernel body. Walk a leading AST_LET chain
-    // (tag 8; value in slot 4, continuation in slot 3), emitting one
-    // SCALAR_CONST_INT "mov.s32 %rN, <val>;" per integer-const-init
-    // let; then the tail -- a bare AST_INT (tag 0) emits one more mov,
-    // while an AST_VAR tail (tag 1) resolves to an already-emitted
-    // register (void kernels discard the value -> no instruction).
-    // Non-const-init lets and arithmetic tails are not lowered yet
-    // (M5d+ adds scalar arith + a real var->reg environment).
-    let mut kcur = __arena_get(fn_idx + 3);
-    let mut kreg: i32 = 0;
-    while __arena_get(kcur) == 8 {
-        let kval = __arena_get(kcur + 4);
-        if __arena_get(kval) == 0 {
-            emit_ptx_mov_const(kreg, __arena_get(kval + 1));
-            kreg = kreg + 1;
-        };
-        kcur = __arena_get(kcur + 3);
-    }
-    if __arena_get(kcur) == 0 {
-        emit_ptx_mov_const(kreg, __arena_get(kcur + 1));
-    };
+    // K1.M5d: lower the kernel body via the recursive expression
+    // emitter + a fresh per-kernel var->register environment. Handles
+    // integer const / let-chain / variable ref / scalar arithmetic
+    // (add/sub/mul) -- see emit_ptx_expr. The result register is
+    // discarded (a PTX kernel is void; later chunks add stores).
+    ptx_vtab_reset(vtab);
+    emit_ptx_expr(__arena_get(fn_idx + 3), vtab);
     // "    ret;\n"  (4-space indent, matches Python emit_kernel)
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
     emit_ptx_byte(32); emit_ptx_byte(114); emit_ptx_byte(101);
@@ -9728,6 +9840,9 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
     if kernel_count == 0 {
         0
     } else {
+        // K1.M5d: the var->register table lives BEFORE `start`, so its
+        // slots are never part of the emitted PTX byte stream.
+        let vtab = ptx_vtab_init();
         let start = __arena_len();
         // ".version 8.3\n"
         emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(101);
@@ -9763,7 +9878,7 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
                 if emitted > 0 {
                     emit_ptx_byte(10);
                 };
-                emit_ptx_entry(fn_idx);
+                emit_ptx_entry(fn_idx, vtab);
                 emitted = emitted + 1;
             };
             walk2 = __arena_get(walk2 + 2);
