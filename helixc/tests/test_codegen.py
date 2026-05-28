@@ -8226,6 +8226,69 @@ def test_bootstrap_wgsl_elementwise():
     )
 
 
+def test_bootstrap_wgsl_mul():
+    """K1.M24 (2026-05-28): WGSL elementwise MULTIPLY -- coverage for the
+    binop emitter's `*` path (out[i] = a[i] * b[i]). Confirms the M23
+    emit_wgsl_expr handles MUL (tag 4) -> infix `*`, same machinery as +.
+    Byte-match of valid WGSL-2024."""
+    src = ("@kernel fn k(out: f32, a: f32, b: f32) { "
+           "let i: i32 = thread_idx(); out[i] = a[i] * b[i] }\n")
+    wgsl = _kovc_self_host_emit_ptx("wgsl_mul", src,
+                                    emit_fn="emit_wgsl_for_ast_to_path")
+    expected = (
+        "// Helix-emitted WGSL — spec wgsl-2024\n"
+        "// Workgroup size default: 64\n"
+        "\n"
+        "@group(0) @binding(0) var<storage, read_write> out: array<f32>;\n"
+        "@group(0) @binding(1) var<storage, read_write> a: array<f32>;\n"
+        "@group(0) @binding(2) var<storage, read_write> b: array<f32>;\n"
+        "@compute @workgroup_size(64)\n"
+        "fn k(\n"
+        "    @builtin(global_invocation_id) gid: vec3<u32>\n"
+        ") {\n"
+        "    let i = gid.x;\n"
+        "    out[i] = a[i] * b[i];\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+    ).encode("utf-8")
+    assert wgsl == expected, (
+        f"WGSL mul mismatch:\n got={wgsl!r}\nwant={expected!r}"
+    )
+
+
+def test_bootstrap_wgsl_i32():
+    """K1.M24 (2026-05-28): WGSL i32 arrays -- a kernel with i32 params
+    emits `array<i32>` storage buffers (vs array<f32>), via the new
+    type_tag branch in emit_wgsl_buffer (AST_PARAM slot4 == 0 -> i32). The
+    body (out[i] = a[i] + b[i]) is element-type-agnostic in WGSL. Byte-
+    match of valid WGSL-2024."""
+    src = ("@kernel fn k(out: i32, a: i32, b: i32) { "
+           "let i: i32 = thread_idx(); out[i] = a[i] + b[i] }\n")
+    wgsl = _kovc_self_host_emit_ptx("wgsl_i32", src,
+                                    emit_fn="emit_wgsl_for_ast_to_path")
+    expected = (
+        "// Helix-emitted WGSL — spec wgsl-2024\n"
+        "// Workgroup size default: 64\n"
+        "\n"
+        "@group(0) @binding(0) var<storage, read_write> out: array<i32>;\n"
+        "@group(0) @binding(1) var<storage, read_write> a: array<i32>;\n"
+        "@group(0) @binding(2) var<storage, read_write> b: array<i32>;\n"
+        "@compute @workgroup_size(64)\n"
+        "fn k(\n"
+        "    @builtin(global_invocation_id) gid: vec3<u32>\n"
+        ") {\n"
+        "    let i = gid.x;\n"
+        "    out[i] = a[i] + b[i];\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+    ).encode("utf-8")
+    assert wgsl == expected, (
+        f"WGSL i32 mismatch:\n got={wgsl!r}\nwant={expected!r}"
+    )
+
+
 def test_bootstrap_msl_empty_kernel():
     """K1.M19 (2026-05-28): SECOND non-NVIDIA GPU backend -- Apple Metal /
     MSL. The bootstrap emits a Metal compute kernel (#include

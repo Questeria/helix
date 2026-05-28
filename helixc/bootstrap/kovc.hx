@@ -11098,7 +11098,7 @@ fn emit_wgsl_stmt(node: i32) -> i32 {
 // Positional binding index. Phase-0: array<f32> (the AI elementwise/tile
 // workload); i32 params would use array<i32> (future). This EXCEEDS the
 // Python WebGPU backend (which stubs all real ops) -- net-new capability.
-fn emit_wgsl_buffer(name_s: i32, name_l: i32, idx: i32) -> i32 {
+fn emit_wgsl_buffer(name_s: i32, name_l: i32, idx: i32, type_tag: i32) -> i32 {
     // "@group(0) @binding("
     emit_ptx_byte(64); emit_ptx_byte(103); emit_ptx_byte(114);
     emit_ptx_byte(111); emit_ptx_byte(117); emit_ptx_byte(112);
@@ -11127,12 +11127,17 @@ fn emit_wgsl_buffer(name_s: i32, name_l: i32, idx: i32) -> i32 {
         emit_ptx_byte(__arena_get(name_s + ni));
         ni = ni + 1;
     }
-    // ": array<f32>;\n"
+    // ": array<f32>;" or ": array<i32>;" (K1.M24: branch on type_tag)
     emit_ptx_byte(58); emit_ptx_byte(32);                       // ": "
     emit_ptx_byte(97); emit_ptx_byte(114); emit_ptx_byte(114);
     emit_ptx_byte(97); emit_ptx_byte(121);                      // "array"
-    emit_ptx_byte(60); emit_ptx_byte(102); emit_ptx_byte(51);
-    emit_ptx_byte(50); emit_ptx_byte(62);                       // "<f32>"
+    emit_ptx_byte(60);                                          // "<"
+    if type_tag == 1 {
+        emit_ptx_byte(102);                                     // "f" (f32)
+    } else {
+        emit_ptx_byte(105);                                     // "i" (i32)
+    };
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(62);    // "32>"
     emit_ptx_byte(59); emit_ptx_byte(10);                       // ";\n"
     0
 }
@@ -11145,7 +11150,8 @@ fn emit_wgsl_kernel_params(fn_idx: i32) -> i32 {
     let mut pcur: i32 = __arena_get(fn_idx + 4);
     let mut pidx: i32 = 0;
     while pcur != 0 {
-        emit_wgsl_buffer(__arena_get(pcur + 1), __arena_get(pcur + 2), pidx);
+        emit_wgsl_buffer(__arena_get(pcur + 1), __arena_get(pcur + 2), pidx,
+                         __arena_get(pcur + 4));
         pcur = __arena_get(pcur + 3);
         pidx = pidx + 1;
     }
