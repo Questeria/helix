@@ -9733,9 +9733,13 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_cmp(node, vtab, 5)
     } else { if tag == 7 {
         emit_ptx_if(node, vtab)
+    } else { if tag == 10 {
+        emit_ptx_while(node, vtab)
+    } else { if tag == 11 {
+        emit_ptx_assign(node, vtab)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -9866,14 +9870,21 @@ fn emit_ptx_cmp(node: i32, vtab: i32, cc: i32) -> i32 {
 // (which=1) -- used in both `bra` targets and the label definitions.
 fn emit_ptx_lbl_ref(which: i32, n: i32) -> i32 {
     emit_ptx_byte(36); emit_ptx_byte(76);   // "$L"
-    if which == 0 {
-        // "else_"
+    if which == 0 {     // "else_" (K1.M8b if)
         emit_ptx_byte(101); emit_ptx_byte(108); emit_ptx_byte(115);
         emit_ptx_byte(101); emit_ptx_byte(95);
-    } else {
-        // "end_"
+    };
+    if which == 1 {     // "end_" (K1.M8b if)
         emit_ptx_byte(101); emit_ptx_byte(110); emit_ptx_byte(100);
         emit_ptx_byte(95);
+    };
+    if which == 2 {     // "top_" (K1.M9 while loop top)
+        emit_ptx_byte(116); emit_ptx_byte(111); emit_ptx_byte(112);
+        emit_ptx_byte(95);
+    };
+    if which == 3 {     // "wend_" (K1.M9 while loop exit)
+        emit_ptx_byte(119); emit_ptx_byte(101); emit_ptx_byte(110);
+        emit_ptx_byte(100); emit_ptx_byte(95);
     };
     emit_ptx_decimal(n);
     0
@@ -9930,6 +9941,73 @@ fn emit_ptx_if(node: i32, vtab: i32) -> i32 {
     emit_ptx_lbl_ref(1, n);
     emit_ptx_byte(58); emit_ptx_byte(10);
     0 - 1
+}
+
+// K1.M9 (2026-05-28): lower AST_WHILE (tag 10; cond slot 1, body slot
+// 2) as a loop: "$Ltop_<n>:" / eval cond / setp.ne != 0 / "@!%p bra
+// $Lwend_<n>" / body / "bra $Ltop_<n>" / "$Lwend_<n>:". Reuses the
+// label + predicate machinery. Statement (returns -1). ptxas-validated.
+fn emit_ptx_while(node: i32, vtab: i32) -> i32 {
+    let n = ptx_alloc_label(vtab);
+    // "$Ltop_<n>:\n"
+    emit_ptx_lbl_ref(2, n);
+    emit_ptx_byte(58); emit_ptx_byte(10);
+    // cond
+    let rc = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let pz = ptx_alloc_pred(vtab);
+    // "    setp.ne.s32 %p<pz>, %r<rc>, 0;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(115); emit_ptx_byte(101);
+    emit_ptx_byte(116); emit_ptx_byte(112); emit_ptx_byte(46);
+    emit_ptx_byte(110); emit_ptx_byte(101); emit_ptx_byte(46);
+    emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(112);
+    emit_ptx_decimal(pz);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(rc);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(48);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    @!%p<pz> bra $Lwend_<n>;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(64); emit_ptx_byte(33);
+    emit_ptx_byte(37); emit_ptx_byte(112);
+    emit_ptx_decimal(pz);
+    emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(3, n);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // body (result discarded)
+    emit_ptx_expr(__arena_get(node + 2), vtab);
+    // "    bra $Ltop_<n>;\n"  (back-edge)
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(2, n);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "$Lwend_<n>:\n"
+    emit_ptx_lbl_ref(3, n);
+    emit_ptx_byte(58); emit_ptx_byte(10);
+    0 - 1
+}
+
+// K1.M9: lower AST_ASSIGN (tag 11; name slot 1/2, val slot 3) -- `x =
+// v` overwrites the variable's existing register: "mov.s32 %rX, %rV"
+// (the var->reg binding is unchanged; subsequent reads see the new
+// value). Returns the destination register.
+fn emit_ptx_assign(node: i32, vtab: i32) -> i32 {
+    let rv = emit_ptx_expr(__arena_get(node + 3), vtab);
+    let rx = ptx_vtab_lookup(vtab, __arena_get(node + 1), __arena_get(node + 2));
+    // "    mov.s32 %r<rx>, %r<rv>;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
+    emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(115);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(rx);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(rv);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    rx
 }
 
 // K1.M6 (2026-05-28): is this call name the byte-string "thread_idx"

@@ -7483,6 +7483,52 @@ def test_bootstrap_ptx_if():
         )
 
 
+def test_bootstrap_ptx_while_loop():
+    """K1.M9 (2026-05-28): AST_WHILE loop + AST_ASSIGN -- a real
+    terminating counting loop. `let x = 0; while x < 4 { x = x + 1 }`
+    lowers to a $Ltop label, the cond (setp.lt + selp), setp.ne,
+    @!%p bra $Lwend, the body (add + mov overwriting x's register),
+    bra back to $Ltop, and the $Lwend exit. x counts 0->4. ptxas-
+    validated (real SASS). Direct tile-IR -> PTX, NO MLIR."""
+    src = ("@kernel fn k() -> i32 { let x: i32 = 0; "
+           "while x < 4 { x = x + 1 } }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_while", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 0;\n"
+        + b"$Ltop_0:\n"
+        + b"    mov.s32 %r1, 4;\n"
+        + b"    setp.lt.s32 %p0, %r0, %r1;\n"
+        + b"    selp.b32 %r2, 1, 0, %p0;\n"
+        + b"    setp.ne.s32 %p1, %r2, 0;\n"
+        + b"    @!%p1 bra $Lwend_0;\n"
+        + b"    mov.s32 %r3, 1;\n"
+        + b"    add.s32 %r4, %r0, %r3;\n"
+        + b"    mov.s32 %r0, %r4;\n"
+        + b"    bra $Ltop_0;\n"
+        + b"$Lwend_0:\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_while.cubin "
+             "/tmp/sh_ptx_while_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected while PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
