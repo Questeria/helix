@@ -7716,6 +7716,47 @@ def test_bootstrap_ptx_elementwise_add():
         )
 
 
+def test_bootstrap_ptx_f32_load():
+    """K1.M11 (2026-05-28): f32 (float) global LOAD -- the first float op
+    (the backend was i32-only). A kernel param typed `: f32` makes a[i]
+    lower to ld.global.f32 into a %f register (vs ld.global.u32 %r for
+    i32), selected via the param type_tag (AST_PARAM slot 4 == 1). The
+    i32 path stays byte-identical (prior tests green). Foundation for
+    f32 arithmetic -- the realistic AI workload. ptxas-validated (real
+    SASS). Direct tile-IR -> PTX, NO MLIR."""
+    src = ("@kernel fn k(a: f32) -> f32 { let i: i32 = thread_idx(); "
+           "a[i] }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_f32load", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k(.param .b64 param_0)\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    ld.param.u64 %rd0, [param_0];\n"
+        + b"    cvta.to.global.u64 %rd1, %rd0;\n"
+        + b"    mul.wide.s32 %rd2, %r0, 4;\n"
+        + b"    add.s64 %rd3, %rd1, %rd2;\n"
+        + b"    ld.global.f32 %f0, [%rd3];\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_f32load.cubin "
+             "/tmp/sh_ptx_f32load_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected f32-load PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

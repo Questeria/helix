@@ -9631,9 +9631,9 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 52 {               // 16 var triples (2..49) + 4 counters:
-        __arena_push(0);         // 50=next_pred, 51=next_label,
-        i = i + 1;               // 52=next_rd, 53=cur_fn_idx (K1.M10)
+    while i < 53 {               // 16 var triples (2..49) + 5 counters:
+        __arena_push(0);         // 50=next_pred, 51=next_label, 52=next_rd,
+        i = i + 1;               // 53=cur_fn_idx, 54=next_f (K1.M11 %f)
     }
     bse
 }
@@ -9643,6 +9643,7 @@ fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab + 50, 0);   // K1.M8: next_pred = 0
     __arena_set(vtab + 51, 0);   // K1.M8: next_label = 0
     __arena_set(vtab + 52, 0);   // K1.M10: next_rd = 0
+    __arena_set(vtab + 54, 0);   // K1.M11: next_f = 0
     0
 }
 fn ptx_alloc_reg(vtab: i32) -> i32 {
@@ -9667,6 +9668,12 @@ fn ptx_alloc_label(vtab: i32) -> i32 {
 fn ptx_alloc_rd(vtab: i32) -> i32 {
     let r = __arena_get(vtab + 52);
     __arena_set(vtab + 52, r + 1);
+    r
+}
+// K1.M11: allocate a fresh 32-bit float register index (%fN).
+fn ptx_alloc_f(vtab: i32) -> i32 {
+    let r = __arena_get(vtab + 54);
+    __arena_set(vtab + 54, r + 1);
     r
 }
 fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32) -> i32 {
@@ -10038,6 +10045,11 @@ fn emit_ptx_rd(n: i32) -> i32 {
     emit_ptx_decimal(n);
     0
 }
+fn emit_ptx_f(n: i32) -> i32 {
+    emit_ptx_byte(37); emit_ptx_byte(102);   // "%f"
+    emit_ptx_decimal(n);
+    0
+}
 
 // K1.M10: resolve a name to its 0-based kernel-parameter index by
 // walking the AST_PARAM list (fn_idx slot 4 = params_head; each
@@ -10052,6 +10064,20 @@ fn ptx_param_index(fn_idx: i32, name_s: i32, name_l: i32) -> i32 {
             if found < 0 { found = idx; };
         };
         idx = idx + 1;
+        p = __arena_get(p + 3);
+    }
+    found
+}
+// K1.M11: the type tag of a named kernel param (AST_PARAM slot 4:
+// 0=i32, 1=f32, ...), or -1 if not a param. Lets index loads/stores
+// pick the element type (ld.global.f32 vs ld.global.u32).
+fn ptx_param_type(fn_idx: i32, name_s: i32, name_l: i32) -> i32 {
+    let mut p = __arena_get(fn_idx + 4);
+    let mut found: i32 = 0 - 1;
+    while p != 0 {
+        if kovc_byte_eq(name_s, name_l, __arena_get(p + 1), __arena_get(p + 2)) == 1 {
+            if found < 0 { found = __arena_get(p + 4); };
+        };
         p = __arena_get(p + 3);
     }
     found
@@ -10122,19 +10148,40 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_rd(rdo);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // "    ld.global.u32 %r<rdst>, [%rd<rda>];\n"
-    let rdst = ptx_alloc_reg(vtab);
-    emit_ptx_indent();
-    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
-    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
-    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
-    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
-    emit_ptx_byte(50); emit_ptx_byte(32);
-    emit_ptx_r(rdst);
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
-    emit_ptx_rd(rda);
-    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
-    rdst
+    // K1.M11: the load instruction depends on the element type. If the
+    // base param is f32 (type_tag 1) emit "ld.global.f32 %f<n>" (into a
+    // float register); else the i32 path "ld.global.u32 %r<n>".
+    let elem_ty = ptx_param_type(fn_idx, __arena_get(base + 1),
+                                 __arena_get(base + 2));
+    if elem_ty == 1 {
+        // "    ld.global.f32 %f<fdst>, [%rd<rda>];\n"
+        let fdst = ptx_alloc_f(vtab);
+        emit_ptx_indent();
+        emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+        emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
+        emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
+        emit_ptx_byte(50); emit_ptx_byte(32);
+        emit_ptx_f(fdst);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+        emit_ptx_rd(rda);
+        emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+        fdst
+    } else {
+        // "    ld.global.u32 %r<rdst>, [%rd<rda>];\n"
+        let rdst = ptx_alloc_reg(vtab);
+        emit_ptx_indent();
+        emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+        emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
+        emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
+        emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
+        emit_ptx_byte(50); emit_ptx_byte(32);
+        emit_ptx_r(rdst);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+        emit_ptx_rd(rda);
+        emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+        rdst
+    }
 }
 
 // K1.M10c: lower a global-memory STORE a[i] = v (AST_INDEX_STORE = tag
