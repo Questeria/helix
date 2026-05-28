@@ -477,6 +477,18 @@ K2_CORPUS = [
     ("p264_add_overflow_wrap",   "fn main() -> i32 { 2147483647 + 1 }", 0),
     ("p265_mul_overflow_wrap",   "fn main() -> i32 { 100000 * 100000 }", 0),
     ("p266_abs_via_cond",        "fn main() -> i32 { let x = 0 - 7; if x < 0 { 0 - x } else { x } }", 7),
+    # S3 recursion/call audit (2026-05-28): axis CLEAN -- the bootstrap matches
+    # Python on self/mutual recursion, deep (100-level) tail recursion, multi-arg
+    # calls, nested calls, and Ackermann. (Fitting: the bootstrap self-hosts via
+    # exactly this recursive-descent call machinery.)
+    ("p267_recursion_fact",   "fn f(n: i32) -> i32 { if n <= 1 { 1 } else { n * f(n - 1) } } fn main() -> i32 { f(5) }", 120),
+    ("p268_recursion_fib",    "fn fib(n: i32) -> i32 { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } } fn main() -> i32 { fib(10) }", 55),
+    ("p269_mutual_recursion", "fn ev(n: i32) -> i32 { if n == 0 { 1 } else { od(n - 1) } } fn od(n: i32) -> i32 { if n == 0 { 0 } else { ev(n - 1) } } fn main() -> i32 { ev(10) }", 1),
+    ("p270_tail_recursion",   "fn c(n: i32, a: i32) -> i32 { if n == 0 { a } else { c(n - 1, a + 1) } } fn main() -> i32 { c(100, 0) }", 100),
+    ("p271_multiarg_call",    "fn add3(a: i32, b: i32, c: i32) -> i32 { a + b + c } fn main() -> i32 { add3(10, 20, 12) }", 42),
+    ("p272_nested_calls",     "fn dbl(x: i32) -> i32 { x * 2 } fn inc(x: i32) -> i32 { x + 1 } fn main() -> i32 { dbl(inc(dbl(10))) }", 42),
+    ("p273_ackermann",        "fn ack(m: i32, n: i32) -> i32 { if m == 0 { n + 1 } else { if n == 0 { ack(m - 1, 1) } else { ack(m - 1, ack(m, n - 1)) } } } fn main() -> i32 { ack(2, 3) }", 9),
+    ("p274_fn_calls_recursive","fn fl(n: i32) -> i32 { if n <= 1 { 1 } else { n * fl(n - 1) } } fn h(n: i32) -> i32 { fl(n) } fn main() -> i32 { h(4) }", 24),
 ]
 
 
@@ -548,7 +560,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 266, (
+    assert len(K2_CORPUS) >= 274, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
