@@ -7437,6 +7437,52 @@ def test_bootstrap_ptx_scalar_cmp():
         )
 
 
+def test_bootstrap_ptx_if():
+    """K1.M8b (2026-05-28): AST_IF -> predicated branch, completing
+    control flow. `if x < 3 { 1 } else { 2 }` lowers to the comparison
+    (setp.lt + selp), a setp.ne != 0 test, `@!%p bra $Lelse`, the then
+    block, `bra $Lend`, the $Lelse label + else block, and $Lend -- the
+    standard GPU branch shape. if-as-statement (value discarded in a
+    void kernel). ptxas-validated (real SASS). Direct tile-IR -> PTX,
+    NO MLIR."""
+    src = ("@kernel fn k() -> i32 { let x: i32 = 5; "
+           "if x < 3 { 1 } else { 2 } }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_if", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.s32 %r0, 5;\n"
+        + b"    mov.s32 %r1, 3;\n"
+        + b"    setp.lt.s32 %p0, %r0, %r1;\n"
+        + b"    selp.b32 %r2, 1, 0, %p0;\n"
+        + b"    setp.ne.s32 %p1, %r2, 0;\n"
+        + b"    @!%p1 bra $Lelse_0;\n"
+        + b"    mov.s32 %r3, 1;\n"
+        + b"    bra $Lend_0;\n"
+        + b"$Lelse_0:\n"
+        + b"    mov.s32 %r4, 2;\n"
+        + b"$Lend_0:\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_if.cubin "
+             "/tmp/sh_ptx_if_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected if PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

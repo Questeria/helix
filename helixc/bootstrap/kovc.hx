@@ -9655,6 +9655,12 @@ fn ptx_alloc_pred(vtab: i32) -> i32 {
     __arena_set(vtab + 50, r + 1);
     r
 }
+// K1.M8b: allocate a fresh label id (for $Lelse_<n> / $Lend_<n>).
+fn ptx_alloc_label(vtab: i32) -> i32 {
+    let r = __arena_get(vtab + 51);
+    __arena_set(vtab + 51, r + 1);
+    r
+}
 fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32) -> i32 {
     let vc = __arena_get(vtab + 1);
     if vc < 16 {
@@ -9725,9 +9731,11 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_cmp(node, vtab, 4)
     } else { if tag == 23 {
         emit_ptx_cmp(node, vtab, 5)
+    } else { if tag == 7 {
+        emit_ptx_if(node, vtab)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -9852,6 +9860,76 @@ fn emit_ptx_cmp(node: i32, vtab: i32, cc: i32) -> i32 {
     // ";\n"
     emit_ptx_byte(59); emit_ptx_byte(10);
     r
+}
+
+// K1.M8b: emit a label NAME "$Lelse_<n>" (which=0) or "$Lend_<n>"
+// (which=1) -- used in both `bra` targets and the label definitions.
+fn emit_ptx_lbl_ref(which: i32, n: i32) -> i32 {
+    emit_ptx_byte(36); emit_ptx_byte(76);   // "$L"
+    if which == 0 {
+        // "else_"
+        emit_ptx_byte(101); emit_ptx_byte(108); emit_ptx_byte(115);
+        emit_ptx_byte(101); emit_ptx_byte(95);
+    } else {
+        // "end_"
+        emit_ptx_byte(101); emit_ptx_byte(110); emit_ptx_byte(100);
+        emit_ptx_byte(95);
+    };
+    emit_ptx_decimal(n);
+    0
+}
+
+// K1.M8b: lower AST_IF (tag 7; cond slot 1, then slot 2, else slot 3)
+// as a predicated branch -- completes control flow. The cond value is
+// tested != 0; on false we branch over the then-block to the else.
+// Per-kernel unique labels via ptx_alloc_label. if-as-statement: the
+// value is discarded (a void kernel uses if for side effects; an
+// if-as-value phi/merge is deferred). ptxas-validated form.
+fn emit_ptx_if(node: i32, vtab: i32) -> i32 {
+    let rc = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let pz = ptx_alloc_pred(vtab);
+    let n = ptx_alloc_label(vtab);
+    // "    setp.ne.s32 %p<pz>, %r<rc>, 0;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(115); emit_ptx_byte(101);
+    emit_ptx_byte(116); emit_ptx_byte(112); emit_ptx_byte(46);
+    emit_ptx_byte(110); emit_ptx_byte(101); emit_ptx_byte(46);
+    emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(112);
+    emit_ptx_decimal(pz);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+    emit_ptx_byte(114); emit_ptx_decimal(rc);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(48);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "    @!%p<pz> bra $Lelse_<n>;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(64); emit_ptx_byte(33);
+    emit_ptx_byte(37); emit_ptx_byte(112);
+    emit_ptx_decimal(pz);
+    emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(0, n);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // then-branch (result discarded)
+    emit_ptx_expr(__arena_get(node + 2), vtab);
+    // "    bra $Lend_<n>;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(1, n);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "$Lelse_<n>:\n"
+    emit_ptx_lbl_ref(0, n);
+    emit_ptx_byte(58); emit_ptx_byte(10);
+    // else-branch (result discarded); guard against a missing else
+    let else_idx = __arena_get(node + 3);
+    if else_idx != 0 {
+        emit_ptx_expr(else_idx, vtab);
+    };
+    // "$Lend_<n>:\n"
+    emit_ptx_lbl_ref(1, n);
+    emit_ptx_byte(58); emit_ptx_byte(10);
+    0 - 1
 }
 
 // K1.M6 (2026-05-28): is this call name the byte-string "thread_idx"
