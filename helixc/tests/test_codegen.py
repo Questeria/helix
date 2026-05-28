@@ -5104,6 +5104,24 @@ def test_bootstrap_fnptr_name_as_value():
     assert rc == 7, f"fn-name-as-value let g=dbl: bootstrap rc={rc}, expected 7"
 
 
+def test_bootstrap_fnptr_indirect_call():
+    """A2b (2026-05-28): a FULL function pointer -- pass a fn by name and
+    CALL it through a parameter. `apply(f, x) { f(x) }` invoked as
+    `apply(dbl, 21)` -> 42. Builds on A2a (fn name decays to its address
+    via rip-relative lea): the call `f(x)`, where f is a local holding
+    that address, now emits an indirect `call r11` (load the local's low
+    32 bits -- the whole code address, since ELF_BASE is 0x400000 -- then
+    call r11) instead of a name-patched rel32 that missed -> SIGILL. This
+    is net-new vs Python helixc (NotImplementedError on fn-typed calls),
+    so it is a bootstrap-only pin where the bootstrap EXCEEDS Python."""
+    rc = _kovc_self_host_compile_and_run(
+        "a2b_fnptr_indirect",
+        "fn dbl(x: i32) -> i32 { x * 2 } "
+        "fn apply(f: fn(i32) -> i32, x: i32) -> i32 { f(x) } "
+        "fn main() -> i32 { apply(dbl, 21) }")
+    assert rc == 42, f"fn-pointer apply(dbl,21): bootstrap rc={rc}, expected 42"
+
+
 def test_bootstrap_closure():
     """K1.M32 (2026-05-28): closures run in the bootstrap kovc -- a let-
     bound lambda `|x: i32| x + 1` called as f(41) -> 42. NOTE: Python

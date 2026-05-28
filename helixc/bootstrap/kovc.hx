@@ -1008,6 +1008,27 @@ fn emit_mov_rax_local_64(offset: i32) -> i32 {
     7
 }
 
+// A2b (2026-05-28): load a local's low 32 bits into r11, zero-extending
+// to the full r11 (mov r11d, [rbp + disp32] -> 44 8B 9D disp32). Used by
+// the AST_CALL indirect path to load a function-pointer value out of a
+// local slot. A 32-bit zero-extend (not a 64-bit load) is deliberate:
+// fn-type params are type-erased to i32 (4-byte slots), and every code
+// address is < 2^32 (ELF_BASE 0x400000 + a small image), so the low 32
+// bits ARE the whole address and the slot's high 32 (possibly garbage
+// from a 32-bit param spill) must be ignored.
+fn emit_mov_r11d_local(offset: i32) -> i32 {
+    emit_byte(0x44); emit_byte(0x8B); emit_byte(0x9D);
+    emit_u32_le(0 - offset);
+    7
+}
+
+// A2b: call through r11 (call r11 -> 41 FF D3). The indirect-call opcode
+// for a fn pointer loaded by emit_mov_r11d_local.
+fn emit_call_r11() -> i32 {
+    emit_byte(0x41); emit_byte(0xFF); emit_byte(0xD3);
+    3
+}
+
 // Stage 2.5b/c stage 2: narrow loads. The arena slot is still 4 bytes
 // wide regardless of declared type; these helpers narrow the read so
 // that a u8/u16/i8/i16 binding's stored bit pattern is interpreted at
@@ -8602,6 +8623,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // emit `call rel32 placeholder` for backpatching.
         let p3 = __arena_get(idx + 3);
         let mut bytes_emitted: i32 = 0;
+        // A2b (2026-05-28): indirect-call detection. If the callee name
+        // resolves to a LOCAL binding, it holds a function-pointer value
+        // (e.g. a `f: fn(...)->...` param, type-erased to i32) rather than
+        // naming a fn -- emit an indirect `call r11` through the loaded
+        // address instead of a name-patched rel32 (which would miss ->
+        // ud2/SIGILL). 0 = not a local => the normal named-call path.
+        let callee_off = bind_lookup(bind_state, p1, p2);
         // Stage 1.7: look up callee's declared param types so we can
         // trap each arg whose actual type doesn't match. Builtins
         // (not in the fn_type_table) return pp_count=0 below, which
@@ -8728,10 +8756,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             let n_sub = emit_sub_rsp_imm32(stack_alloc);
             let n_rev = emit_stack_args_reverse_copy(stack_args, stack_alloc);
             let n_load = emit_load_six_int_args(stack_alloc, arg_count);
-            let disp_slot = emit_call_rel32_placeholder();
-            patch_table_add(patch_state, disp_slot, p1, p2);
+            let n_call = if callee_off == 0 {
+                let disp_slot = emit_call_rel32_placeholder();
+                patch_table_add(patch_state, disp_slot, p1, p2);
+                5
+            } else {
+                let n_ld = emit_mov_r11d_local(callee_off);
+                n_ld + emit_call_r11()
+            };
             let n_clean = emit_add_rsp_imm32(stack_alloc + 8 * arg_count);
-            bytes_emitted + n_sub + n_rev + n_load + 5 + n_clean
+            bytes_emitted + n_sub + n_rev + n_load + n_call + n_clean
         } else {
         // Pass 2: pop into SysV regs in reverse-of-push order.
         // pushed: arg0, arg1, ..., argN-1 (top is argN-1).
@@ -8760,9 +8794,15 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             } else {} }}}}};
             pi = pi - 1;
         }
-        let disp_slot = emit_call_rel32_placeholder();
-        patch_table_add(patch_state, disp_slot, p1, p2);
-        bytes_emitted + 5
+        let n_call = if callee_off == 0 {
+            let disp_slot = emit_call_rel32_placeholder();
+            patch_table_add(patch_state, disp_slot, p1, p2);
+            5
+        } else {
+            let n_ld = emit_mov_r11d_local(callee_off);
+            n_ld + emit_call_r11()
+        };
+        bytes_emitted + n_call
         }
         }
     } else { if t == 13 {

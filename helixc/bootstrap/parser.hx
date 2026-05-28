@@ -11540,6 +11540,50 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                     cur_advance(sb);     // consume 'dyn' IDENT
                 };
             };
+            // A2c (2026-05-28): fn-pointer parameter type `f: fn(T1,..) -> R`.
+            // The `fn` token in param-type position introduces a function-
+            // pointer type. Consume `fn ( ... )` + optional `-> R` as a
+            // type-erased no-op (mirrors the K1.X let-type fn handler), so
+            // the param binds normally (an i32-shaped fn-pointer slot) and
+            // the param list stays in sync. Without this, `fn` was captured
+            // as the type IDENT, leaving `(...)->R` to desync the param loop
+            // (SIGILL). Detect by token BYTES (not tag) since `fn` lexes as a
+            // keyword; fnty_consumed_a2c gates the type-IDENT read below.
+            let ftk_s_a2c = tok_p2(tok_base, cur_get(sb));
+            let ftk_l_a2c = tok_p3(tok_base, cur_get(sb));
+            let is_fn_ty_a2c = if ftk_l_a2c == 2 {
+                if __arena_get(ftk_s_a2c) == 102 {
+                    if __arena_get(ftk_s_a2c + 1) == 110 { 1 } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            let mut fnty_consumed_a2c: i32 = 0;
+            if is_fn_ty_a2c == 1 {
+                cur_advance(sb);    // consume 'fn'
+                cur_advance(sb);    // consume '('
+                let mut keep_fn_a2c: i32 = 1;
+                while keep_fn_a2c == 1 {
+                    let ft_a2c = tok_tag(tok_base, cur_get(sb));
+                    if ft_a2c == 4 {        // ')'
+                        keep_fn_a2c = 0;
+                    } else { if ft_a2c == 0 {   // EOF guard
+                        keep_fn_a2c = 0;
+                    } else {
+                        cur_advance(sb);
+                    }};
+                }
+                cur_advance(sb);    // consume ')'
+                // optional `-> R`: `-` (8) then `>` (17) then ret-type IDENT
+                let aa_a2c = tok_tag(tok_base, cur_get(sb));
+                if aa_a2c == 8 {
+                    let aa2_a2c = tok_tag(tok_base, cur_get(sb) + 1);
+                    if aa2_a2c == 17 {
+                        cur_advance(sb);    // consume '-'
+                        cur_advance(sb);    // consume '>'
+                        cur_advance(sb);    // consume ret-type IDENT
+                    };
+                };
+                fnty_consumed_a2c = 1;
+            };
             // K1.BD (2026-05-26): peek for `&` (TK_AMP=27) as a
             // reference-type prefix on the param type (`fn p(x: &T)`
             // / `fn p(x: &mut T)`). Consume `&`, then optionally
@@ -11740,7 +11784,7 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // them and AST_ADD dispatches to SSE.
             // K1.DI: also gate on tuple_consumed_di -- if a tuple was
             // consumed by the lookahead path above, no IDENT remains.
-            let skip_ident_read = if slice_consumed_cv == 1 { 1 } else { if tuple_consumed_di == 1 { 1 } else { 0 } };
+            let skip_ident_read = if slice_consumed_cv == 1 { 1 } else { if tuple_consumed_di == 1 { 1 } else { if fnty_consumed_a2c == 1 { 1 } else { 0 } } };
             let ty_tok = cur_get(sb);
             let ty_s = if skip_ident_read == 0 { tok_p2(tok_base, ty_tok) } else { 0 };
             let ty_l = if skip_ident_read == 0 { tok_p3(tok_base, ty_tok) } else { 0 };
