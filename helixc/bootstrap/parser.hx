@@ -3911,6 +3911,36 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         else { 1 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F47 (2026-05-27): assert!(IDENT < IDENT). 7-token shape.
+            // mac_t4=TK_LT(16), mac_t5=TK_IDENT(2). Disjoint from K1.F41
+            // (mac_t5=TK_INT(1)) and K1.F45 (mac_t5=TK_EQ(15)). Both operands
+            // K3.S-reject-checked (each could be `true`/`false`/etc.).
+            let is_assert_ident_lt_ident_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 16 {
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let alid_a_s = tok_p2(tok_base, k + 3);
+                        let alid_a_l = tok_p3(tok_base, k + 3);
+                        let alid_b_s = tok_p2(tok_base, k + 5);
+                        let alid_b_l = tok_p3(tok_base, k + 5);
+                        if is_any_reserved_kw_ident(alid_a_s, alid_a_l) == 1 { 0 }
+                        else { if is_any_reserved_kw_ident(alid_b_s, alid_b_l) == 1 { 0 }
+                        else { 1 } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F48 (2026-05-27): assert!(IDENT > IDENT). Sibling of K1.F47.
+            // mac_t4=TK_GT(17). Disjoint from K1.F42/F46 via mac_t5.
+            let is_assert_ident_gt_ident_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 17 {
+                    if mac_t5 == 2 { if mac_t6 == 4 {
+                        let agid_a_s = tok_p2(tok_base, k + 3);
+                        let agid_a_l = tok_p3(tok_base, k + 3);
+                        let agid_b_s = tok_p2(tok_base, k + 5);
+                        let agid_b_l = tok_p3(tok_base, k + 5);
+                        if is_any_reserved_kw_ident(agid_a_s, agid_a_l) == 1 { 0 }
+                        else { if is_any_reserved_kw_ident(agid_b_s, agid_b_l) == 1 { 0 }
+                        else { 1 } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             let is_assert_eq_form = if is_assert_eq_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
                     if mac_t5 == 2 { if mac_t6 == 4 {
@@ -4611,6 +4641,77 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let agei_else = mk_node(16, agei_panic_name_s, 5, agei_args_head);
                 mk_node(7, agei_cond, agei_then, agei_else)
+            } else { if is_assert_ident_lt_ident_form == 1 {
+                // K1.F47 (2026-05-27): assert!(IDENT < IDENT). 7-token shape.
+                // AST_LT (tag 6) on AST_VAR(a) and AST_VAR(b). 19-byte panic
+                // message "assertion failed: <" (reused from K1.F41).
+                let alid_a_s = tok_p2(tok_base, k + 3);
+                let alid_a_l = tok_p3(tok_base, k + 3);
+                let alid_b_s = tok_p2(tok_base, k + 5);
+                let alid_b_l = tok_p3(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // <
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let alid_var_a = mk_node(1, alid_a_s, alid_a_l, 0);
+                let alid_var_b = mk_node(1, alid_b_s, alid_b_l, 0);
+                let alid_cond = mk_node(6, alid_var_a, alid_var_b, 0);   // AST_LT
+                let alid_then = mk_node(0, 0, 0, 0);                      // AST_INT(0)
+                let alid_msg_s = __arena_push(97);                        // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(60);                                         // '<'
+                let alid_str_ast = mk_node(25, alid_msg_s, 19, 0);
+                let alid_args_head = mk_node(17, alid_str_ast, 0, 0);
+                let alid_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let alid_else = mk_node(16, alid_panic_name_s, 5, alid_args_head);
+                mk_node(7, alid_cond, alid_then, alid_else)
+            } else { if is_assert_ident_gt_ident_form == 1 {
+                // K1.F48 (2026-05-27): assert!(IDENT > IDENT). Sibling of
+                // K1.F47 with AST_GT (tag 19) and '>' panic message.
+                let agid_a_s = tok_p2(tok_base, k + 3);
+                let agid_a_l = tok_p3(tok_base, k + 3);
+                let agid_b_s = tok_p2(tok_base, k + 5);
+                let agid_b_l = tok_p3(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // >
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let agid_var_a = mk_node(1, agid_a_s, agid_a_l, 0);
+                let agid_var_b = mk_node(1, agid_b_s, agid_b_l, 0);
+                let agid_cond = mk_node(19, agid_var_a, agid_var_b, 0);  // AST_GT
+                let agid_then = mk_node(0, 0, 0, 0);                      // AST_INT(0)
+                let agid_msg_s = __arena_push(97);                        // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(62);                                         // '>'
+                let agid_str_ast = mk_node(25, agid_msg_s, 19, 0);
+                let agid_args_head = mk_node(17, agid_str_ast, 0, 0);
+                let agid_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let agid_else = mk_node(16, agid_panic_name_s, 5, agid_args_head);
+                mk_node(7, agid_cond, agid_then, agid_else)
             } else { if is_assert_eq_bool_lit_form == 1 {
                 // K1.F22j2: compile-time fold for bool-lit assert_eq!.
                 // Both operands are known to be `true` or `false`
@@ -5216,7 +5317,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form); K1.F41: +1 (is_assert_ident_lt_int_form); K1.F42: +1 (is_assert_ident_gt_int_form); K1.F43: +1 (is_assert_ident_eq_int_form); K1.F44: +1 (is_assert_ident_ne_int_form); K1.F45: +1 (is_assert_ident_le_int_form); K1.F46: +1 (is_assert_ident_ge_int_form)
+            }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form); K1.F41: +1 (is_assert_ident_lt_int_form); K1.F42: +1 (is_assert_ident_gt_int_form); K1.F43: +1 (is_assert_ident_eq_int_form); K1.F44: +1 (is_assert_ident_ne_int_form); K1.F45: +1 (is_assert_ident_le_int_form); K1.F46: +1 (is_assert_ident_ge_int_form); K1.F47: +1 (is_assert_ident_lt_ident_form); K1.F48: +1 (is_assert_ident_gt_ident_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

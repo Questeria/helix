@@ -10395,6 +10395,42 @@ def test_bootstrap_kovc_k1f45_k1f46_assert_le_ge_self_host():
     assert rc_ge_fail == 132
 
 
+def test_bootstrap_kovc_k1f47_k1f48_assert_lt_gt_ident_self_host():
+    """K1.F47 + K1.F48 (2026-05-27): assert!(IDENT < IDENT) /
+    assert!(IDENT > IDENT). 7-token shape with both operands IDENT.
+
+    Real Rust: `assert!(len < cap)`, `assert!(a > b)`. Sibling of
+    K1.F41/F42 (IDENT, INT_LIT) with second operand also IDENT.
+
+    Disjoint from K1.F41/F42 via mac_t5 (TK_IDENT=2 here, TK_INT=1 there)
+    and from K1.F45/F46 via mac_t5 (TK_IDENT=2 here, TK_EQ=15 there).
+    """
+    rc_lt_pass = _kovc_self_host_compile_and_run(
+        "k1f47_alid_pass",
+        'fn main() -> i32 { let a: i32 = 3; let b: i32 = 10; assert!(a < b); 11 }',
+    )
+    assert rc_lt_pass == 11, (
+        f"K1.F47 assert!(a < b) when a=3,b=10: expected rc=11; got {rc_lt_pass}."
+    )
+    rc_lt_fail = _kovc_self_host_compile_and_run(
+        "k1f47_alid_fail",
+        'fn main() -> i32 { let a: i32 = 15; let b: i32 = 10; assert!(a < b); 11 }',
+    )
+    assert rc_lt_fail == 132, (
+        f"K1.F47 assert!(a < b) when a=15,b=10: expected rc=132; got {rc_lt_fail}."
+    )
+    rc_gt_pass = _kovc_self_host_compile_and_run(
+        "k1f48_agid_pass",
+        'fn main() -> i32 { let a: i32 = 10; let b: i32 = 3; assert!(a > b); 11 }',
+    )
+    assert rc_gt_pass == 11
+    rc_gt_fail = _kovc_self_host_compile_and_run(
+        "k1f48_agid_fail",
+        'fn main() -> i32 { let a: i32 = 3; let b: i32 = 10; assert!(a > b); 11 }',
+    )
+    assert rc_gt_fail == 132
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.
