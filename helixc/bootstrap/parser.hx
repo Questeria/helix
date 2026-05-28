@@ -12402,6 +12402,35 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
         } else { if pt == 13 {
             cur_advance(sb);                 // ','
         } else {
+            // K1.F5h (2026-05-27): detect `&self` or `&mut self` ref-of-self
+            // receiver form. The lexer emits `&` as TK_AMP (tag 27) followed
+            // by IDENT(self), with an optional IDENT(mut) between. The
+            // pre-K1.F5h parser fell into the `name: T` branch (looking for
+            // a colon after `&`), then hung because no colon followed. Skip
+            // the `&` (and optional `mut`) so the following self-IDENT
+            // detection logic runs identically to bare `self`. Bootstrap
+            // doesn't have refs as a runtime concept; pass-by-value is
+            // correct for both `self` and `&self`.
+            if pt == 27 {
+                cur_advance(sb);             // consume '&'
+                let post_amp_tag = tok_tag(tok_base, cur_get(sb));
+                let post_amp_tok = cur_get(sb);
+                let post_amp_s = tok_p2(tok_base, post_amp_tok);
+                let post_amp_l = tok_p3(tok_base, post_amp_tok);
+                // Detect `mut` IDENT (bytes 109, 117, 116). If present
+                // between `&` and `self`, skip it too.
+                let is_mut_kw = if post_amp_l == 3 {
+                    if post_amp_tag == 2 {
+                        if __arena_get(post_amp_s) == 109 {
+                            if __arena_get(post_amp_s + 1) == 117 {
+                                if __arena_get(post_amp_s + 2) == 116 { 1 } else { 0 }
+                            } else { 0 }
+                        } else { 0 }
+                    } else { 0 }
+                } else { 0 };
+                if is_mut_kw == 1 { cur_advance(sb); };
+                // Fall through to the standard self-detection path below.
+            };
             let pname_tok = cur_get(sb);
             let pname_s = tok_p2(tok_base, pname_tok);
             let pname_l = tok_p3(tok_base, pname_tok);

@@ -10504,6 +10504,54 @@ def test_bootstrap_kovc_k1f51_k1f52_assert_le_ge_ident_ident_self_host():
     assert rc_ge_fail == 132
 
 
+def test_bootstrap_kovc_k1f5h_ref_self_parses_without_hang_self_host():
+    """K1.F5h (2026-05-27): `&self` receiver in impl-method param.
+
+    Pre-K1.F5h the parser HUNG (infinite loop / timeout) on
+    `impl P { fn read(&self) -> i32 { ... } }`. The `&` was lexed
+    as TK_AMP (27) which the parse_impl_method param-parser fell
+    through to the `name: T` standard branch on, looking for a colon
+    after `&` that doesn't exist.
+
+    K1.F5h FIX: detect TK_AMP + optional `mut` + `self` IDENT BEFORE
+    the standard name-detection logic. Skip the `&` (and `mut`) tokens
+    so the self-detection runs identically to the bare-`self` form.
+    Bootstrap doesn't have refs as a runtime concept; pass-by-value
+    is correct for both `self` and `&self`.
+
+    K1.F5h CLOSES: the parse-side hang. The compile now completes
+    (no timeout).
+
+    K1.F5h does NOT close: the codegen for self-receiver method calls
+    on struct types. Pre- AND post-K1.F5h, the impl-block self-receiver
+    pattern returns rc=132 SIGILL for both bare `self` and `&self`
+    (verified by separate probe). That's a separate K1.F5h2 follow-up
+    chunk (the impl-block fn-decl path doesn't correctly synthesize
+    self-as-first-arg or doesn't correctly wire self.field access).
+
+    This test verifies the PARSE-SIDE FIX: the compile chain
+    progresses past the parser without hanging. rc=132 indicates the
+    parser fix worked; full functional rc=42 awaits K1.F5h2.
+    """
+    src = (
+        "struct P { v: i32 }\n"
+        "impl P { fn read(&self) -> i32 { self.v + 10 } }\n"
+        "fn main() -> i32 { let p: P = P { v: 32 }; p.read() }\n"
+    )
+    rc = _kovc_self_host_compile_and_run("k1f5h_ref_self_parses", src)
+    # K1.F5h closes the PARSE hang. rc=132 (current) reflects the
+    # downstream codegen gap deferred to K1.F5h2; the important
+    # property here is that the compile chain completed instead of
+    # timing out. Accept either 42 (full functional, post-K1.F5h2) or
+    # 132 (parses but codegen-gap exposed) as evidence the parse fix
+    # is intact. Any timeout would re-trigger the hang and fail.
+    assert rc == 42 or rc == 132, (
+        f"K1.F5h: expected parse to complete (rc=132 codegen-gap or "
+        f"rc=42 fully working). Got rc={rc}, suggesting an unexpected "
+        f"new failure mode."
+    )
+
+
 def test_bootstrap_kovc_k1f5c_struct_literal_receiver_self_host():
     """K1.F5c (2026-05-27): struct-literal receiver method-call dispatch.
     Extends K1.F5b (which only handled AST_VAR receivers) to the
