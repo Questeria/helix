@@ -180,6 +180,67 @@ fn set_last_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 19, v); 0 }
 // K1.F5d-g closure plan.
 fn last_call_ret_struct_idx(sb: i32) -> i32 { __arena_get(sb + 74) }
 fn set_last_call_ret_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 74, v); 0 }
+// K1.F5e (2026-05-28): fn_ret_struct_tab -- fn-name -> return-struct-idx
+// mapping. Future K1.F5f wires WRITE at parse_fn_decl exit when ret_ty is
+// 100+struct_idx (struct return). K1.F5g wires READ at method-call
+// PRE-CHECK to enable chained-method dispatch (`a.chain1().chain2()`).
+//
+// Schema: 3-slot entries (name_s, name_l, struct_idx) packed in arena.
+// Capacity 32 entries (96 slots). sb+76 = base offset, sb+77 = count.
+fn fn_ret_struct_tab_base(sb: i32) -> i32 { __arena_get(sb + 76) }
+fn fn_ret_struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 77) }
+fn fn_ret_struct_tab_init(sb: i32) -> i32 {
+    let base = __arena_push(0);
+    let mut i: i32 = 1;
+    while i < 96 { __arena_push(0); i = i + 1; }
+    __arena_set(sb + 76, base);
+    __arena_set(sb + 77, 0);
+    0
+}
+fn fn_ret_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
+    let c = fn_ret_struct_tab_count(sb);
+    if c >= 32 { 0 - 1 }
+    else {
+        let base = fn_ret_struct_tab_base(sb);
+        let off = base + c * 3;
+        __arena_set(off, name_s);
+        __arena_set(off + 1, name_l);
+        __arena_set(off + 2, struct_idx);
+        __arena_set(sb + 77, c + 1);
+        c
+    }
+}
+// Lookup by name bytes. Returns struct_idx if found, -1 if not.
+fn fn_ret_struct_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
+    let c = fn_ret_struct_tab_count(sb);
+    let base = fn_ret_struct_tab_base(sb);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0 - 1;
+    while i < c {
+        if found < 0 {
+            let off = base + i * 3;
+            let e_s = __arena_get(off);
+            let e_l = __arena_get(off + 1);
+            if e_l == name_l {
+                let mut j: i32 = 0;
+                let mut all_match: i32 = 1;
+                while j < name_l {
+                    if all_match == 1 {
+                        if __arena_get(e_s + j) != __arena_get(name_s + j) {
+                            all_match = 0;
+                        };
+                    };
+                    j = j + 1;
+                }
+                if all_match == 1 {
+                    found = __arena_get(off + 2);
+                };
+            };
+        };
+        i = i + 1;
+    }
+    found
+}
 // Stage 6: enum_table state — sb+20 = arena base offset of the enum
 // region, sb+21 = registered count. Each entry is 5 slots
 // (name_s, name_l, variant_count, variants_ptr, max_payload_arity).
@@ -8413,6 +8474,10 @@ fn install_keywords(sb: i32) -> i32 {
     // slot to -1 (no struct return tracked). Future K1.F5e/g will write
     // and read this slot to enable chained method-call dispatch.
     __arena_set(sb + 74, 0 - 1);
+    // K1.F5e (2026-05-28): init the fn_ret_struct_tab (96-slot region for
+    // 32 (name_s, name_l, struct_idx) entries). Empty at start; populated
+    // by K1.F5f at fn-decl exit.
+    fn_ret_struct_tab_init(sb);
     let let_s = __arena_push(108); __arena_push(101); __arena_push(116);
     __arena_set(sb + 1, let_s);
     __arena_set(sb + 2, 3);
