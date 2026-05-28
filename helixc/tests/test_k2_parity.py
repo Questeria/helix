@@ -269,6 +269,14 @@ K2_CORPUS = [
     # K2.V (2026-05-28, M33 probe): match GUARD arm (`n if n > 3 => ...`).
     # Both compilers agree (PARITY). Adds guard-pattern coverage.
     ("p135_match_guard",         "fn main() -> i32 { let x = 5; match x { n if n > 3 => 42, _ => 0 } }", 42),
+    # K2.W (2026-05-28, M34 probe): integration/recursion shapes -- nested
+    # for-loops, recursive gcd, and a boolean short-circuit chain. All
+    # PARITY on both compilers. (struct-in-array-literal was tried but is
+    # NotImplemented in Python + SIGILLs in the bootstrap -- same mapped
+    # 'advanced-feature' class, omitted.)
+    ("p136_nested_for",          "fn main() -> i32 { let mut s = 0; for i in 0..3 { for j in 0..2 { s = s + 7; } } s }", 42),
+    ("p137_gcd_recursion",       "fn gcd(a: i32, b: i32) -> i32 { if b == 0 { a } else { gcd(b, a % b) } } fn main() -> i32 { gcd(84, 126) }", 42),
+    ("p138_bool_shortcircuit",   "fn main() -> i32 { let x = 5; if x > 0 && x < 10 || x == 100 { 42 } else { 0 } }", 42),
 ]
 
 
@@ -340,8 +348,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 135, (
-        f"K2.V corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 138, (
+        f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
