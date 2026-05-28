@@ -10194,6 +10194,61 @@ def test_bootstrap_kovc_k1f37_k1f38_assert_bool_ident_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f39_k1f40_assert_int_int_fold_self_host():
+    """K1.F39 + K1.F40 (2026-05-27): assert_eq/ne!(INT_LIT, INT_LIT)
+    compile-time fold.
+
+    Sibling of K1.F22j2 (BOTH-bool-lit fold) but for integer literals.
+    Both operands at compile time -> evaluate equality and either:
+      - emit AST_INT(0) if the assertion would pass at runtime
+      - emit a panic synthesis if it would fail
+
+    No AST_IF needed: the comparison is folded away entirely. This is
+    a strict optimization over K1.F31/F33 which build runtime AST_IFs
+    even when both operands are constants.
+
+    K1.F39 sub-cases:
+      assert_eq!(5, 5)  -> AST_INT(0)  -> rc=11 (trailing return)
+      assert_eq!(5, 7)  -> panic        -> rc=132
+    K1.F40 sub-cases:
+      assert_ne!(5, 7)  -> AST_INT(0)  -> rc=11
+      assert_ne!(5, 5)  -> panic        -> rc=132
+    """
+    rc_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f39_aeqii_fold_pass",
+        'fn main() -> i32 { assert_eq!(5, 5); 11 }',
+    )
+    assert rc_eq_pass == 11, (
+        f"K1.F39 assert_eq!(5, 5): expected rc=11 (fold to AST_INT(0)); "
+        f"got {rc_eq_pass}."
+    )
+    rc_eq_fail = _kovc_self_host_compile_and_run(
+        "k1f39_aeqii_fold_fail",
+        'fn main() -> i32 { assert_eq!(5, 7); 11 }',
+    )
+    assert rc_eq_fail == 132, (
+        f"K1.F39 assert_eq!(5, 7): expected rc=132 (compile-time panic "
+        f"via ud2); got {rc_eq_fail}. If rc=11: the fold direction was "
+        f"inverted."
+    )
+    rc_ne_pass = _kovc_self_host_compile_and_run(
+        "k1f40_aneii_fold_pass",
+        'fn main() -> i32 { assert_ne!(5, 7); 11 }',
+    )
+    assert rc_ne_pass == 11, (
+        f"K1.F40 assert_ne!(5, 7): expected rc=11 (fold to AST_INT(0)); "
+        f"got {rc_ne_pass}."
+    )
+    rc_ne_fail = _kovc_self_host_compile_and_run(
+        "k1f40_aneii_fold_fail",
+        'fn main() -> i32 { assert_ne!(5, 5); 11 }',
+    )
+    assert rc_ne_fail == 132, (
+        f"K1.F40 assert_ne!(5, 5): expected rc=132 (compile-time panic); "
+        f"got {rc_ne_fail}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

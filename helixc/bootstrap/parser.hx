@@ -3849,6 +3849,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         } else { 0 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F39 (2026-05-27): assert_eq!(INT_LIT, INT_LIT) compile-time
+            // fold. Sibling of K1.F22j2 (BOOL/BOOL fold) but for integer
+            // literals. Both operands at compile time -> evaluate the equality
+            // and emit either AST_INT(0) for pass or full panic synthesis for
+            // fail. 7-token shape; mac_t3=TK_INT(1), mac_t5=TK_INT(1).
+            let is_assert_eq_int_int_form = if is_assert_eq_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 1 { if mac_t4 == 13 {
+                    if mac_t5 == 1 { if mac_t6 == 4 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             // K1.F37 (2026-05-27): assert_eq!(BOOL_LIT, IDENT). Operand-flipped
             // mirror of K1.F35. Real Rust sometimes writes `assert_eq!(true,
             // flag)`. Detection: a IS bool-lit AND b NOT bool-lit.
@@ -3926,6 +3936,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                             else { 1 }
                         } else { 0 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F40 (2026-05-27): assert_ne!(INT_LIT, INT_LIT) compile-time
+            // fold. Sibling of K1.F39 with AST_NE semantics: equal operands
+            // synthesize the panic; differing operands fold to AST_INT(0).
+            let is_assert_ne_int_int_form = if is_assert_ne_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 1 { if mac_t4 == 13 {
+                    if mac_t5 == 1 { if mac_t6 == 4 { 1 }
+                    else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
             // K1.F38 (2026-05-27): assert_ne!(BOOL_LIT, IDENT). Operand-flipped
             // mirror of K1.F36. Pair with K1.F37 (the assert_eq! flip).
@@ -4491,6 +4509,41 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let aeqbi_else = mk_node(16, aeqbi_panic_name_s, 5, aeqbi_args_head);
                 mk_node(7, aeqbi_cond, aeqbi_then, aeqbi_else)
+            } else { if is_assert_eq_int_int_form == 1 {
+                // K1.F39 (2026-05-27): assert_eq!(INT_LIT, INT_LIT) compile-
+                // time fold. Both operands are TK_INT; their values come from
+                // tok_p1 (per parse_primary AST_INT extraction). Equal -> emit
+                // AST_INT(0); unequal -> emit the full panic call.
+                let aeqii_a_val = tok_p1(tok_base, k + 3);
+                let aeqii_b_val = tok_p1(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert_eq)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // INT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // INT (b)
+                cur_advance(sb);           // )
+                if aeqii_a_val == aeqii_b_val {
+                    mk_node(0, 0, 0, 0)    // AST_INT(0) -- both ints equal
+                } else {
+                    // Operands differ at compile time; synthesize panic.
+                    let aeqiip_msg_s = __arena_push(97);                         // 'a'
+                    __arena_push(115); __arena_push(115);                        // 's' 's'
+                    __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                    __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                    __arena_push(32);                                            // ' '
+                    __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                    __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                    __arena_push(58);                                            // ':'
+                    __arena_push(32);                                            // ' '
+                    __arena_push(61); __arena_push(61);                          // '=' '='
+                    let aeqiip_str_ast = mk_node(25, aeqiip_msg_s, 20, 0);
+                    let aeqiip_args_head = mk_node(17, aeqiip_str_ast, 0, 0);
+                    let aeqiip_panic_name_s = __arena_push(112);
+                    __arena_push(97); __arena_push(110); __arena_push(105);
+                    __arena_push(99);
+                    mk_node(16, aeqiip_panic_name_s, 5, aeqiip_args_head)
+                }
             } else { if is_assert_ne_form == 1 {
                 // K1.F22k: synthesize AST_IF(cond=AST_NE(AST_VAR(a),
                 // AST_VAR(b)), then=AST_INT(0), else=AST_CALL(panic,
@@ -4681,6 +4734,41 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let anebi_else = mk_node(16, anebi_panic_name_s, 5, anebi_args_head);
                 mk_node(7, anebi_cond, anebi_then, anebi_else)
+            } else { if is_assert_ne_int_int_form == 1 {
+                // K1.F40 (2026-05-27): assert_ne!(INT_LIT, INT_LIT) compile-
+                // time fold. Inverse of K1.F39: equal operands -> panic,
+                // differing operands -> AST_INT(0).
+                let aneii_a_val = tok_p1(tok_base, k + 3);
+                let aneii_b_val = tok_p1(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert_ne)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // INT (a)
+                cur_advance(sb);           // ,
+                cur_advance(sb);           // INT (b)
+                cur_advance(sb);           // )
+                if aneii_a_val == aneii_b_val {
+                    // Operands equal at compile time; synthesize panic (with
+                    // "assertion failed: !=" message, 20 bytes).
+                    let aneiip_msg_s = __arena_push(97);                         // 'a'
+                    __arena_push(115); __arena_push(115);                        // 's' 's'
+                    __arena_push(101); __arena_push(114); __arena_push(116);     // 'e' 'r' 't'
+                    __arena_push(105); __arena_push(111); __arena_push(110);     // 'i' 'o' 'n'
+                    __arena_push(32);                                            // ' '
+                    __arena_push(102); __arena_push(97); __arena_push(105);      // 'f' 'a' 'i'
+                    __arena_push(108); __arena_push(101); __arena_push(100);     // 'l' 'e' 'd'
+                    __arena_push(58);                                            // ':'
+                    __arena_push(32);                                            // ' '
+                    __arena_push(33); __arena_push(61);                          // '!' '='
+                    let aneiip_str_ast = mk_node(25, aneiip_msg_s, 20, 0);
+                    let aneiip_args_head = mk_node(17, aneiip_str_ast, 0, 0);
+                    let aneiip_panic_name_s = __arena_push(112);
+                    __arena_push(97); __arena_push(110); __arena_push(105);
+                    __arena_push(99);
+                    mk_node(16, aneiip_panic_name_s, 5, aneiip_args_head)
+                } else {
+                    mk_node(0, 0, 0, 0)    // AST_INT(0) -- ints differ, ne holds
+                }
             } else { if is_dbg_ident_form == 1 {
                 // K1.F28 (2026-05-27): dbg!(IDENT) passthrough. Synthesize
                 // AST_VAR(IDENT_bytes) -- the macro wrapper is dropped and
@@ -4775,7 +4863,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form)
+            }}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.

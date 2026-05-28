@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 272      # last bump: K1.F37+F38 batch -- assert_eq/ne!(BOOL_LIT, IDENT) operand-flipped mirrors of K1.F35/F36. Real Rust sometimes writes `assert_eq!(true, flag)`. AST_EQ/AST_NE symmetric so swap is pure convenience; synthesis builds AST_INT(folded bool) on LHS, AST_VAR on RHS. 7-token shape. Third batched commit of the new dynamic-self-paced loop. Tests pass; K1.F35/F36 regressions intact. Counter now at 5 chunks since last Telegram (1c7718a was 268, now 272 - 4 chunks short of 5-min policy threshold, still under 60-min silence).
+K_BOOTSTRAP_CHUNKS_DONE = 274      # last bump: K1.F39+F40 batch -- assert_eq/ne!(INT_LIT, INT_LIT) compile-time fold. Sibling of K1.F22j2 (BOTH-bool-lit fold) but for ints. Both operands at compile time -> evaluate equality, emit AST_INT(0) for pass or full panic synthesis for fail. NO AST_IF needed (vs K1.F31/F33 which build runtime AST_IFs). Strict optimization. Fourth batched commit of the new dynamic-self-paced loop. Hits 5-chunk Telegram threshold (6 chunks since 1c7718a). Tests pass; K1.F22j2 regression intact. After this: K1.F31-F40 macro family is feature-complete for the 4 operand combos x 2 ops (eq/ne) — ready for per-batch 3-axis audit next tick.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
