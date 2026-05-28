@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 288      # last bump: K1.F51+F52 batch -- assert!(IDENT <= IDENT) / assert!(IDENT >= IDENT). CLOSES THE ASSERT! COMPARISON FAMILY across both operand shapes (IDENT/INT_LIT in F41-F46 + IDENT/IDENT in F47-F52) for all 6 ops -- 12 chunks F41-F52. AST_LE=22, AST_GE=23. Boundary tests verify equality-inclusion. MILESTONE: 6-op-x-2-shape assert! family complete. Telegram fires.
+K_BOOTSTRAP_CHUNKS_DONE = 289      # last bump: K3.Z -- audit-clean signal for K1.F47-F52 + partition-table extension. PER-BATCH 3-AXIS AUDIT 6-OF-6 CLEAN: silent-failure-hunter CLEAN (verification matrix all 6 arms), type-design-analyzer 6-of-6 CLEAN / 0 HIGH/MEDIUM/LOW, code-reviewer CLEAN (no high-confidence issues, all 9 focus points pass). Second consecutive fully-clean per-batch audit (K3.Y on F41-F46 was the first). Extended the K3.Y partition table to cover F47-F52 too (the (IDENT, IDENT) shape mirror). 12-chunk assert! comparison family F41-F52 now both feature-complete AND audit-clean. No fix needed -- pure docs + status record.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

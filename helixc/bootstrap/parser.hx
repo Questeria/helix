@@ -3813,11 +3813,12 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         if aeql_a_bool == 1 { if aeql_b_bool == 1 { 1 } else { 0 } } else { 0 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
-            // === K1.F41-F46 PARTITION TABLE (K3.Y audit-doc 2026-05-27) ===
-            // The 6 detectors below cover assert!(IDENT OP INT_LIT) for the
-            // 6 comparison ops. All gated on is_assert_name_macro == 1 AND
-            // K3.S reserved-kw reject on the IDENT operand at k+3.
+            // === K1.F41-F52 PARTITION TABLE (K3.Y/K3.Z audit-doc 2026-05-27) ===
+            // The 12 detectors below cover the full assert! comparison family
+            // — assert!(IDENT OP RHS) for 6 ops × 2 operand shapes. All gated
+            // on is_assert_name_macro == 1 AND K3.S reserved-kw reject(s).
             //
+            // (IDENT, INT_LIT) shape — F41-F46:
             //   Macro      | mac_t4 | mac_t5 | mac_t6 | mac_t7 | tokens | AST | msg-len
             //   ---------- | ------ | ------ | ------ | ------ | ------ | --- | -------
             //   F41 `<`    | LT(16) | INT(1) | RP(4)  |   --   |   7    | 6   |   19
@@ -3827,12 +3828,36 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             //   F45 `<=`   | LT(16) | EQ(15) | INT(1) | RP(4)  |   8    | 22  |   20
             //   F46 `>=`   | GT(17) | EQ(15) | INT(1) | RP(4)  |   8    | 23  |   20
             //
-            // CRITICAL DISJOINTNESS: F41/F45 share mac_t4=LT(16); F42/F46
-            // share mac_t4=GT(17). Mutually exclusive via mac_t5: 7-token
-            // forms have mac_t5=TK_INT(1); 8-token forms have mac_t5=TK_EQ(15).
+            // (IDENT, IDENT) shape — F47-F52 (both operands K3.S-checked):
+            //   Macro      | mac_t4 | mac_t5 | mac_t6 | mac_t7 | tokens | AST | msg-len
+            //   ---------- | ------ | ------ | ------ | ------ | ------ | --- | -------
+            //   F47 `<`    | LT(16) | ID(2)  | RP(4)  |   --   |   7    | 6   |   19
+            //   F48 `>`    | GT(17) | ID(2)  | RP(4)  |   --   |   7    | 19  |   19
+            //   F49 `==`   | EQ(15) | EQ(15) | ID(2)  | RP(4)  |   8    | 20  |   20
+            //   F50 `!=`   | BG(18) | EQ(15) | ID(2)  | RP(4)  |   8    | 21  |   20
+            //   F51 `<=`   | LT(16) | EQ(15) | ID(2)  | RP(4)  |   8    | 22  |   20
+            //   F52 `>=`   | GT(17) | EQ(15) | ID(2)  | RP(4)  |   8    | 23  |   20
             //
-            // INT_LIT operand value: at tok_p1(k+5) for 7-token, tok_p1(k+6)
-            // for 8-token. Synthesis arm advances 7 or 8 times accordingly.
+            // CRITICAL DISJOINTNESS (verified by K3.Y audit on F41-F46 and
+            // K3.Z audit on F47-F52, both 3-of-3 axes clean):
+            //   - F41/F45/F47/F51 all share mac_t4=LT(16). Disjoint via:
+            //       F41 (mac_t5=INT,    7-token)
+            //       F45 (mac_t5=EQ,     mac_t6=INT,    8-token)
+            //       F47 (mac_t5=IDENT,  7-token)
+            //       F51 (mac_t5=EQ,     mac_t6=IDENT,  8-token)
+            //   - Same pattern for mac_t4=GT(17) across F42/F46/F48/F52.
+            //   - F43/F49 share (EQ,EQ); disjoint via mac_t6 (INT vs IDENT).
+            //   - F44/F50 share (BG,EQ); disjoint via mac_t6 (INT vs IDENT).
+            //
+            // RHS value/byte offset:
+            //   - 7-token: tok_p1/p2/p3(k+5)
+            //   - 8-token: tok_p1/p2/p3(k+6)
+            // Synthesis advances 7 or 8 times accordingly.
+            //
+            // K3.S COVERAGE:
+            //   - F41-F46: single-operand reject (LHS only; RHS is literal)
+            //   - F47-F52: double-operand reject (both LHS and RHS IDENT)
+            //
             // === END PARTITION TABLE ===
             //
             // K1.F41 (2026-05-27): assert!(IDENT < INT_LIT). Real Rust idiom
