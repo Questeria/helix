@@ -465,6 +465,18 @@ K2_CORPUS = [
     ("p256_prec_full_chain",     "fn main() -> i32 { 1 | 2 ^ 4 & 4 }", 7),
     ("p257_prec_shift_over_and", "fn main() -> i32 { 1 & 3 << 1 }", 0),
     ("p258_prec_shift_over_xor", "fn main() -> i32 { 2 ^ 1 << 2 }", 6),
+    # S3 integer-semantics audit (2026-05-28): axis CLEAN -- the bootstrap
+    # matches Python/Rust on signed div/rem (trunc toward zero, rem takes the
+    # dividend's sign), sign-preserving arithmetic `>>`, and i32 overflow
+    # wrapping. (rc is the wrapped exit byte: 255=-1, 253=-3, 252=-4, 0=MIN.)
+    ("p259_signed_rem_neg",      "fn main() -> i32 { let x = 0 - 7; x % 3 }", 255),
+    ("p260_rem_neg_divisor",     "fn main() -> i32 { 7 % (0 - 3) }", 1),
+    ("p261_trunc_div_neg",       "fn main() -> i32 { let x = 0 - 7; x / 2 }", 253),
+    ("p262_neg_div_neg",         "fn main() -> i32 { let a = 0 - 7; let b = 0 - 2; a / b }", 3),
+    ("p263_arith_shr_neg",       "fn main() -> i32 { let x = 0 - 8; x >> 1 }", 252),
+    ("p264_add_overflow_wrap",   "fn main() -> i32 { 2147483647 + 1 }", 0),
+    ("p265_mul_overflow_wrap",   "fn main() -> i32 { 100000 * 100000 }", 0),
+    ("p266_abs_via_cond",        "fn main() -> i32 { let x = 0 - 7; if x < 0 { 0 - x } else { x } }", 7),
 ]
 
 
@@ -536,7 +548,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 258, (
+    assert len(K2_CORPUS) >= 266, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
