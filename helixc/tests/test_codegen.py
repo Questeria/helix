@@ -5041,11 +5041,10 @@ def test_bootstrap_generics_struct_and_turbofish():
     compile + run correctly via self-host. NOTE: Python helixc cannot
     PARSE generic syntax at all (ParseError on `<T>`), so the bootstrap
     EXCEEDS Python here (3rd such finding after M21 GPU + M27 impl-method)
-    -> not K2-parity-able; bootstrap-only pin. KNOWN GAP (deliberately NOT
-    pinned here): a BARE generic-fn call without turbofish (e.g. `id(42)`)
-    currently MISCOMPILES to SIGILL (exit 132) -- bare-call type inference
-    is the next generics fix. Deletion-parity for generics is met anyway
-    (Python supports zero generics)."""
+    -> not K2-parity-able; bootstrap-only pin. The BARE generic-fn call
+    `id(42)` (no turbofish) is fixed in A1a (see
+    test_bootstrap_generics_bare_call). Deletion-parity for generics is
+    met anyway (Python supports zero generics)."""
     cases = [
         ("m28_generic_struct",
          "struct Box<T> { v: T } fn main() -> i32 { let b = Box { v: 42 }; b.v }", 42),
@@ -5057,6 +5056,22 @@ def test_bootstrap_generics_struct_and_turbofish():
         assert rc == exp, (
             f"generics {name}: bootstrap rc={rc}, expected {exp}"
         )
+
+
+def test_bootstrap_generics_bare_call():
+    """A1a (2026-05-28): a BARE single-type-param generic call -- `id(42)`
+    with NO turbofish -- runs in the bootstrap. Previously the mono pass
+    only synthesized clones for turbofish call sites, so a bare call hit
+    the K1.F21 fallback's `id__i32` lookup with no clone present and was
+    patched to ud2 -> SIGILL (exit 132). monomorphize_pass now synthesizes
+    a default-i32 entry per single-param generic template that lacks one.
+    Python helixc cannot parse `<T>` at all, so this is a bootstrap-only
+    pin (the bootstrap EXCEEDS Python). Multi-param bare calls (`first(a,b)`)
+    are A1b."""
+    rc = _kovc_self_host_compile_and_run(
+        "a1a_bare_generic_call",
+        "fn id<T>(x: T) -> T { x } fn main() -> i32 { id(42) }")
+    assert rc == 42, f"bare generic call id(42): bootstrap rc={rc}, expected 42"
 
 
 def test_bootstrap_closure():

@@ -9552,6 +9552,47 @@ fn clone_with_rewrite(node_idx: i32, gp_head: i32, packed: i32) -> i32 {
 // AST_PARAM type tags and the AST_FN_DECL's ret_ty slot. Appends new
 // AST_FN_LIST nodes to the END of head so the new fns are emitted.
 fn monomorphize_pass(sb: i32, head: i32) -> i32 {
+    // A1a (2026-05-28): synthesize a default-i32 mono entry for each
+    // SINGLE-type-param generic template that lacks one, so a bare
+    // generic call `id(42)` (no turbofish) resolves. The K1.F21 bare-
+    // call fallback (kovc.hx) builds `<name>__i32`; with no matching
+    // clone it patched ud2 -> SIGILL (rc=132). i32's type tag is 0
+    // (ty_ident_to_tag), so packed==0 and pack_lo==ta_count==1 here.
+    // Multi-param templates (`first<A,B>`) are A1b: the fallback must
+    // also build `<name>__i32_i32` before synthesizing them is useful.
+    let i32_name_s = __arena_len();
+    __arena_push(105);   // 'i'
+    __arena_push(51);    // '3'
+    __arena_push(50);    // '2'
+    let mut syn_walk: i32 = head;
+    let mut syn_keep: i32 = 1;
+    while syn_keep == 1 {
+        let syn_fn = __arena_get(syn_walk + 1);
+        if __arena_get(syn_fn + 6) == 1 {
+            // Count generic params via the gp_names chain (slot 7; AST_GP_NAME
+            // tag 76 nodes linked by slot 3).
+            let mut gp_w: i32 = __arena_get(syn_fn + 7);
+            let mut gp_n: i32 = 0;
+            while gp_w != 0 {
+                gp_n = gp_n + 1;
+                gp_w = __arena_get(gp_w + 3);
+            }
+            if gp_n == 1 {
+                let syn_ns = __arena_get(syn_fn + 1);
+                let syn_nl = __arena_get(syn_fn + 2);
+                if mr_tab_lookup(sb, syn_ns, syn_nl, 1) < 0 {
+                    let ta_base = __arena_len();
+                    __arena_push(i32_name_s);
+                    __arena_push(3);
+                    let mang_s = mangle_name_into_arena(syn_ns, syn_nl, ta_base, 1);
+                    let mang_l = mangle_name_len(syn_nl, ta_base, 1);
+                    mr_tab_add(sb, syn_ns, syn_nl, mang_s, mang_l, 1);
+                };
+            };
+        };
+        let syn_nx = __arena_get(syn_walk + 2);
+        if syn_nx == 0 { syn_keep = 0; } else { syn_walk = syn_nx; };
+    }
     let count = mr_tab_count(sb);
     if count == 0 {
         0
