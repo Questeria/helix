@@ -9631,9 +9631,9 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 53 {               // 16 var triples (2..49) + 5 counters:
-        __arena_push(0);         // 50=next_pred, 51=next_label, 52=next_rd,
-        i = i + 1;               // 53=cur_fn_idx, 54=next_f (K1.M11 %f)
+    while i < 54 {               // 16 var triples (2..49) + 6 counters:
+        __arena_push(0);         // 50=next_pred,51=next_label,52=next_rd,
+        i = i + 1;               // 53=cur_fn_idx,54=next_f,55=last_is_float
     }
     bse
 }
@@ -9644,6 +9644,7 @@ fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab + 51, 0);   // K1.M8: next_label = 0
     __arena_set(vtab + 52, 0);   // K1.M10: next_rd = 0
     __arena_set(vtab + 54, 0);   // K1.M11: next_f = 0
+    __arena_set(vtab + 55, 0);   // K1.M12: last_is_float = 0
     0
 }
 fn ptx_alloc_reg(vtab: i32) -> i32 {
@@ -9711,6 +9712,9 @@ fn ptx_vtab_lookup(vtab: i32, name_s: i32, name_l: i32) -> i32 {
 // emit_ast_code but targets PTX text. Mutually recursive with
 // emit_ptx_binop (forward ref -- same support the parser relies on).
 fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
+    // K1.M12: default result type = i32 (flag 0); f32-producing
+    // branches (f32 index-load, f32 binop) override to 1 at their end.
+    __arena_set(vtab + 55, 0);
     let tag = __arena_get(node);
     if tag == 0 {
         let r = ptx_alloc_reg(vtab);
@@ -10166,6 +10170,7 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
         emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
         emit_ptx_rd(rda);
         emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+        __arena_set(vtab + 55, 1);   // K1.M12: result is f32
         fdst
     } else {
         // "    ld.global.u32 %r<rdst>, [%rd<rda>];\n"
@@ -10180,6 +10185,7 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
         emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
         emit_ptx_rd(rda);
         emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+        __arena_set(vtab + 55, 0);   // K1.M12: result is i32
         rdst
     }
 }
@@ -10198,6 +10204,8 @@ fn emit_ptx_index_store(node: i32, vtab: i32) -> i32 {
     let pidx = ptx_param_index(fn_idx, __arena_get(base + 1),
                                __arena_get(base + 2));
     let rv = emit_ptx_expr(val_node, vtab);
+    let is_f = __arena_get(vtab + 55);   // K1.M12: value type BEFORE the
+                                         // index lowering clobbers the flag
     let ri = emit_ptx_expr(idx_inner, vtab);
     // "    ld.param.u64 %rd<rdb>, [param_<pidx>];\n"
     let rdb = ptx_alloc_rd(vtab);
@@ -10252,16 +10260,26 @@ fn emit_ptx_index_store(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_rd(rdo);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // "    st.global.u32 [%rd<rda>], %r<rv>;\n"
+    // "    st.global.<f32|u32> [%rd<rda>], <%f|%r><rv>;\n" (K1.M12:
+    // type from is_f -- f32 store of a %f value, else i32 of a %r).
     emit_ptx_indent();
-    emit_ptx_byte(115); emit_ptx_byte(116); emit_ptx_byte(46);
-    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
-    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
-    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
-    emit_ptx_byte(50); emit_ptx_byte(32); emit_ptx_byte(91);
+    emit_ptx_byte(115); emit_ptx_byte(116); emit_ptx_byte(46);   // "st."
+    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);  // "glo"
+    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);    // "bal"
+    emit_ptx_byte(46);                                           // "."
+    if is_f == 1 {
+        emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // "f32"
+    } else {
+        emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);   // "u32"
+    };
+    emit_ptx_byte(32); emit_ptx_byte(91);                        // " ["
     emit_ptx_rd(rda);
-    emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);
-    emit_ptx_r(rv);
+    emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);     // "], "
+    if is_f == 1 {
+        emit_ptx_f(rv);
+    } else {
+        emit_ptx_r(rv);
+    };
     emit_ptx_byte(59); emit_ptx_byte(10);
     0 - 1
 }

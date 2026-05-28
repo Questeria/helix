@@ -7757,6 +7757,52 @@ def test_bootstrap_ptx_f32_load():
         )
 
 
+def test_bootstrap_ptx_f32_copy():
+    """K1.M12a (2026-05-28): f32 STORE -- a complete float COPY kernel
+    `out[i] = a[i]` (out, a both f32). The value a[i] is an f32 load
+    (%f); the new last-result-is-float flag (vtab slot 55) lets the
+    indexed store pick st.global.f32 (of a %f register) over
+    st.global.u32. The i32 store path stays byte-identical (out[i]=7
+    and the i32 elementwise-add remain green). ptxas-validated (real
+    SASS). Direct tile-IR -> PTX, NO MLIR."""
+    src = ("@kernel fn k(out: f32, a: f32) -> f32 { "
+           "let i: i32 = thread_idx(); out[i] = a[i] }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_f32copy", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k(.param .b64 param_0, .param .b64 param_1)\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    ld.param.u64 %rd0, [param_1];\n"
+        + b"    cvta.to.global.u64 %rd1, %rd0;\n"
+        + b"    mul.wide.s32 %rd2, %r0, 4;\n"
+        + b"    add.s64 %rd3, %rd1, %rd2;\n"
+        + b"    ld.global.f32 %f0, [%rd3];\n"
+        + b"    ld.param.u64 %rd4, [param_0];\n"
+        + b"    cvta.to.global.u64 %rd5, %rd4;\n"
+        + b"    mul.wide.s32 %rd6, %r0, 4;\n"
+        + b"    add.s64 %rd7, %rd5, %rd6;\n"
+        + b"    st.global.f32 [%rd7], %f0;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_f32copy.cubin "
+             "/tmp/sh_ptx_f32copy_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected f32-copy PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
