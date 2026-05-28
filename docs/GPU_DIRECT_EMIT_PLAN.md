@@ -113,3 +113,46 @@ ops MUST be ported, no defer-to-Python-forever") is satisfied by this
 plan: the *capability* (driving the GPU) is ported to the bootstrap via
 direct emission. The Python MLIR substrate is **deleted** at K4, not
 ported — the bootstrap reaches the same end (GPU codegen) without it.
+
+## K1.M21 parity finding (2026-05-28) — non-NVIDIA backends are scaffolds
+
+After scaffolding all 4 GPU backends in the bootstrap (PTX full;
+WebGPU/Metal/ROCm empty-kernel, M18–M20), a parity probe of the Python
+reference backends revealed the honest state:
+
+- **The Python non-NVIDIA backends (`webgpu.py`/`metal.py`/`rocm.py`) are
+  SUBSTRATE + STUBS, not functional compilers.** They emit a valid module
+  header + kernel entry, but for actual ops they emit `@@HELIX-STUB`
+  parse-breaking tokens. Probe: `WgslEmitter` on a `tile<f32,[256],HBM>`
+  kernel doing `a[i] = a[i]` emits `@@HELIX-STUB: TileOpKind.
+  TILE_INDEX_LOAD_HBM status='stub' not wired` (+ the store) — no real
+  WGSL load/store. The op-mapping tables are mostly `status="stub"`.
+- **Only NVIDIA PTX is a real, functional GPU compiler** (both in Python
+  and now the bootstrap, where it is ptxas-validated through matmul).
+- **Empty-kernel byte-parity** (bootstrap == Python module skeleton) is
+  achieved for all 4 (M18–M20). **Op-level byte-parity is infeasible**:
+  Python's stub tokens reference tile-IR `TileOpKind` names, but the
+  bootstrap lowers AST-direct (no tile-IR), so the two cannot byte-match
+  on op kernels.
+
+**Implications:**
+1. For the **Python-deletion bucket**, the bootstrap's non-NVIDIA
+   backends already match the Python backends' *functional* capability
+   (both: substrate only, zero real non-NVIDIA ops). Nothing is lost by
+   deleting the Python scaffolds.
+2. The **north-star** ("real AI on ANY GPU, incl. non-NVIDIA") is
+   *unrealized in Python too* — real WGSL/MSL/GCN op lowering is an
+   **unbuilt from-scratch arc**, not a port. The bootstrap PTX is the
+   only path that talks to a chip with real compute today.
+3. To genuinely deliver the north-star for non-NVIDIA, the bootstrap must
+   **EXCEED** Python: build AST-direct op lowering (params → storage
+   buffers, global load/store, tile ops) per backend, mirroring the
+   bootstrap PTX arc, validated by shape (+ a real validator like `naga`
+   for WGSL if available — there is no Python byte-match oracle since
+   Python stubs everything).
+
+**Plan from here:** pursue real WGSL op lowering next (WebGPU is the most
+portable target — runs on any GPU), starting with kernel params +
+global load/store (the memory foundation). This is net-new capability
+beyond the Python reference, and the highest-leverage way to make
+"AI on any GPU" real rather than scaffolded.
