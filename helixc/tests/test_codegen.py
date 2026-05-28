@@ -7038,6 +7038,95 @@ fn main() -> i32 {{
     return run_k2.returncode
 
 
+def _kovc_self_host_emit_ptx(name: str, k2_src: str) -> bytes:
+    """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
+    `k2_src` through the P0 -> K1 bootstrap chain, but instead of
+    emit_elf_for_ast_to_path (x86_64 ELF binary) it invokes the new
+    emit_ptx_for_ast_to_path -- emitting NVIDIA PTX *text* for any
+    @kernel fn. Returns the emitted /tmp/sh_<name>_out.ptx bytes.
+
+    The output is PTX text, not an x86 binary, so (unlike
+    _kovc_self_host_compile_and_run) we do NOT chmod+x / run it -- we
+    `cat` it and shape-check the text. ptxas round-trip validation is
+    a later chunk; Python's helixc/backend/ptx.py uses the same
+    text-shape-check fallback when ptxas is unavailable. Direct
+    tile-IR -> PTX, NO MLIR (docs/MLIR_NOT_NEEDED_DECISION.md).
+    """
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    lexer = open(os.path.join(
+        proj, "helixc", "bootstrap", "lexer.hx")).read()
+    lexer_no_main = lexer.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    parser_body = open(os.path.join(
+        proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc = open(os.path.join(
+        proj, "helixc", "bootstrap", "kovc.hx")).read()
+    kovc_lib = kovc.rsplit(
+        "// --------------------------------------------------------------\n// Demo:",
+        1,
+    )[0]
+    in_path = f"/tmp/sh_{name}_in.hx"
+    out_path = f"/tmp/sh_{name}_out.ptx"
+    k1_main = f"""
+fn main() -> i32 {{
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("{in_path}");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_ptx_for_ast_to_path(ast_root);
+    let ptx_start = __arena_len() - total;
+    write_file_to_arena("{out_path}", ptx_start, total)
+}}
+"""
+    subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"rm -f {in_path} {out_path} && cat > {in_path}"],
+        input=k2_src.encode("utf-8"),
+        check=True, timeout=10,
+    )
+    compile_and_run(lexer_no_main + parser_body + kovc_lib + k1_main)
+    out = subprocess.run(
+        ["wsl", "-e", "bash", "-c", f"cat {out_path}"],
+        capture_output=True, timeout=10,
+    )
+    return out.stdout
+
+
+def test_bootstrap_ptx_empty_kernel():
+    """K1.M1 (2026-05-27): FIRST direct-to-GPU (NVIDIA PTX) emission.
+    A @kernel fn drives the bootstrap to emit a minimal valid PTX
+    module (text), exactly as a normal fn drives x86_64 ELF emission.
+    Direct tile-IR -> PTX text, NO MLIR (docs/MLIR_NOT_NEEDED_DECISION
+    .md -- ratified + verified; docs/GPU_DIRECT_EMIT_PLAN.md).
+
+    Proves the full GPU pipeline end to end: parse(@kernel) ->
+    detect(is_kernel AST slot 14) -> emit PTX bytes -> write .ptx ->
+    shape-check text. This is the GPU analog of the bootstrap's first
+    ELF test. Phase-0 narrowing: entry name hardcoded 'k'; the kernel
+    body/params/return are ignored by K1.M1 emit (K1.M2 extracts the
+    real fn name)."""
+    src = "@kernel fn k() -> i32 { 0 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_empty", src)
+    expected = (
+        b".version 8.3\n"
+        b".target sm_75\n"
+        b".address_size 64\n"
+        b"\n"
+        b".visible .entry k()\n"
+        b"{\n"
+        b"ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
 def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
     """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
     that returns (rc, stdout_bytes) instead of just rc. Needed for

@@ -9467,6 +9467,116 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     total_filesz
 }
 
+// ==============================================================
+// K1.M1 (2026-05-27): DIRECT-TO-GPU PTX EMISSION (NVIDIA).
+//
+// Mirror of emit_elf_for_ast_to_path, but the target is NVIDIA
+// PTX -- a *text* virtual ISA. Where the x86_64 path emits ELF
+// *binary* (headers, p-offsets, relocations), this emits PTX
+// *ASCII text*: STRICTLY SIMPLER -- just bytes that spell the
+// assembly the NVIDIA driver JIT-compiles to SASS at load time.
+// No assembler, no linker, no object format.
+//
+// Direct tile-IR -> PTX text, NO MLIR detour. See
+// docs/MLIR_NOT_NEEDED_DECISION.md (ratified + verified) and
+// docs/GPU_DIRECT_EMIT_PLAN.md. This mirrors Python's MLIR-free
+// reference emitter helixc/backend/ptx.py
+// (emit_module_header() + emit_kernel()).
+//
+// NORTH-STAR GOAL (user directive 2026-05-27): "Have Helix
+// wherever possible talk directly to the chips." The bootstrap
+// already talks directly to the CPU (emit_elf_for_ast_to_path
+// -> x86_64 machine code). This is the first step of talking
+// directly to the GPU, with ROCm/Metal/WebGPU to follow as
+// sibling text emitters.
+//
+// CHUNK SCOPE (K1.M1, smallest-first): detect a @kernel fn
+// (parser sets is_kernel on AST_FN_DECL slot 14, Stage 33) and
+// emit the minimal valid empty-entry module:
+//
+//   .version 8.3
+//   .target sm_75
+//   .address_size 64
+//
+//   .visible .entry k()
+//   {
+//   ret;
+//   }
+//
+// Phase-0 narrowing for THIS chunk: the entry name is the fixed
+// byte 'k' (107); K1.M2 extracts the real fn name from slots
+// 1/2 (name_start/name_len). The kernel body/params/return type
+// are ignored here -- later chunks emit .param decls, .reg
+// files, and the lowered tile-op stream. Returns the PTX byte
+// count (0 if the AST has no @kernel fn: a pure-CPU program
+// emits no PTX). PURE-ADDITIVE codegen -- touches no sb scratch
+// slots and no parser state (the K1.F5d-j sb-collision hazard
+// does not apply).
+// ==============================================================
+fn emit_ptx_byte(b: i32) -> i32 {
+    __arena_push(b);
+    0
+}
+
+fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
+    // Scan the fn_list for any @kernel fn (is_kernel slot 14 == 1).
+    // Mirrors the autotune_pass walk: root tag 15 = AST_FN_LIST,
+    // node slot+1 = fn_idx, node slot+2 = next.
+    let mut has_kernel: i32 = 0;
+    if __arena_get(ast_root) == 15 {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                has_kernel = 1;
+            };
+            walk = __arena_get(walk + 2);
+        }
+    };
+    if has_kernel != 1 {
+        0
+    } else {
+        let start = __arena_len();
+        // ".version 8.3\n"
+        emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(101);
+        emit_ptx_byte(114); emit_ptx_byte(115); emit_ptx_byte(105);
+        emit_ptx_byte(111); emit_ptx_byte(110); emit_ptx_byte(32);
+        emit_ptx_byte(56); emit_ptx_byte(46); emit_ptx_byte(51);
+        emit_ptx_byte(10);
+        // ".target sm_75\n"
+        emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(97);
+        emit_ptx_byte(114); emit_ptx_byte(103); emit_ptx_byte(101);
+        emit_ptx_byte(116); emit_ptx_byte(32); emit_ptx_byte(115);
+        emit_ptx_byte(109); emit_ptx_byte(95); emit_ptx_byte(55);
+        emit_ptx_byte(53); emit_ptx_byte(10);
+        // ".address_size 64\n"
+        emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(100);
+        emit_ptx_byte(100); emit_ptx_byte(114); emit_ptx_byte(101);
+        emit_ptx_byte(115); emit_ptx_byte(115); emit_ptx_byte(95);
+        emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(122);
+        emit_ptx_byte(101); emit_ptx_byte(32); emit_ptx_byte(54);
+        emit_ptx_byte(52); emit_ptx_byte(10);
+        // "\n" (blank line between module header and entry)
+        emit_ptx_byte(10);
+        // ".visible .entry k()\n"
+        emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(105);
+        emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(98);
+        emit_ptx_byte(108); emit_ptx_byte(101); emit_ptx_byte(32);
+        emit_ptx_byte(46); emit_ptx_byte(101); emit_ptx_byte(110);
+        emit_ptx_byte(116); emit_ptx_byte(114); emit_ptx_byte(121);
+        emit_ptx_byte(32); emit_ptx_byte(107); emit_ptx_byte(40);
+        emit_ptx_byte(41); emit_ptx_byte(10);
+        // "{\n"
+        emit_ptx_byte(123); emit_ptx_byte(10);
+        // "ret;\n"
+        emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
+        emit_ptx_byte(59); emit_ptx_byte(10);
+        // "}\n"
+        emit_ptx_byte(125); emit_ptx_byte(10);
+        __arena_len() - start
+    }
+}
+
 // --------------------------------------------------------------
 // Demo: build a tiny AST_INT(42) by hand, compile it, write the
 // resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the
