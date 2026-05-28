@@ -10303,6 +10303,50 @@ def test_bootstrap_kovc_k1f41_k1f42_assert_lt_gt_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f43_k1f44_assert_eq_ne_self_host():
+    """K1.F43 + K1.F44 (2026-05-27): assert!(IDENT == INT_LIT) and
+    assert!(IDENT != INT_LIT). 8-token shape (`==` lexes as TK_EQ TK_EQ,
+    `!=` lexes as TK_BANG TK_EQ -- the structural finding from K1.F41/F42).
+
+    Real Rust idiom: `assert!(x == 0)`, `assert!(rc != 0)`.
+
+    Synthesis:
+      AST_IF(AST_EQ(AST_VAR(a), AST_INT(b)), 0, panic("assertion failed: ==")).
+      AST_IF(AST_NE(AST_VAR(a), AST_INT(b)), 0, panic("assertion failed: !=")).
+    AST_EQ=20, AST_NE=21. Synthesis consumes 8 tokens via cur_advance x8.
+    """
+    rc_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f43_aeqi_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert!(x == 5); 11 }',
+    )
+    assert rc_eq_pass == 11, (
+        f"K1.F43 assert!(x == 5) when x=5: expected rc=11; got {rc_eq_pass}."
+    )
+    rc_eq_fail = _kovc_self_host_compile_and_run(
+        "k1f43_aeqi_fail",
+        'fn main() -> i32 { let x: i32 = 7; assert!(x == 5); 11 }',
+    )
+    assert rc_eq_fail == 132, (
+        f"K1.F43 assert!(x == 5) when x=7: expected rc=132 (panic); "
+        f"got {rc_eq_fail}."
+    )
+    rc_ne_pass = _kovc_self_host_compile_and_run(
+        "k1f44_anei_pass",
+        'fn main() -> i32 { let rc: i32 = 1; assert!(rc != 0); 11 }',
+    )
+    assert rc_ne_pass == 11, (
+        f"K1.F44 assert!(rc != 0) when rc=1: expected rc=11; got {rc_ne_pass}."
+    )
+    rc_ne_fail = _kovc_self_host_compile_and_run(
+        "k1f44_anei_fail",
+        'fn main() -> i32 { let rc: i32 = 0; assert!(rc != 0); 11 }',
+    )
+    assert rc_ne_fail == 132, (
+        f"K1.F44 assert!(rc != 0) when rc=0: expected rc=132 (panic); "
+        f"got {rc_ne_fail}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

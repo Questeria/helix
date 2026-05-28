@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 277      # last bump: K1.F41+F42 batch -- assert!(IDENT < INT_LIT) and assert!(IDENT > INT_LIT). Strict-inequality comparison macros for the assert! family. Real Rust idiom `assert!(len < cap)`, `assert!(x > 0)`. AST_LT tag=6, AST_GT tag=19; panic message includes the op char ('<' or '>') for 19 bytes total. STRUCTURAL FINDING this tick: lexer emits `==`, `!=`, `<=`, `>=` as TWO tokens (not single TK_EQEQ etc.) -- so single-char ops (< >) are 7-token shapes (this batch) but double-char ops (<= >= == !=) are 8-9 token shapes (future chunks need different mac_tN slot dispatch). Tests pass; K1.F22i regression intact.
+K_BOOTSTRAP_CHUNKS_DONE = 279      # last bump: K1.F43+F44 batch -- assert!(IDENT == INT_LIT) and assert!(IDENT != INT_LIT). 8-token shapes (the structural finding from K1.F41 commit: `==` lexes as TK_EQ TK_EQ, `!=` lexes as TK_BANG TK_EQ). Added mac_t7 declaration to the IDENT! arm prelude. AST_EQ=20, AST_NE=21; reuses K1.F22j/K1.F22k 20-byte panic messages. Real Rust `assert!(x == 0)`, `assert!(rc != 0)`. Tests pass; K1.F41 regression intact. Chunks-since-last-TG = 4 (last TG at 4c4cf99 counter 275, now 279). Below 5-threshold, TG skipped this tick.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
