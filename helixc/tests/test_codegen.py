@@ -10249,6 +10249,60 @@ def test_bootstrap_kovc_k1f39_k1f40_assert_int_int_fold_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f41_k1f42_assert_lt_gt_self_host():
+    """K1.F41 + K1.F42 (2026-05-27): assert!(IDENT < INT_LIT) and
+    assert!(IDENT > INT_LIT). Strict-inequality comparison macros.
+
+    Real Rust idiomatic: `assert!(len < cap)`, `assert!(x > 0)`.
+    Pre-F41/F42 these fell through to K1.CB no-op-skip.
+
+    Synthesis:
+      AST_IF(AST_LT(AST_VAR(a), AST_INT(b)), then=AST_INT(0), else=panic).
+      AST_IF(AST_GT(AST_VAR(a), AST_INT(b)), then=AST_INT(0), else=panic).
+    AST_LT tag = 6, AST_GT tag = 19. Panic message includes the operator
+    char ('<' or '>') so observed stderr differs by op.
+
+    Shape: 7 tokens (assert, !, (, IDENT, <or>, INT, )). The double-char
+    forms (`<=`, `>=`) tokenize as TWO tokens so they're a separate
+    8-token-shape detector (future chunk).
+    """
+    # K1.F41 -- assert!(x < 10) where x=5
+    rc_lt_pass = _kovc_self_host_compile_and_run(
+        "k1f41_alti_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert!(x < 10); 11 }',
+    )
+    assert rc_lt_pass == 11, (
+        f"K1.F41 assert!(x < 10) when x=5: expected rc=11 (5 < 10 holds); "
+        f"got {rc_lt_pass}."
+    )
+    rc_lt_fail = _kovc_self_host_compile_and_run(
+        "k1f41_alti_fail",
+        'fn main() -> i32 { let x: i32 = 15; assert!(x < 10); 11 }',
+    )
+    assert rc_lt_fail == 132, (
+        f"K1.F41 assert!(x < 10) when x=15: expected rc=132 (15 < 10 "
+        f"false, panic); got {rc_lt_fail}. If rc=11: AST_LT semantics "
+        f"inverted (using > instead of <)."
+    )
+    # K1.F42 -- assert!(x > 0) where x=5
+    rc_gt_pass = _kovc_self_host_compile_and_run(
+        "k1f42_agti_pass",
+        'fn main() -> i32 { let x: i32 = 5; assert!(x > 0); 11 }',
+    )
+    assert rc_gt_pass == 11, (
+        f"K1.F42 assert!(x > 0) when x=5: expected rc=11 (5 > 0 holds); "
+        f"got {rc_gt_pass}."
+    )
+    rc_gt_fail = _kovc_self_host_compile_and_run(
+        "k1f42_agti_fail",
+        'fn main() -> i32 { let x: i32 = -3; assert!(x > 0); 11 }',
+    )
+    assert rc_gt_fail == 132, (
+        f"K1.F42 assert!(x > 0) when x=-3: expected rc=132 (-3 > 0 false, "
+        f"panic); got {rc_gt_fail}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

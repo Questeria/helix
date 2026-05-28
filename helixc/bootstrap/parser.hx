@@ -3809,6 +3809,33 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         if aeql_a_bool == 1 { if aeql_b_bool == 1 { 1 } else { 0 } } else { 0 }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F41 (2026-05-27): assert!(IDENT < INT_LIT). Real Rust idiom
+            // for ordered-check asserts: `assert!(len < cap)`, `assert!(x < 10)`.
+            // 7-token shape: IDENT(assert), !, (, IDENT, TK_LT(16), INT, ).
+            // The lexer emits single `<` as TK_LT (16); double-char `<=` is
+            // lex'd as TK_LT + TK_EQ (two tokens), so this detector ONLY
+            // matches the strict `<` form. The `<=` 8-token shape is a
+            // future chunk.
+            let is_assert_ident_lt_int_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 16 {
+                    if mac_t5 == 1 { if mac_t6 == 4 {
+                        let alti_a_opnd_s = tok_p2(tok_base, k + 3);
+                        let alti_a_opnd_l = tok_p3(tok_base, k + 3);
+                        if is_any_reserved_kw_ident(alti_a_opnd_s, alti_a_opnd_l) == 1 { 0 }
+                        else { 1 }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F42 (2026-05-27): assert!(IDENT > INT_LIT). Sibling of K1.F41
+            // for the strict-greater form. Same 7-token shape, mac_t4=TK_GT(17).
+            let is_assert_ident_gt_int_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 17 {
+                    if mac_t5 == 1 { if mac_t6 == 4 {
+                        let agti_a_opnd_s = tok_p2(tok_base, k + 3);
+                        let agti_a_opnd_l = tok_p3(tok_base, k + 3);
+                        if is_any_reserved_kw_ident(agti_a_opnd_s, agti_a_opnd_l) == 1 { 0 }
+                        else { 1 }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             let is_assert_eq_form = if is_assert_eq_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
                     if mac_t5 == 2 { if mac_t6 == 4 {
@@ -4290,6 +4317,78 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 let asrt_else = mk_node(16, af_panic_name_s, 5, af_args_head);
                 // AST_IF: tag 7, p1=cond, p2=then, p3=else.
                 mk_node(7, asrt_cond, asrt_then, asrt_else)
+            } else { if is_assert_ident_lt_int_form == 1 {
+                // K1.F41 (2026-05-27): assert!(IDENT < INT_LIT).
+                // Synthesizes AST_IF(AST_LT(AST_VAR(a), AST_INT(b_val)),
+                //                    then=AST_INT(0),
+                //                    else=AST_CALL(panic, "assertion failed: <")).
+                // AST_LT tag = 6. Panic message is "assertion failed: <" (19
+                // chars: 16 base + ':' + ' ' + '<').
+                let alti_a_s = tok_p2(tok_base, k + 3);
+                let alti_a_l = tok_p3(tok_base, k + 3);
+                let alti_b_val = tok_p1(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // <
+                cur_advance(sb);           // INT (b)
+                cur_advance(sb);           // )
+                let alti_var_a = mk_node(1, alti_a_s, alti_a_l, 0);
+                let alti_int_b = mk_node(0, alti_b_val, 0, 0);
+                let alti_cond = mk_node(6, alti_var_a, alti_int_b, 0);   // AST_LT
+                let alti_then = mk_node(0, 0, 0, 0);                      // AST_INT(0)
+                let alti_msg_s = __arena_push(97);                        // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(60);                                         // '<'
+                let alti_str_ast = mk_node(25, alti_msg_s, 19, 0);
+                let alti_args_head = mk_node(17, alti_str_ast, 0, 0);
+                let alti_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let alti_else = mk_node(16, alti_panic_name_s, 5, alti_args_head);
+                mk_node(7, alti_cond, alti_then, alti_else)
+            } else { if is_assert_ident_gt_int_form == 1 {
+                // K1.F42 (2026-05-27): assert!(IDENT > INT_LIT). Sibling of
+                // K1.F41 with AST_GT (tag 19) and '>' in the panic message.
+                let agti_a_s = tok_p2(tok_base, k + 3);
+                let agti_a_l = tok_p3(tok_base, k + 3);
+                let agti_b_val = tok_p1(tok_base, k + 5);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // >
+                cur_advance(sb);           // INT (b)
+                cur_advance(sb);           // )
+                let agti_var_a = mk_node(1, agti_a_s, agti_a_l, 0);
+                let agti_int_b = mk_node(0, agti_b_val, 0, 0);
+                let agti_cond = mk_node(19, agti_var_a, agti_int_b, 0);  // AST_GT
+                let agti_then = mk_node(0, 0, 0, 0);                      // AST_INT(0)
+                let agti_msg_s = __arena_push(97);                        // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(62);                                         // '>'
+                let agti_str_ast = mk_node(25, agti_msg_s, 19, 0);
+                let agti_args_head = mk_node(17, agti_str_ast, 0, 0);
+                let agti_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let agti_else = mk_node(16, agti_panic_name_s, 5, agti_args_head);
+                mk_node(7, agti_cond, agti_then, agti_else)
             } else { if is_assert_eq_bool_lit_form == 1 {
                 // K1.F22j2: compile-time fold for bool-lit assert_eq!.
                 // Both operands are known to be `true` or `false`
@@ -4895,7 +4994,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form)
+            }}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form); K1.F41: +1 (is_assert_ident_lt_int_form); K1.F42: +1 (is_assert_ident_gt_int_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
