@@ -3920,6 +3920,13 @@ fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
 // Python-codegen layout: 2097152 data slots + 1 cursor slot,
 // sized for self-host).
 fn helix_arena_cap() -> i32 { 2097152 }
+// K-fix (2026-05-28): arena layout constants DERIVED from the cap, so a future
+// cap rescale is a single-line change (these replaced 6 hardcoded magic numbers:
+// data_bytes=cap*4=8388608, cell_base=4+(cap-64)*4=8388356, trace=that-4=8388352).
+// NB the f32-mantissa 8388608/8388607 in f32_to_f16_bits are UNRELATED (left as-is).
+fn helix_arena_data_bytes() -> i32 { helix_arena_cap() * 4 }
+fn helix_cell_base_disp() -> i32 { 4 + (helix_arena_cap() - 64) * 4 }
+fn helix_trace_disp() -> i32 { helix_cell_base_disp() - 4 }
 
 // Single global slot pointing at bn_state. Set during
 // emit_elf_for_ast_to_path; read by try_emit_builtin_call which
@@ -4446,7 +4453,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             let disp_slot = emit_lea_rax_rip_placeholder();     // 7 bytes
             patch_table_add(patch_state, disp_slot, arena_base_s, 18);
             emit_byte(0x89); emit_byte(0x88);                   // mov [rax + disp32], ecx
-            emit_u32_le(8388352);                               // 4 bytes -> 6-byte instr
+            emit_u32_le(helix_trace_disp());                               // 4 bytes -> 6-byte instr
             emit_byte(0x89); emit_byte(0xC8);                   // mov eax, ecx (restore)
             tev_bytes + 2 + 7 + 6 + 2
         }
@@ -4482,7 +4489,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         let disp_slot_tl = emit_lea_rax_rip_placeholder();
         patch_table_add(patch_state, disp_slot_tl, arena_base_s_tl, 18);
         emit_byte(0x8B); emit_byte(0x80);                   // mov eax, [rax + disp32]
-        emit_u32_le(8388352);
+        emit_u32_le(helix_trace_disp());
         tl_arg_bytes + 7 + 6
     } else { if kovc_byte_eq(name_s, name_l, bn_helix_splice_s(bn_state), 14) == 1 {
         // K1.F4 (2026-05-26): __helix_splice(handle) -> 0 stub.
@@ -5612,7 +5619,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             // Compute cell-table displacement from arena_base.
             // CAP = 2097152, so cell[0] at offset = 4 + (2097088)*4 = 8388356.
             // cell[handle] at offset = 8388356 + handle * 4.
-            let disp = 8388356 + handle * 4;
+            let disp = helix_cell_base_disp() + handle * 4;
             // mov [rax + disp32], ecx  (89 88 disp32) — 6 bytes
             emit_byte(0x89); emit_byte(0x88);
             emit_u32_le(disp);
@@ -5672,7 +5679,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // SIB=88 (scale=10 *4, index=001 rcx, base=000 rax)
         // Encoding: 8B 84 88 disp32 = 7 bytes total.
         emit_byte(0x8B); emit_byte(0x84); emit_byte(0x88);
-        let disp_base = 8388356;
+        let disp_base = helix_cell_base_disp();
         emit_u32_le(disp_base);                              // 4 bytes (3+4 = 7 byte instr)
         emit_byte(0xEB); emit_byte(2);                       // jmp .end (rel8=2)
         emit_byte(0x31); emit_byte(0xC0);                    // xor eax, eax (.oob)
@@ -5772,7 +5779,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         // SIB=90 (scale=10 *4, index=010 rdx, base=000 rax)
         // Encoding: 89 8C 90 disp32 = 7 bytes total.
         emit_byte(0x89); emit_byte(0x8C); emit_byte(0x90);
-        let disp_base2 = 8388356;
+        let disp_base2 = helix_cell_base_disp();
         emit_u32_le(disp_base2);                             // 4 bytes (3+4 = 7 byte instr)
         // mov eax, 1   (B8 01 00 00 00)
         emit_byte(0xB8); emit_byte(0x01); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
@@ -9621,7 +9628,7 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
     // 2097152 * 4 bytes data). Without this gap, an arena_push past
     // file bounds would SIGSEGV. Sized to match HELIX_ARENA_CAP in
     // helixc/backend/x86_64.py (the host compiler's bound).
-    let total_memsz = total_filesz + 4 + 8388608;
+    let total_memsz = total_filesz + 4 + helix_arena_data_bytes();
     patch_u64_le_split(elf_start + 64 + 32, total_filesz, 0);
     patch_u64_le_split(elf_start + 64 + 40, total_memsz, 0);
     total_filesz
