@@ -2501,6 +2501,22 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                             method_lhs_struct = var_struct_tab_lookup(sb, pv_s, pv_l);
                         };
                     };
+                    // K1.F5g (2026-05-28): extend to AST_CALL prim_tag --
+                    // closes chained methods (`a.chain1().chain2()`) and
+                    // non-let-bound receivers (`foo().method()`). The AST_CALL
+                    // node carries the mangled-name bytes in slots p1/p2
+                    // (name_s, name_l) and args in slot p3 (per mk_node(16,
+                    // mang_s, mang_l, args_head) calls). Look up the name
+                    // in fn_ret_struct_tab; if found, that's our receiver's
+                    // struct_idx. Empty table or non-matching name -> -1,
+                    // falls through to field-access branch (matches pre-F5g
+                    // behavior).
+                    if prim_tag_pre == 16 {
+                        let f5g_name_s = __arena_get(prim + 1);
+                        let f5g_name_l = __arena_get(prim + 2);
+                        let f5g_struct_idx = fn_ret_struct_tab_lookup(sb, f5g_name_s, f5g_name_l);
+                        if f5g_struct_idx >= 0 { method_lhs_struct = f5g_struct_idx; };
+                    };
                     // K1.F5c (2026-05-27): extend to STRUCT-LITERAL receiver.
                     // `P { x: 1 }.method()` — prim_tag_pre is AST_TUPLE_LIT
                     // (tag 50, also used for struct literals). The struct

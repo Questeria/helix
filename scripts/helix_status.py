@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 299      # last bump: K1.F5f -- wire the fn_ret_struct_tab WRITE at parse_fn_decl exit. After ret_ty_final is computed, if rt_struct_idx >= 0 (fn returns a struct), call fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx). The lookup table is now populated as fn-decls are parsed; future K1.F5g extends the method-call PRE-CHECK to read it. K1.F5c + K1.F5h + impl_method 5-test regression batch passes (no behavior change on existing paths -- the write site is silent until K1.F5g wires the read).
+K_BOOTSTRAP_CHUNKS_DONE = 300      # last bump: K1.F5g -- extend method-call PRE-CHECK to AST_CALL prim_tag using the fn_ret_struct_tab lookup. When prim_tag_pre == 16 (AST_CALL, the post-K1.F5b synthesis result), pull name_s/name_l from the prim's slots, look up in fn_ret_struct_tab; if found, that's the receiver's struct_idx -> route through K1.F5b struct-method synthesis. STRUCTURAL FINDING during this tick: chained methods STILL return rc=132 even with K1.F5g, because the bootstrap doesn't implement struct-by-value RETURN ABI at all. Even `let b: P = a.chain1(); b.v` (no chaining) fails. So K1.F5g's parse-side routing is correct, but blocked downstream by the struct-return codegen gap. K1.F5g2 next will investigate codegen for struct return. K1.F5c + K1.F5h regression intact.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
