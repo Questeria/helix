@@ -7895,6 +7895,61 @@ def test_bootstrap_ptx_tile_zeros():
         )
 
 
+def test_bootstrap_ptx_tile_add():
+    """K1.M14 (2026-05-28): FIRST GPU tile COMPUTE op -- __tile_add(a, b,
+    dst, count) elementwise-adds two register-tiles into a third over
+    `count` consecutive %f registers (mirroring Python backend/ptx.py
+    TILE_ADD / Stage 64 Inc 3). a/b/dst are vars bound to prior
+    __tile_zeros results (their %f base); count is a static literal.
+    Together with __tile_zeros (M13) this is a complete on-GPU tile
+    elementwise pipeline -- the AI-matrix-primitive arc's first compute.
+    ptxas-validated (real SASS). Direct tile-IR -> PTX, NO MLIR, NO CUDA."""
+    src = ("@kernel fn k() -> i32 { "
+           "let a: f32 = __tile_zeros(2, 2); "
+           "let b: f32 = __tile_zeros(2, 2); "
+           "let c: f32 = __tile_zeros(2, 2); "
+           "__tile_add(a, b, c, 4) }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_tileadd", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.f32 %f0, 0f00000000;\n"
+        + b"    mov.f32 %f1, 0f00000000;\n"
+        + b"    mov.f32 %f2, 0f00000000;\n"
+        + b"    mov.f32 %f3, 0f00000000;\n"
+        + b"    mov.f32 %f4, 0f00000000;\n"
+        + b"    mov.f32 %f5, 0f00000000;\n"
+        + b"    mov.f32 %f6, 0f00000000;\n"
+        + b"    mov.f32 %f7, 0f00000000;\n"
+        + b"    mov.f32 %f8, 0f00000000;\n"
+        + b"    mov.f32 %f9, 0f00000000;\n"
+        + b"    mov.f32 %f10, 0f00000000;\n"
+        + b"    mov.f32 %f11, 0f00000000;\n"
+        + b"    add.f32 %f8, %f0, %f4;\n"
+        + b"    add.f32 %f9, %f1, %f5;\n"
+        + b"    add.f32 %f10, %f2, %f6;\n"
+        + b"    add.f32 %f11, %f3, %f7;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_tileadd.cubin "
+             "/tmp/sh_ptx_tileadd_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected tile-add PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
