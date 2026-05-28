@@ -7571,6 +7571,54 @@ def test_bootstrap_ptx_global_load():
         )
 
 
+def test_bootstrap_ptx_two_load_add():
+    """K1.M10b (2026-05-28): the COMPUTE core of an elementwise kernel --
+    `a[i] + b[i]` reads two arrays from global memory at the same index
+    and adds them. Exercises multi-parameter resolution (param_0 AND
+    param_1) and two full load sequences feeding add.s32. Pure-additive
+    (composes the M10a index-load with the existing binop -- no new
+    emitter code). ptxas-validated (real SASS). The store (out[i] = ...)
+    that completes out[i]=a[i]+b[i] needs a parser change (deferred).
+    Direct tile-IR -> PTX, NO MLIR."""
+    src = ("@kernel fn k(a: i32, b: i32) -> i32 { "
+           "let i: i32 = thread_idx(); a[i] + b[i] }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_2load", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k(.param .b64 param_0, .param .b64 param_1)\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    ld.param.u64 %rd0, [param_0];\n"
+        + b"    cvta.to.global.u64 %rd1, %rd0;\n"
+        + b"    mul.wide.s32 %rd2, %r0, 4;\n"
+        + b"    add.s64 %rd3, %rd1, %rd2;\n"
+        + b"    ld.global.u32 %r1, [%rd3];\n"
+        + b"    ld.param.u64 %rd4, [param_1];\n"
+        + b"    cvta.to.global.u64 %rd5, %rd4;\n"
+        + b"    mul.wide.s32 %rd6, %r0, 4;\n"
+        + b"    add.s64 %rd7, %rd5, %rd6;\n"
+        + b"    ld.global.u32 %r2, [%rd7];\n"
+        + b"    add.s32 %r3, %r1, %r2;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_2load.cubin "
+             "/tmp/sh_ptx_2load_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected two-load PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess
