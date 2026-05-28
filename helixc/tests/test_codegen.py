@@ -7127,6 +7127,30 @@ def test_bootstrap_ptx_empty_kernel():
     )
 
 
+def test_bootstrap_ptx_named_kernel():
+    """K1.M2 (2026-05-28): the PTX entry name is the REAL kernel fn
+    name, not a hardcoded 'k'. A @kernel fn `saxpy` emits
+    `.visible .entry saxpy()`. Proves the bootstrap reads the fn name
+    bytes from AST_FN_DECL slots 1/2 (name_start/name_len) and copies
+    them into the PTX text -- the same source-byte read the bootstrap's
+    `main` detection uses. Direct tile-IR -> PTX, NO MLIR."""
+    src = "@kernel fn saxpy() -> i32 { 0 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_named", src)
+    expected = (
+        b".version 8.3\n"
+        b".target sm_75\n"
+        b".address_size 64\n"
+        b"\n"
+        b".visible .entry saxpy()\n"
+        b"{\n"
+        b"ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
 def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
     """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
     that returns (rc, stdout_bytes) instead of just rc. Needed for

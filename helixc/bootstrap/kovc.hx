@@ -9503,11 +9503,13 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
 //   ret;
 //   }
 //
-// Phase-0 narrowing for THIS chunk: the entry name is the fixed
-// byte 'k' (107); K1.M2 extracts the real fn name from slots
-// 1/2 (name_start/name_len). The kernel body/params/return type
-// are ignored here -- later chunks emit .param decls, .reg
-// files, and the lowered tile-op stream. Returns the PTX byte
+// Phase-0 narrowing: the entry name is the kernel fn's REAL name
+// (K1.M2 -- copied from AST_FN_DECL slots 1/2 = name_start/len,
+// the same source-byte read the "main" detection uses); for
+// multiple kernels only the FIRST is emitted (K1.M3 emits all).
+// The kernel body/params/return type are still ignored here --
+// later chunks emit .param decls, .reg files, and the lowered
+// tile-op stream. Returns the PTX byte
 // count (0 if the AST has no @kernel fn: a pure-CPU program
 // emits no PTX). PURE-ADDITIVE codegen -- touches no sb scratch
 // slots and no parser state (the K1.F5d-j sb-collision hazard
@@ -9519,21 +9521,26 @@ fn emit_ptx_byte(b: i32) -> i32 {
 }
 
 fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
-    // Scan the fn_list for any @kernel fn (is_kernel slot 14 == 1).
-    // Mirrors the autotune_pass walk: root tag 15 = AST_FN_LIST,
-    // node slot+1 = fn_idx, node slot+2 = next.
-    let mut has_kernel: i32 = 0;
+    // Scan the fn_list for the FIRST @kernel fn (is_kernel slot 14
+    // == 1). Mirrors the autotune_pass walk: root tag 15 =
+    // AST_FN_LIST, node slot+1 = fn_idx, node slot+2 = next.
+    // K1.M2: capture the kernel's fn_idx (not just a bool) so we
+    // can read its real name bytes from slots 1/2. Sentinel -1 =
+    // "no @kernel fn found".
+    let mut kernel_fn_idx: i32 = 0 - 1;
     if __arena_get(ast_root) == 15 {
         let mut walk: i32 = ast_root;
         while walk != 0 {
             let fn_idx = __arena_get(walk + 1);
             if __arena_get(fn_idx + 14) == 1 {
-                has_kernel = 1;
+                if kernel_fn_idx < 0 {
+                    kernel_fn_idx = fn_idx;
+                };
             };
             walk = __arena_get(walk + 2);
         }
     };
-    if has_kernel != 1 {
+    if kernel_fn_idx < 0 {
         0
     } else {
         let start = __arena_len();
@@ -9558,14 +9565,28 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
         emit_ptx_byte(52); emit_ptx_byte(10);
         // "\n" (blank line between module header and entry)
         emit_ptx_byte(10);
-        // ".visible .entry k()\n"
+        // ".visible .entry " (prefix; the real entry name follows)
         emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(105);
         emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(98);
         emit_ptx_byte(108); emit_ptx_byte(101); emit_ptx_byte(32);
         emit_ptx_byte(46); emit_ptx_byte(101); emit_ptx_byte(110);
         emit_ptx_byte(116); emit_ptx_byte(114); emit_ptx_byte(121);
-        emit_ptx_byte(32); emit_ptx_byte(107); emit_ptx_byte(40);
-        emit_ptx_byte(41); emit_ptx_byte(10);
+        emit_ptx_byte(32);
+        // K1.M2: emit the REAL kernel name -- copy name_l bytes from
+        // the source buffer at name_start (AST_FN_DECL slots 1/2),
+        // mirroring the name-mangling copy loop elsewhere in kovc.hx
+        // (__arena_get(name_s + i)). The source region stays live in
+        // the arena, so these offsets are valid at emit time (same
+        // read the "main" detection performs).
+        let kname_s = __arena_get(kernel_fn_idx + 1);
+        let kname_l = __arena_get(kernel_fn_idx + 2);
+        let mut ki: i32 = 0;
+        while ki < kname_l {
+            emit_ptx_byte(__arena_get(kname_s + ki));
+            ki = ki + 1;
+        }
+        // "()\n"
+        emit_ptx_byte(40); emit_ptx_byte(41); emit_ptx_byte(10);
         // "{\n"
         emit_ptx_byte(123); emit_ptx_byte(10);
         // "ret;\n"
