@@ -9426,7 +9426,32 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                 __arena_set(scratch + target_name_l + 2, 105); // 'i'
                 __arena_set(scratch + target_name_l + 3, 51);  // '3'
                 __arena_set(scratch + target_name_l + 4, 50);  // '2'
-                fn_table_lookup(fn_state, scratch, target_name_l + 5)
+                let mut try_len = target_name_l + 5;
+                let mut found_off = fn_table_lookup(fn_state, scratch, try_len);
+                // A1b (2026-05-28): multi-param bare generic call. The 1-param
+                // mono is `<name>__i32`; 2..4-param monos are `<name>__i32_i32`
+                // etc. (mangle_name_into_arena uses a single '_' between args).
+                // Append "_i32" up to 3 more times, first fn_table_lookup hit
+                // wins. Gated on target_name_l < 48 so the largest write,
+                // scratch[name_l+16], stays in the 64-slot scratch buffer
+                // (the single-i32 path above keeps its original <60 gate).
+                let mut np: i32 = 1;
+                while np < 4 {
+                    if found_off >= 0 {
+                        np = 4;
+                    } else { if target_name_l < 48 {
+                        __arena_set(scratch + try_len + 0, 95);  // '_'
+                        __arena_set(scratch + try_len + 1, 105); // 'i'
+                        __arena_set(scratch + try_len + 2, 51);  // '3'
+                        __arena_set(scratch + try_len + 3, 50);  // '2'
+                        try_len = try_len + 4;
+                        found_off = fn_table_lookup(fn_state, scratch, try_len);
+                        np = np + 1;
+                    } else {
+                        np = 4;
+                    }};
+                }
+                found_off
             } else {
                 0 - 1
             }};

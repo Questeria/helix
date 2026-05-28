@@ -5074,6 +5074,19 @@ def test_bootstrap_generics_bare_call():
     assert rc == 42, f"bare generic call id(42): bootstrap rc={rc}, expected 42"
 
 
+def test_bootstrap_generics_bare_call_multi():
+    """A1b (2026-05-28): a MULTI-type-param bare generic call -- `first(42,7)`
+    with NO turbofish -- runs in the bootstrap. Extends A1a: monomorphize_pass
+    now synthesizes a default-i32 entry for generics of ANY arity (gp_n>=1),
+    mangled `first__i32_i32`, and the K1.F21 fallback tries `__i32`, then
+    `__i32_i32`, ... up to 4 params (first fn_table_lookup hit wins). Python
+    helixc cannot parse `<A, B>`, so this is a bootstrap-only pin."""
+    rc = _kovc_self_host_compile_and_run(
+        "a1b_bare_generic_call_multi",
+        "fn first<A, B>(a: A, b: B) -> A { a } fn main() -> i32 { first(42, 7) }")
+    assert rc == 42, f"bare call first(42,7): bootstrap rc={rc}, expected 42"
+
+
 def test_bootstrap_closure():
     """K1.M32 (2026-05-28): closures run in the bootstrap kovc -- a let-
     bound lambda `|x: i32| x + 1` called as f(41) -> 42. NOTE: Python

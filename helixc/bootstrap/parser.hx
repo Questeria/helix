@@ -9552,14 +9552,14 @@ fn clone_with_rewrite(node_idx: i32, gp_head: i32, packed: i32) -> i32 {
 // AST_PARAM type tags and the AST_FN_DECL's ret_ty slot. Appends new
 // AST_FN_LIST nodes to the END of head so the new fns are emitted.
 fn monomorphize_pass(sb: i32, head: i32) -> i32 {
-    // A1a (2026-05-28): synthesize a default-i32 mono entry for each
-    // SINGLE-type-param generic template that lacks one, so a bare
-    // generic call `id(42)` (no turbofish) resolves. The K1.F21 bare-
-    // call fallback (kovc.hx) builds `<name>__i32`; with no matching
-    // clone it patched ud2 -> SIGILL (rc=132). i32's type tag is 0
-    // (ty_ident_to_tag), so packed==0 and pack_lo==ta_count==1 here.
-    // Multi-param templates (`first<A,B>`) are A1b: the fallback must
-    // also build `<name>__i32_i32` before synthesizing them is useful.
+    // A1a/A1b (2026-05-28): synthesize a default-i32 mono entry for each
+    // generic template (any arity) that lacks one, so a bare generic call
+    // `id(42)` / `first(42,7)` (no turbofish) resolves. The K1.F21 bare-
+    // call fallback (kovc.hx) builds `<name>__i32` / `<name>__i32_i32`;
+    // with no matching clone it patched ud2 -> SIGILL (rc=132). i32's type
+    // tag is 0 (ty_ident_to_tag), so packed==0 and pack_lo==ta_count==gp_n
+    // (one i32 arg per type param). A1a shipped single-param (gp_n==1);
+    // A1b generalizes to gp_n>=1 (paired with the fallback's multi-suffix).
     let i32_name_s = __arena_len();
     __arena_push(105);   // 'i'
     __arena_push(51);    // '3'
@@ -9577,16 +9577,25 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 gp_n = gp_n + 1;
                 gp_w = __arena_get(gp_w + 3);
             }
-            if gp_n == 1 {
+            if gp_n >= 1 {
                 let syn_ns = __arena_get(syn_fn + 1);
                 let syn_nl = __arena_get(syn_fn + 2);
-                if mr_tab_lookup(sb, syn_ns, syn_nl, 1) < 0 {
+                // pack_lo = packed*8 + ta_count; i32 tag is 0 so packed==0
+                // -> pack_lo == gp_n (one default-i32 arg per type param).
+                // A1b (2026-05-28): generalized from gp_n==1 to gp_n>=1 so a
+                // multi-param bare call `first(42,7)` -> `first__i32_i32`
+                // resolves (the K1.F21 fallback tries the multi-`_i32` suffix).
+                if mr_tab_lookup(sb, syn_ns, syn_nl, gp_n) < 0 {
                     let ta_base = __arena_len();
-                    __arena_push(i32_name_s);
-                    __arena_push(3);
-                    let mang_s = mangle_name_into_arena(syn_ns, syn_nl, ta_base, 1);
-                    let mang_l = mangle_name_len(syn_nl, ta_base, 1);
-                    mr_tab_add(sb, syn_ns, syn_nl, mang_s, mang_l, 1);
+                    let mut tj: i32 = 0;
+                    while tj < gp_n {
+                        __arena_push(i32_name_s);
+                        __arena_push(3);
+                        tj = tj + 1;
+                    }
+                    let mang_s = mangle_name_into_arena(syn_ns, syn_nl, ta_base, gp_n);
+                    let mang_l = mangle_name_len(syn_nl, ta_base, gp_n);
+                    mr_tab_add(sb, syn_ns, syn_nl, mang_s, mang_l, gp_n);
                 };
             };
         };
