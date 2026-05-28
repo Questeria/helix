@@ -266,6 +266,9 @@ K2_CORPUS = [
     # covered payload-less enums; this adds a data-carrying variant E::A(i32)
     # and a binding arm `E::A(n) => n`. Both compilers agree (PARITY).
     ("p134_enum_payload",        "enum E { A(i32), B } fn main() -> i32 { let e = E::A(42); match e { E::A(n) => n, E::B => 0 } }", 42),
+    # K2.V (2026-05-28, M33 probe): match GUARD arm (`n if n > 3 => ...`).
+    # Both compilers agree (PARITY). Adds guard-pattern coverage.
+    ("p135_match_guard",         "fn main() -> i32 { let x = 5; match x { n if n > 3 => 42, _ => 0 } }", 42),
 ]
 
 
@@ -337,8 +340,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 134, (
-        f"K2.U corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 135, (
+        f"K2.V corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
