@@ -72,6 +72,21 @@ dispatch. K1.F5c extended to struct-LITERAL receiver via the
 - ⏳ #4 Generic-impl monomorphization — overlaps with P1.3 generic.
 - ⏳ #9/#10 Default impls — needs trait infra (overlaps with #3).
 
+**STRUCTURAL FINDING (K2.AA 2026-05-28 update):** the impl-block
+self-receiver syntax (`impl P { fn read(self) ... }` and `&self`)
+is BOOTSTRAP-ONLY territory — Python helixc raises `ParseError:
+expected COLON (got RPAREN)` at the position right after `self`.
+This parallels the macro / tile-op structural findings: the bootstrap
+will be a feature-SUPERSET of Python for the self-receiver shape.
+Practical implications:
+  - K2 parity harness cannot test this shape (Python fails first).
+  - The K1.F5h2-i chunks below close the bootstrap codegen gap as
+    bootstrap-only self-host tests, NOT K2 parity probes.
+  - Parity-testable impl methods continue to use the K1.F5b mangled-
+    fn pattern (`fn P__read(p: P)`) — this is what
+    test_impl_method_call_dispatch already uses and what works on
+    both compilers.
+
 **Reordered P1.2 chunk plan (post-probe):**
 1. K1.F5c ✅ — struct-literal receiver. SHIPPED 09bdc3e.
 2. K1.F5d — fn-name→ret-ty table substrate.
