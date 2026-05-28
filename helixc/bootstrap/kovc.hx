@@ -1661,7 +1661,7 @@ fn fn_type_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 1280 {                        // 256 entries * 5 slots
+    while i < 5120 {                        // 1024 entries * 5 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -1669,8 +1669,14 @@ fn fn_type_table_init() -> i32 {
 }
 
 fn fn_type_table_add(state: i32, name_start: i32, name_len: i32, ret_ty: i32, packed_param_tys: i32, param_count: i32) -> i32 {
+    // Safe-hardening (2026-05-28): cap 256 -> 1024. A program with >256 fns
+    // silently dropped fn_type_table entries past #256, so a non-i32-return
+    // fn beyond #256 mis-typed at its call sites (e.g. an f32-returning fn
+    // read as i32 -> SIGILL). Bumped to 1024 (full self-host driver has 673
+    // fns). The table is arena-pushed at init (NOT woven into the hardcoded
+    // end-region address math), so this is a safe size change.
     let top = __arena_get(state);
-    if top >= 256 {
+    if top >= 1024 {
         0 - 1
     } else {
         let table_base = __arena_get(state + 1);

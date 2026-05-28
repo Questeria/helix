@@ -7213,6 +7213,26 @@ def test_bootstrap_self_host_lexer_hx():
     )
 
 
+def test_bootstrap_fn_type_table_over_256():
+    """Safe-hardening (2026-05-28): fn_type_table cap 256 -> 1024. A program
+    with more than 256 fns used to silently drop type-table entries past
+    #256, so a non-i32-return fn beyond #256 mis-typed at its call site --
+    here an f32-returning fn (the 281st) read as i32, which SIGILL'd (132).
+    With the bumped cap its f32 return type is recorded and the program runs
+    correctly (42). The bootstrap now handles realistic multi-hundred-fn
+    programs (the full self-host driver has 673 fns). This is also a
+    prerequisite for the parser.hx/kovc.hx self-host fixpoint legs."""
+    fillers = "".join("fn g%d() -> i32 { 0 } " % i for i in range(280))
+    src = (fillers +
+           "fn getf() -> f32 { 2.0 } "
+           "fn main() -> i32 { let x: f32 = getf(); if x > 1.0 { 42 } else { 0 } }")
+    rc = _kovc_self_host_compile_and_run("fn_type_table_over_256", src)
+    assert rc == 42, (
+        f"fn_type_table >256 fns: bootstrap rc={rc}, expected 42 "
+        f"(pre-fix this was 132 -- the 256-cap dropped the f32 fn's type)"
+    )
+
+
 def _kovc_self_host_emit_ptx(name: str, k2_src: str,
                              emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
