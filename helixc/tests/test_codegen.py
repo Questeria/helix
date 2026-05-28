@@ -8187,6 +8187,34 @@ def test_bootstrap_msl_empty_kernel():
     )
 
 
+def test_bootstrap_rocm_empty_kernel():
+    """K1.M20 (2026-05-28): FOURTH / FINAL GPU backend -- AMD ROCm (AMDGPU
+    GCN assembly, gfx942). The bootstrap emits an AMDGPU asm module
+    (.amdgcn_target + .text + .globl/.p2align/.type + label + s_endpgm)
+    for a @kernel fn, BYTE-MATCHING Python helixc/backend/rocm.py
+    HipEmitter's empty-kernel output. Completes the 4-backend set:
+    NVIDIA PTX + AMD ROCm + Apple Metal + WebGPU -- AI on ANY GPU, direct
+    Helix -> chip text, NO CUDA, NO MLIR, NO LLVM. (No local AMD assembler
+    here -> exact byte-match vs the Python emitter is the check.)"""
+    src = "@kernel fn k() -> i32 { 0 }\n"
+    asm = _kovc_self_host_emit_ptx("rocm_empty", src,
+                                   emit_fn="emit_rocm_for_ast_to_path")
+    expected = (
+        '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"\n'
+        "\n"
+        ".text\n"
+        ".globl k\n"
+        ".p2align 8\n"
+        ".type k,@function\n"
+        "k:\n"
+        "    s_endpgm\n"
+        "\n"
+    ).encode("utf-8")
+    assert asm == expected, (
+        f"ROCm asm mismatch:\n got={asm!r}\nwant={expected!r}"
+    )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

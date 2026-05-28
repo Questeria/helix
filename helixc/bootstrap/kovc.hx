@@ -11184,6 +11184,117 @@ fn emit_msl_for_ast_to_path(ast_root: i32) -> i32 {
     }
 }
 
+// K1.M20 (2026-05-28): FOURTH / FINAL GPU backend -- AMD ROCm (AMDGPU
+// GCN assembly, gfx942). Direct Helix -> GCN asm text, NO MLIR / NO LLVM.
+// Mirrors Python helixc/backend/rocm.py HipEmitter. Pure ASCII (no
+// em-dash). Header: the .amdgcn_target directive + a blank line.
+fn emit_rocm_header() -> i32 {
+    // ".amdgcn_target \"amdgcn-amd-amdhsa--gfx942\"\n"
+    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(109);
+    emit_ptx_byte(100); emit_ptx_byte(103); emit_ptx_byte(99);
+    emit_ptx_byte(110); emit_ptx_byte(95); emit_ptx_byte(116);
+    emit_ptx_byte(97); emit_ptx_byte(114); emit_ptx_byte(103);
+    emit_ptx_byte(101); emit_ptx_byte(116);                    // ".amdgcn_target"
+    emit_ptx_byte(32);
+    emit_ptx_byte(34);                                         // double-quote
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(100);
+    emit_ptx_byte(103); emit_ptx_byte(99); emit_ptx_byte(110);
+    emit_ptx_byte(45); emit_ptx_byte(97); emit_ptx_byte(109);
+    emit_ptx_byte(100); emit_ptx_byte(45); emit_ptx_byte(97);
+    emit_ptx_byte(109); emit_ptx_byte(100); emit_ptx_byte(104);
+    emit_ptx_byte(115); emit_ptx_byte(97); emit_ptx_byte(45);
+    emit_ptx_byte(45); emit_ptx_byte(103); emit_ptx_byte(102);
+    emit_ptx_byte(120); emit_ptx_byte(57); emit_ptx_byte(52);
+    emit_ptx_byte(50);                                         // "amdgcn-amd-amdhsa--gfx942"
+    emit_ptx_byte(34);                                         // double-quote
+    emit_ptx_byte(10);
+    emit_ptx_byte(10);                                         // blank line
+    0
+}
+// K1.M20: emit ONE AMDGPU GCN kernel for a @kernel fn (real source name
+// from slots 1/2, used in .globl / .type / the label). Empty-kernel
+// skeleton (s_endpgm), mirroring Python rocm.py emit_kernel_stub.
+fn emit_rocm_kernel(fn_idx: i32) -> i32 {
+    let kname_s = __arena_get(fn_idx + 1);
+    let kname_l = __arena_get(fn_idx + 2);
+    // ".text\n"
+    emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(101);
+    emit_ptx_byte(120); emit_ptx_byte(116); emit_ptx_byte(10);
+    // ".globl " + <name> + "\n"
+    emit_ptx_byte(46); emit_ptx_byte(103); emit_ptx_byte(108);
+    emit_ptx_byte(111); emit_ptx_byte(98); emit_ptx_byte(108);
+    emit_ptx_byte(32);
+    let mut k1: i32 = 0;
+    while k1 < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + k1));
+        k1 = k1 + 1;
+    }
+    emit_ptx_byte(10);
+    // ".p2align 8\n"
+    emit_ptx_byte(46); emit_ptx_byte(112); emit_ptx_byte(50);
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(105);
+    emit_ptx_byte(103); emit_ptx_byte(110); emit_ptx_byte(32);
+    emit_ptx_byte(56); emit_ptx_byte(10);
+    // ".type " + <name> + ",@function\n"
+    emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(121);
+    emit_ptx_byte(112); emit_ptx_byte(101); emit_ptx_byte(32);
+    let mut k2: i32 = 0;
+    while k2 < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + k2));
+        k2 = k2 + 1;
+    }
+    emit_ptx_byte(44); emit_ptx_byte(64); emit_ptx_byte(102);
+    emit_ptx_byte(117); emit_ptx_byte(110); emit_ptx_byte(99);
+    emit_ptx_byte(116); emit_ptx_byte(105); emit_ptx_byte(111);
+    emit_ptx_byte(110); emit_ptx_byte(10);                     // ",@function\n"
+    // <name> + ":\n"
+    let mut k3: i32 = 0;
+    while k3 < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + k3));
+        k3 = k3 + 1;
+    }
+    emit_ptx_byte(58); emit_ptx_byte(10);                      // ":\n"
+    // "    s_endpgm\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(115); emit_ptx_byte(95); emit_ptx_byte(101);
+    emit_ptx_byte(110); emit_ptx_byte(100); emit_ptx_byte(112);
+    emit_ptx_byte(103); emit_ptx_byte(109); emit_ptx_byte(10); // "s_endpgm\n"
+    emit_ptx_byte(10);                                         // blank line
+    0
+}
+// K1.M20: top-level ROCm emitter. Header once + one kernel per @kernel fn
+// (mirrors emit_msl_for_ast_to_path / Python rocm.py emit_module). 0
+// kernels -> emits nothing (returns 0).
+fn emit_rocm_for_ast_to_path(ast_root: i32) -> i32 {
+    let mut kernel_count: i32 = 0;
+    if __arena_get(ast_root) == 15 {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                kernel_count = kernel_count + 1;
+            };
+            walk = __arena_get(walk + 2);
+        }
+    };
+    if kernel_count == 0 {
+        0
+    } else {
+        let start = __arena_len();
+        emit_rocm_header();
+        let mut walk2: i32 = ast_root;
+        while walk2 != 0 {
+            let fn_idx = __arena_get(walk2 + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                emit_rocm_kernel(fn_idx);
+            };
+            walk2 = __arena_get(walk2 + 2);
+        }
+        __arena_len() - start
+    }
+}
+
 // --------------------------------------------------------------
 // Demo: build a tiny AST_INT(42) by hand, compile it, write the
 // resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the
