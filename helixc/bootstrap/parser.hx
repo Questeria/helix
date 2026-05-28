@@ -2310,45 +2310,92 @@ fn parse_expr_basic(tok_base: i32, sb: i32) -> i32 {
     cmp_result
 }
 
-// Phase 1.10 step 5+: binary bitwise AND/OR/XOR at one precedence level
-// between additive and comparison. Not strictly C-correct (C separates
-// & ^ | into three levels) but enough for AGI substrate work where most
-// callers use parens. Left-associative.
+// Bitwise/shift precedence -- K-fix (2026-05-28): the former single-level
+// parse_bitwise lumped `& | ^ << >>` at ONE precedence (left-assoc). That
+// mis-evaluated `5 ^ 3 & 1` as `(5^3)&1=0` (vs Rust/Python `5^(3&1)=4`) and
+// `3 | 1 ^ 2` as `(3|1)^2=1` (vs `3|(1^2)=3`) -- a real both-compiler
+// divergence found by the S3 precedence audit. Now split into the Rust/C
+// hierarchy (tightest -> loosest): `<<`/`>>` > `&` > `^` > `|`, all between
+// additive and comparison. parse_bitwise is KEPT as the top (`|`) entry so
+// every existing caller (parse_expr_basic lhs + comparison RHS) is unaffected
+// and automatically gets the full corrected chain. The `&&`/`||` bail-outs
+// (handled above comparison in parse_expr_basic) are preserved at their
+// respective single-char levels.
 fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
-    let mut lhs = parse_add(tok_base, sb);
+    // `|` level (loosest bitwise). `||` bails to parse_expr_basic.
+    let mut lhs = parse_bitxor(tok_base, sb);
     let mut keep: i32 = 1;
     while keep == 1 {
         let k = cur_get(sb);
         let t = tok_tag(tok_base, k);
-        if t == 27 {       // TK_AMP -> AST_BAND, or TK_AMP TK_AMP -> bail
-            // K1.M-fix (2026-05-25): the doubled `&&` form is handled
-            // at parse_expr_basic level (above comparison) -- bail
-            // out so the higher level can see the token pair. Single
-            // `&` continues as bitwise.
-            let t_next = tok_tag(tok_base, k + 1);
-            if t_next == 27 {
-                keep = 0;
-            } else {
-                cur_advance(sb);
-                let rhs = parse_add(tok_base, sb);
-                lhs = mk_arith_fold(28, lhs, rhs);
-            }
-        } else { if t == 28 {       // TK_PIPE -> AST_BOR, or TK_PIPE TK_PIPE -> bail
-            // K1.M-fix (2026-05-25): doubled `||` bail-out, same as
-            // `&&` -- handled at parse_expr_basic level above.
+        if t == 28 {       // TK_PIPE -> AST_BOR, or TK_PIPE TK_PIPE -> bail
             let t_next = tok_tag(tok_base, k + 1);
             if t_next == 28 {
                 keep = 0;
             } else {
                 cur_advance(sb);
-                let rhs = parse_add(tok_base, sb);
+                let rhs = parse_bitxor(tok_base, sb);
                 lhs = mk_arith_fold(29, lhs, rhs);
             }
-        } else { if t == 29 {       // TK_CARET -> AST_BXOR
+        } else {
+            keep = 0;
+        };
+    }
+    lhs
+}
+
+// `^` level. Operands are `&`-level (parse_bitand).
+fn parse_bitxor(tok_base: i32, sb: i32) -> i32 {
+    let mut lhs = parse_bitand(tok_base, sb);
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let k = cur_get(sb);
+        let t = tok_tag(tok_base, k);
+        if t == 29 {       // TK_CARET -> AST_BXOR
             cur_advance(sb);
-            let rhs = parse_add(tok_base, sb);
+            let rhs = parse_bitand(tok_base, sb);
             lhs = mk_arith_fold(30, lhs, rhs);
-        } else { if t == 30 {       // TK_LSHIFT -> AST_SHL
+        } else {
+            keep = 0;
+        };
+    }
+    lhs
+}
+
+// `&` level. `&&` bails to parse_expr_basic. Operands are shift-level.
+fn parse_bitand(tok_base: i32, sb: i32) -> i32 {
+    let mut lhs = parse_shift(tok_base, sb);
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let k = cur_get(sb);
+        let t = tok_tag(tok_base, k);
+        if t == 27 {       // TK_AMP -> AST_BAND, or TK_AMP TK_AMP -> bail
+            let t_next = tok_tag(tok_base, k + 1);
+            if t_next == 27 {
+                keep = 0;
+            } else {
+                cur_advance(sb);
+                let rhs = parse_shift(tok_base, sb);
+                lhs = mk_arith_fold(28, lhs, rhs);
+            }
+        } else {
+            keep = 0;
+        };
+    }
+    lhs
+}
+
+// `<<` / `>>` level (tightest bitwise, just above additive). Operands are
+// additive, so `1 << 2 + 1` == `1 << (2+1)` -- shift looser than add, matching
+// Rust and the prior behaviour (the shift-vs-add audit shapes already passed,
+// so this preserves them; only the `& ^ |` sublevels change).
+fn parse_shift(tok_base: i32, sb: i32) -> i32 {
+    let mut lhs = parse_add(tok_base, sb);
+    let mut keep: i32 = 1;
+    while keep == 1 {
+        let k = cur_get(sb);
+        let t = tok_tag(tok_base, k);
+        if t == 30 {       // TK_LSHIFT -> AST_SHL
             cur_advance(sb);
             let rhs = parse_add(tok_base, sb);
             lhs = mk_node(32, lhs, rhs, 0);
@@ -2358,7 +2405,7 @@ fn parse_bitwise(tok_base: i32, sb: i32) -> i32 {
             lhs = mk_node(33, lhs, rhs, 0);
         } else {
             keep = 0;
-        }}}}};
+        }};
     }
     lhs
 }

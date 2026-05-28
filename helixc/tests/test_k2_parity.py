@@ -455,6 +455,16 @@ K2_CORPUS = [
     ("p251_while_not_paren",     "fn main() -> i32 { let mut b = 0; let mut n = 0; while !(b) { n = n + 42; b = 1; } n }", 42),
     ("p252_return_not_paren",    "fn neg(x: i32) -> i32 { return !(x); } fn main() -> i32 { if neg(0) == 1 { 42 } else { 0 } }", 42),
     ("p253_if_not_paren_arith",  "fn main() -> i32 { let b = 5; if !(b - 5) { 42 } else { 0 } }", 42),
+    # K-fix (2026-05-28): bitwise/shift PRECEDENCE. The S3 audit found the
+    # bootstrap evaluated `& ^ |` at ONE level (vs Rust/Python `<< >> > & > ^
+    # > |`): `5 ^ 3 & 1` gave 0 (`(5^3)&1`) not 4 (`5^(3&1)`), `3 | 1 ^ 2` gave
+    # 1 not 3. Fixed by splitting parse_bitwise into proper sublevels. These
+    # pin the hierarchy so it cannot silently regress.
+    ("p254_prec_xor_over_and",   "fn main() -> i32 { 5 ^ 3 & 1 }", 4),
+    ("p255_prec_or_over_xor",    "fn main() -> i32 { 3 | 1 ^ 2 }", 3),
+    ("p256_prec_full_chain",     "fn main() -> i32 { 1 | 2 ^ 4 & 4 }", 7),
+    ("p257_prec_shift_over_and", "fn main() -> i32 { 1 & 3 << 1 }", 0),
+    ("p258_prec_shift_over_xor", "fn main() -> i32 { 2 ^ 1 << 2 }", 6),
 ]
 
 
@@ -526,7 +536,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 253, (
+    assert len(K2_CORPUS) >= 258, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
