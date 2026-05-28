@@ -7856,6 +7856,45 @@ def test_bootstrap_ptx_f32_elementwise_add():
         )
 
 
+def test_bootstrap_ptx_tile_zeros():
+    """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
+    lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills
+    (the register-tile model, mirroring Python backend/ptx.py TILE_ZEROS
+    / Stage 64 Inc 2). The CALL already parses -- the x86 CPU path
+    (K1.F23c) uses the same 2-arg signature -- so this is the first GPU
+    tile primitive with NO parser change; the tile elementwise/matmul arc
+    starts here. 0f00000000 is the PTX hex literal for +0.0f.
+    ptxas-validated (real SASS). Direct tile-IR -> PTX, NO MLIR, NO CUDA."""
+    src = "@kernel fn k() -> i32 { __tile_zeros(2, 2) }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_tilezeros", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.f32 %f0, 0f00000000;\n"
+        + b"    mov.f32 %f1, 0f00000000;\n"
+        + b"    mov.f32 %f2, 0f00000000;\n"
+        + b"    mov.f32 %f3, 0f00000000;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_tilezeros.cubin "
+             "/tmp/sh_ptx_tilezeros_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected tile-zeros PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

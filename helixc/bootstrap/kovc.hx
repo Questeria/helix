@@ -10422,10 +10422,56 @@ fn emit_ptx_mov_ntid_x(ridx: i32) -> i32 {
     0
 }
 
+// K1.M13 (2026-05-28): "__tile_zeros" name matcher (12 chars). The
+// FIRST GPU tile op. Register-tile model: __tile_zeros(N, M) -> N*M
+// consecutive `mov.f32 %fX, 0f00000000;` zero-fills, result = base %f
+// register. Mirrors Python backend/ptx.py TILE_ZEROS (Stage 64 Inc 2).
+// The CALL already parses (CPU path K1.F23c uses the same 2-arg
+// signature), so this is pure-additive -- NO parser change.
+fn ptx_name_is_tile_zeros(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 12 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 3) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 4) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 5) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 6) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 7) != 122 { ok = 0; };   // z
+        if __arena_get(name_s + 8) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 9) != 114 { ok = 0; };   // r
+        if __arena_get(name_s + 10) != 111 { ok = 0; };  // o
+        if __arena_get(name_s + 11) != 115 { ok = 0; };  // s
+        ok
+    }
+}
+// K1.M13: emit one tile-zero register-fill "    mov.f32 %fN, 0f00000000;".
+// 0f00000000 is the PTX hex literal for +0.0f. Mirrors Python ptx.py
+// TILE_ZEROS register-fill.
+fn emit_ptx_mov_f_zero(ridx: i32) -> i32 {
+    emit_ptx_indent();
+    // "mov.f32 "
+    emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_f(ridx);
+    // ", 0f00000000;\n"
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_byte(48); emit_ptx_byte(102);
+    emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48);
+    emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+
 // K1.M6: lower an AST_CALL (tag 16; name in slots 1/2, args_head in
-// slot 3). For now only the thread_idx() kernel builtin is recognised
-// -> mov.u32 %rN, %tid.x (no args). Other calls are unsupported in the
-// GPU path yet (return -1; later chunks add __tile_* + block_idx etc.).
+// slot 3). Recognised GPU builtins: thread_idx()/block_idx()/block_dim()
+// (parallel-index sregs) and __tile_zeros(N, M) (K1.M13, first tile op).
+// Other calls are unsupported in the GPU path yet (return -1; later
+// chunks add __tile_add/sub/mul/matmul).
 fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
     let name_s = __arena_get(node + 1);
     let name_l = __arena_get(node + 2);
@@ -10441,9 +10487,31 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         let r = ptx_alloc_reg(vtab);
         emit_ptx_mov_ntid_x(r);
         r
+    } else { if ptx_name_is_tile_zeros(name_s, name_l) == 1 {
+        // K1.M13: __tile_zeros(N, M) -> N*M consecutive `mov.f32 %fX,
+        // 0f00000000;`. N and M are Phase-0 static int literals (AST_INT,
+        // value in slot 1). Result = base %f register; set the float flag
+        // (vtab slot 55) so a downstream consumer sees an f32 tile.
+        let ah = __arena_get(node + 3);     // args_head (AST_ARG)
+        let a0 = __arena_get(ah + 1);       // first arg expr (AST_INT N)
+        let nxt = __arena_get(ah + 2);      // second AST_ARG
+        let a1 = __arena_get(nxt + 1);      // second arg expr (AST_INT M)
+        let nn = __arena_get(a0 + 1);       // N literal
+        let mm = __arena_get(a1 + 1);       // M literal
+        let count = nn * mm;
+        let base = ptx_alloc_f(vtab);
+        emit_ptx_mov_f_zero(base);
+        let mut i: i32 = 1;
+        while i < count {
+            let rr = ptx_alloc_f(vtab);
+            emit_ptx_mov_f_zero(rr);
+            i = i + 1;
+        }
+        __arena_set(vtab + 55, 1);
+        base
     } else {
         0 - 1
-    }}}
+    }}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
