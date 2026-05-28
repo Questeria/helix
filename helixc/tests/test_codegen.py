@@ -10148,6 +10148,52 @@ def test_bootstrap_kovc_k1f35_k1f36_assert_ident_bool_self_host():
     )
 
 
+def test_bootstrap_kovc_k1f37_k1f38_assert_bool_ident_self_host():
+    """K1.F37 + K1.F38 (2026-05-27): operand-flipped mirrors of K1.F35/F36.
+
+    K1.F37: assert_eq!(BOOL_LIT, IDENT) — e.g. `assert_eq!(true, flag)`.
+    K1.F38: assert_ne!(BOOL_LIT, IDENT) — e.g. `assert_ne!(false, flag)`.
+
+    AST_EQ and AST_NE are symmetric so the operand-swap is pure
+    convenience. The synthesis builds AST_INT (constant-folded bool)
+    on the LHS and AST_VAR on the RHS.
+    """
+    # K1.F37 -- assert_eq!(true, flag) where flag=1
+    rc_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f37_aeqbi_pass",
+        'fn main() -> i32 { let flag: i32 = 1; assert_eq!(true, flag); 11 }',
+    )
+    assert rc_eq_pass == 11, (
+        f"K1.F37 assert_eq!(true, flag) when flag=1: expected rc=11; "
+        f"got {rc_eq_pass}."
+    )
+    rc_eq_fail = _kovc_self_host_compile_and_run(
+        "k1f37_aeqbi_fail",
+        'fn main() -> i32 { let flag: i32 = 0; assert_eq!(true, flag); 11 }',
+    )
+    assert rc_eq_fail == 132, (
+        f"K1.F37 assert_eq!(true, flag) when flag=0: expected rc=132 "
+        f"(panic); got {rc_eq_fail}."
+    )
+    # K1.F38 -- assert_ne!(false, flag) where flag=1
+    rc_ne_pass = _kovc_self_host_compile_and_run(
+        "k1f38_anebi_pass",
+        'fn main() -> i32 { let flag: i32 = 1; assert_ne!(false, flag); 11 }',
+    )
+    assert rc_ne_pass == 11, (
+        f"K1.F38 assert_ne!(false, flag) when flag=1: expected rc=11; "
+        f"got {rc_ne_pass}."
+    )
+    rc_ne_fail = _kovc_self_host_compile_and_run(
+        "k1f38_anebi_fail",
+        'fn main() -> i32 { let flag: i32 = 0; assert_ne!(false, flag); 11 }',
+    )
+    assert rc_ne_fail == 132, (
+        f"K1.F38 assert_ne!(false, flag) when flag=0: expected rc=132; "
+        f"got {rc_ne_fail}."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

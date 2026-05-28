@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 270      # last bump: K1.F35+F36 batch -- assert_eq/ne!(IDENT, BOOL_LIT) mixed-form. Pre-F35 this fell through to K1.CB no-op-skip: K1.F22j rejected via K3.Q (b is reserved kw), K1.F22j2 required BOTH-bool-lit, K1.F31 required TK_INT. Real Rust very often writes `assert_eq!(flag, true)`. Synthesis constant-folds the bool: true -> AST_INT(1), false -> AST_INT(0); cond is AST_EQ(AST_VAR(a), AST_INT(b_val)). K1.F36 = same with AST_NE. 7-token shape. Second batched commit (2 mechanical siblings). Skipped Telegram per new policy (< 5 chunks since last TG, < 60 min silence). Tests pass; K1.F22j2 regression intact.
+K_BOOTSTRAP_CHUNKS_DONE = 272      # last bump: K1.F37+F38 batch -- assert_eq/ne!(BOOL_LIT, IDENT) operand-flipped mirrors of K1.F35/F36. Real Rust sometimes writes `assert_eq!(true, flag)`. AST_EQ/AST_NE symmetric so swap is pure convenience; synthesis builds AST_INT(folded bool) on LHS, AST_VAR on RHS. 7-token shape. Third batched commit of the new dynamic-self-paced loop. Tests pass; K1.F35/F36 regressions intact. Counter now at 5 chunks since last Telegram (1c7718a was 268, now 272 - 4 chunks short of 5-min policy threshold, still under 60-min silence).
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
