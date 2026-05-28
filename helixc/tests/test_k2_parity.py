@@ -288,6 +288,21 @@ K2_CORPUS = [
     ("p144_nested_call",         "fn inc(x: i32) -> i32 { x + 1 } fn main() -> i32 { inc(inc(inc(39))) }", 42),
     ("p145_unary_neg",           "fn main() -> i32 { let x = 0 - 8; let y = 0 - x; y * 5 + 2 }", 42),
     ("p146_bitwise_combo",       "fn main() -> i32 { let x = 40; (x | 2) & 63 }", 42),
+    # PHASE B cont. (2026-05-28): 10 more both-compiler-parity shapes --
+    # struct-param, enum/match, array-sum loop, nested-if, fib recursion,
+    # multi-return-path, shift, precedence, div, square-fn. (while-break /
+    # while-continue probed too but Python helixc NotImplementedErrors on
+    # them -- another bootstrap-exceeds-Python case, so not parity-able.)
+    ("p147_struct_param",        "struct P { x: i32, y: i32 } fn s(p: P) -> i32 { p.x + p.y } fn main() -> i32 { s(P{x:40,y:2}) }", 42),
+    ("p148_enum_match",          "enum E { A, B, C } fn main() -> i32 { let e = E::B; match e { E::A => 0, E::B => 42, E::C => 1 } }", 42),
+    ("p149_array_sum_loop",      "fn main() -> i32 { let a = [10, 20, 12]; let mut s = 0; let mut i = 0; while i < 3 { s = s + a[i]; i = i + 1; } s }", 42),
+    ("p150_nested_if",           "fn main() -> i32 { let x = 7; if x >= 5 { if x <= 10 { 42 } else { 0 } } else { 0 } }", 42),
+    ("p151_fib",                 "fn fib(n: i32) -> i32 { if n < 2 { n } else { fib(n-1) + fib(n-2) } } fn main() -> i32 { fib(9) + 8 }", 42),
+    ("p152_multi_return",        "fn classify(x: i32) -> i32 { if x < 0 { return 0; } if x == 0 { return 1; } 42 } fn main() -> i32 { classify(5) }", 42),
+    ("p153_shift_left",          "fn main() -> i32 { let x = 21; x << 1 }", 42),
+    ("p154_precedence",          "fn main() -> i32 { 2 + 4 * 10 }", 42),
+    ("p155_div",                 "fn main() -> i32 { 420 / 10 }", 42),
+    ("p156_square_fn",           "fn sq(x: i32) -> i32 { x * x } fn main() -> i32 { sq(6) + 6 }", 42),
 ]
 
 
@@ -359,7 +374,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 146, (
+    assert len(K2_CORPUS) >= 156, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
