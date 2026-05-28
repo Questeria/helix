@@ -255,6 +255,13 @@ K2_CORPUS = [
     ("p128_bitxor",              "fn main() -> i32 { 52 ^ 30 }", 42),
     ("p129_shl",                 "fn main() -> i32 { 21 << 1 }", 42),
     ("p130_shr",                 "fn main() -> i32 { 84 >> 1 }", 42),
+    # K2.T (2026-05-28): integration shapes combining already-supported
+    # features in new ways (nested match, mixed arith precedence, a 5-elem
+    # const-index array sum). Both compilers support each primitive; this
+    # widens the credible K2-green gate. Each result = 42.
+    ("p131_nested_match",        "fn main() -> i32 { let x = 2; match x { 1 => 0, 2 => match x { 2 => 42, _ => 1 }, _ => 9 } }", 42),
+    ("p132_arith_precedence",    "fn main() -> i32 { 2 + 3 * 7 + 19 }", 42),
+    ("p133_array5_const_sum",    "fn main() -> i32 { let a = [6, 7, 8, 9, 12]; a[0] + a[1] + a[2] + a[3] + a[4] }", 42),
 ]
 
 
@@ -326,8 +333,8 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 130, (
-        f"K2.S corpus shrank to {len(K2_CORPUS)} entries. The K2 "
+    assert len(K2_CORPUS) >= 133, (
+        f"K2.T corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
     )
