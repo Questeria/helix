@@ -150,16 +150,27 @@ structural pattern as macros, tile ops, impl-block-self).
    returns 42 in bootstrap; Python ParseError. **BOOTSTRAP-ONLY DONE.**
 5. Bounded generics `fn f<T: Trait>(x: T)` — `add<i32>(42, 0)` returns
    42 in bootstrap; Python ParseError. **BOOTSTRAP-ONLY DONE.**
-6. Generic-fn calling generic-fn (param substitution chain). [PROBE]
+6. Generic-fn calling generic-fn — `wrap<U>(x) calls id<T>(x)` returns
+   42 in bootstrap; Python ParseError. **BOOTSTRAP-ONLY DONE.**
 7. Where-clause monomorphization — K1.O parses, doesn't enforce. [PARTIAL]
-8. Const-generic params `fn f<const N: usize>()`. [PROBE]
+8. Const-generic params `fn f<const N: i32>()` — bootstrap rc=132
+   (SIGILL) on `arr<42>()`. Python ParseError. **PENDING** — bootstrap
+   has separate codegen gap.
 9. Lifetime-only generics `fn f<'a>(x: &'a T)` — currently parses as
    K1.CR/CS skip; bootstrap rc=132 per earlier probe. [PENDING]
 10. Generic-impl monomorphization (overlaps with P1.2.4). [PENDING]
 
-**Status**: 4 of 10 items now DONE (1, 2, 4, 5); 2 PARTIAL (3, 7);
-3 PENDING (8 probe, 9, 10); 1 still PROBE (6). Bucket is much closer
-to feature-complete than the original "PARTIAL" label suggested.
+**Status (K2.AD update)**: **5 of 10** items now DONE (1, 2, 4, 5, 6);
+2 PARTIAL (3, 7); 3 PENDING (8, 9, 10). The bucket is **MORE THAN
+HALF CLOSED** — 5 items work in bootstrap as superset features that
+Python's frontend rejects at parse, parallel to the macros / tile
+ops / impl-block-self structural patterns.
+
+The 5 remaining items are advanced shapes (const-gen, lifetime-only,
+generic-impl, gp-field use-sites, where-clause enforcement). For a
+v1.0 deletion-ready bootstrap, items 7-10 are likely not blocking
+real-world usage. Item 3 (gp-field use-sites Stage 28.11 INC-3b) is
+the highest-impact remaining sub-gap.
 
 **Substrate**: extends `struct_tab` Stage 28.11 INC-3a marker model
 (200+ markers for generic-params); INC-3b is the open use-site work.
