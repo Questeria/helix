@@ -7271,6 +7271,11 @@ def test_bootstrap_struct_field_store_self_host():
         ("one_field", "struct P { x:i32 } fn main() -> i32 { let mut p = P{x:0}; p.x = 42; p.x }", 42),
         ("two_field", "struct P { x:i32, y:i32 } fn main() -> i32 { let mut p = P{x:40,y:0}; p.y = 2; p.x + p.y }", 42),
         ("in_loop",   "struct P { x:i32 } fn main() -> i32 { let mut p = P{x:0}; let mut i = 0; while i < 6 { p.x = p.x + 7; i = i + 1; } p.x }", 42),
+        # S3 struct-memory audit (2026-05-28): NESTED field store `o.i.v = v`
+        # deepens the same Python bug -- Python returns 0 (no persist), the
+        # bootstrap correctly returns 42. (Reads `o.i.v` without a store work in
+        # BOTH -- pinned as K2 p277/p278; only the nested STORE diverges.)
+        ("nested_store", "struct Inner { v: i32 } struct Outer { i: Inner } fn main() -> i32 { let mut o = Outer { i: Inner { v: 0 } }; o.i.v = 42; o.i.v }", 42),
     ]
     for name, src, exp in cases:
         rc = _kovc_self_host_compile_and_run(f"sfs_{name}", src)

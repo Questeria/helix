@@ -489,6 +489,19 @@ K2_CORPUS = [
     ("p272_nested_calls",     "fn dbl(x: i32) -> i32 { x * 2 } fn inc(x: i32) -> i32 { x + 1 } fn main() -> i32 { dbl(inc(dbl(10))) }", 42),
     ("p273_ackermann",        "fn ack(m: i32, n: i32) -> i32 { if m == 0 { n + 1 } else { if n == 0 { ack(m - 1, 1) } else { ack(m - 1, ack(m, n - 1)) } } } fn main() -> i32 { ack(2, 3) }", 9),
     ("p274_fn_calls_recursive","fn fl(n: i32) -> i32 { if n <= 1 { 1 } else { n * fl(n - 1) } } fn h(n: i32) -> i32 { fl(n) } fn main() -> i32 { h(4) }", 24),
+    # S3 array/struct-memory audit (2026-05-28): these layout shapes are CLEAN
+    # (byte-identical). Bootstrap matches Python on i32 arrays + index, array
+    # element mutation, 2- and 3-deep non-generic struct field chains, and
+    # multi-struct-field access. (Out-of-scope gaps left unpinned: array-OF-
+    # struct SIGILLs and `[T;N]` struct fields hang -- both unsupported in
+    # Python too; nested-field STORE `o.i.v=v` is a bootstrap-exceeds-Python
+    # case pinned in test_codegen, not here.)
+    ("p275_array_sum",        "fn main() -> i32 { let a = [10, 20, 12]; a[0] + a[1] + a[2] }", 42),
+    ("p276_array_var_idx",    "fn main() -> i32 { let a = [40, 1, 1]; let i = 0; a[i] + 2 }", 42),
+    ("p277_struct_2deep",     "struct Inner { v: i32 } struct Outer { i: Inner } fn main() -> i32 { let o = Outer { i: Inner { v: 42 } }; o.i.v }", 42),
+    ("p278_struct_3deep",     "struct A { v: i32 } struct B { a: A } struct C { b: B } fn main() -> i32 { let c = C { b: B { a: A { v: 42 } } }; c.b.a.v }", 42),
+    ("p279_struct_2fields",   "struct Pt { x: i32, y: i32 } struct Line { a: Pt, b: Pt } fn main() -> i32 { let l = Line { a: Pt { x: 40, y: 0 }, b: Pt { x: 0, y: 2 } }; l.a.x + l.b.y }", 42),
+    ("p280_array_mut",        "fn main() -> i32 { let mut a = [0, 0, 0]; a[1] = 42; a[1] }", 42),
 ]
 
 
@@ -560,7 +573,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 274, (
+    assert len(K2_CORPUS) >= 280, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
