@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 284      # last bump: K1.F47+F48 batch -- assert!(IDENT < IDENT) and assert!(IDENT > IDENT). 7-token shape with both operands IDENT (real Rust `assert!(len < cap)`, `assert!(a > b)`). AST_LT=6, AST_GT=19. Both operands K3.S-reject-checked. Disjoint from K1.F41/F42 via mac_t5 (TK_IDENT=2 here, TK_INT=1 there). 19-byte panic message (same as F41/F42, single-char op). Opens the (IDENT, IDENT) family for the assert! comparison macros — F49+F50 (==/!=) and F51+F52 (<=/>=) next.
+K_BOOTSTRAP_CHUNKS_DONE = 286      # last bump: K1.F49+F50 batch -- assert!(IDENT == IDENT) and assert!(IDENT != IDENT). 8-token shape with both operands IDENT (real Rust `assert!(a == b)`). AST_EQ=20, AST_NE=21. Disjoint from K1.F43/F44 (IDENT/INT) via mac_t6 (TK_IDENT=2 here, TK_INT=1 there). 20-byte panic message (==/!=). Continues building the (IDENT, IDENT) family. K1.F51+F52 (<=/>=) next will close the family.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU

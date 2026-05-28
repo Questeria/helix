@@ -10431,6 +10431,36 @@ def test_bootstrap_kovc_k1f47_k1f48_assert_lt_gt_ident_self_host():
     assert rc_gt_fail == 132
 
 
+def test_bootstrap_kovc_k1f49_k1f50_assert_eq_ne_ident_ident_self_host():
+    """K1.F49 + K1.F50 (2026-05-27): assert!(IDENT == IDENT) /
+    assert!(IDENT != IDENT). 8-token shape with both operands IDENT.
+
+    Real Rust: `assert!(a == b)`, `assert!(actual != expected)`.
+    Disjoint from K1.F43/F44 (IDENT/INT) via mac_t6 (TK_IDENT here,
+    TK_INT there).
+    """
+    rc_eq_pass = _kovc_self_host_compile_and_run(
+        "k1f49_aeqd_pass",
+        'fn main() -> i32 { let a: i32 = 5; let b: i32 = 5; assert!(a == b); 11 }',
+    )
+    assert rc_eq_pass == 11
+    rc_eq_fail = _kovc_self_host_compile_and_run(
+        "k1f49_aeqd_fail",
+        'fn main() -> i32 { let a: i32 = 5; let b: i32 = 7; assert!(a == b); 11 }',
+    )
+    assert rc_eq_fail == 132
+    rc_ne_pass = _kovc_self_host_compile_and_run(
+        "k1f50_aned_pass",
+        'fn main() -> i32 { let a: i32 = 5; let b: i32 = 7; assert!(a != b); 11 }',
+    )
+    assert rc_ne_pass == 11
+    rc_ne_fail = _kovc_self_host_compile_and_run(
+        "k1f50_aned_fail",
+        'fn main() -> i32 { let a: i32 = 5; let b: i32 = 5; assert!(a != b); 11 }',
+    )
+    assert rc_ne_fail == 132
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

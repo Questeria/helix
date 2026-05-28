@@ -3941,6 +3941,37 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                         else { 1 } }
                     } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
             } else { 0 };
+            // K1.F49 (2026-05-27): assert!(IDENT == IDENT). 8-token shape.
+            // mac_t4=TK_EQ(15), mac_t5=TK_EQ(15), mac_t6=TK_IDENT(2),
+            // mac_t7=TK_RPAREN(4). Disjoint from K1.F43 (mac_t6=TK_INT)
+            // via mac_t6 tag. Both operands K3.S-reject-checked.
+            let is_assert_ident_eq_ident_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 15 {
+                    if mac_t5 == 15 { if mac_t6 == 2 { if mac_t7 == 4 {
+                        let aeqd_a_s = tok_p2(tok_base, k + 3);
+                        let aeqd_a_l = tok_p3(tok_base, k + 3);
+                        let aeqd_b_s = tok_p2(tok_base, k + 6);
+                        let aeqd_b_l = tok_p3(tok_base, k + 6);
+                        if is_any_reserved_kw_ident(aeqd_a_s, aeqd_a_l) == 1 { 0 }
+                        else { if is_any_reserved_kw_ident(aeqd_b_s, aeqd_b_l) == 1 { 0 }
+                        else { 1 } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // K1.F50 (2026-05-27): assert!(IDENT != IDENT). Sibling of K1.F49.
+            // mac_t4=TK_BANG(18), mac_t5=TK_EQ(15). Disjoint from K1.F44 via
+            // mac_t6 tag (IDENT vs INT).
+            let is_assert_ident_ne_ident_form = if is_assert_name_macro == 1 {
+                if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 18 {
+                    if mac_t5 == 15 { if mac_t6 == 2 { if mac_t7 == 4 {
+                        let aned_a_s = tok_p2(tok_base, k + 3);
+                        let aned_a_l = tok_p3(tok_base, k + 3);
+                        let aned_b_s = tok_p2(tok_base, k + 6);
+                        let aned_b_l = tok_p3(tok_base, k + 6);
+                        if is_any_reserved_kw_ident(aned_a_s, aned_a_l) == 1 { 0 }
+                        else { if is_any_reserved_kw_ident(aned_b_s, aned_b_l) == 1 { 0 }
+                        else { 1 } }
+                    } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
             let is_assert_eq_form = if is_assert_eq_name_macro == 1 {
                 if mac_t2 == 3 { if mac_t3 == 2 { if mac_t4 == 13 {
                     if mac_t5 == 2 { if mac_t6 == 4 {
@@ -4712,6 +4743,78 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 __arena_push(99);
                 let agid_else = mk_node(16, agid_panic_name_s, 5, agid_args_head);
                 mk_node(7, agid_cond, agid_then, agid_else)
+            } else { if is_assert_ident_eq_ident_form == 1 {
+                // K1.F49 (2026-05-27): assert!(IDENT == IDENT). 8-token shape.
+                // AST_EQ (20) on both AST_VAR operands. b is at k+6 (vs k+5
+                // for 7-token shape). 20-byte "assertion failed: ==" message.
+                let aeqd_a_s = tok_p2(tok_base, k + 3);
+                let aeqd_a_l = tok_p3(tok_base, k + 3);
+                let aeqd_b_s = tok_p2(tok_base, k + 6);
+                let aeqd_b_l = tok_p3(tok_base, k + 6);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // = (first half of ==)
+                cur_advance(sb);           // = (second half of ==)
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let aeqd_var_a = mk_node(1, aeqd_a_s, aeqd_a_l, 0);
+                let aeqd_var_b = mk_node(1, aeqd_b_s, aeqd_b_l, 0);
+                let aeqd_cond = mk_node(20, aeqd_var_a, aeqd_var_b, 0);  // AST_EQ
+                let aeqd_then = mk_node(0, 0, 0, 0);                      // AST_INT(0)
+                let aeqd_msg_s = __arena_push(97);                        // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(61); __arena_push(61);                       // '=' '='
+                let aeqd_str_ast = mk_node(25, aeqd_msg_s, 20, 0);
+                let aeqd_args_head = mk_node(17, aeqd_str_ast, 0, 0);
+                let aeqd_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let aeqd_else = mk_node(16, aeqd_panic_name_s, 5, aeqd_args_head);
+                mk_node(7, aeqd_cond, aeqd_then, aeqd_else)
+            } else { if is_assert_ident_ne_ident_form == 1 {
+                // K1.F50 (2026-05-27): assert!(IDENT != IDENT). AST_NE (21).
+                let aned_a_s = tok_p2(tok_base, k + 3);
+                let aned_a_l = tok_p3(tok_base, k + 3);
+                let aned_b_s = tok_p2(tok_base, k + 6);
+                let aned_b_l = tok_p3(tok_base, k + 6);
+                cur_advance(sb);           // IDENT (assert)
+                cur_advance(sb);           // !
+                cur_advance(sb);           // (
+                cur_advance(sb);           // IDENT (a)
+                cur_advance(sb);           // ! (first half of !=)
+                cur_advance(sb);           // = (second half of !=)
+                cur_advance(sb);           // IDENT (b)
+                cur_advance(sb);           // )
+                let aned_var_a = mk_node(1, aned_a_s, aned_a_l, 0);
+                let aned_var_b = mk_node(1, aned_b_s, aned_b_l, 0);
+                let aned_cond = mk_node(21, aned_var_a, aned_var_b, 0);  // AST_NE
+                let aned_then = mk_node(0, 0, 0, 0);
+                let aned_msg_s = __arena_push(97);                        // 'a'
+                __arena_push(115); __arena_push(115);                     // 's' 's'
+                __arena_push(101); __arena_push(114); __arena_push(116);  // 'e' 'r' 't'
+                __arena_push(105); __arena_push(111); __arena_push(110);  // 'i' 'o' 'n'
+                __arena_push(32);                                         // ' '
+                __arena_push(102); __arena_push(97); __arena_push(105);   // 'f' 'a' 'i'
+                __arena_push(108); __arena_push(101); __arena_push(100);  // 'l' 'e' 'd'
+                __arena_push(58);                                         // ':'
+                __arena_push(32);                                         // ' '
+                __arena_push(33); __arena_push(61);                       // '!' '='
+                let aned_str_ast = mk_node(25, aned_msg_s, 20, 0);
+                let aned_args_head = mk_node(17, aned_str_ast, 0, 0);
+                let aned_panic_name_s = __arena_push(112);
+                __arena_push(97); __arena_push(110); __arena_push(105);
+                __arena_push(99);
+                let aned_else = mk_node(16, aned_panic_name_s, 5, aned_args_head);
+                mk_node(7, aned_cond, aned_then, aned_else)
             } else { if is_assert_eq_bool_lit_form == 1 {
                 // K1.F22j2: compile-time fold for bool-lit assert_eq!.
                 // Both operands are known to be `true` or `false`
@@ -5317,7 +5420,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);                     // consume closing delim
             mk_node(0, 0, 0, 0)
-            }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form); K1.F41: +1 (is_assert_ident_lt_int_form); K1.F42: +1 (is_assert_ident_gt_int_form); K1.F43: +1 (is_assert_ident_eq_int_form); K1.F44: +1 (is_assert_ident_ne_int_form); K1.F45: +1 (is_assert_ident_le_int_form); K1.F46: +1 (is_assert_ident_ge_int_form); K1.F47: +1 (is_assert_ident_lt_ident_form); K1.F48: +1 (is_assert_ident_gt_ident_form)
+            }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.F22b: +1 brace; K1.F22d: +1; K1.F22e: +1; K1.F22f: +1; K1.F22g: +1; K1.F22h: +2; K1.F22i: +1; K1.F22j: +1; K1.F22i2: +1; K1.F22j2: +1; K1.F22k: +1; K1.F28: +1 (is_dbg_ident_form); K1.F29: +1 (is_panic_empty_form); K1.F30: +1 (is_dbg_int_form); K1.F31: +1 (is_assert_eq_ident_int_form); K1.F32: +1 (is_assert_ne_ident_int_form); K1.F33: +1 (is_assert_eq_int_ident_form); K1.F34: +1 (is_assert_ne_int_ident_form); K1.F35: +1 (is_assert_eq_ident_bool_form); K1.F36: +1 (is_assert_ne_ident_bool_form); K1.F37: +1 (is_assert_eq_bool_ident_form); K1.F38: +1 (is_assert_ne_bool_ident_form); K1.F39: +1 (is_assert_eq_int_int_form); K1.F40: +1 (is_assert_ne_int_int_form); K1.F41: +1 (is_assert_ident_lt_int_form); K1.F42: +1 (is_assert_ident_gt_int_form); K1.F43: +1 (is_assert_ident_eq_int_form); K1.F44: +1 (is_assert_ident_ne_int_form); K1.F45: +1 (is_assert_ident_le_int_form); K1.F46: +1 (is_assert_ident_ge_int_form); K1.F47: +1 (is_assert_ident_lt_ident_form); K1.F48: +1 (is_assert_ident_gt_ident_form); K1.F49: +1 (is_assert_ident_eq_ident_form); K1.F50: +1 (is_assert_ident_ne_ident_form)
         } else {
         // Stage 14: detect `grad_rev_all(IDENT)(args).IDENT` — the
         // reverse-mode AD meta-call that returns a per-param gradient.
