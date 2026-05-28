@@ -10504,6 +10504,42 @@ def test_bootstrap_kovc_k1f51_k1f52_assert_le_ge_ident_ident_self_host():
     assert rc_ge_fail == 132
 
 
+def test_bootstrap_kovc_k1f5c_struct_literal_receiver_self_host():
+    """K1.F5c (2026-05-27): struct-literal receiver method-call dispatch.
+    Extends K1.F5b (which only handled AST_VAR receivers) to the
+    AST_TUPLE_LIT prim_tag (= 50, what struct literals lower to).
+
+    Source: `P { v: 32 }.add10()` -- the prim is a struct literal,
+    not a let-bound IDENT. K1.F5b would have fallen through to
+    field-access (treating `add10` as a field name) and failed.
+
+    Mechanism: last_struct_idx(sb) is the side-channel parse_struct_lit
+    writes; the let-binding parser reads it. K1.F5c reads it from the
+    method-call PRE-CHECK before the let-binding parser does. If set
+    (>= 0), use it as method_lhs_struct, routing the call through the
+    existing K1.F5b struct-method-call synthesis branch.
+
+    Test program:
+      struct P { v: i32 }
+      fn P__add10(p: P) -> i32 { p.v + 10 }
+      fn main() -> i32 { P { v: 32 }.add10() }
+    Expected: 32 + 10 = 42.
+    """
+    src = (
+        "struct P { v: i32 }\n"
+        "fn P__add10(p: P) -> i32 { p.v + 10 }\n"
+        "fn main() -> i32 { P { v: 32 }.add10() }\n"
+    )
+    rc = _kovc_self_host_compile_and_run("k1f5c_struct_lit_receiver", src)
+    assert rc == 42, (
+        f"K1.F5c: expected rc=42 from P{{v:32}}.add10() routing through "
+        f"P__add10(P{{v:32}}); got {rc}. If rc=0: the method-call sugar "
+        f"fell through to field-access (treating add10 as a field name) "
+        f"which then evaluated to 0. If rc != 42 and != 0: method routed "
+        f"correctly but body emitted wrong value."
+    )
+
+
 def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
     """K1.F24g (2026-05-27): bisect the K1.F24f multi-builtin composition
     SIGILL.

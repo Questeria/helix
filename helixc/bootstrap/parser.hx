@@ -2430,6 +2430,19 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                             method_lhs_struct = var_struct_tab_lookup(sb, pv_s, pv_l);
                         };
                     };
+                    // K1.F5c (2026-05-27): extend to STRUCT-LITERAL receiver.
+                    // `P { x: 1 }.method()` — prim_tag_pre is AST_TUPLE_LIT
+                    // (tag 50, also used for struct literals). The struct
+                    // id is in last_struct_idx(sb), the side-channel
+                    // parse_struct_lit writes. Read it here BEFORE the
+                    // let-binding parser clears it. Note: tuple literals
+                    // (not struct literals) leave last_struct_idx = -1, so
+                    // they fall through correctly without spuriously routing
+                    // tuples to the struct-method-call branch.
+                    if prim_tag_pre == 50 {
+                        let stl_idx = last_struct_idx(sb);
+                        if stl_idx >= 0 { method_lhs_struct = stl_idx; };
+                    };
                     let lparen_tag = tok_tag(tok_base, pk + 2);
                     let is_method_call = if method_lhs_ty >= 0 {
                         if lparen_tag == 3 { 1 } else { 0 }
