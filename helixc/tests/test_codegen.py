@@ -7151,6 +7151,35 @@ def test_bootstrap_ptx_named_kernel():
     )
 
 
+def test_bootstrap_ptx_multi_kernel():
+    """K1.M3 (2026-05-28): a module with multiple @kernel fns emits the
+    PTX header once, then one `.visible .entry` per kernel (blank-line
+    separated), mirroring Python ptx.py's emit_module loop. A
+    single-kernel module stays byte-identical to K1.M1/M2 (no trailing
+    blank), so empty_kernel / named_kernel stay green. Direct tile-IR
+    -> PTX, NO MLIR."""
+    src = "@kernel fn a() -> i32 { 0 }\n@kernel fn b() -> i32 { 0 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_multi", src)
+    expected = (
+        b".version 8.3\n"
+        b".target sm_75\n"
+        b".address_size 64\n"
+        b"\n"
+        b".visible .entry a()\n"
+        b"{\n"
+        b"ret;\n"
+        b"}\n"
+        b"\n"
+        b".visible .entry b()\n"
+        b"{\n"
+        b"ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
 def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
     """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
     that returns (rc, stdout_bytes) instead of just rc. Needed for

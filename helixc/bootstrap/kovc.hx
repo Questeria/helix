@@ -9520,27 +9520,59 @@ fn emit_ptx_byte(b: i32) -> i32 {
     0
 }
 
+// K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
+//   .visible .entry <name>()
+//   {
+//   ret;
+//   }
+// <name> is the fn's real source name (slots 1/2 = name_start/len),
+// same source-byte read the bootstrap's `main` detection uses. The
+// body/params are still stubbed (K1.M4+ add .param / .reg / ops).
+fn emit_ptx_entry(fn_idx: i32) -> i32 {
+    // ".visible .entry " (prefix; the real entry name follows)
+    emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(105);
+    emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(98);
+    emit_ptx_byte(108); emit_ptx_byte(101); emit_ptx_byte(32);
+    emit_ptx_byte(46); emit_ptx_byte(101); emit_ptx_byte(110);
+    emit_ptx_byte(116); emit_ptx_byte(114); emit_ptx_byte(121);
+    emit_ptx_byte(32);
+    let kname_s = __arena_get(fn_idx + 1);
+    let kname_l = __arena_get(fn_idx + 2);
+    let mut ki: i32 = 0;
+    while ki < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + ki));
+        ki = ki + 1;
+    }
+    // "()\n"
+    emit_ptx_byte(40); emit_ptx_byte(41); emit_ptx_byte(10);
+    // "{\n"
+    emit_ptx_byte(123); emit_ptx_byte(10);
+    // "ret;\n"
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    // "}\n"
+    emit_ptx_byte(125); emit_ptx_byte(10);
+    0
+}
+
 fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
-    // Scan the fn_list for the FIRST @kernel fn (is_kernel slot 14
-    // == 1). Mirrors the autotune_pass walk: root tag 15 =
-    // AST_FN_LIST, node slot+1 = fn_idx, node slot+2 = next.
-    // K1.M2: capture the kernel's fn_idx (not just a bool) so we
-    // can read its real name bytes from slots 1/2. Sentinel -1 =
-    // "no @kernel fn found".
-    let mut kernel_fn_idx: i32 = 0 - 1;
+    // K1.M3: count @kernel fns (is_kernel slot 14 == 1). Mirrors
+    // the autotune_pass walk: root tag 15 = AST_FN_LIST, node
+    // slot+1 = fn_idx, node slot+2 = next. A module with >=1 kernel
+    // emits the header once then one .entry per kernel; 0 kernels
+    // emits nothing (a pure-CPU program produces no PTX).
+    let mut kernel_count: i32 = 0;
     if __arena_get(ast_root) == 15 {
         let mut walk: i32 = ast_root;
         while walk != 0 {
             let fn_idx = __arena_get(walk + 1);
             if __arena_get(fn_idx + 14) == 1 {
-                if kernel_fn_idx < 0 {
-                    kernel_fn_idx = fn_idx;
-                };
+                kernel_count = kernel_count + 1;
             };
             walk = __arena_get(walk + 2);
         }
     };
-    if kernel_fn_idx < 0 {
+    if kernel_count == 0 {
         0
     } else {
         let start = __arena_len();
@@ -9563,37 +9595,26 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
         emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(122);
         emit_ptx_byte(101); emit_ptx_byte(32); emit_ptx_byte(54);
         emit_ptx_byte(52); emit_ptx_byte(10);
-        // "\n" (blank line between module header and entry)
+        // "\n" (blank line after the module header)
         emit_ptx_byte(10);
-        // ".visible .entry " (prefix; the real entry name follows)
-        emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(105);
-        emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(98);
-        emit_ptx_byte(108); emit_ptx_byte(101); emit_ptx_byte(32);
-        emit_ptx_byte(46); emit_ptx_byte(101); emit_ptx_byte(110);
-        emit_ptx_byte(116); emit_ptx_byte(114); emit_ptx_byte(121);
-        emit_ptx_byte(32);
-        // K1.M2: emit the REAL kernel name -- copy name_l bytes from
-        // the source buffer at name_start (AST_FN_DECL slots 1/2),
-        // mirroring the name-mangling copy loop elsewhere in kovc.hx
-        // (__arena_get(name_s + i)). The source region stays live in
-        // the arena, so these offsets are valid at emit time (same
-        // read the "main" detection performs).
-        let kname_s = __arena_get(kernel_fn_idx + 1);
-        let kname_l = __arena_get(kernel_fn_idx + 2);
-        let mut ki: i32 = 0;
-        while ki < kname_l {
-            emit_ptx_byte(__arena_get(kname_s + ki));
-            ki = ki + 1;
+        // K1.M3: emit one entry per @kernel fn, blank-separated. The
+        // header's trailing blank precedes the first entry; a blank
+        // line is inserted before each SUBSEQUENT entry, so a
+        // single-kernel module stays byte-identical to K1.M1/M2 (no
+        // trailing blank).
+        let mut emitted: i32 = 0;
+        let mut walk2: i32 = ast_root;
+        while walk2 != 0 {
+            let fn_idx = __arena_get(walk2 + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                if emitted > 0 {
+                    emit_ptx_byte(10);
+                };
+                emit_ptx_entry(fn_idx);
+                emitted = emitted + 1;
+            };
+            walk2 = __arena_get(walk2 + 2);
         }
-        // "()\n"
-        emit_ptx_byte(40); emit_ptx_byte(41); emit_ptx_byte(10);
-        // "{\n"
-        emit_ptx_byte(123); emit_ptx_byte(10);
-        // "ret;\n"
-        emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
-        emit_ptx_byte(59); emit_ptx_byte(10);
-        // "}\n"
-        emit_ptx_byte(125); emit_ptx_byte(10);
         __arena_len() - start
     }
 }
