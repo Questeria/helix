@@ -9520,6 +9520,70 @@ fn emit_ptx_byte(b: i32) -> i32 {
     0
 }
 
+// K1.M5a (2026-05-28): the common prefix/suffix of a PTX register-
+// file declaration line. Each line is "    .reg <type:<7><class><256>;"
+// -- prefix = "    .reg " (4-space indent), suffix = "<256>;\n".
+fn emit_ptx_reg_prefix() -> i32 {
+    // "    .reg "
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(46); emit_ptx_byte(114);
+    emit_ptx_byte(101); emit_ptx_byte(103); emit_ptx_byte(32);
+    0
+}
+fn emit_ptx_reg_suffix() -> i32 {
+    // "<256>;\n"  (pool cap 256, mirrors Python ptx.py _REG_POOL_CAP)
+    emit_ptx_byte(60); emit_ptx_byte(50); emit_ptx_byte(53);
+    emit_ptx_byte(54); emit_ptx_byte(62); emit_ptx_byte(59);
+    emit_ptx_byte(10);
+    0
+}
+
+// K1.M5a (2026-05-28): emit the standard PTX register-file
+// declaration block -- one ".reg <type> %<class><256>;" per file,
+// byte-matching Python ptx.py _REG_FILES (pool cap 256). Declaring a
+// large pool is FREE: ptxas allocates only the registers actually
+// USED. These decls are the foundation op-lowering (M5b+) needs, so
+// %r0/%f0/... are always declared before any instruction references
+// them. Type field is left-padded to 7 cols (Python ":<7"). Files,
+// in emission order: %p/.pred, %r/.b32, %rd/.b64, %f/.f32, %h/.b16.
+// A blank line follows the block (matches Python emit_kernel).
+fn emit_ptx_reg_block() -> i32 {
+    // "    .reg .pred  %p<256>;"  (.pred padded to 7 = ".pred  ")
+    emit_ptx_reg_prefix();
+    emit_ptx_byte(46); emit_ptx_byte(112); emit_ptx_byte(114);
+    emit_ptx_byte(101); emit_ptx_byte(100); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(112);
+    emit_ptx_reg_suffix();
+    // "    .reg .b32   %r<256>;"  (.b32 padded to 7 = ".b32   ")
+    emit_ptx_reg_prefix();
+    emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_reg_suffix();
+    // "    .reg .b64   %rd<256>;"
+    emit_ptx_reg_prefix();
+    emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(54);
+    emit_ptx_byte(52); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_byte(100);
+    emit_ptx_reg_suffix();
+    // "    .reg .f32   %f<256>;"
+    emit_ptx_reg_prefix();
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(102);
+    emit_ptx_reg_suffix();
+    // "    .reg .b16   %h<256>;"  (Stage 64 f16/bf16 file)
+    emit_ptx_reg_prefix();
+    emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(49);
+    emit_ptx_byte(54); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(104);
+    emit_ptx_reg_suffix();
+    // blank line after the .reg block
+    emit_ptx_byte(10);
+    0
+}
+
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
 //   .visible .entry <name>()
 //   {
@@ -9576,9 +9640,12 @@ fn emit_ptx_entry(fn_idx: i32) -> i32 {
     emit_ptx_byte(41); emit_ptx_byte(10);
     // "{\n"
     emit_ptx_byte(123); emit_ptx_byte(10);
-    // "ret;\n"
-    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
-    emit_ptx_byte(59); emit_ptx_byte(10);
+    // K1.M5a: register-file declarations (foundation for op lowering).
+    emit_ptx_reg_block();
+    // "    ret;\n"  (4-space indent, matches Python emit_kernel)
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(114); emit_ptx_byte(101);
+    emit_ptx_byte(116); emit_ptx_byte(59); emit_ptx_byte(10);
     // "}\n"
     emit_ptx_byte(125); emit_ptx_byte(10);
     0

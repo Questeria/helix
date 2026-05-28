@@ -7097,6 +7097,37 @@ fn main() -> i32 {{
     return out.stdout
 
 
+# K1.M5a (2026-05-28): shared PTX golden fragments. The bootstrap
+# emitter byte-matches Python ptx.py for these pieces, so the tests
+# build expected output from the same building blocks (header + per-
+# entry signature + register-file decls + ret).
+_PTX_HEADER = (
+    b".version 8.3\n"
+    b".target sm_75\n"
+    b".address_size 64\n"
+    b"\n"
+)
+_PTX_REG_BLOCK = (
+    b"    .reg .pred  %p<256>;\n"
+    b"    .reg .b32   %r<256>;\n"
+    b"    .reg .b64   %rd<256>;\n"
+    b"    .reg .f32   %f<256>;\n"
+    b"    .reg .b16   %h<256>;\n"
+    b"\n"
+)
+
+
+def _ptx_entry(sig: bytes) -> bytes:
+    """One PTX .entry block: signature + register-file decls + ret."""
+    return (
+        b".visible .entry " + sig + b"\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    ret;\n"
+        b"}\n"
+    )
+
+
 def test_bootstrap_ptx_empty_kernel():
     """K1.M1 (2026-05-27): FIRST direct-to-GPU (NVIDIA PTX) emission.
     A @kernel fn drives the bootstrap to emit a minimal valid PTX
@@ -7112,16 +7143,7 @@ def test_bootstrap_ptx_empty_kernel():
     real fn name)."""
     src = "@kernel fn k() -> i32 { 0 }\n"
     ptx = _kovc_self_host_emit_ptx("ptx_empty", src)
-    expected = (
-        b".version 8.3\n"
-        b".target sm_75\n"
-        b".address_size 64\n"
-        b"\n"
-        b".visible .entry k()\n"
-        b"{\n"
-        b"ret;\n"
-        b"}\n"
-    )
+    expected = _PTX_HEADER + _ptx_entry(b"k()")
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
     )
@@ -7136,16 +7158,7 @@ def test_bootstrap_ptx_named_kernel():
     `main` detection uses. Direct tile-IR -> PTX, NO MLIR."""
     src = "@kernel fn saxpy() -> i32 { 0 }\n"
     ptx = _kovc_self_host_emit_ptx("ptx_named", src)
-    expected = (
-        b".version 8.3\n"
-        b".target sm_75\n"
-        b".address_size 64\n"
-        b"\n"
-        b".visible .entry saxpy()\n"
-        b"{\n"
-        b"ret;\n"
-        b"}\n"
-    )
+    expected = _PTX_HEADER + _ptx_entry(b"saxpy()")
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
     )
@@ -7161,19 +7174,7 @@ def test_bootstrap_ptx_multi_kernel():
     src = "@kernel fn a() -> i32 { 0 }\n@kernel fn b() -> i32 { 0 }\n"
     ptx = _kovc_self_host_emit_ptx("ptx_multi", src)
     expected = (
-        b".version 8.3\n"
-        b".target sm_75\n"
-        b".address_size 64\n"
-        b"\n"
-        b".visible .entry a()\n"
-        b"{\n"
-        b"ret;\n"
-        b"}\n"
-        b"\n"
-        b".visible .entry b()\n"
-        b"{\n"
-        b"ret;\n"
-        b"}\n"
+        _PTX_HEADER + _ptx_entry(b"a()") + b"\n" + _ptx_entry(b"b()")
     )
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
@@ -7189,15 +7190,8 @@ def test_bootstrap_ptx_kernel_params():
     tile-IR -> PTX, NO MLIR."""
     src = "@kernel fn k(a: i32, b: i32) -> i32 { 0 }\n"
     ptx = _kovc_self_host_emit_ptx("ptx_params", src)
-    expected = (
-        b".version 8.3\n"
-        b".target sm_75\n"
-        b".address_size 64\n"
-        b"\n"
-        b".visible .entry k(.param .b64 param_0, .param .b64 param_1)\n"
-        b"{\n"
-        b"ret;\n"
-        b"}\n"
+    expected = _PTX_HEADER + _ptx_entry(
+        b"k(.param .b64 param_0, .param .b64 param_1)"
     )
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
