@@ -170,6 +170,16 @@ fn var_struct_tab_count(sb: i32) -> i32 { __arena_get(sb + 18) }
 // clears it (-1 = none) to associate the bound name with a struct id.
 fn last_struct_idx(sb: i32) -> i32 { __arena_get(sb + 19) }
 fn set_last_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 19, v); 0 }
+// K1.F5d (2026-05-27): sb+74 = "last_call_ret_struct_idx" scratch
+// slot. Will be written by future K1.F5e at fn-decl time (lookup fn
+// name -> struct return type) and read by future K1.F5g in the
+// method-call PRE-CHECK (when prim_tag_pre == AST_CALL/16, route
+// through struct-method synthesis if this slot is >= 0). Default
+// -1 = "no struct return tracked". Substrate-only for K1.F5d --
+// not yet wired anywhere. See docs/CATEGORY_2_NEXT_PHASE.md for the
+// K1.F5d-g closure plan.
+fn last_call_ret_struct_idx(sb: i32) -> i32 { __arena_get(sb + 74) }
+fn set_last_call_ret_struct_idx(sb: i32, v: i32) -> i32 { __arena_set(sb + 74, v); 0 }
 // Stage 6: enum_table state — sb+20 = arena base offset of the enum
 // region, sb+21 = registered count. Each entry is 5 slots
 // (name_s, name_l, variant_count, variants_ptr, max_payload_arity).
@@ -8399,6 +8409,10 @@ fn cl_tabs_init(sb: i32) -> i32 {
 // and write their (start, len) into state_base+1..state_base+6.
 // --------------------------------------------------------------
 fn install_keywords(sb: i32) -> i32 {
+    // K1.F5d (2026-05-27): init the last_call_ret_struct_idx side-channel
+    // slot to -1 (no struct return tracked). Future K1.F5e/g will write
+    // and read this slot to enable chained method-call dispatch.
+    __arena_set(sb + 74, 0 - 1);
     let let_s = __arena_push(108); __arena_push(101); __arena_push(116);
     __arena_set(sb + 1, let_s);
     __arena_set(sb + 2, 3);
