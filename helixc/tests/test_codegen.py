@@ -7950,6 +7950,90 @@ def test_bootstrap_ptx_tile_add():
         )
 
 
+def test_bootstrap_ptx_tile_sub():
+    """K1.M15 (2026-05-28): __tile_sub(a, b, dst, count) -- elementwise
+    subtract over register-tiles (sub.f32 over `count` consecutive %f).
+    A one-mnemonic sibling of __tile_add (M14), sharing emit_ptx_tile_binop
+    + emit_ptx_binop_f3 (opc 1). Mirrors Python backend/ptx.py TILE_SUB.
+    ptxas-validated. Direct tile-IR -> PTX, NO MLIR."""
+    src = ("@kernel fn k() -> i32 { "
+           "let a: f32 = __tile_zeros(2, 2); "
+           "let b: f32 = __tile_zeros(2, 2); "
+           "let c: f32 = __tile_zeros(2, 2); "
+           "__tile_sub(a, b, c, 4) }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_tilesub", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"".join(b"    mov.f32 %f" + str(i).encode() + b", 0f00000000;\n"
+                   for i in range(12))
+        + b"    sub.f32 %f8, %f0, %f4;\n"
+        + b"    sub.f32 %f9, %f1, %f5;\n"
+        + b"    sub.f32 %f10, %f2, %f6;\n"
+        + b"    sub.f32 %f11, %f3, %f7;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_tilesub.cubin "
+             "/tmp/sh_ptx_tilesub_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected tile-sub PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
+def test_bootstrap_ptx_tile_mul():
+    """K1.M15 (2026-05-28): __tile_mul(a, b, dst, count) -- elementwise
+    multiply over register-tiles (mul.f32 over `count` consecutive %f).
+    Sibling of __tile_add/sub via emit_ptx_tile_binop + emit_ptx_binop_f3
+    (opc 2). Mirrors Python backend/ptx.py TILE_MUL. ptxas-validated.
+    Direct tile-IR -> PTX, NO MLIR."""
+    src = ("@kernel fn k() -> i32 { "
+           "let a: f32 = __tile_zeros(2, 2); "
+           "let b: f32 = __tile_zeros(2, 2); "
+           "let c: f32 = __tile_zeros(2, 2); "
+           "__tile_mul(a, b, c, 4) }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_tilemul", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"".join(b"    mov.f32 %f" + str(i).encode() + b", 0f00000000;\n"
+                   for i in range(12))
+        + b"    mul.f32 %f8, %f0, %f4;\n"
+        + b"    mul.f32 %f9, %f1, %f5;\n"
+        + b"    mul.f32 %f10, %f2, %f6;\n"
+        + b"    mul.f32 %f11, %f3, %f7;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_tilemul.cubin "
+             "/tmp/sh_ptx_tilemul_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected tile-mul PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

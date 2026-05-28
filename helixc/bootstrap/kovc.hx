@@ -10492,11 +10492,59 @@ fn ptx_name_is_tile_add(name_s: i32, name_l: i32) -> i32 {
         ok
     }
 }
-// K1.M14: emit one tile add.f32 "    add.f32 %f<rd>, %f<ra>, %f<rb>;".
-fn emit_ptx_add_f3(rd: i32, ra: i32, rb: i32) -> i32 {
+// K1.M15 (2026-05-28): "__tile_sub" (10 chars) + "__tile_mul" matchers --
+// siblings of __tile_add, one mnemonic apart (sub.f32 / mul.f32).
+fn ptx_name_is_tile_sub(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 10 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 3) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 4) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 5) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 6) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 7) != 115 { ok = 0; };   // s
+        if __arena_get(name_s + 8) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 9) != 98 { ok = 0; };    // b
+        ok
+    }
+}
+fn ptx_name_is_tile_mul(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 10 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 3) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 4) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 5) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 6) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 7) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 8) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 9) != 108 { ok = 0; };   // l
+        ok
+    }
+}
+// K1.M14/M15: emit one tile binary-op line "    <op>.f32 %f<rd>, %f<ra>,
+// %f<rb>;" -- opc selects the mnemonic (0=add, 1=sub, 2=mul). Mirrors the
+// emit_ptx_binop f32 path + Python backend/ptx.py TILE_ADD/SUB/MUL.
+fn emit_ptx_binop_f3(opc: i32, rd: i32, ra: i32, rb: i32) -> i32 {
     emit_ptx_indent();
-    // "add.f32 "
-    emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);
+    if opc == 0 {
+        emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);   // add
+    };
+    if opc == 1 {
+        emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);   // sub
+    };
+    if opc == 2 {
+        emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);  // mul
+    };
+    // ".f32 "
     emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
     emit_ptx_byte(50); emit_ptx_byte(32);
     emit_ptx_f(rd);
@@ -10506,6 +10554,32 @@ fn emit_ptx_add_f3(rd: i32, ra: i32, rb: i32) -> i32 {
     emit_ptx_f(rb);
     emit_ptx_byte(59); emit_ptx_byte(10);   // ";\n"
     0
+}
+// K1.M14/M15: lower a tile elementwise binary op __tile_<add|sub|mul>(a,
+// b, dst, count). a/b/dst are AST_VAR bound to prior __tile_zeros results
+// (ridx = the %f base); count is a static AST_INT. Emit `count` op.f32
+// lines: dst[k] = a[k] <op> b[k] over consecutive %f. opc 0=add 1=sub
+// 2=mul. Result = base_d; sets the float flag (slot 55).
+fn emit_ptx_tile_binop(node: i32, vtab: i32, opc: i32) -> i32 {
+    let ah = __arena_get(node + 3);     // args_head (AST_ARG)
+    let a0 = __arena_get(ah + 1);       // arg 0: AST_VAR a
+    let nxt1 = __arena_get(ah + 2);
+    let a1 = __arena_get(nxt1 + 1);     // arg 1: AST_VAR b
+    let nxt2 = __arena_get(nxt1 + 2);
+    let a2 = __arena_get(nxt2 + 1);     // arg 2: AST_VAR dst
+    let nxt3 = __arena_get(nxt2 + 2);
+    let a3 = __arena_get(nxt3 + 1);     // arg 3: AST_INT count
+    let base_a = ptx_vtab_lookup(vtab, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let base_b = ptx_vtab_lookup(vtab, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let base_d = ptx_vtab_lookup(vtab, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let cnt = __arena_get(a3 + 1);
+    let mut k: i32 = 0;
+    while k < cnt {
+        emit_ptx_binop_f3(opc, base_d + k, base_a + k, base_b + k);
+        k = k + 1;
+    }
+    __arena_set(vtab + 55, 1);
+    base_d
 }
 
 // Other calls are unsupported in the GPU path yet (return -1; later
@@ -10548,32 +10622,14 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         __arena_set(vtab + 55, 1);
         base
     } else { if ptx_name_is_tile_add(name_s, name_l) == 1 {
-        // K1.M14: __tile_add(a, b, dst, count) -- elementwise add over
-        // register-tiles. a/b/dst are AST_VAR bound to prior __tile_zeros
-        // results (ridx = the %f base); count is a static AST_INT. Emit
-        // `count` add.f32 lines: dst[k] = a[k] + b[k] over consecutive %f.
-        let ah = __arena_get(node + 3);     // args_head (AST_ARG)
-        let a0 = __arena_get(ah + 1);       // arg 0: AST_VAR a
-        let nxt1 = __arena_get(ah + 2);
-        let a1 = __arena_get(nxt1 + 1);     // arg 1: AST_VAR b
-        let nxt2 = __arena_get(nxt1 + 2);
-        let a2 = __arena_get(nxt2 + 1);     // arg 2: AST_VAR dst
-        let nxt3 = __arena_get(nxt2 + 2);
-        let a3 = __arena_get(nxt3 + 1);     // arg 3: AST_INT count
-        let base_a = ptx_vtab_lookup(vtab, __arena_get(a0 + 1), __arena_get(a0 + 2));
-        let base_b = ptx_vtab_lookup(vtab, __arena_get(a1 + 1), __arena_get(a1 + 2));
-        let base_d = ptx_vtab_lookup(vtab, __arena_get(a2 + 1), __arena_get(a2 + 2));
-        let cnt = __arena_get(a3 + 1);
-        let mut k: i32 = 0;
-        while k < cnt {
-            emit_ptx_add_f3(base_d + k, base_a + k, base_b + k);
-            k = k + 1;
-        }
-        __arena_set(vtab + 55, 1);
-        base_d
+        emit_ptx_tile_binop(node, vtab, 0)   // K1.M14: dst = a + b
+    } else { if ptx_name_is_tile_sub(name_s, name_l) == 1 {
+        emit_ptx_tile_binop(node, vtab, 1)   // K1.M15: dst = a - b
+    } else { if ptx_name_is_tile_mul(name_s, name_l) == 1 {
+        emit_ptx_tile_binop(node, vtab, 2)   // K1.M15: dst = a * b
     } else {
         0 - 1
-    }}}}}
+    }}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
