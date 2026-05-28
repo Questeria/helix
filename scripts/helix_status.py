@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 290      # last bump: K2.W -- Python-deletion-readiness checklist baked into every Telegram + chunk estimates re-baselined (150/165 -> 400/440 reflecting the macro-saturation phase + remaining GPU/MLIR work). Per-bucket model with 16 buckets: 9 done, 4 partial (impl-dispatch, generic-monomorph, K2-green; plus the macro bucket is fully done now), 5 pending (GPU/MLIR/K3-seed/5-clean-audit-gate). Weighted percent 66% complete. User-facing visibility into "how close to Python deletion" surface this tick after user request.
+K_BOOTSTRAP_CHUNKS_DONE = 291      # last bump: K2.X -- Category-2 next-phase scoping doc (docs/CATEGORY_2_NEXT_PHASE.md). Orders the 7 remaining buckets into Phase-1 PARTIALs (~25 chunks: K2-parity-green, impl-method dispatch, generic monomorph) then Phase-2 PENDINGs (~100+ chunks: MLIR migration, GPU backends, K3 seed, 5-clean gate). Each bucket has a 10-item chunk plan with rough scope so future ticks don't pay per-tick scoping overhead. Substrate notes: builds on existing K1.F5b/F21/Stage-28.11 markers for impl/generic work; defers to text-emission-first design for MLIR/GPU.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
