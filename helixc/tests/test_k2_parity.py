@@ -277,6 +277,17 @@ K2_CORPUS = [
     ("p136_nested_for",          "fn main() -> i32 { let mut s = 0; for i in 0..3 { for j in 0..2 { s = s + 7; } } s }", 42),
     ("p137_gcd_recursion",       "fn gcd(a: i32, b: i32) -> i32 { if b == 0 { a } else { gcd(b, a % b) } } fn main() -> i32 { gcd(84, 126) }", 42),
     ("p138_bool_shortcircuit",   "fn main() -> i32 { let x = 5; if x > 0 && x < 10 || x == 100 { 42 } else { 0 } }", 42),
+    # A-phase pivot (2026-05-28): PHASE B Track-P growth. 8 both-compiler-
+    # parity shapes across shadowing / if-expr-let / while-accumulate /
+    # multi-arg fn / modulo / nested calls / unary neg / bitwise combo.
+    ("p139_shadowing",           "fn main() -> i32 { let x = 20; let x = x + 22; x }", 42),
+    ("p140_if_expr_let",         "fn main() -> i32 { let x = 5; let y = if x > 3 { 40 } else { 0 }; y + 2 }", 42),
+    ("p141_while_accum",         "fn main() -> i32 { let mut s = 0; let mut i = 0; while i < 6 { s = s + 7; i = i + 1; } s }", 42),
+    ("p142_multiarg_fn",         "fn add3(a: i32, b: i32, c: i32) -> i32 { a + b + c } fn main() -> i32 { add3(20, 15, 7) }", 42),
+    ("p143_modulo",              "fn main() -> i32 { let x = 142; x % 100 }", 42),
+    ("p144_nested_call",         "fn inc(x: i32) -> i32 { x + 1 } fn main() -> i32 { inc(inc(inc(39))) }", 42),
+    ("p145_unary_neg",           "fn main() -> i32 { let x = 0 - 8; let y = 0 - x; y * 5 + 2 }", 42),
+    ("p146_bitwise_combo",       "fn main() -> i32 { let x = 40; (x | 2) & 63 }", 42),
 ]
 
 
@@ -348,7 +359,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 138, (
+    assert len(K2_CORPUS) >= 146, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
