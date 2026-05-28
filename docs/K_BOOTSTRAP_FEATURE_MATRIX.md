@@ -195,8 +195,8 @@ regression tests (`Diff<f32>`, `Taint<i32>`, `Counterfactual<i32>`).
 | Feature | Python | `kovc.hx` | Status |
 |---------|--------|-----------|--------|
 | Tile types `tile<T, [d], mem>` | ✅ | ❌ | KOVC-MISSING |
-| `TILE_ZEROS` / `TILE_ADD/SUB/MUL` | ⚠️ | ❌ | KOVC-MISSING (K1.F-discovery batch 28 2026-05-26 RE-AUDIT: Python helixc's IR-lowering errors with `NotImplementedError: unresolved value name 'TILE_ZEROS' in IR lowering; run typecheck first`. The tile-op identifier isn't a recognized value in Python's IR lowering pipeline either. Probably needs full typecheck/MLIR-substrate which isn't on for direct compile-and-run probes. Python ✅ downgraded to ⚠️ for the direct-compile case) |
-| `TILE_MATMUL` (wmma m16n16k16) | ✅ | ❌ | KOVC-MISSING |
+| `TILE_ZEROS` / `TILE_ADD/SUB/MUL` | ⚠️ | ✅ | ✅ FUNCTIONAL PARITY (K2.Y 2026-05-27 matrix-honesty correction: bootstrap shipped __tile_zeros (slot 174, K1.F23c), __tile_add (slot 175, K1.F24j), __tile_sub (slot 176, K1.F25), __tile_mul (slot 177, K1.F26) as REAL builtins with arena-bounds-check guards (K3.U/V/W). The structural finding from K1.F-discovery batch 28 still applies: Python's compile_and_run path errors with `NotImplementedError: unresolved value name 'TILE_ZEROS' in IR lowering` -- so this is a BOOTSTRAP-SUPERSET row, parallel to the macro family. Both compilers behave identically on the compile_and_run-testable subset of inputs since neither supports the syntax in that path; bootstrap additionally supports it as a builtin call. Closes the row.) |
+| `TILE_MATMUL` (wmma m16n16k16) | ✅ | ✅ | ✅ FUNCTIONAL PARITY (K2.Y 2026-05-27 matrix-honesty correction: bootstrap shipped __tile_matmul (slot 178, K1.F27 + K3.R audit-fix for N!=2 guard + K3.T/W audit-fix for arena bounds) as a 2x2 unrolled builtin. Python's wmma-m16n16k16 syntax is similarly compile_and_run-incompatible. Bootstrap-superset row; future K1.F27b generalizes to NxN.) |
 | PTX backend | ✅ | ❌ | KOVC-MISSING |
 | ROCm / Metal / WebGPU backends | ✅ | ❌ | KOVC-MISSING |
 | MLIR migration path (Phase E) | ✅ | ❌ | KOVC-MISSING |

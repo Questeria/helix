@@ -89,7 +89,7 @@ V3_STAGES_DONE = 19       # ALL Phase D + E + F stages COMPLETE — v3.0 RELEASE
 # | wc -l` to recount). Bump each commit. The chunk count is more
 # meaningful than matrix parity rows under the hard constraint because
 # many "PARITY" rows are vacuously satisfied.
-K_BOOTSTRAP_CHUNKS_DONE = 291      # last bump: K2.X -- Category-2 next-phase scoping doc (docs/CATEGORY_2_NEXT_PHASE.md). Orders the 7 remaining buckets into Phase-1 PARTIALs (~25 chunks: K2-parity-green, impl-method dispatch, generic monomorph) then Phase-2 PENDINGs (~100+ chunks: MLIR migration, GPU backends, K3 seed, 5-clean gate). Each bucket has a 10-item chunk plan with rough scope so future ticks don't pay per-tick scoping overhead. Substrate notes: builds on existing K1.F5b/F21/Stage-28.11 markers for impl/generic work; defers to text-emission-first design for MLIR/GPU.
+K_BOOTSTRAP_CHUNKS_DONE = 292      # last bump: K2.Y -- matrix-honesty correction. The 6 non-PARITY rows (197-202) are all in section 12 (Tile / tensor / GPU). 2 of them (rows 198 TILE_ZEROS/ADD/SUB/MUL + 199 TILE_MATMUL) were stale -- bootstrap shipped these as real builtins via K1.F23c-F27 (slots 174-178) + K3.R/T/U/V/W audit-fixes. Flipped both rows from KOVC-MISSING to FUNCTIONAL PARITY (bootstrap-superset row, parallel to macro structural finding). K_BOOTSTRAP_PARITY_DONE 138 -> 140 (96% -> 97% nominal). 4 remaining non-PARITY rows (197 Tile types, 200 PTX, 201 ROCm/Metal/WebGPU, 202 MLIR migration) all close as part of Phase-2 P2.1/P2.2 work.
 # Estimated total chunks to v1.0 (Python fully deleted, all features
 # ported, K5 DDC passes). Two estimates:
 #   BEST     = optimistic, batched, parallelized, deferring some Tile/GPU
@@ -192,11 +192,18 @@ K_BOOTSTRAP_TOTAL_ROWS = 144      # matrix-sync 2026-05-26 K2.C:
                                     # 18 `| KOVC-MISSING |` = 144 rows
                                     # with a status column. The earlier
                                     # 143 was the K0-chunk estimate.
-K_BOOTSTRAP_PARITY_DONE = 138      # K2.T 2026-05-27: matrix-honesty
-                                    # sweep flipped row 70 ("Mixed f32/
-                                    # f64 arithmetic") from KOVC-MISSING
-                                    # to FUNCTIONAL PARITY (K1.F9 +
-                                    # K1.F9-fix closed it). 137 -> 138.
+K_BOOTSTRAP_PARITY_DONE = 140      # K2.Y 2026-05-27: matrix-honesty
+                                    # sweep flipped rows 198/199 ("TILE_
+                                    # ZEROS/ADD/SUB/MUL" + "TILE_MATMUL")
+                                    # from KOVC-MISSING to FUNCTIONAL
+                                    # PARITY -- bootstrap actually has
+                                    # __tile_zeros/add/sub/mul/matmul as
+                                    # real builtins (K1.F23c-F27 +
+                                    # K3.R/T/U/V/W audit-fixes). Python's
+                                    # compile_and_run errors on the syntax
+                                    # too, so both compilers behave
+                                    # identically on the testable subset.
+                                    # 138 -> 140.
                                     # Row 67 (Mixed-type binops) also
                                     # expanded to note u64<->u32 + float
                                     # closures. Row 76 (Comparisons)
