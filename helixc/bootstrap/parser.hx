@@ -3493,8 +3493,30 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let is_macro_open = if mac_t2 == 3 { 1 }
             else { if mac_t2 == 20 { 1 }
             else { if mac_t2 == 5 { 1 } else { 0 } }};
+        // K-fix (2026-05-28): the macro-call shape `IDENT ! (`/`[`/`{` must
+        // NOT fire when the leading IDENT is a reserved keyword. `if`,
+        // `while`, `match`, `return`, etc. are lexed as TK_IDENT (the parser
+        // dispatches by name, not a distinct tag), so `if !(x)`, `while !(x)`,
+        // `return !(x)` would otherwise be mis-detected as a macro invocation
+        // `if!(...)` -- the macro handler consumes the keyword + `!( ... )`
+        // and destroys the real control-flow statement (silent mis-branch:
+        // `if !(b) {..} else {..}` always took the then-branch). No real macro
+        // is named after a keyword, so excluding keywords is safe and correct.
+        let lead_is_kw = if is_any_reserved_kw_ident(id_start, id_len) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_if_s(sb), kw_if_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_while_s(sb), kw_while_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_match_s(sb), kw_match_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_return_s(sb), kw_return_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_loop_s(sb), kw_loop_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_else_s(sb), kw_else_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_for_s(sb), kw_for_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_in_s(sb), kw_in_n(sb)) == 1 { 1 }
+            else { if byte_eq(id_start, id_len, kw_let_s(sb), kw_let_n(sb)) == 1 { 1 }
+            else { 0 } } } } } } } } } };
         let is_macro_call = if mac_t1 == 18 {
-            if is_macro_open == 1 { 1 } else { 0 }
+            if is_macro_open == 1 {
+                if lead_is_kw == 0 { 1 } else { 0 }
+            } else { 0 }
         } else { 0 };
         if is_macro_call == 1 {
             // K1.F22 (2026-05-27): real macro expansion for the

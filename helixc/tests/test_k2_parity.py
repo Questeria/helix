@@ -434,8 +434,11 @@ K2_CORPUS = [
     ("p240_enum_multi_payload",  "enum E { P(i32, i32) } fn main() -> i32 { let e = E::P(40, 2); match e { E::P(a, b) => a + b } }", 42),
     # S3 fresh-micro-surface audit (2026-05-28): 8 clean-parity shapes
     # p241-p248. (Same probe found a REAL bootstrap bug -- `if !(<paren>)`
-    # always takes the then-branch -- root-caused + fix pending next tick;
-    # NOT added here since it's a divergence, see helix_status note.)
+    # always takes the then-branch -- root-caused + FIXED 2026-05-28: the
+    # macro-call detector `IDENT ! (` mis-fired on keyword-prefixed shapes
+    # (`if`/`while`/`return` are TK_IDENT), eating the control-flow keyword.
+    # The now-fixed shapes are pinned at p249-p253 below and in
+    # test_codegen.py::test_bootstrap_if_not_paren_self_host.)
     ("p241_bool_xor",            "fn main() -> i32 { let a = true; let b = false; if a ^ b { 42 } else { 0 } }", 42),
     ("p242_while_complex_cond",  "fn main() -> i32 { let mut i = 0; let mut s = 0; while i < 10 && s < 100 { s = s + i; i = i + 1; } s - 3 }", 42),
     ("p243_const_in_calc",       "const SZ: i32 = 6; fn main() -> i32 { SZ * 7 }", 42),
@@ -444,6 +447,14 @@ K2_CORPUS = [
     ("p246_mod_pow2",            "fn main() -> i32 { 170 % 128 }", 42),
     ("p247_div_pow2",            "fn main() -> i32 { 1344 / 32 }", 42),
     ("p248_bool_and_or_mix",     "fn main() -> i32 { if (true || false) && (false || true) { 42 } else { 0 } }", 42),
+    # K-fix (2026-05-28): the previously-divergent `if/while/return !(<paren>)`
+    # shapes are now byte-correct in both compilers (macro-detector keyword
+    # guard). These pin the parity so the bug cannot silently regress.
+    ("p249_if_not_paren_var",    "fn main() -> i32 { let b = 0; if !(b) { 42 } else { 0 } }", 42),
+    ("p250_if_not_paren_cmp",    "fn main() -> i32 { if !(5 == 6) { 42 } else { 0 } }", 42),
+    ("p251_while_not_paren",     "fn main() -> i32 { let mut b = 0; let mut n = 0; while !(b) { n = n + 42; b = 1; } n }", 42),
+    ("p252_return_not_paren",    "fn neg(x: i32) -> i32 { return !(x); } fn main() -> i32 { if neg(0) == 1 { 42 } else { 0 } }", 42),
+    ("p253_if_not_paren_arith",  "fn main() -> i32 { let b = 5; if !(b - 5) { 42 } else { 0 } }", 42),
 ]
 
 
@@ -515,7 +526,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 248, (
+    assert len(K2_CORPUS) >= 253, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."

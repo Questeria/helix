@@ -7299,6 +7299,54 @@ def test_bootstrap_parser_exceeds_python_self_host():
         )
 
 
+def test_bootstrap_if_not_paren_self_host():
+    """S3 audit fix (2026-05-28): `if !(<expr>) { .. } else { .. }` always took
+    the THEN-branch in the bootstrap (real both-compiler divergence: Python
+    helixc was correct). ROOT CAUSE: the macro-call detector in parse_primary
+    (`IDENT ! (`/`[`/`{` -> macro invocation) fired on KEYWORD-leading shapes.
+    `if`, `while`, `match`, `return` etc. are lexed as TK_IDENT (the parser
+    dispatches by name), so `if !(b) {..}` was mis-read as a macro `if!(...)`,
+    the macro handler consumed the keyword + `!(...)`, and the real control-
+    flow statement was destroyed. FIX: guard is_macro_call so it does not fire
+    when the leading IDENT is a reserved keyword (no real macro is keyword-
+    named). Covers if / while / return / match cond positions, bare-`!` and
+    paren-`!` operands, plus a real `println!` macro to confirm the guard did
+    NOT break legitimate macro detection."""
+    cases = [
+        # the bug: paren operand in if-cond
+        ("if_b1",     "fn main() -> i32 { let b = 1; if !(b) { 7 } else { 9 } }", 9),
+        ("if_b0",     "fn main() -> i32 { let b = 0; if !(b) { 7 } else { 9 } }", 7),
+        ("if_eqeq",   "fn main() -> i32 { if !(5 == 5) { 7 } else { 9 } }", 9),
+        ("if_notnot", "fn main() -> i32 { let b = 1; if !(!b) { 7 } else { 9 } }", 7),
+        ("if_sum",    "fn main() -> i32 { let b = 1; if !(b + 0) { 7 } else { 9 } }", 9),
+        # while-cond and return positions share the keyword-prefix shape
+        ("while",     "fn main() -> i32 { let mut b = 0; let mut n = 0; while !(b) { n = n + 1; b = 1; } n }", 1),
+        ("return",    "fn neg(x: i32) -> i32 { return !(x); } fn main() -> i32 { neg(0) + neg(5) }", 1),
+        ("match",     "fn main() -> i32 { match !(0) { 1 => 42, _ => 0 } }", 42),
+        # bare-`!` and outer-paren forms must keep working (no regression)
+        ("bare",      "fn main() -> i32 { let b = 1; if !b { 7 } else { 9 } }", 9),
+        ("wrapped",   "fn main() -> i32 { let b = 1; if (!(b)) { 7 } else { 9 } }", 9),
+        # the guard must NOT break a real (non-keyword) macro
+        ("real_macro","fn main() -> i32 { println!(\"hi\"); 42 }", 42),
+    ]
+    # The self-host harness has a known intermittent WSL SIGILL (rc 132) on
+    # tiny programs (unrelated to codegen correctness; see the impl_method
+    # flake note). Retry ONLY on rc==132: a real mis-branch produces a stable
+    # WRONG VALUE (e.g. 7 instead of 9), never a random 132, so the retry
+    # absorbs the env flake without masking a genuine regression (a persistent
+    # 132 still fails after the retries).
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(f"ifnotparen_{name}", src)
+        tries = 0
+        while rc == 132 and rc != exp and tries < 2:
+            tries = tries + 1
+            rc = _kovc_self_host_compile_and_run(f"ifnotparen_{name}_r{tries}", src)
+        assert rc == exp, (
+            f"if-!(paren) {name}: bootstrap rc={rc}, expected {exp} "
+            f"(pre-fix the keyword-prefixed `!(` mis-fired as a macro call)"
+        )
+
+
 def _kovc_self_host_emit_ptx(name: str, k2_src: str,
                              emit_fn: str = "emit_ptx_for_ast_to_path") -> bytes:
     """K1.M1 (2026-05-27): DIRECT-TO-GPU emission harness. Compiles
