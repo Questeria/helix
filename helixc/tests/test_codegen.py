@@ -7378,6 +7378,40 @@ def test_bootstrap_generics_exceed_python_self_host():
         )
 
 
+def test_bootstrap_enum_payload_param_self_host():
+    """S3 enum audit fix (2026-05-28): an enum with a PAYLOAD-carrying variant,
+    passed BY VALUE as a function parameter, SIGILL'd (132) -- even when the body
+    ignored the param. A payload enum value is an 8-byte pointer (a tag-50 tuple
+    [disc, payload...]), but parse_fn_decl only recognized struct/generic param
+    types, so an enum param defaulted to i32 (p_ty 0); at the call site the
+    8-byte tuple-lit arg (expr_type 3) mismatched the i32 param -> the 16001
+    arg-type trap -> ud2 (before the body even ran). Fixed by encoding enum-with-
+    payload params with the same 100+idx pointer sentinel as struct params
+    (parser.hx parse_fn_decl), routing them through the existing 8-byte prologue
+    store + call-site struct-exemption + match pointer-deref path. Python helixc
+    handled these all along -> real bootstrap-only divergence, now parity (also
+    pinned in K2 p281-p285). Nullary-only enum params were unaffected (stay
+    i32-disc). retry-on-132 absorbs the WSL self-host flake."""
+    cases = [
+        ("match_V",      "enum E { Z, V(i32) } fn f(e: E) -> i32 { match e { E::Z => 0, E::V(x) => x } } fn main() -> i32 { f(E::V(42)) }", 42),
+        ("match_Z",      "enum E { Z, V(i32) } fn f(e: E) -> i32 { match e { E::Z => 42, E::V(x) => x } } fn main() -> i32 { f(E::Z) }", 42),
+        ("body_ignores", "enum E { Z, V(i32) } fn f(e: E) -> i32 { 42 } fn main() -> i32 { f(E::V(7)) }", 42),
+        ("multi_payload","enum E { P(i32, i32) } fn f(e: E) -> i32 { match e { E::P(a, b) => a + b } } fn main() -> i32 { f(E::P(40, 2)) }", 42),
+        ("order_swap",   "enum E { V(i32), Z } fn f(e: E) -> i32 { match e { E::V(x) => x, E::Z => 0 } } fn main() -> i32 { f(E::V(42)) }", 42),
+        ("nullary_ok",   "enum E { A, B } fn f(e: E) -> i32 { match e { E::A => 42, E::B => 0 } } fn main() -> i32 { f(E::A) }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(f"enp_{name}", src)
+        tries = 0
+        while rc == 132 and rc != exp and tries < 2:
+            tries = tries + 1
+            rc = _kovc_self_host_compile_and_run(f"enp_{name}_r{tries}", src)
+        assert rc == exp, (
+            f"enum-payload-param {name}: bootstrap rc={rc}, expected {exp} "
+            f"(pre-fix this SIGILL'd 132 -- enum-with-payload fn param mis-sized as i32)"
+        )
+
+
 def test_bootstrap_if_not_paren_self_host():
     """S3 audit fix (2026-05-28): `if !(<expr>) { .. } else { .. }` always took
     the THEN-branch in the bootstrap (real both-compiler divergence: Python

@@ -12105,11 +12105,33 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let p_ty_generic = if gp_idx_p >= 0 { 200 + gp_idx_p } else { 0 };
             let s_idx_p = struct_tab_lookup_idx(sb, ty_s, ty_l);
             let p_ty_struct = if s_idx_p >= 0 { 100 + s_idx_p } else { 0 };
-            let p_ty_pre = if p_ty == 0 { p_ty_struct } else { p_ty };
+            // K-fix (2026-05-28): enum-WITH-PAYLOAD param. An enum value that has
+            // any payload-carrying variant is an 8-byte pointer (a tag-50
+            // tuple-lit [disc, payload...]), exactly like a struct. Previously
+            // such params were left as p_ty 0 (i32 scalar), so at the call site
+            // the 8-byte tuple-lit arg (expr_type 3) mismatched the i32 param and
+            // emitted the 16001 arg-type trap -> SIGILL 132, even when the body
+            // ignored the param. Encode them with the same 100+idx pointer
+            // sentinel as structs so they flow through the existing 8-byte
+            // prologue store + call-site struct-exemption + match pointer-deref
+            // path. enum_tab slot+4 = max_payload_arity; gate on >0 so
+            // nullary-only enums stay scalar i32-disc (the working `enum {A,B}`
+            // param case). var_enum_tab has no consumers (match reads the
+            // pointer directly), so no var registration is needed.
+            let e_idx_p = enum_tab_lookup_idx(sb, ty_s, ty_l);
+            let e_payload_p = if e_idx_p >= 0 {
+                __arena_get(enum_tab_base(sb) + e_idx_p * 5 + 4)
+            } else { 0 };
+            let p_ty_enum = if e_idx_p >= 0 { if e_payload_p > 0 { 100 + e_idx_p } else { 0 } } else { 0 };
+            let p_ty_pre0 = if p_ty == 0 { p_ty_struct } else { p_ty };
+            let p_ty_pre = if p_ty_pre0 == 0 { p_ty_enum } else { p_ty_pre0 };
             let p_ty_final = if p_ty_generic > 0 { p_ty_generic } else { p_ty_pre };
-            let n_register = if p_ty_final >= 100 { if p_ty_final < 200 {
+            // Register only ACTUAL struct params in var_struct_tab (for `p.field`
+            // resolution). Enum-with-payload params reuse the 100+idx width
+            // sentinel but are NOT structs (matched, never field-accessed).
+            let n_register = if s_idx_p >= 0 { if p_ty_final >= 100 { if p_ty_final < 200 {
                 var_struct_tab_add(sb, pname_s, pname_l, p_ty_final - 100)
-            } else { 0 } } else { 0 };
+            } else { 0 } } else { 0 } } else { 0 };
             let _drop_n = n_register;
             let new_param = mk_node(18, pname_s, pname_l, 0);
             __arena_push(p_ty_final);   // p4: type tag (100+ = struct)

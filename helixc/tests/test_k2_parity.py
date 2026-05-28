@@ -502,6 +502,16 @@ K2_CORPUS = [
     ("p278_struct_3deep",     "struct A { v: i32 } struct B { a: A } struct C { b: B } fn main() -> i32 { let c = C { b: B { a: A { v: 42 } } }; c.b.a.v }", 42),
     ("p279_struct_2fields",   "struct Pt { x: i32, y: i32 } struct Line { a: Pt, b: Pt } fn main() -> i32 { let l = Line { a: Pt { x: 40, y: 0 }, b: Pt { x: 0, y: 2 } }; l.a.x + l.b.y }", 42),
     ("p280_array_mut",        "fn main() -> i32 { let mut a = [0, 0, 0]; a[1] = 42; a[1] }", 42),
+    # S3 enum audit FIX (2026-05-28): an enum with a payload-carrying variant,
+    # passed by value as a fn parameter, used to SIGILL in the bootstrap (the
+    # param was mis-sized as i32 -> call-site 16001 arg-type trap) while Python
+    # was correct. Fixed in parse_fn_decl (enum-with-payload params now use the
+    # struct pointer sentinel). Now parity; pinned so it cannot regress.
+    ("p281_enum_param_match",  "enum E { Z, V(i32) } fn f(e: E) -> i32 { match e { E::Z => 0, E::V(x) => x } } fn main() -> i32 { f(E::V(42)) }", 42),
+    ("p282_enum_param_nullary","enum E { Z, V(i32) } fn f(e: E) -> i32 { match e { E::Z => 42, E::V(x) => x } } fn main() -> i32 { f(E::Z) }", 42),
+    ("p283_enum_param_multi",  "enum E { P(i32, i32) } fn f(e: E) -> i32 { match e { E::P(a, b) => a + b } } fn main() -> i32 { f(E::P(40, 2)) }", 42),
+    ("p284_enum_param_ignored","enum E { Z, V(i32) } fn f(e: E) -> i32 { 42 } fn main() -> i32 { f(E::V(7)) }", 42),
+    ("p285_enum_param_order",  "enum E { V(i32), Z } fn f(e: E) -> i32 { match e { E::V(x) => x, E::Z => 0 } } fn main() -> i32 { f(E::V(42)) }", 42),
 ]
 
 
@@ -573,7 +583,7 @@ def test_k2_corpus_size():
     Subsequent K2.* chunks will continue raising it until a credible
     "K2 green over a real-source corpus" threshold is reached.
     """
-    assert len(K2_CORPUS) >= 280, (
+    assert len(K2_CORPUS) >= 285, (
         f"K2.W corpus shrank to {len(K2_CORPUS)} entries. The K2 "
         f"growth ratchet is one-way -- entries can be replaced but "
         f"not net-removed."
