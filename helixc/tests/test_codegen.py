@@ -5122,6 +5122,26 @@ def test_bootstrap_fnptr_indirect_call():
     assert rc == 42, f"fn-pointer apply(dbl,21): bootstrap rc={rc}, expected 42"
 
 
+def test_bootstrap_tuple_destructure_let():
+    """A3 (2026-05-28): tuple-destructure let `let (a, b) = (40, 2); a + b`
+    -> 42. Previously the bootstrap PARSED the `(a,b)` pattern (K1.CC) but
+    left a/b UNREGISTERED (syntactic acceptance only), so reading them
+    trapped (id 1001 -> exit 132). Now a FLAT tuple pattern whose RHS is a
+    tuple literal of matching arity desugars at parse time to a chain of
+    single lets (`let a = 40; let b = 2; ...`), binding each name to its
+    element -- no runtime tuple representation needed. Python helixc
+    ParseErrors on tuple-destructure, so this is a bootstrap-only pin
+    (the bootstrap EXCEEDS Python). Also checks a 3-tuple."""
+    rc = _kovc_self_host_compile_and_run(
+        "a3_tuple_destructure",
+        "fn main() -> i32 { let (a, b) = (40, 2); a + b }")
+    assert rc == 42, f"tuple destructure (a,b)=(40,2): bootstrap rc={rc}, expected 42"
+    rc3 = _kovc_self_host_compile_and_run(
+        "a3_tuple_destructure3",
+        "fn main() -> i32 { let (a, b, c) = (10, 20, 12); a + b + c }")
+    assert rc3 == 42, f"3-tuple destructure: bootstrap rc={rc3}, expected 42"
+
+
 def test_bootstrap_closure():
     """K1.M32 (2026-05-28): closures run in the bootstrap kovc -- a let-
     bound lambda `|x: i32| x + 1` called as f(41) -> 42. NOTE: Python

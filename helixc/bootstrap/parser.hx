@@ -5847,6 +5847,15 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         } else {
         if byte_eq(id_start, id_len, kw_let_s(sb), kw_let_n(sb)) == 1 {
             cur_advance(sb);
+            // A3 (2026-05-28): tuple-destructure desugar state. For a FLAT
+            // pure-tuple pattern `let (a, b) = ...` we collect the names
+            // here and, if the RHS is a tuple literal of matching arity,
+            // build a chain of single lets at the node-build below
+            // (binding each name to the matching element). 0/unset => the
+            // pre-A3 single (0,0)-named let (unreachable bindings) is used.
+            let mut td_simple: i32 = 0;
+            let mut td_pat_base: i32 = 0;
+            let mut td_pat_count: i32 = 0;
             // Optional `mut` keyword.
             let nk0 = cur_get(sb);
             let nk0_tag = tok_tag(tok_base, nk0);
@@ -5911,37 +5920,76 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             let is_tuple_pat = if post_mut_t == 3 { 1 }
                 else { if is_variant_pat == 1 { 1 } else { 0 } };
             if is_tuple_pat == 1 {
-                // For variant pattern, first consume the IDENT(::IDENT)
-                // prefix; then the `(` consume below paren-balances
-                // the args. For tuple pattern (post_mut_t == 3), skip
-                // straight to the `(` consume.
                 if is_variant_pat == 1 {
+                    // Variant pattern `Some(x)` / `R::Ok(x)`: consume the
+                    // IDENT(::IDENT) prefix, then paren-balance the args as
+                    // a no-op (no name collection; pre-A3 behavior).
                     cur_advance(sb);                 // consume first IDENT
                     if tok_tag(tok_base, cur_get(sb)) == 14 {
                         cur_advance(sb);             // consume ':'
                         cur_advance(sb);             // consume second ':'
                         cur_advance(sb);             // consume second IDENT
                     };
-                };
-                cur_advance(sb);                     // consume '('
-                let mut tp_depth: i32 = 1;
-                while tp_depth > 0 {
-                    let tpt = tok_tag(tok_base, cur_get(sb));
-                    if tpt == 3 {
-                        tp_depth = tp_depth + 1;
-                        cur_advance(sb);
-                    } else { if tpt == 4 {
-                        tp_depth = tp_depth - 1;
-                        if tp_depth > 0 {
+                    cur_advance(sb);                 // consume '('
+                    let mut tp_depth: i32 = 1;
+                    while tp_depth > 0 {
+                        let tpt = tok_tag(tok_base, cur_get(sb));
+                        if tpt == 3 {
+                            tp_depth = tp_depth + 1;
                             cur_advance(sb);
-                        };
-                    } else { if tpt == 0 {
-                        tp_depth = 0;                // EOF safety
-                    } else {
-                        cur_advance(sb);
-                    }}};
-                }
-                cur_advance(sb);                     // consume ')'
+                        } else { if tpt == 4 {
+                            tp_depth = tp_depth - 1;
+                            if tp_depth > 0 {
+                                cur_advance(sb);
+                            };
+                        } else { if tpt == 0 {
+                            tp_depth = 0;            // EOF safety
+                        } else {
+                            cur_advance(sb);
+                        }}};
+                    }
+                    cur_advance(sb);                 // consume ')'
+                } else {
+                    // A3 (2026-05-28): PURE tuple pattern `(a, b, ...)`.
+                    // Collect the FLAT IDENT names (depth-1 only) so the
+                    // node-build can desugar to a chain of single lets. The
+                    // loop stays paren-balanced even for non-flat patterns
+                    // (nested `(`, `_`, types) -- those set td_simple=0 so
+                    // we fall back to the pre-A3 unreachable-binding let.
+                    cur_advance(sb);                 // consume '('
+                    td_pat_base = __arena_len();
+                    td_simple = 1;
+                    let mut tp_d2: i32 = 1;
+                    while tp_d2 > 0 {
+                        let tpt2 = tok_tag(tok_base, cur_get(sb));
+                        if tpt2 == 3 {               // nested '(' -> not flat
+                            tp_d2 = tp_d2 + 1;
+                            td_simple = 0;
+                            cur_advance(sb);
+                        } else { if tpt2 == 4 {      // ')'
+                            tp_d2 = tp_d2 - 1;
+                            if tp_d2 > 0 {
+                                cur_advance(sb);
+                            };
+                        } else { if tpt2 == 0 {      // EOF safety
+                            tp_d2 = 0;
+                            td_simple = 0;
+                        } else { if tpt2 == 13 {     // ','
+                            cur_advance(sb);
+                        } else { if tpt2 == 2 {      // IDENT -> collect at depth 1
+                            if tp_d2 == 1 {
+                                __arena_push(tok_p2(tok_base, cur_get(sb)));
+                                __arena_push(tok_p3(tok_base, cur_get(sb)));
+                                td_pat_count = td_pat_count + 1;
+                            };
+                            cur_advance(sb);
+                        } else {                     // `_`, type ann, etc. -> not flat
+                            td_simple = 0;
+                            cur_advance(sb);
+                        }}}}};
+                    }
+                    cur_advance(sb);                 // consume ')'
+                };
             };
             let nk = cur_get(sb);
             let name_start = if is_tuple_pat == 1 { 0 } else { tok_p2(tok_base, nk) };
@@ -6619,9 +6667,49 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             // Extend the node to 5 slots: p3 = body_idx, p4 =
             // value_idx, both 32-bit.
             let tag = if is_mut == 1 { 12 } else { 8 };
-            let node = mk_node(tag, name_start, name_len, body);
-            __arena_push(value);
-            node
+            // A3 (2026-05-28): tuple-destructure desugar. If we captured a
+            // FLAT tuple pattern AND the RHS is a tuple literal (tag 50) of
+            // matching arity, build a chain of single lets binding each
+            // name to the matching element, innermost wrapping `body`:
+            //   let (a,b) = (e0,e1); BODY  ==>  let a=e0; let b=e1; BODY
+            // The tuple-lit element chain is at value slot2 (tag-51 nodes:
+            // slot1=value expr, slot2=next). Otherwise fall through to the
+            // single-let build (byte-identical to pre-A3; for an
+            // un-desugarable tuple pattern that means name (0,0) =
+            // unreachable bindings, the prior behavior).
+            let td_ok = if td_simple == 1 {
+                if td_pat_count > 0 {
+                    if __arena_get(value) == 50 {
+                        if __arena_get(value + 1) == td_pat_count { 1 } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
+            if td_ok == 1 {
+                // Gather element value-expr idxs (parallel to names).
+                let ev_base = __arena_len();
+                let mut ev_walk = __arena_get(value + 2);
+                while ev_walk != 0 {
+                    __arena_push(__arena_get(ev_walk + 1));
+                    ev_walk = __arena_get(ev_walk + 2);
+                }
+                // Build the let-chain bottom-up (last name innermost).
+                let mut cur_body = body;
+                let mut bi = td_pat_count - 1;
+                while bi >= 0 {
+                    let nm_s = __arena_get(td_pat_base + bi * 2);
+                    let nm_l = __arena_get(td_pat_base + bi * 2 + 1);
+                    let elem_v = __arena_get(ev_base + bi);
+                    let chain_node = mk_node(8, nm_s, nm_l, cur_body);
+                    __arena_push(elem_v);            // slot4 = element value
+                    cur_body = chain_node;
+                    bi = bi - 1;
+                }
+                cur_body
+            } else {
+                let node = mk_node(tag, name_start, name_len, body);
+                __arena_push(value);
+                node
+            }
         } else { if byte_eq(id_start, id_len, kw_if_s(sb), kw_if_n(sb)) == 1 {
             cur_advance(sb);
             // K1.CG (2026-05-26): `if let pattern = expr { ... } [else ...]`.
