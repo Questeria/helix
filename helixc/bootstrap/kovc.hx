@@ -9543,8 +9543,37 @@ fn emit_ptx_entry(fn_idx: i32) -> i32 {
         emit_ptx_byte(__arena_get(kname_s + ki));
         ki = ki + 1;
     }
-    // "()\n"
-    emit_ptx_byte(40); emit_ptx_byte(41); emit_ptx_byte(10);
+    // "(" then params then ")\n"  (K1.M4)
+    emit_ptx_byte(40);
+    // K1.M4: emit one ".param .b64 param_<idx>" per fn param, comma-
+    // space separated. params_head = AST_FN_DECL slot 4; each
+    // AST_PARAM links via slot 3 (next), slot 4 = type_tag. v0.1:
+    // every param is .b64 (mirror Python ptx.py _format_param) and
+    // the PTX param name is POSITIONAL (param_0, param_1, ...), not
+    // the source name. Zero params -> empty parens "()" (unchanged
+    // from K1.M1-M3). Phase-0 caps params at 6, so the index digit
+    // is always a single ASCII char (48 + idx).
+    let mut pcur: i32 = __arena_get(fn_idx + 4);
+    let mut pidx: i32 = 0;
+    while pcur != 0 {
+        if pidx > 0 {
+            // ", "
+            emit_ptx_byte(44); emit_ptx_byte(32);
+        };
+        // ".param .b64 param_"
+        emit_ptx_byte(46); emit_ptx_byte(112); emit_ptx_byte(97);
+        emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(109);
+        emit_ptx_byte(32); emit_ptx_byte(46); emit_ptx_byte(98);
+        emit_ptx_byte(54); emit_ptx_byte(52); emit_ptx_byte(32);
+        emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+        emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(95);
+        // positional index digit (Phase-0: 0..5)
+        emit_ptx_byte(48 + pidx);
+        pcur = __arena_get(pcur + 3);
+        pidx = pidx + 1;
+    }
+    // ")\n"
+    emit_ptx_byte(41); emit_ptx_byte(10);
     // "{\n"
     emit_ptx_byte(123); emit_ptx_byte(10);
     // "ret;\n"

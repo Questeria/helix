@@ -7180,6 +7180,30 @@ def test_bootstrap_ptx_multi_kernel():
     )
 
 
+def test_bootstrap_ptx_kernel_params():
+    """K1.M4 (2026-05-28): kernel params emit as positional
+    `.param .b64 param_N` inside the .entry parens (v0.1: all params
+    .b64, mirroring Python ptx.py _format_param; the PTX param name is
+    positional, not the source name). Comma-space separated. Zero-param
+    kernels keep empty parens, so empty/named/multi stay green. Direct
+    tile-IR -> PTX, NO MLIR."""
+    src = "@kernel fn k(a: i32, b: i32) -> i32 { 0 }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_params", src)
+    expected = (
+        b".version 8.3\n"
+        b".target sm_75\n"
+        b".address_size 64\n"
+        b"\n"
+        b".visible .entry k(.param .b64 param_0, .param .b64 param_1)\n"
+        b"{\n"
+        b"ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
 def _kovc_self_host_compile_and_run_with_stdout(name: str, k2_src: str):
     """K1.F22b (2026-05-27): variant of _kovc_self_host_compile_and_run
     that returns (rc, stdout_bytes) instead of just rc. Needed for
