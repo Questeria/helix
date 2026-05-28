@@ -8034,6 +8034,69 @@ def test_bootstrap_ptx_tile_mul():
         )
 
 
+def test_bootstrap_ptx_tile_matmul():
+    """K1.M16 (2026-05-28): __tile_matmul(a, b, dst, n) -- a NAIVE unrolled
+    NxN row-major matrix multiply over register-tiles: dst[i][j] = sum_k
+    a[i][k]*b[k][j], emitted as mul.f32 + add.f32 over consecutive %f with
+    the accumulator moved into dst[i*n+j]. The CORRECTNESS form of the AI
+    matrix primitive -- a real on-GPU matmul matching the CPU __tile_matmul
+    naive path; NVIDIA Tensor-Core wmma.mma.sync is a later perf
+    optimization. Completes the GPU tile op family (zeros/add/sub/mul/
+    matmul). ptxas-validated to real SASS. Direct tile-IR -> PTX, NO MLIR,
+    NO CUDA. For n=2: each dst[i][j] = 2 muls + 1 add, accumulator moved
+    into dst -- 16 ops over %f12..%f23 (a/b/c zeroed into %f0..%f11)."""
+    src = ("@kernel fn k() -> i32 { "
+           "let a: f32 = __tile_zeros(2, 2); "
+           "let b: f32 = __tile_zeros(2, 2); "
+           "let c: f32 = __tile_zeros(2, 2); "
+           "__tile_matmul(a, b, c, 2) }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_tilemm", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k()\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"".join(b"    mov.f32 %f" + str(i).encode() + b", 0f00000000;\n"
+                   for i in range(12))
+        # C[0][0] = a[0]*b[0] + a[1]*b[2]
+        + b"    mul.f32 %f12, %f0, %f4;\n"
+        + b"    mul.f32 %f13, %f1, %f6;\n"
+        + b"    add.f32 %f14, %f12, %f13;\n"
+        + b"    mov.f32 %f8, %f14;\n"
+        # C[0][1] = a[0]*b[1] + a[1]*b[3]
+        + b"    mul.f32 %f15, %f0, %f5;\n"
+        + b"    mul.f32 %f16, %f1, %f7;\n"
+        + b"    add.f32 %f17, %f15, %f16;\n"
+        + b"    mov.f32 %f9, %f17;\n"
+        # C[1][0] = a[2]*b[0] + a[3]*b[2]
+        + b"    mul.f32 %f18, %f2, %f4;\n"
+        + b"    mul.f32 %f19, %f3, %f6;\n"
+        + b"    add.f32 %f20, %f18, %f19;\n"
+        + b"    mov.f32 %f10, %f20;\n"
+        # C[1][1] = a[2]*b[1] + a[3]*b[3]
+        + b"    mul.f32 %f21, %f2, %f5;\n"
+        + b"    mul.f32 %f22, %f3, %f7;\n"
+        + b"    add.f32 %f23, %f21, %f22;\n"
+        + b"    mov.f32 %f11, %f23;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_tilemm.cubin "
+             "/tmp/sh_ptx_tilemm_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected tile-matmul PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

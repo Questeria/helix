@@ -10582,8 +10582,93 @@ fn emit_ptx_tile_binop(node: i32, vtab: i32, opc: i32) -> i32 {
     base_d
 }
 
-// Other calls are unsupported in the GPU path yet (return -1; later
-// chunks add __tile_sub/mul/matmul).
+// K1.M16 (2026-05-28): reg-to-reg "    mov.f32 %f<rd>, %f<rs>;" -- moves
+// a computed accumulator into a destination tile register (used by matmul
+// to write each dst[i][j]).
+fn emit_ptx_mov_f_reg(rd: i32, rs: i32) -> i32 {
+    emit_ptx_indent();
+    // "mov.f32 "
+    emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_f(rd);
+    emit_ptx_byte(44); emit_ptx_byte(32);   // ", "
+    emit_ptx_f(rs);
+    emit_ptx_byte(59); emit_ptx_byte(10);   // ";\n"
+    0
+}
+// K1.M16: "__tile_matmul" name matcher (13 chars).
+fn ptx_name_is_tile_matmul(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 13 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 3) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 4) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 5) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 6) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 7) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 8) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 9) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 10) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 11) != 117 { ok = 0; };  // u
+        if __arena_get(name_s + 12) != 108 { ok = 0; };  // l
+        ok
+    }
+}
+// K1.M16: lower __tile_matmul(a, b, dst, n) -- NAIVE unrolled NxN row-
+// major matrix multiply over register-tiles: dst[i][j] = sum_k
+// a[i][k]*b[k][j], emitted as mul.f32 + add.f32 over consecutive %f with
+// the accumulator moved into dst[i*n+j]. This is the CORRECTNESS form (a
+// real on-GPU matmul, matching the CPU __tile_matmul naive path); NVIDIA
+// Tensor-Core wmma.mma.sync acceleration is a later perf optimization.
+// a/b/dst are AST_VAR bound to prior __tile_zeros results (ridx = %f
+// base); n is a static AST_INT. Result = base_d; sets the float flag.
+fn emit_ptx_tile_matmul(node: i32, vtab: i32) -> i32 {
+    let ah = __arena_get(node + 3);     // args_head (AST_ARG)
+    let a0 = __arena_get(ah + 1);       // arg 0: AST_VAR a
+    let nxt1 = __arena_get(ah + 2);
+    let a1 = __arena_get(nxt1 + 1);     // arg 1: AST_VAR b
+    let nxt2 = __arena_get(nxt1 + 2);
+    let a2 = __arena_get(nxt2 + 1);     // arg 2: AST_VAR dst
+    let nxt3 = __arena_get(nxt2 + 2);
+    let a3 = __arena_get(nxt3 + 1);     // arg 3: AST_INT n
+    let base_a = ptx_vtab_lookup(vtab, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let base_b = ptx_vtab_lookup(vtab, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let base_d = ptx_vtab_lookup(vtab, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let n = __arena_get(a3 + 1);
+    let mut i: i32 = 0;
+    while i < n {
+        let mut j: i32 = 0;
+        while j < n {
+            // acc = a[i][0] * b[0][j]
+            let acc0 = ptx_alloc_f(vtab);
+            emit_ptx_binop_f3(2, acc0, base_a + i * n, base_b + j);
+            let mut acc = acc0;
+            let mut k: i32 = 1;
+            while k < n {
+                // acc = acc + a[i][k] * b[k][j]
+                let prod = ptx_alloc_f(vtab);
+                emit_ptx_binop_f3(2, prod, base_a + i * n + k, base_b + k * n + j);
+                let nacc = ptx_alloc_f(vtab);
+                emit_ptx_binop_f3(0, nacc, acc, prod);
+                acc = nacc;
+                k = k + 1;
+            }
+            emit_ptx_mov_f_reg(base_d + i * n + j, acc);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    __arena_set(vtab + 55, 1);
+    base_d
+}
+
+// Other calls are unsupported in the GPU path yet (return -1; the tile op
+// family -- zeros/add/sub/mul/matmul -- is now complete).
 fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
     let name_s = __arena_get(node + 1);
     let name_l = __arena_get(node + 2);
@@ -10627,9 +10712,11 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_tile_binop(node, vtab, 1)   // K1.M15: dst = a - b
     } else { if ptx_name_is_tile_mul(name_s, name_l) == 1 {
         emit_ptx_tile_binop(node, vtab, 2)   // K1.M15: dst = a * b
+    } else { if ptx_name_is_tile_matmul(name_s, name_l) == 1 {
+        emit_ptx_tile_matmul(node, vtab)     // K1.M16: dst = a @ b (naive)
     } else {
         0 - 1
-    }}}}}}}
+    }}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
