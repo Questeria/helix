@@ -7803,6 +7803,59 @@ def test_bootstrap_ptx_f32_copy():
         )
 
 
+def test_bootstrap_ptx_f32_elementwise_add():
+    """K1.M12b (2026-05-28): MILESTONE -- a full FLOAT elementwise-add
+    kernel `out[i] = a[i] + b[i]` (all f32), the realistic AI workload.
+    The two f32 loads set the float flag, the binop sees both operands
+    float and emits add.f32 into a %f register, and the store emits
+    st.global.f32. The i32 binop path stays byte-identical (i32
+    elementwise-add + scalar arithmetic green). ptxas-validated (real
+    SASS). Helix -> PTX -> ptxas -> SASS, NO CUDA, NO MLIR."""
+    src = ("@kernel fn k(out: f32, a: f32, b: f32) -> f32 { "
+           "let i: i32 = thread_idx(); out[i] = a[i] + b[i] }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_f32ewadd", src)
+    expected = _PTX_HEADER + (
+        b".visible .entry k(.param .b64 param_0, .param .b64 param_1, "
+        b".param .b64 param_2)\n"
+        b"{\n"
+        + _PTX_REG_BLOCK
+        + b"    mov.u32 %r0, %tid.x;\n"
+        + b"    ld.param.u64 %rd0, [param_1];\n"
+        + b"    cvta.to.global.u64 %rd1, %rd0;\n"
+        + b"    mul.wide.s32 %rd2, %r0, 4;\n"
+        + b"    add.s64 %rd3, %rd1, %rd2;\n"
+        + b"    ld.global.f32 %f0, [%rd3];\n"
+        + b"    ld.param.u64 %rd4, [param_2];\n"
+        + b"    cvta.to.global.u64 %rd5, %rd4;\n"
+        + b"    mul.wide.s32 %rd6, %r0, 4;\n"
+        + b"    add.s64 %rd7, %rd5, %rd6;\n"
+        + b"    ld.global.f32 %f1, [%rd7];\n"
+        + b"    add.f32 %f2, %f0, %f1;\n"
+        + b"    ld.param.u64 %rd8, [param_0];\n"
+        + b"    cvta.to.global.u64 %rd9, %rd8;\n"
+        + b"    mul.wide.s32 %rd10, %r0, 4;\n"
+        + b"    add.s64 %rd11, %rd9, %rd10;\n"
+        + b"    st.global.f32 [%rd11], %f2;\n"
+        + b"    ret;\n"
+        b"}\n"
+    )
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+    if _ptxas_available():
+        import subprocess
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c",
+             "ptxas --gpu-name sm_75 -o /tmp/ptx_f32ewadd.cubin "
+             "/tmp/sh_ptx_f32ewadd_out.ptx 2>&1"],
+            capture_output=True, timeout=30,
+        )
+        assert r.returncode == 0, (
+            f"ptxas rejected f32-elementwise-add PTX (rc={r.returncode}): "
+            f"{r.stdout.decode(errors='replace')}"
+        )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

@@ -9771,45 +9771,73 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
 // Mirrors Python ptx.py emit_op SCALAR_ADD/SUB/MUL.
 fn emit_ptx_binop(node: i32, vtab: i32, opc: i32) -> i32 {
     let la = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let la_f = __arena_get(vtab + 55);       // K1.M12b: lhs float?
     let ra = emit_ptx_expr(__arena_get(node + 2), vtab);
-    let r = ptx_alloc_reg(vtab);
-    // "    " indent
-    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
-    emit_ptx_byte(32);
-    if opc == 0 {
-        // "add.s32"
-        emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);
-        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
-        emit_ptx_byte(50);
-    } else { if opc == 1 {
-        // "sub.s32"
-        emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);
-        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
-        emit_ptx_byte(50);
-    } else { if opc == 2 {
-        // "mul.lo.s32"
-        emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
-        emit_ptx_byte(46); emit_ptx_byte(108); emit_ptx_byte(111);
-        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
-        emit_ptx_byte(50);
+    let ra_f = __arena_get(vtab + 55);       // rhs float?
+    // K1.M12b: f32 path only when BOTH operands are float (mixed int+
+    // float would need a cvt -- not yet supported). opc 0=add 1=sub
+    // 2=mul 3=div(.rn).
+    let both_f = if la_f == 1 { ra_f } else { 0 };
+    if both_f == 1 {
+        let rf = ptx_alloc_f(vtab);
+        emit_ptx_indent();
+        if opc == 0 {
+            emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);   // add
+        };
+        if opc == 1 {
+            emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);   // sub
+        };
+        if opc == 2 {
+            emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);  // mul
+        };
+        if opc == 3 {
+            emit_ptx_byte(100); emit_ptx_byte(105); emit_ptx_byte(118);  // div
+            emit_ptx_byte(46); emit_ptx_byte(114); emit_ptx_byte(110);   // .rn
+        };
+        // ".f32 "
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
+        emit_ptx_byte(50); emit_ptx_byte(32);
+        emit_ptx_f(rf);
+        emit_ptx_byte(44); emit_ptx_byte(32);
+        emit_ptx_f(la);
+        emit_ptx_byte(44); emit_ptx_byte(32);
+        emit_ptx_f(ra);
+        emit_ptx_byte(59); emit_ptx_byte(10);
+        __arena_set(vtab + 55, 1);
+        rf
     } else {
-        // "div.s32"
-        emit_ptx_byte(100); emit_ptx_byte(105); emit_ptx_byte(118);
-        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
-        emit_ptx_byte(50);
-    }}};
-    // " %r" + D
-    emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
-    emit_ptx_decimal(r);
-    // ", %r" + A
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
-    emit_ptx_byte(114); emit_ptx_decimal(la);
-    // ", %r" + B
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
-    emit_ptx_byte(114); emit_ptx_decimal(ra);
-    // ";\n"
-    emit_ptx_byte(59); emit_ptx_byte(10);
-    r
+        // s32 (i32) path -- byte-identical to pre-K1.M12b.
+        let r = ptx_alloc_reg(vtab);
+        emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+        emit_ptx_byte(32);
+        if opc == 0 {
+            emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);
+            emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+            emit_ptx_byte(50);
+        } else { if opc == 1 {
+            emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);
+            emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+            emit_ptx_byte(50);
+        } else { if opc == 2 {
+            emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
+            emit_ptx_byte(46); emit_ptx_byte(108); emit_ptx_byte(111);
+            emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+            emit_ptx_byte(50);
+        } else {
+            emit_ptx_byte(100); emit_ptx_byte(105); emit_ptx_byte(118);
+            emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
+            emit_ptx_byte(50);
+        }}};
+        emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+        emit_ptx_decimal(r);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+        emit_ptx_byte(114); emit_ptx_decimal(la);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
+        emit_ptx_byte(114); emit_ptx_decimal(ra);
+        emit_ptx_byte(59); emit_ptx_byte(10);
+        __arena_set(vtab + 55, 0);
+        r
+    }
 }
 
 // K1.M5e (2026-05-28): emit a scalar negate "    neg.s32 %rD, %rA;".
