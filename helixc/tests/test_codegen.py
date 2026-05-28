@@ -8157,6 +8157,36 @@ def test_bootstrap_wgsl_empty_kernel():
     )
 
 
+def test_bootstrap_msl_empty_kernel():
+    """K1.M19 (2026-05-28): SECOND non-NVIDIA GPU backend -- Apple Metal /
+    MSL. The bootstrap emits a Metal compute kernel (#include
+    <metal_stdlib> + using namespace metal; + kernel void entry +
+    thread_position_in_threadgroup attribute) for a @kernel fn,
+    BYTE-MATCHING Python helixc/backend/metal.py's empty-kernel output
+    (incl. the U+2014 EM DASH). Targets Apple Silicon GPUs -- another step
+    toward AI on any GPU. Direct Helix -> MSL text, NO MLIR, NO LLVM. (No
+    local Metal compiler here -> exact byte-match vs the Python emitter is
+    the check.)"""
+    src = "@kernel fn k() -> i32 { 0 }\n"
+    msl = _kovc_self_host_emit_ptx("msl_empty", src,
+                                   emit_fn="emit_msl_for_ast_to_path")
+    expected = (
+        "// Helix-emitted MSL — target apple7, metal3.2\n"
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "\n"
+        "kernel void k(\n"
+        "    uint tid [[thread_position_in_threadgroup]]\n"
+        ") {\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+    ).encode("utf-8")
+    assert msl == expected, (
+        f"MSL mismatch:\n got={msl!r}\nwant={expected!r}"
+    )
+
+
 def _ptxas_available() -> bool:
     """True if NVIDIA's PTX assembler is on the WSL PATH."""
     import subprocess

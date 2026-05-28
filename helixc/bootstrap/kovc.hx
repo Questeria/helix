@@ -11042,6 +11042,148 @@ fn emit_wgsl_for_ast_to_path(ast_root: i32) -> i32 {
     }
 }
 
+// K1.M19 (2026-05-28): SECOND non-NVIDIA GPU backend -- Apple Metal /
+// MSL (Metal Shading Language, a C++-based GPU language for Apple
+// Silicon). Direct Helix -> MSL text, NO MLIR / NO LLVM. Mirrors Python
+// helixc/backend/metal.py MslEmitter (emit_module_header + emit_kernel_
+// stub). Header: doc comment (incl. U+2014 EM DASH = UTF-8 226 128 148)
+// + #include <metal_stdlib> + using namespace metal; + blank.
+fn emit_msl_header() -> i32 {
+    // "// Helix-emitted MSL " + EM_DASH + " target apple7, metal3.2\n"
+    emit_ptx_byte(47); emit_ptx_byte(47); emit_ptx_byte(32);   // "// "
+    emit_ptx_byte(72); emit_ptx_byte(101); emit_ptx_byte(108);
+    emit_ptx_byte(105); emit_ptx_byte(120); emit_ptx_byte(45);
+    emit_ptx_byte(101); emit_ptx_byte(109); emit_ptx_byte(105);
+    emit_ptx_byte(116); emit_ptx_byte(116); emit_ptx_byte(101);
+    emit_ptx_byte(100);                                        // "Helix-emitted"
+    emit_ptx_byte(32);
+    emit_ptx_byte(77); emit_ptx_byte(83); emit_ptx_byte(76);   // "MSL"
+    emit_ptx_byte(32);
+    emit_ptx_byte(226); emit_ptx_byte(128); emit_ptx_byte(148); // EM DASH
+    emit_ptx_byte(32);
+    emit_ptx_byte(116); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(103); emit_ptx_byte(101); emit_ptx_byte(116); // "target"
+    emit_ptx_byte(32);
+    emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112);
+    emit_ptx_byte(108); emit_ptx_byte(101); emit_ptx_byte(55);  // "apple7"
+    emit_ptx_byte(44); emit_ptx_byte(32);                      // ", "
+    emit_ptx_byte(109); emit_ptx_byte(101); emit_ptx_byte(116);
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(51);
+    emit_ptx_byte(46); emit_ptx_byte(50);                      // "metal3.2"
+    emit_ptx_byte(10);
+    // "#include <metal_stdlib>\n"
+    emit_ptx_byte(35); emit_ptx_byte(105); emit_ptx_byte(110);
+    emit_ptx_byte(99); emit_ptx_byte(108); emit_ptx_byte(117);
+    emit_ptx_byte(100); emit_ptx_byte(101);                    // "#include"
+    emit_ptx_byte(32);
+    emit_ptx_byte(60); emit_ptx_byte(109); emit_ptx_byte(101);
+    emit_ptx_byte(116); emit_ptx_byte(97); emit_ptx_byte(108);
+    emit_ptx_byte(95); emit_ptx_byte(115); emit_ptx_byte(116);
+    emit_ptx_byte(100); emit_ptx_byte(108); emit_ptx_byte(105);
+    emit_ptx_byte(98); emit_ptx_byte(62);                      // "<metal_stdlib>"
+    emit_ptx_byte(10);
+    // "using namespace metal;\n"
+    emit_ptx_byte(117); emit_ptx_byte(115); emit_ptx_byte(105);
+    emit_ptx_byte(110); emit_ptx_byte(103);                    // "using"
+    emit_ptx_byte(32);
+    emit_ptx_byte(110); emit_ptx_byte(97); emit_ptx_byte(109);
+    emit_ptx_byte(101); emit_ptx_byte(115); emit_ptx_byte(112);
+    emit_ptx_byte(97); emit_ptx_byte(99); emit_ptx_byte(101);  // "namespace"
+    emit_ptx_byte(32);
+    emit_ptx_byte(109); emit_ptx_byte(101); emit_ptx_byte(116);
+    emit_ptx_byte(97); emit_ptx_byte(108);                     // "metal"
+    emit_ptx_byte(59);                                         // ";"
+    emit_ptx_byte(10);
+    emit_ptx_byte(10);                                         // blank line
+    0
+}
+// K1.M19: emit ONE MSL kernel for a @kernel fn (real source name from
+// slots 1/2). Empty-kernel skeleton (`return;`), mirroring Python
+// metal.py emit_kernel_stub. `kernel void` + name + the
+// thread_position_in_threadgroup attribute param.
+fn emit_msl_kernel(fn_idx: i32) -> i32 {
+    // "kernel void " + <name> + "(\n"
+    emit_ptx_byte(107); emit_ptx_byte(101); emit_ptx_byte(114);
+    emit_ptx_byte(110); emit_ptx_byte(101); emit_ptx_byte(108); // "kernel"
+    emit_ptx_byte(32);
+    emit_ptx_byte(118); emit_ptx_byte(111); emit_ptx_byte(105);
+    emit_ptx_byte(100);                                        // "void"
+    emit_ptx_byte(32);
+    let kname_s = __arena_get(fn_idx + 1);
+    let kname_l = __arena_get(fn_idx + 2);
+    let mut ki: i32 = 0;
+    while ki < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + ki));
+        ki = ki + 1;
+    }
+    emit_ptx_byte(40); emit_ptx_byte(10);                      // "(\n"
+    // "    uint tid [[thread_position_in_threadgroup]]\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(117); emit_ptx_byte(105); emit_ptx_byte(110);
+    emit_ptx_byte(116);                                        // "uint"
+    emit_ptx_byte(32);
+    emit_ptx_byte(116); emit_ptx_byte(105); emit_ptx_byte(100); // "tid"
+    emit_ptx_byte(32);
+    emit_ptx_byte(91); emit_ptx_byte(91);                      // "[["
+    emit_ptx_byte(116); emit_ptx_byte(104); emit_ptx_byte(114);
+    emit_ptx_byte(101); emit_ptx_byte(97); emit_ptx_byte(100);
+    emit_ptx_byte(95); emit_ptx_byte(112); emit_ptx_byte(111);
+    emit_ptx_byte(115); emit_ptx_byte(105); emit_ptx_byte(116);
+    emit_ptx_byte(105); emit_ptx_byte(111); emit_ptx_byte(110);
+    emit_ptx_byte(95); emit_ptx_byte(105); emit_ptx_byte(110);
+    emit_ptx_byte(95); emit_ptx_byte(116); emit_ptx_byte(104);
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(97);
+    emit_ptx_byte(100); emit_ptx_byte(103); emit_ptx_byte(114);
+    emit_ptx_byte(111); emit_ptx_byte(117); emit_ptx_byte(112); // "thread_position_in_threadgroup"
+    emit_ptx_byte(93); emit_ptx_byte(93);                      // "]]"
+    emit_ptx_byte(10);
+    // ") {\n"
+    emit_ptx_byte(41); emit_ptx_byte(32); emit_ptx_byte(123);
+    emit_ptx_byte(10);
+    // "    return;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
+    emit_ptx_byte(117); emit_ptx_byte(114); emit_ptx_byte(110);
+    emit_ptx_byte(59);                                         // "return;"
+    emit_ptx_byte(10);
+    // "}\n\n"
+    emit_ptx_byte(125); emit_ptx_byte(10); emit_ptx_byte(10);
+    0
+}
+// K1.M19: top-level MSL emitter. Header once + one kernel per @kernel fn
+// (mirrors emit_wgsl_for_ast_to_path / Python metal.py emit_module). 0
+// kernels -> emits nothing (returns 0).
+fn emit_msl_for_ast_to_path(ast_root: i32) -> i32 {
+    let mut kernel_count: i32 = 0;
+    if __arena_get(ast_root) == 15 {
+        let mut walk: i32 = ast_root;
+        while walk != 0 {
+            let fn_idx = __arena_get(walk + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                kernel_count = kernel_count + 1;
+            };
+            walk = __arena_get(walk + 2);
+        }
+    };
+    if kernel_count == 0 {
+        0
+    } else {
+        let start = __arena_len();
+        emit_msl_header();
+        let mut walk2: i32 = ast_root;
+        while walk2 != 0 {
+            let fn_idx = __arena_get(walk2 + 1);
+            if __arena_get(fn_idx + 14) == 1 {
+                emit_msl_kernel(fn_idx);
+            };
+            walk2 = __arena_get(walk2 + 2);
+        }
+        __arena_len() - start
+    }
+}
+
 // --------------------------------------------------------------
 // Demo: build a tiny AST_INT(42) by hand, compile it, write the
 // resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the
