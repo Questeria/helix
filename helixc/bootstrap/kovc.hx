@@ -9874,11 +9874,13 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
         // slots are never part of the emitted PTX byte stream.
         let vtab = ptx_vtab_init();
         let start = __arena_len();
-        // ".version 8.3\n"
+        // ".version 8.0\n"  (PTX ISA 8.0 = CUDA 12.0; we use only
+        // basic scalar ops so 8.0 is sufficient and broadly compatible
+        // -- and is the max the local/CI ptxas supports. K1.M5f.)
         emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(101);
         emit_ptx_byte(114); emit_ptx_byte(115); emit_ptx_byte(105);
         emit_ptx_byte(111); emit_ptx_byte(110); emit_ptx_byte(32);
-        emit_ptx_byte(56); emit_ptx_byte(46); emit_ptx_byte(51);
+        emit_ptx_byte(56); emit_ptx_byte(46); emit_ptx_byte(48);
         emit_ptx_byte(10);
         // ".target sm_75\n"
         emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(97);

@@ -7102,7 +7102,7 @@ fn main() -> i32 {{
 # build expected output from the same building blocks (header + per-
 # entry signature + register-file decls + ret).
 _PTX_HEADER = (
-    b".version 8.3\n"
+    b".version 8.0\n"
     b".target sm_75\n"
     b".address_size 64\n"
     b"\n"
@@ -7321,6 +7321,51 @@ def test_bootstrap_ptx_scalar_neg():
     )
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
+def _ptxas_available() -> bool:
+    """True if NVIDIA's PTX assembler is on the WSL PATH."""
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["wsl", "-e", "bash", "-c", "which ptxas"],
+            capture_output=True, timeout=10,
+        )
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+def test_bootstrap_ptx_ptxas_roundtrip():
+    """K1.M5f (2026-05-28): PROOF the bootstrap's direct-emitted PTX is
+    REAL GPU code, not just plausible text. Emit a scalar-arithmetic
+    @kernel, then assemble it with NVIDIA's official ptxas (--gpu-name
+    sm_75). rc==0 means ptxas accepted our PTX and produced a cubin
+    (SASS GPU machine code). This is the end-to-end proof of the
+    direct-to-chip path: Helix source -> (self-hosted bootstrap) -> PTX
+    text -> (ptxas) -> SASS, with NO CUDA frontend and NO MLIR.
+
+    Skipped when ptxas is unavailable (non-CUDA boxes), so CI without
+    the CUDA toolkit still passes."""
+    import subprocess
+    if not _ptxas_available():
+        import pytest
+        pytest.skip("ptxas not available (CUDA toolkit not installed)")
+    name = "ptxas_rt"
+    src = "@kernel fn k() -> i32 { let x: i32 = 5; x + 2 }\n"
+    ptx = _kovc_self_host_emit_ptx(name, src)
+    assert ptx.startswith(b".version"), f"unexpected PTX head: {ptx[:64]!r}"
+    out_path = f"/tmp/sh_{name}_out.ptx"
+    r = subprocess.run(
+        ["wsl", "-e", "bash", "-c",
+         f"ptxas --gpu-name sm_75 -o /tmp/{name}.cubin {out_path} 2>&1"],
+        capture_output=True, timeout=30,
+    )
+    assert r.returncode == 0, (
+        f"ptxas REJECTED the bootstrap-emitted PTX (rc={r.returncode}):\n"
+        f"{r.stdout.decode(errors='replace')}\n"
+        f"--- emitted PTX ---\n{ptx.decode(errors='replace')}"
     )
 
 
