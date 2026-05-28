@@ -10943,12 +10943,11 @@ fn emit_wgsl_header() -> i32 {
     emit_ptx_byte(10);                                         // blank line
     0
 }
-// K1.M18: emit ONE WGSL @compute entry for a @kernel fn (real source
-// name from slots 1/2). Body is the empty-kernel skeleton (`return;`) --
-// mirrors Python webgpu.py emit_kernel_stub for a no-op kernel. Later
-// chunks emit the real body (storage buffers, tile ops). The fixed
-// workgroup_size(64) matches Python DEFAULT_WORKGROUP_SIZE.
-fn emit_wgsl_kernel(fn_idx: i32) -> i32 {
+// K1.M18/M22: the EMPTY-kernel WGSL form (no params) -- byte-matches
+// Python webgpu.py emit_kernel_stub for a no-op kernel (@builtin(local_
+// invocation_id) + return;). Param kernels take the M22 real form
+// (emit_wgsl_kernel_params); emit_wgsl_kernel dispatches on param count.
+fn emit_wgsl_kernel_empty(fn_idx: i32) -> i32 {
     // "@compute @workgroup_size(64)\n"
     emit_ptx_byte(64); emit_ptx_byte(99); emit_ptx_byte(111);
     emit_ptx_byte(109); emit_ptx_byte(112); emit_ptx_byte(117);
@@ -11010,6 +11009,139 @@ fn emit_wgsl_kernel(fn_idx: i32) -> i32 {
     emit_ptx_byte(125); emit_ptx_byte(10); emit_ptx_byte(10);
     0
 }
+// K1.M22: emit one WGSL storage-buffer binding for a kernel param --
+// "@group(0) @binding(<idx>) var<storage, read_write> <name>: array<f32>;".
+// Positional binding index. Phase-0: array<f32> (the AI elementwise/tile
+// workload); i32 params would use array<i32> (future). This EXCEEDS the
+// Python WebGPU backend (which stubs all real ops) -- net-new capability.
+fn emit_wgsl_buffer(name_s: i32, name_l: i32, idx: i32) -> i32 {
+    // "@group(0) @binding("
+    emit_ptx_byte(64); emit_ptx_byte(103); emit_ptx_byte(114);
+    emit_ptx_byte(111); emit_ptx_byte(117); emit_ptx_byte(112);
+    emit_ptx_byte(40); emit_ptx_byte(48); emit_ptx_byte(41);    // "@group(0)"
+    emit_ptx_byte(32);
+    emit_ptx_byte(64); emit_ptx_byte(98); emit_ptx_byte(105);
+    emit_ptx_byte(110); emit_ptx_byte(100); emit_ptx_byte(105);
+    emit_ptx_byte(110); emit_ptx_byte(103); emit_ptx_byte(40);  // "@binding("
+    emit_ptx_decimal(idx);
+    emit_ptx_byte(41);                                          // ")"
+    // " var<storage, read_write> "
+    emit_ptx_byte(32);
+    emit_ptx_byte(118); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(60); emit_ptx_byte(115); emit_ptx_byte(116);
+    emit_ptx_byte(111); emit_ptx_byte(114); emit_ptx_byte(97);
+    emit_ptx_byte(103); emit_ptx_byte(101); emit_ptx_byte(44);  // "var<storage,"
+    emit_ptx_byte(32);
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(97);
+    emit_ptx_byte(100); emit_ptx_byte(95); emit_ptx_byte(119);
+    emit_ptx_byte(114); emit_ptx_byte(105); emit_ptx_byte(116);
+    emit_ptx_byte(101); emit_ptx_byte(62);                      // "read_write>"
+    emit_ptx_byte(32);
+    // <name>
+    let mut ni: i32 = 0;
+    while ni < name_l {
+        emit_ptx_byte(__arena_get(name_s + ni));
+        ni = ni + 1;
+    }
+    // ": array<f32>;\n"
+    emit_ptx_byte(58); emit_ptx_byte(32);                       // ": "
+    emit_ptx_byte(97); emit_ptx_byte(114); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(121);                      // "array"
+    emit_ptx_byte(60); emit_ptx_byte(102); emit_ptx_byte(51);
+    emit_ptx_byte(50); emit_ptx_byte(62);                       // "<f32>"
+    emit_ptx_byte(59); emit_ptx_byte(10);                       // ";\n"
+    0
+}
+// K1.M22: emit the REAL (params) WGSL kernel form -- module-scope storage
+// buffers (one per param) then a @compute entry using global_invocation_id
+// (the cross-workgroup thread index for indexing buffers). Body is still
+// the skeleton (`return;`); M23 fills it (load/store/arith). Net-new vs
+// the Python WebGPU scaffold.
+fn emit_wgsl_kernel_params(fn_idx: i32) -> i32 {
+    let mut pcur: i32 = __arena_get(fn_idx + 4);
+    let mut pidx: i32 = 0;
+    while pcur != 0 {
+        emit_wgsl_buffer(__arena_get(pcur + 1), __arena_get(pcur + 2), pidx);
+        pcur = __arena_get(pcur + 3);
+        pidx = pidx + 1;
+    }
+    // "@compute @workgroup_size(64)\n"
+    emit_ptx_byte(64); emit_ptx_byte(99); emit_ptx_byte(111);
+    emit_ptx_byte(109); emit_ptx_byte(112); emit_ptx_byte(117);
+    emit_ptx_byte(116); emit_ptx_byte(101);                    // "@compute"
+    emit_ptx_byte(32);
+    emit_ptx_byte(64); emit_ptx_byte(119); emit_ptx_byte(111);
+    emit_ptx_byte(114); emit_ptx_byte(107); emit_ptx_byte(103);
+    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(117);
+    emit_ptx_byte(112); emit_ptx_byte(95); emit_ptx_byte(115);
+    emit_ptx_byte(105); emit_ptx_byte(122); emit_ptx_byte(101); // "@workgroup_size"
+    emit_ptx_byte(40); emit_ptx_byte(54); emit_ptx_byte(52);
+    emit_ptx_byte(41);                                         // "(64)"
+    emit_ptx_byte(10);
+    // "fn " + <name> + "(\n"
+    emit_ptx_byte(102); emit_ptx_byte(110); emit_ptx_byte(32); // "fn "
+    let kname_s = __arena_get(fn_idx + 1);
+    let kname_l = __arena_get(fn_idx + 2);
+    let mut ki: i32 = 0;
+    while ki < kname_l {
+        emit_ptx_byte(__arena_get(kname_s + ki));
+        ki = ki + 1;
+    }
+    emit_ptx_byte(40); emit_ptx_byte(10);                      // "(\n"
+    // "    @builtin(global_invocation_id) gid: vec3<u32>\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(64); emit_ptx_byte(98); emit_ptx_byte(117);
+    emit_ptx_byte(105); emit_ptx_byte(108); emit_ptx_byte(116);
+    emit_ptx_byte(105); emit_ptx_byte(110);                    // "@builtin"
+    emit_ptx_byte(40);                                         // "("
+    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
+    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
+    emit_ptx_byte(95); emit_ptx_byte(105); emit_ptx_byte(110);
+    emit_ptx_byte(118); emit_ptx_byte(111); emit_ptx_byte(99);
+    emit_ptx_byte(97); emit_ptx_byte(116); emit_ptx_byte(105);
+    emit_ptx_byte(111); emit_ptx_byte(110); emit_ptx_byte(95);
+    emit_ptx_byte(105); emit_ptx_byte(100);                    // "global_invocation_id"
+    emit_ptx_byte(41);                                         // ")"
+    emit_ptx_byte(32);
+    emit_ptx_byte(103); emit_ptx_byte(105); emit_ptx_byte(100);
+    emit_ptx_byte(58);                                         // "gid:"
+    emit_ptx_byte(32);
+    emit_ptx_byte(118); emit_ptx_byte(101); emit_ptx_byte(99);
+    emit_ptx_byte(51); emit_ptx_byte(60); emit_ptx_byte(117);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(62);   // "vec3<u32>"
+    emit_ptx_byte(10);
+    // ") {\n"
+    emit_ptx_byte(41); emit_ptx_byte(32); emit_ptx_byte(123);
+    emit_ptx_byte(10);
+    // "    return;\n"
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32);
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(116);
+    emit_ptx_byte(117); emit_ptx_byte(114); emit_ptx_byte(110);
+    emit_ptx_byte(59);                                         // "return;"
+    emit_ptx_byte(10);
+    // "}\n\n"
+    emit_ptx_byte(125); emit_ptx_byte(10); emit_ptx_byte(10);
+    0
+}
+// K1.M22: dispatch a @kernel to the empty form (0 params, byte-matches
+// Python) or the real params form (>=1 param). Param count = walk
+// AST_FN_DECL slot4 (params_head) via AST_PARAM slot3 (next).
+fn emit_wgsl_kernel(fn_idx: i32) -> i32 {
+    let mut pc: i32 = 0;
+    let mut p: i32 = __arena_get(fn_idx + 4);
+    while p != 0 {
+        pc = pc + 1;
+        p = __arena_get(p + 3);
+    }
+    if pc == 0 {
+        emit_wgsl_kernel_empty(fn_idx)
+    } else {
+        emit_wgsl_kernel_params(fn_idx)
+    }
+}
+
 // K1.M18: top-level WGSL emitter. Header once, then one @compute entry
 // per @kernel fn (mirrors emit_ptx_for_ast_to_path's structure + Python
 // webgpu.py emit_module). 0 kernels -> emits nothing (returns 0).

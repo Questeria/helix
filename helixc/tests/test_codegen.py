@@ -8157,6 +8157,39 @@ def test_bootstrap_wgsl_empty_kernel():
     )
 
 
+def test_bootstrap_wgsl_params():
+    """K1.M22 (2026-05-28): REAL WGSL op lowering begins -- a @kernel WITH
+    f32 params now emits module-scope storage-buffer bindings (@group(0)
+    @binding(N) var<storage, read_write> ...: array<f32>;) + a @compute
+    entry using @builtin(global_invocation_id) (the cross-workgroup thread
+    index, for indexing buffers). This EXCEEDS the Python WebGPU backend,
+    which stubs all real ops -- the bootstrap is now the source of truth
+    for non-NVIDIA GPU codegen. Body is still the skeleton (return;); M23
+    fills it. No naga/wgpu validator on this box -> spec-correct byte-match
+    is the check. The 0-param empty kernel still byte-matches Python (see
+    test_bootstrap_wgsl_empty_kernel)."""
+    src = "@kernel fn k(out: f32, a: f32) -> i32 { 0 }\n"
+    wgsl = _kovc_self_host_emit_ptx("wgsl_params", src,
+                                    emit_fn="emit_wgsl_for_ast_to_path")
+    expected = (
+        "// Helix-emitted WGSL — spec wgsl-2024\n"
+        "// Workgroup size default: 64\n"
+        "\n"
+        "@group(0) @binding(0) var<storage, read_write> out: array<f32>;\n"
+        "@group(0) @binding(1) var<storage, read_write> a: array<f32>;\n"
+        "@compute @workgroup_size(64)\n"
+        "fn k(\n"
+        "    @builtin(global_invocation_id) gid: vec3<u32>\n"
+        ") {\n"
+        "    return;\n"
+        "}\n"
+        "\n"
+    ).encode("utf-8")
+    assert wgsl == expected, (
+        f"WGSL params mismatch:\n got={wgsl!r}\nwant={expected!r}"
+    )
+
+
 def test_bootstrap_msl_empty_kernel():
     """K1.M19 (2026-05-28): SECOND non-NVIDIA GPU backend -- Apple Metal /
     MSL. The bootstrap emits a Metal compute kernel (#include
