@@ -87,6 +87,29 @@ Practical implications:
     test_impl_method_call_dispatch already uses and what works on
     both compilers.
 
+**ADDITIONAL FINDING (K2.AB 2026-05-28): struct-by-value RETURN ABI is the
+deeper blocker.** K1.F5g shipped the parse-side dispatch for chained
+methods (AST_CALL prim_tag routing) but probe showed even single-call
+struct returns fail: `let b: P = a.chain1(); b.v` returns rc=132. The
+bootstrap's AST_CALL codegen at kovc.hx:8541 + the fn_type_table system
+treats return values as i32 (in eax) by default. Struct returns are
+8-byte pointers that need rax (full 64-bit).
+
+Closing the chained-method path requires extending kovc.hx with:
+1. A fn_ret_type_table parallel to fn_type_table that tracks each fn's
+   return type tag (including 100+struct_idx encoding).
+2. AST_CALL codegen reads the table; for struct returns, expects rax
+   (REX.W) instead of eax. Already works because SysV ABI puts return
+   in rax always — but kovc.hx may zero-extend/sign-extend from eax
+   afterward, truncating the 64-bit struct-pointer.
+3. The let-binding type-stamp for `let b: P = a.chain1()` must use
+   var_struct_tab_add to register `b` as struct-typed.
+
+Multi-chunk K1.F5g2+ arc; needs careful investigation of where exactly
+the rax-vs-eax truncation happens. Probably looks like K1.E1's i64-bug
+debug pattern: emit trap-id probes, capture stderr, isolate the bad
+codegen site.
+
 **Reordered P1.2 chunk plan (post-probe):**
 1. K1.F5c ✅ — struct-literal receiver. SHIPPED 09bdc3e.
 2. K1.F5d — fn-name→ret-ty table substrate.
