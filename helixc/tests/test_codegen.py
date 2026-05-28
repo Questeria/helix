@@ -7117,16 +7117,22 @@ _PTX_REG_BLOCK = (
 )
 
 
-def _ptx_entry(sig: bytes, body_const: int = 0) -> bytes:
-    """One PTX .entry block: signature + register-file decls + the
-    body's SCALAR_CONST_INT lowering (mov.s32 %r0, <const>) + ret.
-    body_const defaults to 0 -- the `{ 0 }` body of the M1-M4 fixtures
-    (K1.M5b lowers an integer-literal body to mov.s32 %r0, <val>)."""
+def _ptx_entry(sig: bytes, movs=(0,)) -> bytes:
+    """One PTX .entry block: signature + register-file decls + one
+    SCALAR_CONST_INT `mov.s32 %r<i>, <const>;` per entry in `movs`
+    (positional registers %r0, %r1, ...) + ret. `movs` defaults to
+    (0,) -- the `{ 0 }` body of the M1-M4 fixtures, which lowers to
+    `mov.s32 %r0, 0;`. K1.M5c walks an AST_LET chain, so a body with N
+    const-init lets yields N movs (%r0..%r(N-1))."""
+    body = b""
+    for i, c in enumerate(movs):
+        body += (b"    mov.s32 %r" + str(i).encode()
+                 + b", " + str(c).encode() + b";\n")
     return (
         b".visible .entry " + sig + b"\n"
         b"{\n"
         + _PTX_REG_BLOCK
-        + b"    mov.s32 %r0, " + str(body_const).encode() + b";\n"
+        + body
         + b"    ret;\n"
         b"}\n"
     )
@@ -7211,7 +7217,22 @@ def test_bootstrap_ptx_scalar_const():
     Direct tile-IR -> PTX, NO MLIR (docs/MLIR_NOT_NEEDED_DECISION.md)."""
     src = "@kernel fn k() -> i32 { 7 }\n"
     ptx = _kovc_self_host_emit_ptx("ptx_sconst", src)
-    expected = _PTX_HEADER + _ptx_entry(b"k()", 7)
+    expected = _PTX_HEADER + _ptx_entry(b"k()", (7,))
+    assert ptx == expected, (
+        f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
+    )
+
+
+def test_bootstrap_ptx_let_chain():
+    """K1.M5c (2026-05-28): a kernel body with let-bindings lowers each
+    integer-const init to its own register via SCALAR_CONST_INT
+    (mov.s32 %rN, <val>), walking the AST_LET continuation chain (tag
+    8: value slot 4, continuation slot 3). The tail variable resolves
+    to an already-emitted register, so a void kernel emits no extra
+    instruction. Direct tile-IR -> PTX, NO MLIR."""
+    src = "@kernel fn k() -> i32 { let x: i32 = 3; let y: i32 = 8; y }\n"
+    ptx = _kovc_self_host_emit_ptx("ptx_letchain", src)
+    expected = _PTX_HEADER + _ptx_entry(b"k()", (3, 8))
     assert ptx == expected, (
         f"PTX text mismatch:\n got={ptx!r}\nwant={expected!r}"
     )

@@ -9601,6 +9601,25 @@ fn emit_ptx_reg_block() -> i32 {
     0
 }
 
+// K1.M5c (2026-05-28): emit a SCALAR_CONST_INT op --
+// "    mov.s32 %r<reg>, <val>;" (load an integer constant into a
+// register). Mirrors Python ptx.py emit_op SCALAR_CONST_INT.
+fn emit_ptx_mov_const(ridx: i32, val: i32) -> i32 {
+    // "    mov.s32 %r"  (`ridx` not `reg` -- `reg` is a Helix keyword)
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
+    emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(115);
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(114);
+    emit_ptx_decimal(ridx);
+    // ", "
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_decimal(val);
+    // ";\n"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
 //   .visible .entry <name>()
 //   {
@@ -9659,24 +9678,26 @@ fn emit_ptx_entry(fn_idx: i32) -> i32 {
     emit_ptx_byte(123); emit_ptx_byte(10);
     // K1.M5a: register-file declarations (foundation for op lowering).
     emit_ptx_reg_block();
-    // K1.M5b: lower the kernel body's terminal scalar. If it is an
-    // integer literal (AST_INT = tag 0; value in slot 1), materialize
-    // it into %r0 via the SCALAR_CONST_INT lowering -- "    mov.s32
-    // %r0, <val>;" (mirrors Python ptx.py emit_op SCALAR_CONST_INT).
-    // Non-literal bodies are not lowered yet (M5c+); they fall through
-    // to ret-only.
-    let kbody = __arena_get(fn_idx + 3);
-    if __arena_get(kbody) == 0 {
-        // "    mov.s32 %r0, "
-        emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
-        emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
-        emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(115);
-        emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
-        emit_ptx_byte(37); emit_ptx_byte(114); emit_ptx_byte(48);
-        emit_ptx_byte(44); emit_ptx_byte(32);
-        emit_ptx_decimal(__arena_get(kbody + 1));
-        // ";\n"
-        emit_ptx_byte(59); emit_ptx_byte(10);
+    // K1.M5b/M5c: lower the kernel body. Walk a leading AST_LET chain
+    // (tag 8; value in slot 4, continuation in slot 3), emitting one
+    // SCALAR_CONST_INT "mov.s32 %rN, <val>;" per integer-const-init
+    // let; then the tail -- a bare AST_INT (tag 0) emits one more mov,
+    // while an AST_VAR tail (tag 1) resolves to an already-emitted
+    // register (void kernels discard the value -> no instruction).
+    // Non-const-init lets and arithmetic tails are not lowered yet
+    // (M5d+ adds scalar arith + a real var->reg environment).
+    let mut kcur = __arena_get(fn_idx + 3);
+    let mut kreg: i32 = 0;
+    while __arena_get(kcur) == 8 {
+        let kval = __arena_get(kcur + 4);
+        if __arena_get(kval) == 0 {
+            emit_ptx_mov_const(kreg, __arena_get(kval + 1));
+            kreg = kreg + 1;
+        };
+        kcur = __arena_get(kcur + 3);
+    }
+    if __arena_get(kcur) == 0 {
+        emit_ptx_mov_const(kreg, __arena_get(kcur + 1));
     };
     // "    ret;\n"  (4-space indent, matches Python emit_kernel)
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
