@@ -333,6 +333,191 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
     ("EDGE", "ed_u8_wrap",           "fn main() -> i32 { let x: u8 = 250; let y: u8 = 48; x + y }", 42),
     ("EDGE", "ed_i64_beyond_i32",    "fn double_i64(x: i64) -> i64 { x + x } fn main() -> i32 { let r: i64 = double_i64(21_i64); r as i32 }", 42),
     ("EDGE", "ed_u64_basic",         "fn main() -> i32 { let x: u64 = 100_u64; let y: u64 = 58_u64; (x - y) as i32 }", 42),
+
+    # ---- GENERIC: generic functions and structs (monomorphized) ----
+    # Python's monomorphize pass infers concrete types from call sites; bootstrap
+    # synthesizes __i32 clones. ALL of these are PARITY GAP (rc=132 SIGILL) in
+    # the bootstrap — see KNOWN_PARITY_GAPS below and the GAP_REPORT section.
+    ("GENERIC", "gn_id_i32",
+        "fn id[T](x: T) -> T { x } fn main() -> i32 { id(42) }", 42),
+    ("GENERIC", "gn_first_two_params",
+        "fn first[A, B](a: A, b: B) -> A { a } fn main() -> i32 { first(42, 1) }", 42),
+    ("GENERIC", "gn_swap",
+        "fn swap[A, B](a: A, b: B) -> A { a } fn main() -> i32 { swap(42, false) }", 42),
+    ("GENERIC", "gn_pick",
+        "fn pick[T](flag: bool, a: T, b: T) -> T { if flag { a } else { b } } fn main() -> i32 { pick(true, 42, 0) }", 42),
+    ("GENERIC", "gn_sum_n",
+        "fn sum_n[T](n: T) -> T { n } fn main() -> i32 { sum_n(42) }", 42),
+    ("GENERIC", "gn_struct_one_field",
+        "struct Wrapper[T] { val: T } fn main() -> i32 { let w = Wrapper { val: 42 }; w.val }", 42),
+    ("GENERIC", "gn_struct_two_fields_same",
+        "struct Vec2[T] { x: T, y: T } fn main() -> i32 { let v = Vec2 { x: 20, y: 22 }; v.x + v.y }", 42),
+    ("GENERIC", "gn_struct_two_params",
+        "struct Pair[A, B] { fst: A, snd: B } fn main() -> i32 { let p = Pair { fst: 42, snd: true }; if p.snd { p.fst } else { 0 } }", 42),
+    ("GENERIC", "gn_struct_in_match",
+        "struct Tagged[T] { tag: i32, val: T } fn main() -> i32 { let t = Tagged { tag: 1, val: 42 }; match t.tag { 1 => t.val, _ => 0 } }", 42),
+    ("GENERIC", "gn_struct_impl",
+        "struct Box[T] { val: T } impl Box { fn get(self: Box) -> i32 { self.val } } fn main() -> i32 { let b = Box { val: 42 }; b.get() }", 42),
+    ("GENERIC", "gn_struct_explicit_ty",
+        "struct Box[T] { val: T } fn main() -> i32 { let b: Box<i32> = Box { val: 42 }; b.val }", 42),
+    ("GENERIC", "gn_struct_pair_explicit",
+        "struct Pair[A, B] { a: A, b: B } fn main() -> i32 { let p = Pair { a: 40, b: 2 }; p.a + p.b }", 42),
+
+    # ---- TRAIT: trait definitions, impl blocks, method dispatch ----
+    ("TRAIT", "tr_impl_method",
+        "trait Eq { fn eq(self: i32, other: i32) -> bool; } "
+        "impl Eq for i32 { fn eq(self: i32, other: i32) -> bool { self == other } } "
+        "fn main() -> i32 { let a: i32 = 42; if a.eq(42) { 42 } else { 0 } }", 42),
+    ("TRAIT", "tr_multi_trait",
+        "trait Show { fn show(self: i32) -> i32; } "
+        "trait Double { fn dbl(self: i32) -> i32; } "
+        "impl Show for i32 { fn show(self: i32) -> i32 { self } } "
+        "impl Double for i32 { fn dbl(self: i32) -> i32 { self + self } } "
+        "fn main() -> i32 { let x: i32 = 21; x.dbl() }", 42),
+    ("TRAIT", "tr_multi_method",
+        "trait Math { fn add(self: i32, other: i32) -> i32; fn double(self: i32) -> i32; } "
+        "impl Math for i32 { "
+        "  fn add(self: i32, other: i32) -> i32 { self + other } "
+        "  fn double(self: i32) -> i32 { self + self } } "
+        "fn main() -> i32 { let x: i32 = 21; x.double() }", 42),
+    ("TRAIT", "tr_impl_for_struct",
+        "struct Counter { val: i32 } "
+        "trait Inc { fn inc(self: Counter) -> i32; } "
+        "impl Inc for Counter { fn inc(self: Counter) -> i32 { self.val + 1 } } "
+        "fn main() -> i32 { let c = Counter { val: 41 }; c.inc() }", 42),
+    ("TRAIT", "tr_two_impls_struct",
+        "struct Vec2 { x: i32, y: i32 } "
+        "trait Len { fn len(self: Vec2) -> i32; } "
+        "trait Scale { fn scale(self: Vec2, factor: i32) -> i32; } "
+        "impl Len for Vec2 { fn len(self: Vec2) -> i32 { self.x + self.y } } "
+        "impl Scale for Vec2 { fn scale(self: Vec2, factor: i32) -> i32 { (self.x + self.y) * factor } } "
+        "fn main() -> i32 { let v = Vec2 { x: 6, y: 15 }; v.scale(2) }", 42),
+    ("TRAIT", "tr_method_complex",
+        "struct Point { x: i32, y: i32 } "
+        "trait Manhattan { fn dist(self: Point) -> i32; } "
+        "impl Manhattan for Point { "
+        "  fn dist(self: Point) -> i32 { "
+        "    let ax = if self.x < 0 { 0 - self.x } else { self.x }; "
+        "    let ay = if self.y < 0 { 0 - self.y } else { self.y }; "
+        "    ax + ay } } "
+        "fn main() -> i32 { let p = Point { x: 20, y: 22 }; p.dist() }", 42),
+    ("TRAIT", "tr_impl_no_trait",
+        "struct Rect { w: i32, h: i32 } "
+        "impl Rect { "
+        "  fn area(self: Rect) -> i32 { self.w * self.h } "
+        "  fn perimeter(self: Rect) -> i32 { (self.w + self.h) * 2 } } "
+        "fn main() -> i32 { let r = Rect { w: 6, h: 7 }; r.area() }", 42),
+    ("TRAIT", "tr_impl_early_return",
+        "struct S { val: i32 } "
+        "impl S { fn clamp(self: S, max: i32) -> i32 { if self.val > max { return max; } self.val } } "
+        "fn main() -> i32 { let s = S { val: 100 }; s.clamp(42) }", 42),
+    ("TRAIT", "tr_chain_method_fn",
+        "struct S { val: i32 } "
+        "trait Val { fn get(self: S) -> i32; } "
+        "impl Val for S { fn get(self: S) -> i32 { self.val } } "
+        "fn double(n: i32) -> i32 { n * 2 } "
+        "fn main() -> i32 { let s = S { val: 21 }; double(s.get()) }", 42),
+    ("TRAIT", "tr_impl_multi_method",
+        "struct S { v: i32 } "
+        "impl S { "
+        "  fn dbl(self: S) -> i32 { self.v + self.v } "
+        "  fn trip(self: S) -> i32 { self.v + self.v + self.v } } "
+        "fn main() -> i32 { let s = S { v: 21 }; s.dbl() }", 42),
+    ("TRAIT", "tr_impl_with_param",
+        "struct S { base: i32 } "
+        "impl S { fn add(self: S, extra: i32) -> i32 { self.base + extra } } "
+        "fn main() -> i32 { let s = S { base: 20 }; s.add(22) }", 42),
+    ("TRAIT", "tr_impl_while_loop",
+        "struct S { n: i32 } "
+        "impl S { fn cnt(self: S) -> i32 { let mut c = 0; while c < self.n { c = c + 1; } c } } "
+        "fn main() -> i32 { let s = S { n: 42 }; s.cnt() }", 42),
+    ("TRAIT", "tr_impl_in_recursion",
+        "struct S { val: i32 } "
+        "impl S { fn get(self: S) -> i32 { self.val } } "
+        "fn add_two(s: S, extra: i32) -> i32 { s.get() + extra } "
+        "fn main() -> i32 { let s = S { val: 20 }; add_two(s, 22) }", 42),
+
+    # ---- TYPEALIAS: type alias declarations ----
+    ("TYPEALIAS", "ta_basic",
+        "type MyInt = i32; fn main() -> i32 { let x: MyInt = 42; x }", 42),
+    ("TYPEALIAS", "ta_fn_return",
+        "type Count = i32; fn count() -> Count { 42 } fn main() -> i32 { count() }", 42),
+    ("TYPEALIAS", "ta_two_aliases",
+        "type Idx = i32; type Score = i32; fn score(i: Idx) -> Score { i * 7 } fn main() -> i32 { score(6) }", 42),
+    ("TYPEALIAS", "ta_in_struct",
+        "type Val = i32; struct S { v: Val } fn main() -> i32 { let s = S { v: 42 }; s.v }", 42),
+
+    # ---- NESTED: multi-feature programs combining structs, enums, impls, match ----
+    ("NESTED", "ne_struct_of_enum",
+        "enum Dir { N, S, E, W } struct Step { dir: Dir, dist: i32 } "
+        "fn main() -> i32 { let s = Step { dir: Dir::N, dist: 42 }; s.dist }", 42),
+    ("NESTED", "ne_enum_multi_payload",
+        "enum Event { Move(i32, i32), Click(i32) } "
+        "fn process(e: Event) -> i32 { match e { Event::Move(x, y) => x + y, Event::Click(n) => n } } "
+        "fn main() -> i32 { process(Event::Move(20, 22)) }", 42),
+    ("NESTED", "ne_enum_nested_match",
+        "enum Opt { None, Some(i32) } "
+        "fn main() -> i32 { let outer = 2; let inner = Opt::Some(42); "
+        "match outer { 1 => 0, 2 => match inner { Opt::Some(v) => v, Opt::None => 0 }, _ => 99 } }", 42),
+    ("NESTED", "ne_nested_struct",
+        "struct Inner { v: i32 } struct Outer { inner: Inner, extra: i32 } "
+        "fn main() -> i32 { let o = Outer { inner: Inner { v: 20 }, extra: 22 }; o.inner.v + o.extra }", 42),
+    ("NESTED", "ne_struct_fn_recursion",
+        "struct Node { val: i32, depth: i32 } "
+        "fn node_sum(n: Node) -> i32 { n.val + n.depth } "
+        "fn main() -> i32 { let n = Node { val: 30, depth: 12 }; node_sum(n) }", 42),
+    ("NESTED", "ne_enum_fn_dispatch",
+        "enum Tree { Leaf(i32), Node(i32, i32) } "
+        "fn tree_val(t: Tree) -> i32 { match t { Tree::Leaf(v) => v, Tree::Node(a, b) => a + b } } "
+        "fn main() -> i32 { tree_val(Tree::Node(20, 22)) }", 42),
+    ("NESTED", "ne_multi_struct_fn",
+        "struct A { x: i32 } struct B { y: i32 } "
+        "fn get_x(a: A) -> i32 { a.x } "
+        "fn add_ab(a: A, b: B) -> i32 { get_x(a) + b.y } "
+        "fn main() -> i32 { let a = A { x: 20 }; let b = B { y: 22 }; add_ab(a, b) }", 42),
+    ("NESTED", "ne_enum_in_struct",
+        "enum Color { Red, Blue } struct Pixel { color: Color, intensity: i32 } "
+        "fn main() -> i32 { let p = Pixel { color: Color::Blue, intensity: 42 }; "
+        "match p.color { Color::Red => 0, Color::Blue => p.intensity } }", 42),
+    ("NESTED", "ne_multi_match_enum",
+        "enum E { A, B(i32), C(i32, i32) } "
+        "fn f(e: E) -> i32 { match e { E::A => 0, E::B(v) => v, E::C(a, b) => a + b } } "
+        "fn main() -> i32 { f(E::C(20, 22)) }", 42),
+    ("NESTED", "ne_fn_two_structs",
+        "struct A { x: i32 } struct B { y: i32 } "
+        "fn combine(a: A, b: B) -> i32 { a.x + b.y } "
+        "fn main() -> i32 { let a = A { x: 20 }; let b = B { y: 22 }; combine(a, b) }", 42),
+    ("NESTED", "ne_struct_match_field",
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { x: 10, y: 32 }; "
+        "match p { Pt { x, y } => x + y } }", 42),
+    ("NESTED", "ne_impl_plus_trait",
+        "struct S { val: i32 } "
+        "trait Get { fn get(self: S) -> i32; } "
+        "impl Get for S { fn get(self: S) -> i32 { self.val } } "
+        "fn double(n: i32) -> i32 { n * 2 } "
+        "fn main() -> i32 { let s = S { val: 21 }; double(s.get()) }", 42),
+    ("NESTED", "ne_impl_and_cond",
+        "struct C { going_n: bool, dist: i32 } "
+        "impl C { fn dx(self: C) -> i32 { if self.going_n { self.dist } else { 0 - self.dist } } } "
+        "fn main() -> i32 { let c = C { going_n: true, dist: 42 }; c.dx() }", 42),
+
+    # ---- PAT2: advanced pattern features ----
+    ("PAT2", "pa2_struct_destr_fn",
+        "struct Pt { x: i32, y: i32 } "
+        "fn main() -> i32 { let p = Pt { x: 10, y: 32 }; match p { Pt { x, y } => x + y } }", 42),
+    ("PAT2", "pa2_enum_guard_complex",
+        "enum E { V(i32) } "
+        "fn main() -> i32 { let e = E::V(42); match e { E::V(n) if n > 40 => 42, E::V(_) => 0 } }", 42),
+    ("PAT2", "pa2_enum_or_arms",
+        "enum E { A, B, C } "
+        "fn main() -> i32 { let e = E::B; match e { E::A | E::B => 42, E::C => 0 } }", 42),
+    ("PAT2", "pa2_nested_enum_match",
+        "enum Outer { X(i32), Y } enum Inner { P(i32), Q } "
+        "fn main() -> i32 { let o = Outer::X(2); let i = Inner::P(42); "
+        "match o { Outer::X(v) => match i { Inner::P(w) => v * w / 2, Inner::Q => 0 }, Outer::Y => 0 } }", 42),
+    ("PAT2", "pa2_guard_bind",
+        "fn main() -> i32 { let x = 42; match x { n if n > 40 => n, n if n > 20 => 20, _ => 0 } }", 42),
 ]
 
 # Known bootstrap parity gaps (Python succeeds, bootstrap diverges) — tracked so
@@ -352,7 +537,31 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 #   (ret_body_width_class in kovc.hx), matching Python which imposes no width
 #   restriction among <=32-bit integers. The 8-byte (i64/u64/f64) and 16-bit
 #   float (bf16/f16) data-loss classes still trap.
-KNOWN_PARITY_GAPS: set[tuple[str, str]] = set()
+# Advanced-feature parity gaps discovered 2026-05-29 (extended audit).
+# Category: GENERIC — bootstrap K1 SIGILL (rc=132) on ALL generic-fn and
+# generic-struct programs. Root cause: the bootstrap's Stage-8 monomorphize_pass
+# synthesizes __i32 clones correctly for function-identity generics, but the
+# cloned body's type-tagged arithmetic/field-access paths hit ud2 traps because
+# the bootstrap's codegen does not yet handle the generic-type-param scalar width
+# class at emit time (e.g. AST_FN_DECL body-vs-return-type width-class trap fires
+# for T-typed return when the mono clone carries tag 0 = i32 but the ret-ty slot
+# is still encoded as a generic-param index 200+k). This is the same width-class
+# trap family as the il_u8/u16 fix (2026-05-29) but for the generic mono path.
+KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
+    # GENERIC: bootstrap SIGILL (rc=132) on all generic fn/struct programs.
+    ("GENERIC", "gn_id_i32"),
+    ("GENERIC", "gn_first_two_params"),
+    ("GENERIC", "gn_swap"),
+    ("GENERIC", "gn_pick"),
+    ("GENERIC", "gn_sum_n"),
+    ("GENERIC", "gn_struct_one_field"),
+    ("GENERIC", "gn_struct_two_fields_same"),
+    ("GENERIC", "gn_struct_two_params"),
+    ("GENERIC", "gn_struct_in_match"),
+    ("GENERIC", "gn_struct_impl"),
+    ("GENERIC", "gn_struct_explicit_ty"),
+    ("GENERIC", "gn_struct_pair_explicit"),
+}
 
 
 # ============================================================================
