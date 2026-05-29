@@ -12470,8 +12470,8 @@ def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
       P3: 3 × __tile_zeros + 2 × __arena_set + 1 × __arena_get
           (NO __tile_add). Tests the K1.F24f program MINUS __tile_add.
           Expected rc=10.
-      P4: full K1.F24f program with __tile_add stub. Expected rc=0
-          (BSS-zero dst, stub doesn't write); current behavior rc=132.
+      P4: full K1.F24f program. __tile_add now ACTUALLY ADDS (no longer a
+          no-op stub): dst[0] = a[0] + b[0] = 3 + 10 = 13. Expected rc=13.
 
     The first probe where all 3 runs are rc=132 localizes the defect.
     The bisect outcome is reported via the assertion message (visible
@@ -12545,7 +12545,7 @@ def test_bootstrap_kovc_k1f24g_tile_chain_bisect_self_host():
         '    __tile_add(a, b, dst, 4);\n'
         '    __arena_get(dst)\n'
         '}\n',
-        expected=0,
+        expected=13,  # __tile_add now adds: dst[0] = a[0]+b[0] = 3+10 (was no-op stub -> 0)
     )
 
     # Find first probe that ALWAYS SIGILLs (3-of-3) -- the defect localizer.

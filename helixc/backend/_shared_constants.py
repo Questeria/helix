@@ -60,7 +60,14 @@ HELIX_CELL_SIZE = 8
 # Slot 0 is reserved for the cursor. Slots 1..HELIX_ARENA_CAP are
 # user-allocatable; `__arena_push` returns the slot index, advancing
 # the cursor. Bounds checks compare cursor against this constant.
-HELIX_ARENA_CAP = 2097152
+HELIX_ARENA_CAP = 6291456
+# RESCALE 2026-05-28 (user-approved): 2097152 -> 6291456 (3x; 6 Mi-slots;
+# 24 MB BSS). The bootstrap source grew ~13x since the estimate above (now
+# ~1.4 MB across lexer+parser+kovc); the full self-host driver needs ~2.72M
+# slots, over the old 2.1M cap, so K1 overflowed compiling its own source.
+# 6.29M gives ~2.3x headroom. Cost is virtual/BSS only -- no produced-binary
+# file-size change and no program-behavior change (displacements scale
+# consistently). MUST stay numerically equal to kovc.hx helix_arena_cap().
 
 # ---------------------------------------------------------------------------
 # Trace ring buffer (compile-time-zero-overhead @trace fn

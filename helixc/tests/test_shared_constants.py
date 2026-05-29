@@ -26,8 +26,11 @@ def test_reflection_cell_count_pinned():
 
 
 def test_arena_cap_pinned():
-    """2 097 152 i32 slots = 8 MB BSS arena."""
-    assert shared.HELIX_ARENA_CAP == 2097152
+    """6 291 456 i32 slots = 24 MB BSS arena. Rescaled 3x from 2097152 on
+    2026-05-28 (user-approved) so the self-built compiler can compile its
+    own ~1.4 MB source (~2.72M slots) without arena overflow. A bump is a
+    public ABI change -- must stay equal to kovc.hx helix_arena_cap()."""
+    assert shared.HELIX_ARENA_CAP == 6291456
 
 
 def test_trace_cap_pinned():

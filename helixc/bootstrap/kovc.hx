@@ -3917,12 +3917,14 @@ fn str_table_add(b: i32, disp_slot: i32, body_s: i32, body_l: i32) -> i32 {
 
 // HELIX_ARENA_CAP mirrored as kovc constant (kovc emits its own
 // arena in the produced binary so the compiled programs match the
-// Python-codegen layout: 2097152 data slots + 1 cursor slot,
-// sized for self-host).
-fn helix_arena_cap() -> i32 { 2097152 }
-// K-fix (2026-05-28): arena layout constants DERIVED from the cap, so a future
-// cap rescale is a single-line change (these replaced 6 hardcoded magic numbers:
-// data_bytes=cap*4=8388608, cell_base=4+(cap-64)*4=8388356, trace=that-4=8388352).
+// Python-codegen layout: 6291456 data slots + 1 cursor slot, sized for
+// self-host). RESCALE 2026-05-28 (user-approved): 2097152 -> 6291456 (3x);
+// matches HELIX_ARENA_CAP in _shared_constants.py (MUST stay equal).
+fn helix_arena_cap() -> i32 { 6291456 }
+// K-fix (2026-05-28): arena layout constants DERIVED from the cap, so a
+// cap rescale is a single-line change (these replaced 6 hardcoded magic
+// numbers: data_bytes=cap*4, cell_base=4+(cap-64)*4, trace=that-4; at the
+// original 2097152 cap those were 8388608/8388356/8388352).
 // NB the f32-mantissa 8388608/8388607 in f32_to_f16_bits are UNRELATED (left as-is).
 fn helix_arena_data_bytes() -> i32 { helix_arena_cap() * 4 }
 fn helix_cell_base_disp() -> i32 { 4 + (helix_arena_cap() - 64) * 4 }
