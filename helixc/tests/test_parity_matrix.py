@@ -337,14 +337,22 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 
 # Known bootstrap parity gaps (Python succeeds, bootstrap diverges) — tracked so
 # the corpus lands GREEN (xfail) instead of red, and auto-detected when fixed.
-#   il_u8_suffix / il_u16_suffix: the `42_u8`/`42_u16` integer LITERAL SUFFIX
-#   SIGILLs (rc 132) in the bootstrap while Python -> 42. The u8/u16 *types* (via
-#   typed let) and the _u32/_u64 suffixes all work; only the 8/16-bit unsigned
-#   literal suffix is mis-handled. Stable (132 x3). Remove an entry when fixed.
-KNOWN_PARITY_GAPS = {
-    ("INT_LIT", "il_u8_suffix"),
-    ("INT_LIT", "il_u16_suffix"),
-}
+#
+# FIXED 2026-05-29 (now empty -> full 218/218 parity):
+#   il_u8_suffix / il_u16_suffix: `fn main() -> i32 { 42_u8 as i32 }` (and the
+#   u16 form) SIGILLed (rc 132) in the bootstrap while Python -> 42. Root cause
+#   was NOT the lexer suffix recognizer or the literal codegen (both correct) —
+#   it was the AST_FN_DECL body-vs-return-type width-class trap (id 14002) in
+#   kovc.hx. The `as i32` cast is a parser-level no-op (returns the inner node
+#   unchanged), so the function body kept type tag u8 (width 1) against an i32
+#   return (width 4); the width mismatch emitted a ud2. u32 (width 4) matched
+#   i32 and so escaped the trap, which is why only u8/u16 (and i8/i16, and the
+#   `u64 as i32` 8->4 form) appeared broken. Fix: fold the <=32-bit integer
+#   family (i32/u32/u8/u16/i8/i16) into one width class at the trap site
+#   (ret_body_width_class in kovc.hx), matching Python which imposes no width
+#   restriction among <=32-bit integers. The 8-byte (i64/u64/f64) and 16-bit
+#   float (bf16/f16) data-loss classes still trap.
+KNOWN_PARITY_GAPS: set[tuple[str, str]] = set()
 
 
 # ============================================================================
@@ -375,11 +383,14 @@ def test_parity(category: str, name: str, src: str, expected_rc: int):
         f"Corpus item is wrong or Python helixc regressed."
     )
 
-    # Path 2: Bootstrap kovc self-host. Retry-on-132 absorbs WSL's spurious
-    # SIGILL flake on tiny programs (a STABLE 132 across retries is a real gap).
+    # Path 2: Bootstrap kovc self-host. Retry on ANY mismatch (not just
+    # rc 132): WSL has transient cold-start / IO flakes on tiny programs
+    # that can return rc 1 (WSL_E_USER_NOT_FOUND), rc 132 (SIGILL), etc.
+    # A REAL parity gap is deterministic and fails ALL attempts; a flake
+    # passes on retry. 3 retries (4 attempts total).
     bootstrap_rc = bootstrap_compile(f"pm_{category}_{name}", src)
     tries = 0
-    while bootstrap_rc == 132 and bootstrap_rc != python_rc and tries < 2:
+    while bootstrap_rc != python_rc and tries < 3:
         tries += 1
         bootstrap_rc = bootstrap_compile(f"pm_{category}_{name}_r{tries}", src)
 

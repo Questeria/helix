@@ -1640,6 +1640,31 @@ fn type_width_class(ty: i32) -> i32 {
     else { type_width_class_struct(ty) } } } } } } } }
 }
 
+// Parity fix (2026-05-29): body-vs-ret-ty width class for the 14002
+// trap, with the sub-32-bit integer types FOLDED into the i32 class.
+// u8 (7), u16 (8), i8 (10), i16 (11) all share i32's physical storage
+// (a 4-byte stack slot; the value lives in eax via `mov eax, imm32`),
+// so a narrow-int body flowing into a wider integer return (or vice
+// versa) is benign — the bits are already correct in eax and the
+// caller reads the low N bits it cares about. The Python reference
+// compiler imposes NO width restriction among <=32-bit integers
+// (e.g. `fn main() -> i32 { 42_u8 as i32 }` and `fn main() -> u8
+// { 42 }` both compile and return 42), so the bootstrap's 14002
+// width trap must treat the whole {i32,u32,u8,u16,i8,i16} family as
+// one class to match. The genuine silent-data-loss cases the trap
+// guards — the 8-byte boundary (i64/u64/f64 -> tag 2/3/9, class 8)
+// and the true 16-bit floats (bf16/f16 -> tag 4, class 2, distinct
+// codegen) — keep their own classes and still trap on mismatch.
+// type_width_class itself is left unchanged (it has exactly one
+// caller: the 14002 trap site, which now routes through this).
+fn ret_body_width_class(ty: i32) -> i32 {
+    if ty == 7 { 4 }                                  // u8  -> i32 class
+    else { if ty == 8 { 4 }                           // u16 -> i32 class
+    else { if ty == 10 { 4 }                          // i8  -> i32 class
+    else { if ty == 11 { 4 }                          // i16 -> i32 class
+    else { type_width_class(ty) } } } }
+}
+
 // Phase 1.10 step 5c follow-on: fn_type_table maps fn names to their
 // declared return-type tag (0=i32, 1=f32, 2=f64, 3=i64). Populated
 // PRE-PASS over the AST_FN_LIST so expr_type can resolve user-named
@@ -9472,19 +9497,29 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             };
             // Audit follow-up Finding #1 (softer width-only variant).
             // The 14001 trap above only covers 8b vs !8b. This adds
-            // a width-class check that catches narrow-vs-wider mismatches
-            // missed by the original (e.g. `fn f() -> u8 { i32 }`,
+            // a width-class check that catches FLOAT-vs-narrower and
+            // 8-byte-class mismatches missed by the original (e.g.
             // `fn f() -> bf16 { i32 }`, `fn f() -> f64 { i32 }`).
-            // We compare width-class (1/2/4/8 bytes) of body vs ret_ty.
-            // Same width = no trap (so i32 vs u32 vs f32 same class
-            // is allowed — narrow re-truncation at use site keeps that
-            // benign for the bootstrap source). Different widths trap
-            // 14002. The full-equality variant produces false positives
-            // in the existing bootstrap source; this width variant is
-            // strictly stricter than 14001 (catches all 14001 cases plus
-            // narrow-class mismatches) without breaking self-host.
-            let body_width = type_width_class(expr_type(fn_body, bind_state, bn_state));
-            let ret_width = type_width_class(fn_ret_ty);
+            // We compare width-class via ret_body_width_class, which
+            // FOLDS the <=32-bit integer family (i32/u32/u8/u16/i8/i16)
+            // into a single 4-byte class. Same class = no trap.
+            //
+            // Parity fix (2026-05-29): previously this used the raw
+            // type_width_class, so a narrow-int body in a wider integer
+            // return — e.g. `fn main() -> i32 { 42_u8 as i32 }` (body
+            // u8, class 1) or `fn main() -> u8 { 42 }` (body i32,
+            // class 4) — tripped 14002 (ud2/SIGILL, rc 132). The Python
+            // reference compiler accepts ALL <=32-bit integer body/ret
+            // combinations (returns 42 for every one), because the
+            // value already sits correctly in eax and narrow types are
+            // physically i32-shaped storage. Folding the narrow ints
+            // into the i32 class restores parity. The genuine
+            // silent-data-loss classes the trap guards still fire: the
+            // 8-byte boundary (i64/u64/f64) and the true 16-bit floats
+            // (bf16/f16, distinct codegen). f32-vs-i32 (both class 4)
+            // remains allowed as before.
+            let body_width = ret_body_width_class(expr_type(fn_body, bind_state, bn_state));
+            let ret_width = ret_body_width_class(fn_ret_ty);
             if body_width != ret_width {
                 emit_trap_with_id(14002);
             };
