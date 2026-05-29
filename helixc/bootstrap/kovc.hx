@@ -3995,14 +3995,14 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     // emitted) agree on the buffer size.
     // sub rsp, 0x100000 (1M read buffer)
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC);
-    emit_u32_le(1048576);
+    emit_u32_le(4194304);
     // mov rdi, [rsp+0x100000] (load fd back into rdi)
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
-    emit_u32_le(1048576);
+    emit_u32_le(4194304);
     // mov rsi, rsp (buffer = rsp)
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
     // mov edx, 0x100000 (count = 1M, LE bytes 00 00 10 00)
-    emit_byte(0xBA); emit_u32_le(1048576);
+    emit_byte(0xBA); emit_u32_le(4194304);
     // mov eax, 0 (sys_read); syscall
     emit_byte(0xB8); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
@@ -4015,12 +4015,12 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     // a corrupt downstream binary. cmp r10, 0x100000 (49 81 FA imm32);
     // jne +2 (75 02); ud2 (0F 0B).
     emit_byte(0x49); emit_byte(0x81); emit_byte(0xFA);
-    emit_u32_le(1048576);
+    emit_u32_le(4194304);
     emit_byte(0x75); emit_byte(0x02);
     emit_byte(0x0F); emit_byte(0x0B);
     // mov rdi, [rsp+0x100000]; mov eax, 3 (sys_close); syscall
     emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24);
-    emit_u32_le(1048576);
+    emit_u32_le(4194304);
     emit_byte(0xB8); emit_byte(3); emit_byte(0); emit_byte(0); emit_byte(0);
     emit_byte(0x0F); emit_byte(0x05);
     // test r10, r10 ; jns +3 ; xor r10, r10 (clamp negative to 0)
@@ -4077,7 +4077,7 @@ fn emit_read_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     // ---- postlude ----
     // add rsp, 0x100000 (must match the sub above)
     emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4);
-    emit_u32_le(1048576);
+    emit_u32_le(4194304);
     // add rsp, 8 (drop fd)
     emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x08);
     // mov rax, r10 (return bytes_read)

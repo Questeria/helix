@@ -3445,7 +3445,14 @@ class FnCompiler:
                 # constants in helixc/bootstrap/kovc.hx's
                 # emit_read_file_to_arena_body so K1 (Python-emitted)
                 # and K2 (kovc.hx-emitted) agree on the read buffer.
-                BUF_SIZE = 0x100000
+                # 2026-05-28: 1 MB -> 4 MB. The self-host source reached 1.43 MB
+                # > the 1 MB single-read buffer, so the truncation sentinel (ud2)
+                # fired -> SIGILL before codegen (root-caused via runtime
+                # instrumentation). Transient stack alloc freed before parse;
+                # 4 MB < the 8 MB default stack. Lock-step with the six
+                # emit_u32_le(4194304) in kovc.hx emit_read_file_to_arena_body.
+                # TODO: replace the single sys_read with a read-until-EOF loop.
+                BUF_SIZE = 0x400000
 
                 # ---- sys_open(path, O_RDONLY=0) ----
                 buf.emit(0x48, 0x8D, 0x3D)            # lea rdi, [rip+disp]
