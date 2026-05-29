@@ -12934,7 +12934,38 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
                     let s3 = __arena_get(ty_s_raw + 3);
                     if s0 == 83 { if s1 == 101 { if s2 == 108 { if s3 == 102 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
                 } else { 0 };
-                let p_ty_resolved = if is_self_ty == 1 { target_tag } else { ty_ident_to_tag(ty_s_raw, ty_l_raw) };
+                // K-fix (2026-05-29): explicitly-TYPED struct receiver/param in
+                // an impl method, e.g. `fn get(self: C)` or `fn add(a: C)`. A
+                // struct value is an 8-byte pointer (struct-lit address), but
+                // this typed-param branch only ran ty_ident_to_tag, which knows
+                // scalars only and returns 0 (i32) for a struct name. So the
+                // param was sized as i32 (p_ty 0), the call site's 8-byte struct
+                // arg (expr_type 3) mismatched the i32 param -> the 16001 arg-
+                // type trap -> ud2 -> SIGILL 132 (before the body ran). It also
+                // skipped var_struct_tab registration, so `param.field` inside
+                // the body had no field offset. The BARE-self branch above
+                // already handles both (target_tag carries 100+idx; it registers
+                // self in var_struct_tab); mirror that here. Encode named struct
+                // params as 100+struct_idx (the parser's pointer-width sentinel,
+                // matched by codegen's struct-exemption + field-offset path) and
+                // register them in var_struct_tab. `Self` resolves to target_tag
+                // (already 100+idx when the impl target is a struct). Python
+                // helixc handled these all along -> real bootstrap-only divergence.
+                let s_idx_im = struct_tab_lookup_idx(sb, ty_s_raw, ty_l_raw);
+                let p_ty_struct_im = if is_self_ty == 1 {
+                    target_tag
+                } else {
+                    if s_idx_im >= 0 { 100 + s_idx_im } else { ty_ident_to_tag(ty_s_raw, ty_l_raw) }
+                };
+                let p_ty_resolved = p_ty_struct_im;
+                // Register an actual struct param (not a Self->scalar target) in
+                // var_struct_tab so the body's `param.field` resolves to a field
+                // offset. Gate on the resolved type being a struct sentinel
+                // (100..199); struct_idx = p_ty_resolved - 100.
+                let n_im_register = if p_ty_resolved >= 100 { if p_ty_resolved < 200 {
+                    var_struct_tab_add(sb, pname_s, pname_l, p_ty_resolved - 100)
+                } else { 0 } } else { 0 };
+                let _drop_im = n_im_register;
                 let new_param = mk_node(18, pname_s, pname_l, 0);
                 __arena_push(p_ty_resolved);
                 if params_head == 0 {

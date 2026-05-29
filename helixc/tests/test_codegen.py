@@ -14552,6 +14552,66 @@ def test_bootstrap_kovc_impl_method_amp_param_self_host():
         assert rc == expected, f"{name}: expected {expected}, got {rc}"
 
 
+def test_bootstrap_kovc_impl_method_typed_self_struct_param_self_host():
+    """K-fix (2026-05-29): an impl method with an EXPLICITLY-TYPED struct
+    receiver (`fn get(self: C)`) -- or a by-value struct param like
+    `fn add(a: C, b: i32)` -- SIGILL'd (132) under the bootstrap while
+    Python helixc returned the correct value. Real Rust permits naming the
+    receiver's type explicitly:
+
+      impl C { fn get(self: C) -> i32 { self.n } }
+      impl C { fn get(self: Self) -> i32 { self.n } }
+
+    A struct value is an 8-byte pointer (a struct-lit address), exactly like
+    the BARE-`self` receiver. But parse_impl_method's typed `name: T` branch
+    only ran ty_ident_to_tag on the type IDENT -- which knows scalar types
+    only and returns 0 (i32) for a struct name. So the param was sized as i32
+    (p_ty 0); at the call site (`c.get()` / `C::add(c, 1)`) the 8-byte struct
+    arg (expr_type 3) mismatched the i32 param -> the 16001 arg-type trap ->
+    ud2 -> SIGILL 132, BEFORE the body ran. It also skipped var_struct_tab
+    registration, so `self.n` / `a.n` inside the body had no field offset.
+
+    The BARE-`self` branch already encoded target_tag as 100+struct_idx and
+    registered self in var_struct_tab; this is the exact analog (cf. the
+    enum-with-payload param fix 2354f09, where parse_fn_decl mis-sized an
+    8-byte enum value as i32 the same way). Fix (parser.hx parse_impl_method,
+    typed-param branch): encode a named struct param as 100+struct_idx (the
+    parser's pointer-width sentinel routed through codegen's struct-exemption
+    + field-offset path), resolve `Self` to target_tag, and register actual
+    struct params in var_struct_tab so `param.field` resolves. Nullary /
+    scalar / `&self` / `&mut self` / bare-self forms are unaffected.
+
+    Python helixc handled `self: C` all along -> real bootstrap-only
+    divergence, now parity. (Bare-self, `C::add(c,1)` assoc and `self: Self`
+    are Python parse/NotImplemented cases, so they are bootstrap-only here.)
+    retry-on-132 absorbs the WSL self-host flake on these tiny programs."""
+    cases = [
+        # PARITY BUG (Python -> 42, bootstrap pre-fix -> 132)
+        ("typed_self_field",    "struct C { n: i32 } impl C { fn get(self: C) -> i32 { self.n } } fn main() -> i32 { let c = C { n: 42 }; c.get() }", 42),
+        ("typed_self_arith",    "struct C { n: i32 } impl C { fn get(self: C) -> i32 { self.n + 1 } } fn main() -> i32 { let c = C { n: 41 }; c.get() }", 42),
+        ("typed_self_multi",    "struct P { x: i32, y: i32 } impl P { fn sum(self: P) -> i32 { self.x + self.y } } fn main() -> i32 { let p = P { x: 40, y: 2 }; p.sum() }", 42),
+        # bootstrap-only (Python ParseError / NotImplementedError) -- must not regress
+        ("self_Self_field",     "struct C { n: i32 } impl C { fn get(self: Self) -> i32 { self.n } } fn main() -> i32 { let c = C { n: 42 }; c.get() }", 42),
+        ("assoc_byval_param",   "struct C { n: i32 } impl C { fn add(a: C, b: i32) -> i32 { a.n + b } } fn main() -> i32 { let c = C { n: 41 }; C::add(c, 1) }", 42),
+        # regression guards: bare-self / &self / &mut self field access still work
+        ("bare_self_field",     "struct C { n: i32 } impl C { fn get(self) -> i32 { self.n } } fn main() -> i32 { let c = C { n: 42 }; c.get() }", 42),
+        ("amp_self_field",      "struct C { n: i32 } impl C { fn get(&self) -> i32 { self.n } } fn main() -> i32 { let c = C { n: 42 }; c.get() }", 42),
+        ("amp_mut_self_field",  "struct C { n: i32 } impl C { fn get(&mut self) -> i32 { self.n } } fn main() -> i32 { let c = C { n: 42 }; c.get() }", 42),
+        # regression guard: scalar by-value param in impl method unaffected
+        ("scalar_param",        "struct S; impl S { fn x(v: i32) -> i32 { v } } fn main() -> i32 { S::x(42) }", 42),
+    ]
+    for name, src, exp in cases:
+        rc = _kovc_self_host_compile_and_run(f"tysp_{name}", src)
+        tries = 0
+        while rc == 132 and rc != exp and tries < 2:
+            tries = tries + 1
+            rc = _kovc_self_host_compile_and_run(f"tysp_{name}_r{tries}", src)
+        assert rc == exp, (
+            f"typed-self-struct-param {name}: bootstrap rc={rc}, expected {exp} "
+            f"(pre-fix the self:C / by-value struct param SIGILL'd 132 -- mis-sized as i32)"
+        )
+
+
 def test_bootstrap_kovc_struct_amp_field_self_host():
     """K1.DU (2026-05-26): `&T` (with optional lifetime + mut) and
     `<...>` generic args in struct field type position. Real Rust
