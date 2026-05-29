@@ -538,30 +538,20 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 #   restriction among <=32-bit integers. The 8-byte (i64/u64/f64) and 16-bit
 #   float (bf16/f16) data-loss classes still trap.
 # Advanced-feature parity gaps discovered 2026-05-29 (extended audit).
-# Category: GENERIC — bootstrap K1 SIGILL (rc=132) on ALL generic-fn and
-# generic-struct programs. Root cause: the bootstrap's Stage-8 monomorphize_pass
-# synthesizes __i32 clones correctly for function-identity generics, but the
-# cloned body's type-tagged arithmetic/field-access paths hit ud2 traps because
-# the bootstrap's codegen does not yet handle the generic-type-param scalar width
-# class at emit time (e.g. AST_FN_DECL body-vs-return-type width-class trap fires
-# for T-typed return when the mono clone carries tag 0 = i32 but the ret-ty slot
-# is still encoded as a generic-param index 200+k). This is the same width-class
-# trap family as the il_u8/u16 fix (2026-05-29) but for the generic mono path.
-KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
-    # GENERIC: bootstrap SIGILL (rc=132) on all generic fn/struct programs.
-    ("GENERIC", "gn_id_i32"),
-    ("GENERIC", "gn_first_two_params"),
-    ("GENERIC", "gn_swap"),
-    ("GENERIC", "gn_pick"),
-    ("GENERIC", "gn_sum_n"),
-    ("GENERIC", "gn_struct_one_field"),
-    ("GENERIC", "gn_struct_two_fields_same"),
-    ("GENERIC", "gn_struct_two_params"),
-    ("GENERIC", "gn_struct_in_match"),
-    ("GENERIC", "gn_struct_impl"),
-    ("GENERIC", "gn_struct_explicit_ty"),
-    ("GENERIC", "gn_struct_pair_explicit"),
-}
+# Category: GENERIC — FIXED 2026-05-29. The bootstrap K1 used to SIGILL
+# (rc=132) on EVERY generic-fn and generic-struct program. The true root
+# cause was NOT a codegen width-class trap (the earlier theory): the
+# bootstrap's Stage-8 monomorphize machinery (gp_tab, mr_tab synthesis,
+# default-i32 mono clones, struct field 200+k substitution) was fully
+# functional — but it was wired to recognise generic-param lists delimited
+# by ANGLE brackets `<T>` (TK_LT=16 / TK_GT=17), while Helix (and the Python
+# reference) use SQUARE brackets `[T]` (TK_LBRACK=20 / TK_RBRACK=21). So
+# `fn id[T](...)` never entered the generic path: the parser consumed `[`
+# as the `(` of the param list and desynced, producing a garbage AST that
+# emitted `mov eax,<junk>; ud2`. Fix: parse_fn_decl + parse_struct_decl now
+# accept `[`/`]` as the generic-param-list delimiters (legacy `<>` kept).
+# All 12 cases now reach behavioral parity with Python — set is empty.
+KNOWN_PARITY_GAPS: set[tuple[str, str]] = set()
 
 
 # ============================================================================

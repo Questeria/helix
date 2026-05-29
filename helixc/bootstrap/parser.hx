@@ -11439,13 +11439,25 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     gp_tab_reset(sb);
     let gp_peek_t = tok_tag(tok_base, cur_get(sb));
     let mut is_generic_fn: i32 = 0;
-    if gp_peek_t == 16 {
-        is_generic_fn = 1;
-        cur_advance(sb);                        // consume '<'
+    // Helix generic syntax uses SQUARE brackets: `fn id[T](x: T) -> T`.
+    // The Python reference compiler accepts ONLY `[T]` (and rejects the
+    // angle-bracket `<T>` form). The bootstrap's Stage-8 machinery was
+    // originally wired to `<` (TK_LT=16) / `>` (TK_GT=17); we now accept
+    // `[` (TK_LBRACK=20) as the opener too. With `[T]` the closer is the
+    // unambiguous `]` (TK_RBRACK=21); inner trait bounds (if any) keep
+    // their own `<...>` skips, so `]` never collides. We keep accepting
+    // `<` as a legacy opener (no live bootstrap source uses it) to avoid
+    // any regression risk.
+    if gp_peek_t == 16 { is_generic_fn = 1; };
+    if gp_peek_t == 20 { is_generic_fn = 1; };
+    if is_generic_fn == 1 {
+        cur_advance(sb);                        // consume '<' or '['
         let mut keep_g: i32 = 1;
         while keep_g == 1 {
             let gtt = tok_tag(tok_base, cur_get(sb));
             if gtt == 17 {                      // '>' end
+                keep_g = 0;
+            } else { if gtt == 21 {             // ']' end (square-bracket generics)
                 keep_g = 0;
             } else { if gtt == 31 {             // K1.DE: '>>' end (nested generic
                                                 // closed both inner AND outer
@@ -11623,7 +11635,7 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                         } };
                     }
                 };
-            }}}};
+            }}}}};
         }
         // Stage 28.11 INC-1 cycle-3 polish (cycle-2 code-review F-4
         // conf 75): DEFERRED-KNOWN breadcrumb — this fn-generic loop
@@ -13958,13 +13970,23 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
     // proper fix requires a keyword-string check inside this loop
     // (bootstrap currently does keyword detection at decl-dispatch
     // time, not here). Out-of-scope for INC-1; track for INC-2/3.
+    // Helix generic structs use SQUARE brackets: `struct Wrapper[T] {..}`.
+    // The Python reference accepts ONLY `[T]`; the bootstrap's Stage-28.11
+    // machinery was wired to `<` (16) / `>` (17). Accept `[` (TK_LBRACK=20)
+    // as the opener and `]` (TK_RBRACK=21) as the closer too (legacy `<>`
+    // kept for safety — no live bootstrap source uses generic structs).
     let g_peek = tok_tag(tok_base, cur_get(sb));
-    if g_peek == 16 {                        // TK_LT = `<`
-        cur_advance(sb);                     // consume '<'
+    let mut g_is_open: i32 = 0;
+    if g_peek == 16 { g_is_open = 1; };
+    if g_peek == 20 { g_is_open = 1; };
+    if g_is_open == 1 {                      // TK_LT `<` or TK_LBRACK `[`
+        cur_advance(sb);                     // consume '<' or '['
         let mut keep_g: i32 = 1;
         while keep_g == 1 {
             let gtt = tok_tag(tok_base, cur_get(sb));
             if gtt == 17 {                   // TK_GT = `>` end
+                keep_g = 0;
+            } else { if gtt == 21 {          // TK_RBRACK = `]` end (square generics)
                 keep_g = 0;
             } else { if gtt == 31 {          // K1.DF: TK_RSHIFT (>>)
                                              // closing both inner AND
@@ -14135,7 +14157,7 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
                 // (5/6), nested `<` (16), operators, literals, etc.
                 // The post-loop guard below handles the cursor.
                 keep_g = 0;
-            }}}};
+            }}}}};
         }
         // Stage 28.11 INC-1 cycle-2 SF-2 fix: only advance past `>`
         // if the cursor actually points at one. EOF-mid-list or
@@ -14149,6 +14171,9 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
         // (if any) ends at the same position as the outer `>`.
         if tok_tag(tok_base, cur_get(sb)) == 17 {
             cur_advance(sb);                 // consume '>'
+        };
+        if tok_tag(tok_base, cur_get(sb)) == 21 {
+            cur_advance(sb);                 // consume ']' (square generics)
         };
         if tok_tag(tok_base, cur_get(sb)) == 31 {
             cur_advance(sb);                 // K1.DF: consume '>>'
