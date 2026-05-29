@@ -749,39 +749,97 @@ fn lex_char_lit(src_start: i32, src_len: i32, pos: i32) -> i32 {
 
 // --------------------------------------------------------------
 // Lex a string literal. Caller has verified bytes[pos] == 34 ('"').
-// Walks forward to the next unescaped '"' (Phase-0: no escape
-// processing yet — '\' is treated as a literal byte). Emits a
-// TK_STRLIT whose payload = body byte_start, src_len = body length
-// (both EXCLUDE the quotes). Returns byte index AFTER the closing
-// quote, or AFTER end-of-source if string was unterminated (we
-// emit anyway so the parser sees something coherent).
+// Walks forward to the next UNESCAPED '"', decoding backslash escapes
+// IN PLACE as it goes. Emits a TK_STRLIT whose payload = body
+// byte_start, src_len = the DECODED body length (both EXCLUDE the
+// quotes). Returns byte index AFTER the closing quote, or AFTER
+// end-of-source if the string was unterminated (we emit anyway so
+// the parser sees something coherent).
+//
+// Escape decoding mirrors the Python reference lexer
+// (helixc/frontend/lexer.py _decode_escape) and the bootstrap's own
+// lex_char_lit: the standard single-byte set
+//   n=10, t=9, r=13, 0=0, '=39, "=34, \=92
+// is resolved; an ESCAPED '"' (`\"`) therefore does NOT terminate
+// the string. Any OTHER escape byte is "unknown" — Python raises a
+// LexError, so we emit TK_ERR (tag 19), matching its strict
+// behaviour (and lex_char_lit's precedent). A trailing backslash
+// with no following byte before end-of-source is likewise an error.
+//
+// In-place decode-compact: a read pointer (rp) and write pointer
+// (wp) both start at body_start. The decoded body is never longer
+// than the raw body, so wp <= rp at all times — overwriting the
+// source bytes in [body_start, wp) is safe (those raw bytes are
+// never re-read for this token; downstream reads use src_start +
+// src_len = the decoded region). Note (v0.5 fix): __strlen reads
+// this src_len (kovc.hx:5436) so the decoded length now matches
+// Python's len(s.encode("utf-8")).
 // --------------------------------------------------------------
 fn lex_string(src_start: i32, src_len: i32, pos: i32) -> i32 {
     let body_start = pos + 1;
-    let mut p: i32 = body_start;
     let end = src_start + src_len;
+    let mut rp: i32 = body_start;
+    let mut wp: i32 = body_start;
     let mut keep: i32 = 1;
+    let mut closed: i32 = 0;
     while keep == 1 {
-        if p >= end {
+        if rp >= end {
             keep = 0;
         } else {
-            let b = __arena_get(p);
+            let b = __arena_get(rp);
             if b == 34 {
+                // Unescaped closing quote — end of string.
+                closed = 1;
                 keep = 0;
             } else {
-                p = p + 1;
+                if b == 92 {
+                    // Backslash escape. Need rp+1 < end for the
+                    // escape byte; a trailing '\' is an error.
+                    if rp + 1 >= end {
+                        // Trailing '\' with no escape byte: error
+                        // (Python raises). Leave closed=0 -> TK_ERR.
+                        keep = 0;
+                    } else {
+                        let esc = __arena_get(rp + 1);
+                        let dec =
+                            if esc == 110 { 10 }           // \n
+                            else { if esc == 116 { 9 }     // \t
+                            else { if esc == 114 { 13 }    // \r
+                            else { if esc == 48 { 0 }      // \0
+                            else { if esc == 39 { 39 }     // \'
+                            else { if esc == 34 { 34 }     // \"
+                            else { if esc == 92 { 92 }     // \\
+                            else { 0 - 1 } } } } } } };     // unknown sentinel
+                        if dec == (0 - 1) {
+                            // Unknown escape: Python raises LexError.
+                            // Leave closed=0 -> TK_ERR (tag 19).
+                            keep = 0;
+                        } else {
+                            __arena_set(wp, dec);
+                            wp = wp + 1;
+                            rp = rp + 2;
+                        };
+                    };
+                } else {
+                    // Ordinary byte — copy through.
+                    __arena_set(wp, b);
+                    wp = wp + 1;
+                    rp = rp + 1;
+                };
             };
         };
     }
-    let body_len = p - body_start;
+    let body_len = wp - body_start;
     // Audit fix #13b (cycle 1, polish): when the closing quote is
-    // missing (p >= end before seeing '"'), emit TK_ERR (tag 19)
+    // missing (or an escape was malformed), emit TK_ERR (tag 19)
     // instead of TK_STRLIT (tag 25). The parser then treats the
-    // unterminated string as a parse error rather than silently
-    // consuming the rest of the file as a string body.
-    let tk = if p < end { 25 } else { 19 };
+    // unterminated/invalid string as a parse error rather than
+    // silently consuming a bogus body.
+    let tk = if closed == 1 { 25 } else { 19 };
     push_token(tk, body_start, body_start, body_len);
-    if p < end { p + 1 } else { p }
+    // Advance past the closing quote when one was found; otherwise
+    // stop at rp (end-of-source or the malformed-escape position).
+    if closed == 1 { rp + 1 } else { rp }
 }
 
 // --------------------------------------------------------------
