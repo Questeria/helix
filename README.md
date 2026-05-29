@@ -26,17 +26,22 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 - **Runtime**: `helixrt`
 - **Target bootstrap chain**: stage0 (hand-encoded hex) → hex1 → M0 (assembler) → M1 → M2 (C-subset compiler) → helixc-bootstrap (in C-subset) → helixc (self-hosted in Helix)
 
-## Status (2026-05-16)
+## Status (2026-05-29)
 
-**Current stage: Stage 35 CLOSED (3/3 clean gates).** The Stage 35 audit-cleanup campaign closed at restart 65 (Increment 82 in the progress ledger) after three consecutive all-clean fresh audits on top of the substantive HEAD `e441173`. The exact test count changes as each subsequent stage adds regressions; restart 65 collected **2,556+ live `helixc/tests` pytest tests**. Continue from the newest pushed `git log -1 --oneline` and the tail of `docs/stage35-progress-2026-05-15.md` (see Increments 80 + 81 + 82 for the three clean-gate records, Increments 70 onward for the per-restart canary chain since restart 50). Stage 36 opens next; run `python -m pytest helixc/tests --collect-only -q` for the live count.
+**Current thrust: the self-hosting parity campaign ("K-bootstrap"), driving toward Python-deletion-ready.** The Helix-native bootstrap compiler — `helixc/bootstrap/{lexer,parser,kovc}.hx`, a from-scratch compiler written *in Helix* that emits x86-64 ELF directly (no assembler/linker/libc) — now **self-hosts with a proven byte-identical fixpoint**: the Python reference compiler builds K1 from the bootstrap source; K1 compiles the same source → K2; K2 compiles it → K3; and **K2 == K3 byte-for-byte** (locked by `helixc/tests/test_self_host_fixpoint.py`). The compiler written in Helix reproduces itself exactly — the same test a self-hosted C compiler uses (stage2 == stage3).
 
-The production compiler path is still the Python-hosted `helixc` implementation. A Helix self-hosted compiler remains the target of the bootstrap roadmap, not a shipped replacement for Python yet.
+Parity against the Python reference is *measured*, not assumed, by a data-driven corpus (`helixc/tests/test_parity_matrix.py`): the **core CPU language is at 100% parity** (every literal / integer-width / operator+precedence / control-flow / match-pattern / function / struct / enum / array / tuple / cast / float / impl-method shape the Python compiler accepts compiles to the identical exit result under the self-built bootstrap), and the corpus extends to **277 cases** covering advanced features — traits, nested structures, and type-aliases are all at parity; **generics are the sole remaining CPU-language gap** (fix in progress). Self-hosting progress is tracked by the K-bootstrap chunk counter in `scripts/helix_status.py` (~392).
+
+**Python is still the production compiler and the bootstrap *seed*.** Deleting Python ("K4", `helixc/` minus `bootstrap/`) is the end goal but is **user-gated** and gated on: full parity *beyond* the core language (porting the autodiff/grad passes, the type checker, the GPU backends, and the test infrastructure to Helix), a checked-in **trusted-seed binary (K3)** so the chain no longer needs Python to start, and **5 consecutive clean multi-agent audits**. That remaining scope is a multi-month effort, now fully enumerated and measured.
+
+> The older "Stage NN" numbering (this section previously read "Stage 35", 2026-05-16) is superseded by the K-bootstrap chunk counter for self-hosting progress. For live state, read in order: `git log --oneline -8`, `scripts/helix_status.py`, `helixc/tests/test_parity_matrix.py`, `helixc/tests/test_self_host_fixpoint.py`.
 
 Major direction shift this session: Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where ergonomics conflicts with structural regularity, structural regularity wins.
 
 What works today:
 - Hand-authored 299-byte ELF (`stage0/hex0/hex0.bin`) — the raw-binary foundation
 - Working Helix compiler (`helixc`): parse → typecheck → IR → const-fold + CSE + DCE + fdce + effect-check → x86-64 → Linux ELF
+- **Self-hosting Helix-native bootstrap compiler** (`helixc/bootstrap/{lexer,parser,kovc}.hx`): a complete lexer + parser + x86-64-ELF code generator written *in Helix*, compiled by `helixc` into a native binary that compiles Helix programs — including its own source. Proven **byte-identical self-host fixpoint** (K2 == K3) and **100% parity** with the Python reference on the core CPU language (277-case parity corpus; generics the one remaining gap)
 - **Source-level forward + reverse-mode autodiff** as language built-ins (`grad`, `grad_rev`, `grad_rev_all`), with chain rules across user-defined function calls (via inlining) and stdlib transcendentals (analytic rules)
 - **Verifier-gated reflection runtime**: 64 mutable cells in the binary's writable region. `quote`/`splice_f`/`modify_f` actually call your verifier function before committing
 - **IR-level effect verification**: @pure functions transitively prohibited from effectful code
