@@ -69,7 +69,7 @@ helixc\tests\test_self_host_fixpoint.py   # K2==K3 byte-identical fixpoint
 ```
 HEAD at this handoff: `5335304` (README status update). Counter ~392.
 
-## Audit / commit discipline (Anthony requires)
+## Audit / commit discipline (the maintainer requires)
 
 - **Fail closed always.** Unsupported constructs must raise / return FAILED,
   never emit plausible-but-wrong output. Never ship red; never fake an audit.
@@ -84,7 +84,7 @@ HEAD at this handoff: `5335304` (README status update). Counter ~392.
 
 Concise updates after meaningful progress / blockers:
 ```
-python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat 8212106071 --msg "Helix update: <status>. Next: <next>."
+python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat <YOUR_TELEGRAM_CHAT_ID> --msg "Helix update: <status>. Next: <next>."
 ```
 Or the full status panel: `python scripts\helix_status.py --note "<plain text>" --commit <sha>`.
 

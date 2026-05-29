@@ -472,7 +472,7 @@ behavior for strict diagnosis.
 - Send Telegram updates using:
 
 ```powershell
-python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat 8212106071 --msg "<message>"
+python C:\Projects\Kovostov\runtime\lib\kovostov_telegram.py send --chat <YOUR_TELEGRAM_CHAT_ID> --msg "<message>"
 ```
 
 - Keep language beginner-friendly with progress percentages.

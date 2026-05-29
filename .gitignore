@@ -58,3 +58,17 @@ desktop.ini
 /.stage31-bin/
 /.stage31-venv/
 /.stage33-logs/
+
+# --- public-repo hygiene: never commit secrets / local scratch ---
+*.env
+api.env
+.env
+*.key
+*.pem
+*.p12
+*.pfx
+*credentials*
+id_rsa*
+.loop_resume.md
+__pycache__/
+*.pyc

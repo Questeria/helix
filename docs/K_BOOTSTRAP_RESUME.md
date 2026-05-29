@@ -32,7 +32,7 @@ Per-chunk DISCIPLINE:
 - Per-chunk 3-axis audit when scope justifies (silent-failure-hunter / type-design-analyzer / code-reviewer). Small parser-level no-ops can skip the audit. Track consecutive-clean-audit counter once Python-ready-to-delete state is reached.
 - Each chunk = one coherent commit. Commit message has the K1.* shape (concrete description, Co-Authored-By line).
 - Push to origin/main after each commit (never force-push, never skip hooks).
-- ALWAYS send a Telegram update after each commit: `cd C:/Projects/Kovostov-Native && MSG="$(python scripts/helix_status.py --note '<one plain-English sentence>' --commit $(git rev-parse --short HEAD))" && cd C:/Projects/Kovostov/runtime/lib && python kovostov_telegram.py send --chat 8212106071 --msg "$MSG"`.
+- ALWAYS send a Telegram update after each commit: `cd C:/Projects/Kovostov-Native && MSG="$(python scripts/helix_status.py --note '<one plain-English sentence>' --commit $(git rev-parse --short HEAD))" && cd C:/Projects/Kovostov/runtime/lib && python kovostov_telegram.py send --chat <YOUR_TELEGRAM_CHAT_ID> --msg "$MSG"`.
 
 HARD RULES (always):
 - Claude subscription only — no external AI APIs, no direct Anthropic API.
