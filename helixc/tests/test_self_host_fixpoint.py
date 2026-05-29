@@ -74,3 +74,43 @@ fn main() -> i32 {
     r3 = subprocess.run(["wsl", "-e", "bash", "-c", "cp /tmp/sh_fp_k2_out.bin /tmp/sh_fp_k3.bin && chmod +x /tmp/sh_fp_k3.bin && /tmp/sh_fp_k3.bin; echo exit=$?"],
                         capture_output=True, timeout=10)
     assert b"exit=42" in r3.stdout, f"K3 (compiled by the self-built K2) did not exit 42: stdout={r3.stdout!r} stderr={r3.stderr!r}"
+
+
+def test_self_host_fixpoint_byte_identical():
+    """TRUE fixpoint: K1 (Python-built) compiles source_X -> K2; K2 compiles the
+    SAME source_X -> K3; K2 and K3 must be BYTE-IDENTICAL. Proves the
+    bootstrap-built compiler reproduces ITSELF exactly -- the gold-standard
+    self-host fixpoint (no divergence, no nondeterminism). Big stack (bug #1)."""
+    from helixc.tests.test_codegen import _compile_src_to_elf
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lexer_no_main = _read_lib(proj, "lexer.hx")
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx")).read()
+    kovc_lib = _read_lib(proj, "kovc.hx")
+    main_x = """
+fn main() -> i32 {
+    let src_start = __arena_len();
+    let src_len = read_file_to_arena("/tmp/sh_fpc_in.hx");
+    let tok_base = __arena_len();
+    lex(src_start, src_len);
+    let ast_root = parse_top(tok_base);
+    let total = emit_elf_for_ast_to_path(ast_root);
+    let elf_start = __arena_len() - total;
+    write_file_to_arena("/tmp/sh_fpc_out.bin", elf_start, total)
+}
+"""
+    source_x = lexer_no_main + parser_body + kovc_lib + main_x
+
+    k1 = _compile_src_to_elf(source_x)
+    subprocess.run(["wsl", "-e", "bash", "-c", "cat > /tmp/sh_fpc_k1.bin"], input=k1, check=True, timeout=30)
+    subprocess.run(["wsl", "-e", "bash", "-c", "cat > /tmp/sh_fpc_in.hx"], input=source_x.encode("utf-8"), check=True, timeout=30)
+    # K1 compiles source_X -> K2.
+    subprocess.run(["wsl", "-e", "bash", "-c", f"rm -f /tmp/sh_fpc_out.bin; {_UL}chmod +x /tmp/sh_fpc_k1.bin && /tmp/sh_fpc_k1.bin"], timeout=180)
+    subprocess.run(["wsl", "-e", "bash", "-c", "cp /tmp/sh_fpc_out.bin /tmp/sh_fpc_k2.bin 2>/dev/null"], timeout=10)
+    assert _sz("/tmp/sh_fpc_k2.bin") > 0, "K1 failed to compile source_X into K2"
+    # K2 compiles the SAME source_X -> K3.
+    subprocess.run(["wsl", "-e", "bash", "-c", "cat > /tmp/sh_fpc_in.hx"], input=source_x.encode("utf-8"), check=True, timeout=30)
+    subprocess.run(["wsl", "-e", "bash", "-c", f"rm -f /tmp/sh_fpc_out.bin; {_UL}chmod +x /tmp/sh_fpc_k2.bin && /tmp/sh_fpc_k2.bin"], timeout=180)
+    subprocess.run(["wsl", "-e", "bash", "-c", "cp /tmp/sh_fpc_out.bin /tmp/sh_fpc_k3.bin 2>/dev/null"], timeout=10)
+    assert _sz("/tmp/sh_fpc_k3.bin") > 0, "K2 failed to compile source_X into K3"
+    cmp = subprocess.run(["wsl", "-e", "bash", "-c", "cmp -s /tmp/sh_fpc_k2.bin /tmp/sh_fpc_k3.bin && echo IDENTICAL || echo DIFFER"], capture_output=True, timeout=20)
+    assert b"IDENTICAL" in cmp.stdout, f"self-host is NOT a byte-identical fixpoint: K2 != K3 ({cmp.stdout!r})"
