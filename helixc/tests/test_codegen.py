@@ -8492,13 +8492,17 @@ def test_bootstrap_test_runner_over_corpus_subset():
         body.append("fails }")
         return check + "".join(body)
 
-    # 8 short self-contained CPU programs. Kept SMALL on purpose: the bootstrap
-    # miscompiles a `main` with >=~11 sequential statement-blocks (5/7/9 blocks
-    # pass, 12 fail -- a code-size/jump-offset codegen bug, characterized via
-    # bisection 2026-05-30). Scaling this runner to the full ~720 corpus needs
-    # that bootstrap fix OR a loop/manifest-driven runner whose main body is
-    # fixed-size (a single loop) regardless of corpus length.
-    subset = [(c[2], c[3]) for c in PARITY_CORPUS if len(c[2]) < 40][:8]
+    # 32 short self-contained CPU programs (scaled from 8 on 2026-05-30 after the
+    # task-14 fix, commit 6854909). The earlier ~11-block cap was the large-function
+    # HOST STACK OVERFLOW: the runner inlines each program's bytes as __arena_push
+    # statements, so N programs make a `main` of ~sum(len)+4N statements, and the
+    # bootstrap's recursive AST_SEQ codegen overflowed the host stack at ~290. Now
+    # that emit_ast_code + expr_type walk the spine ITERATIVELY the ceiling is
+    # >=2000, so 32 programs (~1026 stmts) fit with 2x margin. Scaling to the full
+    # ~720 corpus still needs a loop/manifest-driven runner with a FIXED-size main
+    # (one loop reading each program from a file) -- which needs a dynamic-path read
+    # builtin (T1 follow-up), since read_file_to_arena takes a compile-time strlit.
+    subset = [(c[2], c[3]) for c in PARITY_CORPUS if len(c[2]) < 40][:32]
     rc_all, _, _ = _kovc_self_host_compile_and_run_full("corpus_runner_all", _gen_runner(subset))
     assert rc_all == 0, (
         f"Helix runner over {len(subset)} corpus programs expected 0 failures, got {rc_all}")
