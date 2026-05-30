@@ -8509,6 +8509,30 @@ def test_bootstrap_test_runner_over_corpus_subset():
     assert rc_one == 1, f"Helix runner with 1 wrong expected expected 1 failure, got {rc_one}"
 
 
+@pytest.mark.xfail(strict=False, reason=(
+    "Known bootstrap codegen bug (task #14, minimized 2026-05-30): a LOCAL held "
+    "across ~300+ inlined __arena_push calls in a large main is corrupted -- a "
+    "code-size threshold (passes <=~260 pushes, fails >=~300). NOT local count "
+    "(60 lets are fine), NOT the binop (last tick's 244 was a mod-256 exit-code "
+    "confound), NOT run_process (no builtins involved beyond __arena_push). It "
+    "blocks scaling the Helix-native test runner past ~8-16 corpus programs "
+    "(test_bootstrap_test_runner_over_corpus_subset is kept at 8). Root-cause "
+    "needs disassembly (objdump can't parse the bare ELF; install capstone or "
+    "objdump -D -b binary on the extracted .text)."))
+def test_bootstrap_large_main_local_corruption_xfail():
+    """Minimal repro of the large-main codegen defect. A local `d` computed early
+    (= 23) must survive to the return, but with ~400 inlined __arena_push calls
+    after it in the same main, the bootstrap miscompiles and `d` comes back
+    wrong. Flips to PASS (xpass) when the codegen is fixed -> remove the xfail."""
+    src = ("fn main() -> i32 { let s = __arena_len(); "
+           + "__arena_push(65); " * 23
+           + "let d = __arena_len() - s; "
+           + "__arena_push(66); " * 400
+           + "d }")
+    rc, _, _ = _kovc_self_host_compile_and_run_full("large_main_local", src)
+    assert rc == 23, f"local d (=23) held across 400 inlined pushes was corrupted: got {rc}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills
