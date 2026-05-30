@@ -1,0 +1,6 @@
+# stage0 is a BYTE-EXACT bootstrap tree: never apply line-ending or any other
+# content conversion. The hex sources are decoded byte-for-byte and their
+# recorded .sha256 / PROVENANCE hashes must match a fresh checkout; the .bin
+# files are binaries; the shell scripts run under bash and must stay LF.
+* -text
+*.bin binary
