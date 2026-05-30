@@ -30,7 +30,7 @@ MODULE_DEPS: dict[str, list[str]] = {
     "option": ["option"],
     "result": ["result"],
     "vec": ["vec"],
-    "iter": ["iterators"],
+    "iter": ["vec", "iterators"],       # iterators.hx + vec.hx base (some iter cases construct inputs via vec_new/vec_push)
     "hashmap": ["tensor", "hashmap"],   # hashmap ops call into tensor.hx
     "string": ["string"],
     "nn": ["tensor", "nn"],             # nn fns reference tensor.hx helpers
@@ -124,12 +124,17 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
      "fn main() -> i32 { let a = Result::Ok(42); let b = Result::Ok(99); let c = Result::Err(7); let n_match = result_eq_ok(a, 42); let n_no = result_eq_ok(b, 42); let n_err = result_eq_ok(c, 42); n_match * 42 + n_no + n_err }", 42),
     ("vec", "contains",
      "fn main() -> i32 { let s = vec_new(); let c0 = vec_push(s, 0, 11); let c1 = vec_push(s, c0, 22); let c2 = vec_push(s, c1, 33); let hit = vec_contains(s, c2, 22); let miss = vec_contains(s, c2, 99); (hit - miss) * 42 }", 42),
-    # vec_abs_sum + vec_sum_squares TRAP (rc132) under the bootstrap while
-    # Python returns 42 -- a real bootstrap codegen gap in these two vec fns
-    # (vec_contains/sum/max/push/index_of all work). KNOWN_PARITY_GAPS below.
-    ("vec", "abs_sum",
+    # vec_abs_sum + vec_sum_squares live in iterators.hx (i64-accumulator L1/L2
+    # helpers), so they are keyed "iter" (deps vec + iterators), NOT "vec" (the
+    # earlier "vec" keying prepended only vec.hx, which lacks the fns -> the
+    # bootstrap compiled a call to an undefined fn and trapped: a harness mis-
+    # attribution, not the real bug). The REAL bug was K1.CAST-SX (2026-05-30):
+    # a negative i32 `as i64` was ZERO-extended, so vec_abs_sum's `if v < 0` /
+    # `if acc > hi` saturation mis-saturated to 2147483647. Fixed in kovc.hx
+    # emit_cast_conv; now BOOT == PY == 42.
+    ("iter", "abs_sum",
      "fn main() -> i32 { let v = vec_new(); let n0 = vec_push(v, 0, 5); let n1 = vec_push(v, n0, -3); let n2 = vec_push(v, n1, -8); let n3 = vec_push(v, n2, 1); vec_abs_sum(v, n3) * 2 + 8 }", 42),
-    ("vec", "sum_squares",
+    ("iter", "sum_squares",
      "fn main() -> i32 { let v = vec_new(); let n0 = vec_push(v, 0, 1); let n1 = vec_push(v, n0, 2); let n2 = vec_push(v, n1, 3); let n3 = vec_push(v, n2, 4); vec_sum_squares(v, n3) + 12 }", 42),
     ("string", "from_to_int_roundtrip",
      "fn main() -> i32 { let start = __arena_len(); let n = string_from_int(123); let v = string_to_int(start, n); if v == 123 { 42 } else { 1 } }", 42),
@@ -147,14 +152,18 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 # Remove entries as the underlying bootstrap bug is fixed.
 # ============================================================================
 KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
-    # vec_abs_sum / vec_sum_squares: bootstrap SIGILLs (rc132) while Python
-    # returns the correct sum. The other vec fns (contains/sum/max/push/
-    # index_of) all work, so it's a codegen gap specific to these two
-    # (likely an op they use -- abs or i32 square/saturation -- that the
-    # bootstrap mishandles in that context). Found 2026-05-30 corpus
-    # expansion; root-cause + fix is a follow-up chunk.
-    ("vec", "abs_sum"),
-    ("vec", "sum_squares"),
+    # (empty) — all corpus entries pass under both Python and the bootstrap.
+    #
+    # FIXED 2026-05-30: vec_abs_sum / vec_sum_squares (keyed "iter") were a
+    # TWO-part finding. (a) Harness mis-attribution: keyed "vec" they got only
+    # vec.hx prepended, but the fns live in iterators.hx -> the bootstrap
+    # compiled a call to an undefined fn and trapped (rc132). Re-keyed "iter"
+    # (deps vec + iterators) so the def is present. (b) The REAL codegen bug,
+    # exposed once defined: a negative i32 `as i64` was ZERO-extended (kovc.hx
+    # emit_cast_conv int->int no-op), so the `if v < 0` / `if acc > hi`
+    # saturation mis-saturated to 2147483647. Fixed with a movsxd sign-extend
+    # for EXACTLY-i32 -> i64/u64 widening (K1.CAST-SX); guarded directly in
+    # test_parity_matrix.py CAST (ca_neg_*).
     #
     # FIXED 2026-05-30: option/sum was the symptom of a deep nested-match
     # codegen bug. A nested match in ANY arm of a match re-init'd the SHARED

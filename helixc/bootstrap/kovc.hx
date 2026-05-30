@@ -6740,8 +6740,23 @@ fn emit_cast_conv(src_tag: i32, tgt_tag: i32) -> i32 {
     let tgt_f = cast_is_float_tag(tgt_tag);
     if src_f == 0 {
         if tgt_f == 0 {
-            // int -> int: no conversion.
-            0
+            // K1.CAST-SX (2026-05-30): int -> int. Same-shape and
+            // narrowing casts need no bytes (a 32-bit producer zero-
+            // clears rax's high half; truncation reads only the low
+            // half). BUT widening a SIGNED i32 (tag 0) to a 64-bit
+            // target (i64=3 / u64=9) MUST sign-extend: x86 leaves eax
+            // zero-extended in rax, which misreads a negative i32 as a
+            // large positive i64 -- fatal once the i64 is compared
+            // (vec_abs_sum's `if v < 0` / `if acc > hi` saturation).
+            // u8/u16/u32 sources are already zero-extend-correct;
+            // i64/u64 sources are already 64-bit wide. Mirrors the
+            // EXACTLY-i32 widening guard of the i64<->i32 binary ops
+            // (K1.F8/F11).
+            if src_tag == 0 {
+                if cast_is_i64_tag(tgt_tag) == 1 {
+                    emit_movsxd_rax_eax()
+                } else { 0 }
+            } else { 0 }
         } else {
             // int -> float. Source GPR is eax (32-bit) or rax (64-bit
             // when src is i64/u64). Result goes to eax (f32) or rax (f64).

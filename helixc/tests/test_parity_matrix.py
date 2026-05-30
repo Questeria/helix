@@ -296,6 +296,17 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
     ("CAST", "ca_f64_cmp",           "fn main() -> i32 { let x: f64 = 1.5_f64 + 2.5_f64; if x == 4.0_f64 { 42 } else { 0 } }", 42),
     ("CAST", "ca_i32_to_i64_fn",     "fn main() -> i32 { let r: i64 = 21_i64 + 21_i64; r as i32 }", 42),
 
+    # ---- CAST sign-extension regression (K1.CAST-SX 2026-05-30) ----
+    # A NEGATIVE i32 widened `as i64` MUST sign-extend, not zero-extend. The
+    # pre-existing ca_i32_via_let used a POSITIVE value and truncated back via
+    # `as i32`, masking the bug; these use negatives UNDER A COMPARISON (which
+    # reads the high 32 bits) so a zero-extended -3 (0xFFFFFFFD = 4294967293)
+    # is caught. Real CPU-language codegen gap behind vec_abs_sum/sum_squares.
+    ("CAST", "ca_neg_i32_i64_lt",    "fn main() -> i32 { let x: i32 = 0 - 3; let v: i64 = x as i64; if v < 0_i64 { 42 } else { 1 } }", 42),
+    ("CAST", "ca_neg_i32_i64_gthi",  "fn main() -> i32 { let x: i32 = 0 - 3; let v: i64 = x as i64; let hi: i64 = 2147483647_i64; if v > hi { 1 } else { 42 } }", 42),
+    ("CAST", "ca_neg_param_i64",     "fn f(x: i32) -> i32 { let v: i64 = x as i64; if v < 0_i64 { 42 } else { 1 } } fn main() -> i32 { f(0 - 7) }", 42),
+    ("CAST", "ca_neg_i64_abs_sat",   "fn main() -> i32 { let mut acc: i64 = 0_i64; let hi: i64 = 2147483647_i64; let x: i32 = 0 - 8; let v: i64 = x as i64; if v < 0_i64 { acc = acc - v; } else { acc = acc + v; } if acc > hi { acc = hi; }; (acc as i32) + 34 }", 42),
+
     # ---- CAST_CONV: REAL numeric conversions via `as` (K1.CAST 2026-05-29) ----
     # These deliberately AVOID round-trips: each value is computed in float
     # arithmetic and truncated to int, so a NO-OP cast (the pre-K1.CAST
