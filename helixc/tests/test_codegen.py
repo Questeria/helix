@@ -8447,6 +8447,68 @@ def test_bootstrap_runner_compiles_and_runs_helix():
     assert rc_bad == 1, f"runner compile+run 7 (expect 42) -> 1, got {rc_bad}"
 
 
+def test_bootstrap_test_runner_over_corpus_subset():
+    """T2 STEP C (2026-05-30): the Helix-native runner reproduces pytest's
+    pass/fail over a SUBSET of the REAL CPU parity corpus -- the capstone that
+    the Python test harness is REPLACEABLE. A generated Helix RUNNER, per
+    (src, expected_rc) tuple, write_file's src -> /tmp/t.hx, run_process's the
+    fixed-path kovc /tmp/kovc_t to compile -> /tmp/t.elf, set_exec+run_process's
+    it, compares the exit code to expected_rc, tallies failures. All subset
+    programs pass under the Helix runner exactly as under pytest -> 0; one
+    deliberately-wrong expected -> 1. (Python only builds the kovc binary once;
+    the K3 trusted seed replaces that. The bootstrap kovc has no stdlib
+    auto-include, but every CPU-parity src is self-contained.)"""
+    import subprocess
+    from helixc.tests.test_parity_matrix import PARITY_CORPUS
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _strip_demo(name):
+        s = open(os.path.join(proj, "helixc", "bootstrap", name), encoding="utf-8").read()
+        return s.rsplit(
+            "// --------------------------------------------------------------\n// Demo:", 1)[0]
+
+    in_path, out_path, kovc_t = "/tmp/t.hx", "/tmp/t.elf", "/tmp/kovc_t"
+    k1_main = (
+        "\nfn main() -> i32 {\n    let src_start = __arena_len();\n"
+        f'    let src_len = read_file_to_arena("{in_path}");\n    let tok_base = __arena_len();\n'
+        "    lex(src_start, src_len);\n    let ast_root = parse_top(tok_base);\n"
+        "    let total = emit_elf_for_ast_to_path(ast_root);\n    let elf_start = __arena_len() - total;\n"
+        f'    write_file_to_arena("{out_path}", elf_start, total)\n}}\n')
+    driver = (_strip_demo("lexer.hx")
+              + open(os.path.join(proj, "helixc", "bootstrap", "parser.hx"), encoding="utf-8").read()
+              + _strip_demo("kovc.hx") + k1_main)
+    subprocess.run(["wsl", "-e", "bash", "-c", f"cat > {kovc_t} && chmod +x {kovc_t}"],
+                   input=_compile_src_to_elf(driver), check=True, timeout=30)
+
+    def _gen_runner(tuples):
+        check = ('fn check(expected: i32) -> i32 { set_exec("' + kovc_t + '"); run_process("' + kovc_t
+                 + '"); set_exec("' + out_path + '"); let rc = run_process("' + out_path
+                 + '"); if rc == expected { 0 } else { 1 } } ')
+        body = ["fn main() -> i32 { let mut fails = 0; "]
+        for i, (src, exp) in enumerate(tuples):
+            push = "".join(f"__arena_push({b}); " for b in src.encode("utf-8"))
+            body.append(f"let s{i} = __arena_len(); {push}let n{i} = __arena_len() - s{i}; "
+                        f'write_file_to_arena("{in_path}", s{i}, n{i}); fails = fails + check({exp}); ')
+        body.append("fails }")
+        return check + "".join(body)
+
+    # 8 short self-contained CPU programs. Kept SMALL on purpose: the bootstrap
+    # miscompiles a `main` with >=~11 sequential statement-blocks (5/7/9 blocks
+    # pass, 12 fail -- a code-size/jump-offset codegen bug, characterized via
+    # bisection 2026-05-30). Scaling this runner to the full ~720 corpus needs
+    # that bootstrap fix OR a loop/manifest-driven runner whose main body is
+    # fixed-size (a single loop) regardless of corpus length.
+    subset = [(c[2], c[3]) for c in PARITY_CORPUS if len(c[2]) < 40][:8]
+    rc_all, _, _ = _kovc_self_host_compile_and_run_full("corpus_runner_all", _gen_runner(subset))
+    assert rc_all == 0, (
+        f"Helix runner over {len(subset)} corpus programs expected 0 failures, got {rc_all}")
+    corrupt = subset[:]
+    mid = len(corrupt) // 2
+    corrupt[mid] = (corrupt[mid][0], corrupt[mid][1] + 99)
+    rc_one, _, _ = _kovc_self_host_compile_and_run_full("corpus_runner_corrupt", _gen_runner(corrupt))
+    assert rc_one == 1, f"Helix runner with 1 wrong expected expected 1 failure, got {rc_one}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills
