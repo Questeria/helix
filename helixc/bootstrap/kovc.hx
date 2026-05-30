@@ -5880,10 +5880,21 @@ fn bn_global_slot_address() -> i32 {
 fn count_float_digits(p1: i32, p2: i32) -> i32 {
     let mut i: i32 = 0;
     let mut digits: i32 = 0;
+    // Stop at the first '_' (95): the float-literal token's byte-range
+    // INCLUDES the type suffix (lexer.hx flen = p - pos, p past the
+    // suffix), so without this the '3'/'2' of '_f32' (and '1'/'6' of
+    // '_f16'/'_bf16') were counted as numeric digits — tripping the >9
+    // overflow guard ~2 digits early (e.g. 6.2831853_f32 = 8 real digits
+    // + 2 suffix = 10 > 9 -> false trap 27002). parse_float_bits already
+    // stops at '_', so the guard must count the same numeric run.
+    let mut keep: i32 = 1;
     while i < p2 {
-        let b = __arena_get(p1 + i);
-        if b == 46 { } // '.', skip
-        else { if b >= 48 { if b <= 57 { digits = digits + 1; }; }; };
+        if keep == 1 {
+            let b = __arena_get(p1 + i);
+            if b == 95 { keep = 0; } // '_' type-suffix start: stop counting
+            else { if b == 46 { }    // '.', skip
+            else { if b >= 48 { if b <= 57 { digits = digits + 1; }; }; }; };
+        };
         i = i + 1;
     }
     digits
