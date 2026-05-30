@@ -278,36 +278,20 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # derivative of a constant is f32 0.0, whose bit pattern survives the
     # bootstrap's no-op `as i32` cast as integer 0 (== expected_rc).
     #
-    # The remaining FWD_F32 ARITHMETIC cases below stay xfail NOT because
-    # of the autodiff math (C1 fixed that) but because of a SEPARATE,
-    # pre-existing bootstrap limitation: the `as` cast operator is a
-    # parser-level NO-OP (parser.hx ~2755: it consumes `as <type>` and
-    # returns the operand unchanged). Every corpus FWD_F32 case extracts
-    # its result via `grad(f)(arg) as i32`; for a non-zero f32 result the
-    # no-op cast leaves an f32 bit-pattern where i32 is expected, so the
-    # value reads as 0 (or the 14002 body-vs-ret width trap fires, rc=132)
-    # in the bootstrap while the Python reference does a real cvttss2si
-    # truncation. This `as`-cast no-op is its OWN chunk (float->int cast
-    # lowering); it is out of C1's "f32 derivative constants" scope.
-    # Until that lands, these stay xfail.
-    ("FWD_F32", "ident"),
-    ("FWD_F32", "x_squared"),
-    ("FWD_F32", "add_x"),
-    ("FWD_F32", "linear"),
-    ("FWD_F32", "x_cubed"),
-    ("FWD_F32", "sub_neg"),
-    ("FWD_F32", "div_half"),
-    ("FWD_F32", "neg_unary"),
-    ("FWD_F32", "quadratic"),
-    # GAP-1 + GAP-2
+    # CHUNK C1b (2026-05-30) LANDED real `as`-cast lowering (AST_CAST tag 81
+    # + emit_cast_conv SSE conversions in kovc.hx). The 9 FWD_F32 ARITHMETIC
+    # cases (ident/x_squared/add_x/linear/x_cubed/sub_neg/div_half/neg_unary/
+    # quadratic) and the 3 FWD_F32_FN cases (single_helper/two_level/
+    # deep_block) extract via `grad(f)(arg) as i32`; with the no-op cast gone
+    # the bootstrap now does a real cvttss2si truncation matching Python.
+    # All 12 are REMOVED from this set and are now hard-asserted (a future
+    # regression FAILS loudly instead of being silently xfailed).
+    #
+    # The FWD_F32_LET cases need BOTH the f32 path AND let-binding support in
+    # differentiate (GAP-2), so they stay xfail until C2 lands.
     ("FWD_F32_LET", "simple"),
     ("FWD_F32_LET", "chain"),
     ("FWD_F32_LET", "let_pred"),
-    # GAP-1 (helper fns work in Python because inline_user_calls runs first,
-    # but bootstrap still emits f64 derivative constants for f32 fn)
-    ("FWD_F32_FN", "single_helper"),
-    ("FWD_F32_FN", "two_level"),
-    ("FWD_F32_FN", "deep_block"),
     # GAP-1 + GAP-4
     ("FWD_F32_HO", "grad_grad"),
     ("FWD_F32_HO", "let_alias"),
