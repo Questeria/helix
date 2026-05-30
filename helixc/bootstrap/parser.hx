@@ -5878,20 +5878,48 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let g_t2 = tok_tag(tok_base, k + 2);
         let g_t3 = tok_tag(tok_base, k + 3);
         let g_t4 = tok_tag(tok_base, k + 4);
+        let g_t5 = tok_tag(tok_base, k + 5);
+        let g_t6 = tok_tag(tok_base, k + 6);
+        // is_grad_call matches BOTH the one-arg form `grad(f)(...)` (tokens
+        // grad ( IDENT ) ( -> g_t3==`)`==4, g_t4==`(`==3) AND the C4 two-arg
+        // param-index form `grad(f, N)(...)` (grad ( IDENT , INT ) ( ->
+        // g_t3==`,`==13, g_t4==INT==1, g_t5==`)`==4, g_t6==`(`==3).
         let is_grad_call = if is_grad_kw == 1 {
-            if g_t1 == 3 { if g_t2 == 2 { if g_t3 == 4 { if g_t4 == 3 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            if g_t1 == 3 { if g_t2 == 2 {
+                if g_t3 == 4 {
+                    if g_t4 == 3 { 1 } else { 0 }
+                } else { if g_t3 == 13 {
+                    if g_t4 == 1 { if g_t5 == 4 { if g_t6 == 3 { 1 } else { 0 } } else { 0 } } else { 0 }
+                } else { 0 } }
+            } else { 0 } } else { 0 }
         } else { 0 };
         if is_grad_call == 1 {
-            // Consume `grad`, `(`, IDENT (loss_name), `)`, `(`.
+            // C4: two-arg param-index form iff the token after the loss
+            // IDENT is `,` (g_t3==13). Otherwise the one-arg form.
+            let is_two_arg = if g_t3 == 13 { 1 } else { 0 };
+            // Consume `grad`, `(`, IDENT (loss_name).
             cur_advance(sb);     // `grad`
             cur_advance(sb);     // `(`
             let loss_k = cur_get(sb);
             let loss_s = tok_p2(tok_base, loss_k);
             let loss_l = tok_p3(tok_base, loss_k);
             cur_advance(sb);     // loss_name IDENT
+            // Two-arg: consume `,` then the INT, capturing its first digit
+            // char (Phase-0: single-digit param index). One-arg: '0' default
+            // (not appended to the name).
+            let idx_byte = if is_two_arg == 1 {
+                cur_advance(sb);     // `,`
+                let idx_k = cur_get(sb);
+                let ib = __arena_get(tok_p2(tok_base, idx_k));
+                cur_advance(sb);     // INT
+                ib
+            } else {
+                48
+            };
             cur_advance(sb);     // `)`
             cur_advance(sb);     // `(`
-            // Build mangled name "<loss>__grad" directly into the arena.
+            // Build mangled name "<loss>__grad" (one-arg) or
+            // "<loss>__grad<digit>" (two-arg) directly into the arena.
             let mang_s = __arena_len();
             let mut bi: i32 = 0;
             while bi < loss_l {
@@ -5904,7 +5932,14 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             __arena_push(114);   // 'r'
             __arena_push(97);    // 'a'
             __arena_push(100);   // 'd'
-            let mang_l = loss_l + 6;
+            // Two-arg appends the index digit (contiguous push) so grad_pass
+            // recovers N from the trailing byte; one-arg keeps width 6.
+            let mang_l = if is_two_arg == 1 {
+                __arena_push(idx_byte);
+                loss_l + 7
+            } else {
+                loss_l + 6
+            };
             // Register in grad_pending (idempotent on duplicate would still
             // synthesize twice — Phase-0 caps at 8 calls, dedup deferred).
             grad_pending_add(sb, loss_s, loss_l, mang_s, mang_l);
@@ -11128,11 +11163,26 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 let loss_params = __arena_get(loss_fn_idx + 4);
                 let loss_ret_ty = __arena_get(loss_fn_idx + 5);
                 let loss_is_ckpt = __arena_get(loss_fn_idx + 8);
-                // Extract first param's name (the variable to differentiate
-                // w.r.t.). AST_PARAM (tag 18) layout: slot 1 = name_s,
-                // 2 = name_l, 3 = next, 4 = type_tag.
-                let var_s = if loss_params == 0 { 0 } else { __arena_get(loss_params + 1) };
-                let var_l = if loss_params == 0 { 0 } else { __arena_get(loss_params + 2) };
+                // C4: pick the variable to differentiate w.r.t. by param
+                // index. The mangled name is "<loss>__grad" (param 0) or
+                // "<loss>__grad<N>" (param N, one extra trailing digit). When
+                // the mangled length is loss_l + 7, recover N from the last
+                // byte; otherwise N = 0. Then walk N steps down the param
+                // chain. AST_PARAM (tag 18): slot 1 = name_s, 2 = name_l,
+                // 3 = next, 4 = type_tag.
+                let grad_param_n = if mang_l == loss_l + 7 {
+                    __arena_get(mang_s + mang_l - 1) - 48
+                } else {
+                    0
+                };
+                let mut pwalk: i32 = loss_params;
+                let mut pn: i32 = grad_param_n;
+                while pn > 0 {
+                    if pwalk != 0 { pwalk = __arena_get(pwalk + 3); };
+                    pn = pn - 1;
+                }
+                let var_s = if pwalk == 0 { 0 } else { __arena_get(pwalk + 1) };
+                let var_l = if pwalk == 0 { 0 } else { __arena_get(pwalk + 2) };
                 // Stage 13 prep: inline user-fn calls inside loss before
                 // differentiating. depth=0; recursion cap=6 inside the
                 // pass. Calls to unknown fns (transcendentals, builtins)

@@ -295,12 +295,17 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # REMOVED from this set (hard-asserted). REVERSE-mode let bindings
     # (REV_F64_LET) still trap — that path is propagate_adj, a separate
     # chunk (C2b) — so REV_F64_LET stays xfail below.
-    # GAP-1 + GAP-4
+    # GAP-4: higher-order. grad_grad = grad(grad(f)); let_alias binds
+    # grad(f) to a variable then calls it. Both need grad-as-value / nested
+    # grad handling in the call-site parser (the detector only matches the
+    # immediately-applied grad(IDENT)( shape), so they stay xfail.
     ("FWD_F32_HO", "grad_grad"),
     ("FWD_F32_HO", "let_alias"),
-    # GAP-1 + GAP-5
-    ("FWD_F32_IDX", "idx_0"),
-    ("FWD_F32_IDX", "idx_1"),
+    # GAP-5: explicit param index. CHUNK C4 (2026-05-30) LANDED grad(f, N):
+    # the call-site parser now also matches grad ( IDENT , INT ) ( and
+    # encodes N as a trailing digit in the mangled name "<loss>__grad<N>";
+    # grad_pass recovers N and differentiates w.r.t. the N-th param. idx_0
+    # and idx_1 now match Python and are REMOVED (hard-asserted).
     # GAP-3: transcendental chain rules. CHUNK C3a (2026-05-30) LANDED the
     # relu/abs subgradient rules (a new AST_CALL arm in differentiate):
     # relu' = (u>0?1:0), abs' = (u>0?1:(u<0?-1:0)) — pure conditionals
