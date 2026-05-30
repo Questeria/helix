@@ -8362,6 +8362,38 @@ def test_bootstrap_set_exec_makes_runnable():
     assert rc_noexec == 127, f"write+run without set_exec expected 127, got {rc_noexec}"
 
 
+def test_bootstrap_test_runner_skeleton():
+    """T2 STEP A (2026-05-30): the Helix-native test-RUNNER LOOP, proven in
+    compiled Helix (no Python). A multi-fn program: write_script writes a
+    `#!/bin/sh\\nexit <d>` shebang to a fixed path; run_one does
+    write_file -> set_exec -> run_process -> compare exit code to expected,
+    returning 1 on mismatch; main tallies failures across several programs and
+    returns the fail count. Proves the orchestration logic (helper fns,
+    write/chmod/run sequencing, exit-code compare, pass/fail tally, status
+    return) works end to end. All-pass -> 0; one deliberately-wrong expected
+    -> 1. (STEP B wires compiling each test program via a fixed-path kovc.)"""
+    helpers = (
+        "fn write_script(code_byte: i32) -> i32 { let s = __arena_len(); "
+        "__arena_push(35); __arena_push(33); __arena_push(47); __arena_push(98); "
+        "__arena_push(105); __arena_push(110); __arena_push(47); __arena_push(115); "
+        "__arena_push(104); __arena_push(10); __arena_push(101); __arena_push(120); "
+        "__arena_push(105); __arena_push(116); __arena_push(32); __arena_push(code_byte); "
+        "let n = __arena_len() - s; write_file_to_arena(\"/tmp/r_t.sh\", s, n); 0 } "
+        "fn run_one(code_byte: i32, expected: i32) -> i32 { write_script(code_byte); "
+        "set_exec(\"/tmp/r_t.sh\"); let rc = run_process(\"/tmp/r_t.sh\"); "
+        "if rc == expected { 0 } else { 1 } } ")
+    runner_pass = helpers + (
+        "fn main() -> i32 { let f1 = run_one(48, 0); let f2 = run_one(55, 7); "
+        "let f3 = run_one(53, 5); f1 + f2 + f3 }")
+    runner_fail = helpers + (
+        "fn main() -> i32 { let f1 = run_one(48, 0); let f2 = run_one(55, 9); "
+        "let f3 = run_one(53, 5); f1 + f2 + f3 }")
+    rc_pass, _, _ = _kovc_self_host_compile_and_run_full("test_runner_pass", runner_pass)
+    assert rc_pass == 0, f"runner all-pass expected 0 failures, got {rc_pass}"
+    rc_fail, _, _ = _kovc_self_host_compile_and_run_full("test_runner_fail", runner_fail)
+    assert rc_fail == 1, f"runner one-fail expected 1 failure, got {rc_fail}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills
