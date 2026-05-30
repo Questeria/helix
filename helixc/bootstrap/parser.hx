@@ -10628,13 +10628,61 @@ fn sum_bucket(sb: i32, ret_tag: i32) -> i32 {
     }
 }
 
+// C2b (2026-05-30): reverse-mode AD let support. The reverse propagators
+// (propagate_adj / propagate_adj_multi) have no AST_LET arm and trap
+// 85001 on a let. Rather than duplicate the let logic into both
+// propagators, eliminate all AST_LET(8) / AST_SEQ(13) nodes up front and
+// hand the propagator a let-free body. `let v = val; body` flattens to
+// ad_subst(body, v, flatten(val)); the result is recursively flattened
+// (nested lets). A seq's value is its second operand. Arithmetic nodes
+// are rebuilt with flattened children so lets nested INSIDE an expression
+// are also removed. Leaves / unsupported tags pass through unchanged (an
+// unsupported tag still traps later in the propagator — fail-closed).
+fn ad_flatten_lets(expr_idx: i32) -> i32 {
+    let t = __arena_get(expr_idx);
+    if t == 8 {
+        let name_s = __arena_get(expr_idx + 1);
+        let name_l = __arena_get(expr_idx + 2);
+        let body = __arena_get(expr_idx + 3);
+        let value = __arena_get(expr_idx + 4);
+        let fvalue = ad_flatten_lets(value);
+        let inlined = ad_subst(body, name_s, name_l, fvalue);
+        ad_flatten_lets(inlined)
+    } else { if t == 13 {
+        let second = __arena_get(expr_idx + 2);
+        ad_flatten_lets(second)
+    } else { if t == 2 {
+        let l = ad_flatten_lets(__arena_get(expr_idx + 1));
+        let r = ad_flatten_lets(__arena_get(expr_idx + 2));
+        mk_node(2, l, r, 0)
+    } else { if t == 3 {
+        let l = ad_flatten_lets(__arena_get(expr_idx + 1));
+        let r = ad_flatten_lets(__arena_get(expr_idx + 2));
+        mk_node(3, l, r, 0)
+    } else { if t == 4 {
+        let l = ad_flatten_lets(__arena_get(expr_idx + 1));
+        let r = ad_flatten_lets(__arena_get(expr_idx + 2));
+        mk_node(4, l, r, 0)
+    } else { if t == 5 {
+        let l = ad_flatten_lets(__arena_get(expr_idx + 1));
+        let r = ad_flatten_lets(__arena_get(expr_idx + 2));
+        mk_node(5, l, r, 0)
+    } else { if t == 9 {
+        let i = ad_flatten_lets(__arena_get(expr_idx + 1));
+        mk_node(9, i, 0, 0)
+    } else {
+        expr_idx
+    } } } } } } }
+}
+
 // Reverse-mode top-level: differentiate `expr_idx` w.r.t. (var_s, var_l)
 // by seeding adjoint = 1.0_f64, walking with propagate_adj, then summing
 // the bucket. Returns the (un-simplified) derivative AST idx.
 fn differentiate_reverse_one(sb: i32, expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     bucket_reset(sb);
+    let flat = ad_flatten_lets(expr_idx);
     let seed = mk_one_typed(ret_tag);
-    propagate_adj(sb, expr_idx, seed, var_s, var_l);
+    propagate_adj(sb, flat, seed, var_s, var_l);
     sum_bucket(sb, ret_tag)
 }
 
@@ -10851,8 +10899,9 @@ fn propagate_adj_multi(sb: i32, node: i32, adj: i32) -> i32 {
 // calling. After the walk, caller reads each bucket via bucket_array_sum.
 // Returns 0.
 fn differentiate_reverse_all(sb: i32, expr_idx: i32, ret_tag: i32) -> i32 {
+    let flat = ad_flatten_lets(expr_idx);
     let seed = mk_one_typed(ret_tag);
-    propagate_adj_multi(sb, expr_idx, seed);
+    propagate_adj_multi(sb, flat, seed);
     0
 }
 

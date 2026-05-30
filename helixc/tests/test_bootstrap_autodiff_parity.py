@@ -310,8 +310,13 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     ("FWD_F32_TC", "abs_positive"),
     ("FWD_F32_TC", "abs_negative"),
     ("FWD_F32_TC", "sigmoid_at_zero"),
-    # --- GAP-2: f64 reverse-mode with let-bindings (C2b, not yet landed) ---
-    ("REV_F64_LET", "simple_dx"),
+    # CHUNK C2b (2026-05-30) LANDED reverse-mode let-binding AD: a new
+    # ad_flatten_lets() pre-pass (reusing ad_subst) eliminates AST_LET/
+    # AST_SEQ before propagate_adj(_multi) walks the body, injected at
+    # differentiate_reverse_one + differentiate_reverse_all. REV_F64_LET/
+    # simple_dx now matches Python and is REMOVED (hard-asserted). The
+    # let-binding theme (forward C2 + reverse C2b) is fully closed.
+    #
     # NOTE: FWD_F64 (no let) and REV_F64 (no let) are NOT in gaps;
     # the bootstrap already passes them.
 }
