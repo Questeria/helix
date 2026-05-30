@@ -10344,6 +10344,27 @@ fn ad_subst(expr_idx: i32, name_s: i32, name_l: i32, repl_idx: i32) -> i32 {
         expr_idx
     } } } } } } } }
 }
+// C3a (2026-05-30): callee-name matchers for the subgradient builtins
+// whose derivative needs no stdlib transcendental. Push the reference
+// bytes into the arena (like push_zero_f64_bytes) and byte_eq the call's
+// name range against them. A few wasted slots per call, kept simple.
+fn ad_name_is_relu(s: i32, l: i32) -> i32 {
+    let ref_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(114);               // 'r'
+    __arena_push(101);               // 'e'
+    __arena_push(108);               // 'l'
+    __arena_push(117);               // 'u'
+    byte_eq(s, l, ref_s, 6)
+}
+fn ad_name_is_abs(s: i32, l: i32) -> i32 {
+    let ref_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(97);                // 'a'
+    __arena_push(98);                // 'b'
+    __arena_push(115);               // 's'
+    byte_eq(s, l, ref_s, 5)
+}
 fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 0 {
@@ -10429,12 +10450,55 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
         // pure-AD subset), so d(seq) = d(second).
         let seq_second = __arena_get(expr_idx + 2);
         differentiate(seq_second, var_s, var_l, ret_tag)
+    } else { if t == 16 {
+        // AST_CALL — C3a. Chain rules for the subgradient builtins whose
+        // derivative needs NO stdlib transcendental: relu and abs. Their
+        // derivative is a pure conditional on the argument, so it codegens
+        // without resolving __relu/__abs themselves. The analytic
+        // transcendentals (exp/sin/sqrt/sigmoid) stay trapped here: their
+        // derivatives reference __exp/__cos/__sqrt/__sigmoid, which the
+        // bootstrap cannot yet resolve (stdlib transcendentals are not
+        // auto-included). CALL layout: p1=name_s, p2=name_l, p3=args_head
+        // (AST_ARG tag 17: slot1=arg expr, slot2=next). Single-arg builtin.
+        let callee_s = __arena_get(expr_idx + 1);
+        let callee_l = __arena_get(expr_idx + 2);
+        let args_head = __arena_get(expr_idx + 3);
+        let arg_u = __arena_get(args_head + 1);
+        if ad_name_is_relu(callee_s, callee_l) == 1 {
+            // d/dx relu(u) = (u > 0 ? 1 : 0) * du. Build children before
+            // parents (arena positional-ordering invariant).
+            let du = differentiate(arg_u, var_s, var_l, ret_tag);
+            let z_cmp = mk_zero_typed(ret_tag);
+            let gt = mk_node(19, arg_u, z_cmp, 0);
+            let one_v = mk_one_typed(ret_tag);
+            let z_else = mk_zero_typed(ret_tag);
+            let cond = mk_node(7, gt, one_v, z_else);
+            mk_node(4, cond, du, 0)
+        } else { if ad_name_is_abs(callee_s, callee_l) == 1 {
+            // d/dx abs(u) = (u > 0 ? 1 : (u < 0 ? -1 : 0)) * du.
+            let du = differentiate(arg_u, var_s, var_l, ret_tag);
+            let z_lt = mk_zero_typed(ret_tag);
+            let lt = mk_node(6, arg_u, z_lt, 0);
+            let one_neg = mk_one_typed(ret_tag);
+            let neg_one = mk_node(9, one_neg, 0, 0);
+            let z_in = mk_zero_typed(ret_tag);
+            let inner_if = mk_node(7, lt, neg_one, z_in);
+            let z_gt = mk_zero_typed(ret_tag);
+            let gt2 = mk_node(19, arg_u, z_gt, 0);
+            let one_v2 = mk_one_typed(ret_tag);
+            let outer_if = mk_node(7, gt2, one_v2, inner_if);
+            mk_node(4, outer_if, du, 0)
+        } else {
+            // Unsupported call (transcendental needing stdlib, or a user
+            // fn that should have been inlined upstream) — fail closed.
+            mk_node(99, 85001, 0, 0)
+        } }
     } else {
-        // Unsupported tag (CALL, IF, WHILE, BLOCK, ...) — Phase-0
-        // limitation. Trap with id 85001 by emitting an AST_ERR node;
-        // codegen lowers AST_ERR to ud2.
+        // Unsupported tag (IF, WHILE, BLOCK, ...) — Phase-0 limitation.
+        // Trap with id 85001 by emitting an AST_ERR node; codegen lowers
+        // AST_ERR to ud2.
         mk_node(99, 85001, 0, 0)
-    } } } } } } } } } } } }
+    } } } } } } } } } } } } }
 }
 
 // Stage 14: reverse-mode propagator for ONE target param.

@@ -301,14 +301,22 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # GAP-1 + GAP-5
     ("FWD_F32_IDX", "idx_0"),
     ("FWD_F32_IDX", "idx_1"),
-    # GAP-1 + GAP-3
+    # GAP-3: transcendental chain rules. CHUNK C3a (2026-05-30) LANDED the
+    # relu/abs subgradient rules (a new AST_CALL arm in differentiate):
+    # relu' = (u>0?1:0), abs' = (u>0?1:(u<0?-1:0)) — pure conditionals
+    # needing NO stdlib call, so relu_positive/relu_negative/abs_positive/
+    # abs_negative now match Python and are REMOVED (hard-asserted).
+    #
+    # exp/sin/sqrt/sigmoid stay xfail on a DEEPER blocker (NOT the AD math):
+    # their derivatives reference __exp/__cos/__sqrt/__sigmoid, but the
+    # bootstrap CANNOT resolve stdlib transcendentals at all — they are
+    # stdlib @pure fns (not codegen builtins) and are not auto-included, so
+    # even a direct __exp(0.0) SIGILLs (rc132, undefined call). Python
+    # auto-includes the stdlib. These unblock only once the bootstrap gains
+    # stdlib transcendental resolution (a separate, larger prerequisite).
     ("FWD_F32_TC", "exp_at_zero"),
-    ("FWD_F32_TC", "relu_positive"),
-    ("FWD_F32_TC", "relu_negative"),
     ("FWD_F32_TC", "sin_at_zero"),
     ("FWD_F32_TC", "sqrt_at_4"),
-    ("FWD_F32_TC", "abs_positive"),
-    ("FWD_F32_TC", "abs_negative"),
     ("FWD_F32_TC", "sigmoid_at_zero"),
     # CHUNK C2b (2026-05-30) LANDED reverse-mode let-binding AD: a new
     # ad_flatten_lets() pre-pass (reusing ad_subst) eliminates AST_LET/
