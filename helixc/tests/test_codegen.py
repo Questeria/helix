@@ -8582,6 +8582,74 @@ def test_bootstrap_bigstack_deep_recursion():
     assert rc == 7, f"20000-deep recursion should return 7 on the mmap'd stack, got {rc}"
 
 
+def test_bootstrap_seed_driver_self_rebuild():
+    """K3 chunk 2 (2026-05-30): a HELIX-NATIVE seed driver rebuilds the compiler
+    end-to-end with NO Python orchestration and NO external ulimit. The seed is
+    [lexer + parser + kovc + seed_main] -- a full compiler whose main reads the 3
+    bootstrap source files (read_file_to_arena APPENDS at the arena cursor, so the
+    files concatenate for free), prepends a driver main placed FIRST (so
+    resolve_program_root selects it and demo-stripping is unnecessary), compiles
+    the assembly via lex/parse_top/emit_elf_for_ast_to_path into K-next, then
+    validates K-next by having it compile `6*7` and running the result (-> 42).
+
+    The seed must be built by K1 (the bootstrap), not the Python reference
+    compiler, because seed_main uses the run_process/set_exec builtins that exist
+    only in kovc.hx. K1 is Python-built (no big-stack stub), so building the
+    1.43 MB seed needs ulimit; but the seed BINARY carries the task-16 big-stack
+    _start stub, so it runs and self-compiles WITHOUT ulimit -- proving the
+    bootstrap can drive its own rebuild + self-validation in Helix."""
+    import os, subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    SEP = "// --------------------------------------------------------------\n// Demo:"
+
+    def lib(name, strip):
+        s = open(os.path.join(proj, "helixc", "bootstrap", name), encoding="utf-8").read()
+        return s.rsplit(SEP, 1)[0] if strip else s
+
+    for name, dst, strip in [("lexer.hx", "/tmp/sd_lexer.hx", True),
+                             ("parser.hx", "/tmp/sd_parser.hx", False),
+                             ("kovc.hx", "/tmp/sd_kovc.hx", True)]:
+        subprocess.run(["wsl", "-e", "bash", "-c", f"cat > {dst}"],
+                       input=lib(name, strip).encode("utf-8"), check=True, timeout=30)
+
+    knext_main = ('fn main() -> i32 { let s = __arena_len(); '
+        'let n = read_file_to_arena("/tmp/sd_in.hx"); let t = __arena_len(); lex(s, n); '
+        'let a = parse_top(t); let tot = emit_elf_for_ast_to_path(a); '
+        'let es = __arena_len() - tot; write_file_to_arena("/tmp/sd_out.bin", es, tot) } ')
+    kn = "".join(f"__arena_push({b}); " for b in knext_main.encode("utf-8"))
+    tp = "".join(f"__arena_push({b}); " for b in "fn main() -> i32 { 6 * 7 }".encode("utf-8"))
+    seed_main = (
+        'fn seed_rebuild() -> i32 { let src_start = __arena_len(); '
+        + kn +
+        'read_file_to_arena("/tmp/sd_lexer.hx"); read_file_to_arena("/tmp/sd_parser.hx"); '
+        'read_file_to_arena("/tmp/sd_kovc.hx"); let total_src = __arena_len() - src_start; '
+        'let tok_base = __arena_len(); lex(src_start, total_src); let ast_root = parse_top(tok_base); '
+        'let elf_total = emit_elf_for_ast_to_path(ast_root); let elf_start = __arena_len() - elf_total; '
+        'write_file_to_arena("/tmp/sd_knext.bin", elf_start, elf_total); '
+        'let tp_start = __arena_len(); ' + tp + 'let tp_len = __arena_len() - tp_start; '
+        'write_file_to_arena("/tmp/sd_in.hx", tp_start, tp_len); '
+        'set_exec("/tmp/sd_knext.bin"); run_process("/tmp/sd_knext.bin"); '
+        'set_exec("/tmp/sd_out.bin"); let rc = run_process("/tmp/sd_out.bin"); rc } '
+        'fn main() -> i32 { seed_rebuild() } ')
+    seed_source = lib("lexer.hx", True) + lib("parser.hx", False) + lib("kovc.hx", True) + seed_main
+
+    drv, in_path, out_path = _self_host_driver()
+    subprocess.run(["wsl", "-e", "bash", "-c", f"cat > {in_path}"],
+                   input=seed_source.encode("utf-8"), check=True, timeout=30)
+    subprocess.run(["wsl", "-e", "bash", "-c",
+                    f"rm -f {out_path}; ulimit -s unlimited; chmod +x {drv} && {drv}"], timeout=180)
+    subprocess.run(["wsl", "-e", "bash", "-c", f"cp {out_path} /tmp/sd_seed.bin"], check=True, timeout=10)
+    out = ""
+    for _ in range(2):  # retry once on a cold-WSL flake (lesson 10)
+        r = subprocess.run(["wsl", "-e", "bash", "-c",
+            "rm -f /tmp/sd_knext.bin /tmp/sd_out.bin; chmod +x /tmp/sd_seed.bin && /tmp/sd_seed.bin; echo RC=$?"],
+            capture_output=True, timeout=120)
+        out = r.stdout.decode("utf-8", "replace")
+        if "RC=42" in out:
+            break
+    assert "RC=42" in out, f"Helix seed self-rebuild should validate K-next via 6*7 -> 42, got: {out[-200:]!r}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills

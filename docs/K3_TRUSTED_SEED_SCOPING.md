@@ -133,3 +133,31 @@ so it needs the full gate (fixpoint 2 + broad parity 403).
 - Intent: `docs/HELIX_K_BOOTSTRAP_MASTER_PLAN.md` (§5 K0-K5),
   `docs/K_BOOTSTRAP_HARD_CONSTRAINT.md` (acceptance criteria),
   `scripts/helix_status.py` (PYTHON_DELETION_BUCKETS).
+
+## Progress update (2026-05-30)
+
+- **Chunk 1 (big-stack entry stub) DONE** (commit ae3ea64, task 16): every
+  bootstrap-emitted binary mmaps a 512 MiB stack at `_start`, so the self-compile
+  runs without external `ulimit`.
+- **Chunk 2 (Helix self-rebuild seed driver) DONE** (test
+  `test_bootstrap_seed_driver_self_rebuild`). **Two corrections to the chunk-2
+  sketch above, found by probing (the sketch was optimistic):**
+  1. The seed is NOT a standalone main. To call `lex`/`parse_top`/
+     `emit_elf_for_ast_to_path` it must INCLUDE the full compiler source —
+     `seed = [lexer + parser + kovc + seed_main]` — else those calls are
+     unresolved and the binary `ud2`s (SIGILL 132).
+  2. It must be built by K1 (the BOOTSTRAP), NOT the Python reference compiler:
+     `seed_main` uses `run_process`/`set_exec`, which exist only in `kovc.hx`
+     (the Python backend raises `NotImplementedError: unknown function
+     'set_exec'`). K1 needs `ulimit` to build the 1.43 MB seed (it is Python-
+     built, no stub), but the seed BINARY carries the chunk-1 stub so it RUNS
+     without `ulimit`.
+  Verified end-to-end with NO external `ulimit`: the 606 KB bootstrap-built seed
+  reads the 3 source files (free append-concat), prepends a driver main placed
+  FIRST (so `resolve_program_root` picks it; the demos become dead code — no
+  in-Helix `rsplit` needed), compiles them into a 593 KB K-next, then has K-next
+  compile `6*7` and runs the result → exit 42.
+- REMAINING toward the trust root: (a) the full stage-0 (hex0/Mes/C) — the major
+  deferred, user-steered effort; (b) optionally promote the seed driver from a
+  generated test to a committed `helixc/bootstrap/seed.hx`; (c) task 17 (Python-
+  backend stub) to unskip the canonical self-host loop.
