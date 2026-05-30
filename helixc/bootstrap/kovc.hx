@@ -2137,6 +2137,7 @@ fn install_builtin_names() -> i32 {
     // N must be 2 for the current 2x2 codegen; the value is currently
     // ignored. Future chunk generalizes to arbitrary N via loops.
     __arena_push(0);      // slot 178: __tile_matmul name offset
+    __arena_push(0);      // slot 179: run_process name offset (T1 process-exec)
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2339,6 +2340,14 @@ fn install_builtin_names() -> i32 {
     __arena_push(109); __arena_push(97); __arena_push(116);
     __arena_push(109); __arena_push(117); __arena_push(108);
     __arena_set(bn_state + 178, s_tmm);
+
+    // T1 (2026-05-30): "run_process" name bytes (11 chars: 114 117 110 95
+    // 112 114 111 99 101 115 115). Stored at slot 179. Process-exec builtin:
+    // fork(57) + execve(59, path) + wait4(61); returns the child's exit code.
+    let s_rp = __arena_push(114); __arena_push(117); __arena_push(110); __arena_push(95);
+    __arena_push(112); __arena_push(114); __arena_push(111); __arena_push(99);
+    __arena_push(101); __arena_push(115); __arena_push(115);
+    __arena_set(bn_state + 179, s_rp);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3859,6 +3868,7 @@ fn bn_tile_sub_s(b: i32) -> i32 { __arena_get(b + 176) }
 fn bn_tile_mul_s(b: i32) -> i32 { __arena_get(b + 177) }
 // K1.F27 (2026-05-27): __tile_matmul accessor (slot 178). 13-char name.
 fn bn_tile_matmul_s(b: i32) -> i32 { __arena_get(b + 178) }
+fn bn_run_process_s(b: i32) -> i32 { __arena_get(b + 179) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4232,6 +4242,66 @@ fn emit_write_file_to_arena_body(patch_state: i32, arena_base_s: i32) -> i32 {
     emit_byte(0x5B);
     // add rsp, 16 (drop the 2 args pushed by caller)
     emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x10);
+    __arena_len() - body_start
+}
+
+// T1 (2026-05-30): emit run_process(path) -> i32. On entry rdi = the
+// NUL-terminated path pointer (set by the dispatch's lea rdi). Builds a
+// minimal argv [path, NULL] + envp [NULL] on the stack, fork(57)s; the child
+// execve(59)s the path (exit 127 on failure); the parent wait4(61)s and
+// returns the child's exit code = (wstatus >> 8) & 0xFF in eax. No ret (the
+// body is inlined; the result is left in eax per the builtin contract).
+// Stack frame (sub rsp,32): [rsp]=argv[0]=path, [rsp+8]=NULL (=argv[1]=envp[0]),
+// [rsp+16]=wstatus int. rdi/rsi/rdx/r10 survive syscall (only rax/rcx/r11 clobbered).
+fn emit_run_process_body() -> i32 {
+    let body_start = __arena_len();
+    // sub rsp, 32
+    emit_sub_rsp_imm32(32);
+    // mov [rsp], rdi            (argv[0] = path)
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0x3C); emit_byte(0x24);
+    // mov qword [rsp+8], 0      (argv[1] = NULL = envp[0])
+    emit_byte(0x48); emit_byte(0xC7); emit_byte(0x44); emit_byte(0x24); emit_byte(0x08);
+    emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    // fork: mov eax, 57 ; syscall
+    emit_byte(0xB8); emit_byte(57); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // test rax, rax ; jne parent
+    emit_byte(0x48); emit_byte(0x85); emit_byte(0xC0);
+    let jne_parent_slot = emit_jne_rel32_placeholder();
+    // ---- CHILD (rax == 0): execve(rdi=path, rsi=argv=rsp, rdx=envp=rsp+8) ----
+    // mov rsi, rsp
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6);
+    // lea rdx, [rsp+8]
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0x54); emit_byte(0x24); emit_byte(0x08);
+    // mov eax, 59 (execve) ; syscall
+    emit_byte(0xB8); emit_byte(59); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // execve returns only on failure -> exit(127): mov edi,127 ; mov eax,60 ; syscall
+    emit_byte(0xBF); emit_byte(127); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0xB8); emit_byte(60); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // ---- PARENT: patch the jne target to here ----
+    patch_rel32(jne_parent_slot, __arena_len());
+    // mov rdi, rax              (pid)
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xC7);
+    // lea rsi, [rsp+16]         (&wstatus)
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0x74); emit_byte(0x24); emit_byte(0x10);
+    // xor edx, edx              (options = 0)
+    emit_byte(0x31); emit_byte(0xD2);
+    // xor r10d, r10d            (rusage = 0)
+    emit_byte(0x45); emit_byte(0x31); emit_byte(0xD2);
+    // mov eax, 61 (wait4) ; syscall
+    emit_byte(0xB8); emit_byte(61); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // mov eax, [rsp+16]         (wstatus)
+    emit_byte(0x8B); emit_byte(0x44); emit_byte(0x24); emit_byte(0x10);
+    // shr eax, 8                (WEXITSTATUS high byte)
+    emit_byte(0xC1); emit_byte(0xE8); emit_byte(0x08);
+    // and eax, 0xFF
+    emit_byte(0x25); emit_byte(0xFF); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    // add rsp, 32
+    emit_add_rsp_imm32(32);
+    // result (child exit code) is now in eax; no ret.
     __arena_len() - body_start
 }
 
@@ -5254,6 +5324,23 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             let body_bytes = emit_write_file_to_arena_body(patch_state, arena_base_s);
             n3 + n3p + n2 + n2p + 7 + body_bytes
         }
+    } else { if kovc_byte_eq(name_s, name_l, bn_run_process_s(bn_state), 11) == 1 {
+        // T1 (2026-05-30): run_process(path: STRLIT) -> i32 (child exit code).
+        // fork(57) + execve(59, path) + wait4(61). First arg MUST be AST_STR_LIT
+        // (tag 25); the lea rdi loads the NUL-terminated path the body execve's.
+        let arg_idx = __arena_get(args_head + 1);
+        let arg_tag = __arena_get(arg_idx);
+        if arg_tag != 25 {
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s = __arena_get(arg_idx + 1);
+            let body_l = __arena_get(arg_idx + 2);
+            let path_disp_slot = emit_lea_rdi_rip_placeholder();
+            str_table_add(bn_state, path_disp_slot, body_s, body_l);
+            let body_bytes = emit_run_process_body();
+            7 + body_bytes
+        }
     } else { if kovc_byte_eq(name_s, name_l, bn_fadd_s(bn_state), 6) == 1 {
         // __fadd(a, b) -> f32 bits in eax.
         // eval a -> eax; push; eval b -> eax;
@@ -5819,7 +5906,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul); +K1.F27: 1 more arm (__tile_matmul)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul); +K1.F27: 1 more arm (__tile_matmul); +T1: 1 more arm (run_process)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to

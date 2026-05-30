@@ -8322,6 +8322,21 @@ def test_bootstrap_ptx_tile_dtype_i32():
     assert "ld.global.f32" not in ptx, ptx
 
 
+def test_bootstrap_run_process_exit_codes():
+    """T1 (2026-05-30): the run_process(path: STRLIT) -> i32 builtin lets a
+    compiled Helix program fork(57) + execve(59, path) + wait4(61) a binary
+    and capture its decoded exit code ((wstatus >> 8) & 0xFF). This is the
+    process-exec prerequisite for a Helix-native test runner (test-infra T1,
+    docs/TEST_INFRA_PORT_SCOPING.md). The bootstrap previously emitted only
+    read/write/open/close/exit syscalls. /bin/true -> 0, /bin/false -> 1."""
+    rc_true, _, _ = _kovc_self_host_compile_and_run_full(
+        "run_process_true", 'fn main() -> i32 { run_process("/bin/true") }')
+    assert rc_true == 0, f"run_process(/bin/true) expected 0, got {rc_true}"
+    rc_false, _, _ = _kovc_self_host_compile_and_run_full(
+        "run_process_false", 'fn main() -> i32 { run_process("/bin/false") }')
+    assert rc_false == 1, f"run_process(/bin/false) expected 1, got {rc_false}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills
