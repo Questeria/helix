@@ -75,16 +75,32 @@ convention than cc_amd64, so cc_amd64's defs would segfault) — produces runnab
 binaries that exit with the correct codes. So M2 emits correct machine code, end
 to end from our hand-authored hex0 root.
 
-## Known-future hardening (NOT yet done — not faked)
+## Self-host fixpoint — investigated, NOT yet holding (documented, not faked)
 
-A full **self-host fixpoint** (M2 recompiles its own sources via `-f` flags like
-the recipe's later phases, producing a second-gen M2 proven byte-stable) is the
-strongest possible test for a self-hosting compiler and is planned as a follow-up
-hardening step. A first quick attempt (feeding M2 the single concatenated
-`M2-0.c`) did not succeed — M2 wants its sources as separate `-f` units — so it
-is deliberately left out of `run_tests.sh` rather than asserted falsely. The rung
-ships green on its real, demonstrated capability (compiles C → runs → correct
-exit).
+A full **self-host fixpoint** (our M2 recompiles its own sources, producing a
+second-gen M2 proven byte-stable) is the strongest possible trust test for a
+self-hosting compiler. It is **not yet passing** and is deliberately kept out of
+`run_tests.sh` rather than asserted falsely. Precise findings (2026-05-30):
+
+- M2's *core* capability is solid and tested: it compiles ordinary C and the
+  result runs (see `run_tests.sh`). That is the rung's actual claim.
+- Rebuild via separate `-f` units + `--bootstrap-mode` (the shape the recipe's
+  later phases use) **compiles cleanly** (gen2 `.M1` is produced, non-empty), but
+  the resulting gen2 M2, assembled with `M2libc/amd64/{amd64_defs,libc-core}.M1`,
+  **SIGILLs (132) at runtime** — an illegal opcode, i.e. a defs/libc-pairing or
+  latent-codegen mismatch, not a link failure.
+- Rebuild via the single concatenated `M2-0.c` (the exact input cc_amd64 used)
+  needs `--bootstrap-mode` too (without it M2 errors `Unknown type FILE`, since
+  `FILE` lives in the bootstrap libc) — cc_amd64 was more lenient here.
+- The full M2-Planet likely needs `M2libc/amd64/libc-full.M1` (the recipe's
+  phases 8-11 switch to `libc-full.M1`), which this rung does **not** vendor yet.
+
+**Next concrete step when this is picked up:** vendor `M2libc/amd64/libc-full.M1`
+(pin b8bb2a01) and/or follow M2-Planet's *own* self-host test recipe (in the
+M2-Planet repo, not the stage0-posix mini-kaem, which never rebuilds M2 with M2),
+then assert gen2==gen3 byte-identical. Upstream M2-Planet self-hosts, so this is
+expected to be a recipe/libc-pairing gap, not a fundamental defect — but it is
+left open and honest rather than forced.
 
 ## Next rung
 
