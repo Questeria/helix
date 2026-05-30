@@ -115,11 +115,23 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 # Remove entries as the underlying bootstrap bug is fixed.
 # ============================================================================
 KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
-    # option_sum(Some(7), None): Python returns 7 (None = additive identity);
-    # the bootstrap returns 0 — it mishandles the Some+None arm of option_sum
-    # (the two-Some path option_max and option_unwrap_or both work, so basic
-    # enum dispatch is fine; this is specific to option_sum's None branch).
-    # A narrow bootstrap codegen/enum bug; fix is a follow-up stdlib chunk.
+    # option_sum(Some(20), Some(22)) -> bootstrap 22 (not 42); option_sum(
+    # Some(7), None) -> 0 (not 7). ROOT-CAUSED 2026-05-30 to a deep nested-
+    # match codegen bug (NOT i64, NOT @pure, NOT option-specific). Minimal
+    # repro (no stdlib): when BOTH outer match arms contain a nested match on
+    # the SAME scrutinee, the bootstrap LOSES the outer match's payload
+    # binding inside the first nested match (reads it as 0 / unbound):
+    #   enum E { A(i32), B }
+    #   fn f(a: E, b: E) -> i32 {
+    #     match a { E::A(av) => match b { E::A(bv) => av + bv, E::B => av },
+    #               E::B    => match b { E::A(bv) => bv,      E::B => 0  } } }
+    #   f(E::A(20), E::A(22)) -> bootstrap 22, Python 42.
+    # A SINGLE nested match (only one outer arm nests) works fine. Cause: the
+    # bootstrap's match codegen has ONE match-state region ("only one match-
+    # arm chain in flight at a time", kovc.hx ~2003); two nested matches on
+    # the same scrutinee collide / over-pop the outer binding. Deep fix
+    # (match-state must nest) -> tracked as its own chunk; option_sum is its
+    # only stdlib-corpus symptom so far.
     ("option", "sum"),
 }
 
