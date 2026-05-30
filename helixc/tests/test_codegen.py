@@ -8337,6 +8337,31 @@ def test_bootstrap_run_process_exit_codes():
     assert rc_false == 1, f"run_process(/bin/false) expected 1, got {rc_false}"
 
 
+def test_bootstrap_set_exec_makes_runnable():
+    """T2 (2026-05-30): set_exec(path) chmod 0o755's a file so a freshly
+    write_file_to_arena'd program (mode 0644) becomes executable for
+    run_process. Validates the full Helix-native test-runner primitive chain:
+    write_file -> set_exec -> run_process -> exit code. A shebang script
+    `#!/bin/sh\\nexit 7` written + set_exec'd + run returns 7; WITHOUT set_exec
+    the non-exec file fails execve (EACCES) -> the child exits 127."""
+    # "#!/bin/sh\nexit 7\n" = 35 33 47 98 105 110 47 115 104 10 101 120 105 116 32 55 10
+    push = ("__arena_push(35); __arena_push(33); __arena_push(47); __arena_push(98); "
+            "__arena_push(105); __arena_push(110); __arena_push(47); __arena_push(115); "
+            "__arena_push(104); __arena_push(10); __arena_push(101); __arena_push(120); "
+            "__arena_push(105); __arena_push(116); __arena_push(32); __arena_push(55); "
+            "__arena_push(10);")
+    with_se = ('fn main() -> i32 { let s = __arena_len(); ' + push +
+               ' let n = __arena_len() - s; write_file_to_arena("/tmp/se_t1.sh", s, n); '
+               'set_exec("/tmp/se_t1.sh"); run_process("/tmp/se_t1.sh") }')
+    without_se = ('fn main() -> i32 { let s = __arena_len(); ' + push +
+                  ' let n = __arena_len() - s; write_file_to_arena("/tmp/se_t2.sh", s, n); '
+                  'run_process("/tmp/se_t2.sh") }')
+    rc_exec, _, _ = _kovc_self_host_compile_and_run_full("set_exec_yes", with_se)
+    assert rc_exec == 7, f"write+set_exec+run expected 7, got {rc_exec}"
+    rc_noexec, _, _ = _kovc_self_host_compile_and_run_full("set_exec_no", without_se)
+    assert rc_noexec == 127, f"write+run without set_exec expected 127, got {rc_noexec}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills

@@ -2138,6 +2138,7 @@ fn install_builtin_names() -> i32 {
     // ignored. Future chunk generalizes to arbitrary N via loops.
     __arena_push(0);      // slot 178: __tile_matmul name offset
     __arena_push(0);      // slot 179: run_process name offset (T1 process-exec)
+    __arena_push(0);      // slot 180: set_exec name offset (T2 chmod +x)
 
     // "__arena_push"
     let s0 = __arena_push(95); __arena_push(95); __arena_push(97); __arena_push(114);
@@ -2348,6 +2349,13 @@ fn install_builtin_names() -> i32 {
     __arena_push(112); __arena_push(114); __arena_push(111); __arena_push(99);
     __arena_push(101); __arena_push(115); __arena_push(115);
     __arena_set(bn_state + 179, s_rp);
+
+    // T2 (2026-05-30): "set_exec" name bytes (8 chars: 115 101 116 95 101 120
+    // 101 99). Stored at slot 180. chmod(path, 0o755) so a freshly written ELF
+    // can be execve'd by run_process (the Helix-native test-runner path).
+    let s_se = __arena_push(115); __arena_push(101); __arena_push(116); __arena_push(95);
+    __arena_push(101); __arena_push(120); __arena_push(101); __arena_push(99);
+    __arena_set(bn_state + 180, s_se);
 
     // K3.O (2026-05-27): relocate the str_table region. The original
     // slots 9..56 (16 entries × 3) collided with the f32 builtin slots
@@ -3869,6 +3877,7 @@ fn bn_tile_mul_s(b: i32) -> i32 { __arena_get(b + 177) }
 // K1.F27 (2026-05-27): __tile_matmul accessor (slot 178). 13-char name.
 fn bn_tile_matmul_s(b: i32) -> i32 { __arena_get(b + 178) }
 fn bn_run_process_s(b: i32) -> i32 { __arena_get(b + 179) }
+fn bn_set_exec_s(b: i32) -> i32 { __arena_get(b + 180) }
 fn bn_helix_splice_s(b: i32) -> i32 { __arena_get(b + 166) }
 fn bn_helix_modify_s(b: i32) -> i32 { __arena_get(b + 167) }
 fn bn_helix_reflect_hash_s(b: i32) -> i32 { __arena_get(b + 168) }
@@ -4302,6 +4311,22 @@ fn emit_run_process_body() -> i32 {
     // add rsp, 32
     emit_add_rsp_imm32(32);
     // result (child exit code) is now in eax; no ret.
+    __arena_len() - body_start
+}
+
+// T2 (2026-05-30): emit set_exec(path) -> i32. On entry rdi = the path
+// pointer (set by the dispatch's lea rdi). Emits chmod(path, 0o755) so a
+// freshly write_file_to_arena'd ELF (mode 0644) becomes executable for a
+// subsequent run_process execve. chmod=90, rdi=path, esi=mode. Returns 0 on
+// success / -errno in eax (left for the caller; no ret).
+fn emit_set_exec_body() -> i32 {
+    let body_start = __arena_len();
+    // mov esi, 493 (0o755)
+    emit_byte(0xBE); emit_u32_le(493);
+    // mov eax, 90 (chmod) ; syscall
+    emit_byte(0xB8); emit_byte(90); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    // result in eax; no ret.
     __arena_len() - body_start
 }
 
@@ -5341,6 +5366,23 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
             let body_bytes = emit_run_process_body();
             7 + body_bytes
         }
+    } else { if kovc_byte_eq(name_s, name_l, bn_set_exec_s(bn_state), 8) == 1 {
+        // T2 (2026-05-30): set_exec(path: STRLIT) -> i32. chmod(path, 0o755)
+        // so a freshly written ELF is executable for run_process. First arg
+        // MUST be AST_STR_LIT (tag 25); the lea rdi loads the path.
+        let arg_idx = __arena_get(args_head + 1);
+        let arg_tag = __arena_get(arg_idx);
+        if arg_tag != 25 {
+            emit_byte(0x0F); emit_byte(0x0B);
+            2
+        } else {
+            let body_s = __arena_get(arg_idx + 1);
+            let body_l = __arena_get(arg_idx + 2);
+            let path_disp_slot = emit_lea_rdi_rip_placeholder();
+            str_table_add(bn_state, path_disp_slot, body_s, body_l);
+            let body_bytes = emit_set_exec_body();
+            7 + body_bytes
+        }
     } else { if kovc_byte_eq(name_s, name_l, bn_fadd_s(bn_state), 6) == 1 {
         // __fadd(a, b) -> f32 bits in eax.
         // eval a -> eax; push; eval b -> eax;
@@ -5906,7 +5948,7 @@ fn try_emit_builtin_call(name_s: i32, name_l: i32, args_head: i32,
         nh + nph + nv + npv + np + 3 + 1 + 1 + 2 + 3 + 2 + 3 + 2 + 7 + 7 + 5 + 2 + 2
     } else {
         0
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul); +K1.F27: 1 more arm (__tile_matmul); +T1: 1 more arm (run_process)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}    // +K1.F2/F3/F4: 5 new builtin arms (reflect_hash + trace_event + __helix_* trio); +K1.F20b: 1 more arm (__trace_last); +K1.F22c: 1 more arm (print_str_ln); +K1.F22d: 1 more arm (eprint_str_ln); +K1.F22f: 1 more arm (eprint_str); +K1.F23c: 1 more arm (__tile_zeros); +K1.F24e: 1 more arm (__tile_add stub); +K1.F25: 1 more arm (__tile_sub); +K1.F26: 1 more arm (__tile_mul); +K1.F27: 1 more arm (__tile_matmul); +T1: 1 more arm (run_process); +T2: 1 more arm (set_exec)
 }
 
 // Audit fix #6 (cycle 1, polish): try_emit_builtin_call_impl used to
