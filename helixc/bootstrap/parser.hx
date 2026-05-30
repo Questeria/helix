@@ -9955,6 +9955,38 @@ fn mk_one_f64() -> i32 {
     mk_node(34, s, 3, 0)
 }
 
+// C1 (2026-05-29): typed derivative-constant emitters. The synthesized
+// gradient fn inherits the loss fn's return TYPE TAG (slot 5):
+//   tag 1 = f32  -> emit AST_FLOATLIT      (tag 27)  width-class f32
+//   tag 2 = f64  -> emit AST_FLOATLIT_F64  (tag 34)  width-class f64
+// Before C1, differentiate/simplify hard-coded mk_zero_f64/mk_one_f64
+// (tag 34), so an f32 loss fn's gradient body carried f64 literal nodes
+// into an f32-typed fn — codegen's width-class check then fires ud2
+// (rc 132) or silently mis-reads the xmm scalar as f64 (wrong value,
+// rc 0). Threading ret_tag from grad_pass/grad_rev_pass into the
+// constant emitters fixes the f32 forward-mode arithmetic cases.
+//
+// Any tag other than 1 falls through to f64 (tag 34), so the existing
+// f64 forward + reverse behavior is byte-identical (ret_tag is always 2
+// for those, and parser.hx itself never differentiates an f32 fn).
+fn mk_zero_typed(ret_tag: i32) -> i32 {
+    let s = push_zero_f64_bytes();
+    if ret_tag == 1 {
+        mk_node(27, s, 3, 0)
+    } else {
+        mk_node(34, s, 3, 0)
+    }
+}
+
+fn mk_one_typed(ret_tag: i32) -> i32 {
+    let s = push_one_f64_bytes();
+    if ret_tag == 1 {
+        mk_node(27, s, 3, 0)
+    } else {
+        mk_node(34, s, 3, 0)
+    }
+}
+
 // Test if a node is a literal whose decimal value equals 0.0 (f64 or
 // f32 zero, AST_INT zero). Returns 1 on match, 0 otherwise. Used by
 // the simplifier to detect 0+x=x, 0*x=0, etc.
@@ -10001,8 +10033,25 @@ fn ast_is_zero(idx: i32) -> i32 {
 @pure
 fn ast_is_one(idx: i32) -> i32 {
     let t = __arena_get(idx);
+    // C1: recognize the f32 float-literal (tag 27) "1.0"/"1" too, so the
+    // simplifier folds 1*x=x / x*1=x for f32 gradients exactly as it does
+    // for f64 (where the constant was tag 34). Byte-for-byte the same
+    // "1.0" pattern; only the tag differs. f64 (tag 34) behavior unchanged.
     if t == 34 {
         // AST_FLOATLIT_F64. Match "1.0" or "1" exactly.
+        let s = __arena_get(idx + 1);
+        let l = __arena_get(idx + 2);
+        if l == 3 {
+            let b0 = __arena_get(s);
+            let b1 = __arena_get(s + 1);
+            let b2 = __arena_get(s + 2);
+            if b0 == 49 { if b1 == 46 { if b2 == 48 { 1 } else { 0 } } else { 0 } } else { 0 }
+        } else { if l == 1 {
+            let b0 = __arena_get(s);
+            if b0 == 49 { 1 } else { 0 }
+        } else { 0 } }
+    } else { if t == 27 {
+        // AST_FLOATLIT (f32). Match "1.0" or "1" exactly (same as f64).
         let s = __arena_get(idx + 1);
         let l = __arena_get(idx + 2);
         if l == 3 {
@@ -10017,7 +10066,7 @@ fn ast_is_one(idx: i32) -> i32 {
     } else { if t == 0 {
         let v = __arena_get(idx + 1);
         if v == 1 { 1 } else { 0 }
-    } else { 0 } }
+    } else { 0 } } }
 }
 
 // Walk an AST subtree, replacing any AST_VAR whose name matches
@@ -10188,41 +10237,46 @@ fn inline_user_calls(expr_idx: i32, head: i32, depth: i32) -> i32 {
 // Phase-0 supported tags: 0 (INT), 27 (FLOATLIT f32), 34 (FLOATLIT_F64),
 // 35 (INTLIT_I64), 1 (VAR), 2 (ADD), 3 (SUB), 4 (MUL), 5 (DIV), 9 (NEG).
 // Trap-id 85001 emitted via mk_node(99, ...) for unsupported tags.
-fn differentiate(expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
+// C1 (2026-05-29): `ret_tag` is the loss fn's return TYPE TAG (1=f32,
+// 2=f64). Derivative constants are emitted via mk_zero_typed/mk_one_typed
+// so an f32 loss yields f32 (tag 27) literal nodes and an f64 loss yields
+// f64 (tag 34) nodes — matching the synthesized gradient fn's declared
+// return width. Pre-C1 this hard-coded f64, breaking all f32 grad cases.
+fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 0 {
-        // d(c) = 0 for integer literal — but the surrounding type is
-        // f64, so emit f64 zero.
-        mk_zero_f64()
+        // d(c) = 0 for integer literal — emit a zero of the loss's
+        // return width (f32 or f64).
+        mk_zero_typed(ret_tag)
     } else { if t == 27 {
-        mk_zero_f64()
+        mk_zero_typed(ret_tag)
     } else { if t == 34 {
-        mk_zero_f64()
+        mk_zero_typed(ret_tag)
     } else { if t == 35 {
-        mk_zero_f64()
+        mk_zero_typed(ret_tag)
     } else { if t == 1 {
         // AST_VAR. p1 = name_s, p2 = name_l. d(x) = 1 if x == var_name,
         // else 0.
         let n_s = __arena_get(expr_idx + 1);
         let n_l = __arena_get(expr_idx + 2);
         if byte_eq(n_s, n_l, var_s, var_l) == 1 {
-            mk_one_f64()
+            mk_one_typed(ret_tag)
         } else {
-            mk_zero_f64()
+            mk_zero_typed(ret_tag)
         }
     } else { if t == 2 {
         // AST_ADD. d(a + b) = d(a) + d(b).
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let dl = differentiate(l, var_s, var_l);
-        let dr = differentiate(r, var_s, var_l);
+        let dl = differentiate(l, var_s, var_l, ret_tag);
+        let dr = differentiate(r, var_s, var_l, ret_tag);
         mk_node(2, dl, dr, 0)
     } else { if t == 3 {
         // AST_SUB. d(a - b) = d(a) - d(b).
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let dl = differentiate(l, var_s, var_l);
-        let dr = differentiate(r, var_s, var_l);
+        let dl = differentiate(l, var_s, var_l, ret_tag);
+        let dr = differentiate(r, var_s, var_l, ret_tag);
         mk_node(3, dl, dr, 0)
     } else { if t == 4 {
         // AST_MUL. Product rule: d(a*b) = d(a)*b + a*d(b).
@@ -10232,8 +10286,8 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
         // BETWEEN child allocations and read garbage.
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let dl = differentiate(l, var_s, var_l);
-        let dr = differentiate(r, var_s, var_l);
+        let dl = differentiate(l, var_s, var_l, ret_tag);
+        let dr = differentiate(r, var_s, var_l, ret_tag);
         let term1 = mk_node(4, dl, r, 0);
         let term2 = mk_node(4, l, dr, 0);
         mk_node(2, term1, term2, 0)
@@ -10241,8 +10295,8 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
         // AST_DIV. Quotient rule: d(a/b) = (d(a)*b - a*d(b)) / (b*b).
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let dl = differentiate(l, var_s, var_l);
-        let dr = differentiate(r, var_s, var_l);
+        let dl = differentiate(l, var_s, var_l, ret_tag);
+        let dr = differentiate(r, var_s, var_l, ret_tag);
         let num1 = mk_node(4, dl, r, 0);
         let num2 = mk_node(4, l, dr, 0);
         let num = mk_node(3, num1, num2, 0);
@@ -10251,7 +10305,7 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
     } else { if t == 9 {
         // AST_NEG. d(-a) = -d(a).
         let inner = __arena_get(expr_idx + 1);
-        let di = differentiate(inner, var_s, var_l);
+        let di = differentiate(inner, var_s, var_l, ret_tag);
         mk_node(9, di, 0, 0)
     } else {
         // Unsupported tag (CALL, IF, WHILE, LET, SEQ, BLOCK, ...) —
@@ -10430,11 +10484,12 @@ fn propagate_adj(sb: i32, node: i32, adj: i32, var_s: i32, var_l: i32) -> i32 {
 }
 
 // Sum the bucket chain into a single expression (chain of binary +).
-// Empty bucket → fresh 0.0_f64 literal. Single entry → just that entry.
-fn sum_bucket(sb: i32) -> i32 {
+// Empty bucket → fresh typed-0.0 literal (C1: f32 or f64 per ret_tag).
+// Single entry → just that entry.
+fn sum_bucket(sb: i32, ret_tag: i32) -> i32 {
     let head = bucket_head_slot(sb);
     if head == 0 {
-        mk_zero_f64()
+        mk_zero_typed(ret_tag)
     } else {
         let first_expr = __arena_get(head + 1);
         let mut acc: i32 = first_expr;
@@ -10454,11 +10509,11 @@ fn sum_bucket(sb: i32) -> i32 {
 // Reverse-mode top-level: differentiate `expr_idx` w.r.t. (var_s, var_l)
 // by seeding adjoint = 1.0_f64, walking with propagate_adj, then summing
 // the bucket. Returns the (un-simplified) derivative AST idx.
-fn differentiate_reverse_one(sb: i32, expr_idx: i32, var_s: i32, var_l: i32) -> i32 {
+fn differentiate_reverse_one(sb: i32, expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     bucket_reset(sb);
-    let seed = mk_one_f64();
+    let seed = mk_one_typed(ret_tag);
     propagate_adj(sb, expr_idx, seed, var_s, var_l);
-    sum_bucket(sb)
+    sum_bucket(sb, ret_tag)
 }
 
 // ========================================================================
@@ -10554,10 +10609,10 @@ fn bucket_array_append(sb: i32, idx: i32, expr_idx: i32) -> i32 {
 // Sum bucket idx into a single expression (chain of binary +).
 // Empty bucket → fresh 0.0_f64 literal. Single entry → just that entry.
 // Mirrors sum_bucket but parameterized over idx.
-fn bucket_array_sum(sb: i32, idx: i32) -> i32 {
+fn bucket_array_sum(sb: i32, idx: i32, ret_tag: i32) -> i32 {
     let head = bucket_array_head(sb, idx);
     if head == 0 {
-        mk_zero_f64()
+        mk_zero_typed(ret_tag)
     } else {
         let first_expr = __arena_get(head + 1);
         let mut acc: i32 = first_expr;
@@ -10673,8 +10728,8 @@ fn propagate_adj_multi(sb: i32, node: i32, adj: i32) -> i32 {
 // param_array (via bucket_array_reset + set_param_array_name) before
 // calling. After the walk, caller reads each bucket via bucket_array_sum.
 // Returns 0.
-fn differentiate_reverse_all(sb: i32, expr_idx: i32) -> i32 {
-    let seed = mk_one_f64();
+fn differentiate_reverse_all(sb: i32, expr_idx: i32, ret_tag: i32) -> i32 {
+    let seed = mk_one_typed(ret_tag);
     propagate_adj_multi(sb, expr_idx, seed);
     0
 }
@@ -10696,26 +10751,31 @@ fn differentiate_reverse_all(sb: i32, expr_idx: i32) -> i32 {
 // equivalent replacement for the single-bucket helpers. Inc 3 then
 // confidently extends to true n>1 single-walk.
 fn differentiate_reverse_one_via_array(
-    sb: i32, expr_idx: i32, var_s: i32, var_l: i32
+    sb: i32, expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32
 ) -> i32 {
     bucket_array_reset(sb, 1);
     set_param_array_name(sb, 0, var_s, var_l);
-    differentiate_reverse_all(sb, expr_idx);
-    bucket_array_sum(sb, 0)
+    differentiate_reverse_all(sb, expr_idx, ret_tag);
+    bucket_array_sum(sb, 0, ret_tag)
 }
 
 // Bottom-up algebraic simplifier for the differentiate output. Folds
 // 0+x=x, x+0=x, x-0=x, 0-x=-x, 0*x=0, 1*x=x, x*1=x, -(-x)=x, -0=0,
 // and constant-folds two literal-zero / literal-one operands into a
 // new literal. Returns the (possibly new) node index.
-fn simplify(expr_idx: i32) -> i32 {
+// C1 (2026-05-29): `ret_tag` threads the loss fn's return TYPE TAG so the
+// folded constants (0*x=0, x*0=0, -0=0) are emitted at the correct width
+// (f32 tag 27 vs f64 tag 34) via mk_zero_typed. For ret_tag==2 (f64) this
+// is byte-identical to the pre-C1 mk_zero_f64 path. ast_is_one now also
+// matches f32 "1.0" so 1*x=x folds for f32 gradients too.
+fn simplify(expr_idx: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 2 {
         // AST_ADD: simplify children first, then fold.
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let sl = simplify(l);
-        let sr = simplify(r);
+        let sl = simplify(l, ret_tag);
+        let sr = simplify(r, ret_tag);
         if ast_is_zero(sl) == 1 {
             sr
         } else { if ast_is_zero(sr) == 1 {
@@ -10727,8 +10787,8 @@ fn simplify(expr_idx: i32) -> i32 {
         // AST_SUB: x - 0 = x; 0 - x = -x.
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let sl = simplify(l);
-        let sr = simplify(r);
+        let sl = simplify(l, ret_tag);
+        let sr = simplify(r, ret_tag);
         if ast_is_zero(sr) == 1 {
             sl
         } else { if ast_is_zero(sl) == 1 {
@@ -10740,12 +10800,12 @@ fn simplify(expr_idx: i32) -> i32 {
         // AST_MUL: 0*x=0, x*0=0, 1*x=x, x*1=x.
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let sl = simplify(l);
-        let sr = simplify(r);
+        let sl = simplify(l, ret_tag);
+        let sr = simplify(r, ret_tag);
         if ast_is_zero(sl) == 1 {
-            mk_zero_f64()
+            mk_zero_typed(ret_tag)
         } else { if ast_is_zero(sr) == 1 {
-            mk_zero_f64()
+            mk_zero_typed(ret_tag)
         } else { if ast_is_one(sl) == 1 {
             sr
         } else { if ast_is_one(sr) == 1 {
@@ -10757,19 +10817,19 @@ fn simplify(expr_idx: i32) -> i32 {
         // AST_DIV: simplify children; no algebraic identity beyond that.
         let l = __arena_get(expr_idx + 1);
         let r = __arena_get(expr_idx + 2);
-        let sl = simplify(l);
-        let sr = simplify(r);
+        let sl = simplify(l, ret_tag);
+        let sr = simplify(r, ret_tag);
         mk_node(5, sl, sr, 0)
     } else { if t == 9 {
         // AST_NEG: -(-x) = x; -0 = 0.
         let inner = __arena_get(expr_idx + 1);
-        let si = simplify(inner);
+        let si = simplify(inner, ret_tag);
         let it = __arena_get(si);
         if it == 9 {
             // -(-x) → x
             __arena_get(si + 1)
         } else { if ast_is_zero(si) == 1 {
-            mk_zero_f64()
+            mk_zero_typed(ret_tag)
         } else {
             mk_node(9, si, 0, 0)
         } }
@@ -10843,9 +10903,11 @@ fn grad_pass(sb: i32, head: i32) -> i32 {
                 // pass. Calls to unknown fns (transcendentals, builtins)
                 // are left as-is — differentiate will trap on them.
                 let inlined = inline_user_calls(loss_body, head, 0);
-                // Differentiate then simplify.
-                let deriv_raw = differentiate(inlined, var_s, var_l);
-                let deriv = simplify(deriv_raw);
+                // Differentiate then simplify. C1: thread the loss fn's
+                // return type tag (slot 5) so derivative constants are
+                // emitted at the loss's width (f32 tag 27 / f64 tag 34).
+                let deriv_raw = differentiate(inlined, var_s, var_l, loss_ret_ty);
+                let deriv = simplify(deriv_raw, loss_ret_ty);
                 // Synthesize the AST_FN_DECL clone. Same param chain (we
                 // share — derivative still takes the same input shape) and
                 // same ret_ty (f64 in the test cases). The clone has
@@ -11239,16 +11301,17 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                             }
                             let run_body_to_diff = inline_user_calls(
                                 run_loss_body, head, 0);
+                            // C1: thread loss return type tag (f32/f64).
                             differentiate_reverse_all(
-                                sb, run_body_to_diff);
+                                sb, run_body_to_diff, run_loss_ret_ty);
                             let mut xi: i32 = 0;
                             while xi < run_size {
                                 let xe = base + (gri + xi) * 5;
                                 let xms = __arena_get(xe + 4);
                                 let xfl = __arena_get(xe + 3);
                                 let xml = run_loss_l + 7 + xfl;
-                                let xder_raw = bucket_array_sum(sb, xi);
-                                let xder = simplify(xder_raw);
+                                let xder_raw = bucket_array_sum(sb, xi, run_loss_ret_ty);
+                                let xder = simplify(xder_raw, run_loss_ret_ty);
                                 let xclone = mk_node(14, xms, xml, xder);
                                 __arena_push(run_loss_params);
                                 __arena_push(run_loss_ret_ty);
@@ -11370,7 +11433,7 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                             // n=1; preserves self-host G3..G4 byte-
                             // identity. Inc 3 will introduce true
                             // grouping (single walk for multi-param).
-                            differentiate_reverse_one_via_array(sb, body_to_diff, var_s, var_l)
+                            differentiate_reverse_one_via_array(sb, body_to_diff, var_s, var_l, loss_ret_ty)
                         } else {
                             body_to_diff
                         }
@@ -11379,7 +11442,7 @@ fn grad_rev_pass(sb: i32, head: i32) -> i32 {
                 let deriv = if have_param == 1 {
                     if valid_field == 1 {
                         if ckpt_ok == 1 {
-                            simplify(deriv_raw)
+                            simplify(deriv_raw, loss_ret_ty)
                         } else {
                             deriv_raw
                         }

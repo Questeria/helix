@@ -265,8 +265,31 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 # All bootstrap gaps as measured 2026-05-29. Remove entries as chunks land.
 # ============================================================================
 KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
-    # --- GAP-1: f32 forward mode (all f32 grad cases) ---
-    ("FWD_F32", "const"),
+    # --- GAP-1: f32 forward mode (f32 grad cases) ---
+    # CHUNK C1 (2026-05-29) LANDED the f32 derivative-constant fix in
+    # parser.hx: differentiate()/simplify() now emit f32 float-literal
+    # nodes (tag 27) — not f64 (tag 34) — into an f32-typed gradient fn,
+    # threaded via the loss fn's return type tag (mk_zero_typed/
+    # mk_one_typed). This makes the synthesized f32 gradient produce
+    # CORRECT f32 values (verified directly via __f32_to_i32: grad(x*x)
+    # at 21.0 -> 42, grad(x*6+12) -> 6, grad(x*x*x) at 4.0 -> 48, etc.).
+    #
+    # ("FWD_F32", "const") is now REMOVED from this set — it passes: the
+    # derivative of a constant is f32 0.0, whose bit pattern survives the
+    # bootstrap's no-op `as i32` cast as integer 0 (== expected_rc).
+    #
+    # The remaining FWD_F32 ARITHMETIC cases below stay xfail NOT because
+    # of the autodiff math (C1 fixed that) but because of a SEPARATE,
+    # pre-existing bootstrap limitation: the `as` cast operator is a
+    # parser-level NO-OP (parser.hx ~2755: it consumes `as <type>` and
+    # returns the operand unchanged). Every corpus FWD_F32 case extracts
+    # its result via `grad(f)(arg) as i32`; for a non-zero f32 result the
+    # no-op cast leaves an f32 bit-pattern where i32 is expected, so the
+    # value reads as 0 (or the 14002 body-vs-ret width trap fires, rc=132)
+    # in the bootstrap while the Python reference does a real cvttss2si
+    # truncation. This `as`-cast no-op is its OWN chunk (float->int cast
+    # lowering); it is out of C1's "f32 derivative constants" scope.
+    # Until that lands, these stay xfail.
     ("FWD_F32", "ident"),
     ("FWD_F32", "x_squared"),
     ("FWD_F32", "add_x"),
