@@ -67,11 +67,13 @@
 // Restart 56 A1: range-reduce x into [-π, π] before the Taylor series.
 // The 4-term series is only accurate for |x| < π/2 ≈ 1.57; without
 // reduction, |x| > 2π produces nonsense. Mirrors __exp range reduction
-// discipline. Two-pi constant inlined as 6.28318530718; round-via-i32-
-// cast handles |x| up to ~2 billion before integer overflow becomes a
-// concern (well past any realistic angle).
+// discipline. Two-pi constant inlined as 6.2831853 (8 sig digits — rounds
+// to the SAME f32 bits 0x40C90FDB as full-precision 2pi, and fits the
+// bootstrap's i32 literal parser; a 12-digit form genuinely overflows it).
+// round-via-i32-cast handles |x| up to ~2 billion before integer overflow
+// becomes a concern (well past any realistic angle).
 @pure fn __sin(x: f32) -> f32 {
-    let two_pi = 6.28318530718_f32;
+    let two_pi = 6.2831853_f32;
     let k = ((x / two_pi) + (if x >= 0.0_f32 { 0.5_f32 } else { 0.0_f32 - 0.5_f32 })) as i32;
     let xr = x - (k as f32) * two_pi;
     // sin(x) = x - x³/3! + x⁵/5! - x⁷/7!
@@ -83,7 +85,7 @@
 }
 
 @pure fn __cos(x: f32) -> f32 {
-    let two_pi = 6.28318530718_f32;
+    let two_pi = 6.2831853_f32;
     let k = ((x / two_pi) + (if x >= 0.0_f32 { 0.5_f32 } else { 0.0_f32 - 0.5_f32 })) as i32;
     let xr = x - (k as f32) * two_pi;
     // cos(x) = 1 - x²/2! + x⁴/4! - x⁶/6!

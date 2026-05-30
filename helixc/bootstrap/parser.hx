@@ -10224,7 +10224,8 @@ fn inline_user_calls(expr_idx: i32, head: i32, depth: i32) -> i32 {
                 if ad_name_is_exp(call_ns, call_nl) == 1 { 1 }
                 else { if ad_name_is_sqrt(call_ns, call_nl) == 1 { 1 }
                 else { if ad_name_is_sigmoid(call_ns, call_nl) == 1 { 1 }
-                else { 0 } } }
+                else { if ad_name_is_sin(call_ns, call_nl) == 1 { 1 }
+                else { 0 } } } }
             };
             if skip_inline == 1 {
                 // Not found, or a known transcendental — leave as-is.
@@ -10485,6 +10486,27 @@ fn ad_mk_call_sigmoid(u: i32) -> i32 {
     let arg = mk_node(17, u, 0, 0);
     mk_node(16, name_s, 9, arg)
 }
+// C3d (2026-05-30): __sin chain rule support. d sin(u) = cos(u)*du, so the
+// differentiate arm matches __sin and EMITS a __cos call. (__sin/__cos
+// compile under the bootstrap now that their 12-digit two_pi was shortened
+// to the bit-identical 8-digit form.)
+fn ad_name_is_sin(s: i32, l: i32) -> i32 {
+    let ref_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(115);               // 's'
+    __arena_push(105);               // 'i'
+    __arena_push(110);               // 'n'
+    byte_eq(s, l, ref_s, 5)
+}
+fn ad_mk_call_cos(u: i32) -> i32 {
+    let name_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(99);                // 'c'
+    __arena_push(111);               // 'o'
+    __arena_push(115);               // 's'
+    let arg = mk_node(17, u, 0, 0);
+    mk_node(16, name_s, 5, arg)
+}
 fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 0 {
@@ -10638,11 +10660,17 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
             let onemsig = mk_node(3, one_s, sig2, 0);
             let prod = mk_node(4, sig1, onemsig, 0);
             mk_node(4, prod, du, 0)
+        } else { if ad_name_is_sin(callee_s, callee_l) == 1 {
+            // d/dx sin(u) = cos(u) * du (C3d). Emits a __cos call, which
+            // resolves with the stdlib present (harness prepends it).
+            let du = differentiate(arg_u, var_s, var_l, ret_tag);
+            let ccall = ad_mk_call_cos(arg_u);
+            mk_node(4, ccall, du, 0)
         } else {
-            // Unsupported call (sin/cos pending — __sin/__cos SIGILL in the
-            // bootstrap; or a user fn that should have been inlined) — trap.
+            // Unsupported call (__cos grad pending; or a user fn that should
+            // have been inlined upstream) — fail closed.
             mk_node(99, 85001, 0, 0)
-        } } } } }
+        } } } } } }
     } else {
         // Unsupported tag (IF, WHILE, BLOCK, ...) — Phase-0 limitation.
         // Trap with id 85001 by emitting an AST_ERR node; codegen lowers

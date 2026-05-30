@@ -328,11 +328,14 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # sqrt_at_4 and sigmoid_at_zero now match Python and are REMOVED. 7 of 8
     # FWD_F32_TC now pass.
     #
-    # Still xfail: sin_at_zero is blocked by a __sin/__cos bootstrap codegen
-    # bug (both SIGILL rc132 even with the stdlib present — a separate parity
-    # bug, under investigation). The "bootstrap auto-includes stdlib" gap (so
-    # production programs need no manual prefix) is a K3/driver concern.
-    ("FWD_F32_TC", "sin_at_zero"),
+    # CHUNK C3d (2026-05-30) UNBLOCKED __sin/__cos and LANDED the __sin chain
+    # rule. The __sin/__cos SIGILL was the 12-digit two_pi (6.28318530718_f32)
+    # genuinely overflowing the bootstrap's i32 float parser; shortened to the
+    # bit-identical 8-digit 6.2831853_f32 (same f32 0x40C90FDB). Then added the
+    # d sin(u)=cos(u)*du arm (emits __cos). sin_at_zero now matches Python and
+    # is REMOVED. ALL 8 FWD_F32_TC pass (exp/sin/sqrt/sigmoid/relu/abs). The
+    # full-precision >9-digit f32 literal parser (parse_float_bits i64 widening)
+    # remains a K3/endgame item for complete literal parity.
     ("FWD_F32_TC", "sqrt_at_4"),
     ("FWD_F32_TC", "sigmoid_at_zero"),
     # CHUNK C2b (2026-05-30) LANDED reverse-mode let-binding AD: a new
