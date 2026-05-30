@@ -1959,6 +1959,50 @@ fn emit_exit_with_eax() -> i32 {
     9
 }
 
+// Big-stack entry prologue (task 16 / "bug #1"). Emitted at the very top of
+// the _start stub, BEFORE `call main`, so every emitted program runs main on
+// a large mmap'd stack instead of the kernel's default 8 MB. This is what
+// lets a bootstrap-built compiler self-compile its own deeply-recursive
+// ~1.43 MB source (parse_primary has ~1241 lets) with NO external
+// `ulimit -s unlimited`. mmap(0, 512 MiB, PROT_READ|WRITE,
+// MAP_PRIVATE|MAP_ANON|MAP_NORESERVE, -1, 0); on success (rax >= 0, a low
+// canonical user address so the sign bit is clear) set rsp = base+len
+// (16-aligned); on FAILURE (rax = -errno, sign bit set) the `js` skips the
+// switch so the kernel stack is kept and nothing regresses. Anonymous +
+// NORESERVE pages are demand-paged, so 512 MiB costs nothing until touched.
+// The stub itself uses no stack (registers + syscall only), so it is safe to
+// run before the switch; the kernel-provided argv/argc on the original stack
+// are unused (the bootstrap has no argv), so abandoning that stack is
+// harmless. syscall clobbers only rcx/r11; rsi (= len) survives it, so
+// `lea rsp,[rax+rsi]` reads the live length. 53 bytes.
+//   31 FF                xor edi, edi              ; addr = 0
+//   48 C7 C6 00 00 00 20 mov rsi, 0x20000000       ; len = 512 MiB
+//   48 C7 C2 03 00 00 00 mov rdx, 3                ; PROT_READ|PROT_WRITE
+//   49 C7 C2 22 40 00 00 mov r10, 0x4022           ; MAP_PRIVATE|MAP_ANON|MAP_NORESERVE
+//   49 C7 C0 FF FF FF FF mov r8, -1                ; fd = -1
+//   45 31 C9             xor r9d, r9d              ; offset = 0
+//   B8 09 00 00 00       mov eax, 9                ; sys_mmap
+//   0F 05                syscall                   ; rax = base | -errno
+//   48 85 C0             test rax, rax
+//   78 08                js +8                     ; mmap failed -> keep kernel stack
+//   48 8D 24 30          lea rsp, [rax + rsi]      ; rsp = base + len
+//   48 83 E4 F0          and rsp, -16              ; 16-align
+fn emit_start_bigstack() -> i32 {
+    emit_byte(0x31); emit_byte(0xFF);
+    emit_byte(0x48); emit_byte(0xC7); emit_byte(0xC6); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00); emit_byte(0x20);
+    emit_byte(0x48); emit_byte(0xC7); emit_byte(0xC2); emit_byte(0x03); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x49); emit_byte(0xC7); emit_byte(0xC2); emit_byte(0x22); emit_byte(0x40); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x49); emit_byte(0xC7); emit_byte(0xC0); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);
+    emit_byte(0x45); emit_byte(0x31); emit_byte(0xC9);
+    emit_byte(0xB8); emit_byte(0x09); emit_byte(0x00); emit_byte(0x00); emit_byte(0x00);
+    emit_byte(0x0F); emit_byte(0x05);
+    emit_byte(0x48); emit_byte(0x85); emit_byte(0xC0);
+    emit_byte(0x78); emit_byte(0x08);
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0x24); emit_byte(0x30);
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xE4); emit_byte(0xF0);
+    53
+}
+
 // --------------------------------------------------------------
 // --------------------------------------------------------------
 // Builtin name templates. Each is a static byte sequence we push
@@ -9703,6 +9747,13 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
         //   89 C7                mov edi, eax           (2)
         //   B8 3C 00 00 00       mov eax, 60 (sys_exit) (5)
         //   0F 05                syscall                (2)
+        // task 16 / bug #1: switch to a 512 MiB mmap'd stack FIRST (before
+        // `call main`), so the deeply-recursive self-compile no longer
+        // overflows the 8 MB kernel stack and no external `ulimit -s
+        // unlimited` is needed. Fail-safe: on mmap failure it keeps the
+        // kernel stack. Adds 53 bytes at the entry; `call main` below is
+        // still rel32-patched by NAME, so the entry-point shift is absorbed.
+        emit_start_bigstack();
         let main_call_disp = emit_call_rel32_placeholder();
         patch_table_add(patch_state, main_call_disp, main_name_s, 4);
         emit_byte(0x89); emit_byte(0xC7);

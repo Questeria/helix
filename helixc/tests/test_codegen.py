@@ -6769,13 +6769,17 @@ def test_bootstrap_kovc_self_host_loop():
     """
     import pytest
     pytest.skip(
-        "Needs bug #1: the bootstrap parser is deeply recursive (parse_primary "
-        "has ~1241 lets), so the full self-compile overflows the default 8 MB "
-        "stack under this test's plain subprocess run. The self-host fixpoint "
-        "(K1 compiles its own full source -> K2 -> K3 exits 42) IS proven under "
-        "a big stack by test_self_host_fixpoint.py (milestone, commit 0ee8824). "
-        "Unskip once the entry-stub big-stack fix lands so no external ulimit "
-        "is needed (see task: bug #1 large-stack entry stub)."
+        "Partially unblocked 2026-05-30 (task 16): the kovc.hx _start stub now "
+        "mmaps a 512 MiB stack, so BOOTSTRAP-built compilers (K2+) self-compile "
+        "deeply-recursive sources without an external ulimit (proven by "
+        "test_bootstrap_bigstack_deep_recursion + the byte-identical "
+        "test_self_host_fixpoint). But THIS test's K1 is Python-built "
+        "(_compile_src_to_elf), whose _start has no such stub, so the K1->K2 "
+        "step still overflows the default 8 MB stack without an external ulimit. "
+        "Full unskip needs the matching mmap stub in the Python backend "
+        "(helixc/backend/x86_64.py _start emission) -- a transitional follow-up "
+        "(Python is deleted at K4 anyway). The self-host fixpoint IS proven "
+        "under a big stack by test_self_host_fixpoint.py."
     )
     import os, subprocess
     proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -8559,6 +8563,23 @@ def test_bootstrap_large_let_chain_parser_recursion_xfail():
            + "42 }")
     rc, _, _ = _kovc_self_host_compile_and_run_full("large_let_chain", src)
     assert rc == 42, f"318 let-bindings should return 42, got {rc}"
+
+
+def test_bootstrap_bigstack_deep_recursion():
+    """Regression for the big-stack entry stub (task 16 / bug #1, 2026-05-30).
+    Every bootstrap-emitted binary now begins with an _start stub that mmaps a
+    512 MiB stack and switches rsp before calling main, so deep RUNTIME
+    recursion no longer overflows the kernel's default 8 MB stack. A
+    self-recursion 20000 frames deep (~80 MB at the 4 KB-per-frame prologue)
+    returns 7; before the stub it SIGSEGV'd (rc 139) for any depth >~2500
+    (measured: rec(2000) ok, rec(5000) -> 139, rec(100000) -> 7 with the stub).
+    Bootstrap-side half of closing the self-host stack limit -- the canonical
+    test_bootstrap_kovc_self_host_loop still needs the matching stub in the
+    Python backend for its Python-built K1 (see that test's skip note)."""
+    src = ("fn rec(n: i32) -> i32 { if n == 0 { 7 } else { rec(n - 1) } } "
+           "fn main() -> i32 { rec(20000) }")
+    rc, _, _ = _kovc_self_host_compile_and_run_full("bigstack_deep_rec", src)
+    assert rc == 7, f"20000-deep recursion should return 7 on the mmap'd stack, got {rc}"
 
 
 def test_bootstrap_ptx_tile_zeros():
