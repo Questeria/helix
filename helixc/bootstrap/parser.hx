@@ -2652,8 +2652,30 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                     let s_entry = struct_tab_base(sb) + method_lhs_struct * 4;
                     let s_name_s = __arena_get(s_entry);
                     let s_name_l = __arena_get(s_entry + 1);
-                    let mang_s = mangle_impl_method(s_name_s, s_name_l, m_s, m_l);
-                    let mang_l = s_name_l + 2 + m_l;
+                    // task 18 fix: a turbofish struct literal Box::<i32>{...}
+                    // records the MONOMORPHIZED struct name (Box__i32) on the
+                    // binding, but the impl method is registered under the
+                    // ORIGINAL name (Box__get -- generic params type-erased). So
+                    // normalize the receiver name by truncating at the first __
+                    // mono-separator (byte 95,95) before mangling. No current
+                    // struct name contains __, so this is a no-op except for mono
+                    // receivers: Box__i32 -> Box -> Box__get (the registered method).
+                    let mut eff_name_l = s_name_l;
+                    let mut scan_i = 0;
+                    let mut found_sep = 0;
+                    while scan_i + 1 < s_name_l {
+                        if found_sep == 0 {
+                            if __arena_get(s_name_s + scan_i) == 95 {
+                                if __arena_get(s_name_s + scan_i + 1) == 95 {
+                                    eff_name_l = scan_i;
+                                    found_sep = 1;
+                                }
+                            }
+                        }
+                        scan_i = scan_i + 1;
+                    }
+                    let mang_s = mangle_impl_method(s_name_s, eff_name_l, m_s, m_l);
+                    let mang_l = eff_name_l + 2 + m_l;
                     // Consume `.`, method IDENT, `(`.
                     cur_advance(sb);                       // '.'
                     cur_advance(sb);                       // method IDENT

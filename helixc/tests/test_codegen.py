@@ -5093,8 +5093,8 @@ def test_bootstrap_impl_generics_advanced_working():
     actually RUN correctly in the bootstrap today -- &self receiver, multiple impl
     blocks on one struct, a where-clause on a generic fn, and a nested generic call.
     (Python helixc cannot parse any of these, so they are bootstrap-only
-    deletion-parity wins.) The one remaining real gap is generic-impl methods --
-    see test_bootstrap_generic_impl_method_xfail."""
+    deletion-parity wins.) Generic-impl methods via turbofish construction was the
+    one remaining gap and is now FIXED (task 18) -- see test_bootstrap_generic_impl_method."""
     assert _kovc_self_host_compile_and_run("adv_amp_self",
         "struct P { a: i32 } impl P { fn get(&self) -> i32 { self.a } } "
         "fn main() -> i32 { let p = P { a: 42 }; p.get() }") == 42
@@ -5108,21 +5108,22 @@ def test_bootstrap_impl_generics_advanced_working():
         "fn id<T>(x: T) -> T { x } fn main() -> i32 { id(id(id(42))) }") == 42
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "Known bootstrap-quality gap (status-reconciled 2026-05-30, HEAD e74ae8a): a method "
-    "on a GENERIC impl block -- `impl<T> Box<T> { fn get(self) -> T {..} }` called as "
-    "`b.get()` -- miscompiles to SIGILL (exit 132); the bootstrap does not monomorphize "
-    "generic-impl methods for the concrete instance. NOT a deletion blocker (Python helixc "
-    "cannot parse generics at all). The other advanced impl/generic cases the old notes "
-    "flagged are re-verified WORKING (test_bootstrap_impl_generics_advanced_working). Flips "
-    "to xpass when generic-impl-method monomorphization lands."))
-def test_bootstrap_generic_impl_method_xfail():
-    """A method on a generic impl block, dispatched on a concrete Box::<i32>. SIGILL 132."""
+def test_bootstrap_generic_impl_method():
+    """task 18 FIXED (2026-05-30): a method on a GENERIC impl block dispatched on a
+    TURBOFISH-constructed instance -- `let b = Box::<i32> { v: 42 }; b.get()`. ROOT
+    CAUSE: the turbofish struct literal records the MONOMORPHIZED struct name
+    (Box__i32) on the binding, but the impl method is registered under the ORIGINAL
+    name (Box__get -- generic params are type-erased), so dispatch mangled
+    Box__i32__get -> not found -> ud2 -> SIGILL 132. FIX (parser.hx ~2655): truncate
+    the receiver struct name at the first __ mono-separator before mangling, so
+    Box__i32 -> Box -> Box__get. Plain construction `Box { v: 42 }` (T inferred)
+    already worked; field access on the turbofish value already worked (it uses the
+    struct index, not the name). NOT a deletion blocker (Python cannot parse generics)."""
     rc = _kovc_self_host_compile_and_run(
         "gen_impl_method",
         "struct Box<T> { v: T } impl<T> Box<T> { fn get(self) -> T { self.v } } "
         "fn main() -> i32 { let b = Box::<i32> { v: 42 }; b.get() }")
-    assert rc == 42, f"generic-impl method b.get() should return 42, got {rc}"
+    assert rc == 42, f"generic-impl method via turbofish b.get() should return 42, got {rc}"
 
 
 def test_bootstrap_fnptr_name_as_value():
