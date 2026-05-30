@@ -107,6 +107,38 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
      "fn main() -> i32 { __clamp_i32(100, 0, 42) }", 42),
     ("math", "abs_i32",
      "fn main() -> i32 { __abs_i32(0 - 42) }", 42),
+
+    # ==== Expansion 2026-05-30 (harvested from test_codegen.py validated
+    #      tests; each independently BOOT==PY==expected verified). ====
+    ("option", "or_zero",
+     "fn main() -> i32 { let a = Option::Some(42); let b = Option::None; option_or_zero(a) + option_or_zero(b) }", 42),
+    ("option", "or_neg",
+     "fn main() -> i32 { let a = Option::Some(43); let b = Option::None; option_or_neg(a) + option_or_neg(b) }", 42),
+    ("option", "eq_some",
+     "fn main() -> i32 { let a = Option::Some(42); let b = Option::Some(99); let c = Option::None; let n_match = option_eq_some(a, 42); let n_no = option_eq_some(b, 42); let n_none = option_eq_some(c, 42); n_match * 42 + n_no + n_none }", 42),
+    ("option", "min",
+     "fn main() -> i32 { let a = Option::Some(22); let b = Option::Some(20); let none = Option::None; let m1 = option_min(a, b); let m2 = option_min(a, none); m1 + m2 }", 42),
+    ("result", "or_zero",
+     "fn main() -> i32 { let a = Result::Ok(42); let b = Result::Err(99); result_or_zero(a) + result_or_zero(b) }", 42),
+    ("result", "eq_ok",
+     "fn main() -> i32 { let a = Result::Ok(42); let b = Result::Ok(99); let c = Result::Err(7); let n_match = result_eq_ok(a, 42); let n_no = result_eq_ok(b, 42); let n_err = result_eq_ok(c, 42); n_match * 42 + n_no + n_err }", 42),
+    ("vec", "contains",
+     "fn main() -> i32 { let s = vec_new(); let c0 = vec_push(s, 0, 11); let c1 = vec_push(s, c0, 22); let c2 = vec_push(s, c1, 33); let hit = vec_contains(s, c2, 22); let miss = vec_contains(s, c2, 99); (hit - miss) * 42 }", 42),
+    # vec_abs_sum + vec_sum_squares TRAP (rc132) under the bootstrap while
+    # Python returns 42 -- a real bootstrap codegen gap in these two vec fns
+    # (vec_contains/sum/max/push/index_of all work). KNOWN_PARITY_GAPS below.
+    ("vec", "abs_sum",
+     "fn main() -> i32 { let v = vec_new(); let n0 = vec_push(v, 0, 5); let n1 = vec_push(v, n0, -3); let n2 = vec_push(v, n1, -8); let n3 = vec_push(v, n2, 1); vec_abs_sum(v, n3) * 2 + 8 }", 42),
+    ("vec", "sum_squares",
+     "fn main() -> i32 { let v = vec_new(); let n0 = vec_push(v, 0, 1); let n1 = vec_push(v, n0, 2); let n2 = vec_push(v, n1, 3); let n3 = vec_push(v, n2, 4); vec_sum_squares(v, n3) + 12 }", 42),
+    ("string", "from_to_int_roundtrip",
+     "fn main() -> i32 { let start = __arena_len(); let n = string_from_int(123); let v = string_to_int(start, n); if v == 123 { 42 } else { 1 } }", 42),
+    ("string", "last_index_of",
+     "fn main() -> i32 { let s = string_new(); let n0 = string_push(s, 0, 97); let n1 = string_push(s, n0, 98); let n2 = string_push(s, n1, 99); let n3 = string_push(s, n2, 98); let n4 = string_push(s, n3, 97); let last_b = string_last_index_of(s, n4, 98); let last_z = string_last_index_of(s, n4, 122); if last_b == 3 { if last_z == 0 - 1 { 42 } else { 1 } } else { 2 } }", 42),
+    ("math", "min_max_clamp",
+     "fn main() -> i32 { let a = __min_i32(5, 3); let b = __max_i32(5, 3); let c = __clamp_i32(100, 0, 10); a + b + c }", 18),
+    ("math", "sign_i32",
+     "fn main() -> i32 { let a = __sign_i32(7); let b = __sign_i32(0 - 5); let c = __sign_i32(0); a * 40 - b * 2 + c }", 42),
 ]
 
 
@@ -115,7 +147,14 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
 # Remove entries as the underlying bootstrap bug is fixed.
 # ============================================================================
 KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
-    # (empty) — all 21 stdlib corpus entries are hard-asserted at parity.
+    # vec_abs_sum / vec_sum_squares: bootstrap SIGILLs (rc132) while Python
+    # returns the correct sum. The other vec fns (contains/sum/max/push/
+    # index_of) all work, so it's a codegen gap specific to these two
+    # (likely an op they use -- abs or i32 square/saturation -- that the
+    # bootstrap mishandles in that context). Found 2026-05-30 corpus
+    # expansion; root-cause + fix is a follow-up chunk.
+    ("vec", "abs_sum"),
+    ("vec", "sum_squares"),
     #
     # FIXED 2026-05-30: option/sum was the symptom of a deep nested-match
     # codegen bug. A nested match in ANY arm of a match re-init'd the SHARED
