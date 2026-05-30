@@ -6535,7 +6535,84 @@ fn emit_one_match_arm(arm_idx: i32, scrut_off: i32, match_state: i32,
     let end_table = match_state + 17;
     fail_jmp_state_reset(fail_state);
     let n_pat = emit_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state);
+    // C7 (2026-05-30): make match_state NEST. The body below may contain a
+    // nested match, whose match_state_init resets the SHARED 34-slot region
+    // (fail_state 0..16 + end_table 17..33) — orphaning THIS match's already-
+    // recorded fail/end jumps. End-table orphaning left the parent arm's
+    // merge-jump unpatched (jmp +0 -> fall-through into the next arm, re-
+    // executing it: the option_sum / nested-match bug). Save the region to
+    // LOCALS before the body and restore after, so the end-jump record +
+    // fail patch below land in the correct table. Locals (the call stack)
+    // give each emit_one_match_arm recursion its own save -> arbitrary depth.
+    let sv0 = __arena_get(match_state + 0);
+    let sv1 = __arena_get(match_state + 1);
+    let sv2 = __arena_get(match_state + 2);
+    let sv3 = __arena_get(match_state + 3);
+    let sv4 = __arena_get(match_state + 4);
+    let sv5 = __arena_get(match_state + 5);
+    let sv6 = __arena_get(match_state + 6);
+    let sv7 = __arena_get(match_state + 7);
+    let sv8 = __arena_get(match_state + 8);
+    let sv9 = __arena_get(match_state + 9);
+    let sv10 = __arena_get(match_state + 10);
+    let sv11 = __arena_get(match_state + 11);
+    let sv12 = __arena_get(match_state + 12);
+    let sv13 = __arena_get(match_state + 13);
+    let sv14 = __arena_get(match_state + 14);
+    let sv15 = __arena_get(match_state + 15);
+    let sv16 = __arena_get(match_state + 16);
+    let sv17 = __arena_get(match_state + 17);
+    let sv18 = __arena_get(match_state + 18);
+    let sv19 = __arena_get(match_state + 19);
+    let sv20 = __arena_get(match_state + 20);
+    let sv21 = __arena_get(match_state + 21);
+    let sv22 = __arena_get(match_state + 22);
+    let sv23 = __arena_get(match_state + 23);
+    let sv24 = __arena_get(match_state + 24);
+    let sv25 = __arena_get(match_state + 25);
+    let sv26 = __arena_get(match_state + 26);
+    let sv27 = __arena_get(match_state + 27);
+    let sv28 = __arena_get(match_state + 28);
+    let sv29 = __arena_get(match_state + 29);
+    let sv30 = __arena_get(match_state + 30);
+    let sv31 = __arena_get(match_state + 31);
+    let sv32 = __arena_get(match_state + 32);
+    let sv33 = __arena_get(match_state + 33);
     let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
+    __arena_set(match_state + 0, sv0);
+    __arena_set(match_state + 1, sv1);
+    __arena_set(match_state + 2, sv2);
+    __arena_set(match_state + 3, sv3);
+    __arena_set(match_state + 4, sv4);
+    __arena_set(match_state + 5, sv5);
+    __arena_set(match_state + 6, sv6);
+    __arena_set(match_state + 7, sv7);
+    __arena_set(match_state + 8, sv8);
+    __arena_set(match_state + 9, sv9);
+    __arena_set(match_state + 10, sv10);
+    __arena_set(match_state + 11, sv11);
+    __arena_set(match_state + 12, sv12);
+    __arena_set(match_state + 13, sv13);
+    __arena_set(match_state + 14, sv14);
+    __arena_set(match_state + 15, sv15);
+    __arena_set(match_state + 16, sv16);
+    __arena_set(match_state + 17, sv17);
+    __arena_set(match_state + 18, sv18);
+    __arena_set(match_state + 19, sv19);
+    __arena_set(match_state + 20, sv20);
+    __arena_set(match_state + 21, sv21);
+    __arena_set(match_state + 22, sv22);
+    __arena_set(match_state + 23, sv23);
+    __arena_set(match_state + 24, sv24);
+    __arena_set(match_state + 25, sv25);
+    __arena_set(match_state + 26, sv26);
+    __arena_set(match_state + 27, sv27);
+    __arena_set(match_state + 28, sv28);
+    __arena_set(match_state + 29, sv29);
+    __arena_set(match_state + 30, sv30);
+    __arena_set(match_state + 31, sv31);
+    __arena_set(match_state + 32, sv32);
+    __arena_set(match_state + 33, sv33);
     let n_binds = count_pattern_binds(pat_idx);
     let mut bp: i32 = 0;
     while bp < n_binds {
