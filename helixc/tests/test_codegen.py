@@ -8394,6 +8394,59 @@ def test_bootstrap_test_runner_skeleton():
     assert rc_fail == 1, f"runner one-fail expected 1 failure, got {rc_fail}"
 
 
+def test_bootstrap_runner_compiles_and_runs_helix():
+    """T2 STEP B (2026-05-30): the Helix-native runner COMPILES + RUNS a real
+    Helix program (not just shell scripts). A fixed-path kovc (reads /tmp/t.hx
+    -> writes /tmp/t.elf, built once via the _self_host_driver pattern + dropped
+    at /tmp/kovc_t) is the runner's inner compiler. The Helix RUNNER program:
+    write src -> /tmp/t.hx, run_process(/tmp/kovc_t) to COMPILE -> /tmp/t.elf,
+    set_exec + run_process(/tmp/t.elf), compare exit code to expected. Proves the
+    full compile->run->check cycle runs inside compiled Helix (Python only builds
+    the kovc binary once; the K3 trusted seed replaces that). Distinct /tmp/t.*
+    paths avoid ETXTBSY with the harness's own sh_drv_* driver."""
+    import subprocess
+    proj = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _strip_demo(name):
+        s = open(os.path.join(proj, "helixc", "bootstrap", name), encoding="utf-8").read()
+        return s.rsplit(
+            "// --------------------------------------------------------------\n// Demo:", 1)[0]
+
+    lexer = _strip_demo("lexer.hx")
+    parser_body = open(os.path.join(proj, "helixc", "bootstrap", "parser.hx"), encoding="utf-8").read()
+    kovc_lib = _strip_demo("kovc.hx")
+    in_path, out_path, kovc_t = "/tmp/t.hx", "/tmp/t.elf", "/tmp/kovc_t"
+    k1_main = (
+        "\nfn main() -> i32 {\n"
+        "    let src_start = __arena_len();\n"
+        f'    let src_len = read_file_to_arena("{in_path}");\n'
+        "    let tok_base = __arena_len();\n"
+        "    lex(src_start, src_len);\n"
+        "    let ast_root = parse_top(tok_base);\n"
+        "    let total = emit_elf_for_ast_to_path(ast_root);\n"
+        "    let elf_start = __arena_len() - total;\n"
+        f'    write_file_to_arena("{out_path}", elf_start, total)\n'
+        "}\n")
+    elf = _compile_src_to_elf(lexer + parser_body + kovc_lib + k1_main)
+    subprocess.run(["wsl", "-e", "bash", "-c", f"cat > {kovc_t} && chmod +x {kovc_t}"],
+                   input=elf, check=True, timeout=30)
+
+    def _runner(prog: bytes, expected: int) -> str:
+        push = "".join(f"__arena_push({b}); " for b in prog)
+        return ("fn main() -> i32 { let s = __arena_len(); " + push +
+                f'let n = __arena_len() - s; write_file_to_arena("{in_path}", s, n); '
+                f'set_exec("{kovc_t}"); run_process("{kovc_t}"); '
+                f'set_exec("{out_path}"); let rc = run_process("{out_path}"); '
+                f"if rc == {expected} {{ 0 }} else {{ 1 }} }}")
+
+    rc_ok, _, _ = _kovc_self_host_compile_and_run_full(
+        "runner_compile_ok", _runner(b"fn main() -> i32 { 42 }", 42))
+    assert rc_ok == 0, f"runner compile+run 42 (expect 42) -> 0, got {rc_ok}"
+    rc_bad, _, _ = _kovc_self_host_compile_and_run_full(
+        "runner_compile_bad", _runner(b"fn main() -> i32 { 7 }", 42))
+    assert rc_bad == 1, f"runner compile+run 7 (expect 42) -> 1, got {rc_bad}"
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills
