@@ -83,3 +83,20 @@ stubbing; nothing to reproduce until Python implements them.
   pipeline AST→`ir/lower_ast.py`(TIR)→`ir/tile_ir.py`(TileIR)→ptx.
 - Harness: `_kovc_self_host_emit_ptx` (test_codegen.py:7473); Python `emit()`
   (test_ptx.py:36). Both text-only, no GPU. See `docs/GPU_DIRECT_EMIT_PLAN.md`.
+
+## Progress update (2026-05-30)
+
+- **Chunk 1 DONE** (commit d7737e5): `parse_fn_decl` extracts the element dtype
+  from a `tile<ELEM,…>` param; `tile<f32>` kernels now emit `ld.global.f32`/
+  `add.f32` matching Python. +2 regression tests (`ptx_tile_dtype_f32/i32`).
+- **Chunks 2-5 = MEASURED COSMETIC, DEFERRED.** A direct unnormalized
+  bootstrap-vs-Python `emit_ptx` diff (post-chunk-1) shows tile<> kernels now
+  differ ONLY on: `.version` 8.0/8.3, a `BB0:` label, i32 `.u32`/`.s32`
+  (same-width, ptxas-identical), and a trailing newline. **None affect SASS** —
+  the bootstrap already emits valid, ptxas-accepted PTX. Byte-matching Python
+  needs ~25 hand-edits across 21 inline goldens in `test_bootstrap_ptx_*`
+  (high churn, cosmetic value), so per loop discipline it is DEFERRED to a
+  single batch-regenerated finalization pass right before the GPU audit (then
+  replace golden-fragment tests with a DIRECT bootstrap-vs-`emit_ptx` corpus).
+  Chunk 4 (unit-return `@kernel`) already works. Verified emitter sites for the
+  future pass are recorded in task #11. NOT correctness-blocking.

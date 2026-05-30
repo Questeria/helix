@@ -215,6 +215,30 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
      "fn main() -> i32 { let s = string_new(); let s1 = string_push(s, 0, 97); let s2 = string_push(s, s1, 10); let s3 = string_push(s, s2, 98); let s4 = string_push(s, s3, 10); let s5 = string_push(s, s4, 99); let s6 = string_push(s, s5, 10); string_count_lines(s, s6) * 14 }", 42),
     ("string", "eq_ignore_case",
      "fn main() -> i32 { let a = string_new(); let a1 = string_push(a, 0, 65); let a2 = string_push(a, a1, 98); let a3 = string_push(a, a2, 67); let b = __arena_len(); let b1 = string_push(b, 0, 97); let b2 = string_push(b, b1, 66); let b3 = string_push(b, b2, 99); string_eq_ignore_case_ascii(a, a3, b, b3) * 42 }", 42),
+
+    # ==== Expansion 4 (2026-05-30): more tensor reductions/elementwise +
+    #      string; each INDEPENDENTLY BOOT==PY==expected verified via probe
+    #      (Python oracle = truth). Broadens dense-tensor codegen coverage.
+    ("tensor", "axpy",
+     "fn main() -> i32 { let x = t1d_new(3); ti1d_set(x, 0, 1); ti1d_set(x, 1, 1); ti1d_set(x, 2, 1); let y = t1d_new(3); ti1d_set(y, 0, 1); ti1d_set(y, 1, 2); ti1d_set(y, 2, 3); ti1d_axpy(y, 2, x, 3); ti1d_sum(y, 3) }", 12),
+    ("tensor", "matvec",
+     "fn main() -> i32 { let w = ti2d_new(2, 2); ti2d_set(w, 2, 0, 0, 1); ti2d_set(w, 2, 0, 1, 2); ti2d_set(w, 2, 1, 0, 3); ti2d_set(w, 2, 1, 1, 4); let x = t1d_new(2); ti1d_set(x, 0, 10); ti1d_set(x, 1, 20); let y = t1d_new(2); ti2d_matvec(w, 2, 2, x, y); ti1d_sum(y, 2) }", 160),
+    ("tensor", "relu_then_add",
+     "fn main() -> i32 { let x = t1d_new(3); ti1d_set(x, 0, 0 - 3); ti1d_set(x, 1, 0); ti1d_set(x, 2, 4); let r = t1d_new(3); ti1d_relu(x, r, 3); let b = t1d_new(3); ti1d_set(b, 0, 1); ti1d_set(b, 1, 2); ti1d_set(b, 2, 3); let z = t1d_new(3); ti1d_add(r, b, z, 3); ti1d_sum(z, 3) }", 10),
+    ("tensor", "sub",
+     "fn main() -> i32 { let x = t1d_new(4); ti1d_set(x, 0, 10); ti1d_set(x, 1, 20); ti1d_set(x, 2, 30); ti1d_set(x, 3, 40); let y = t1d_new(4); ti1d_set(y, 0, 1); ti1d_set(y, 1, 2); ti1d_set(y, 2, 3); ti1d_set(y, 3, 4); let z = t1d_new(4); ti1d_sub(x, y, z, 4); ti1d_sum(z, 4) - 48 }", 42),
+    ("tensor", "mul",
+     "fn main() -> i32 { let x = t1d_new(3); ti1d_set(x, 0, 2); ti1d_set(x, 1, 3); ti1d_set(x, 2, 5); let y = t1d_new(3); ti1d_set(y, 0, 3); ti1d_set(y, 1, 4); ti1d_set(y, 2, 2); let z = t1d_new(3); ti1d_mul(x, y, z, 3); ti1d_sum(z, 3) + 14 }", 42),
+    ("tensor", "max",
+     "fn main() -> i32 { let x = t1d_new(5); ti1d_set(x, 0, 3); ti1d_set(x, 1, 7); ti1d_set(x, 2, 1); ti1d_set(x, 3, 42); ti1d_set(x, 4, 5); ti1d_max(x, 5) }", 42),
+    ("tensor", "argmin",
+     "fn main() -> i32 { let x = t1d_new(5); ti1d_set(x, 0, 10); ti1d_set(x, 1, 20); ti1d_set(x, 2, 5); ti1d_set(x, 3, 30); ti1d_set(x, 4, 15); ti1d_argmin(x, 5) * 20 + 2 }", 42),
+    ("tensor", "clamp",
+     "fn main() -> i32 { let x = t1d_new(3); ti1d_set(x, 0, 0 - 5); ti1d_set(x, 1, 3); ti1d_set(x, 2, 100); let dst = t1d_new(3); ti1d_clamp(x, 0, 50, dst, 3); ti1d_sum(dst, 3) - 11 }", 42),
+    ("tensor", "transpose",
+     "fn main() -> i32 { let src = ti2d_new(2, 3); ti2d_set(src, 3, 0, 0, 1); ti2d_set(src, 3, 0, 1, 2); ti2d_set(src, 3, 0, 2, 3); ti2d_set(src, 3, 1, 0, 4); ti2d_set(src, 3, 1, 1, 5); ti2d_set(src, 3, 1, 2, 6); let dst = ti2d_new(3, 2); ti2d_transpose(src, 2, 3, dst); let s = ti2d_get(dst, 2, 0, 0) + ti2d_get(dst, 2, 0, 1) + ti2d_get(dst, 2, 1, 0) + ti2d_get(dst, 2, 1, 1) + ti2d_get(dst, 2, 2, 0) + ti2d_get(dst, 2, 2, 1); s * 2 }", 42),
+    ("string", "to_lower",
+     "fn main() -> i32 { let s = string_new(); let s1 = string_push(s, 0, 72); let s2 = string_push(s, s1, 69); let s3 = string_push(s, s2, 76); let s4 = string_push(s, s3, 76); let s5 = string_push(s, s4, 79); let lower = string_to_lower(s, s5); let first = string_get(lower, 0); first - 62 }", 42),
 ]
 
 
