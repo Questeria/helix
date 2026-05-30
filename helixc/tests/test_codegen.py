@@ -8289,6 +8289,39 @@ def test_bootstrap_ptx_f32_elementwise_add():
         )
 
 
+def test_bootstrap_ptx_tile_dtype_f32():
+    """K1.GPU-TILE (2026-05-30): a `tile<f32, [N], HBM>` kernel param adopts its
+    ELEMENT dtype (f32), so indexed load/store/arith emit FLOAT PTX
+    (ld.global.f32 / add.f32 / st.global.f32) -- matching Python's
+    backend/ptx.py -- instead of the u32/s32 INTEGER ops the bootstrap emitted
+    before (it parsed `tile<...>` but DROPPED the element type, defaulting to
+    i32 -> u32 ld/st on float data). The fix captures the first generic-arg
+    IDENT of a `tile<ELEM,...>` param in parse_fn_decl and tags the param with
+    ty_ident_to_tag(ELEM). Substring-asserted (not byte-golden) so it survives
+    the later BB0/version chunks. GPU chunk 1 of docs/GPU_PTX_PARITY_SCOPING.md."""
+    src = ("@kernel fn vadd(a: tile<f32, [256], HBM>, b: tile<f32, [256], HBM>, "
+           "c: tile<f32, [256], HBM>) { let i = thread_idx(); c[i] = a[i] + b[i]; }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_tile_f32", src).decode("utf-8", "replace")
+    assert "ld.global.f32" in ptx, ptx
+    assert "add.f32" in ptx, ptx
+    assert "st.global.f32" in ptx, ptx
+    assert "ld.global.u32" not in ptx, ptx
+    assert "add.s32" not in ptx, ptx
+
+
+def test_bootstrap_ptx_tile_dtype_i32():
+    """K1.GPU-TILE (2026-05-30) contrastive: a `tile<i32,...>` param adopts i32,
+    so load/store/arith stay INTEGER (ld.global.u32 / add.s32) -- confirming the
+    tile-element extraction is dtype-CORRECT, not blanket-float. The
+    u32-vs-Python-s32 signedness is a separate cosmetic chunk (GPU chunk 3)."""
+    src = ("@kernel fn vadd(a: tile<i32, [256], HBM>, b: tile<i32, [256], HBM>, "
+           "c: tile<i32, [256], HBM>) { let i = thread_idx(); c[i] = a[i] + b[i]; }\n")
+    ptx = _kovc_self_host_emit_ptx("ptx_tile_i32", src).decode("utf-8", "replace")
+    assert "ld.global.u32" in ptx, ptx
+    assert "add.s32" in ptx, ptx
+    assert "ld.global.f32" not in ptx, ptx
+
+
 def test_bootstrap_ptx_tile_zeros():
     """K1.M13 (2026-05-28): FIRST GPU tile op -- __tile_zeros(N, M)
     lowers to N*M consecutive `mov.f32 %fX, 0f00000000;` register-fills

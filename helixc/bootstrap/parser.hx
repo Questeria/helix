@@ -12585,8 +12585,19 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             // after fn-param type IDENT. Mirrors K1.T's let-type
             // handling. The bootstrap is type-erased, so generic
             // type args are discarded; we just skip the tokens.
+            // K1.GPU-TILE (2026-05-30): EXCEPT capture the FIRST generic-arg
+            // IDENT, so a `tile<ELEM,[N],SPACE>` param can adopt ELEM's scalar
+            // tag (f32->1 etc.) below -- the PTX emitter selects f32-vs-u32
+            // ld/st by the param's slot-4 type_tag (test_bootstrap_ptx_f32_load).
+            let mut tile_elem_s: i32 = 0;
+            let mut tile_elem_l: i32 = 0;
             if tok_tag(tok_base, cur_get(sb)) == 16 {
                 cur_advance(sb);                 // consume '<'
+                let g_first_ct = cur_get(sb);
+                if tok_tag(tok_base, g_first_ct) == 2 {
+                    tile_elem_s = tok_p2(tok_base, g_first_ct);
+                    tile_elem_l = tok_p3(tok_base, g_first_ct);
+                };
                 let mut g_depth_ct: i32 = 1;
                 // K1.CZ (2026-05-26): `->` arrow inside generic args
                 // (e.g. `Box<dyn Fn() -> i32>`) -- don't treat the
@@ -12752,6 +12763,23 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             let p_ty_pre0 = if p_ty == 0 { p_ty_struct } else { p_ty };
             let p_ty_pre = if p_ty_pre0 == 0 { p_ty_enum } else { p_ty_pre0 };
             let p_ty_final = if p_ty_generic > 0 { p_ty_generic } else { p_ty_pre };
+            // K1.GPU-TILE (2026-05-30): a `tile<ELEM,...>` param (the GPU tile
+            // type; ty IDENT "tile" = 116 105 108 101) carries no scalar tag of
+            // its own (p_ty_final == 0), so the PTX emitter defaulted f32 tiles
+            // to u32 INTEGER ld/st. Adopt the first generic-arg ELEM's scalar
+            // tag (f32->1 etc.) so tile<f32> kernels emit f32 ops, matching
+            // Python. Gated on the literal "tile" IDENT (NOT just ty_l==4, which
+            // also matches bf16) so other generic params (Vec<T> etc.) are
+            // unaffected. The bootstrap source itself uses no `tile<`, so this
+            // cannot perturb the self-host fixpoint.
+            let is_tile_p = if ty_l == 4 {
+                let tb0 = __arena_get(ty_s);
+                let tb1 = __arena_get(ty_s + 1);
+                let tb2 = __arena_get(ty_s + 2);
+                let tb3 = __arena_get(ty_s + 3);
+                if tb0 == 116 { if tb1 == 105 { if tb2 == 108 { if tb3 == 101 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            let p_ty_tile = if is_tile_p == 1 { if tile_elem_l > 0 { ty_ident_to_tag(tile_elem_s, tile_elem_l) } else { p_ty_final } } else { p_ty_final };
             // Register only ACTUAL struct params in var_struct_tab (for `p.field`
             // resolution). Enum-with-payload params reuse the 100+idx width
             // sentinel but are NOT structs (matched, never field-accessed).
@@ -12760,7 +12788,7 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             } else { 0 } } else { 0 } } else { 0 };
             let _drop_n = n_register;
             let new_param = mk_node(18, pname_s, pname_l, 0);
-            __arena_push(p_ty_final);   // p4: type tag (100+ = struct)
+            __arena_push(p_ty_tile);   // p4: type tag (100+ = struct; tile<ELEM> -> ELEM tag)
             if params_head == 0 {
                 params_head = new_param;
                 prev_param = new_param;
