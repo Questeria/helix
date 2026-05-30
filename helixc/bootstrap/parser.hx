@@ -10214,8 +10214,15 @@ fn inline_user_calls(expr_idx: i32, head: i32, depth: i32) -> i32 {
                     if nx == 0 { fk = 0; } else { walk = nx; };
                 };
             }
-            if callee_idx == 0 {
-                // Not found — leave as-is. differentiate will trap.
+            // C3b: do NOT inline a known transcendental that has an analytic
+            // chain rule in differentiate (currently __exp) — leave the CALL
+            // so the chain rule fires instead of inlining its Taylor-series
+            // body (which differentiate cannot handle). Mirrors Python's
+            // AD_KNOWN_PURE_CALLS. (Forward ref to ad_name_is_exp is fine —
+            // the bootstrap collects all fn decls before compiling bodies.)
+            let skip_inline = if callee_idx == 0 { 1 } else { ad_name_is_exp(call_ns, call_nl) };
+            if skip_inline == 1 {
+                // Not found, or a known transcendental — leave as-is.
                 expr_idx
             } else {
                 // Get callee body + params.
@@ -10400,6 +10407,32 @@ fn ad_name_is_abs(s: i32, l: i32) -> i32 {
     __arena_push(115);               // 's'
     byte_eq(s, l, ref_s, 5)
 }
+// C3b (2026-05-30): matcher + call-builder for the analytic transcendental
+// __exp. Unlike relu/abs (whose derivative is a pure conditional), exp's
+// derivative IS exp, so the synthesized gradient must CALL __exp — which
+// resolves only when the stdlib transcendentals are present in the compiled
+// program (the autodiff harness prepends transcendentals.hx for these cases;
+// the bootstrap can compile it). ad_mk_call_exp builds an AST_CALL(16) to
+// "__exp" with one arg: push the 5 name bytes, then the AST_ARG(17) cell,
+// then the call node (children before parent; name bytes precede the arg so
+// the name_l=5 range stays clean).
+fn ad_name_is_exp(s: i32, l: i32) -> i32 {
+    let ref_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(101);               // 'e'
+    __arena_push(120);               // 'x'
+    __arena_push(112);               // 'p'
+    byte_eq(s, l, ref_s, 5)
+}
+fn ad_mk_call_exp(u: i32) -> i32 {
+    let name_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(101);               // 'e'
+    __arena_push(120);               // 'x'
+    __arena_push(112);               // 'p'
+    let arg = mk_node(17, u, 0, 0);
+    mk_node(16, name_s, 5, arg)
+}
 fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 0 {
@@ -10486,15 +10519,14 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
         let seq_second = __arena_get(expr_idx + 2);
         differentiate(seq_second, var_s, var_l, ret_tag)
     } else { if t == 16 {
-        // AST_CALL — C3a. Chain rules for the subgradient builtins whose
-        // derivative needs NO stdlib transcendental: relu and abs. Their
-        // derivative is a pure conditional on the argument, so it codegens
-        // without resolving __relu/__abs themselves. The analytic
-        // transcendentals (exp/sin/sqrt/sigmoid) stay trapped here: their
-        // derivatives reference __exp/__cos/__sqrt/__sigmoid, which the
-        // bootstrap cannot yet resolve (stdlib transcendentals are not
-        // auto-included). CALL layout: p1=name_s, p2=name_l, p3=args_head
-        // (AST_ARG tag 17: slot1=arg expr, slot2=next). Single-arg builtin.
+        // AST_CALL — C3a/C3b. Chain rules for builtins. relu/abs (C3a) have
+        // a pure-conditional derivative needing no stdlib. __exp (C3b) has
+        // an analytic derivative that CALLS __exp, which resolves only when
+        // the stdlib transcendentals are in the program (harness prepends
+        // transcendentals.hx). sqrt/sigmoid are analogous (next chunk);
+        // sin/cos are additionally blocked by a __sin/__cos bootstrap bug.
+        // CALL layout: p1=name_s, p2=name_l, p3=args_head (AST_ARG tag 17:
+        // slot1=arg expr, slot2=next). Single-arg builtin.
         let callee_s = __arena_get(expr_idx + 1);
         let callee_l = __arena_get(expr_idx + 2);
         let args_head = __arena_get(expr_idx + 3);
@@ -10523,11 +10555,20 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
             let one_v2 = mk_one_typed(ret_tag);
             let outer_if = mk_node(7, gt2, one_v2, inner_if);
             mk_node(4, outer_if, du, 0)
+        } else { if ad_name_is_exp(callee_s, callee_l) == 1 {
+            // d/dx exp(u) = exp(u) * du. The emitted __exp call resolves
+            // only when the stdlib transcendentals are compiled into the
+            // program (the autodiff parity harness prepends transcendentals.hx
+            // for these cases; the bootstrap can compile it). Children before
+            // parent (arena positional-ordering invariant).
+            let du = differentiate(arg_u, var_s, var_l, ret_tag);
+            let ecall = ad_mk_call_exp(arg_u);
+            mk_node(4, ecall, du, 0)
         } else {
-            // Unsupported call (transcendental needing stdlib, or a user
-            // fn that should have been inlined upstream) — fail closed.
+            // Unsupported call (sin/cos/sqrt/sigmoid pending, or a user fn
+            // that should have been inlined upstream) — fail closed.
             mk_node(99, 85001, 0, 0)
-        } }
+        } } }
     } else {
         // Unsupported tag (IF, WHILE, BLOCK, ...) — Phase-0 limitation.
         // Trap with id 85001 by emitting an AST_ERR node; codegen lowers

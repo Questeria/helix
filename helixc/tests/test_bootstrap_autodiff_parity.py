@@ -312,14 +312,22 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # needing NO stdlib call, so relu_positive/relu_negative/abs_positive/
     # abs_negative now match Python and are REMOVED (hard-asserted).
     #
-    # exp/sin/sqrt/sigmoid stay xfail on a DEEPER blocker (NOT the AD math):
-    # their derivatives reference __exp/__cos/__sqrt/__sigmoid, but the
-    # bootstrap CANNOT resolve stdlib transcendentals at all — they are
-    # stdlib @pure fns (not codegen builtins) and are not auto-included, so
-    # even a direct __exp(0.0) SIGILLs (rc132, undefined call). Python
-    # auto-includes the stdlib. These unblock only once the bootstrap gains
-    # stdlib transcendental resolution (a separate, larger prerequisite).
-    ("FWD_F32_TC", "exp_at_zero"),
+    # CHUNK C3b (2026-05-30) LANDED the __exp chain rule + stdlib plumbing.
+    # Key finding: the bootstrap CAN compile transcendentals.hx (the stdlib
+    # @pure fn impls) — it just does not auto-include the stdlib the way
+    # Python's compile_and_run does. So the fix is two-part: (1) differentiate
+    # gained an __exp arm emitting exp(u)*du (a CALL to __exp), and
+    # inline_user_calls now SKIPS __exp so the chain rule fires instead of
+    # inlining its Taylor body; (2) the harness prepends transcendentals.hx
+    # for transcendental-calling cases (see _autodiff_stdlib_prefix), mirroring
+    # Python's auto-include. exp_at_zero now matches Python and is REMOVED.
+    #
+    # Still xfail: sqrt_at_4 / sigmoid_at_zero need their own chain-rule arms
+    # (verified the derivative SHAPES compile+run under the bootstrap, so they
+    # are next). sin_at_zero is additionally blocked by a __sin/__cos bootstrap
+    # codegen bug (both SIGILL rc132 even with the stdlib present — a separate
+    # parity bug). The "bootstrap auto-includes stdlib" gap (so production
+    # programs need no manual prefix) is a K3/driver concern tracked separately.
     ("FWD_F32_TC", "sin_at_zero"),
     ("FWD_F32_TC", "sqrt_at_4"),
     ("FWD_F32_TC", "sigmoid_at_zero"),
@@ -338,6 +346,35 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
 # ============================================================================
 # PYTEST PARAMETRIZE RUNNER
 # ============================================================================
+
+# Builtins whose synthesized derivative CALLS a stdlib transcendental, so the
+# bootstrap source must carry the Helix-source definitions (relu/abs derive to
+# pure conditionals and are deliberately excluded).
+_STDLIB_TRANSCENDENTALS = ("__exp", "__sin", "__cos", "__sqrt", "__sigmoid",
+                           "__tanh", "__log")
+_AUTODIFF_STDLIB_CACHE: list[str] = []
+
+
+def _autodiff_stdlib_prefix() -> str:
+    """transcendentals.hx source, read once.
+
+    The bootstrap (unlike Python's compile_and_run, which auto-includes the
+    stdlib via include_stdlib=True) does NOT auto-include the stdlib, so a
+    program whose synthesized gradient calls __exp/__sqrt/__sigmoid must be
+    given those Helix-source definitions. The bootstrap CAN compile
+    transcendentals.hx (verified 2026-05-30). Prepending it here mirrors
+    Python's auto-include and isolates AD-chain-rule correctness from the
+    separate "bootstrap lacks stdlib auto-include" gap (a K3/driver concern
+    tracked in project_helix_status).
+    """
+    if not _AUTODIFF_STDLIB_CACHE:
+        import os
+        helixc_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(helixc_dir, "stdlib", "transcendentals.hx"),
+                  encoding="utf-8") as f:
+            _AUTODIFF_STDLIB_CACHE.append(f.read())
+    return _AUTODIFF_STDLIB_CACHE[0]
+
 
 @pytest.mark.parametrize(
     "category,name,src,expected_rc",
@@ -375,11 +412,16 @@ def test_autodiff_parity(category: str, name: str, src: str, expected_rc: int):
             pass
 
     # Bootstrap check (ground truth for f64 categories; parity gate for f32).
-    bootstrap_rc = bootstrap_compile(f"adp_{category}_{name}", src)
+    # Prepend the stdlib transcendentals iff the synthesized gradient will call
+    # one (mirrors Python's auto-include; see _autodiff_stdlib_prefix).
+    boot_src = src
+    if any(t in src for t in _STDLIB_TRANSCENDENTALS):
+        boot_src = _autodiff_stdlib_prefix() + "\n\n" + src
+    bootstrap_rc = bootstrap_compile(f"adp_{category}_{name}", boot_src)
     tries = 0
     while bootstrap_rc != expected_rc and tries < 3:
         tries += 1
-        bootstrap_rc = bootstrap_compile(f"adp_{category}_{name}_r{tries}", src)
+        bootstrap_rc = bootstrap_compile(f"adp_{category}_{name}_r{tries}", boot_src)
 
     if (category, name) in KNOWN_PARITY_GAPS and bootstrap_rc != expected_rc:
         pytest.xfail(
