@@ -245,6 +245,13 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
     ("ENUM", "en_payload_2var",      "enum E { A(i32), B(i32), C } fn main() -> i32 { let e = E::B(42); match e { E::A(n)=>n, E::B(n)=>n, E::C=>0 } }", 42),
     ("ENUM", "en_param_match",       "enum E { Z, V(i32) } fn f(e: E) -> i32 { match e { E::Z => 0, E::V(x) => x } } fn main() -> i32 { f(E::V(42)) }", 42),
     ("ENUM", "en_disc_arith",        "enum C { R, G, B } fn main() -> i32 { let c = C::G; let n = match c { C::R=>0, C::G=>40, C::B=>1 }; n + 2 }", 42),
+    # Nested-match regression guards (the 287c30a match_state-nesting fix): a
+    # nested match in a LATER arm used to re-init the shared match_state and
+    # orphan an EARLIER arm's merge-jump -> jmp +0 fall-through into the next
+    # arm. All three diverged pre-fix (bootstrap returned the wrong arm value).
+    ("ENUM", "en_nest_later_arm",    "enum E { A(i32), B } fn f(a: E, b: E) -> i32 { match a { E::A(av) => av, E::B => match b { E::A(z) => 0, E::B => 0 } } } fn main() -> i32 { f(E::A(7), E::B) }", 7),
+    ("ENUM", "en_nest_both_arms",    "enum E { A(i32), B } fn f(a: E, b: E) -> i32 { match a { E::A(av) => match b { E::A(bv) => av + bv, E::B => av }, E::B => match b { E::A(bv) => bv, E::B => 0 } } } fn main() -> i32 { f(E::A(20), E::A(22)) }", 42),
+    ("ENUM", "en_nest_depth3",       "enum E { A(i32), B } fn f(a: E, b: E, c: E) -> i32 { match a { E::A(av) => match b { E::A(bv) => match c { E::A(cv) => av + bv + cv, E::B => av + bv }, E::B => av }, E::B => match b { E::A(bv) => bv, E::B => 0 } } } fn main() -> i32 { f(E::A(10), E::A(20), E::A(12)) }", 42),
 
     # ---- ARRAY: arrays ----
     ("ARRAY", "ar_lit_index",        "fn main() -> i32 { let a = [10, 20, 30]; a[1] + 22 }", 42),
