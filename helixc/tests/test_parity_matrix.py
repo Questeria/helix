@@ -289,6 +289,28 @@ PARITY_CORPUS: list[tuple[str, str, str, int]] = [
     ("CAST", "ca_f64_cmp",           "fn main() -> i32 { let x: f64 = 1.5_f64 + 2.5_f64; if x == 4.0_f64 { 42 } else { 0 } }", 42),
     ("CAST", "ca_i32_to_i64_fn",     "fn main() -> i32 { let r: i64 = 21_i64 + 21_i64; r as i32 }", 42),
 
+    # ---- CAST_CONV: REAL numeric conversions via `as` (K1.CAST 2026-05-29) ----
+    # These deliberately AVOID round-trips: each value is computed in float
+    # arithmetic and truncated to int, so a NO-OP cast (the pre-K1.CAST
+    # bootstrap behaviour) would produce a WRONG result. The K1.CAST codegen
+    # emits the SSE cvt sequences (cvttss2si / cvttsd2si / cvtss2sd / cvtsd2ss)
+    # so the bootstrap now matches Python on real conversions, not just on
+    # value-preserving round-trips. (The cast-of-an-INT-to-float-then-DIVIDE
+    # pattern is intentionally not used here: the Python x86 reference backend
+    # has a SEPARATE pre-existing bug on it -- see the spawned follow-up.)
+    ("CAST_CONV", "cc_f64_div_trunc",    "fn main() -> i32 { let x: f64 = 7.0; let y: f64 = 2.0; (x / y) as i32 }", 3),
+    ("CAST_CONV", "cc_f32_div_trunc",    "fn main() -> i32 { let x: f32 = 9.0_f32; let y: f32 = 2.0_f32; (x / y) as i32 }", 4),
+    ("CAST_CONV", "cc_f64_lit_trunc",    "fn main() -> i32 { (7.0 / 2.0) as i32 }", 3),
+    ("CAST_CONV", "cc_f32_lit_trunc",    "fn main() -> i32 { (9.0_f32 / 4.0_f32) as i32 }", 2),
+    ("CAST_CONV", "cc_f64_mul_trunc",    "fn main() -> i32 { let x: f64 = 3.3; (x * 3.0) as i32 }", 9),
+    ("CAST_CONV", "cc_f32_sub_trunc",    "fn main() -> i32 { let x: f32 = 10.9_f32; (x - 0.9_f32) as i32 }", 10),
+    ("CAST_CONV", "cc_f64_to_f32_trunc", "fn main() -> i32 { let x: f64 = 6.7; let f: f32 = x as f32; f as i32 }", 6),
+    ("CAST_CONV", "cc_f32_floor",        "fn main() -> i32 { let x: f32 = 41.99_f32; x as i32 }", 41),
+    ("CAST_CONV", "cc_f64_floor",        "fn main() -> i32 { let x: f64 = 41.99; x as i32 }", 41),
+    ("CAST_CONV", "cc_f64_half",         "fn main() -> i32 { let x: f64 = 85.0; (x / 2.0) as i32 }", 42),
+    ("CAST_CONV", "cc_f32_third",        "fn main() -> i32 { let x: f32 = 127.0_f32; (x / 3.0_f32) as i32 }", 42),
+    ("CAST_CONV", "cc_neg_f64_trunc",    "fn main() -> i32 { let x: f64 = 0.0; (x - 5.9) as i32 }", 251),
+
     # ---- FLOAT: f32/f64 comparisons (parity OK) ----
     # NOTE: f32/f64 arithmetic results + casts are PARITY GAPS (see GAP_REPORT)
     ("FLOAT", "fl_f32_cmp_lt",       "fn main() -> i32 { let x: f32 = 1.5_f32; let y: f32 = 2.5_f32; if x < y { 42 } else { 0 } }", 42),

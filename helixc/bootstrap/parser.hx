@@ -2755,13 +2755,17 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                 cur_struct_idx = 0 - 1;
             } else { keep_p = 0; }; };
         }
-        // K1.N (2026-05-25): postfix `expr as Type` cast. The
-        // bootstrap is type-erased at codegen (all storage is i32-
-        // shaped), so cast is a runtime no-op: consume the `as`
-        // IDENT and the type IDENT, return `prim` unchanged. Chained
-        // casts (`x as i32 as i64`) loop. Type forms beyond a bare
-        // IDENT (e.g. `Box<T>`, `&T`, `(i32, i32)`) are NOT yet
-        // supported -- a follow-up can extend this when needed.
+        // K1.N (2026-05-25): postfix `expr as Type` cast.
+        // K1.CAST (2026-05-29): the cast is no longer a pure runtime
+        // no-op. When the target is a bare type IDENT (tok tag 2) it
+        // wraps `prim` in an AST_CAST node (tag 81) carrying the
+        // resolved target type tag (ty_ident_to_tag) in slot p2, so
+        // codegen can emit the SSE numeric conversion for int<->float
+        // and float<->float casts (int<->int stays a 0-byte no-op).
+        // Chained casts (`x as i32 as i64`) loop, nesting AST_CAST
+        // nodes. Type forms beyond a bare IDENT (e.g. `Box<T>`, `&T`,
+        // `(i32, i32)`) are NOT supported -- they keep the old no-op
+        // (no AST_CAST wrap) and stop the loop.
         let mut keep_cast: i32 = 1;
         while keep_cast == 1 {
             let ck = cur_get(sb);
@@ -2777,7 +2781,22 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                 } else { 0 };
                 if is_as == 1 {
                     cur_advance(sb);       // consume `as`
-                    cur_advance(sb);       // consume type IDENT
+                    // Now look at the type token (without consuming yet).
+                    let tk = cur_get(sb);
+                    let tt = tok_tag(tok_base, tk);
+                    if tt == 2 {
+                        // Bare type IDENT: resolve to a type tag and wrap.
+                        let ts = tok_p2(tok_base, tk);
+                        let tl = tok_p3(tok_base, tk);
+                        let tgt_tag = ty_ident_to_tag(ts, tl);
+                        cur_advance(sb);   // consume type IDENT
+                        prim = mk_node(81, prim, tgt_tag, 0);
+                    } else {
+                        // Non-IDENT type form: keep the old no-op (do not
+                        // consume the type token here -- leave it for the
+                        // surrounding parser) and stop casting.
+                        keep_cast = 0;
+                    }
                 } else {
                     keep_cast = 0;
                 }

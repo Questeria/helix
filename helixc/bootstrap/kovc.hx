@@ -1404,6 +1404,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
     else { if t == 80 { 4 }                           // AST_FLOATLIT_F16 (K1.F15 2026-05-27) -- 16-bit shape; arith traps via is_bf16_expr predicate (same handling as bf16)
+    else { if t == 81 { p2 }                           // AST_CAST (K1.CAST) -- static type is the target tag (slot p2 = tgt_tag from ty_ident_to_tag)
     else { if t == 50 { 3 }                            // AST_TUPLE_LIT (Stage 4) — 64-bit pointer (treat as i64 for storage)
     else { if t == 52 {
         // AST_TUPLE_FIELD (Stage 4 iter B). Stage 5 Iter D: p3 == 1 marks
@@ -1548,7 +1549,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
                 }
             }
         }
-    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
+    } else { 0 }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // Phase 1.10 step 5c: type-inference on AST nodes. Returns 1 if the
@@ -6611,12 +6612,132 @@ fn emit_index_store_cpu(idx: i32, bind_state: i32, patch_state: i32, bn_state: i
     n_val + n_vpush + n_base + n_bpush + n_idx + 14
 }
 
+// K1.CAST (2026-05-29): emit the SSE numeric-conversion bytes for an
+// `as` cast from src_tag to tgt_tag, returning the number of bytes
+// emitted. The inner expression has already been emitted by the caller
+// (its value is in eax for 32-bit-shaped types, rax for 64-bit). Type
+// tags: i32=0, f32=1, f64=2, i64=3, u32=6, u8=7, u16=8, u64=9, i8=10,
+// i16=11. 16-bit floats (bf16=4, f16=80) have no SSE half-conversion
+// in Phase-0, so any cast touching them is a 0-byte no-op (matches the
+// pre-existing type-erased behaviour for those shapes).
+//
+// Conversion rules:
+//   int  -> int   : 0 bytes (value already in the right GPR shape).
+//   same float    : 0 bytes (f32->f32, f64->f64).
+//   int  -> f32   : cvtsi2ss xmm0,(e|r)ax ; movd eax,xmm0.
+//   int  -> f64   : cvtsi2sd xmm0,(e|r)ax ; movq rax,xmm0.
+//   f32  -> int   : movd xmm0,eax ; cvttss2si (e|r)ax,xmm0.
+//   f64  -> int   : movq xmm0,rax ; cvttsd2si (e|r)ax,xmm0.
+//   f32  -> f64   : movd xmm0,eax ; cvtss2sd xmm0,xmm0 ; movq rax,xmm0.
+//   f64  -> f32   : movq xmm0,rax ; cvtsd2ss xmm0,xmm0 ; movd eax,xmm0.
+// For a 64-bit integer end (i64=3 / u64=9) the cvtsi2*/cvtt*2si gains a
+// REX.W (0x48) prefix between the mandatory SSE prefix and the 0F byte,
+// promoting the GPR operand to 64-bit. The byte sequences are copied
+// verbatim from the __i32_to_f32 / __f32_to_i32 / __i32_to_f64 /
+// __f64_to_i32 / __f32_to_f64 / __f64_to_f32 intrinsics.
+fn cast_is_float_tag(tag: i32) -> i32 {
+    if tag == 1 { 1 } else { if tag == 2 { 1 } else { 0 } }
+}
+fn cast_is_i64_tag(tag: i32) -> i32 {
+    if tag == 3 { 1 } else { if tag == 9 { 1 } else { 0 } }
+}
+// Emit a REX.W (0x48) prefix iff want64 == 1; return the byte count
+// emitted (1 or 0). Used to promote the GPR operand of cvtsi2*/cvtt*2si
+// to 64-bit for i64/u64 cast ends.
+fn emit_rexw_if(want64: i32) -> i32 {
+    if want64 == 1 { emit_byte(0x48); 1 } else { 0 }
+}
+fn emit_cast_conv(src_tag: i32, tgt_tag: i32) -> i32 {
+    let src_f = cast_is_float_tag(src_tag);
+    let tgt_f = cast_is_float_tag(tgt_tag);
+    if src_f == 0 {
+        if tgt_f == 0 {
+            // int -> int: no conversion.
+            0
+        } else {
+            // int -> float. Source GPR is eax (32-bit) or rax (64-bit
+            // when src is i64/u64). Result goes to eax (f32) or rax (f64).
+            let src64 = cast_is_i64_tag(src_tag);
+            if tgt_tag == 1 {
+                // int -> f32: cvtsi2ss xmm0,(e|r)ax ; movd eax,xmm0.
+                emit_byte(0xF3);                                    // mandatory SSE prefix
+                let n_rex = emit_rexw_if(src64);                    // REX.W (1 byte) iff i64/u64 src
+                emit_byte(0x0F); emit_byte(0x2A); emit_byte(0xC0);   // cvtsi2ss xmm0, eax/rax
+                emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movd eax, xmm0
+                n_rex + 8
+            } else {
+                // int -> f64: cvtsi2sd xmm0,(e|r)ax ; movq rax,xmm0.
+                emit_byte(0xF2);                                    // mandatory SSE prefix
+                let n_rex = emit_rexw_if(src64);                    // REX.W (1 byte) iff i64/u64 src
+                emit_byte(0x0F); emit_byte(0x2A); emit_byte(0xC0);   // cvtsi2sd xmm0, eax/rax
+                emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movq rax, xmm0
+                n_rex + 9
+            }
+        }
+    } else {
+        if tgt_f == 0 {
+            // float -> int. Dest GPR is eax (32-bit) or rax (64-bit when
+            // target is i64/u64). Source float bits are in eax (f32) /
+            // rax (f64).
+            let tgt64 = cast_is_i64_tag(tgt_tag);
+            if src_tag == 1 {
+                // f32 -> int: movd xmm0,eax ; cvttss2si (e|r)ax,xmm0.
+                emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movd xmm0, eax
+                emit_byte(0xF3);                                    // mandatory SSE prefix
+                let n_rex = emit_rexw_if(tgt64);                    // REX.W (1 byte) iff i64/u64 target
+                emit_byte(0x0F); emit_byte(0x2C); emit_byte(0xC0);   // cvttss2si eax/rax, xmm0
+                n_rex + 8
+            } else {
+                // f64 -> int: movq xmm0,rax ; cvttsd2si (e|r)ax,xmm0.
+                emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movq xmm0, rax
+                emit_byte(0xF2);                                    // mandatory SSE prefix
+                let n_rex = emit_rexw_if(tgt64);                    // REX.W (1 byte) iff i64/u64 target
+                emit_byte(0x0F); emit_byte(0x2C); emit_byte(0xC0);   // cvttsd2si eax/rax, xmm0
+                n_rex + 8
+            }
+        } else {
+            // float -> float.
+            if src_tag == tgt_tag {
+                0
+            } else {
+                if src_tag == 1 {
+                    // f32 -> f64: movd xmm0,eax ; cvtss2sd xmm0,xmm0 ; movq rax,xmm0.
+                    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movd xmm0, eax
+                    emit_byte(0xF3); emit_byte(0x0F); emit_byte(0x5A); emit_byte(0xC0); // cvtss2sd xmm0, xmm0
+                    emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movq rax, xmm0
+                    13
+                } else {
+                    // f64 -> f32: movq xmm0,rax ; cvtsd2ss xmm0,xmm0 ; movd eax,xmm0.
+                    emit_byte(0x66); emit_byte(0x48); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0); // movq xmm0, rax
+                    emit_byte(0xF2); emit_byte(0x0F); emit_byte(0x5A); emit_byte(0xC0); // cvtsd2ss xmm0, xmm0
+                    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0); // movd eax, xmm0
+                    13
+                }
+            }
+        }
+    }
+}
+
 fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> i32 {
     let t = __arena_get(idx);
     let p1 = __arena_get(idx + 1);
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
+    } else { if t == 81 {
+        // K1.CAST (2026-05-29): AST_CAST (tag 81). p1 = inner expr idx,
+        // p2 = target type tag (from ty_ident_to_tag). Emit the inner
+        // expression, then the SSE numeric-conversion bytes. int<->int
+        // and same-float casts are 0-byte no-ops (value already lives in
+        // eax/rax in the right shape); int<->float and float<->float
+        // casts emit the cvt sequence copied verbatim from the
+        // __i32_to_f32 / __f32_to_i32 / __i32_to_f64 / __f64_to_i32 /
+        // __f32_to_f64 / __f64_to_f32 intrinsics. The static type of the
+        // result is p2 (see expr_type's t==81 arm).
+        let src_tag = expr_type(p1, bind_state, bn_state);
+        let n_inner = emit_ast_code(p1, bind_state, patch_state, bn_state);
+        let n_conv = emit_cast_conv(src_tag, p2);
+        n_inner + n_conv
     } else { if t == 62 {
         // Stage 7: AST_MATCH (tag 62). p1 = scrut_idx, p2 = arms_head.
         // Lowered into emit_match_dispatch helper to keep this arm body
@@ -9117,7 +9238,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else {
             emit_trap_with_id(99001)
         }
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 AST_FIELD_STORE; K1.F15: +1 AST_FLOATLIT_F16 (tag 80)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 AST_FIELD_STORE; K1.F15: +1 AST_FLOATLIT_F16 (tag 80); K1.CAST: +1 AST_CAST (tag 81)
 }
 
 // --------------------------------------------------------------
