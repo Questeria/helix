@@ -1430,7 +1430,23 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         let body_idx = __arena_get(idx + 3);
         expr_type(body_idx, bind_state, bn_state)
     } else { if t == 13 {                             // AST_SEQ
-        expr_type(p2, bind_state, bn_state)
+        // The type of a sequence is the type of its LAST statement. A
+        // naive expr_type(p2) tail-recurses one host frame per statement;
+        // since this runs on every fn body (body/return-type trap), a
+        // function with a few hundred statements overflows the stack
+        // mid-compile. Walk the right-nested p2 spine to its tail
+        // iteratively, then type that node (identical result).
+        let mut et_cur = p2;
+        let mut et_more = 1;
+        while et_more == 1 {
+            let et_t = __arena_get(et_cur);
+            if et_t == 13 {
+                et_cur = __arena_get(et_cur + 2);
+            } else {
+                et_more = 0;
+            }
+        }
+        expr_type(et_cur, bind_state, bn_state)
     } else { if t == 11 {                             // AST_ASSIGN
         let value_idx = __arena_get(idx + 3);
         expr_type(value_idx, bind_state, bn_state)
@@ -9231,12 +9247,30 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         }
         }
     } else { if t == 13 {
-        // AST_SEQ(first, second): emit first (discard eax), emit
-        // second (its eax is the result). Helix's calling convention
-        // here is "value left in eax", so we just chain.
-        let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
-        let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
-        n1 + n2
+        // AST_SEQ(first, second): iterative right-spine walk. The chain
+        // is right-nested SEQ(s1, SEQ(s2, SEQ(s3, ...))), so a naive
+        // recursion on `second` descends one emit_ast_code frame per
+        // statement -- a function with a few hundred statements overflows
+        // the host stack mid-compile (SIGSEGV, empty ELF). Walking the
+        // spine with a loop keeps recursion depth bounded by each single
+        // statement's own expression tree. Emission order (s1, s2, ...)
+        // and the summed byte count are byte-identical to the recursive
+        // form, so the self-host fixpoint is preserved.
+        let mut seq_total = 0;
+        let mut seq_cur = idx;
+        let mut seq_more = 1;
+        while seq_more == 1 {
+            let seq_t = __arena_get(seq_cur);
+            if seq_t == 13 {
+                let seq_first = __arena_get(seq_cur + 1);
+                seq_total = seq_total + emit_ast_code(seq_first, bind_state, patch_state, bn_state);
+                seq_cur = __arena_get(seq_cur + 2);
+            } else {
+                seq_total = seq_total + emit_ast_code(seq_cur, bind_state, patch_state, bn_state);
+                seq_more = 0;
+            }
+        }
+        seq_total
     } else { if t == 10 {
         // AST_WHILE(cond, body):
         //   loop_top:

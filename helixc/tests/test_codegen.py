@@ -8509,28 +8509,52 @@ def test_bootstrap_test_runner_over_corpus_subset():
     assert rc_one == 1, f"Helix runner with 1 wrong expected expected 1 failure, got {rc_one}"
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "Known bootstrap codegen bug (task #14, minimized 2026-05-30): a LOCAL held "
-    "across ~300+ inlined __arena_push calls in a large main is corrupted -- a "
-    "code-size threshold (passes <=~260 pushes, fails >=~300). NOT local count "
-    "(60 lets are fine), NOT the binop (last tick's 244 was a mod-256 exit-code "
-    "confound), NOT run_process (no builtins involved beyond __arena_push). It "
-    "blocks scaling the Helix-native test runner past ~8-16 corpus programs "
-    "(test_bootstrap_test_runner_over_corpus_subset is kept at 8). Root-cause "
-    "needs disassembly (objdump can't parse the bare ELF; install capstone or "
-    "objdump -D -b binary on the extracted .text)."))
-def test_bootstrap_large_main_local_corruption_xfail():
-    """Minimal repro of the large-main codegen defect. A local `d` computed early
-    (= 23) must survive to the return, but with ~400 inlined __arena_push calls
-    after it in the same main, the bootstrap miscompiles and `d` comes back
-    wrong. Flips to PASS (xpass) when the codegen is fixed -> remove the xfail."""
+def test_bootstrap_large_main_statement_sequence():
+    """Regression for the large-function HOST-STACK-OVERFLOW bug (task #14,
+    root-caused 2026-05-30). It was NEVER data corruption -- the earlier xfail
+    premise was wrong. A function's statements are stored as a right-nested
+    AST_SEQ chain; the bootstrap's code emitter (emit_ast_code) AND its type
+    inference (expr_type, run on every fn body by the body/return-type trap)
+    each recursed one host-stack frame per statement, so a main with a few
+    hundred statements overflowed the stack MID-COMPILE (SIGSEGV -> empty ELF;
+    proven: under `ulimit -s unlimited` the same source compiled fine). Both
+    were converted to iterative right-spine walks (byte-identical output, so
+    the self-host fixpoint is preserved), raising the ceiling from ~290 to
+    >=2000 statements. Here a local `d` (=23) computed early must survive a
+    1000-statement body and return correct -- the original repro was 400."""
     src = ("fn main() -> i32 { let s = __arena_len(); "
            + "__arena_push(65); " * 23
            + "let d = __arena_len() - s; "
-           + "__arena_push(66); " * 400
+           + "__arena_push(66); " * 1000
            + "d }")
-    rc, _, _ = _kovc_self_host_compile_and_run_full("large_main_local", src)
-    assert rc == 23, f"local d (=23) held across 400 inlined pushes was corrupted: got {rc}"
+    rc, _, _ = _kovc_self_host_compile_and_run_full("large_main_seq", src)
+    assert rc == 23, f"local d (=23) held across 1000 inlined pushes should be 23, got {rc}"
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    "Remaining recursion-depth limit (task #14 follow-up, 2026-05-30): after the "
+    "codegen-side fix (emit_ast_code + expr_type are now iterative), the deepest "
+    "always-on recursion left is the recursive-descent PARSER itself. It builds "
+    "the let-chain (parse_let -> parse_expr at parser.hx:6908) and the statement "
+    "SEQ-chain (parse_expr self-call ~2167/2182) one host-stack frame per "
+    "statement, so a function with ~200+ flat `let` bindings overflows the stack "
+    "DURING PARSING (SIGSEGV, empty ELF). Fixing it needs an explicit parse "
+    "work-stack to flatten construction while preserving the right-nested tree "
+    "(output byte-identity depends on tree STRUCTURE, not arena positions). Only "
+    "pathological flat functions hit this: the self-compile and the Helix test "
+    "runner use bounded-depth functions, and the push/statement form already "
+    "works to >=2000 (see test_bootstrap_large_main_statement_sequence). Tracked "
+    "as the parser-iterativization follow-up (with walk_for_panic)."))
+def test_bootstrap_large_let_chain_parser_recursion_xfail():
+    """~318 sequential `let` bindings overflow the recursive-descent parser's
+    host stack during parsing (heavier parse_let frames overflow earlier, ~200,
+    than the ~2000 SEQ-statement ceiling). Flips to xpass when parse_expr /
+    parse_let are made iterative -> then remove the xfail."""
+    src = ("fn main() -> i32 { "
+           + "".join(f"let v{i} = {i % 7}; " for i in range(318))
+           + "42 }")
+    rc, _, _ = _kovc_self_host_compile_and_run_full("large_let_chain", src)
+    assert rc == 42, f"318 let-bindings should return 42, got {rc}"
 
 
 def test_bootstrap_ptx_tile_zeros():
