@@ -295,11 +295,17 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # REMOVED from this set (hard-asserted). REVERSE-mode let bindings
     # (REV_F64_LET) still trap — that path is propagate_adj, a separate
     # chunk (C2b) — so REV_F64_LET stays xfail below.
-    # GAP-4: higher-order. grad_grad = grad(grad(f)); let_alias binds
-    # grad(f) to a variable then calls it. Both need grad-as-value / nested
-    # grad handling in the call-site parser (the detector only matches the
-    # immediately-applied grad(IDENT)( shape), so they stay xfail.
-    ("FWD_F32_HO", "grad_grad"),
+    # GAP-4: higher-order. CHUNK C5 (2026-05-30) LANDED grad_grad: the
+    # call-site parser now also matches `grad ( grad ( IDENT ) ) (` as a
+    # sibling branch (k+2 IDENT == 'grad'), registering BOTH f__grad and
+    # f__grad__grad in grad_pending in order; grad_pass appends synthesized
+    # fns incrementally so the 2nd entry differentiates the 1st's body.
+    # grad_grad now matches Python and is REMOVED.
+    #
+    # Still xfail: let_alias (`let gf = grad(f); gf(21.0)`) — grad-as-value.
+    # Plan (parse-time alias): register f__grad at the let, map gf -> f__grad
+    # in a grad_alias_tab, rewrite gf(...) -> f__grad(...) at the call site
+    # (mirrors cl_var_tab/use_tab). Avoids the runtime f32-fn-value bug.
     ("FWD_F32_HO", "let_alias"),
     # GAP-5: explicit param index. CHUNK C4 (2026-05-30) LANDED grad(f, N):
     # the call-site parser now also matches grad ( IDENT , INT ) ( and

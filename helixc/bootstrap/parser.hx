@@ -5880,11 +5880,18 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         let g_t4 = tok_tag(tok_base, k + 4);
         let g_t5 = tok_tag(tok_base, k + 5);
         let g_t6 = tok_tag(tok_base, k + 6);
-        // is_grad_call matches BOTH the one-arg form `grad(f)(...)` (tokens
+        let g_t7 = tok_tag(tok_base, k + 7);
+        // C5 (grad-of-grad): is the token at k+2 the 4-byte IDENT 'grad'?
+        let inner_s = tok_p2(tok_base, k + 2);
+        let inner_l = tok_p3(tok_base, k + 2);
+        let inner_is_grad = if inner_l == 4 {
+            if __arena_get(inner_s) == 103 { if __arena_get(inner_s + 1) == 114 { if __arena_get(inner_s + 2) == 97 { if __arena_get(inner_s + 3) == 100 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        // is_grad_call_base matches the one-arg form `grad(f)(...)` (tokens
         // grad ( IDENT ) ( -> g_t3==`)`==4, g_t4==`(`==3) AND the C4 two-arg
         // param-index form `grad(f, N)(...)` (grad ( IDENT , INT ) ( ->
         // g_t3==`,`==13, g_t4==INT==1, g_t5==`)`==4, g_t6==`(`==3).
-        let is_grad_call = if is_grad_kw == 1 {
+        let is_grad_call_base = if is_grad_kw == 1 {
             if g_t1 == 3 { if g_t2 == 2 {
                 if g_t3 == 4 {
                     if g_t4 == 3 { 1 } else { 0 }
@@ -5893,7 +5900,79 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 } else { 0 } }
             } else { 0 } } else { 0 }
         } else { 0 };
+        // C5 (grad_grad): `grad ( grad ( IDENT ) ) (` -> tags 3,2,3,2,4,4,3
+        // with the k+2 IDENT == 'grad'. Synthesizes f__grad AND f__grad__grad;
+        // grad_pass's incremental fn_list append lets the 2nd pending entry
+        // differentiate the body the 1st just synthesized.
+        let is_grad_grad = if is_grad_kw == 1 {
+            if g_t1 == 3 { if g_t2 == 2 { if inner_is_grad == 1 {
+                if g_t3 == 3 { if g_t4 == 2 { if g_t5 == 4 { if g_t6 == 4 { if g_t7 == 3 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 } } else { 0 } } else { 0 }
+        } else { 0 };
+        let is_grad_call = if is_grad_call_base == 1 { 1 } else { is_grad_grad };
         if is_grad_call == 1 {
+            if is_grad_grad == 1 {
+                // C5 grad-of-grad `grad(grad(f))(args)`: register (f -> f__grad)
+                // then (f__grad -> f__grad__grad) in grad_pending, and emit the
+                // call to f__grad__grad. f__grad__grad's body = d/dx(d/dx f).
+                cur_advance(sb);     // outer `grad`
+                cur_advance(sb);     // outer `(`
+                cur_advance(sb);     // inner `grad`
+                cur_advance(sb);     // inner `(`
+                let gg_loss_k = cur_get(sb);
+                let gg_loss_s = tok_p2(tok_base, gg_loss_k);
+                let gg_loss_l = tok_p3(tok_base, gg_loss_k);
+                cur_advance(sb);     // loss IDENT
+                cur_advance(sb);     // inner `)`
+                cur_advance(sb);     // outer `)`
+                cur_advance(sb);     // `(`
+                // Build "<f>__grad" (mang1) then "<f>__grad__grad" (mang2),
+                // each in a fresh contiguous arena region.
+                let mang1_s = __arena_len();
+                let mut gg_bi: i32 = 0;
+                while gg_bi < gg_loss_l {
+                    __arena_push(__arena_get(gg_loss_s + gg_bi));
+                    gg_bi = gg_bi + 1;
+                }
+                __arena_push(95); __arena_push(95); __arena_push(103);
+                __arena_push(114); __arena_push(97); __arena_push(100);
+                let mang1_l = gg_loss_l + 6;
+                let mang2_s = __arena_len();
+                let mut gg_bj: i32 = 0;
+                while gg_bj < mang1_l {
+                    __arena_push(__arena_get(mang1_s + gg_bj));
+                    gg_bj = gg_bj + 1;
+                }
+                __arena_push(95); __arena_push(95); __arena_push(103);
+                __arena_push(114); __arena_push(97); __arena_push(100);
+                let mang2_l = mang1_l + 6;
+                grad_pending_add(sb, gg_loss_s, gg_loss_l, mang1_s, mang1_l);
+                grad_pending_add(sb, mang1_s, mang1_l, mang2_s, mang2_l);
+                // Parse args until `)`.
+                let mut gg_args_head: i32 = 0;
+                let mut gg_prev: i32 = 0;
+                let mut gg_keep: i32 = 1;
+                while gg_keep == 1 {
+                    let gat = tok_tag(tok_base, cur_get(sb));
+                    if gat == 4 {
+                        gg_keep = 0;
+                    } else { if gat == 13 {
+                        cur_advance(sb);
+                    } else {
+                        let gae = parse_expr_basic(tok_base, sb);
+                        let gna = mk_node(17, gae, 0, 0);
+                        if gg_args_head == 0 {
+                            gg_args_head = gna;
+                            gg_prev = gna;
+                        } else {
+                            __arena_set(gg_prev + 2, gna);
+                            gg_prev = gna;
+                        };
+                    }};
+                }
+                cur_advance(sb);     // consume `)`
+                mk_node(16, mang2_s, mang2_l, gg_args_head)
+            } else {
             // C4: two-arg param-index form iff the token after the loss
             // IDENT is `,` (g_t3==13). Otherwise the one-arg form.
             let is_two_arg = if g_t3 == 13 { 1 } else { 0 };
@@ -5967,6 +6046,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             }
             cur_advance(sb);     // consume `)`
             mk_node(16, mang_s, mang_l, args_head)
+            }
         } else {
         if byte_eq(id_start, id_len, kw_let_s(sb), kw_let_n(sb)) == 1 {
             cur_advance(sb);
