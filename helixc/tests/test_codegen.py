@@ -5087,6 +5087,44 @@ def test_bootstrap_generics_bare_call_multi():
     assert rc == 42, f"bare call first(42,7): bootstrap rc={rc}, expected 42"
 
 
+def test_bootstrap_impl_generics_advanced_working():
+    """Status-reconciliation pins (2026-05-30, HEAD e74ae8a): advanced impl/generic
+    cases the 2026-05-28 deletion-bucket notes called 'pending/partial' but which
+    actually RUN correctly in the bootstrap today -- &self receiver, multiple impl
+    blocks on one struct, a where-clause on a generic fn, and a nested generic call.
+    (Python helixc cannot parse any of these, so they are bootstrap-only
+    deletion-parity wins.) The one remaining real gap is generic-impl methods --
+    see test_bootstrap_generic_impl_method_xfail."""
+    assert _kovc_self_host_compile_and_run("adv_amp_self",
+        "struct P { a: i32 } impl P { fn get(&self) -> i32 { self.a } } "
+        "fn main() -> i32 { let p = P { a: 42 }; p.get() }") == 42
+    assert _kovc_self_host_compile_and_run("adv_multi_impl",
+        "struct P { a: i32 } impl P { fn g(self) -> i32 { self.a } } "
+        "impl P { fn h(self) -> i32 { self.a + 1 } } "
+        "fn main() -> i32 { let p = P { a: 41 }; p.h() }") == 42
+    assert _kovc_self_host_compile_and_run("adv_where",
+        "fn id<T>(x: T) -> T where T: Copy { x } fn main() -> i32 { id(42) }") == 42
+    assert _kovc_self_host_compile_and_run("adv_nested_gen",
+        "fn id<T>(x: T) -> T { x } fn main() -> i32 { id(id(id(42))) }") == 42
+
+
+@pytest.mark.xfail(strict=False, reason=(
+    "Known bootstrap-quality gap (status-reconciled 2026-05-30, HEAD e74ae8a): a method "
+    "on a GENERIC impl block -- `impl<T> Box<T> { fn get(self) -> T {..} }` called as "
+    "`b.get()` -- miscompiles to SIGILL (exit 132); the bootstrap does not monomorphize "
+    "generic-impl methods for the concrete instance. NOT a deletion blocker (Python helixc "
+    "cannot parse generics at all). The other advanced impl/generic cases the old notes "
+    "flagged are re-verified WORKING (test_bootstrap_impl_generics_advanced_working). Flips "
+    "to xpass when generic-impl-method monomorphization lands."))
+def test_bootstrap_generic_impl_method_xfail():
+    """A method on a generic impl block, dispatched on a concrete Box::<i32>. SIGILL 132."""
+    rc = _kovc_self_host_compile_and_run(
+        "gen_impl_method",
+        "struct Box<T> { v: T } impl<T> Box<T> { fn get(self) -> T { self.v } } "
+        "fn main() -> i32 { let b = Box::<i32> { v: 42 }; b.get() }")
+    assert rc == 42, f"generic-impl method b.get() should return 42, got {rc}"
+
+
 def test_bootstrap_fnptr_name_as_value():
     """A2a (2026-05-28): a function name used as a VALUE (`let g = dbl`)
     no longer SIGILLs. The bootstrap had no fn-pointer value concept --
