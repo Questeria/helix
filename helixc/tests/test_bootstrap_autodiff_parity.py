@@ -322,12 +322,16 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # for transcendental-calling cases (see _autodiff_stdlib_prefix), mirroring
     # Python's auto-include. exp_at_zero now matches Python and is REMOVED.
     #
-    # Still xfail: sqrt_at_4 / sigmoid_at_zero need their own chain-rule arms
-    # (verified the derivative SHAPES compile+run under the bootstrap, so they
-    # are next). sin_at_zero is additionally blocked by a __sin/__cos bootstrap
-    # codegen bug (both SIGILL rc132 even with the stdlib present — a separate
-    # parity bug). The "bootstrap auto-includes stdlib" gap (so production
-    # programs need no manual prefix) is a K3/driver concern tracked separately.
+    # CHUNK C3c (2026-05-30) LANDED the __sqrt and __sigmoid chain rules
+    # (d sqrt(u)=du/(2*sqrt(u)); d sigmoid(u)=sig*(1-sig)*du), same pattern as
+    # __exp (matcher + call-builder + inline-skip + harness stdlib prefix).
+    # sqrt_at_4 and sigmoid_at_zero now match Python and are REMOVED. 7 of 8
+    # FWD_F32_TC now pass.
+    #
+    # Still xfail: sin_at_zero is blocked by a __sin/__cos bootstrap codegen
+    # bug (both SIGILL rc132 even with the stdlib present — a separate parity
+    # bug, under investigation). The "bootstrap auto-includes stdlib" gap (so
+    # production programs need no manual prefix) is a K3/driver concern.
     ("FWD_F32_TC", "sin_at_zero"),
     ("FWD_F32_TC", "sqrt_at_4"),
     ("FWD_F32_TC", "sigmoid_at_zero"),

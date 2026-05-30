@@ -10220,7 +10220,12 @@ fn inline_user_calls(expr_idx: i32, head: i32, depth: i32) -> i32 {
             // body (which differentiate cannot handle). Mirrors Python's
             // AD_KNOWN_PURE_CALLS. (Forward ref to ad_name_is_exp is fine —
             // the bootstrap collects all fn decls before compiling bodies.)
-            let skip_inline = if callee_idx == 0 { 1 } else { ad_name_is_exp(call_ns, call_nl) };
+            let skip_inline = if callee_idx == 0 { 1 } else {
+                if ad_name_is_exp(call_ns, call_nl) == 1 { 1 }
+                else { if ad_name_is_sqrt(call_ns, call_nl) == 1 { 1 }
+                else { if ad_name_is_sigmoid(call_ns, call_nl) == 1 { 1 }
+                else { 0 } } }
+            };
             if skip_inline == 1 {
                 // Not found, or a known transcendental — leave as-is.
                 expr_idx
@@ -10433,6 +10438,53 @@ fn ad_mk_call_exp(u: i32) -> i32 {
     let arg = mk_node(17, u, 0, 0);
     mk_node(16, name_s, 5, arg)
 }
+// C3c (2026-05-30): __sqrt and __sigmoid matchers + call-builders (same
+// pattern as __exp). d sqrt(u)=du/(2*sqrt(u)); d sigmoid(u)=sig*(1-sig)*du —
+// both reference stdlib transcendentals, both verified to compile+run.
+fn ad_name_is_sqrt(s: i32, l: i32) -> i32 {
+    let ref_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(115);               // 's'
+    __arena_push(113);               // 'q'
+    __arena_push(114);               // 'r'
+    __arena_push(116);               // 't'
+    byte_eq(s, l, ref_s, 6)
+}
+fn ad_mk_call_sqrt(u: i32) -> i32 {
+    let name_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(115);               // 's'
+    __arena_push(113);               // 'q'
+    __arena_push(114);               // 'r'
+    __arena_push(116);               // 't'
+    let arg = mk_node(17, u, 0, 0);
+    mk_node(16, name_s, 6, arg)
+}
+fn ad_name_is_sigmoid(s: i32, l: i32) -> i32 {
+    let ref_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(115);               // 's'
+    __arena_push(105);               // 'i'
+    __arena_push(103);               // 'g'
+    __arena_push(109);               // 'm'
+    __arena_push(111);               // 'o'
+    __arena_push(105);               // 'i'
+    __arena_push(100);               // 'd'
+    byte_eq(s, l, ref_s, 9)
+}
+fn ad_mk_call_sigmoid(u: i32) -> i32 {
+    let name_s = __arena_push(95);   // '_'
+    __arena_push(95);                // '_'
+    __arena_push(115);               // 's'
+    __arena_push(105);               // 'i'
+    __arena_push(103);               // 'g'
+    __arena_push(109);               // 'm'
+    __arena_push(111);               // 'o'
+    __arena_push(105);               // 'i'
+    __arena_push(100);               // 'd'
+    let arg = mk_node(17, u, 0, 0);
+    mk_node(16, name_s, 9, arg)
+}
 fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 0 {
@@ -10564,11 +10616,33 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
             let du = differentiate(arg_u, var_s, var_l, ret_tag);
             let ecall = ad_mk_call_exp(arg_u);
             mk_node(4, ecall, du, 0)
+        } else { if ad_name_is_sqrt(callee_s, callee_l) == 1 {
+            // d/dx sqrt(u) = du / (2*sqrt(u)). 2 = 1+1 (avoids a 2.0-literal
+            // helper). Children before parent.
+            let du = differentiate(arg_u, var_s, var_l, ret_tag);
+            let one_a = mk_one_typed(ret_tag);
+            let one_b = mk_one_typed(ret_tag);
+            let two = mk_node(2, one_a, one_b, 0);
+            let scall = ad_mk_call_sqrt(arg_u);
+            let denom = mk_node(4, two, scall, 0);
+            let one_n = mk_one_typed(ret_tag);
+            let frac = mk_node(5, one_n, denom, 0);
+            mk_node(4, frac, du, 0)
+        } else { if ad_name_is_sigmoid(callee_s, callee_l) == 1 {
+            // d/dx sigmoid(u) = sigmoid(u) * (1 - sigmoid(u)) * du. Two
+            // distinct __sigmoid(u) call nodes (no sharing).
+            let du = differentiate(arg_u, var_s, var_l, ret_tag);
+            let sig1 = ad_mk_call_sigmoid(arg_u);
+            let one_s = mk_one_typed(ret_tag);
+            let sig2 = ad_mk_call_sigmoid(arg_u);
+            let onemsig = mk_node(3, one_s, sig2, 0);
+            let prod = mk_node(4, sig1, onemsig, 0);
+            mk_node(4, prod, du, 0)
         } else {
-            // Unsupported call (sin/cos/sqrt/sigmoid pending, or a user fn
-            // that should have been inlined upstream) — fail closed.
+            // Unsupported call (sin/cos pending — __sin/__cos SIGILL in the
+            // bootstrap; or a user fn that should have been inlined) — trap.
             mk_node(99, 85001, 0, 0)
-        } } }
+        } } } } }
     } else {
         // Unsupported tag (IF, WHILE, BLOCK, ...) — Phase-0 limitation.
         // Trap with id 85001 by emitting an AST_ERR node; codegen lowers
