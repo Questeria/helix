@@ -302,11 +302,14 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # fns incrementally so the 2nd entry differentiates the 1st's body.
     # grad_grad now matches Python and is REMOVED.
     #
-    # Still xfail: let_alias (`let gf = grad(f); gf(21.0)`) — grad-as-value.
-    # Plan (parse-time alias): register f__grad at the let, map gf -> f__grad
-    # in a grad_alias_tab, rewrite gf(...) -> f__grad(...) at the call site
-    # (mirrors cl_var_tab/use_tab). Avoids the runtime f32-fn-value bug.
-    ("FWD_F32_HO", "let_alias"),
+    # CHUNK C6 (2026-05-30) LANDED let_alias (`let gf = grad(f); gf(21.0)`)
+    # via a PARSE-TIME ALIAS: at the let, a `grad(IDENT)`-not-applied RHS
+    # registers f__grad in grad_pending and adds a use_tab alias gf->f__grad;
+    # the call site already consults use_tab_lookup so `gf(args)` rewrites to
+    # f__grad(args) (no runtime fn-value; sidesteps the f32-fn-value bug).
+    # let_alias now matches Python and is REMOVED. **AUTODIFF CORPUS IS NOW
+    # 47/47 — KNOWN_PARITY_GAPS is EMPTY.** Every case is hard-asserted; any
+    # regression fails loudly.
     # GAP-5: explicit param index. CHUNK C4 (2026-05-30) LANDED grad(f, N):
     # the call-site parser now also matches grad ( IDENT , INT ) ( and
     # encodes N as a trailing digit in the mangled name "<loss>__grad<N>";

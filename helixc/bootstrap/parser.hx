@@ -6641,11 +6641,54 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             };
             // value uses parse_expr_basic so the `;` after the
             // value belongs to the let-terminator, not a sequencer.
+            // C6 (let_alias): detect `let gf = grad(IDENT)` NOT immediately
+            // applied (RHS tokens = grad ( IDENT ) followed by a non-`(`
+            // token). Register f__grad in grad_pending and alias gf ->
+            // f__grad via use_tab, so a later `gf(args)` call rewrites to
+            // f__grad(args) at the call site (which already consults
+            // use_tab_lookup). Parse-time alias — avoids the broken runtime
+            // f32-fn-value path. The binding value is a dummy AST_INT(0); gf
+            // is used only as a call alias, never as a runtime value.
+            let rhs_k0 = cur_get(sb);
+            let rhs_is_grad_val = if no_init_dk == 0 {
+                if tok_tag(tok_base, rhs_k0) == 2 {
+                    let rk0_s = tok_p2(tok_base, rhs_k0);
+                    let rk0_l = tok_p3(tok_base, rhs_k0);
+                    let rk0_is_grad = if rk0_l == 4 {
+                        if __arena_get(rk0_s) == 103 { if __arena_get(rk0_s + 1) == 114 { if __arena_get(rk0_s + 2) == 97 { if __arena_get(rk0_s + 3) == 100 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
+                    } else { 0 };
+                    if rk0_is_grad == 1 {
+                        if tok_tag(tok_base, rhs_k0 + 1) == 3 { if tok_tag(tok_base, rhs_k0 + 2) == 2 { if tok_tag(tok_base, rhs_k0 + 3) == 4 {
+                            if tok_tag(tok_base, rhs_k0 + 4) == 3 { 0 } else { 1 }
+                        } else { 0 } } else { 0 } } else { 0 }
+                    } else { 0 }
+                } else { 0 }
+            } else { 0 };
             let value = if no_init_dk == 1 {
                 mk_node(0, 0, 0, 0)     // AST_INT(0) placeholder
+            } else { if rhs_is_grad_val == 1 {
+                cur_advance(sb);     // `grad`
+                cur_advance(sb);     // `(`
+                let gv_loss_k = cur_get(sb);
+                let gv_loss_s = tok_p2(tok_base, gv_loss_k);
+                let gv_loss_l = tok_p3(tok_base, gv_loss_k);
+                cur_advance(sb);     // loss IDENT
+                cur_advance(sb);     // `)`
+                let gv_mang_s = __arena_len();
+                let mut gv_bi: i32 = 0;
+                while gv_bi < gv_loss_l {
+                    __arena_push(__arena_get(gv_loss_s + gv_bi));
+                    gv_bi = gv_bi + 1;
+                }
+                __arena_push(95); __arena_push(95); __arena_push(103);
+                __arena_push(114); __arena_push(97); __arena_push(100);
+                let gv_mang_l = gv_loss_l + 6;
+                grad_pending_add(sb, gv_loss_s, gv_loss_l, gv_mang_s, gv_mang_l);
+                use_tab_add(sb, name_start, name_len, gv_mang_s, gv_mang_l);
+                mk_node(0, 0, 0, 0)     // dummy value; gf is a call alias only
             } else {
                 parse_expr_basic(tok_base, sb)
-            };
+            } };
             // K1.CA (2026-05-26): postfix range absorber. After
             // parsing the let RHS, if the next token is `..`
             // (TK_DOTDOT = 43), consume it as a no-op range
