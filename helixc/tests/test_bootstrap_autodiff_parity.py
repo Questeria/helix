@@ -287,11 +287,14 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     # All 12 are REMOVED from this set and are now hard-asserted (a future
     # regression FAILS loudly instead of being silently xfailed).
     #
-    # The FWD_F32_LET cases need BOTH the f32 path AND let-binding support in
-    # differentiate (GAP-2), so they stay xfail until C2 lands.
-    ("FWD_F32_LET", "simple"),
-    ("FWD_F32_LET", "chain"),
-    ("FWD_F32_LET", "let_pred"),
+    # CHUNK C2 (2026-05-30) LANDED forward-mode let-binding AD: a new
+    # ad_subst() helper in parser.hx inlines a let-bound value into the
+    # body before differentiate runs, and differentiate gained AST_LET(8)
+    # / AST_SEQ(13) arms (nested lets peel one level per recursion). The
+    # 3 FWD_F32_LET and 2 FWD_F64_LET cases now match Python and are
+    # REMOVED from this set (hard-asserted). REVERSE-mode let bindings
+    # (REV_F64_LET) still trap — that path is propagate_adj, a separate
+    # chunk (C2b) — so REV_F64_LET stays xfail below.
     # GAP-1 + GAP-4
     ("FWD_F32_HO", "grad_grad"),
     ("FWD_F32_HO", "let_alias"),
@@ -307,10 +310,7 @@ KNOWN_PARITY_GAPS: set[tuple[str, str]] = {
     ("FWD_F32_TC", "abs_positive"),
     ("FWD_F32_TC", "abs_negative"),
     ("FWD_F32_TC", "sigmoid_at_zero"),
-    # --- GAP-2: f64 forward-mode with let-bindings ---
-    ("FWD_F64_LET", "simple"),
-    ("FWD_F64_LET", "chain"),
-    # --- GAP-2: f64 reverse-mode with let-bindings ---
+    # --- GAP-2: f64 reverse-mode with let-bindings (C2b, not yet landed) ---
     ("REV_F64_LET", "simple_dx"),
     # NOTE: FWD_F64 (no let) and REV_F64 (no let) are NOT in gaps;
     # the bootstrap already passes them.

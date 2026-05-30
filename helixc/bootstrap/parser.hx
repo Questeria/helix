@@ -10261,6 +10261,89 @@ fn inline_user_calls(expr_idx: i32, head: i32, depth: i32) -> i32 {
 // so an f32 loss yields f32 (tag 27) literal nodes and an f64 loss yields
 // f64 (tag 34) nodes — matching the synthesized gradient fn's declared
 // return width. Pre-C1 this hard-coded f64, breaking all f32 grad cases.
+//
+// C2 (2026-05-30): forward-mode AD helper. Substitute every free
+// occurrence of the variable (name_s,name_l) in `expr_idx` with
+// `repl_idx`, returning a NEW AST. Used by differentiate's AST_LET arm
+// to inline a let-bound value into the body before differentiating, so
+// the bound var's dependence on the diff variable is expressed through
+// the existing arithmetic chain rules. Handles the pure-arithmetic AD
+// subset plus nested lets, respecting lexical shadowing (an inner let
+// re-binding the same name shields its body). Leaf literals / unhandled
+// tags are returned unchanged; a let body using an unsupported construct
+// still traps 85001 later in differentiate (fail-closed preserved).
+fn ad_subst(expr_idx: i32, name_s: i32, name_l: i32, repl_idx: i32) -> i32 {
+    let t = __arena_get(expr_idx);
+    if t == 1 {
+        // AST_VAR: replace iff the name matches the substituted variable.
+        let n_s = __arena_get(expr_idx + 1);
+        let n_l = __arena_get(expr_idx + 2);
+        if byte_eq(n_s, n_l, name_s, name_l) == 1 {
+            repl_idx
+        } else {
+            expr_idx
+        }
+    } else { if t == 2 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = ad_subst(l, name_s, name_l, repl_idx);
+        let sr = ad_subst(r, name_s, name_l, repl_idx);
+        mk_node(2, sl, sr, 0)
+    } else { if t == 3 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = ad_subst(l, name_s, name_l, repl_idx);
+        let sr = ad_subst(r, name_s, name_l, repl_idx);
+        mk_node(3, sl, sr, 0)
+    } else { if t == 4 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = ad_subst(l, name_s, name_l, repl_idx);
+        let sr = ad_subst(r, name_s, name_l, repl_idx);
+        mk_node(4, sl, sr, 0)
+    } else { if t == 5 {
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = ad_subst(l, name_s, name_l, repl_idx);
+        let sr = ad_subst(r, name_s, name_l, repl_idx);
+        mk_node(5, sl, sr, 0)
+    } else { if t == 9 {
+        let inner = __arena_get(expr_idx + 1);
+        let si = ad_subst(inner, name_s, name_l, repl_idx);
+        mk_node(9, si, 0, 0)
+    } else { if t == 8 {
+        // Nested AST_LET(name2_s, name2_l, body, value). Always
+        // substitute in the bound VALUE (evaluated in the enclosing
+        // scope). Substitute in the BODY only when the inner binding does
+        // not shadow our name. Rebuild the 5-slot let node contiguously:
+        // children are allocated FIRST so the mk_node + slot-4 push stay
+        // adjacent in the arena (positional-ordering invariant).
+        let n2_s = __arena_get(expr_idx + 1);
+        let n2_l = __arena_get(expr_idx + 2);
+        let body2 = __arena_get(expr_idx + 3);
+        let value2 = __arena_get(expr_idx + 4);
+        let sval = ad_subst(value2, name_s, name_l, repl_idx);
+        let sbody = if byte_eq(n2_s, n2_l, name_s, name_l) == 1 {
+            body2
+        } else {
+            ad_subst(body2, name_s, name_l, repl_idx)
+        };
+        let node = mk_node(8, n2_s, n2_l, sbody);
+        __arena_push(sval);
+        node
+    } else { if t == 13 {
+        // AST_SEQ(first, second): substitute in both operands.
+        let l = __arena_get(expr_idx + 1);
+        let r = __arena_get(expr_idx + 2);
+        let sl = ad_subst(l, name_s, name_l, repl_idx);
+        let sr = ad_subst(r, name_s, name_l, repl_idx);
+        mk_node(13, sl, sr, 0)
+    } else {
+        // Leaf (int/float/i64 literal) or unhandled tag — no variable to
+        // substitute; return the node unchanged.
+        expr_idx
+    } } } } } } } }
+}
 fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
     let t = __arena_get(expr_idx);
     if t == 0 {
@@ -10326,12 +10409,32 @@ fn differentiate(expr_idx: i32, var_s: i32, var_l: i32, ret_tag: i32) -> i32 {
         let inner = __arena_get(expr_idx + 1);
         let di = differentiate(inner, var_s, var_l, ret_tag);
         mk_node(9, di, 0, 0)
+    } else { if t == 8 {
+        // AST_LET(name_s, name_l, body, value) — C2. Forward-mode AD via
+        // substitution: inline the bound value into the body so the
+        // let-bound var's dependence on the diff variable flows through
+        // the already-implemented chain/product rules, then differentiate
+        // the (let-free at this level) body. Nested lets peel one level
+        // per recursion: ad_subst recurses through inner-let VALUE exprs
+        // and differentiate re-enters this arm for an inner let body.
+        let l_name_s = __arena_get(expr_idx + 1);
+        let l_name_l = __arena_get(expr_idx + 2);
+        let l_body = __arena_get(expr_idx + 3);
+        let l_value = __arena_get(expr_idx + 4);
+        let inlined = ad_subst(l_body, l_name_s, l_name_l, l_value);
+        differentiate(inlined, var_s, var_l, ret_tag)
+    } else { if t == 13 {
+        // AST_SEQ(first, second) — C2. The value of a sequence is its
+        // second operand (the first is an effect-only statement in the
+        // pure-AD subset), so d(seq) = d(second).
+        let seq_second = __arena_get(expr_idx + 2);
+        differentiate(seq_second, var_s, var_l, ret_tag)
     } else {
-        // Unsupported tag (CALL, IF, WHILE, LET, SEQ, BLOCK, ...) —
-        // Phase-0 limitation. Trap with id 85001 by emitting an
-        // AST_ERR node; codegen lowers AST_ERR to ud2.
+        // Unsupported tag (CALL, IF, WHILE, BLOCK, ...) — Phase-0
+        // limitation. Trap with id 85001 by emitting an AST_ERR node;
+        // codegen lowers AST_ERR to ud2.
         mk_node(99, 85001, 0, 0)
-    } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 // Stage 14: reverse-mode propagator for ONE target param.
