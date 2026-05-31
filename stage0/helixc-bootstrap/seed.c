@@ -687,6 +687,64 @@ int emit_store_local(int slot) {
     emit_byte(0x89); emit_byte(0x85); emit_u32le(0 - 8 * (slot + 1)); return 0;
 }
 
+/* ----- function table + call backpatching + SysV arg passing (inc 3e) ----- */
+int* FN_NAMETOK;   /* FN_NAMETOK[i] = name-token of fn i        */
+int* FN_OFF;       /* FN_OFF[i]     = its code offset in IMG    */
+int FN_N;
+int* CALL_SLOT;    /* CALL_SLOT[j]  = rel32 slot of call site j */
+int* CALL_NAMETOK; /* CALL_NAMETOK[j] = callee name-token       */
+int CALL_N;
+
+int callgen_init() {
+    FN_NAMETOK = calloc(8192, sizeof(int));
+    FN_OFF = calloc(8192, sizeof(int));
+    CALL_SLOT = calloc(262144, sizeof(int));
+    CALL_NAMETOK = calloc(262144, sizeof(int));
+    FN_N = 0; CALL_N = 0;
+    return 0;
+}
+int fn_offset(int nametok) {        /* code offset of the fn with this name */
+    int i; int s; int l;
+    s = tok_start(nametok); l = tok_len(nametok);
+    i = 0;
+    while (i < FN_N) {
+        if (spans_eq(s, l, tok_start(FN_NAMETOK[i]), tok_len(FN_NAMETOK[i]))) { return FN_OFF[i]; }
+        i = i + 1;
+    }
+    return 0;
+}
+int fn_find_main() {
+    int i;
+    i = 0;
+    while (i < FN_N) {
+        if (span_eq(tok_start(FN_NAMETOK[i]), tok_len(FN_NAMETOK[i]), "main")) { return FN_OFF[i]; }
+        i = i + 1;
+    }
+    return 0;
+}
+/* pop the next stacked arg into the i-th SysV integer-argument register */
+int emit_pop_argreg(int i) {
+    if (i == 0) { emit_byte(0x5F); return 0; }                  /* pop rdi */
+    if (i == 1) { emit_byte(0x5E); return 0; }                  /* pop rsi */
+    if (i == 2) { emit_byte(0x5A); return 0; }                  /* pop rdx */
+    if (i == 3) { emit_byte(0x59); return 0; }                  /* pop rcx */
+    if (i == 4) { emit_byte(0x41); emit_byte(0x58); return 0; } /* pop r8  */
+    if (i == 5) { emit_byte(0x41); emit_byte(0x59); return 0; } /* pop r9  */
+    return 0;
+}
+/* spill the regi-th incoming param register to its slot [rbp - 8*(slot+1)] */
+int emit_spill_argreg(int regi, int slot) {
+    int disp;
+    disp = 0 - 8 * (slot + 1);
+    if (regi == 0) { emit_byte(0x89); emit_byte(0xBD); emit_u32le(disp); return 0; }  /* mov [rbp-x], edi */
+    if (regi == 1) { emit_byte(0x89); emit_byte(0xB5); emit_u32le(disp); return 0; }  /* esi */
+    if (regi == 2) { emit_byte(0x89); emit_byte(0x95); emit_u32le(disp); return 0; }  /* edx */
+    if (regi == 3) { emit_byte(0x89); emit_byte(0x8D); emit_u32le(disp); return 0; }  /* ecx */
+    if (regi == 4) { emit_byte(0x44); emit_byte(0x89); emit_byte(0x85); emit_u32le(disp); return 0; }  /* r8d */
+    if (regi == 5) { emit_byte(0x44); emit_byte(0x89); emit_byte(0x8D); emit_u32le(disp); return 0; }  /* r9d */
+    return 0;
+}
+
 /* forward declarations (the codegen functions are mutually recursive) */
 int cg_expr(int node);
 int cg_bin(int op, int left, int right);
@@ -694,6 +752,7 @@ int cg_stmt(int node);
 int cg_block(int block);
 int cg_while(int node);
 int cg_if(int node);
+int cg_call(int node);
 
 /* codegen a binary op: eval left -> rax (saved), right -> rcx, then the op.
  * Result in eax. left in rax, right in rcx after the setup below. */
@@ -764,7 +823,32 @@ int cg_expr(int node) {
     if (k == ND_IF) {
         return cg_if(node);   /* if as a value-producing expression */
     }
-    emit_byte(0xB8); emit_u32le(0);   /* ND_CALL -> later increment */
+    if (k == ND_CALL) {
+        return cg_call(node);
+    }
+    emit_byte(0xB8); emit_u32le(0);   /* unknown -> 0 */
+    return 0;
+}
+
+/* function call: evaluate args (push each), pop into SysV registers, then call
+ * (recorded for backpatch). The callee returns its result in eax. */
+int cg_call(int node) {
+    int arg; int n; int i;
+    arg = nd_b(node);
+    n = 0;
+    while (arg != 0 - 1) {
+        cg_expr(arg);
+        emit_byte(0x50);                  /* push rax */
+        n = n + 1;
+        arg = nd_next(arg);
+    }
+    i = n;
+    while (i > 0) { i = i - 1; emit_pop_argreg(i); }
+    emit_byte(0xE8);                       /* call rel32 (backpatched) */
+    CALL_SLOT[CALL_N] = IMGN;
+    CALL_NAMETOK[CALL_N] = nd_a(node);
+    CALL_N = CALL_N + 1;
+    emit_u32le(0);
     return 0;
 }
 
@@ -840,7 +924,7 @@ int cg_if(int node) {
 /* codegen a function: reserve a frame for locals, run the statements, then
  * the tail expression -> eax, then epilogue + ret. */
 int cg_fn(int fn) {
-    int frame;
+    int frame; int p; int pi;
     collect_locals(fn);
     frame = LOCAL_N * 8;
     frame = ((frame + 15) / 16) * 16;                  /* 16-byte align   */
@@ -849,6 +933,10 @@ int cg_fn(int fn) {
     if (frame > 0) {
         emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC); emit_u32le(frame); /* sub rsp, frame */
     }
+    /* spill incoming param registers (rdi, rsi, ...) into their stack slots
+     * (params are slots 0..k-1, assigned first by collect_locals) */
+    p = nd_b(fn); pi = 0;
+    while (p != 0 - 1) { emit_spill_argreg(pi, pi); pi = pi + 1; p = nd_next(p); }
     cg_block(nd_c(fn));                                 /* body -> eax     */
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xEC); /* mov rsp, rbp    */
     emit_byte(0x5D);                                   /* pop rbp         */
@@ -856,19 +944,31 @@ int cg_fn(int fn) {
     return 0;
 }
 
-/* emit _start (call main; sys_exit eax) then the program's functions */
+/* emit _start (call main; sys_exit eax), then every function, recording each
+ * function's offset; finally backpatch all call sites + the _start -> main call. */
 int codegen() {
-    int call_rel_pos; int main_off; int rel;
-    emit_byte(0xE8);                  /* call rel32 -> main          */
-    call_rel_pos = IMGN;
-    emit_u32le(0);                    /* rel32 placeholder           */
-    emit_byte(0x89); emit_byte(0xC7); /* mov edi, eax (exit status)  */
-    emit_byte(0xB8); emit_u32le(60);  /* mov eax, 60 (sys_exit)      */
-    emit_byte(0x0F); emit_byte(0x05); /* syscall                     */
-    main_off = IMGN;
-    cg_fn(PROG);                      /* INC 3a: the single fn IS main */
-    rel = main_off - (call_rel_pos + 4);
-    put_u32(call_rel_pos, rel);
+    int start_main_slot; int fn; int i; int off;
+    FN_N = 0; CALL_N = 0;
+    emit_byte(0xE8);                  /* call main (rel32, patched below) */
+    start_main_slot = IMGN; emit_u32le(0);
+    emit_byte(0x89); emit_byte(0xC7); /* mov edi, eax (exit status)       */
+    emit_byte(0xB8); emit_u32le(60);  /* mov eax, 60 (sys_exit)           */
+    emit_byte(0x0F); emit_byte(0x05); /* syscall                          */
+    fn = PROG;
+    while (fn != 0 - 1) {
+        FN_NAMETOK[FN_N] = nd_a(fn);
+        FN_OFF[FN_N] = IMGN;
+        FN_N = FN_N + 1;
+        cg_fn(fn);
+        fn = nd_next(fn);
+    }
+    i = 0;
+    while (i < CALL_N) {
+        off = fn_offset(CALL_NAMETOK[i]);
+        put_u32(CALL_SLOT[i], off - (CALL_SLOT[i] + 4));
+        i = i + 1;
+    }
+    put_u32(start_main_slot, fn_find_main() - (start_main_slot + 4));
     return 0;
 }
 
@@ -1011,6 +1111,7 @@ int main(int argc, char** argv) {
     /* compile mode: argv[1] = input .hx, argv[2] = output ELF path */
     img_init();
     locals_init();
+    callgen_init();
     read_file(argv[1]);
     lex();
     CUR = 0; PERR = 0;

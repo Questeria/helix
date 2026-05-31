@@ -38,6 +38,9 @@ compile_run 3c-two-locals test/t6.hx 42  # { let a = 6; let b = 7; a * b }
 compile_run 3d-while-sum test/t7.hx 36   # sum 0..8 = 36 (while loop)
 compile_run 3d-if-else   test/t8.hx 42   # if x > 5 then 42 (if as value)
 compile_run 3d-factorial test/t9.hx 176  # 7! = 5040, exit code = 5040 & 255 = 176
+compile_run 3e-call      test/t10.hx 42  # add(40, 2) -> 42 (call + params)
+compile_run 3e-call-expr test/t11.hx 42  # sq(6) + 6 -> 42
+compile_run 3e-recursion test/t12.hx 55  # fib(10) -> 55 (recursion)
 
 rm -rf "$T"
 echo

@@ -92,7 +92,13 @@ other rung.
   their result in eax); `collect_locals` now recurses into nested blocks. A
   `cg_block` helper runs a block's statements then its tail. Verified: while-sum
   0..8→36, `if x>5 {42} else {7}`→42, factorial-7 loop→5040 (exit 176).
-- **next (3e…):** function calls + params, then the 6 intrinsics; then compile
+- **3e — DONE:** function calls + params + multi-function. `codegen` emits every
+  function, records each one's offset, and backpatches all call sites (forward
+  refs resolved by name) plus the `_start`→`main` call. `cg_call` evaluates args,
+  pushes them, pops into the SysV registers (rdi, rsi, …), and emits the call;
+  `cg_fn` spills incoming param registers to their stack slots. Verified:
+  `add(40,2)`→42, `sq(6)+6`→42, and **`fib(10)`→55 (recursion)**.
+- **next (3f):** the 6 intrinsics (arena + file I/O), then scale up to compile
   `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
