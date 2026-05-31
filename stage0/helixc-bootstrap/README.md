@@ -98,8 +98,14 @@ other rung.
   pushes them, pops into the SysV registers (rdi, rsi, …), and emits the call;
   `cg_fn` spills incoming param registers to their stack slots. Verified:
   `add(40,2)`→42, `sq(6)+6`→42, and **`fib(10)`→55 (recursion)**.
-- **next (3f):** the 6 intrinsics (arena + file I/O), then scale up to compile
-  `kovc.hx`.
+- **3f-arena — DONE:** the four arena intrinsics. A 128 MiB BSS arena per
+  compiled program (reserved via `p_memsz`) at vaddr `0x1400000`; `__arena_push`/
+  `get`/`set`/`len` emit inline against `r11` (cursor at base, slots at
+  `base+4+i*4`). Functionally equal to kovc's RIP-relative arena (DDC washes out
+  the difference at the fixpoint). Verified: push/get/set/len → 55.
+- **next (3f-io):** string literals + `read_file_to_arena`/`write_file_to_arena`
+  (the last two intrinsics), then scale up to compile `lexer.hx` → `parser.hx`
+  → `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

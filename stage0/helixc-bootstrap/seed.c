@@ -613,9 +613,10 @@ int build_headers() {
     put_u64(72, 0);        /* p_offset              */
     put_u64(80, 4194304);  /* p_vaddr = 0x400000    */
     put_u64(88, 4194304);  /* p_paddr = 0x400000    */
-    put_u64(96, total);    /* p_filesz              */
-    put_u64(104, total);   /* p_memsz               */
-    put_u64(112, 4096);    /* p_align = 0x1000      */
+    put_u64(96, total);       /* p_filesz = code/data on disk */
+    put_u64(104, 150994944);  /* p_memsz: 16 MiB code headroom + 128 MiB BSS arena
+                               * from vaddr 0x400000 (arena base = 0x1400000) */
+    put_u64(112, 4096);       /* p_align = 0x1000      */
     return 0;
 }
 
@@ -830,10 +831,69 @@ int cg_expr(int node) {
     return 0;
 }
 
+/* ----- the arena intrinsics (increment 3f) -----
+ * One BSS arena per compiled program at vaddr 0x1400000 (reserved by p_memsz):
+ * [cursor i32 @ base][slot i32 @ base+4 + i*4]. Emitted inline; r11 = base.
+ * Functionally equivalent to kovc's RIP-relative arena (DDC washes out the
+ * difference at the self-hosting fixpoint). */
+int emit_mov_r11_arena() {
+    emit_byte(0x49); emit_byte(0xBB);                  /* mov r11, imm64 */
+    emit_u32le(20971520);                              /* 0x1400000      */
+    emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+    return 0;
+}
+int call_is(int node, char* name) {
+    return span_eq(tok_start(nd_a(node)), tok_len(nd_a(node)), name);
+}
+/* __arena_len() -> eax = [base] */
+int cg_arena_len() {
+    emit_mov_r11_arena();
+    emit_byte(0x41); emit_byte(0x8B); emit_byte(0x03); /* mov eax, [r11] */
+    return 0;
+}
+/* __arena_get(i) -> eax = [base + 4 + i*4] */
+int cg_arena_get(int node) {
+    cg_expr(nd_b(node));                                /* index -> eax        */
+    emit_byte(0x48); emit_byte(0x63); emit_byte(0xC8); /* movsxd rcx, eax     */
+    emit_mov_r11_arena();
+    emit_byte(0x41); emit_byte(0x8B); emit_byte(0x44); emit_byte(0x8B); emit_byte(0x04); /* mov eax,[r11+rcx*4+4] */
+    return 0;
+}
+/* __arena_set(i, v) -> [base + 4 + i*4] = v */
+int cg_arena_set(int node) {
+    int a0; int a1;
+    a0 = nd_b(node);
+    a1 = nd_next(a0);
+    cg_expr(a0);                                        /* index -> eax        */
+    emit_byte(0x50);                                    /* push rax            */
+    cg_expr(a1);                                        /* value -> eax        */
+    emit_byte(0x59);                                    /* pop rcx (index)     */
+    emit_byte(0x48); emit_byte(0x63); emit_byte(0xC9); /* movsxd rcx, ecx     */
+    emit_mov_r11_arena();
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0x44); emit_byte(0x8B); emit_byte(0x04); /* mov [r11+rcx*4+4],eax */
+    return 0;
+}
+/* __arena_push(v) -> store at [base+4+cursor*4], cursor++, return OLD cursor */
+int cg_arena_push(int node) {
+    cg_expr(nd_b(node));                                /* value -> eax        */
+    emit_mov_r11_arena();
+    emit_byte(0x41); emit_byte(0x8B); emit_byte(0x0B); /* mov ecx, [r11] cursor */
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0x44); emit_byte(0x8B); emit_byte(0x04); /* mov [r11+rcx*4+4],eax */
+    emit_byte(0x89); emit_byte(0xC8);                  /* mov eax, ecx (old)  */
+    emit_byte(0x8D); emit_byte(0x49); emit_byte(0x01); /* lea ecx, [rcx+1]    */
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0x0B); /* mov [r11], ecx      */
+    return 0;
+}
+
 /* function call: evaluate args (push each), pop into SysV registers, then call
  * (recorded for backpatch). The callee returns its result in eax. */
 int cg_call(int node) {
     int arg; int n; int i;
+    /* intrinsics are emitted inline, not called */
+    if (call_is(node, "__arena_len"))  { return cg_arena_len(); }
+    if (call_is(node, "__arena_push")) { return cg_arena_push(node); }
+    if (call_is(node, "__arena_get"))  { return cg_arena_get(node); }
+    if (call_is(node, "__arena_set"))  { return cg_arena_set(node); }
     arg = nd_b(node);
     n = 0;
     while (arg != 0 - 1) {

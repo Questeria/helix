@@ -41,6 +41,7 @@ compile_run 3d-factorial test/t9.hx 176  # 7! = 5040, exit code = 5040 & 255 = 1
 compile_run 3e-call      test/t10.hx 42  # add(40, 2) -> 42 (call + params)
 compile_run 3e-call-expr test/t11.hx 42  # sq(6) + 6 -> 42
 compile_run 3e-recursion test/t12.hx 55  # fib(10) -> 55 (recursion)
+compile_run 3f-arena     test/t13.hx 55  # arena push/get/set/len: 10+30+12+3 = 55
 
 rm -rf "$T"
 echo
