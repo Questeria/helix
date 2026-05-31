@@ -35,6 +35,9 @@ compile_run 3b-precedence test/t3.hx 14  # { 2 + 3 * 4 }  (mul binds tighter)
 compile_run 3b-compare   test/t4.hx 1    # { 5 > 3 }  -> 1
 compile_run 3c-local-mut test/t5.hx 42   # { let mut x = 41; x = x + 1; x }
 compile_run 3c-two-locals test/t6.hx 42  # { let a = 6; let b = 7; a * b }
+compile_run 3d-while-sum test/t7.hx 36   # sum 0..8 = 36 (while loop)
+compile_run 3d-if-else   test/t8.hx 42   # if x > 5 then 42 (if as value)
+compile_run 3d-factorial test/t9.hx 176  # 7! = 5040, exit code = 5040 & 255 = 176
 
 rm -rf "$T"
 echo

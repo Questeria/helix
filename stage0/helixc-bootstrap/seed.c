@@ -652,19 +652,31 @@ int local_add(int name_tok) {      /* assign (or reuse) a slot */
     LOCAL_N = LOCAL_N + 1;
     return LOCAL_N - 1;
 }
-/* pre-pass: collect params + top-level lets so the frame size is known up front
- * (nested-block lets are collected when while/if codegen lands in inc 3d). */
+/* recursively collect every `let` (incl. those inside while/if blocks) so the
+ * frame size + slot assignment cover the whole function up front. */
+int collect_locals_rec(int node) {
+    int k; int stmt;
+    if (node == 0 - 1) { return 0; }
+    k = nd_kind(node);
+    if (k == ND_BLOCK) {
+        stmt = nd_a(node);
+        while (stmt != 0 - 1) { collect_locals_rec(stmt); stmt = nd_next(stmt); }
+        collect_locals_rec(nd_c(node));               /* tail expr */
+        return 0;
+    }
+    if (k == ND_LET)    { local_add(nd_a(node)); collect_locals_rec(nd_b(node)); return 0; }
+    if (k == ND_ASSIGN) { collect_locals_rec(nd_b(node)); return 0; }
+    if (k == ND_WHILE)  { collect_locals_rec(nd_b(node)); return 0; }   /* body */
+    if (k == ND_IF)     { collect_locals_rec(nd_b(node)); collect_locals_rec(nd_c(node)); return 0; }
+    return 0;
+}
+/* pre-pass: params get slots, then recurse the body for every let. */
 int collect_locals(int fn) {
-    int p; int body; int stmt;
+    int p;
     locals_reset();
     p = nd_b(fn);
     while (p != 0 - 1) { local_add(nd_a(p)); p = nd_next(p); }
-    body = nd_c(fn);
-    stmt = nd_a(body);
-    while (stmt != 0 - 1) {
-        if (nd_kind(stmt) == ND_LET) { local_add(nd_a(stmt)); }
-        stmt = nd_next(stmt);
-    }
+    collect_locals_rec(nd_c(fn));
     return 0;
 }
 /* mov eax, [rbp - 8*(slot+1)]  /  mov [rbp - 8*(slot+1)], eax  (disp32 form) */
@@ -675,10 +687,13 @@ int emit_store_local(int slot) {
     emit_byte(0x89); emit_byte(0x85); emit_u32le(0 - 8 * (slot + 1)); return 0;
 }
 
-/* forward declarations (cg_expr <-> cg_bin <-> cg_stmt are mutually recursive) */
+/* forward declarations (the codegen functions are mutually recursive) */
 int cg_expr(int node);
 int cg_bin(int op, int left, int right);
 int cg_stmt(int node);
+int cg_block(int block);
+int cg_while(int node);
+int cg_if(int node);
 
 /* codegen a binary op: eval left -> rax (saved), right -> rcx, then the op.
  * Result in eax. left in rax, right in rcx after the setup below. */
@@ -746,7 +761,10 @@ int cg_expr(int node) {
         emit_load_local(local_find(nd_a(node)));   /* mov eax, [rbp - slot] */
         return 0;
     }
-    emit_byte(0xB8); emit_u32le(0);   /* ND_CALL/ND_IF -> later increments */
+    if (k == ND_IF) {
+        return cg_if(node);   /* if as a value-producing expression */
+    }
+    emit_byte(0xB8); emit_u32le(0);   /* ND_CALL -> later increment */
     return 0;
 }
 
@@ -764,14 +782,65 @@ int cg_stmt(int node) {
         emit_store_local(local_find(nd_a(node)));
         return 0;
     }
+    if (k == ND_WHILE) { return cg_while(node); }
+    if (k == ND_IF)    { return cg_if(node); }
     cg_expr(node);                                 /* expr-statement: value discarded */
+    return 0;
+}
+
+/* run a block's statements then leave its tail value (or 0) in eax */
+int cg_block(int block) {
+    int stmt; int tail;
+    stmt = nd_a(block);
+    while (stmt != 0 - 1) { cg_stmt(stmt); stmt = nd_next(stmt); }
+    tail = nd_c(block);
+    if (tail != 0 - 1) { cg_expr(tail); }
+    else { emit_byte(0xB8); emit_u32le(0); }
+    return 0;
+}
+
+/* while cond { body } -- cond at top, jz past the loop, jmp back */
+int cg_while(int node) {
+    int ltop; int jzslot; int jmprel;
+    ltop = IMGN;
+    cg_expr(nd_a(node));                  /* cond -> eax           */
+    emit_byte(0x85); emit_byte(0xC0);     /* test eax, eax         */
+    emit_byte(0x0F); emit_byte(0x84);     /* jz rel32 (-> after)   */
+    jzslot = IMGN; emit_u32le(0);
+    cg_block(nd_b(node));                 /* body (value discarded)*/
+    emit_byte(0xE9);                      /* jmp rel32 (-> ltop)   */
+    jmprel = ltop - (IMGN + 4);
+    emit_u32le(jmprel);
+    put_u32(jzslot, IMGN - (jzslot + 4)); /* backpatch jz -> here  */
+    return 0;
+}
+
+/* if cond { then } else { else } -- both arms leave their value in eax */
+int cg_if(int node) {
+    int jzslot; int jmpslot; int els;
+    cg_expr(nd_a(node));                  /* cond -> eax           */
+    emit_byte(0x85); emit_byte(0xC0);     /* test eax, eax         */
+    emit_byte(0x0F); emit_byte(0x84);     /* jz rel32 (-> else)    */
+    jzslot = IMGN; emit_u32le(0);
+    cg_block(nd_b(node));                 /* then -> eax           */
+    emit_byte(0xE9);                      /* jmp rel32 (-> end)    */
+    jmpslot = IMGN; emit_u32le(0);
+    put_u32(jzslot, IMGN - (jzslot + 4)); /* else label = here     */
+    els = nd_c(node);
+    if (els != 0 - 1) {
+        if (nd_kind(els) == ND_IF) { cg_if(els); }   /* else if   */
+        else { cg_block(els); }                      /* else block*/
+    } else {
+        emit_byte(0xB8); emit_u32le(0);   /* no else -> value 0    */
+    }
+    put_u32(jmpslot, IMGN - (jmpslot + 4)); /* end label = here    */
     return 0;
 }
 
 /* codegen a function: reserve a frame for locals, run the statements, then
  * the tail expression -> eax, then epilogue + ret. */
 int cg_fn(int fn) {
-    int body; int stmt; int tail; int frame;
+    int frame;
     collect_locals(fn);
     frame = LOCAL_N * 8;
     frame = ((frame + 15) / 16) * 16;                  /* 16-byte align   */
@@ -780,12 +849,7 @@ int cg_fn(int fn) {
     if (frame > 0) {
         emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC); emit_u32le(frame); /* sub rsp, frame */
     }
-    body = nd_c(fn);
-    stmt = nd_a(body);
-    while (stmt != 0 - 1) { cg_stmt(stmt); stmt = nd_next(stmt); }
-    tail = nd_c(body);
-    if (tail != 0 - 1) { cg_expr(tail); }
-    else { emit_byte(0xB8); emit_u32le(0); }           /* default eax = 0 */
+    cg_block(nd_c(fn));                                 /* body -> eax     */
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xEC); /* mov rsp, rbp    */
     emit_byte(0x5D);                                   /* pop rbp         */
     emit_byte(0xC3);                                   /* ret             */

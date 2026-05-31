@@ -86,8 +86,14 @@ other rung.
   to `[rbp - 8*(slot+1)]`, `ND_VAR` reads from it. `cg_stmt` runs the block's
   statements before the tail expression. Verified: `let mut x=41; x=x+1; x`→42,
   `let a=6; let b=7; a*b`→42.
-- **next (3d…):** control flow (while/if with jumps), calls + params, then the
-  6 intrinsics; then compile `kovc.hx`.
+- **3d — DONE:** control flow. `cg_while` (cond at top, `jz` past the loop,
+  `jmp` back) and `cg_if` (cond, `jz` else, then-arm, `jmp` end, else-arm) with
+  rel32 jump backpatching; `if` works as statement and value (both arms leave
+  their result in eax); `collect_locals` now recurses into nested blocks. A
+  `cg_block` helper runs a block's statements then its tail. Verified: while-sum
+  0..8→36, `if x>5 {42} else {7}`→42, factorial-7 loop→5040 (exit 176).
+- **next (3e…):** function calls + params, then the 6 intrinsics; then compile
+  `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
