@@ -94,6 +94,17 @@ with the Helix-native test-infra port).
 
 ## Premises (stated honestly)
 
+- **Diverse independent builders.** The two routes must be genuinely independent
+  compilers, or a single trojan could sit in both and survive. Here they are: a C
+  seed built only by the from-raw-binary stage-0 / M2-Planet ladder, versus the
+  Helix reference compiler running under CPython — different languages, different
+  toolchains, no shared codegen. A bug or trojan present in *both* back-ends would
+  not be caught (the same shared-residual as **Trusted runtime** below).
+- **Honest source.** DDC proves the seed-built compiler matches the Python-built
+  one *for the given kovc source*; it does not certify that source. A bug in
+  `kovc.hx` is faithfully reproduced by both routes and the match still holds —
+  exactly what "replace Python" needs, but it means the correctness of kovc
+  itself is out of scope (see "Does not prove").
 - **Determinism.** The fixpoint argument assumes kovc is a deterministic
   compiler (same source → same bytes). This is independently validated by
   `helixc/tests/test_self_host_fixpoint.py::test_self_host_fixpoint_byte_identical`,
