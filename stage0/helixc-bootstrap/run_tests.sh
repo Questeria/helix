@@ -58,6 +58,18 @@ else
     echo "FAIL 3f-write (returned $wrc, file=$wcontent, want 3 / Hi!)"; FAIL=$((FAIL+1))
 fi
 
+# inc 4: compile the REAL helixc/bootstrap/lexer.hx (1087 lines) and run the
+# emitted lexer on a known input -- proves the seed compiles real compiler source.
+printf 'fn f() { 1 + 2 }' > /tmp/helix_lex_input.hx
+./seed.bin ../../helixc/bootstrap/lexer.hx "$T/lex.bin" 2>/dev/null; lrc=$?
+chmod +x "$T/lex.bin" 2>/dev/null
+"$T/lex.bin"; ltok=$?
+if [ "$lrc" = "0" ] && [ "$ltok" = "10" ]; then
+    echo "PASS 4-real-lexer (compiled lexer.hx -> lexed fn f(){1+2} = $ltok tokens)"; PASS=$((PASS+1))
+else
+    echo "FAIL 4-real-lexer (compile rc=$lrc, tokens=$ltok, want 0 / 10)"; FAIL=$((FAIL+1))
+fi
+
 rm -rf "$T"
 echo
 echo "Results: $PASS passed, $FAIL failed"

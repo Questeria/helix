@@ -255,7 +255,7 @@ int ND_N;
 int PERR;   /* parser error flag (set by expect_tag on a mismatch) */
 
 int nodes_init() {
-    ND = calloc(8192 * 5, sizeof(int));
+    ND = calloc(2097152 * 5, sizeof(int));   /* up to ~2M AST nodes */
     ND_N = 0;
     PERR = 0;
     ND_INT = 1; ND_VAR = 2; ND_BIN = 3; ND_CALL = 4; ND_IFE = 5;
@@ -503,17 +503,23 @@ int parse_block() {
     while (done == 0) {
         t = p_tag();
         if (t == TK_RBRACE || t == TK_EOF) { done = 1; }
+        else if (t == TK_SEMI) { p_adv(); }   /* empty statement */
         else if (t == TK_LET) {
             s = parse_let();
             if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
         }
         else if (t == TK_WHILE) {
             s = parse_while();
+            if (p_tag() == TK_SEMI) { p_adv(); }   /* optional terminator */
             if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
         }
         else if (t == TK_IF) {
             s = parse_if();
-            if (p_tag() == TK_RBRACE) { tail = s; done = 1; }
+            if (p_tag() == TK_SEMI) {              /* if-statement terminated by ; */
+                p_adv();
+                if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
+            }
+            else if (p_tag() == TK_RBRACE) { tail = s; done = 1; }   /* if as the block's value */
             else { if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; } }
         }
         else {
@@ -579,8 +585,8 @@ int IMGN;    /* write cursor (code begins at file offset 0x1000)     */
 int PROG;    /* parsed program (first fn node)                       */
 
 int img_init() {
-    IMG = calloc(8 * 1048576, 1);   /* 8 MiB output image */
-    IMGN = 4096;                     /* code begins at file offset 0x1000 */
+    IMG = calloc(64 * 1048576, 1);   /* 64 MiB output image (real compiler is big) */
+    IMGN = 4096;                      /* code begins at file offset 0x1000 */
     return 0;
 }
 int emit_byte(int b) { IMG[IMGN] = b; IMGN = IMGN + 1; return 0; }
@@ -640,7 +646,7 @@ int spans_eq(int sa, int la, int sb, int lb) {
     while (i < la) { if (SRC[sa + i] != SRC[sb + i]) { return 0; } i = i + 1; }
     return 1;
 }
-int locals_init() { LOCAL_TOK = calloc(8192, sizeof(int)); LOCAL_N = 0; return 0; }
+int locals_init() { LOCAL_TOK = calloc(65536, sizeof(int)); LOCAL_N = 0; return 0; }
 int locals_reset() { LOCAL_N = 0; return 0; }
 int local_find(int name_tok) {     /* -> slot, or -1 */
     int i; int s; int l;
@@ -707,12 +713,12 @@ int* STR_TOK;      /* STR_TOK[k]    = the TK_STR token index     */
 int STR_N;
 
 int callgen_init() {
-    FN_NAMETOK = calloc(8192, sizeof(int));
-    FN_OFF = calloc(8192, sizeof(int));
-    CALL_SLOT = calloc(262144, sizeof(int));
-    CALL_NAMETOK = calloc(262144, sizeof(int));
-    STR_SLOT = calloc(8192, sizeof(int));
-    STR_TOK = calloc(8192, sizeof(int));
+    FN_NAMETOK = calloc(65536, sizeof(int));
+    FN_OFF = calloc(65536, sizeof(int));
+    CALL_SLOT = calloc(1048576, sizeof(int));
+    CALL_NAMETOK = calloc(1048576, sizeof(int));
+    STR_SLOT = calloc(65536, sizeof(int));
+    STR_TOK = calloc(65536, sizeof(int));
     FN_N = 0; CALL_N = 0; STR_N = 0;
     return 0;
 }
@@ -1289,11 +1295,19 @@ int check_parser_stmts() {
     return 0;
 }
 
+/* on a parse error, dump a chunk of source at the failing token to stderr */
+int diag_at(int tok) {
+    write(2, "SEED parse error near: ", 23);
+    write(2, SRC + tok_start(tok), 80);
+    write(2, "\n", 1);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     int rc;
     arena_init();
     tags_init();
-    TOK = calloc(65536, sizeof(int));
+    TOK = calloc(2097152, sizeof(int));   /* up to ~512K tokens (stride 4) */
     nodes_init();
 
     if (argc < 3) {
@@ -1312,8 +1326,8 @@ int main(int argc, char** argv) {
     lex();
     CUR = 0; PERR = 0;
     PROG = parse_program();
-    if (PERR != 0)     { return 90; }   /* parse error */
-    if (PROG == 0 - 1) { return 91; }   /* no function found */
+    if (PERR != 0)     { diag_at(CUR); return 90; }   /* parse error (dump location) */
+    if (PROG == 0 - 1) { return 91; }                 /* no function found */
     codegen();
     write_image(argv[2]);
     return 0;

@@ -118,8 +118,14 @@ other rung.
   subset: lexer, parser, full codegen (literals, arithmetic, comparisons,
   bitwise, locals, while/if, calls, recursion), string literals, and all six
   intrinsics (arena + file I/O).
-- **next (inc 4):** scale the pools and compile the real compiler —
-  `lexer.hx` → `parser.hx` → `kovc.hx` — then the self-hosting fixpoint + DDC.
+- **4 (lexer.hx) — DONE:** pools scaled (TOK/ND/FN/CALL/STR/IMG/locals) for real
+  ~30k-line sources; added a parse-error diagnostic; fixed `parse_block` to accept
+  semicolon-terminated `if`/`while` statements + empty statements (the first real
+  construct the tiny tests missed). **The seed compiles the real 1087-line
+  `helixc/bootstrap/lexer.hx` into a 21957-byte ELF, and the emitted lexer runs:
+  it tokenizes `fn f() { 1 + 2 }` into 10 tokens.** Locked in as a regression test.
+- **next:** compile `parser.hx`, then the full `kovc.hx` source; then the
+  self-hosting fixpoint + DDC.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
