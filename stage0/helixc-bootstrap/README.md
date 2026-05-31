@@ -69,9 +69,16 @@ other rung.
   fns). `if` is reachable from `parse_primary`, so it works as an expression too.
   Self-test parses whole functions and asserts the let-mut/assign/tail-expr and
   while/if-expression AST shapes. **The parser is complete.**
-- **next (3):** x86-64 ELF codegen — compile `fn main() -> i32 { 42 }` to a
-  self-contained ELF that runs and exits 42; then grow codegen across the subset
-  + the 6 intrinsics until it compiles `kovc.hx`.
+- **3a — DONE:** minimal x86-64 ELF codegen + the compile pipeline. The seed now
+  has two modes: no args → run the front-end self-tests (exit 42); `seed in.hx
+  out.bin` → read the file, lex, parse, **emit a self-contained ELF** (ELF64
+  header + one PT_LOAD R|W|X at 0x400000, code at 0x1000, `_start` calls main +
+  sys_exit). Codegen handles a tail integer literal (`mov eax, imm32`). Verified
+  end-to-end: the seed compiles `fn main() -> i32 { 42 }` → the output ELF runs
+  and exits 42. **First runnable binary emitted by our own seed.**
+- **next (3b…):** grow codegen — integer expressions (binops), locals
+  (let/assign), control flow (while/if), calls + params, then the 6 intrinsics;
+  then compile `kovc.hx` itself.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

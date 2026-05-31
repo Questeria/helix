@@ -1,24 +1,32 @@
 #!/usr/bin/env bash
 # run_tests.sh -- exercise the helixc-bootstrap seed. Run under WSL.
-# Grows one test per increment; increment 0 = the arena self-test.
+#   no args  -> seed runs its lexer + parser self-tests (exit 42).
+#   in out   -> seed compiles a .hx file to a self-contained ELF.
 set -u
 cd "$(dirname "$0")"
 PASS=0; FAIL=0
+T=$(mktemp -d)
 
-# The seed's built-in self-test returns 42 when all internal asserts pass; a
-# small diagnostic code otherwise. Grows with each increment.
-#   inc 0: arena push/get/set + while-sum -> 42.
-#   inc 1: lexer -- assert the 17-token stream of the sample program.
-#   inc 2a: expression parser -- precedence (2+3*4), parens, call f(7,x).
-#   inc 2b: full parser -- parse whole fns; assert let-mut/assign/tail-expr and
-#           while + if-expression AST shapes.
+# 1. self-test mode: lexer + expr parser + full parser asserts -> exit 42.
 ./seed.bin; rc=$?
 if [ "$rc" = "42" ]; then
-    echo "PASS 03-full-parser-selftest (exit $rc)"; PASS=$((PASS+1))
+    echo "PASS 03-frontend-selftest (exit $rc)"; PASS=$((PASS+1))
 else
-    echo "FAIL 03-full-parser-selftest (exit $rc -- diagnostic index; want 42)"; FAIL=$((FAIL+1))
+    echo "FAIL 03-frontend-selftest (exit $rc -- diagnostic index; want 42)"; FAIL=$((FAIL+1))
 fi
 
+# 2. codegen (inc 3a): compile `fn main() -> i32 { 42 }` to an ELF, run it,
+#    assert exit 42 -- proves the seed emits a correct, runnable x86-64 binary.
+./seed.bin test/t1.hx "$T/t1.bin" 2>/dev/null; crc=$?
+chmod +x "$T/t1.bin" 2>/dev/null
+"$T/t1.bin"; rc=$?
+if [ "$crc" = "0" ] && [ "$rc" = "42" ]; then
+    echo "PASS 3a-compile-return42 (compile rc=$crc, run exit=$rc)"; PASS=$((PASS+1))
+else
+    echo "FAIL 3a-compile-return42 (compile rc=$crc, run exit=$rc, want 0/42)"; FAIL=$((FAIL+1))
+fi
+
+rm -rf "$T"
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

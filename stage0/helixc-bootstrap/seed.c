@@ -562,6 +562,127 @@ int parse_program() {
     return first;
 }
 
+/* ===================== codegen: x86-64 self-contained ELF (increment 3a) ===================== *
+ * Emit the same self-contained static-ELF shape kovc uses: ELF64 header + one
+ * PT_LOAD (R|W|X) at 0x400000, code at file offset 0x1000 (entry 0x401000),
+ * `_start` calls main then sys_exit with its return. INC 3a handles only a tail
+ * integer literal; later increments grow expression/statement/call codegen. */
+char* IMG;   /* whole output image: headers + pad + code            */
+int IMGN;    /* write cursor (code begins at file offset 0x1000)     */
+int PROG;    /* parsed program (first fn node)                       */
+
+int img_init() {
+    IMG = calloc(8 * 1048576, 1);   /* 8 MiB output image */
+    IMGN = 4096;                     /* code begins at file offset 0x1000 */
+    return 0;
+}
+int emit_byte(int b) { IMG[IMGN] = b; IMGN = IMGN + 1; return 0; }
+int emit_u32le(int v) {
+    emit_byte(v & 255); emit_byte((v >> 8) & 255);
+    emit_byte((v >> 16) & 255); emit_byte((v >> 24) & 255);
+    return 0;
+}
+/* poke fixed-width little-endian values at an absolute image position */
+int put_u16(int pos, int v) { IMG[pos] = v & 255; IMG[pos + 1] = (v >> 8) & 255; return 0; }
+int put_u32(int pos, int v) { put_u16(pos, v); put_u16(pos + 2, v >> 16); return 0; }
+int put_u64(int pos, int v) { put_u32(pos, v); put_u32(pos + 4, 0); return 0; }   /* v < 2^32 */
+
+/* fill the ELF + program headers now that the total size (IMGN) is known */
+int build_headers() {
+    int total;
+    total = IMGN;
+    IMG[0] = 127; IMG[1] = 69; IMG[2] = 76; IMG[3] = 70;   /* 0x7F 'E' 'L' 'F' */
+    IMG[4] = 2;   /* ELFCLASS64 */
+    IMG[5] = 1;   /* little-endian */
+    IMG[6] = 1;   /* EI_VERSION */
+    put_u16(16, 2);        /* e_type = ET_EXEC      */
+    put_u16(18, 62);       /* e_machine = x86-64    */
+    put_u32(20, 1);        /* e_version             */
+    put_u64(24, 4198400);  /* e_entry = 0x401000    */
+    put_u64(32, 64);       /* e_phoff               */
+    put_u64(40, 0);        /* e_shoff               */
+    put_u32(48, 0);        /* e_flags               */
+    put_u16(52, 64);       /* e_ehsize              */
+    put_u16(54, 56);       /* e_phentsize           */
+    put_u16(56, 1);        /* e_phnum               */
+    put_u16(58, 0);        /* e_shentsize           */
+    put_u16(60, 0);        /* e_shnum               */
+    put_u16(62, 0);        /* e_shstrndx            */
+    put_u32(64, 1);        /* p_type = PT_LOAD      */
+    put_u32(68, 7);        /* p_flags = R|W|X       */
+    put_u64(72, 0);        /* p_offset              */
+    put_u64(80, 4194304);  /* p_vaddr = 0x400000    */
+    put_u64(88, 4194304);  /* p_paddr = 0x400000    */
+    put_u64(96, total);    /* p_filesz              */
+    put_u64(104, total);   /* p_memsz               */
+    put_u64(112, 4096);    /* p_align = 0x1000      */
+    return 0;
+}
+
+/* codegen an expression -> result in eax (INC 3a: integer literal only) */
+int cg_expr(int node) {
+    if (nd_kind(node) == ND_INT) {
+        emit_byte(0xB8);              /* mov eax, imm32 */
+        emit_u32le(nd_a(node));
+        return 0;
+    }
+    emit_byte(0xB8); emit_u32le(0);   /* later: ND_BIN/VAR/CALL/IF */
+    return 0;
+}
+
+/* codegen a function: prologue, tail expression -> eax, epilogue, ret */
+int cg_fn(int fn) {
+    int body; int tail;
+    emit_byte(0x55);                                   /* push rbp        */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE5); /* mov rbp, rsp    */
+    body = nd_c(fn);
+    tail = nd_c(body);
+    if (tail != 0 - 1) { cg_expr(tail); }
+    else { emit_byte(0xB8); emit_u32le(0); }           /* default eax = 0 */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xEC); /* mov rsp, rbp    */
+    emit_byte(0x5D);                                   /* pop rbp         */
+    emit_byte(0xC3);                                   /* ret             */
+    return 0;
+}
+
+/* emit _start (call main; sys_exit eax) then the program's functions */
+int codegen() {
+    int call_rel_pos; int main_off; int rel;
+    emit_byte(0xE8);                  /* call rel32 -> main          */
+    call_rel_pos = IMGN;
+    emit_u32le(0);                    /* rel32 placeholder           */
+    emit_byte(0x89); emit_byte(0xC7); /* mov edi, eax (exit status)  */
+    emit_byte(0xB8); emit_u32le(60);  /* mov eax, 60 (sys_exit)      */
+    emit_byte(0x0F); emit_byte(0x05); /* syscall                     */
+    main_off = IMGN;
+    cg_fn(PROG);                      /* INC 3a: the single fn IS main */
+    rel = main_off - (call_rel_pos + 4);
+    put_u32(call_rel_pos, rel);
+    return 0;
+}
+
+/* read a whole file into SRC / SRC_LEN */
+int read_file(char* path) {
+    FILE* f; int c;
+    f = fopen(path, "r");
+    SRC = calloc(4 * 1048576, 1);
+    SRC_LEN = 0;
+    c = fgetc(f);
+    while (c != 0 - 1) { SRC[SRC_LEN] = c; SRC_LEN = SRC_LEN + 1; c = fgetc(f); }
+    fclose(f);
+    return 0;
+}
+
+/* write the built image to disk */
+int write_image(char* path) {
+    FILE* f;
+    build_headers();
+    f = fopen(path, "w");
+    fwrite(IMG, 1, IMGN, f);
+    fclose(f);
+    return 0;
+}
+
 /* ===================== self-tests ===================== */
 int lex_str(char* s) {
     SRC = s;
@@ -661,14 +782,30 @@ int check_parser_stmts() {
     return 0;
 }
 
-int main() {
+int main(int argc, char** argv) {
     int rc;
     arena_init();
     tags_init();
-    TOK = calloc(8192, sizeof(int));
+    TOK = calloc(65536, sizeof(int));
     nodes_init();
-    rc = check_lexer();        if (rc != 0) { return rc; }
-    rc = check_parser();       if (rc != 0) { return 20 + rc; }
-    rc = check_parser_stmts(); if (rc != 0) { return 50 + rc; }
-    return 42;
+
+    if (argc < 3) {
+        /* no input/output args -> run the lexer + parser self-tests */
+        rc = check_lexer();        if (rc != 0) { return rc; }
+        rc = check_parser();       if (rc != 0) { return 20 + rc; }
+        rc = check_parser_stmts(); if (rc != 0) { return 50 + rc; }
+        return 42;
+    }
+
+    /* compile mode: argv[1] = input .hx, argv[2] = output ELF path */
+    img_init();
+    read_file(argv[1]);
+    lex();
+    CUR = 0; PERR = 0;
+    PROG = parse_program();
+    if (PERR != 0)     { return 90; }   /* parse error */
+    if (PROG == 0 - 1) { return 91; }   /* no function found */
+    codegen();
+    write_image(argv[2]);
+    return 0;
 }
