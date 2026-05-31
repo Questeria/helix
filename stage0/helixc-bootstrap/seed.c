@@ -619,14 +619,73 @@ int build_headers() {
     return 0;
 }
 
-/* codegen an expression -> result in eax (INC 3a: integer literal only) */
+/* forward declarations (cg_expr <-> cg_bin are mutually recursive) */
+int cg_expr(int node);
+int cg_bin(int op, int left, int right);
+
+/* codegen a binary op: eval left -> rax (saved), right -> rcx, then the op.
+ * Result in eax. left in rax, right in rcx after the setup below. */
+int cg_bin(int op, int left, int right) {
+    cg_expr(left);
+    emit_byte(0x50);                                    /* push rax            */
+    cg_expr(right);
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xC1);  /* mov rcx, rax (right)*/
+    emit_byte(0x58);                                    /* pop rax (left)      */
+    if (op == TK_PLUS)    { emit_byte(0x01); emit_byte(0xC8); return 0; }                   /* add eax,ecx  */
+    if (op == TK_MINUS)   { emit_byte(0x29); emit_byte(0xC8); return 0; }                   /* sub eax,ecx  */
+    if (op == TK_STAR)    { emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1); return 0; }  /* imul eax,ecx */
+    if (op == TK_SLASH)   { emit_byte(0x99); emit_byte(0xF7); emit_byte(0xF9); return 0; }  /* cdq; idiv ecx -> eax */
+    if (op == TK_PERCENT) { emit_byte(0x99); emit_byte(0xF7); emit_byte(0xF9);
+                            emit_byte(0x89); emit_byte(0xD0); return 0; }                   /* cdq; idiv ecx; mov eax,edx */
+    if (op == TK_AMP)     { emit_byte(0x21); emit_byte(0xC8); return 0; }                   /* and eax,ecx  */
+    if (op == TK_PIPE)    { emit_byte(0x09); emit_byte(0xC8); return 0; }                   /* or  eax,ecx  */
+    if (op == TK_CARET)   { emit_byte(0x31); emit_byte(0xC8); return 0; }                   /* xor eax,ecx  */
+    if (op == TK_EQEQ || op == TK_NE || op == TK_LT || op == TK_LE || op == TK_GT || op == TK_GE) {
+        emit_byte(0x39); emit_byte(0xC8);               /* cmp eax, ecx        */
+        emit_byte(0x0F);
+        if (op == TK_EQEQ)    { emit_byte(0x94); }      /* sete  */
+        else if (op == TK_NE) { emit_byte(0x95); }      /* setne */
+        else if (op == TK_LT) { emit_byte(0x9C); }      /* setl  */
+        else if (op == TK_LE) { emit_byte(0x9E); }      /* setle */
+        else if (op == TK_GT) { emit_byte(0x9F); }      /* setg  */
+        else                  { emit_byte(0x9D); }      /* setge */
+        emit_byte(0xC0);                                /* setcc al            */
+        emit_byte(0x0F); emit_byte(0xB6); emit_byte(0xC0); /* movzx eax, al    */
+        return 0;
+    }
+    if (op == TK_ANDAND) {   /* non-short-circuit: (left!=0) * (right!=0) */
+        emit_byte(0x85); emit_byte(0xC0);                      /* test eax,eax  */
+        emit_byte(0x0F); emit_byte(0x95); emit_byte(0xC0);     /* setne al      */
+        emit_byte(0x0F); emit_byte(0xB6); emit_byte(0xC0);     /* movzx eax,al  */
+        emit_byte(0x85); emit_byte(0xC9);                      /* test ecx,ecx  */
+        emit_byte(0x0F); emit_byte(0x95); emit_byte(0xC1);     /* setne cl      */
+        emit_byte(0x0F); emit_byte(0xB6); emit_byte(0xC9);     /* movzx ecx,cl  */
+        emit_byte(0x0F); emit_byte(0xAF); emit_byte(0xC1);     /* imul eax,ecx  */
+        return 0;
+    }
+    if (op == TK_OROR) {     /* non-short-circuit: (left|right) != 0 */
+        emit_byte(0x09); emit_byte(0xC8);                      /* or eax,ecx    */
+        emit_byte(0x85); emit_byte(0xC0);                      /* test eax,eax  */
+        emit_byte(0x0F); emit_byte(0x95); emit_byte(0xC0);     /* setne al      */
+        emit_byte(0x0F); emit_byte(0xB6); emit_byte(0xC0);     /* movzx eax,al  */
+        return 0;
+    }
+    return 0;
+}
+
+/* codegen an expression -> result in eax (INC 3b: int literals + binary ops) */
 int cg_expr(int node) {
-    if (nd_kind(node) == ND_INT) {
+    int k;
+    k = nd_kind(node);
+    if (k == ND_INT) {
         emit_byte(0xB8);              /* mov eax, imm32 */
         emit_u32le(nd_a(node));
         return 0;
     }
-    emit_byte(0xB8); emit_u32le(0);   /* later: ND_BIN/VAR/CALL/IF */
+    if (k == ND_BIN) {
+        return cg_bin(nd_a(node), nd_b(node), nd_c(node));
+    }
+    emit_byte(0xB8); emit_u32le(0);   /* ND_VAR/ND_CALL/ND_IF -> later increments */
     return 0;
 }
 

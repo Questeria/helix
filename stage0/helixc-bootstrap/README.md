@@ -76,9 +76,13 @@ other rung.
   sys_exit). Codegen handles a tail integer literal (`mov eax, imm32`). Verified
   end-to-end: the seed compiles `fn main() -> i32 { 42 }` → the output ELF runs
   and exits 42. **First runnable binary emitted by our own seed.**
-- **next (3b…):** grow codegen — integer expressions (binops), locals
-  (let/assign), control flow (while/if), calls + params, then the 6 intrinsics;
-  then compile `kovc.hx` itself.
+- **3b — DONE:** integer expression codegen. `cg_bin` evaluates left→rax (push),
+  right→rcx (pop), then emits the op: `+ - * / %`, bitwise `& | ^`, the six
+  comparisons (cmp + setcc + movzx), and `&& ||` (non-short-circuit, sound for
+  the side-effect-free subset). Verified: `6*7`→42, `2+3*4`→14 (precedence),
+  `5>3`→1.
+- **next (3c…):** locals (let/assign as `[rbp-k]` stack slots), control flow
+  (while/if), calls + params, then the 6 intrinsics; then compile `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
