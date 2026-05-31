@@ -188,17 +188,26 @@ int lex() {
         }
         else if (is_digit(c)) {
             start = p; val = 0;
-            if (c == '0') { if (n == 'x') {
+            if (c == '0' && (n == 'x' || n == 'X')) {
                 p = p + 2;
                 while (p < SRC_LEN) { if (is_hex(SRC[p])) { val = val * 16 + hexval(SRC[p]); p = p + 1; } else { break; } }
-                tok_push(TK_INT, val, start, p - start);
             } else {
                 while (p < SRC_LEN) { if (is_digit(SRC[p])) { val = val * 10 + (SRC[p] - '0'); p = p + 1; } else { break; } }
-                tok_push(TK_INT, val, start, p - start);
-            } } else {
-                while (p < SRC_LEN) { if (is_digit(SRC[p])) { val = val * 10 + (SRC[p] - '0'); p = p + 1; } else { break; } }
-                tok_push(TK_INT, val, start, p - start);
+                /* float literal: consume an optional `.` + fractional digits. The
+                 * value becomes a placeholder (the integer part) -- f32/f64 code
+                 * is dead in the self-hosting path, so exact bits do not matter;
+                 * the fixpoint test catches it if that assumption is ever wrong. */
+                if (p + 1 < SRC_LEN) { if (SRC[p] == '.') { if (is_digit(SRC[p + 1])) {
+                    p = p + 1;
+                    while (p < SRC_LEN) { if (is_digit(SRC[p])) { p = p + 1; } else { break; } }
+                } } }
             }
+            /* optional numeric suffix like _f32 / _f64 / _i64 / _u32 */
+            if (p < SRC_LEN) { if (SRC[p] == '_') {
+                p = p + 1;
+                while (p < SRC_LEN) { if (is_alnum(SRC[p])) { p = p + 1; } else { break; } }
+            } }
+            tok_push(TK_INT, val, start, p - start);
         }
         else if (is_alpha(c)) {
             start = p;
