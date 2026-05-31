@@ -163,8 +163,10 @@ other rung.
   **byte-identical**: `K2_seed == K2_python` (593572 == 593572 bytes), and
   K2_seed compiles `6*7 → exit 42` (it is a working compiler). By Wheeler's
   diverse-double-compiling, a byte-identical fixpoint match proves the seed
-  reproduced kovc faithfully and injected nothing (Thompson's trusting-trust
-  attack defeated). **Python is provably redundant in the bootstrap trust
+  reproduced kovc faithfully and injected nothing — defeating a trusting-trust
+  trojan in either the seed or the Python mint route (assuming an honest kovc
+  source and a trusted host runtime; Thompson 1984 / Wheeler 2009). **Python is
+  provably redundant in the bootstrap trust
   chain** — the first `helixc` can be minted from 299 hand-typed bytes with no
   Python anywhere. See `../../docs/K_DDC_RESULT.md`.
 - **next:** Python-deletion-READY for the bootstrap is reached. Actual deletion

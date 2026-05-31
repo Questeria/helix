@@ -108,6 +108,14 @@ with the Helix-native test-infra port).
   does not re-verify the stage-0 ladder (hex0 → … → M2-Planet) that builds the
   seed — that chain is reproducible-from-source and audited separately (every
   rung byte-identical on rebuild from hand-authored hex0).
+- **Trusted runtime.** Per Wheeler (2009), DDC assumes the environment that
+  *runs* both compiles and the comparison (`cmp`) is itself trusted: a trojan
+  present *identically in both* routes — e.g. in the shared host Linux kernel /
+  WSL, or in the comparison harness — perturbs `K2_seed` and `K2_python` the
+  same way and is **not** detected. The surface this DDC defends is a trojan in
+  *one* mint route (the Python toolchain **or** the C seed), which forces a
+  divergence and is caught; the shared kovc source and the shared host runtime
+  are the explicit residual.
 
 ## Reproduce from scratch
 
