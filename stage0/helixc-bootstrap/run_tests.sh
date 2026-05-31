@@ -5,14 +5,16 @@ set -u
 cd "$(dirname "$0")"
 PASS=0; FAIL=0
 
-# Increment 0: the seed's own self-test returns 42 via the arena
-# (push 6,7,28 -> set slot2=29 -> while-sum -> 42). Proves the build pipeline
-# and the global-arena primitive under M2-Planet.
+# The seed's built-in self-test returns 42 when all internal asserts pass; a
+# small diagnostic code otherwise. Grows with each increment.
+#   inc 0: arena push/get/set + while-sum -> 42.
+#   inc 1: lex `fn main() -> i32 { let x = 41; x + 1 }` and assert the 17-token
+#          stream (tags + the int values 41,1).
 ./seed.bin; rc=$?
 if [ "$rc" = "42" ]; then
-    echo "PASS 00-arena-selftest (exit $rc)"; PASS=$((PASS+1))
+    echo "PASS 01-lexer-selftest (exit $rc)"; PASS=$((PASS+1))
 else
-    echo "FAIL 00-arena-selftest (exit $rc, want 42)"; FAIL=$((FAIL+1))
+    echo "FAIL 01-lexer-selftest (exit $rc -- diagnostic index; want 42)"; FAIL=$((FAIL+1))
 fi
 
 echo

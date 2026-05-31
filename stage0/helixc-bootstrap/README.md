@@ -51,11 +51,15 @@ other rung.
 ## Increments
 
 - **0 — DONE:** project + build-pipeline proof + the global-arena core
-  (`calloc`'d int buffer + push/get/set/len; self-test sums to 42). Confirms our
-  Apache-2.0 C compiles and runs through M2-Planet, and the heart of the design
-  works in the M2 subset.
-- **next:** lexer for the Helix subset → recursive-descent parser → x86-64 ELF
-  codegen → compile `kovc.hx`, test-driven all the way.
+  (`calloc`'d int buffer + push/get/set/len; self-test sums to 42).
+- **1 — DONE:** lexer. Tokenizes the Helix subset into stride-4 token records
+  (tag, val, start, len): `//` + nested `/* */` comments, identifiers +
+  keywords (fn/let/mut/if/else/while/return), i32 decimal + `0x` hex literals,
+  string literals, the full operator/punctuation set, and skips `@attr`.
+  Self-test lexes `fn main() -> i32 { let x = 41; x + 1 }` and asserts the
+  17-token stream.
+- **next:** recursive-descent parser → AST in the arena → x86-64 ELF codegen →
+  compile `kovc.hx`, test-driven all the way.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
