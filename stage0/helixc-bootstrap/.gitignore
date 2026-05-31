@@ -4,3 +4,6 @@ seed.bin
 *.M1
 *.hex2
 disasm.txt
+
+k1src.hx
+k1input.hx

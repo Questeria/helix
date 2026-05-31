@@ -131,8 +131,18 @@ other rung.
   valid ELF** (rc 0). parser.hx is a library (no `fn main`), so a clean compile +
   valid ELF is its milestone — full runtime verification comes with the assembled
   compiler.
-- **next:** compile the full `kovc.hx` / the concatenated K-source; then the
-  self-hosting fixpoint + DDC.
+- **4 (kovc.hx) — DONE:** added float-literal lexing (`2.5_f32` → placeholder
+  int; the f32/f64 self-test functions are dead code in the self-hosting path, so
+  exact float codegen is irrelevant — the fixpoint check guards the assumption).
+  With that the seed compiles the full **12,181-line `kovc.hx` into a 229 KB ELF**
+  (rc 0). All three real sources (lexer/parser/kovc) now compile.
+- **4 (STEP B) — in progress:** `assemble_k1.py` concatenates the frozen sources
+  into the runnable-compiler source exactly as `test_self_host_fixpoint.py` does
+  (`lexer_no_main + parser_body + kovc_lib + driver_main`, ~29.4k lines / 1.5 MB)
+  → `k1src.hx` (git-ignored). The seed is building it into **K1'** (a self-built
+  helixc). Then: K1' compiles a tiny program (sanity), the self-hosting fixpoint,
+  and DDC vs the Python-built K1. (Note: the source exceeds kovc's 1 MiB
+  `read_file_to_arena` buffer, which the fixpoint step will need to account for.)
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
