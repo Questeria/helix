@@ -3,8 +3,8 @@
 `M2` (M2-Planet) is the seventh rung of the Kovostov-Native bootstrap ladder, and
 the **full, self-hosting C compiler**. cc_amd64 (rung 6) builds the first M2;
 from M2 upward the toolchain compiles real C with structs, function pointers,
-and the M2libc standard library. It is the compiler in whose C subset we will
-write our own Apache-2.0 `helix-libc` + `helixc-bootstrap`.
+and the M2libc standard library. It is the compiler in whose C subset we wrote our
+own Apache-2.0 `helixc-bootstrap` seed.
 
 Per project policy (`stage0/README.md`; user decision 2026-05-30), the middle
 rungs are **vendored from canonical, community-audited sources at pinned
@@ -104,7 +104,10 @@ left open and honest rather than forced.
 
 ## Next rung
 
-After M2-Planet, the ladder leaves vendored territory: **we write `helix-libc` +
-`helixc-bootstrap`** in the M2 C subset (original Apache-2.0 work, statically
-separable from these GPL trees). The user is checkpointed at that transition
-before it starts. Then `helixc` (= the existing, frozen kovc).
+After M2-Planet, the ladder leaves vendored territory: **we wrote the
+`helixc-bootstrap` seed** (`seed.c`) in the M2 C subset — original Apache-2.0
+work, statically separable from these GPL trees. The user chose Option A
+(2026-05-30); the seed is built by this ladder and mints `helixc` (the existing
+frozen kovc) byte-identically to the Python reference, proven by a diverse
+double-compile (`../../docs/K_DDC_RESULT.md`). There is no separate `helix-libc`
+— kovc emits self-contained ELFs.
