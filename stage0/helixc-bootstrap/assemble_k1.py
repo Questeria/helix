@@ -41,5 +41,5 @@ k1_input = lexer_no_main + parser_body + kovc_lib + input_main
 here = os.path.dirname(os.path.abspath(__file__))
 open(os.path.join(here, "k1src.hx"), "w", encoding="utf-8", newline="\n").write(k1_driver)
 open(os.path.join(here, "k1input.hx"), "w", encoding="utf-8", newline="\n").write(k1_input)
-print("k1_driver:", k1_driver.count(chr(10)) + 1, "lines,", len(k1_driver), "bytes -> k1src.hx")
-print("k1_input :", k1_input.count(chr(10)) + 1, "lines,", len(k1_input), "bytes -> k1input.hx")
+print("k1_driver:", k1_driver.count(chr(10)) + 1, "lines,", len(k1_driver.encode("utf-8")), "bytes -> k1src.hx")
+print("k1_input :", k1_input.count(chr(10)) + 1, "lines,", len(k1_input.encode("utf-8")), "bytes -> k1input.hx")

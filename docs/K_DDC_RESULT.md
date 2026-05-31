@@ -29,7 +29,7 @@ Wheeler (2009) / Thompson (1984), defeats a "trusting trust" trojan: a malicious
 seed could only pass if it reproduced kovc exactly, i.e. injected nothing.
 
 ```
-source S = k1src.hx   (lexer_no_main + parser_body + kovc_lib + driver_main, 1 495 577 bytes)
+source S = k1src.hx   (lexer_no_main + parser_body + kovc_lib + driver_main, 1 496 734 bytes / 1 495 577 UTF-8 code points)
 input  BIG = k1input.hx (the same 1.5 MB compiler source; what the fixpoint compiles)
 
 Route A (seed):    S --seed (C, stage0 ladder)----> K1'   ; K1'(BIG)  -> K2_seed
