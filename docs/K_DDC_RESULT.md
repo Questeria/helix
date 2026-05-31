@@ -55,10 +55,13 @@ self-hosting fixpoint.
 ## What this proves, and what it does not
 
 - **Proves:** the seed-built compiler is *behaviorally identical* to the
-  Python-built compiler on the canonical DDC input (the compiler's own 1.5 MB
-  source, which exercises the large majority of the bootstrap's language
-  constructs). A trojan in the C seed (independent of Python) cannot survive
-  this match. Python is redundant for *minting helixc*.
+  Python-built compiler on the canonical DDC input — the compiler's own 1.5 MB
+  source. That input exercises the constructs kovc's *own source* uses (the
+  i32 + `while` + `if`-expression + six-intrinsic subset, ~15 of kovc's ~53
+  codegen arms): the large majority of the *dynamic execution* of a minting
+  compile, but **not** a majority of the language surface. A trojan in the C
+  seed (independent of Python) cannot survive the match on the exercised paths.
+  Python is redundant for *minting helixc*.
 - **Does not prove:** that kovc is bug-free (DDC proves equivalence to the
   reference, not absolute correctness — if the Python reference had a bug the
   seed would faithfully reproduce it, which is exactly what "replace Python"
@@ -70,6 +73,19 @@ self-hosting fixpoint.
   result plus K1's own faithfully-compiled float lexer keep K2 byte-identical —
   empirically confirmed by the match.) It also does not port the Python
   *test/build* tooling — a separate track before full v1.0 Python-deletion.
+
+## Cross-check beyond the self-source (audit round 3)
+
+To probe the single-input limitation, an independent equivalence battery compiled
+**21 diverse programs** through BOTH the seed-built kovc (K1') and the Python-built
+kovc (K1py), comparing the output ELFs byte-for-byte: deep + mutual recursion, full
+operator precedence/associativity, **signed** division/modulo, i32 overflow wrap,
+many-local frames, all six intrinsics, and string-literal `write_file_to_arena`.
+**All 21 were byte-identical** (distinct md5s, predicted exit codes) — extending the
+seed ≡ Python-kovc equivalence well beyond the self-source *within the i32 subset*.
+The struct / enum / match / array / autodiff / GPU / non-i32-width arms remain
+present-but-unexercised; closing that needs a feature-diverse DDC corpus (tracked
+with the Helix-native test-infra port).
 
 ## Premises (stated honestly)
 
