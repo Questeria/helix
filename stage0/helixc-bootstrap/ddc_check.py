@@ -51,7 +51,7 @@ def main():
     k1prime = sys.argv[1] if len(sys.argv) > 1 else "/tmp/K1prime"
     driver = open(os.path.join(HERE, "k1src.hx"), encoding="utf-8").read()    # the compiler source
     big = open(os.path.join(HERE, "k1input.hx"), encoding="utf-8").read()     # 1.5 MB self-source (BIG)
-    print(f"driver = {len(driver)} bytes ; BIG = {len(big)} bytes ; K1' = {k1prime}")
+    print(f"driver = {len(driver.encode('utf-8'))} bytes ; BIG = {len(big.encode('utf-8'))} bytes ; K1' = {k1prime}")
 
     # ---- Route B (Python): build K1py, run it on BIG -> K2_python ----
     from helixc.tests.test_codegen import _compile_src_to_elf
