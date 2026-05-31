@@ -144,10 +144,25 @@ other rung.
   **runs and exits 42**. The full chain is proven end-to-end: 299 hand-typed
   bytes → hex0 → … → M2-Planet → seed → K1' (helixc) → a running Helix program.
   No Python in the chain.
-- **next:** trust check — compile a battery of programs with both K1' (seed-built)
-  and the Python-built K1, assert byte-identical outputs (the achievable DDC,
-  given kovc's 1 MiB read buffer is smaller than the 1.5 MB self-source). Then
-  Python-deletion-ready → **user-gated K4** → 5 clean audits → STOP.
+- **4 (STEP C+D) — DONE: the diverse double-compile PASSES byte-for-byte.**
+  Bumping the seed's emitted read buffer to 4 MiB let K1' read the full 1.5 MB
+  self-source, so the *full* Wheeler DDC fixpoint runs (`ddc_check.py`):
+    - Route A (seed):   `k1src.hx → seed → K1' → (compiles BIG) → K2_seed`
+    - Route B (Python): `k1src.hx → python reference → K1py → (compiles BIG) → K2_python`
+  Both K1s compile the SAME 1.5 MB source (`BIG = k1input.hx`). K1' and K1py
+  differ in bytes (different compilers built kovc) — but their *output* is
+  **byte-identical**: `K2_seed == K2_python` (593572 == 593572 bytes), and
+  K2_seed compiles `6*7 → exit 42` (it is a working compiler). By Wheeler's
+  diverse-double-compiling, a byte-identical fixpoint match proves the seed
+  reproduced kovc faithfully and injected nothing (Thompson's trusting-trust
+  attack defeated). **Python is provably redundant in the bootstrap trust
+  chain** — the first `helixc` can be minted from 299 hand-typed bytes with no
+  Python anywhere. See `../../docs/K_DDC_RESULT.md`.
+- **next:** Python-deletion-READY for the bootstrap is reached. Actual deletion
+  (K4) is **user-gated** and broader than the bootstrap (the Python compiler is
+  still the test-suite reference + build tooling; full v1.0 deletion needs the
+  Helix-native test infra to subsume it). Flag the user; run the 5 clean
+  multi-agent audits of this proof; do NOT delete Python autonomously.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
