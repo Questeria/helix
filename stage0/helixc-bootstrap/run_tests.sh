@@ -42,6 +42,8 @@ compile_run 3e-call      test/t10.hx 42  # add(40, 2) -> 42 (call + params)
 compile_run 3e-call-expr test/t11.hx 42  # sq(6) + 6 -> 42
 compile_run 3e-recursion test/t12.hx 55  # fib(10) -> 55 (recursion)
 compile_run 3f-arena     test/t13.hx 55  # arena push/get/set/len: 10+30+12+3 = 55
+printf 'ABC' > /tmp/seed_read_test.txt   # 3 bytes, no newline
+compile_run 3f-read      test/t14.hx 68  # read_file_to_arena: len(3) + first byte 'A'(65) = 68
 
 rm -rf "$T"
 echo

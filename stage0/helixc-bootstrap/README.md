@@ -103,9 +103,14 @@ other rung.
   `get`/`set`/`len` emit inline against `r11` (cursor at base, slots at
   `base+4+i*4`). Functionally equal to kovc's RIP-relative arena (DDC washes out
   the difference at the fixpoint). Verified: push/get/set/len → 55.
-- **next (3f-io):** string literals + `read_file_to_arena`/`write_file_to_arena`
-  (the last two intrinsics), then scale up to compile `lexer.hx` → `parser.hx`
-  → `kovc.hx`.
+- **3f-read — DONE:** string literals + `read_file_to_arena`. String literals
+  (`ND_STR`) are emitted as NUL-terminated data after the code, referenced by a
+  `mov rax, imm64` that's backpatched to the string's vaddr. `read_file_to_arena`
+  emits open → read-into-1 MiB-stack-buffer → push each byte as one i32 into the
+  arena → return the count (matching kovc's contract; the lexer reads
+  `__arena_get(i)`). Verified: reads a 3-byte file → len 3, first byte 'A'(65) → 68.
+- **next (3f-write):** `write_file_to_arena` (the last intrinsic), then scale up
+  to compile `lexer.hx` → `parser.hx` → `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

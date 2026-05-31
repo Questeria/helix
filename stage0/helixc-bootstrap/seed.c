@@ -249,6 +249,7 @@ int lex() {
  */
 int ND_INT; int ND_VAR; int ND_BIN; int ND_CALL; int ND_IFE;
 int ND_LET; int ND_ASSIGN; int ND_WHILE; int ND_IF; int ND_BLOCK; int ND_FN; int ND_PARAM;
+int ND_STR;
 int* ND;
 int ND_N;
 int PERR;   /* parser error flag (set by expect_tag on a mismatch) */
@@ -259,6 +260,7 @@ int nodes_init() {
     PERR = 0;
     ND_INT = 1; ND_VAR = 2; ND_BIN = 3; ND_CALL = 4; ND_IFE = 5;
     ND_LET = 6; ND_ASSIGN = 7; ND_WHILE = 8; ND_IF = 9; ND_BLOCK = 10; ND_FN = 11; ND_PARAM = 12;
+    ND_STR = 13;
     return 0;
 }
 int nodes_reset() { ND_N = 0; return 0; }
@@ -304,6 +306,11 @@ int parse_primary() {
         v = tok_val(CUR);
         p_adv();
         return node_new(ND_INT, v, 0, 0);
+    }
+    if (t == TK_STR) {
+        node = node_new(ND_STR, CUR, 0, 0);   /* a = the TK_STR token index */
+        p_adv();
+        return node;
     }
     if (t == TK_LPAREN) {
         p_adv();
@@ -695,13 +702,18 @@ int FN_N;
 int* CALL_SLOT;    /* CALL_SLOT[j]  = rel32 slot of call site j */
 int* CALL_NAMETOK; /* CALL_NAMETOK[j] = callee name-token       */
 int CALL_N;
+int* STR_SLOT;     /* STR_SLOT[k]   = imm64 slot of string use k */
+int* STR_TOK;      /* STR_TOK[k]    = the TK_STR token index     */
+int STR_N;
 
 int callgen_init() {
     FN_NAMETOK = calloc(8192, sizeof(int));
     FN_OFF = calloc(8192, sizeof(int));
     CALL_SLOT = calloc(262144, sizeof(int));
     CALL_NAMETOK = calloc(262144, sizeof(int));
-    FN_N = 0; CALL_N = 0;
+    STR_SLOT = calloc(8192, sizeof(int));
+    STR_TOK = calloc(8192, sizeof(int));
+    FN_N = 0; CALL_N = 0; STR_N = 0;
     return 0;
 }
 int fn_offset(int nametok) {        /* code offset of the fn with this name */
@@ -827,6 +839,14 @@ int cg_expr(int node) {
     if (k == ND_CALL) {
         return cg_call(node);
     }
+    if (k == ND_STR) {
+        emit_byte(0x48); emit_byte(0xB8);   /* mov rax, imm64 (string vaddr, patched) */
+        STR_SLOT[STR_N] = IMGN;
+        STR_TOK[STR_N] = nd_a(node);
+        STR_N = STR_N + 1;
+        emit_u32le(0); emit_byte(0); emit_byte(0); emit_byte(0); emit_byte(0);
+        return 0;
+    }
     emit_byte(0xB8); emit_u32le(0);   /* unknown -> 0 */
     return 0;
 }
@@ -885,6 +905,58 @@ int cg_arena_push(int node) {
     return 0;
 }
 
+/* read_file_to_arena(path): open the file, read up to 1 MiB into a stack
+ * buffer, then push each byte as one i32 into the arena (cursor advances) and
+ * return the byte count -- matching kovc's contract (lexer reads __arena_get(i)). */
+int cg_read_file(int node) {
+    int jge_slot; int loop_top; int endlbl;
+    cg_expr(nd_b(node));                               /* path vaddr -> rax   */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xC7); /* mov rdi, rax        */
+    /* open(path, O_RDONLY=0, 0) */
+    emit_byte(0xBE); emit_u32le(0);                    /* mov esi, 0          */
+    emit_byte(0xBA); emit_u32le(0);                    /* mov edx, 0          */
+    emit_byte(0xB8); emit_u32le(2);                    /* mov eax, 2 (open)   */
+    emit_byte(0x0F); emit_byte(0x05);                  /* syscall -> fd       */
+    emit_byte(0x50);                                   /* push rax (fd)       */
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC); emit_u32le(1048576);   /* sub rsp, 1 MiB */
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24); emit_u32le(1048576); /* mov rdi,[rsp+1M] fd */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6); /* mov rsi, rsp (buf)  */
+    emit_byte(0xBA); emit_u32le(1048576);              /* mov edx, 1 MiB      */
+    emit_byte(0xB8); emit_u32le(0);                    /* mov eax, 0 (read)   */
+    emit_byte(0x0F); emit_byte(0x05);                  /* syscall -> n        */
+    emit_byte(0x49); emit_byte(0x89); emit_byte(0xC2); /* mov r10, rax        */
+    /* truncation trap: if n == 1 MiB the file overran the buffer -> ud2 */
+    emit_byte(0x49); emit_byte(0x81); emit_byte(0xFA); emit_u32le(1048576);
+    emit_byte(0x75); emit_byte(0x02);                  /* jne +2              */
+    emit_byte(0x0F); emit_byte(0x0B);                  /* ud2                 */
+    /* close(fd) */
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24); emit_u32le(1048576);
+    emit_byte(0xB8); emit_u32le(3);                    /* mov eax, 3 (close)  */
+    emit_byte(0x0F); emit_byte(0x05);                  /* syscall             */
+    /* clamp r10 >= 0 */
+    emit_byte(0x4D); emit_byte(0x85); emit_byte(0xD2); /* test r10, r10       */
+    emit_byte(0x7D); emit_byte(0x03);                  /* jns +3              */
+    emit_byte(0x4D); emit_byte(0x31); emit_byte(0xD2); /* xor r10, r10        */
+    emit_mov_r11_arena();                              /* r11 = arena base    */
+    emit_byte(0x31); emit_byte(0xC9);                  /* xor ecx, ecx        */
+    loop_top = IMGN;
+    emit_byte(0x4C); emit_byte(0x39); emit_byte(0xD1); /* cmp rcx, r10        */
+    emit_byte(0x0F); emit_byte(0x8D);                  /* jge end (rel32)     */
+    jge_slot = IMGN; emit_u32le(0);
+    emit_byte(0x0F); emit_byte(0xB6); emit_byte(0x04); emit_byte(0x0C); /* movzx eax, byte [rsp+rcx] */
+    emit_byte(0x41); emit_byte(0x8B); emit_byte(0x13); /* mov edx, [r11] cursor */
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0x44); emit_byte(0x93); emit_byte(0x04); /* mov [r11+rdx*4+4],eax */
+    emit_byte(0x8D); emit_byte(0x52); emit_byte(0x01); /* lea edx, [rdx+1]    */
+    emit_byte(0x41); emit_byte(0x89); emit_byte(0x13); /* mov [r11], edx      */
+    emit_byte(0x48); emit_byte(0xFF); emit_byte(0xC1); /* inc rcx             */
+    emit_byte(0xE9); emit_u32le(loop_top - (IMGN + 4));/* jmp loop_top        */
+    endlbl = IMGN;
+    put_u32(jge_slot, endlbl - (jge_slot + 4));        /* patch jge -> end    */
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4); emit_u32le(1048584);   /* add rsp, 1 MiB + 8 */
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0xD0); /* mov eax, r10d (len) */
+    return 0;
+}
+
 /* function call: evaluate args (push each), pop into SysV registers, then call
  * (recorded for backpatch). The callee returns its result in eax. */
 int cg_call(int node) {
@@ -894,6 +966,7 @@ int cg_call(int node) {
     if (call_is(node, "__arena_push")) { return cg_arena_push(node); }
     if (call_is(node, "__arena_get"))  { return cg_arena_get(node); }
     if (call_is(node, "__arena_set"))  { return cg_arena_set(node); }
+    if (call_is(node, "read_file_to_arena")) { return cg_read_file(node); }
     arg = nd_b(node);
     n = 0;
     while (arg != 0 - 1) {
@@ -1007,8 +1080,7 @@ int cg_fn(int fn) {
 /* emit _start (call main; sys_exit eax), then every function, recording each
  * function's offset; finally backpatch all call sites + the _start -> main call. */
 int codegen() {
-    int start_main_slot; int fn; int i; int off;
-    FN_N = 0; CALL_N = 0;
+    int start_main_slot; int fn; int i; int off; int s; int l; int j; int strvaddr;
     emit_byte(0xE8);                  /* call main (rel32, patched below) */
     start_main_slot = IMGN; emit_u32le(0);
     emit_byte(0x89); emit_byte(0xC7); /* mov edi, eax (exit status)       */
@@ -1022,6 +1094,19 @@ int codegen() {
         cg_fn(fn);
         fn = nd_next(fn);
     }
+    /* emit each string literal's bytes (NUL-terminated) after the code, and
+     * patch its mov rax imm64 with the string's virtual address */
+    i = 0;
+    while (i < STR_N) {
+        strvaddr = 4194304 + IMGN;          /* 0x400000 + file offset */
+        s = tok_start(STR_TOK[i]); l = tok_len(STR_TOK[i]);
+        j = 0;
+        while (j < l) { emit_byte(SRC[s + j]); j = j + 1; }
+        emit_byte(0);                        /* NUL */
+        put_u64(STR_SLOT[i], strvaddr);
+        i = i + 1;
+    }
+    /* backpatch all call sites and the _start -> main call */
     i = 0;
     while (i < CALL_N) {
         off = fn_offset(CALL_NAMETOK[i]);
