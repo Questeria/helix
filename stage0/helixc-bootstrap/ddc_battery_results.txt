@@ -1,0 +1,46 @@
+Equivalence battery result -- captured output of ddc_battery.py (audit round 4).
+Reproduce from the repo root:  python stage0/helixc-bootstrap/ddc_battery.py
+(builds K1py via the Python reference + K1' via the seed, both from scratch, then
+compiles all 21 programs through BOTH and compares the output ELFs byte-for-byte.)
+
+k1_driver: 29369 lines, 1496734 bytes -> k1src.hx
+k1_input : 29369 lines, 1496734 bytes -> k1input.hx
+building K1py (Python reference) ...
+K1py = 955807 bytes
+building /tmp/K1prime with the seed (~4 min) ...
+K1prime = 587092 bytes
+
+program       cmp      exit  want  output md5
+------------------------------------------------------------------------
+ret           SAME       42    42  a3e236707141f126379832952f811d3e
+mul           SAME       42    42  a3e236707141f126379832952f811d3e
+precedence    SAME       14    14  2ea842feee7ebcb940a4aabf5b5ecea0
+sub_assoc     SAME       12    12  9224c7d951e70392c15462a1b7e9784f
+div_assoc     SAME       10    10  0afb8297f2ae8d7643ea7e1b1bf86c17
+modulo        SAME        2     2  5fc106d9215f1e52ddc51797d718cf9c
+bit_and       SAME        8     8  cedfcedfae9402293f01d062e29e480c
+bit_or        SAME       13    13  27c4084c6ab6df5620ade33f3dba6035
+bit_xor       SAME        6     6  1d5ac696918ce30c5e27c901f117784b
+signed_div    SAME        3     3  d7002eb2856cd626eeb58309c2253b6b
+overflow      SAME        0     0  14512eb2cc48032e0eec95bbddd021e5
+mut_local     SAME       42    42  002a7ef50969b0a5e103e8a554eae694
+while_sum     SAME       55    55  b11adb408466ec471599f05effdbd951
+six_cmp       SAME        6     6  1d5ac696918ce30c5e27c901f117784b
+nested_if     SAME      100   100  446d4175f37f933c543a73e5cd5eb272
+recursion     SAME      208   208  94047ef6492eb802242cd85d2c2ae04b
+fib           SAME      233   233  ca5188537d964b6e07fc4947160d4c80
+mutual_rec    SAME        1     1  dc9943a4a1dd5ff12e3fd55becc927ab
+many_locals   SAME       55    55  42acc45cbca677ce6082bb49f9185b88
+arena         SAME       58    58  6b2ed6e8baf28ef80aec3e20f133b8fe
+arena_set     SAME       42    42  79aaec6f36aa540564231259af28673c
+------------------------------------------------------------------------
+21 programs ; all byte-identical (K1' vs K1py): True ; all exit codes match prediction: True ; distinct output md5s: 19
+
+BATTERY PASS: seed-built kovc and Python-built kovc produce byte-identical
+ELFs on every program, each running to its predicted exit code. The seed's
+fidelity to kovc holds well beyond the self-source (within the i32 subset).
+
+Note: 19 distinct md5s over 21 programs -- two pairs collide because kovc
+constant-folds to the same value (ret and mul both -> 42; bit_xor and six_cmp
+both -> 6), so they emit identical ELFs. The collision is identical for BOTH
+compilers, so the equivalence (K1' output == K1py output, per program) holds.

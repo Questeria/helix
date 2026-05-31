@@ -74,16 +74,21 @@ self-hosting fixpoint.
   empirically confirmed by the match.) It also does not port the Python
   *test/build* tooling — a separate track before full v1.0 Python-deletion.
 
-## Cross-check beyond the self-source (audit round 3)
+## Cross-check beyond the self-source
 
-To probe the single-input limitation, an independent equivalence battery compiled
-**21 diverse programs** through BOTH the seed-built kovc (K1') and the Python-built
-kovc (K1py), comparing the output ELFs byte-for-byte: deep + mutual recursion, full
-operator precedence/associativity, **signed** division/modulo, i32 overflow wrap,
-many-local frames, all six intrinsics, and string-literal `write_file_to_arena`.
-**All 21 were byte-identical** (distinct md5s, predicted exit codes) — extending the
-seed ≡ Python-kovc equivalence well beyond the self-source *within the i32 subset*.
-The struct / enum / match / array / autodiff / GPU / non-i32-width arms remain
+To probe the single-input limitation, a committed, reproducible equivalence battery
+(`stage0/helixc-bootstrap/ddc_battery.py`) compiles **21 diverse programs** through
+BOTH the seed-built kovc (K1') and the Python-built kovc (K1py), compares the output
+ELFs byte-for-byte, and runs each to a predicted exit code. The corpus covers
+arithmetic + full operator precedence/associativity, **signed** division/modulo, i32
+overflow wrap, all bitwise ops, the six comparisons, mutable locals, `while`, nested
+`if`-expressions, single + **mutual** recursion, many-local frames, and the four
+arena intrinsics (`__arena_push/get/set/len`). **All 21 are byte-identical** between
+the two compilers, each running to its predicted exit — captured in
+`ddc_battery_results.txt`, reproduce with `python stage0/helixc-bootstrap/ddc_battery.py`
+(builds both kovc binaries from scratch). This extends the seed ≡ Python-kovc
+equivalence well beyond the self-source *within the i32 subset*. The
+struct / enum / match / array / autodiff / GPU / non-i32-width arms remain
 present-but-unexercised; closing that needs a feature-diverse DDC corpus (tracked
 with the Helix-native test-infra port).
 
