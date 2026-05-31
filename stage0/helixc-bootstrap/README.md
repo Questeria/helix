@@ -136,13 +136,18 @@ other rung.
   exact float codegen is irrelevant — the fixpoint check guards the assumption).
   With that the seed compiles the full **12,181-line `kovc.hx` into a 229 KB ELF**
   (rc 0). All three real sources (lexer/parser/kovc) now compile.
-- **4 (STEP B) — in progress:** `assemble_k1.py` concatenates the frozen sources
-  into the runnable-compiler source exactly as `test_self_host_fixpoint.py` does
-  (`lexer_no_main + parser_body + kovc_lib + driver_main`, ~29.4k lines / 1.5 MB)
-  → `k1src.hx` (git-ignored). The seed is building it into **K1'** (a self-built
-  helixc). Then: K1' compiles a tiny program (sanity), the self-hosting fixpoint,
-  and DDC vs the Python-built K1. (Note: the source exceeds kovc's 1 MiB
-  `read_file_to_arena` buffer, which the fixpoint step will need to account for.)
+- **4 (STEP B) — DONE: the seed built a working compiler.** `assemble_k1.py`
+  concatenates the frozen sources into the runnable-compiler source
+  (`lexer_no_main + parser_body + kovc_lib + driver_main`, 29,369 lines / 1.5 MB)
+  → `k1src.hx`. The seed compiled that into **K1' (a 587 KB self-built helixc)**,
+  and K1' then compiled `fn main() -> i32 { 6 * 7 }` into a 4184-byte ELF that
+  **runs and exits 42**. The full chain is proven end-to-end: 299 hand-typed
+  bytes → hex0 → … → M2-Planet → seed → K1' (helixc) → a running Helix program.
+  No Python in the chain.
+- **next:** trust check — compile a battery of programs with both K1' (seed-built)
+  and the Python-built K1, assert byte-identical outputs (the achievable DDC,
+  given kovc's 1 MiB read buffer is smaller than the 1.5 MB self-source). Then
+  Python-deletion-ready → **user-gated K4** → 5 clean audits → STOP.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 
