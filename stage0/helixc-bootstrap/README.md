@@ -124,7 +124,14 @@ other rung.
   construct the tiny tests missed). **The seed compiles the real 1087-line
   `helixc/bootstrap/lexer.hx` into a 21957-byte ELF, and the emitted lexer runs:
   it tokenizes `fn f() { 1 + 2 }` into 10 tokens.** Locked in as a regression test.
-- **next:** compile `parser.hx`, then the full `kovc.hx` source; then the
+- **4 (parser.hx) — DONE:** added `return expr;` (an explicit return statement —
+  `ND_RETURN`: parser + codegen that evaluates the value then emits the epilogue
+  + `ret`; parser.hx genuinely uses it, which task-0 had undercounted). With that
+  one fix the seed compiles the full **16,115-line `parser.hx` into a 344 KB
+  valid ELF** (rc 0). parser.hx is a library (no `fn main`), so a clean compile +
+  valid ELF is its milestone — full runtime verification comes with the assembled
+  compiler.
+- **next:** compile the full `kovc.hx` / the concatenated K-source; then the
   self-hosting fixpoint + DDC.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)

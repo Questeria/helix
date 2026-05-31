@@ -249,7 +249,7 @@ int lex() {
  */
 int ND_INT; int ND_VAR; int ND_BIN; int ND_CALL; int ND_IFE;
 int ND_LET; int ND_ASSIGN; int ND_WHILE; int ND_IF; int ND_BLOCK; int ND_FN; int ND_PARAM;
-int ND_STR;
+int ND_STR; int ND_RETURN;
 int* ND;
 int ND_N;
 int PERR;   /* parser error flag (set by expect_tag on a mismatch) */
@@ -260,7 +260,7 @@ int nodes_init() {
     PERR = 0;
     ND_INT = 1; ND_VAR = 2; ND_BIN = 3; ND_CALL = 4; ND_IFE = 5;
     ND_LET = 6; ND_ASSIGN = 7; ND_WHILE = 8; ND_IF = 9; ND_BLOCK = 10; ND_FN = 11; ND_PARAM = 12;
-    ND_STR = 13;
+    ND_STR = 13; ND_RETURN = 14;
     return 0;
 }
 int nodes_reset() { ND_N = 0; return 0; }
@@ -289,7 +289,7 @@ int parse_or();   int parse_and();  int parse_bor(); int parse_bxor();
 int parse_band(); int parse_eq();   int parse_rel(); int parse_add();
 int parse_mul();  int parse_unary(); int parse_primary();
 int parse_block(); int parse_if();  int parse_let();  int parse_while();
-int parse_fn();    int parse_program();
+int parse_fn();    int parse_program(); int parse_return();
 
 /* expect a token tag: advance on match, else raise the parser error flag */
 int expect_tag(int tag) {
@@ -469,6 +469,15 @@ int parse_let() {
     return node_new(ND_LET, name, init, mut);
 }
 
+/* `return` expr `;`  ->  ND_RETURN{a=expr} */
+int parse_return() {
+    int e;
+    expect_tag(TK_RETURN);
+    e = parse_expr();
+    expect_tag(TK_SEMI);
+    return node_new(ND_RETURN, e, 0, 0);
+}
+
 /* `while` expr block  ->  ND_WHILE{a=cond,b=block} */
 int parse_while() {
     int cond; int body;
@@ -506,6 +515,10 @@ int parse_block() {
         else if (t == TK_SEMI) { p_adv(); }   /* empty statement */
         else if (t == TK_LET) {
             s = parse_let();
+            if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
+        }
+        else if (t == TK_RETURN) {
+            s = parse_return();
             if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
         }
         else if (t == TK_WHILE) {
@@ -682,6 +695,7 @@ int collect_locals_rec(int node) {
     if (k == ND_ASSIGN) { collect_locals_rec(nd_b(node)); return 0; }
     if (k == ND_WHILE)  { collect_locals_rec(nd_b(node)); return 0; }   /* body */
     if (k == ND_IF)     { collect_locals_rec(nd_b(node)); collect_locals_rec(nd_c(node)); return 0; }
+    if (k == ND_RETURN) { collect_locals_rec(nd_a(node)); return 0; }
     return 0;
 }
 /* pre-pass: params get slots, then recurse the body for every let. */
@@ -1058,6 +1072,13 @@ int cg_stmt(int node) {
     }
     if (k == ND_WHILE) { return cg_while(node); }
     if (k == ND_IF)    { return cg_if(node); }
+    if (k == ND_RETURN) {
+        cg_expr(nd_a(node));                       /* value -> eax */
+        emit_byte(0x48); emit_byte(0x89); emit_byte(0xEC); /* mov rsp, rbp */
+        emit_byte(0x5D);                                   /* pop rbp     */
+        emit_byte(0xC3);                                   /* ret         */
+        return 0;
+    }
     cg_expr(node);                                 /* expr-statement: value discarded */
     return 0;
 }
