@@ -619,9 +619,66 @@ int build_headers() {
     return 0;
 }
 
-/* forward declarations (cg_expr <-> cg_bin are mutually recursive) */
+/* ----- per-function locals: name -> stack slot (increment 3c) ----- *
+ * Each local (param or let) gets a slot; slot i lives at [rbp - 8*(i+1)].
+ * Names are matched by their source span (idents are not interned). */
+int* LOCAL_TOK;   /* LOCAL_TOK[slot] = the token index of that local's name */
+int LOCAL_N;
+
+int spans_eq(int sa, int la, int sb, int lb) {
+    int i;
+    if (la != lb) { return 0; }
+    i = 0;
+    while (i < la) { if (SRC[sa + i] != SRC[sb + i]) { return 0; } i = i + 1; }
+    return 1;
+}
+int locals_init() { LOCAL_TOK = calloc(8192, sizeof(int)); LOCAL_N = 0; return 0; }
+int locals_reset() { LOCAL_N = 0; return 0; }
+int local_find(int name_tok) {     /* -> slot, or -1 */
+    int i; int s; int l;
+    s = tok_start(name_tok); l = tok_len(name_tok);
+    i = 0;
+    while (i < LOCAL_N) {
+        if (spans_eq(s, l, tok_start(LOCAL_TOK[i]), tok_len(LOCAL_TOK[i]))) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+int local_add(int name_tok) {      /* assign (or reuse) a slot */
+    int slot;
+    slot = local_find(name_tok);
+    if (slot != 0 - 1) { return slot; }
+    LOCAL_TOK[LOCAL_N] = name_tok;
+    LOCAL_N = LOCAL_N + 1;
+    return LOCAL_N - 1;
+}
+/* pre-pass: collect params + top-level lets so the frame size is known up front
+ * (nested-block lets are collected when while/if codegen lands in inc 3d). */
+int collect_locals(int fn) {
+    int p; int body; int stmt;
+    locals_reset();
+    p = nd_b(fn);
+    while (p != 0 - 1) { local_add(nd_a(p)); p = nd_next(p); }
+    body = nd_c(fn);
+    stmt = nd_a(body);
+    while (stmt != 0 - 1) {
+        if (nd_kind(stmt) == ND_LET) { local_add(nd_a(stmt)); }
+        stmt = nd_next(stmt);
+    }
+    return 0;
+}
+/* mov eax, [rbp - 8*(slot+1)]  /  mov [rbp - 8*(slot+1)], eax  (disp32 form) */
+int emit_load_local(int slot) {
+    emit_byte(0x8B); emit_byte(0x85); emit_u32le(0 - 8 * (slot + 1)); return 0;
+}
+int emit_store_local(int slot) {
+    emit_byte(0x89); emit_byte(0x85); emit_u32le(0 - 8 * (slot + 1)); return 0;
+}
+
+/* forward declarations (cg_expr <-> cg_bin <-> cg_stmt are mutually recursive) */
 int cg_expr(int node);
 int cg_bin(int op, int left, int right);
+int cg_stmt(int node);
 
 /* codegen a binary op: eval left -> rax (saved), right -> rcx, then the op.
  * Result in eax. left in rax, right in rcx after the setup below. */
@@ -685,16 +742,47 @@ int cg_expr(int node) {
     if (k == ND_BIN) {
         return cg_bin(nd_a(node), nd_b(node), nd_c(node));
     }
-    emit_byte(0xB8); emit_u32le(0);   /* ND_VAR/ND_CALL/ND_IF -> later increments */
+    if (k == ND_VAR) {
+        emit_load_local(local_find(nd_a(node)));   /* mov eax, [rbp - slot] */
+        return 0;
+    }
+    emit_byte(0xB8); emit_u32le(0);   /* ND_CALL/ND_IF -> later increments */
     return 0;
 }
 
-/* codegen a function: prologue, tail expression -> eax, epilogue, ret */
+/* codegen a statement (INC 3c: let / assign / expr-statement) */
+int cg_stmt(int node) {
+    int k;
+    k = nd_kind(node);
+    if (k == ND_LET) {
+        cg_expr(nd_b(node));                       /* init -> eax */
+        emit_store_local(local_find(nd_a(node)));
+        return 0;
+    }
+    if (k == ND_ASSIGN) {
+        cg_expr(nd_b(node));                       /* rhs -> eax  */
+        emit_store_local(local_find(nd_a(node)));
+        return 0;
+    }
+    cg_expr(node);                                 /* expr-statement: value discarded */
+    return 0;
+}
+
+/* codegen a function: reserve a frame for locals, run the statements, then
+ * the tail expression -> eax, then epilogue + ret. */
 int cg_fn(int fn) {
-    int body; int tail;
+    int body; int stmt; int tail; int frame;
+    collect_locals(fn);
+    frame = LOCAL_N * 8;
+    frame = ((frame + 15) / 16) * 16;                  /* 16-byte align   */
     emit_byte(0x55);                                   /* push rbp        */
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE5); /* mov rbp, rsp    */
+    if (frame > 0) {
+        emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC); emit_u32le(frame); /* sub rsp, frame */
+    }
     body = nd_c(fn);
+    stmt = nd_a(body);
+    while (stmt != 0 - 1) { cg_stmt(stmt); stmt = nd_next(stmt); }
     tail = nd_c(body);
     if (tail != 0 - 1) { cg_expr(tail); }
     else { emit_byte(0xB8); emit_u32le(0); }           /* default eax = 0 */
@@ -858,6 +946,7 @@ int main(int argc, char** argv) {
 
     /* compile mode: argv[1] = input .hx, argv[2] = output ELF path */
     img_init();
+    locals_init();
     read_file(argv[1]);
     lex();
     CUR = 0; PERR = 0;

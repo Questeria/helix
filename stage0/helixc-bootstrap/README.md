@@ -81,8 +81,13 @@ other rung.
   comparisons (cmp + setcc + movzx), and `&& ||` (non-short-circuit, sound for
   the side-effect-free subset). Verified: `6*7`→42, `2+3*4`→14 (precedence),
   `5>3`→1.
-- **next (3c…):** locals (let/assign as `[rbp-k]` stack slots), control flow
-  (while/if), calls + params, then the 6 intrinsics; then compile `kovc.hx`.
+- **3c — DONE:** local variables. A per-function name→slot table (matched by
+  source span); the prologue reserves a 16-aligned frame; `let`/assignment store
+  to `[rbp - 8*(slot+1)]`, `ND_VAR` reads from it. `cg_stmt` runs the block's
+  statements before the tail expression. Verified: `let mut x=41; x=x+1; x`→42,
+  `let a=6; let b=7; a*b`→42.
+- **next (3d…):** control flow (while/if with jumps), calls + params, then the
+  6 intrinsics; then compile `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

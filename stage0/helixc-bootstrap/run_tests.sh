@@ -33,6 +33,8 @@ compile_run 3a-return42  test/t1.hx 42   # { 42 }
 compile_run 3b-mul       test/t2.hx 42   # { 6 * 7 }
 compile_run 3b-precedence test/t3.hx 14  # { 2 + 3 * 4 }  (mul binds tighter)
 compile_run 3b-compare   test/t4.hx 1    # { 5 > 3 }  -> 1
+compile_run 3c-local-mut test/t5.hx 42   # { let mut x = 41; x = x + 1; x }
+compile_run 3c-two-locals test/t6.hx 42  # { let a = 6; let b = 7; a * b }
 
 rm -rf "$T"
 echo
