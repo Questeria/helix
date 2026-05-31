@@ -63,8 +63,15 @@ other rung.
   < `==`/`!=` < rel < `+`/`-` < `*`/`/`/`%`), unary minus via `0 - x`, parens,
   and calls with `next`-chained args. Self-test asserts precedence, parens
   override, and a call AST.
-- **next (2b):** statements + fn/block parsing (let/assign/if-stmt+expr/while/
-  blocks-as-expression) → x86-64 ELF codegen → compile `kovc.hx`, test-driven.
+- **2b — DONE:** full parser. Statements (`let`/`let mut`, assignment, `while`,
+  `if` as both statement and value), blocks (stmts chained via `next`, last bare
+  expr = the block's value), `fn` with params, and `parse_program` (list of
+  fns). `if` is reachable from `parse_primary`, so it works as an expression too.
+  Self-test parses whole functions and asserts the let-mut/assign/tail-expr and
+  while/if-expression AST shapes. **The parser is complete.**
+- **next (3):** x86-64 ELF codegen — compile `fn main() -> i32 { 42 }` to a
+  self-contained ELF that runs and exits 42; then grow codegen across the subset
+  + the 6 intrinsics until it compiles `kovc.hx`.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

@@ -248,13 +248,17 @@ int lex() {
  * ==/!= < rel < +/- < * / %, with unary minus via the `0 - x` idiom.
  */
 int ND_INT; int ND_VAR; int ND_BIN; int ND_CALL; int ND_IFE;
+int ND_LET; int ND_ASSIGN; int ND_WHILE; int ND_IF; int ND_BLOCK; int ND_FN; int ND_PARAM;
 int* ND;
 int ND_N;
+int PERR;   /* parser error flag (set by expect_tag on a mismatch) */
 
 int nodes_init() {
     ND = calloc(8192 * 5, sizeof(int));
     ND_N = 0;
+    PERR = 0;
     ND_INT = 1; ND_VAR = 2; ND_BIN = 3; ND_CALL = 4; ND_IFE = 5;
+    ND_LET = 6; ND_ASSIGN = 7; ND_WHILE = 8; ND_IF = 9; ND_BLOCK = 10; ND_FN = 11; ND_PARAM = 12;
     return 0;
 }
 int nodes_reset() { ND_N = 0; return 0; }
@@ -277,15 +281,25 @@ int CUR;
 int p_tag() { return tok_tag(CUR); }
 int p_adv() { CUR = CUR + 1; return 0; }
 
-/* forward declarations (the ladder is mutually recursive via parens/calls) */
+/* forward declarations (the grammar is mutually recursive) */
 int parse_expr();
 int parse_or();   int parse_and();  int parse_bor(); int parse_bxor();
 int parse_band(); int parse_eq();   int parse_rel(); int parse_add();
 int parse_mul();  int parse_unary(); int parse_primary();
+int parse_block(); int parse_if();  int parse_let();  int parse_while();
+int parse_fn();    int parse_program();
+
+/* expect a token tag: advance on match, else raise the parser error flag */
+int expect_tag(int tag) {
+    if (p_tag() == tag) { p_adv(); return 1; }
+    PERR = 1;
+    return 0;
+}
 
 int parse_primary() {
     int t; int v; int node; int name; int firstarg; int last; int arg;
     t = p_tag();
+    if (t == TK_IF) { return parse_if(); }   /* if as a value-producing expression */
     if (t == TK_INT) {
         v = tok_val(CUR);
         p_adv();
@@ -431,6 +445,123 @@ int parse_or() {
 }
 int parse_expr() { return parse_or(); }
 
+/* ----- statements, blocks, functions (increment 2b) ----- */
+
+/* `let` [`mut`] NAME [`:` TYPE] `=` expr `;`  ->  ND_LET{a=name-tok,b=init,c=mut?} */
+int parse_let() {
+    int mut; int name; int init;
+    expect_tag(TK_LET);
+    mut = 0;
+    if (p_tag() == TK_MUT) { mut = 1; p_adv(); }
+    name = CUR;
+    expect_tag(TK_IDENT);
+    if (p_tag() == TK_COLON) { p_adv(); if (p_tag() == TK_IDENT) { p_adv(); } }
+    expect_tag(TK_EQ);
+    init = parse_expr();
+    expect_tag(TK_SEMI);
+    return node_new(ND_LET, name, init, mut);
+}
+
+/* `while` expr block  ->  ND_WHILE{a=cond,b=block} */
+int parse_while() {
+    int cond; int body;
+    expect_tag(TK_WHILE);
+    cond = parse_expr();
+    body = parse_block();
+    return node_new(ND_WHILE, cond, body, 0);
+}
+
+/* `if` expr block (`else` (block | if))?  ->  ND_IF{a=cond,b=then,c=else-or-(-1)}
+ * Usable as both a statement and a value-producing expression. */
+int parse_if() {
+    int cond; int then_b; int else_b;
+    expect_tag(TK_IF);
+    cond = parse_expr();
+    then_b = parse_block();
+    else_b = 0 - 1;
+    if (p_tag() == TK_ELSE) {
+        p_adv();
+        if (p_tag() == TK_IF) { else_b = parse_if(); }
+        else { else_b = parse_block(); }
+    }
+    return node_new(ND_IF, cond, then_b, else_b);
+}
+
+/* `{` stmt* tail-expr? `}`  ->  ND_BLOCK{a=first-stmt-or-(-1),c=tail-expr-or-(-1)}
+ * stmts chain via nd_next; the final bare expr (no `;`) is the block's value. */
+int parse_block() {
+    int first; int last; int tail; int t; int s; int e; int rhs; int done;
+    expect_tag(TK_LBRACE);
+    first = 0 - 1; last = 0 - 1; tail = 0 - 1; done = 0;
+    while (done == 0) {
+        t = p_tag();
+        if (t == TK_RBRACE || t == TK_EOF) { done = 1; }
+        else if (t == TK_LET) {
+            s = parse_let();
+            if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
+        }
+        else if (t == TK_WHILE) {
+            s = parse_while();
+            if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
+        }
+        else if (t == TK_IF) {
+            s = parse_if();
+            if (p_tag() == TK_RBRACE) { tail = s; done = 1; }
+            else { if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; } }
+        }
+        else {
+            e = parse_expr();
+            if (p_tag() == TK_EQ) {
+                p_adv(); rhs = parse_expr(); expect_tag(TK_SEMI);
+                s = node_new(ND_ASSIGN, nd_a(e), rhs, 0);
+                if (first == 0 - 1) { first = s; last = s; } else { nd_set_next(last, s); last = s; }
+            }
+            else if (p_tag() == TK_SEMI) {
+                p_adv();
+                if (first == 0 - 1) { first = e; last = e; } else { nd_set_next(last, e); last = e; }
+            }
+            else { tail = e; done = 1; }
+        }
+    }
+    expect_tag(TK_RBRACE);
+    return node_new(ND_BLOCK, first, 0, tail);
+}
+
+/* `fn` NAME `(` params `)` (`->` TYPE)? block  ->  ND_FN{a=name-tok,b=first-param,c=body} */
+int parse_fn() {
+    int name; int firstp; int lastp; int ptok; int pnode; int body;
+    expect_tag(TK_FN);
+    name = CUR;
+    expect_tag(TK_IDENT);
+    expect_tag(TK_LPAREN);
+    firstp = 0 - 1; lastp = 0 - 1;
+    while (p_tag() != TK_RPAREN && p_tag() != TK_EOF) {
+        ptok = CUR;
+        expect_tag(TK_IDENT);
+        if (p_tag() == TK_COLON) { p_adv(); if (p_tag() == TK_IDENT) { p_adv(); } }
+        pnode = node_new(ND_PARAM, ptok, 0, 0);
+        if (firstp == 0 - 1) { firstp = pnode; lastp = pnode; }
+        else { nd_set_next(lastp, pnode); lastp = pnode; }
+        if (p_tag() == TK_COMMA) { p_adv(); }
+    }
+    expect_tag(TK_RPAREN);
+    if (p_tag() == TK_ARROW) { p_adv(); if (p_tag() == TK_IDENT) { p_adv(); } }
+    body = parse_block();
+    return node_new(ND_FN, name, firstp, body);
+}
+
+/* program = fn*  ->  first fn node (rest chained via nd_next), or -1 */
+int parse_program() {
+    int first; int last; int fn;
+    first = 0 - 1; last = 0 - 1;
+    while (p_tag() == TK_FN) {
+        fn = parse_fn();
+        if (first == 0 - 1) { first = fn; last = fn; }
+        else { nd_set_next(last, fn); last = fn; }
+    }
+    return first;
+}
+
 /* ===================== self-tests ===================== */
 int lex_str(char* s) {
     SRC = s;
@@ -490,13 +621,54 @@ int check_parser() {
     return 0;
 }
 
+/* inc 2b: parse full functions; assert the statement/fn/block AST shapes */
+int check_parser_stmts() {
+    int prog; int fn; int body; int s1; int s2;
+    /* a function with let-mut, an assignment, and a tail expression */
+    lex_str("fn main() -> i32 { let mut x = 41; x = x + 1; x }");
+    nodes_reset(); CUR = 0; PERR = 0;
+    prog = parse_program();
+    if (PERR != 0)                     { return 1; }
+    if (prog == 0 - 1)                 { return 2; }
+    fn = prog;
+    if (nd_kind(fn) != ND_FN)          { return 3; }
+    body = nd_c(fn);
+    if (nd_kind(body) != ND_BLOCK)     { return 4; }
+    s1 = nd_a(body);                   /* let mut x = 41 */
+    if (nd_kind(s1) != ND_LET)         { return 5; }
+    if (nd_c(s1) != 1)                 { return 6; }   /* mut flag */
+    if (nd_kind(nd_b(s1)) != ND_INT)   { return 7; }
+    if (nd_a(nd_b(s1)) != 41)          { return 8; }   /* init value 41 */
+    s2 = nd_next(s1);                  /* x = x + 1 */
+    if (nd_kind(s2) != ND_ASSIGN)      { return 9; }
+    if (nd_kind(nd_b(s2)) != ND_BIN)   { return 10; }
+    if (nd_next(s2) != 0 - 1)          { return 11; }  /* no more chained stmts */
+    if (nd_kind(nd_c(body)) != ND_VAR) { return 12; }  /* tail expr = x */
+
+    /* a function with a while loop and an if-expression tail */
+    lex_str("fn f() -> i32 { let mut i = 0; while i < 10 { i = i + 1; } if i > 5 { 1 } else { 0 } }");
+    nodes_reset(); CUR = 0; PERR = 0;
+    prog = parse_program();
+    if (PERR != 0)                     { return 13; }
+    fn = prog; body = nd_c(fn);
+    s1 = nd_a(body);                   /* let mut i = 0 */
+    if (nd_kind(s1) != ND_LET)         { return 14; }
+    s2 = nd_next(s1);                  /* while i < 10 { ... } */
+    if (nd_kind(s2) != ND_WHILE)       { return 15; }
+    if (nd_kind(nd_a(s2)) != ND_BIN)   { return 16; }  /* cond i < 10 */
+    if (nd_kind(nd_b(s2)) != ND_BLOCK) { return 17; }  /* while body block */
+    if (nd_kind(nd_c(body)) != ND_IF)  { return 18; }  /* tail = if-expr */
+    return 0;
+}
+
 int main() {
     int rc;
     arena_init();
     tags_init();
     TOK = calloc(8192, sizeof(int));
     nodes_init();
-    rc = check_lexer();  if (rc != 0) { return rc; }
-    rc = check_parser(); if (rc != 0) { return 20 + rc; }
+    rc = check_lexer();        if (rc != 0) { return rc; }
+    rc = check_parser();       if (rc != 0) { return 20 + rc; }
+    rc = check_parser_stmts(); if (rc != 0) { return 50 + rc; }
     return 42;
 }
