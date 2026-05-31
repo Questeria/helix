@@ -194,9 +194,12 @@ int lex() {
             } else {
                 while (p < SRC_LEN) { if (is_digit(SRC[p])) { val = val * 10 + (SRC[p] - '0'); p = p + 1; } else { break; } }
                 /* float literal: consume an optional `.` + fractional digits. The
-                 * value becomes a placeholder (the integer part) -- f32/f64 code
-                 * is dead in the self-hosting path, so exact bits do not matter;
-                 * the fixpoint test catches it if that assumption is ever wrong. */
+                 * value becomes a placeholder (the integer part). kovc's only float
+                 * literals are the three in step6_f32_marker, which is LIVE (called
+                 * from emit_elf_for_ast_to_path) but whose RESULT is discarded, and
+                 * the self-source's floats are re-lexed by K1's own faithfully-
+                 * compiled kovc lexer -- so this placeholder never reaches K2. The
+                 * DDC fixpoint catches it if that assumption is ever wrong. */
                 if (p + 1 < SRC_LEN) { if (SRC[p] == '.') { if (is_digit(SRC[p + 1])) {
                     p = p + 1;
                     while (p < SRC_LEN) { if (is_digit(SRC[p])) { p = p + 1; } else { break; } }

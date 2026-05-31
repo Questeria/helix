@@ -89,7 +89,9 @@ def run_one(name, src, expected):
     wsl("cat > /tmp/k1_in.hx", input=src.encode("utf-8"), check=True, timeout=30)
     script = (
         _UL +
-        "rm -f /tmp/k1_out.bin; chmod +x /tmp/K1prime; /tmp/K1prime >/dev/null 2>&1; "
+        # clear BOTH per-program outputs first so a silently-failing compiler leaves
+        # a MISSING file (cmp -> DIFFER), never a stale ELF that could falsely match.
+        "rm -f /tmp/bat_seed /tmp/bat_py /tmp/k1_out.bin; chmod +x /tmp/K1prime; /tmp/K1prime >/dev/null 2>&1; "
         "cp /tmp/k1_out.bin /tmp/bat_seed 2>/dev/null; "
         "rm -f /tmp/k1_out.bin; chmod +x /tmp/K1py.bin; /tmp/K1py.bin >/dev/null 2>&1; "
         "cp /tmp/k1_out.bin /tmp/bat_py 2>/dev/null; "
