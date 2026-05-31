@@ -58,8 +58,13 @@ other rung.
   string literals, the full operator/punctuation set, and skips `@attr`.
   Self-test lexes `fn main() -> i32 { let x = 41; x + 1 }` and asserts the
   17-token stream.
-- **next:** recursive-descent parser → AST in the arena → x86-64 ELF codegen →
-  compile `kovc.hx`, test-driven all the way.
+- **2a — DONE:** expression parser. AST nodes in a stride-5 int pool
+  ({kind, a, b, c, next}); full precedence ladder (`||` < `&&` < `|` < `^` < `&`
+  < `==`/`!=` < rel < `+`/`-` < `*`/`/`/`%`), unary minus via `0 - x`, parens,
+  and calls with `next`-chained args. Self-test asserts precedence, parens
+  override, and a call AST.
+- **next (2b):** statements + fn/block parsing (let/assign/if-stmt+expr/while/
+  blocks-as-expression) → x86-64 ELF codegen → compile `kovc.hx`, test-driven.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

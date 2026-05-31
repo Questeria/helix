@@ -240,37 +240,263 @@ int lex() {
     return 0;
 }
 
-/* ===================== increment-1 self-test ===================== *
- * Lex `fn main() -> i32 { let x = 41; x + 1 }` and assert the token stream.
- * Returns 42 on success, or a small diagnostic code at the first failed check.
+/* ===================== parser (increment 2a: expressions) ===================== *
+ * AST nodes live in a calloc'd int pool, stride 5: {kind, a, b, c, next}.
+ * `next` chains siblings (call args now; statement lists next increment). Only
+ * EXPRESSION node kinds this increment; fn/statements/blocks come next. The
+ * precedence ladder mirrors C (and the Helix subset): || < && < | < ^ < & <
+ * ==/!= < rel < +/- < * / %, with unary minus via the `0 - x` idiom.
  */
+int ND_INT; int ND_VAR; int ND_BIN; int ND_CALL; int ND_IFE;
+int* ND;
+int ND_N;
+
+int nodes_init() {
+    ND = calloc(8192 * 5, sizeof(int));
+    ND_N = 0;
+    ND_INT = 1; ND_VAR = 2; ND_BIN = 3; ND_CALL = 4; ND_IFE = 5;
+    return 0;
+}
+int nodes_reset() { ND_N = 0; return 0; }
+int node_new(int kind, int a, int b, int c) {
+    int i;
+    i = ND_N * 5;
+    ND[i] = kind; ND[i + 1] = a; ND[i + 2] = b; ND[i + 3] = c; ND[i + 4] = 0 - 1;
+    ND_N = ND_N + 1;
+    return ND_N - 1;
+}
+int nd_kind(int i) { return ND[i * 5]; }
+int nd_a(int i)    { return ND[i * 5 + 1]; }
+int nd_b(int i)    { return ND[i * 5 + 2]; }
+int nd_c(int i)    { return ND[i * 5 + 3]; }
+int nd_next(int i) { return ND[i * 5 + 4]; }
+int nd_set_next(int i, int v) { ND[i * 5 + 4] = v; return 0; }
+
+/* parser cursor over TOK */
+int CUR;
+int p_tag() { return tok_tag(CUR); }
+int p_adv() { CUR = CUR + 1; return 0; }
+
+/* forward declarations (the ladder is mutually recursive via parens/calls) */
+int parse_expr();
+int parse_or();   int parse_and();  int parse_bor(); int parse_bxor();
+int parse_band(); int parse_eq();   int parse_rel(); int parse_add();
+int parse_mul();  int parse_unary(); int parse_primary();
+
+int parse_primary() {
+    int t; int v; int node; int name; int firstarg; int last; int arg;
+    t = p_tag();
+    if (t == TK_INT) {
+        v = tok_val(CUR);
+        p_adv();
+        return node_new(ND_INT, v, 0, 0);
+    }
+    if (t == TK_LPAREN) {
+        p_adv();
+        node = parse_expr();
+        if (p_tag() == TK_RPAREN) { p_adv(); }
+        return node;
+    }
+    if (t == TK_IDENT) {
+        name = CUR;          /* token index of the name (span looked up later) */
+        p_adv();
+        if (p_tag() == TK_LPAREN) {
+            p_adv();
+            firstarg = 0 - 1;
+            last = 0 - 1;
+            while (p_tag() != TK_RPAREN) {
+                if (p_tag() == TK_EOF) { break; }
+                arg = parse_expr();
+                if (firstarg == 0 - 1) { firstarg = arg; last = arg; }
+                else { nd_set_next(last, arg); last = arg; }
+                if (p_tag() == TK_COMMA) { p_adv(); }
+            }
+            if (p_tag() == TK_RPAREN) { p_adv(); }
+            return node_new(ND_CALL, name, firstarg, 0);
+        }
+        return node_new(ND_VAR, name, 0, 0);
+    }
+    /* unrecognized token: consume it and emit a 0 literal so the parser is total */
+    p_adv();
+    return node_new(ND_INT, 0, 0, 0);
+}
+
+int parse_unary() {
+    int operand;
+    if (p_tag() == TK_MINUS) {
+        p_adv();
+        operand = parse_unary();
+        return node_new(ND_BIN, TK_MINUS, node_new(ND_INT, 0, 0, 0), operand);
+    }
+    return parse_primary();
+}
+int parse_mul() {
+    int left; int op; int right;
+    left = parse_unary();
+    op = p_tag();
+    while (op == TK_STAR || op == TK_SLASH || op == TK_PERCENT) {
+        p_adv(); right = parse_unary();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_add() {
+    int left; int op; int right;
+    left = parse_mul();
+    op = p_tag();
+    while (op == TK_PLUS || op == TK_MINUS) {
+        p_adv(); right = parse_mul();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_rel() {
+    int left; int op; int right;
+    left = parse_add();
+    op = p_tag();
+    while (op == TK_LT || op == TK_LE || op == TK_GT || op == TK_GE) {
+        p_adv(); right = parse_add();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_eq() {
+    int left; int op; int right;
+    left = parse_rel();
+    op = p_tag();
+    while (op == TK_EQEQ || op == TK_NE) {
+        p_adv(); right = parse_rel();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_band() {
+    int left; int op; int right;
+    left = parse_eq();
+    op = p_tag();
+    while (op == TK_AMP) {
+        p_adv(); right = parse_eq();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_bxor() {
+    int left; int op; int right;
+    left = parse_band();
+    op = p_tag();
+    while (op == TK_CARET) {
+        p_adv(); right = parse_band();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_bor() {
+    int left; int op; int right;
+    left = parse_bxor();
+    op = p_tag();
+    while (op == TK_PIPE) {
+        p_adv(); right = parse_bxor();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_and() {
+    int left; int op; int right;
+    left = parse_bor();
+    op = p_tag();
+    while (op == TK_ANDAND) {
+        p_adv(); right = parse_bor();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_or() {
+    int left; int op; int right;
+    left = parse_and();
+    op = p_tag();
+    while (op == TK_OROR) {
+        p_adv(); right = parse_and();
+        left = node_new(ND_BIN, op, left, right);
+        op = p_tag();
+    }
+    return left;
+}
+int parse_expr() { return parse_or(); }
+
+/* ===================== self-tests ===================== */
+int lex_str(char* s) {
+    SRC = s;
+    SRC_LEN = cstr_len(s);
+    lex();
+    return 0;
+}
+
+/* inc 1: lex `fn main() -> i32 { let x = 41; x + 1 }`, assert the token stream */
+int check_lexer() {
+    lex_str("fn main() -> i32 { let x = 41; x + 1 }");
+    if (TOK_N != 17)             { return 1; }
+    if (tok_tag(0) != TK_FN)     { return 2; }
+    if (tok_tag(4) != TK_ARROW)  { return 3; }
+    if (tok_tag(6) != TK_LBRACE) { return 4; }
+    if (tok_tag(7) != TK_LET)    { return 5; }
+    if (tok_tag(10) != TK_INT)   { return 6; }
+    if (tok_val(10) != 41)       { return 7; }
+    if (tok_tag(14) != TK_INT)   { return 8; }
+    if (tok_val(14) != 1)        { return 9; }
+    if (tok_tag(16) != TK_EOF)   { return 10; }
+    return 0;
+}
+
+/* inc 2a: parse expressions; assert precedence, parens, and a call */
+int check_parser() {
+    int root; int l; int r; int rr;
+    /* precedence: 2 + 3 * 4  =>  +( 2, *(3,4) ) */
+    lex_str("2 + 3 * 4"); nodes_reset(); CUR = 0;
+    root = parse_expr();
+    if (nd_kind(root) != ND_BIN)  { return 1; }
+    if (nd_a(root) != TK_PLUS)    { return 2; }
+    l = nd_b(root); r = nd_c(root);
+    if (nd_kind(l) != ND_INT)     { return 3; }
+    if (nd_a(l) != 2)             { return 4; }
+    if (nd_kind(r) != ND_BIN)     { return 5; }
+    if (nd_a(r) != TK_STAR)       { return 6; }
+    rr = nd_b(r);
+    if (nd_kind(rr) != ND_INT)    { return 7; }
+    if (nd_a(rr) != 3)            { return 8; }
+    if (nd_a(nd_c(r)) != 4)       { return 9; }
+    /* parens override: (2 + 3) * 4  =>  *( +(2,3), 4 ) */
+    lex_str("(2 + 3) * 4"); nodes_reset(); CUR = 0;
+    root = parse_expr();
+    if (nd_kind(root) != ND_BIN)       { return 10; }
+    if (nd_a(root) != TK_STAR)         { return 11; }
+    if (nd_kind(nd_b(root)) != ND_BIN) { return 12; }
+    if (nd_a(nd_b(root)) != TK_PLUS)   { return 13; }
+    if (nd_a(nd_c(root)) != 4)         { return 14; }
+    /* call: f(7, x)  =>  ND_CALL with two chained args (7 then x) */
+    lex_str("f(7, x)"); nodes_reset(); CUR = 0;
+    root = parse_expr();
+    if (nd_kind(root) != ND_CALL)               { return 15; }
+    if (nd_kind(nd_b(root)) != ND_INT)          { return 16; }
+    if (nd_a(nd_b(root)) != 7)                  { return 17; }
+    if (nd_kind(nd_next(nd_b(root))) != ND_VAR) { return 18; }
+    return 0;
+}
+
 int main() {
+    int rc;
     arena_init();
     tags_init();
-    SRC = "fn main() -> i32 { let x = 41; x + 1 }";
-    SRC_LEN = cstr_len(SRC);
-    TOK = calloc(4096, sizeof(int));
-    lex();
-
-    if (TOK_N != 17)            { return 1; }   /* 16 tokens + EOF */
-    if (tok_tag(0) != TK_FN)    { return 2; }
-    if (tok_tag(1) != TK_IDENT) { return 3; }
-    if (tok_tag(2) != TK_LPAREN){ return 4; }
-    if (tok_tag(3) != TK_RPAREN){ return 5; }
-    if (tok_tag(4) != TK_ARROW) { return 6; }
-    if (tok_tag(5) != TK_IDENT) { return 7; }   /* i32 (type word = ident) */
-    if (tok_tag(6) != TK_LBRACE){ return 8; }
-    if (tok_tag(7) != TK_LET)   { return 9; }
-    if (tok_tag(8) != TK_IDENT) { return 10; }  /* x */
-    if (tok_tag(9) != TK_EQ)    { return 11; }
-    if (tok_tag(10) != TK_INT)  { return 12; }
-    if (tok_val(10) != 41)      { return 13; }
-    if (tok_tag(11) != TK_SEMI) { return 14; }
-    if (tok_tag(12) != TK_IDENT){ return 15; }  /* x */
-    if (tok_tag(13) != TK_PLUS) { return 16; }
-    if (tok_tag(14) != TK_INT)  { return 17; }
-    if (tok_val(14) != 1)       { return 18; }
-    if (tok_tag(15) != TK_RBRACE){ return 19; }
-    if (tok_tag(16) != TK_EOF)  { return 20; }
+    TOK = calloc(8192, sizeof(int));
+    nodes_init();
+    rc = check_lexer();  if (rc != 0) { return rc; }
+    rc = check_parser(); if (rc != 0) { return 20 + rc; }
     return 42;
 }
