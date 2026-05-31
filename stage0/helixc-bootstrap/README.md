@@ -131,11 +131,20 @@ other rung.
   valid ELF** (rc 0). parser.hx is a library (no `fn main`), so a clean compile +
   valid ELF is its milestone — full runtime verification comes with the assembled
   compiler.
-- **4 (kovc.hx) — DONE:** added float-literal lexing (`2.5_f32` → placeholder
-  int; the f32/f64 self-test functions are dead code in the self-hosting path, so
-  exact float codegen is irrelevant — the fixpoint check guards the assumption).
-  With that the seed compiles the full **12,181-line `kovc.hx` into a 229 KB ELF**
-  (rc 0). All three real sources (lexer/parser/kovc) now compile.
+- **4 (kovc.hx) — DONE:** added float-literal lexing — the seed lexes `2.5_f32`
+  as its integer part (a placeholder). kovc's ONLY float literals are the three
+  in `step6_f32_marker` (`1.5/2.5/4.0_f32`). That function is **live** — the
+  codegen entry `emit_elf_for_ast_to_path` calls it — but its **result is
+  discarded** (`let _f32_marker = step6_f32_marker();`, unused). So the seed
+  compiling that body with int arithmetic instead of SSE cannot change what K1'
+  *emits*. And the floats in the self-source are re-lexed by K1' using its OWN
+  (faithfully seed-compiled) kovc lexer, which emits the correct `TK_FLOATLIT` —
+  so the seed's own float-lex gap never reaches K2. The byte-identical DDC
+  fixpoint empirically guards this: a mis-lex reaching K2 would have made
+  `K2_seed != K2_python`. With that the seed compiles the full **12,181-line
+  `kovc.hx` into a 229 KB ELF** (rc 0); all three real sources compile.
+  (An earlier note called these functions "dead code"; a methodology audit
+  corrected it — they are live-but-result-discarded.)
 - **4 (STEP B) — DONE: the seed built a working compiler.** `assemble_k1.py`
   concatenates the frozen sources into the runnable-compiler source
   (`lexer_no_main + parser_body + kovc_lib + driver_main`, 29,369 lines / 1.5 MB)
