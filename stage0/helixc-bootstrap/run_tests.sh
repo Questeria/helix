@@ -45,6 +45,19 @@ compile_run 3f-arena     test/t13.hx 55  # arena push/get/set/len: 10+30+12+3 = 
 printf 'ABC' > /tmp/seed_read_test.txt   # 3 bytes, no newline
 compile_run 3f-read      test/t14.hx 68  # read_file_to_arena: len(3) + first byte 'A'(65) = 68
 
+# 3f-write: program pushes 'Hi!' into the arena then write_file_to_arena it out;
+# assert the return count AND the actual file bytes.
+rm -f /tmp/seedout.bin
+./seed.bin test/t15.hx "$T/t15.bin" 2>/dev/null
+chmod +x "$T/t15.bin" 2>/dev/null
+"$T/t15.bin"; wrc=$?
+wcontent=$(cat /tmp/seedout.bin 2>/dev/null)
+if [ "$wrc" = "3" ] && [ "$wcontent" = "Hi!" ]; then
+    echo "PASS 3f-write (returned $wrc, file=$wcontent)"; PASS=$((PASS+1))
+else
+    echo "FAIL 3f-write (returned $wrc, file=$wcontent, want 3 / Hi!)"; FAIL=$((FAIL+1))
+fi
+
 rm -rf "$T"
 echo
 echo "Results: $PASS passed, $FAIL failed"

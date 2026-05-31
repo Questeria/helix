@@ -109,8 +109,17 @@ other rung.
   emits open → read-into-1 MiB-stack-buffer → push each byte as one i32 into the
   arena → return the count (matching kovc's contract; the lexer reads
   `__arena_get(i)`). Verified: reads a 3-byte file → len 3, first byte 'A'(65) → 68.
-- **next (3f-write):** `write_file_to_arena` (the last intrinsic), then scale up
-  to compile `lexer.hx` → `parser.hx` → `kovc.hx`.
+- **3f-write — DONE:** `write_file_to_arena(path, off, len)` — opens the path
+  (truncating), writes `len` bytes (the low byte of each arena slot off+k) one
+  per `write(2)`, closes, returns the count. Matches kovc's contract (one byte
+  per i32 slot). Verified: the seed compiles a program that pushes "Hi!" into the
+  arena and writes it to disk → the file contains exactly "Hi!".
+- **SUBSET COMPLETE.** The seed now implements the entire Helix self-hosting
+  subset: lexer, parser, full codegen (literals, arithmetic, comparisons,
+  bitwise, locals, while/if, calls, recursion), string literals, and all six
+  intrinsics (arena + file I/O).
+- **next (inc 4):** scale the pools and compile the real compiler —
+  `lexer.hx` → `parser.hx` → `kovc.hx` — then the self-hosting fixpoint + DDC.
 
 ## M2-Planet C-subset notes (learned, so we don't re-hit them)
 

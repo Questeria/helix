@@ -957,6 +957,56 @@ int cg_read_file(int node) {
     return 0;
 }
 
+/* write_file_to_arena(path, off, len): open the path (truncating), write `len`
+ * bytes -- the low byte of each arena slot (off + k) -- one per write(2), then
+ * close; returns the count. Matches kovc's contract (one byte per i32 slot). */
+int cg_write_file(int node) {
+    int a0; int a1; int a2; int jge_slot; int loop_top; int done;
+    a0 = nd_b(node);                                   /* path */
+    a1 = nd_next(a0);                                  /* off  */
+    a2 = nd_next(a1);                                  /* len  */
+    emit_byte(0x53);                                   /* push rbx            */
+    emit_byte(0x41); emit_byte(0x54);                  /* push r12            */
+    emit_byte(0x41); emit_byte(0x55);                  /* push r13            */
+    emit_byte(0x41); emit_byte(0x56);                  /* push r14            */
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xEC); emit_byte(0x10);       /* sub rsp, 16 */
+    cg_expr(a1); emit_byte(0x41); emit_byte(0x89); emit_byte(0xC4);           /* off  -> r12d */
+    cg_expr(a2); emit_byte(0x41); emit_byte(0x89); emit_byte(0xC5);           /* len  -> r13d */
+    cg_expr(a0); emit_byte(0x48); emit_byte(0x89); emit_byte(0xC3);           /* path -> rbx  */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xDF); /* mov rdi, rbx        */
+    emit_byte(0xBE); emit_u32le(577);                  /* mov esi, 0x241 (WR|CREAT|TRUNC) */
+    emit_byte(0xBA); emit_u32le(420);                  /* mov edx, 0x1A4 (0644) */
+    emit_byte(0xB8); emit_u32le(2); emit_byte(0x0F); emit_byte(0x05);         /* open -> fd */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0x44); emit_byte(0x24); emit_byte(0x08); /* mov [rsp+8], rax */
+    emit_byte(0x45); emit_byte(0x31); emit_byte(0xF6); /* xor r14d, r14d (k)  */
+    loop_top = IMGN;
+    emit_byte(0x45); emit_byte(0x39); emit_byte(0xEE); /* cmp r14d, r13d      */
+    emit_byte(0x0F); emit_byte(0x8D);                  /* jge done (rel32)    */
+    jge_slot = IMGN; emit_u32le(0);
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0xE1); /* mov ecx, r12d       */
+    emit_byte(0x44); emit_byte(0x01); emit_byte(0xF1); /* add ecx, r14d (idx) */
+    emit_mov_r11_arena();
+    emit_byte(0x41); emit_byte(0x8B); emit_byte(0x44); emit_byte(0x8B); emit_byte(0x04); /* mov eax,[r11+rcx*4+4] */
+    emit_byte(0x88); emit_byte(0x04); emit_byte(0x24); /* mov [rsp], al       */
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08); /* mov rdi,[rsp+8] fd */
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6); /* mov rsi, rsp        */
+    emit_byte(0xBA); emit_u32le(1);                    /* mov edx, 1          */
+    emit_byte(0xB8); emit_u32le(1); emit_byte(0x0F); emit_byte(0x05);         /* write */
+    emit_byte(0x41); emit_byte(0xFF); emit_byte(0xC6); /* inc r14d            */
+    emit_byte(0xE9); emit_u32le(loop_top - (IMGN + 4));/* jmp loop_top        */
+    done = IMGN;
+    put_u32(jge_slot, done - (jge_slot + 4));
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0x7C); emit_byte(0x24); emit_byte(0x08); /* mov rdi,[rsp+8] fd */
+    emit_byte(0xB8); emit_u32le(3); emit_byte(0x0F); emit_byte(0x05);         /* close */
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0xF0); /* mov eax, r14d (count) */
+    emit_byte(0x48); emit_byte(0x83); emit_byte(0xC4); emit_byte(0x10);       /* add rsp, 16 */
+    emit_byte(0x41); emit_byte(0x5E);                  /* pop r14             */
+    emit_byte(0x41); emit_byte(0x5D);                  /* pop r13             */
+    emit_byte(0x41); emit_byte(0x5C);                  /* pop r12             */
+    emit_byte(0x5B);                                   /* pop rbx             */
+    return 0;
+}
+
 /* function call: evaluate args (push each), pop into SysV registers, then call
  * (recorded for backpatch). The callee returns its result in eax. */
 int cg_call(int node) {
@@ -966,7 +1016,8 @@ int cg_call(int node) {
     if (call_is(node, "__arena_push")) { return cg_arena_push(node); }
     if (call_is(node, "__arena_get"))  { return cg_arena_get(node); }
     if (call_is(node, "__arena_set"))  { return cg_arena_set(node); }
-    if (call_is(node, "read_file_to_arena")) { return cg_read_file(node); }
+    if (call_is(node, "read_file_to_arena"))  { return cg_read_file(node); }
+    if (call_is(node, "write_file_to_arena")) { return cg_write_file(node); }
     arg = nd_b(node);
     n = 0;
     while (arg != 0 - 1) {
