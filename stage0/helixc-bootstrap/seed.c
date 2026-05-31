@@ -938,7 +938,8 @@ int cg_arena_push(int node) {
  * buffer, then push each byte as one i32 into the arena (cursor advances) and
  * return the byte count -- matching kovc's contract (lexer reads __arena_get(i)). */
 int cg_read_file(int node) {
-    int jge_slot; int loop_top; int endlbl;
+    int jge_slot; int loop_top; int endlbl; int buf;
+    buf = 4194304;   /* 4 MiB read buffer (kovc uses 4 MiB; the 1.5 MB self-source needs > 1 MiB) */
     cg_expr(nd_b(node));                               /* path vaddr -> rax   */
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xC7); /* mov rdi, rax        */
     /* open(path, O_RDONLY=0, 0) */
@@ -947,19 +948,19 @@ int cg_read_file(int node) {
     emit_byte(0xB8); emit_u32le(2);                    /* mov eax, 2 (open)   */
     emit_byte(0x0F); emit_byte(0x05);                  /* syscall -> fd       */
     emit_byte(0x50);                                   /* push rax (fd)       */
-    emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC); emit_u32le(1048576);   /* sub rsp, 1 MiB */
-    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24); emit_u32le(1048576); /* mov rdi,[rsp+1M] fd */
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xEC); emit_u32le(buf);   /* sub rsp, buf (4 MiB) */
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24); emit_u32le(buf); /* mov rdi,[rsp+buf] fd */
     emit_byte(0x48); emit_byte(0x89); emit_byte(0xE6); /* mov rsi, rsp (buf)  */
-    emit_byte(0xBA); emit_u32le(1048576);              /* mov edx, 1 MiB      */
+    emit_byte(0xBA); emit_u32le(buf);              /* mov edx, buf (4 MiB) */
     emit_byte(0xB8); emit_u32le(0);                    /* mov eax, 0 (read)   */
     emit_byte(0x0F); emit_byte(0x05);                  /* syscall -> n        */
     emit_byte(0x49); emit_byte(0x89); emit_byte(0xC2); /* mov r10, rax        */
-    /* truncation trap: if n == 1 MiB the file overran the buffer -> ud2 */
-    emit_byte(0x49); emit_byte(0x81); emit_byte(0xFA); emit_u32le(1048576);
+    /* truncation trap: if n == buf the file overran the buffer -> ud2 */
+    emit_byte(0x49); emit_byte(0x81); emit_byte(0xFA); emit_u32le(buf);
     emit_byte(0x75); emit_byte(0x02);                  /* jne +2              */
     emit_byte(0x0F); emit_byte(0x0B);                  /* ud2                 */
     /* close(fd) */
-    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24); emit_u32le(1048576);
+    emit_byte(0x48); emit_byte(0x8B); emit_byte(0xBC); emit_byte(0x24); emit_u32le(buf);
     emit_byte(0xB8); emit_u32le(3);                    /* mov eax, 3 (close)  */
     emit_byte(0x0F); emit_byte(0x05);                  /* syscall             */
     /* clamp r10 >= 0 */
@@ -981,7 +982,7 @@ int cg_read_file(int node) {
     emit_byte(0xE9); emit_u32le(loop_top - (IMGN + 4));/* jmp loop_top        */
     endlbl = IMGN;
     put_u32(jge_slot, endlbl - (jge_slot + 4));        /* patch jge -> end    */
-    emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4); emit_u32le(1048584);   /* add rsp, 1 MiB + 8 */
+    emit_byte(0x48); emit_byte(0x81); emit_byte(0xC4); emit_u32le(buf + 8);   /* add rsp, buf + 8 */
     emit_byte(0x44); emit_byte(0x89); emit_byte(0xD0); /* mov eax, r10d (len) */
     return 0;
 }
