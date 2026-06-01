@@ -38,6 +38,22 @@ static int check(CUresult r, const char* what) {
 }
 #define CK(call, what) do { if (check((call), (what))) return 2; } while (0)
 
+/* L for one layernorm row with gamma and a perturbation delta at column cc -- the
+ * forward used by the dx finite-difference. y[k]=gamma[k]*(x[k]-mean)/std + beta[k];
+ * beta cancels in the central difference so it is omitted. L = sum_k dy[k]*y[k]. */
+static float ln_rowL(const float* xr, const float* dyr, const float* gam, int cols, int cc, float delta) {
+    float mean = 0.0f;
+    for (int k = 0; k < cols; k++) mean += xr[k] + (k == cc ? delta : 0.0f);
+    mean /= (float)cols;
+    float var = 0.0f;
+    for (int k = 0; k < cols; k++) { float v = xr[k] + (k == cc ? delta : 0.0f) - mean; var += v * v; }
+    var /= (float)cols;
+    float istd = 1.0f / sqrtf(var);
+    float L = 0.0f;
+    for (int k = 0; k < cols; k++) { float xv = xr[k] + (k == cc ? delta : 0.0f); L += dyr[k] * gam[k] * (xv - mean) * istd; }
+    return L;
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub|reverse]\n", argv[0]);
@@ -690,6 +706,108 @@ int main(int argc, char** argv) {
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hx); free(hy); free(hg); free(hb); free(hist); free(ptx);
         return lbad ? 1 : 0;
+    }
+
+    /* layernorm_bwd_dx mode: cuda_launch <ptx> gpu_layernorm_backward_dx <N> layernorm_bwd_dx <rows> <cols>.
+     * dx = layernorm input gradient. INDEPENDENT ref = central finite-difference of the layernorm
+     * FORWARD: dx_fd[s,c]=(L(x+h e_sc)-L(x-h e_sc))/2h, L=sum_k dy*y, h=1e-3, tol 2e-2; plus the
+     * conservation law sum_c dx[s,:] ~ 0 (tol 1e-3). gamma non-trivial; ist computed on CPU. */
+    if (strcmp(op, "layernorm_bwd_dx") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hdy = (float*)malloc(ne * sizeof(float));
+        float* hg = (float*)malloc((size_t)cols * sizeof(float));
+        float* hist = (float*)malloc((size_t)rows * sizeof(float));
+        float* hdx = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hdy || !hg || !hist || !hdx) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hdy[i] = (float)((int)((i * 5 + 1) % 7) - 3) * 0.5f; }
+        for (int c = 0; c < cols; c++) hg[c] = 1.0f + 0.25f * (float)(c % 4);
+        for (int r = 0; r < rows; r++) { float m = 0.0f; for (int c = 0; c < cols; c++) m += hx[r * cols + c]; m /= (float)cols; float v = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - m; v += d * d; } v /= (float)cols; hist[r] = 1.0f / sqrtf(v); }
+        CUdeviceptr dx_, ddy, dg, dist, ddx;
+        CK(cuMemAlloc(&dx_, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&ddy, ne * sizeof(float)), "alloc dy");
+        CK(cuMemAlloc(&dg, (size_t)cols * sizeof(float)), "alloc g");
+        CK(cuMemAlloc(&dist, (size_t)rows * sizeof(float)), "alloc ist");
+        CK(cuMemAlloc(&ddx, ne * sizeof(float)), "alloc dx");
+        CK(cuMemcpyHtoD(dx_, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(ddy, hdy, ne * sizeof(float)), "H2D dy");
+        CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "H2D g");
+        CK(cuMemcpyHtoD(dist, hist, (size_t)rows * sizeof(float)), "H2D ist");
+        void* ax[] = { &dx_, &ddy, &dg, &dist, &ddx, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, ax, 0), "launch ln_bwd_dx");
+        CK(cuCtxSynchronize(), "sync ln_bwd_dx");
+        CK(cuMemcpyDtoH(hdx, ddx, ne * sizeof(float)), "D2H dx");
+        int bad = 0; float maxfd = 0.0f, maxrs = 0.0f, d0 = 0.0f, r0 = 0.0f, h = 1.0e-3f;
+        for (int s = 0; s < rows; s++) {
+            float rs = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float fd = (ln_rowL(&hx[s * cols], &hdy[s * cols], hg, cols, c, h) - ln_rowL(&hx[s * cols], &hdy[s * cols], hg, cols, c, -h)) / (2.0f * h);
+                float got = hdx[s * cols + c];
+                if (s == 0 && c == 0) { d0 = got; r0 = fd; }
+                rs += got;
+                float e = got - fd; if (e < 0) e = -e; if (e > maxfd) maxfd = e;
+                if (isnan(got) || e > 2.0e-2f) { if (bad < 4) fprintf(stderr, "ln_bwd_dx mismatch dx[%d,%d]=%g fd %g\n", s, c, got, fd); bad++; }
+            }
+            float ers = rs < 0 ? -rs : rs; if (ers > maxrs) maxrs = ers;
+            if (isnan(rs) || ers > 1.0e-3f) { if (bad < 4) fprintf(stderr, "ln_bwd_dx row %d sum %g (want 0)\n", s, rs); bad++; }
+        }
+        printf("GPU [%s] layernorm_bwd_dx %dx%d: dx[0,0]=%g fd %g, max|dx-fd|=%g, max|row_sum|=%g, %d bad -> %s\n",
+               gpu, rows, cols, d0, r0, maxfd, maxrs, bad, bad ? "FAIL" : "PASS");
+        cuMemFree(dx_); cuMemFree(ddy); cuMemFree(dg); cuMemFree(dist); cuMemFree(ddx);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hdy); free(hg); free(hist); free(hdx); free(ptx);
+        return bad ? 1 : 0;
+    }
+
+    /* layernorm_bwd_dgb mode: cuda_launch <ptx> gpu_layernorm_backward_dgb <N> layernorm_bwd_dgb <rows> <cols>.
+     * dgamma=dgb[c], dbeta=dgb[cols+c]. Verify per-cell vs a CPU reduction dgamma[c]=sum_s
+     * dy[s,c]*xhat[s,c], dbeta[c]=sum_s dy[s,c] (xhat=(x-mean_s)*ist[s]), tol 1e-3. */
+    if (strcmp(op, "layernorm_bwd_dgb") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hdy = (float*)malloc(ne * sizeof(float));
+        float* hist = (float*)malloc((size_t)rows * sizeof(float));
+        float* hdgb = (float*)malloc((size_t)(2 * cols) * sizeof(float));
+        if (!hx || !hdy || !hist || !hdgb) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hdy[i] = (float)((int)((i * 5 + 1) % 7) - 3) * 0.5f; }
+        for (int r = 0; r < rows; r++) { float m = 0.0f; for (int c = 0; c < cols; c++) m += hx[r * cols + c]; m /= (float)cols; float v = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - m; v += d * d; } v /= (float)cols; hist[r] = 1.0f / sqrtf(v); }
+        CUdeviceptr dx_, ddy, dist, ddgb;
+        CK(cuMemAlloc(&dx_, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&ddy, ne * sizeof(float)), "alloc dy");
+        CK(cuMemAlloc(&dist, (size_t)rows * sizeof(float)), "alloc ist");
+        CK(cuMemAlloc(&ddgb, (size_t)(2 * cols) * sizeof(float)), "alloc dgb");
+        CK(cuMemcpyHtoD(dx_, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(ddy, hdy, ne * sizeof(float)), "H2D dy");
+        CK(cuMemcpyHtoD(dist, hist, (size_t)rows * sizeof(float)), "H2D ist");
+        void* ag[] = { &dx_, &ddy, &dist, &ddgb, &rows, &cols };
+        CK(cuLaunchKernel(fn, cols, 1, 1, 1, 1, 1, 0, 0, ag, 0), "launch ln_bwd_dgb");
+        CK(cuCtxSynchronize(), "sync ln_bwd_dgb");
+        CK(cuMemcpyDtoH(hdgb, ddgb, (size_t)(2 * cols) * sizeof(float)), "D2H dgb");
+        int bad = 0; float maxe = 0.0f, g0 = 0.0f, g0r = 0.0f;
+        for (int c = 0; c < cols; c++) {
+            float dgr = 0.0f, dbr = 0.0f;
+            for (int s = 0; s < rows; s++) {
+                float m = 0.0f; for (int k = 0; k < cols; k++) m += hx[s * cols + k]; m /= (float)cols;
+                float xh = (hx[s * cols + c] - m) * hist[s];
+                dgr += hdy[s * cols + c] * xh;
+                dbr += hdy[s * cols + c];
+            }
+            float gg = hdgb[c], gb = hdgb[cols + c];
+            if (c == 0) { g0 = gg; g0r = dgr; }
+            float eg = gg - dgr; if (eg < 0) eg = -eg; if (eg > maxe) maxe = eg;
+            float eb = gb - dbr; if (eb < 0) eb = -eb; if (eb > maxe) maxe = eb;
+            if (isnan(gg) || isnan(gb) || eg > 1.0e-3f || eb > 1.0e-3f) { if (bad < 4) fprintf(stderr, "ln_bwd_dgb c=%d dgamma=%g(ref %g) dbeta=%g(ref %g)\n", c, gg, dgr, gb, dbr); bad++; }
+        }
+        printf("GPU [%s] layernorm_bwd_dgb %dx%d: dgamma[0]=%g ref %g, max|err|=%g, %d bad -> %s\n",
+               gpu, rows, cols, g0, g0r, maxe, bad, bad ? "FAIL" : "PASS");
+        cuMemFree(dx_); cuMemFree(ddy); cuMemFree(dist); cuMemFree(ddgb);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hdy); free(hist); free(hdgb); free(ptx);
+        return bad ? 1 : 0;
     }
 
     /* affine probe: cuda_launch <ptx> gpu_affine <N> affine. y[i]=0.5*x[i]+0.25,
