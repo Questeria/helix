@@ -3,6 +3,13 @@
 **Date:** 2026-05-30 · **Repo:** Kovostov-Native @ branch main · **Harness:**
 `stage0/helixc-bootstrap/ddc_check.py`
 
+> **K4 status (2026-05-31): the Python reference compiler (Route B, below) has been
+> DELETED** from the live tree — preserved at tag `v0-pre-k4-full-with-python` + the
+> V0 bundle (`backups/`). This proof was established and 5×-audited *before* deletion;
+> to **re-run** the DDC (which needs the Python Route B), restore that tag first. The
+> live toolchain now mints helixc with no Python (verified: seed → kovc, 17/17 tests,
+> `6*7`→42). Post-K4 state: tag `k4-python-compiler-deleted`.
+
 ## Claim (precise, scoped)
 
 The `helixc-bootstrap` **seed** — a small Apache-2.0 C compiler written in the

@@ -40,7 +40,7 @@ auditable, not asserted.
 | 3 | **GPU executes** ⭐ | `tile` kernels run on **real GPU hardware**, results match reference (GPU corpus green on HW) | ❌ **stubs — THE GATE** |
 | 4 | **Autodiff correct** | `grad` gradients match numerical/reference gradients on CPU **and** GPU (gradient-check suite green) | 🔶 CPU autodiff exists; GPU + full gradient-check pending |
 | 5 | **Full-language trust** | the diverse-double-compile passes over a **feature-diverse** corpus (beyond i32) | 🔶 i32 DDC ✅ (5/5 audits); feature-diverse corpus pending |
-| 6 | **Python-free + raw-binary** | K4 done; the **entire** toolchain (compiler, test runner, build) is Helix/seed/ladder only; **zero `.py`** in the live toolchain; reproducible from hex0 | ❌ K4 pending; test/build infra still Python |
+| 6 | **Python-free + raw-binary** | the **entire** toolchain (compiler, test runner, build) is Helix/seed/ladder only; **zero `.py`** in the live toolchain; reproducible from hex0 | 🔶 **reference compiler DELETED 2026-05-31 (K4)**; mint verified Python-free; remaining: de-Python `assemble_k1.py` + DDC harnesses + 5 dev scripts, + port test-infra to Helix |
 | 7 | **Usable stdlib + toolchain** | documented stdlib (collections, math, strings, I/O, tensor/ML ops the capstone needs) with passing tests; self-sufficient driver / test-runner / module system in Helix | 🔶 stdlib campaign in progress |
 | 8 | **Design frozen (v1.0 spec)** | a written language reference; syntax/semantics committed; no breaking changes after v1.0 | 🔶 near-stable (self-host parity); not formally frozen |
 
@@ -60,8 +60,9 @@ correctly.
 ## Current status & critical path (honest)
 
 - ✅ **Trust + bootstrap** — from-raw-binary, DDC-verified (i32 core), 5/5 clean audits, full pre-K4 backup tagged. *The hardest-to-trust part is already done.*
+- ✅ **K4 done (2026-05-31)** — the Python reference compiler is **deleted**; the mint is verified Python-free (seed → kovc, 17/17 tests, `6*7`→42). Pre-K4 state preserved at tag `v0-pre-k4-full-with-python`; post-K4 at `k4-python-compiler-deleted`.
 - ❌ **The gate (#3)** — GPU execution. The `tile`/PTX emitters are stubs. This is the **single biggest** item between today and the capstone.
-- 🔶 **Remaining** — full-feature compile+run + feature-diverse DDC (#1,#2,#4,#5), Python removal (#6), stdlib + spec freeze (#7,#8).
+- 🔶 **Remaining** — full-feature compile+run + feature-diverse DDC (#1,#2,#4,#5); *finish* Python removal (#6 — compiler gone; still to de-Python `assemble_k1.py` + the DDC harnesses + 5 dev scripts, and port test-infra to Helix); stdlib + spec freeze (#7,#8).
 
 ```
 critical path:
