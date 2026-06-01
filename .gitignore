@@ -72,3 +72,6 @@ id_rsa*
 .loop_resume.md
 __pycache__/
 *.pyc
+init_weights.bin
+*.ptx
+loss_curve.csv
