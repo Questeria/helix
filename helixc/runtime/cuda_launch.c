@@ -72,6 +72,97 @@ int main(int argc, char** argv) {
     CUmodule mod; CK(cuModuleLoadData(&mod, ptx), "cuModuleLoadData");
     CUfunction fn; CK(cuModuleGetFunction(&fn, mod, kname), "cuModuleGetFunction");
 
+    /* attention mode: cuda_launch <combined.ptx> gpu_qkt <Nignored> attention <S> <d>.
+     * combined.ptx carries 3 entries (gpu_qkt, gpu_softmax, naive_matmul -- concat the
+     * 3 kernel .hx files, emit once). Single-head scaled dot-product attention:
+     *   scores = (1/sqrt(d)) * Q @ K^T   (gpu_qkt bakes 0.25 = 1/sqrt(16), so d MUST be 16)
+     *   attn   = softmax(scores) row-wise
+     *   out    = attn @ V                (naive_matmul, A=attn[S,S] B=V[S,d])
+     * mod is already loaded from argv[1]; fetch all 3 entries from it (argv[2]=gpu_qkt
+     * satisfies the generic get above). Verify out vs a 3-stage CPU reference AND
+     * (independent) that each GPU attn row sums to ~1. Integer-valued inputs so QK^T is
+     * exact; 0.25*int is exact; the only error is softmax ex2.approx (tol 1e-3). */
+    if (strcmp(op, "attention") == 0) {
+        int S = (argc > 5) ? atoi(argv[5]) : 4;
+        int d = (argc > 6) ? atoi(argv[6]) : 16;
+        CUfunction f_qkt, f_sm, f_mm;
+        CK(cuModuleGetFunction(&f_qkt, mod, "gpu_qkt"), "get gpu_qkt");
+        CK(cuModuleGetFunction(&f_sm, mod, "gpu_softmax"), "get gpu_softmax");
+        CK(cuModuleGetFunction(&f_mm, mod, "naive_matmul"), "get naive_matmul");
+        size_t sd = (size_t)S * d, ssz = (size_t)S * S;
+        float* hQ = (float*)malloc(sd * sizeof(float));
+        float* hK = (float*)malloc(sd * sizeof(float));
+        float* hV = (float*)malloc(sd * sizeof(float));
+        float* hO = (float*)malloc(sd * sizeof(float));
+        float* hA = (float*)malloc(ssz * sizeof(float));
+        float* sc = (float*)malloc(ssz * sizeof(float));
+        float* at = (float*)malloc(ssz * sizeof(float));
+        if (!hQ || !hK || !hV || !hO || !hA || !sc || !at) return 2;
+        for (size_t i = 0; i < sd; i++) {
+            hQ[i] = (float)((int)(i % 7) - 3);
+            hK[i] = (float)((int)(i % 5) - 2);
+            hV[i] = (float)((int)(i % 9) - 4);
+        }
+        CUdeviceptr dQ, dK, dV, dS, dA, dO;
+        CK(cuMemAlloc(&dQ, sd * sizeof(float)), "alloc Q");
+        CK(cuMemAlloc(&dK, sd * sizeof(float)), "alloc K");
+        CK(cuMemAlloc(&dV, sd * sizeof(float)), "alloc V");
+        CK(cuMemAlloc(&dS, ssz * sizeof(float)), "alloc scores");
+        CK(cuMemAlloc(&dA, ssz * sizeof(float)), "alloc attn");
+        CK(cuMemAlloc(&dO, sd * sizeof(float)), "alloc out");
+        CK(cuMemcpyHtoD(dQ, hQ, sd * sizeof(float)), "H2D Q");
+        CK(cuMemcpyHtoD(dK, hK, sd * sizeof(float)), "H2D K");
+        CK(cuMemcpyHtoD(dV, hV, sd * sizeof(float)), "H2D V");
+        /* stage 1: scores = 0.25 * Q@K^T. gridDim=S, blockDim=S. */
+        void* a1[] = { &dQ, &dK, &dS, &S, &d };
+        CK(cuLaunchKernel(f_qkt, S, 1, 1, S, 1, 1, 0, 0, a1, 0), "launch qkt");
+        CK(cuCtxSynchronize(), "sync qkt");
+        /* stage 2: attn = softmax(scores) row-wise. gridDim=S, blockDim=1, cols=S. */
+        void* a2[] = { &dS, &dA, &S, &S };
+        CK(cuLaunchKernel(f_sm, S, 1, 1, 1, 1, 1, 0, 0, a2, 0), "launch softmax");
+        CK(cuCtxSynchronize(), "sync softmax");
+        /* stage 3: out = attn @ V. naive_matmul(a,b,c,M,K,N): M=S,K=S,N=d. gridDim=S, blockDim=d. */
+        void* a3[] = { &dA, &dV, &dO, &S, &S, &d };
+        CK(cuLaunchKernel(f_mm, S, 1, 1, d, 1, 1, 0, 0, a3, 0), "launch matmul");
+        CK(cuCtxSynchronize(), "sync matmul");
+        CK(cuMemcpyDtoH(hO, dO, sd * sizeof(float)), "D2H out");
+        CK(cuMemcpyDtoH(hA, dA, ssz * sizeof(float)), "D2H attn");
+        /* CPU reference: scores -> row softmax -> out. */
+        float scale = 1.0f / sqrtf((float)d);
+        for (int i = 0; i < S; i++) {
+            for (int j = 0; j < S; j++) {
+                float dot = 0.0f;
+                for (int t = 0; t < d; t++) dot += hQ[i * d + t] * hK[j * d + t];
+                sc[i * S + j] = scale * dot;
+            }
+            float mx = sc[i * S]; for (int j = 1; j < S; j++) if (sc[i * S + j] > mx) mx = sc[i * S + j];
+            float sm = 0.0f; for (int j = 0; j < S; j++) sm += expf(sc[i * S + j] - mx);
+            for (int j = 0; j < S; j++) at[i * S + j] = expf(sc[i * S + j] - mx) / sm;
+        }
+        int abad = 0; float ref0 = 0.0f; float maxrs = 0.0f;
+        for (int i = 0; i < S; i++) {
+            for (int kk = 0; kk < d; kk++) {
+                float ref = 0.0f; for (int j = 0; j < S; j++) ref += at[i * S + j] * hV[j * d + kk];
+                if (i == 0 && kk == 0) ref0 = ref;
+                float got = hO[i * d + kk];
+                float e = got - ref; if (e < 0) e = -e;
+                if (isnan(got) || e > 1.0e-3f) { if (abad < 4) fprintf(stderr, "attention mismatch out[%d,%d]=%g ref %g\n", i, kk, got, ref); abad++; }
+            }
+        }
+        /* independent cross-check: each GPU attn row sums to ~1. */
+        for (int i = 0; i < S; i++) {
+            float rs = 0.0f; for (int j = 0; j < S; j++) rs += hA[i * S + j];
+            float e = rs - 1.0f; if (e < 0) e = -e; if (e > maxrs) maxrs = e;
+            if (isnan(rs) || e > 1.0e-3f) { if (abad < 4) fprintf(stderr, "attention attn row %d sum %g (want 1)\n", i, rs); abad++; }
+        }
+        printf("GPU [%s] attention S=%d d=%d: out[0,0]=%g ref %g, max|attn_rowsum-1|=%g, %d bad -> %s\n",
+               gpu, S, d, hO[0], ref0, maxrs, abad, abad ? "FAIL" : "PASS");
+        cuMemFree(dQ); cuMemFree(dK); cuMemFree(dV); cuMemFree(dS); cuMemFree(dA); cuMemFree(dO);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hQ); free(hK); free(hV); free(hO); free(hA); free(sc); free(at); free(ptx);
+        return abad ? 1 : 0;
+    }
+
     /* matmul mode: cuda_launch <ptx> <kernel> <Nvec-ignored> matmul <M> <K> <N>.
      * One thread per output cell -- gridDim.x=M (row=block_idx), blockDim.x=N
      * (col=thread_idx). Verifies EVERY M*N cell of C against a CPU reference in the
