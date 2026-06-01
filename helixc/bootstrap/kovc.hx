@@ -481,6 +481,9 @@ fn emit_or_rax_rcx_64()  -> i32 { emit_byte(0x48); emit_byte(0x09); emit_byte(0x
 fn emit_xor_rax_rcx_64() -> i32 { emit_byte(0x48); emit_byte(0x31); emit_byte(0xC8); 3 }
 fn emit_shl_rax_cl_64() -> i32 { emit_byte(0x48); emit_byte(0xD3); emit_byte(0xE0); 3 }
 fn emit_sar_rax_cl_64() -> i32 { emit_byte(0x48); emit_byte(0xD3); emit_byte(0xF8); 3 }
+// 64-bit LOGICAL shift right: shr rax, cl (REX.W D3 /5). For UNSIGNED u64 >>,
+// where sar (arithmetic) would wrongly replicate the sign bit (DoD #2 fix).
+fn emit_shr_rax_cl_64() -> i32 { emit_byte(0x48); emit_byte(0xD3); emit_byte(0xE8); 3 }
 fn emit_test_rax_rax_64() -> i32 { emit_byte(0x48); emit_byte(0x85); emit_byte(0xC0); 3 }
 // 64-bit modulo: cqo (sign-extend rax to rdx:rax) + idiv rcx + mov rax, rdx.
 //   48 99        cqo
@@ -8197,13 +8200,10 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 else { emit_shl_eax_cl() }}}}};
         n1 + np + n2 + nm + no + na
     } else { if t == 33 {
-        // AST_SHR: sar eax, cl (D3 F8) i32; sar rax, cl (48 D3 F8) i64/u64.
-        // Audit follow-up Finding #5: add u64 dispatch and trap on
-        // float/bf16. Note: this still uses sar (arithmetic) for u64;
-        // the signedness sub-finding (sar vs shr for unsigned types) is
-        // tracked separately and not addressed here to keep the patch
-        // minimal. u64 sar produces wrong results for u64 values >=
-        // 0x8000_0000_0000_0000.
+        // AST_SHR: signed i32/i64 use sar (arithmetic, D3 F8 / 48 D3 F8);
+        // UNSIGNED u64 uses shr (LOGICAL, 48 D3 E8). DoD #2 fix (2026-06-01):
+        // u64 >> previously used sar and gave wrong results for u64 values >=
+        // 0x8000_0000_0000_0000 (sign-bit replication). Trap on float/bf16.
         let n1 = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let np = emit_push_rax();
         let n2 = emit_ast_code(p2, bind_state, patch_state, bn_state);
@@ -8218,7 +8218,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 else { if l_f64 == 1 { emit_trap_with_id(33010) }
                 else { if l_f32 == 1 { emit_trap_with_id(33040) }
                 else { if l_i64 == 1 { emit_sar_rax_cl_64() }
-                else { if l_u64 == 1 { emit_sar_rax_cl_64() }
+                else { if l_u64 == 1 { emit_shr_rax_cl_64() }
                 else { emit_sar_eax_cl() }}}}};
         n1 + np + n2 + nm + no + na
     } else { if t == 6 {
