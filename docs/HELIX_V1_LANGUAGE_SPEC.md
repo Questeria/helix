@@ -1,4 +1,4 @@
-# Helix v1.0 — Language Reference (DRAFT)
+# Helix v1.0 — Language Reference (FROZEN)
 
 **Status: FROZEN — v1.0 (2026-06-01).** This documents the Helix language **as actually
 implemented by the self-hosted compiler `kovc`** (helixc/bootstrap/{lexer,parser,kovc}.hx),

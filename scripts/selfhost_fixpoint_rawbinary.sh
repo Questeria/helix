@@ -15,9 +15,9 @@
 # proves DoD #1's "no external ulimit" requirement. (Earlier defensiveness raised it;
 # removed once measured unnecessary.)
 #
-# The ONLY non-Helix step is assemble_k1.py concatenating the FROZEN bootstrap sources;
-# that source-assembly helper is tracked for de-Python under DoD #6. The COMPILE chain
-# proven here uses ZERO Python.
+# The ONLY non-Helix step is the shell assembler assemble_k1.sh concatenating the FROZEN
+# bootstrap sources (assemble_k1.py was de-Pythoned to byte-identical shell at DoD #6).
+# The COMPILE chain proven here uses ZERO Python.
 set -u
 echo "stack soft limit (NOT raised): $(ulimit -s) KB"
 HERE=/mnt/c/Projects/Kovostov-Native/stage0/helixc-bootstrap
