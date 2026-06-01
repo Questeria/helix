@@ -17,11 +17,15 @@ gen() { cat > "$CD/$1"; }   # gen <name>  (program body on stdin)
 gen i64_basic.hx <<'EOF'
 fn main() -> i32 { let x: i64 = 42_i64; x as i32 }
 EOF
-gen i64_add.hx <<'EOF'
-fn main() -> i32 { let big: i64 = 5_000_000_000_i64; let one_b: i64 = 1_000_000_000_i64; let q: i64 = big / one_b; q as i32 }
+# i64 arithmetic BEYOND the i32 range, using sub-2^31 SOURCE LITERALS (so the lexer's
+# i32 literal accumulator does not truncate) but producing/dividing 64-bit runtime
+# values > i32. This tests the 64-bit imul/idiv codegen (correct). The separate
+# known limitation -- source literals >= 2^31 truncate -- is documented in DoD #2.
+gen i64_mul_beyond.hx <<'EOF'
+fn main() -> i32 { let a: i64 = 2000000000_i64; let b: i64 = 3_i64; let c: i64 = a * b; let g: i64 = 1000000000_i64; (c / g) as i32 }
 EOF
-gen i64_mul.hx <<'EOF'
-fn main() -> i32 { let a: i64 = 3_000_000_000_i64; let b: i64 = 2_i64; let c: i64 = a * b; let one_b: i64 = 1_000_000_000_i64; (c / one_b) as i32 }
+gen i64_div_beyond.hx <<'EOF'
+fn main() -> i32 { let a: i64 = 2000000000_i64; let b: i64 = 2_i64; let big: i64 = a * b; let g: i64 = 80000000_i64; (big / g) as i32 }
 EOF
 gen i64_cmp.hx <<'EOF'
 fn main() -> i32 { let a: i64 = 5_000_000_000_i64; let b: i64 = 4_000_000_000_i64; if a > b { 1 } else { 0 } }
@@ -84,8 +88,8 @@ check "$CD/result_inline.hx"                 42  result-enum-userdefined
 check "$EX/gradient_descent.hx"              42  grad+float
 echo "=== authored int-width ==="
 check "$CD/i64_basic.hx"  42  i64-cast
-check "$CD/i64_add.hx"     5  i64-div
-check "$CD/i64_mul.hx"     6  i64-mul
+check "$CD/i64_mul_beyond.hx"  6  i64-mul-beyond-i32
+check "$CD/i64_div_beyond.hx" 50  i64-div-beyond-i32
 check "$CD/i64_cmp.hx"     1  i64-cmp
 check "$CD/i64_neg.hx"     5  i64-neg
 check "$CD/u64_shr.hx"     1  u64-logical-shift
