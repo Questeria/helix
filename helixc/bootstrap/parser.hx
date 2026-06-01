@@ -13785,11 +13785,15 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     // matched, consume the entire `<...>` block depth-balanced
     // (handles nested generics, lifetimes, bounds). The bootstrap
     // is type-erased so the generic params are discarded.
-    if tok_tag(tok_base, cur_get(sb)) == 16 {
-        cur_advance(sb);                     // consume '<'
+    let mut imo1 = tok_tag(tok_base, cur_get(sb));
+    if imo1 == 20 { imo1 = 16; };            // K1.SQ: accept square-bracket generics like angle
+    if imo1 == 16 {
+        cur_advance(sb);                     // consume opener (< or [)
         let mut g_depth_dd: i32 = 1;
         while g_depth_dd > 0 {
-            let gt_dd = tok_tag(tok_base, cur_get(sb));
+            let mut gt_dd = tok_tag(tok_base, cur_get(sb));
+            if gt_dd == 20 { gt_dd = 16; };   // square open nests like angle
+            if gt_dd == 21 { gt_dd = 17; };   // square close ends like angle
             if gt_dd == 16 {
                 g_depth_dd = g_depth_dd + 1;
                 cur_advance(sb);
@@ -13832,11 +13836,15 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     // the real next token (`for` IDENT for trait-for-target, `{` for
     // inherent). Without this, the existing trait-for-target branch
     // mis-consumed `<` as `for` and `T` as the target type, hanging.
-    if tok_tag(tok_base, cur_get(sb)) == 16 {
-        cur_advance(sb);                     // consume '<'
+    let mut imo2 = tok_tag(tok_base, cur_get(sb));
+    if imo2 == 20 { imo2 = 16; };            // K1.SQ: accept square-bracket generics like angle
+    if imo2 == 16 {
+        cur_advance(sb);                     // consume opener (< or [)
         let mut g_depth_dd3: i32 = 1;
         while g_depth_dd3 > 0 {
-            let gt_dd3 = tok_tag(tok_base, cur_get(sb));
+            let mut gt_dd3 = tok_tag(tok_base, cur_get(sb));
+            if gt_dd3 == 20 { gt_dd3 = 16; };   // square open nests like angle
+            if gt_dd3 == 21 { gt_dd3 = 17; };   // square close ends like angle
             if gt_dd3 == 16 {
                 g_depth_dd3 = g_depth_dd3 + 1;
                 cur_advance(sb);
@@ -13924,11 +13932,15 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     // After K1.DD's `impl<T>` generic-param skip + target IDENT
     // consume, the target type's own `<...>` may still follow. Skip
     // depth-balanced.
-    if tok_tag(tok_base, cur_get(sb)) == 16 {
-        cur_advance(sb);                     // consume '<'
+    let mut imo3 = tok_tag(tok_base, cur_get(sb));
+    if imo3 == 20 { imo3 = 16; };            // K1.SQ: accept square-bracket generics like angle
+    if imo3 == 16 {
+        cur_advance(sb);                     // consume opener (< or [)
         let mut g_depth_dd2: i32 = 1;
         while g_depth_dd2 > 0 {
-            let gt_dd2 = tok_tag(tok_base, cur_get(sb));
+            let mut gt_dd2 = tok_tag(tok_base, cur_get(sb));
+            if gt_dd2 == 20 { gt_dd2 = 16; };   // square open nests like angle
+            if gt_dd2 == 21 { gt_dd2 = 17; };   // square close ends like angle
             if gt_dd2 == 16 {
                 g_depth_dd2 = g_depth_dd2 + 1;
                 cur_advance(sb);
