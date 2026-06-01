@@ -8,16 +8,18 @@
 #   K1 = seed.bin(k1src.hx);  K2 = K1(k1input.hx);  K3 = K2(k1input.hx);  K4 = K3(k1input.hx)
 # FIXPOINT (criterion #1): K2 == K3 == K4 byte-identical.
 #
-# K1 carries the SEED's bare _start (seed.c has no big-stack stub) so it parses the
-# 1.5 MB deeply-recursive source only under `ulimit -s unlimited`. K2+ are kovc-emitted
-# and carry emit_start_bigstack() (kovc.hx:~1990) -- a 512 MiB mmap'd stack -- so they
-# need no external ulimit; we set it globally anyway (harmless, covers seed.bin + K1).
+# NO EXTERNAL ulimit (proven 2026-06-01): the seed compiles the 1.5 MB source on the
+# DEFAULT 8 MB stack (seed_rc=0, byte-identical K1=595754 B), and K2+ are kovc-emitted
+# and carry emit_start_bigstack() (kovc.hx:~1990, a 512 MiB mmap'd stack). The full
+# chain runs on the default stack -- this runner does NOT raise it; a green run here
+# proves DoD #1's "no external ulimit" requirement. (Earlier defensiveness raised it;
+# removed once measured unnecessary.)
 #
 # The ONLY non-Helix step is assemble_k1.py concatenating the FROZEN bootstrap sources;
 # that source-assembly helper is tracked for de-Python under DoD #6. The COMPILE chain
 # proven here uses ZERO Python.
 set -u
-ulimit -s unlimited
+echo "stack soft limit (NOT raised): $(ulimit -s) KB"
 HERE=/mnt/c/Projects/Kovostov-Native/stage0/helixc-bootstrap
 cd "$HERE" || { echo "FATAL: no bootstrap dir"; exit 90; }
 chmod +x seed.bin 2>/dev/null
