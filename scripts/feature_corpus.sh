@@ -106,6 +106,22 @@ EOF
 gen match_range.hx <<'EOF'
 fn main() -> i32 { let x = 5; match x { 1..10 => 1, _ => 0 } }
 EOF
+# collections POC: a growable int Vec built on the arena (free fns) -- demonstrates
+# general-purpose collections are user-implementable in Helix (DoD #7). Header slot
+# = length; elements follow contiguously. 10+20+12 + len(3) = 45.
+gen vec_arena.hx <<'EOF'
+fn vec_new() -> i32 { __arena_push(0) }
+fn vec_push(v: i32, x: i32) -> i32 { let n = __arena_get(v); __arena_set(v, n + 1); __arena_push(x) }
+fn vec_len(v: i32) -> i32 { __arena_get(v) }
+fn vec_get(v: i32, i: i32) -> i32 { __arena_get(v + 1 + i) }
+fn main() -> i32 {
+    let v = vec_new();
+    vec_push(v, 10);
+    vec_push(v, 20);
+    vec_push(v, 12);
+    vec_get(v, 0) + vec_get(v, 1) + vec_get(v, 2) + vec_len(v)
+}
+EOF
 
 echo "=== build K2 (general full-language compiler) from the raw seed ==="
 bash assemble_k1.sh >/dev/null 2>&1
@@ -171,6 +187,7 @@ check "$CD/tuple2.hx"      7  tuple-literal-field
 check "$CD/impl_method.hx" 42  impl-method-self
 check "$CD/match_or.hx"   10  match-or-pattern
 check "$CD/match_range.hx" 1  match-range-pattern
+check "$CD/vec_arena.hx"  45  collections-vec-on-arena
 
 echo
 echo "RESULT: $pass passed, $fail failed (of $((pass+fail)))"
