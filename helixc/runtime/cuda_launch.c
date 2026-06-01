@@ -39,7 +39,7 @@ static int check(CUresult r, const char* what) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub]\n", argv[0]);
+        fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub|reverse]\n", argv[0]);
         return 2;
     }
     const char* ptx_path = argv[1];
@@ -92,12 +92,13 @@ int main(int argc, char** argv) {
 
     int is_mul = (strcmp(op, "mul") == 0);
     int is_sub = (strcmp(op, "sub") == 0);
+    int is_rev = (strcmp(op, "reverse") == 0);  /* c[i]=a[N-1-i]: exercises an i32 scalar param read in the index */
     int bad = 0;
     for (int i = 0; i < N; i++) {
-        float want = is_mul ? ha[i] * hb[i] : is_sub ? ha[i] - hb[i] : ha[i] + hb[i];
+        float want = is_rev ? ha[N - 1 - i] : is_mul ? ha[i] * hb[i] : is_sub ? ha[i] - hb[i] : ha[i] + hb[i];
         if (hc[i] != want) { if (bad < 4) fprintf(stderr, "mismatch c[%d]=%g want %g\n", i, hc[i], want); bad++; }
     }
-    float want7 = is_mul ? ha[7] * hb[7] : is_sub ? ha[7] - hb[7] : ha[7] + hb[7];
+    float want7 = is_rev ? ha[N - 1 - 7] : is_mul ? ha[7] * hb[7] : is_sub ? ha[7] - hb[7] : ha[7] + hb[7];
     printf("GPU [%s] kernel '%s' op=%s over %d elems: c[7]=%g (want %g) -> %s\n",
            gpu, kname, op, N, hc[7], want7, bad ? "FAIL" : "PASS");
 

@@ -10363,7 +10363,19 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_mov_const(r, __arena_get(node + 1));
         r
     } else { if tag == 1 {
-        ptx_vtab_lookup(vtab, __arena_get(node + 1), __arena_get(node + 2))
+        let vlk = ptx_vtab_lookup(vtab, __arena_get(node + 1), __arena_get(node + 2));
+        if vlk < 0 {
+            // K1.GPU-ABI (P5): a bare var not bound by a let -- resolve it as a
+            // kernel scalar param. vtab+53 holds the current @kernel fn_idx (set by
+            // emit_ptx_entry); an i32 scalar dim (M/K/N, a loop bound or stride)
+            // loads as a VALUE via ld.param.u32, not as a pointer.
+            let pix = ptx_param_index(__arena_get(vtab + 53), __arena_get(node + 1), __arena_get(node + 2));
+            if pix < 0 { vlk } else {
+                let rsc = ptx_alloc_reg(vtab);
+                emit_ptx_ld_param_u32(rsc, pix);
+                rsc
+            }
+        } else { vlk }
     } else { if tag == 8 {
         let vr = emit_ptx_expr(__arena_get(node + 4), vtab);
         ptx_vtab_add(vtab, __arena_get(node + 1), __arena_get(node + 2), vr);
@@ -10762,6 +10774,25 @@ fn ptx_param_type(fn_idx: i32, name_s: i32, name_l: i32) -> i32 {
 // the standard CUDA load: load the param pointer, convert to the global
 // address space, compute base + i*4 (i32 elems), then ld.global.u32.
 // ptxas-validated. Returns the %r holding the loaded value.
+// K1.GPU-ABI (P5 Step A edit-2): load an i32 scalar kernel param as a VALUE:
+//   "    ld.param.u32 %r<r>, [param_<pidx>];\n"
+// Mirrors the ld.param.u64 pointer-load in emit_ptx_index_load, but .u32 into a
+// %r reg -- for scalar dims like M/K/N read in a kernel body (loop bounds/strides).
+fn emit_ptx_ld_param_u32(r: i32, pidx: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(46);
+    emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32);
+    emit_ptx_r(r);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(95);
+    emit_ptx_decimal(pidx);
+    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+    r
+}
 fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     let base = __arena_get(node + 1);
     let idx_node = __arena_get(node + 2);
