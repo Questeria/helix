@@ -115,6 +115,52 @@ int main(int argc, char** argv) {
         return mbad ? 1 : 0;
     }
 
+    /* softmax mode: cuda_launch <ptx> <kernel> <Nignored> softmax <rows> <cols>.
+     * One thread per row (gridDim.x=rows, blockDim.x=1). Non-constant inputs so each
+     * row differs; verify every cell vs a CPU max-subtract softmax (tol 1e-3 for
+     * ex2.approx) AND that each row sums to ~1. */
+    if (strcmp(op, "softmax") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hy) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hy[i] = -1.0f; }
+        CUdeviceptr dx, dy;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "cuMemAlloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "cuMemAlloc y");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "cuMemcpyHtoD x");
+        void* sargs[] = { &dx, &dy, &rows, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, sargs, 0), "cuLaunchKernel softmax");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
+        int sbad = 0;
+        for (int r = 0; r < rows; r++) {
+            float mx = hx[r * cols];
+            for (int j = 1; j < cols; j++) if (hx[r * cols + j] > mx) mx = hx[r * cols + j];
+            float sm = 0.0f;
+            for (int kk = 0; kk < cols; kk++) sm += expf(hx[r * cols + kk] - mx);
+            float rowsum = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float ref = expf(hx[r * cols + c] - mx) / sm;
+                float got = hy[r * cols + c];
+                rowsum += got;
+                float d = got - ref; if (d < 0) d = -d;
+                if (d > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax mismatch y[%d,%d]=%g ref %g\n", r, c, got, ref); sbad++; }
+            }
+            float ds = rowsum - 1.0f; if (ds < 0) ds = -ds;
+            if (ds > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax row %d sum %g (want 1)\n", r, rowsum); sbad++; }
+        }
+        float r0s = 0.0f; for (int c = 0; c < cols; c++) r0s += hy[c];
+        printf("GPU [%s] softmax %dx%d: row0 sum=%g (want 1), %d bad -> %s\n",
+               gpu, rows, cols, r0s, sbad, sbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(ptx);
+        return sbad ? 1 : 0;
+    }
+
     size_t bytes = (size_t)N * sizeof(float);
     float* ha = (float*)malloc(bytes);
     float* hb = (float*)malloc(bytes);
