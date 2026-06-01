@@ -10319,13 +10319,17 @@ fn ptx_alloc_f(vtab: i32) -> i32 {
     __arena_set(vtab + 54, r + 1);
     r
 }
-fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32) -> i32 {
+fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32, is_f: i32) -> i32 {
+    // K1.GPU-ABI (P5 Step B): 4-slot entries (name_s, name_l, ridx, is_f) so a var's
+    // f32-ness is restored on read -- an f32 accumulator must stay f32 through a loop.
+    // Cap 12 (12*4=48 slots, 2..49) keeps the counters at vtab+50.. intact.
     let vc = __arena_get(vtab + 1);
-    if vc < 16 {
-        let bse = vtab + 2 + vc * 3;
+    if vc < 12 {
+        let bse = vtab + 2 + vc * 4;
         __arena_set(bse, name_s);
         __arena_set(bse + 1, name_l);
         __arena_set(bse + 2, ridx);
+        __arena_set(bse + 3, is_f);
         __arena_set(vtab + 1, vc + 1);
     };
     0
@@ -10336,9 +10340,23 @@ fn ptx_vtab_lookup(vtab: i32, name_s: i32, name_l: i32) -> i32 {
     let mut i: i32 = 0;
     let mut found: i32 = 0 - 1;
     while i < vc {
-        let bse = vtab + 2 + i * 3;
+        let bse = vtab + 2 + i * 4;
         if kovc_byte_eq(name_s, name_l, __arena_get(bse), __arena_get(bse + 1)) == 1 {
             found = __arena_get(bse + 2);
+        };
+        i = i + 1;
+    }
+    found
+}
+// K1.GPU-ABI (P5 Step B): the is_f flag (slot 3) of the latest matching binding, 0 if none.
+fn ptx_vtab_lookup_isf(vtab: i32, name_s: i32, name_l: i32) -> i32 {
+    let vc = __arena_get(vtab + 1);
+    let mut i: i32 = 0;
+    let mut found: i32 = 0;
+    while i < vc {
+        let bse = vtab + 2 + i * 4;
+        if kovc_byte_eq(name_s, name_l, __arena_get(bse), __arena_get(bse + 1)) == 1 {
+            found = __arena_get(bse + 3);
         };
         i = i + 1;
     }
@@ -10375,10 +10393,16 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
                 emit_ptx_ld_param_u32(rsc, pix);
                 rsc
             }
-        } else { vlk }
-    } else { if tag == 8 {
+        } else {
+            // K1.GPU-ABI (P5 Step B): restore the var's f32-ness on read (an f32
+            // accumulator/value must keep its type, else binops/stores use the i32 path).
+            __arena_set(vtab + 55, ptx_vtab_lookup_isf(vtab, __arena_get(node + 1), __arena_get(node + 2)));
+            vlk
+        }
+    } else { if ptx_is_let_tag(tag) == 1 {
         let vr = emit_ptx_expr(__arena_get(node + 4), vtab);
-        ptx_vtab_add(vtab, __arena_get(node + 1), __arena_get(node + 2), vr);
+        let vis_f = __arena_get(vtab + 55);
+        ptx_vtab_add(vtab, __arena_get(node + 1), __arena_get(node + 2), vr, vis_f);
         emit_ptx_expr(__arena_get(node + 3), vtab)
     } else { if tag == 2 {
         emit_ptx_binop(node, vtab, 0)
@@ -10414,9 +10438,16 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_index_load(node, vtab)
     } else { if tag == 55 {
         emit_ptx_index_store(node, vtab)
+    } else { if tag == 13 {
+        // K1.GPU-ABI (P5 Step B): AST_SEQ (tag 13; first slot 1, second slot 2) -- a
+        // statement sequence like `while ...; c[i]=acc`. The PTX emitter never
+        // dispatched it (elementwise kernels had single-statement let bodies), so any
+        // multi-statement kernel body silently lost everything after the first stmt.
+        emit_ptx_expr(__arena_get(node + 1), vtab);
+        emit_ptx_expr(__arena_get(node + 2), vtab)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -10701,16 +10732,29 @@ fn emit_ptx_while(node: i32, vtab: i32) -> i32 {
 // value). Returns the destination register.
 fn emit_ptx_assign(node: i32, vtab: i32) -> i32 {
     let rv = emit_ptx_expr(__arena_get(node + 3), vtab);
+    // K1.GPU-ABI (P5 Step B): capture the RHS float flag BEFORE the vtab lookup, so
+    // an f32 accumulator (matmul: acc = acc + a*b) re-assigns via mov.f32 %f and an
+    // i32 loop var (t = t + 1) via mov.s32 %r. (vtab+55 = 1 when the RHS is f32.)
+    let is_f = __arena_get(vtab + 55);
     let rx = ptx_vtab_lookup(vtab, __arena_get(node + 1), __arena_get(node + 2));
-    // "    mov.s32 %r<rx>, %r<rv>;\n"
-    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
-    emit_ptx_byte(32); emit_ptx_byte(109); emit_ptx_byte(111);
-    emit_ptx_byte(118); emit_ptx_byte(46); emit_ptx_byte(115);
-    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
-    emit_ptx_byte(37); emit_ptx_byte(114);
-    emit_ptx_decimal(rx);
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
-    emit_ptx_byte(114); emit_ptx_decimal(rv);
+    emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
+    if is_f == 1 {
+        // "mov.f32 %f<rx>, %f<rv>"
+        emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);
+        emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(102);
+        emit_ptx_decimal(rx);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(102);
+        emit_ptx_decimal(rv);
+    } else {
+        // "mov.s32 %r<rx>, %r<rv>"
+        emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+        emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+        emit_ptx_decimal(rx);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+        emit_ptx_decimal(rv);
+    };
     emit_ptx_byte(59); emit_ptx_byte(10);
     rx
 }
@@ -10778,6 +10822,13 @@ fn ptx_param_type(fn_idx: i32, name_s: i32, name_l: i32) -> i32 {
 //   "    ld.param.u32 %r<r>, [param_<pidx>];\n"
 // Mirrors the ld.param.u64 pointer-load in emit_ptx_index_load, but .u32 into a
 // %r reg -- for scalar dims like M/K/N read in a kernel body (loop bounds/strides).
+// K1.GPU-ABI (P5 Step B): 1 if t is a let tag -- AST_LET (8) or AST_LET_MUT (12,
+// "let mut"). Both lower identically in the PTX path (same slots); the emitter
+// previously handled only tag 8 and silently dropped a let-mut subtree, losing the
+// matmul accumulator (and crashing downstream on the resulting unbound -1 register).
+fn ptx_is_let_tag(t: i32) -> i32 {
+    if t == 8 { 1 } else { if t == 12 { 1 } else { 0 } }
+}
 fn emit_ptx_ld_param_u32(r: i32, pidx: i32) -> i32 {
     emit_ptx_indent();
     emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);

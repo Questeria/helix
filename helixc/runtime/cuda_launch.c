@@ -69,6 +69,49 @@ int main(int argc, char** argv) {
     CUmodule mod; CK(cuModuleLoadData(&mod, ptx), "cuModuleLoadData");
     CUfunction fn; CK(cuModuleGetFunction(&fn, mod, kname), "cuModuleGetFunction");
 
+    /* matmul mode: cuda_launch <ptx> <kernel> <Nvec-ignored> matmul <M> <K> <N>.
+     * One thread per output cell -- gridDim.x=M (row=block_idx), blockDim.x=N
+     * (col=thread_idx). Verifies EVERY M*N cell of C against a CPU reference in the
+     * SAME accumulation order the kernel uses (acc=a[row*K]*b[col], then += k=1..K-1),
+     * with integer-valued inputs (a[i]=i%7, b[i]=i%5) so all sums are exact in f32. */
+    if (strcmp(op, "matmul") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 16;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 16;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 16;
+        size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        float* hA = (float*)malloc(aN * sizeof(float));
+        float* hB = (float*)malloc(bN * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hC) return 2;
+        for (size_t i = 0; i < aN; i++) hA[i] = (float)(i % 7);
+        for (size_t i = 0; i < bN; i++) hB[i] = (float)(i % 5);
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(float)), "cuMemAlloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(float)), "cuMemAlloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)), "cuMemAlloc C");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "cuMemcpyHtoD A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "cuMemcpyHtoD B");
+        void* margs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, margs, 0), "cuLaunchKernel matmul");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "cuMemcpyDtoH C");
+        int mbad = 0;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                float ref = hA[r * Kd] * hB[cc];
+                for (int t = 1; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
+                float got = hC[r * Nd + cc];
+                if (got != ref) { if (mbad < 4) fprintf(stderr, "matmul mismatch C[%d,%d]=%g ref %g\n", r, cc, got, ref); mbad++; }
+            }
+        }
+        printf("GPU [%s] naive_matmul %dx%dx%d over %d cells: C[1,1]=%g, %d bad -> %s\n",
+               gpu, Md, Kd, Nd, Md * Nd, hC[1 * Nd + 1], mbad, mbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return mbad ? 1 : 0;
+    }
+
     size_t bytes = (size_t)N * sizeof(float);
     float* ha = (float*)malloc(bytes);
     float* hb = (float*)malloc(bytes);
