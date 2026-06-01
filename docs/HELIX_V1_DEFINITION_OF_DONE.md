@@ -37,7 +37,7 @@ auditable, not asserted.
 |---|-----------|----------------------------|---------------------|
 | 1 | **Self-hosts (full language)** | byte-identical self-host fixpoint `K2 == K3` on the FULL `kovc` source — no i32-subset restriction, no external `ulimit` (the canonical self-host test unskipped + green) | 🔶 partial (i32 fixpoint ✅; canonical test still skipped pending big-stack) |
 | 2 | **Feature-complete + runs (CPU)** | 100% of a language-feature corpus **compiles AND runs** correctly: structs, enums, `match`, generics, traits, closures, floats, all int widths, `grad`, `tile` | 🔶 most features compile; full compile+run corpus not yet 100% |
-| 3 | **GPU executes** ⭐ | `tile` kernels run on **real GPU hardware**, results match reference (GPU corpus green on HW) | ❌ **stubs — THE GATE** |
+| 3 | **GPU executes** ⭐ THE GATE | `tile` kernels run on **real GPU hardware**, results match reference (GPU corpus green on HW) | 🔶 **FIRST-LIGHT GREEN (2026-06-01)** — kovc-emitted `vector_add` PTX executes on the RTX 3070, `c[7]=21` verified over 256 elems, 2-agent adversarial audit PASS/HIGH (negative controls); remaining: tiled GEMM + transformer-op corpus on HW (P5). See `docs/HELIX_GPU_FIRSTLIGHT.md` |
 | 4 | **Autodiff correct** | `grad` gradients match numerical/reference gradients on CPU **and** GPU (gradient-check suite green) | 🔶 CPU autodiff exists; GPU + full gradient-check pending |
 | 5 | **Full-language trust** | the diverse-double-compile passes over a **feature-diverse** corpus (beyond i32) | 🔶 i32 DDC ✅ (5/5 audits); feature-diverse corpus pending |
 | 6 | **Python-free + raw-binary** | the **entire** toolchain (compiler, test runner, build) is Helix/seed/ladder only; **zero `.py`** in the live toolchain; reproducible from hex0 | 🔶 **reference compiler DELETED 2026-05-31 (K4)**; mint verified Python-free; remaining: de-Python `assemble_k1.py` + DDC harnesses + 5 dev scripts, + port test-infra to Helix |
@@ -61,7 +61,7 @@ correctly.
 
 - ✅ **Trust + bootstrap** — from-raw-binary, DDC-verified (i32 core), 5/5 clean audits, full pre-K4 backup tagged. *The hardest-to-trust part is already done.*
 - ✅ **K4 done (2026-05-31)** — the Python reference compiler is **deleted**; the mint is verified Python-free (seed → kovc, 17/17 tests, `6*7`→42). Pre-K4 state preserved at tag `v0-pre-k4-full-with-python`; post-K4 at `k4-python-compiler-deleted`.
-- ❌ **The gate (#3)** — GPU execution. The `tile`/PTX emitters are stubs. This is the **single biggest** item between today and the capstone.
+- 🔶 **The gate (#3) — FIRST-LIGHT CROSSED (2026-06-01).** kovc-emitted PTX runs correctly on the RTX 3070 (`vector_add`, independently audited PASS/HIGH with negative controls). The GATE *mechanism* — a raw-binary-bootstrapped Helix toolchain driving real GPU execution end-to-end — is proven. Remaining for full #3 is **breadth**: general tiled GEMM (shared-memory + barriers, not register-only) + the transformer-op corpus on HW (P5). See `docs/HELIX_GPU_FIRSTLIGHT.md`.
 - 🔶 **Remaining** — full-feature compile+run + feature-diverse DDC (#1,#2,#4,#5); *finish* Python removal (#6 — compiler gone; still to de-Python `assemble_k1.py` + the DDC harnesses + 5 dev scripts, and port test-infra to Helix); stdlib + spec freeze (#7,#8).
 
 ```
