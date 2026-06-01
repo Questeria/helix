@@ -64,12 +64,21 @@ for k in K1 K2 K3 K4; do
   printf "  %s %s bytes  %s\n" "$k" "$(stat -c%s /tmp/$k.bin)" "$(sha256sum /tmp/$k.bin | awk '{print $1}')"
 done
 
-echo "=== verdict ==="
+echo "=== Helix-native byte-identity check (selfhost_bytecmp.hx, seed-compiled) ==="
+# The load-bearing equality assertion done by a HELIX program built by the raw-binary
+# seed (read_file_to_arena + arena byte-compare), cross-checked against bash cmp.
+./seed.bin selfhost_bytecmp.hx /tmp/bytecmp.bin && chmod +x /tmp/bytecmp.bin
+helix_eq () { cp "$1" /tmp/cmp_a; cp "$2" /tmp/cmp_b; /tmp/bytecmp.bin; echo $?; }
+hx23=$(helix_eq /tmp/K2.bin /tmp/K3.bin)
+hx34=$(helix_eq /tmp/K3.bin /tmp/K4.bin)
+echo "  Helix-checker: K2 vs K3 -> $hx23  K3 vs K4 -> $hx34  (0 = identical)"
+
+echo "=== verdict (cmp AND Helix-native checker must agree) ==="
 v=0
-if cmp -s /tmp/K2.bin /tmp/K3.bin; then echo "  K2 == K3  IDENTICAL"; else echo "  K2 != K3  DIFFER"; v=1; fi
-if cmp -s /tmp/K3.bin /tmp/K4.bin; then echo "  K3 == K4  IDENTICAL"; else echo "  K3 != K4  DIFFER"; v=1; fi
+if cmp -s /tmp/K2.bin /tmp/K3.bin && [ "$hx23" = "0" ]; then echo "  K2 == K3  IDENTICAL (cmp + Helix agree)"; else echo "  K2 vs K3  MISMATCH"; v=1; fi
+if cmp -s /tmp/K3.bin /tmp/K4.bin && [ "$hx34" = "0" ]; then echo "  K3 == K4  IDENTICAL (cmp + Helix agree)"; else echo "  K3 vs K4  MISMATCH"; v=1; fi
 if [ $v -eq 0 ]; then
-  echo "RESULT: PYTHON-FREE FULL-SOURCE SELF-HOST FIXPOINT PASS (K2==K3==K4 byte-identical)"
+  echo "RESULT: PYTHON-FREE FULL-SOURCE SELF-HOST FIXPOINT PASS (K2==K3==K4 byte-identical; Helix-native check + cmp agree)"
 else
   echo "RESULT: FIXPOINT FAIL"
 fi
