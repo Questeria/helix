@@ -147,10 +147,10 @@ int main(int argc, char** argv) {
                 float got = hy[r * cols + c];
                 rowsum += got;
                 float d = got - ref; if (d < 0) d = -d;
-                if (d > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax mismatch y[%d,%d]=%g ref %g\n", r, c, got, ref); sbad++; }
+                if (isnan(got) || d > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax mismatch y[%d,%d]=%g ref %g\n", r, c, got, ref); sbad++; }
             }
             float ds = rowsum - 1.0f; if (ds < 0) ds = -ds;
-            if (ds > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax row %d sum %g (want 1)\n", r, rowsum); sbad++; }
+            if (isnan(rowsum) || ds > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax row %d sum %g (want 1)\n", r, rowsum); sbad++; }
         }
         float r0s = 0.0f; for (int c = 0; c < cols; c++) r0s += hy[c];
         printf("GPU [%s] softmax %dx%d: row0 sum=%g (want 1), %d bad -> %s\n",
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
         float want = is_exp ? expf(ha[i]) : is_relu ? (ha[i] > 0.0f ? ha[i] : 0.0f)
                    : is_rev ? ha[N - 1 - i] : is_mul ? ha[i] * hb[i] : is_sub ? ha[i] - hb[i] : ha[i] + hb[i];
         int bad_i;
-        if (is_exp) { float d = hc[i] - want; if (d < 0) d = -d; float aw = want < 0 ? -want : want; bad_i = (d > 1.0e-3f * (aw + 1.0e-6f)); }
+        if (is_exp) { float d = hc[i] - want; if (d < 0) d = -d; float aw = want < 0 ? -want : want; bad_i = (isnan(hc[i]) || d > 1.0e-3f * (aw + 1.0e-6f)); }
         else bad_i = (hc[i] != want);
         if (bad_i) { if (bad < 4) fprintf(stderr, "mismatch c[%d]=%g want %g\n", i, hc[i], want); bad++; }
     }
