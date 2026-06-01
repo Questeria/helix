@@ -54,6 +54,20 @@ static float ln_rowL(const float* xr, const float* dyr, const float* gam, int co
     return L;
 }
 
+/* CPU single-head attention forward: out = softmax(0.25*Q@K^T) @ V, all [S,d] row-major.
+ * Used by the attn_backward finite-difference (perturb an input, recompute out, L=sum(dOut*out)).
+ * S is bounded by 64 here so the SxS scratch fits the static buffers. */
+static void attn_forward_cpu(const float* Q, const float* K, const float* V, float* out, int S, int d) {
+    static float sc[4096]; static float at[4096];
+    for (int i = 0; i < S; i++) {
+        for (int j = 0; j < S; j++) { float dot = 0.0f; for (int t = 0; t < d; t++) dot += Q[i * d + t] * K[j * d + t]; sc[i * S + j] = 0.25f * dot; }
+        float mx = sc[i * S]; for (int j = 1; j < S; j++) if (sc[i * S + j] > mx) mx = sc[i * S + j];
+        float sm = 0.0f; for (int j = 0; j < S; j++) sm += expf(sc[i * S + j] - mx);
+        for (int j = 0; j < S; j++) at[i * S + j] = expf(sc[i * S + j] - mx) / sm;
+    }
+    for (int i = 0; i < S; i++) for (int t = 0; t < d; t++) { float o = 0.0f; for (int j = 0; j < S; j++) o += at[i * S + j] * V[j * d + t]; out[i * d + t] = o; }
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub|reverse]\n", argv[0]);
@@ -177,6 +191,94 @@ int main(int argc, char** argv) {
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hQ); free(hK); free(hV); free(hO); free(hA); free(sc); free(at); free(ptx);
         return abad ? 1 : 0;
+    }
+
+    /* attn_backward mode: cuda_launch <combined.ptx> gpu_qkt <Nignored> attn_backward <S> <d>.
+     * combined.ptx has 7 entries (gpu_qkt, gpu_softmax, naive_matmul, gpu_matmul_abt,
+     * gpu_matmul_atb, gpu_softmax_backward, gpu_scale_inplace). Single-head attention forward
+     * (scores=0.25*Q@K^T -> softmax -> out=attn@V) + backward given dOut: dV=attn^T@dOut,
+     * d_attn=dOut@V^T, d_scores=softmax_bwd(attn,d_attn), dQ=0.25*d_scores@K, dK=0.25*d_scores^T@Q.
+     * Verify dQ/dK/dV vs a central finite-difference of L=sum(dOut*out) wrt Q/K/V (INDEPENDENT;
+     * uses only the forward; tol 2e-2). mod already loaded from argv[1]. */
+    if (strcmp(op, "attn_backward") == 0) {
+        int S = (argc > 5) ? atoi(argv[5]) : 8;
+        int d = (argc > 6) ? atoi(argv[6]) : 16;
+        CUfunction f_qkt, f_sm, f_mm, f_abt, f_atb, f_smb, f_sc;
+        CK(cuModuleGetFunction(&f_qkt, mod, "gpu_qkt"), "get qkt");
+        CK(cuModuleGetFunction(&f_sm, mod, "gpu_softmax"), "get softmax");
+        CK(cuModuleGetFunction(&f_mm, mod, "naive_matmul"), "get matmul");
+        CK(cuModuleGetFunction(&f_abt, mod, "gpu_matmul_abt"), "get abt");
+        CK(cuModuleGetFunction(&f_atb, mod, "gpu_matmul_atb"), "get atb");
+        CK(cuModuleGetFunction(&f_smb, mod, "gpu_softmax_backward"), "get sm_bwd");
+        CK(cuModuleGetFunction(&f_sc, mod, "gpu_scale_inplace"), "get scale");
+        size_t sd = (size_t)S * d, ss = (size_t)S * S;
+        float* hQ = (float*)malloc(sd * sizeof(float));
+        float* hK = (float*)malloc(sd * sizeof(float));
+        float* hV = (float*)malloc(sd * sizeof(float));
+        float* hdO = (float*)malloc(sd * sizeof(float));
+        float* hdV = (float*)malloc(sd * sizeof(float));
+        float* hdQ = (float*)malloc(sd * sizeof(float));
+        float* hdK = (float*)malloc(sd * sizeof(float));
+        float* tmp = (float*)malloc(sd * sizeof(float));
+        float* ob = (float*)malloc(sd * sizeof(float));
+        if (!hQ || !hK || !hV || !hdO || !hdV || !hdQ || !hdK || !tmp || !ob) return 2;
+        for (size_t i = 0; i < sd; i++) {
+            hQ[i] = (float)((int)(i % 7) - 3) * 0.1f;
+            hK[i] = (float)((int)(i % 5) - 2) * 0.1f;
+            hV[i] = (float)((int)(i % 9) - 4) * 0.1f;
+            hdO[i] = (float)((int)(i % 6) - 2) * 0.1f;
+        }
+        CUdeviceptr gQ, gK, gV, gdO, gSc, gAt, gDat, gDsc, gOut, gDV, gDQ, gDK;
+        CK(cuMemAlloc(&gQ, sd * sizeof(float)), "Q"); CK(cuMemAlloc(&gK, sd * sizeof(float)), "K");
+        CK(cuMemAlloc(&gV, sd * sizeof(float)), "V"); CK(cuMemAlloc(&gdO, sd * sizeof(float)), "dO");
+        CK(cuMemAlloc(&gSc, ss * sizeof(float)), "Sc"); CK(cuMemAlloc(&gAt, ss * sizeof(float)), "At");
+        CK(cuMemAlloc(&gDat, ss * sizeof(float)), "Dat"); CK(cuMemAlloc(&gDsc, ss * sizeof(float)), "Dsc");
+        CK(cuMemAlloc(&gOut, sd * sizeof(float)), "Out"); CK(cuMemAlloc(&gDV, sd * sizeof(float)), "DV");
+        CK(cuMemAlloc(&gDQ, sd * sizeof(float)), "DQ"); CK(cuMemAlloc(&gDK, sd * sizeof(float)), "DK");
+        CK(cuMemcpyHtoD(gQ, hQ, sd * sizeof(float)), "h2d Q"); CK(cuMemcpyHtoD(gK, hK, sd * sizeof(float)), "h2d K");
+        CK(cuMemcpyHtoD(gV, hV, sd * sizeof(float)), "h2d V"); CK(cuMemcpyHtoD(gdO, hdO, sd * sizeof(float)), "h2d dO");
+        int Si = S, di = d, sdi = (int)sd;
+        /* FORWARD */
+        void* fa[] = { &gQ, &gK, &gSc, &Si, &di }; CK(cuLaunchKernel(f_qkt, S, 1, 1, S, 1, 1, 0, 0, fa, 0), "qkt"); CK(cuCtxSynchronize(), "s");
+        void* fb[] = { &gSc, &gAt, &Si, &Si }; CK(cuLaunchKernel(f_sm, S, 1, 1, 1, 1, 1, 0, 0, fb, 0), "sm"); CK(cuCtxSynchronize(), "s");
+        void* fc[] = { &gAt, &gV, &gOut, &Si, &Si, &di }; CK(cuLaunchKernel(f_mm, S, 1, 1, d, 1, 1, 0, 0, fc, 0), "mm"); CK(cuCtxSynchronize(), "s");
+        /* BACKWARD */
+        void* b1[] = { &gAt, &gdO, &gDV, &Si, &Si, &di }; CK(cuLaunchKernel(f_atb, S, 1, 1, d, 1, 1, 0, 0, b1, 0), "dV"); CK(cuCtxSynchronize(), "s");
+        void* b2[] = { &gdO, &gV, &gDat, &Si, &di, &Si }; CK(cuLaunchKernel(f_abt, S, 1, 1, S, 1, 1, 0, 0, b2, 0), "dAttn"); CK(cuCtxSynchronize(), "s");
+        void* b3[] = { &gAt, &gDat, &gDsc, &Si, &Si }; CK(cuLaunchKernel(f_smb, S, 1, 1, 1, 1, 1, 0, 0, b3, 0), "dScores"); CK(cuCtxSynchronize(), "s");
+        void* b4[] = { &gDsc, &gK, &gDQ, &Si, &Si, &di }; CK(cuLaunchKernel(f_mm, S, 1, 1, d, 1, 1, 0, 0, b4, 0), "dQ"); CK(cuCtxSynchronize(), "s");
+        void* s1[] = { &gDQ, &sdi }; CK(cuLaunchKernel(f_sc, sdi, 1, 1, 1, 1, 1, 0, 0, s1, 0), "scaleQ"); CK(cuCtxSynchronize(), "s");
+        void* b5[] = { &gDsc, &gQ, &gDK, &Si, &Si, &di }; CK(cuLaunchKernel(f_atb, S, 1, 1, d, 1, 1, 0, 0, b5, 0), "dK"); CK(cuCtxSynchronize(), "s");
+        void* s2[] = { &gDK, &sdi }; CK(cuLaunchKernel(f_sc, sdi, 1, 1, 1, 1, 1, 0, 0, s2, 0), "scaleK"); CK(cuCtxSynchronize(), "s");
+        CK(cuMemcpyDtoH(hdV, gDV, sd * sizeof(float)), "d2h dV");
+        CK(cuMemcpyDtoH(hdQ, gDQ, sd * sizeof(float)), "d2h dQ");
+        CK(cuMemcpyDtoH(hdK, gDK, sd * sizeof(float)), "d2h dK");
+        /* finite-difference of L=sum(dOut*out) wrt Q (->dQ), K (->dK), V (->dV). */
+        int bad = 0; float maxe = 0.0f, q0 = hdQ[0], q0r = 0.0f, h = 1.0e-3f;
+        for (int pass = 0; pass < 3; pass++) {
+            float* base = (pass == 0) ? hQ : (pass == 1) ? hK : hV;
+            float* got = (pass == 0) ? hdQ : (pass == 1) ? hdK : hdV;
+            for (size_t i = 0; i < sd; i++) {
+                for (size_t k = 0; k < sd; k++) tmp[k] = base[k];
+                tmp[i] = base[i] + h;
+                attn_forward_cpu(pass == 0 ? tmp : hQ, pass == 1 ? tmp : hK, pass == 2 ? tmp : hV, ob, S, d);
+                float Lp = 0.0f; for (size_t k = 0; k < sd; k++) Lp += hdO[k] * ob[k];
+                tmp[i] = base[i] - h;
+                attn_forward_cpu(pass == 0 ? tmp : hQ, pass == 1 ? tmp : hK, pass == 2 ? tmp : hV, ob, S, d);
+                float Lm = 0.0f; for (size_t k = 0; k < sd; k++) Lm += hdO[k] * ob[k];
+                float fd = (Lp - Lm) / (2.0f * h);
+                if (pass == 0 && i == 0) q0r = fd;
+                float e = got[i] - fd; if (e < 0) e = -e; if (e > maxe) maxe = e;
+                if (isnan(got[i]) || e > 2.0e-2f) { if (bad < 6) fprintf(stderr, "attn_bwd pass %d [%zu] got %g fd %g\n", pass, i, got[i], fd); bad++; }
+            }
+        }
+        printf("GPU [%s] attn_backward S=%d d=%d: dQ[0]=%g fd %g, max|grad-fd|=%g, %d bad -> %s\n",
+               gpu, S, d, q0, q0r, maxe, bad, bad ? "FAIL" : "PASS");
+        cuMemFree(gQ); cuMemFree(gK); cuMemFree(gV); cuMemFree(gdO); cuMemFree(gSc); cuMemFree(gAt);
+        cuMemFree(gDat); cuMemFree(gDsc); cuMemFree(gOut); cuMemFree(gDV); cuMemFree(gDQ); cuMemFree(gDK);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hQ); free(hK); free(hV); free(hdO); free(hdV); free(hdQ); free(hdK); free(tmp); free(ob); free(ptx);
+        return bad ? 1 : 0;
     }
 
     /* ce_softmax_grad mode: cuda_launch <ptx> gpu_ce_softmax_grad <Nignored> ce_softmax_grad <rows> <cols>.
