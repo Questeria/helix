@@ -1,0 +1,30 @@
+=================== CAPSTONE AUDIT ROUND round5  18:58:18 ===================
+=== [1] gate_kovc.sh (fixpoint + GPU PTX + corpus; mints /tmp/newdrv.bin from seed) ===
+  GATE_PASS  (96c440d3c42aa193... ; CORPUS: 35 passed, 0 failed (expect 35 pass: all sample features green incl assoc/cmp/bitwise/array/while/f64/tuple/impl-method/match-or-range/vec-on-arena; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus))
+=== [2] PTX-driver kovc (fresh from raw-binary seed) ===
+  driver (seed-minted) 595991 B  sha=fa8406b0cec79564
+=== [3] emit combined.ptx (15 kovc-emitted kernels via the seed-minted driver) ===
+  concatenated 15 kernel sources
+  combined.ptx 37731 B, 15 .entry kernels
+=== [4a] train_transformer VERIFY: backward finite-diff gradient check ===
+      dW_lm  : 5/5 checked, max|grad-fd|=6.63439e-05 -> ok
+      dW2[1] : 5/5 checked, max|grad-fd|=0.000273864 -> ok
+      dWo[1] : 5/5 checked, max|grad-fd|=0.000513844 -> ok
+      dWq[0] : 5/5 checked, max|grad-fd|=0.00120616 -> ok
+      dW1[0] : 5/5 checked, max|grad-fd|=0.000533017 -> ok
+      dWv[1] : 5/5 checked, max|grad-fd|=0.000860558 -> ok
+    GPU [NVIDIA GeForce RTX 3070 Laptop GPU] backward finite-diff: PASS
+  FINITE-DIFF: PASS (rc=0)
+=== [4b] train_transformer TRAIN: 500 Adam steps on GPU ===
+    GPU [NVIDIA GeForce RTX 3070 Laptop GPU] step0 loss = 62.350887 (sum CE; mean=3.8969, log V=3.4657)
+    GPU [NVIDIA GeForce RTX 3070 Laptop GPU] train K=500: start loss 62.350887 -> final 0.415819 (mean 0.02599)
+  final loss = 0.41581876  (NC1: must be 0 < L < 1.0)  rc=0
+=== [5] numpy oracle (independent) + within-2% compare ===
+  oracle rc=0
+  worst-case relative diff = 0.00000876 over 22 comparable rows  (bar = 0.02)
+  NC2: curves differ (genuinely independent) ok
+=== [6] negative control: corrupt gpu_gelu_backward -> finite-diff MUST catch it ===
+  NC-PERTURB ok (corrupted backward caught: GPU [NVIDIA GeForce RTX 3070 Laptop GPU] backward finite-diff: FAIL)
+=================== VERDICT ===================
+CAPSTONE_AUDIT_PASS
+(round round5 done 19:04:47)

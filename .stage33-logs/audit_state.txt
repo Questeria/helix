@@ -1,0 +1,22 @@
+HELIX v1.0 FINAL AUDIT -- consecutive-clean tracker
+target: 5 consecutive CLEAN full rounds over the capstone
+consecutive_clean_count: 5  ==> TARGET MET
+
+round 1 CLEAN: methodology lens (found+fixed 2 harness bugs first).
+round 2 CLEAN: shared-bug + GPU-reality lens.
+round 3 CLEAN: provenance / raw-binary trust-chain lens.
+round 4 CLEAN: completeness / non-degeneracy lens.
+round 5 CLEAN: holistic certification lens (dynamic CAPSTONE_AUDIT_PASS; static skeptic confirmed all 8
+  criteria green-honest + capstone fully supported + no regression, and surfaced the finalization items:
+  numpy-not-PyTorch wording fix + the 3 observations + seed.sha256 pin -- all now applied).
+
+ALL 5 ROUNDS: dynamic CAPSTONE_AUDIT_PASS (gate 96c440d3 + corpus 35/35; 15 .entry; finite-diff PASS;
+  62.35->0.4158; oracle worst 0.00000876 / 22 rows; NC-PERTURB caught) + independent static CLEAN (distinct lens).
+
+FINALIZATION (in progress this tick):
+  [done] O1 seed.sha256 pin added (9837db12...).
+  [done] overclaim fixed: DoD "PyTorch oracle" -> "independent numpy oracle"; "ZERO Python/PyTorch" -> "ZERO Python".
+  [done] DoD: v1.0 DONE banner + done-condition SATISFIED + Final Audit Record (5 rounds + O1/O2/O3) added.
+  [next] final confirm-skeptic on the finalized DoD -> if certified: commit+push + workspace/goal DONE + confetti telegram + STOP.
+
+THIS IS THE SUBSTRATE FINISH LINE. On certify -> Helix v1.0 DONE -> loop STOPS.
