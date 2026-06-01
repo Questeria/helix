@@ -1,0 +1,7 @@
+# Backup archives are large binaries -- keep them on disk, not in git history.
+# They are documented + checksummed in README.md.
+*.bundle
+*.tar
+*.tar.gz
+*.tar.zst
+*.zip
