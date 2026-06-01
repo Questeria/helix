@@ -35,11 +35,24 @@ fn main() -> i32 {
 """
 input_main = driver_main.replace("/tmp/k1_in.hx", "/tmp/k2_in.hx").replace("/tmp/k1_out.bin", "/tmp/k2_out.bin")
 
+# PTX-driver main (P1.2, GPU first-light / DoD criterion #3): read an @kernel .hx,
+# auto-route to PTX via the EXISTING emit_auto_for_ast_to_path dispatcher, write the
+# .ptx. Differs from driver_main ONLY in the emitter call + the fixed in/out paths,
+# so it touches NO frozen helixc/bootstrap source -> no self-host-fixpoint impact.
+ptx_driver_main = (driver_main
+    .replace("/tmp/k1_in.hx", "/tmp/kernel_in.hx")
+    .replace("emit_elf_for_ast_to_path", "emit_auto_for_ast_to_path")
+    .replace("/tmp/k1_out.bin", "/tmp/out.ptx")
+    .replace("elf_start", "ptx_start"))
+
 k1_driver = lexer_no_main + parser_body + kovc_lib + driver_main
 k1_input = lexer_no_main + parser_body + kovc_lib + input_main
+k1_ptx_driver = lexer_no_main + parser_body + kovc_lib + ptx_driver_main
 
 here = os.path.dirname(os.path.abspath(__file__))
 open(os.path.join(here, "k1src.hx"), "w", encoding="utf-8", newline="\n").write(k1_driver)
 open(os.path.join(here, "k1input.hx"), "w", encoding="utf-8", newline="\n").write(k1_input)
+open(os.path.join(here, "k1ptxdrv.hx"), "w", encoding="utf-8", newline="\n").write(k1_ptx_driver)
 print("k1_driver:", k1_driver.count(chr(10)) + 1, "lines,", len(k1_driver.encode("utf-8")), "bytes -> k1src.hx")
 print("k1_input :", k1_input.count(chr(10)) + 1, "lines,", len(k1_input.encode("utf-8")), "bytes -> k1input.hx")
+print("k1_ptxdrv:", k1_ptx_driver.count(chr(10)) + 1, "lines,", len(k1_ptx_driver.encode("utf-8")), "bytes -> k1ptxdrv.hx")
