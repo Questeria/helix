@@ -6,6 +6,20 @@ from hex0. The user's broader constraint is stricter: **NO Python OR OTHER LANGU
 remain in the project at v1.0 (so `.c`, `.sh` also count, eventually). This plan inventories
 the non-Helix in the live tree and sequences its removal.
 
+> **✅ EXECUTED 2026-06-01 — Python purge complete (criterion #6 GREEN).** Removed the
+> 93-file `HELIX_STAGE30_COMPILER_SNAPSHOT/` (archived pre-self-host Python compiler;
+> preserved in tag `v0-pre-k4-full-with-python`), the 4 dead `helixc.*`-importing dev
+> scripts (`proof_artifact_{gate,key,validate}`, `mlir_audit_canaries`), the dev status
+> reporter (`helix_status.py`), and the 2 non-load-bearing hex0 audit aids (`encode.py`,
+> `hex0_reference.py`; `hex0.bin` SHA byte-identical after). The **only** `.py` remaining
+> is the numpy oracle, relocated to a fenced `verification/oracle/` (decision 4, an
+> independent verification reference outside the Helix tree). The toolchain self-hosts
+> **byte-identically Python-free** (post-purge gate: fixpoint `96c440d3` K2==K3==K4 + GPU
+> PTX byte-identical + corpus 35/35). Remaining non-Helix is by DECLARED trusted-tool
+> boundary: the C GPU launcher (decision 3) and shell build-orchestration — a Helix
+> concatenator/test-runner is post-v1.0 (#13). See `HELIX_V1_DEFINITION_OF_DONE.md`,
+> "v1.0 SCOPE DECISIONS".
+
 ## Trust-root boundary (EXEMPT — intentionally not Helix)
 
 The from-raw-binary trust root is the bootstrap seed; you cannot bootstrap Helix from Helix.

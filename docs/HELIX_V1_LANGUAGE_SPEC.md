@@ -1,13 +1,15 @@
 # Helix v1.0 — Language Reference (DRAFT)
 
-**Status: DRAFT (not frozen).** This documents the Helix language **as actually
+**Status: FROZEN — v1.0 (2026-06-01).** This documents the Helix language **as actually
 implemented by the self-hosted compiler `kovc`** (helixc/bootstrap/{lexer,parser,kovc}.hx),
-the only compiler after K4 (the Python reference was deleted). A formal **freeze**
-(DoD criterion #8 green) requires (a) the open scope decisions below resolved, and
-(b) the language to stop changing. This draft is the precursor.
+the only compiler after K4 (the Python reference was deleted). The v1.0 scope decisions
+(§7) are **RESOLVED** (generics/traits/closures = post-v1.0; `Ok`/`Err`/`Result` =
+user-defined — see `HELIX_V1_DEFINITION_OF_DONE.md`, "v1.0 SCOPE DECISIONS"), and the v1.0
+language surface is committed: **no breaking changes after v1.0**. Post-v1.0 additions (the
+deferred features) extend this spec; they do not change what v1.0 defines.
 
 **Honesty legend** — every feature is marked:
-- **[proven]** — exercised + passing in the 17-program feature corpus (`scripts/feature_corpus.sh`), compiled+run on the self-hosted compiler.
+- **[proven]** — exercised + passing in the 35-program feature corpus (`scripts/feature_corpus.sh`), compiled+run on the self-hosted compiler.
 - **[impl]** — implemented in `kovc` codegen, not in the sample corpus (works, but not yet corpus-proven).
 - **[erased]** — *parsed* but type-erased / not enforced / no real codegen (accepts the syntax, does NOT give the semantics).
 - **[unsupported]** — no syntax / not implemented.
@@ -111,20 +113,20 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 - **No** `for` loops, compound-assignment, traits, closures, references/pointers, module visibility, async, exhaustiveness checks, const-folding. [unsupported/erased]
 - Lifetimes/`where`-clauses parsed but ignored. [erased]
 
-**OPEN v1.0 SCOPE DECISIONS (for the user — these gate criterion #2 "feature-complete" + the #8 freeze):**
-1. **generics / traits / closures** — the DoD #2 corpus lists them, but they are erased/unsupported and dogfood comments say "post-v1.0". Are they **in** v1.0 scope (→ must implement monomorphization etc., large) or **deferred** (→ remove from #2's required corpus)?
-2. **`Ok`/`Err`/`Result`** — builtins (stdlib-provided) or always user-defined `enum`? (Affects #2 + #7 stdlib.)
-3. (From DoD #6) **CUDA C launcher** — implement a Helix FFI (~weeks) or accept the trusted C launcher as a documented exception like the ladder/ptxas? **numpy oracle** — keep as fenced-offline audit exception or port?
+**v1.0 SCOPE DECISIONS — RESOLVED 2026-06-01** (see `HELIX_V1_DEFINITION_OF_DONE.md`, "v1.0 SCOPE DECISIONS"):
+1. **generics / traits / closures** — **post-v1.0** (deferred). Erased/unsupported above; not in the v1.0 feature set. They extend this spec later without changing what v1.0 defines.
+2. **`Ok`/`Err`/`Result`** — **user-defined `enum`** (not builtins); proven by `result_inline.hx` (→42). The more Helix-native answer; needs no compiler magic.
+3. **CUDA C launcher** — **documented trusted-tool boundary** (compute-free C shim, same category as `ld`/`ptxas`; NOT FFI). **numpy oracle** — **fenced external verification reference** (`verification/oracle/`), kept because an independent oracle is required for trustworthy verification.
 
 ---
 
-## 8. Proven corpus (the 17 programs, `scripts/feature_corpus.sh`)
+## 8. Proven corpus (the 35 programs, `scripts/feature_corpus.sh`)
 
 baseline-literal (42) · scalar-arith (69) · struct+enum+match (129) · payload-enum+match (42) ·
 enum+recursion (120) · nested-PatStruct-destructure (42) · user-defined-`enum Result`+match (42) ·
 grad+float (42) · i64 cast/cmp/neg · i64 mul-beyond-i32 (6) · i64 div-beyond-i32 (50) ·
-u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42) · left-assoc sub/div · comparisons (ne/ge/le) · bitwise (and-or/xor/shl) · array literal+index · while + break · **f64** add/mul · **tuples** · **impl-method** (self) · **match or/range patterns**. **34/34 pass on the self-hosted K2 (2026-06-01).**
+u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42) · left-assoc sub/div · comparisons (ne/ge/le) · bitwise (and-or/xor/shl) · array literal+index · while + break · **f64** add/mul · **tuples** · **impl-method** (self) · **match or/range patterns** · **collections** (Vec-on-arena POC →45). **35/35 pass on the self-hosted K2 (2026-06-01).**
 
 ---
 
-*Draft authored 2026-06-01 from a read-only enumeration of `kovc`/`lexer`/`parser` + the proven corpus. Freeze pending the §7 scope decisions and language stability.*
+*Authored 2026-06-01 from a read-only enumeration of `kovc`/`lexer`/`parser` + the proven corpus. **FROZEN v1.0 (2026-06-01)** — §7 scope decisions resolved; v1.0 language surface committed.*
