@@ -163,6 +163,57 @@ int main(int argc, char** argv) {
         return abad ? 1 : 0;
     }
 
+    /* ce_softmax_grad mode: cuda_launch <ptx> gpu_ce_softmax_grad <Nignored> ce_softmax_grad <rows> <cols>.
+     * softmax-cross-entropy backward: dlogits[r,c]=softmax(logits[r,:])[c]-onehot(tgt[r])[c]. Targets
+     * passed as f32 (class index as float). Verify cell-by-cell vs a CPU softmax-minus-onehot ref
+     * (tol 1e-4) AND the INDEPENDENT conservation property that each grad row sums to ~0 (a missing
+     * or misplaced onehot breaks this even when every cell formula looks plausible). */
+    if (strcmp(op, "ce_softmax_grad") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hL = (float*)malloc(ne * sizeof(float));
+        float* hG = (float*)malloc(ne * sizeof(float));
+        float* htg = (float*)malloc((size_t)rows * sizeof(float));
+        if (!hL || !hG || !htg) return 2;
+        for (size_t i = 0; i < ne; i++) hL[i] = (float)((int)((i * 7 + 3) % 13) - 6);
+        for (int r = 0; r < rows; r++) htg[r] = (float)((r * 5 + 2) % cols);
+        CUdeviceptr dL, dT, dG;
+        CK(cuMemAlloc(&dL, ne * sizeof(float)), "alloc L");
+        CK(cuMemAlloc(&dT, (size_t)rows * sizeof(float)), "alloc T");
+        CK(cuMemAlloc(&dG, ne * sizeof(float)), "alloc G");
+        CK(cuMemcpyHtoD(dL, hL, ne * sizeof(float)), "H2D L");
+        CK(cuMemcpyHtoD(dT, htg, (size_t)rows * sizeof(float)), "H2D T");
+        void* cargs[] = { &dL, &dT, &dG, &rows, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, cargs, 0), "launch ce_grad");
+        CK(cuCtxSynchronize(), "sync ce_grad");
+        CK(cuMemcpyDtoH(hG, dG, ne * sizeof(float)), "D2H G");
+        int cbad = 0; float g00 = 0.0f, ref00 = 0.0f, maxrs = 0.0f;
+        for (int r = 0; r < rows; r++) {
+            float mx = hL[r * cols]; for (int c = 1; c < cols; c++) if (hL[r * cols + c] > mx) mx = hL[r * cols + c];
+            float sm = 0.0f; for (int c = 0; c < cols; c++) sm += expf(hL[r * cols + c] - mx);
+            int tgt = (int)htg[r];
+            float rs = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float p = expf(hL[r * cols + c] - mx) / sm;
+                float ref = p - ((c == tgt) ? 1.0f : 0.0f);
+                float got = hG[r * cols + c];
+                if (r == 0 && c == 0) { g00 = got; ref00 = ref; }
+                rs += got;
+                float e = got - ref; if (e < 0) e = -e;
+                if (isnan(got) || e > 1.0e-4f) { if (cbad < 4) fprintf(stderr, "ce_grad mismatch g[%d,%d]=%g ref %g\n", r, c, got, ref); cbad++; }
+            }
+            float ers = rs < 0 ? -rs : rs; if (ers > maxrs) maxrs = ers;
+            if (isnan(rs) || ers > 1.0e-3f) { if (cbad < 4) fprintf(stderr, "ce_grad row %d sum %g (want 0)\n", r, rs); cbad++; }
+        }
+        printf("GPU [%s] ce_softmax_grad %dx%d: g[0,0]=%g ref %g, max|row_sum|=%g, %d bad -> %s\n",
+               gpu, rows, cols, g00, ref00, maxrs, cbad, cbad ? "FAIL" : "PASS");
+        cuMemFree(dL); cuMemFree(dT); cuMemFree(dG);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hL); free(hG); free(htg); free(ptx);
+        return cbad ? 1 : 0;
+    }
+
     /* matmul mode: cuda_launch <ptx> <kernel> <Nvec-ignored> matmul <M> <K> <N>.
      * One thread per output cell -- gridDim.x=M (row=block_idx), blockDim.x=N
      * (col=thread_idx). Verifies EVERY M*N cell of C against a CPU reference in the
