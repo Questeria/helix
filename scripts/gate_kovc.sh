@@ -16,7 +16,7 @@ mkdir -p "$CD"
 GATE_OK=1
 
 echo "=== [0] regenerate sources from the edited kovc.hx ==="
-python3 assemble_k1.py >/dev/null 2>&1 && echo "  assembled" || { echo "FATAL assemble"; exit 8; }
+bash assemble_k1.sh >/dev/null 2>&1 && echo "  assembled" || { echo "FATAL assemble"; exit 8; }
 
 echo "=== [1] GPU PTX reference (OLD driver, pre-re-mint) ==="
 Kern=$EX/vector_add_kernel.hx

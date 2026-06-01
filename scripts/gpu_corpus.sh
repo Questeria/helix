@@ -22,7 +22,7 @@ DRV="stage0/helixc-bootstrap/_kovc_ptx_driver.bin"
 
 if [[ ! -x "$DRV" ]]; then
     echo "PTX-driver kovc absent; minting from the seed (~10 min)..."
-    python3 stage0/helixc-bootstrap/assemble_k1.py
+    bash stage0/helixc-bootstrap/assemble_k1.sh
     ( cd stage0/helixc-bootstrap && ulimit -s unlimited && ./seed.bin k1ptxdrv.hx _kovc_ptx_driver.bin )
 fi
 

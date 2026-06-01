@@ -28,7 +28,7 @@ echo "=== Python-free raw-binary self-host fixpoint ==="
 echo "date: $(date -u +%FT%TZ)"
 echo "kovc.hx sha: $(sha256sum ../../helixc/bootstrap/kovc.hx | awk '{print $1}')"
 echo "[1/5] regenerate k1src.hx/k1input.hx from the CURRENT frozen sources (concatenator only)"
-python3 assemble_k1.py || { echo "FATAL: assemble"; exit 89; }
+bash assemble_k1.sh || { echo "FATAL: assemble"; exit 89; }
 ls -l k1src.hx k1input.hx | awk '{print "  "$5" "$9}'
 
 run_gen () { # <label> <binary> <expected-out>

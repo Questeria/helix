@@ -39,7 +39,7 @@ EXEMPT (documented, permanent): `stage0/hex0..hex2`, `stage0/catm`, `stage0/M0`,
   the K4-deleted Python compiler (`helixc.backend`/`helixc.frontend`) — they cannot run; the live
   proof is `scripts/selfhost_fixpoint_rawbinary.sh` (Python-free). Zero build impact. **Done first.**
   Then the dev-only `helix_status.py`.
-- **P2 — port `assemble_k1.py`** (the one *used* build-helper Python: a pure concatenator —
+- **P2 — ✅ DONE (2026-06-01)**: ported `assemble_k1.py` → `assemble_k1.sh`, **byte-identical** output (sha-verified) + gated (fixpoint `96c440d3` unchanged, corpus 17/17); all 4 callers rewired; `.py` deleted. The live toolchain is now Python-free. (Final form: a Helix concatenator.) Original note — (the one *used* build-helper Python: a pure concatenator —
   `lexer.hx + parser.hx + kovc.hx` minus the `// Demo:` tail + a driver `main`, written to
   `k1src.hx`/`k1input.hx`/`k1ptxdrv.hx`). Port → a shell `assemble_k1.sh` (interim), then a Helix
   concatenator (read_file_to_arena + scan the SEP marker + write_file_to_arena, like

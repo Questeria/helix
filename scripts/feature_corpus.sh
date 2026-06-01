@@ -52,7 +52,7 @@ fn main() -> i32 { let r = Result::Ok(42); match r { Result::Ok(x) => x, Result:
 EOF
 
 echo "=== build K2 (general full-language compiler) from the raw seed ==="
-python3 assemble_k1.py >/dev/null 2>&1
+bash assemble_k1.sh >/dev/null 2>&1
 t0=$SECONDS
 timeout 400 ./seed.bin k1src.hx /tmp/K1.bin; echo "  seed->K1 rc=$? ($((SECONDS-t0))s)"
 chmod +x /tmp/K1.bin
