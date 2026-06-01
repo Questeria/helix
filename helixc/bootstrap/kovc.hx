@@ -1415,7 +1415,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
         // codegen path emits a 64-bit load and the type tag is 3 (i64-
         // shaped, same convention as AST_TUPLE_LIT).
         let p3 = __arena_get(idx + 3);
-        if p3 == 1 { 3 } else { 0 }
+        if p3 == 1 { 3 } else { if p3 >= 100 { p3 - 100 } else { 0 } }
     } else { if t == 53 { 0 }                            // AST_INDEX (Stage 4 iter E) — 32-bit element
     else { if t == 0 { 0 }                            // AST_INTLIT (i32)
     else { if t == 1 {                                // AST_VAR

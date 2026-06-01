@@ -2762,7 +2762,8 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                                     cur_struct_idx = 0 - 1;
                                 };
                             } else {
-                                prim = mk_node(52, prim, f_idx, 0);
+                                let p3sc = if f_struct_idx <= (0 - 100) { 0 - f_struct_idx } else { 0 };
+                                prim = mk_node(52, prim, f_idx, p3sc);
                                 cur_struct_idx = 0 - 1;
                             };
                         } else { keep_p = 0; };
@@ -8130,7 +8131,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                                     let sub_ty_s = __arena_get(ta_entry);
                                     let sub_ty_l = __arena_get(ta_entry + 1);
                                     let sub_struct_idx = struct_tab_lookup_idx(sb, sub_ty_s, sub_ty_l);
-                                    __arena_push(sub_struct_idx);
+                                    if sub_struct_idx >= 0 { __arena_push(sub_struct_idx); } else { let stag = ty_ident_to_tag(sub_ty_s, sub_ty_l); if stag == 0 { __arena_push(0 - 1); } else { __arena_push(0 - (100 + stag)); }; };
                                 } else {
                                     __arena_push(0 - 1);
                                 };
