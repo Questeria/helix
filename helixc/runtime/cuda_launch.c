@@ -229,6 +229,45 @@ int main(int argc, char** argv) {
         return lbad ? 1 : 0;
     }
 
+    /* gelu mode: cuda_launch <ptx> gpu_gelu <N> gelu. y=0.5*x*(1+tanh(0.7978846*
+     * (x+0.044715*x^3))), the tanh GELU. CPU ref mirrors stdlib __gelu exactly.
+     * Inputs in [-3,3] so e^(2z) never saturates. Combines f32 literals + __gpu_exp. */
+    if (strcmp(op, "gelu") == 0) {
+        size_t ne = (size_t)N;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hy) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)(i % 61) - 30) * 0.1f; hy[i] = -7.0f; }
+        CUdeviceptr dx, dy;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "cuMemAlloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "cuMemAlloc y");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "cuMemcpyHtoD x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "cuMemcpyHtoD y");
+        void* gargs[] = { &dx, &dy, &N };
+        CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "cuLaunchKernel gelu");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
+        int gbad = 0; float gref0 = 0.0f;
+        for (size_t i = 0; i < ne; i++) {
+            float xx = hx[i];
+            float x3 = xx * xx * xx;
+            float inner = 0.7978846f * (xx + 0.044715f * x3);
+            float e2 = expf(2.0f * inner);
+            float th = (e2 - 1.0f) / (e2 + 1.0f);
+            float ref = 0.5f * xx * (1.0f + th);
+            if (i == 0) gref0 = ref;
+            float got = hy[i];
+            float d = got - ref; if (d < 0) d = -d;
+            if (isnan(got) || d > 1.0e-3f) { if (gbad < 4) fprintf(stderr, "gelu mismatch y[%zu]=%g ref %g (x=%g)\n", i, got, ref, xx); gbad++; }
+        }
+        printf("GPU [%s] gelu N=%d (tanh approx, f32 literals + exp): y[0]=%g ref %g, %d bad -> %s\n",
+               gpu, N, hy[0], gref0, gbad, gbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy);
+        return gbad ? 1 : 0;
+    }
+
     /* affine probe: cuda_launch <ptx> gpu_affine <N> affine. y[i]=0.5*x[i]+0.25,
      * validating the f32-LITERAL PTX emitter (0.5=0f3F000000, 0.25=0f3E800000). */
     if (strcmp(op, "affine") == 0) {
