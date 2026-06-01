@@ -68,7 +68,7 @@ fn main() -> i32 {
     append_stripped(kov_base, kov_keep);
     append_stripped(d1_base, d1_len);
     let o1_len = __arena_len() - o1_base;
-    write_file_to_arena("/tmp/hx_k1src.hx", o1_base, o1_len);
+    write_file_to_arena("/mnt/c/Projects/Kovostov-Native/stage0/helixc-bootstrap/k1src.hx", o1_base, o1_len);
 
     // variant 2: k1input
     let d2_base = __arena_len();
@@ -79,7 +79,7 @@ fn main() -> i32 {
     append_stripped(kov_base, kov_keep);
     append_stripped(d2_base, d2_len);
     let o2_len = __arena_len() - o2_base;
-    write_file_to_arena("/tmp/hx_k1input.hx", o2_base, o2_len);
+    write_file_to_arena("/mnt/c/Projects/Kovostov-Native/stage0/helixc-bootstrap/k1input.hx", o2_base, o2_len);
 
     // variant 3: k1ptxdrv
     let d3_base = __arena_len();
@@ -90,6 +90,6 @@ fn main() -> i32 {
     append_stripped(kov_base, kov_keep);
     append_stripped(d3_base, d3_len);
     let o3_len = __arena_len() - o3_base;
-    write_file_to_arena("/tmp/hx_k1ptxdrv.hx", o3_base, o3_len);
+    write_file_to_arena("/mnt/c/Projects/Kovostov-Native/stage0/helixc-bootstrap/k1ptxdrv.hx", o3_base, o3_len);
     0
 }
