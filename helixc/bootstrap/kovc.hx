@@ -11401,11 +11401,22 @@ fn emit_ptx_entry(fn_idx: i32, vtab: i32) -> i32 {
             // ", "
             emit_ptx_byte(44); emit_ptx_byte(32);
         };
-        // ".param .b64 param_"
+        // ".param " then the param type then " param_". K1.GPU-ABI (P5):
+        // an i32 scalar dim (type_tag 0 in AST_PARAM slot 4) is read as a value
+        // and the host passes a 4-byte int, so emit ".u32"; f32/array params are
+        // 64-bit device pointers, so emit ".b64". (Today only i32 scalars exist as
+        // non-pointer params; i32-array params are not used by the GPU corpus.)
         emit_ptx_byte(46); emit_ptx_byte(112); emit_ptx_byte(97);
         emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(109);
-        emit_ptx_byte(32); emit_ptx_byte(46); emit_ptx_byte(98);
-        emit_ptx_byte(54); emit_ptx_byte(52); emit_ptx_byte(32);
+        emit_ptx_byte(32);
+        if __arena_get(pcur + 4) == 0 {
+            // ".u32"
+            emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);
+        } else {
+            // ".b64"
+            emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(54); emit_ptx_byte(52);
+        };
+        emit_ptx_byte(32);
         emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);
         emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(95);
         // positional index digit (Phase-0: 0..5)
