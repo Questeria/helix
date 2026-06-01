@@ -39,7 +39,8 @@ static int check(CUresult r, const char* what) {
 
 static CUcontext ctx;
 static CUfunction f_add, f_ln, f_mm, f_qkt, f_sm, f_gelu;
-static CUfunction f_ceg, f_atb, f_abt, f_geb, f_smb, f_lnbx, f_lnbg, f_scale;
+static CUfunction f_ceg, f_atb, f_abt, f_geb, f_smb, f_lnbx, f_lnbg, f_scale, f_adam;
+static CUdeviceptr dbc1, dbc2;
 static int Si = S, Di = D, Hi = H, Vi = V, SDi = SD, SHi = SH;
 
 static uint32_t xs_state = 0x12345678u;
@@ -178,6 +179,32 @@ static void backward_full(void) {
     backward_layer(0, g_dh2[0], g_dxscr);
 }
 
+/* Adam parameter table: every trainable tensor + its grad + (m,v) moments. The LN
+ * gamma/beta share a packed dgb grad buffer (dgamma=dgb[0:D], dbeta=dgb[D:2D]) so beta
+ * uses a byte-offset into the same grad buffer. */
+typedef struct { CUdeviceptr w, g, m, v; int n; } Param;
+static Param params[80]; static int nparams = 0;
+static void addp(CUdeviceptr w, CUdeviceptr g, int n) {
+    Param* p = &params[nparams++]; p->w = w; p->g = g; p->n = n; p->m = A(n); p->v = A(n);
+    CKX(cuMemsetD8(p->m, 0, (size_t)n * sizeof(float)), "zero m");
+    CKX(cuMemsetD8(p->v, 0, (size_t)n * sizeof(float)), "zero v");
+}
+static void build_params(void) {
+    for (int L = 0; L < NL; L++) {
+        addp(Wq[L], dWq[L], DD); addp(Wk[L], dWk[L], DD); addp(Wv[L], dWv[L], DD); addp(Wo[L], dWo[L], DD);
+        addp(W1[L], dW1[L], DH); addp(W2[L], dW2[L], HD);
+        addp(LN1g[L], dLN1[L], D); addp(LN1b[L], dLN1[L] + (CUdeviceptr)(D * sizeof(float)), D);
+        addp(LN2g[L], dLN2[L], D); addp(LN2b[L], dLN2[L] + (CUdeviceptr)(D * sizeof(float)), D);
+    }
+    addp(LNfg, dLNf, D); addp(LNfb, dLNf + (CUdeviceptr)(D * sizeof(float)), D); addp(W_lm, dW_lm, DV);
+}
+static void adam_step(int t) {
+    float bc1 = 1.0f / (1.0f - powf(0.9f, (float)t));
+    float bc2 = 1.0f / (1.0f - powf(0.999f, (float)t));
+    CKX(cuMemcpyHtoD(dbc1, &bc1, sizeof(float)), "bc1"); CKX(cuMemcpyHtoD(dbc2, &bc2, sizeof(float)), "bc2");
+    for (int i = 0; i < nparams; i++) { Param* p = &params[i]; void* a[] = { &p->w, &p->g, &p->m, &p->v, &dbc1, &dbc2 }; LX(f_adam, p->n, 1, a); }
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) { fprintf(stderr, "usage: %s <combined.ptx>\n", argv[0]); return 2; }
     FILE* f = fopen(argv[1], "rb"); if (!f) { fprintf(stderr, "open ptx\n"); return 2; }
@@ -201,6 +228,7 @@ int main(int argc, char** argv) {
     CK(cuModuleGetFunction(&f_lnbx, mod, "gpu_layernorm_backward_dx"), "lnbx");
     CK(cuModuleGetFunction(&f_lnbg, mod, "gpu_layernorm_backward_dgb"), "lnbg");
     CK(cuModuleGetFunction(&f_scale, mod, "gpu_scale_inplace"), "scale");
+    CK(cuModuleGetFunction(&f_adam, mod, "gpu_adam"), "adam");
     for (int L = 0; L < NL; L++) {
         Wq[L]=A(DD); Wk[L]=A(DD); Wv[L]=A(DD); Wo[L]=A(DD); LN1g[L]=A(D); LN1b[L]=A(D); LN2g[L]=A(D); LN2b[L]=A(D); W1[L]=A(DH); W2[L]=A(HD);
         xn1[L]=A(SD); Qb[L]=A(SD); Kb[L]=A(SD); Vb[L]=A(SD); scores[L]=A(SS); attn[L]=A(SS); ao[L]=A(SD); proj[L]=A(SD); h1[L]=A(SD); xn2[L]=A(SD); amlp[L]=A(SH); gmlp[L]=A(SH); mmlp[L]=A(SD); h2[L]=A(SD); ist1[L]=A(S); ist2[L]=A(S);
@@ -220,6 +248,9 @@ int main(int argc, char** argv) {
 
     double loss0 = forward_full();
     printf("GPU [%s] step0 loss = %.6f (sum CE; mean=%.4f, log V=%.4f)\n", gpu, loss0, loss0 / (double)S, logf((float)V));
+    dbc1 = A(1); dbc2 = A(1);
+    build_params();
+    if (argc > 2 && strcmp(argv[2], "verify") == 0) {
     backward_full();
 
     /* finite-diff verify: spot-check a few weights across both layers. weight host offsets: */
@@ -257,4 +288,19 @@ int main(int argc, char** argv) {
     }
     printf("GPU [%s] backward finite-diff: %s\n", gpu, total_bad ? "FAIL" : "PASS");
     return total_bad ? 1 : 0;
+    }
+    /* TRAIN: K=500 Adam steps (forward -> backward -> Adam per weight). */
+    int K = 500;
+    FILE* cf = fopen("loss_curve.csv", "wb");
+    double loss = loss0;
+    for (int t = 1; t <= K; t++) {
+        loss = forward_full();
+        backward_full();
+        adam_step(t);
+        if (t == 1 || t % 25 == 0 || t == K) { printf("  step %4d loss %.6f (mean %.5f)\n", t, loss, loss / (double)S); if (cf) fprintf(cf, "%d,%.8f\n", t, loss); }
+    }
+    double lf = forward_full();
+    if (cf) { fprintf(cf, "%d,%.8f\n", K + 1, lf); fclose(cf); }
+    printf("GPU [%s] train K=%d: start loss %.6f -> final %.6f (mean %.5f)\n", gpu, K, loss0, lf, lf / (double)S);
+    return 0;
 }
