@@ -26,7 +26,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 - **String literals**: `"…"` with escapes `\n \t \r \0 \' \" \\` [impl]; `b"…"`/`r"…"`/`c"…"` prefixes parsed, semantics erased [erased].
 - **Char literals**: `'X'` and `'\n'`-style escapes → an integer (byte value) [impl].
 - **Identifiers**: `[A-Za-z_][A-Za-z0-9_]*`. `_` alone = match wildcard.
-- **Operators**: `+ - * / %` [proven]; `< > <= >= == !=` ([proven] `<`; [impl] rest); `& | ^ ~ << >>` bitwise/shift [impl] (`>>` is arithmetic for signed, **logical for u64** — fixed 2026-06-01); `!` logical-not [impl]; `=` assignment [proven]; `as` cast [proven]; `.` field access [impl]; `..` range/rest [impl]; `=>` match arm [proven]; `@` attribute [impl]. `&&`/`||` are **not** tokens — use nested `if` [erased].
+- **Operators**: `+ - * / %` [proven]; `< > <= >= == !=` [proven] (all corpus-verified, LEFT-associative); `& | ^ << >>` bitwise/shift [proven] (`>>` arithmetic for signed, **logical for u64**), `~` [impl]; `!` logical-not [impl]; `=` assignment [proven]; `as` cast [proven]; `.` field access [impl]; `..` range/rest [impl]; `=>` match arm [proven]; `@` attribute [impl]. `&&`/`||` are **not** tokens — use nested `if` [erased].
 - **No compound assignment** (`+= -= *= …`) [unsupported].
 
 ---
@@ -44,7 +44,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 | `struct N { … }` | [proven] | named + (positional/tuple [impl]) fields; positional layout |
 | `enum N { V, V(T), … }` | [proven] | tag-only + payload variants; struct-variants [erased] |
 | tuples `(a,b)` | [impl] | literal + `.0/.1` access + tuple patterns |
-| arrays `[a,b]`, `a[i]` | [impl] | literal + index (+ index-store) |
+| arrays `[a,b]`, `a[i]` | [proven] | literal + index (`arr_idx`→20); index-store [impl] |
 | `tile<ELEM,N,SPACE>` | [impl] | GPU `@kernel` param type only |
 | references `&T`/`&mut T`, raw pointers `*T` | [unsupported] | `&` is bitwise-AND only |
 | **generics `<T>`/`<T,E>`** | **[erased]** | parsed + depth-balanced-erased; **NO monomorphization** — generic code over differing types is unsafe (see §7). |
@@ -68,7 +68,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 - **`let` / `let mut`**: `let x = e;` / `let mut x = e;` [proven]; `let x: T = e;` [impl]; destructuring `let (x,y)=…` / `let P{x,y}=…` [impl].
 - **Assignment**: `x = e;` [proven]; `obj.field = e;` [impl]; `arr[i] = e;` [impl].
 - **`if`/`else`** (an **expression** yielding the taken arm's value): `if c { a } else { b }` [proven]. No `else if` keyword — nest in the `else` arm [proven].
-- **`while`**: `while c { body }` [impl]; `break` [impl]; `continue` [impl]. **No `for`** loop [unsupported] (use `while` + a counter).
+- **`while`**: `while c { body }` [proven] (`while_sum`→10); `break` [proven] (`while_break`→7); `continue` [impl]. **No `for`** loop [unsupported] (use `while` + a counter).
 - **`match`** (expression) [proven]: arms `pat => body`, comma-separated. Patterns:
   - bind `x` [proven], wildcard `_` [proven], literal `42` [impl], range `a..b` [impl],
   - tuple `(a,b)` [impl], **struct `P { x, y }` / `P { x: 0, y }` (literal field) / `O { i: I { v }, t }` (nested) / `P { .. }` (rest)** [proven — fixed 2026-06-01],
@@ -78,7 +78,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 - **Cast**: `e as T` — int↔int (width-correct), int↔float, float↔float [proven].
 - **Calls**: `f(a, b, …)` [proven]; method `x.m(…)` [impl]; field `s.f` / `t.0` [impl]; index `a[i]` [impl].
 - **`return e;`** early-exit [impl]. **Unary**: `-e` [proven], `~e` [impl], `!e` [impl].
-- **Arithmetic correctness**: verified end-to-end by the **capstone** (a 2-layer transformer's forward+backward+Adam, all in Helix, matching a numpy reference to 0.0009%), which exercises extensive `+ - * /` and comparisons — so operator semantics/precedence are correct on the exercised paths. *(TODO: a dedicated left-associativity corpus test for `-`/`/`/`<<`/`>>` to remove any doubt.)*
+- **Arithmetic correctness + associativity**: operators are **LEFT-associative** — corpus-proven (2026-06-01): `10 - 3 - 2` → **5** (not 9), `100 / 5 / 2` → **10** (not 40). The full operator set is now corpus-proven: comparisons `!= >= <= == > <`, bitwise `& | ^`, shift `<<`/`>>`, plus arrays, `while`+`break`. Also verified end-to-end by the **capstone** (transformer forward+backward+Adam matching numpy to 0.0009%).
 
 ---
 
@@ -123,7 +123,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 baseline-literal (42) · scalar-arith (69) · struct+enum+match (129) · payload-enum+match (42) ·
 enum+recursion (120) · nested-PatStruct-destructure (42) · user-defined-`enum Result`+match (42) ·
 grad+float (42) · i64 cast/cmp/neg · i64 mul-beyond-i32 (6) · i64 div-beyond-i32 (50) ·
-u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42). **17/17 pass on the self-hosted K2.**
+u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42) · left-assoc sub/div · comparisons (ne/ge/le) · bitwise (and-or/xor/shl) · array literal+index · while + break. **28/28 pass on the self-hosted K2 (2026-06-01).**
 
 ---
 

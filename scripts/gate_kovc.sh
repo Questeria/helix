@@ -82,6 +82,39 @@ gen result_inline.hx <<'EOF'
 enum Result { Ok(i32), Err(i32) }
 fn main() -> i32 { let r = Result::Ok(42); match r { Result::Ok(x) => x, Result::Err(e) => e } }
 EOF
+gen assoc_sub.hx <<'EOF'
+fn main() -> i32 { 10 - 3 - 2 }
+EOF
+gen assoc_div.hx <<'EOF'
+fn main() -> i32 { 100 / 5 / 2 }
+EOF
+gen cmp_ne.hx <<'EOF'
+fn main() -> i32 { if 5 != 3 { 1 } else { 0 } }
+EOF
+gen cmp_ge.hx <<'EOF'
+fn main() -> i32 { if 5 >= 5 { 1 } else { 0 } }
+EOF
+gen cmp_le.hx <<'EOF'
+fn main() -> i32 { if 3 <= 5 { 1 } else { 0 } }
+EOF
+gen bit_andor.hx <<'EOF'
+fn main() -> i32 { (12 & 10) | 1 }
+EOF
+gen bit_xor.hx <<'EOF'
+fn main() -> i32 { 255 ^ 15 }
+EOF
+gen bit_shl.hx <<'EOF'
+fn main() -> i32 { 1 << 4 }
+EOF
+gen arr_idx.hx <<'EOF'
+fn main() -> i32 { let a = [10, 20, 30]; a[1] }
+EOF
+gen while_sum.hx <<'EOF'
+fn main() -> i32 { let mut s = 0; let mut i = 0; while i < 5 { s = s + i; i = i + 1; } s }
+EOF
+gen while_break.hx <<'EOF'
+fn main() -> i32 { let mut i = 0; while i < 100 { i = i + 1; if i >= 7 { break; } } i }
+EOF
 pass=0; fail=0
 chk() { local f="$1" exp="$2" b; b=$(basename "$1")
   [ -f "$f" ] || { echo "  MISSING $b"; fail=$((fail+1)); return; }
@@ -95,9 +128,11 @@ chk "$EX/hbs_sample_option.hx" 42; chk "$EX/hbs_sample_recursion.hx" 120
 chk "$EX/dogfood_18_pat_struct_showcase.hx" 42; chk "$CD/result_inline.hx" 42; chk "$EX/gradient_descent.hx" 42
 chk "$CD/i64_basic.hx" 42; chk "$CD/i64_mul_beyond.hx" 6; chk "$CD/i64_div_beyond.hx" 50; chk "$CD/i64_cmp.hx" 1; chk "$CD/i64_neg.hx" 5
 chk "$CD/u64_shr.hx" 1; chk "$CD/u8_wrap.hx" 42; chk "$CD/u16_wrap.hx" 42; chk "$CD/i16_ovf.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 17 pass: all sample features green; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus -- the corpus tests i64-beyond-i32 via sub-2^31 literals)"
+chk "$CD/assoc_sub.hx" 5; chk "$CD/assoc_div.hx" 10; chk "$CD/cmp_ne.hx" 1; chk "$CD/cmp_ge.hx" 1; chk "$CD/cmp_le.hx" 1
+chk "$CD/bit_andor.hx" 9; chk "$CD/bit_xor.hx" 240; chk "$CD/bit_shl.hx" 16; chk "$CD/arr_idx.hx" 20; chk "$CD/while_sum.hx" 10; chk "$CD/while_break.hx" 7
+echo "  CORPUS: $pass passed, $fail failed (expect 28 pass: all sample features green incl assoc/cmp/bitwise/array/while; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 17 ]; then echo "  CORPUS REGRESSION (pass=$pass < 17)"; GATE_OK=0; fi
+if [ "$pass" -lt 28 ]; then echo "  CORPUS REGRESSION (pass=$pass < 28)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi

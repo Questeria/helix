@@ -50,6 +50,41 @@ gen result_inline.hx <<'EOF'
 enum Result { Ok(i32), Err(i32) }
 fn main() -> i32 { let r = Result::Ok(42); match r { Result::Ok(x) => x, Result::Err(e) => e } }
 EOF
+# expr/operator probes -- verify [impl] features (promote to [proven]) + the
+# associativity concern (left-assoc => assoc_sub=5/assoc_div=10; right => 9/40).
+gen assoc_sub.hx <<'EOF'
+fn main() -> i32 { 10 - 3 - 2 }
+EOF
+gen assoc_div.hx <<'EOF'
+fn main() -> i32 { 100 / 5 / 2 }
+EOF
+gen cmp_ne.hx <<'EOF'
+fn main() -> i32 { if 5 != 3 { 1 } else { 0 } }
+EOF
+gen cmp_ge.hx <<'EOF'
+fn main() -> i32 { if 5 >= 5 { 1 } else { 0 } }
+EOF
+gen cmp_le.hx <<'EOF'
+fn main() -> i32 { if 3 <= 5 { 1 } else { 0 } }
+EOF
+gen bit_andor.hx <<'EOF'
+fn main() -> i32 { (12 & 10) | 1 }
+EOF
+gen bit_xor.hx <<'EOF'
+fn main() -> i32 { 255 ^ 15 }
+EOF
+gen bit_shl.hx <<'EOF'
+fn main() -> i32 { 1 << 4 }
+EOF
+gen arr_idx.hx <<'EOF'
+fn main() -> i32 { let a = [10, 20, 30]; a[1] }
+EOF
+gen while_sum.hx <<'EOF'
+fn main() -> i32 { let mut s = 0; let mut i = 0; while i < 5 { s = s + i; i = i + 1; } s }
+EOF
+gen while_break.hx <<'EOF'
+fn main() -> i32 { let mut i = 0; while i < 100 { i = i + 1; if i >= 7 { break; } } i }
+EOF
 
 echo "=== build K2 (general full-language compiler) from the raw seed ==="
 bash assemble_k1.sh >/dev/null 2>&1
@@ -96,6 +131,18 @@ check "$CD/u64_shr.hx"     1  u64-logical-shift
 check "$CD/u8_wrap.hx"    42  u8-wrap-cast
 check "$CD/u16_wrap.hx"   42  u16-wrap-cast
 check "$CD/i16_ovf.hx"    42  i16-overflow
+echo "=== exprs / operators ==="
+check "$CD/assoc_sub.hx"   5  left-assoc-sub
+check "$CD/assoc_div.hx"  10  left-assoc-div
+check "$CD/cmp_ne.hx"      1  compare-ne
+check "$CD/cmp_ge.hx"      1  compare-ge
+check "$CD/cmp_le.hx"      1  compare-le
+check "$CD/bit_andor.hx"   9  bitwise-and-or
+check "$CD/bit_xor.hx"   240  bitwise-xor
+check "$CD/bit_shl.hx"    16  shift-left
+check "$CD/arr_idx.hx"    20  array-literal-index
+check "$CD/while_sum.hx"  10  while-loop
+check "$CD/while_break.hx" 7  while-break
 
 echo
 echo "RESULT: $pass passed, $fail failed (of $((pass+fail)))"
