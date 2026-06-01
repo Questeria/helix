@@ -20,6 +20,26 @@ A partial monomorphization pipeline already exists and works for the easy case:
 - **=> simple scalar generic FUNCTIONS via turbofish ALREADY monomorphize correctly**
   (`id::<f32>(x)` with param arithmetic emits addss; `id::<i32>` emits add).
 
+## PROBE RESULTS (2026-06-01) — design CORRECTED by probe-first (dev-opt #20)
+A generics probe corpus (`stage0/helixc-bootstrap/corpus_gen/`, `scripts/h2_probe.sh`, run via the
+cached K2) captured CURRENT behavior. The design's assumption that **d.1** (generic fn body clone) is
+broken was **WRONG**:
+- **PASS — 6/6 generic FUNCTIONS**: turbofish i32 (`gen_id_i32`→42); param arithmetic f32
+  (`gen_add_f32`, add2::<f32> → `addss` → 5); a T-typed local that holds bits (`gen_body_local`→5);
+  **a T-typed local DRIVING an op `y+y` (`gen_body_op`→4)** — so generic fn bodies ARE typed
+  correctly, d.1 is NOT a gap; one generic fn at BOTH i32 and f32 (`gen_two_types`→42).
+- **PASS — control**: generic struct with i32 fields (`gen_box_i32`→5).
+- **FAIL**: `gen_box_f32`→0 (want 5) — generic struct NON-i32 field math (**d.2, the real gap**);
+  `gen_bare_f32`→0 (want 3) — bare non-turbofish call at f32 (**d.3**).
+
+**CONCLUSION**: generic FUNCTIONS over differing scalar types ALREADY work (the charter H2 corpus's
+"generic fns over differing element types" is largely already MET). H2's real work narrows to **d.2 —
+generic struct non-i32 fields** (the field is scalar-erased to a 4-byte i32-shaped slot, so f32/f64/i64
+field reads/writes use integer ops; this is what `Vec<T>`/`Option<T>` need). **d.1 is DROPPED.** **d.3**
+is a scope decision: implement bare-call argument-type inference, OR document "explicit turbofish
+required for non-i32 scalar generics" (a reasonable v1.1 bound — `gen_bare_f32` becomes a documented
+limitation, not a blocker).
+
 ## The 3 gaps (where erasure bites) = the H2 work
 - **d.1 Shallow body clone** — `clone_with_rewrite` (parser.hx:9884-9903) rewrites only AST_CALL
   *names*; it SHARES every other body node. So a `T`-typed local (`let y: T = ..`), a T literal,
