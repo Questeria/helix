@@ -162,8 +162,12 @@ int main(int argc, char** argv) {
     }
 
     /* layernorm mode: cuda_launch <ptx> <kernel> <Nignored> layernorm <rows> <cols>.
-     * gamma=1, beta=0, so y = normalized x. Verify each cell vs a CPU layernorm AND
-     * that each row of y has mean~0, var~1 (NaN-guarded). */
+     * TWO passes. pass 0: gamma=1,beta=0 -> verify each cell vs a CPU layernorm AND
+     * that each row of y has mean~0, var~1. pass 1: non-trivial per-column gamma/beta
+     * -> verify each cell vs an affine-aware reference gamma[c]*norm+beta[c], which
+     * exercises the kernel's gamma[t]/beta[t] load+store path (a kernel that ignored
+     * gamma/beta would pass pass 0 but mismatch pass 1). All checks NaN-guarded; the
+     * real kernel must pass BOTH passes. */
     if (strcmp(op, "layernorm") == 0) {
         int rows = (argc > 5) ? atoi(argv[5]) : 8;
         int cols = (argc > 6) ? atoi(argv[6]) : 16;
@@ -173,42 +177,51 @@ int main(int argc, char** argv) {
         float* hg = (float*)malloc((size_t)cols * sizeof(float));
         float* hbe = (float*)malloc((size_t)cols * sizeof(float));
         if (!hx || !hy || !hg || !hbe) return 2;
-        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hy[i] = -7.0f; }
-        for (int c = 0; c < cols; c++) { hg[c] = 1.0f; hbe[c] = 0.0f; }
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); }
         CUdeviceptr dx, dy, dg, db;
         CK(cuMemAlloc(&dx, ne * sizeof(float)), "cuMemAlloc x");
         CK(cuMemAlloc(&dy, ne * sizeof(float)), "cuMemAlloc y");
         CK(cuMemAlloc(&dg, (size_t)cols * sizeof(float)), "cuMemAlloc g");
         CK(cuMemAlloc(&db, (size_t)cols * sizeof(float)), "cuMemAlloc b");
         CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "cuMemcpyHtoD x");
-        CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "cuMemcpyHtoD g");
-        CK(cuMemcpyHtoD(db, hbe, (size_t)cols * sizeof(float)), "cuMemcpyHtoD b");
         void* largs[] = { &dx, &dy, &dg, &db, &cols };
-        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "cuLaunchKernel layernorm");
-        CK(cuCtxSynchronize(), "cuCtxSynchronize");
-        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
         int lbad = 0;
-        for (int r = 0; r < rows; r++) {
-            float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[r * cols + c]; mean /= (float)cols;
-            float v = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - mean; v += d * d; } v /= (float)cols;
-            float inv = 1.0f / sqrtf(v);
-            float ym = 0.0f, yv = 0.0f;
+        float r0m = 0.0f;
+        for (int pass = 0; pass < 2; pass++) {
             for (int c = 0; c < cols; c++) {
-                float ref = (hx[r * cols + c] - mean) * inv;
-                float got = hy[r * cols + c];
-                ym += got;
-                float d = got - ref; if (d < 0) d = -d;
-                if (isnan(got) || d > 1.0e-3f) { if (lbad < 4) fprintf(stderr, "layernorm mismatch y[%d,%d]=%g ref %g\n", r, c, got, ref); lbad++; }
+                if (pass == 0) { hg[c] = 1.0f; hbe[c] = 0.0f; }
+                else { hg[c] = 1.0f + 0.25f * (float)(c % 4); hbe[c] = 0.5f * (float)((c % 3) - 1); }
             }
-            ym /= (float)cols;
-            for (int c = 0; c < cols; c++) { float dd = hy[r * cols + c] - ym; yv += dd * dd; } yv /= (float)cols;
-            float dm = ym < 0 ? -ym : ym;
-            float dv = (yv - 1.0f) < 0 ? -(yv - 1.0f) : (yv - 1.0f);
-            if (isnan(ym) || dm > 1.0e-2f) { if (lbad < 4) fprintf(stderr, "layernorm row %d mean %g (want 0)\n", r, ym); lbad++; }
-            if (isnan(yv) || dv > 1.0e-2f) { if (lbad < 4) fprintf(stderr, "layernorm row %d var %g (want 1)\n", r, yv); lbad++; }
+            for (size_t i = 0; i < ne; i++) hy[i] = -7.0f;
+            CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "cuMemcpyHtoD y");
+            CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "cuMemcpyHtoD g");
+            CK(cuMemcpyHtoD(db, hbe, (size_t)cols * sizeof(float)), "cuMemcpyHtoD b");
+            CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "cuLaunchKernel layernorm");
+            CK(cuCtxSynchronize(), "cuCtxSynchronize");
+            CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
+            for (int r = 0; r < rows; r++) {
+                float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[r * cols + c]; mean /= (float)cols;
+                float v = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - mean; v += d * d; } v /= (float)cols;
+                float inv = 1.0f / sqrtf(v);
+                for (int c = 0; c < cols; c++) {
+                    float norm = (hx[r * cols + c] - mean) * inv;
+                    float ref = hg[c] * norm + hbe[c];
+                    float got = hy[r * cols + c];
+                    float d = got - ref; if (d < 0) d = -d;
+                    if (isnan(got) || d > 1.0e-3f) { if (lbad < 4) fprintf(stderr, "layernorm[g/b pass %d] mismatch y[%d,%d]=%g ref %g\n", pass, r, c, got, ref); lbad++; }
+                }
+                if (pass == 0) {
+                    float ym = 0.0f; for (int c = 0; c < cols; c++) ym += hy[r * cols + c]; ym /= (float)cols;
+                    float yv = 0.0f; for (int c = 0; c < cols; c++) { float dd = hy[r * cols + c] - ym; yv += dd * dd; } yv /= (float)cols;
+                    float dm = ym < 0 ? -ym : ym;
+                    float dv = (yv - 1.0f) < 0 ? -(yv - 1.0f) : (yv - 1.0f);
+                    if (isnan(ym) || dm > 1.0e-2f) { if (lbad < 4) fprintf(stderr, "layernorm row %d mean %g (want 0)\n", r, ym); lbad++; }
+                    if (isnan(yv) || dv > 1.0e-2f) { if (lbad < 4) fprintf(stderr, "layernorm row %d var %g (want 1)\n", r, yv); lbad++; }
+                    if (r == 0) r0m = ym;
+                }
+            }
         }
-        float r0m = 0.0f; for (int c = 0; c < cols; c++) r0m += hy[c]; r0m /= (float)cols;
-        printf("GPU [%s] layernorm %dx%d: row0 mean=%g (want 0), %d bad -> %s\n",
+        printf("GPU [%s] layernorm %dx%d (gamma/beta affine-checked): row0 mean=%g (want 0), %d bad -> %s\n",
                gpu, rows, cols, r0m, lbad, lbad ? "FAIL" : "PASS");
         cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
