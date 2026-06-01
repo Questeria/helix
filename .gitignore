@@ -75,3 +75,4 @@ __pycache__/
 init_weights.bin
 *.ptx
 loss_curve.csv
+oracle_curve.csv

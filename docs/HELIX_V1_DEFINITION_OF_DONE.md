@@ -26,6 +26,28 @@ One demo, but by construction it exercises the entire substrate at once: the ful
 language, GPU execution, autodiff, the numeric/tensor stack, and the Python-free
 trusted toolchain. **The day this passes, Helix is done.**
 
+### ✅ CAPSTONE ACHIEVED — 2026-06-01 (commit `adab69d`)
+
+A 2-layer pre-norm transformer (V=32, d=16, S=16, 1 head, MLP H=64, NL=2) trains
+end-to-end on the RTX 3070 in pure Helix-native: all 15 math kernels (forward, full
+backward, Adam) are **kovc-emitted PTX**, with **zero Python in the training loop**.
+Adam K=500: loss 62.35 → 0.42. Its full loss curve matches an independent,
+self-gradient-checked numpy reference (`helixc/runtime/oracle_train.py`, FENCED
+OFFLINE — never in the Helix path) to **0.0009%** worst-case (step 200) — three
+orders of magnitude inside the 2% bar. Verification chain (no shared-bug escape):
+forward vs numpy 1e-6 (`542b02c`) · GPU backward vs double-precision finite-diff,
+weight-by-weight (`dcce27e`) · GPU training loss drop (`6f82db7`) · full-curve match
++ oracle backward self-check (`adab69d`). Harness: `helixc/runtime/train_transformer.c`
+(Decision D2 trusted C launcher — to be ported to in-Helix CUDA-driver FFI before the
+v1.0 freeze, see #6/#8).
+
+**This crosses THE GATE (criterion #3)** and proves the substrate works end-to-end
+(GPU execution + correct GPU autodiff numerics + the tensor stack + a Python-free
+loop). It does **not by itself** make criteria #1, #2, #5, #6, #7, #8 green — those
+remain real (lower-uncertainty) engineering, tracked below. Formal **v1.0 DONE** still
+requires all 8 criteria green **AND** the 5-consecutive-clean-audit gate over the final
+(Helix-harness) capstone. The loop does **not** stop here.
+
 ---
 
 ## DEFINITION OF DONE — the measurable checklist (all 8 must hold)
@@ -37,8 +59,8 @@ auditable, not asserted.
 |---|-----------|----------------------------|---------------------|
 | 1 | **Self-hosts (full language)** | byte-identical self-host fixpoint `K2 == K3` on the FULL `kovc` source — no i32-subset restriction, no external `ulimit` (the canonical self-host test unskipped + green) | 🔶 partial (i32 fixpoint ✅; canonical test still skipped pending big-stack) |
 | 2 | **Feature-complete + runs (CPU)** | 100% of a language-feature corpus **compiles AND runs** correctly: structs, enums, `match`, generics, traits, closures, floats, all int widths, `grad`, `tile` | 🔶 most features compile; full compile+run corpus not yet 100% |
-| 3 | **GPU executes** ⭐ THE GATE | `tile` kernels run on **real GPU hardware**, results match reference (GPU corpus green on HW) | 🔶 **FIRST-LIGHT GREEN (2026-06-01)** — kovc-emitted `vector_add` PTX executes on the RTX 3070, `c[7]=21` verified over 256 elems, 2-agent adversarial audit PASS/HIGH (negative controls); remaining: tiled GEMM + transformer-op corpus on HW (P5). See `docs/HELIX_GPU_FIRSTLIGHT.md` |
-| 4 | **Autodiff correct** | `grad` gradients match numerical/reference gradients on CPU **and** GPU (gradient-check suite green) | 🔶 CPU autodiff exists; GPU + full gradient-check pending |
+| 3 | **GPU executes** ⭐ THE GATE | `tile` kernels run on **real GPU hardware**, results match reference (GPU corpus green on HW) | ✅ **GREEN — full transformer-op corpus on HW (2026-06-01, capstone `adab69d`)**: 15 kovc-emitted kernels (layernorm fwd/bwd-dx/bwd-dgb, naive matmul + A^T·B + A·B^T, qkt, softmax fwd/bwd, gelu fwd/bwd, ce-softmax-grad, scale, adam) execute on the RTX 3070, each verified vs an independent reference with negative controls. Correctness-complete. Remaining is **perf only**: shared-memory tiled GEMM with barriers (capstone uses register/naive matmuls — correct but unoptimized); not a correctness gate. First-light history: `docs/HELIX_GPU_FIRSTLIGHT.md` |
+| 4 | **Autodiff correct** | `grad` gradients match numerical/reference gradients on CPU **and** GPU (gradient-check suite green) | 🔶 **GPU gradient-check GREEN (capstone)** — the full transformer backward (attention, layernorm, gelu, matmul, CE) is verified weight-by-weight on the RTX 3070 vs double-precision finite-diff (`dcce27e`); CPU autodiff exists. **Remaining / judgment call**: the capstone's GPU gradients come from **hand-written, finite-diff-verified backward kernels**, not from the `grad` autodiff KEYWORD emitting GPU code. If #4 requires the `grad` keyword to emit verified GPU gradients → still pending; if verified-correct GPU gradients suffice → green. **Flagged for the user.** |
 | 5 | **Full-language trust** | the diverse-double-compile passes over a **feature-diverse** corpus (beyond i32) | 🔶 i32 DDC ✅ (5/5 audits); feature-diverse corpus pending |
 | 6 | **Python-free + raw-binary** | the **entire** toolchain (compiler, test runner, build) is Helix/seed/ladder only; **zero `.py`** in the live toolchain; reproducible from hex0 | 🔶 **reference compiler DELETED 2026-05-31 (K4)**; mint verified Python-free; remaining: de-Python `assemble_k1.py` + DDC harnesses + 5 dev scripts, + port test-infra to Helix |
 | 7 | **Usable stdlib + toolchain** | documented stdlib (collections, math, strings, I/O, tensor/ML ops the capstone needs) with passing tests; self-sufficient driver / test-runner / module system in Helix | 🔶 stdlib campaign in progress |
@@ -61,13 +83,14 @@ correctly.
 
 - ✅ **Trust + bootstrap** — from-raw-binary, DDC-verified (i32 core), 5/5 clean audits, full pre-K4 backup tagged. *The hardest-to-trust part is already done.*
 - ✅ **K4 done (2026-05-31)** — the Python reference compiler is **deleted**; the mint is verified Python-free (seed → kovc, 17/17 tests, `6*7`→42). Pre-K4 state preserved at tag `v0-pre-k4-full-with-python`; post-K4 at `k4-python-compiler-deleted`.
-- 🔶 **The gate (#3) — FIRST-LIGHT CROSSED (2026-06-01).** kovc-emitted PTX runs correctly on the RTX 3070 (`vector_add`, independently audited PASS/HIGH with negative controls). The GATE *mechanism* — a raw-binary-bootstrapped Helix toolchain driving real GPU execution end-to-end — is proven. Remaining for full #3 is **breadth**: general tiled GEMM (shared-memory + barriers, not register-only) + the transformer-op corpus on HW (P5). See `docs/HELIX_GPU_FIRSTLIGHT.md`.
-- 🔶 **Remaining** — full-feature compile+run + feature-diverse DDC (#1,#2,#4,#5); *finish* Python removal (#6 — compiler gone; still to de-Python `assemble_k1.py` + the DDC harnesses + 5 dev scripts, and port test-infra to Helix); stdlib + spec freeze (#7,#8).
+- ✅ **THE GATE (#3) — CROSSED (2026-06-01, capstone `adab69d`).** Not just first-light: the **entire transformer-op corpus** (15 kovc-emitted kernels — forward, full backward, Adam) executes on the RTX 3070, each verified vs an independent reference with negative controls. A raw-binary-bootstrapped Helix toolchain drives real GPU execution end-to-end. Remaining is **perf only** (shared-memory tiled GEMM); correctness is complete. See `docs/HELIX_GPU_FIRSTLIGHT.md`.
+- ✅ **THE CAPSTONE — ACHIEVED (2026-06-01, `adab69d`).** A 2-layer transformer trains end-to-end on the RTX 3070 in pure Helix-native (zero Python in the loop), matching a self-gradient-checked numpy reference to **0.0009%** over 500 Adam steps — 3 orders inside the 2% bar. The single hardest, most *uncertain* demonstration is done.
+- 🔶 **Remaining for formal v1.0 (honest — the capstone proves the substrate but is NOT the whole checklist).** Still RED/partial: **#1** full-language self-host fixpoint `K2==K3` on full source (blocked on big-stack — tasks #15/#17); **#2** 100% feature compile+run corpus; **#4** the `grad` keyword emitting GPU gradients (GPU gradients themselves verified — see table); **#5** feature-diverse DDC (beyond i32); **#6** finish Python/non-Helix removal (de-Python `assemble_k1.py` + DDC harnesses + dev scripts + port test-infra **and** the capstone C harness to Helix); **#7** stdlib; **#8** spec freeze. Lower-uncertainty engineering, but real — the loop continues until all green + 5 clean audits.
 
 ```
-critical path:
-  GPU executes (#3)  →  single-GPU training loop  →  capstone transformer converges  =  HELIX v1.0 DONE
-  (in parallel: finish #1,#2,#4,#5,#6,#7,#8)
+critical path (post-capstone, 2026-06-01):
+  ✅ GPU executes (#3) → ✅ training loop → ✅ capstone converges (0.0009%)   [THE GATE — CROSSED]
+  remaining → close #1 #2 #4 #5 #6 #7 #8 (engineering) → 5 consecutive clean audits → HELIX v1.0 DONE
 ```
 
 When this line is crossed, the substrate is proven and the AI-building phase begins.
