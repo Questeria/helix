@@ -552,6 +552,146 @@ int main(int argc, char** argv) {
         return gbad ? 1 : 0;
     }
 
+    /* adam mode: cuda_launch <ptx> gpu_adam <N> adam. One in-place Adam step on w (with g,m,v).
+     * bc1,bc2 (bias-correction) passed as 1-elem arrays; here bc1=10, bc2=1000 (step t=1). Verify
+     * nm,nv (tol 1e-5, exact arithmetic) and new_w (tol 1e-4, rsqrt.approx) vs an independent CPU
+     * Adam step with the same baked literals. */
+    if (strcmp(op, "adam") == 0) {
+        size_t ne = (size_t)N;
+        float* hw = (float*)malloc(ne * sizeof(float));
+        float* hg = (float*)malloc(ne * sizeof(float));
+        float* hm = (float*)malloc(ne * sizeof(float));
+        float* hv = (float*)malloc(ne * sizeof(float));
+        float* hw0 = (float*)malloc(ne * sizeof(float));
+        float* hm0 = (float*)malloc(ne * sizeof(float));
+        float* hv0 = (float*)malloc(ne * sizeof(float));
+        if (!hw || !hg || !hm || !hv || !hw0 || !hm0 || !hv0) return 2;
+        for (size_t i = 0; i < ne; i++) {
+            hw[i] = hw0[i] = (float)((int)(i % 5) - 2);
+            hg[i] = (float)((int)(i % 7) - 3) * 0.1f;
+            hm[i] = hm0[i] = (float)((int)(i % 3) - 1) * 0.05f;
+            hv[i] = hv0[i] = (float)(i % 4) * 0.01f;
+        }
+        float hbc1 = 10.0f, hbc2 = 1000.0f;
+        CUdeviceptr dw, dg, dm, dv, dbc1, dbc2;
+        CK(cuMemAlloc(&dw, ne * sizeof(float)), "alloc w");
+        CK(cuMemAlloc(&dg, ne * sizeof(float)), "alloc g");
+        CK(cuMemAlloc(&dm, ne * sizeof(float)), "alloc m");
+        CK(cuMemAlloc(&dv, ne * sizeof(float)), "alloc v");
+        CK(cuMemAlloc(&dbc1, sizeof(float)), "alloc bc1");
+        CK(cuMemAlloc(&dbc2, sizeof(float)), "alloc bc2");
+        CK(cuMemcpyHtoD(dw, hw, ne * sizeof(float)), "H2D w");
+        CK(cuMemcpyHtoD(dg, hg, ne * sizeof(float)), "H2D g");
+        CK(cuMemcpyHtoD(dm, hm, ne * sizeof(float)), "H2D m");
+        CK(cuMemcpyHtoD(dv, hv, ne * sizeof(float)), "H2D v");
+        CK(cuMemcpyHtoD(dbc1, &hbc1, sizeof(float)), "H2D bc1");
+        CK(cuMemcpyHtoD(dbc2, &hbc2, sizeof(float)), "H2D bc2");
+        void* aargs[] = { &dw, &dg, &dm, &dv, &dbc1, &dbc2 };
+        CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, aargs, 0), "launch adam");
+        CK(cuCtxSynchronize(), "sync adam");
+        CK(cuMemcpyDtoH(hw, dw, ne * sizeof(float)), "D2H w");
+        CK(cuMemcpyDtoH(hm, dm, ne * sizeof(float)), "D2H m");
+        CK(cuMemcpyDtoH(hv, dv, ne * sizeof(float)), "D2H v");
+        int abad = 0; float w0 = 0.0f, w0ref = 0.0f;
+        for (size_t i = 0; i < ne; i++) {
+            float nm = 0.9f * hm0[i] + 0.1f * hg[i];
+            float nv = 0.999f * hv0[i] + 0.001f * hg[i] * hg[i];
+            float mh = nm * hbc1, vh = nv * hbc2;
+            float nw = hw0[i] - 0.001f * mh / sqrtf(vh + 1.0e-8f);
+            if (i == 0) { w0 = hw[i]; w0ref = nw; }
+            float em = hm[i] - nm; if (em < 0) em = -em;
+            float ev = hv[i] - nv; if (ev < 0) ev = -ev;
+            float ew = hw[i] - nw; if (ew < 0) ew = -ew;
+            if (isnan(hw[i]) || em > 1.0e-5f || ev > 1.0e-5f || ew > 1.0e-4f) { if (abad < 4) fprintf(stderr, "adam mismatch i=%zu w=%g(ref %g) m=%g(ref %g) v=%g(ref %g)\n", i, hw[i], nw, hm[i], nm, hv[i], nv); abad++; }
+        }
+        printf("GPU [%s] adam N=%d: w[0]=%g ref %g, %d bad -> %s\n",
+               gpu, N, w0, w0ref, abad, abad ? "FAIL" : "PASS");
+        cuMemFree(dw); cuMemFree(dg); cuMemFree(dm); cuMemFree(dv); cuMemFree(dbc1); cuMemFree(dbc2);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hw); free(hg); free(hm); free(hv); free(hw0); free(hm0); free(hv0); free(ptx);
+        return abad ? 1 : 0;
+    }
+
+    /* scale mode: cuda_launch <ptx> gpu_scale_inplace <N> scale. a[i]=0.25*a[i] in place. */
+    if (strcmp(op, "scale") == 0) {
+        size_t ne = (size_t)N;
+        float* ha = (float*)malloc(ne * sizeof(float));
+        float* ha0 = (float*)malloc(ne * sizeof(float));
+        if (!ha || !ha0) return 2;
+        for (size_t i = 0; i < ne; i++) ha[i] = ha0[i] = (float)((int)(i % 11) - 5);
+        CUdeviceptr da;
+        CK(cuMemAlloc(&da, ne * sizeof(float)), "alloc a");
+        CK(cuMemcpyHtoD(da, ha, ne * sizeof(float)), "H2D a");
+        void* scargs[] = { &da, &N };
+        CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, scargs, 0), "launch scale");
+        CK(cuCtxSynchronize(), "sync scale");
+        CK(cuMemcpyDtoH(ha, da, ne * sizeof(float)), "D2H a");
+        int scbad = 0;
+        for (size_t i = 0; i < ne; i++) {
+            float ref = 0.25f * ha0[i];
+            float e = ha[i] - ref; if (e < 0) e = -e;
+            if (isnan(ha[i]) || e > 1.0e-6f) { if (scbad < 4) fprintf(stderr, "scale mismatch a[%zu]=%g ref %g\n", i, ha[i], ref); scbad++; }
+        }
+        printf("GPU [%s] scale N=%d: a[1]=%g ref %g, %d bad -> %s\n",
+               gpu, N, ha[1], 0.25f * ha0[1], scbad, scbad ? "FAIL" : "PASS");
+        cuMemFree(da);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(ha); free(ha0); free(ptx);
+        return scbad ? 1 : 0;
+    }
+
+    /* layernorm_save mode: cuda_launch <ptx> gpu_layernorm_fwd_save <N> layernorm_save <rows> <cols>.
+     * Forward layernorm with non-trivial gamma/beta, ALSO writing ist[row]=1/sqrt(var). Verify y
+     * per-cell vs CPU affine layernorm (1e-3) AND ist[row]=1/sqrt(var_row) (1e-3, independent). */
+    if (strcmp(op, "layernorm_save") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        float* hg = (float*)malloc((size_t)cols * sizeof(float));
+        float* hb = (float*)malloc((size_t)cols * sizeof(float));
+        float* hist = (float*)malloc((size_t)rows * sizeof(float));
+        if (!hx || !hy || !hg || !hb || !hist) return 2;
+        for (size_t i = 0; i < ne; i++) hx[i] = (float)((int)((i * 7 + 3) % 13) - 6);
+        for (int c = 0; c < cols; c++) { hg[c] = 1.0f + 0.25f * (float)(c % 4); hb[c] = 0.5f * (float)((c % 3) - 1); }
+        CUdeviceptr dx, dy, dg, db, dist;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemAlloc(&dg, (size_t)cols * sizeof(float)), "alloc g");
+        CK(cuMemAlloc(&db, (size_t)cols * sizeof(float)), "alloc b");
+        CK(cuMemAlloc(&dist, (size_t)rows * sizeof(float)), "alloc ist");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "H2D g");
+        CK(cuMemcpyHtoD(db, hb, (size_t)cols * sizeof(float)), "H2D b");
+        void* largs[] = { &dx, &dy, &dg, &db, &dist, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "launch ln_save");
+        CK(cuCtxSynchronize(), "sync ln_save");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        CK(cuMemcpyDtoH(hist, dist, (size_t)rows * sizeof(float)), "D2H ist");
+        int lbad = 0; float i0 = 0.0f, i0ref = 0.0f;
+        for (int r = 0; r < rows; r++) {
+            float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[r * cols + c]; mean /= (float)cols;
+            float var = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - mean; var += d * d; } var /= (float)cols;
+            float invref = 1.0f / sqrtf(var);
+            if (r == 0) { i0 = hist[r]; i0ref = invref; }
+            float ei = hist[r] - invref; if (ei < 0) ei = -ei;
+            if (isnan(hist[r]) || ei > 1.0e-3f) { if (lbad < 4) fprintf(stderr, "ln_save ist[%d]=%g ref %g\n", r, hist[r], invref); lbad++; }
+            for (int c = 0; c < cols; c++) {
+                float ref = hg[c] * ((hx[r * cols + c] - mean) * invref) + hb[c];
+                float got = hy[r * cols + c];
+                float e = got - ref; if (e < 0) e = -e;
+                if (isnan(got) || e > 1.0e-3f) { if (lbad < 4) fprintf(stderr, "ln_save y[%d,%d]=%g ref %g\n", r, c, got, ref); lbad++; }
+            }
+        }
+        printf("GPU [%s] layernorm_save %dx%d: ist[0]=%g ref %g, %d bad -> %s\n",
+               gpu, rows, cols, i0, i0ref, lbad, lbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db); cuMemFree(dist);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(hg); free(hb); free(hist); free(ptx);
+        return lbad ? 1 : 0;
+    }
+
     /* affine probe: cuda_launch <ptx> gpu_affine <N> affine. y[i]=0.5*x[i]+0.25,
      * validating the f32-LITERAL PTX emitter (0.5=0f3F000000, 0.25=0f3E800000). */
     if (strcmp(op, "affine") == 0) {
