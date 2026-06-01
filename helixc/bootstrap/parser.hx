@@ -13235,8 +13235,10 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
     // `enum Result<T, E>`, etc.) pervasively. The bootstrap is
     // type-erased; consume `<...>` depth-balanced as a no-op so the
     // following `{` body parses cleanly.
-    if tok_tag(tok_base, cur_get(sb)) == 16 {
-        cur_advance(sb);                     // consume '<'
+    let mut eno = tok_tag(tok_base, cur_get(sb));
+    if eno == 20 { eno = 16; };              // K1.SQ: accept square-bracket enum generics like angle
+    if eno == 16 {
+        cur_advance(sb);                     // consume opener (< or [)
         let mut g_depth_dc: i32 = 1;
         // K1.DG (2026-05-26): track previous `-` token (TK_MINUS = 8) so
         // that the `>` immediately after it is recognized as part of
@@ -13247,7 +13249,9 @@ fn parse_enum_decl(tok_base: i32, sb: i32) -> i32 {
         // hanging the parser. Mirror of K1.CZ's prev_minus tracking.
         let mut prev_minus_dc: i32 = 0;
         while g_depth_dc > 0 {
-            let gt_dc = tok_tag(tok_base, cur_get(sb));
+            let mut gt_dc = tok_tag(tok_base, cur_get(sb));
+            if gt_dc == 20 { gt_dc = 16; };   // square open nests like angle
+            if gt_dc == 21 { gt_dc = 17; };   // square close ends like angle
             if gt_dc == 16 {
                 g_depth_dc = g_depth_dc + 1;
                 cur_advance(sb);
