@@ -257,6 +257,48 @@ int main(int argc, char** argv) {
         return mbad ? 1 : 0;
     }
 
+    /* matmul_atb mode: cuda_launch <ptx> gpu_matmul_atb <Nignored> matmul_atb <M> <K> <N>.
+     * C[K,N] = A[M,K]^T @ B[M,N], i.e. C[i,j]=sum_t A[t,i]*B[t,j] -- the dW=X^T@dY backward
+     * workhorse (the 3rd matmul variant). gridDim=K, blockDim=N. Integer inputs so the result
+     * is exact in f32; verify every K*N cell vs a CPU A^T@B in the kernel's accumulation order. */
+    if (strcmp(op, "matmul_atb") == 0) {
+        int M = (argc > 5) ? atoi(argv[5]) : 16;
+        int K = (argc > 6) ? atoi(argv[6]) : 16;
+        int Nn = (argc > 7) ? atoi(argv[7]) : 16;
+        size_t aN = (size_t)M * K, bN = (size_t)M * Nn, cN = (size_t)K * Nn;
+        float* hA = (float*)malloc(aN * sizeof(float));
+        float* hB = (float*)malloc(bN * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hC) return 2;
+        for (size_t i = 0; i < aN; i++) hA[i] = (float)(i % 7);
+        for (size_t i = 0; i < bN; i++) hB[i] = (float)(i % 5);
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(float)), "alloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(float)), "alloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)), "alloc C");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
+        void* targs[] = { &dA, &dB, &dC, &M, &K, &Nn };
+        CK(cuLaunchKernel(fn, K, 1, 1, Nn, 1, 1, 0, 0, targs, 0), "launch matmul_atb");
+        CK(cuCtxSynchronize(), "sync matmul_atb");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
+        int tbad = 0;
+        for (int i = 0; i < K; i++) {
+            for (int j = 0; j < Nn; j++) {
+                float ref = hA[0 * K + i] * hB[0 * Nn + j];
+                for (int t = 1; t < M; t++) ref += hA[t * K + i] * hB[t * Nn + j];
+                float got = hC[i * Nn + j];
+                if (got != ref) { if (tbad < 4) fprintf(stderr, "matmul_atb mismatch C[%d,%d]=%g ref %g\n", i, j, got, ref); tbad++; }
+            }
+        }
+        printf("GPU [%s] matmul_atb (A^T@B) %dx%dx%d over %d cells: C[1,1]=%g, %d bad -> %s\n",
+               gpu, M, K, Nn, K * Nn, hC[1 * Nn + 1], tbad, tbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return tbad ? 1 : 0;
+    }
+
     /* softmax mode: cuda_launch <ptx> <kernel> <Nignored> softmax <rows> <cols>.
      * One thread per row (gridDim.x=rows, blockDim.x=1). Non-constant inputs so each
      * row differs; verify every cell vs a CPU max-subtract softmax (tol 1e-3 for
