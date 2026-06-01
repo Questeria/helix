@@ -101,6 +101,46 @@ Stricter-verdict-wins: **PASS, HIGH, p_pass 0.90, evidence reproducible.**
 
 ---
 
+## GPU compute — naive matmul (Step B, 2026-06-01)
+
+**The first real GPU *compute* kernel in pure Helix.** `kovc` compiled
+`helixc/examples/naive_matmul_kernel.hx` — a naive matrix multiply (one thread per
+output cell: `row=block_idx()`, `col=thread_idx()`; an f32 accumulator k-loop summing
+`A[row,k]*B[k,col]`; reading `K`/`N` as scalar params) — to PTX, and it **executed on the
+RTX 3070 computing a 16×16×16 matmul whose all 256 cells match a CPU reference (0 bad)**.
+Committed `a38a1b6`. Pipeline + repro: as above, with
+`cuda_launch out.ptx naive_matmul <N> matmul M K N` (the launcher allocates A/B/C,
+launches `gridDim.x=M, blockDim.x=N`, and verifies every `M*N` cell in the kernel's
+accumulation order over integer-valued inputs so f32 sums are exact).
+
+This is the first kernel with a **loop + f32 accumulator + multi-statement body**, so it
+surfaced (and we fixed + gated) three real `kovc.hx` PTX-emitter gaps — each invisible to
+the elementwise kernels:
+- **`AST_LET_MUT` (tag 12, `let mut`)** wasn't dispatched in `emit_ptx_expr` → the
+  accumulator was silently dropped. Fixed via `ptx_is_let_tag`.
+- **`AST_SEQ` (tag 13, statement sequences)** wasn't dispatched → a multi-statement body
+  lost everything after the first statement. Added a `tag==13` arm.
+- **Variable type tracking** — the vtab stored each var's register but not its type, so an
+  f32 var read back as i32 (`add.s32`/`st.global.u32`). Added a 4th vtab slot `is_f`
+  (4-wide entries, cap 12), `ptx_vtab_lookup_isf`, restore `vtab+55` on read, store on bind;
+  plus `emit_ptx_assign` now branches `mov.f32` vs `mov.s32`.
+
+**Independent adversarial audit (2 fresh agents) — PASS / HIGH:**
+- **Critic p_pass 0.94** — reproduced; deterministic PTX (sha256 `c23547cb…`); negative
+  controls flip (`add.f32`→`sub.f32` → 256 bad FAIL; corrupt stride → 144 bad FAIL; pristine
+  → 0 bad PASS); multi-size 8/16/32 PASS; fixpoint IDENTICAL.
+- **Skeptic p_pass 0.96** — **re-minted the driver byte-identically from the seed** (proving
+  it's genuinely seed-minted); `readelf` static syscall-only ELF, zero nvcc/python strings;
+  three negative controls all FAIL; sizes 8/16/32 + non-square 7×11×5 PASS; rebuilt the
+  fixpoint K2==K3 with matching SHA-256.
+
+**Gate:** matmul 256/256 on HW; elementwise regression green; **self-host fixpoint K2==K3
+byte-identical** (595376==595376) — all edits PTX-path-only, the ELF self-host untouched.
+**Scope:** correctness, not throughput — the naive matmul is the compute *floor*; a tiled
+GEMM with shared memory (Step C) is the performance path.
+
+---
+
 ## What remains for full criterion #3 (P5)
 
 First-light is the elementwise floor. Full "GPU executes" needs the **throughput + breadth** corpus on hardware: a general tiled matmul (shared-memory staging + `bar.sync`, not the current register-only naive form), GPU elementwise/reduction/softmax/layernorm, and ultimately `wmma` Tensor-Core GEMM — each validated against the CPU `tensor.hx`/`nn.hx` oracle, then GPU autodiff (criterion #4). That is the bulk of the road to the capstone. But the road is now **open**: Helix can drive the GPU.
