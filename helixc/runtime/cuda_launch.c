@@ -345,6 +345,106 @@ int main(int argc, char** argv) {
         return sbad ? 1 : 0;
     }
 
+    /* gelu_backward mode: cuda_launch <ptx> gpu_gelu_backward <N> gelu_backward.
+     * dx = dy * gelu'(x). INDEPENDENT ref = central finite-difference of the GELU FORWARD
+     * (uses tanhf, does NOT share the kernel's analytic derivative): gp_fd=(gelu(x+h)-gelu(x-h))/2h,
+     * h=1e-3, dx_ref=dy*gp_fd, tol 2e-2; plus a tighter analytic gelu' check at tol 1e-3.
+     * Inputs in [-3,3] so e^2z never saturates. */
+    if (strcmp(op, "gelu_backward") == 0) {
+        size_t ne = (size_t)N;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hdy = (float*)malloc(ne * sizeof(float));
+        float* hdx = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hdy || !hdx) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)(i % 61) - 30) * 0.1f; hdy[i] = (float)((int)(i % 7) - 3); }
+        CUdeviceptr dxb, ddy, ddx;
+        CK(cuMemAlloc(&dxb, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&ddy, ne * sizeof(float)), "alloc dy");
+        CK(cuMemAlloc(&ddx, ne * sizeof(float)), "alloc dx");
+        CK(cuMemcpyHtoD(dxb, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(ddy, hdy, ne * sizeof(float)), "H2D dy");
+        void* gargs[] = { &dxb, &ddy, &ddx, &N };
+        CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "launch gelu_bwd");
+        CK(cuCtxSynchronize(), "sync gelu_bwd");
+        CK(cuMemcpyDtoH(hdx, ddx, ne * sizeof(float)), "D2H dx");
+        int gbad = 0; float maxfd = 0.0f, g0 = 0.0f, r0 = 0.0f;
+        for (size_t i = 0; i < ne; i++) {
+            float xx = hx[i];
+            float inn = 0.7978846f * (xx + 0.044715f * xx * xx * xx);
+            float e2 = expf(2.0f * inn); float th = (e2 - 1.0f) / (e2 + 1.0f);
+            float idv = 0.7978846f * (1.0f + 0.134145f * xx * xx);
+            float gp_a = 0.5f * (1.0f + th) + 0.5f * xx * (1.0f - th * th) * idv;
+            float ref_a = hdy[i] * gp_a;
+            float h = 1.0e-3f, xp = xx + h, xm = xx - h;
+            float gpx = 0.5f * xp * (1.0f + tanhf(0.7978846f * (xp + 0.044715f * xp * xp * xp)));
+            float gmx = 0.5f * xm * (1.0f + tanhf(0.7978846f * (xm + 0.044715f * xm * xm * xm)));
+            float ref_fd = hdy[i] * (gpx - gmx) / (2.0f * h);
+            float got = hdx[i];
+            if (i == 0) { g0 = got; r0 = ref_fd; }
+            float ea = got - ref_a; if (ea < 0) ea = -ea;
+            float ef = got - ref_fd; if (ef < 0) ef = -ef; if (ef > maxfd) maxfd = ef;
+            if (isnan(got) || ea > 1.0e-3f || ef > 2.0e-2f) { if (gbad < 4) fprintf(stderr, "gelu_bwd mismatch dx[%zu]=%g ref_a %g ref_fd %g (x=%g)\n", i, got, ref_a, ref_fd, xx); gbad++; }
+        }
+        printf("GPU [%s] gelu_backward N=%d: dx[0]=%g ref_fd %g, max|dx-fd|=%g, %d bad -> %s\n",
+               gpu, N, g0, r0, maxfd, gbad, gbad ? "FAIL" : "PASS");
+        cuMemFree(dxb); cuMemFree(ddy); cuMemFree(ddx);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hdy); free(hdx); free(ptx);
+        return gbad ? 1 : 0;
+    }
+
+    /* softmax_backward mode: cuda_launch <ptx> gpu_softmax_backward <N> softmax_backward <rows> <cols>.
+     * dA[i,j]=P[i,j]*(dP[i,j]-sum_k dP[i,k]*P[i,k]). P is a valid CPU softmax, dP a varied upstream
+     * grad. Verify per-cell vs CPU (1e-4) AND the INDEPENDENT conservation that each dA row sums
+     * to ~0 (sum_j dA = dot - 1*dot = 0 since sum_j P = 1). */
+    if (strcmp(op, "softmax_backward") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hP = (float*)malloc(ne * sizeof(float));
+        float* hdP = (float*)malloc(ne * sizeof(float));
+        float* hdA = (float*)malloc(ne * sizeof(float));
+        if (!hP || !hdP || !hdA) return 2;
+        for (int r = 0; r < rows; r++) {
+            float mx = -1.0e30f;
+            for (int c = 0; c < cols; c++) { float z = (float)((int)(((r * cols + c) * 7 + 3) % 13) - 6); hP[r * cols + c] = z; if (z > mx) mx = z; }
+            float sm = 0.0f; for (int c = 0; c < cols; c++) sm += expf(hP[r * cols + c] - mx);
+            for (int c = 0; c < cols; c++) hP[r * cols + c] = expf(hP[r * cols + c] - mx) / sm;
+            for (int c = 0; c < cols; c++) hdP[r * cols + c] = (float)((int)(((r * cols + c) * 5 + 1) % 7) - 3);
+        }
+        CUdeviceptr dP, ddP, ddA;
+        CK(cuMemAlloc(&dP, ne * sizeof(float)), "alloc P");
+        CK(cuMemAlloc(&ddP, ne * sizeof(float)), "alloc dP");
+        CK(cuMemAlloc(&ddA, ne * sizeof(float)), "alloc dA");
+        CK(cuMemcpyHtoD(dP, hP, ne * sizeof(float)), "H2D P");
+        CK(cuMemcpyHtoD(ddP, hdP, ne * sizeof(float)), "H2D dP");
+        void* sargs[] = { &dP, &ddP, &ddA, &rows, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, sargs, 0), "launch softmax_bwd");
+        CK(cuCtxSynchronize(), "sync softmax_bwd");
+        CK(cuMemcpyDtoH(hdA, ddA, ne * sizeof(float)), "D2H dA");
+        int sbad = 0; float maxrs = 0.0f, a0 = 0.0f, r0 = 0.0f;
+        for (int r = 0; r < rows; r++) {
+            float dot = 0.0f; for (int c = 0; c < cols; c++) dot += hdP[r * cols + c] * hP[r * cols + c];
+            float rs = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float ref = hP[r * cols + c] * (hdP[r * cols + c] - dot);
+                float got = hdA[r * cols + c];
+                if (r == 0 && c == 0) { a0 = got; r0 = ref; }
+                rs += got;
+                float e = got - ref; if (e < 0) e = -e;
+                if (isnan(got) || e > 1.0e-4f) { if (sbad < 4) fprintf(stderr, "softmax_bwd mismatch dA[%d,%d]=%g ref %g\n", r, c, got, ref); sbad++; }
+            }
+            float ers = rs < 0 ? -rs : rs; if (ers > maxrs) maxrs = ers;
+            if (isnan(rs) || ers > 1.0e-3f) { if (sbad < 4) fprintf(stderr, "softmax_bwd row %d sum %g (want 0)\n", r, rs); sbad++; }
+        }
+        printf("GPU [%s] softmax_backward %dx%d: dA[0,0]=%g ref %g, max|row_sum|=%g, %d bad -> %s\n",
+               gpu, rows, cols, a0, r0, maxrs, sbad, sbad ? "FAIL" : "PASS");
+        cuMemFree(dP); cuMemFree(ddP); cuMemFree(ddA);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hP); free(hdP); free(hdA); free(ptx);
+        return sbad ? 1 : 0;
+    }
+
     /* layernorm mode: cuda_launch <ptx> <kernel> <Nignored> layernorm <rows> <cols>.
      * TWO passes. pass 0: gamma=1,beta=0 -> verify each cell vs a CPU layernorm AND
      * that each row of y has mean~0, var~1. pass 1: non-trivial per-column gamma/beta
