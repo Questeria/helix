@@ -78,6 +78,10 @@ EOF
 gen i16_ovf.hx <<'EOF'
 fn main() -> i32 { let x: i16 = 32767_i16 + 1_i16; let y: i32 = x as i32; if y < 0 { 42 } else { 7 } }
 EOF
+gen result_inline.hx <<'EOF'
+enum Result { Ok(i32), Err(i32) }
+fn main() -> i32 { let r = Result::Ok(42); match r { Result::Ok(x) => x, Result::Err(e) => e } }
+EOF
 pass=0; fail=0
 chk() { local f="$1" exp="$2" b; b=$(basename "$1")
   [ -f "$f" ] || { echo "  MISSING $b"; fail=$((fail+1)); return; }
@@ -88,12 +92,12 @@ chk() { local f="$1" exp="$2" b; b=$(basename "$1")
 }
 chk "$EX/exit42.hx" 42; chk "$EX/matmul_2x2.hx" 69; chk "$EX/hbs_sample_enum_struct.hx" 129
 chk "$EX/hbs_sample_option.hx" 42; chk "$EX/hbs_sample_recursion.hx" 120
-chk "$EX/dogfood_18_pat_struct_showcase.hx" 42; chk "$EX/dogfood_16_result_basic.hx" 42; chk "$EX/gradient_descent.hx" 42
+chk "$EX/dogfood_18_pat_struct_showcase.hx" 42; chk "$CD/result_inline.hx" 42; chk "$EX/gradient_descent.hx" 42
 chk "$CD/i64_basic.hx" 42; chk "$CD/i64_add.hx" 5; chk "$CD/i64_mul.hx" 6; chk "$CD/i64_cmp.hx" 1; chk "$CD/i64_neg.hx" 5
 chk "$CD/u64_shr.hx" 1; chk "$CD/u8_wrap.hx" 42; chk "$CD/u16_wrap.hx" 42; chk "$CD/i16_ovf.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 13 pass after the u64-shr fix; the 4 known-fail = dogfood_18/16 + i64_add/mul)"
+echo "  CORPUS: $pass passed, $fail failed (expect 15 pass: dogfood_18 PatStruct + result_inline now PASS; 2 known-fail = i64_add/mul lexer-width)"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 13 ]; then echo "  CORPUS REGRESSION (pass=$pass < 13)"; GATE_OK=0; fi
+if [ "$pass" -lt 15 ]; then echo "  CORPUS REGRESSION (pass=$pass < 15)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi

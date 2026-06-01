@@ -42,6 +42,10 @@ EOF
 gen i16_ovf.hx <<'EOF'
 fn main() -> i32 { let x: i16 = 32767_i16 + 1_i16; let y: i32 = x as i32; if y < 0 { 42 } else { 7 } }
 EOF
+gen result_inline.hx <<'EOF'
+enum Result { Ok(i32), Err(i32) }
+fn main() -> i32 { let r = Result::Ok(42); match r { Result::Ok(x) => x, Result::Err(e) => e } }
+EOF
 
 echo "=== build K2 (general full-language compiler) from the raw seed ==="
 python3 assemble_k1.py >/dev/null 2>&1
@@ -76,7 +80,7 @@ check "$EX/hbs_sample_enum_struct.hx"       129  struct+enum+match
 check "$EX/hbs_sample_option.hx"             42  payload-enum+match
 check "$EX/hbs_sample_recursion.hx"         120  enum+recursion
 check "$EX/dogfood_18_pat_struct_showcase.hx" 42 struct-destructure
-check "$EX/dogfood_16_result_basic.hx"       42  Result-enum
+check "$CD/result_inline.hx"                 42  result-enum-userdefined
 check "$EX/gradient_descent.hx"              42  grad+float
 echo "=== authored int-width ==="
 check "$CD/i64_basic.hx"  42  i64-cast

@@ -15611,7 +15611,16 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
                     let fn0_s = tok_p2(tok_base, fk0);
                     let fn0_l = tok_p3(tok_base, fk0);
                     cur_advance(sb);         // consume first field IDENT
-                    let first_bind = mk_node(65, fn0_s, fn0_l, 0);
+                    // `field: subpattern` (literal test / nested struct / rename) vs
+                    // shorthand `field`. DoD #2 fix 2026-06-01: the loop previously
+                    // broke on ':' -> derailed the token stream -> ud2/SIGILL. The
+                    // sub-pattern is parsed positionally (mirrors the tuple-struct path).
+                    let first_bind = if tok_tag(tok_base, cur_get(sb)) == 14 {
+                        cur_advance(sb);                 // consume ':'
+                        parse_pattern(tok_base, sb)      // field's sub-pattern
+                    } else {
+                        mk_node(65, fn0_s, fn0_l, 0)     // shorthand -> PAT_BIND
+                    };
                     let mut sub_head_st: i32 = mk_node(51, first_bind, 0, 0);
                     let mut tail_idx_st: i32 = sub_head_st;
                     let mut arity_st: i32 = 1;
@@ -15630,7 +15639,12 @@ fn parse_pattern_atom(tok_base: i32, sb: i32) -> i32 {
                                 let fn_n_s = tok_p2(tok_base, fk_n);
                                 let fn_n_l = tok_p3(tok_base, fk_n);
                                 cur_advance(sb);
-                                let next_bind = mk_node(65, fn_n_s, fn_n_l, 0);
+                                let next_bind = if tok_tag(tok_base, cur_get(sb)) == 14 {
+                                    cur_advance(sb);                 // consume ':'
+                                    parse_pattern(tok_base, sb)      // field's sub-pattern
+                                } else {
+                                    mk_node(65, fn_n_s, fn_n_l, 0)   // shorthand -> PAT_BIND
+                                };
                                 let new_cons = mk_node(51, next_bind, 0, 0);
                                 __arena_set(tail_idx_st + 2, new_cons);
                                 tail_idx_st = new_cons;
