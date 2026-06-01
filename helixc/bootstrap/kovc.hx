@@ -6277,41 +6277,43 @@ fn parse_float_bits(p1: i32, p2: i32) -> i32 {
     if v_scaled == 0 {
         bits = 0;
     } else {
-        // Find binary exponent k: largest k such that 2^k * pow10 <= v_scaled.
-        // For v_scaled < pow10 (sub-1.0 literals like 0.5/0.25), first decrement
-        // k and halve threshold until threshold <= v_scaled. Then do the
-        // positive-k loop. The two loops together cover (~10^-9, ~10^9).
+        // Find binary exponent k and the alignment unit (the mantissa divisor).
+        // value = v_scaled / pow10, brought into [1,2) scaled:
+        //   value < 1 (v_scaled < pow10): DOUBLE the numerator (exact in i32) until
+        //     num >= pow10; k = -m; the divisor stays pow10. (The old code halved
+        //     pow10 by INTEGER division, which truncated and lost precision for small
+        //     single-sig-digit literals like 0.1/0.001/1e-8 -- it returned the next
+        //     power of two with a zero mantissa. Scaling the numerator up is exact.)
+        //   value >= 1: DOUBLE the divisor (pow10) until num=v_scaled in [unit,2*unit).
+        // num and unit both stay < 2*10^9 < 2^31, so no overflow.
         let mut k: i32 = 0;
-        let mut threshold: i32 = pow10;
-        let mut keep_neg: i32 = 1;
-        while keep_neg == 1 {
-            if threshold <= v_scaled { keep_neg = 0; }
-            else { if threshold == 1 { keep_neg = 0; }
-            else {
-                threshold = threshold / 2;
-                k = k - 1;
-            }};
-        }
-        let mut keep_k: i32 = 1;
-        while keep_k == 1 {
-            if threshold > v_scaled / 2 { keep_k = 0; }
-            else {
-                threshold = threshold * 2;
-                k = k + 1;
+        let mut num: i32 = v_scaled;
+        let mut unit: i32 = pow10;
+        if v_scaled < pow10 {
+            let mut keep_neg: i32 = 1;
+            while keep_neg == 1 {
+                if num >= pow10 { keep_neg = 0; }
+                else { num = num * 2; k = k - 1; }
+            }
+        } else {
+            let mut keep_k: i32 = 1;
+            while keep_k == 1 {
+                if unit > v_scaled / 2 { keep_k = 0; }
+                else { unit = unit * 2; k = k + 1; }
             }
         }
-        // Extract 23 mantissa bits via residual-doubling.
-        let mut residual = v_scaled - threshold;
+        // Extract 23 mantissa bits via residual-doubling against `unit`.
+        let mut residual = num - unit;
         let mut mantissa: i32 = 0;
         let mut bit: i32 = 22;
         while bit >= 0 {
             residual = residual * 2;
-            if residual >= threshold {
+            if residual >= unit {
                 let mut bv: i32 = 1;
                 let mut sh: i32 = 0;
                 while sh < bit { bv = bv * 2; sh = sh + 1; }
                 mantissa = mantissa + bv;
-                residual = residual - threshold;
+                residual = residual - unit;
             }
             bit = bit - 1;
         }
