@@ -24,6 +24,7 @@
 #include <cuda.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
@@ -38,13 +39,17 @@ static int check(CUresult r, const char* what) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N]\n", argv[0]);
+        fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub]\n", argv[0]);
         return 2;
     }
     const char* ptx_path = argv[1];
     const char* kname    = argv[2];
     int N = (argc > 3) ? atoi(argv[3]) : 256;
     if (N <= 0) N = 256;
+    /* op selects the CPU reference the GPU result is checked against, so this one
+     * launcher verifies a growing kernel corpus (vector_add/mul/sub) over the same
+     * f32 inputs a[i]=i, b[i]=2*i. Default add (back-compat with the first-light run). */
+    const char* op = (argc > 4) ? argv[4] : "add";
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
     FILE* f = fopen(ptx_path, "rb");
@@ -85,13 +90,16 @@ int main(int argc, char** argv) {
     CK(cuCtxSynchronize(), "cuCtxSynchronize");
     CK(cuMemcpyDtoH(hc, dc, bytes), "cuMemcpyDtoH c");
 
+    int is_mul = (strcmp(op, "mul") == 0);
+    int is_sub = (strcmp(op, "sub") == 0);
     int bad = 0;
     for (int i = 0; i < N; i++) {
-        float want = ha[i] + hb[i];
+        float want = is_mul ? ha[i] * hb[i] : is_sub ? ha[i] - hb[i] : ha[i] + hb[i];
         if (hc[i] != want) { if (bad < 4) fprintf(stderr, "mismatch c[%d]=%g want %g\n", i, hc[i], want); bad++; }
     }
-    printf("GPU [%s] kernel '%s' over %d elems: c[7]=%g (want %g) -> %s\n",
-           gpu, kname, N, hc[7], ha[7] + hb[7], bad ? "FAIL" : "PASS");
+    float want7 = is_mul ? ha[7] * hb[7] : is_sub ? ha[7] - hb[7] : ha[7] + hb[7];
+    printf("GPU [%s] kernel '%s' op=%s over %d elems: c[7]=%g (want %g) -> %s\n",
+           gpu, kname, op, N, hc[7], want7, bad ? "FAIL" : "PASS");
 
     cuMemFree(da); cuMemFree(db); cuMemFree(dc);
     cuModuleUnload(mod); cuCtxDestroy(ctx);
