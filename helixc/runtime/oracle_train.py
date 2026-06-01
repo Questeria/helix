@@ -64,8 +64,10 @@ def forward(W):
     return logits
 
 def loss_of(logits):
+    # SUM cross-entropy (matches train_transformer.c: the loss is the antiderivative of
+    # the unaveraged softmax-onehot gradient). Relative comparison is convention-invariant.
     p = softmax(logits)
-    return float(-np.log(p[np.arange(S), tgt]).mean())
+    return float(-np.log(p[np.arange(S), tgt]).sum())
 
 logits = forward(W)
 L0 = loss_of(logits)
