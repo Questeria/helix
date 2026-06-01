@@ -269,7 +269,12 @@ int main(int argc, char** argv) {
                 float fd = (Lp - Lm) / (2.0f * h);
                 if (pass == 0 && i == 0) q0r = fd;
                 float e = got[i] - fd; if (e < 0) e = -e; if (e > maxe) maxe = e;
-                if (isnan(got[i]) || e > 2.0e-2f) { if (bad < 6) fprintf(stderr, "attn_bwd pass %d [%zu] got %g fd %g\n", pass, i, got[i], fd); bad++; }
+                float af = fd < 0 ? -fd : fd;
+                /* magnitude-aware: an absolute floor 1e-3 (ignores finite-diff/f32 noise on
+                 * near-zero grads) AND a 5% relative bound (catches multiplicative errors like a
+                 * wrong backward scale on the small dQ/dK gradients -- an audit found an
+                 * absolute-only 2e-2 tol missed a 2x scale error here). */
+                if (isnan(got[i]) || (e > 1.0e-3f && e > 0.05f * af)) { if (bad < 6) fprintf(stderr, "attn_bwd pass %d [%zu] got %g fd %g\n", pass, i, got[i], fd); bad++; }
             }
         }
         printf("GPU [%s] attn_backward S=%d d=%d: dQ[0]=%g fd %g, max|grad-fd|=%g, %d bad -> %s\n",
