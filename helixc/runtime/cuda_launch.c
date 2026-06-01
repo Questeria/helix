@@ -229,6 +229,38 @@ int main(int argc, char** argv) {
         return lbad ? 1 : 0;
     }
 
+    /* affine probe: cuda_launch <ptx> gpu_affine <N> affine. y[i]=0.5*x[i]+0.25,
+     * validating the f32-LITERAL PTX emitter (0.5=0f3F000000, 0.25=0f3E800000). */
+    if (strcmp(op, "affine") == 0) {
+        size_t ne = (size_t)N;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hy) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hy[i] = -7.0f; }
+        CUdeviceptr dx, dy;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "cuMemAlloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "cuMemAlloc y");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "cuMemcpyHtoD x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "cuMemcpyHtoD y");
+        void* aargs[] = { &dx, &dy, &N };
+        CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, aargs, 0), "cuLaunchKernel affine");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
+        int abad = 0;
+        for (size_t i = 0; i < ne; i++) {
+            float ref = 0.5f * hx[i] + 0.25f;
+            float got = hy[i];
+            float d = got - ref; if (d < 0) d = -d;
+            if (isnan(got) || d > 1.0e-4f) { if (abad < 4) fprintf(stderr, "affine mismatch y[%zu]=%g ref %g\n", i, got, ref); abad++; }
+        }
+        printf("GPU [%s] affine N=%d (y=0.5x+0.25, f32 literals): y[0]=%g ref %g, %d bad -> %s\n",
+               gpu, N, hy[0], 0.5f * hx[0] + 0.25f, abad, abad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy);
+        return abad ? 1 : 0;
+    }
+
     size_t bytes = (size_t)N * sizeof(float);
     float* ha = (float*)malloc(bytes);
     float* hb = (float*)malloc(bytes);

@@ -10380,6 +10380,26 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         let r = ptx_alloc_reg(vtab);
         emit_ptx_mov_const(r, __arena_get(node + 1));
         r
+    } else { if tag == 27 {
+        // K1.GPU-ABI (P5): AST_FLOATLIT (f32 literal, tag 27 -- slot 1 = text
+        // byte-offset, slot 2 = text length). Reuse the CPU backend's
+        // parse_float_bits for the IEEE-754 32-bit pattern, then emit
+        // "mov.f32 %fN, 0fXXXXXXXX;". Result is f32 (vtab+55=1). Literal must be
+        // <= 9 significant digits (parse_float_bits accumulator bound); a negative
+        // literal arrives as AST_NEG of a positive literal so bits >= 0 here.
+        let fbits = parse_float_bits(__arena_get(node + 1), __arena_get(node + 2));
+        let fr = ptx_alloc_f(vtab);
+        emit_ptx_indent();
+        emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);   // mov
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .f32
+        emit_ptx_byte(32);
+        emit_ptx_f(fr);
+        emit_ptx_byte(44); emit_ptx_byte(32);    // ", "
+        emit_ptx_byte(48); emit_ptx_byte(102);   // "0f"
+        emit_ptx_hex8(fbits);
+        emit_ptx_byte(59); emit_ptx_byte(10);    // ";\n"
+        __arena_set(vtab + 55, 1);
+        fr
     } else { if tag == 1 {
         let vlk = ptx_vtab_lookup(vtab, __arena_get(node + 1), __arena_get(node + 2));
         if vlk < 0 {
@@ -10447,7 +10467,7 @@ fn emit_ptx_expr(node: i32, vtab: i32) -> i32 {
         emit_ptx_expr(__arena_get(node + 2), vtab)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M5d: emit a scalar binary op "    <mnem>.s32 %rD, %rA, %rB;"
@@ -11232,6 +11252,28 @@ fn emit_ptx_mov_f_zero(ridx: i32) -> i32 {
     emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48);
     emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48);
     emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+
+// K1.GPU-ABI (P5): emit one uppercase hex digit (0-9 -> 48+n, A-F -> 55+n).
+fn emit_ptx_hex_nibble(n: i32) -> i32 {
+    if n < 10 { emit_ptx_byte(48 + n) } else { emit_ptx_byte(55 + n) };
+    0
+}
+// K1.GPU-ABI (P5): emit 8 uppercase hex digits of `bits` (MSB nibble first) --
+// the PTX f32 immediate body that follows "0f". `bits` is the IEEE-754 32-bit
+// pattern from parse_float_bits; for a positive literal the sign bit is 0 so
+// bits is a non-negative i32 and the /,% nibble extraction is exact (the
+// bootstrap has no evaluable right-shift / bitwise-AND, so division is used).
+fn emit_ptx_hex8(bits: i32) -> i32 {
+    emit_ptx_hex_nibble((bits / 268435456) % 16);   // nibble 7 (bits 31-28)
+    emit_ptx_hex_nibble((bits / 16777216) % 16);    // nibble 6 (bits 27-24)
+    emit_ptx_hex_nibble((bits / 1048576) % 16);      // nibble 5 (bits 23-20)
+    emit_ptx_hex_nibble((bits / 65536) % 16);        // nibble 4 (bits 19-16)
+    emit_ptx_hex_nibble((bits / 4096) % 16);         // nibble 3 (bits 15-12)
+    emit_ptx_hex_nibble((bits / 256) % 16);          // nibble 2 (bits 11-8)
+    emit_ptx_hex_nibble((bits / 16) % 16);           // nibble 1 (bits 7-4)
+    emit_ptx_hex_nibble(bits % 16);                  // nibble 0 (bits 3-0)
     0
 }
 
