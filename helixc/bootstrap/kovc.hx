@@ -11489,6 +11489,79 @@ fn emit_ptx_gpu_exp(node: i32, vtab: i32) -> i32 {
     __arena_set(vtab + 55, 1);
     fr
 }
+// K1.GPU-ABI (P5): __gpu_rsqrt -- 11-char matcher; 1/sqrt(x) via rsqrt.approx.f32.
+fn ptx_name_is_gpu_rsqrt(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 11 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 103 { ok = 0; };   // g
+        if __arena_get(name_s + 3) != 112 { ok = 0; };   // p
+        if __arena_get(name_s + 4) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 5) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 6) != 114 { ok = 0; };   // r
+        if __arena_get(name_s + 7) != 115 { ok = 0; };   // s
+        if __arena_get(name_s + 8) != 113 { ok = 0; };   // q
+        if __arena_get(name_s + 9) != 114 { ok = 0; };   // r
+        if __arena_get(name_s + 10) != 116 { ok = 0; };  // t
+        ok
+    }
+}
+fn emit_ptx_gpu_rsqrt(node: i32, vtab: i32) -> i32 {
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let fx = emit_ptx_expr(a0, vtab);
+    let fr = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(114); emit_ptx_byte(115); emit_ptx_byte(113); emit_ptx_byte(114); emit_ptx_byte(116);  // rsqrt
+    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112); emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(120);  // .approx
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(fx);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    __arena_set(vtab + 55, 1);
+    fr
+}
+// K1.GPU-ABI (P5): __gpu_i2f -- 9-char matcher; i32 -> f32 via cvt.rn.f32.s32.
+fn ptx_name_is_gpu_i2f(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 9 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 103 { ok = 0; };   // g
+        if __arena_get(name_s + 3) != 112 { ok = 0; };   // p
+        if __arena_get(name_s + 4) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 5) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 6) != 105 { ok = 0; };   // i
+        if __arena_get(name_s + 7) != 50 { ok = 0; };    // 2
+        if __arena_get(name_s + 8) != 102 { ok = 0; };   // f
+        ok
+    }
+}
+fn emit_ptx_gpu_i2f(node: i32, vtab: i32) -> i32 {
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let rx = emit_ptx_expr(a0, vtab);
+    let fr = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);   // cvt
+    emit_ptx_byte(46); emit_ptx_byte(114); emit_ptx_byte(110);   // .rn
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);   // .s32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rx);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    __arena_set(vtab + 55, 1);
+    fr
+}
 fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
     let name_s = __arena_get(node + 1);
     let name_l = __arena_get(node + 2);
@@ -11536,9 +11609,13 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_tile_matmul(node, vtab)     // K1.M16: dst = a @ b (naive)
     } else { if ptx_name_is_gpu_exp(name_s, name_l) == 1 {
         emit_ptx_gpu_exp(node, vtab)         // K1.GPU-ABI (P5): e^x
+    } else { if ptx_name_is_gpu_rsqrt(name_s, name_l) == 1 {
+        emit_ptx_gpu_rsqrt(node, vtab)       // K1.GPU-ABI (P5): 1/sqrt(x)
+    } else { if ptx_name_is_gpu_i2f(name_s, name_l) == 1 {
+        emit_ptx_gpu_i2f(node, vtab)         // K1.GPU-ABI (P5): i32 -> f32
     } else {
         0 - 1
-    }}}}}}}}}
+    }}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:

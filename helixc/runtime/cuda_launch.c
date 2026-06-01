@@ -161,6 +161,61 @@ int main(int argc, char** argv) {
         return sbad ? 1 : 0;
     }
 
+    /* layernorm mode: cuda_launch <ptx> <kernel> <Nignored> layernorm <rows> <cols>.
+     * gamma=1, beta=0, so y = normalized x. Verify each cell vs a CPU layernorm AND
+     * that each row of y has mean~0, var~1 (NaN-guarded). */
+    if (strcmp(op, "layernorm") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 16;
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        float* hg = (float*)malloc((size_t)cols * sizeof(float));
+        float* hbe = (float*)malloc((size_t)cols * sizeof(float));
+        if (!hx || !hy || !hg || !hbe) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hy[i] = -7.0f; }
+        for (int c = 0; c < cols; c++) { hg[c] = 1.0f; hbe[c] = 0.0f; }
+        CUdeviceptr dx, dy, dg, db;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "cuMemAlloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "cuMemAlloc y");
+        CK(cuMemAlloc(&dg, (size_t)cols * sizeof(float)), "cuMemAlloc g");
+        CK(cuMemAlloc(&db, (size_t)cols * sizeof(float)), "cuMemAlloc b");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "cuMemcpyHtoD x");
+        CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "cuMemcpyHtoD g");
+        CK(cuMemcpyHtoD(db, hbe, (size_t)cols * sizeof(float)), "cuMemcpyHtoD b");
+        void* largs[] = { &dx, &dy, &dg, &db, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "cuLaunchKernel layernorm");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
+        int lbad = 0;
+        for (int r = 0; r < rows; r++) {
+            float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[r * cols + c]; mean /= (float)cols;
+            float v = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - mean; v += d * d; } v /= (float)cols;
+            float inv = 1.0f / sqrtf(v);
+            float ym = 0.0f, yv = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float ref = (hx[r * cols + c] - mean) * inv;
+                float got = hy[r * cols + c];
+                ym += got;
+                float d = got - ref; if (d < 0) d = -d;
+                if (isnan(got) || d > 1.0e-3f) { if (lbad < 4) fprintf(stderr, "layernorm mismatch y[%d,%d]=%g ref %g\n", r, c, got, ref); lbad++; }
+            }
+            ym /= (float)cols;
+            for (int c = 0; c < cols; c++) { float dd = hy[r * cols + c] - ym; yv += dd * dd; } yv /= (float)cols;
+            float dm = ym < 0 ? -ym : ym;
+            float dv = (yv - 1.0f) < 0 ? -(yv - 1.0f) : (yv - 1.0f);
+            if (isnan(ym) || dm > 1.0e-2f) { if (lbad < 4) fprintf(stderr, "layernorm row %d mean %g (want 0)\n", r, ym); lbad++; }
+            if (isnan(yv) || dv > 1.0e-2f) { if (lbad < 4) fprintf(stderr, "layernorm row %d var %g (want 1)\n", r, yv); lbad++; }
+        }
+        float r0m = 0.0f; for (int c = 0; c < cols; c++) r0m += hy[c]; r0m /= (float)cols;
+        printf("GPU [%s] layernorm %dx%d: row0 mean=%g (want 0), %d bad -> %s\n",
+               gpu, rows, cols, r0m, lbad, lbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(hg); free(hbe);
+        return lbad ? 1 : 0;
+    }
+
     size_t bytes = (size_t)N * sizeof(float);
     float* ha = (float*)malloc(bytes);
     float* hb = (float*)malloc(bytes);
