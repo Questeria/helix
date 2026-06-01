@@ -10564,7 +10564,13 @@ fn emit_ptx_cc(cc: i32) -> i32 {
 // value-returning emit_ptx_expr model. ptxas-validated form.
 fn emit_ptx_cmp(node: i32, vtab: i32, cc: i32) -> i32 {
     let la = emit_ptx_expr(__arena_get(node + 1), vtab);
+    let la_f = __arena_get(vtab + 55);
     let ra = emit_ptx_expr(__arena_get(node + 2), vtab);
+    let ra_f = __arena_get(vtab + 55);
+    // K1.GPU-ABI (P5): float compare (e.g. relu x > 0.0) must use setp.<cc>.f32 over
+    // %f operands; the old code always emitted setp.<cc>.s32 %r, which reinterprets
+    // the f32 bit pattern as signed int -> wrong for negative floats.
+    let both_f = if la_f == 1 { ra_f } else { 0 };
     let p = ptx_alloc_pred(vtab);
     let r = ptx_alloc_reg(vtab);
     // "    setp."
@@ -10572,20 +10578,28 @@ fn emit_ptx_cmp(node: i32, vtab: i32, cc: i32) -> i32 {
     emit_ptx_byte(32); emit_ptx_byte(115); emit_ptx_byte(101);
     emit_ptx_byte(116); emit_ptx_byte(112); emit_ptx_byte(46);
     emit_ptx_cc(cc);
-    // ".s32 %p" + P
-    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51);
-    emit_ptx_byte(50); emit_ptx_byte(32); emit_ptx_byte(37);
-    emit_ptx_byte(112);
-    emit_ptx_decimal(p);
-    // ", %r" + A
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
-    emit_ptx_byte(114); emit_ptx_decimal(la);
-    // ", %r" + B
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37);
-    emit_ptx_byte(114); emit_ptx_decimal(ra);
+    if both_f == 1 {
+        // ".f32 %p" P ", %f" A ", %f" B
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);
+        emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(112);
+        emit_ptx_decimal(p);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(102);
+        emit_ptx_decimal(la);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(102);
+        emit_ptx_decimal(ra);
+    } else {
+        // ".s32 %p" P ", %r" A ", %r" B
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+        emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(112);
+        emit_ptx_decimal(p);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+        emit_ptx_decimal(la);
+        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(37); emit_ptx_byte(114);
+        emit_ptx_decimal(ra);
+    };
     // ";\n"
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // "    selp.b32 %r" + R
+    // "    selp.b32 %r" + R  (the boolean result materializes as an i32 0/1)
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
     emit_ptx_byte(32); emit_ptx_byte(115); emit_ptx_byte(101);
     emit_ptx_byte(108); emit_ptx_byte(112); emit_ptx_byte(46);
@@ -10599,6 +10613,7 @@ fn emit_ptx_cmp(node: i32, vtab: i32, cc: i32) -> i32 {
     emit_ptx_byte(112); emit_ptx_decimal(p);
     // ";\n"
     emit_ptx_byte(59); emit_ptx_byte(10);
+    __arena_set(vtab + 55, 0);
     r
 }
 
@@ -10632,6 +10647,27 @@ fn emit_ptx_lbl_ref(which: i32, n: i32) -> i32 {
 // Per-kernel unique labels via ptx_alloc_label. if-as-statement: the
 // value is discarded (a void kernel uses if for side effects; an
 // if-as-value phi/merge is deferred). ptxas-validated form.
+// K1.GPU-ABI (P5): mov a value between same-file regs -- mov.f32 %f or mov.s32 %r.
+fn emit_ptx_mov_reg(dst: i32, src: i32, is_f: i32) -> i32 {
+    emit_ptx_indent();
+    if is_f == 1 {
+        emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);
+        emit_ptx_byte(32);
+        emit_ptx_f(dst);
+        emit_ptx_byte(44); emit_ptx_byte(32);
+        emit_ptx_f(src);
+    } else {
+        emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+        emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);
+        emit_ptx_byte(32);
+        emit_ptx_r(dst);
+        emit_ptx_byte(44); emit_ptx_byte(32);
+        emit_ptx_r(src);
+    };
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
 fn emit_ptx_if(node: i32, vtab: i32) -> i32 {
     let rc = emit_ptx_expr(__arena_get(node + 1), vtab);
     let pz = ptx_alloc_pred(vtab);
@@ -10657,8 +10693,14 @@ fn emit_ptx_if(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(97); emit_ptx_byte(32);
     emit_ptx_lbl_ref(0, n);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // then-branch (result discarded)
-    emit_ptx_expr(__arena_get(node + 2), vtab);
+    // K1.GPU-ABI (P5): IF-EXPRESSION. Both branches mov their value into a shared
+    // result reg (typed by the then-value), so `if c { x } else { y }` yields a real
+    // register (was -1 -> an invalid st of %f-1). The else body is now emitted (it was
+    // silently empty before). A no-else statement still works (result discarded).
+    let rt = emit_ptx_expr(__arena_get(node + 2), vtab);
+    let tf = __arena_get(vtab + 55);
+    let rr = if tf == 1 { ptx_alloc_f(vtab) } else { ptx_alloc_reg(vtab) };
+    emit_ptx_mov_reg(rr, rt, tf);
     // "    bra $Lend_<n>;\n"
     emit_ptx_byte(32); emit_ptx_byte(32); emit_ptx_byte(32);
     emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114);
@@ -10668,15 +10710,17 @@ fn emit_ptx_if(node: i32, vtab: i32) -> i32 {
     // "$Lelse_<n>:\n"
     emit_ptx_lbl_ref(0, n);
     emit_ptx_byte(58); emit_ptx_byte(10);
-    // else-branch (result discarded); guard against a missing else
     let else_idx = __arena_get(node + 3);
     if else_idx != 0 {
-        emit_ptx_expr(else_idx, vtab);
+        let re = emit_ptx_expr(else_idx, vtab);
+        let ef = __arena_get(vtab + 55);
+        emit_ptx_mov_reg(rr, re, ef);
     };
     // "$Lend_<n>:\n"
     emit_ptx_lbl_ref(1, n);
     emit_ptx_byte(58); emit_ptx_byte(10);
-    0 - 1
+    __arena_set(vtab + 55, tf);
+    rr
 }
 
 // K1.M9 (2026-05-28): lower AST_WHILE (tag 10; cond slot 1, body slot
@@ -11393,6 +11437,58 @@ fn emit_ptx_tile_matmul(node: i32, vtab: i32) -> i32 {
 
 // Other calls are unsupported in the GPU path yet (return -1; the tile op
 // family -- zeros/add/sub/mul/matmul -- is now complete).
+// K1.GPU-ABI (P5): __gpu_exp -- 9-char matcher (mirror ptx_name_is_thread_idx).
+fn ptx_name_is_gpu_exp(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 9 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 103 { ok = 0; };   // g
+        if __arena_get(name_s + 3) != 112 { ok = 0; };   // p
+        if __arena_get(name_s + 4) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 5) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 6) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 7) != 120 { ok = 0; };   // x
+        if __arena_get(name_s + 8) != 112 { ok = 0; };   // p
+        ok
+    }
+}
+// __gpu_exp(x) -> e^x via ex2.approx.f32 (e^x = 2^(x*log2e); log2e=1.44269504=0f3FB8AA3B).
+// SM86 hardware, error ~2^-22 -- well within the 2pct capstone bar. Arg must be f32.
+fn emit_ptx_gpu_exp(node: i32, vtab: i32) -> i32 {
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let fx = emit_ptx_expr(a0, vtab);
+    let ft = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);   // mul
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(ft);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(fx);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    // "0f3FB8AA3B"  (log2e)
+    emit_ptx_byte(48); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(70);
+    emit_ptx_byte(66); emit_ptx_byte(56); emit_ptx_byte(65); emit_ptx_byte(65);
+    emit_ptx_byte(51); emit_ptx_byte(66);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    let fr = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(101); emit_ptx_byte(120); emit_ptx_byte(50);   // ex2
+    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112);
+    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(120);   // .approx
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(ft);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    __arena_set(vtab + 55, 1);
+    fr
+}
 fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
     let name_s = __arena_get(node + 1);
     let name_l = __arena_get(node + 2);
@@ -11438,9 +11534,11 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_tile_binop(node, vtab, 2)   // K1.M15: dst = a * b
     } else { if ptx_name_is_tile_matmul(name_s, name_l) == 1 {
         emit_ptx_tile_matmul(node, vtab)     // K1.M16: dst = a @ b (naive)
+    } else { if ptx_name_is_gpu_exp(name_s, name_l) == 1 {
+        emit_ptx_gpu_exp(node, vtab)         // K1.GPU-ABI (P5): e^x
     } else {
         0 - 1
-    }}}}}}}}
+    }}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:

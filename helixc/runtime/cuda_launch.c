@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
@@ -50,6 +51,8 @@ int main(int argc, char** argv) {
      * launcher verifies a growing kernel corpus (vector_add/mul/sub) over the same
      * f32 inputs a[i]=i, b[i]=2*i. Default add (back-compat with the first-light run). */
     const char* op = (argc > 4) ? argv[4] : "add";
+    int is_exp = (strcmp(op, "exp") == 0);    /* c[i]=e^a[i] via __gpu_exp; small inputs, tol-checked */
+    int is_relu = (strcmp(op, "relu") == 0);  /* c[i]=max(a[i],0); negative inputs exercise the float compare */
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
     FILE* f = fopen(ptx_path, "rb");
@@ -117,7 +120,10 @@ int main(int argc, char** argv) {
     float* hb = (float*)malloc(bytes);
     float* hc = (float*)malloc(bytes);
     if (!ha || !hb || !hc) { return 2; }
-    for (int i = 0; i < N; i++) { ha[i] = (float)i; hb[i] = (float)(2 * i); hc[i] = -1.0f; }
+    for (int i = 0; i < N; i++) {
+        ha[i] = is_exp ? (float)((i % 8) - 4) : is_relu ? (float)(i - 128) : (float)i;
+        hb[i] = (float)(2 * i); hc[i] = -1.0f;
+    }
 
     CUdeviceptr da, db, dc;
     CK(cuMemAlloc(&da, bytes), "cuMemAlloc a");
@@ -138,10 +144,15 @@ int main(int argc, char** argv) {
     int is_rev = (strcmp(op, "reverse") == 0);  /* c[i]=a[N-1-i]: exercises an i32 scalar param read in the index */
     int bad = 0;
     for (int i = 0; i < N; i++) {
-        float want = is_rev ? ha[N - 1 - i] : is_mul ? ha[i] * hb[i] : is_sub ? ha[i] - hb[i] : ha[i] + hb[i];
-        if (hc[i] != want) { if (bad < 4) fprintf(stderr, "mismatch c[%d]=%g want %g\n", i, hc[i], want); bad++; }
+        float want = is_exp ? expf(ha[i]) : is_relu ? (ha[i] > 0.0f ? ha[i] : 0.0f)
+                   : is_rev ? ha[N - 1 - i] : is_mul ? ha[i] * hb[i] : is_sub ? ha[i] - hb[i] : ha[i] + hb[i];
+        int bad_i;
+        if (is_exp) { float d = hc[i] - want; if (d < 0) d = -d; float aw = want < 0 ? -want : want; bad_i = (d > 1.0e-3f * (aw + 1.0e-6f)); }
+        else bad_i = (hc[i] != want);
+        if (bad_i) { if (bad < 4) fprintf(stderr, "mismatch c[%d]=%g want %g\n", i, hc[i], want); bad++; }
     }
-    float want7 = is_rev ? ha[N - 1 - 7] : is_mul ? ha[7] * hb[7] : is_sub ? ha[7] - hb[7] : ha[7] + hb[7];
+    float want7 = is_exp ? expf(ha[7]) : is_relu ? (ha[7] > 0.0f ? ha[7] : 0.0f)
+                : is_rev ? ha[N - 1 - 7] : is_mul ? ha[7] * hb[7] : is_sub ? ha[7] - hb[7] : ha[7] + hb[7];
     printf("GPU [%s] kernel '%s' op=%s over %d elems: c[7]=%g (want %g) -> %s\n",
            gpu, kname, op, N, hc[7], want7, bad ? "FAIL" : "PASS");
 
