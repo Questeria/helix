@@ -85,6 +85,27 @@ EOF
 gen while_break.hx <<'EOF'
 fn main() -> i32 { let mut i = 0; while i < 100 { i = i + 1; if i >= 7 { break; } } i }
 EOF
+# types/items probes -- verify [impl] features (f64, tuples, impl-methods, or/range patterns)
+gen f64_add.hx <<'EOF'
+fn main() -> i32 { let a: f64 = 1.5_f64; let b: f64 = 2.5_f64; (a + b) as i32 }
+EOF
+gen f64_mul.hx <<'EOF'
+fn main() -> i32 { let a: f64 = 3.0_f64; let b: f64 = 4.0_f64; (a * b) as i32 }
+EOF
+gen tuple2.hx <<'EOF'
+fn main() -> i32 { let t = (3, 4); t.0 + t.1 }
+EOF
+gen impl_method.hx <<'EOF'
+struct P { x: i32 }
+impl P { fn get(self) -> i32 { self.x } }
+fn main() -> i32 { let p = P { x: 42 }; p.get() }
+EOF
+gen match_or.hx <<'EOF'
+fn main() -> i32 { let x = 2; match x { 1 | 2 | 3 => 10, _ => 0 } }
+EOF
+gen match_range.hx <<'EOF'
+fn main() -> i32 { let x = 5; match x { 1..10 => 1, _ => 0 } }
+EOF
 
 echo "=== build K2 (general full-language compiler) from the raw seed ==="
 bash assemble_k1.sh >/dev/null 2>&1
@@ -143,6 +164,13 @@ check "$CD/bit_shl.hx"    16  shift-left
 check "$CD/arr_idx.hx"    20  array-literal-index
 check "$CD/while_sum.hx"  10  while-loop
 check "$CD/while_break.hx" 7  while-break
+echo "=== types / items (verify [impl]) ==="
+check "$CD/f64_add.hx"     4  f64-add
+check "$CD/f64_mul.hx"    12  f64-mul
+check "$CD/tuple2.hx"      7  tuple-literal-field
+check "$CD/impl_method.hx" 42  impl-method-self
+check "$CD/match_or.hx"   10  match-or-pattern
+check "$CD/match_range.hx" 1  match-range-pattern
 
 echo
 echo "RESULT: $pass passed, $fail failed (of $((pass+fail)))"

@@ -38,12 +38,12 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 | `i8 i16 i32 i64` | i32/i64 [proven], i8/i16 [impl] | signed; full-width arith for i64 |
 | `u8 u16 u32 u64` | u8/u16/u64 [proven], u32 [impl] | unsigned; wrap/cast/logical-shift proven |
 | `usize` | [erased] | alias parsed, no distinct width tag |
-| `f32 f64` | f32 [proven], f64 [impl] | IEEE-754, SSE codegen |
+| `f32 f64` | **[proven]** (both) | IEEE-754, SSE codegen (`f64_add`→4, `f64_mul`→12) |
 | `bf16 f16` | [impl] | truncated/half precision |
 | `bool` | [impl] | represented as i32 0/1; `if` needs an explicit comparison, no implicit int→bool |
 | `struct N { … }` | [proven] | named + (positional/tuple [impl]) fields; positional layout |
 | `enum N { V, V(T), … }` | [proven] | tag-only + payload variants; struct-variants [erased] |
-| tuples `(a,b)` | [impl] | literal + `.0/.1` access + tuple patterns |
+| tuples `(a,b)` | **[proven]** | literal + `.0/.1` access (`tuple2`→7) + tuple patterns |
 | arrays `[a,b]`, `a[i]` | [proven] | literal + index (`arr_idx`→20); index-store [impl] |
 | `tile<ELEM,N,SPACE>` | [impl] | GPU `@kernel` param type only |
 | references `&T`/`&mut T`, raw pointers `*T` | [unsupported] | `&` is bitwise-AND only |
@@ -56,7 +56,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 - **Function**: `fn name(p: T, …) -> Ret { body }` [proven]. Body is a single (block) expression. Default return type `i32`. Recursion [proven]. No visibility modifiers (all public). Generic params `<T>` parsed-erased.
 - **Struct decl**: `struct Name { f: T, … }` [proven]; tuple struct `struct P(i32,i32)` [impl]; unit struct `struct M;` [unsupported].
 - **Enum decl**: `enum Name { V1, V2(T1,T2), … }` [proven] (payload variants proven).
-- **Impl block**: `impl Type { fn method(self, …) { … } }` — methods + associated fns [impl].
+- **Impl block**: `impl Type { fn method(self, …) { … } }` — methods + associated fns **[proven]** (`impl_method`: `p.get()` with `self.x` → 42).
 - **`@kernel` function**: GPU kernel, params may be `tile<…>` / `f32` arrays / `i32` scalars; emitted as **PTX** (used by the capstone's 15 kernels) [impl→proven via the capstone, see #3 of the DoD].
 - **Attributes**: `@pure` [proven], `@kernel` [impl], `@autotune(…)` [impl], `@deprecated("…")` / `@since("…")` [impl]; Rust `#[…]`/`#![…]` skipped at lex [impl].
 - **Module / const / static / trait**: parsed-erased or unsupported (no real semantics) [erased/unsupported].
@@ -70,13 +70,13 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 - **`if`/`else`** (an **expression** yielding the taken arm's value): `if c { a } else { b }` [proven]. No `else if` keyword — nest in the `else` arm [proven].
 - **`while`**: `while c { body }` [proven] (`while_sum`→10); `break` [proven] (`while_break`→7); `continue` [impl]. **No `for`** loop [unsupported] (use `while` + a counter).
 - **`match`** (expression) [proven]: arms `pat => body`, comma-separated. Patterns:
-  - bind `x` [proven], wildcard `_` [proven], literal `42` [impl], range `a..b` [impl],
-  - tuple `(a,b)` [impl], **struct `P { x, y }` / `P { x: 0, y }` (literal field) / `O { i: I { v }, t }` (nested) / `P { .. }` (rest)** [proven — fixed 2026-06-01],
-  - enum variant `E::V(x)` [proven], or-pattern `A | B` [impl].
+  - bind `x` [proven], wildcard `_` [proven], literal `42` [proven], range `a..b` **[proven]** (`match_range`→1),
+  - tuple `(a,b)` **[proven]**, **struct `P { x, y }` / `P { x: 0, y }` (literal field) / `O { i: I { v }, t }` (nested) / `P { .. }` (rest)** [proven — fixed 2026-06-01],
+  - enum variant `E::V(x)` [proven], or-pattern `A | B` **[proven]** (`match_or`→10).
   - **Guards `pat if cond =>` are parsed but NOT enforced** — every matching arm body runs regardless of the guard [erased]. No exhaustiveness check [unsupported].
 - **Blocks / sequencing**: `{ s1; s2; tail }`; `;` separates statements; the trailing expression is the block's value [proven].
 - **Cast**: `e as T` — int↔int (width-correct), int↔float, float↔float [proven].
-- **Calls**: `f(a, b, …)` [proven]; method `x.m(…)` [impl]; field `s.f` / `t.0` [impl]; index `a[i]` [impl].
+- **Calls**: `f(a, b, …)` [proven]; method `x.m(…)` **[proven]** (`impl_method`); field `s.f` / `t.0` **[proven]**; index `a[i]` [proven].
 - **`return e;`** early-exit [impl]. **Unary**: `-e` [proven], `~e` [impl], `!e` [impl].
 - **Arithmetic correctness + associativity**: operators are **LEFT-associative** — corpus-proven (2026-06-01): `10 - 3 - 2` → **5** (not 9), `100 / 5 / 2` → **10** (not 40). The full operator set is now corpus-proven: comparisons `!= >= <= == > <`, bitwise `& | ^`, shift `<<`/`>>`, plus arrays, `while`+`break`. Also verified end-to-end by the **capstone** (transformer forward+backward+Adam matching numpy to 0.0009%).
 
@@ -123,7 +123,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 baseline-literal (42) · scalar-arith (69) · struct+enum+match (129) · payload-enum+match (42) ·
 enum+recursion (120) · nested-PatStruct-destructure (42) · user-defined-`enum Result`+match (42) ·
 grad+float (42) · i64 cast/cmp/neg · i64 mul-beyond-i32 (6) · i64 div-beyond-i32 (50) ·
-u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42) · left-assoc sub/div · comparisons (ne/ge/le) · bitwise (and-or/xor/shl) · array literal+index · while + break. **28/28 pass on the self-hosted K2 (2026-06-01).**
+u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42) · left-assoc sub/div · comparisons (ne/ge/le) · bitwise (and-or/xor/shl) · array literal+index · while + break · **f64** add/mul · **tuples** · **impl-method** (self) · **match or/range patterns**. **34/34 pass on the self-hosted K2 (2026-06-01).**
 
 ---
 

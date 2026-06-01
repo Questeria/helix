@@ -115,6 +115,26 @@ EOF
 gen while_break.hx <<'EOF'
 fn main() -> i32 { let mut i = 0; while i < 100 { i = i + 1; if i >= 7 { break; } } i }
 EOF
+gen f64_add.hx <<'EOF'
+fn main() -> i32 { let a: f64 = 1.5_f64; let b: f64 = 2.5_f64; (a + b) as i32 }
+EOF
+gen f64_mul.hx <<'EOF'
+fn main() -> i32 { let a: f64 = 3.0_f64; let b: f64 = 4.0_f64; (a * b) as i32 }
+EOF
+gen tuple2.hx <<'EOF'
+fn main() -> i32 { let t = (3, 4); t.0 + t.1 }
+EOF
+gen impl_method.hx <<'EOF'
+struct P { x: i32 }
+impl P { fn get(self) -> i32 { self.x } }
+fn main() -> i32 { let p = P { x: 42 }; p.get() }
+EOF
+gen match_or.hx <<'EOF'
+fn main() -> i32 { let x = 2; match x { 1 | 2 | 3 => 10, _ => 0 } }
+EOF
+gen match_range.hx <<'EOF'
+fn main() -> i32 { let x = 5; match x { 1..10 => 1, _ => 0 } }
+EOF
 pass=0; fail=0
 chk() { local f="$1" exp="$2" b; b=$(basename "$1")
   [ -f "$f" ] || { echo "  MISSING $b"; fail=$((fail+1)); return; }
@@ -130,9 +150,10 @@ chk "$CD/i64_basic.hx" 42; chk "$CD/i64_mul_beyond.hx" 6; chk "$CD/i64_div_beyon
 chk "$CD/u64_shr.hx" 1; chk "$CD/u8_wrap.hx" 42; chk "$CD/u16_wrap.hx" 42; chk "$CD/i16_ovf.hx" 42
 chk "$CD/assoc_sub.hx" 5; chk "$CD/assoc_div.hx" 10; chk "$CD/cmp_ne.hx" 1; chk "$CD/cmp_ge.hx" 1; chk "$CD/cmp_le.hx" 1
 chk "$CD/bit_andor.hx" 9; chk "$CD/bit_xor.hx" 240; chk "$CD/bit_shl.hx" 16; chk "$CD/arr_idx.hx" 20; chk "$CD/while_sum.hx" 10; chk "$CD/while_break.hx" 7
-echo "  CORPUS: $pass passed, $fail failed (expect 28 pass: all sample features green incl assoc/cmp/bitwise/array/while; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
+chk "$CD/f64_add.hx" 4; chk "$CD/f64_mul.hx" 12; chk "$CD/tuple2.hx" 7; chk "$CD/impl_method.hx" 42; chk "$CD/match_or.hx" 10; chk "$CD/match_range.hx" 1
+echo "  CORPUS: $pass passed, $fail failed (expect 34 pass: all sample features green incl assoc/cmp/bitwise/array/while/f64/tuple/impl-method/match-or-range; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 28 ]; then echo "  CORPUS REGRESSION (pass=$pass < 28)"; GATE_OK=0; fi
+if [ "$pass" -lt 34 ]; then echo "  CORPUS REGRESSION (pass=$pass < 34)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
