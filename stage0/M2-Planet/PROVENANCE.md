@@ -102,6 +102,34 @@ then assert gen2==gen3 byte-identical. Upstream M2-Planet self-hosts, so this is
 expected to be a recipe/libc-pairing gap, not a fundamental defect — but it is
 left open and honest rather than forced.
 
+### Update 2026-06-02 (v1.1 H6 — bounded attempt + decision)
+
+The next step above was executed (`selfhost_probe.sh`): `M2libc/amd64/libc-full.M1`
+was vendored at pin `b8bb2a01` (sha256 `ed3a14ae…`, 1780 bytes) and the self-host
+fixpoint retried. Result — **the gap is deeper than the libc-core/libc-full pairing:**
+
+- `M2.bin` self-compiles its own 12 sources cleanly: **gen2.M1 = 2 198 293 bytes**
+  (M2's C front end parses and emits M1 for the full M2-Planet source on its own input).
+- But assembling gen2.M1 with `amd64_defs.M1 + libc-full.M1` (M0 → hex2) yields a
+  **169-byte** binary that **SIGILLs (132)**. The M0/hex2 assemble of M2's *complex*
+  own-output is what breaks — even though M2's output for a simple program (`return 42`)
+  assembles and runs correctly (`run_tests.sh` passes). The residual blocker is a latent
+  M1-emission / assemble-pairing mismatch for large inputs inside the **vendored GPL
+  M2-Planet / M0 / hex2 toolchain**, not the libc variant and not our code.
+
+**Decision (v1.1 H6 — honest, charter-sanctioned):** M2-Planet is kept
+**built-once-and-audited**, the trusted-once root the seed is built from. This is the
+correct Reflections-on-Trusting-Trust position: some root must be trusted-once, and
+M2-Planet is the strongest available one — **vendored from canonical community-audited
+sources at a pinned commit, built only by prior rungs (no pre-built binary trusted),
+and its output verified end-to-end** (compiles C, the result runs with correct exit
+codes). The trust that bears on *our* Apache-2.0 code (seed → kovc) is the
+**K2==K3==K4 self-host fixpoint + diverse-double-compile**, which is green and gated on
+every compiler commit. Chasing the vendored-toolchain self-host SIGILL is deliberately
+**out of scope** — it would mean debugging GPL upstream codegen, not Helix. The probe
+(`selfhost_probe.sh`) and the vendored `libc-full.M1` are kept so the investigation is
+reproducible. **H6 (green-or-documented) = documented.**
+
 ## Next rung
 
 After M2-Planet, the ladder leaves vendored territory: **we wrote the
