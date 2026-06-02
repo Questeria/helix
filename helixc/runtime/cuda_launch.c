@@ -380,6 +380,69 @@ int main(int argc, char** argv) {
         return mbad ? 1 : 0;
     }
 
+    /* gemm_perf mode (T2/M1): cuda_launch <ptx> tiled_matmul <Nignored> gemm_perf <M> <K> <N> [mutate].
+     * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device:
+     *   grid=(N/BN, M/BM), block=(16,16)=256 threads, BM=BN=64, BK=8, TM=TN=4, 0 dyn-smem.
+     * CORRECTNESS gate (this chunk): EVERY M*N cell of C vs a CPU GEMM oracle with
+     * integer-valued inputs (a[i]=i%7, b[i]=i%5) so all sums are EXACT in f32 (== compare,
+     * not tol). Any mismatch -> exit 1. The optional trailing "mutate" arg perturbs one C
+     * cell pre-compare to prove the comparator has teeth (negative control -> must FAIL).
+     * Requires M%64==N%64==K%8==0 (asserted) so the launch covers all of C.
+     *
+     * NEXT CHUNK (G1, NOT this one): a fenced cuBLAS oracle (cublasSgemm, column-major ->
+     * swapped operands) + CUDA-event TFLOP/s timing (warmup + K timed launches, report
+     * min/median/max for the laptop-throttle skeptic note) + the >=3 TFLOP/s bar. The
+     * scaffold (divisibility assert, integer-exact CPU oracle, 2D launch) is here; the
+     * cuBLAS link (-lcublas, -L/usr/local/cuda/lib64) + cuEvent block land with G1. */
+    if (strcmp(op, "gemm_perf") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 64;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 64;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 64;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        /* tile-divisibility assert: billed cells == computed cells, no boundary code. */
+        if (Md % 64 != 0 || Nd % 64 != 0 || Kd % 8 != 0) {
+            fprintf(stderr, "gemm_perf: dims must satisfy M%%64==0 (%d), N%%64==0 (%d), K%%8==0 (%d)\n", Md, Nd, Kd);
+            return 2;
+        }
+        size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        float* hA = (float*)malloc(aN * sizeof(float));
+        float* hB = (float*)malloc(bN * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hC) return 2;
+        for (size_t i = 0; i < aN; i++) hA[i] = (float)(i % 7);
+        for (size_t i = 0; i < bN; i++) hB[i] = (float)(i % 5);
+        for (size_t i = 0; i < cN; i++) hC[i] = -1.0f;
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(float)), "alloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(float)), "alloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)), "alloc C");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
+        CK(cuMemcpyHtoD(dC, hC, cN * sizeof(float)), "H2D C");   /* sentinel so an unwritten cell shows */
+        void* gargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+        /* grid=(N/BN, M/BM), block=(16,16). ctaid.x->col block, ctaid.y->row block. */
+        unsigned gx = (unsigned)(Nd / 64), gy = (unsigned)(Md / 64);
+        CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0), "launch tiled_matmul");
+        CK(cuCtxSynchronize(), "sync tiled_matmul");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
+        if (mutate) hC[0] += 1.0f;   /* negative control: must trip the comparator */
+        int gbad = 0;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                float ref = 0.0f;
+                for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
+                float got = hC[r * Nd + cc];
+                if (got != ref) { if (gbad < 6) fprintf(stderr, "gemm_perf mismatch C[%d,%d]=%g ref %g\n", r, cc, got, ref); gbad++; }
+            }
+        }
+        printf("GPU [%s] tiled_matmul (SMEM 64x64/BK8/4x4) %dx%dx%d over %d cells%s: C[1,1]=%g, %d bad -> %s\n",
+               gpu, Md, Kd, Nd, Md * Nd, mutate ? " [MUTATED]" : "", hC[1 * Nd + 1], gbad, gbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return gbad ? 1 : 0;
+    }
+
     /* matmul_abt mode: cuda_launch <ptx> gpu_matmul_abt <Nignored> matmul_abt <M> <K> <N>.
      * C[M,N] = A[M,K] @ B[N,K]^T, i.e. C[i,j]=sum_t A[i,t]*B[j,t] -- the UNSCALED A@B^T used
      * for d_attn=dOut@V^T. gridDim=M, blockDim=N. Integer inputs so exact; verify every cell. */

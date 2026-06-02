@@ -260,6 +260,35 @@ with its reason.
 > **M1 — Emitter loop/SMEM foundation (THE load-bearing new capability).** (L, ~2–3 weeks)
 > Grow the emitter from full-unroll register tiles to **real PTX loops with a `tid→address` mapping**: `.shared .f32` declarations, `st.shared`/`ld.shared.f32`, `bar.sync 0`, and a `__tiled_matmul_smem(A,B,C,M,K,N,TILE)` intrinsic dispatched in `emit_ptx_call` (`:11663`) to a new `emit_ptx_tiled_matmul_smem` (per `HELIX_GPU_GEMM_ROADMAP.md:25` Step C). Classic 32×32-tiled GEMM: cooperative SMEM load → `bar.sync` → partial dot → `bar.sync`. **Risk: hardest emitter change** — requires expressing cooperative per-thread loads the register-tile model cannot; likely needs a parser/AST surface for "loop over tiles."
 > **Gate G1:** ≥ 3 TFLOP/s, correctness vs CPU+cuBLAS, PTX contains `.shared`+`bar.sync`, fixpoint green.
+>
+> **M1 CORRECTNESS — LANDED (2026-06-02, commit on `main`).** The fused intrinsic
+> `__tiled_matmul_smem(a,b,c,M,K,N)` is implemented in `kovc.hx` (dispatched in
+> `emit_ptx_call` to the new `emit_ptx_tiled_matmul_smem`), emitting the WHOLE tiled
+> kernel: `.shared` tile decls (`smem_a`/`smem_b`, 2 KB each) + cooperative GMEM→SMEM
+> load + 2× `bar.sync 0` + a runtime k-tile loop + a 4×4 register micro-tile with
+> `fma.rn.f32` + an epilogue global store. New byte emitters: `bar.sync`,
+> `.shared` decl, `ld/st.shared.f32`, `fma.rn.f32`, 2D `%tid.y`/`%ctaid.y` sregs,
+> `mad.lo`/`mul.lo`/`div.s32` address helpers. **ZERO parser/lexer change** (parses as
+> `AST_CALL`); `emit_ptx_entry`/`emit_ptx_reg_block` UNTOUCHED (decls emitted at the top
+> of the intrinsic) so `vector_add`'s reference PTX is unperturbed. Tile params (3070,
+> correctness-first): **BM=BN=64, BK=8, TM=TN=4, block 16×16=256, grid=(N/BN, M/BM)**;
+> ptxas: **56 regs, 4096 B smem, 0 spills, sm_86**. NO new vtab slots needed.
+> Test kernel `helixc/examples/tiled_matmul_kernel.hx`; host `gemm_perf` mode in
+> `cuda_launch.c` (integer inputs → EXACT-equality CPU oracle, 2D launch) + a `mutate`
+> negative control; orchestrator `scripts/gpu_perf_corpus.sh`; committed reference PTX
+> `helixc/examples/tiled_matmul_kernel.ref.ptx`; tiled PTX-regression + provenance
+> appended to `gate_kovc.sh`. **GATE GREEN:** self-host fixpoint K2==K3==K4
+> byte-identical + corpus 56/56 + vector_add PTX-regression + tiled PTX-regression +
+> `.shared`/`bar.sync` provenance on the emitted OUTPUT; **GEMM correct vs CPU oracle
+> cell-by-cell (0 bad) at 64³/64×8×128/128³/256³/2048³** on the RTX 3070 Laptop; the
+> barrier/smem path is load-bearing (the inner product reads only `ld.shared`, fed by
+> the cooperative `st.shared` across the two `bar.sync`).
+> **NEXT CHUNK = G1 perf:** add the fenced cuBLAS oracle (`cublasSgemm`, column-major →
+> swapped operands; link `-lcublas -L/usr/local/cuda/lib64`) + CUDA-event TFLOP/s timing
+> (warmup + K timed launches, report min/median/max for laptop throttle) + the **≥ 3
+> TFLOP/s** bar to `gemm_perf`; if the 64×64 tile falls short, upscale to 128×128/8×8 per
+> the blueprint. The `gemm_perf` scaffold (divisibility assert, integer-exact oracle, 2D
+> launch) is already in place for it.
 
 > **M2 — `cp.async` double-buffering.** (M–L, ~1–1.5 weeks)
 > Add `cp.async.cg.shared.global [smem],[gmem],16;` + `cp.async.commit_group` / `cp.async.wait_group N` to the SMEM tiled GEMM; software-pipeline two SMEM buffers. Requires sm_86 (done M0) + 16-byte-aligned tiles. **Risk: fence/alignment correctness — finicky but localized.**
