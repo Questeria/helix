@@ -26,6 +26,14 @@ trusted surface — so it stays strictly an auditor.
 
 ## Definition of DONE (5 clean audits certify)
 
+**✅ STATUS (2026-06-02):** **DC1 GREEN** (gcc builds `seed_gcc`, self-test 42). **DC2 GREEN** —
+`seed_gcc` and the M2-Planet seed both compile `k1src.hx` → **byte-identical `K1` = 600783 B**,
+sha `a435b6ca…` (commit `116d2a0`). **DC3 GREEN** — the full fixpoint via the gcc-built seed reaches
+`K2==K3==K4` = 606680 B, sha `03a456fe…`, identical to the M2 route (commit `72faee0`). **DC4** —
+the reusable gates (`ddc_crosscheck.sh`, `ddc_fixpoint_gcc.sh`) are committed; PROVENANCE records the
+independent corroboration. **DC5** (5 clean audits) — **folded into the Helix Completion final audits**
+(`HELIX_COMPLETION.md`), which reexamine the whole trust chain before officially closing it.
+
 - **DC1** — gcc compiles the **frozen** `seed.c` (no edits; libc decls supplied via
   `-include`, since seed.c omits `#include`s) → `seed_gcc`; no-arg self-test exits **42**.
   *(confirmed 2026-06-02: gcc 13.3, seed_gcc 46368 B, exit 42.)*
