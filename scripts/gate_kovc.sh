@@ -186,6 +186,23 @@ fn main() -> i32 {
     vec_get(v, 0) + vec_get(v, 1) + vec_get(v, 2) + vec_len(v)
 }
 EOF
+# T3 >6-arg SysV stack-pass corpus (2026-06-02): no prior Helix fn had >6 params;
+# kovc dropped params 7+ (callee bound only rdi..r9, args 7+ trapped ud2 -> SIGILL
+# rc 132). These exercise the new caller stack-pass + callee [rbp+16+8*(i-6)] binding.
+# f8: 1..8 -> 36 ; f9: 1..9 -> 45 ; f11: 1..11 -> 66 (all < 256 so the exit-code
+# byte holds the full sum). Each arg distinct so a dropped/clobbered arg shows.
+gen f8_args.hx <<'EOF'
+fn f8(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32) -> i32 { a+b+c+d+e+f+g+h }
+fn main() -> i32 { f8(1,2,3,4,5,6,7,8) }
+EOF
+gen f9_args.hx <<'EOF'
+fn f9(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32, i: i32) -> i32 { a+b+c+d+e+f+g+h+i }
+fn main() -> i32 { f9(1,2,3,4,5,6,7,8,9) }
+EOF
+gen f11_args.hx <<'EOF'
+fn f11(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32, i: i32, j: i32, k: i32) -> i32 { a+b+c+d+e+f+g+h+i+j+k }
+fn main() -> i32 { f11(1,2,3,4,5,6,7,8,9,10,11) }
+EOF
 pass=0; fail=0
 chk() { local f="$1" exp="$2" b; b=$(basename "$1")
   [ -f "$f" ] || { echo "  MISSING $b"; fail=$((fail+1)); return; }
@@ -215,9 +232,12 @@ chk "$GENC/g1_guard_true.hx" 1; chk "$GENC/g2_guard_false.hx" 0; chk "$GENC/g3_g
 # (mirror f64 tag-34 path) via i32-multi-word 16-bit limbs -- no longer truncates at 2^31. Full range
 # incl >= 2^32: L2 = 5_000_000_000_i64 (> 2^32) / 1e8 = 50.
 chk "$GENC/L1_i64_big.hx" 30; chk "$GENC/L2_i64_bigger.hx" 50; chk "$GENC/L3_i64_just_over.hx" 22
-echo "  CORPUS: $pass passed, $fail failed (expect 56 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation])"
+# T3 >6-arg SysV stack-pass (2026-06-02): params beyond the 6th go on the stack.
+chk "$CD/f8_args.hx" 36; chk "$CD/f9_args.hx" 45; chk "$CD/f11_args.hx" 66
+echo "  CORPUS: $pass passed, $fail failed (expect 59 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66])"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
-if [ "$pass" -lt 56 ]; then echo "  CORPUS REGRESSION (pass=$pass < 56)"; GATE_OK=0; fi
+# T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
+if [ "$pass" -lt 59 ]; then echo "  CORPUS REGRESSION (pass=$pass < 59)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi

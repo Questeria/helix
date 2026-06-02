@@ -9199,7 +9199,13 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             // bound var) — neither matches the sentinel, so the trap
             // would fire spuriously. Iter D may add a stricter check
             // that compares struct identity end-to-end.
+            // T3 >6-arg fix (2026-06-02): also require arg_count < 6 -- the
+            // packed param-type field holds only 6 tags, so unpack_param_ty
+            // is only meaningful for indices 0..5. Args 7+ (and the param
+            // types of 7+ param fns) are not type-checked here; the >6-arg
+            // path's correctness is gated by the corpus instead.
             if arg_count < pp_count {
+              if arg_count < 6 {
                 let expected_ty = unpack_param_ty(pp_packed, arg_count);
                 let actual_ty = expr_type(arg_expr, bind_state, bn_state);
                 let exp_is_struct = if expected_ty == 15 { 1 } else { 0 };
@@ -9210,6 +9216,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                     let n_trap = emit_trap_with_id(16001);
                     bytes_emitted = bytes_emitted + n_trap;
                 };
+              };
             };
             arg_count = arg_count + 1;
             arg_cur = __arena_get(arg_cur + 2);
@@ -9230,7 +9237,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // safe — investigation 2026-05-08 confirmed this is the root cause
         // (no real arity-mismatched calls in self-host source; the trap
         // didn't fire at any real call once the pattern was made flat).
-        let n_arity_trap = if pp_count > 0 {
+        // T3 >6-arg fix (2026-06-02): only enforce exact arity when
+        // pp_count is in [1,6]. pp_count == 7 is the "7-or-more params,
+        // exact count not representable in the 3-bit packed field"
+        // sentinel (see the fn_type_table pre-pass) -- skip the arity
+        // trap there so >6-arg calls (which are now correctly stack-
+        // passed both caller- and callee-side) are not falsely rejected.
+        let arity_ok_to_check = if pp_count > 0 {
+            if pp_count < 7 { 1 } else { 0 }
+        } else { 0 };
+        let n_arity_trap = if arity_ok_to_check == 1 {
             if arg_count != pp_count {
                 emit_trap_with_id(16003)
             } else { 0 }
@@ -9765,14 +9781,19 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                     }
                     pp_packed = pp_packed + place_val;
                     pp_shift = pp_shift + 4;
-                    // Audit-cycle-5 polish: cap pp_count at 6 too. Beyond 6
-                    // params the AST_CALL site emits ud2 unconditionally
-                    // (existing arg_count>6 trap), so the over-count was
-                    // benign — but capping keeps fn_type_table_lookup_params'
-                    // count return value (low 3 bits of (packed*8+count))
-                    // unambiguous.
-                    pp_count = pp_count + 1;
                 };
+                // T3 >6-arg fix (2026-06-02): count now SATURATES at 7 rather
+                // than capping at 6. Rationale: the packed type field only has
+                // room for 6 tags (6*4=24 bits) so we still pack only the first
+                // 6 (the `if pp_count < 6` guard above), but fn_type_table_
+                // lookup_params returns (packed*8 + count) where count is the
+                // LOW 3 BITS -- so count must stay <= 7. A value of 7 is the
+                // "7-or-more params, exact arity not representable" sentinel;
+                // the AST_CALL arity trap (16003) skips when pp_count >= 7,
+                // since the >6-arg SysV stack-pass path is now real (no longer
+                // an unconditional ud2) and the count cannot be verified for
+                // 7+ param fns. Fns with <= 6 params keep exact arity checking.
+                if pp_count < 7 { pp_count = pp_count + 1; };
                 pp_cur = __arena_get(pp_cur + 3);
             }
             fn_type_table_add(fn_type_state, fn_name_s, fn_name_l, fn_ret_ty, pp_packed, pp_count);
@@ -9881,9 +9902,11 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
             };
             // Copy each param's SysV arg register into a fresh stack
             // slot and register the binding so the body can reference
-            // params by name. Phase 0: up to 6 params (rdi/rsi/rdx/
-            // rcx/r8/r9). Encoding: 89 BD disp32 = mov [rbp+disp32],
-            // edi; ModRM second-byte differs per source register.
+            // params by name. Params 1-6 arrive in rdi/rsi/rdx/rcx/r8/r9
+            // (this register path); params 7+ arrive on the STACK and are
+            // bound by the `else` branch below (T3 >6-arg fix, 2026-06-02).
+            // Encoding: 89 BD disp32 = mov [rbp+disp32], edi; ModRM
+            // second-byte differs per source register.
             let mut pcur: i32 = params_head;
             let mut pidx: i32 = 0;
             while pcur != 0 {
@@ -9958,6 +9981,31 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
                         emit_u32_le(0 - off);
                     } else {} }}}}};
                     };
+                } else {
+                    // T3 >6-arg fix (2026-06-02): params 7..N arrive on the
+                    // STACK (SysV AMD64), NOT in registers. The CALLER (AST_CALL
+                    // arg_count>6 path) already lays them out so that param i
+                    // (0-indexed, i>=6) sits at [rbp + 16 + 8*(i-6)] in the
+                    // callee after `push rbp; mov rbp,rsp` (the +16 skips the
+                    // saved rbp and the return address). Bind the param's NAME
+                    // to that incoming slot directly -- no register copy, no
+                    // local-slot alloc. Every load/store helper emits the
+                    // displacement as emit_u32_le(0 - off), so a NEGATIVE off
+                    // produces the POSITIVE rbp displacement we want: with
+                    // off = -(16 + 8*(i-6)), 0-off = 16 + 8*(i-6). The body
+                    // reads (and any param-write stores) the value in place,
+                    // which is correct SysV behaviour (the caller's stack-arg
+                    // region is callee-owned scratch). Width is honoured via
+                    // the same p_ty type tag the register path uses (8-byte
+                    // i64/u64/f64/struct load the full slot; u8/u16/i8/i16
+                    // narrow-load the low bytes -- the caller pushed full
+                    // 8-byte values, low bits meaningful, little-endian).
+                    // FLAT (Finding #7): two statements, no nested if-cascade.
+                    let pname_s7 = __arena_get(pcur + 1);
+                    let pname_l7 = __arena_get(pcur + 2);
+                    let p_ty7 = __arena_get(pcur + 4);
+                    let off7 = 0 - (16 + 8 * (pidx - 6));
+                    bind_push_typed(bind_state, pname_s7, pname_l7, off7, p_ty7);
                 };
                 pidx = pidx + 1;
                 pcur = __arena_get(pcur + 3);
