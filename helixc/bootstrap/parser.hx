@@ -13508,6 +13508,14 @@ fn mangle_impl_method(target_s: i32, target_l: i32, method_s: i32, method_l: i32
 // (calls parse_expr inside the {}).
 fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, target_tag: i32) -> i32 {
     cur_advance(sb);                         // consume 'fn' IDENT
+    // H3 fix (2026-06-01): reset var_struct_tab (count at sb+18) at the start of
+    // each impl method so this method's `self` resolves to ITS OWN struct. The
+    // table never reset + lookup returns the FIRST match, so a second impl method
+    // (different struct, differently-named fields) had its `self.field` resolved
+    // against the FIRST method's struct -> wrong offset / unresolved -> exit 132.
+    // Same-field-name structs passed only by offset coincidence. Method scope is
+    // self + the method's own struct-locals, so a fresh table per method is correct.
+    __arena_set(sb + 18, 0);
     let nk = cur_get(sb);
     let method_name_s = tok_p2(tok_base, nk);
     let method_name_l = tok_p3(tok_base, nk);

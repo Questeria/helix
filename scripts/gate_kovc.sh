@@ -168,9 +168,12 @@ chk "$CD/f64_add.hx" 4; chk "$CD/f64_mul.hx" 12; chk "$CD/tuple2.hx" 7; chk "$CD
 GENC=$BS/corpus_gen
 chk "$GENC/gen_impl_t_single_f32.hx" 5; chk "$GENC/gen_impl_angle_i32.hx" 5; chk "$GENC/gen_impl_ret_f32.hx" 5; chk "$GENC/gen_concrete_on_mono.hx" 7
 chk "$GENC/gen_pair_multi.hx" 12; chk "$GENC/gen_vec_i32.hx" 42; chk "$GENC/gen_vec_f32.hx" 5; chk "$GENC/e6_bare_match.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 43 pass: 35 v1.0 sample features + 8 H2 generics [bare-T impl-method over i32/f32, explicit-return, concrete-on-mono'd-receiver, multi-instantiation Pair, generic Vec over i32/f32, generic enum Option]; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
+# H3 traits + closures corpus (2026-06-01): trait-method dispatch + closure capture codegen.
+chk "$GENC/t2_trait_impl.hx" 42; chk "$GENC/t3_closure_call.hx" 42; chk "$GENC/t4_closure_capture.hx" 42; chk "$GENC/t8_closure_two_caps.hx" 42
+chk "$GENC/t7_trait_poly.hx" 42; chk "$GENC/t7b_trait_2types.hx" 42; chk "$GENC/t7c_difffields.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 50 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures [trait dispatch single/poly/two-types/diff-fields, closure call + single/double capture]; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 43 ]; then echo "  CORPUS REGRESSION (pass=$pass < 43)"; GATE_OK=0; fi
+if [ "$pass" -lt 50 ]; then echo "  CORPUS REGRESSION (pass=$pass < 50)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
