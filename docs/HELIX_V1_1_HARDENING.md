@@ -10,6 +10,8 @@ compiler/parser/lexer/seed change is **GATED** (`scripts/gate_kovc.sh`: self-hos
 K2==K3==K4 byte-identical + GPU-PTX regression + the feature corpus) before commit; never ship
 red; never fake; honest caveats stay visible.
 
+**✅ STATUS — HELIX v1.1 DONE (2026-06-02).** All six criteria resolved: **H1–H5 GREEN and self-host-fixpoint-gated** (H5 i64-literal widening landed at commit `dcb87e8`; gate corpus **56/56**), **H6 DOCUMENTED** (commit `d14ace0` — M2-Planet kept as the built-once-and-audited *trusted-once root*; the residual self-host SIGILL is a vendored-GPL-toolchain assemble-pairing gap, deliberately out of scope). An **independent adversarial audit certified** the claim (no overclaim, H6 honestly documented, gate structure sound, fixpoint integrity intact), and a fresh final gate is **GATE_PASS** (`seed→K1 rc=0`; FIXPOINT OK K2==K3==K4 byte-identical; GPU PTX byte-identical; CORPUS **56 passed / 0 failed**). Tagged **`v1.1`**. Next: the AI-building phase.
+
 ---
 
 ## DEFINITION OF DONE — measurable criteria (all must hold)
