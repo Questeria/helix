@@ -591,10 +591,16 @@ int main(int argc, char** argv) {
     if (strcmp(op, "gemm_tf32") == 0) {
         int Md = (argc > 5) ? atoi(argv[5]) : 16;
         int Kd = (argc > 6) ? atoi(argv[6]) : 8;
-        int Nd = (argc > 7) ? atoi(argv[7]) : 8;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 32;
         int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
-        if (Md % 16 != 0 || Nd % 8 != 0 || Kd % 8 != 0) {
-            fprintf(stderr, "gemm_tf32: dims must satisfy M%%16==0 (%d), N%%8==0 (%d), K%%8==0 (%d)\n", Md, Nd, Kd);
+        /* TF32_NB / TF32_WP MUST equal the `nb` / `wp` constants in emit_ptx_tf32_matmul_mma
+         * (kovc.hx): a block = (32, WP, 1) of WP warps, each warp a 16 x (8*NB) strip, so the
+         * block covers 16 x (8*NB*WP) and grid=(N/(8*NB*WP), M/16). */
+        const int TF32_NB = 4;
+        const int TF32_WP = 4;
+        const int NTILE = 8 * TF32_NB * TF32_WP;   /* = 128: the N-span one block covers */
+        if (Md % 16 != 0 || Nd % NTILE != 0 || Kd % 8 != 0) {
+            fprintf(stderr, "gemm_tf32: dims must satisfy M%%16==0 (%d), N%%%d==0 (%d), K%%8==0 (%d)\n", Md, NTILE, Nd, Kd);
             return 2;
         }
         size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
@@ -621,10 +627,11 @@ int main(int argc, char** argv) {
         CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
         CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
         CK(cuMemcpyHtoD(dC, hC, cN * sizeof(float)), "H2D C");
-        /* launch: one warp per 16x8 output tile. grid=(N/8, M/16), block=32. */
+        /* launch: WP warps/block, each a 16 x (8*NB) strip. grid=(N/(8*NB*WP), M/16),
+         * block=(32, WP, 1). */
         void* gargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
-        unsigned gx = (unsigned)(Nd / 8), gy = (unsigned)(Md / 16);
-        CK(cuLaunchKernel(fn, gx, gy, 1, 32, 1, 1, 0, 0, gargs, 0), "launch tf32_matmul");
+        unsigned gx = (unsigned)(Nd / NTILE), gy = (unsigned)(Md / 16);
+        CK(cuLaunchKernel(fn, gx, gy, 1, 32, TF32_WP, 1, 0, 0, gargs, 0), "launch tf32_matmul");
         CK(cuCtxSynchronize(), "sync tf32_matmul");
         CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
         /* comparator negative control: perturb one cell so the tol compare MUST trip. The
@@ -653,10 +660,19 @@ int main(int argc, char** argv) {
         CK(cuCtxSynchronize(), "sync cublas f32");
         CK(cuMemcpyDtoH(hF, dR, cN * sizeof(float)), "D2H F(f32)");
 
+        /* The two CPU triple-loops below are O(M*N*K). At small corpus sizes (<=128^3) they
+         * run in full and give the harness its teeth. At a large PERF size (e.g. 2048^3) a
+         * CPU triple-loop is ~17e9 scalar MACs = MINUTES at 0% GPU -- the "hang" the prior
+         * agent hit was NOT a kernel illegal-access but this CPU reference. So gate them on a
+         * work cap: above it, skip the CPU loops and rely on the PRIMARY GPU-side kovc-vs-
+         * cuBLAS-TF32 compare (line below, only O(M*N) cells -- cheap even at 2048^2), which is
+         * itself a sound oracle (cuBLAS-TF32 was validated == CPU at the small sizes). */
+        double cpu_work = (double)Md * (double)Nd * (double)Kd;
+        int big = (cpu_work > 4.0e8);   /* ~735^3; 128^3=2.1e6 runs, 512^3=1.34e8 runs, 2048^3 skips */
         /* META-ANCHOR check: pedantic-f32 cuBLAS == CPU triple-loop (cell-by-cell, ~1e-3).
-         * Proves the references are correct; runs in full at these small G3 sizes. */
+         * Proves the references are correct; runs in full at the small G3 sizes (skipped when big). */
         int obad = 0;
-        for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
+        if (!big) for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
             float ref = 0.0f;
             for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
             float got = hF[r * Nd + cc];
@@ -664,7 +680,8 @@ int main(int argc, char** argv) {
             float aref = ref < 0 ? -ref : ref;
             if (isnan(got) || (e > 1.0e-3f && e > 1.0e-3f * aref)) { if (obad < 6) fprintf(stderr, "f32-cuBLAS-vs-CPU mismatch [%d,%d]=%g ref %g\n", r, cc, got, ref); obad++; }
         }
-        /* PRIMARY: kovc TF32 kernel vs cuBLAS-TF32, tight ~2e-3 RELATIVE (magnitude-aware). */
+        /* PRIMARY (ALWAYS, even when big): kovc TF32 kernel vs cuBLAS-TF32, tight ~2e-3 RELATIVE
+         * (magnitude-aware). O(M*N) only -- this is the real correctness gate at every size. */
         const float TF32_REL = 2.0e-3f, TF32_ABS = 2.0e-3f;
         int tbad = 0; float maxrel = 0.0f;
         for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
@@ -674,9 +691,9 @@ int main(int argc, char** argv) {
             float rel = e / (ar > 1.0f ? ar : 1.0f); if (rel > maxrel) maxrel = rel;
             if (isnan(got) || (e > TF32_ABS && e > TF32_REL * ar)) { if (tbad < 6) fprintf(stderr, "tf32 kovc-vs-cuBLAS-TF32 mismatch C[%d,%d]=%g tf32ref %g (rel %g)\n", r, cc, got, refb, rel); tbad++; }
         }
-        /* CONTEXT only: kovc TF32 vs CPU-f32 max relative deviation (NOT a gate). */
-        float ctx_maxrel = 0.0f;
-        for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
+        /* CONTEXT only: kovc TF32 vs CPU-f32 max relative deviation (NOT a gate; -1 = skipped when big). */
+        float ctx_maxrel = big ? -1.0f : 0.0f;
+        if (!big) for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
             float ref = 0.0f; for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
             float got = hC[r * Nd + cc]; float e = got - ref; if (e < 0) e = -e;
             float ar = ref < 0 ? -ref : ref; float rel = e / (ar > 1.0f ? ar : 1.0f);
@@ -691,11 +708,11 @@ int main(int argc, char** argv) {
             int WARM = 5, ITERS = 50;
             float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
             CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
-            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, gx, gy, 1, 32, 1, 1, 0, 0, gargs, 0), "warm kov");
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, gx, gy, 1, 32, TF32_WP, 1, 0, 0, gargs, 0), "warm kov");
             CK(cuCtxSynchronize(), "sync warm kov");
             for (int it = 0; it < ITERS; it++) {
                 CK(cuEventRecord(e0, 0), "rec0");
-                CK(cuLaunchKernel(fn, gx, gy, 1, 32, 1, 1, 0, 0, gargs, 0), "time kov");
+                CK(cuLaunchKernel(fn, gx, gy, 1, 32, TF32_WP, 1, 0, 0, gargs, 0), "time kov");
                 CK(cuEventRecord(e1, 0), "rec1"); CK(cuEventSynchronize(e1), "evsync");
                 CK(cuEventElapsedTime(&ts[it], e0, e1), "elapsed");
             }

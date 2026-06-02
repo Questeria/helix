@@ -10377,7 +10377,7 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 75 {               // 16 var triples (2..49) + 6 counters +
+    while i < 107 {              // 16 var triples (2..49) + 6 counters +
         __arena_push(0);         // 50=next_pred,51=next_label,52=next_rd,
         i = i + 1;               // 53=cur_fn_idx,54=next_f,55=last_is_float;
     }                            // T2/G2 GEMM context (cp.async tile-load,
@@ -10387,6 +10387,8 @@ fn ptx_vtab_init() -> i32 {
                                  // fix, so the 14-id mma call is passed via these
                                  // scratch slots, NOT 14 fn args): 63..66=D %f,
                                  // 67..70=A %r, 71..72=B %r, 73..76=C %f.
+                                 // M-G3.3 warp N-tiling accumulator-id store (NB<=8
+                                 // subtiles x 4 %f accumulators each): slots 77..108.
 fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab, 0);        // next_reg = 0
     __arena_set(vtab + 1, 0);    // var_count = 0
@@ -12645,20 +12647,32 @@ fn ptx_name_is_tf32_matmul_mma(name_s: i32, name_l: i32) -> i32 {
     }
 }
 // T3/G3: the TF32 Tensor-Core GEMM orchestrator. Emits the WHOLE kernel body for
-// __tf32_matmul_mma(a,b,c,M,K,N). SINGLE-WARP, correctness-first (M-G3.2): ONE warp
-// (32 lanes = one block) computes one 16x8 output tile of C via
-// mma.sync.aligned.m16n8k8.row.col.f32.tf32, looping K/8 mma calls. Grid=(N/8, M/16),
-// block=(32,1,1). Path-2 (manual ld.global.f32 + cvt.rna.tf32) -- NO SMEM staging, NO
-// ldmatrix (both are perf optimizations for the NEXT phase; this body proves the mma MATH).
-// Requires M%16==0, N%8==0, K%8==0 (no boundary guard).
+// __tf32_matmul_mma(a,b,c,M,K,N). M-G3.3 WARP-TILING for occupancy + N-TILING for intensity:
+// block = (32, WP, 1) = WP warps; each warp (32 lanes) owns a DISTINCT 16 x (8*NB) output STRIP
+// of C, computed via NB mma.sync.aligned.m16n8k8.row.col.f32.tf32 ops per K-step over K/8 steps.
+// The WP warps hide global-load latency on the 48-warp SM (the single-warp M-G3.2 kernel was
+// occupancy-starved). Within a warp the A fragment (16x8) is loaded+converted ONCE per K-step
+// and REUSED across all NB N-subtiles (each subtile loads its own 8x8 B fragment) -- amortizing
+// the A global load + per-K index arithmetic over NB mma's. WP, NB are emitter constants below.
+// A block covers 16 x (8*NB*WP); grid=(N/(8*NB*WP), M/16), block=(32,WP,1). Path-2 (manual
+// ld.global.f32 + cvt.rna.tf32, NO SMEM/ldmatrix). Requires M%16==0, N%(8*NB*WP)==0, K%8==0.
 //
-// Fragment layout (PTX-ISA canonical, GPU-VALIDATED at 16x8x8 distinct-input, M-G3.0):
+// Fragment layout (PTX-ISA canonical, GPU-VALIDATED at 16x8x8 distinct-input, M-G3.2):
 //   lane t -> gid=t>>2 (0..7), tig=t&3 (0..3)
 //   A (M x K, row-major):  a0=(gid,tig) a1=(gid+8,tig) a2=(gid,tig+4) a3=(gid+8,tig+4)  [k cols tig/tig+4]
 //   B (K x N, row-major):  b0=(tig,gid) b1=(tig+4,gid)   [k along row, n along col]
 //   C/D (M x N, row-major):c0=(gid,2tig) c1=(gid,2tig+1) c2=(gid+8,2tig) c3=(gid+8,2tig+1)
+// This warp's col0 = bx*(8*NB*WP) + (tid.y)*(8*NB); subtile jb (0..NB-1) covers cols
+// [col0 + jb*8, +8). The NB*4 accumulator register-ids persist across the K-loop in vtab
+// slots 77 + jb*4 + {0,1,2,3} (per-warp -- each warp re-runs the emitter? NO: the emitter runs
+// ONCE; warp_id is a runtime reg, so all WP warps execute the SAME emitted code with distinct col0).
 // mm (M) is unused in the body (the row block comes from ctaid.y); derived from K/N + geometry.
 fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
+    let nb = 4;                  // N-subtiles per warp (warp tile = 16 x 8*nb). vtab has room for nb<=8.
+    let wp = 4;                  // warps per block (block = (32, wp, 1)). Occupancy: wp warps hide
+                                 // global-load latency on the 48-warp SM. Each warp owns a DISTINCT
+                                 // 16 x (8*nb) N-strip; a block covers 16 x (8*nb*wp). MUST equal the
+                                 // TF32_WP constant in cuda_launch.c (block.y) and the corpus dims.
     let fn_idx = __arena_get(vtab + 53);
     // resolve a/b/c/M/K/N param indices from the 6 call args (AST_VAR). (M unused in body.)
     let ah = __arena_get(node + 3);
@@ -12690,9 +12704,13 @@ fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
     let rd_a = emit_ptx_param_global_base(pa, vtab);
     let rd_b = emit_ptx_param_global_base(pb, vtab);
     let rd_c = emit_ptx_param_global_base(pc, vtab);
-    // block output-tile origin:  row0 = by*16, col0 = bx*8
+    // output-tile origin:  row0 = by*16 (all warps in the block share the 16 rows);
+    // col0 = bx*(8*nb*wp) + warp_id*(8*nb), where warp_id = tid.y -> each warp a distinct N-strip.
     let r_row0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_row0, r_by, 16);
-    let r_col0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_col0, r_bx, 8);
+    let r_wid = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_wid, 1);              // warp_id = tid.y
+    let r_bcol = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_bcol, r_bx, 8 * nb * wp);  // block col base
+    let r_wcol = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_wcol, r_wid, 8 * nb);      // warp col offset
+    let r_col0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_col0, r_bcol, r_wcol);        // this warp's col0
     let r_tig4 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_tig4, r_tig, 4);   // tig+4
     // the two A row indices:  rowA0 = row0+gid, rowA8 = row0+gid+8
     let r_rowA0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_rowA0, r_row0, r_gid);
@@ -12700,17 +12718,20 @@ fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
     // A row-base element indices (row*K, runtime K):  rA0K = rowA0*K, rA8K = rowA8*K
     let r_rA0K = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_rA0K, r_rowA0, r_K);
     let r_rA8K = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_rA8K, r_rowA8, r_K);
-    // B column (constant across k):  colB = col0 + gid
-    let r_colB = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_colB, r_col0, r_gid);
-    // C epilogue col bits:  cCol0 = col0 + 2*tig
-    let r_2tig = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_2tig, r_tig, 2);
-    let r_cCol0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_cCol0, r_col0, r_2tig);
-    // --- accumulators d0..d3 (%f), zeroed; persist across the K-loop ---
-    let d0 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d0);
-    let d1 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d1);
-    let d2 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d2);
-    let d3 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d3);
-    // --- K-loop: for (kk=0; kk<K; kk+=8) one mma per k-tile ---
+    // C-row element bases (row*N), shared by every subtile's epilogue store
+    let r_cr0 = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_cr0, r_rowA0, r_N);
+    let r_cr8 = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_cr8, r_rowA8, r_N);
+    let r_2tig = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_2tig, r_tig, 2);   // 2*tig
+    // --- NB*4 accumulators (%f), zeroed; persist across the K-loop. ids -> vtab 77 + jb*4 + r ---
+    let mut jb = 0;
+    while jb < nb {
+        let e0 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(e0); __arena_set(vtab + 77 + jb * 4 + 0, e0);
+        let e1 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(e1); __arena_set(vtab + 77 + jb * 4 + 1, e1);
+        let e2 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(e2); __arena_set(vtab + 77 + jb * 4 + 2, e2);
+        let e3 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(e3); __arena_set(vtab + 77 + jb * 4 + 3, e3);
+        jb = jb + 1;
+    }
+    // --- K-loop: for (kk=0; kk<K; kk+=8) ; A loaded once, NB mma's per k-tile ---
     let r_kk = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_kk, 0);
     let lbl = ptx_alloc_label(vtab);
     emit_ptx_lbl_ref(2, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Ltop_<lbl>:"
@@ -12720,17 +12741,12 @@ fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
     // per-iteration k offsets:  kk_tig = kk+tig, kk_tig4 = kk+tig4
     let r_kkt = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_kkt, r_kk, r_tig);
     let r_kkt4 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_kkt4, r_kk, r_tig4);
-    // A element indices: a0=rA0K+kk_tig a1=rA8K+kk_tig a2=rA0K+kk_tig4 a3=rA8K+kk_tig4
+    // A element indices (jb-INDEPENDENT): a0=rA0K+kk_tig a1=rA8K+kk_tig a2=rA0K+kk_tig4 a3=rA8K+kk_tig4
     let r_ai0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai0, r_rA0K, r_kkt);
     let r_ai1 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai1, r_rA8K, r_kkt);
     let r_ai2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai2, r_rA0K, r_kkt4);
     let r_ai3 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai3, r_rA8K, r_kkt4);
-    // B element indices: b0=kk_tig*N+colB  b1=kk_tig4*N+colB
-    let r_bi0m = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_bi0m, r_kkt, r_N);
-    let r_bi0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bi0, r_bi0m, r_colB);
-    let r_bi1m = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_bi1m, r_kkt4, r_N);
-    let r_bi1 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bi1, r_bi1m, r_colB);
-    // load f32, cvt.rna -> tf32 (.b32) for each A/B fragment element
+    // load A f32, cvt.rna -> tf32 (.b32) ONCE; reused across every N-subtile
     let fa0 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa0, rd_a, r_ai0, vtab);
     let ra0 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra0, fa0);
     let fa1 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa1, rd_a, r_ai1, vtab);
@@ -12739,18 +12755,35 @@ fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
     let ra2 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra2, fa2);
     let fa3 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa3, rd_a, r_ai3, vtab);
     let ra3 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra3, fa3);
-    let fb0 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb0, rd_b, r_bi0, vtab);
-    let rb0 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(rb0, fb0);
-    let fb1 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb1, rd_b, r_bi1, vtab);
-    let rb1 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(rb1, fb1);
-    // mma: D = A*B + C, with C==D (accumulate in place). Stash the 14 operand
-    // register-ids in vtab scratch slots 63..76, then call with ONE arg (the seed
-    // PTX-driver compiler lacks the >6-arg fix; a 14-arg call mis-passes args 7+).
-    __arena_set(vtab + 63, d0); __arena_set(vtab + 64, d1); __arena_set(vtab + 65, d2); __arena_set(vtab + 66, d3);
+    // A operands are jb-invariant -> stash once in the mma A slots 67..70
     __arena_set(vtab + 67, ra0); __arena_set(vtab + 68, ra1); __arena_set(vtab + 69, ra2); __arena_set(vtab + 70, ra3);
-    __arena_set(vtab + 71, rb0); __arena_set(vtab + 72, rb1);
-    __arena_set(vtab + 73, d0); __arena_set(vtab + 74, d1); __arena_set(vtab + 75, d2); __arena_set(vtab + 76, d3);
-    emit_ptx_mma_m16n8k8_tf32(vtab);
+    // for each N-subtile jb: B column = col0 + jb*8 + gid ; one mma into subtile jb's accumulators
+    let mut jk = 0;
+    while jk < nb {
+        let r_cj = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_cj, r_col0, jk * 8);   // col0 + jb*8
+        let r_colB = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_colB, r_cj, r_gid);     // + gid
+        // B element indices: b0=kk_tig*N+colB  b1=kk_tig4*N+colB
+        let r_bi0m = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_bi0m, r_kkt, r_N);
+        let r_bi0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bi0, r_bi0m, r_colB);
+        let r_bi1m = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_bi1m, r_kkt4, r_N);
+        let r_bi1 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bi1, r_bi1m, r_colB);
+        let fb0 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb0, rd_b, r_bi0, vtab);
+        let rb0 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(rb0, fb0);
+        let fb1 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb1, rd_b, r_bi1, vtab);
+        let rb1 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(rb1, fb1);
+        // accumulators for subtile jk (D==C, accumulate in place)
+        let d0 = __arena_get(vtab + 77 + jk * 4 + 0);
+        let d1 = __arena_get(vtab + 77 + jk * 4 + 1);
+        let d2 = __arena_get(vtab + 77 + jk * 4 + 2);
+        let d3 = __arena_get(vtab + 77 + jk * 4 + 3);
+        // stash D/B/C ids in mma scratch slots (A already in 67..70 above); call with ONE arg
+        // (the seed PTX-driver compiler lacks the >6-arg fix; a 14-arg call mis-passes args 7+).
+        __arena_set(vtab + 63, d0); __arena_set(vtab + 64, d1); __arena_set(vtab + 65, d2); __arena_set(vtab + 66, d3);
+        __arena_set(vtab + 71, rb0); __arena_set(vtab + 72, rb1);
+        __arena_set(vtab + 73, d0); __arena_set(vtab + 74, d1); __arena_set(vtab + 75, d2); __arena_set(vtab + 76, d3);
+        emit_ptx_mma_m16n8k8_tf32(vtab);
+        jk = jk + 1;
+    }
     // kk += 8; back-edge
     emit_ptx_ri_imm(0, r_kk, r_kk, 8);
     emit_ptx_indent();
@@ -12758,18 +12791,27 @@ fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
     emit_ptx_lbl_ref(2, lbl);
     emit_ptx_byte(59); emit_ptx_byte(10);
     emit_ptx_lbl_ref(3, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Lwend_<lbl>:"
-    // --- epilogue: store d0..d3 to C (M x N row-major) ---
-    // c0=(rowA0, cCol0)  c1=(rowA0, cCol0+1)  c2=(rowA8, cCol0)  c3=(rowA8, cCol0+1)
-    let r_cr0 = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_cr0, r_rowA0, r_N);
-    let r_cr8 = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_cr8, r_rowA8, r_N);
-    let r_ci0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ci0, r_cr0, r_cCol0);
-    emit_ptx_gstore_f32(rd_c, r_ci0, d0, vtab);
-    let r_ci1 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ci1, r_ci0, 1);
-    emit_ptx_gstore_f32(rd_c, r_ci1, d1, vtab);
-    let r_ci2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ci2, r_cr8, r_cCol0);
-    emit_ptx_gstore_f32(rd_c, r_ci2, d2, vtab);
-    let r_ci3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ci3, r_ci2, 1);
-    emit_ptx_gstore_f32(rd_c, r_ci3, d3, vtab);
+    // --- epilogue: for each subtile jb, store its 4 accumulators to C (M x N row-major) ---
+    // c0=(rowA0, cCol_jb)  c1=(rowA0, cCol_jb+1)  c2=(rowA8, cCol_jb)  c3=(rowA8, cCol_jb+1)
+    // where cCol_jb = col0 + jb*8 + 2*tig.
+    let mut je = 0;
+    while je < nb {
+        let d0 = __arena_get(vtab + 77 + je * 4 + 0);
+        let d1 = __arena_get(vtab + 77 + je * 4 + 1);
+        let d2 = __arena_get(vtab + 77 + je * 4 + 2);
+        let d3 = __arena_get(vtab + 77 + je * 4 + 3);
+        let r_cje = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_cje, r_col0, je * 8);   // col0 + jb*8
+        let r_cCol = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_cCol, r_cje, r_2tig);     // + 2*tig
+        let r_ci0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ci0, r_cr0, r_cCol);
+        emit_ptx_gstore_f32(rd_c, r_ci0, d0, vtab);
+        let r_ci1 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ci1, r_ci0, 1);
+        emit_ptx_gstore_f32(rd_c, r_ci1, d1, vtab);
+        let r_ci2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ci2, r_cr8, r_cCol);
+        emit_ptx_gstore_f32(rd_c, r_ci2, d2, vtab);
+        let r_ci3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ci3, r_ci2, 1);
+        emit_ptx_gstore_f32(rd_c, r_ci3, d3, vtab);
+        je = je + 1;
+    }
     0 - 1
 }
 fn emit_ptx_call(node: i32, vtab: i32) -> i32 {

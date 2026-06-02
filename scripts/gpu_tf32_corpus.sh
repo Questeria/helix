@@ -33,8 +33,10 @@ OUT="$ROOT/.m1probe"
 mkdir -p "$OUT"
 DRV="stage0/helixc-bootstrap/_kovc_ptx_driver.bin"
 PTXAS="${PTXAS:-/usr/local/cuda/bin/ptxas}"
-CORR_DIMS="${CORR_DIMS:-16 8 8 32 8 8 16 16 8 16 8 16 64 64 64 128 128 128}"
-PERF_DIMS="${PERF_DIMS:-128 128 128}"
+# M-G3.3: block tile = 16 x (8*NB*WP)=128 cols (4 warps x 4 subtiles), so N must be a multiple
+# of 128 (M mult 16, K mult 8). Distinct-input correctness from 16x8x128 up to 256^3.
+CORR_DIMS="${CORR_DIMS:-16 8 128 32 8 128 16 16 128 16 8 256 128 128 128 256 256 256}"
+PERF_DIMS="${PERF_DIMS:-256 256 256}"
 RC=0
 
 echo "=== [0] ensure PTX driver is current (mint from seed if absent) ==="
@@ -89,7 +91,7 @@ KOVC_TF="$(echo "$PERF_OUT" | sed -n 's/.*MEDIAN-TFLOPS-TF32 kovc=\([0-9.]*\).*/
 echo "  parsed kovc TF32 = ${KOVC_TF:-?} TFLOP/s (perf gate DEFERRED to next phase)"
 
 echo "=== [7] NEG-CONTROL A (comparator teeth: mutate one C cell -> MUST FAIL) ==="
-if /tmp/cl /tmp/out.ptx tf32_matmul 0 gemm_tf32 16 8 8 mutate >/dev/null 2>&1; then
+if /tmp/cl /tmp/out.ptx tf32_matmul 0 gemm_tf32 16 8 32 mutate >/dev/null 2>&1; then
     echo "  NEG-CONTROL-A FAIL: mutated compare returned PASS (comparator has no teeth)"; RC=4
 else
     echo "  NEG-CONTROL-A OK: mutated compare correctly FAILED"

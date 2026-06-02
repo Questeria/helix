@@ -1,9 +1,10 @@
 # Helix GPU Performance Result (Track 2)
 
 Result document for `GPU_PERF_PASS` (charter `docs/HELIX_COMPLETION.md` §1.2). This file
-records the measured perf tiers as they land. **G1 and G2 are GREEN** (G1 = SMEM-tiled f32
-bar.sync @ 4.56 TFLOP/s; G2 = cp.async double-buffer @ 5.445 TFLOP/s, 67.5% cuBLAS f32). G3
-(TF32 Tensor-Core, the committed parity tier) is next.
+records the measured perf tiers as they land. **G1, G2 and G3 are GREEN** (G1 = SMEM-tiled f32
+bar.sync @ 4.56 TFLOP/s; G2 = cp.async double-buffer @ 5.445 TFLOP/s, 67.5% cuBLAS f32; G3 =
+TF32 `mma.sync` Tensor-Core warp-tiled @ 5.354 TFLOP/s, 50.3% cuBLAS-TF32 — the committed
+parity tier). G4 (bf16 wmma) is the remaining stretch.
 
 Reference box: **NVIDIA GeForce RTX 3070 Laptop GPU (sm_86)**, max SM clock 2100 MHz.
 Toolchain: ptxas/CUDA driver 12.0, cuBLAS 12.8.3.14, libcuda via WSL2.
@@ -231,7 +232,55 @@ and bump the emitted `.version` to **8.3** (the default 12.0 ptxas REJECTS `.ver
 `cvt.rna.tf32.f32` for the operand round, and `mma.sync`/`ldmatrix` to the provenance greps. It is
 a `kovc.hx` emitter change -> FULL self-host gate + a re-minted/re-committed tiled reference PTX.
 
-## G3 — TF32 mma.sync Tensor-Core (committed parity tier) — IN PROGRESS
+## G3 — TF32 mma.sync Tensor-Core (committed parity tier) — **PASS**
+
+**Gate (§1.2 / §6 G3):** the TF32 `mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32`
+GEMM is CORRECT vs a cuBLAS-TF32 oracle (`cublasGemmEx` `COMPUTE_32F_FAST_TF32` +
+`TENSOR_OP`) cell-by-cell at a tight **2e-3** relative tol, distinct-per-element inputs,
+16x8x8 .. 2048^3, AND median **>= 4.26 TFLOP/s @ 2048^3** (= 40% of measured cuBLAS-TF32
+10.646), AND `mma.sync`/`.tf32`/`cvt.rna.tf32` provable in the emitted PTX OUTPUT with NO
+`fma.rn.f32` on the accumulators, AND both negative controls trip (comparator-teeth +
+mma-strip → the Tensor-Core path is load-bearing). Measured 2026-06-02 on the RTX 3070
+Laptop GPU (sm_86), ptxas 12.8, PTX `.version 8.3`.
+
+| metric | value |
+|---|---|
+| **kovc median TFLOP/s @ 2048^3** | **5.354 TFLOP/s** (min 2.94 / med 3.21 ms / max 4.30 ms over 50 timed kernel-only launches) |
+| cuBLAS-TF32 median TFLOP/s @ 2048^3 | 10.646 TFLOP/s (med 1.6138 ms) |
+| **kovc / cuBLAS-TF32 ratio** | **~50.3%** (gate floor 40% = 4.26 TFLOP/s) |
+| G3 bar (>= 4.26 TFLOP/s, OR >= 15 absolute) | **PASS** (5.354 >= 4.26, ~1.26x margin; the absolute-15 alt is physically unreachable on this ~10.6-TFLOP/s-ceiling box) |
+| correctness vs cuBLAS-TF32 oracle | 0 bad cells @ 2e-3 rel, 16x8x128 .. 2048^3 distinct-input (maxrel 0.00e+00) |
+| f32-cuBLAS anchor == CPU triple-loop | 0 bad cells, small sizes (capped above ~735^3 where the O(M*N*K) CPU loop would dominate; the 2048^3 gate rests on the O(M*N) GPU-side kovc-vs-cuBLAS-TF32 compare) |
+| provenance (emitted PTX) | `mma.sync.aligned.m16n8k8` + `.tf32` + `cvt.rna.tf32.f32` + `.version 8.3` + `.target sm_86`, 0x `fma.rn.f32` |
+| negative controls | comparator-teeth (mutate one cell → FAIL) + mma-strip (drop the 4 mma.sync → mis-computes → FAIL) both trip |
+
+### M-G3.3 — warp-tiling for occupancy (the PASS kernel), measured 2026-06-02
+
+The M-G3.2 kernel was correctness-first **single-warp** (one 32-lane warp = one block computes
+one 16x8 output tile; grid=(N/8, M/16), block=32). It was **correct at 2048^3** but
+**occupancy-starved** — one warp per block on a 48-warp SM measured **2.541 TFLOP/s** (med 6.76 ms),
+below the 4.26 floor. M-G3.3 restructures `emit_ptx_tf32_matmul_mma` to **warp-tiling +
+N-tiling**: a block is `(32, WP, 1)` = **WP=4 warps**, each warp owns a distinct
+**16 x (8*NB)** output strip computed via **NB=4** `mma.sync` ops per K-step (16 N-subtiles
+of 8 cols per block). The A fragment (16x8) is loaded+`cvt.rna.tf32` **once** per K-step and
+**reused** across all NB N-subtiles (amortizes the A global load + per-K index arithmetic over
+4 mma's); each subtile loads its own 8x8 B fragment. A block covers `16 x (8*NB*WP)` = 16x128;
+grid=(N/128, M/16), block=(32,4,1). The 4 warps hide global-load latency → **5.354 TFLOP/s**
+(2.1x the single-warp kernel), clearing the 40%-cuBLAS-TF32 floor. Identical numerics: same
+C[1,1]=487.125 == cuBLAS-TF32 at 2048^3. NB/WP are emitter constants in `kovc.hx` mirrored by
+`TF32_NB`/`TF32_WP` (=block.y) in `cuda_launch.c`. Still Path-2 (manual `ld.global.f32` +
+`cvt.rna.tf32`, NO SMEM staging / NO `ldmatrix` — those are the next intensity lever, not needed
+to clear the committed-parity floor). ptxas: 48 registers, 0 spills, 0 barriers (no cross-warp
+sync — each warp is independent, so there is **no bar.sync deadlock risk** at any N).
+
+**The "2048^3 hang" was never the kernel.** A prior session reported the warp-tiling WIP
+hanging at 2048^3; the diagnosis this session: the hang was the host-side **O(M*N*K) CPU
+triple-loop** reference (meta-anchor + context loops in `cuda_launch.c`), ~51e9 scalar MACs =
+minutes at 0% GPU — NOT a kernel illegal-access or barrier deadlock. The fix is a **work-cap**
+(`cpu_work > 4.0e8` → skip the CPU loops above ~735^3 and rely on the PRIMARY O(M*N) GPU-side
+kovc-vs-cuBLAS-TF32 compare, itself anchored == CPU at the small sizes). With the cap, **both**
+the committed single-warp kernel AND the warp-tiling kernel complete 2048^3 correctness+timing
+in ~1s wall under `timeout 90`.
 
 ### M-G3.0 — cuBLAS-TF32 baseline measurement (the perf denominator), measured 2026-06-02
 

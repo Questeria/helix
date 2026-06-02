@@ -47,8 +47,9 @@ echo "=== [E] build launcher (WIP cuda_launch.c + cuBLAS) ==="
 gcc helixc/runtime/cuda_launch.c -I/usr/local/cuda/include -L/usr/lib/wsl/lib -L/usr/local/cuda/lib64 -lcuda -lcublas -lm -o /tmp/cl \
   || { echo "FATAL gcc"; exit 2; }
 
-echo "=== [F] CORRECTNESS @16x8x8 distinct-input (kovc-TF32 vs cuBLAS-TF32 @2e-3) ==="
-/tmp/cl /tmp/out.ptx tf32_matmul 0 gemm_tf32 16 8 8 2>&1 | tee "$OUT/_g3_corr16.log"
+echo "=== [F] CORRECTNESS @16x8x128 distinct-input (kovc-TF32 vs cuBLAS-TF32 @2e-3) ==="
+# N must be a multiple of 8*NB*WP = 128 (4 warps x 4 subtiles x 8 cols).
+timeout 120 /tmp/cl /tmp/out.ptx tf32_matmul 0 gemm_tf32 16 8 128 2>&1 | tee "$OUT/_g3_corr16.log"
 RC=${PIPESTATUS[0]}
 T1=$(date +%s)
 echo "=== FAST-INNER-LOOP wall-time: $((T1-T0))s (K1 build alone: $((TBE-TB))s) ; corr rc=$RC ==="
