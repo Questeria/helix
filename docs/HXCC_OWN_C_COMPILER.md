@@ -1,3 +1,5 @@
+> ⚠️ **SUPERSEDED (2026-06-02).** The adversarial design skeptic showed hxcc-in-Helix is **not trust-independent of M2-Planet** (kovc descends from the M2-Planet-built seed), so it is a *weaker* diverse-double-compile route than using an independent compiler, and it does **not** make H6 green. Pivoted to **`SEED_DDC_CROSSCHECK.md`** — a gcc-vs-M2-Planet DDC of the seed (genuinely independent lineage). This doc + the design-workflow blueprint + the skeptic's 7 findings are retained as the design record.
+
 # hxcc — our own C-compiler rung, written in Helix (Option C)
 
 **Goal.** Replace our reliance on the borrowed GPL **M2-Planet** rung with **`hxcc`** — a
