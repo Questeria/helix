@@ -6729,6 +6729,19 @@ fn emit_one_match_arm(arm_idx: i32, scrut_off: i32, match_state: i32,
     let end_table = match_state + 17;
     fail_jmp_state_reset(fail_state);
     let n_pat = emit_pattern_test(pat_idx, scrut_off, fail_state, bind_state, bn_state);
+    // H4 (2026-06-01): match-arm GUARD. arm_idx+4 holds the guard expr (0 = none).
+    // After the pattern matches (its binds are active, so guard vars like `n`
+    // resolve), evaluate the guard; if FALSE (rax==0) jump to fail_state -> the
+    // next arm, exactly like a pattern mismatch. Recorded into fail_state before
+    // the match_state save below so it is saved/restored across a body nested-match.
+    let guard_idx = __arena_get(arm_idx + 4);
+    let n_guard = if guard_idx != 0 {
+        let n_g = emit_ast_code(guard_idx, bind_state, patch_state, bn_state);
+        emit_byte(0x85); emit_byte(0xC0);            // test eax, eax
+        let gdisp = emit_je_rel32_placeholder();      // je (ZF=1 -> guard false) -> next arm
+        fail_jmp_state_add(fail_state, gdisp);
+        n_g + 8
+    } else { 0 };
     // C7 (2026-05-30): make match_state NEST. The body below may contain a
     // nested match, whose match_state_init resets the SHARED 34-slot region
     // (fail_state 0..16 + end_table 17..33) — orphaning THIS match's already-
@@ -6817,7 +6830,7 @@ fn emit_one_match_arm(arm_idx: i32, scrut_off: i32, match_state: i32,
     fail_jmp_state_add(end_table, end_disp);
     let next_arm_label = __arena_len();
     fail_jmp_state_patch_all(fail_state, next_arm_label);
-    n_pat + n_body + 5
+    n_pat + n_guard + n_body + 5
 }
 
 // Stage 7: emit the entire match-arm chain.

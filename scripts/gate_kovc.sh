@@ -171,9 +171,11 @@ chk "$GENC/gen_pair_multi.hx" 12; chk "$GENC/gen_vec_i32.hx" 42; chk "$GENC/gen_
 # H3 traits + closures corpus (2026-06-01): trait-method dispatch + closure capture codegen.
 chk "$GENC/t2_trait_impl.hx" 42; chk "$GENC/t3_closure_call.hx" 42; chk "$GENC/t4_closure_capture.hx" 42; chk "$GENC/t8_closure_two_caps.hx" 42
 chk "$GENC/t7_trait_poly.hx" 42; chk "$GENC/t7b_trait_2types.hx" 42; chk "$GENC/t7c_difffields.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 50 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures [trait dispatch single/poly/two-types/diff-fields, closure call + single/double capture]; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
+# H4 pattern guards corpus (2026-06-01): match arm `if cond` guard is now evaluated.
+chk "$GENC/g1_guard_true.hx" 1; chk "$GENC/g2_guard_false.hx" 0; chk "$GENC/g3_guard_chain.hx" 2
+echo "  CORPUS: $pass passed, $fail failed (expect 53 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards [guard true/false-falls-through/chain-2nd-wins]; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 50 ]; then echo "  CORPUS REGRESSION (pass=$pass < 50)"; GATE_OK=0; fi
+if [ "$pass" -lt 53 ]; then echo "  CORPUS REGRESSION (pass=$pass < 53)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi

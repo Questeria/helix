@@ -16177,18 +16177,22 @@ fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
     // is type-erased; the guard is over-permissively accepted as
     // always-true (the arm fires whenever the pattern matches). Real
     // guard evaluation is a Phase-0 semantic gap.
+    // H4 (2026-06-01): CAPTURE the guard (was parse-and-discard) into arm slot 4
+    // so emit_one_match_arm can evaluate it after the pattern matches.
+    let mut first_guard: i32 = 0;
     if tok_tag(tok_base, cur_get(sb)) == 2 {
         let mfirst_k = cur_get(sb);
         let mfirst_s = tok_p2(tok_base, mfirst_k);
         let mfirst_l = tok_p3(tok_base, mfirst_k);
         if byte_eq(mfirst_s, mfirst_l, kw_if_s(sb), kw_if_n(sb)) == 1 {
             cur_advance(sb);                 // consume 'if'
-            parse_expr_basic(tok_base, sb);  // parse + discard guard
+            first_guard = parse_expr_basic(tok_base, sb);  // CAPTURE guard
         };
     };
     cur_advance(sb);                         // consume '=>' (TK_FATARROW = 42)
     let first_body = parse_match_arm_body(tok_base, sb);
     let arms_head = mk_node(63, first_pat, first_body, 0);
+    __arena_push(first_guard);               // arm slot 4 = guard expr (0 = none)
     let mut tail_idx: i32 = arms_head;
     let mut keep: i32 = 1;
     while keep == 1 {
@@ -16203,19 +16207,21 @@ fn parse_match_expr(tok_base: i32, sb: i32) -> i32 {
                 keep = 0;
             } else {
                 let next_pat = parse_pattern(tok_base, sb);
-                // K1.DL: also peek for `if` guard on subsequent arms.
+                // K1.DL + H4: CAPTURE the `if` guard on subsequent arms too.
+                let mut next_guard: i32 = 0;
                 if tok_tag(tok_base, cur_get(sb)) == 2 {
                     let mn_k = cur_get(sb);
                     let mn_s = tok_p2(tok_base, mn_k);
                     let mn_l = tok_p3(tok_base, mn_k);
                     if byte_eq(mn_s, mn_l, kw_if_s(sb), kw_if_n(sb)) == 1 {
                         cur_advance(sb);     // consume 'if'
-                        parse_expr_basic(tok_base, sb);  // parse + discard
+                        next_guard = parse_expr_basic(tok_base, sb);  // CAPTURE guard
                     };
                 };
                 cur_advance(sb);             // consume '=>'
                 let next_body = parse_match_arm_body(tok_base, sb);
                 let new_arm = mk_node(63, next_pat, next_body, 0);
+                __arena_push(next_guard);    // arm slot 4 = guard expr (0 = none)
                 __arena_set(tail_idx + 3, new_arm);
                 tail_idx = new_arm;
             };
