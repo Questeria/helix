@@ -231,5 +231,29 @@ and bump the emitted `.version` to **8.3** (the default 12.0 ptxas REJECTS `.ver
 `cvt.rna.tf32.f32` for the operand round, and `mma.sync`/`ldmatrix` to the provenance greps. It is
 a `kovc.hx` emitter change -> FULL self-host gate + a re-minted/re-committed tiled reference PTX.
 
-## G3 — TF32 mma.sync Tensor-Core (committed parity tier) — pending
+## G3 — TF32 mma.sync Tensor-Core (committed parity tier) — IN PROGRESS
+
+### M-G3.0 — cuBLAS-TF32 baseline measurement (the perf denominator), measured 2026-06-02
+
+Standalone `cublasGemmEx(CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP)`,
+operands `CUDA_R_32F`, at **2048^3** on the reference box (RTX 3070 Laptop GPU, sm_86, driver
+596.21 / CUDA-13.2 capable), warmup 10 + median-of-50 kernel-only cuEvent timing:
+
+| metric | value |
+|---|---|
+| **cuBLAS-TF32 median TFLOP/s @ 2048^3** | **10.646 TFLOP/s** (min 8.013 / med 10.646 / max 11.555) |
+| cuBLAS-TF32 ms @ 2048^3 | min 1.4868 / med 1.6138 / max 2.1439 ms |
+| measured by | standalone pure-cuBLAS bench (no kovc kernel), so the denominator cannot be lost to codegen |
+| prior reading (same box, earlier run) | med 11.260 (min 9.969 / max 11.603) — throttle variance ~6%; both confirm the ~10-11 TFLOP/s ceiling |
+
+**Load-bearing reconciliation (skeptic-confirmed):** measured cuBLAS-TF32 median is **10.6
+TFLOP/s** (a re-measure read 11.26; the throttled mobile GA104 varies ~6% run-to-run, both
+well under 15), which is BELOW the originally-estimated 15 TFLOP/s absolute floor. The 15 was an
+estimate of ~40% of an assumed cuBLAS-TF32 peak; the actual throttled-mobile-GA104 cuBLAS-TF32
+ceiling is ~10-11 TFLOP/s, so **the kovc kernel physically cannot reach 15 (it cannot beat
+cuBLAS)**. Per the pre-set honest rule, the **governing G3 perf threshold is the RELATIVE one:
+median GEMM @ 2048^3 >= 40% of measured cuBLAS-TF32 = >= 4.26 TFLOP/s** (0.40 x 10.646). Both
+numbers (absolute TFLOP/s and the cuBLAS-TF32 ratio) are reported always. The absolute 15
+floor is documented here as superseded by the relative measure on this specific box.
+
 ## G4 — bf16 wmma (STRETCH) — pending

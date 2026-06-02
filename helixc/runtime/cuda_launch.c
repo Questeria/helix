@@ -565,6 +565,158 @@ int main(int argc, char** argv) {
         return totbad ? 1 : 0;
     }
 
+    /* ===================================================================== *
+     * gemm_tf32 mode (T3/G3): cuda_launch <ptx> tf32_matmul 0 gemm_tf32 <M> <K> <N> [mutate]
+     *
+     * Correctness + perf harness for the kovc TF32 Tensor-Core (mma.sync) GEMM. The kernel
+     * is warp-collaborative: ONE warp (32 threads = one block) computes one 16x8 output tile
+     * via mma.sync.aligned.m16n8k8.row.col.f32.tf32, looping K/8 times. Grid = (N/8, M/16),
+     * block = 32. Requires M%16==0, N%8==0, K%8==0.
+     *
+     * ORACLE DESIGN (skeptic-corrected, the load-bearing part):
+     *  - PRIMARY correctness: judge the kovc TF32 kernel against cublasGemmEx(
+     *    CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP) at a TIGHT ~2e-3 rel
+     *    tol. Two correct TF32 GEMMs differ only by accumulation order (both truncate the
+     *    SAME 10-bit mantissa), so they agree to ~1e-3; a dropped/mis-indexed fragment
+     *    stands out sharply. This is the test that has TEETH for a reduced-precision kernel.
+     *  - META-ANCHOR (retained): pedantic-f32 cublasSgemm == CPU triple-loop, exact-ish
+     *    (1e-3), proves the cuBLAS references themselves are sane (chain-of-trust CPU<-cuBLAS).
+     *  - DISTINCT-per-element inputs (NOT i%7/i%5 uniform): every one of the 32 lanes'
+     *    fragments is individually observable, so a fragment-permutation bug cannot hide
+     *    behind periodic/low-rank input. Inputs are small bounded values to keep the
+     *    accumulation noise tiny but each (r,c) element is distinct.
+     *  - kovc-TF32 vs CPU-f32 deviation is reported for CONTEXT only (NOT a gate -- f32 ref
+     *    vs a tf32 kernel is the self-contradictory tol the skeptic warned against).
+     * ===================================================================== */
+    if (strcmp(op, "gemm_tf32") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 16;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 8;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 8;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        if (Md % 16 != 0 || Nd % 8 != 0 || Kd % 8 != 0) {
+            fprintf(stderr, "gemm_tf32: dims must satisfy M%%16==0 (%d), N%%8==0 (%d), K%%8==0 (%d)\n", Md, Nd, Kd);
+            return 2;
+        }
+        size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        float* hA = (float*)malloc(aN * sizeof(float));
+        float* hB = (float*)malloc(bN * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));   /* kovc TF32 result */
+        float* hR = (float*)malloc(cN * sizeof(float));   /* cuBLAS-TF32 result (primary ref) */
+        float* hF = (float*)malloc(cN * sizeof(float));   /* cuBLAS-f32-pedantic (meta-anchor) */
+        if (!hA || !hB || !hC || !hR || !hF) return 2;
+        /* DISTINCT per-element inputs: a quasi-random but deterministic bounded spread so
+         * every element differs from its neighbours (exposes any lane/fragment swap), yet
+         * stays small (|elem|<~7.8, |prod|<~61, K-partial sums < ~1e3) so TF32 truncation
+         * noise is low. NOTE the (int) cast BEFORE the -125/-120: the modulo is computed in
+         * size_t (unsigned), so subtracting in size_t would UNDERFLOW to ~1.8e19 for the
+         * lower half of values (-> garbage ~1.15e18 floats); cast to int first. */
+        for (size_t i = 0; i < aN; i++) hA[i] = (float)((int)((i * 131 + 7) % 251) - 125) * 0.0625f;
+        for (size_t i = 0; i < bN; i++) hB[i] = (float)((int)((i * 97 + 13) % 241) - 120) * 0.0625f;
+        for (size_t i = 0; i < cN; i++) hC[i] = -123456.0f;   /* sentinel: unwritten cell shows */
+        CUdeviceptr dA, dB, dC, dR;
+        CK(cuMemAlloc(&dA, aN * sizeof(float)), "alloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(float)), "alloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)), "alloc C");
+        CK(cuMemAlloc(&dR, cN * sizeof(float)), "alloc R(cublas)");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
+        CK(cuMemcpyHtoD(dC, hC, cN * sizeof(float)), "H2D C");
+        /* launch: one warp per 16x8 output tile. grid=(N/8, M/16), block=32. */
+        void* gargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+        unsigned gx = (unsigned)(Nd / 8), gy = (unsigned)(Md / 16);
+        CK(cuLaunchKernel(fn, gx, gy, 1, 32, 1, 1, 0, 0, gargs, 0), "launch tf32_matmul");
+        CK(cuCtxSynchronize(), "sync tf32_matmul");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
+        /* comparator negative control: perturb one cell so the tol compare MUST trip. The
+         * delta is SCALED to exceed the magnitude-aware tol (skeptic §5.7): a bare +1.0f
+         * could be < TF32_REL*|hC[0]| on a large-magnitude cell -> vacuous. */
+        if (mutate) { float d = 0.05f * fabsf(hC[0]); hC[0] += (d > 1.0f ? d : 1.0f); }
+
+        cublasHandle_t cbh;
+        if (cublasCreate(&cbh) != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cublasCreate failed\n"); return 2; }
+        float alpha = 1.0f, beta = 0.0f;
+        /* (A) cuBLAS-TF32 reference (PRIMARY): cublasGemmEx COMPUTE_32F_FAST_TF32 + TENSOR_OP.
+         * row-major C(MxN)=A*B <=> col-major C^T=B^T*A^T: GemmEx(N,N, N,M,K, B(ld N), A(ld K), R(ld N)). */
+        cublasSetMathMode(cbh, CUBLAS_TF32_TENSOR_OP_MATH);
+        if (cublasGemmEx(cbh, CUBLAS_OP_N, CUBLAS_OP_N, Nd, Md, Kd, &alpha,
+                         (const void*)dB, CUDA_R_32F, Nd, (const void*)dA, CUDA_R_32F, Kd, &beta,
+                         (void*)dR, CUDA_R_32F, Nd, CUBLAS_COMPUTE_32F_FAST_TF32, CUBLAS_GEMM_DEFAULT_TENSOR_OP)
+            != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cublasGemmEx TF32 failed\n"); return 2; }
+        CK(cuCtxSynchronize(), "sync cublas tf32");
+        CK(cuMemcpyDtoH(hR, dR, cN * sizeof(float)), "D2H R(tf32)");
+        /* (B) cuBLAS-f32 pedantic (META-ANCHOR): true f32, no TF32 contamination. */
+        cublasSetMathMode(cbh, CUBLAS_PEDANTIC_MATH);
+        if (cublasSgemm(cbh, CUBLAS_OP_N, CUBLAS_OP_N, Nd, Md, Kd, &alpha,
+                        (const float*)dB, Nd, (const float*)dA, Kd, &beta, (float*)dR, Nd) != CUBLAS_STATUS_SUCCESS) {
+            fprintf(stderr, "cublasSgemm failed\n"); return 2;
+        }
+        CK(cuCtxSynchronize(), "sync cublas f32");
+        CK(cuMemcpyDtoH(hF, dR, cN * sizeof(float)), "D2H F(f32)");
+
+        /* META-ANCHOR check: pedantic-f32 cuBLAS == CPU triple-loop (cell-by-cell, ~1e-3).
+         * Proves the references are correct; runs in full at these small G3 sizes. */
+        int obad = 0;
+        for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
+            float ref = 0.0f;
+            for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
+            float got = hF[r * Nd + cc];
+            float e = got - ref; if (e < 0) e = -e;
+            float aref = ref < 0 ? -ref : ref;
+            if (isnan(got) || (e > 1.0e-3f && e > 1.0e-3f * aref)) { if (obad < 6) fprintf(stderr, "f32-cuBLAS-vs-CPU mismatch [%d,%d]=%g ref %g\n", r, cc, got, ref); obad++; }
+        }
+        /* PRIMARY: kovc TF32 kernel vs cuBLAS-TF32, tight ~2e-3 RELATIVE (magnitude-aware). */
+        const float TF32_REL = 2.0e-3f, TF32_ABS = 2.0e-3f;
+        int tbad = 0; float maxrel = 0.0f;
+        for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
+            float got = hC[r * Nd + cc], refb = hR[r * Nd + cc];
+            float e = got - refb; if (e < 0) e = -e;
+            float ar = refb < 0 ? -refb : refb;
+            float rel = e / (ar > 1.0f ? ar : 1.0f); if (rel > maxrel) maxrel = rel;
+            if (isnan(got) || (e > TF32_ABS && e > TF32_REL * ar)) { if (tbad < 6) fprintf(stderr, "tf32 kovc-vs-cuBLAS-TF32 mismatch C[%d,%d]=%g tf32ref %g (rel %g)\n", r, cc, got, refb, rel); tbad++; }
+        }
+        /* CONTEXT only: kovc TF32 vs CPU-f32 max relative deviation (NOT a gate). */
+        float ctx_maxrel = 0.0f;
+        for (int r = 0; r < Md; r++) for (int cc = 0; cc < Nd; cc++) {
+            float ref = 0.0f; for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
+            float got = hC[r * Nd + cc]; float e = got - ref; if (e < 0) e = -e;
+            float ar = ref < 0 ? -ref : ref; float rel = e / (ar > 1.0f ? ar : 1.0f);
+            if (rel > ctx_maxrel) ctx_maxrel = rel;
+        }
+
+        /* --- TIMING (kernel-only) via cuEvent: warmup + median-of-50, min/med/max. The
+         * absolute perf GATE is DEFERRED this phase (correctness-first); set via G1_MIN_TFLOPS
+         * by the corpus. We still report the number for the orchestrator. --- */
+        double flop = 2.0 * (double)Md * (double)Nd * (double)Kd;
+        if (!mutate) {
+            int WARM = 5, ITERS = 50;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, gx, gy, 1, 32, 1, 1, 0, 0, gargs, 0), "warm kov");
+            CK(cuCtxSynchronize(), "sync warm kov");
+            for (int it = 0; it < ITERS; it++) {
+                CK(cuEventRecord(e0, 0), "rec0");
+                CK(cuLaunchKernel(fn, gx, gy, 1, 32, 1, 1, 0, 0, gargs, 0), "time kov");
+                CK(cuEventRecord(e1, 0), "rec1"); CK(cuEventSynchronize(e1), "evsync");
+                CK(cuEventElapsedTime(&ts[it], e0, e1), "elapsed");
+            }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            float kmin = ts[0], kmax = ts[ITERS - 1], kmed = ts[ITERS / 2];
+            double kov_tf = flop / (kmed * 1.0e-3) / 1.0e12;
+            printf("GPU [%s] TIMING tf32_kovc %dx%dx%d: min=%.4f med=%.4f max=%.4f ms\n", gpu, Md, Kd, Nd, kmin, kmed, kmax);
+            printf("MEDIAN-TFLOPS-TF32 kovc=%.3f\n", kov_tf);
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts);
+        }
+        cublasDestroy(cbh);
+
+        int totbad = tbad + obad;
+        printf("GPU [%s] tf32_matmul (mma m16n8k8) %dx%dx%d over %d cells%s: C[1,1]=%g tf32ref=%g, kovc-vs-cuBLAS-TF32=%d(maxrel=%.2e tol=%.0e) anchor(f32cuBLAS-vs-CPU)=%d [ctx:kovc-vs-CPUf32 maxrel=%.2e] -> %s\n",
+               gpu, Md, Kd, Nd, Md * Nd, mutate ? " [MUTATED]" : "", hC[1 * Nd + 1], hR[1 * Nd + 1], tbad, maxrel, (double)TF32_REL, obad, ctx_maxrel, totbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC); cuMemFree(dR);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(hR); free(hF); free(ptx);
+        return totbad ? 1 : 0;
+    }
+
     /* matmul_abt mode: cuda_launch <ptx> gpu_matmul_abt <Nignored> matmul_abt <M> <K> <N>.
      * C[M,N] = A[M,K] @ B[N,K]^T, i.e. C[i,j]=sum_t A[i,t]*B[j,t] -- the UNSCALED A@B^T used
      * for d_attn=dOut@V^T. gridDim=M, blockDim=N. Integer inputs so exact; verify every cell. */

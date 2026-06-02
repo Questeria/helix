@@ -1,0 +1,102 @@
+.version 8.3
+.target sm_86
+.address_size 64
+
+.visible .entry tf32_matmul(.param .b64 param_0, .param .b64 param_1, .param .b64 param_2, .param .u32 param_3, .param .u32 param_4, .param .u32 param_5)
+{
+    .reg .pred  %p<256>;
+    .reg .b32   %r<256>;
+    .reg .b64   %rd<256>;
+    .reg .f32   %f<256>;
+    .reg .b16   %h<256>;
+
+    mov.u32 %r0, %tid.x;
+    and.b32 %r1, %r0, 31;
+    shr.u32 %r2, %r1, 2;
+    and.b32 %r3, %r1, 3;
+    mov.u32 %r4, %ctaid.x;
+    mov.u32 %r5, %ctaid.y;
+    ld.param.u32 %r6, [param_4];
+    ld.param.u32 %r7, [param_5];
+    ld.param.u64 %rd0, [param_0];
+    cvta.to.global.u64 %rd1, %rd0;
+    ld.param.u64 %rd2, [param_1];
+    cvta.to.global.u64 %rd3, %rd2;
+    ld.param.u64 %rd4, [param_2];
+    cvta.to.global.u64 %rd5, %rd4;
+    mul.lo.s32 %r8, %r5, 16;
+    mul.lo.s32 %r9, %r4, 8;
+    add.s32 %r10, %r3, 4;
+    add.s32 %r11, %r8, %r2;
+    add.s32 %r12, %r11, 8;
+    mul.lo.s32 %r13, %r11, %r6;
+    mul.lo.s32 %r14, %r12, %r6;
+    add.s32 %r15, %r9, %r2;
+    mul.lo.s32 %r16, %r3, 2;
+    add.s32 %r17, %r9, %r16;
+    mov.f32 %f0, 0f00000000;
+    mov.f32 %f1, 0f00000000;
+    mov.f32 %f2, 0f00000000;
+    mov.f32 %f3, 0f00000000;
+    mov.s32 %r18, 0;
+$Ltop_0:
+    setp.lt.s32 %p0, %r18, %r6;
+    @!%p0 bra $Lwend_0;
+    add.s32 %r19, %r18, %r3;
+    add.s32 %r20, %r18, %r10;
+    add.s32 %r21, %r13, %r19;
+    add.s32 %r22, %r14, %r19;
+    add.s32 %r23, %r13, %r20;
+    add.s32 %r24, %r14, %r20;
+    mul.lo.s32 %r25, %r19, %r7;
+    add.s32 %r26, %r25, %r15;
+    mul.lo.s32 %r27, %r20, %r7;
+    add.s32 %r28, %r27, %r15;
+    mul.wide.s32 %rd6, %r21, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    ld.global.f32 %f4, [%rd7];
+    cvt.rna.tf32.f32 %r29, %f4;
+    mul.wide.s32 %rd8, %r22, 4;
+    add.s64 %rd9, %rd1, %rd8;
+    ld.global.f32 %f5, [%rd9];
+    cvt.rna.tf32.f32 %r30, %f5;
+    mul.wide.s32 %rd10, %r23, 4;
+    add.s64 %rd11, %rd1, %rd10;
+    ld.global.f32 %f6, [%rd11];
+    cvt.rna.tf32.f32 %r31, %f6;
+    mul.wide.s32 %rd12, %r24, 4;
+    add.s64 %rd13, %rd1, %rd12;
+    ld.global.f32 %f7, [%rd13];
+    cvt.rna.tf32.f32 %r32, %f7;
+    mul.wide.s32 %rd14, %r26, 4;
+    add.s64 %rd15, %rd3, %rd14;
+    ld.global.f32 %f8, [%rd15];
+    cvt.rna.tf32.f32 %r33, %f8;
+    mul.wide.s32 %rd16, %r28, 4;
+    add.s64 %rd17, %rd3, %rd16;
+    ld.global.f32 %f9, [%rd17];
+    cvt.rna.tf32.f32 %r34, %f9;
+    mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 {%f0,%f1,%f2,%f3}, {%r29,%r30,%r31,%r32}, {%r33,%r34}, {%f0,%f1,%f2,%f3};
+    add.s32 %r18, %r18, 8;
+    bra $Ltop_0;
+$Lwend_0:
+    mul.lo.s32 %r35, %r11, %r7;
+    mul.lo.s32 %r36, %r12, %r7;
+    add.s32 %r37, %r35, %r17;
+    mul.wide.s32 %rd18, %r37, 4;
+    add.s64 %rd19, %rd5, %rd18;
+    st.global.f32 [%rd19], %f0;
+    add.s32 %r38, %r37, 1;
+    mul.wide.s32 %rd20, %r38, 4;
+    add.s64 %rd21, %rd5, %rd20;
+    st.global.f32 [%rd21], %f1;
+    add.s32 %r39, %r36, %r17;
+    mul.wide.s32 %rd22, %r39, 4;
+    add.s64 %rd23, %rd5, %rd22;
+    st.global.f32 [%rd23], %f2;
+    add.s32 %r40, %r39, 1;
+    mul.wide.s32 %rd24, %r40, 4;
+    add.s64 %rd25, %rd5, %rd24;
+    st.global.f32 [%rd25], %f3;
+    ret;
+}

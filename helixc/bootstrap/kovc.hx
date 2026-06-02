@@ -10377,12 +10377,16 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 61 {               // 16 var triples (2..49) + 6 counters +
+    while i < 75 {               // 16 var triples (2..49) + 6 counters +
         __arena_push(0);         // 50=next_pred,51=next_label,52=next_rd,
         i = i + 1;               // 53=cur_fn_idx,54=next_f,55=last_is_float;
     }                            // T2/G2 GEMM context (cp.async tile-load,
     bse                          // avoids a >6-arg call): 56=tid,57=rowbase,
 }                                // 58=colbase,59=rd_a,60=rd_b,61=K,62=N.
+                                 // T3/G3 mma.sync operands (seed lacks the >6-arg
+                                 // fix, so the 14-id mma call is passed via these
+                                 // scratch slots, NOT 14 fn args): 63..66=D %f,
+                                 // 67..70=A %r, 71..72=B %r, 73..76=C %f.
 fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab, 0);        // next_reg = 0
     __arena_set(vtab + 1, 0);    // var_count = 0
@@ -12198,6 +12202,106 @@ fn emit_ptx_cp_async_wait(n: i32) -> i32 {
     emit_ptx_byte(59); emit_ptx_byte(10);                       // ;\n
     0
 }
+// T3/G3: "    cvt.rna.tf32.f32 %r<rdst>, %f<fsrc>;\n" -- the f32->tf32 bridge. The DEST is
+// .b32 (%r, the tf32 bit-pattern) and the SRC is .f32 (%f) -- this asymmetry is the
+// ptxas-12.8-VERIFIED accepted spelling (cvt.rna.f32->.f32 is REJECTED; dst MUST be .b32).
+// Produces exactly the .b32 A/B fragment operands the mma.sync needs.
+fn emit_ptx_cvt_rna_tf32(rdst: i32, fsrc: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);   // cvt
+    emit_ptx_byte(46); emit_ptx_byte(114); emit_ptx_byte(110); emit_ptx_byte(97);  // .rna
+    emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .tf32
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .f32
+    emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(fsrc);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T3/G3: "    and.b32 %r<rdst>, %r<rsrc>, <imm>;\n" -- bitwise-and immediate (lane masks:
+// lane = tid & 31, tig = lane & 3). No and/shr existed (emit_ptx_ri_imm is add/mul/div only);
+// .b32 / unsigned is the honest spelling for a bit-mask (no signed-div footgun).
+fn emit_ptx_and_imm(rdst: i32, rsrc: i32, imm: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(97); emit_ptx_byte(110); emit_ptx_byte(100);   // and
+    emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(51); emit_ptx_byte(50);  // .b32
+    emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rsrc);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_decimal(imm);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T3/G3: "    shr.u32 %r<rdst>, %r<rsrc>, <imm>;\n" -- logical right shift immediate
+// (groupID = lane >> 2). .u32 (unsigned) so it is a true logical shift, not arithmetic.
+fn emit_ptx_shr_imm(rdst: i32, rsrc: i32, imm: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(104); emit_ptx_byte(114);  // shr
+    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);  // .u32
+    emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rsrc);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_decimal(imm);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T3/G3: the headline Tensor-Core op. 14 args (4 D-%f, 4 A-%r, 2 B-%r, 4 C-%f) -- SAFE on
+// HEAD 8b7cf37+ (the >6-arg SysV stack-pass fix is landed; this emitter is itself an implicit
+// exercise of that fix in kovc's own compile). Emits:
+// "    mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 {%f,%f,%f,%f}, {%r,%r,%r,%r}, {%r,%r}, {%f,%f,%f,%f};\n"
+// Operand classes are ptxas-12.8-VERIFIED: A/B fragments = .b32 (%r), D/C accumulators =
+// .f32 (%f). all-%f is REJECTED; cvt.rna dst MUST be .b32.
+fn emit_ptx_mma_m16n8k8_tf32(vtab: i32) -> i32 {
+    // The 14 operand register-ids are read from vtab scratch slots 63..76 (NOT 14 fn
+    // args): the SEED compiler that builds the PTX driver lacks the >6-arg SysV fix
+    // (8b7cf37 fixed kovc.hx, but seed predates it), so a 14-arg call would mis-pass
+    // args 7+ and emit garbage operands. Slots: 63..66=D(%f),67..70=A(%r),71..72=B(%r),
+    // 73..76=C(%f). Mirrors the cp.async vtab-56..62 idiom.
+    let d0 = __arena_get(vtab + 63);
+    let d1 = __arena_get(vtab + 64);
+    let d2 = __arena_get(vtab + 65);
+    let d3 = __arena_get(vtab + 66);
+    let a0 = __arena_get(vtab + 67);
+    let a1 = __arena_get(vtab + 68);
+    let a2 = __arena_get(vtab + 69);
+    let a3 = __arena_get(vtab + 70);
+    let b0 = __arena_get(vtab + 71);
+    let b1 = __arena_get(vtab + 72);
+    let c0 = __arena_get(vtab + 73);
+    let c1 = __arena_get(vtab + 74);
+    let c2 = __arena_get(vtab + 75);
+    let c3 = __arena_get(vtab + 76);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(109); emit_ptx_byte(97); emit_ptx_byte(46);   // mma.
+    emit_ptx_byte(115); emit_ptx_byte(121); emit_ptx_byte(110); emit_ptx_byte(99); emit_ptx_byte(46);  // sync.
+    emit_ptx_byte(97); emit_ptx_byte(108); emit_ptx_byte(105); emit_ptx_byte(103); emit_ptx_byte(110); emit_ptx_byte(101); emit_ptx_byte(100); emit_ptx_byte(46);  // aligned.
+    emit_ptx_byte(109); emit_ptx_byte(49); emit_ptx_byte(54); emit_ptx_byte(110); emit_ptx_byte(56); emit_ptx_byte(107); emit_ptx_byte(56); emit_ptx_byte(46);  // m16n8k8.
+    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(119); emit_ptx_byte(46);  // row.
+    emit_ptx_byte(99); emit_ptx_byte(111); emit_ptx_byte(108); emit_ptx_byte(46);   // col.
+    emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(46);    // f32.
+    emit_ptx_byte(116); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(46);  // tf32.
+    emit_ptx_byte(116); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(46);  // tf32.
+    emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // f32
+    emit_ptx_byte(32);
+    // {%f<d0>,%f<d1>,%f<d2>,%f<d3>}
+    emit_ptx_byte(123); emit_ptx_f(d0); emit_ptx_byte(44); emit_ptx_f(d1); emit_ptx_byte(44); emit_ptx_f(d2); emit_ptx_byte(44); emit_ptx_f(d3); emit_ptx_byte(125);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    // {%r<a0>,%r<a1>,%r<a2>,%r<a3>}
+    emit_ptx_byte(123); emit_ptx_r(a0); emit_ptx_byte(44); emit_ptx_r(a1); emit_ptx_byte(44); emit_ptx_r(a2); emit_ptx_byte(44); emit_ptx_r(a3); emit_ptx_byte(125);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    // {%r<b0>,%r<b1>}
+    emit_ptx_byte(123); emit_ptx_r(b0); emit_ptx_byte(44); emit_ptx_r(b1); emit_ptx_byte(125);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    // {%f<c0>,%f<c1>,%f<c2>,%f<c3>}
+    emit_ptx_byte(123); emit_ptx_f(c0); emit_ptx_byte(44); emit_ptx_f(c1); emit_ptx_byte(44); emit_ptx_f(c2); emit_ptx_byte(44); emit_ptx_f(c3); emit_ptx_byte(125);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
 // T2/G2: "    @!%p<pp> bra $L<which>_<lbl>;\n" -- guard-branch over a block.
 fn emit_ptx_bra_ifnot(pp: i32, which: i32, lbl: i32) -> i32 {
     emit_ptx_indent();
@@ -12513,6 +12617,161 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
     }
     0 - 1
 }
+// T3/G3: name-matcher for "__tf32_matmul_mma" (17 chars). Mirrors
+// ptx_name_is_tiled_matmul_smem.
+fn ptx_name_is_tf32_matmul_mma(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 17 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 3) != 102 { ok = 0; };   // f
+        if __arena_get(name_s + 4) != 51 { ok = 0; };    // 3
+        if __arena_get(name_s + 5) != 50 { ok = 0; };    // 2
+        if __arena_get(name_s + 6) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 7) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 8) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 9) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 10) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 11) != 117 { ok = 0; };  // u
+        if __arena_get(name_s + 12) != 108 { ok = 0; };  // l
+        if __arena_get(name_s + 13) != 95 { ok = 0; };   // _
+        if __arena_get(name_s + 14) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 15) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 16) != 97 { ok = 0; };   // a
+        ok
+    }
+}
+// T3/G3: the TF32 Tensor-Core GEMM orchestrator. Emits the WHOLE kernel body for
+// __tf32_matmul_mma(a,b,c,M,K,N). SINGLE-WARP, correctness-first (M-G3.2): ONE warp
+// (32 lanes = one block) computes one 16x8 output tile of C via
+// mma.sync.aligned.m16n8k8.row.col.f32.tf32, looping K/8 mma calls. Grid=(N/8, M/16),
+// block=(32,1,1). Path-2 (manual ld.global.f32 + cvt.rna.tf32) -- NO SMEM staging, NO
+// ldmatrix (both are perf optimizations for the NEXT phase; this body proves the mma MATH).
+// Requires M%16==0, N%8==0, K%8==0 (no boundary guard).
+//
+// Fragment layout (PTX-ISA canonical, GPU-VALIDATED at 16x8x8 distinct-input, M-G3.0):
+//   lane t -> gid=t>>2 (0..7), tig=t&3 (0..3)
+//   A (M x K, row-major):  a0=(gid,tig) a1=(gid+8,tig) a2=(gid,tig+4) a3=(gid+8,tig+4)  [k cols tig/tig+4]
+//   B (K x N, row-major):  b0=(tig,gid) b1=(tig+4,gid)   [k along row, n along col]
+//   C/D (M x N, row-major):c0=(gid,2tig) c1=(gid,2tig+1) c2=(gid+8,2tig) c3=(gid+8,2tig+1)
+// mm (M) is unused in the body (the row block comes from ctaid.y); derived from K/N + geometry.
+fn emit_ptx_tf32_matmul_mma(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    // resolve a/b/c/M/K/N param indices from the 6 call args (AST_VAR). (M unused in body.)
+    let ah = __arena_get(node + 3);
+    let a0n = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2);
+    let a1n = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2);
+    let a2n = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2);
+    let a3n = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2);
+    let a4n = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2);
+    let a5n = __arena_get(n5 + 1);
+    let pa = ptx_param_index(fn_idx, __arena_get(a0n + 1), __arena_get(a0n + 2));
+    let pb = ptx_param_index(fn_idx, __arena_get(a1n + 1), __arena_get(a1n + 2));
+    let pc = ptx_param_index(fn_idx, __arena_get(a2n + 1), __arena_get(a2n + 2));
+    let p_k = ptx_param_index(fn_idx, __arena_get(a4n + 1), __arena_get(a4n + 2));
+    let p_n = ptx_param_index(fn_idx, __arena_get(a5n + 1), __arena_get(a5n + 2));
+    // --- prologue (once) ---
+    let r_lane0 = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_lane0, 0);   // tid.x (block 32 wide -> = lane)
+    let r_lane = ptx_alloc_reg(vtab); emit_ptx_and_imm(r_lane, r_lane0, 31);   // lane = tid & 31
+    let r_gid = ptx_alloc_reg(vtab); emit_ptx_shr_imm(r_gid, r_lane, 2);       // groupID = lane >> 2
+    let r_tig = ptx_alloc_reg(vtab); emit_ptx_and_imm(r_tig, r_lane, 3);       // tid_in_group = lane & 3
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);   // ctaid.x
+    let r_by = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_by, 3);   // ctaid.y
+    let r_K = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_K, p_k);
+    let r_N = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_N, p_n);
+    let rd_a = emit_ptx_param_global_base(pa, vtab);
+    let rd_b = emit_ptx_param_global_base(pb, vtab);
+    let rd_c = emit_ptx_param_global_base(pc, vtab);
+    // block output-tile origin:  row0 = by*16, col0 = bx*8
+    let r_row0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_row0, r_by, 16);
+    let r_col0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_col0, r_bx, 8);
+    let r_tig4 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_tig4, r_tig, 4);   // tig+4
+    // the two A row indices:  rowA0 = row0+gid, rowA8 = row0+gid+8
+    let r_rowA0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_rowA0, r_row0, r_gid);
+    let r_rowA8 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_rowA8, r_rowA0, 8);
+    // A row-base element indices (row*K, runtime K):  rA0K = rowA0*K, rA8K = rowA8*K
+    let r_rA0K = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_rA0K, r_rowA0, r_K);
+    let r_rA8K = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_rA8K, r_rowA8, r_K);
+    // B column (constant across k):  colB = col0 + gid
+    let r_colB = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_colB, r_col0, r_gid);
+    // C epilogue col bits:  cCol0 = col0 + 2*tig
+    let r_2tig = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_2tig, r_tig, 2);
+    let r_cCol0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_cCol0, r_col0, r_2tig);
+    // --- accumulators d0..d3 (%f), zeroed; persist across the K-loop ---
+    let d0 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d0);
+    let d1 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d1);
+    let d2 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d2);
+    let d3 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(d3);
+    // --- K-loop: for (kk=0; kk<K; kk+=8) one mma per k-tile ---
+    let r_kk = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_kk, 0);
+    let lbl = ptx_alloc_label(vtab);
+    emit_ptx_lbl_ref(2, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Ltop_<lbl>:"
+    let pz = ptx_alloc_pred(vtab);
+    emit_ptx_setp_lt_s32(pz, r_kk, r_K);
+    emit_ptx_bra_ifnot(pz, 3, lbl);   // @!pz bra $Lwend_<lbl>
+    // per-iteration k offsets:  kk_tig = kk+tig, kk_tig4 = kk+tig4
+    let r_kkt = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_kkt, r_kk, r_tig);
+    let r_kkt4 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_kkt4, r_kk, r_tig4);
+    // A element indices: a0=rA0K+kk_tig a1=rA8K+kk_tig a2=rA0K+kk_tig4 a3=rA8K+kk_tig4
+    let r_ai0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai0, r_rA0K, r_kkt);
+    let r_ai1 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai1, r_rA8K, r_kkt);
+    let r_ai2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai2, r_rA0K, r_kkt4);
+    let r_ai3 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ai3, r_rA8K, r_kkt4);
+    // B element indices: b0=kk_tig*N+colB  b1=kk_tig4*N+colB
+    let r_bi0m = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_bi0m, r_kkt, r_N);
+    let r_bi0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bi0, r_bi0m, r_colB);
+    let r_bi1m = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_bi1m, r_kkt4, r_N);
+    let r_bi1 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bi1, r_bi1m, r_colB);
+    // load f32, cvt.rna -> tf32 (.b32) for each A/B fragment element
+    let fa0 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa0, rd_a, r_ai0, vtab);
+    let ra0 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra0, fa0);
+    let fa1 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa1, rd_a, r_ai1, vtab);
+    let ra1 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra1, fa1);
+    let fa2 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa2, rd_a, r_ai2, vtab);
+    let ra2 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra2, fa2);
+    let fa3 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa3, rd_a, r_ai3, vtab);
+    let ra3 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(ra3, fa3);
+    let fb0 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb0, rd_b, r_bi0, vtab);
+    let rb0 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(rb0, fb0);
+    let fb1 = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb1, rd_b, r_bi1, vtab);
+    let rb1 = ptx_alloc_reg(vtab); emit_ptx_cvt_rna_tf32(rb1, fb1);
+    // mma: D = A*B + C, with C==D (accumulate in place). Stash the 14 operand
+    // register-ids in vtab scratch slots 63..76, then call with ONE arg (the seed
+    // PTX-driver compiler lacks the >6-arg fix; a 14-arg call mis-passes args 7+).
+    __arena_set(vtab + 63, d0); __arena_set(vtab + 64, d1); __arena_set(vtab + 65, d2); __arena_set(vtab + 66, d3);
+    __arena_set(vtab + 67, ra0); __arena_set(vtab + 68, ra1); __arena_set(vtab + 69, ra2); __arena_set(vtab + 70, ra3);
+    __arena_set(vtab + 71, rb0); __arena_set(vtab + 72, rb1);
+    __arena_set(vtab + 73, d0); __arena_set(vtab + 74, d1); __arena_set(vtab + 75, d2); __arena_set(vtab + 76, d3);
+    emit_ptx_mma_m16n8k8_tf32(vtab);
+    // kk += 8; back-edge
+    emit_ptx_ri_imm(0, r_kk, r_kk, 8);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbl);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_lbl_ref(3, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Lwend_<lbl>:"
+    // --- epilogue: store d0..d3 to C (M x N row-major) ---
+    // c0=(rowA0, cCol0)  c1=(rowA0, cCol0+1)  c2=(rowA8, cCol0)  c3=(rowA8, cCol0+1)
+    let r_cr0 = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_cr0, r_rowA0, r_N);
+    let r_cr8 = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_cr8, r_rowA8, r_N);
+    let r_ci0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ci0, r_cr0, r_cCol0);
+    emit_ptx_gstore_f32(rd_c, r_ci0, d0, vtab);
+    let r_ci1 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ci1, r_ci0, 1);
+    emit_ptx_gstore_f32(rd_c, r_ci1, d1, vtab);
+    let r_ci2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ci2, r_cr8, r_cCol0);
+    emit_ptx_gstore_f32(rd_c, r_ci2, d2, vtab);
+    let r_ci3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ci3, r_ci2, 1);
+    emit_ptx_gstore_f32(rd_c, r_ci3, d3, vtab);
+    0 - 1
+}
 fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
     let name_s = __arena_get(node + 1);
     let name_l = __arena_get(node + 2);
@@ -12566,9 +12825,11 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_gpu_i2f(node, vtab)         // K1.GPU-ABI (P5): i32 -> f32
     } else { if ptx_name_is_tiled_matmul_smem(name_s, name_l) == 1 {
         emit_ptx_tiled_matmul_smem(node, vtab)  // T2/M1: SMEM tiled GEMM
+    } else { if ptx_name_is_tf32_matmul_mma(name_s, name_l) == 1 {
+        emit_ptx_tf32_matmul_mma(node, vtab)    // T3/G3: TF32 Tensor-Core GEMM (mma.sync)
     } else {
         0 - 1
-    }}}}}}}}}}}}
+    }}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
