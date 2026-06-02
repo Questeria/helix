@@ -130,6 +130,36 @@ every compiler commit. Chasing the vendored-toolchain self-host SIGILL is delibe
 (`selfhost_probe.sh`) and the vendored `libc-full.M1` are kept so the investigation is
 reproducible. **H6 (green-or-documented) = documented.**
 
+### Update 2026-06-02 (H6 GREEN — M2-Planet self-hosts via mescc-tools)
+
+**This supersedes the "documented" status above: H6 is now GREEN.** The bounded attempt's
+libc-full 169-byte reading was a red herring. The real root cause (found by an adversarial
+investigation, reproduced 3×): our reduced stage0 `M0` assembler **corrupts exactly one
+`lea_rax,[rdi+DWORD]`** (drops the opcode + writes a garbage displacement → an illegal byte at
+VA `0x616d77` → SIGILL) when assembling M2's 2.2 MB self-output. The `M1` text is correct,
+libc-core is correct, the body is intact — a large-input bug in the **vendored stage0 assembler**,
+not M2 or Helix.
+
+Upstream M2-Planet self-hosts via the **mescc-tools** toolchain, not our positional `M0`/`hex2`.
+We vendored mescc-tools 1.7.0 (`M1` macro-assembler + `blood-elf` + the flag-driven `hex2` linker;
+see `../MESCC_TOOLS_PROVENANCE.md`), built them with the seed `M2.bin`, and re-ran the self-host
+via `selfhost_v2.sh`: M2 → gen2 → gen3 with **gen2 == gen3 byte-identical** at source
+(`gen2.M1==gen3.M1`, `baa30d8e…`) and binary (`gen2-M2.bin==gen3-M2.bin`, `b6b3530e…`), the result
+proven a *working* compiler (G1 `return 42`→42 + live compiles of new programs). Gates G1–G4 all
+pass. **Independently reproduced from scratch 3×** by a fresh adversarial verifier — exact shas, a
+negative control on the one supplementary encoding-verified `lea_rax,[rdi+DWORD] 488D87` DEFINE
+(genuinely absent from `amd64_defs.M1`), all vendored/seed bytes byte-identical, `M1` used not `M0`.
+
+**Two recipe completions** (vendored bytes untouched; in `selfhost_v2.sh` / `hex2-linker/build.sh`):
+the verified missing `lea` DEFINE supplied as an extra `-f` unit; and the hex2 M2-build re-expresses
+hex2.h's object-like `#define`s as an `enum` (+ `fflush` no-op / `chmod` syscall shim) so M2 can
+compile it. **Honest scope:** the mescc-tools are *auxiliary verifiers built by the seed `M2.bin`* —
+the main `hex0..M2` ladder is unchanged. The fixpoint proves M2 reproduces itself under a fixed
+functional assembler; the trust root remains the seed `M2.bin`, **independently corroborated by the
+gcc-vs-M2 diverse-double-compile of the seed** (`../helixc-bootstrap/ddc_crosscheck.sh`, commit
+`72faee0`: gcc and M2 produce a byte-identical seed `K1`). The from-raw ladder now **fully
+self-hosts**, with the seed independently cross-checked.
+
 ## Next rung
 
 After M2-Planet, the ladder leaves vendored territory: **we wrote the
