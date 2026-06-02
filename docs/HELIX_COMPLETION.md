@@ -367,6 +367,32 @@ with its reason.
 > **M4 — Optimized transformer op set on the tiled substrate (bulk-of-coverage).** (L, ~3–4 weeks)
 > Re-emit the full op corpus on M1–M3 (not the naive forms): tiled matmul / A·Bᵀ / Aᵀ·B (attention + grads), **flash-attention-style fused QKᵀ→softmax→·V** with SMEM tiling + online-softmax (avoids materializing S×S scores in HBM — the real attention win), warp-reduction softmax/layernorm (replace one-thread-per-row), GELU/Adam/elementwise (bandwidth-bind them). Each **fwd and backward** (mirrors `HELIX_FINISH_PLAN.md` P5.4/P6), validated vs CPU oracle (`nn.hx`) + a PyTorch/cuDNN op oracle where available.
 > **Gate:** each op correct + faster than its naive form; attention within target of cuDNN flash-attn.
+>
+> **M4 ITEM 1 — TRANSPOSED GEMMs LANDED (2026-06-02, on `main`). The first op-set milestone.**
+> kovc emits SMEM-tiled **A·Bᵀ** and **Aᵀ·B** (the two transposed matmuls the backward pass
+> needs: d_attn=dOut@V^T, dW=X^T@dY) via one shared emitter `emit_ptx_tiled_matmul_t(node,
+> vtab, mode)` dispatched from two fused intrinsics `__matmul_abt_smem`(mode 0)/
+> `__matmul_atb_smem`(mode 1) in `kovc.hx`. It **reuses the G1/G2 forward tiled GEMM machinery
+> verbatim** — same `smem_a[64][8]`/`smem_b[8][64]` layout, same 4×4 register micro-tile + the
+> identical `fma.rn.f32` inner product + epilogue; the transpose is ONLY a change to the
+> GMEM→SMEM tile-element index (mode 0 reads B transposed, mode 1 reads A transposed + loops the
+> contraction over M). Scalar cooperative loads (one `ld.global`→`st.shared`/elem; NOT cp.async
+> vec4 — a transposed read is strided so the 16-B vec4 invariant fails), single-buffered, 2
+> bar.sync/k-tile. BM=BN=64, BK=8, TM=TN=4, block 16×16. **CORRECT vs CPU oracle (0 bad,
+> integer-exact ==) at 64³, 512³, 256×128×512 / 128×256×512, and vs-naive at 1024³** (CPU
+> work-capped above ~735³). **FASTER-THAN-NAIVE** (measured kernel-only cuEvent median vs the
+> pre-existing naive non-tiled `gpu_matmul_{abt,atb}`): **A·Bᵀ 18.4× @512³ → 23.4× @1024³**;
+> **Aᵀ·B 4.5× @512³ → 8.6× @1024³** (the speedup grows with size — the SMEM-reuse signature; at
+> 64³ tiling overhead dominates so the gate is asserted at the large/non-square sizes, 64³ is
+> correctness-only — stated honestly). **BOTH neg-controls trip** (comparator-teeth +
+> bar.sync-strip → load-bearing). The new emitter fires only for the new intrinsic names, so the
+> **forward `vector_add`/`tiled_matmul` reference PTX is byte-identical** and the **self-host
+> fixpoint K2==K3==K4 re-mints byte-identical** (`0fd61d08…`) — universal-invariant gate
+> GATE_PASS (fixpoint + both PTX-regressions + provenance + corpus 59/59). Kernels
+> `helixc/examples/tiled_matmul_{abt,atb}_kernel.hx`; host modes `gemm_abt`/`gemm_atb` in
+> `cuda_launch.c`; corpus `scripts/gpu_transpose_corpus.sh` → `GPU_TRANSPOSE_PASS`; result doc
+> `docs/HELIX_GPU_PERF_RESULT.md` (§ M4). **NEXT M4:** fused flash-style attention →
+> warp-reduction softmax/layernorm → GELU/Adam, then the M6 capstone re-train.
 
 > **M5 (STRETCH) — bf16 `wmma` + autotune.** (XL, ~3–5 weeks)
 > The bf16 datatype arc: a `.b16`/bf16 register class through the **whole expression emitter**, `cvt.rn.bf16.f32`, `wmma.load/mma/store.*.f16`. Then port `@autotune` (TILE/WARP sweep) from Python helixc into the bootstrap (NOT in the bootstrap today — `CUDA_OBSOLESCENCE_PLAN.md:1.1`) to close the last gap to cuBLAS. **Highest risk** (numerics vs the 2% bar + biggest emitter delta; interacts with the capstone's f32-as-i32-bits numerics). Explicitly stretch — can trail; G4 absence does not block FULLY COMPLETE.

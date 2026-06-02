@@ -12619,6 +12619,317 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
     }
     0 - 1
 }
+// ==========================================================================
+// T2/M4 (transposed-GEMM op set, 2026-06-02): SMEM-tiled A@B^T and A^T@B --
+// the two transposed matmuls the transformer backward pass needs (d_attn =
+// dOut@V^T uses A@B^T; weight-grad dW = X^T@dY uses A^T@B). These reuse the
+// SAME tiled SMEM machinery + register micro-tile + inner product as the
+// G1/G2 forward GEMM; the transpose is ONLY a change to how each A/B tile
+// element's GLOBAL index is computed when it is cooperatively staged into
+// shared. The shared LAYOUT (smem_a[64][8], smem_b[8][64]) and the compute
+// are byte-for-byte the forward kernel's, so correctness reduces to the
+// already-proven inner product once the staged tiles hold the right values.
+//
+// Deliberately SCALAR cooperative loads (one ld.global -> one st.shared per
+// element, 2 elems/thread over 256 threads = the 512-elem tile), NOT the G2
+// cp.async vec4 path: a transposed read is strided (non-contiguous in the
+// fast axis), so the 16-byte vec4 cp.async contiguity/alignment invariant
+// does NOT hold -- scalar loads are the SIMPLEST form that is correct under
+// transposition and still far faster than the naive non-tiled kernel (the
+// SMEM data-reuse is the win; the perf bar here is faster-than-naive, not a
+// TFLOP/s target). Single-buffered: two bar.sync per k-tile (load|compute).
+//
+// mode 0 = A@B^T:  A[M,K] (a[i*K+t]), B[N,K] (b[j*K+t]), C[M,N] (c[i*N+j]);
+//                  contraction length = K; output rows = M.
+// mode 1 = A^T@B:  A[M,K] (a[t*K+i], t=contraction), B[M,N] (b[t*N+j]),
+//                  C[K,N] (c[i*N+j]); contraction length = M; output rows = K.
+// Both keep the forward tile constants BM=BN=64, BK=8, TM=TN=4, block 16x16,
+// grid=(N/64, OUTROWS/64). Require OUTROWS%64==0, N%64==0, CONTRACT%8==0.
+// Param positions: a=0,b=1,c=2, mm=M(3), kk=K(4), nn=N(5).
+//
+// Cooperative-load context (read by emit_ptx_t_tile_load to keep it a small
+// call): vtab 56=tid, 57=rowbase, 58=colbase, 59=rd_a, 60=rd_b, 61=kk(A/B
+// stride that does NOT change with mode), 62=nn (B stride in mode 1). (These
+// per-kernel scratch slots are the G2 cp.async slots; this kernel never runs
+// the G2 path so the reuse is safe.)
+//
+// Cooperatively stage k-tile k0 into smem_a0 (sym 0) + smem_b0 (sym 2).
+// Each of the 256 threads moves 2 A elems + 2 B elems (slot s in {0,1},
+// flat tile-elem e = tid + s*256, the SAME e indexes the shared dst byte
+// e*4 for BOTH tiles -- only the global source index is mode-dependent).
+//   A: e -> (r=e/8 in 0..63, kt=e%8 in 0..7); global index by mode below.
+//   B: e -> (kt=e/64 in 0..7, col=e%64 in 0..63); global index by mode below.
+fn emit_ptx_t_tile_load(r_k0: i32, mode: i32, vtab: i32) -> i32 {
+    let r_tid = __arena_get(vtab + 56);
+    let r_rowbase = __arena_get(vtab + 57);
+    let r_colbase = __arena_get(vtab + 58);
+    let rd_a = __arena_get(vtab + 59);
+    let rd_b = __arena_get(vtab + 60);
+    let r_kk = __arena_get(vtab + 61);
+    let r_nn = __arena_get(vtab + 62);
+    let r_smem_a = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smem_a, 0);
+    let r_smem_b = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smem_b, 2);
+    let mut s: i32 = 0;
+    while s < 2 {
+        // e = tid + s*256  (the flat tile-element index this thread handles).
+        let r_e = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_e, r_tid, s * 256);
+        // shared dst byte offset = e*4 (identical for A and B; tiles are flat).
+        let r_soff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_soff, r_e, 4);
+        // ---- A element: r = e/8, kt = e - r*8 ----
+        let r_ar = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_ar, r_e, 8);          // r = e/8
+        let r_akt = ptx_alloc_reg(vtab); emit_ptx_madc(r_akt, r_ar, 0 - 8, r_e);   // kt = e - r*8
+        // global (row,col) of this A element: arow = rowbase + r ; acol = k0 + kt
+        let r_arow = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_arow, r_rowbase, r_ar);
+        let r_acol = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_acol, r_k0, r_akt);
+        // mode 0 (A@B^T): A index = arow*kk + acol   (A row-major [M,K], stride kk)
+        // mode 1 (A^T@B):  A index = acol*kk + arow   (A[t*K+i]; t=acol contraction,
+        //                  i=arow output-row; stride kk = A's row length)
+        let r_aidx = ptx_alloc_reg(vtab);
+        if mode == 0 {
+            let r_t = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_t, r_arow, r_kk);
+            emit_ptx_add_rr(r_aidx, r_t, r_acol);
+        } else {
+            let r_t = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_t, r_acol, r_kk);
+            emit_ptx_add_rr(r_aidx, r_t, r_arow);
+        };
+        let fa = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa, rd_a, r_aidx, vtab);
+        let r_asm = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_asm, r_smem_a, r_soff);
+        emit_ptx_st_shared(r_asm, fa);
+        // ---- B element: kt = e/64, col = e - kt*64 ----
+        let r_bkt = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_bkt, r_e, 64);        // kt = e/64
+        let r_bcol = ptx_alloc_reg(vtab); emit_ptx_madc(r_bcol, r_bkt, 0 - 64, r_e); // col = e - kt*64
+        // global (row,col) of this B element: brow = k0 + kt ; bcol = colbase + col
+        let r_brow = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_brow, r_k0, r_bkt);
+        let r_bcolg = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bcolg, r_colbase, r_bcol);
+        // mode 0 (A@B^T): B index = bcolg*kk + brow  (B[N,K], b[j*K+t]; j=bcolg, t=brow)
+        // mode 1 (A^T@B):  B index = brow*nn + bcolg  (B[M,N], b[t*N+j]; t=brow, j=bcolg)
+        let r_bidx = ptx_alloc_reg(vtab);
+        if mode == 0 {
+            let r_t = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_t, r_bcolg, r_kk);
+            emit_ptx_add_rr(r_bidx, r_t, r_brow);
+        } else {
+            let r_t = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_t, r_brow, r_nn);
+            emit_ptx_add_rr(r_bidx, r_t, r_bcolg);
+        };
+        let fb = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb, rd_b, r_bidx, vtab);
+        let r_bsm = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bsm, r_smem_b, r_soff);
+        emit_ptx_st_shared(r_bsm, fb);
+        s = s + 1;
+    }
+    0
+}
+// "__matmul_abt_smem" (17 chars) name matcher.
+fn ptx_name_is_matmul_abt_smem(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 17 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 3) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 4) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 5) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 6) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 7) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 8) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 9) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 10) != 98 { ok = 0; };   // b
+        if __arena_get(name_s + 11) != 116 { ok = 0; };  // t
+        if __arena_get(name_s + 12) != 95 { ok = 0; };   // _
+        if __arena_get(name_s + 13) != 115 { ok = 0; };  // s
+        if __arena_get(name_s + 14) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 15) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 16) != 109 { ok = 0; };  // m
+        ok
+    }
+}
+// "__matmul_atb_smem" (17 chars) name matcher.
+fn ptx_name_is_matmul_atb_smem(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 17 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 3) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 4) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 5) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 6) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 7) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 8) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 9) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 10) != 116 { ok = 0; };  // t
+        if __arena_get(name_s + 11) != 98 { ok = 0; };   // b
+        if __arena_get(name_s + 12) != 95 { ok = 0; };   // _
+        if __arena_get(name_s + 13) != 115 { ok = 0; };  // s
+        if __arena_get(name_s + 14) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 15) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 16) != 109 { ok = 0; };  // m
+        ok
+    }
+}
+// The shared transposed-GEMM orchestrator. Emits the WHOLE kernel body for
+// __matmul_abt_smem / __matmul_atb_smem (a,b,c,M,K,N). mode 0 = A@B^T,
+// mode 1 = A^T@B (see the block comment above emit_ptx_t_tile_load). Returns
+// -1 (a void kernel body). Single-buffered classic tiled GEMM: stage one
+// k-tile into smem (scalar cooperative load, mode-dependent global index) ->
+// bar.sync -> 4x4 register micro-tile FMA inner product over the BK slice ->
+// bar.sync -> next k-tile; then store the micro-tile to C.
+fn emit_ptx_tiled_matmul_t(node: i32, vtab: i32, mode: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    // resolve a/b/c/M/K/N param indices from the 6 call args (AST_VAR).
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2);
+    let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2);
+    let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2);
+    let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2);
+    let a4 = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2);
+    let a5 = __arena_get(n5 + 1);
+    let pa = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let pb = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pc = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let p_m = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let p_k = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    let p_n = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
+    // TWO .shared tiles (single-buffered): smem_a0 (sym 0) + smem_b0 (sym 2),
+    // 2048 B each (64x8 f32 / 8x64 f32). The double-buffer siblings (sym 1/3)
+    // are unused here; one tile pair + two bar.sync per k-tile is the simplest
+    // correct form and is plenty fast vs the naive non-tiled kernel.
+    emit_ptx_shared_decl(0, 2048);   // smem_a0
+    emit_ptx_shared_decl(2, 2048);   // smem_b0
+    // --- prologue: thread/block coords + dims + global bases (once) ---
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);
+    let r_ty = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_ty, 1);
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);
+    let r_by = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_by, 3);
+    let r_M = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_M, p_m);
+    let r_K = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_K, p_k);
+    let r_N = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_N, p_n);
+    let rd_a = emit_ptx_param_global_base(pa, vtab);
+    let rd_b = emit_ptx_param_global_base(pb, vtab);
+    let rd_c = emit_ptx_param_global_base(pc, vtab);
+    // flat thread id  tid = ty*16 + tx
+    let r_tid = ptx_alloc_reg(vtab); emit_ptx_madc(r_tid, r_ty, 16, r_tx);
+    // block origin in C: rowbase = by*BM, colbase = bx*BN
+    let r_rowbase = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_rowbase, r_by, 64);
+    let r_colbase = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_colbase, r_bx, 64);
+    // this thread's micro-tile origin within the block tile: trow0=ty*TM, tcol0=tx*TN
+    let r_trow0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_trow0, r_ty, 4);
+    let r_tcol0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_tcol0, r_tx, 4);
+    // global row/col of this thread's micro-tile origin (for the epilogue)
+    let r_grow0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_grow0, r_rowbase, r_trow0);
+    let r_gcol0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_gcol0, r_colbase, r_tcol0);
+    // per-thread shared-read BYTE OFFSETS (constant for the whole kernel):
+    //   a_roff = (trow0*BK)*4 = trow0*32 ;  b_roff = tcol0*4.
+    let r_a_roff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_a_roff, r_trow0, 32);
+    let r_b_roff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_b_roff, r_tcol0, 4);
+    // shared tile base addrs (32-bit shared-window) + per-thread read bases.
+    let r_sma = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sma, 0);
+    let r_smb = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smb, 2);
+    let r_a_sbase = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_a_sbase, r_sma, r_a_roff);
+    let r_b_sbase = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_b_sbase, r_smb, r_b_roff);
+    // contraction length: mode 0 -> K (kk); mode 1 -> M (mm). The k-loop runs
+    // k0 = 0 .. Lk step BK=8; Lk is a runtime multiple of 8 (asserted by host).
+    let r_Lk = ptx_alloc_reg(vtab);
+    if mode == 0 { emit_ptx_mov_rr(r_Lk, r_K); } else { emit_ptx_mov_rr(r_Lk, r_M); };
+    // stash INVARIANT cooperative-load context into vtab 56..62 (keeps the load
+    // helper a 3-arg call; the seed mis-passes >6-arg calls).
+    __arena_set(vtab + 56, r_tid);
+    __arena_set(vtab + 57, r_rowbase);
+    __arena_set(vtab + 58, r_colbase);
+    __arena_set(vtab + 59, rd_a);
+    __arena_set(vtab + 60, rd_b);
+    __arena_set(vtab + 61, r_K);
+    __arena_set(vtab + 62, r_N);
+    // --- zero the TM*TN = 16 register micro-tile accumulators ---
+    let acc_base = ptx_alloc_f(vtab);
+    emit_ptx_mov_f_zero(acc_base);
+    let mut ai: i32 = 1;
+    while ai < 16 {
+        let rr = ptx_alloc_f(vtab);
+        emit_ptx_mov_f_zero(rr);
+        ai = ai + 1;
+    }
+    // k-tile loop: for (k0 = 0; k0 < Lk; k0 += BK)
+    let r_k0 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_k0, 0);
+    let lbl = ptx_alloc_label(vtab);
+    emit_ptx_lbl_ref(2, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Ltop_<lbl>:"
+    let pz = ptx_alloc_pred(vtab);
+    emit_ptx_setp_lt_s32(pz, r_k0, r_Lk);
+    emit_ptx_bra_ifnot(pz, 3, lbl);   // @!pz bra $Lwend_<lbl>
+    // stage this k-tile (scalar cooperative load, mode-dependent global index).
+    emit_ptx_t_tile_load(r_k0, mode, vtab);
+    emit_ptx_bar_sync();
+    // --- inner product over the BK k-slice (host-unrolled), identical to the
+    // forward tiled kernel: As[i]=smem_a[(trow0+i)*BK+kk], Bs[j]=smem_b[kk*BN+
+    // (tcol0+j)], acc[i][j] = fma(As[i], Bs[j], acc[i][j]). ---
+    let mut kk2: i32 = 0;
+    while kk2 < 8 {
+        let fa0 = ptx_alloc_f(vtab);
+        let r_aa0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_aa0, r_a_sbase, (0 * 8 + kk2) * 4); emit_ptx_ld_shared(fa0, r_aa0);
+        let fa1 = ptx_alloc_f(vtab);
+        let r_aa1 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_aa1, r_a_sbase, (1 * 8 + kk2) * 4); emit_ptx_ld_shared(fa1, r_aa1);
+        let fa2 = ptx_alloc_f(vtab);
+        let r_aa2 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_aa2, r_a_sbase, (2 * 8 + kk2) * 4); emit_ptx_ld_shared(fa2, r_aa2);
+        let fa3 = ptx_alloc_f(vtab);
+        let r_aa3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_aa3, r_a_sbase, (3 * 8 + kk2) * 4); emit_ptx_ld_shared(fa3, r_aa3);
+        let fb0 = ptx_alloc_f(vtab);
+        let r_bb0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_bb0, r_b_sbase, (kk2 * 64 + 0) * 4); emit_ptx_ld_shared(fb0, r_bb0);
+        let fb1 = ptx_alloc_f(vtab);
+        let r_bb1 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_bb1, r_b_sbase, (kk2 * 64 + 1) * 4); emit_ptx_ld_shared(fb1, r_bb1);
+        let fb2 = ptx_alloc_f(vtab);
+        let r_bb2 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_bb2, r_b_sbase, (kk2 * 64 + 2) * 4); emit_ptx_ld_shared(fb2, r_bb2);
+        let fb3 = ptx_alloc_f(vtab);
+        let r_bb3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_bb3, r_b_sbase, (kk2 * 64 + 3) * 4); emit_ptx_ld_shared(fb3, r_bb3);
+        emit_ptx_fma(acc_base + 0, fa0, fb0, acc_base + 0);
+        emit_ptx_fma(acc_base + 1, fa0, fb1, acc_base + 1);
+        emit_ptx_fma(acc_base + 2, fa0, fb2, acc_base + 2);
+        emit_ptx_fma(acc_base + 3, fa0, fb3, acc_base + 3);
+        emit_ptx_fma(acc_base + 4, fa1, fb0, acc_base + 4);
+        emit_ptx_fma(acc_base + 5, fa1, fb1, acc_base + 5);
+        emit_ptx_fma(acc_base + 6, fa1, fb2, acc_base + 6);
+        emit_ptx_fma(acc_base + 7, fa1, fb3, acc_base + 7);
+        emit_ptx_fma(acc_base + 8, fa2, fb0, acc_base + 8);
+        emit_ptx_fma(acc_base + 9, fa2, fb1, acc_base + 9);
+        emit_ptx_fma(acc_base + 10, fa2, fb2, acc_base + 10);
+        emit_ptx_fma(acc_base + 11, fa2, fb3, acc_base + 11);
+        emit_ptx_fma(acc_base + 12, fa3, fb0, acc_base + 12);
+        emit_ptx_fma(acc_base + 13, fa3, fb1, acc_base + 13);
+        emit_ptx_fma(acc_base + 14, fa3, fb2, acc_base + 14);
+        emit_ptx_fma(acc_base + 15, fa3, fb3, acc_base + 15);
+        kk2 = kk2 + 1;
+    }
+    emit_ptx_bar_sync();
+    // advance k0 += BK, back-edge.
+    emit_ptx_ri_imm(0, r_k0, r_k0, 8);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbl);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_lbl_ref(3, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Lwend_<lbl>:"
+    // --- epilogue: store the micro-tile to C[(grow0+i)*N + (gcol0+j)] ---
+    let mut ei: i32 = 0;
+    while ei < 4 {
+        let r_crow = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_crow, r_grow0, ei);
+        let r_crn = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_crn, r_crow, r_N);
+        let mut ej: i32 = 0;
+        while ej < 4 {
+            let r_ccol = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_ccol, r_gcol0, ej);
+            let r_cidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_cidx, r_crn, r_ccol);
+            emit_ptx_gstore_f32(rd_c, r_cidx, acc_base + ei * 4 + ej, vtab);
+            ej = ej + 1;
+        }
+        ei = ei + 1;
+    }
+    0 - 1
+}
 // T3/G3: name-matcher for "__tf32_matmul_mma" (17 chars). Mirrors
 // ptx_name_is_tiled_matmul_smem.
 fn ptx_name_is_tf32_matmul_mma(name_s: i32, name_l: i32) -> i32 {
@@ -12867,11 +13178,15 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_gpu_i2f(node, vtab)         // K1.GPU-ABI (P5): i32 -> f32
     } else { if ptx_name_is_tiled_matmul_smem(name_s, name_l) == 1 {
         emit_ptx_tiled_matmul_smem(node, vtab)  // T2/M1: SMEM tiled GEMM
+    } else { if ptx_name_is_matmul_abt_smem(name_s, name_l) == 1 {
+        emit_ptx_tiled_matmul_t(node, vtab, 0)  // T2/M4: SMEM tiled A@B^T
+    } else { if ptx_name_is_matmul_atb_smem(name_s, name_l) == 1 {
+        emit_ptx_tiled_matmul_t(node, vtab, 1)  // T2/M4: SMEM tiled A^T@B
     } else { if ptx_name_is_tf32_matmul_mma(name_s, name_l) == 1 {
         emit_ptx_tf32_matmul_mma(node, vtab)    // T3/G3: TF32 Tensor-Core GEMM (mma.sync)
     } else {
         0 - 1
-    }}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:

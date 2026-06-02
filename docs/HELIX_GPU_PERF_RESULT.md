@@ -12,6 +12,80 @@ Measured 2026-06-02.
 
 ---
 
+## M4 (transformer op set) — transposed GEMMs A·Bᵀ and Aᵀ·B (SMEM-tiled) — **PASS**
+
+**Charter §1.2 item (4):** the optimized transformer op set — tiled matmul / **A·Bᵀ** / **Aᵀ·B**
+(the two transposed GEMMs the matmul backward pass needs) — each **correct vs the CPU oracle**
+AND **faster than its naive form**. This is the FIRST op-set milestone (the transposed-GEMM
+variants). The bar is correct + faster-than-naive (a measured speedup vs the naive non-tiled
+GPU baseline), **not** a TFLOP/s target.
+
+**Implementation.** kovc emits both transposed GEMMs as SMEM-tiled kernels via one shared
+emitter `emit_ptx_tiled_matmul_t(node, vtab, mode)` (`helixc/bootstrap/kovc.hx`), dispatched in
+`emit_ptx_call` from two new fused intrinsics: `__matmul_abt_smem` (mode 0 = A·Bᵀ) and
+`__matmul_atb_smem` (mode 1 = Aᵀ·B). It **reuses the G1/G2 forward tiled GEMM machinery
+verbatim** — the same shared-tile layout (`smem_a[64][8]`, `smem_b[8][64]`), the same 4×4
+register micro-tile, the same `fma.rn.f32` inner product over the BK k-slice, the same epilogue.
+**The transpose is ONLY a change to how each A/B tile element's GLOBAL index is computed when it
+is cooperatively staged into shared** (mode 0 reads B transposed: `b[(colbase+col)*K + k]`;
+mode 1 reads A transposed: `a[(k0+kt)*K + (rowbase+r)]` and loops the contraction over M).
+Deliberately **scalar** cooperative loads (one `ld.global`→one `st.shared` per element, 2
+elems/thread over the 256-thread block), NOT the G2 `cp.async` vec4 path — a transposed read is
+strided so the 16-byte vec4 contiguity/alignment invariant does not hold; scalar staging is the
+SIMPLEST form that is correct under transposition and is still many× faster than the naive
+non-tiled kernel (the SMEM data-reuse is the win). Single-buffered: two `bar.sync` per k-tile
+(load | compute). Tile params BM=BN=64, BK=8, TM=TN=4, block 16×16, grid=(N/64, OUTROWS/64).
+ptxas (sm_86): **56 registers, 1 barrier, 4096 B smem, 0 spills**.
+
+**ZERO change to the forward kernels.** The new emitter fires only for the two new intrinsic
+names, so the committed `vector_add_kernel.ref.ptx` and `tiled_matmul_kernel.ref.ptx` are
+**byte-identical** (the universal-invariant PTX regression stays green) and the self-host
+fixpoint K2==K3==K4 is re-minted byte-identical from the edited `kovc.hx` (the new emitter is
+fixpoint-safe-by-construction — the bootstrap compiler never calls it).
+
+**Measured on the RTX 3070 Laptop GPU (sm_86), kernel-only cuEvent median, integer-exact
+inputs (== compare):**
+
+| variant | correct vs CPU | speedup vs naive (tiled med / naive med) |
+|---|---|---|
+| **A·Bᵀ** 512³ | **0 bad** (maxrel 0) | **18.4×** (0.154 ms / 2.831 ms) |
+| **A·Bᵀ** 256×128×512 | **0 bad** | **11.1×** (0.029 ms / 0.315 ms) |
+| **A·Bᵀ** 1024³ (CPU-capped → vs-naive) | **0 bad** vs naive | **23.4×** (0.799 ms / 18.69 ms) |
+| **A·Bᵀ** 64³ (small, speedup not gated) | **0 bad** | ~1.0× (too little work to amortize tiling) |
+| **Aᵀ·B** 512³ | **0 bad** (maxrel 0) | **4.5×** (0.082 ms / 0.370 ms) |
+| **Aᵀ·B** 128×256×512 | **0 bad** | **2.2×** (0.028 ms / 0.061 ms) |
+| **Aᵀ·B** 1024³ (CPU-capped → vs-naive) | **0 bad** vs naive | **8.6×** (0.417 ms / 3.607 ms) |
+| **Aᵀ·B** 64³ (small, speedup not gated) | **0 bad** | ~0.6× (too little work to amortize tiling) |
+
+**Honest note on small sizes.** At 64³ the tiled kernel is **not** faster than the naive kernel
+(≈1.0× for A·Bᵀ, ≈0.6× for Aᵀ·B) — one/few blocks give too little work to amortize the SMEM
+staging + two barriers, so the naive one-thread-per-cell kernel matches a tiny problem. The
+faster-than-naive **gate is therefore asserted at the large/non-square sizes** (512³ and
+256×128×512 / 128×256×512), where the data-reuse advantage dominates; the 64³ case is run as a
+**correctness-only** check (speedup measured + reported, not gated). The advantage grows with
+size (512³ → 1024³: A·Bᵀ 18× → 23×; Aᵀ·B 4.5× → 8.6×), exactly the SMEM-reuse signature.
+
+**Negative controls (both variants):** (A) comparator teeth — mutate one C cell → the
+cell-by-cell compare FAILs; (B) bar.sync-strip — delete every `bar.sync` from the emitted PTX
+(still ptxas-accepts), run at 256³ → mis-computes/FAILs, proving `.shared`/`bar.sync` are
+load-bearing (not cosmetic). The naive baseline run also writes C and is checked tiled-vs-naive
+cell-by-cell, so the speedup denominator is a REAL same-answer kernel.
+
+**Provenance (grep the emitted OUTPUT):** `.shared`, `bar.sync 0`, `ld.shared.f32`,
+`st.shared.f32` (the scalar cooperative-stage signature), `fma.rn.f32`, `.target sm_86`, plus
+both `.entry tiled_matmul_abt` and `.entry tiled_matmul_atb` present in the combined module.
+
+**Reproduce:** `wsl.exe bash -c "bash scripts/gpu_transpose_corpus.sh"` →
+`GPU_TRANSPOSE_PASS`. Kernels: `helixc/examples/tiled_matmul_{abt,atb}_kernel.hx` (tiled) +
+`helixc/examples/gpu_matmul_{abt,atb}_kernel.hx` (naive baselines, pre-existing). Host modes
+`gemm_abt` / `gemm_atb` in `helixc/runtime/cuda_launch.c`.
+
+**Remaining op-set items (charter §1.2 item 4, M4):** fused flash-style attention,
+warp-reduction softmax/layernorm, GELU, Adam — each correct vs CPU + faster-than-naive — then
+the capstone re-train (§1.2 item 5). The transposed GEMMs (this section) are the first to land.
+
+---
+
 ## G1 — SMEM-tiled f32 GEMM (bar.sync) — **PASS**
 
 **Gate (§1.2 / §6 G1):** the SMEM-tiled f32 GEMM is CORRECT vs the CPU oracle AND vs a

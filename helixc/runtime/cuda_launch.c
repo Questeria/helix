@@ -817,6 +817,186 @@ int main(int argc, char** argv) {
         return tbad ? 1 : 0;
     }
 
+    /* gemm_abt mode (T2/M4): cuda_launch <combined.ptx> tiled_matmul_abt 0 gemm_abt <M> <K> <N> [mutate].
+     * The SMEM-tiled A@B^T (emit_ptx_tiled_matmul_t mode 0) vs (a) a CPU A@B^T oracle for
+     * CORRECTNESS and (b) the naive non-tiled gpu_matmul_abt for the FASTER-THAN-NAIVE bar.
+     * combined.ptx must carry BOTH kernels (concat tiled_matmul_abt_kernel.hx +
+     * gpu_matmul_abt_kernel.hx, emit once). A[M,K] (a[i*K+t]), B[N,K] (b[j*K+t]) transposed,
+     * C[M,N] (c[i*N+j]); C[i,j]=sum_t A[i,t]*B[j,t]. Tiled: grid=(N/64,M/64) block=(16,16);
+     * naive: grid.x=M block.x=N (so the speedup compare needs N<=1024). Integer inputs
+     * (a[i]=i%7,b[i]=i%5) keep every cell sum < 2^24 for K up to ~7e5 -> EXACT == compare.
+     * Requires M%64==0, N%64==0, K%8==0 (tiled, asserted). */
+    if (strcmp(op, "gemm_abt") == 0) {
+        int M = (argc > 5) ? atoi(argv[5]) : 64;
+        int K = (argc > 6) ? atoi(argv[6]) : 64;
+        int Nn = (argc > 7) ? atoi(argv[7]) : 64;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        /* "corr" (8th arg): correctness-only -- still measure+report the tiled-vs-naive speedup
+         * but do NOT gate on it (used for tiny sizes like 64^3 where there is too little work to
+         * amortize the tiling overhead so the naive kernel can match/beat it; the faster-than-
+         * naive GATE is asserted at the large/perf sizes). */
+        int corr_only = (argc > 8 && strcmp(argv[8], "corr") == 0);
+        if (M % 64 != 0 || Nn % 64 != 0 || K % 8 != 0) {
+            fprintf(stderr, "gemm_abt: dims must satisfy M%%64==0 (%d), N%%64==0 (%d), K%%8==0 (%d)\n", M, Nn, K);
+            return 2;
+        }
+        if (Nn > 1024) { fprintf(stderr, "gemm_abt: N<=1024 (naive baseline blockDim.x=N); got %d\n", Nn); return 2; }
+        CUfunction f_naive; CK(cuModuleGetFunction(&f_naive, mod, "gpu_matmul_abt"), "get gpu_matmul_abt");
+        size_t aN = (size_t)M * K, bN = (size_t)Nn * K, cN = (size_t)M * Nn;
+        float* hA = (float*)malloc(aN * sizeof(float));
+        float* hB = (float*)malloc(bN * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hC) return 2;
+        for (size_t i = 0; i < aN; i++) hA[i] = (float)(i % 7);
+        for (size_t i = 0; i < bN; i++) hB[i] = (float)(i % 5);
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(float)), "alloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(float)), "alloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)), "alloc C");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
+        { float neg = -1.0f; for (size_t i = 0; i < cN; i++) hC[i] = neg; }
+        CK(cuMemcpyHtoD(dC, hC, cN * sizeof(float)), "H2D C(sentinel)");
+        void* gargs[] = { &dA, &dB, &dC, &M, &K, &Nn };
+        unsigned gx = (unsigned)(Nn / 64), gy = (unsigned)(M / 64);
+        CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0), "launch tiled_matmul_abt");
+        CK(cuCtxSynchronize(), "sync tiled_matmul_abt");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
+        if (mutate) hC[0] += 1.0f;
+        /* CORRECTNESS: cell-by-cell vs CPU A@B^T (integer-exact). Work-capped: above ~735^3
+         * the O(M*N*K) CPU loop is skipped (sizes here stay <=512 so it runs in full). */
+        double cpu_work = (double)M * (double)Nn * (double)K;
+        int big = (cpu_work > 4.0e8);
+        int cbad = 0;
+        if (!big) for (int i = 0; i < M; i++) for (int j = 0; j < Nn; j++) {
+            float ref = hA[i * K] * hB[j * K];
+            for (int t = 1; t < K; t++) ref += hA[i * K + t] * hB[j * K + t];
+            float got = hC[i * Nn + j];
+            if (got != ref) { if (cbad < 6) fprintf(stderr, "gemm_abt mismatch C[%d,%d]=%g ref %g\n", i, j, got, ref); cbad++; }
+        }
+        /* FASTER-THAN-NAIVE: time the tiled kernel AND the naive gpu_matmul_abt, kernel-only,
+         * cuEvent median-of-30. The naive run also writes dC -> validate it agrees with the
+         * tiled result (GPU-side, O(M*N)) so the baseline is a REAL same-answer comparison. */
+        double speedup = 0.0; int nbad = 0;
+        if (!mutate) {
+            int WARM = 3, ITERS = 30;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            float* hCn = (float*)malloc(cN * sizeof(float));
+            void* nargs[] = { &dA, &dB, &dC, &M, &K, &Nn };
+            /* tiled timing */
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0), "warm tiled");
+            CK(cuCtxSynchronize(), "sync warm tiled");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0,0),"r0"); CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0),"t"); CK(cuEventRecord(e1,0),"r1"); CK(cuEventSynchronize(e1),"s"); CK(cuEventElapsedTime(&ts[it],e0,e1),"e"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i+1; j < ITERS; j++) if (ts[j] < ts[i]) { float t=ts[i]; ts[i]=ts[j]; ts[j]=t; }
+            float t_tiled = ts[ITERS/2];
+            /* naive timing (grid.x=M, block.x=N) */
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(f_naive, (unsigned)M, 1, 1, (unsigned)Nn, 1, 1, 0, 0, nargs, 0), "warm naive");
+            CK(cuCtxSynchronize(), "sync warm naive");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0,0),"r0"); CK(cuLaunchKernel(f_naive,(unsigned)M,1,1,(unsigned)Nn,1,1,0,0,nargs,0),"t"); CK(cuEventRecord(e1,0),"r1"); CK(cuEventSynchronize(e1),"s"); CK(cuEventElapsedTime(&ts[it],e0,e1),"e"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i+1; j < ITERS; j++) if (ts[j] < ts[i]) { float t=ts[i]; ts[i]=ts[j]; ts[j]=t; }
+            float t_naive = ts[ITERS/2];
+            CK(cuMemcpyDtoH(hCn, dC, cN * sizeof(float)), "D2H Cn(naive)");
+            for (int i = 0; i < M; i++) for (int j = 0; j < Nn; j++) if (hCn[i*Nn+j] != hC[i*Nn+j]) { if (nbad < 6) fprintf(stderr, "gemm_abt tiled-vs-naive mismatch C[%d,%d] tiled=%g naive=%g\n", i, j, hC[i*Nn+j], hCn[i*Nn+j]); nbad++; }
+            speedup = (t_naive > 0.0f) ? (double)t_naive / (double)t_tiled : 0.0;
+            printf("GPU [%s] SPEEDUP-ABT %dx%dx%d: tiled med=%.4f ms  naive med=%.4f ms  speedup=%.2fx\n", gpu, M, K, Nn, t_tiled, t_naive, speedup);
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts); free(hCn);
+        }
+        int faster = (mutate || corr_only) ? 1 : (speedup > 1.0);
+        int totbad = cbad + nbad + (faster ? 0 : 1);
+        printf("GPU [%s] tiled_matmul_abt (A@B^T, SMEM 64x64/BK8/4x4) %dx%dx%d over %d cells%s: C[1,1]=%g, vs-CPU=%d vs-naive=%d [CPU:%s] faster-than-naive=%s -> %s\n",
+               gpu, M, K, Nn, M * Nn, mutate ? " [MUTATED]" : "", hC[1 * Nn + 1], cbad, nbad,
+               big ? "skipped(large)" : "ran", mutate ? "n/a" : (corr_only ? "not-gated(corr)" : (faster ? "YES" : "NO")), totbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return totbad ? 1 : 0;
+    }
+
+    /* gemm_atb mode (T2/M4): cuda_launch <combined.ptx> tiled_matmul_atb 0 gemm_atb <M> <K> <N> [mutate].
+     * The SMEM-tiled A^T@B (emit_ptx_tiled_matmul_t mode 1) vs (a) a CPU A^T@B oracle for
+     * CORRECTNESS and (b) the naive non-tiled gpu_matmul_atb for the FASTER-THAN-NAIVE bar.
+     * combined.ptx carries BOTH kernels (concat tiled_matmul_atb_kernel.hx + gpu_matmul_atb_kernel.hx).
+     * A[M,K] (a[t*K+i], t=contraction), B[M,N] (b[t*N+j]), C[K,N] (c[i*N+j]); C[i,j]=sum_t A[t,i]*B[t,j],
+     * contraction length = M. Tiled: grid=(N/64,K/64) block=(16,16); naive: grid.x=K block.x=N (N<=1024).
+     * Integer inputs keep cell sums < 2^24 for M up to ~7e5 -> EXACT == compare.
+     * Requires K%64==0, N%64==0, M%8==0 (tiled, asserted). */
+    if (strcmp(op, "gemm_atb") == 0) {
+        int M = (argc > 5) ? atoi(argv[5]) : 64;
+        int K = (argc > 6) ? atoi(argv[6]) : 64;
+        int Nn = (argc > 7) ? atoi(argv[7]) : 64;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        int corr_only = (argc > 8 && strcmp(argv[8], "corr") == 0);   /* correctness-only; speedup reported not gated */
+        if (K % 64 != 0 || Nn % 64 != 0 || M % 8 != 0) {
+            fprintf(stderr, "gemm_atb: dims must satisfy K%%64==0 (%d), N%%64==0 (%d), M%%8==0 (%d)\n", K, Nn, M);
+            return 2;
+        }
+        if (Nn > 1024) { fprintf(stderr, "gemm_atb: N<=1024 (naive baseline blockDim.x=N); got %d\n", Nn); return 2; }
+        CUfunction f_naive; CK(cuModuleGetFunction(&f_naive, mod, "gpu_matmul_atb"), "get gpu_matmul_atb");
+        size_t aN = (size_t)M * K, bN = (size_t)M * Nn, cN = (size_t)K * Nn;
+        float* hA = (float*)malloc(aN * sizeof(float));
+        float* hB = (float*)malloc(bN * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hC) return 2;
+        for (size_t i = 0; i < aN; i++) hA[i] = (float)(i % 7);
+        for (size_t i = 0; i < bN; i++) hB[i] = (float)(i % 5);
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(float)), "alloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(float)), "alloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)), "alloc C");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
+        { float neg = -1.0f; for (size_t i = 0; i < cN; i++) hC[i] = neg; }
+        CK(cuMemcpyHtoD(dC, hC, cN * sizeof(float)), "H2D C(sentinel)");
+        void* gargs[] = { &dA, &dB, &dC, &M, &K, &Nn };
+        unsigned gx = (unsigned)(Nn / 64), gy = (unsigned)(K / 64);
+        CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0), "launch tiled_matmul_atb");
+        CK(cuCtxSynchronize(), "sync tiled_matmul_atb");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
+        if (mutate) hC[0] += 1.0f;
+        double cpu_work = (double)K * (double)Nn * (double)M;
+        int big = (cpu_work > 4.0e8);
+        int cbad = 0;
+        if (!big) for (int i = 0; i < K; i++) for (int j = 0; j < Nn; j++) {
+            float ref = hA[0 * K + i] * hB[0 * Nn + j];
+            for (int t = 1; t < M; t++) ref += hA[t * K + i] * hB[t * Nn + j];
+            float got = hC[i * Nn + j];
+            if (got != ref) { if (cbad < 6) fprintf(stderr, "gemm_atb mismatch C[%d,%d]=%g ref %g\n", i, j, got, ref); cbad++; }
+        }
+        double speedup = 0.0; int nbad = 0;
+        if (!mutate) {
+            int WARM = 3, ITERS = 30;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            float* hCn = (float*)malloc(cN * sizeof(float));
+            void* nargs[] = { &dA, &dB, &dC, &M, &K, &Nn };
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0), "warm tiled");
+            CK(cuCtxSynchronize(), "sync warm tiled");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0,0),"r0"); CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0),"t"); CK(cuEventRecord(e1,0),"r1"); CK(cuEventSynchronize(e1),"s"); CK(cuEventElapsedTime(&ts[it],e0,e1),"e"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i+1; j < ITERS; j++) if (ts[j] < ts[i]) { float t=ts[i]; ts[i]=ts[j]; ts[j]=t; }
+            float t_tiled = ts[ITERS/2];
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(f_naive, (unsigned)K, 1, 1, (unsigned)Nn, 1, 1, 0, 0, nargs, 0), "warm naive");
+            CK(cuCtxSynchronize(), "sync warm naive");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0,0),"r0"); CK(cuLaunchKernel(f_naive,(unsigned)K,1,1,(unsigned)Nn,1,1,0,0,nargs,0),"t"); CK(cuEventRecord(e1,0),"r1"); CK(cuEventSynchronize(e1),"s"); CK(cuEventElapsedTime(&ts[it],e0,e1),"e"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i+1; j < ITERS; j++) if (ts[j] < ts[i]) { float t=ts[i]; ts[i]=ts[j]; ts[j]=t; }
+            float t_naive = ts[ITERS/2];
+            CK(cuMemcpyDtoH(hCn, dC, cN * sizeof(float)), "D2H Cn(naive)");
+            for (int i = 0; i < K; i++) for (int j = 0; j < Nn; j++) if (hCn[i*Nn+j] != hC[i*Nn+j]) { if (nbad < 6) fprintf(stderr, "gemm_atb tiled-vs-naive mismatch C[%d,%d] tiled=%g naive=%g\n", i, j, hC[i*Nn+j], hCn[i*Nn+j]); nbad++; }
+            speedup = (t_naive > 0.0f) ? (double)t_naive / (double)t_tiled : 0.0;
+            printf("GPU [%s] SPEEDUP-ATB %dx%dx%d: tiled med=%.4f ms  naive med=%.4f ms  speedup=%.2fx\n", gpu, M, K, Nn, t_tiled, t_naive, speedup);
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts); free(hCn);
+        }
+        int faster = (mutate || corr_only) ? 1 : (speedup > 1.0);
+        int totbad = cbad + nbad + (faster ? 0 : 1);
+        printf("GPU [%s] tiled_matmul_atb (A^T@B, SMEM 64x64/BK8/4x4) %dx%dx%d over %d cells%s: C[1,1]=%g, vs-CPU=%d vs-naive=%d [CPU:%s] faster-than-naive=%s -> %s\n",
+               gpu, M, K, Nn, K * Nn, mutate ? " [MUTATED]" : "", hC[1 * Nn + 1], cbad, nbad,
+               big ? "skipped(large)" : "ran", mutate ? "n/a" : (corr_only ? "not-gated(corr)" : (faster ? "YES" : "NO")), totbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return totbad ? 1 : 0;
+    }
+
     /* softmax mode: cuda_launch <ptx> <kernel> <Nignored> softmax <rows> <cols>.
      * One thread per row (gridDim.x=rows, blockDim.x=1). Non-constant inputs so each
      * row differs; verify every cell vs a CPU max-subtract softmax (tol 1e-3 for
