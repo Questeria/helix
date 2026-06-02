@@ -1,0 +1,42 @@
+HELIX COMPLETION — TRACK 1 (DDC BROADENING) — DDC_BROAD_PASS (behavioral form). 2026-06-02.
+
+Prior commit 611e4e0. From-raw K2 reproduces DC3 (commit 72faee0): K1=600783 B,
+K2=606680 B, sha 03a456fe..., K2==K3 fixpoint OK.
+
+GATE (HELIX_COMPLETION.md §1.1 DDC_BROAD_PASS):
+  item 1  fence  git ls-files "*.py" == 1 (verification/oracle/oracle_train.py only) : MET
+          witness + R1 typecheck shim are gitignored (verification/py_witness/), never committed.
+  item 2  K1' (from-raw) vs K1py (fenced Python witness) AGREE on every reachable program,
+          byte OR behavioral, each to predicted exit, split reported, multi-input          : MET (behavioral)
+          -> 44 programs cross-checked: 42 behavioral-agree (same exit), 0 TRUE disagreements,
+             0 byte-identical (expected: two different compilers, uniform explained byte-DIFF),
+             2 witness-PARSE drift exclusions (impl_method inherent-impl, arm_enum_payload3 Tri::A).
+          -> multi-input differential (5 arms x 5 inputs) agrees on every input.
+  item 3  distinct witness-reachable codegen arms dynamically exercised >= 40/53            : MET (44/53)
+          -> honest per-arm dedup to kovc.hx AST codegen tags: 43 numeric tags + 1 STRUCT arm.
+          -> GPU/PTX arms (43/77/78) carved out per charter (ELF-DDC can't reach PTX).
+  item 4  quince debate verdict = agreement holds                                           : DEFERRED
+          -> folds into the campaign FINALE 5-audit streak (§1.4), lens (ii). Noted, not run here.
+
+R1 (stronger BYTE form, best-effort): ATTEMPTED, advanced past the prior blocker, NOT completable.
+  - fenced fixes (recursionlimit=2e6 + 1 GiB stack + if-stmt-unit typecheck shim) let the witness
+    PARSE+TYPECHECK+CODEGEN the full current k1src.hx (parse OK 735 fns, typecheck OK, codegen OK,
+    K1py=1019766 B). The prior RecursionError + 7 if-unit divergences are resolved.
+  - BUT K1py is not a runnable kovc: executing it to mint K2 -> "Illegal instruction (core dumped)".
+    The Stage-30 witness CODEGEN predates v1.1; on the full 1.5 MB self-host source it diverges from a
+    working kovc, so K2_python cannot be minted and the fixpoint byte-identity cannot be computed.
+  - Honest: byte form not achievable with this witness (expected); the >=40-arm multi-input behavioral
+    form is the gate (charter accepts byte OR behavioral). No unbounded time sunk (~3.5 min total).
+
+RESIDUAL (R2, honest, in docs/K_DDC_BROADENED.md): the v1.1-surface arms (generics/traits/closures/
+  turbofish/field-store/break/continue/bf16-f16) are DRIFT-EXCLUDED — the frozen Stage-30 witness
+  cannot parse them, so they are NOT second-witness-DDC'd by the Python witness. They are covered
+  instead by (i) the SINGLE-lineage from-raw self-host fixpoint K2==K3==K4 and (ii) the SEED-level
+  gcc-vs-M2-Planet DDC (DC1-DC3, commit 72faee0) — both weaker for those exact arms than a
+  program-by-program second-witness DDC. This is a NAMED OPEN residual, not a closed claim; closing
+  it needs a second diverse witness that can parse the v1.1 surface.
+
+COMMITTED: docs/K_DDC_BROADENED.md (final record), this tracker note, 11 new corpus_gen/arm_*.hx probes.
+  NEVER committed: any .py (fence == 1); the witness; the R1 shim; the gitignored py_witness scratch.
+SERIAL discipline held: only one seed/K1 build at a time (run_all_broad.sh, r1_byteform.sh,
+  multiinput_diff.sh each do their single build in one WSL session, guarded against concurrent builds).
