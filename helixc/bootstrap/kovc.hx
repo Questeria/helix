@@ -10192,8 +10192,8 @@ fn emit_elf_for_ast_to_path(ast_root: i32) -> i32 {
 // (parser sets is_kernel on AST_FN_DECL slot 14, Stage 33) and
 // emit the minimal valid empty-entry module:
 //
-//   .version 8.3
-//   .target sm_75
+//   .version 8.0
+//   .target sm_86
 //   .address_size 64
 //
 //   .visible .entry k()
@@ -11835,12 +11835,19 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
         emit_ptx_byte(111); emit_ptx_byte(110); emit_ptx_byte(32);
         emit_ptx_byte(56); emit_ptx_byte(46); emit_ptx_byte(48);
         emit_ptx_byte(10);
-        // ".target sm_75\n"
+        // ".target sm_86\n"  (T2/M0 2026-06-02: sm_75 -> sm_86 for the
+        // reference box RTX 3070 Laptop, compute_cap 8.6. cp.async (M2) and
+        // mma.sync TF32 (M3) require sm_86. The '7'/'5' ASCII bytes below
+        // became '8'/'6' (55->56, 53->54). The .version stays 8.0: the local
+        // default `which ptxas` is CUDA 12.0 whose MAX PTX ISA is 8.0 and which
+        // REJECTS .version 8.3+; sm_86 + .version 8.0 is ptxas-accepted on both
+        // the 12.0 and 12.8 ptxas. M3's TF32 path will route to the 12.8 ptxas
+        // and bump .version to 8.3 then -- out of scope for M0.)
         emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(97);
         emit_ptx_byte(114); emit_ptx_byte(103); emit_ptx_byte(101);
         emit_ptx_byte(116); emit_ptx_byte(32); emit_ptx_byte(115);
-        emit_ptx_byte(109); emit_ptx_byte(95); emit_ptx_byte(55);
-        emit_ptx_byte(53); emit_ptx_byte(10);
+        emit_ptx_byte(109); emit_ptx_byte(95); emit_ptx_byte(56);
+        emit_ptx_byte(54); emit_ptx_byte(10);
         // ".address_size 64\n"
         emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(100);
         emit_ptx_byte(100); emit_ptx_byte(114); emit_ptx_byte(101);

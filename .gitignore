@@ -80,5 +80,9 @@ __pycache__/
 *.pyc
 init_weights.bin
 *.ptx
+# T2/M0: the committed sm_86 GPU-PTX regression baseline IS tracked (the gate
+# cmp's the re-minted PTX against it). All OTHER .ptx (transient emitter dumps)
+# stay ignored.
+!helixc/examples/*.ref.ptx
 loss_curve.csv
 oracle_curve.csv

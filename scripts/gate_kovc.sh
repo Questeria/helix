@@ -18,13 +18,24 @@ GATE_OK=1
 echo "=== [0] regenerate sources from the edited kovc.hx ==="
 bash assemble_k1.sh >/dev/null 2>&1 && echo "  assembled" || { echo "FATAL assemble"; exit 8; }
 
-echo "=== [1] GPU PTX reference (OLD driver, pre-re-mint) ==="
+echo "=== [1] GPU PTX reference (committed sm_86 baseline; fallback: OLD driver) ==="
 Kern=$EX/vector_add_kernel.hx
-if [ -f "$Kern" ] && [ -x ./_kovc_ptx_driver.bin ]; then
+# T2/M0 (2026-06-02): the GPU PTX regression guard now anchors to a COMMITTED
+# reference PTX (vector_add_kernel.ref.ptx), not the gitignored on-disk driver.
+# M0 INTENTIONALLY changed the emitted PTX (.target sm_75 -> sm_86 for the sm_86
+# reference box, kovc.hx:11839-11843); the new committed reference IS the sm_86
+# baseline, so the guard becomes "re-minted PTX matches the committed reference."
+# Reason recorded: helixc/examples/vector_add_kernel.ref.ptx (sha pinned by git;
+# .gitattributes eol=lf). If a later T2 milestone intentionally changes PTX again,
+# re-mint + re-commit this reference with its reason (charter 1.0 step 2).
+REF=$EX/vector_add_kernel.ref.ptx
+if [ -s "$REF" ]; then
+  cp "$REF" /tmp/ref.ptx; echo "  ref.ptx <- committed $REF ($(stat -c%s /tmp/ref.ptx) bytes, sm_86 baseline)"
+elif [ -f "$Kern" ] && [ -x ./_kovc_ptx_driver.bin ]; then
   cp "$Kern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
   timeout 30 ./_kovc_ptx_driver.bin >/dev/null 2>&1 || true
-  if [ -s /tmp/out.ptx ]; then cp /tmp/out.ptx /tmp/ref.ptx; echo "  ref.ptx $(stat -c%s /tmp/ref.ptx) bytes"; else echo "  WARN: old driver emitted no PTX"; fi
-else echo "  WARN: missing kernel or driver -- skipping GPU ref"; fi
+  if [ -s /tmp/out.ptx ]; then cp /tmp/out.ptx /tmp/ref.ptx; echo "  ref.ptx $(stat -c%s /tmp/ref.ptx) bytes (old on-disk driver)"; else echo "  WARN: old driver emitted no PTX"; fi
+else echo "  WARN: missing committed ref, kernel, or driver -- skipping GPU ref"; fi
 
 echo "=== [2] SELF-HOST FIXPOINT from edited kovc.hx ==="
 t0=$SECONDS

@@ -1,3 +1,7 @@
 *.sh text eol=lf
 stage0/hex0/test/*.expected text eol=lf
 stage0/hex0/test/*.hex0 text eol=lf
+# Committed reference PTX (T2/M0): the gate cmp's it BYTE-for-byte against the
+# kovc-emitted PTX (LF from WSL). Pin LF so git's autocrlf cannot corrupt the
+# byte-identical match.
+helixc/examples/*.ref.ptx text eol=lf
