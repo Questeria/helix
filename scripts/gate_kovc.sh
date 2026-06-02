@@ -164,9 +164,13 @@ chk "$CD/u64_shr.hx" 1; chk "$CD/u8_wrap.hx" 42; chk "$CD/u16_wrap.hx" 42; chk "
 chk "$CD/assoc_sub.hx" 5; chk "$CD/assoc_div.hx" 10; chk "$CD/cmp_ne.hx" 1; chk "$CD/cmp_ge.hx" 1; chk "$CD/cmp_le.hx" 1
 chk "$CD/bit_andor.hx" 9; chk "$CD/bit_xor.hx" 240; chk "$CD/bit_shl.hx" 16; chk "$CD/arr_idx.hx" 20; chk "$CD/while_sum.hx" 10; chk "$CD/while_break.hx" 7
 chk "$CD/f64_add.hx" 4; chk "$CD/f64_mul.hx" 12; chk "$CD/tuple2.hx" 7; chk "$CD/impl_method.hx" 42; chk "$CD/match_or.hx" 10; chk "$CD/match_range.hx" 1; chk "$CD/vec_arena.hx" 45
-echo "  CORPUS: $pass passed, $fail failed (expect 35 pass: all sample features green incl assoc/cmp/bitwise/array/while/f64/tuple/impl-method/match-or-range/vec-on-arena; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
+# H2 generics corpus (2026-06-01): the charter generics items run on the self-hosted compiler.
+GENC=$BS/corpus_gen
+chk "$GENC/gen_impl_t_single_f32.hx" 5; chk "$GENC/gen_impl_angle_i32.hx" 5; chk "$GENC/gen_impl_ret_f32.hx" 5; chk "$GENC/gen_concrete_on_mono.hx" 7
+chk "$GENC/gen_pair_multi.hx" 12; chk "$GENC/gen_vec_i32.hx" 42; chk "$GENC/gen_vec_f32.hx" 5; chk "$GENC/e6_bare_match.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 43 pass: 35 v1.0 sample features + 8 H2 generics [bare-T impl-method over i32/f32, explicit-return, concrete-on-mono'd-receiver, multi-instantiation Pair, generic Vec over i32/f32, generic enum Option]; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 35 ]; then echo "  CORPUS REGRESSION (pass=$pass < 35)"; GATE_OK=0; fi
+if [ "$pass" -lt 43 ]; then echo "  CORPUS REGRESSION (pass=$pass < 43)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
