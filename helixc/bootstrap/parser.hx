@@ -2699,7 +2699,29 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                         } };
                     }
                     cur_advance(sb);                       // ')'
-                    prim = mk_node(16, mang_s, mang_l, args_head);
+                    // approach-B (2026-06-01): a method call on a MONO'd receiver
+                    // (Box__f32, found_sep==1) ALWAYS rewrites to a per-instantiation
+                    // name + an mr_tab request, recovering the receiver type-arg from
+                    // the name suffix. monomorphize_pass then clones (bare-T method)
+                    // or aliases (concrete method). found_sep==0 (non-mono'd receiver)
+                    // is unchanged -- no regression to ordinary impl methods.
+                    if found_sep == 1 {
+                        let suf_s = s_name_s + eff_name_l + 2;
+                        let suf_l = s_name_l - eff_name_l - 2;
+                        let recv_tag = ty_ident_to_tag(suf_s, suf_l);
+                        let ta_b = __arena_len();
+                        __arena_push(suf_s);
+                        __arena_push(suf_l);
+                        let nm_s = mangle_name_into_arena(mang_s, mang_l, ta_b, 1);
+                        let nm_l = mangle_name_len(mang_l, ta_b, 1);
+                        let plo = recv_tag * 8 + 1;
+                        if mr_tab_lookup(sb, mang_s, mang_l, plo) < 0 {
+                            mr_tab_add(sb, mang_s, mang_l, nm_s, nm_l, plo);
+                        };
+                        prim = mk_node(16, nm_s, nm_l, args_head);
+                    } else {
+                        prim = mk_node(16, mang_s, mang_l, args_head);
+                    };
                     cur_struct_idx = 0 - 1;
                     } else {
                     // Stage 5 Iter B: `.IDENT` named field access.
@@ -10102,6 +10124,54 @@ fn monomorphize_pass(sb: i32, head: i32) -> i32 {
                 let new_list_node = mk_node(15, clone_idx, 0, 0);
                 __arena_set(tail + 2, new_list_node);
                 tail = new_list_node;
+            } else {
+                // approach-B (2026-06-01): the request orig is a CONCRETE method
+                // (is_generic==0) on a mono'd receiver -- EDIT 3 always-rewrote its call
+                // to <orig>__<recv>. Find the concrete orig by name and emit an ALIAS
+                // clone (verbatim copy under the mangled name, no type substitution) so
+                // the rewritten call resolves instead of trapping (ud2/SIGILL). A generic
+                // method takes the tpl_idx>0 clone path above, never this branch.
+                let mut awalk: i32 = head;
+                let mut aidx: i32 = 0;
+                let mut afind: i32 = 1;
+                while afind == 1 {
+                    let acand = __arena_get(awalk + 1);
+                    let acand_ns = __arena_get(acand + 1);
+                    let acand_nl = __arena_get(acand + 2);
+                    let acand_gen = __arena_get(acand + 6);
+                    if acand_gen == 0 {
+                        if byte_eq(orig_s, orig_l, acand_ns, acand_nl) == 1 {
+                            aidx = acand;
+                            afind = 0;
+                        };
+                    };
+                    if afind == 1 {
+                        let anx = __arena_get(awalk + 2);
+                        if anx == 0 { afind = 0; } else { awalk = anx; };
+                    };
+                }
+                if aidx > 0 {
+                    let alias_idx = mk_node(14, mang_s, mang_l, __arena_get(aidx + 3));
+                    __arena_push(__arena_get(aidx + 4));    // slot 4: params_head (shared)
+                    __arena_push(__arena_get(aidx + 5));    // slot 5: ret_ty (concrete)
+                    __arena_push(0);                        // slot 6: is_generic = 0
+                    __arena_push(0);                        // slot 7: gp_names_head
+                    __arena_push(__arena_get(aidx + 8));
+                    __arena_push(__arena_get(aidx + 9));
+                    __arena_push(__arena_get(aidx + 10));
+                    __arena_push(__arena_get(aidx + 11));
+                    __arena_push(__arena_get(aidx + 12));
+                    __arena_push(__arena_get(aidx + 13));
+                    __arena_push(__arena_get(aidx + 14));
+                    __arena_push(__arena_get(aidx + 15));
+                    __arena_push(__arena_get(aidx + 16));
+                    __arena_push(__arena_get(aidx + 17));
+                    __arena_push(__arena_get(aidx + 18));
+                    __arena_push(__arena_get(aidx + 19));
+                    let alias_list = mk_node(15, alias_idx, 0, 0);
+                    __arena_set(tail + 2, alias_list);
+                    tail = alias_list;
+                };
             };
             mi = mi + 1;
         }
@@ -13747,15 +13817,16 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
         let s3 = __arena_get(rt_s + 3);
         if s0 == 83 { if s1 == 101 { if s2 == 108 { if s3 == 102 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 }
     } else { 0 };
-    let ret_ty_resolved = if is_self_rt == 1 { target_tag } else { ty_ident_to_tag(rt_s, rt_l) };
+    let rt_gp_idx = gp_tab_lookup(sb, rt_s, rt_l);   // approach-B: bare impl generic-param T as return?
+    let ret_ty_resolved = if is_self_rt == 1 { target_tag } else { if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ty_ident_to_tag(rt_s, rt_l) } };
     cur_advance(sb);                         // '{'
     let body = parse_expr(tok_base, sb);
     cur_advance(sb);                         // '}'
     let node = mk_node(14, mang_s, mang_l, body);
     __arena_push(params_head);
     __arena_push(ret_ty_resolved);
-    __arena_push(0);                         // is_generic = 0 (concrete)
-    __arena_push(0);                         // slot 7: gp_names_head (none)
+    __arena_push(if rt_gp_idx >= 0 { 1 } else { 0 });  // approach-B: bare-T return -> generic template (mono'd per receiver)
+    __arena_push(0);                         // slot 7: gp_names_head (none -- body is self.v, clone shares it)
     __arena_push(0);                         // slot 8: is_checkpoint = 0 (Stage 14.5)
     __arena_push(0);                         // slot 9: is_deprecated = 0 (Stage 28.9)
     __arena_push(0);                         // slot 10: is_trace = 0 (Stage 28.9)
@@ -13780,6 +13851,7 @@ fn parse_impl_method(tok_base: i32, sb: i32, target_s: i32, target_l: i32, targe
 // its rewritten methods are emitted via the standard fn-list path.
 fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // consume 'impl' IDENT
+    gp_tab_reset(sb);                        // approach-B (2026-06-01): capture impl generic params so a bare-T method return mono's per receiver instantiation
     // K1.DD (2026-05-26): optional `<T>` generic params on impl
     // block. Real Rust source uses generic impls pervasively:
     //   impl<T> Box<T> { ... }
@@ -13814,6 +13886,10 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
             } else { if gt_dd == 0 {
                 g_depth_dd = 0;
             } else {
+                if gt_dd == 2 { if g_depth_dd == 1 {
+                    let gpk1 = cur_get(sb);
+                    gp_tab_add(sb, tok_p2(tok_base, gpk1), tok_p3(tok_base, gpk1));
+                }; };
                 cur_advance(sb);
             }}}};
         }
