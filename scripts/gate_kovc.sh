@@ -173,9 +173,13 @@ chk "$GENC/t2_trait_impl.hx" 42; chk "$GENC/t3_closure_call.hx" 42; chk "$GENC/t
 chk "$GENC/t7_trait_poly.hx" 42; chk "$GENC/t7b_trait_2types.hx" 42; chk "$GENC/t7c_difffields.hx" 42
 # H4 pattern guards corpus (2026-06-01): match arm `if cond` guard is now evaluated.
 chk "$GENC/g1_guard_true.hx" 1; chk "$GENC/g2_guard_false.hx" 0; chk "$GENC/g3_guard_chain.hx" 2
-echo "  CORPUS: $pass passed, $fail failed (expect 53 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards [guard true/false-falls-through/chain-2nd-wins]; large i64 source literals >=2^31 are a documented lexer limitation, not in the corpus)"
+# H5 i64-literal widening (2026-06-02): codegen decodes the full 64-bit literal from its text ref
+# (mirror f64 tag-34 path) via i32-multi-word 16-bit limbs -- no longer truncates at 2^31. Full range
+# incl >= 2^32: L2 = 5_000_000_000_i64 (> 2^32) / 1e8 = 50.
+chk "$GENC/L1_i64_big.hx" 30; chk "$GENC/L2_i64_bigger.hx" 50; chk "$GENC/L3_i64_just_over.hx" 22
+echo "  CORPUS: $pass passed, $fail failed (expect 56 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation])"
 
 echo "=== GATE VERDICT ==="
-# regression guard: the u64_shr must now PASS, and we must not drop below 13 passes.
-if [ "$pass" -lt 53 ]; then echo "  CORPUS REGRESSION (pass=$pass < 53)"; GATE_OK=0; fi
+# regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
+if [ "$pass" -lt 56 ]; then echo "  CORPUS REGRESSION (pass=$pass < 56)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi

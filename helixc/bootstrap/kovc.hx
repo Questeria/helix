@@ -7054,14 +7054,55 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // shallow (host parser depth budget).
         emit_match_dispatch(p1, p2, bind_state, patch_state, bn_state)
     } else { if t == 35 {
-        // Approach A Stage 1: AST_INTLIT_I64 (tag 35). p1 = i32 value.
-        // For values that fit in i32 (positive < 2^31 OR negative
-        // > -2^31), the 64-bit encoding sign-extends: high32 = 0 if
-        // p1 >= 0, else high32 = -1 (all bits set, two's-complement).
-        // Emits `movabs rax, imm64` (10 bytes) so subsequent 64-bit
-        // arithmetic / comparisons / let-bindings see the full width.
-        let hi32 = if p1 < 0 { 0 - 1 } else { 0 };
-        emit_movabs_rax_imm64(p1, hi32)
+        // AST_INTLIT_I64 (tag 35). p1 = byte_start, p2 = byte_len of the
+        // literal source text -- the parser now stores the text ref
+        // (mirroring the f64 tag-34 path) instead of the lex-truncated
+        // i32 value, which garbled every literal >= 2^31. Decode the
+        // decimal digits into the full 64-bit value as four positive
+        // 16-bit limbs w0..w3 (multiply-by-10 with carry), assemble
+        // (lo,hi), then emit movabs rax, imm64. All-positive i32
+        // arithmetic (NO i64 / shift / cast / signed-division) so the
+        // i32-only seed self-compiles it. '_' digit separators are
+        // skipped; the _i64 suffix (first non-digit, non-'_' byte) ends
+        // the scan. Now 5_000_000_000_i64 and the full i64 literal range
+        // no longer truncate. Limbs hold up to 2^64; a literal beyond
+        // i64 range wraps mod 2^64 (out-of-range source, user error).
+        let mut i: i32 = 0;
+        let mut w0: i32 = 0;
+        let mut w1: i32 = 0;
+        let mut w2: i32 = 0;
+        let mut w3: i32 = 0;
+        let mut keep: i32 = 1;
+        while keep == 1 {
+            if i >= p2 { keep = 0; }
+            else {
+                let b = __arena_get(p1 + i);
+                if b == 95 {
+                    i = i + 1;
+                } else {
+                    if b < 48 { keep = 0; }
+                    else { if b > 57 { keep = 0; }
+                    else {
+                        let d = b - 48;
+                        let t0 = w0 * 10 + d;
+                        w0 = t0 & 65535;
+                        let c0 = t0 / 65536;
+                        let t1 = w1 * 10 + c0;
+                        w1 = t1 & 65535;
+                        let c1 = t1 / 65536;
+                        let t2 = w2 * 10 + c1;
+                        w2 = t2 & 65535;
+                        let c2 = t2 / 65536;
+                        let t3 = w3 * 10 + c2;
+                        w3 = t3 & 65535;
+                        i = i + 1;
+                    }};
+                };
+            };
+        }
+        let lo = w1 * 65536 + w0;
+        let hi = w3 * 65536 + w2;
+        emit_movabs_rax_imm64(lo, hi)
     } else { if t == 36 {
         // Approach A Stage 2.1: AST_INTLIT_U32 (tag 36). p1 = i32-encoded
         // bits of the u32 value. Codegen identical to AST_INTLIT (i32):

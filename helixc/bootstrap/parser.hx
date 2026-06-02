@@ -3493,16 +3493,17 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         cur_advance(sb);
         mk_node(34, body_s, body_l, 0)
     } else { if t == 33 {
-        // Approach A Stage 1: TK_INTLIT_I64 (tag 33) -> AST_INTLIT_I64
-        // (tag 35). Distinct AST tag so codegen emits 8-byte
-        // `movabs rax, imm64` (loads full 64-bit pattern, sign-extended
-        // for negative values that fit in i32) instead of 4-byte
-        // `mov eax, imm32`. The 64-bit width matters when the i64
-        // value flows into a let-binding, fn param, or arithmetic op
-        // typed as i64 — the high half must survive.
-        let v = tok_p1(tok_base, k);
+        // TK_INTLIT_I64 (tag 33) -> AST_INTLIT_I64 (tag 35). Mirror the
+        // f64 tag-34 path: store the literal TEXT ref (byte_start in p1,
+        // byte_len in p2) instead of the lex-time i32 value, which
+        // wrapped/truncated for literals >= 2^31 (e.g. 5_000_000_000_i64).
+        // Codegen (kovc tag 35) decodes the decimal text into the full
+        // 64-bit (lo,hi) via i32-multi-word accumulation, then emits
+        // movabs rax, imm64 -- so the full i64 literal range survives.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
         cur_advance(sb);
-        mk_node(35, v, 0, 0)
+        mk_node(35, body_s, body_l, 0)
     } else { if t == 34 {
         // Approach A Stage 2.1: TK_INTLIT_U32 (tag 34) -> AST_INTLIT_U32
         // (tag 36). Codegen emits identical bits to AST_INTLIT (i32) —
