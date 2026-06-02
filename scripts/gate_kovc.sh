@@ -59,11 +59,16 @@ if [ -s /tmp/newdrv.bin ] && [ -s /tmp/ref.ptx ]; then
   else echo "  GPU PTX CHANGED -- inspect (x86-only fix should NOT alter PTX)"; GATE_OK=0; fi
 else echo "  WARN: could not run PTX regression (no newdrv or ref)"; fi
 
-# T2/M1 (2026-06-02): tiled-GEMM PTX regression. The SMEM tiled kernel is a NEW
+# T2/M1 (2026-06-02): tiled-GEMM PTX regression. The SMEM tiled kernel is a
 # committed reference (helixc/examples/tiled_matmul_kernel.ref.ptx); re-emit it from
 # the freshly-minted driver and assert byte-identical to the committed reference +
-# that the OUTPUT carries .shared AND bar.sync (provenance: grep the OUTPUT, never
-# source). Anchors the new emitter the same way vector_add anchors the old path.
+# that the OUTPUT carries the expected instruction classes (provenance: grep the
+# OUTPUT, never source). Anchors the new emitter the same way vector_add anchors the
+# old path.
+# T2/G2 (2026-06-02): the emitter INTENTIONALLY changed the tiled PTX (cp.async
+# double-buffer); the reference was re-minted + re-committed with that reason (charter
+# 1.0 step 2). Provenance now also requires the cp.async.cg.shared.global +
+# commit_group + wait_group double-buffer signature in the OUTPUT.
 TREF=$EX/tiled_matmul_kernel.ref.ptx
 TKern=$EX/tiled_matmul_kernel.hx
 if [ -s /tmp/newdrv.bin ] && [ -s "$TREF" ] && [ -f "$TKern" ]; then
@@ -73,8 +78,11 @@ if [ -s /tmp/newdrv.bin ] && [ -s "$TREF" ] && [ -f "$TKern" ]; then
     cp "$TREF" /tmp/tref.ptx
     if cmp -s /tmp/out.ptx /tmp/tref.ptx; then echo "  TILED PTX REGRESSION OK (matches committed tiled_matmul_kernel.ref.ptx)";
     else echo "  TILED PTX CHANGED -- re-mint+re-commit the tiled reference with a reason"; GATE_OK=0; fi
-    if grep -q '\.shared' /tmp/out.ptx && grep -q 'bar\.sync 0' /tmp/out.ptx; then echo "  TILED PROVENANCE OK (.shared + bar.sync in the OUTPUT)";
-    else echo "  TILED PROVENANCE FAIL (no .shared/bar.sync in emitted PTX)"; GATE_OK=0; fi
+    if grep -q '\.shared' /tmp/out.ptx && grep -q 'bar\.sync 0' /tmp/out.ptx \
+       && grep -q 'cp\.async\.cg\.shared\.global' /tmp/out.ptx \
+       && grep -q 'cp\.async\.commit_group' /tmp/out.ptx \
+       && grep -q 'cp\.async\.wait_group' /tmp/out.ptx; then echo "  TILED PROVENANCE OK (.shared + bar.sync + cp.async double-buffer in the OUTPUT)";
+    else echo "  TILED PROVENANCE FAIL (missing .shared/bar.sync/cp.async in emitted PTX)"; GATE_OK=0; fi
   else echo "  WARN: tiled kernel emitted no PTX"; GATE_OK=0; fi
 else echo "  WARN: could not run tiled PTX regression (no newdrv/ref/kernel)"; fi
 

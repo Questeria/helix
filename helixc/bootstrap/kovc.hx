@@ -10329,12 +10329,12 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 54 {               // 16 var triples (2..49) + 6 counters:
+    while i < 61 {               // 16 var triples (2..49) + 6 counters +
         __arena_push(0);         // 50=next_pred,51=next_label,52=next_rd,
-        i = i + 1;               // 53=cur_fn_idx,54=next_f,55=last_is_float
-    }
-    bse
-}
+        i = i + 1;               // 53=cur_fn_idx,54=next_f,55=last_is_float;
+    }                            // T2/G2 GEMM context (cp.async tile-load,
+    bse                          // avoids a >6-arg call): 56=tid,57=rowbase,
+}                                // 58=colbase,59=rd_a,60=rd_b,61=K,62=N.
 fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab, 0);        // next_reg = 0
     __arena_set(vtab + 1, 0);    // var_count = 0
@@ -10712,6 +10712,10 @@ fn emit_ptx_lbl_ref(which: i32, n: i32) -> i32 {
     if which == 3 {     // "wend_" (K1.M9 while loop exit)
         emit_ptx_byte(119); emit_ptx_byte(101); emit_ptx_byte(110);
         emit_ptx_byte(100); emit_ptx_byte(95);
+    };
+    if which == 4 {     // "skip_" (T2/G2 cp.async active-thread guard)
+        emit_ptx_byte(115); emit_ptx_byte(107); emit_ptx_byte(105);
+        emit_ptx_byte(112); emit_ptx_byte(95);
     };
     emit_ptx_decimal(n);
     0
@@ -11689,22 +11693,33 @@ fn emit_ptx_bar_sync() -> i32 {
     emit_ptx_byte(59); emit_ptx_byte(10);                       // ";\n"
     0
 }
-// emit the shared symbol name: 0 -> "smem_a", 1 -> "smem_b".
+// emit the shared symbol name. T2/G2 double-buffer: FOUR ping-pong tiles --
+// 0 -> "smem_a0", 1 -> "smem_a1", 2 -> "smem_b0", 3 -> "smem_b1". sym>>1
+// selects A(0)/B(1), sym&1 selects buffer 0/1. (G1 used only smem_a/smem_b;
+// the trailing 0/1 digit is the new buffer index that makes the names
+// distinct so the two in-flight tiles do not alias.)
 fn emit_ptx_smem_sym(sym_id: i32) -> i32 {
     emit_ptx_byte(115); emit_ptx_byte(109); emit_ptx_byte(101);  // sme
     emit_ptx_byte(109); emit_ptx_byte(95);                       // m_
-    if sym_id == 0 { emit_ptx_byte(97) } else { emit_ptx_byte(98) };  // a|b
+    if sym_id < 2 { emit_ptx_byte(97) } else { emit_ptx_byte(98) };  // a|b
+    if sym_id == 0 { emit_ptx_byte(48); };   // 0  (smem_a0)
+    if sym_id == 1 { emit_ptx_byte(49); };   // 1  (smem_a1)
+    if sym_id == 2 { emit_ptx_byte(48); };   // 0  (smem_b0)
+    if sym_id == 3 { emit_ptx_byte(49); };   // 1  (smem_b1)
     0
 }
-// "    .shared .align 4 .b8 <sym>[<nbytes>];\n" -- a static entry-scoped
-// shared tile decl (legal before the first body op; .align 4 = f32).
+// "    .shared .align 16 .b8 <sym>[<nbytes>];\n" -- a static entry-scoped
+// shared tile decl (legal before the first body op). T2/G2: .align 16 (was 4)
+// so each ping-pong buffer base is 16-byte aligned -- REQUIRED for the
+// cp.async.cg.shared.global 16-byte (vec4 f32) copies whose dst must be
+// 16-B-aligned. The per-element ld.shared.f32 reads (4-B) are unaffected.
 fn emit_ptx_shared_decl(sym_id: i32, nbytes: i32) -> i32 {
     emit_ptx_indent();
     emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(104);   // .sh
     emit_ptx_byte(97); emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(100);  // ared
     emit_ptx_byte(32); emit_ptx_byte(46); emit_ptx_byte(97);      // " .a"
     emit_ptx_byte(108); emit_ptx_byte(105); emit_ptx_byte(103); emit_ptx_byte(110);  // lign
-    emit_ptx_byte(32); emit_ptx_byte(52); emit_ptx_byte(32);      // " 4 "
+    emit_ptx_byte(32); emit_ptx_byte(49); emit_ptx_byte(54); emit_ptx_byte(32);  // " 16 "
     emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(56);      // .b8
     emit_ptx_byte(32);
     emit_ptx_smem_sym(sym_id);
@@ -11988,6 +12003,224 @@ fn emit_ptx_param_global_base(pidx: i32, vtab: i32) -> i32 {
     emit_ptx_byte(59); emit_ptx_byte(10);
     rdg
 }
+// T2/G2 global byte-address: addr = base + elem*4 (a %rd), for cp.async
+// whose [gmem] source operand wants the byte address. Mirrors the first
+// two ops of emit_ptx_gload_f32 (mul.wide + add.s64) but returns the %rd
+// instead of issuing the load -- cp.async copies GMEM->SMEM directly with
+// no register round-trip (the whole point: no ld.global + st.shared pair).
+fn emit_ptx_gaddr(rd_base: i32, r_elem: i32, vtab: i32) -> i32 {
+    let rdo = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);  // mul
+    emit_ptx_byte(46); emit_ptx_byte(119); emit_ptx_byte(105);   // .wi
+    emit_ptx_byte(100); emit_ptx_byte(101); emit_ptx_byte(46);   // de.
+    emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);    // s32
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(r_elem);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(52);     // ", 4"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    let rda = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);   // add
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(54); emit_ptx_byte(52);  // .s64
+    emit_ptx_byte(32);
+    emit_ptx_rd(rda);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rd_base);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    rda
+}
+// T2/G2: "    cp.async.cg.shared.global [%r<saddr>], [%rd<gaddr>], 16;\n"
+// -- Ampere async bulk copy of a 16-byte (vec4 f32) chunk straight from
+// global to shared, bypassing the register file. .cg = cache-global (L2
+// only), 16 B is the only legal .cg size; the SMEM dst is a 32-bit shared-
+// window address (mov.u32 %r,smem_sym), the GMEM src a cvta'd 64-bit %rd.
+// 16-byte alignment holds: smem tiles are .align 16 and every issued offset
+// is a multiple of 16 (g*16); GMEM rows are unit-stride and the gate's tile
+// divisibility (M%64,N%64,K%8) makes every element index a multiple of 4 so
+// 4 consecutive elems are contiguous AND the byte address is 16-aligned.
+fn emit_ptx_cp_async_cg16(r_saddr: i32, rd_gaddr: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(112); emit_ptx_byte(46);    // cp.
+    emit_ptx_byte(97); emit_ptx_byte(115); emit_ptx_byte(121);   // asy
+    emit_ptx_byte(110); emit_ptx_byte(99); emit_ptx_byte(46);    // nc.
+    emit_ptx_byte(99); emit_ptx_byte(103); emit_ptx_byte(46);    // cg.
+    emit_ptx_byte(115); emit_ptx_byte(104); emit_ptx_byte(97);   // sha
+    emit_ptx_byte(114); emit_ptx_byte(101); emit_ptx_byte(100);  // red
+    emit_ptx_byte(46); emit_ptx_byte(103); emit_ptx_byte(108);   // .gl
+    emit_ptx_byte(111); emit_ptx_byte(98); emit_ptx_byte(97);    // oba
+    emit_ptx_byte(108);                                          // l
+    emit_ptx_byte(32); emit_ptx_byte(91);                        // " ["
+    emit_ptx_r(r_saddr);
+    emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);     // "], "
+    emit_ptx_byte(91);                                           // [
+    emit_ptx_rd(rd_gaddr);
+    emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);     // "], "
+    emit_ptx_byte(49); emit_ptx_byte(54);                        // 16
+    emit_ptx_byte(59); emit_ptx_byte(10);                       // ;\n
+    0
+}
+// T2/G2: "    setp.lt.s32 %p<pd>, %r<ra>, %r<rb>;\n" -- a standalone signed
+// less-than predicate-set (the G1 loop inlined this; G2's pipeline needs it
+// in two more places so it is factored out here).
+fn emit_ptx_setp_lt_s32(pd: i32, ra: i32, rb: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(101); emit_ptx_byte(116);  // set
+    emit_ptx_byte(112); emit_ptx_byte(46); emit_ptx_byte(108);   // p.l
+    emit_ptx_byte(116); emit_ptx_byte(46); emit_ptx_byte(115);   // t.s
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);     // 32 " "
+    emit_ptx_byte(37); emit_ptx_byte(112); emit_ptx_decimal(pd);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ra);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rb);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T2/G2: "    selp.b32 %r<rd>, %r<ra>, %r<rb>, %p<pp>;\n" -- rd = pp ? ra : rb.
+// The branch-free buffer-base / clamp select the double-buffer ping-pong
+// needs (pick smem_a0 vs smem_a1 etc. by the runtime tile parity, with no
+// divergent control flow).
+fn emit_ptx_selp_b32(rd: i32, ra: i32, rb: i32, pp: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(101); emit_ptx_byte(108);  // sel
+    emit_ptx_byte(112); emit_ptx_byte(46); emit_ptx_byte(98);    // p.b
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);     // 32 " "
+    emit_ptx_r(rd);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ra);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rb);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_byte(37); emit_ptx_byte(112); emit_ptx_decimal(pp);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T2/G2: "    xor.b32 %r<rd>, %r<ra>, <imm>;\n" -- the tile-parity flip
+// (par = par ^ 1) that ping-pongs the current/next buffer each iteration.
+fn emit_ptx_xor_imm(rd: i32, ra: i32, imm: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(120); emit_ptx_byte(111); emit_ptx_byte(114);  // xor
+    emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(51); emit_ptx_byte(50);  // .b32
+    emit_ptx_byte(32);
+    emit_ptx_r(rd);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ra);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_decimal(imm);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T2/G2: "    cp.async.commit_group;\n" -- seal the cp.async ops issued
+// since the last commit into one named group (the unit cp.async.wait_group
+// counts).
+fn emit_ptx_cp_async_commit() -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(112); emit_ptx_byte(46);    // cp.
+    emit_ptx_byte(97); emit_ptx_byte(115); emit_ptx_byte(121);   // asy
+    emit_ptx_byte(110); emit_ptx_byte(99); emit_ptx_byte(46);    // nc.
+    emit_ptx_byte(99); emit_ptx_byte(111); emit_ptx_byte(109);   // com
+    emit_ptx_byte(109); emit_ptx_byte(105); emit_ptx_byte(116);  // mit
+    emit_ptx_byte(95); emit_ptx_byte(103); emit_ptx_byte(114);   // _gr
+    emit_ptx_byte(111); emit_ptx_byte(117); emit_ptx_byte(112);  // oup
+    emit_ptx_byte(59); emit_ptx_byte(10);                       // ;\n
+    0
+}
+// T2/G2: "    cp.async.wait_group <n>;\n" -- block the warp until at most
+// <n> of the most-recent committed cp.async groups are still in flight
+// (older groups guaranteed complete). With a 2-stage pipeline (current tile
+// computing while next prefetches) `wait_group 1` keeps the 1 prefetch in
+// flight and guarantees the current tile's copy landed; `wait_group 0`
+// drains everything (used on the final tile, where no prefetch was issued).
+fn emit_ptx_cp_async_wait(n: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(99); emit_ptx_byte(112); emit_ptx_byte(46);    // cp.
+    emit_ptx_byte(97); emit_ptx_byte(115); emit_ptx_byte(121);   // asy
+    emit_ptx_byte(110); emit_ptx_byte(99); emit_ptx_byte(46);    // nc.
+    emit_ptx_byte(119); emit_ptx_byte(97); emit_ptx_byte(105);   // wai
+    emit_ptx_byte(116); emit_ptx_byte(95); emit_ptx_byte(103);   // t_g
+    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(117);  // rou
+    emit_ptx_byte(112);                                          // p
+    emit_ptx_byte(32);                                          // " "
+    emit_ptx_decimal(n);
+    emit_ptx_byte(59); emit_ptx_byte(10);                       // ;\n
+    0
+}
+// T2/G2: "    @!%p<pp> bra $L<which>_<lbl>;\n" -- guard-branch over a block.
+fn emit_ptx_bra_ifnot(pp: i32, which: i32, lbl: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(64); emit_ptx_byte(33); emit_ptx_byte(37); emit_ptx_byte(112);
+    emit_ptx_decimal(pp);
+    emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // " bra "
+    emit_ptx_lbl_ref(which, lbl);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// T2/G2: "$L<which>_<lbl>:\n" -- a branch target label definition.
+fn emit_ptx_label_def(which: i32, lbl: i32) -> i32 {
+    emit_ptx_lbl_ref(which, lbl);
+    emit_ptx_byte(58); emit_ptx_byte(10);   // ":\n"
+    0
+}
+// T2/G2: cooperative cp.async GMEM->SMEM stage of ONE k-tile (a 64x8 A
+// sub-tile + an 8x64 B sub-tile) into the given shared buffers, using
+// 16-byte (vec4 f32) cp.async.cg copies that bypass the register file. The
+// 512 A elems + 512 B elems are each 128 vec4 groups; threads 0..127 each
+// issue one A copy + one B copy (threads >=128 skip via a single guard
+// branch). r_a_buf / r_b_buf are the chosen ping-pong buffer base regs;
+// r_k0 the current k-offset. The 5 INVARIANT context regs (tid, rowbase,
+// colbase, rd_a, rd_b, K, N) are read from vtab slots 56..62 -- stashed once
+// by the caller -- so this stays a 4-ARG call (the bootstrap compiler's
+// >6-arg call path mis-passes args 7+; see arity probe).
+// Mapping (A): group g -> first elem e=g*4, row r=g/2, kk0=(g&1)*4, global
+//   A[(rowbase+r)*K + (k0+kk0)] (4 contiguous in K) -> smem byte g*16.
+// Mapping (B): group g -> e=g*4, kk=g/16, col0=(g&15)*4, global
+//   B[(k0+kk)*N + (colbase+col0)] (4 contiguous in N) -> smem byte g*16.
+fn emit_ptx_cp_tile_load(r_k0: i32, r_a_buf: i32, r_b_buf: i32, vtab: i32) -> i32 {
+    let r_tid = __arena_get(vtab + 56);
+    let r_rowbase = __arena_get(vtab + 57);
+    let r_colbase = __arena_get(vtab + 58);
+    let rd_a = __arena_get(vtab + 59);
+    let rd_b = __arena_get(vtab + 60);
+    let r_K = __arena_get(vtab + 61);
+    let r_N = __arena_get(vtab + 62);
+    // guard: only threads 0..127 issue copies (128 vec4 groups, group = tid).
+    let p_act = ptx_alloc_pred(vtab);
+    let r_128 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_128, 128);
+    emit_ptx_setp_lt_s32(p_act, r_tid, r_128);
+    let lskip = ptx_alloc_label(vtab);
+    emit_ptx_bra_ifnot(p_act, 4, lskip);
+    let r_g = r_tid;    // group index = tid (active range 0..127)
+    let r_soff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_soff, r_g, 16);  // g*16 smem byte off
+    // --- A vec4 --- (smem byte g*16 -> elem e=g*4; row r=e/8=g/2; kk0=e-r*8)
+    let r_ar = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_ar, r_g, 2);        // r = g/2
+    let r_akk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_akk, r_g, 4);      // e = g*4
+    let r_akk2 = ptx_alloc_reg(vtab); emit_ptx_madc(r_akk2, r_ar, 0 - 8, r_akk); // kk0 = g*4 - r*8 = (g&1)*4
+    let r_arow = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_arow, r_rowbase, r_ar);
+    let r_acol = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_acol, r_k0, r_akk2);
+    let r_ark = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_ark, r_arow, r_K);
+    let r_aidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_aidx, r_ark, r_acol);
+    let rd_ag = emit_ptx_gaddr(rd_a, r_aidx, vtab);
+    let r_asm = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_asm, r_a_buf, r_soff);
+    emit_ptx_cp_async_cg16(r_asm, rd_ag);
+    // --- B vec4 ---
+    let r_bkk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_bkk, r_g, 16);     // kk = g/16
+    let r_bg16 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_bg16, r_g, 4);    // g*4
+    let r_bcol = ptx_alloc_reg(vtab); emit_ptx_madc(r_bcol, r_bkk, 0 - 64, r_bg16); // col0 = g*4 - kk*64
+    let r_brow = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_brow, r_k0, r_bkk);
+    let r_bcol2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bcol2, r_colbase, r_bcol);
+    let r_brn = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_brn, r_brow, r_N);
+    let r_bidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bidx, r_brn, r_bcol2);
+    let rd_bg = emit_ptx_gaddr(rd_b, r_bidx, vtab);
+    let r_bsm = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bsm, r_b_buf, r_soff);
+    emit_ptx_cp_async_cg16(r_bsm, rd_bg);
+    emit_ptx_label_def(4, lskip);
+    0
+}
 // "__tiled_matmul_smem" name matcher (19 chars). Copy of
 // ptx_name_is_tile_matmul with the length + per-byte ASCII for the
 // fused-intrinsic spelling.
@@ -12047,9 +12280,13 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
     let pc = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
     let p_k = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
     let p_n = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
-    // .shared tile decls: smem_a[BM][BK] + smem_b[BK][BN], BM*BK*4 = 2048 B each.
-    emit_ptx_shared_decl(0, 2048);
-    emit_ptx_shared_decl(1, 2048);
+    // T2/G2 double-buffer: FOUR .shared tiles (2 A + 2 B), 2048 B each = 8192
+    // B total, so the NEXT k-tile can be cp.async-prefetched into the idle
+    // buffer pair while the CURRENT pair is consumed by the FMA inner product.
+    emit_ptx_shared_decl(0, 2048);   // smem_a0
+    emit_ptx_shared_decl(1, 2048);   // smem_a1
+    emit_ptx_shared_decl(2, 2048);   // smem_b0
+    emit_ptx_shared_decl(3, 2048);   // smem_b1
     // --- prologue: thread/block coords + dims + global bases (once) ---
     let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);
     let r_ty = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_ty, 1);
@@ -12060,8 +12297,11 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
     let rd_a = emit_ptx_param_global_base(pa, vtab);
     let rd_b = emit_ptx_param_global_base(pb, vtab);
     let rd_c = emit_ptx_param_global_base(pc, vtab);
-    let r_sma = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sma, 0);
-    let r_smb = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smb, 1);
+    // the FOUR ping-pong buffer base addresses (32-bit shared-window addrs).
+    let r_sma0 = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sma0, 0);
+    let r_sma1 = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sma1, 1);
+    let r_smb0 = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smb0, 2);
+    let r_smb1 = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smb1, 3);
     // flat thread id  tid = ty*16 + tx
     let r_tid = ptx_alloc_reg(vtab); emit_ptx_madc(r_tid, r_ty, 16, r_tx);
     // block origin in C:  rowbase = by*BM, colbase = bx*BN
@@ -12074,14 +12314,23 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
     // global row/col of this thread's micro-tile origin (for the epilogue)
     let r_grow0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_grow0, r_rowbase, r_trow0);
     let r_gcol0 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_gcol0, r_colbase, r_tcol0);
-    // shared-read base addresses for THIS thread's micro-tile (constant
-    // for the whole kernel): a_sbase = smem_a + (trow0*BK)*4 = sma + trow0*32;
-    // b_sbase = smem_b + (tcol0)*4 = smb + tcol0*4. Then the per-(i,kk)/(kk,j)
-    // shared address is a_sbase/b_sbase + a COMPILE-TIME byte offset.
-    let r_t1 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_t1, r_trow0, 32);
-    let r_a_sbase = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_a_sbase, r_sma, r_t1);
-    let r_t2 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_t2, r_tcol0, 4);
-    let r_b_sbase = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_b_sbase, r_smb, r_t2);
+    // per-thread shared-read BYTE OFFSETS (constant for the whole kernel),
+    // added to whichever buffer holds the current tile inside the loop:
+    //   a_roff = (trow0*BK)*4 = trow0*32 ;  b_roff = tcol0*4.
+    let r_a_roff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_a_roff, r_trow0, 32);
+    let r_b_roff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_b_roff, r_tcol0, 4);
+    // last valid k-tile offset = K-BK, for clamping the over-prefetch on the
+    // final iteration (K is a runtime multiple of BK, >= BK).
+    let r_kbk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_kbk, r_K, 0 - 8);
+    // stash the INVARIANT cp.async tile-load context into vtab slots 56..62 so
+    // emit_ptx_cp_tile_load stays a 4-arg call (the >6-arg call path is buggy).
+    __arena_set(vtab + 56, r_tid);
+    __arena_set(vtab + 57, r_rowbase);
+    __arena_set(vtab + 58, r_colbase);
+    __arena_set(vtab + 59, rd_a);
+    __arena_set(vtab + 60, rd_b);
+    __arena_set(vtab + 61, r_K);
+    __arena_set(vtab + 62, r_N);
     // --- zero the TM*TN = 16 register micro-tile accumulators ---
     let acc_base = ptx_alloc_f(vtab);
     emit_ptx_mov_f_zero(acc_base);
@@ -12091,67 +12340,57 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
         emit_ptx_mov_f_zero(rr);
         ai = ai + 1;
     }
+    // --- PROLOGUE PREFETCH: stage k-tile 0 into buffer pair 0, commit. This
+    // is the cp.async that the FIRST loop iteration's compute overlaps with. ---
+    let r_kp0 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_kp0, 0);
+    emit_ptx_cp_tile_load(r_kp0, r_sma0, r_smb0, vtab);
+    emit_ptx_cp_async_commit();
+    // tile-parity register: par==0 -> buffer pair 0 holds the CURRENT tile;
+    // par==1 -> pair 1. Flipped each iteration (xor 1) to ping-pong.
+    let r_par = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_par, 0);
     // k-tile loop: for (k0 = 0; k0 < K; k0 += BK)
     let r_k0 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_k0, 0);
     let lbl = ptx_alloc_label(vtab);
     emit_ptx_lbl_ref(2, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Ltop_<lbl>:"
     let pz = ptx_alloc_pred(vtab);
-    // "    setp.lt.s32 %p<pz>, %r<k0>, %r<K>;"
+    emit_ptx_setp_lt_s32(pz, r_k0, r_K);
+    emit_ptx_bra_ifnot(pz, 3, lbl);   // @!pz bra $Lwend_<lbl>
+    // parity predicate: ppar == (par != 0)  [true -> CURRENT is pair 1]
+    let ppar = ptx_alloc_pred(vtab);
+    let r_zero = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_zero, 0);
+    // "setp.ne.s32 %p<ppar>, %r<par>, 0;"
     emit_ptx_indent();
     emit_ptx_byte(115); emit_ptx_byte(101); emit_ptx_byte(116);  // set
-    emit_ptx_byte(112); emit_ptx_byte(46); emit_ptx_byte(108);   // p.l
-    emit_ptx_byte(116); emit_ptx_byte(46); emit_ptx_byte(115);   // t.s
+    emit_ptx_byte(112); emit_ptx_byte(46); emit_ptx_byte(110);   // p.n
+    emit_ptx_byte(101); emit_ptx_byte(46); emit_ptx_byte(115);   // e.s
     emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);     // 32 " "
-    emit_ptx_byte(37); emit_ptx_byte(112); emit_ptx_decimal(pz);
+    emit_ptx_byte(37); emit_ptx_byte(112); emit_ptx_decimal(ppar);
     emit_ptx_byte(44); emit_ptx_byte(32);
-    emit_ptx_r(r_k0);
-    emit_ptx_byte(44); emit_ptx_byte(32);
-    emit_ptx_r(r_K);
+    emit_ptx_r(r_par);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(48);     // ", 0"
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // "    @!%p<pz> bra $Lwend_<lbl>;"
-    emit_ptx_indent();
-    emit_ptx_byte(64); emit_ptx_byte(33); emit_ptx_byte(37); emit_ptx_byte(112);
-    emit_ptx_decimal(pz);
-    emit_ptx_byte(32); emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);
-    emit_ptx_lbl_ref(3, lbl);
-    emit_ptx_byte(59); emit_ptx_byte(10);
-    // --- cooperative GMEM->SMEM load of the A-tile (smem_a[r][kk], 512 elems) ---
-    // e = tid + pass*256 (pass 0/1, 256 threads); r = e/BK, kk = e - r*BK;
-    // global A[(rowbase+r)*K + (k0+kk)] -> smem_a byte offset e*4.
-    let mut pa_pass: i32 = 0;
-    while pa_pass < 2 {
-        let r_e = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_e, r_tid, pa_pass * 256);
-        let r_r = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_r, r_e, 8);
-        let r_kk = ptx_alloc_reg(vtab); emit_ptx_madc(r_kk, r_r, 0 - 8, r_e);
-        let r_arow = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_arow, r_rowbase, r_r);
-        let r_acol = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_acol, r_k0, r_kk);
-        let r_ark = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_ark, r_arow, r_K);
-        let r_aidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_aidx, r_ark, r_acol);
-        let fa = ptx_alloc_f(vtab); emit_ptx_gload_f32(fa, rd_a, r_aidx, vtab);
-        let r_soff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_soff, r_e, 4);
-        let r_saddr = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_saddr, r_sma, r_soff);
-        emit_ptx_st_shared(r_saddr, fa);
-        pa_pass = pa_pass + 1;
-    }
-    // --- cooperative GMEM->SMEM load of the B-tile (smem_b[kk][col], 512 elems) ---
-    // e = tid + pass*256; kk = e/BN, col = e - kk*BN; global B[(k0+kk)*N +
-    // (colbase+col)] -> smem_b byte offset e*4.
-    let mut pb_pass: i32 = 0;
-    while pb_pass < 2 {
-        let r_e = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_e, r_tid, pb_pass * 256);
-        let r_kk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_kk, r_e, 64);
-        let r_col = ptx_alloc_reg(vtab); emit_ptx_madc(r_col, r_kk, 0 - 64, r_e);
-        let r_brow = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_brow, r_k0, r_kk);
-        let r_bcol = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bcol, r_colbase, r_col);
-        let r_brn = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_brn, r_brow, r_N);
-        let r_bidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_bidx, r_brn, r_bcol);
-        let fb = ptx_alloc_f(vtab); emit_ptx_gload_f32(fb, rd_b, r_bidx, vtab);
-        let r_soff = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_soff, r_e, 4);
-        let r_saddr = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_saddr, r_smb, r_soff);
-        emit_ptx_st_shared(r_saddr, fb);
-        pb_pass = pb_pass + 1;
-    }
+    // --- PREFETCH the NEXT tile into the OTHER buffer pair (branch-free via
+    // selp), then commit. Source k-offset is clamped to K-BK so the final
+    // iteration's prefetch is a harmless redundant re-fetch (never computed)
+    // -- this keeps EXACTLY 2 cp.async groups in flight every iteration so
+    // the wait_group below always waits for precisely the current tile. ---
+    let r_kpf = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_kpf, r_k0, 8);     // k0+BK
+    let ppf = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(ppf, r_kpf, r_K);   // is there a next tile?
+    emit_ptx_selp_b32(r_kpf, r_kpf, r_kbk, ppf);                             // clamp -> min(k0+BK, K-BK)
+    // OTHER buffer = (par==0)? pair1 : pair0  (selp picks ra when ppar true)
+    let r_an = ptx_alloc_reg(vtab); emit_ptx_selp_b32(r_an, r_sma0, r_sma1, ppar);
+    let r_bn = ptx_alloc_reg(vtab); emit_ptx_selp_b32(r_bn, r_smb0, r_smb1, ppar);
+    emit_ptx_cp_tile_load(r_kpf, r_an, r_bn, vtab);
+    emit_ptx_cp_async_commit();
+    // wait until the CURRENT tile's group has landed (keep <=1 in flight: the
+    // prefetch just issued), then a barrier so all threads see the full tile.
+    emit_ptx_cp_async_wait(1);
     emit_ptx_bar_sync();
+    // CURRENT buffer = (par==0)? pair0 : pair1; add the per-thread read offset.
+    let r_acur = ptx_alloc_reg(vtab); emit_ptx_selp_b32(r_acur, r_sma1, r_sma0, ppar);
+    let r_bcur = ptx_alloc_reg(vtab); emit_ptx_selp_b32(r_bcur, r_smb1, r_smb0, ppar);
+    let r_a_sbase = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_a_sbase, r_acur, r_a_roff);
+    let r_b_sbase = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_b_sbase, r_bcur, r_b_roff);
     // --- inner product over the BK k-slice (host-unrolled) ---
     // for kk in 0..BK: load As[i] = smem_a[(trow0+i)*BK + kk] (i in 0..TM),
     //                  Bs[j] = smem_b[kk*BN + (tcol0+j)] (j in 0..TN),
@@ -12199,13 +12438,17 @@ fn emit_ptx_tiled_matmul_smem(node: i32, vtab: i32) -> i32 {
         kk2 = kk2 + 1;
     }
     emit_ptx_bar_sync();
-    // advance k0 += BK (in place; dst==src is valid) then back-edge.
+    // advance k0 += BK, flip the buffer parity (par ^= 1), then back-edge.
     emit_ptx_ri_imm(0, r_k0, r_k0, 8);
+    emit_ptx_xor_imm(r_par, r_par, 1);
     emit_ptx_indent();
     emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
     emit_ptx_lbl_ref(2, lbl);
     emit_ptx_byte(59); emit_ptx_byte(10);
     emit_ptx_lbl_ref(3, lbl); emit_ptx_byte(58); emit_ptx_byte(10);   // "$Lwend_<lbl>:"
+    // drain any still-in-flight cp.async group (the clamped final prefetch);
+    // harmless since its buffer is never read -- keeps the warp clean.
+    emit_ptx_cp_async_wait(0);
     // --- epilogue: store the micro-tile to C[(grow0+i)*N + (gcol0+j)] ---
     let mut ei: i32 = 0;
     while ei < 4 {

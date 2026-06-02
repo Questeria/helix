@@ -52,9 +52,15 @@ echo "=== [2] PTX-PROVENANCE (grep the OUTPUT, never source) ==="
 grep -q '\.shared'      /tmp/out.ptx && echo "  .shared PRESENT"      || { echo "  PROVENANCE FAIL: no .shared";   RC=3; }
 grep -q 'bar\.sync 0'   /tmp/out.ptx && echo "  bar.sync 0 PRESENT"   || { echo "  PROVENANCE FAIL: no bar.sync";  RC=3; }
 grep -q 'ld\.shared\.f32' /tmp/out.ptx && echo "  ld.shared.f32 PRESENT" || { echo "  PROVENANCE FAIL: no ld.shared"; RC=3; }
-grep -q 'st\.shared\.f32' /tmp/out.ptx && echo "  st.shared.f32 PRESENT" || { echo "  PROVENANCE FAIL: no st.shared"; RC=3; }
 grep -q 'fma\.rn\.f32'  /tmp/out.ptx && echo "  fma.rn.f32 PRESENT"   || { echo "  PROVENANCE FAIL: no fma.rn.f32"; RC=3; }
 grep -q '\.target sm_86' /tmp/out.ptx && echo "  .target sm_86 PRESENT" || { echo "  PROVENANCE FAIL: not sm_86"; RC=3; }
+# T2/G2: the cp.async double-buffer signature MUST be in the emitted OUTPUT (the
+# G2 perf tier's defining instruction class). st.shared.f32 is GONE for the tile
+# stage -- cp.async copies GMEM->SMEM directly, bypassing the register file -- so
+# st.shared is no longer required here (it was the G1 synchronous-copy signature).
+grep -q 'cp\.async\.cg\.shared\.global' /tmp/out.ptx && echo "  cp.async.cg.shared.global PRESENT" || { echo "  PROVENANCE FAIL: no cp.async.cg.shared.global"; RC=3; }
+grep -q 'cp\.async\.commit_group'       /tmp/out.ptx && echo "  cp.async.commit_group PRESENT"     || { echo "  PROVENANCE FAIL: no cp.async.commit_group"; RC=3; }
+grep -q 'cp\.async\.wait_group'         /tmp/out.ptx && echo "  cp.async.wait_group PRESENT"       || { echo "  PROVENANCE FAIL: no cp.async.wait_group"; RC=3; }
 
 echo "=== [3] ptxas acceptance (sm_86, -v for occupancy/spill) ==="
 ptxas -arch=sm_86 -v /tmp/out.ptx -o "$OUT/tiled_matmul_kernel.cubin" 2>&1 | tee "$OUT/ptxas.log" || { echo "  PTXAS_REJECT"; exit 2; }
@@ -113,7 +119,31 @@ else
     echo "  NEG-CONTROL-B OK: no-bar kernel mis-computed (FAILED) -> .shared/bar.sync ARE load-bearing"
 fi
 
+echo "=== [8b] NEG-CONTROL B' (cp.async load-bearing: strip wait_group -> MUST mis-compute) ==="
+# G2-specific: cp.async.wait_group is what guarantees the async GMEM->SMEM copy has
+# LANDED before the FMA reads the tile. Strip every wait_group from the emitted PTX
+# (still ptxas-valid) -> the inner product races the in-flight copy -> wrong result.
+# Proves the cp.async completion barrier carries real semantics (not cosmetic).
+NW=$(grep -c 'cp\.async\.wait_group' /tmp/out.ptx)
+grep -v 'cp\.async\.wait_group' /tmp/out.ptx > /tmp/out_nowait.ptx
+cp /tmp/out_nowait.ptx "$OUT/tiled_matmul_kernel.nowait.ptx"
+echo "  stripped $NW cp.async.wait_group line(s) from the emitted PTX"
+if ptxas -arch=sm_86 /tmp/out_nowait.ptx -o "$OUT/nowait.cubin" 2>/dev/null; then
+    echo "  no-wait PTX still ptxas-accepts (valid PTX, just un-awaited async)"
+else
+    echo "  NOTE: no-wait PTX ptxas-rejected (still proves wait_group is structural)"
+fi
+if /tmp/cl /tmp/out_nowait.ptx tiled_matmul 0 gemm_perf 256 256 256 >/dev/null 2>&1; then
+    echo "  NEG-CONTROL-B' FAIL: no-wait kernel PASSED (cp.async wait NOT load-bearing?!)"; RC=4
+else
+    echo "  NEG-CONTROL-B' OK: no-wait kernel mis-computed (FAILED) -> cp.async.wait_group IS load-bearing"
+fi
+
 echo "=== GPU PERF CORPUS VERDICT ==="
-if [[ "$RC" = "0" ]]; then echo "GPU_PERF_G1_PASS (kovc ${KOVC_TF:-?} TFLOP/s >= ${G1_MIN_TFLOPS}, cuBLAS-correct, both neg-controls trip)";
-else echo "GPU_PERF_G1_FAIL (rc=$RC)"; fi
+# Tier label tracks the threshold: >=5 TFLOP/s + cp.async provenance = the G2 gate
+# (cp.async double-buffer); the default 3.0 floor = the G1 gate. Both share this one
+# harness (cuBLAS oracle + cuEvent timing + both negative controls + provenance).
+TIER="G1"; awk -v b="$G1_MIN_TFLOPS" 'BEGIN{exit !(b+0 >= 5)}' && TIER="G2"
+if [[ "$RC" = "0" ]]; then echo "GPU_PERF_${TIER}_PASS (kovc ${KOVC_TF:-?} TFLOP/s >= ${G1_MIN_TFLOPS}, cuBLAS-correct, cp.async in OUTPUT, all three neg-controls trip)";
+else echo "GPU_PERF_${TIER}_FAIL (rc=$RC)"; fi
 exit $RC

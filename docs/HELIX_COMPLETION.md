@@ -307,6 +307,31 @@ with its reason.
 > **M2 — `cp.async` double-buffering.** (M–L, ~1–1.5 weeks)
 > Add `cp.async.cg.shared.global [smem],[gmem],16;` + `cp.async.commit_group` / `cp.async.wait_group N` to the SMEM tiled GEMM; software-pipeline two SMEM buffers. Requires sm_86 (done M0) + 16-byte-aligned tiles. **Risk: fence/alignment correctness — finicky but localized.**
 > **Gate G2:** ≥ 5 TFLOP/s, PTX contains `cp.async`.
+>
+> **G2 — LANDED (2026-06-02). GPU_PERF G2 = PASS.** `emit_ptx_tiled_matmul_smem` restructured
+> into a **two-stage cp.async software pipeline**: FOUR `.shared .align 16` ping-pong tiles
+> (smem_a0/a1 + smem_b0/b1, 8192 B), a PROLOGUE prefetch + per-iteration NEXT-tile prefetch into
+> the idle buffer pair (branch-free `selp.b32` parity select; clamped over-prefetch keeps exactly
+> 2 cp.async groups in flight) + `cp.async.wait_group 1` + `bar.sync` + the **identical** G1 4×4
+> register-micro-tile FMA reading the current pair + parity flip; trailing `wait_group 0` drain.
+> New byte-emitters: `cp.async.cg.shared.global` (16-byte vec4 GMEM→SMEM, bypasses the register
+> file), `commit_group`, `wait_group N`, plus `emit_ptx_gaddr`/`selp.b32`/`setp.lt.s32`/`xor.b32`.
+> Tiles UNCHANGED (BM=BN=64, BK=8, TM=TN=4); the win is purely the pipeline. **Result on the RTX
+> 3070 Laptop (sm_86): kovc median = 5.445 TFLOP/s @ 2048³ (≥ 5 ✓), vs true-f32 cuBLAS 8.07 =
+> ~67.5% (≥ ~50% ✓), +19% over G1's 4.56;** correct vs CPU (0 bad, 64³–512³) AND vs cuBLAS (0 bad,
+> 64³–2048³). **THREE negative controls trip:** (A) comparator teeth, (B) bar.sync removal, (B')
+> **cp.async.wait_group removal** → mis-computes, proving the async-completion barrier is
+> load-bearing. ptxas: 56 regs, 8192 B smem, 0 spills; `.version 8.0` (cp.async is ISA 7.0+,
+> accepted by the default 12.0 ptxas). **FULL self-host gate GREEN:** K2==K3==K4 byte-identical +
+> corpus 56/56 + vector_add PTX-regression (untouched) + tiled PTX-regression vs the **re-minted,
+> re-committed** `tiled_matmul_kernel.ref.ptx` (G2 intentionally changed the tiled PTX, charter
+> 1.0 step 2) + cp.async provenance on the OUTPUT. A latent >6-arg codegen bug (no prior fn had >6
+> params) was found+worked-around (4-arg helper + `vtab` context slots), logged as a v-next
+> follow-up. Result doc: `docs/HELIX_GPU_PERF_RESULT.md`. Verdict: `GPU_PERF_G2_PASS`.
+> **NEXT = G3:** TF32 `mma.sync.aligned.m16n8k8.row.col.f32.tf32` (≥ 15 TFLOP/s, ≥ ~40%
+> cuBLAS-TF32) — route to the **12.8 ptxas** + bump `.version` to **8.3** (the 12.0 ptxas rejects
+> 8.3+ and the TF32 mma shapes); cp.async SMEM staging from G2 is the feed; add `ldmatrix`/
+> `mma.sync` provenance + a TF32-cuBLAS reference. A `kovc.hx` change → FULL gate + new ref PTX.
 
 > **M3 — TF32 Tensor-Core MMA (the committed parity tier).** (L, ~2–3 weeks)
 > Emit `mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32` + SMEM→fragment staging. **No new datatype** (TF32 is f32-shaped — chosen deliberately to avoid the bf16 datatype arc). This is the parity target. **Risk: fragment register layout + mma operand constraints; medium.** (The 256-register file helps — wmma/mma want contiguous register bursts.)
