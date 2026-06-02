@@ -283,12 +283,26 @@ with its reason.
 > cell-by-cell (0 bad) at 64³/64×8×128/128³/256³/2048³** on the RTX 3070 Laptop; the
 > barrier/smem path is load-bearing (the inner product reads only `ld.shared`, fed by
 > the cooperative `st.shared` across the two `bar.sync`).
-> **NEXT CHUNK = G1 perf:** add the fenced cuBLAS oracle (`cublasSgemm`, column-major →
-> swapped operands; link `-lcublas -L/usr/local/cuda/lib64`) + CUDA-event TFLOP/s timing
-> (warmup + K timed launches, report min/median/max for laptop throttle) + the **≥ 3
-> TFLOP/s** bar to `gemm_perf`; if the 64×64 tile falls short, upscale to 128×128/8×8 per
-> the blueprint. The `gemm_perf` scaffold (divisibility assert, integer-exact oracle, 2D
-> launch) is already in place for it.
+>
+> **G1 PERF — LANDED (2026-06-02). GPU_PERF G1 = PASS.** The 64×64 tile already clears
+> the bar — **NO `kovc.hx` change needed** (emitter byte-identical to M1 `cef380a`; the
+> freshly-emitted PTX still matches the committed `tiled_matmul_kernel.ref.ptx` byte-for-
+> byte → no self-host re-mint required; only the host-side `cuda_launch.c` + the
+> `gpu_perf_corpus.sh` orchestrator changed, both OUTSIDE the fixpoint). Added to the
+> `gemm_perf` mode: a **fenced cuBLAS oracle** (`cublasSgemm`, column-major → swapped
+> operands for row-major C=A·B, forced `CUBLAS_PEDANTIC_MATH` = true-f32, validated vs the
+> CPU oracle FIRST so it is trusted; link `-lcublas -L/usr/local/cuda/lib64`) + **cuEvent
+> TFLOP/s timing** (5 warmup + 50 timed kernel-only launches, min/median/max). **Result on
+> the RTX 3070 Laptop (sm_86): kovc median = 4.56 TFLOP/s @ 2048³ (≥ 3 ✓), vs true-f32
+> cuBLAS 8.15 TFLOP/s = ~56% (≥ ~30% ✓);** correct vs CPU oracle (0 bad, 64³–512³, integer-
+> exact) AND vs cuBLAS (0 bad, 64³–2048³). **Two negative controls trip:** (A) comparator
+> teeth (mutate one cell → FAIL); (B) **barrier-removal** — strip every `bar.sync` from the
+> emitted PTX → mis-computes/FAILs, proving `.shared`/`bar.sync` are load-bearing. Result
+> doc: `docs/HELIX_GPU_PERF_RESULT.md`. Verdict line: `GPU_PERF_G1_PASS`.
+> **NEXT = G2:** `cp.async.cg.shared.global` + `commit_group`/`wait_group` double-buffer
+> (≥ 5 TFLOP/s, ≥ ~50% cuBLAS f32) — a `kovc.hx` emitter change → FULL self-host gate +
+> re-minted/re-committed tiled reference PTX; the cuBLAS+timing+neg-control harness is now
+> reusable (raise `G1_MIN_TFLOPS=5`, add `cp.async` to the provenance greps).
 
 > **M2 — `cp.async` double-buffering.** (M–L, ~1–1.5 weeks)
 > Add `cp.async.cg.shared.global [smem],[gmem],16;` + `cp.async.commit_group` / `cp.async.wait_group N` to the SMEM tiled GEMM; software-pipeline two SMEM buffers. Requires sm_86 (done M0) + 16-byte-aligned tiles. **Risk: fence/alignment correctness — finicky but localized.**

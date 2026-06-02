@@ -22,6 +22,7 @@
  */
 
 #include <cuda.h>
+#include <cublas_v2.h>   /* G1: fenced cuBLAS f32 GEMM oracle (gemm_perf mode only); link -lcublas */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -380,67 +381,188 @@ int main(int argc, char** argv) {
         return mbad ? 1 : 0;
     }
 
-    /* gemm_perf mode (T2/M1): cuda_launch <ptx> tiled_matmul <Nignored> gemm_perf <M> <K> <N> [mutate].
-     * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device:
-     *   grid=(N/BN, M/BM), block=(16,16)=256 threads, BM=BN=64, BK=8, TM=TN=4, 0 dyn-smem.
-     * CORRECTNESS gate (this chunk): EVERY M*N cell of C vs a CPU GEMM oracle with
-     * integer-valued inputs (a[i]=i%7, b[i]=i%5) so all sums are EXACT in f32 (== compare,
-     * not tol). Any mismatch -> exit 1. The optional trailing "mutate" arg perturbs one C
-     * cell pre-compare to prove the comparator has teeth (negative control -> must FAIL).
-     * Requires M%64==N%64==K%8==0 (asserted) so the launch covers all of C.
+    /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul
+     *   <Nignored> gemm_perf <M> <K> <N> [mutate].
+     * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device.
+     * The launch geometry is read from the emitted PTX-implied tile params via the
+     * BM/BN/BK constants below (kept in sync with kovc.hx's emit_ptx_tiled_matmul_smem).
      *
-     * NEXT CHUNK (G1, NOT this one): a fenced cuBLAS oracle (cublasSgemm, column-major ->
-     * swapped operands) + CUDA-event TFLOP/s timing (warmup + K timed launches, report
-     * min/median/max for the laptop-throttle skeptic note) + the >=3 TFLOP/s bar. The
-     * scaffold (divisibility assert, integer-exact CPU oracle, 2D launch) is here; the
-     * cuBLAS link (-lcublas, -L/usr/local/cuda/lib64) + cuEvent block land with G1. */
+     * G1 (this chunk):
+     *  (a) FENCED cuBLAS ORACLE (cublasSgemm, column-major -> swapped operands for a
+     *      row-major C=A*B), forced to CUBLAS_PEDANTIC_MATH so it is a TRUE-f32 oracle
+     *      (no TF32 tensor-core contamination), and VALIDATED vs the CPU oracle FIRST so
+     *      the oracle itself is trusted before it judges the kovc kernel. Link with
+     *      -lcublas -L/usr/local/cuda/lib64.
+     *  (b) CORRECTNESS: every M*N cell of the kovc result vs the CPU oracle (integer
+     *      inputs a[i]=i%7,b[i]=i%5 -> sums < 2^24 are EXACT in f32, == compare) AND vs
+     *      the cuBLAS oracle cell-by-cell within tol (1e-3 rel; integer-exact so it is
+     *      really 0). A mismatch -> exit 1.
+     *  (c) TIMING via cuEvent: ~5 warmup + ~50 timed KERNEL-ONLY launches, report
+     *      min/median/max ms (the laptop throttles), TFLOP/s = 2*M*N*K / median_seconds,
+     *      for BOTH the kovc kernel and the (pedantic, true-f32) cuBLAS reference, plus
+     *      the kovc/cuBLAS ratio. The >=3 TFLOP/s G1 bar is checked by the orchestrator
+     *      (scripts/gpu_perf_corpus.sh) which parses the "MEDIAN-TFLOPS" line below.
+     * The optional "mutate" arg perturbs one C cell pre-compare to prove the comparator
+     * has teeth (comparator negative control -> must FAIL). The barrier-removal negative
+     * control (a bar.sync-stripped PTX must mis-compute, proving .shared/bar.sync are
+     * load-bearing) is driven by the orchestrator, which re-runs THIS mode on a PTX with
+     * the bar.sync lines deleted and asserts it FAILs.
+     * Requires M%BM==N%BN==K%BK==0 (asserted) so the launch covers all of C. */
     if (strcmp(op, "gemm_perf") == 0) {
         int Md = (argc > 5) ? atoi(argv[5]) : 64;
         int Kd = (argc > 6) ? atoi(argv[6]) : 64;
         int Nd = (argc > 7) ? atoi(argv[7]) : 64;
         int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        /* Tile params -- KEEP IN SYNC with kovc.hx emit_ptx_tiled_matmul_smem. The block
+         * is (BN/TN)x(BM/TM) threads; grid is (N/BN, M/BM). Override via env for the G1
+         * upscale experiments without recompiling the launcher. */
+        int BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
+        { const char* e;
+          if ((e = getenv("GEMM_BM"))) BM = atoi(e);
+          if ((e = getenv("GEMM_BN"))) BN = atoi(e);
+          if ((e = getenv("GEMM_BK"))) BK = atoi(e);
+          if ((e = getenv("GEMM_TM"))) TM = atoi(e);
+          if ((e = getenv("GEMM_TN"))) TN = atoi(e); }
+        int bdimx = BN / TN, bdimy = BM / TM;   /* threads per block in x/y */
         /* tile-divisibility assert: billed cells == computed cells, no boundary code. */
-        if (Md % 64 != 0 || Nd % 64 != 0 || Kd % 8 != 0) {
-            fprintf(stderr, "gemm_perf: dims must satisfy M%%64==0 (%d), N%%64==0 (%d), K%%8==0 (%d)\n", Md, Nd, Kd);
+        if (Md % BM != 0 || Nd % BN != 0 || Kd % BK != 0) {
+            fprintf(stderr, "gemm_perf: dims must satisfy M%%%d==0 (%d), N%%%d==0 (%d), K%%%d==0 (%d)\n", BM, Md, BN, Nd, BK, Kd);
             return 2;
         }
         size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
         float* hA = (float*)malloc(aN * sizeof(float));
         float* hB = (float*)malloc(bN * sizeof(float));
         float* hC = (float*)malloc(cN * sizeof(float));
-        if (!hA || !hB || !hC) return 2;
+        float* hR = (float*)malloc(cN * sizeof(float));   /* cuBLAS result */
+        if (!hA || !hB || !hC || !hR) return 2;
         for (size_t i = 0; i < aN; i++) hA[i] = (float)(i % 7);
         for (size_t i = 0; i < bN; i++) hB[i] = (float)(i % 5);
         for (size_t i = 0; i < cN; i++) hC[i] = -1.0f;
-        CUdeviceptr dA, dB, dC;
+        CUdeviceptr dA, dB, dC, dR;
         CK(cuMemAlloc(&dA, aN * sizeof(float)), "alloc A");
         CK(cuMemAlloc(&dB, bN * sizeof(float)), "alloc B");
         CK(cuMemAlloc(&dC, cN * sizeof(float)), "alloc C");
+        CK(cuMemAlloc(&dR, cN * sizeof(float)), "alloc R(cublas)");
         CK(cuMemcpyHtoD(dA, hA, aN * sizeof(float)), "H2D A");
         CK(cuMemcpyHtoD(dB, hB, bN * sizeof(float)), "H2D B");
         CK(cuMemcpyHtoD(dC, hC, cN * sizeof(float)), "H2D C");   /* sentinel so an unwritten cell shows */
         void* gargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
-        /* grid=(N/BN, M/BM), block=(16,16). ctaid.x->col block, ctaid.y->row block. */
-        unsigned gx = (unsigned)(Nd / 64), gy = (unsigned)(Md / 64);
-        CK(cuLaunchKernel(fn, gx, gy, 1, 16, 16, 1, 0, 0, gargs, 0), "launch tiled_matmul");
+        unsigned gx = (unsigned)(Nd / BN), gy = (unsigned)(Md / BM);
+        CK(cuLaunchKernel(fn, gx, gy, 1, (unsigned)bdimx, (unsigned)bdimy, 1, 0, 0, gargs, 0), "launch tiled_matmul");
         CK(cuCtxSynchronize(), "sync tiled_matmul");
         CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "D2H C");
-        if (mutate) hC[0] += 1.0f;   /* negative control: must trip the comparator */
-        int gbad = 0;
-        for (int r = 0; r < Md; r++) {
-            for (int cc = 0; cc < Nd; cc++) {
-                float ref = 0.0f;
-                for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
-                float got = hC[r * Nd + cc];
-                if (got != ref) { if (gbad < 6) fprintf(stderr, "gemm_perf mismatch C[%d,%d]=%g ref %g\n", r, cc, got, ref); gbad++; }
+        if (mutate) hC[0] += 1.0f;   /* comparator negative control: must trip the compare */
+
+        /* --- fenced cuBLAS oracle: true-f32 (pedantic), validated vs CPU FIRST --- */
+        cublasHandle_t cbh;
+        if (cublasCreate(&cbh) != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "cublasCreate failed\n"); return 2; }
+        cublasSetMathMode(cbh, CUBLAS_PEDANTIC_MATH);   /* TRUE f32 -- no TF32 contamination */
+        float alpha = 1.0f, beta = 0.0f;
+        /* row-major C(MxN)=A*B  <=>  column-major C^T(NxM)=B^T*A^T:
+         *   Sgemm(N,N, N,M,K, B(ld N), A(ld K), C(ld N)). */
+        if (cublasSgemm(cbh, CUBLAS_OP_N, CUBLAS_OP_N, Nd, Md, Kd, &alpha,
+                        (const float*)dB, Nd, (const float*)dA, Kd, &beta, (float*)dR, Nd) != CUBLAS_STATUS_SUCCESS) {
+            fprintf(stderr, "cublasSgemm failed\n"); return 2;
+        }
+        CK(cuCtxSynchronize(), "sync cublas");
+        CK(cuMemcpyDtoH(hR, dR, cN * sizeof(float)), "D2H R");
+
+        /* The CPU-oracle triple-loops (1)+(2) are O(M*N*K) on ONE host thread -- at
+         * 2048^3 that is ~17 GFLOP twice (minutes). They establish the chain-of-trust
+         * CPU<-cuBLAS<-kovc and are run in FULL at the smaller corpus sizes; above a cell
+         * budget they are SKIPPED and large-N correctness rests on (3) kovc-vs-cuBLAS
+         * (GPU-fast) plus the already-trusted oracle. Override the budget via GEMM_CPU_MNK
+         * (set 0 to force-skip). This is an honest, reported relaxation -- not a hidden one. */
+        double mnk = (double)Md * (double)Nd * (double)Kd;
+        double cpu_budget = 6.0e8;   /* ~840^3; covers 64..512 cubed in full */
+        { const char* e; if ((e = getenv("GEMM_CPU_MNK"))) cpu_budget = atof(e); }
+        int cpu_oracle_ran = (mnk <= cpu_budget);
+        /* (1) trust the cuBLAS oracle: cuBLAS == CPU oracle, cell-by-cell. */
+        int obad = 0;
+        if (cpu_oracle_ran) {
+            for (int r = 0; r < Md; r++) {
+                for (int cc = 0; cc < Nd; cc++) {
+                    float ref = 0.0f;
+                    for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
+                    float got = hR[r * Nd + cc];
+                    float e = got - ref; if (e < 0) e = -e;
+                    float aref = ref < 0 ? -ref : ref;
+                    if (isnan(got) || (e > 1.0e-3f && e > 1.0e-3f * aref)) { if (obad < 6) fprintf(stderr, "cuBLAS-vs-CPU mismatch [%d,%d]=%g ref %g\n", r, cc, got, ref); obad++; }
+                }
             }
         }
-        printf("GPU [%s] tiled_matmul (SMEM 64x64/BK8/4x4) %dx%dx%d over %d cells%s: C[1,1]=%g, %d bad -> %s\n",
-               gpu, Md, Kd, Nd, Md * Nd, mutate ? " [MUTATED]" : "", hC[1 * Nd + 1], gbad, gbad ? "FAIL" : "PASS");
-        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        /* (2) kovc kernel == CPU oracle (integer-exact, == compare). */
+        int gbad = 0;
+        if (cpu_oracle_ran) {
+            for (int r = 0; r < Md; r++) {
+                for (int cc = 0; cc < Nd; cc++) {
+                    float ref = 0.0f;
+                    for (int t = 0; t < Kd; t++) ref += hA[r * Kd + t] * hB[t * Nd + cc];
+                    float got = hC[r * Nd + cc];
+                    if (got != ref) { if (gbad < 6) fprintf(stderr, "gemm_perf(CPU) mismatch C[%d,%d]=%g ref %g\n", r, cc, got, ref); gbad++; }
+                }
+            }
+        }
+        /* (3) kovc kernel vs cuBLAS oracle, cell-by-cell within tol (1e-3 f32) -- O(M*N), GPU-trusted. */
+        int cbad = 0;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                float got = hC[r * Nd + cc], refb = hR[r * Nd + cc];
+                float e = got - refb; if (e < 0) e = -e;
+                float ar = refb < 0 ? -refb : refb;
+                if (isnan(got) || (e > 1.0e-3f && e > 1.0e-3f * ar)) { if (cbad < 6) fprintf(stderr, "gemm_perf(cuBLAS) mismatch C[%d,%d]=%g cublas %g\n", r, cc, got, refb); cbad++; }
+            }
+        }
+
+        /* --- TIMING (kernel-only) via cuEvent: warmup + timed launches, min/med/max --- */
+        double flop = 2.0 * (double)Md * (double)Nd * (double)Kd;
+        double kov_med = 0.0, blas_med = 0.0;
+        if (!mutate) {
+            int WARM = 5, ITERS = 50;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            /* kovc kernel timing */
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, gx, gy, 1, (unsigned)bdimx, (unsigned)bdimy, 1, 0, 0, gargs, 0), "warm kov");
+            CK(cuCtxSynchronize(), "sync warm kov");
+            for (int it = 0; it < ITERS; it++) {
+                CK(cuEventRecord(e0, 0), "rec0");
+                CK(cuLaunchKernel(fn, gx, gy, 1, (unsigned)bdimx, (unsigned)bdimy, 1, 0, 0, gargs, 0), "time kov");
+                CK(cuEventRecord(e1, 0), "rec1"); CK(cuEventSynchronize(e1), "evsync");
+                CK(cuEventElapsedTime(&ts[it], e0, e1), "elapsed");
+            }
+            /* sort to get min/median/max */
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            float kmin = ts[0], kmax = ts[ITERS - 1], kmed = ts[ITERS / 2];
+            kov_med = (double)kmed;
+            /* cuBLAS (pedantic, true-f32) timing -- same protocol */
+            for (int w = 0; w < WARM; w++) cublasSgemm(cbh, CUBLAS_OP_N, CUBLAS_OP_N, Nd, Md, Kd, &alpha, (const float*)dB, Nd, (const float*)dA, Kd, &beta, (float*)dR, Nd);
+            CK(cuCtxSynchronize(), "sync warm blas");
+            for (int it = 0; it < ITERS; it++) {
+                CK(cuEventRecord(e0, 0), "brec0");
+                cublasSgemm(cbh, CUBLAS_OP_N, CUBLAS_OP_N, Nd, Md, Kd, &alpha, (const float*)dB, Nd, (const float*)dA, Kd, &beta, (float*)dR, Nd);
+                CK(cuEventRecord(e1, 0), "brec1"); CK(cuEventSynchronize(e1), "bevsync");
+                CK(cuEventElapsedTime(&ts[it], e0, e1), "belapsed");
+            }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            float bmin = ts[0], bmax = ts[ITERS - 1], bmed = ts[ITERS / 2];
+            blas_med = (double)bmed;
+            double kov_tf = flop / (kov_med * 1.0e-3) / 1.0e12;
+            double blas_tf = flop / (blas_med * 1.0e-3) / 1.0e12;
+            printf("GPU [%s] TIMING kovc   %dx%dx%d: min=%.4f med=%.4f max=%.4f ms\n", gpu, Md, Kd, Nd, kmin, kmed, kmax);
+            printf("GPU [%s] TIMING cuBLAS %dx%dx%d (pedantic f32): min=%.4f med=%.4f max=%.4f ms\n", gpu, Md, Kd, Nd, bmin, bmed, bmax);
+            printf("MEDIAN-TFLOPS kovc=%.3f cublas=%.3f ratio=%.1f%%\n", kov_tf, blas_tf, 100.0 * kov_tf / blas_tf);
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts);
+        }
+        cublasDestroy(cbh);
+
+        int totbad = gbad + obad + cbad;
+        printf("GPU [%s] tiled_matmul (SMEM %dx%d/BK%d/%dx%d) %dx%dx%d over %d cells%s: C[1,1]=%g, kovc-vs-CPU=%d oracle(cuBLAS-vs-CPU)=%d kovc-vs-cuBLAS=%d [CPU-oracle:%s] -> %s\n",
+               gpu, BM, BN, BK, TM, TN, Md, Kd, Nd, Md * Nd, mutate ? " [MUTATED]" : "", hC[1 * Nd + 1], gbad, obad, cbad,
+               cpu_oracle_ran ? "ran" : "skipped(large-N; kovc-vs-cuBLAS only)", totbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC); cuMemFree(dR);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
-        free(hA); free(hB); free(hC); free(ptx);
-        return gbad ? 1 : 0;
+        free(hA); free(hB); free(hC); free(hR); free(ptx);
+        return totbad ? 1 : 0;
     }
 
     /* matmul_abt mode: cuda_launch <ptx> gpu_matmul_abt <Nignored> matmul_abt <M> <K> <N>.
