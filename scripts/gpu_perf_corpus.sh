@@ -30,6 +30,11 @@ mkdir -p "$OUT"
 DRV="stage0/helixc-bootstrap/_kovc_ptx_driver.bin"
 G1_MIN_TFLOPS="${G1_MIN_TFLOPS:-3.0}"
 PERF_DIMS="${PERF_DIMS:-2048 2048 2048}"
+# T3/G3 (2026-06-02): kovc now emits .version 8.3 (TF32 mma path). The default
+# /usr/bin/ptxas is CUDA 12.0 which FATALLY rejects .version 8.3; route the WHOLE
+# corpus to the 12.8 ptxas (V12.8.61, accepts 8.3 + mma.sync.tf32 + cvt.rna.tf32).
+# 12.8 assembles the G1/G2 kernels fine too, so one assembler for all is correct.
+PTXAS="${PTXAS:-/usr/local/cuda/bin/ptxas}"
 RC=0
 
 echo "=== [0] ensure PTX driver is current (mint from seed if absent) ==="
@@ -62,9 +67,9 @@ grep -q 'cp\.async\.cg\.shared\.global' /tmp/out.ptx && echo "  cp.async.cg.shar
 grep -q 'cp\.async\.commit_group'       /tmp/out.ptx && echo "  cp.async.commit_group PRESENT"     || { echo "  PROVENANCE FAIL: no cp.async.commit_group"; RC=3; }
 grep -q 'cp\.async\.wait_group'         /tmp/out.ptx && echo "  cp.async.wait_group PRESENT"       || { echo "  PROVENANCE FAIL: no cp.async.wait_group"; RC=3; }
 
-echo "=== [3] ptxas acceptance (sm_86, -v for occupancy/spill) ==="
-ptxas -arch=sm_86 -v /tmp/out.ptx -o "$OUT/tiled_matmul_kernel.cubin" 2>&1 | tee "$OUT/ptxas.log" || { echo "  PTXAS_REJECT"; exit 2; }
-echo "  PTXAS_ACCEPT"
+echo "=== [3] ptxas acceptance (sm_86, -v for occupancy/spill; 12.8 ptxas for .version 8.3) ==="
+"$PTXAS" -arch=sm_86 -v /tmp/out.ptx -o "$OUT/tiled_matmul_kernel.cubin" 2>&1 | tee "$OUT/ptxas.log" || { echo "  PTXAS_REJECT"; exit 2; }
+echo "  PTXAS_ACCEPT ($PTXAS)"
 
 echo "=== [4] build host launcher WITH fenced cuBLAS oracle (-lcublas) ==="
 gcc helixc/runtime/cuda_launch.c -I/usr/local/cuda/include -L/usr/lib/wsl/lib -L/usr/local/cuda/lib64 -lcuda -lcublas -lm -o /tmp/cl \
@@ -108,7 +113,7 @@ NB=$(grep -c 'bar\.sync' /tmp/out.ptx)
 grep -v 'bar\.sync' /tmp/out.ptx > /tmp/out_nobar.ptx
 cp /tmp/out_nobar.ptx "$OUT/tiled_matmul_kernel.nobar.ptx"
 echo "  stripped $NB bar.sync line(s) from the emitted PTX"
-if ptxas -arch=sm_86 /tmp/out_nobar.ptx -o "$OUT/nobar.cubin" 2>/dev/null; then
+if "$PTXAS" -arch=sm_86 /tmp/out_nobar.ptx -o "$OUT/nobar.cubin" 2>/dev/null; then
     echo "  no-bar PTX still ptxas-accepts (valid PTX, just unsynchronized)"
 else
     echo "  NOTE: no-bar PTX ptxas-rejected (still proves bar.sync is structural)"
@@ -128,7 +133,7 @@ NW=$(grep -c 'cp\.async\.wait_group' /tmp/out.ptx)
 grep -v 'cp\.async\.wait_group' /tmp/out.ptx > /tmp/out_nowait.ptx
 cp /tmp/out_nowait.ptx "$OUT/tiled_matmul_kernel.nowait.ptx"
 echo "  stripped $NW cp.async.wait_group line(s) from the emitted PTX"
-if ptxas -arch=sm_86 /tmp/out_nowait.ptx -o "$OUT/nowait.cubin" 2>/dev/null; then
+if "$PTXAS" -arch=sm_86 /tmp/out_nowait.ptx -o "$OUT/nowait.cubin" 2>/dev/null; then
     echo "  no-wait PTX still ptxas-accepts (valid PTX, just un-awaited async)"
 else
     echo "  NOTE: no-wait PTX ptxas-rejected (still proves wait_group is structural)"

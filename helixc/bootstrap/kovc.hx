@@ -12682,22 +12682,27 @@ fn emit_ptx_for_ast_to_path(ast_root: i32) -> i32 {
         // slots are never part of the emitted PTX byte stream.
         let vtab = ptx_vtab_init();
         let start = __arena_len();
-        // ".version 8.0\n"  (PTX ISA 8.0 = CUDA 12.0; we use only
-        // basic scalar ops so 8.0 is sufficient and broadly compatible
-        // -- and is the max the local/CI ptxas supports. K1.M5f.)
+        // ".version 8.3\n"  (PTX ISA 8.3 = CUDA 12.4+). T3/G3 (2026-06-02):
+        // bumped 8.0 -> 8.3 so the TF32 Tensor-Core path (mma.sync.aligned.
+        // m16n8k8.row.col.f32.tf32 + cvt.rna.tf32.f32) is accepted. .version
+        // 8.3 is FATALLY rejected by the default /usr/bin/ptxas (CUDA 12.0) but
+        // accepted by /usr/local/cuda/bin/ptxas (CUDA 12.8 V12.8.61), so the
+        // WHOLE GPU corpus + gate now route to the 12.8 ptxas unconditionally
+        // (scripts/gpu_perf_corpus.sh + gate_kovc.sh pin PTXAS=/usr/local/cuda/
+        // bin/ptxas). The reference-box DRIVER (596.21/CUDA 13.2) JITs 8.3 PTX
+        // TEXT directly via cuModuleLoadData (verified M-G3.0). The mantissa byte
+        // below is 51 ('3'); was 48 ('0').
         emit_ptx_byte(46); emit_ptx_byte(118); emit_ptx_byte(101);
         emit_ptx_byte(114); emit_ptx_byte(115); emit_ptx_byte(105);
         emit_ptx_byte(111); emit_ptx_byte(110); emit_ptx_byte(32);
-        emit_ptx_byte(56); emit_ptx_byte(46); emit_ptx_byte(48);
+        emit_ptx_byte(56); emit_ptx_byte(46); emit_ptx_byte(51);
         emit_ptx_byte(10);
         // ".target sm_86\n"  (T2/M0 2026-06-02: sm_75 -> sm_86 for the
-        // reference box RTX 3070 Laptop, compute_cap 8.6. cp.async (M2) and
-        // mma.sync TF32 (M3) require sm_86. The '7'/'5' ASCII bytes below
-        // became '8'/'6' (55->56, 53->54). The .version stays 8.0: the local
-        // default `which ptxas` is CUDA 12.0 whose MAX PTX ISA is 8.0 and which
-        // REJECTS .version 8.3+; sm_86 + .version 8.0 is ptxas-accepted on both
-        // the 12.0 and 12.8 ptxas. M3's TF32 path will route to the 12.8 ptxas
-        // and bump .version to 8.3 then -- out of scope for M0.)
+        // reference box RTX 3070 Laptop, compute_cap 8.6. cp.async (G2) and
+        // mma.sync TF32 (G3) require sm_86. The '7'/'5' ASCII bytes below
+        // became '8'/'6' (55->56, 53->54). T3/G3 (2026-06-02): the .version is
+        // now 8.3 (see above) and the GPU corpus/gate route to the 12.8 ptxas
+        // unconditionally -- the TF32 Tensor-Core path is in.)
         emit_ptx_byte(46); emit_ptx_byte(116); emit_ptx_byte(97);
         emit_ptx_byte(114); emit_ptx_byte(103); emit_ptx_byte(101);
         emit_ptx_byte(116); emit_ptx_byte(32); emit_ptx_byte(115);

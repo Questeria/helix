@@ -11,6 +11,11 @@ set -u
 BS=/mnt/c/Projects/Kovostov-Native/stage0/helixc-bootstrap
 EX=/mnt/c/Projects/Kovostov-Native/helixc/examples
 CD=/tmp/corpus
+# T3/G3 (2026-06-02): kovc emits .version 8.3 (TF32 mma). This gate is ptxas-FREE
+# (it cmp's emitted PTX vs committed .ref.ptx + greps provenance; the self-host
+# fixpoint is pure x86), so the ptxas version does NOT affect it -- but any future
+# ptxas leg MUST use the 12.8 ptxas (12.0 rejects 8.3). Pinned here for the record.
+PTXAS="${PTXAS:-/usr/local/cuda/bin/ptxas}"
 cd "$BS" || { echo "FATAL: no bootstrap dir"; exit 9; }
 mkdir -p "$CD"
 GATE_OK=1
