@@ -1328,7 +1328,8 @@ int main(int argc, char** argv) {
         CK(cuMemcpyHtoD(dP, hP, ne * sizeof(float)), "H2D P");
         CK(cuMemcpyHtoD(ddP, hdP, ne * sizeof(float)), "H2D dP");
         void* sargs[] = { &dP, &ddP, &ddA, &rows, &cols };
-        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, sargs, 0), "launch softmax_bwd");
+        int tb_sb = getenv("CL_BLOCK") ? atoi(getenv("CL_BLOCK")) : 1;  /* 256 for blockred kernel */
+        CK(cuLaunchKernel(fn, rows, 1, 1, tb_sb, 1, 1, 0, 0, sargs, 0), "launch softmax_bwd");
         CK(cuCtxSynchronize(), "sync softmax_bwd");
         CK(cuMemcpyDtoH(hdA, ddA, ne * sizeof(float)), "D2H dA");
         int sbad = 0; float maxrs = 0.0f, a0 = 0.0f, r0 = 0.0f;
@@ -1711,7 +1712,8 @@ int main(int argc, char** argv) {
         CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "H2D g");
         CK(cuMemcpyHtoD(db, hb, (size_t)cols * sizeof(float)), "H2D b");
         void* largs[] = { &dx, &dy, &dg, &db, &dist, &cols };
-        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "launch ln_save");
+        int tb_ls = getenv("CL_BLOCK") ? atoi(getenv("CL_BLOCK")) : 1;  /* 256 for blockred kernel */
+        CK(cuLaunchKernel(fn, rows, 1, 1, tb_ls, 1, 1, 0, 0, largs, 0), "launch ln_save");
         CK(cuCtxSynchronize(), "sync ln_save");
         CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
         CK(cuMemcpyDtoH(hist, dist, (size_t)rows * sizeof(float)), "D2H ist");
@@ -1766,7 +1768,8 @@ int main(int argc, char** argv) {
         CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "H2D g");
         CK(cuMemcpyHtoD(dist, hist, (size_t)rows * sizeof(float)), "H2D ist");
         void* ax[] = { &dx_, &ddy, &dg, &dist, &ddx, &cols };
-        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, ax, 0), "launch ln_bwd_dx");
+        int tb_lb = getenv("CL_BLOCK") ? atoi(getenv("CL_BLOCK")) : 1;  /* 256 for blockred kernel */
+        CK(cuLaunchKernel(fn, rows, 1, 1, tb_lb, 1, 1, 0, 0, ax, 0), "launch ln_bwd_dx");
         CK(cuCtxSynchronize(), "sync ln_bwd_dx");
         CK(cuMemcpyDtoH(hdx, ddx, ne * sizeof(float)), "D2H dx");
         int bad = 0; float maxfd = 0.0f, maxrs = 0.0f, d0 = 0.0f, r0 = 0.0f, h = 1.0e-3f;

@@ -13185,6 +13185,71 @@ fn emit_ptx_red_colloop(seed_f: i32, r_mf: i32, mode: i32, vtab: i32) -> i32 {
         let f_y = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_y, f_gn, f_be);     // + beta
         emit_ptx_gstore_f32(rd_y, r_idx, f_y, vtab);
     };
+    // ---- M6 backward/save block-reduction modes (slot 60 = secondary read base
+    // dp/dy; 61 = broadcast m1; 62 = broadcast mean; 63 = inv; 58 = gamma; 57 = write).
+    // rd_x (slot 66) is the PRIMARY read (p for softmax-bwd, x for layernorm-bwd). ----
+    if mode == 5 {
+        // softmax-bwd dot: local += dp[idx]*p[idx].  p=f_x (rd_x), dp from slot 60.
+        let rd_dp = __arena_get(vtab + 60);
+        let f_dp = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_dp, rd_dp, r_idx, vtab);
+        let f_pr = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_pr, f_dp, f_x);    // dp*p
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_n, local, f_pr);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 6 {
+        // softmax-bwd write: da[idx] = p[idx]*(dp[idx] - dot).  dot=r_mf, p=f_x, dp slot60.
+        let rd_dp = __arena_get(vtab + 60);
+        let rd_da = __arena_get(vtab + 57);
+        let f_dp = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_dp, rd_dp, r_idx, vtab);
+        let f_df = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_df, f_dp, r_mf);   // dp - dot
+        let f_da = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_da, f_x, f_df);    // p*(dp-dot)
+        emit_ptx_gstore_f32(rd_da, r_idx, f_da, vtab);
+    };
+    if mode == 9 {
+        // lnbwd m1: local += dy[idx]*gamma[j].  dy slot60, gamma slot58.
+        let rd_dy = __arena_get(vtab + 60);
+        let rd_g = __arena_get(vtab + 58);
+        let f_dy = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_dy, rd_dy, r_idx, vtab);
+        let f_g = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_g, rd_g, r_j, vtab);
+        let f_dxh = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_dxh, f_dy, f_g);  // dy*gamma
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_n, local, f_dxh);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 10 {
+        // lnbwd m2: dxhat=dy*gamma; xhat=(x-mean)*inv; local += dxhat*xhat.
+        // mean=r_mf, inv slot63, dy slot60, gamma slot58, x=f_x.
+        let rd_dy = __arena_get(vtab + 60);
+        let rd_g = __arena_get(vtab + 58);
+        let r_inv = __arena_get(vtab + 63);
+        let f_dy = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_dy, rd_dy, r_idx, vtab);
+        let f_g = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_g, rd_g, r_j, vtab);
+        let f_dxh = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_dxh, f_dy, f_g);  // dxhat
+        let f_d = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_d, f_x, r_mf);      // x-mean
+        let f_xh = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_xh, f_d, r_inv);   // xhat
+        let f_pr = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_pr, f_dxh, f_xh);  // dxhat*xhat
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_n, local, f_pr);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 11 {
+        // lnbwd write: dx[idx] = inv*(dxhat - m1 - xhat*m2).  m2=r_mf, m1 slot61,
+        // mean slot62, inv slot63, dy slot60, gamma slot58, dx slot57, x=f_x.
+        let rd_dy = __arena_get(vtab + 60);
+        let rd_g = __arena_get(vtab + 58);
+        let rd_dx = __arena_get(vtab + 57);
+        let r_m1 = __arena_get(vtab + 61);
+        let r_mean = __arena_get(vtab + 62);
+        let r_inv = __arena_get(vtab + 63);
+        let f_dy = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_dy, rd_dy, r_idx, vtab);
+        let f_g = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_g, rd_g, r_j, vtab);
+        let f_dxh = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_dxh, f_dy, f_g);  // dxhat
+        let f_d = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_d, f_x, r_mean);    // x-mean
+        let f_xh = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_xh, f_d, r_inv);   // xhat
+        let f_xm2 = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_xm2, f_xh, r_mf); // xhat*m2
+        let f_s1 = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_s1, f_dxh, r_m1);  // dxhat-m1
+        let f_s2 = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_s2, f_s1, f_xm2);  // -(xhat*m2)
+        let f_dx = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_dx, r_inv, f_s2);  // inv*(...)
+        emit_ptx_gstore_f32(rd_dx, r_idx, f_dx, vtab);
+    };
     // j += 256 ; back-edge
     emit_ptx_ri_imm(0, r_j, r_j, 256);
     emit_ptx_indent();
@@ -13192,7 +13257,9 @@ fn emit_ptx_red_colloop(seed_f: i32, r_mf: i32, mode: i32, vtab: i32) -> i32 {
     emit_ptx_lbl_ref(2, lbl);
     emit_ptx_byte(59); emit_ptx_byte(10);
     emit_ptx_label_def(3, lbl);              // $Lwend_<lbl>:
-    if mode == 4 { 0 - 1 } else { local }
+    // write modes (4 LN-write, 6 softmax-bwd-write, 11 LN-bwd-dx-write) return -1;
+    // reduce modes (0/1/2/3/5/9/10) return the accumulated local.
+    if mode == 4 { 0 - 1 } else { if mode == 6 { 0 - 1 } else { if mode == 11 { 0 - 1 } else { local } } }
 }
 // SOFTMAX block-reduction orchestrator: __softmax_blockred(x, y, rows, cols).
 // Numerically-stable row softmax y[r,c] = exp(x[r,c]-rowmax)/rowsum. One block
@@ -13310,7 +13377,237 @@ fn emit_ptx_layernorm_blockred(node: i32, vtab: i32) -> i32 {
     0 - 1
 }
 // ===================================================================
+// T2/M6 (2026-06-03): BACKWARD/SAVE block-reduction redux intrinsics -- the
+// block-per-row (256-thread) siblings of the one-thread-per-row LN-fwd-save,
+// softmax-backward, and LN-backward-dx kernels that DOMINATE the optimized
+// capstone training step (the forward softmax/layernorm block-reductions landed
+// in M4; these are the backward+save forms the capstone's training loop needs).
+// Each REUSES emit_ptx_red_colloop + emit_ptx_smem_tree_reduce verbatim, mirroring
+// emit_ptx_softmax_blockred. Reached ONLY via the new intrinsic names (zero
+// occurrences in the self-host source) -> fixpoint-safe-by-construction.
+// ===================================================================
+// "__layernorm_fwd_save_blockred" (29 chars).
+fn ptx_name_is_ln_fwd_save_blockred(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 29 { 0 } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };   if __arena_get(name_s + 1) != 95 { ok = 0; };
+        if __arena_get(name_s + 2) != 108 { ok = 0; };  if __arena_get(name_s + 3) != 97 { ok = 0; };   // la
+        if __arena_get(name_s + 4) != 121 { ok = 0; };  if __arena_get(name_s + 5) != 101 { ok = 0; };  // ye
+        if __arena_get(name_s + 6) != 114 { ok = 0; };  if __arena_get(name_s + 7) != 110 { ok = 0; };  // rn
+        if __arena_get(name_s + 8) != 111 { ok = 0; };  if __arena_get(name_s + 9) != 114 { ok = 0; };  // or
+        if __arena_get(name_s + 10) != 109 { ok = 0; }; if __arena_get(name_s + 11) != 95 { ok = 0; };  // m_
+        if __arena_get(name_s + 12) != 102 { ok = 0; }; if __arena_get(name_s + 13) != 119 { ok = 0; }; // fw
+        if __arena_get(name_s + 14) != 100 { ok = 0; }; if __arena_get(name_s + 15) != 95 { ok = 0; };  // d_
+        if __arena_get(name_s + 16) != 115 { ok = 0; }; if __arena_get(name_s + 17) != 97 { ok = 0; };  // sa
+        if __arena_get(name_s + 18) != 118 { ok = 0; }; if __arena_get(name_s + 19) != 101 { ok = 0; }; // ve
+        if __arena_get(name_s + 20) != 95 { ok = 0; };  if __arena_get(name_s + 21) != 98 { ok = 0; };  // _b
+        if __arena_get(name_s + 22) != 108 { ok = 0; }; if __arena_get(name_s + 23) != 111 { ok = 0; }; // lo
+        if __arena_get(name_s + 24) != 99 { ok = 0; };  if __arena_get(name_s + 25) != 107 { ok = 0; }; // ck
+        if __arena_get(name_s + 26) != 114 { ok = 0; }; if __arena_get(name_s + 27) != 101 { ok = 0; }; // re
+        if __arena_get(name_s + 28) != 100 { ok = 0; };                                                  // d
+        ok
+    }
+}
+// LN-FWD-SAVE block-reduction: __layernorm_fwd_save_blockred(x,y,gamma,beta,ist,cols).
+// = emit_ptx_layernorm_blockred + write ist[row]=inv (the reciprocal-std the backward
+// needs). 6 params; row = ctaid.x. One block (256 threads) per row.
+fn emit_ptx_layernorm_fwd_save_blockred(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2); let a5 = __arena_get(n5 + 1);
+    let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let py = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pg = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let pb = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let pist = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    let p_cols = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
+    emit_ptx_shared_decl(0, 1024);
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);
+    let r_cols = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_cols, p_cols);
+    let rd_x = emit_ptx_param_global_base(px, vtab);
+    let rd_y = emit_ptx_param_global_base(py, vtab);
+    let rd_g = emit_ptx_param_global_base(pg, vtab);
+    let rd_b = emit_ptx_param_global_base(pb, vtab);
+    let rd_ist = emit_ptx_param_global_base(pist, vtab);
+    __arena_set(vtab + 57, rd_y);
+    __arena_set(vtab + 58, rd_g);
+    __arena_set(vtab + 59, rd_b);
+    let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    let r_base = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_base, r_bx, r_cols);
+    __arena_set(vtab + 64, r_base);
+    __arena_set(vtab + 65, r_cols);
+    __arena_set(vtab + 66, rd_x);
+    __arena_set(vtab + 67, r_tx);
+    let f_colsf = emit_ptx_i2f_reg(r_cols, vtab);
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let f_locsum = emit_ptx_red_colloop(f_zero, f_colsf, 2, vtab);
+    let f_sum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locsum, 0, vtab);
+    let f_mean = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_mean, f_sum, f_colsf);
+    let f_zero2 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero2);
+    let f_locvar = emit_ptx_red_colloop(f_zero2, f_mean, 3, vtab);
+    let f_vsum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locvar, 0, vtab);
+    let f_var = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_var, f_vsum, f_colsf);
+    let f_inv = emit_ptx_rsqrt_reg(f_var, vtab);
+    __arena_set(vtab + 63, f_inv);
+    // SAVE ist[row] = inv (the only delta vs layernorm_blockred). row = r_bx.
+    emit_ptx_gstore_f32(rd_ist, r_bx, f_inv, vtab);
+    emit_ptx_red_colloop(f_zero2, f_mean, 4, vtab);   // y = gamma*(x-mean)*inv + beta
+    0 - 1
+}
+// "__softmax_backward_blockred" (27 chars).
+fn ptx_name_is_softmax_bwd_blockred(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 27 { 0 } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };   if __arena_get(name_s + 1) != 95 { ok = 0; };
+        if __arena_get(name_s + 2) != 115 { ok = 0; };  if __arena_get(name_s + 3) != 111 { ok = 0; };  // so
+        if __arena_get(name_s + 4) != 102 { ok = 0; };  if __arena_get(name_s + 5) != 116 { ok = 0; };  // ft
+        if __arena_get(name_s + 6) != 109 { ok = 0; };  if __arena_get(name_s + 7) != 97 { ok = 0; };   // ma
+        if __arena_get(name_s + 8) != 120 { ok = 0; };  if __arena_get(name_s + 9) != 95 { ok = 0; };   // x_
+        if __arena_get(name_s + 10) != 98 { ok = 0; };  if __arena_get(name_s + 11) != 97 { ok = 0; };  // ba
+        if __arena_get(name_s + 12) != 99 { ok = 0; };  if __arena_get(name_s + 13) != 107 { ok = 0; }; // ck
+        if __arena_get(name_s + 14) != 119 { ok = 0; }; if __arena_get(name_s + 15) != 97 { ok = 0; };  // wa
+        if __arena_get(name_s + 16) != 114 { ok = 0; }; if __arena_get(name_s + 17) != 100 { ok = 0; }; // rd
+        if __arena_get(name_s + 18) != 95 { ok = 0; };  if __arena_get(name_s + 19) != 98 { ok = 0; };  // _b
+        if __arena_get(name_s + 20) != 108 { ok = 0; }; if __arena_get(name_s + 21) != 111 { ok = 0; }; // lo
+        if __arena_get(name_s + 22) != 99 { ok = 0; };  if __arena_get(name_s + 23) != 107 { ok = 0; }; // ck
+        if __arena_get(name_s + 24) != 114 { ok = 0; }; if __arena_get(name_s + 25) != 101 { ok = 0; }; // re
+        if __arena_get(name_s + 26) != 100 { ok = 0; };                                                  // d
+        ok
+    }
+}
+// SOFTMAX-BWD block-reduction: __softmax_backward_blockred(p,dp,da,rows,cols).
+// dA[i,j] = P[i,j]*(dP[i,j] - dot), dot = block-sum_j dP[i,j]*P[i,j]. 5 params.
+fn emit_ptx_softmax_backward_blockred(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let pp = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let pdp = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pda = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let p_cols = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    emit_ptx_shared_decl(0, 1024);
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);
+    let r_cols = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_cols, p_cols);
+    let rd_p = emit_ptx_param_global_base(pp, vtab);
+    let rd_dp = emit_ptx_param_global_base(pdp, vtab);
+    let rd_da = emit_ptx_param_global_base(pda, vtab);
+    __arena_set(vtab + 60, rd_dp);
+    __arena_set(vtab + 57, rd_da);
+    let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    let r_base = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_base, r_bx, r_cols);
+    __arena_set(vtab + 64, r_base);
+    __arena_set(vtab + 65, r_cols);
+    __arena_set(vtab + 66, rd_p);
+    __arena_set(vtab + 67, r_tx);
+    // phase 1: dot = block-sum_j dp[base+j]*p[base+j]. seed 0, mode 5, tree add.
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let f_locdot = emit_ptx_red_colloop(f_zero, f_zero, 5, vtab);
+    let f_dot = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locdot, 0, vtab);
+    // phase 2: da[base+j] = p*(dp - dot). mode 6, r_mf = dot.
+    emit_ptx_red_colloop(f_zero, f_dot, 6, vtab);
+    0 - 1
+}
+// "__layernorm_backward_dx_blockred" (32 chars).
+fn ptx_name_is_ln_bwd_dx_blockred(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 32 { 0 } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };   if __arena_get(name_s + 1) != 95 { ok = 0; };
+        if __arena_get(name_s + 2) != 108 { ok = 0; };  if __arena_get(name_s + 3) != 97 { ok = 0; };   // la
+        if __arena_get(name_s + 4) != 121 { ok = 0; };  if __arena_get(name_s + 5) != 101 { ok = 0; };  // ye
+        if __arena_get(name_s + 6) != 114 { ok = 0; };  if __arena_get(name_s + 7) != 110 { ok = 0; };  // rn
+        if __arena_get(name_s + 8) != 111 { ok = 0; };  if __arena_get(name_s + 9) != 114 { ok = 0; };  // or
+        if __arena_get(name_s + 10) != 109 { ok = 0; }; if __arena_get(name_s + 11) != 95 { ok = 0; };  // m_
+        if __arena_get(name_s + 12) != 98 { ok = 0; };  if __arena_get(name_s + 13) != 97 { ok = 0; };  // ba
+        if __arena_get(name_s + 14) != 99 { ok = 0; };  if __arena_get(name_s + 15) != 107 { ok = 0; }; // ck
+        if __arena_get(name_s + 16) != 119 { ok = 0; }; if __arena_get(name_s + 17) != 97 { ok = 0; };  // wa
+        if __arena_get(name_s + 18) != 114 { ok = 0; }; if __arena_get(name_s + 19) != 100 { ok = 0; }; // rd
+        if __arena_get(name_s + 20) != 95 { ok = 0; };  if __arena_get(name_s + 21) != 100 { ok = 0; }; // _d
+        if __arena_get(name_s + 22) != 120 { ok = 0; }; if __arena_get(name_s + 23) != 95 { ok = 0; };  // x_
+        if __arena_get(name_s + 24) != 98 { ok = 0; };  if __arena_get(name_s + 25) != 108 { ok = 0; }; // bl
+        if __arena_get(name_s + 26) != 111 { ok = 0; }; if __arena_get(name_s + 27) != 99 { ok = 0; };  // oc
+        if __arena_get(name_s + 28) != 107 { ok = 0; }; if __arena_get(name_s + 29) != 114 { ok = 0; }; // kr
+        if __arena_get(name_s + 30) != 101 { ok = 0; }; if __arena_get(name_s + 31) != 100 { ok = 0; }; // ed
+        ok
+    }
+}
+// LN-BWD-DX block-reduction: __layernorm_backward_dx_blockred(x,dy,gamma,ist,dx,cols).
+// dx[c] = ist*(dxhat[c] - m1 - xhat[c]*m2); xhat=(x-mean)*ist; dxhat=dy*gamma;
+// m1=mean_c(dxhat); m2=mean_c(dxhat*xhat). mean recomputed from x; ist read per row.
+// 6 params. One block (256 threads) per row.
+fn emit_ptx_layernorm_backward_dx_blockred(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2); let a5 = __arena_get(n5 + 1);
+    let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let pdy = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pg = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let pist = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let pdx = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    let p_cols = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
+    emit_ptx_shared_decl(0, 1024);
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);
+    let r_cols = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_cols, p_cols);
+    let rd_x = emit_ptx_param_global_base(px, vtab);
+    let rd_dy = emit_ptx_param_global_base(pdy, vtab);
+    let rd_g = emit_ptx_param_global_base(pg, vtab);
+    let rd_ist = emit_ptx_param_global_base(pist, vtab);
+    let rd_dx = emit_ptx_param_global_base(pdx, vtab);
+    __arena_set(vtab + 60, rd_dy);
+    __arena_set(vtab + 58, rd_g);
+    __arena_set(vtab + 57, rd_dx);
+    let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    let r_base = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_base, r_bx, r_cols);
+    __arena_set(vtab + 64, r_base);
+    __arena_set(vtab + 65, r_cols);
+    __arena_set(vtab + 66, rd_x);
+    __arena_set(vtab + 67, r_tx);
+    let f_colsf = emit_ptx_i2f_reg(r_cols, vtab);
+    // ist[row] (per-row reciprocal std, saved by the forward); stash in slot 63.
+    let f_ist = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_ist, rd_ist, r_bx, vtab);
+    __arena_set(vtab + 63, f_ist);
+    // phase 1: mean = block-sum(x)/cols. seed 0, mode 2, tree add. stash mean slot 62.
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let f_locsum = emit_ptx_red_colloop(f_zero, f_colsf, 2, vtab);
+    let f_sum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locsum, 0, vtab);
+    let f_mean = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_mean, f_sum, f_colsf);
+    __arena_set(vtab + 62, f_mean);
+    // phase 2: m1sum = block-sum(dy*gamma); m1 = m1sum/cols. mode 9, tree add. stash m1 slot61.
+    let f_zero2 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero2);
+    let f_m1loc = emit_ptx_red_colloop(f_zero2, f_mean, 9, vtab);
+    let f_m1sum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_m1loc, 0, vtab);
+    let f_m1 = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_m1, f_m1sum, f_colsf);
+    __arena_set(vtab + 61, f_m1);
+    // phase 3: m2sum = block-sum(dxhat*xhat); m2 = m2sum/cols. mode 10, r_mf=mean, tree add.
+    let f_zero3 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero3);
+    let f_m2loc = emit_ptx_red_colloop(f_zero3, f_mean, 10, vtab);
+    let f_m2sum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_m2loc, 0, vtab);
+    let f_m2 = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_m2, f_m2sum, f_colsf);
+    // phase 4: dx write. mode 11, r_mf=m2 ; m1 slot61, mean slot62, inv(ist) slot63.
+    emit_ptx_red_colloop(f_zero3, f_m2, 11, vtab);
+    0 - 1
+}
+// ===================================================================
 // T2/M4 (2026-06-02): FUSED FLASH-STYLE ATTENTION. One fused intrinsic
+// __flash_attention(q, k, v, o, S, d), one BLOCK (256 threads) per query
+// row, computing out = softmax(Q@K^T / sqrt(d)) @ V. The full S x S scores
+// matrix is NEVER materialized in HBM -- the per-row scores live ONLY in
+// SHARED MEMORY (S floats per block, the same row a block owns), so the kernel
 // __flash_attention(q, k, v, o, S, d), one BLOCK (256 threads) per query
 // row, computing out = softmax(Q@K^T / sqrt(d)) @ V. The full S x S scores
 // matrix is NEVER materialized in HBM -- the per-row scores live ONLY in
@@ -13864,9 +14161,15 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_layernorm_blockred(node, vtab) // T2/M4: block-reduction row layernorm
     } else { if ptx_name_is_flash_attention(name_s, name_l) == 1 {
         emit_ptx_flash_attention(node, vtab)    // T2/M4: fused flash-style attention
+    } else { if ptx_name_is_ln_fwd_save_blockred(name_s, name_l) == 1 {
+        emit_ptx_layernorm_fwd_save_blockred(node, vtab)  // T2/M6: LN-fwd-save block-reduction
+    } else { if ptx_name_is_softmax_bwd_blockred(name_s, name_l) == 1 {
+        emit_ptx_softmax_backward_blockred(node, vtab)    // T2/M6: softmax-bwd block-reduction
+    } else { if ptx_name_is_ln_bwd_dx_blockred(name_s, name_l) == 1 {
+        emit_ptx_layernorm_backward_dx_blockred(node, vtab) // T2/M6: LN-bwd-dx block-reduction
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:

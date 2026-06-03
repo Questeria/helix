@@ -63,6 +63,8 @@ static CUfunction f_add, f_ln, f_mm, f_qkt, f_sm, f_gelu;
 static CUfunction f_ceg, f_atb, f_abt, f_geb, f_smb, f_lnbx, f_lnbg, f_scale, f_adam;
 /* OPT-path kernels (only loaded when OPT) */
 static CUfunction f_mm_t, f_atb_t, f_abt_t, f_sm_b, f_scale_rt;
+/* OPT-path block-reduction backward/save redux kernels (T2/M6) */
+static CUfunction f_ln_b, f_lnbx_b, f_smb_b;
 static CUdeviceptr dbc1, dbc2, d_attn_scale;
 static int Si, Di, Hi, Vi, SDi, SHi;
 
@@ -74,12 +76,21 @@ static float rnd(float scale) { return ((float)(int32_t)xs() / 2147483648.0f) * 
  * exact). PROF=1 accumulates time into t_gemm / t_redux / t_elem / t_other. */
 static int PROF = 0;
 static double t_gemm=0, t_redux=0, t_elem=0, t_other=0;
+/* FASTSYNC=1 (env HX_FASTSYNC, default 0 = OFF): skip the per-kernel cuCtxSynchronize so
+ * launches pipeline on the default stream (CUDA guarantees same-stream ordering, so each
+ * kernel still sees the prior's writes; the blocking cuMemcpyDtoH in forward_full provides
+ * the host sync the loss read needs). PROF forces per-kernel sync (required to time each
+ * category). Measured to barely move the wall-clock here (the per-step loss D2H already
+ * serializes steps), but available as an honest launch-sequencing option for both paths.
+ * Default OFF keeps the v1.0 capstone audit byte-identical (per-kernel sync). */
+static int FASTSYNC = 0;
 static double pf_t0(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return ts.tv_sec*1000.0+ts.tv_nsec/1.0e6; }
-#define LX(fn, grid, block, args) do { CKX(cuLaunchKernel((fn), (grid),1,1, (block),1,1, 0,0, (args), 0), #fn); CKX(cuCtxSynchronize(), "sync " #fn); } while (0)
-#define LX2(fn, gx, gy, bx, by, args) do { CKX(cuLaunchKernel((fn), (gx),(gy),1, (bx),(by),1, 0,0, (args), 0), #fn); CKX(cuCtxSynchronize(), "sync " #fn); } while (0)
+#define SYNC(w) do { if (!FASTSYNC || PROF) CKX(cuCtxSynchronize(), w); } while (0)
+#define LX(fn, grid, block, args) do { CKX(cuLaunchKernel((fn), (grid),1,1, (block),1,1, 0,0, (args), 0), #fn); SYNC("sync " #fn); } while (0)
+#define LX2(fn, gx, gy, bx, by, args) do { CKX(cuLaunchKernel((fn), (gx),(gy),1, (bx),(by),1, 0,0, (args), 0), #fn); SYNC("sync " #fn); } while (0)
 /* timed launch into a category bucket */
-#define LXT(bucket, fn, grid, block, args) do { double _t=PROF?pf_t0():0; CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); CKX(cuCtxSynchronize(),"sync " #fn); if(PROF)bucket+=pf_t0()-_t; } while(0)
-#define LXT2(bucket, fn, gx, gy, bx, by, args) do { double _t=PROF?pf_t0():0; CKX(cuLaunchKernel((fn),(gx),(gy),1,(bx),(by),1,0,0,(args),0), #fn); CKX(cuCtxSynchronize(),"sync " #fn); if(PROF)bucket+=pf_t0()-_t; } while(0)
+#define LXT(bucket, fn, grid, block, args) do { double _t=PROF?pf_t0():0; CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); SYNC("sync " #fn); if(PROF)bucket+=pf_t0()-_t; } while(0)
+#define LXT2(bucket, fn, gx, gy, bx, by, args) do { double _t=PROF?pf_t0():0; CKX(cuLaunchKernel((fn),(gx),(gy),1,(bx),(by),1,0,0,(args),0), #fn); SYNC("sync " #fn); if(PROF)bucket+=pf_t0()-_t; } while(0)
 /* elementwise launch over n flat elements. The elem kernels use the grid-stride index
  * block_idx()*block_dim()+thread_idx() with NO bounds guard, so blocks*threads must == n
  * exactly. naive (v1.0 baseline): block=1, grid=n (1 thread/block -- poor occupancy). OPT:
@@ -114,6 +125,24 @@ static void softmax(CUdeviceptr x, CUdeviceptr y, int rows, int cols) {
     int r=rows,c=cols;
     if (OPT) { void* ar[] = { &x,&y,&r,&c }; LXT(t_redux, f_sm_b, rows, 256, ar); }
     else     { void* ar[] = { &x,&y,&r,&c }; LXT(t_redux, f_sm, rows, 1, ar); }
+}
+/* LN forward+save over [rows=S, cols]. naive gpu_layernorm_fwd_save: grid=S,block=1.
+ * opt layernorm_fwd_save_blockred: grid=S,block=256 (block-reduction). */
+static void ln_fwd(CUdeviceptr x, CUdeviceptr y, CUdeviceptr g, CUdeviceptr b, CUdeviceptr ist, int cols) {
+    int c=cols; void* ar[] = { &x,&y,&g,&b,&ist,&c };
+    if (OPT) { LXT(t_redux, f_ln_b, S, 256, ar); } else { LXT(t_redux, f_ln, S, 1, ar); }
+}
+/* LN backward dx over [rows=S, cols]. naive gpu_layernorm_backward_dx: grid=S,block=1.
+ * opt layernorm_backward_dx_blockred: grid=S,block=256. */
+static void ln_bwd_dx(CUdeviceptr x, CUdeviceptr dy, CUdeviceptr g, CUdeviceptr ist, CUdeviceptr dx, int cols) {
+    int c=cols; void* ar[] = { &x,&dy,&g,&ist,&dx,&c };
+    if (OPT) { LXT(t_redux, f_lnbx_b, S, 256, ar); } else { LXT(t_redux, f_lnbx, S, 1, ar); }
+}
+/* softmax backward over [rows=S, cols=S]. naive gpu_softmax_backward: grid=S,block=1.
+ * opt softmax_backward_blockred: grid=S,block=256. */
+static void softmax_bwd(CUdeviceptr p, CUdeviceptr dp, CUdeviceptr da, int rows, int cols) {
+    int r=rows,c=cols; void* ar[] = { &p,&dp,&da,&r,&c };
+    if (OPT) { LXT(t_redux, f_smb_b, rows, 256, ar); } else { LXT(t_redux, f_smb, rows, 1, ar); }
 }
 /* in-place scale by 1/sqrt(d): naive gpu_scale_inplace bakes 0.25 (d=16 only); opt uses the
  * runtime-scalar gpu_scale_rt so it is correct at any d. */
@@ -160,7 +189,7 @@ static void upload_weights(const float* w) {
 }
 
 static void forward_layer(int L, CUdeviceptr x) {
-    void* a1[] = { &x, &xn1[L], &LN1g[L], &LN1b[L], &ist1[L], &Di }; LXT(t_redux, f_ln, S, 1, a1);
+    ln_fwd(x, xn1[L], LN1g[L], LN1b[L], ist1[L], D);
     mm_AB(xn1[L], Wq[L], Qb[L], S, D, D);
     mm_AB(xn1[L], Wk[L], Kb[L], S, D, D);
     mm_AB(xn1[L], Wv[L], Vb[L], S, D, D);
@@ -171,7 +200,7 @@ static void forward_layer(int L, CUdeviceptr x) {
     mm_AB(attn[L], Vb[L], ao[L], S, S, D);
     mm_AB(ao[L], Wo[L], proj[L], S, D, D);
     void* ah1[] = { &x, &proj[L], &h1[L], &SDi }; LXE(t_elem, f_add, SD, ah1);
-    void* a2[] = { &h1[L], &xn2[L], &LN2g[L], &LN2b[L], &ist2[L], &Di }; LXT(t_redux, f_ln, S, 1, a2);
+    ln_fwd(h1[L], xn2[L], LN2g[L], LN2b[L], ist2[L], D);
     mm_AB(xn2[L], W1[L], amlp[L], S, D, H);
     void* ag[] = { &amlp[L], &gmlp[L], &SHi }; LXE(t_elem, f_gelu, SH, ag);
     mm_AB(gmlp[L], W2[L], mmlp[L], S, H, D);
@@ -189,7 +218,7 @@ static double forward_full(void) {
     forward_layer(0, x_in);
     for (int L = 1; L < NL; L++) forward_layer(L, h2[L-1]);
     CUdeviceptr xlast = h2[NL-1];
-    void* alf[] = { &xlast, &xf, &LNfg, &LNfb, &istf, &Di }; LXT(t_redux, f_ln, S, 1, alf);
+    ln_fwd(xlast, xf, LNfg, LNfb, istf, D);
     mm_AB(xf, W_lm, logits, S, D, V);
     float* hlog = (float*)malloc((size_t)SV*sizeof(float)); CKX(cuMemcpyDtoH(hlog, logits, (size_t)SV*sizeof(float)), "d2h logits");
     double l = ce_loss(hlog, g_tgt); free(hlog); return l;
@@ -202,8 +231,8 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     void* ada[] = { &amlp[L], &g_dg, &g_da, &SHi }; LXE(t_elem, f_geb, SH, ada);
     mm_AtB(xn2[L], g_da, dW1[L], S, D, H);
     mm_ABt(g_da, W1[L], g_dxn2, S, H, D);
-    /* LN2 bwd (kept naive: tiny O(S*D), and backward LN reductions reuse the saved ist) */
-    void* al2x[]= { &h1[L], &g_dxn2, &LN2g[L], &ist2[L], &g_dxln2, &Di }; LXT(t_redux, f_lnbx, S, 1, al2x);
+    /* LN2 bwd: dx is block-reduced (opt); dgb (column reduce) stays naive. */
+    ln_bwd_dx(h1[L], g_dxn2, LN2g[L], ist2[L], g_dxln2, D);
     void* al2g[]= { &h1[L], &g_dxn2, &ist2[L], &dLN2[L], &Si, &Di };      LXT(t_redux, f_lnbg, D, 1, al2g);
     void* adh1[]= { &g_dxln2, &dh2_in, &g_dh1, &SDi }; LXE(t_elem, f_add, SD, adh1);
     /* attn proj */
@@ -212,7 +241,7 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     /* attn core */
     mm_AtB(attn[L], g_dao, g_dVv, S, S, D);
     mm_ABt(g_dao, Vb[L], g_dattn, S, D, S);
-    void* adsc[]= { &attn[L], &g_dattn, &g_dsc, &Si, &Si };    LXT(t_redux, f_smb, S, 1, adsc);
+    softmax_bwd(attn[L], g_dattn, g_dsc, S, S);
     mm_AB(g_dsc, Kb[L], g_dQ, S, S, D); scale_attn(g_dQ, SD);
     mm_AtB(g_dsc, Qb[L], g_dK, S, S, D); scale_attn(g_dK, SD);
     /* QKV weight grads */
@@ -227,7 +256,7 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     void* a123[]= { &g_t12, &g_t3, &g_dxn1, &SDi }; LXE(t_elem, f_add, SD, a123);
     /* LN1 bwd */
     CUdeviceptr xL = (L == 0) ? x_in : h2[L-1];
-    void* al1x[]= { &xL, &g_dxn1, &LN1g[L], &ist1[L], &g_dxln1, &Di }; LXT(t_redux, f_lnbx, S, 1, al1x);
+    ln_bwd_dx(xL, g_dxn1, LN1g[L], ist1[L], g_dxln1, D);
     void* al1g[]= { &xL, &g_dxn1, &ist1[L], &dLN1[L], &Si, &Di };      LXT(t_redux, f_lnbg, D, 1, al1g);
     void* adx[] = { &g_dxln1, &g_dh1, &dx_out, &SDi }; LXE(t_elem, f_add, SD, adx);
 }
@@ -237,7 +266,7 @@ static void backward_full(void) {
     mm_AtB(xf, g_dlog, dW_lm, S, D, V);
     mm_ABt(g_dlog, W_lm, g_dxf, S, V, D);
     CUdeviceptr xlast = h2[NL-1];
-    void* alfx[]= { &xlast, &g_dxf, &LNfg, &istf, &g_dh2[NL-1], &Di }; LXT(t_redux, f_lnbx, S, 1, alfx);
+    ln_bwd_dx(xlast, g_dxf, LNfg, istf, g_dh2[NL-1], D);
     void* alfg[]= { &xlast, &g_dxf, &istf, &dLNf, &Si, &Di };          LXT(t_redux, f_lnbg, D, 1, alfg);
     for (int L = NL-1; L >= 1; L--) backward_layer(L, g_dh2[L], g_dh2[L-1]);
     backward_layer(0, g_dh2[0], g_dxscr);
@@ -272,6 +301,7 @@ int main(int argc, char** argv) {
     if (argc < 2) { fprintf(stderr, "usage: %s <combined.ptx> [verify]\n", argv[0]); return 2; }
     init_dims();
     { const char* e = getenv("HX_PROF"); if (e) PROF = atoi(e); }
+    { const char* e = getenv("HX_FASTSYNC"); if (e) FASTSYNC = atoi(e); }
     Si=S; Di=D; Hi=H; Vi=V; SDi=SD; SHi=SH;
     g_tgt = (int*)malloc((size_t)S*sizeof(int));
     FILE* f = fopen(argv[1], "rb"); if (!f) { fprintf(stderr, "open ptx\n"); return 2; }
@@ -302,6 +332,9 @@ int main(int argc, char** argv) {
         CK(cuModuleGetFunction(&f_abt_t, mod, "tiled_matmul_abt"), "abt_t");
         CK(cuModuleGetFunction(&f_sm_b,  mod, "softmax_blockred"), "sm_b");
         CK(cuModuleGetFunction(&f_scale_rt, mod, "gpu_scale_rt"),  "scale_rt");
+        CK(cuModuleGetFunction(&f_ln_b,   mod, "layernorm_fwd_save_blockred"),   "ln_b");
+        CK(cuModuleGetFunction(&f_lnbx_b, mod, "layernorm_backward_dx_blockred"), "lnbx_b");
+        CK(cuModuleGetFunction(&f_smb_b,  mod, "softmax_backward_blockred"),      "smb_b");
     }
     for (int L = 0; L < NL; L++) {
         Wq[L]=A(DD); Wk[L]=A(DD); Wv[L]=A(DD); Wo[L]=A(DD); LN1g[L]=A(D); LN1b[L]=A(D); LN2g[L]=A(D); LN2b[L]=A(D); W1[L]=A(DH); W2[L]=A(HD);
