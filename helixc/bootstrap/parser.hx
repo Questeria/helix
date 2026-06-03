@@ -7429,9 +7429,73 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 let after_gt = tok_tag(tok_base, k + tfs_off);
                 if after_gt == 5 { 1 } else { 0 }
             } else { 0 };
-            // Mask the turbofish flag when it's actually a struct-lit
-            // so the fn-call turbofish branch doesn't fire.
-            let is_turbofish = if is_turbofish_struct == 1 { 0 } else { is_turbofish_raw };
+            // T3 §1.6 M-4 (2026-06-03): turbofish on an ENUM CONSTRUCTOR
+            // `EnumName::<T>::Variant(payload)` (or `::Variant` unit). The
+            // leading IDENT is a registered enum AND the shape is
+            // `IDENT :: < ...balanced... > :: Variant`. Pre-fix this fell
+            // into is_turbofish_raw (t3_pre == 16 LT) and the generic-fn
+            // turbofish branch HUNG scanning for `(args)` after `>` (it
+            // found `::` instead) -> silent compile timeout (rc 124). The
+            // fix re-routes it to the SAME AST_TUPLE_LIT enum-construct
+            // path as the bare `Opt::Some(42)` form (is_enum_payload /
+            // is_enum_unit), skipping the `::<T>` type-arg segment (the
+            // bootstrap is type-erased -- the monomorph type carries no
+            // runtime tag, identical to bare construction).
+            //
+            // etf_after_off = offset (from k) of the token 1 past the
+            // closing `>` (angle-balanced scan from k+3, the `<`); the
+            // tokens at that offset must be `:` `:` IDENT for the
+            // constructor form. etf_skip = number of tokens in the
+            // `< ...balanced... >` run (from the `<` at k+3 through the
+            // `>`), so the enum arm can skip them after consuming the
+            // first `::`.
+            let etf_scan_ok = if is_turbofish_raw == 1 { if e_idx_pre >= 0 { 1 } else { 0 } } else { 0 };
+            let etf_after_off = if etf_scan_ok == 1 {
+                let mut etf_off: i32 = 4;
+                let mut etf_depth: i32 = 1;
+                while etf_depth > 0 {
+                    let etft = tok_tag(tok_base, k + etf_off);
+                    if etft == 16 {
+                        etf_depth = etf_depth + 1;
+                    } else { if etft == 17 {
+                        etf_depth = etf_depth - 1;
+                    } else { if etft == 31 {
+                        etf_depth = etf_depth - 2;
+                    } else { if etft == 0 {
+                        etf_depth = 0;
+                    } else {
+                    } } } };
+                    etf_off = etf_off + 1;
+                }
+                etf_off
+            } else { 0 };
+            // etf_skip = token count of the `<...>` run = etf_after_off - 3
+            // (offsets k+3 .. k+etf_after_off-1 inclusive are `<`..`>`).
+            let etf_skip = if etf_scan_ok == 1 { etf_after_off - 3 } else { 0 };
+            let is_enum_turbofish = if etf_scan_ok == 1 {
+                let ea0 = tok_tag(tok_base, k + etf_after_off);
+                let ea1 = tok_tag(tok_base, k + etf_after_off + 1);
+                let ea2 = tok_tag(tok_base, k + etf_after_off + 2);
+                if ea0 == 14 { if ea1 == 14 { if ea2 == 2 { 1 } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 };
+            // Variant-payload detector for the turbofish-enum form: the
+            // token after `::Variant` (at k+etf_after_off+3) is `(` (3) for
+            // a payload variant, otherwise it's a unit variant.
+            let etf_variant_paren = if is_enum_turbofish == 1 {
+                if tok_tag(tok_base, k + etf_after_off + 3) == 3 { 1 } else { 0 }
+            } else { 0 };
+            let is_enum_tf_payload = if is_enum_turbofish == 1 { etf_variant_paren } else { 0 };
+            let is_enum_tf_unit = if is_enum_turbofish == 1 { if etf_variant_paren == 1 { 0 } else { 1 } } else { 0 };
+            // Mask the turbofish flag when it's actually a struct-lit OR an
+            // enum-constructor turbofish so the fn-call turbofish branch
+            // doesn't fire (M-4).
+            let is_turbofish = if is_turbofish_struct == 1 { 0 } else { if is_enum_turbofish == 1 { 0 } else { is_turbofish_raw } };
+            // M-4: combined enum-construct flags (bare `Opt::Some` OR
+            // turbofish `Opt::<i32>::Some`) so the existing enum arms below
+            // handle both. Computed flat (no `||` in the arm condition) to
+            // keep the parse_primary cascade recursion-budget-safe.
+            let enum_unit_any = if is_enum_unit == 1 { 1 } else { is_enum_tf_unit };
+            let enum_payload_any = if is_enum_payload == 1 { 1 } else { is_enum_tf_payload };
             // Stage 8.5C: type-namespace call `IDENT::IDENT(args)` where the
             // first IDENT is either a generic-param name (in gp_tab) or one
             // of the canonical scalar type IDENTs (i32/f32/f64/i64/u32/u64).
@@ -7713,11 +7777,20 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 } else {
                     mk_node(16, mang_s, mang_l, args_head)
                 }
-            } else { if is_enum_unit == 1 {
+            } else { if enum_unit_any == 1 {
                 // Consume IDENT, `:`, `:`, variant-IDENT.
                 cur_advance(sb);                       // outer IDENT (enum name)
                 cur_advance(sb);                       // first ':'
                 cur_advance(sb);                       // second ':'
+                // M-4: skip the `< ...type args... > ::` turbofish segment
+                // for the `Opt::<i32>::Variant` form (etf_skip tokens for
+                // `<...>` + 2 for the second `::`). Type-erased: the type
+                // args carry no runtime tag.
+                if is_enum_tf_unit == 1 {
+                    let mut etf_u: i32 = 0;
+                    let etf_u_n = etf_skip + 2;
+                    while etf_u < etf_u_n { cur_advance(sb); etf_u = etf_u + 1; }
+                };
                 let vk = cur_get(sb);
                 let v_name_s = tok_p2(tok_base, vk);
                 let v_name_l = tok_p3(tok_base, vk);
@@ -7743,7 +7816,7 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     // All-unit enum — fold to plain AST_INT (Stage 6B).
                     mk_node(0, safe_disc, 0, 0)
                 }
-            } else { if is_enum_payload == 1 {
+            } else { if enum_payload_any == 1 {
                 // Stage 6C: payload variant `Maybe::Some(42)`. Build
                 // an AST_TUPLE_LIT (tag 50) with arity = 1 + payload
                 // arity, head = TUPLE_CONS chain whose first element
@@ -7756,6 +7829,15 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                 cur_advance(sb);                       // outer IDENT (enum name)
                 cur_advance(sb);                       // first ':'
                 cur_advance(sb);                       // second ':'
+                // M-4: skip the `< ...type args... > ::` turbofish segment
+                // for the `Opt::<i32>::Some(42)` form (etf_skip tokens for
+                // `<...>` + 2 for the second `::`) so the cursor lands on
+                // the variant IDENT, identical to the bare form.
+                if is_enum_tf_payload == 1 {
+                    let mut etf_p: i32 = 0;
+                    let etf_p_n = etf_skip + 2;
+                    while etf_p < etf_p_n { cur_advance(sb); etf_p = etf_p + 1; }
+                };
                 let vk = cur_get(sb);
                 let v_name_s = tok_p2(tok_base, vk);
                 let v_name_l = tok_p3(tok_base, vk);
