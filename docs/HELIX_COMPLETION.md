@@ -464,6 +464,34 @@ with its reason.
 > **M6 — Capstone re-run + perf audit + parity certification.** (M, ~1 week)
 > Re-train the transformer on the tiled+Tensor-Core kernels; confirm **2% loss parity maintained** AND a measured **end-to-end speedup vs the naive capstone (≥ 10×)**. Run the cuBLAS-compare negative controls.
 > **Gate = GPU_PERF_PASS** (§1.2), feeding the FINALE.
+>
+> **M6 — RE-TRAINED + PARITY CERTIFIED; SPEEDUP HONESTLY ~2.2× (< 10×, GEMM-limited).**
+> **(2026-06-03, on `main`, commits `829ade9` + `ac4c0a7`).** The v1.0 capstone transformer was
+> re-trained on the optimized op-set (tiled SMEM GEMM fwd+bwd, block-reduction softmax + the NEW
+> block-reduction LN-fwd-save / LN-bwd-dx / softmax-bwd backward+save intrinsics, runtime-scale
+> `gpu_scale_rt`, occupancy-aware block=256 elementwise), MATH identical to the naive form.
+> **(a) 2% LOSS PARITY — MAINTAINED:** optimized train vs the independent numpy oracle (same dims/math)
+> = **worst rel diff 0.0003% @ S=128, 0.0000% @ S=512** (3+ orders inside the 2% bar). The new redux
+> kernels are unit-gated (`scripts/gpu_redux_bwd_corpus.sh` → `GPU_REDUX_BWD_PASS`, CPU-ref correct +
+> `.shared`/`bar.sync` provenance + a bar.sync-strip neg-control that mis-computes).
+> **(b) END-TO-END SPEEDUP — measured ~2.2× (HONEST, below the ≥10× bar):** RTX 3070, S=512 D=256 H=1024
+> V=512 K=50, **naive 71.1 → optimized 31.8 ms/step = 2.24×.** The shortfall is **Amdahl, not a missing
+> optimization, and is named:** the tiled GEMMs deliver **6.1×** (930→155 ms) but thereby shrink to ~19%
+> of the optimized step; the new bottleneck is the **many-rows row-reduction backward ops** (LN
+> fwd/bwd-dx + softmax-bwd = 65% of the opt step), which block-reduction accelerates only **~1.1× AT THIS
+> SCALE** (rows = S = 512 already gives the naive one-thread-per-row form ample parallelism; the
+> block-per-row form wins big only at FEW wide rows — the M4 softmax-fwd's 16× was at small rows). The
+> rest is bandwidth/launch-bound elementwise. Closing to ≥10× requires **kernel fusion** (fusing the ~40
+> small per-step elementwise/reduction launches + their HBM round-trips), an architectural change beyond
+> swapping naive→landed-op-set — **the loop decides whether to pursue it.** Per the honest-number
+> directive this is reported as-is (not faked). Dims are ENV-parameterized (`HX_*`) DEFAULTING to the
+> exact v1.0 capstone so the v1.0 audit is byte-identical (`CAPSTONE_AUDIT_PASS`, loss 0.41581876,
+> parity 0.0009%). **GATE GREEN:** self-host fixpoint K2==K3==K4 byte-identical (`b7e741c0…`), corpus
+> 59/59, vector_add + tiled reference PTX byte-identical (new emitters fire only for new intrinsic
+> names). Fence intact (`git ls-files "*.py"` == 1). Result doc: `docs/HELIX_GPU_PERF_RESULT.md` (§ M6).
+> **§1.2 item 5 status: PARITY met; the ≥10× end-to-end bar is NOT met at the measured balanced scale
+> (~2.2×, GEMM-limited) — so GPU_PERF_PASS's item-(5) speedup clause is OPEN pending a fusion pass (or a
+> scope decision). Items (1)(3)(4) + item-(5) parity are satisfied.**
 
 **Dependency order (strict):** M0 (instrument) → M1 (SMEM loops — unblocks everything) → {M2, M3}
 (logically parallel cp.async vs MMA, but SERIAL on the build artifact — see §5) → M4 (needs M1–M3
