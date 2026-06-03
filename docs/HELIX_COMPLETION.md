@@ -421,6 +421,41 @@ with its reason.
 > build-trial was attempted (loop_prompt SPEEDUP) but is NOT adopted — `assemble_k1.hx` hardcodes
 > absolute /mnt/c paths so the assembler writes outside an ext4 copy; the real commit-gate ran on
 > /mnt/c (`.stage33-logs/ext4_result.txt`). **NEXT M4:** fused flash-style attention → M6 capstone re-train.
+>
+> **M4 ITEM 4 — FUSED FLASH-STYLE ATTENTION LANDED (2026-06-03, on `main`). THE LAST OP-SET ITEM —
+> the transformer op set is COMPLETE.** kovc emits a single fused kernel
+> `out = softmax(Q@K^T / sqrt(d)) @ V` via the intrinsic `__flash_attention(q,k,v,o,S,d)` ->
+> `emit_ptx_flash_attention` in `kovc.hx`, one 256-thread BLOCK per query row, **with the S×S scores
+> matrix resident ONLY in SHARED MEMORY — never materialized in HBM** (the flash memory win). Three
+> barrier-separated phases: (1) PARALLEL scores `s_j=scale*dot(Q[i,:],K[j,:])` into `smem_scores`
+> (Q staged in SMEM, K from global, no per-key sync); (2) NUMERICALLY-STABLE block-reduction softmax
+> REUSING the `__softmax_blockred` tree-reduce primitives VERBATIM (row max via `emit_ptx_smem_tree_reduce`
+> op=max, then row sum of `exp(s_j-m)` op=add, overwriting `smem_scores` with the unnormalized weight,
+> `inv=1/l`); (3) 256-THREAD-PARALLEL P@V (`tpc=256/d` threads per output column via `tid->(col,ksub)`
+> split + a per-column `smem_red` reduction) — the 256-way parallelism that clears the perf bar. scale
+> = `1/sqrt(d)` is a RUNTIME `rsqrt.approx` (dimension-independent). New byte-emitters `emit_ptx_sub_rr`
+> /`emit_ptx_div_rr`; the new emitter fires ONLY for `__flash_attention`, so `vector_add`/`tiled_matmul`
+> reference PTX stay byte-identical. ptxas sm_86: 14 regs, 0 spills, 18432 B smem. **CORRECT vs a CPU
+> reference (integer inputs → Q@K^T + scale + @V exact; only error = ex2.approx exp, tol 1e-3): 0 bad,
+> maxrel ≈ 1–3e-07 at S∈{8,16,64,512,1024,2048}, d∈{16,64,128}.** **FASTER-THAN-NAIVE** vs the unfused
+> 3-kernel pipeline (`gpu_qkt`→`gpu_softmax`→`naive_matmul`, S×S round-tripped through HBM), GATED at the
+> canonical head dim **d=16: 2.5× @ S=512 → 3.2× @ S=1024** (kernel-only cuEvent median). **HONEST: at
+> d≥64 the kernel is competitive but not faster (~0.85–0.98×; the naive @V matmul is itself well-
+> parallelized) so d≥64 is correctness-only — a warp-tiled @V is v-next.** **FUSION LEVEL (honest):** a
+> SMEM-resident-scores fused attention with a stable block-reduction softmax (one kernel, no S×S in HBM);
+> NOT the register-tiled warp-level online-rescale cuDNN form, and it keeps the full S-length score row
+> in SMEM (S≤4096 bound) rather than streaming K/V tiles with a running rescale — honest scope choices
+> that clear the op-set bar. (A true streaming online-softmax form — running max+sum rescale, one
+> tree-reduce per key — was implemented + verified correct first, but was barrier-bound at ~0.1× naive;
+> the SMEM-resident form is the one that beats naive.) **THREE neg-controls trip:** comparator-teeth +
+> **bar.sync-strip** (SMEM scores/reduction barriers load-bearing) + **softmax-normalization-strip**
+> (force `inv=1` → unnormalized output → mis-compute). Kernel `helixc/examples/flash_attention_kernel.hx`;
+> host mode `attn_flash` in `cuda_launch.c`; corpus `scripts/gpu_attention_corpus.sh` → `GPU_ATTENTION_PASS`;
+> result `docs/HELIX_GPU_PERF_RESULT.md` (§ M4 item 4). **FULL self-host gate GREEN: K2==K3==K4
+> byte-identical + corpus 59/59 + vector_add & tiled PTX-regression byte-identical.** Fence intact
+> (`git ls-files "*.py"` == 1). **§1.2 item 4 (the optimized transformer op set) is DONE:** tiled matmul +
+> A·Bᵀ/Aᵀ·B + fused attention + block-reduction softmax/layernorm + GELU/Adam — each correct vs CPU +
+> faster-than-naive (or honest GB/s for the memory-bound elementwise pair). **NEXT: M6 capstone re-train (§1.2 item 5).**
 
 > **M5 (STRETCH) — bf16 `wmma` + autotune.** (XL, ~3–5 weeks)
 > The bf16 datatype arc: a `.b16`/bf16 register class through the **whole expression emitter**, `cvt.rn.bf16.f32`, `wmma.load/mma/store.*.f16`. Then port `@autotune` (TILE/WARP sweep) from Python helixc into the bootstrap (NOT in the bootstrap today — `CUDA_OBSOLESCENCE_PLAN.md:1.1`) to close the last gap to cuBLAS. **Highest risk** (numerics vs the 2% bar + biggest emitter delta; interacts with the capstone's f32-as-i32-bits numerics). Explicitly stretch — can trail; G4 absence does not block FULLY COMPLETE.

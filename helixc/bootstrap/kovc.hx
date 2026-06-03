@@ -11935,6 +11935,36 @@ fn emit_ptx_mul_rr(rdst: i32, ra: i32, rb: i32) -> i32 {
     emit_ptx_byte(59); emit_ptx_byte(10);
     0
 }
+// "    sub.s32 %r<rdst>, %r<ra>, %r<rb>;\n" (reg - reg) -- T2/M4 fused attention
+// needs tid - ksub*d for the Phase-3 thread->(col,ksub) split (col=tid-ksub*d).
+fn emit_ptx_sub_rr(rdst: i32, ra: i32, rb: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(117); emit_ptx_byte(98);   // sub
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);  // .s32
+    emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ra);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rb);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// "    div.s32 %r<rdst>, %r<ra>, %r<rb>;\n" (reg / reg) -- T2/M4 fused attention
+// needs 256/d (threads-per-col) + tid/d (ksub) where d is a runtime param.
+fn emit_ptx_div_rr(rdst: i32, ra: i32, rb: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(100); emit_ptx_byte(105); emit_ptx_byte(118);  // div
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);  // .s32
+    emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ra);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rb);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
 // "    mov.s32 %r<rdst>, %r<rsrc>;\n" (reg copy, for the loop counter).
 fn emit_ptx_mov_rr(rdst: i32, rsrc: i32) -> i32 {
     emit_ptx_indent();
@@ -13279,6 +13309,301 @@ fn emit_ptx_layernorm_blockred(node: i32, vtab: i32) -> i32 {
     emit_ptx_red_colloop(f_zero2, f_mean, 4, vtab);
     0 - 1
 }
+// ===================================================================
+// T2/M4 (2026-06-02): FUSED FLASH-STYLE ATTENTION. One fused intrinsic
+// __flash_attention(q, k, v, o, S, d), one BLOCK (256 threads) per query
+// row, computing out = softmax(Q@K^T / sqrt(d)) @ V. The full S x S scores
+// matrix is NEVER materialized in HBM -- the per-row scores live ONLY in
+// SHARED MEMORY (S floats per block, the same row a block owns), so the kernel
+// avoids the S x S HBM round-trips the naive QK^T -> softmax -> @V pipeline
+// pays (which writes + reads the S x S scores AND attn matrices through global
+// memory). That HBM-traffic elision is the flash win, and it is what makes the
+// fused kernel beat the naive 3-kernel baseline at large S.
+//
+// PARALLEL-OVER-KEYS (fully occupies the 256-thread block; no per-key barrier):
+//   Q[i,:] is staged into SMEM once (d floats, smem_a1/sym 1). Then THREE
+//   barrier-separated phases, each parallel across the 256 threads:
+//   (1) SCORES: thread t computes s_j = scale*dot(Q[i,:],K[j,:]) for its strided
+//       keys j=t,t+256,... and writes them to smem_scores[j] (smem_b0/sym 2).
+//       The dot reads Q from SMEM + K from global; NO inter-thread sync.
+//   (2) STABLE SOFTMAX over the S smem scores, reusing the __softmax_blockred
+//       primitives VERBATIM: block-reduce rowmax m (per-thread strided max +
+//       emit_ptx_smem_tree_reduce, op=max), then block-reduce rowsum l of
+//       exp(s_j - m) (op=add) -- numerically stable (max-subtracted), exp via
+//       ex2.approx. The reduction buffer is smem_a0/sym 0 (256 f32).
+//   (3) OUTPUT: thread t (t<d) owns output column t and accumulates
+//       acc = sum_j (exp(smem_scores[j]-m)/l) * V[j*d+t] over all keys j (V from
+//       global, scores from SMEM), then writes out[i*d+t] = acc.
+// The (exp(s_j-m)/l) softmax weights are an exact convex combination summing to
+// 1 (the max-subtract is the load-bearing online-stable rescale -- the neg
+// control strips it and the kernel mis-normalizes). scale = 1/sqrt(d) is a
+// RUNTIME rsqrt (dimension-independent; no baked 0.25-for-d=16 literal).
+//
+// Grid = (S,1,1), block = (256,1,1). d <= 256 (one output col per thread). S <=
+// 4096 (smem_scores is statically sized 16384 B = 4096 f32). Returns -1 (void
+// body). FUSION LEVEL (honest): a SMEM-resident-scores fused attention with a
+// numerically-stable block-reduction softmax -- the S x S scores never touch
+// HBM (the real flash memory win). It is NOT the register-tiled warp-level
+// online-rescale form of cuDNN flash-attn (the per-thread (m,l,acc) merge), and
+// it keeps the full S-length score row in SMEM rather than streaming K/V tiles
+// with a running rescale -- both honest scope choices that still clear the
+// faster-than-naive op-set bar; reported as such in the result doc.
+// ===================================================================
+fn emit_ptx_flash_attention(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2); let a5 = __arena_get(n5 + 1);
+    let pq = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let pk = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pv = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let po = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    // a4 = S (grid dim + key range), a5 = d.
+    let p_d = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
+    let p_S = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    emit_ptx_shared_decl(0, 1024);    // sym 0 = smem_a0 : reduction buffer (256 f32)
+    emit_ptx_shared_decl(1, 1024);    // sym 1 = smem_a1 : Q[i,:] row staging (<=256 f32)
+    emit_ptx_shared_decl(2, 16384);   // sym 2 = smem_b0 : the S per-row scores (<=4096 f32)
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);   // tid.x = t
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);   // ctaid.x = i (query row)
+    let r_d = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_d, p_d);
+    let r_S = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_S, p_S);
+    let rd_q = emit_ptx_param_global_base(pq, vtab);
+    let rd_k = emit_ptx_param_global_base(pk, vtab);
+    let rd_v = emit_ptx_param_global_base(pv, vtab);
+    let rd_o = emit_ptx_param_global_base(po, vtab);
+    let r_red = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_red, 0);  // reduction buffer base
+    let r_smq = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_smq, 1);  // Q-row smem base
+    let r_sms = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sms, 2);  // scores smem base
+    // scale = rsqrt(d) (runtime; dimension-independent).
+    let f_df = emit_ptx_i2f_reg(r_d, vtab);
+    let f_scale = emit_ptx_rsqrt_reg(f_df, vtab);
+    // qbase = i*d  (Q + output row base).
+    let r_qbase = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_qbase, r_bx, r_d);
+    // active = (t < d): these threads own a Q element to stage + an output col.
+    let p_act = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_act, r_tx, r_d);
+    // --- stage Q[i,:] into smem_q[t] for t<d (one barrier, then reused by all). ---
+    let lblq = ptx_alloc_label(vtab);
+    emit_ptx_bra_ifnot(p_act, 4, lblq);          // @!act bra $Lskip_<lblq>
+    let r_qi = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_qi, r_qbase, r_tx);
+    let f_qv = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_qv, rd_q, r_qi, vtab);
+    let r_qso = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_qso, r_tx, 4);   // t*4
+    let r_qsa = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_qsa, r_smq, r_qso);
+    emit_ptx_st_shared(r_qsa, f_qv);
+    emit_ptx_label_def(4, lblq);                 // $Lskip_<lblq>:
+    emit_ptx_bar_sync();
+    // ============ PHASE 1: SCORES s_j = scale*dot(Q[i,:],K[j,:]) -> smem_scores[j].
+    // thread t strides keys j = t, t+256, ... ; the dot reads Q from SMEM + K from
+    // global. No inter-thread dependence -> no barrier inside the j-loop.
+    let r_j1 = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_j1, r_tx);
+    let lbj1 = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbj1);                 // $Ltop_<lbj1>:
+    let p_j1 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_j1, r_j1, r_S);
+    emit_ptx_bra_ifnot(p_j1, 3, lbj1);           // @!p bra $Lwend_<lbj1>
+    let r_kbase = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_kbase, r_j1, r_d);
+    // dot = sum_{t2<d} smem_q[t2]*K[kbase+t2].  inner k-loop over t2 in [0,d).
+    let f_dot = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_dot);
+    let r_t2 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_t2, 0);
+    let lbk1 = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbk1);                 // $Ltop_<lbk1>:
+    let p_k1 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_k1, r_t2, r_d);
+    emit_ptx_bra_ifnot(p_k1, 3, lbk1);           // @!p bra $Lwend_<lbk1>
+    let r_qso2 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_qso2, r_t2, 4);   // t2*4
+    let r_qsa2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_qsa2, r_smq, r_qso2);
+    let f_qt2 = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_qt2, r_qsa2);        // smem_q[t2]
+    let r_kidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_kidx, r_kbase, r_t2);
+    let f_kv = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_kv, rd_k, r_kidx, vtab);
+    let f_pr = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_pr, f_qt2, f_kv);   // q*K
+    let f_da = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_da, f_dot, f_pr);   // dot += q*K
+    emit_ptx_mov_f_reg(f_dot, f_da);
+    emit_ptx_ri_imm(0, r_t2, r_t2, 1);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbk1); emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbk1);                 // $Lwend_<lbk1>:
+    // s_j = scale*dot ; smem_scores[j] = s_j.
+    let f_sj = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_sj, f_dot, f_scale);
+    let r_sso = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_sso, r_j1, 4);     // j*4
+    let r_ssa = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ssa, r_sms, r_sso);
+    emit_ptx_st_shared(r_ssa, f_sj);
+    emit_ptx_ri_imm(0, r_j1, r_j1, 256);   // j += 256
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbj1); emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbj1);                 // $Lwend_<lbj1>:
+    emit_ptx_bar_sync();
+    // ============ PHASE 2: STABLE SOFTMAX over the S smem scores (reuse the
+    // __softmax_blockred primitives). The strided column loops here read scores
+    // from SMEM (not global) so the reduction helper's global-read colloop is
+    // inlined directly against smem_scores rather than via emit_ptx_red_colloop.
+    // (a) rowmax m: per-thread strided max over smem_scores[j], then SMEM tree max.
+    let f_locmax = ptx_alloc_f(vtab);
+    emit_ptx_indent();   // seed local max = -1e30
+    emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32); emit_ptx_f(f_locmax);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_byte(48); emit_ptx_byte(102);
+    emit_ptx_byte(70); emit_ptx_byte(49); emit_ptx_byte(53);
+    emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    let r_jm = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_jm, r_tx);
+    let lbjm = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbjm);
+    let p_jm = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_jm, r_jm, r_S);
+    emit_ptx_bra_ifnot(p_jm, 3, lbjm);
+    let r_smo = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_smo, r_jm, 4);
+    let r_sma = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_sma, r_sms, r_smo);
+    let f_sv = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_sv, r_sma);
+    let f_nm = ptx_alloc_f(vtab); emit_ptx_binop_f3(4, f_nm, f_locmax, f_sv);
+    emit_ptx_mov_f_reg(f_locmax, f_nm);
+    emit_ptx_ri_imm(0, r_jm, r_jm, 256);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(2, lbjm); emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbjm);
+    let f_max = emit_ptx_smem_tree_reduce(r_tx, r_red, f_locmax, 4, vtab);
+    // (b) rowsum l: per-thread strided sum of exp(s_j - m), then SMEM tree add.
+    let f_locsum = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_locsum);
+    let r_js = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_js, r_tx);
+    let lbjs = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbjs);
+    let p_js = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_js, r_js, r_S);
+    emit_ptx_bra_ifnot(p_js, 3, lbjs);
+    let r_sso2 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_sso2, r_js, 4);
+    let r_ssa2 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ssa2, r_sms, r_sso2);
+    let f_sv2 = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_sv2, r_ssa2);
+    let f_dmx = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_dmx, f_sv2, f_max);   // s_j - m
+    let f_e = emit_ptx_exp_reg(f_dmx, vtab);                                     // exp(s_j - m)
+    // OVERWRITE smem_scores[j] with the unnormalized weight e=exp(s_j-m) so Phase 3
+    // does NOT recompute exp (the raw score is no longer needed). The /l normalization
+    // is folded into Phase 3 via inv. This halves the exp() count (S instead of 2S).
+    emit_ptx_st_shared(r_ssa2, f_e);
+    let f_ns = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_ns, f_locsum, f_e);
+    emit_ptx_mov_f_reg(f_locsum, f_ns);
+    emit_ptx_ri_imm(0, r_js, r_js, 256);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(2, lbjs); emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbjs);
+    let f_sum = emit_ptx_smem_tree_reduce(r_tx, r_red, f_locsum, 0, vtab);
+    // inv = 1/l (reciprocal via 1.0/sum so the per-key weight is exp(s_j-m)*inv).
+    let f_one = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);
+    emit_ptx_byte(32); emit_ptx_f(f_one);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_byte(48); emit_ptx_byte(102);                       // 0f3F800000 = 1.0
+    emit_ptx_byte(51); emit_ptx_byte(70); emit_ptx_byte(56);
+    emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48); emit_ptx_byte(48);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    let f_inv = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_inv, f_one, f_sum);   // 1.0/l
+    // barrier: make every thread's smem_scores[j]=e overwrite (Phase 2 sum loop)
+    // visible before Phase 3 reads ALL of them.
+    emit_ptx_bar_sync();
+    // ============ PHASE 3: OUTPUT, 256-thread PARALLEL P@V (= [1,S]@[S,d]).
+    // ALL 256 threads share the key-sum so Phase 3 is no longer the d-thread serial
+    // bottleneck. With tpc = 256/d threads-per-column (d divides 256: d in {16,32,
+    // 64,128,256} -> tpc in {16,8,4,2,1}), thread tid maps to:
+    //   ksub = tid / d   (which slice of the key range it sums)
+    //   col  = tid - ksub*d   (= tid % d, the output column it contributes to)
+    // partial = sum over j = ksub, ksub+tpc, ... < S of w_j * V[j*d+col],
+    // w_j = smem_scores[j]*inv (smem_scores holds e=exp(s_j-m) from Phase 2). Each
+    // thread writes its partial to smem_red[tid]; after a barrier the column owner
+    // (ksub==0, tid<d) sums the tpc partials smem_red[k*d+col], k in [0,tpc), and
+    // stores out[i*d+col]. Coalesced V reads (consecutive tid -> consecutive col).
+    // tpc = 256 / d  (threads cooperating per output column).
+    let r_c256 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_c256, 256);
+    let r_tpc = ptx_alloc_reg(vtab); emit_ptx_div_rr(r_tpc, r_c256, r_d);
+    let r_ksub = ptx_alloc_reg(vtab); emit_ptx_div_rr(r_ksub, r_tx, r_d);   // tid / d
+    let r_kd = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_kd, r_ksub, r_d);     // ksub*d
+    let r_col = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_col, r_tx, r_kd);    // tid - ksub*d
+    // partial = sum_{j=ksub; j<S; j+=tpc} w_j * V[j*d+col].
+    let f_part3 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_part3);
+    let r_jo = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_jo, r_ksub);
+    let lbjo = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbjo);
+    let p_jo = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_jo, r_jo, r_S);
+    emit_ptx_bra_ifnot(p_jo, 3, lbjo);
+    let r_smo3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_smo3, r_jo, 4);
+    let r_sma3 = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_sma3, r_sms, r_smo3);
+    let f_e3 = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_e3, r_sma3);            // e=exp(s_j-m)
+    let f_w = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_w, f_e3, f_inv);       // weight w_j
+    let r_vbase = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_vbase, r_jo, r_d);
+    let r_vidx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_vidx, r_vbase, r_col); // j*d + col
+    let f_vv = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_vv, rd_v, r_vidx, vtab);
+    let f_wv = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_wv, f_w, f_vv);       // w*V
+    let f_aa = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_aa, f_part3, f_wv);   // partial += w*V
+    emit_ptx_mov_f_reg(f_part3, f_aa);
+    let r_jn = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_jn, r_jo, r_tpc);        // j += tpc
+    emit_ptx_mov_rr(r_jo, r_jn);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(2, lbjo); emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbjo);
+    // smem_red[tid] = partial ; barrier ; column owners (ksub==0) reduce + store.
+    let r_po = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_po, r_tx, 4);         // tid*4
+    let r_pa = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_pa, r_red, r_po);
+    emit_ptx_st_shared(r_pa, f_part3);
+    emit_ptx_bar_sync();
+    // owner: tid < d  (ksub==0). acc = sum_{k=0}^{tpc-1} smem_red[(k*d+col)] ; out[i*d+col]=acc.
+    let lblo = ptx_alloc_label(vtab);
+    emit_ptx_bra_ifnot(p_act, 4, lblo);          // @!(tid<d) bra $Lskip_<lblo>
+    let f_acc = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_acc);
+    let r_k3 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_k3, 0);
+    let r_idxk = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_idxk, r_tx);           // k*d+col, k=0 -> tid(=col)
+    let lblk3 = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lblk3);
+    let p_k3 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_k3, r_k3, r_tpc);
+    emit_ptx_bra_ifnot(p_k3, 3, lblk3);
+    let r_pko = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_pko, r_idxk, 4);     // (k*d+col)*4
+    let r_pka = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_pka, r_red, r_pko);
+    let f_pv3 = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_pv3, r_pka);
+    let f_ac3 = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_ac3, f_acc, f_pv3);
+    emit_ptx_mov_f_reg(f_acc, f_ac3);
+    let r_idxn = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_idxn, r_idxk, r_d);    // += d
+    emit_ptx_mov_rr(r_idxk, r_idxn);
+    emit_ptx_ri_imm(0, r_k3, r_k3, 1);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);
+    emit_ptx_lbl_ref(2, lblk3); emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lblk3);
+    let r_oi = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_oi, r_qbase, r_tx);      // i*d + col (tid<d -> tid=col)
+    emit_ptx_gstore_f32(rd_o, r_oi, f_acc, vtab);
+    emit_ptx_label_def(4, lblo);                 // $Lskip_<lblo>:
+    0 - 1
+}
+// "__flash_attention" (17 chars) name matcher.
+fn ptx_name_is_flash_attention(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 17 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 102 { ok = 0; };   // f
+        if __arena_get(name_s + 3) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 4) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 5) != 115 { ok = 0; };   // s
+        if __arena_get(name_s + 6) != 104 { ok = 0; };   // h
+        if __arena_get(name_s + 7) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 8) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 9) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 10) != 116 { ok = 0; };  // t
+        if __arena_get(name_s + 11) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 12) != 110 { ok = 0; };  // n
+        if __arena_get(name_s + 13) != 116 { ok = 0; };  // t
+        if __arena_get(name_s + 14) != 105 { ok = 0; };  // i
+        if __arena_get(name_s + 15) != 111 { ok = 0; };  // o
+        if __arena_get(name_s + 16) != 110 { ok = 0; };  // n
+        ok
+    }
+}
 // T3/G3: name-matcher for "__tf32_matmul_mma" (17 chars). Mirrors
 // ptx_name_is_tiled_matmul_smem.
 fn ptx_name_is_tf32_matmul_mma(name_s: i32, name_l: i32) -> i32 {
@@ -13537,9 +13862,11 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_softmax_blockred(node, vtab)   // T2/M4: block-reduction row softmax
     } else { if ptx_name_is_layernorm_blockred(name_s, name_l) == 1 {
         emit_ptx_layernorm_blockred(node, vtab) // T2/M4: block-reduction row layernorm
+    } else { if ptx_name_is_flash_attention(name_s, name_l) == 1 {
+        emit_ptx_flash_attention(node, vtab)    // T2/M4: fused flash-style attention
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
