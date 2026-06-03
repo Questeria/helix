@@ -286,7 +286,22 @@ chk "$GENC/M5_bare_generic_bound.hx" 0; chk "$GENC/M7_privacy_bound.hx" 42; chk 
 # Library-level, NO kovc.hx change -> fixpoint byte-identical (verified via the
 # fast inner loop: K2 sha == the H-3 mint bdff0049...).
 chk "$GENC/H1_vec.hx" 42; chk "$GENC/H1_hashmap.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 73 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42])"
+# T3 H-2 RICH STRING (2026-06-03, charter §1.6 HIGH): an arena-backed String
+# (str_new/str_push_byte/str_len/str_byte_at/str_concat/str_eq with GROWTH on
+# push). Library = stdlib/string.hx; this corpus program inlines it (no
+# external-module loader) and exercises the full round-trip end-to-end:
+#   H2_string: build "Hel"+"lix" byte-by-byte -> str_concat -> "Hellix" (the
+#     concat result starts cap 4, receives 6 bytes -> forces a grow 4->8) ->
+#     index byte[0]='H'(72) & byte[5]='x'(120) back out -> str_eq EQUAL (vs an
+#     independently-built "Hellix"), UNEQUAL-same-length ("Hel" vs "lix"),
+#     UNEQUAL-diff-length (short-circuit), and a one-byte-diff ("Helliy") ->
+#     exit = str_len("Hellix") * 7 = 42 (runtime-derived). A string LITERAL as
+#     a value lowers to mov eax,0, so every byte/eq/concat op runs at RUNTIME
+#     over arena bytes (nothing folds). Library-level, NO kovc.hx change ->
+#     fixpoint byte-identical (verified via the fast inner loop: K2 sha == the
+#     H-3 mint bdff0049...).
+chk "$GENC/H2_string.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 74 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -332,7 +347,8 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 # T3 (2026-06-03): bumped 65 -> 71 for 3 desugar promotions (M-1 for / M-2 op= / L-4 &&||)
 #                  + 3 doc-as-bound bound-provers (M-5 bare-generic / M-7 privacy / L-3 non-exhaustive).
 # T3 (2026-06-03): bumped 71 -> 73 for H-1 packaged collections (H1_vec growth + H1_hashmap collision).
-if [ "$pass" -lt 73 ]; then echo "  CORPUS REGRESSION (pass=$pass < 73)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 73 -> 74 for H-2 rich String (H2_string: concat + eq + byte_at round-trip).
+if [ "$pass" -lt 74 ]; then echo "  CORPUS REGRESSION (pass=$pass < 74)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure
