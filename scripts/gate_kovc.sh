@@ -239,10 +239,16 @@ chk "$GENC/g1_guard_true.hx" 1; chk "$GENC/g2_guard_false.hx" 0; chk "$GENC/g3_g
 chk "$GENC/L1_i64_big.hx" 30; chk "$GENC/L2_i64_bigger.hx" 50; chk "$GENC/L3_i64_just_over.hx" 22
 # T3 >6-arg SysV stack-pass (2026-06-02): params beyond the 6th go on the stack.
 chk "$CD/f8_args.hx" 36; chk "$CD/f9_args.hx" 45; chk "$CD/f11_args.hx" 66
-echo "  CORPUS: $pass passed, $fail failed (expect 59 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66])"
+# T3 L-1 index-STORE hardening (2026-06-03, charter §1.6 LOW): `arr[i] = e` promoted
+# [impl]->[proven]. Runtime-computed index+value through the mutable-array store path
+# (emit_index_store_cpu, kovc.hx:6896, AST_INDEX_STORE tag 55), incl a same-slot
+# overwrite; arr_idx above only READS. -> 42.
+chk "$GENC/L1_index_store.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 60 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42])"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
 # T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
-if [ "$pass" -lt 59 ]; then echo "  CORPUS REGRESSION (pass=$pass < 59)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 59 -> 60 for the L-1 index-store program.
+if [ "$pass" -lt 60 ]; then echo "  CORPUS REGRESSION (pass=$pass < 60)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
