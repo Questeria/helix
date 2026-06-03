@@ -252,12 +252,33 @@ chk "$GENC/L1_index_store.hx" 42
 # gated, i8/u32 were not). No kovc.hx change (codegen pre-existed as [impl]).
 chk "$GENC/arm_neg.hx" 42; chk "$GENC/arm_bnot.hx" 42; chk "$GENC/arm_not.hx" 42
 chk "$GENC/arm_i8_width.hx" 42; chk "$GENC/arm_u32_width.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 65 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42])"
+# T3 §1.6 PARSER-DESUGAR promotions (2026-06-03, charter §1.6 MED/LOW): three desugars
+# that were already implemented in parser.hx but had no gated corpus row. The self-host
+# source uses plain `while` / `x = x + ...` / nested `if`, NEVER the new syntax, so these
+# promotions keep the fixpoint byte-identical (b7e741c0) -- exercised only here through K2.
+#   M-1 `for` loops (parse_for, parser.hx:16017): exclusive/inclusive/var-bound ranges -> 42.
+#   M-2 compound assign `op=` (K1.U/K1.AN, parser.hx:7786): all 10 operators +=..>>= -> 42.
+#   L-4 `&&`/`||` short-circuit (K1.M-fix, parser.hx:2267): desugars to AST_IF (branch ->
+#       untaken arm skipped). PROVES the RHS side effect is NOT evaluated when the LHS
+#       decides, via arena-slot side-effect channels (skipped slots stay 0, run slots set 1) -> 42.
+chk "$GENC/M1_for_loop.hx" 42; chk "$GENC/M2_compound_assign.hx" 42; chk "$GENC/L4_short_circuit.hx" 42
+# T3 §1.6 DOCUMENT-AS-BOUND negative/bound-proving rows (2026-06-03): each LOCKS a real,
+# reproduced v1.2 limitation -- the compiler ACCEPTS (or mis-types) code that Rust rejects.
+#   M-5 bare non-i32 scalar generic: `id(3.0_f32)` defaults T->i32 -> 0 (NOT 3); the
+#       supported idiom is explicit turbofish id::<f32> (->3) / add2::<f32> (->5). Exit 0.
+#   M-7 module privacy: a private (non-pub) `secret::hidden()` is ACCEPTED and RUNS (no
+#       privacy enforcement) -> 42; Rust rejects (error[E0603] private). Exit 42 proves it.
+#   L-3 match-exhaustiveness: a payload-enum match omitting the Err arm is ACCEPTED and runs
+#       the covered Ok arm -> 42; Rust rejects (non-exhaustive patterns). Exit 42 proves it.
+chk "$GENC/M5_bare_generic_bound.hx" 0; chk "$GENC/M7_privacy_bound.hx" 42; chk "$GENC/L3_nonexhaustive_bound.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 71 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42])"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
 # T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
 # T3 (2026-06-03): bumped 59 -> 60 for the L-1 index-store program.
 # T3 (2026-06-03): bumped 60 -> 65 for the 5 L-7 dark-arm rows (neg/bnot/not/i8/u32).
-if [ "$pass" -lt 65 ]; then echo "  CORPUS REGRESSION (pass=$pass < 65)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 65 -> 71 for 3 desugar promotions (M-1 for / M-2 op= / L-4 &&||)
+#                  + 3 doc-as-bound bound-provers (M-5 bare-generic / M-7 privacy / L-3 non-exhaustive).
+if [ "$pass" -lt 71 ]; then echo "  CORPUS REGRESSION (pass=$pass < 71)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
