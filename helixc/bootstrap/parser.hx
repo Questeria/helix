@@ -3128,9 +3128,40 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         set_last_closure_idx(sb, closure_id);
         __arena_set(sb + 58, captures_persist_ptr);
         __arena_set(sb + 59, cap_count);
-        // Return a placeholder AST_INT(0). The closure's runtime value is
-        // unused — only the binding name matters at the call site.
-        mk_node(0, 0, 0, 0)
+        // T3 §1.6 M-6 (2026-06-03): the closure literal's VALUE node.
+        //
+        // For a NON-CAPTURING closure, the synthesized `__closure_<id>` is a
+        // plain top-level fn whose runtime address IS a valid function
+        // pointer. Returning AST_VAR(`__closure_<id>`) makes the closure a
+        // first-class value: codegen's A2a arm (an AST_VAR naming a known fn)
+        // emits `lea rax, [rip+__closure_<id>]`, so the closure can be PASSED
+        // AS AN ARGUMENT and invoked indirectly inside the callee via A2b
+        // (`call r11` through the bound param). Closes M-6 for the no-capture
+        // case (charter probe `apply(|y| y+1, 41)`): pre-fix the literal
+        // returned AST_INT(0), the fn pointer was lost, and the callee did
+        // `call *0` -> SIGSEGV(139).
+        //
+        // The existing local-binding path (`let g = |x| ...; g(...)`) is
+        // UNAFFECTED: parse_let still registers `g` in cl_var_tab off
+        // last_closure_idx, so `g(args)` rewrites to the DIRECT
+        // `__closure_<id>(args...)` named call; the fn pointer now stored in
+        // g's slot is simply unused on that by-name path (harmless), and is
+        // the correct value if `g` is later passed BY VALUE as an argument.
+        //
+        // For a CAPTURING closure we keep AST_INT(0): the synthesized fn
+        // takes the captures as extra LEADING params
+        // (`__closure_<id>(cap0, ..., params...)`), so a bare flat fn pointer
+        // cannot carry the captured environment. The by-name local-call path
+        // (which injects the captures positionally at the call site) still
+        // works for `let c = |x| x+n; c(2)`. Passing a CAPTURING closure as a
+        // value/argument is a documented v1.2 bound (needs a heap closure
+        // object: env + fn-ptr); the 0 placeholder makes that case fail LOUD
+        // (`call *0` -> SIGSEGV) rather than silently dropping the capture.
+        if cap_count == 0 {
+            mk_node(1, name_start, name_len, 0)
+        } else {
+            mk_node(0, 0, 0, 0)
+        }
         }      // Stage 29 fix: closes the `else` branch of nonint_capture
     }
 }
@@ -3468,8 +3499,11 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         //      the user's fn list,
         //   5. registers (captures_ptr, cap_count) in scratch slots 57..59
         //      so parse_let can record the binding in cl_var_tab.
-        // Returns AST_INT(0) as the closure value; the runtime value is
-        // unused — only the binding name matters at the call site.
+        // M-6 (2026-06-03): returns AST_VAR(__closure_<id>) for a NON-
+        // capturing closure (so the literal evaluates to a real fn pointer
+        // and can be passed as an argument / called indirectly), or
+        // AST_INT(0) for a capturing closure (whose env can't ride a flat
+        // fn pointer -- the by-name call-site path injects captures instead).
         parse_closure_lit(tok_base, sb)
     } else { if t == 1 {
         let v = tok_p1(tok_base, k);

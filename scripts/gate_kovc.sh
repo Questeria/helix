@@ -358,7 +358,27 @@ chk "$GENC/eret_option.hx" 42
 # + unit None turbofish selecting the None arm; runtime-derived so nothing
 # folds. gen_option_i32: the charter probe -- turbofish Some matched to 42.
 chk "$GENC/M4_turbofish_enum.hx" 42; chk "$GENC/gen_option_i32.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 82 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42])"
+# T3 §1.6 M-6 CLOSURE-AS-ARGUMENT (2026-06-03, charter §1.6 MED): passing a
+# (non-capturing) closure AS AN ARGUMENT to a higher-order fn that INVOKES it
+# now works. Pre-fix the closure literal in arg position lowered to AST_INT(0)
+# (the fn pointer was lost) -> the callee did `call *0` -> SIGSEGV(139). The
+# fix (helixc/bootstrap/parser.hx, parse_closure_lit) returns
+# AST_VAR(__closure_<id>) for a no-capture closure: codegen A2a emits
+# `lea rax,[rip+__closure_<id>]` (a real fn pointer), which flows as the arg,
+# and the callee invokes it indirectly via A2b (`call r11` through the bound
+# param). Capturing closures keep AST_INT(0) (the by-name call path injects
+# their env positionally; passing a capturing closure by value is a documented
+# v1.2 bound). parser.hx changed -> fixpoint sha MOVES off 0f846aea; K2==K3==K4
+# stay byte-identical (the self-host source has no closures-as-args).
+#   M6_closure_arg: apply1/twice/apply2/choose -- a closure passed as an arg &
+#     invoked (incl the SAME closure twice, two invocations, and TWO distinct
+#     closure args); runtime-derived -> 42.
+#   t6_closure_arg: the charter probe apply(|y| y+1, 41) (pre-fix SIGSEGV) -> 42.
+#   M6_capture_regression: a CAPTURING closure called by name still works
+#     (the fix must not disturb the capture path) -> 42.
+chk "$GENC/M6_closure_arg.hx" 42; chk "$GENC/t6_closure_arg.hx" 42
+chk "$GENC/M6_capture_regression.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 82 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -411,7 +431,10 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 #   + t5 default/override mix -- the last HIGH §1.6 item).
 # T3 (2026-06-03): bumped 82 -> 84 for M-4 turbofish-on-enum-constructor
 #   (M4_turbofish_enum payload+unit -> 42, gen_option_i32 turbofish-match -> 42).
-if [ "$pass" -lt 84 ]; then echo "  CORPUS REGRESSION (pass=$pass < 84)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 84 -> 87 for M-6 closure-as-argument (M6_closure_arg
+#   multi-form -> 42, t6_closure_arg charter probe -> 42, M6_capture_regression
+#   capturing-by-name -> 42).
+if [ "$pass" -lt 87 ]; then echo "  CORPUS REGRESSION (pass=$pass < 87)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure
