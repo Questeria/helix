@@ -9,9 +9,19 @@
 # Usage: python3 oracle_train.py              (self-check the backward, train K=500, compare)
 import numpy as np, sys, os
 
-V, D, S, H, NL = 32, 16, 16, 64, 2
+# Dims default to the v1.0 capstone (V=32,D=16,S=16,H=64,NL=2) so the existing v1.0
+# capstone audit is byte-for-byte unchanged. The M6 scale-up re-train overrides them via
+# env (HX_V/HX_D/HX_S/HX_H/HX_NL) to a representative size where the tiled+Tensor-Core
+# kernels are valid (every matmul axis a multiple of 64) -- the SAME transformer math at a
+# larger scale, so the 2% loss-parity check stays a real, identical-math correctness gate.
+V  = int(os.environ.get("HX_V",  32))
+D  = int(os.environ.get("HX_D",  16))
+S  = int(os.environ.get("HX_S",  16))
+H  = int(os.environ.get("HX_H",  64))
+NL = int(os.environ.get("HX_NL", 2))
 B1, B2, LR, EPS = 0.9, 0.999, 1e-3, 1e-8
-K = 500
+K = int(os.environ.get("HX_K", 500))
+SCALE = 1.0 / np.sqrt(float(D))   # attention scale 1/sqrt(d); 0.25 at d=16, 0.125 at d=64
 
 def layernorm(x, g, b):
     mu = x.mean(1, keepdims=True); var = ((x - mu) ** 2).mean(1, keepdims=True); ist = 1.0 / np.sqrt(var)
@@ -50,7 +60,7 @@ def forward(W, save=False):
     for L in range(NL):
         xn1, xh1, ist1 = layernorm(x, W[f"LN1g{L}"], W[f"LN1b{L}"])
         Q = xn1 @ W[f"Wq{L}"]; Kk = xn1 @ W[f"Wk{L}"]; Vv = xn1 @ W[f"Wv{L}"]
-        sc = 0.25 * (Q @ Kk.T); at = softmax(sc); ao = at @ Vv; proj = ao @ W[f"Wo{L}"]; h1 = x + proj
+        sc = SCALE * (Q @ Kk.T); at = softmax(sc); ao = at @ Vv; proj = ao @ W[f"Wo{L}"]; h1 = x + proj
         xn2, xh2, ist2 = layernorm(h1, W[f"LN2g{L}"], W[f"LN2b{L}"])
         a = xn2 @ W[f"W1{L}"]; g = gelu(a); m = g @ W[f"W2{L}"]; h2 = h1 + m
         if save: acts[L] = dict(x=x, xn1=xn1, xh1=xh1, ist1=ist1, Q=Q, K=Kk, Vv=Vv, at=at, ao=ao, h1=h1, xn2=xn2, xh2=xh2, ist2=ist2, a=a, g=g)
@@ -88,7 +98,7 @@ def backward(W, acts):
         dVv = ac["at"].T @ dao
         dattn = dao @ ac["Vv"].T
         dsc = ac["at"] * (dattn - (dattn * ac["at"]).sum(1, keepdims=True))
-        dQ = 0.25 * (dsc @ ac["K"]); dK = 0.25 * (dsc.T @ ac["Q"])
+        dQ = SCALE * (dsc @ ac["K"]); dK = SCALE * (dsc.T @ ac["Q"])
         G[f"Wq{L}"] = ac["xn1"].T @ dQ; G[f"Wk{L}"] = ac["xn1"].T @ dK; G[f"Wv{L}"] = ac["xn1"].T @ dVv
         dxn1 = dQ @ W[f"Wq{L}"].T + dK @ W[f"Wk{L}"].T + dVv @ W[f"Wv{L}"].T
         dxl1, G[f"LN1g{L}"], G[f"LN1b{L}"] = ln_bwd(dxn1, ac["xh1"], ac["ist1"], W[f"LN1g{L}"])
