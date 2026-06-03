@@ -1043,6 +1043,89 @@ int main(int argc, char** argv) {
         return sbad ? 1 : 0;
     }
 
+    /* softmax_perf mode (T2/M4): cuda_launch <combined.ptx> softmax_blockred <Nignored>
+     *   softmax_perf <rows> <cols> [mutate].
+     * Correctness + faster-than-naive harness for the WARP/BLOCK-REDUCTION row softmax.
+     * combined.ptx carries BOTH the kovc block-reduction kernel (argv[2], here
+     * softmax_blockred) AND the naive one-thread-per-row gpu_softmax (the baseline).
+     *  (a) CORRECTNESS: every cell of the block-reduction y vs a CPU stable-softmax
+     *      reference (expf, max-subtracted); report maxrel + a per-row sum~1 check. The
+     *      tol accounts HONESTLY for the kernel's ex2.approx exp (sm_86 ~2^-22) -- tol
+     *      SM_TOL (default 1e-3, the same the naive softmax mode uses).
+     *  (b) TIMING (kernel-only, cuEvent): block-reduction grid=(rows,1,1) block=(256,1,1)
+     *      vs naive grid=(rows,1,1) block=(1,1,1); report medians + speedup-vs-naive.
+     * The optional "mutate" perturbs one y cell pre-compare (comparator negative control
+     * -> must FAIL). The bar.sync-strip neg-control is driven by the corpus script. */
+    if (strcmp(op, "softmax_perf") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 64;
+        int cols = (argc > 6) ? atoi(argv[6]) : 256;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        float SM_TOL = 1.0e-3f; { const char* e; if ((e = getenv("SM_TOL"))) SM_TOL = (float)atof(e); }
+        CUfunction f_naive;
+        CK(cuModuleGetFunction(&f_naive, mod, "gpu_softmax"), "get gpu_softmax (naive baseline)");
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hy) return 2;
+        for (size_t i = 0; i < ne; i++) { hx[i] = (float)((int)((i * 7 + 3) % 13) - 6); hy[i] = -1.0f; }
+        CUdeviceptr dx, dy;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "H2D y(sentinel)");
+        void* sargs[] = { &dx, &dy, &rows, &cols };
+        /* block-reduction launch: ONE block of 256 threads per row. */
+        CK(cuLaunchKernel(fn, rows, 1, 1, 256, 1, 1, 0, 0, sargs, 0), "launch softmax_blockred");
+        CK(cuCtxSynchronize(), "sync softmax_blockred");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        if (mutate) hy[0] += 1.0f;   /* comparator negative control */
+        /* CPU stable-softmax reference: maxrel + per-row sum~1. */
+        int sbad = 0; float maxrel = 0.0f, maxsumerr = 0.0f;
+        for (int r = 0; r < rows; r++) {
+            float mx = hx[r * cols];
+            for (int j = 1; j < cols; j++) if (hx[r * cols + j] > mx) mx = hx[r * cols + j];
+            float sm = 0.0f;
+            for (int kk = 0; kk < cols; kk++) sm += expf(hx[r * cols + kk] - mx);
+            float rowsum = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float ref = expf(hx[r * cols + c] - mx) / sm;
+                float got = hy[r * cols + c];
+                rowsum += got;
+                float d = got - ref; if (d < 0) d = -d;
+                float ar = ref < 0 ? -ref : ref; float rel = d / (ar > 1e-6f ? ar : 1e-6f);
+                if (rel > maxrel) maxrel = rel;
+                if (isnan(got) || (d > SM_TOL && rel > SM_TOL)) { if (sbad < 6) fprintf(stderr, "softmax_perf mismatch y[%d,%d]=%g ref %g (rel %.2e)\n", r, c, got, ref, rel); sbad++; }
+            }
+            float ds = rowsum - 1.0f; if (ds < 0) ds = -ds; if (ds > maxsumerr) maxsumerr = ds;
+            if (isnan(rowsum) || ds > 1.0e-3f) { if (sbad < 6) fprintf(stderr, "softmax_perf row %d sum %g (want 1)\n", r, rowsum); sbad++; }
+        }
+        /* TIMING (kernel-only): block-reduction vs naive. */
+        double br_med = 0.0, nv_med = 0.0;
+        if (!mutate) {
+            int WARM = 5, ITERS = 50;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, rows, 1, 1, 256, 1, 1, 0, 0, sargs, 0), "warm br");
+            CK(cuCtxSynchronize(), "sync warm br");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0, 0), "r0"); CK(cuLaunchKernel(fn, rows, 1, 1, 256, 1, 1, 0, 0, sargs, 0), "time br"); CK(cuEventRecord(e1, 0), "r1"); CK(cuEventSynchronize(e1), "es"); CK(cuEventElapsedTime(&ts[it], e0, e1), "el"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            br_med = (double)ts[ITERS / 2];
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(f_naive, rows, 1, 1, 1, 1, 1, 0, 0, sargs, 0), "warm nv");
+            CK(cuCtxSynchronize(), "sync warm nv");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0, 0), "n0"); CK(cuLaunchKernel(f_naive, rows, 1, 1, 1, 1, 1, 0, 0, sargs, 0), "time nv"); CK(cuEventRecord(e1, 0), "n1"); CK(cuEventSynchronize(e1), "nes"); CK(cuEventElapsedTime(&ts[it], e0, e1), "nel"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            nv_med = (double)ts[ITERS / 2];
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts);
+            printf("GPU [%s] TIMING softmax %dx%d: blockred med=%.4f ms  naive med=%.4f ms  SPEEDUP=%.2fx\n", gpu, rows, cols, br_med, nv_med, nv_med / br_med);
+        }
+        printf("GPU [%s] softmax_perf (block-reduction 256t/row) %dx%d%s: maxrel=%.2e (tol=%.0e) max|rowsum-1|=%.2e, %d bad -> %s\n",
+               gpu, rows, cols, mutate ? " [MUTATED]" : "", maxrel, SM_TOL, maxsumerr, sbad, sbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(ptx);
+        return sbad ? 1 : 0;
+    }
+
     /* gelu_backward mode: cuda_launch <ptx> gpu_gelu_backward <N> gelu_backward.
      * dx = dy * gelu'(x). INDEPENDENT ref = central finite-difference of the GELU FORWARD
      * (uses tanhf, does NOT share the kernel's analytic derivative): gp_fd=(gelu(x+h)-gelu(x-h))/2h,
@@ -1205,6 +1288,89 @@ int main(int argc, char** argv) {
         }
         printf("GPU [%s] layernorm %dx%d (gamma/beta affine-checked): row0 mean=%g (want 0), %d bad -> %s\n",
                gpu, rows, cols, r0m, lbad, lbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(hg); free(hbe);
+        return lbad ? 1 : 0;
+    }
+
+    /* layernorm_perf mode (T2/M4): cuda_launch <combined.ptx> layernorm_blockred <Nignored>
+     *   layernorm_perf <rows> <cols> [mutate].
+     * Correctness + faster-than-naive harness for the WARP/BLOCK-REDUCTION row LayerNorm.
+     * combined.ptx carries BOTH the kovc block-reduction kernel (argv[2]) AND the naive
+     * one-thread-per-row gpu_layernorm (baseline). Non-trivial per-column gamma/beta (so a
+     * kernel that ignored gamma/beta would mismatch). CORRECTNESS: every cell vs a CPU
+     * affine layernorm reference gamma[c]*(x-mean)/sqrt(var)+beta[c]; report maxrel. The tol
+     * (LN_TOL, default 1e-3) accounts HONESTLY for rsqrt.approx. TIMING: block-reduction
+     * grid=(rows,1,1) block=(256,1,1) vs naive block=(1,1,1); speedup-vs-naive. The "mutate"
+     * arg perturbs one y cell (comparator neg-control -> must FAIL). */
+    if (strcmp(op, "layernorm_perf") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 64;
+        int cols = (argc > 6) ? atoi(argv[6]) : 256;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        float LN_TOL = 1.0e-3f; { const char* e; if ((e = getenv("LN_TOL"))) LN_TOL = (float)atof(e); }
+        CUfunction f_naive;
+        CK(cuModuleGetFunction(&f_naive, mod, "gpu_layernorm"), "get gpu_layernorm (naive baseline)");
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        float* hg = (float*)malloc((size_t)cols * sizeof(float));
+        float* hbe = (float*)malloc((size_t)cols * sizeof(float));
+        if (!hx || !hy || !hg || !hbe) return 2;
+        for (size_t i = 0; i < ne; i++) hx[i] = (float)((int)((i * 7 + 3) % 13) - 6);
+        for (int c = 0; c < cols; c++) { hg[c] = 1.0f + 0.25f * (float)(c % 4); hbe[c] = 0.5f * (float)((c % 3) - 1); }
+        CUdeviceptr dx, dy, dg, db;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemAlloc(&dg, (size_t)cols * sizeof(float)), "alloc g");
+        CK(cuMemAlloc(&db, (size_t)cols * sizeof(float)), "alloc b");
+        for (size_t i = 0; i < ne; i++) hy[i] = -7.0f;
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "H2D y(sentinel)");
+        CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "H2D g");
+        CK(cuMemcpyHtoD(db, hbe, (size_t)cols * sizeof(float)), "H2D b");
+        void* largs[] = { &dx, &dy, &dg, &db, &cols };
+        CK(cuLaunchKernel(fn, rows, 1, 1, 256, 1, 1, 0, 0, largs, 0), "launch layernorm_blockred");
+        CK(cuCtxSynchronize(), "sync layernorm_blockred");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        if (mutate) hy[0] += 1.0f;
+        /* CPU affine layernorm reference: maxrel. */
+        int lbad = 0; float maxrel = 0.0f;
+        for (int r = 0; r < rows; r++) {
+            float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[r * cols + c]; mean /= (float)cols;
+            float v = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[r * cols + c] - mean; v += d * d; } v /= (float)cols;
+            float inv = 1.0f / sqrtf(v);
+            for (int c = 0; c < cols; c++) {
+                float norm = (hx[r * cols + c] - mean) * inv;
+                float ref = hg[c] * norm + hbe[c];
+                float got = hy[r * cols + c];
+                float d = got - ref; if (d < 0) d = -d;
+                float ar = ref < 0 ? -ref : ref; float rel = d / (ar > 1e-6f ? ar : 1e-6f);
+                if (rel > maxrel) maxrel = rel;
+                if (isnan(got) || (d > LN_TOL && rel > LN_TOL)) { if (lbad < 6) fprintf(stderr, "layernorm_perf mismatch y[%d,%d]=%g ref %g (rel %.2e)\n", r, c, got, ref, rel); lbad++; }
+            }
+        }
+        /* TIMING (kernel-only): block-reduction vs naive. */
+        double br_med = 0.0, nv_med = 0.0;
+        if (!mutate) {
+            int WARM = 5, ITERS = 50;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, rows, 1, 1, 256, 1, 1, 0, 0, largs, 0), "warm br");
+            CK(cuCtxSynchronize(), "sync warm br");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0, 0), "r0"); CK(cuLaunchKernel(fn, rows, 1, 1, 256, 1, 1, 0, 0, largs, 0), "time br"); CK(cuEventRecord(e1, 0), "r1"); CK(cuEventSynchronize(e1), "es"); CK(cuEventElapsedTime(&ts[it], e0, e1), "el"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            br_med = (double)ts[ITERS / 2];
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(f_naive, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "warm nv");
+            CK(cuCtxSynchronize(), "sync warm nv");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0, 0), "n0"); CK(cuLaunchKernel(f_naive, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "time nv"); CK(cuEventRecord(e1, 0), "n1"); CK(cuEventSynchronize(e1), "nes"); CK(cuEventElapsedTime(&ts[it], e0, e1), "nel"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            nv_med = (double)ts[ITERS / 2];
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts);
+            printf("GPU [%s] TIMING layernorm %dx%d: blockred med=%.4f ms  naive med=%.4f ms  SPEEDUP=%.2fx\n", gpu, rows, cols, br_med, nv_med, nv_med / br_med);
+        }
+        printf("GPU [%s] layernorm_perf (block-reduction 256t/row, affine) %dx%d%s: maxrel=%.2e (tol=%.0e), %d bad -> %s\n",
+               gpu, rows, cols, mutate ? " [MUTATED]" : "", maxrel, LN_TOL, lbad, lbad ? "FAIL" : "PASS");
         cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hx); free(hy); free(hg); free(hbe);

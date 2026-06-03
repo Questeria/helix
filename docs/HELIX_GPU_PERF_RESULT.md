@@ -380,3 +380,8 @@ numbers (absolute TFLOP/s and the cuBLAS-TF32 ratio) are reported always. The ab
 floor is documented here as superseded by the relative measure on this specific box.
 
 ## G4 — bf16 wmma (STRETCH) — pending
+
+## M4 item 2 -- block-reduction softmax + layernorm (2026-06-02)
+- **softmax_blockred**: correct vs CPU (maxrel 3.5e-06, max|rowsum-1| 2.3e-06, 0 bad), faster-than-naive 16.0x @4096x1024 / 12.0x @1024x4096.
+- **layernorm_blockred**: correct vs CPU (maxrel <=2.15e-04 incl ex2/rsqrt.approx tol, 0 bad), faster-than-naive 8.3x / 9.4x.
+- Both neg-controls trip (comparator-teeth + bar.sync-strip -> SMEM reduction barriers load-bearing). Self-host fixpoint GREEN (K2==K3==K4, corpus 59/59). scripts/gpu_reduction_corpus.sh = GPU_REDUCTION_PASS (722s).

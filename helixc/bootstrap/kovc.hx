@@ -1914,11 +1914,20 @@ fn fn_table_lookup(state: i32, name_start: i32, name_len: i32) -> i32 {
 // 2059 LEAs), overflowing the 4096 cap and dropping ~2700 patches
 // (LEA disps stayed 0 → K2 read from wrong arena base → empty K3).
 // 16384 gives 2.4x headroom over the new measured 6800.
+// T2/M4 (2026-06-02): bumped 16384 → 32768. The k1input self-source patch
+// count (CALL + LEA) had crept up with each op-set milestone and the M4
+// block-reduction softmax/layernorm emitters tipped it just OVER 16384 —
+// K1 hit the 10031 overflow trap while compiling k1input → K2, dropping the
+// tail patches AND emitting a ud2 into K2 → K2 SIGILLed on first run (the
+// self-host fixpoint failed: K2 broke, K3/K4 never produced). Same silent-
+// then-loud overflow signature as the Stage-29.1 4096→16384 bump; 32768
+// restores ~2x headroom. The arena (helix_arena_cap 6291456) absorbs the
+// extra 49152 slots; the seed compiles the larger init loop unchanged.
 fn patch_table_init() -> i32 {
     let state = __arena_push(0);            // top = 0
     __arena_push(state + 2);                // table_base = state + 2
     let mut i: i32 = 0;
-    while i < 49152 {                       // 16384 entries * 3 slots
+    while i < 98304 {                       // 32768 entries * 3 slots
         __arena_push(0);
         i = i + 1;
     }
@@ -1927,7 +1936,7 @@ fn patch_table_init() -> i32 {
 
 fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -> i32 {
     // Audit fix #10: cap-check before writing. patch_table_init
-    // allocates 16384 entries; without this guard, a source with > 16384
+    // allocates 32768 entries; without this guard, a source with > 32768
     // CALL+LEA patches would silently corrupt adjacent arena memory.
     // Cycle 110 fix C109-CR-F3 (HIGH conf 82): emit a loud-fail trap
     // when the cap is exceeded. Pre-fix returned `0 - 1` silently
@@ -1936,7 +1945,7 @@ fn patch_table_add(state: i32, disp_slot: i32, name_start: i32, name_len: i32) -
     // failure pattern as the Stage 29.1 patch_table overflow that
     // corrupted K3 prior to the cap bump. Trap id 10031.
     let top = __arena_get(state);
-    if top >= 16384 {
+    if top >= 32768 {
         emit_trap_with_id(10031);
         0 - 1
     } else {
@@ -11468,6 +11477,16 @@ fn emit_ptx_binop_f3(opc: i32, rd: i32, ra: i32, rb: i32) -> i32 {
     if opc == 2 {
         emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);  // mul
     };
+    // T2/M4 (2026-06-02): opc 3 = div.rn (true-rounded f32 divide, for the
+    // softmax 1/sum + layernorm /cols), opc 4 = max (the softmax row-max
+    // reduce). These two extend the f32 op set the reduction kernels need.
+    if opc == 3 {
+        emit_ptx_byte(100); emit_ptx_byte(105); emit_ptx_byte(118);  // div
+        emit_ptx_byte(46); emit_ptx_byte(114); emit_ptx_byte(110);   // .rn
+    };
+    if opc == 4 {
+        emit_ptx_byte(109); emit_ptx_byte(97); emit_ptx_byte(120);   // max
+    };
     // ".f32 "
     emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);
     emit_ptx_byte(50); emit_ptx_byte(32);
@@ -11613,35 +11632,14 @@ fn ptx_name_is_gpu_exp(name_s: i32, name_l: i32) -> i32 {
 }
 // __gpu_exp(x) -> e^x via ex2.approx.f32 (e^x = 2^(x*log2e); log2e=1.44269504=0f3FB8AA3B).
 // SM86 hardware, error ~2^-22 -- well within the 2pct capstone bar. Arg must be f32.
+// T2/M4: the byte-emission moved to the REG-LEVEL emit_ptx_exp_reg (reused by the
+// reduction kernels); this node entry just lowers the AST arg + delegates (keeps the
+// source token-lean -- the seed's fixed TOK buffer is near full at this fn count).
 fn emit_ptx_gpu_exp(node: i32, vtab: i32) -> i32 {
     let ah = __arena_get(node + 3);
     let a0 = __arena_get(ah + 1);
     let fx = emit_ptx_expr(a0, vtab);
-    let ft = ptx_alloc_f(vtab);
-    emit_ptx_indent();
-    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);   // mul
-    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
-    emit_ptx_byte(32);
-    emit_ptx_f(ft);
-    emit_ptx_byte(44); emit_ptx_byte(32);
-    emit_ptx_f(fx);
-    emit_ptx_byte(44); emit_ptx_byte(32);
-    // "0f3FB8AA3B"  (log2e)
-    emit_ptx_byte(48); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(70);
-    emit_ptx_byte(66); emit_ptx_byte(56); emit_ptx_byte(65); emit_ptx_byte(65);
-    emit_ptx_byte(51); emit_ptx_byte(66);
-    emit_ptx_byte(59); emit_ptx_byte(10);
-    let fr = ptx_alloc_f(vtab);
-    emit_ptx_indent();
-    emit_ptx_byte(101); emit_ptx_byte(120); emit_ptx_byte(50);   // ex2
-    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112);
-    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(120);   // .approx
-    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
-    emit_ptx_byte(32);
-    emit_ptx_f(fr);
-    emit_ptx_byte(44); emit_ptx_byte(32);
-    emit_ptx_f(ft);
-    emit_ptx_byte(59); emit_ptx_byte(10);
+    let fr = emit_ptx_exp_reg(fx, vtab);
     __arena_set(vtab + 55, 1);
     fr
 }
@@ -11669,16 +11667,7 @@ fn emit_ptx_gpu_rsqrt(node: i32, vtab: i32) -> i32 {
     let ah = __arena_get(node + 3);
     let a0 = __arena_get(ah + 1);
     let fx = emit_ptx_expr(a0, vtab);
-    let fr = ptx_alloc_f(vtab);
-    emit_ptx_indent();
-    emit_ptx_byte(114); emit_ptx_byte(115); emit_ptx_byte(113); emit_ptx_byte(114); emit_ptx_byte(116);  // rsqrt
-    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112); emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(120);  // .approx
-    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .f32
-    emit_ptx_byte(32);
-    emit_ptx_f(fr);
-    emit_ptx_byte(44); emit_ptx_byte(32);
-    emit_ptx_f(fx);
-    emit_ptx_byte(59); emit_ptx_byte(10);
+    let fr = emit_ptx_rsqrt_reg(fx, vtab);   // T2/M4: byte-emit moved to the reg helper
     __arena_set(vtab + 55, 1);
     fr
 }
@@ -11704,6 +11693,62 @@ fn emit_ptx_gpu_i2f(node: i32, vtab: i32) -> i32 {
     let ah = __arena_get(node + 3);
     let a0 = __arena_get(ah + 1);
     let rx = emit_ptx_expr(a0, vtab);
+    let fr = emit_ptx_i2f_reg(rx, vtab);     // T2/M4: byte-emit moved to the reg helper
+    __arena_set(vtab + 55, 1);
+    fr
+}
+// T2/M4 (2026-06-02): REGISTER-LEVEL e^x for the fused reduction emitters --
+// e^x = ex2.approx.f32(x * log2e), log2e=1.44269504=0f3FB8AA3B. Same numerics
+// as emit_ptx_gpu_exp but takes a %f register (not an AST node) so it can be
+// reused inside the softmax block-reduction's exp+sum loop. Returns the
+// result %f register. ex2.approx error ~2^-22 on sm_86 -- the resulting
+// softmax tol vs the CPU expf reference is validated honestly in the corpus.
+fn emit_ptx_exp_reg(fx: i32, vtab: i32) -> i32 {
+    let ft = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);   // mul
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(ft);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(fx);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    // "0f3FB8AA3B" (log2e)
+    emit_ptx_byte(48); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(70);
+    emit_ptx_byte(66); emit_ptx_byte(56); emit_ptx_byte(65); emit_ptx_byte(65);
+    emit_ptx_byte(51); emit_ptx_byte(66);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    let fr = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(101); emit_ptx_byte(120); emit_ptx_byte(50);   // ex2
+    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112);
+    emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(120);   // .approx
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(ft);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    fr
+}
+// T2/M4 (2026-06-02): register-level 1/sqrt(x) -- rsqrt.approx.f32(x). Mirrors
+// emit_ptx_gpu_rsqrt but on a %f register, for the layernorm reduction.
+fn emit_ptx_rsqrt_reg(fx: i32, vtab: i32) -> i32 {
+    let fr = ptx_alloc_f(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(114); emit_ptx_byte(115); emit_ptx_byte(113); emit_ptx_byte(114); emit_ptx_byte(116);  // rsqrt
+    emit_ptx_byte(46); emit_ptx_byte(97); emit_ptx_byte(112); emit_ptx_byte(112); emit_ptx_byte(114); emit_ptx_byte(111); emit_ptx_byte(120);  // .approx
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_f(fx);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    fr
+}
+// T2/M4 (2026-06-02): register-level i32 -> f32 (cvt.rn.f32.s32), for the
+// layernorm cols->colsf mean/var divisor. Mirrors emit_ptx_gpu_i2f on a reg.
+fn emit_ptx_i2f_reg(rx: i32, vtab: i32) -> i32 {
     let fr = ptx_alloc_f(vtab);
     emit_ptx_indent();
     emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);   // cvt
@@ -11715,7 +11760,6 @@ fn emit_ptx_gpu_i2f(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_r(rx);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    __arena_set(vtab + 55, 1);
     fr
 }
 // ===================================================================
@@ -12930,6 +12974,311 @@ fn emit_ptx_tiled_matmul_t(node: i32, vtab: i32, mode: i32) -> i32 {
     }
     0 - 1
 }
+// ===================================================================
+// T2/M4 (2026-06-02): WARP/BLOCK-REDUCTION SOFTMAX + LAYERNORM. Two fused
+// intrinsics, one BLOCK (256 threads) per matrix row, that build the
+// reduction primitives (row max + sum for softmax; mean + var for
+// layernorm) the fused-attention milestone will reuse. The block-per-row
+// SMEM tree reduction replaces the prior ONE-thread-per-row serial kernels
+// (gpu_softmax / gpu_layernorm) which now serve as the faster-than-naive
+// baseline. Grid = (rows,1,1); block = (256,1,1); row = ctaid.x. Threads
+// stride over the columns (j = tid, tid+256, ...) so any cols>=1 works.
+// ===================================================================
+// Shared SMEM tree reduce over a 256-thread block. The caller has already
+// computed this thread's per-thread partial `local_f` (an %f register).
+// We st.shared it to smem[tid], bar.sync, host-unroll the 8 tree strides
+// (128,64,32,16,8,4,2,1) with `op` (4=max, 0=add) combining smem[tid] and
+// smem[tid+stride] under the `tid<stride` guard, then a final bar.sync and
+// read smem[0] -- the block-wide reduction -- into a fresh %f, returned.
+// r_sm = the smem buffer's base 32-bit shared-window address; r_tid = this
+// thread's flat id. A leading bar.sync makes the buffer safe to reuse
+// across phases (the prior phase's smem[0] read has completed). One
+// reduction buffer (sym 0, 1024 B) serves every phase.
+fn emit_ptx_smem_tree_reduce(r_tid: i32, r_sm: i32, local_f: i32, op: i32, vtab: i32) -> i32 {
+    // barrier so any prior-phase use of this buffer is finished before reuse.
+    emit_ptx_bar_sync();
+    // st.shared smem[tid] = local : byte addr = r_sm + tid*4.
+    let r_to = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_to, r_tid, 4);
+    let r_ta = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ta, r_sm, r_to);
+    emit_ptx_st_shared(r_ta, local_f);
+    emit_ptx_bar_sync();
+    // host-unrolled tree: stride = 128,64,32,16,8,4,2,1.
+    let mut stride: i32 = 128;
+    while stride > 0 {
+        // guard: if (tid < stride) { smem[tid] = op(smem[tid], smem[tid+stride]); }
+        let r_st = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_st, stride);
+        let p = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p, r_tid, r_st);
+        let lbl = ptx_alloc_label(vtab);
+        emit_ptx_bra_ifnot(p, 4, lbl);   // @!p bra $Lskip_<lbl>
+        // load smem[tid] and smem[tid+stride]
+        let f_a = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_a, r_ta);
+        let r_jb = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_jb, r_tid, stride);   // tid+stride
+        let r_jo = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_jo, r_jb, 4);          // *4
+        let r_ja = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_ja, r_sm, r_jo);          // +sm
+        let f_b = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_b, r_ja);
+        let f_c = ptx_alloc_f(vtab); emit_ptx_binop_f3(op, f_c, f_a, f_b);
+        emit_ptx_st_shared(r_ta, f_c);
+        emit_ptx_label_def(4, lbl);      // $Lskip_<lbl>:
+        emit_ptx_bar_sync();             // all threads sync each tree level
+        stride = stride / 2;
+    }
+    // broadcast: every thread reads smem[0].
+    let r_s0 = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_s0, r_sm);
+    let f_res = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_res, r_s0);
+    f_res
+}
+// "__softmax_blockred" (18 chars) name matcher.
+fn ptx_name_is_softmax_blockred(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 18 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 115 { ok = 0; };   // s
+        if __arena_get(name_s + 3) != 111 { ok = 0; };   // o
+        if __arena_get(name_s + 4) != 102 { ok = 0; };   // f
+        if __arena_get(name_s + 5) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 6) != 109 { ok = 0; };   // m
+        if __arena_get(name_s + 7) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 8) != 120 { ok = 0; };   // x
+        if __arena_get(name_s + 9) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 10) != 98 { ok = 0; };   // b
+        if __arena_get(name_s + 11) != 108 { ok = 0; };  // l
+        if __arena_get(name_s + 12) != 111 { ok = 0; };  // o
+        if __arena_get(name_s + 13) != 99 { ok = 0; };   // c
+        if __arena_get(name_s + 14) != 107 { ok = 0; };  // k
+        if __arena_get(name_s + 15) != 114 { ok = 0; };  // r
+        if __arena_get(name_s + 16) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 17) != 100 { ok = 0; };  // d
+        ok
+    }
+}
+// "__layernorm_blockred" (20 chars) name matcher.
+fn ptx_name_is_layernorm_blockred(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 20 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 108 { ok = 0; };   // l
+        if __arena_get(name_s + 3) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 4) != 121 { ok = 0; };   // y
+        if __arena_get(name_s + 5) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 6) != 114 { ok = 0; };   // r
+        if __arena_get(name_s + 7) != 110 { ok = 0; };   // n
+        if __arena_get(name_s + 8) != 111 { ok = 0; };   // o
+        if __arena_get(name_s + 9) != 114 { ok = 0; };   // r
+        if __arena_get(name_s + 10) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 11) != 95 { ok = 0; };   // _
+        if __arena_get(name_s + 12) != 98 { ok = 0; };   // b
+        if __arena_get(name_s + 13) != 108 { ok = 0; };  // l
+        if __arena_get(name_s + 14) != 111 { ok = 0; };  // o
+        if __arena_get(name_s + 15) != 99 { ok = 0; };   // c
+        if __arena_get(name_s + 16) != 107 { ok = 0; };  // k
+        if __arena_get(name_s + 17) != 114 { ok = 0; };  // r
+        if __arena_get(name_s + 18) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 19) != 100 { ok = 0; };  // d
+        ok
+    }
+}
+// Emit a "j = tid; while j < cols { ... j += 256 }" strided column loop with a
+// caller-supplied per-element body. Because the seed mis-passes >6-arg calls,
+// the body is INLINED here (not a callback). `mode`: 0 = max-reduce (local =
+// max(local, x[base+j])); 1 = exp+sum+writeY (e=exp(x[base+j]-m); y[base+j]=e;
+// local += e); 2 = sum-reduce (local += x[base+j]); 3 = sumsq-reduce (d=
+// x[base+j]-mean; local += d*d); 4 = layernorm-write (y[base+j]=gamma[j]*
+// (x[base+j]-mean)*inv + beta[j], no reduce). r_mf = the broadcast scalar
+// (m for mode1, mean for mode3/4) ; for write modes the y/gamma/beta bases come
+// from vtab scratch slots 57..59. Returns the accumulated `local` %f (modes
+// 0/1/2/3); write modes (4) return -1.
+//
+// ARITY: kept to 4 args because the FROZEN seed (which compiles k1ptxdrv.hx)
+// mis-passes >6-arg calls (the same constraint that forces the tile-load +
+// mma helpers to use vtab scratch). The 4 INVARIANT loop regs are read from
+// vtab slots 64..67 (r_base, r_cols, rd_x, r_tid), stashed once by the caller.
+fn emit_ptx_red_colloop(seed_f: i32, r_mf: i32, mode: i32, vtab: i32) -> i32 {
+    let r_base = __arena_get(vtab + 64);
+    let r_cols = __arena_get(vtab + 65);
+    let rd_x = __arena_get(vtab + 66);
+    let r_tid = __arena_get(vtab + 67);
+    // local = seed (a fresh mutable %f initialized to the caller's seed reg).
+    let local = ptx_alloc_f(vtab); emit_ptx_mov_f_reg(local, seed_f);
+    // j = tid
+    let r_j = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_j, r_tid);
+    let lbl = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbl);              // $Ltop_<lbl>:
+    let p = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p, r_j, r_cols);
+    emit_ptx_bra_ifnot(p, 3, lbl);           // @!p bra $Lwend_<lbl>
+    // elem index = base + j ; load x[base+j]
+    let r_idx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_idx, r_base, r_j);
+    let f_x = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_x, rd_x, r_idx, vtab);
+    if mode == 0 {
+        // local = max(local, x)
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(4, f_n, local, f_x);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 1 {
+        // e = exp(x - m) ; y[base+j] = e ; local += e
+        let f_d = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_d, f_x, r_mf);   // x - m
+        let f_e = emit_ptx_exp_reg(f_d, vtab);
+        let rd_y = __arena_get(vtab + 57);
+        emit_ptx_gstore_f32(rd_y, r_idx, f_e, vtab);
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_n, local, f_e);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 2 {
+        // local += x
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_n, local, f_x);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 3 {
+        // d = x - mean ; local += d*d
+        let f_d = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_d, f_x, r_mf);
+        let f_sq = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_sq, f_d, f_d);
+        let f_n = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_n, local, f_sq);
+        emit_ptx_mov_f_reg(local, f_n);
+    };
+    if mode == 4 {
+        // y[base+j] = gamma[j]*(x - mean)*inv + beta[j].  r_mf = mean,
+        // inv comes from vtab slot 63; gamma base slot 58, beta base 59, y base 57.
+        let r_inv = __arena_get(vtab + 63);
+        let rd_y = __arena_get(vtab + 57);
+        let rd_g = __arena_get(vtab + 58);
+        let rd_b = __arena_get(vtab + 59);
+        let f_d = ptx_alloc_f(vtab); emit_ptx_binop_f3(1, f_d, f_x, r_mf);     // x - mean
+        let f_norm = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_norm, f_d, r_inv); // *inv
+        let f_g = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_g, rd_g, r_j, vtab);  // gamma[j]
+        let f_be = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_be, rd_b, r_j, vtab); // beta[j]
+        let f_gn = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_gn, f_g, f_norm);  // gamma*norm
+        let f_y = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_y, f_gn, f_be);     // + beta
+        emit_ptx_gstore_f32(rd_y, r_idx, f_y, vtab);
+    };
+    // j += 256 ; back-edge
+    emit_ptx_ri_imm(0, r_j, r_j, 256);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbl);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbl);              // $Lwend_<lbl>:
+    if mode == 4 { 0 - 1 } else { local }
+}
+// SOFTMAX block-reduction orchestrator: __softmax_blockred(x, y, rows, cols).
+// Numerically-stable row softmax y[r,c] = exp(x[r,c]-rowmax)/rowsum. One block
+// (256 threads) per row. THREE reduction-coupled phases:
+//   (1) rowmax = block-max over the row (strided per-thread max + SMEM tree).
+//   (2) rowsum = block-sum of e=exp(x-rowmax), ALSO writing y[r,c]=e.
+//   (3) normalize y[r,c] /= rowsum (a second strided column loop).
+// rows is the grid dim (unused in the body). Returns -1 (void kernel body).
+fn emit_ptx_softmax_blockred(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let py = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    // a2=rows (param 2, the grid dim, unused), a3=cols (param 3).
+    let p_cols = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    emit_ptx_shared_decl(0, 1024);   // smem reduction buffer (256 f32)
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);   // tid.x
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);   // ctaid.x = row
+    let r_cols = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_cols, p_cols);
+    let rd_x = emit_ptx_param_global_base(px, vtab);
+    let rd_y = emit_ptx_param_global_base(py, vtab);
+    __arena_set(vtab + 57, rd_y);   // y base for the mode-1 write
+    let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    // base = row * cols
+    let r_base = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_base, r_bx, r_cols);
+    // stash the 4 INVARIANT loop regs (seed compiler can't take >6-arg calls).
+    __arena_set(vtab + 64, r_base);
+    __arena_set(vtab + 65, r_cols);
+    __arena_set(vtab + 66, rd_x);
+    __arena_set(vtab + 67, r_tx);
+    // --- phase 1: rowmax. seed = x[base] (a real row elem, <= true max). ---
+    let f_x0 = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_x0, rd_x, r_base, vtab);
+    let f_locmax = emit_ptx_red_colloop(f_x0, f_x0, 0, vtab);
+    let f_max = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locmax, 4, vtab);
+    // --- phase 2: rowsum of e=exp(x-max); writes y[base+j]=e. seed = 0. ---
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let f_locsum = emit_ptx_red_colloop(f_zero, f_max, 1, vtab);
+    let f_sum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locsum, 0, vtab);
+    // --- phase 3: y[base+j] /= sum (strided column loop over y, in place). ---
+    let r_j = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_j, r_tx);
+    let lbl = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbl);
+    let p = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p, r_j, r_cols);
+    emit_ptx_bra_ifnot(p, 3, lbl);
+    let r_idx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_idx, r_base, r_j);
+    let f_yj = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_yj, rd_y, r_idx, vtab);
+    let f_q = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_q, f_yj, f_sum);   // /sum
+    emit_ptx_gstore_f32(rd_y, r_idx, f_q, vtab);
+    emit_ptx_ri_imm(0, r_j, r_j, 256);
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbl);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbl);
+    0 - 1
+}
+// LAYERNORM block-reduction orchestrator: __layernorm_blockred(x,y,gamma,beta,cols).
+// Row layernorm y[r,c] = gamma[c]*(x[r,c]-mean)/sqrt(var) + beta[c]. One block
+// (256 threads) per row. THREE phases:
+//   (1) mean = block-sum(x)/cols.
+//   (2) var  = block-sum((x-mean)^2)/cols ; inv = rsqrt(var).
+//   (3) write y = gamma*(x-mean)*inv + beta (strided column loop).
+// rows is the grid dim. NO eps (matches the existing naive layernorm kernel +
+// CPU ref; non-degenerate rows have var>0). Returns -1 (void kernel body).
+fn emit_ptx_layernorm_blockred(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let py = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pg = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let pb = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let p_cols = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    emit_ptx_shared_decl(0, 1024);   // smem reduction buffer (256 f32)
+    let r_tx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tx, 0);
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);
+    let r_cols = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_cols, p_cols);
+    let rd_x = emit_ptx_param_global_base(px, vtab);
+    let rd_y = emit_ptx_param_global_base(py, vtab);
+    let rd_g = emit_ptx_param_global_base(pg, vtab);
+    let rd_b = emit_ptx_param_global_base(pb, vtab);
+    __arena_set(vtab + 57, rd_y);
+    __arena_set(vtab + 58, rd_g);
+    __arena_set(vtab + 59, rd_b);
+    let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    let r_base = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_base, r_bx, r_cols);
+    // stash the 4 INVARIANT loop regs (seed compiler can't take >6-arg calls).
+    __arena_set(vtab + 64, r_base);
+    __arena_set(vtab + 65, r_cols);
+    __arena_set(vtab + 66, rd_x);
+    __arena_set(vtab + 67, r_tx);
+    let f_colsf = emit_ptx_i2f_reg(r_cols, vtab);
+    // --- phase 1: mean = sum(x)/cols. seed = 0. r_mf unused (pass f_colsf as a dummy). ---
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let f_locsum = emit_ptx_red_colloop(f_zero, f_colsf, 2, vtab);
+    let f_sum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locsum, 0, vtab);
+    let f_mean = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_mean, f_sum, f_colsf);
+    // --- phase 2: var = sum((x-mean)^2)/cols ; inv = rsqrt(var). seed = 0. ---
+    let f_zero2 = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero2);
+    let f_locvar = emit_ptx_red_colloop(f_zero2, f_mean, 3, vtab);
+    let f_vsum = emit_ptx_smem_tree_reduce(r_tx, r_sm, f_locvar, 0, vtab);
+    let f_var = ptx_alloc_f(vtab); emit_ptx_binop_f3(3, f_var, f_vsum, f_colsf);
+    let f_inv = emit_ptx_rsqrt_reg(f_var, vtab);
+    __arena_set(vtab + 63, f_inv);   // inv for the mode-4 write
+    // --- phase 3: y = gamma*(x-mean)*inv + beta. ---
+    emit_ptx_red_colloop(f_zero2, f_mean, 4, vtab);
+    0 - 1
+}
 // T3/G3: name-matcher for "__tf32_matmul_mma" (17 chars). Mirrors
 // ptx_name_is_tiled_matmul_smem.
 fn ptx_name_is_tf32_matmul_mma(name_s: i32, name_l: i32) -> i32 {
@@ -13184,9 +13533,13 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_tiled_matmul_t(node, vtab, 1)  // T2/M4: SMEM tiled A^T@B
     } else { if ptx_name_is_tf32_matmul_mma(name_s, name_l) == 1 {
         emit_ptx_tf32_matmul_mma(node, vtab)    // T3/G3: TF32 Tensor-Core GEMM (mma.sync)
+    } else { if ptx_name_is_softmax_blockred(name_s, name_l) == 1 {
+        emit_ptx_softmax_blockred(node, vtab)   // T2/M4: block-reduction row softmax
+    } else { if ptx_name_is_layernorm_blockred(name_s, name_l) == 1 {
+        emit_ptx_layernorm_blockred(node, vtab) // T2/M4: block-reduction row layernorm
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
