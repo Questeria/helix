@@ -1381,6 +1381,8 @@ int main(int argc, char** argv) {
      * (x+0.044715*x^3))), the tanh GELU. CPU ref mirrors stdlib __gelu exactly.
      * Inputs in [-3,3] so e^(2z) never saturates. Combines f32 literals + __gpu_exp. */
     if (strcmp(op, "gelu") == 0) {
+        /* optional "mutate" (argv[5], after <ptx> <kname> <N> <op>) = comparator-teeth control. */
+        int mutate = (argc > 5 && strcmp(argv[5], "mutate") == 0);
         size_t ne = (size_t)N;
         float* hx = (float*)malloc(ne * sizeof(float));
         float* hy = (float*)malloc(ne * sizeof(float));
@@ -1395,7 +1397,8 @@ int main(int argc, char** argv) {
         CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "cuLaunchKernel gelu");
         CK(cuCtxSynchronize(), "cuCtxSynchronize");
         CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "cuMemcpyDtoH y");
-        int gbad = 0; float gref0 = 0.0f;
+        if (mutate) hy[0] += 1.0f;   /* comparator negative control -> must FAIL */
+        int gbad = 0; float gref0 = 0.0f, maxrel = 0.0f, maxabs = 0.0f;
         for (size_t i = 0; i < ne; i++) {
             float xx = hx[i];
             float x3 = xx * xx * xx;
@@ -1405,11 +1408,30 @@ int main(int argc, char** argv) {
             float ref = 0.5f * xx * (1.0f + th);
             if (i == 0) gref0 = ref;
             float got = hy[i];
-            float d = got - ref; if (d < 0) d = -d;
+            float d = got - ref; if (d < 0) d = -d; if (d > maxabs) maxabs = d;
+            float ar = ref < 0 ? -ref : ref; float rel = d / (ar > 1e-6f ? ar : 1e-6f);
+            if (rel > maxrel) maxrel = rel;
             if (isnan(got) || d > 1.0e-3f) { if (gbad < 4) fprintf(stderr, "gelu mismatch y[%zu]=%g ref %g (x=%g)\n", i, got, ref, xx); gbad++; }
         }
-        printf("GPU [%s] gelu N=%d (tanh approx, f32 literals + exp): y[0]=%g ref %g, %d bad -> %s\n",
-               gpu, N, hy[0], gref0, gbad, gbad ? "FAIL" : "PASS");
+        /* THROUGHPUT (kernel-only, cuEvent): elementwise GELU is MEMORY-BOUND
+         * (read N + write N f32 = 8N bytes). NO naive/tiled pair exists -- this
+         * IS the elementwise form -- so we report GB/s honestly, never a fake
+         * speedup. Gate rests on correctness (gbad==0). */
+        if (!mutate) {
+            int WARM = 5, ITERS = 50;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            for (int w = 0; w < WARM; w++) CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "warm gelu");
+            CK(cuCtxSynchronize(), "sync warm gelu");
+            for (int it = 0; it < ITERS; it++) { CK(cuEventRecord(e0, 0), "r0"); CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "time gelu"); CK(cuEventRecord(e1, 0), "r1"); CK(cuEventSynchronize(e1), "es"); CK(cuEventElapsedTime(&ts[it], e0, e1), "el"); }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            double med = (double)ts[ITERS / 2];
+            double gbps = (8.0 * (double)ne) / (med * 1.0e-3) / 1.0e9;
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts);
+            printf("GPU [%s] THROUGHPUT gelu N=%d: med=%.4f ms  %.1f GB/s (8N B, memory-bound elementwise)\n", gpu, N, med, gbps);
+        }
+        printf("GPU [%s] gelu N=%d (tanh approx, f32 literals + exp)%s: y[0]=%g ref %g, maxrel=%.2e maxabs=%.2e (tol 1e-3), %d bad -> %s\n",
+               gpu, N, mutate ? " [MUTATED]" : "", hy[0], gref0, maxrel, maxabs, gbad, gbad ? "FAIL" : "PASS");
         cuMemFree(dx); cuMemFree(dy);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hx); free(hy);
@@ -1421,6 +1443,10 @@ int main(int argc, char** argv) {
      * nm,nv (tol 1e-5, exact arithmetic) and new_w (tol 1e-4, rsqrt.approx) vs an independent CPU
      * Adam step with the same baked literals. */
     if (strcmp(op, "adam") == 0) {
+        /* optional "mutate" (argv[5], after <ptx> <kname> <N> <op>) = comparator-teeth
+         * control. Re-runs are non-idempotent (Adam mutates w,m,v in place), so timing
+         * re-uploads the pristine host arrays before each launch. */
+        int mutate = (argc > 5 && strcmp(argv[5], "mutate") == 0);
         size_t ne = (size_t)N;
         float* hw = (float*)malloc(ne * sizeof(float));
         float* hg = (float*)malloc(ne * sizeof(float));
@@ -1456,7 +1482,8 @@ int main(int argc, char** argv) {
         CK(cuMemcpyDtoH(hw, dw, ne * sizeof(float)), "D2H w");
         CK(cuMemcpyDtoH(hm, dm, ne * sizeof(float)), "D2H m");
         CK(cuMemcpyDtoH(hv, dv, ne * sizeof(float)), "D2H v");
-        int abad = 0; float w0 = 0.0f, w0ref = 0.0f;
+        if (mutate) hw[0] += 1.0f;   /* comparator negative control -> must FAIL */
+        int abad = 0; float w0 = 0.0f, w0ref = 0.0f, maxrel = 0.0f;
         for (size_t i = 0; i < ne; i++) {
             float nm = 0.9f * hm0[i] + 0.1f * hg[i];
             float nv = 0.999f * hv0[i] + 0.001f * hg[i] * hg[i];
@@ -1466,10 +1493,37 @@ int main(int argc, char** argv) {
             float em = hm[i] - nm; if (em < 0) em = -em;
             float ev = hv[i] - nv; if (ev < 0) ev = -ev;
             float ew = hw[i] - nw; if (ew < 0) ew = -ew;
+            float aw = nw < 0 ? -nw : nw; float rw = ew / (aw > 1e-6f ? aw : 1e-6f);
+            if (rw > maxrel) maxrel = rw;
             if (isnan(hw[i]) || em > 1.0e-5f || ev > 1.0e-5f || ew > 1.0e-4f) { if (abad < 4) fprintf(stderr, "adam mismatch i=%zu w=%g(ref %g) m=%g(ref %g) v=%g(ref %g)\n", i, hw[i], nw, hm[i], nm, hv[i], nv); abad++; }
         }
-        printf("GPU [%s] adam N=%d: w[0]=%g ref %g, %d bad -> %s\n",
-               gpu, N, w0, w0ref, abad, abad ? "FAIL" : "PASS");
+        /* THROUGHPUT (kernel-only, cuEvent): the Adam step is MEMORY-BOUND --
+         * reads w,g,m,v + writes w,m,v = 7 array touches = 28N bytes. NO
+         * naive/tiled pair (this IS the elementwise form), so report GB/s
+         * honestly; gate rests on correctness (abad==0). Re-upload w,m,v each
+         * launch (in-place mutation). */
+        if (!mutate) {
+            int WARM = 5, ITERS = 50;
+            float* ts = (float*)malloc((size_t)ITERS * sizeof(float));
+            CUevent e0, e1; CK(cuEventCreate(&e0, 0), "evt0"); CK(cuEventCreate(&e1, 0), "evt1");
+            for (int w = 0; w < WARM; w++) {
+                CK(cuMemcpyHtoD(dw, hw0, ne * sizeof(float)), "re-w"); CK(cuMemcpyHtoD(dm, hm0, ne * sizeof(float)), "re-m"); CK(cuMemcpyHtoD(dv, hv0, ne * sizeof(float)), "re-v");
+                CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, aargs, 0), "warm adam");
+            }
+            CK(cuCtxSynchronize(), "sync warm adam");
+            for (int it = 0; it < ITERS; it++) {
+                CK(cuMemcpyHtoD(dw, hw0, ne * sizeof(float)), "re-w"); CK(cuMemcpyHtoD(dm, hm0, ne * sizeof(float)), "re-m"); CK(cuMemcpyHtoD(dv, hv0, ne * sizeof(float)), "re-v");
+                CK(cuCtxSynchronize(), "pre-time sync");
+                CK(cuEventRecord(e0, 0), "r0"); CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, aargs, 0), "time adam"); CK(cuEventRecord(e1, 0), "r1"); CK(cuEventSynchronize(e1), "es"); CK(cuEventElapsedTime(&ts[it], e0, e1), "el");
+            }
+            for (int i = 0; i < ITERS; i++) for (int j = i + 1; j < ITERS; j++) if (ts[j] < ts[i]) { float t = ts[i]; ts[i] = ts[j]; ts[j] = t; }
+            double med = (double)ts[ITERS / 2];
+            double gbps = (28.0 * (double)ne) / (med * 1.0e-3) / 1.0e9;
+            cuEventDestroy(e0); cuEventDestroy(e1); free(ts);
+            printf("GPU [%s] THROUGHPUT adam N=%d: med=%.4f ms  %.1f GB/s (28N B, memory-bound elementwise)\n", gpu, N, med, gbps);
+        }
+        printf("GPU [%s] adam N=%d%s: w[0]=%g ref %g, maxrel(w)=%.2e (tol m/v 1e-5, w 1e-4), %d bad -> %s\n",
+               gpu, N, mutate ? " [MUTATED]" : "", w0, w0ref, maxrel, abad, abad ? "FAIL" : "PASS");
         cuMemFree(dw); cuMemFree(dg); cuMemFree(dm); cuMemFree(dv); cuMemFree(dbc1); cuMemFree(dbc2);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hw); free(hg); free(hm); free(hv); free(hw0); free(hm0); free(hv0); free(ptx);

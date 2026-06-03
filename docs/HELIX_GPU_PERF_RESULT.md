@@ -385,3 +385,36 @@ floor is documented here as superseded by the relative measure on this specific 
 - **softmax_blockred**: correct vs CPU (maxrel 3.5e-06, max|rowsum-1| 2.3e-06, 0 bad), faster-than-naive 16.0x @4096x1024 / 12.0x @1024x4096.
 - **layernorm_blockred**: correct vs CPU (maxrel <=2.15e-04 incl ex2/rsqrt.approx tol, 0 bad), faster-than-naive 8.3x / 9.4x.
 - Both neg-controls trip (comparator-teeth + bar.sync-strip -> SMEM reduction barriers load-bearing). Self-host fixpoint GREEN (K2==K3==K4, corpus 59/59). scripts/gpu_reduction_corpus.sh = GPU_REDUCTION_PASS (722s).
+
+## M4 item 3 -- elementwise GELU + Adam (2026-06-02)
+The last two core transformer ops, both **elementwise / one-thread-per-element**. Both compile through
+the ALREADY-GATED emitter (f32 literals + `__gpu_exp`=`ex2.approx.f32` + `__gpu_rsqrt`=`rsqrt.approx.f32`)
+with **NO `kovc.hx` change** -> the self-host fixpoint + the committed vector_add/tiled reference PTX stay
+byte-identical (universal gate undisturbed; this is a host-`cuda_launch.c` + corpus-script + docs change).
+- **gpu_gelu** — **tanh-approximation GELU** (Hendrycks & Gimpel), the form the charter names:
+  `y = 0.5*x*(1 + tanh(0.7978846*(x + 0.044715*x^3)))`, tanh inlined via `ex2.approx.f32`.
+  **CORRECT vs an independent CPU `expf`-based ref: maxrel 1.14e-07 (tol 1e-3, honestly covers the
+  ex2.approx ~2^-22), 0 bad @ N=256 and N=1048576.** Constants verified in the emitted PTX
+  (`0f3F4C422A`=sqrt(2/pi), `0f3D372713`=0.044715 — exercising the A-F hex-nibble emit path).
+- **gpu_adam** — one in-place **Adam optimiser step** (b1=0.9, b2=0.999, lr=1e-3, eps=1e-8 baked;
+  step-dependent bias-correction bc1=1/(1-b1^t), bc2=1/(1-b2^t) passed as 1-elem f32 arrays):
+  `nm=b1*m+(1-b1)*g ; nv=b2*v+(1-b2)*g^2 ; w -= lr*(nm*bc1)/sqrt((nv*bc2)+eps)` (1/sqrt via
+  `rsqrt.approx.f32`). **CORRECT vs an independent CPU Adam step (same literals+bc): nm,nv exact-arith
+  tol 1e-5 + new_w tol 1e-4 (rsqrt.approx); maxrel(w) 3.81e-07, 0 bad @ N=256 and N=1048576.**
+- **THROUGHPUT (honest, gated on CORRECTNESS — these are MEMORY-BOUND with NO naive/tiled pair to beat,
+  so per the charter we report GB/s and do NOT manufacture a fake speedup):** RTX 3070 Laptop @ N=1048576
+  (kernel-only cuEvent median) — **GELU 6.4 GB/s** (8N B/elem); **Adam 24.3 GB/s** (28N B/elem). The
+  per-element transcendental (ex2 in GELU) is the bottleneck; Adam is closer to bandwidth.
+- **TWO neg-controls trip per op:** (A) comparator-teeth (perturb one out cell -> FAIL); (B)
+  **transcendental-strip (load-bearing)** — delete the `ex2.approx.f32` lines (GELU) / `rsqrt.approx.f32`
+  lines (Adam) from the emitted PTX, ptxas-accept, re-run -> mis-computes (FAIL), proving the exp/rsqrt
+  are load-bearing, not dead code.
+- Self-host fixpoint GREEN (K2==K3==K4, corpus 59/59; bootstrap byte-identical to the prior commit since
+  no `kovc.hx` change). scripts/gpu_elementwise_corpus.sh = **GPU_ELEMENTWISE_PASS**. With M4 items 1
+  (transposed GEMMs) + 2 (softmax/layernorm) + 3 (GELU/Adam), the charter §1.2-item-4 elementwise/reduction
+  op set is correct-vs-CPU + (faster-than-naive where a naive pair exists; honest GB/s where it does not).
+  Remaining M4: fused flash-style attention; then the M6 capstone re-train (§1.2 item 5).
+- **EXT4 trial (per loop_prompt SPEEDUP): DO NOT ADOPT** — assemble_k1.hx hardcodes absolute /mnt/c paths
+  for its source reads + output writes (assemble_k1.hx:54-93), so on an ext4 copy it writes k1src.hx back
+  to /mnt/c, not the ext4 tree -> seed rc=91 -> ext4 fixpoint never runs. The real commit-gate ran on
+  /mnt/c (detached). See .stage33-logs/ext4_result.txt for the precondition to make ext4 viable later.

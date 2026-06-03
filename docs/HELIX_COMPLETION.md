@@ -393,6 +393,34 @@ with its reason.
 > `cuda_launch.c`; corpus `scripts/gpu_transpose_corpus.sh` → `GPU_TRANSPOSE_PASS`; result doc
 > `docs/HELIX_GPU_PERF_RESULT.md` (§ M4). **NEXT M4:** fused flash-style attention →
 > warp-reduction softmax/layernorm → GELU/Adam, then the M6 capstone re-train.
+>
+> **M4 ITEM 2 — BLOCK-REDUCTION SOFTMAX + LAYERNORM LANDED (2026-06-02, on `main`, commit
+> 7f3f00b).** kovc emits a 256-thread block-per-row softmax (`__softmax_blockred`, row MAX+SUM
+> SMEM tree reductions) + layernorm (`__layernorm_blockred`, row MEAN+VAR), replacing the naive
+> one-thread-per-row form. CORRECT vs CPU (softmax maxrel 3.5e-6; layernorm maxrel ≤2.15e-4 incl
+> ex2/rsqrt.approx tol; 0 bad) + FASTER-THAN-NAIVE (softmax 16×/12×, layernorm 8.3×/9.4×). Both
+> neg-controls trip (comparator-teeth + bar.sync-strip → SMEM-reduction barriers load-bearing).
+> `scripts/gpu_reduction_corpus.sh` = `GPU_REDUCTION_PASS`; fixpoint GREEN (K2==K3==K4, corpus 59/59).
+>
+> **M4 ITEM 3 — ELEMENTWISE GELU + Adam LANDED (2026-06-02, on `main`). The last two core ops.**
+> Both **elementwise / one-thread-per-element**, and both compile through the ALREADY-GATED emitter
+> (f32 literals + `__gpu_exp`=`ex2.approx.f32` + `__gpu_rsqrt`=`rsqrt.approx.f32`) with **NO `kovc.hx`
+> change** → self-host fixpoint + committed reference PTX byte-identical (host-`cuda_launch.c` + corpus
+> + docs change only). **GELU** = the tanh-approx form `0.5*x*(1+tanh(0.7978846*(x+0.044715*x^3)))`
+> (tanh via `ex2.approx`), CORRECT vs an independent CPU `expf` ref (maxrel 1.14e-7, tol 1e-3 honestly
+> covering ex2.approx, 0 bad @ N=256 & 1M). **Adam** = `nm=b1*m+(1-b1)*g; nv=b2*v+(1-b2)*g²;
+> w-=lr*(nm*bc1)/sqrt((nv*bc2)+eps)` (b1/b2/lr/eps baked, bias-correction as 1-elem arrays, 1/sqrt via
+> `rsqrt.approx`), CORRECT vs an independent CPU Adam step (nm/nv tol 1e-5 + new_w tol 1e-4, maxrel(w)
+> 3.81e-7, 0 bad @ N=256 & 1M). **THROUGHPUT honest + gated on CORRECTNESS** (memory-bound, NO naive
+> pair to beat — no fake speedup): GELU 6.4 GB/s, Adam 24.3 GB/s @ 1M on the RTX 3070 Laptop. **Two
+> neg-controls trip per op:** comparator-teeth + **transcendental-strip** (delete the emitted
+> `ex2.approx`/`rsqrt.approx` lines → mis-computes → exp/rsqrt load-bearing). Kernels
+> `helixc/examples/gpu_{gelu,adam}_kernel.hx`; host modes `gelu`/`adam` in `cuda_launch.c` (+ `mutate`
+> + GB/s timing); corpus `scripts/gpu_elementwise_corpus.sh` → `GPU_ELEMENTWISE_PASS`; result
+> `docs/HELIX_GPU_PERF_RESULT.md` (§ M4 item 3). Fixpoint GREEN (K2==K3==K4, corpus 59/59). The EXT4
+> build-trial was attempted (loop_prompt SPEEDUP) but is NOT adopted — `assemble_k1.hx` hardcodes
+> absolute /mnt/c paths so the assembler writes outside an ext4 copy; the real commit-gate ran on
+> /mnt/c (`.stage33-logs/ext4_result.txt`). **NEXT M4:** fused flash-style attention → M6 capstone re-train.
 
 > **M5 (STRETCH) — bf16 `wmma` + autotune.** (XL, ~3–5 weeks)
 > The bf16 datatype arc: a `.b16`/bf16 register class through the **whole expression emitter**, `cvt.rn.bf16.f32`, `wmma.load/mma/store.*.f16`. Then port `@autotune` (TILE/WARP sweep) from Python helixc into the bootstrap (NOT in the bootstrap today — `CUDA_OBSOLESCENCE_PLAN.md:1.1`) to close the last gap to cuBLAS. **Highest risk** (numerics vs the 2% bar + biggest emitter delta; interacts with the capstone's f32-as-i32-bits numerics). Explicitly stretch — can trail; G4 absence does not block FULLY COMPLETE.
