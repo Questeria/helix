@@ -301,7 +301,30 @@ chk "$GENC/H1_vec.hx" 42; chk "$GENC/H1_hashmap.hx" 42
 #     fixpoint byte-identical (verified via the fast inner loop: K2 sha == the
 #     H-3 mint bdff0049...).
 chk "$GENC/H2_string.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 74 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42])"
+# T3 §1.6 AGGREGATE-RETURN-BY-VALUE fix (2026-06-03): returning a struct OR
+# enum BY VALUE from a fn previously mis-lowered (the callee returned a
+# pointer into its own about-to-be-reclaimed frame, AND the caller stored
+# that pointer with a 32-bit truncating mov) -> SIGSEGV(139) for structs,
+# SIGILL(132) for the enum-then-match case (arm_enum_payload3). The fix
+# (kovc.hx) copies the aggregate run into the CALLER's frame the instant the
+# call returns + 64-bit-stores the pointer, and (parser.hx) tags enum
+# returns pointer-rep (100+8+enum_idx) so the let-store/match drive the
+# pointer path. Closes the L-7 arm_enum_payload3 v-next item + the H-2
+# struct-return gap. SELF-HOST SOURCE RETURNS ONLY SCALARS -> this new path
+# is never exercised during self-compilation -> fixpoint byte-identical.
+# Each program is runtime-derived (loop-accumulated inputs) so nothing
+# constant-folds; struct cases cover the 1-field / 16-byte / >16-byte / 40-
+# byte size classes + read EVERY field; enum cases match disc + extract
+# payload through the copied [disc,payload] run.
+chk "$GENC/sret_1field.hx" 42; chk "$GENC/sret_2field.hx" 42
+chk "$GENC/sret_3field.hx" 42; chk "$GENC/sret_5field.hx" 42
+# arm_enum_payload3: PROMOTED v-next -> gated. 3-variant payload enum
+# returned by value from pick() then matched (runtime variant C) -> 42.
+chk "$GENC/arm_enum_payload3.hx" 42
+# eret_option: 2-variant Option-shape enum returned by value + matched
+# (runtime Some(42)) -> 42.
+chk "$GENC/eret_option.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 80 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -348,7 +371,9 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 #                  + 3 doc-as-bound bound-provers (M-5 bare-generic / M-7 privacy / L-3 non-exhaustive).
 # T3 (2026-06-03): bumped 71 -> 73 for H-1 packaged collections (H1_vec growth + H1_hashmap collision).
 # T3 (2026-06-03): bumped 73 -> 74 for H-2 rich String (H2_string: concat + eq + byte_at round-trip).
-if [ "$pass" -lt 74 ]; then echo "  CORPUS REGRESSION (pass=$pass < 74)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 74 -> 80 for the §1.6 aggregate-return-by-value fix
+#   (sret 1/2/3/5-field structs + arm_enum_payload3 [PROMOTED v-next->gated] + eret_option).
+if [ "$pass" -lt 80 ]; then echo "  CORPUS REGRESSION (pass=$pass < 80)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure

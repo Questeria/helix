@@ -1032,6 +1032,63 @@ fn emit_call_r11() -> i32 {
     3
 }
 
+// T3 §1.6 aggregate-return-by-value fix (2026-06-03): the number of
+// 8-byte slots the caller copies out of a callee's by-value aggregate
+// return. A struct/enum value is represented as a POINTER to a run of
+// 8-byte slots (AST_TUPLE_LIT codegen, tag 50); when a fn returns such a
+// value the body leaves a pointer to the run in rax -- but that run lives
+// in the CALLEE's stack frame, which the epilogue (mov rsp,rbp; pop rbp;
+// ret) reclaims, so the pointer dangles. The caller fixes this by copying
+// the run into ITS OWN frame the instant the call returns (before any push
+// clobbers the still-live-below-rsp callee bytes) and using the copy. We
+// copy a fixed, conservative slot count rather than the exact arity (the
+// codegen has no struct/enum size table -- those live in the parser's
+// struct_tab/enum_tab). 16 slots (128 bytes) covers every Phase-0
+// aggregate (the corpus tops out at 5 fields); the source read stays well
+// inside the callee's 4096-byte frame, and the extra dest slots are never
+// read (field/disc loads use the real offsets < arity*8). Bump if a wider
+// aggregate is ever added.
+fn agg_ret_copy_slots() -> i32 { 16 }
+
+// T3 §1.6: emit the caller-side copy of a by-value aggregate return.
+// On entry rax = pointer to the callee's just-built aggregate (valid this
+// instant). dest0_off is a positive rbp-relative offset (slot lives at
+// [rbp - dest0_off]); the caller reserved agg_ret_copy_slots() consecutive
+// slots ending at dest0_off (slot 0 at [rbp - dest0_off], slot k at
+// [rbp - dest0_off + 8*k]), matching the AST_TUPLE_LIT slot0-at-low-end
+// layout so field reads via [rax + 8*k] recover the right address. After
+// this runs, rax = pointer into the CALLER's frame (the live copy).
+//   mov rsi, rax                 ; 48 89 C6        src = callee aggregate
+//   lea rdi, [rbp + (-dest0)]    ; 48 8D BD disp32 dst = caller buffer
+//   (x N) mov rax,[rsi+8k]       ; 48 8B 46 d8     copy slot k
+//         mov [rdi+8k],rax       ; 48 89 47 d8
+//   lea rax, [rbp + (-dest0)]    ; 48 8D 85 disp32 result = caller buffer
+fn emit_agg_ret_copy(dest0_off: i32) -> i32 {
+    let n = agg_ret_copy_slots();
+    emit_byte(0x48); emit_byte(0x89); emit_byte(0xC6);        // mov rsi, rax
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0xBD);         // lea rdi, [rbp+disp32]
+    emit_u32_le(0 - dest0_off);
+    let mut k: i32 = 0;
+    while k < n {
+        let d8 = k * 8;
+        emit_byte(0x48); emit_byte(0x8B); emit_byte(0x46); emit_byte(d8);  // mov rax, [rsi+d8]
+        emit_byte(0x48); emit_byte(0x89); emit_byte(0x47); emit_byte(d8);  // mov [rdi+d8], rax
+        k = k + 1;
+    }
+    emit_byte(0x48); emit_byte(0x8D); emit_byte(0x85);         // lea rax, [rbp+disp32]
+    emit_u32_le(0 - dest0_off);
+    3 + 7 + n * 8 + 7
+}
+
+// T3 §1.6: is `ret_ty` a by-value aggregate (struct or enum) return?
+// Struct returns are encoded 100+struct_idx; enum returns 100+(8+enum_idx)
+// (the parser offsets enum idx past the 8-struct cap so both land in the
+// [100,200) aggregate band without colliding). Generic-param returns use
+// 200+gp_idx and are NOT treated as aggregates here (type-erased to i32).
+fn ret_ty_is_aggregate(ret_ty: i32) -> i32 {
+    if ret_ty >= 100 { if ret_ty < 200 { 1 } else { 0 } } else { 0 }
+}
+
 // Stage 2.5b/c stage 2: narrow loads. The arena slot is still 4 bytes
 // wide regardless of declared type; these helpers narrow the read so
 // that a u8/u16/i8/i16 binding's stored bit pattern is interpreted at
@@ -9035,7 +9092,16 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // 2's narrow loads, this gives proper truncation: bits past
         // the declared width never enter the slot.
         // i32 (0), f32 (1), u32 (6) use 32-bit store.
-        let n_store = if val_ty == 2 {
+        // T3 §1.6 (2026-06-03): a by-value aggregate (struct/enum) binding
+        // holds an 8-byte POINTER (val_ty in [100,200), encoded
+        // 100+struct_idx / 100+(8+enum_idx)) -- it MUST use a 64-bit store,
+        // exactly like a direct AST_TUPLE_LIT bind (val_ty==3). Pre-fix it
+        // fell through to the 32-bit emit_mov_local_eax, truncating the
+        // returned pointer -> the field/match deref read a corrupt address
+        // (SIGSEGV/SIGILL). Mirrors the i64/f64/u64 8-byte path.
+        let n_store = if ret_ty_is_aggregate(val_ty) == 1 {
+            emit_mov_local_rax_64(off)
+        } else { if val_ty == 2 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
@@ -9051,7 +9117,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_mov_local_ax(off)
         } else {
             emit_mov_local_eax(off)
-        }}}}}}};
+        }}}}}}}};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -9068,7 +9134,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let val_ty = expr_type(value_idx, bind_state, bn_state);
         let n_val = emit_ast_code(value_idx, bind_state, patch_state, bn_state);
         let off = bind_alloc_offset(bind_state);
-        let n_store = if val_ty == 2 {
+        // T3 §1.6 (2026-06-03): aggregate (struct/enum) binding holds an
+        // 8-byte pointer -> 64-bit store (see the AST_LET note above).
+        let n_store = if ret_ty_is_aggregate(val_ty) == 1 {
+            emit_mov_local_rax_64(off)
+        } else { if val_ty == 2 {
             emit_mov_local_rax_64(off)
         } else { if val_ty == 3 {
             emit_mov_local_rax_64(off)
@@ -9084,7 +9154,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             emit_mov_local_ax(off)
         } else {
             emit_mov_local_eax(off)
-        }}}}}}};
+        }}}}}}}};
         bind_push_typed(bind_state, p1, p2, off, val_ty);
         let n_body = emit_ast_code(body_idx, bind_state, patch_state, bn_state);
         bind_pop(bind_state);
@@ -9173,6 +9243,27 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // emit `call rel32 placeholder` for backpatching.
         let p3 = __arena_get(idx + 3);
         let mut bytes_emitted: i32 = 0;
+        // T3 §1.6 aggregate-return-by-value fix (2026-06-03): does this
+        // callee return a struct/enum BY VALUE? If so its body leaves a
+        // pointer to an aggregate in its OWN (about-to-be-reclaimed) frame;
+        // we must copy that run into the CALLER's frame right after the call
+        // returns. Reserve the destination buffer NOW (before arg temporaries
+        // grab their own slots, so the dest never aliases an arg) -- slot 0
+        // ends up at the LAST-allocated (most-negative) offset, matching the
+        // AST_TUPLE_LIT slot0-at-low-end layout emit_agg_ret_copy assumes.
+        let ret_fts = bn_fn_type_state(bn_state);
+        let call_ret_ty = if ret_fts == 0 { 0 }
+                          else { fn_type_table_lookup(ret_fts, p1, p2) };
+        let agg_ret = ret_ty_is_aggregate(call_ret_ty);
+        let mut agg_dest0_off: i32 = 0;
+        if agg_ret == 1 {
+            let mut ar_i: i32 = 0;
+            let ar_n = agg_ret_copy_slots();
+            while ar_i < ar_n {
+                agg_dest0_off = bind_alloc_offset(bind_state);
+                ar_i = ar_i + 1;
+            }
+        };
         // A2b (2026-05-28): indirect-call detection. If the callee name
         // resolves to a LOCAL binding, it holds a function-pointer value
         // (e.g. a `f: fn(...)->...` param, type-erased to i32) rather than
@@ -9331,7 +9422,12 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 n_ld + emit_call_r11()
             };
             let n_clean = emit_add_rsp_imm32(stack_alloc + 8 * arg_count);
-            bytes_emitted + n_sub + n_rev + n_load + n_call + n_clean
+            // T3 §1.6: by-value aggregate return (the >6-arg call path).
+            // rsp is restored by n_clean; the callee aggregate (pointer in
+            // rax) and its still-live frame bytes are untouched -- copy into
+            // the caller-owned buffer reserved above.
+            let n_agg7 = if agg_ret == 1 { emit_agg_ret_copy(agg_dest0_off) } else { 0 };
+            bytes_emitted + n_sub + n_rev + n_load + n_call + n_clean + n_agg7
         } else {
         // Pass 2: pop into SysV regs in reverse-of-push order.
         // pushed: arg0, arg1, ..., argN-1 (top is argN-1).
@@ -9368,7 +9464,11 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             let n_ld = emit_mov_r11d_local(callee_off);
             n_ld + emit_call_r11()
         };
-        bytes_emitted + n_call
+        // T3 §1.6: by-value aggregate return -- copy the callee's just-built
+        // aggregate (pointer in rax, still-live callee frame) into the
+        // caller-owned buffer reserved above; rax then points at the copy.
+        let n_agg = if agg_ret == 1 { emit_agg_ret_copy(agg_dest0_off) } else { 0 };
+        bytes_emitted + n_call + n_agg
         }
         }
     } else { if t == 13 {

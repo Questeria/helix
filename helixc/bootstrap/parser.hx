@@ -6921,6 +6921,24 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
             if s_idx_b >= 0 {
                 var_struct_tab_add(sb, name_start, name_len, s_idx_b);
                 set_last_struct_idx(sb, 0 - 1);
+            } else {
+                // T3 §1.6 struct-return-by-value fix (2026-06-03): if the RHS
+                // is a CALL (tag 16) to a struct-returning fn, register the
+                // bound var's struct_idx from fn_ret_struct_tab so `x.field`
+                // lowers correctly (the codegen aggregate-return copy makes
+                // the pointer valid; this makes the PARSE resolve the field).
+                // Pre-fix this relied on stale last_struct_idx leakage from
+                // the callee's body parse -- which intervening statements
+                // (e.g. a `while` loop before the let) cleared, so `x.field`
+                // failed to parse. Reading fn_ret_struct_tab is deterministic.
+                if __arena_get(value) == 16 {
+                    let cv_s = __arena_get(value + 1);
+                    let cv_l = __arena_get(value + 2);
+                    let crsi = fn_ret_struct_tab_lookup(sb, cv_s, cv_l);
+                    if crsi >= 0 {
+                        var_struct_tab_add(sb, name_start, name_len, crsi);
+                    };
+                };
             };
             // Stage 9: if the value was a closure literal, register the
             // binding (name -> closure_id, captures_ptr, capture_count) in
@@ -8974,6 +8992,19 @@ fn install_keywords(sb: i32) -> i32 {
     __arena_push(112);
     __arena_set(sb + 92, loop_s);
     __arena_set(sb + 93, 4);
+    // T3 §1.6 struct-return-by-value fix (2026-06-03): RE-ENABLE the
+    // fn-name -> return-struct-idx map (was K1.F5k-disabled because sb+124/125
+    // overflowed the region + the init's 96-slot push was suspected of
+    // shifting keyword offsets). Both concerns are now addressed: the
+    // sb-region was extended to 128 slots above, and this init runs LAST in
+    // install_keywords (AFTER every keyword string), so its 96-slot push
+    // cannot shift any keyword string offset (those are already captured).
+    // Used at `let x = struct_returning_call()` sites so `x.field` resolves
+    // its struct_idx (var_struct_tab) -- the runtime aggregate-return copy
+    // (kovc.hx) handles the pointer; this handles the parse-time field
+    // lowering. Self-host source returns no structs -> inert there.
+    __arena_set(sb + 124, 0 - 1);
+    fn_ret_struct_tab_init(sb);
     0
 }
 
@@ -9116,8 +9147,17 @@ fn parse_top(tok_base: i32) -> i32 {
     // writers (set_param_array_name / set_bucket_array_head / _count)
     // and parse_top's region-allocation block below take it from
     // there.
+    // T3 §1.6 struct-return-by-value fix (2026-06-03): EXTENDED 28 -> 32
+    // (slots 96..127) so sb+124 (last_call_ret_struct_idx) and sb+125/126
+    // (fn_ret_struct_tab base/count) are backed by real region slots --
+    // previously they OVERFLOWED the region (K1.F5j/K1.F5k disable note).
+    // The 4 new slots sit at the END (124..127), AFTER the const_tab pair
+    // at 122/123 and the entire AD param_array/bucket_array write range
+    // (96..121), so no existing fixed offset moves; the keyword strings
+    // pushed later in install_keywords capture their own offsets
+    // dynamically, so they simply land 4 slots further down (transparent).
     let mut k3a_pad: i32 = 0;
-    while k3a_pad < 28 {
+    while k3a_pad < 32 {
         __arena_push(0);
         k3a_pad = k3a_pad + 1;
     }
@@ -13127,18 +13167,32 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     // the ident bytes don't represent any known type. Limited to struct
     // recognition for now.
     let rt_struct_idx = struct_tab_lookup_idx(sb, rt_s, rt_l);
-    let ret_ty_post_struct = if rt_struct_idx >= 0 { 100 + rt_struct_idx } else { ret_ty };
+    // T3 §1.6 enum-return-by-value fix (2026-06-03): an enum return type is
+    // NOT in struct_tab (parse_enum_decl registers only enum_tab), so it
+    // previously fell through to ret_ty=0 (i32). An enum value is, like a
+    // struct, a POINTER to a slot run ([disc, payload...]), so the call site
+    // must (a) 64-bit-store the returned pointer, (b) copy the run into the
+    // caller frame, and (c) drive the match pointer-rep path. Encode it in
+    // the SAME [100,200) aggregate band the codegen recognizes, OFFSET past
+    // the 8-struct cap (100 + 8 + enum_idx) so struct and enum returns never
+    // collide. The codegen only needs "is it in [100,200)" + a fixed copy
+    // size; it never maps an enum's ret_ty-100 back to a struct_idx (match
+    // uses the pointer path, not struct_tab field access). Self-host source
+    // returns no enums -> this branch is inert there (fixpoint unchanged).
+    let rt_enum_idx = if rt_struct_idx >= 0 { 0 - 1 } else { enum_tab_lookup_idx(sb, rt_s, rt_l) };
+    let ret_ty_post_struct = if rt_struct_idx >= 0 { 100 + rt_struct_idx }
+                             else { if rt_enum_idx >= 0 { 100 + 8 + rt_enum_idx } else { ret_ty } };
     let ret_ty_final = if rt_gp_idx >= 0 { 200 + rt_gp_idx } else { ret_ty_post_struct };
     // K1.F5f (2026-05-28): register fn-name -> return-struct-idx in
     // fn_ret_struct_tab if this fn returns a struct.
-    // K1.F5k (2026-05-28 audit-fix): DISABLED -- same rationale as the init
-    // disable in install_keywords. The fn_ret_struct_tab_add call writes
-    // to sb+125/126, which (combined with the init disable) leaves stale
-    // garbage in those slots. Safer to gate the write. Re-enable as a pair
-    // with the init when K1.F5g2 codegen lands.
-    // if rt_struct_idx >= 0 {
-    //     let _f5f_added = fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx);
-    // };
+    // T3 §1.6 struct-return-by-value fix (2026-06-03): RE-ENABLED (paired
+    // with the init re-enable in install_keywords + the sb-region extension
+    // to 128 slots). A fn whose declared return type is a struct (rt_struct_
+    // idx >= 0, i.e. ret_ty 100+struct_idx) is recorded here so the let-site
+    // (parse_let) can register the bound var's struct_idx for field access.
+    if rt_struct_idx >= 0 {
+        let _f5f_added = fn_ret_struct_tab_add(sb, name_start, name_len, rt_struct_idx);
+    };
     // K1.O (2026-05-25): optional `where T: Bound, U: Bound2` clause
     // after the return type and before the body LBRACE. Bounds are
     // not enforced in the type-erased bootstrap -- just consume all
