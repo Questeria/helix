@@ -270,6 +270,19 @@ chk "$GENC/arm_block_comment.hx" 42; chk "$GENC/arm_radix_lits.hx" 42
 chk "$GENC/arm_char_lit.hx" 42; chk "$GENC/arm_continue.hx" 42
 chk "$GENC/arm_early_return.hx" 42; chk "$GENC/arm_tuple_struct.hx" 42
 chk "$GENC/arm_bf16_f16_decl.hx" 42; chk "$GENC/arm_bf16_arith_bound.hx" 132
+# T3 §1.6 M-3 (2026-06-03) DOCUMENT-AS-BOUND + negative test: 8-byte SCALAR struct
+# fields (f64/i64/u64) are not fully supported -- the field READ (AST_TUPLE_FIELD)
+# only emits an 8-byte REX.W load when p3==1, which the parser sets ONLY for nested-
+# struct (pointer) fields, NOT for f64/i64/u64 scalar fields (decl-time struct_idx
+# == -1, indistinguishable from i32). So a field read takes only the LOW 32 bits.
+# f64 path fails CLOSED: the 4-byte-read result is i32-typed, so `a.v + 0.0_f64`
+# hits the mixed-type guard -> ud2/SIGILL 132 (never wrong float math). (i64/u64
+# field read silently truncates low-32 -- the one silent-wrong residual, recorded
+# v-next.) Full fix = decl 8-byte-scalar detection + p3==1 read + f64 field-result
+# typing + generic use-site monomorph (INC-3b) = v-next. The non-generic 4-byte
+# path is gated (gen_box_f32 ->5; sret_*field ->42). NO kovc.hx/parser change here
+# -> fixpoint stays 9cc8f20b.
+chk "$GENC/M3_wide_field_bound.hx" 132
 # T3 §1.6 PARSER-DESUGAR promotions (2026-06-03, charter §1.6 MED/LOW): three desugars
 # that were already implemented in parser.hx but had no gated corpus row. The self-host
 # source uses plain `while` / `x = x + ...` / nested `if`, NEVER the new syntax, so these
@@ -466,7 +479,9 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 5 ]; then echo "  CHECK_ERR REGRESSION (
 #   block-comment / radix+_ / char-lit / continue / early-return / tuple-struct /
 #   bf16-f16-decl ->42 + bf16-arith-bound ->132). No kovc.hx change (fixpoint stays
 #   byte-identical 9cc8f20b) -- pure promotions of already-implemented arms.
-if [ "$pass" -lt 95 ]; then echo "  CORPUS REGRESSION (pass=$pass < 95)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 95 -> 96 for M-3 8-byte-struct-field DOCUMENT-AS-BOUND
+#   (M3_wide_field_bound ->132, f64 wide-field read fails closed). No source change.
+if [ "$pass" -lt 96 ]; then echo "  CORPUS REGRESSION (pass=$pass < 96)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure
