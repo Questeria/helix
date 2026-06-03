@@ -30,6 +30,8 @@
 
 /* ---- ENV-parameterized dims (default = the exact v1.0 capstone) ---- */
 static int V = 32, D = 16, S = 16, H = 64, NL = 2, K = 500, OPT = 0;
+static int TF32 = 0;   /* OPT==2 -> route the plain-A@B GEMMs (mm_AB) to the TF32 Tensor-Core mma.sync kernel */
+static int DGBFUSE = 0; /* OPT>=1 (or HX_DGBFUSE) -> use the O(rows*cols) fused dgb (row_mean + dgb_pm) */
 #define MAXNL 16
 /* derived sizes (set in init_dims) */
 static int SD, SS, SH, SV, DD, DH, HD, DV, NW;
@@ -44,6 +46,14 @@ static void init_dims(void) {
     if ((e = getenv("HX_NL"))) NL = atoi(e);
     if ((e = getenv("HX_K")))  K  = atoi(e);
     if ((e = getenv("HX_OPT"))) OPT = atoi(e);
+    /* HX_OPT=2: optimized op-set PLUS TF32 Tensor-Core for the plain-A@B GEMMs. OPT stays
+     * truthy (all the OPT-path block-reduction/tiled branches fire); TF32 additionally swaps
+     * mm_AB to the mma.sync kernel. HX_OPT=1 = optimized w/ tiled-SMEM-f32 GEMM (the M6 baseline). */
+    if (OPT >= 2) TF32 = 1;
+    /* dgb fusion: ON by default whenever OPT (it is the dominant cost). HX_DGBFUSE=0 forces the
+     * naive single-kernel dgb (to A/B the fusion); HX_DGBFUSE=1 forces it on even at OPT=0. */
+    if (OPT >= 1) DGBFUSE = 1;
+    if ((e = getenv("HX_DGBFUSE"))) DGBFUSE = atoi(e);
     if (NL > MAXNL) { fprintf(stderr, "NL>%d unsupported\n", MAXNL); exit(2); }
     SD = S*D; SS = S*S; SH = S*H; SV = S*V; DD = D*D; DH = D*H; HD = H*D; DV = D*V;
     NW = NL*(4*DD + 4*D + DH + HD) + 2*D + DV;
@@ -63,8 +73,18 @@ static CUfunction f_add, f_ln, f_mm, f_qkt, f_sm, f_gelu;
 static CUfunction f_ceg, f_atb, f_abt, f_geb, f_smb, f_lnbx, f_lnbg, f_scale, f_adam;
 /* OPT-path kernels (only loaded when OPT) */
 static CUfunction f_mm_t, f_atb_t, f_abt_t, f_sm_b, f_scale_rt;
+/* TF32 Tensor-Core A@B kernel (loaded when OPT>=2). Only the plain-A@B GEMMs route to it
+ * (no TF32 transposed variant exists); A@Bt / At@B stay tiled-SMEM-f32. Geometry from
+ * cuda_launch.c gemm_tf32: grid=(N/128, M/16), block=(32,4,1); requires M%16,N%128,K%8==0. */
+static CUfunction f_mm_tf32;
 /* OPT-path block-reduction backward/save redux kernels (T2/M6) */
 static CUfunction f_ln_b, f_lnbx_b, f_smb_b;
+/* OPT-path dgb FUSION (T2/M6): hoist the per-row mean out of the LN gamma/beta column-reduce
+ * (the naive gpu_layernorm_backward_dgb recomputes mean PER COLUMN -> O(rows*cols^2), measured
+ * at 61% of the optimized step). f_rowmean fills mean[rows] once (O(rows*cols)); f_dgb_pm reads
+ * it -> the column-reduce becomes O(rows*cols). Identical math; finite-diff + 2% oracle gate it. */
+static CUfunction f_rowmean, f_dgb_pm;
+static CUdeviceptr d_rowmean;   /* scratch mean[S]; dgb calls are serial so one buffer suffices */
 static CUdeviceptr dbc1, dbc2, d_attn_scale;
 static int Si, Di, Hi, Vi, SDi, SHi;
 
@@ -75,7 +95,7 @@ static float rnd(float scale) { return ((float)(int32_t)xs() / 2147483648.0f) * 
 /* coarse per-category profiling (every LX syncs, so a monotonic timer around a launch is
  * exact). PROF=1 accumulates time into t_gemm / t_redux / t_elem / t_other. */
 static int PROF = 0;
-static double t_gemm=0, t_redux=0, t_elem=0, t_other=0;
+static double t_gemm=0, t_redux=0, t_elem=0, t_other=0, t_dgb=0;  /* t_dgb: the LN gamma/beta column-reduce, isolated from t_redux to expose the O(cols^2) hotspot */
 /* FASTSYNC=1 (env HX_FASTSYNC, default 0 = OFF): skip the per-kernel cuCtxSynchronize so
  * launches pipeline on the default stream (CUDA guarantees same-stream ordering, so each
  * kernel still sees the prior's writes; the blocking cuMemcpyDtoH in forward_full provides
@@ -103,7 +123,8 @@ static int elem_block(int n) { if (!OPT) return 1; int b[]={256,128,64,32}; for 
  * block=(16,16). MATH identical; only launch geometry + which kernel differ. */
 static void mm_AB(CUdeviceptr a, CUdeviceptr b, CUdeviceptr c, int M, int Kc, int N) {
     int m=M,k=Kc,n=N;
-    if (OPT) { void* ar[] = { &a,&b,&c,&m,&k,&n }; LXT2(t_gemm, f_mm_t, n/TILE, m/TILE, TILE/4, TILE/4, ar); }
+    if (TF32) { void* ar[] = { &a,&b,&c,&m,&k,&n }; LXT2(t_gemm, f_mm_tf32, n/128, m/16, 32, 4, ar); }
+    else if (OPT) { void* ar[] = { &a,&b,&c,&m,&k,&n }; LXT2(t_gemm, f_mm_t, n/TILE, m/TILE, TILE/4, TILE/4, ar); }
     else     { void* ar[] = { &a,&b,&c,&m,&k,&n }; LXT(t_gemm, f_mm, M, N, ar); }
 }
 /* C[M,N] = A[M,K] @ B[N,K]^T  (A@B^T). naive gpu_matmul_abt: grid=M,block=N. tiled abt:
@@ -143,6 +164,19 @@ static void ln_bwd_dx(CUdeviceptr x, CUdeviceptr dy, CUdeviceptr g, CUdeviceptr 
 static void softmax_bwd(CUdeviceptr p, CUdeviceptr dp, CUdeviceptr da, int rows, int cols) {
     int r=rows,c=cols; void* ar[] = { &p,&dp,&da,&r,&c };
     if (OPT) { LXT(t_redux, f_smb_b, rows, 256, ar); } else { LXT(t_redux, f_smb, rows, 1, ar); }
+}
+/* LN gamma/beta gradients (column reduction over rows) -> dgb[2*cols]. naive: the single
+ * gpu_layernorm_backward_dgb (grid=cols, block=1) that RECOMPUTES the per-row mean inside the
+ * column loop = O(rows*cols^2). DGBFUSE: gpu_row_mean fills mean[rows] once (O(rows*cols)),
+ * then gpu_layernorm_backward_dgb_pm reads it (O(rows*cols)). MATH identical. cols = D here. */
+static void ln_bwd_dgb(CUdeviceptr x, CUdeviceptr dy, CUdeviceptr ist, CUdeviceptr dgb, int rows, int cols) {
+    int r=rows, c=cols;
+    if (DGBFUSE) {
+        void* arm[] = { &x, &d_rowmean, &r, &c };                 LXT(t_dgb, f_rowmean, rows, 1, arm);
+        void* apm[] = { &x, &dy, &ist, &d_rowmean, &dgb, &r, &c }; LXT(t_dgb, f_dgb_pm, cols, 1, apm);
+    } else {
+        void* ad[] = { &x, &dy, &ist, &dgb, &r, &c };             LXT(t_dgb, f_lnbg, cols, 1, ad);
+    }
 }
 /* in-place scale by 1/sqrt(d): naive gpu_scale_inplace bakes 0.25 (d=16 only); opt uses the
  * runtime-scalar gpu_scale_rt so it is correct at any d. */
@@ -233,7 +267,7 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     mm_ABt(g_da, W1[L], g_dxn2, S, H, D);
     /* LN2 bwd: dx is block-reduced (opt); dgb (column reduce) stays naive. */
     ln_bwd_dx(h1[L], g_dxn2, LN2g[L], ist2[L], g_dxln2, D);
-    void* al2g[]= { &h1[L], &g_dxn2, &ist2[L], &dLN2[L], &Si, &Di };      LXT(t_redux, f_lnbg, D, 1, al2g);
+    ln_bwd_dgb(h1[L], g_dxn2, ist2[L], dLN2[L], S, D);
     void* adh1[]= { &g_dxln2, &dh2_in, &g_dh1, &SDi }; LXE(t_elem, f_add, SD, adh1);
     /* attn proj */
     mm_AtB(ao[L], g_dh1, dWo[L], S, D, D);
@@ -257,7 +291,7 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     /* LN1 bwd */
     CUdeviceptr xL = (L == 0) ? x_in : h2[L-1];
     ln_bwd_dx(xL, g_dxn1, LN1g[L], ist1[L], g_dxln1, D);
-    void* al1g[]= { &xL, &g_dxn1, &ist1[L], &dLN1[L], &Si, &Di };      LXT(t_redux, f_lnbg, D, 1, al1g);
+    ln_bwd_dgb(xL, g_dxn1, ist1[L], dLN1[L], S, D);
     void* adx[] = { &g_dxln1, &g_dh1, &dx_out, &SDi }; LXE(t_elem, f_add, SD, adx);
 }
 
@@ -267,7 +301,7 @@ static void backward_full(void) {
     mm_ABt(g_dlog, W_lm, g_dxf, S, V, D);
     CUdeviceptr xlast = h2[NL-1];
     ln_bwd_dx(xlast, g_dxf, LNfg, istf, g_dh2[NL-1], D);
-    void* alfg[]= { &xlast, &g_dxf, &istf, &dLNf, &Si, &Di };          LXT(t_redux, f_lnbg, D, 1, alfg);
+    ln_bwd_dgb(xlast, g_dxf, istf, dLNf, S, D);
     for (int L = NL-1; L >= 1; L--) backward_layer(L, g_dh2[L], g_dh2[L-1]);
     backward_layer(0, g_dh2[0], g_dxscr);
 }
@@ -292,7 +326,10 @@ static void adam_step(int t) {
     float bc1 = 1.0f / (1.0f - powf(0.9f, (float)t));
     float bc2 = 1.0f / (1.0f - powf(0.999f, (float)t));
     CKX(cuMemcpyHtoD(dbc1, &bc1, sizeof(float)), "bc1"); CKX(cuMemcpyHtoD(dbc2, &bc2, sizeof(float)), "bc2");
-    for (int i = 0; i < nparams; i++) { Param* p = &params[i]; void* a[] = { &p->w, &p->g, &p->m, &p->v, &dbc1, &dbc2 }; LXT(t_elem, f_adam, p->n, 1, a); }
+    /* gpu_adam uses the grid-stride index block_idx()*block_dim()+thread_idx() with no bounds
+     * guard, so (like the other elementwise kernels) it can take the occupancy-aware block via
+     * LXE instead of the v1.0 block=1 (1 thread/block) launch. MATH identical. */
+    for (int i = 0; i < nparams; i++) { Param* p = &params[i]; void* a[] = { &p->w, &p->g, &p->m, &p->v, &dbc1, &dbc2 }; LXE(t_elem, f_adam, p->n, a); }
 }
 
 static double now_ms(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec*1000.0 + ts.tv_nsec/1.0e6; }
@@ -326,6 +363,10 @@ int main(int argc, char** argv) {
     CK(cuModuleGetFunction(&f_lnbg, mod, "gpu_layernorm_backward_dgb"), "lnbg");
     CK(cuModuleGetFunction(&f_scale, mod, "gpu_scale_inplace"), "scale");
     CK(cuModuleGetFunction(&f_adam, mod, "gpu_adam"), "adam");
+    if (DGBFUSE) {
+        CK(cuModuleGetFunction(&f_rowmean, mod, "gpu_row_mean"), "rowmean");
+        CK(cuModuleGetFunction(&f_dgb_pm,  mod, "gpu_layernorm_backward_dgb_pm"), "dgb_pm");
+    }
     if (OPT) {
         CK(cuModuleGetFunction(&f_mm_t,  mod, "tiled_matmul"),     "mm_t");
         CK(cuModuleGetFunction(&f_atb_t, mod, "tiled_matmul_atb"), "atb_t");
@@ -335,6 +376,7 @@ int main(int argc, char** argv) {
         CK(cuModuleGetFunction(&f_ln_b,   mod, "layernorm_fwd_save_blockred"),   "ln_b");
         CK(cuModuleGetFunction(&f_lnbx_b, mod, "layernorm_backward_dx_blockred"), "lnbx_b");
         CK(cuModuleGetFunction(&f_smb_b,  mod, "softmax_backward_blockred"),      "smb_b");
+        if (TF32) { CK(cuModuleGetFunction(&f_mm_tf32, mod, "tf32_matmul"), "mm_tf32"); }
     }
     for (int L = 0; L < NL; L++) {
         Wq[L]=A(DD); Wk[L]=A(DD); Wv[L]=A(DD); Wo[L]=A(DD); LN1g[L]=A(D); LN1b[L]=A(D); LN2g[L]=A(D); LN2b[L]=A(D); W1[L]=A(DH); W2[L]=A(HD);
@@ -344,6 +386,7 @@ int main(int argc, char** argv) {
     LNfg=A(D); LNfb=A(D); W_lm=A(DV); xf=A(SD); istf=A(S); logits=A(SV); x_in=A(SD); targets_f=A(S); dLNf=A(2*D); dW_lm=A(DV);
     g_dlog=A(SV); g_dxf=A(SD); g_dh1=A(SD); g_dg=A(SH); g_da=A(SH); g_dxn2=A(SD); g_dxln2=A(SD); g_dao=A(SD); g_dVv=A(SD); g_dQ=A(SD); g_dK=A(SD); g_dattn=A(SS); g_dsc=A(SS); g_dxn1=A(SD); g_dxln1=A(SD); g_t1=A(SD); g_t2=A(SD); g_t3=A(SD); g_t12=A(SD); g_dxscr=A(SD);
     d_attn_scale = A(1); CK(cuMemcpyHtoD(d_attn_scale, &ATTN_SCALE, sizeof(float)), "h2d scale");
+    d_rowmean = A(S);   /* scratch per-row mean for the fused dgb (cols=D, rows=S) */
 
     float* hw = (float*)malloc(NW * sizeof(float));
     gen_weights(hw);
@@ -412,6 +455,6 @@ int main(int argc, char** argv) {
     double wall = t_end - t_start;
     printf("GPU [%s] train K=%d: start loss %.6f -> final %.6f (mean %.5f)\n", gpu, K, loss0, lf, lf / (double)S);
     printf("TRAIN_WALL_MS=%.3f  (OPT=%d S=%d D=%d H=%d V=%d NL=%d K=%d, %.4f ms/step)\n", wall, OPT, S, D, H, V, NL, K, wall/(double)K);
-    if (PROF) { double acc=t_gemm+t_redux+t_elem+t_other; printf("PROF_MS gemm=%.1f redux=%.1f elem=%.1f other=%.1f acc=%.1f (gemm %.0f%% redux %.0f%% elem %.0f%%)\n", t_gemm,t_redux,t_elem,t_other,acc, 100*t_gemm/acc,100*t_redux/acc,100*t_elem/acc); }
+    if (PROF) { double acc=t_gemm+t_redux+t_elem+t_other+t_dgb; printf("PROF_MS gemm=%.1f redux=%.1f dgb=%.1f elem=%.1f other=%.1f acc=%.1f (gemm %.0f%% redux %.0f%% dgb %.0f%% elem %.0f%%)\n", t_gemm,t_redux,t_dgb,t_elem,t_other,acc, 100*t_gemm/acc,100*t_redux/acc,100*t_dgb/acc,100*t_elem/acc); }
     return 0;
 }

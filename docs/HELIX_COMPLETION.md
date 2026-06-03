@@ -465,6 +465,24 @@ with its reason.
 > Re-train the transformer on the tiled+Tensor-Core kernels; confirm **2% loss parity maintained** AND a measured **end-to-end speedup vs the naive capstone (≥ 10×)**. Run the cuBLAS-compare negative controls.
 > **Gate = GPU_PERF_PASS** (§1.2), feeding the FINALE.
 >
+> **M6.2 UPDATE (2026-06-03) — SPEEDUP RAISED 2.24× → ~8.8× (still < 10×, now GEMM-Amdahl-bounded).**
+> A second pass found the M6.1 "redux 65%" attribution was an instrumentation artifact: a new `t_dgb`
+> profiler bucket showed the real dominant cost was the LayerNorm γ/β column-reduce (`gpu_layernorm_
+> backward_dgb`), whose naive form recomputes the per-row mean PER COLUMN = **O(rows·cols²) = 61% of the
+> opt step**, NOT the row-reductions (which block-reduction already cut to 4%). **Fusing dgb** (hoist the
+> mean: new pure-Helix kernels `gpu_row_mean` + `gpu_layernorm_backward_dgb_pm`, NO `kovc.hx` change → dgb
+> 884→33 ms, 27×) + an **Adam occupancy fix** (block=1 → `LXE` block=256) + the existing **fast-sync**
+> launch option took the step 31.8 → **8.14 ms**, end-to-end **2.24× → ~8.8×**, parity **MAINTAINED**
+> (0.0000% f32; **0.0011% under TF32**). The **TF32 Tensor-Core swap was tried and measured**: it HOLDS
+> 2% parity but is **0.97× (no faster)** on the RTX 3070 Laptop — its TF32 mma (5.354 TFLOP/s) ≈ its
+> tuled-SMEM-f32 (5.445), so TF32 is not the lever here. **The ≥10× bar is still OPEN** — after the fusions
+> GEMM is the Amdahl wall (64% of the step) and our GEMM is the f32-SMEM tier; reaching 10× needs a faster
+> GEMM (G2 cp.async, +19%, lands ≈10× in the best framing) which is a **fixpoint-gated emitter change**, or
+> a wider scale where the naive baseline literally cannot launch (`block=N>1024`) so no honest ratio exists.
+> Full write-up + the speedup ladder + per-bucket Amdahl: `docs/HELIX_GPU_PERF_RESULT.md` § M6.2. The
+> orchestrator decides: re-scope the clause to the honest ~8.8× (4× better than M6.1) or pursue the
+> cp.async GEMM. See the original M6.1 record below for the parity certification + neg-controls.
+>
 > **M6 — RE-TRAINED + PARITY CERTIFIED; SPEEDUP HONESTLY ~2.2× (< 10×, GEMM-limited).**
 > **(2026-06-03, on `main`, commits `829ade9` + `ac4c0a7`).** The v1.0 capstone transformer was
 > re-trained on the optimized op-set (tiled SMEM GEMM fwd+bwd, block-reduction softmax + the NEW

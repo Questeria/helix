@@ -556,3 +556,92 @@ oracle). **Charter §1.2 item 5 = re-trained at 2% parity; end-to-end speedup re
 (GEMM-limited, dominant cost = many-rows row-reductions + bandwidth-bound elementwise; the optimized GEMMs
 themselves deliver 6.1×).** The ≥10× bar is NOT met at the measured balanced scale; reported as-is per the
 charter's honest-number directive — the loop decides whether to pursue kernel fusion.
+
+---
+
+## M6.2 — CAPSTONE SPEEDUP, SECOND PASS: TF32 probe + the REAL bottleneck (dgb) + fusion — 2026-06-03
+
+Took the ≥10× clause again. Two results: **(1) the TF32 Tensor-Core swap was tried and MEASURED — it
+holds 2% parity but gives NO speedup on this GPU; (2) a finer profiler exposed that the true dominant cost
+was NEVER the row-reductions — it was the LayerNorm γ/β column-reduce (`dgb`), whose naive kernel recomputes
+the per-row mean PER COLUMN = O(rows·cols²). Fusing that (hoist the mean) + an Adam occupancy fix + the
+already-available fast-sync launch option took the capstone from 2.24× to ~8.8× end-to-end, parity
+maintained (0.0011%).** Still < 10× — GEMM-Amdahl-bounded — but a 4× improvement, honestly measured.
+
+**The mislabel that M6.1 made (now corrected by instrumentation).** M6.1 attributed the 65% "redux" bucket
+to the *row-reduction backward ops* (LN-fwd/bwd-dx + softmax-bwd) and concluded block-reduction only buys
+~1.1× there. A new `t_dgb` profiling bucket (isolating the `gpu_layernorm_backward_dgb` column-reduce from
+the row-reductions) shows the truth on the RTX 3070 Laptop at S=512 D=256 H=1024 V=512 K=50:
+
+| bucket | optimized-no-fuse ms (K=50) | share | note |
+|---|---|---|---|
+| GEMM (tiled SMEM, fwd+bwd) | 274 | 19% | as before |
+| redux (LN-fwd/bwd-dx + softmax-bwd, the block-reductions) | 55 | **4%** | block-reduction is FINE — the row-reductions were never the problem |
+| **dgb (LN γ/β column-reduce, naive)** | **884** | **61%** | **the real bottleneck — O(rows·cols²) mean recompute** |
+| elem (gelu/add/scale/adam) | 230 | 16% | adam at block=1 dominates this |
+
+So the M6.1 "redux 65%, block-reduction only 1.1×" story was an artifact of lumping `dgb` (which
+block-reduction never touched) in with the genuine row-reductions (which it accelerated fine, to 4%).
+
+**(a) TF32 Tensor-Core swap — PARITY HOLDS, NO SPEEDUP HERE (measured, not assumed).** Added `HX_OPT=2`:
+the plain-A@B GEMMs (`mm_AB`: all forward proj/MLP/LM-head + the one backward A@B) route to the committed
+`tf32_matmul` (`__tf32_matmul_mma`, `mma.sync.aligned.m16n8k8.row.col.f32.tf32`); the A@Bᵀ/Aᵀ@B backward
+GEMMs stay tiled-SMEM-f32 (no TF32 transposed variant exists). **Parity vs the f64 numpy oracle =
+0.0011% worst rel diff @ S=512 K=50 — TF32's ~10-bit mantissa holds well inside the 2% bar over the
+training run (the f32 accumulator in the mma carries it).** But TF32 GEMM = 312 ms vs tiled-f32 GEMM 274 ms
+(**0.97×, i.e. slightly SLOWER**), so TF32 end-to-end (2.11×) ≈ tiled (2.14×). This matches the G3 perf
+result: on this RTX 3070 Laptop TF32 mma = 5.354 TFLOP/s vs the tiled-SMEM-f32 G2 = 5.445 TFLOP/s — the
+laptop's Tensor Cores do not beat its tuned SMEM-f32 path at these tile sizes (TF32's win shows on
+datacenter parts / larger tiles, not here). **So the request's hypothesis — "TF32 is much faster vs naive,
+swap it in" — is true vs NAIVE but irrelevant vs the already-optimized tiled-f32 path on this hardware.**
+TF32 is kept as a selectable path (`HX_OPT=2`) and its parity is recorded; it is NOT the lever to 10× here.
+
+**(b) dgb fusion — the real lever: +2.25× on the step, parity EXACT.** Two new pure-Helix corpus kernels
+(NO `kovc.hx` change): `gpu_row_mean` fills `mean[rows]` once (O(rows·cols)); `gpu_layernorm_backward_dgb_pm`
+reads it so the γ/β column-reduce is O(rows·cols) instead of O(rows·cols²). Identical math (the finite-diff
+gradient check still PASSES; the 2% oracle parity stays **0.0000%**). `dgb` 884 ms → **33 ms (27×)**; the
+step 31.8 → **14.2 ms**; end-to-end **2.14× → 4.80×**.
+
+**(c) Adam occupancy + fast-sync — to ~8.8×.** `gpu_adam` was launched at block=1 (grid=n, 1 thread/block);
+it uses the grid-stride index so it took the same occupancy-aware `LXE` block=256 the other elementwise
+ops use (math identical) → elem 191 → 91 ms; step → 8.14 ms (PROF-sync). The harness's existing
+`HX_FASTSYNC=1` (skip the per-kernel `cuCtxSynchronize`; CUDA same-stream ordering still guarantees each
+kernel sees the prior's writes; the per-step loss D2H provides the host sync) overlaps launch latency across
+the ~40 small per-step launches → **8.14 ms/step**, parity still 0.0011% (TF32) / 0.0000% (f32).
+
+**END-TO-END SPEEDUP LADDER (RTX 3070 Laptop, S=512 D=256 H=1024 V=512 NL=2 K=50, vs the naive v1.0 loop):**
+
+| optimized config (cumulative) | ms/step | vs naive(sync 71.6) | parity |
+|---|---|---|---|
+| naive v1.0 (per-kernel sync) | 71.6 | 1.00× | — (naive bakes d=16 scale → math-wrong at d=256; opt's `gpu_scale_rt` is correct) |
+| tiled-SMEM-f32 GEMM + block-reduction + occupancy (M6.1) | 31.8 | 2.25× | 0.0000% |
+| + **dgb fusion** | 14.2 | 5.04× | 0.0000% |
+| + **Adam occupancy** | 12.4 | 5.78× | 0.0011% |
+| + **fast-sync** (HX_FASTSYNC=1) | **8.14** | **8.80×** | 0.0011% |
+| + TF32 (HX_OPT=2) | 8.14 | 8.80× | 0.0011% (TF32 adds nothing here) |
+
+Honest framings of the headline number: **5.78× under a matched (both-sync, f32) policy; 8.80× comparing
+each path at its best (naive per-kernel-sync as v1.0 shipped vs the optimized loop with fast-sync); 7.52×
+if BOTH paths use fast-sync (naive 61.2 → 8.14).** All parity-gated. **The ≥10× bar is still NOT met.**
+
+**Why not 10×, named precisely (Amdahl).** After the fusions the sync'd profile is GEMM 64% / elem 19% /
+redux 11% / dgb 6% — **GEMM is now the wall** (310 ms / 50 = 6.2 ms/step of the 8.14). Our GEMM is the
+tiled-SMEM-f32 tier (4.56–5.45 TFLOP/s, ~56% cuBLAS-f32); TF32 does not beat it on this laptop. To reach
+10× (≤7.16 ms/step vs the 71.6 naive, i.e. shave ~1 ms) the only remaining real lever is a **faster GEMM**:
+the G2 cp.async double-buffered SMEM path is +19% (5.445 vs 4.56 TFLOP/s) and would land the *best-framing*
+number at ≈10×, but the capstone's forward GEMM uses `__tiled_matmul_smem` (synchronous M1), and wiring a
+general cp.async GEMM into the training op-set touches `kovc.hx`'s emitter (a fixpoint-gated change) — a
+real next step, not a launcher tweak. The other axis (a *wider* shape where naive GEMM dominates far more,
+so the ratio grows past 10×) is NOT honestly measurable here: the naive matmul is `grid=M, block=N` with one
+thread/cell, so at H=2048 `block=N=2048` exceeds the 1024-thread/block limit and the naive baseline **cannot
+launch at all** — there is no naive number to divide by. The balanced S=512 D=256 shape (naive `block=N=256`
+≤ 1024, so it runs) is the honest comparison point, and there the answer is ~8.8×.
+
+**Files (M6.2):** harness `helixc/runtime/train_transformer.c` (`HX_OPT=2` TF32 path; `HX_DGBFUSE` fused dgb
+default-on at OPT≥1; Adam `LXE` occupancy; `t_dgb` profiling bucket); new corpus kernels
+`helixc/examples/{gpu_row_mean,gpu_layernorm_backward_dgb_pm}_kernel.hx` (pure Helix — no `kovc.hx` change,
+fixpoint byte-identical). v1.0 default-dims audit reproduces byte-identically (OPT=0 → DGBFUSE off, Adam
+block=1: step0 62.350887 → final 0.415819). Probe scripts under `.stage33-logs/m6_{tf32,dgbfuse}*.sh`.
+**Charter §1.2 item 5: parity MAINTAINED (incl. under TF32, 0.0011%); end-to-end now ~8.8× (was 2.24×) —
+honest, GEMM-Amdahl-bounded; ≥10× needs a cp.async GEMM (a fixpoint-gated emitter step) — orchestrator to
+decide re-scope vs pursue.**
