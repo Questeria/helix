@@ -271,7 +271,22 @@ chk "$GENC/M1_for_loop.hx" 42; chk "$GENC/M2_compound_assign.hx" 42; chk "$GENC/
 #   L-3 match-exhaustiveness: a payload-enum match omitting the Err arm is ACCEPTED and runs
 #       the covered Ok arm -> 42; Rust rejects (non-exhaustive patterns). Exit 42 proves it.
 chk "$GENC/M5_bare_generic_bound.hx" 0; chk "$GENC/M7_privacy_bound.hx" 42; chk "$GENC/L3_nonexhaustive_bound.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 71 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42])"
+# T3 H-1 PACKAGED GENERIC COLLECTIONS (2026-06-03, charter §1.6 HIGH): generic
+# Vec<T> (new/push/get/set/len/pop with GROWTH on push) + an i32->i32
+# open-addressing HashMap (insert/get/contains, collision resolved by linear
+# probing). Library = stdlib/collections.hx; these two corpus programs inline
+# it (no external-module loader) and exercise every op end-to-end:
+#   H1_vec: cap 2 -> push 1..8 (forces TWO relocations 2->4->8) -> assert
+#     len==8 & cap==8 -> sum-back via get (=36) -> set(0,7) -> pop()==8 ->
+#     live-sum 34 + popped 8 = 42. Proves growth + copy + set + pop + len.
+#   H1_hashmap: cap 8; insert keys 3,11,19 (ALL hash to bucket 3 -- a forced
+#     COLLISION resolved by linear probing into 3,4,5) + key 6 + overwrite 6 ->
+#     count==4 -> get each collided key back (10,20,5,7) -> miss on absent 99 ->
+#     contains present/absent/collided-but-absent(27) -> value sum 42.
+# Library-level, NO kovc.hx change -> fixpoint byte-identical (verified via the
+# fast inner loop: K2 sha == the H-3 mint bdff0049...).
+chk "$GENC/H1_vec.hx" 42; chk "$GENC/H1_hashmap.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 73 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -316,7 +331,8 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 # T3 (2026-06-03): bumped 60 -> 65 for the 5 L-7 dark-arm rows (neg/bnot/not/i8/u32).
 # T3 (2026-06-03): bumped 65 -> 71 for 3 desugar promotions (M-1 for / M-2 op= / L-4 &&||)
 #                  + 3 doc-as-bound bound-provers (M-5 bare-generic / M-7 privacy / L-3 non-exhaustive).
-if [ "$pass" -lt 71 ]; then echo "  CORPUS REGRESSION (pass=$pass < 71)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 71 -> 73 for H-1 packaged collections (H1_vec growth + H1_hashmap collision).
+if [ "$pass" -lt 73 ]; then echo "  CORPUS REGRESSION (pass=$pass < 73)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure
