@@ -252,6 +252,24 @@ chk "$GENC/L1_index_store.hx" 42
 # gated, i8/u32 were not). No kovc.hx change (codegen pre-existed as [impl]).
 chk "$GENC/arm_neg.hx" 42; chk "$GENC/arm_bnot.hx" 42; chk "$GENC/arm_not.hx" 42
 chk "$GENC/arm_i8_width.hx" 42; chk "$GENC/arm_u32_width.hx" 42
+# T3 L-7 REMAINING frozen-arm sweep (2026-06-03, charter §1.6 LOW -- completes L-7):
+# the LAST frozen-denominator arms, all probed [impl]->[proven] via the K2 9cc8f20b
+# fixpoint (NO kovc.hx/lexer/parser change -> the sha stays byte-identical). Each
+# loop/runtime-derives 42 so nothing constant-folds; the bf16/f16 ARITH row is a
+# doc-as-bound neg test (compiles, then SIGILLs 132 -- bf16/f16 are storage-only,
+# no x86 baseline hardware arithmetic; fails closed, never silent-wrong).
+#   arm_block_comment : nested `/* /* */ */` block comments (lexer skip_block_comment).
+#   arm_radix_lits    : hex 0x2A / 0xFF_FF, binary 0b10_1010, octal 0o52 -- WITH `_` seps.
+#   arm_char_lit      : char literals as int values ('*'=42, '\n' escape, '0').
+#   arm_continue      : `continue` skipping iterations in a while loop.
+#   arm_early_return  : early `return` from inside an if / out of a loop (before the tail).
+#   arm_tuple_struct  : tuple struct `struct Pair(i32,i32)` + positional `.0`/`.1` access.
+#   arm_bf16_f16_decl : bf16/f16 LITERAL declaration (truncated bit pattern emitted) -> 42.
+#   arm_bf16_arith_bound : bf16/f16 ARITHMETIC bound -- compiles + traps (SIGILL 132).
+chk "$GENC/arm_block_comment.hx" 42; chk "$GENC/arm_radix_lits.hx" 42
+chk "$GENC/arm_char_lit.hx" 42; chk "$GENC/arm_continue.hx" 42
+chk "$GENC/arm_early_return.hx" 42; chk "$GENC/arm_tuple_struct.hx" 42
+chk "$GENC/arm_bf16_f16_decl.hx" 42; chk "$GENC/arm_bf16_arith_bound.hx" 132
 # T3 §1.6 PARSER-DESUGAR promotions (2026-06-03, charter §1.6 MED/LOW): three desugars
 # that were already implemented in parser.hx but had no gated corpus row. The self-host
 # source uses plain `while` / `x = x + ...` / nested `if`, NEVER the new syntax, so these
@@ -411,12 +429,22 @@ chk_err "$GENC/err_at_l1.hx" 1 20
 chk_err "$GENC/err_let_rhs.hx" 1 28
 chk_err "$GENC/err_multiline_l3.hx" 3 13
 chk_err "$GENC/err_after_op_l2.hx" 2 9
-echo "  CHECK_ERR: $epass passed, $efail failed (expect 4: file:line:col correct + non-zero exit + no ELF)"
+# T3 §1.6 L-2 (2026-06-03) DOCUMENT-AS-BOUND + negative test: a u64 LITERAL whose
+# decimal magnitude exceeds 2^32-1 is lex-capped (i32 accumulator) and FAILS CLOSED
+# -- lexer tags it token 40 (no parser arm, lexer.hx:580-617 + check_u64_10digit_
+# overflow), the parser unexpected-token catch-all makes an AST_ERR, and the H-3
+# diagnostic prints `<path>:line:col: parse error: unexpected token` + non-zero exit
+# + NO ELF. `5_000_000_000_u64` is the offending token at line 25 col 20 of the
+# fixture. (i64 >= 2^32 literals work via the limb path -- i64_cmp/L2_i64_bigger;
+# u64 >= 2^32 is reachable by COMPUTATION -- u64_shr; only the u64 *literal* is
+# capped. Lex-accumulator widening = v-next.) Proves the bound never silent-wrongs.
+chk_err "$GENC/L2_u64_over_2p32.hx" 25 20
+echo "  CHECK_ERR: $epass passed, $efail failed (expect 5: file:line:col correct + non-zero exit + no ELF)"
 
 echo "=== GATE VERDICT ==="
 # H-3 (2026-06-03): the check_err negative corpus must be all-green (correct
 # path:line:col + non-zero compile exit). Any miss fails the gate.
-if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (epass=$epass efail=$efail; want 4/0)"; GATE_OK=0; fi
+if [ "$efail" -ne 0 ] || [ "$epass" -lt 5 ]; then echo "  CHECK_ERR REGRESSION (epass=$epass efail=$efail; want 5/0)"; GATE_OK=0; fi
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
 # T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
 # T3 (2026-06-03): bumped 59 -> 60 for the L-1 index-store program.
@@ -434,7 +462,11 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 # T3 (2026-06-03): bumped 84 -> 87 for M-6 closure-as-argument (M6_closure_arg
 #   multi-form -> 42, t6_closure_arg charter probe -> 42, M6_capture_regression
 #   capturing-by-name -> 42).
-if [ "$pass" -lt 87 ]; then echo "  CORPUS REGRESSION (pass=$pass < 87)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 87 -> 95 for the L-7 REMAINING frozen-arm sweep (8 rows:
+#   block-comment / radix+_ / char-lit / continue / early-return / tuple-struct /
+#   bf16-f16-decl ->42 + bf16-arith-bound ->132). No kovc.hx change (fixpoint stays
+#   byte-identical 9cc8f20b) -- pure promotions of already-implemented arms.
+if [ "$pass" -lt 95 ]; then echo "  CORPUS REGRESSION (pass=$pass < 95)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure
