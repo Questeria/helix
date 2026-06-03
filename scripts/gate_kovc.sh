@@ -244,11 +244,20 @@ chk "$CD/f8_args.hx" 36; chk "$CD/f9_args.hx" 45; chk "$CD/f11_args.hx" 66
 # (emit_index_store_cpu, kovc.hx:6896, AST_INDEX_STORE tag 55), incl a same-slot
 # overwrite; arr_idx above only READS. -> 42.
 chk "$GENC/L1_index_store.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 60 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42])"
+# T3 L-7 dark-arm sweep (2026-06-03, charter §1.6 LOW): [impl]->[proven] for the
+# FROZEN-denominator arms whose codegen ran dynamically but had no gated row. Each probe
+# loop-accumulates a RUNTIME value so the arm cannot be constant-folded, then exits 42.
+# Frozen L-7 items covered: `~e`/`!e` unary (AST_NEG 9 / AST_BNOT 26 / AST_NOT 27) +
+# `i8`/`u32` width arms (AST_INTLIT_I8 39 / AST_INTLIT_U32 36 -- u8/u16/i16 were already
+# gated, i8/u32 were not). No kovc.hx change (codegen pre-existed as [impl]).
+chk "$GENC/arm_neg.hx" 42; chk "$GENC/arm_bnot.hx" 42; chk "$GENC/arm_not.hx" 42
+chk "$GENC/arm_i8_width.hx" 42; chk "$GENC/arm_u32_width.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 65 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42])"
 
 echo "=== GATE VERDICT ==="
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
 # T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
 # T3 (2026-06-03): bumped 59 -> 60 for the L-1 index-store program.
-if [ "$pass" -lt 60 ]; then echo "  CORPUS REGRESSION (pass=$pass < 60)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 60 -> 65 for the 5 L-7 dark-arm rows (neg/bnot/not/i8/u32).
+if [ "$pass" -lt 65 ]; then echo "  CORPUS REGRESSION (pass=$pass < 65)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
