@@ -301,6 +301,24 @@ chk "$GENC/H1_vec.hx" 42; chk "$GENC/H1_hashmap.hx" 42
 #     fixpoint byte-identical (verified via the fast inner loop: K2 sha == the
 #     H-3 mint bdff0049...).
 chk "$GENC/H2_string.hx" 42
+# T3 H-4 TRAIT DEFAULT METHODS (2026-06-03, charter §1.6 HIGH -- the last HIGH
+# item): a trait may declare a method WITH a default body; a type that impls the
+# trait but does NOT override that method dispatches to the default, while a type
+# that DOES override it uses its own. Implemented in parser.hx: parse_trait_decl
+# now STORES each default-bodied method's `fn`-token (tdef_tab) instead of
+# brace-skipping it; parse_impl_block SYNTHESIZES a concrete `<Target>__<method>`
+# by re-parsing that token range as an impl method of the impl's target type
+# (so `self.field`/`self.method()` resolve against the concrete type) -- UNLESS
+# the impl provides an explicit override (override wins). The self-host source
+# uses traits (signature-only methods + explicit impls), so the fixpoint sha
+# MOVES (parser.hx changed) but K2==K3==K4 stay byte-identical; the existing
+# trait corpus (t2/t7/t7b/t7c) must not regress.
+#   t1_trait_default     DEFAULT-USED: trait Greet { fn hello(self)->i32 {42} } +
+#     `impl Greet for P {}` (empty) -> p.hello() dispatches to the default -> 42.
+#   t5_trait_default_mix DEFAULT + OVERRIDE: A uses the default hello()=10 ; B
+#     OVERRIDES hello()=32 -> a.hello()+b.hello() = 42 (proves override beats the
+#     default -- B's 32, not the default 10).
+chk "$GENC/t1_trait_default.hx" 42; chk "$GENC/t5_trait_default_mix.hx" 42
 # T3 §1.6 AGGREGATE-RETURN-BY-VALUE fix (2026-06-03): returning a struct OR
 # enum BY VALUE from a fn previously mis-lowered (the callee returned a
 # pointer into its own about-to-be-reclaimed frame, AND the caller stored
@@ -324,7 +342,7 @@ chk "$GENC/arm_enum_payload3.hx" 42
 # eret_option: 2-variant Option-shape enum returned by value + matched
 # (runtime Some(42)) -> 42.
 chk "$GENC/eret_option.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 80 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42])"
+echo "  CORPUS: $pass passed, $fail failed (expect 82 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -373,7 +391,9 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 # T3 (2026-06-03): bumped 73 -> 74 for H-2 rich String (H2_string: concat + eq + byte_at round-trip).
 # T3 (2026-06-03): bumped 74 -> 80 for the §1.6 aggregate-return-by-value fix
 #   (sret 1/2/3/5-field structs + arm_enum_payload3 [PROMOTED v-next->gated] + eret_option).
-if [ "$pass" -lt 80 ]; then echo "  CORPUS REGRESSION (pass=$pass < 80)"; GATE_OK=0; fi
+# T3 (2026-06-03): bumped 80 -> 82 for H-4 trait DEFAULT methods (t1 default-used
+#   + t5 default/override mix -- the last HIGH §1.6 item).
+if [ "$pass" -lt 82 ]; then echo "  CORPUS REGRESSION (pass=$pass < 82)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure

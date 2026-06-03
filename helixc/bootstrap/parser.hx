@@ -633,6 +633,29 @@ fn impl_tab_lookup(sb: i32, trait_s: i32, trait_l: i32, target_tag: i32) -> i32 
     }
     found
 }
+// H-4 trait DEFAULT methods (2026-06-03): tdef_tab at sb+128/129. Each entry
+// is 4 slots (trait_idx, method_name_s, method_name_l, fn_tok). fn_tok is the
+// token INDEX of the `fn` keyword of a trait method that has a `{ ... }`
+// default body. parse_trait_decl records one entry per defaulted method;
+// parse_impl_block reads them to synthesize per-target default methods.
+// Cap 16 defaulted methods across all traits in Phase-0.
+fn tdef_tab_base(sb: i32) -> i32 { __arena_get(sb + 128) }
+fn tdef_tab_count(sb: i32) -> i32 { __arena_get(sb + 129) }
+fn tdef_tab_add(sb: i32, trait_idx: i32, m_s: i32, m_l: i32, fn_tok: i32) -> i32 {
+    let count = tdef_tab_count(sb);
+    if count >= 16 {
+        0 - 1
+    } else {
+        let base = tdef_tab_base(sb);
+        let entry = base + count * 4;
+        __arena_set(entry, trait_idx);
+        __arena_set(entry + 1, m_s);
+        __arena_set(entry + 2, m_l);
+        __arena_set(entry + 3, fn_tok);
+        __arena_set(sb + 129, count + 1);
+        count
+    }
+}
 // Stage 8.5: trait/impl/for keyword bytes installed at sb+37..42.
 fn kw_trait_s(sb: i32) -> i32 { __arena_get(sb + 37) }
 fn kw_trait_n(sb: i32) -> i32 { __arena_get(sb + 38) }
@@ -9156,8 +9179,16 @@ fn parse_top(tok_base: i32) -> i32 {
     // (96..121), so no existing fixed offset moves; the keyword strings
     // pushed later in install_keywords capture their own offsets
     // dynamically, so they simply land 4 slots further down (transparent).
+    // H-4 trait DEFAULT methods (2026-06-03): EXTENDED 32 -> 34 (slots
+    // 96..129) so sb+128/129 (tdef_tab base/count -- the trait-default
+    // method table) are backed by real region slots. The 2 new slots sit
+    // at the END (128/129), AFTER fn_ret_struct_tab (124..126) and the
+    // entire AD param_array/bucket_array + const_tab range (96..123), so no
+    // existing fixed offset moves; the keyword strings + table regions pushed
+    // later capture their own offsets dynamically, so they simply land 2 slots
+    // further down (transparent).
     let mut k3a_pad: i32 = 0;
-    while k3a_pad < 32 {
+    while k3a_pad < 34 {
         __arena_push(0);
         k3a_pad = k3a_pad + 1;
     }
@@ -9239,6 +9270,24 @@ fn parse_top(tok_base: i32) -> i32 {
     }
     __arena_set(cur_slot + 122, const_base);
     __arena_set(cur_slot + 123, 0);
+    // H-4 trait DEFAULT methods (2026-06-03): tdef_tab region (64 slots,
+    // 16 entries x 4 fields). Each entry = (trait_idx, method_name_s,
+    // method_name_l, fn_tok) -- the token index of the `fn` keyword of a
+    // trait method that carries a DEFAULT body. parse_trait_decl records one
+    // per defaulted method; parse_impl_block synthesizes a concrete
+    // `<Target>__<method>` by re-parsing those tokens as an impl method of
+    // the impl's target type (so `self.field`/`self.other_method()` resolve
+    // against the concrete type) -- UNLESS the impl block already provides an
+    // explicit override of that method (override wins). Region BASE stored at
+    // sb+128, count at sb+129.
+    let tdef_base = __arena_push(0);
+    let mut tdi: i32 = 1;
+    while tdi < 64 {
+        __arena_push(0);
+        tdi = tdi + 1;
+    }
+    __arena_set(cur_slot + 128, tdef_base);
+    __arena_set(cur_slot + 129, 0);
     // Peek the first token. If it's `fn`, parse a function decl.
     // Otherwise treat the whole input as a single expression
     // (legacy mode) for backward compat with all existing tests.
@@ -14153,6 +14202,24 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     cur_advance(sb);                         // '{'
     // Parse zero-or-more method decls until '}'.
     let mut method_count: i32 = 0;
+    // H-4 trait DEFAULT methods (2026-06-03): record the (name_s, name_l) of
+    // every EXPLICIT method this impl block defines, so the post-loop default-
+    // synthesis can skip any overridden method (override wins). Pre-reserve a
+    // FIXED contiguous scratch region (32 cells = 16 methods x 2) and write by
+    // INDEX -- not by push -- because parse_impl_method pushes its own AST
+    // subtree between our captures, so a push-based buffer would not be
+    // contiguous. The region is plain scratch (never referenced by an AST
+    // node), so it does not perturb codegen. >16 methods/impl just stop being
+    // recorded (cap-bounded); such a method would fall back to synthesizing the
+    // default even though it was overridden -- but Phase-0 impls are small and
+    // the existing trait corpus has <=2 methods/impl, so the cap is ample.
+    let expl_buf = __arena_len();
+    let mut expl_cap_i: i32 = 0;
+    while expl_cap_i < 32 {
+        __arena_push(0);
+        expl_cap_i = expl_cap_i + 1;
+    }
+    let mut expl_count: i32 = 0;
     let mut keep: i32 = 1;
     while keep == 1 {
         // K1.BZ (2026-05-26): swallow leading vis/linkage modifiers
@@ -14201,6 +14268,17 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
                 };
             };
             if is_fn_item == 1 {
+            // H-4 (2026-06-03): capture this explicit method's name (the IDENT
+            // right after the `fn` keyword the cursor is on) BEFORE
+            // parse_impl_method consumes it, so the post-loop default-synthesis
+            // can skip any method the impl overrides. Write by INDEX into the
+            // pre-reserved contiguous scratch region (cap 16 methods).
+            if expl_count < 16 {
+                let expl_name_k = cur_get(sb) + 1;
+                __arena_set(expl_buf + expl_count * 2, tok_p2(tok_base, expl_name_k));
+                __arena_set(expl_buf + expl_count * 2 + 1, tok_p3(tok_base, expl_name_k));
+                expl_count = expl_count + 1;
+            };
             // Expect `fn IDENT(...) -> RET { ... }`. parse_impl_method
             // consumes the entire decl + body + closing '}'.
             let fn_node = parse_impl_method(tok_base, sb, target_s, target_l, target_tag);
@@ -14221,6 +14299,60 @@ fn parse_impl_block(tok_base: i32, sb: i32) -> i32 {
     }
     cur_advance(sb);                         // consume final '}'
     impl_tab_add(sb, trait_s, trait_l, target_tag, method_count);
+    // H-4 trait DEFAULT methods (2026-06-03): for the `impl Trait for Type`
+    // form (trait_l > 0), synthesize a concrete `<Target>__<method>` for every
+    // DEFAULT method of `Trait` that THIS impl block did not explicitly
+    // override. Each is built by re-running parse_impl_method over the trait
+    // default method's stored token range (fn_tok), with this impl's
+    // target_s/l/tag -- so `self.field` and `self.other_method()` inside the
+    // default body resolve against the CONCRETE type, exactly as a hand-written
+    // override would. The cursor is saved + restored around each re-parse so
+    // the outer top-level decl walk is unaffected. An explicit override (whose
+    // name we recorded in expl_buf) suppresses synthesis -> override wins.
+    if trait_l > 0 {
+        let syn_trait_idx = trait_tab_lookup(sb, trait_s, trait_l);
+        if syn_trait_idx >= 0 {
+            let tdc = tdef_tab_count(sb);
+            let tdb = tdef_tab_base(sb);
+            let mut tdi2: i32 = 0;
+            while tdi2 < tdc {
+                let tde = tdb + tdi2 * 4;
+                let ti = __arena_get(tde);
+                if ti == syn_trait_idx {
+                    let dm_s = __arena_get(tde + 1);
+                    let dm_l = __arena_get(tde + 2);
+                    let dm_tok = __arena_get(tde + 3);
+                    // Was this default method explicitly overridden by THIS impl?
+                    let mut overridden: i32 = 0;
+                    let mut ei: i32 = 0;
+                    while ei < expl_count {
+                        let es = __arena_get(expl_buf + ei * 2);
+                        let el = __arena_get(expl_buf + ei * 2 + 1);
+                        if byte_eq(dm_s, dm_l, es, el) == 1 { overridden = 1; ei = expl_count; }
+                        else { ei = ei + 1; };
+                    }
+                    if overridden == 0 {
+                        // Synthesize <Target>__<method> from the default body.
+                        let saved_cur = cur_get(sb);
+                        cur_set(sb, dm_tok);     // seek to the default method's `fn`
+                        let syn_fn = parse_impl_method(tok_base, sb, target_s, target_l, target_tag);
+                        cur_set(sb, saved_cur);  // restore the top-level cursor
+                        let syn_list = mk_node(15, syn_fn, 0, 0);
+                        let s_head = impl_pending_head(sb);
+                        if s_head == 0 {
+                            set_impl_pending_head(sb, syn_list);
+                            set_impl_pending_tail(sb, syn_list);
+                        } else {
+                            let s_tail = impl_pending_tail(sb);
+                            __arena_set(s_tail + 2, syn_list);
+                            set_impl_pending_tail(sb, syn_list);
+                        };
+                    };
+                };
+                tdi2 = tdi2 + 1;
+            }
+        };
+    };
     mk_node(54, 0, 0, 0)
 }
 
@@ -14704,26 +14836,78 @@ fn parse_trait_decl(tok_base: i32, sb: i32) -> i32 {
             cur_advance(sb);
         }}};
     }
+    // H-4 (2026-06-03): register the trait FIRST so we have its index to key
+    // the trait-default table on. (Pre-H-4 this add happened at the end; the
+    // index is now needed during the body walk below.)
+    let trait_idx = trait_tab_add(sb, name_s, name_l);
     cur_advance(sb);                         // consume '{' (LBRACE = 5)
-    // Brace-balance scan: consume tokens until the matching '}'. Most
-    // trait bodies in Phase-0 are flat (no nested {} since methods are
-    // signature-only), but the loop tolerates nesting for safety.
+    // H-4 trait DEFAULT methods (2026-06-03): walk the trait body method-by-
+    // method instead of blindly brace-skipping. A trait method is either
+    // signature-only (`fn name(params) -> ret` / `... ;`) -- recorded nowhere,
+    // same as pre-H-4 -- or DEFAULT-BODIED (`fn name(params) -> ret { body }`)
+    // -- whose `fn`-keyword token index + method name are stored in tdef_tab so
+    // parse_impl_block can synthesize a concrete `<Target>__<method>` for any
+    // impl of this trait that does NOT override it. Because params can't
+    // contain `{` and a `-> ret` type can't contain `{`, the FIRST `{` (at the
+    // trait-body depth) after a method's `fn` -- appearing before the next `;`,
+    // the next `fn`, or the trait's closing `}` -- is unambiguously that
+    // method's default-body opener.
+    //
+    // `pending_fn_tok` >= 0 means we've seen a `fn` whose default-or-not is
+    // still undetermined; `pending_name_s/l` carry its method name. When a `{`
+    // at depth 1 opens that method's body we record the default; when a `;`,
+    // a new `fn`, or the trait `}` arrives first, the pending method was
+    // signature-only and is dropped.
     let mut depth: i32 = 1;
+    let mut pending_fn_tok: i32 = 0 - 1;
+    let mut pending_name_s: i32 = 0;
+    let mut pending_name_l: i32 = 0;
     while depth > 0 {
-        let tt = tok_tag(tok_base, cur_get(sb));
+        let here = cur_get(sb);
+        let tt = tok_tag(tok_base, here);
         if tt == 5 {                         // LBRACE
+            // A `{` at depth 1 opens the pending method's default body.
+            if depth == 1 {
+                if pending_fn_tok >= 0 {
+                    tdef_tab_add(sb, trait_idx, pending_name_s, pending_name_l, pending_fn_tok);
+                    pending_fn_tok = 0 - 1;  // consumed -- this method is defaulted
+                };
+            };
             depth = depth + 1;
+            cur_advance(sb);
         } else { if tt == 6 {                // RBRACE
             depth = depth - 1;
+            if depth > 0 {
+                cur_advance(sb);
+            };
+            // (depth == 0: the trait's closing `}` -- consumed after the loop.
+            //  Any still-pending method was signature-only -> correctly dropped.)
         } else { if tt == 0 {                // EOF safety
             depth = 0;
-        } else {} } };
-        if depth > 0 {
+        } else { if tt == 12 {               // TK_SEMI
+            // Terminates a signature-only method at depth 1.
+            if depth == 1 { pending_fn_tok = 0 - 1; };
             cur_advance(sb);
-        };
+        } else {
+            // At depth 1, detect a `fn` keyword (2-byte IDENT "fn" = 102 110).
+            // Its arrival also closes any prior still-pending (signature-only)
+            // method. Record this `fn`'s token index + the method name IDENT
+            // that follows, as the new pending method.
+            let is_fn_kw_t = if depth == 1 { if tt == 2 {
+                let fs = tok_p2(tok_base, here);
+                let fl = tok_p3(tok_base, here);
+                if fl == 2 { if __arena_get(fs) == 102 { if __arena_get(fs + 1) == 110 { 1 } else { 0 } } else { 0 } } else { 0 }
+            } else { 0 } } else { 0 };
+            if is_fn_kw_t == 1 {
+                pending_fn_tok = here;            // token index of `fn`
+                let mname_k = here + 1;          // the method-name IDENT
+                pending_name_s = tok_p2(tok_base, mname_k);
+                pending_name_l = tok_p3(tok_base, mname_k);
+            };
+            cur_advance(sb);
+        }}}};
     }
     cur_advance(sb);                         // consume final '}'
-    trait_tab_add(sb, name_s, name_l);
     mk_node(54, 0, 0, 0)
 }
 
