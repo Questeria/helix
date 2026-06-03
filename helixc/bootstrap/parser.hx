@@ -8705,7 +8705,16 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         if t == 6 {
             mk_node(0, 0, 0, 0)
         } else {
-            mk_node(99, t, 0, 0)
+            // H-3 (file:line:col diagnostics): thread the offending
+            // token's SOURCE BYTE OFFSET (token-record slot 2 =
+            // src_start, read via tok_p2) into AST_ERR's p2. Codegen
+            // (kovc.hx tag-99 arm) reads only p1 for the runtime trap-id,
+            // so p2 is free for diagnostic use. The driver's
+            // find_first_err_offset walk reads p2 to map byte->line:col
+            // and print `path:line:col: parse error: ...` at COMPILE time.
+            // For a CLEAN program this site is never reached, so the AST
+            // (and the self-host fixpoint) is byte-identical.
+            mk_node(99, t, tok_p2(tok_base, k), 0)
         }
     }}}}}}}}}}}}}}}}}}}     // K1.CA (2026-05-26): +1 '}' for t == 43 wrapper; K1.F15 (2026-05-27): +1 '}' for t == 44 (TK_FLOATLIT_F16) wrapper
 }

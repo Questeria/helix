@@ -273,7 +273,43 @@ chk "$GENC/M1_for_loop.hx" 42; chk "$GENC/M2_compound_assign.hx" 42; chk "$GENC/
 chk "$GENC/M5_bare_generic_bound.hx" 0; chk "$GENC/M7_privacy_bound.hx" 42; chk "$GENC/L3_nonexhaustive_bound.hx" 42
 echo "  CORPUS: $pass passed, $fail failed (expect 71 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42])"
 
+echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
+# H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
+# exit AND a `path:line:col: message` diagnostic with the CORRECT line+col of the
+# offending token (not a bare byte offset / runtime trap). The fresh K2 compiles
+# each err fixture (reading /tmp/k2_in.hx), so the reported path is /tmp/k2_in.hx.
+# chk_err asserts: (1) K2's OWN exit is non-zero, (2) it did NOT write an output
+# ELF, (3) its stdout/stderr is EXACTLY `/tmp/k2_in.hx:<line>:<col>: parse error:
+# unexpected token` with the line:col we computed by hand from each fixture's bytes.
+# A clean program emits NO diagnostic (its AST has no AST_ERR node), so the
+# self-host fixpoint + the 71-corpus above are unperturbed.
+epass=0; efail=0
+chk_err() { # <fixture> <expected_line> <expected_col>
+  local f="$1" el="$2" ec="$3" b; b=$(basename "$1")
+  [ -f "$f" ] || { echo "  EMISSING $b"; efail=$((efail+1)); return; }
+  cp "$f" /tmp/k2_in.hx; rm -f /tmp/k2_out.bin
+  local out rc want; out=$(timeout 20 /tmp/K2.bin 2>&1); rc=$?
+  want="/tmp/k2_in.hx:${el}:${ec}: parse error: unexpected token"
+  if [ "$rc" = "0" ]; then echo "  EFAIL $b (compiler exited 0 on a parse error)"; efail=$((efail+1)); return; fi
+  if [ -s /tmp/k2_out.bin ]; then echo "  EFAIL $b (wrote an output ELF despite the error)"; efail=$((efail+1)); return; fi
+  if [ "$out" = "$want" ]; then echo "  EPASS $b -> '$out' (exit $rc)"; epass=$((epass+1));
+  else echo "  EFAIL $b: got '$out' want '$want' (exit $rc)"; efail=$((efail+1)); fi
+}
+# Hand-computed line:col of the offending '@' token in each fixture (1-based):
+#   err_at_l1.hx:        `fn main() -> i32 { @ }`  -> '@' at byte 19 -> 1:20
+#   err_let_rhs.hx:      `fn main() -> i32 { let x = @; x }` -> 1:28
+#   err_multiline_l3.hx: '@' is the let-RHS on line 3, col 13 -> 3:13
+#   err_after_op_l2.hx:  '@' after `1 + ` on line 2, col 9   -> 2:9
+chk_err "$GENC/err_at_l1.hx" 1 20
+chk_err "$GENC/err_let_rhs.hx" 1 28
+chk_err "$GENC/err_multiline_l3.hx" 3 13
+chk_err "$GENC/err_after_op_l2.hx" 2 9
+echo "  CHECK_ERR: $epass passed, $efail failed (expect 4: file:line:col correct + non-zero exit + no ELF)"
+
 echo "=== GATE VERDICT ==="
+# H-3 (2026-06-03): the check_err negative corpus must be all-green (correct
+# path:line:col + non-zero compile exit). Any miss fails the gate.
+if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (epass=$epass efail=$efail; want 4/0)"; GATE_OK=0; fi
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
 # T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
 # T3 (2026-06-03): bumped 59 -> 60 for the L-1 index-store program.
@@ -282,3 +318,8 @@ echo "=== GATE VERDICT ==="
 #                  + 3 doc-as-bound bound-provers (M-5 bare-generic / M-7 privacy / L-3 non-exhaustive).
 if [ "$pass" -lt 71 ]; then echo "  CORPUS REGRESSION (pass=$pass < 71)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
+# H-3 (2026-06-03): exit reflects the verdict so the detached runner's
+# exit-code check (detached_gate.sh) reports RED on ANY gate failure
+# (corpus/check_err/fixpoint/PTX) -- previously the trailing echo masked
+# GATE_FAIL as exit 0.
+if [ "$GATE_OK" = "1" ]; then exit 0; else exit 1; fi

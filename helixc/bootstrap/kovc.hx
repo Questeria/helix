@@ -14997,6 +14997,231 @@ fn emit_rocm_for_ast_to_path(ast_root: i32) -> i32 {
     }
 }
 
+// ==============================================================
+// H-3 (charter §1.6): file:line:col DIAGNOSTICS.
+//
+// kovc's compiler-error model is "always emit an ELF; a malformed
+// program traps (ud2) on entry with a trap-id" — there was no
+// COMPILE-TIME diagnostic with a source location. H-3 adds a
+// compile-time `path:line:col: parse error: ...` message + a
+// non-zero compiler exit, driven from the driver `main` BETWEEN
+// parse and codegen. The byte offset of the offending token is
+// already carried on the AST_ERR node (tag 99) in slot p2 (set at
+// parser.hx parse_primary's unexpected-token catch-all via tok_p2
+// = the token-record src_start). These helpers map that byte
+// offset to a 1-based (line, col) against the source buffer and
+// print it.
+//
+// FIXPOINT SAFETY: clean programs (incl. the whole self-host
+// source) reach NO AST_ERR node, so find_first_err_offset returns
+// -1, the driver takes the normal emit path, and the emitted ELF
+// is byte-identical. These functions are reachable only on a
+// malformed input. The added find_first_err_offset walk mirrors
+// the already-run panic_pass traversal exactly (same max recursion
+// depth), so it adds no new stack-budget risk.
+// ==============================================================
+
+// Map a source byte offset to a 1-based LINE number by counting
+// newlines (byte 10) in [src_base, off). src_base is the arena
+// index where the source buffer starts (the driver's src_start);
+// off is the ABSOLUTE arena index of the offending byte (= the
+// token-record src_start, which the lexer stores as an absolute
+// index). A leading position (off == src_base) is line 1.
+fn src_off_to_line(src_base: i32, off: i32) -> i32 {
+    let mut i: i32 = src_base;
+    let mut line: i32 = 1;
+    while i < off {
+        if __arena_get(i) == 10 { line = line + 1; };
+        i = i + 1;
+    }
+    line
+}
+
+// Map a source byte offset to a 1-based COLUMN = (off - index just
+// after the last newline before off) + 1. If no newline precedes
+// off, the line starts at src_base, so col = off - src_base + 1.
+fn src_off_to_col(src_base: i32, off: i32) -> i32 {
+    // line_start = index of the first byte of off's line.
+    let mut line_start: i32 = src_base;
+    let mut i: i32 = src_base;
+    while i < off {
+        if __arena_get(i) == 10 { line_start = i + 1; };
+        i = i + 1;
+    }
+    (off - line_start) + 1
+}
+
+// Recursively find the FIRST AST_ERR (tag 99) reachable from `idx`
+// and return its byte offset (slot p2), or -1 if none. Structure
+// mirrors walk_for_panic (the proven full-body traversal) but
+// short-circuits on the first error found. Descends every
+// expression-bearing slot the bootstrap parser can produce.
+fn walk_for_first_err(idx: i32) -> i32 {
+    if idx == 0 { 0 - 1 } else {
+        let t = __arena_get(idx);
+        let p1 = __arena_get(idx + 1);
+        let p2 = __arena_get(idx + 2);
+        let p3 = __arena_get(idx + 3);
+        if t == 99 {
+            // AST_ERR: p2 holds the source byte offset (H-3). Found.
+            p2
+        } else { if t == 16 {
+            // AST_CALL: walk each arg expr (p3 = args_head chain).
+            let mut cur_arg: i32 = p3;
+            let mut found_c: i32 = 0 - 1;
+            while cur_arg != 0 {
+                if found_c < 0 {
+                    let arg_expr = __arena_get(cur_arg + 1);
+                    let r = walk_for_first_err(arg_expr);
+                    if r >= 0 { found_c = r; };
+                };
+                cur_arg = __arena_get(cur_arg + 2);
+            }
+            found_c
+        } else { if t == 7 {
+            // AST_IF: cond + then + else
+            let r1 = walk_for_first_err(p1);
+            if r1 >= 0 { r1 } else {
+                let r2 = walk_for_first_err(p2);
+                if r2 >= 0 { r2 } else { walk_for_first_err(p3) }
+            }
+        } else { if t == 8 {
+            // AST_LET: p3=body, p4=value
+            let value = __arena_get(idx + 4);
+            let rv = walk_for_first_err(value);
+            if rv >= 0 { rv } else { walk_for_first_err(p3) }
+        } else { if t == 12 {
+            // AST_LET_MUT: p3=body, p4=value
+            let value2 = __arena_get(idx + 4);
+            let rv2 = walk_for_first_err(value2);
+            if rv2 >= 0 { rv2 } else { walk_for_first_err(p3) }
+        } else { if t == 10 {
+            // AST_WHILE: p1=cond, p2=body
+            let rw = walk_for_first_err(p1);
+            if rw >= 0 { rw } else { walk_for_first_err(p2) }
+        } else { if t == 11 {
+            // AST_ASSIGN: p3=value
+            walk_for_first_err(p3)
+        } else { if t == 13 {
+            // AST_SEQ: p1=first, p2=second
+            let rs = walk_for_first_err(p1);
+            if rs >= 0 { rs } else { walk_for_first_err(p2) }
+        } else { if t == 9 {
+            walk_for_first_err(p1)            // AST_NEG
+        } else { if t == 26 {
+            walk_for_first_err(p1)            // AST_BNOT
+        } else { if t == 31 {
+            walk_for_first_err(p1)            // AST_NOT
+        } else { if t == 62 {
+            // AST_MATCH: p1=scrut, p2=arms_head chain (p2=body, p3=next)
+            let rm = walk_for_first_err(p1);
+            if rm >= 0 { rm } else {
+                let mut arm: i32 = p2;
+                let mut found_m: i32 = 0 - 1;
+                while arm != 0 {
+                    if found_m < 0 {
+                        let arm_body = __arena_get(arm + 2);
+                        let ra = walk_for_first_err(arm_body);
+                        if ra >= 0 { found_m = ra; };
+                    };
+                    arm = __arena_get(arm + 3);
+                }
+                found_m
+            }
+        } else { if t == 52 {
+            walk_for_first_err(p1)            // AST_TUPLE_FIELD: p1=value
+        } else { if t == 79 {
+            // AST_FIELD_STORE: p1=AST_TUPLE_FIELD, p2=value
+            let rf = walk_for_first_err(p1);
+            if rf >= 0 { rf } else { walk_for_first_err(p2) }
+        } else { if t == 53 {
+            // AST_INDEX: p1=value, p2=idx
+            let ri = walk_for_first_err(p1);
+            if ri >= 0 { ri } else { walk_for_first_err(p2) }
+        } else { if t == 50 {
+            // AST_TUPLE_LIT: p2=head_idx chain of AST_TUPLE_CONS (tag 51).
+            let mut cur: i32 = p2;
+            let mut found_t: i32 = 0 - 1;
+            while cur != 0 {
+                if found_t < 0 {
+                    let elem_expr = __arena_get(cur + 1);
+                    let re = walk_for_first_err(elem_expr);
+                    if re >= 0 { found_t = re; };
+                };
+                cur = __arena_get(cur + 2);
+            }
+            found_t
+        } else {
+            // Binops with p1=lhs, p2=rhs: tags 2..6, 19..23, 24, 28..30,
+            // 32, 33. Same coarse range check as walk_for_panic.
+            let is_arith = if t >= 2 { if t <= 6 { 1 } else { 0 } } else { 0 };
+            let is_cmp   = if t >= 19 { if t <= 23 { 1 } else { 0 } } else { 0 };
+            let is_bit   = if t >= 28 { if t <= 30 { 1 } else { 0 } } else { 0 };
+            let is_mod   = if t == 24 { 1 } else { 0 };
+            let is_shift = if t == 32 { 1 } else { if t == 33 { 1 } else { 0 } };
+            let is_binop = if is_arith == 1 { 1 }
+                           else { if is_cmp == 1 { 1 }
+                           else { if is_bit == 1 { 1 }
+                           else { if is_mod == 1 { 1 }
+                           else { if is_shift == 1 { 1 } else { 0 } } } } };
+            if is_binop == 1 {
+                let rb = walk_for_first_err(p1);
+                if rb >= 0 { rb } else { walk_for_first_err(p2) }
+            } else {
+                0 - 1
+            }
+        }}}}}}}}}}}}}}}}
+    }
+}
+
+// Top-level: find the first AST_ERR byte offset in the whole
+// program (every non-generic AST_FN_DECL body), or -1 if the
+// program is clean. Mirrors panic_pass's fn-list iteration.
+fn find_first_err_offset(ast_root: i32) -> i32 {
+    let root_tag = __arena_get(ast_root);
+    if root_tag != 15 {
+        // Single-expr program (legacy): walk the root directly.
+        walk_for_first_err(ast_root)
+    } else {
+        let mut walk: i32 = ast_root;
+        let mut found: i32 = 0 - 1;
+        while walk != 0 {
+            if found < 0 {
+                let fn_idx = __arena_get(walk + 1);
+                let is_generic = __arena_get(fn_idx + 6);
+                if is_generic == 0 {
+                    let body = __arena_get(fn_idx + 3);
+                    let r = walk_for_first_err(body);
+                    if r >= 0 { found = r; };
+                };
+            };
+            walk = __arena_get(walk + 2);
+        }
+        found
+    }
+}
+
+// Emit the `:line:col: parse error: unexpected token` SUFFIX of a
+// diagnostic to stdout (the driver prints the `path` PREFIX first,
+// via its own path string literal, since read_file_to_arena paths
+// are compile-time literals). Uses the existing print_int / print_str
+// builtins (sys_write to fd=1). The full line is therefore
+// `<path>:<line>:<col>: parse error: unexpected token\n`.
+// Returns 0.
+fn report_parse_diag(src_base: i32, off: i32) -> i32 {
+    let line = src_off_to_line(src_base, off);
+    let col = src_off_to_col(src_base, off);
+    print_str(":");
+    print_int(line);
+    print_str(":");
+    print_int(col);
+    // print_str_ln appends a REAL newline byte (separate 1-byte
+    // sys_write); a plain "\n" in a string literal would emit a
+    // literal backslash-n (the lexer has NO string escapes).
+    print_str_ln(": parse error: unexpected token");
+    0
+}
+
 // --------------------------------------------------------------
 // Demo: build a tiny AST_INT(42) by hand, compile it, write the
 // resulting ELF to /tmp/kovc_ast_int.bin. The caller runs the
