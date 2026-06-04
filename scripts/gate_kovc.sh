@@ -255,9 +255,7 @@ chk "$GENC/arm_i8_width.hx" 42; chk "$GENC/arm_u32_width.hx" 42
 # T3 L-7 REMAINING frozen-arm sweep (2026-06-03, charter §1.6 LOW -- completes L-7):
 # the LAST frozen-denominator arms, all probed [impl]->[proven] via the K2 9cc8f20b
 # fixpoint (NO kovc.hx/lexer/parser change -> the sha stays byte-identical). Each
-# loop/runtime-derives 42 so nothing constant-folds; the bf16/f16 ARITH row is a
-# doc-as-bound neg test (compiles, then SIGILLs 132 -- bf16/f16 are storage-only,
-# no x86 baseline hardware arithmetic; fails closed, never silent-wrong).
+# loop/runtime-derives 42 so nothing constant-folds.
 #   arm_block_comment : nested `/* /* */ */` block comments (lexer skip_block_comment).
 #   arm_radix_lits    : hex 0x2A / 0xFF_FF, binary 0b10_1010, octal 0o52 -- WITH `_` seps.
 #   arm_char_lit      : char literals as int values ('*'=42, '\n' escape, '0').
@@ -265,11 +263,14 @@ chk "$GENC/arm_i8_width.hx" 42; chk "$GENC/arm_u32_width.hx" 42
 #   arm_early_return  : early `return` from inside an if / out of a loop (before the tail).
 #   arm_tuple_struct  : tuple struct `struct Pair(i32,i32)` + positional `.0`/`.1` access.
 #   arm_bf16_f16_decl : bf16/f16 LITERAL declaration (truncated bit pattern emitted) -> 42.
-#   arm_bf16_arith_bound : bf16/f16 ARITHMETIC bound -- compiles + traps (SIGILL 132).
+# [v1.3 V4 update 2026-06-04: arm_bf16_arith_bound (the bf16/f16-ARITHMETIC-traps
+# negative row) is RETIRED -- bf16/f16 arith now SHIPS via the convert-op-convert
+# path; see the V4 block below. A now-shipped feature must NOT still assert
+# fail-closed, so its chk row + fixture are removed.]
 chk "$GENC/arm_block_comment.hx" 42; chk "$GENC/arm_radix_lits.hx" 42
 chk "$GENC/arm_char_lit.hx" 42; chk "$GENC/arm_continue.hx" 42
 chk "$GENC/arm_early_return.hx" 42; chk "$GENC/arm_tuple_struct.hx" 42
-chk "$GENC/arm_bf16_f16_decl.hx" 42; chk "$GENC/arm_bf16_arith_bound.hx" 132
+chk "$GENC/arm_bf16_f16_decl.hx" 42
 # v1.3 V1 (P0, 2026-06-03) -- the silent-bug FIX (charter §1 V1). The v1.2 M-3
 # bound (an i64/u64 wide struct-field READ silently truncated to low-32; an f64
 # wide field failed closed SIGILL 132) is now CLOSED. Root cause: the field READ
@@ -437,10 +438,13 @@ chk "$GENC/M4_turbofish_enum.hx" 42; chk "$GENC/gen_option_i32.hx" 42
 # AST_VAR(__closure_<id>) for a no-capture closure: codegen A2a emits
 # `lea rax,[rip+__closure_<id>]` (a real fn pointer), which flows as the arg,
 # and the callee invokes it indirectly via A2b (`call r11` through the bound
-# param). Capturing closures keep AST_INT(0) (the by-name call path injects
-# their env positionally; passing a capturing closure by value is a documented
-# v1.2 bound). parser.hx changed -> fixpoint sha MOVES off 0f846aea; K2==K3==K4
-# stay byte-identical (the self-host source has no closures-as-args).
+# param). [v1.3 V3 update 2026-06-04: CAPTURING closures NO LONGER keep AST_INT(0)
+# -- the "passing a capturing closure by value is a documented v1.2 bound" note
+# below is SUPERSEDED. Capturing closures now compile to a real arena closure
+# OBJECT {code_ptr, caps} + env-based indirect dispatch, so they too can be passed
+# by value; see the V3 block further down.] parser.hx changed -> fixpoint sha MOVES
+# off 0f846aea; K2==K3==K4 stay byte-identical (the self-host source has no
+# closures-as-args).
 #   M6_closure_arg: apply1/twice/apply2/choose -- a closure passed as an arg &
 #     invoked (incl the SAME closure twice, two invocations, and TWO distinct
 #     closure args); runtime-derived -> 42.
@@ -469,8 +473,43 @@ chk "$GENC/M6_capture_regression.hx" 42
 #   V3_capture_arg: x=40 (loop-derived); c=|y| x+y; apply(c,2) -> c(2) -> 42
 #     (a CAPTURING closure passed by value + invoked, reads its capture). This is
 #     the charter probe; pre-fix it SIGSEGV'd. The v1.2 M-6 capturing bound SHIPS.
+#   V3_multi_capture: a closure capturing 3 locals (a=10,b=20,c=5) passed by
+#     value + invoked reads ALL captures via the multi-cell env -> 42.
+#   V3_modify_after: capture-by-value-AT-CREATION -- x=40 captured, then x set to
+#     999 AFTER creation; apply(c,2) is STILL 42 (NOT 1001). Documents + gates the
+#     chosen by-value semantics (a by-REFERENCE capture would see 999).
 chk "$GENC/V3_capture_arg.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 103 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug] + 1 v1.3 V3 capturing-closure-by-value [V3_capture_arg x=40;|y| x+y; apply(c,2)->42 -- a CAPTURING closure passed by value + invoked, reads its capture; the v1.2 M-6 capturing bound SHIPS; capture-by-value at creation])"
+chk "$GENC/V3_multi_capture.hx" 42
+chk "$GENC/V3_modify_after.hx" 42
+# v1.3 V4 (2026-06-04, charter §1 V4): bf16/f16 ARITHMETIC ships. In v1.2 bf16/f16
+# were STORAGE-only (arith TRAPPED SIGILL 2001/4001; the arm_bf16_arith_bound row
+# above, now RETIRED). V4 computes bf16/f16 add+mul via convert-op-convert: the
+# operands convert to f32, the op runs in f32 (addss/mulss), and the f32 result
+# rounds back to the 16-bit float with ROUND-TO-NEAREST-EVEN (bf16: clear the low
+# 16 mantissa bits with an RNE bias; f16: F16C vcvtps2ph imm8=0). bf16->f32 is the
+# identity (bf16 is stored as the f32-valid top-16). kovc.hx changed (parser/lexer
+# unchanged) -> fixpoint sha MOVES (the self-host source uses no bf16/f16 arith, so
+# the path is exercised ONLY here through K2) -> K2==K3==K4 stay byte-identical.
+# Each row asserts BIT-EXACT vs the expected ROUNDED f32 value, not just "no crash"
+# (each compares the exact result internally with a full i32 compare and returns a
+# 42/0 sentinel -- so the assertion is bit-exact AND fits the 8-bit exit byte):
+#   V4_bf16_add: 256.0 + 3.0 (both bf16-exact); f32 sum 259.0 is NOT bf16-rep'able
+#     (exp-8 step 2) -> RNE rounds to the EVEN 260.0 (truncation would give 258).
+#     `(c as i32) == 260` -> 42 verifies the RNE round-back of the SUM bit-exactly.
+#   V4_bf16_mul: 17.0 * 19.0 (both bf16-exact); f32 product 323.0 -> RNE -> EVEN
+#     324.0 (truncation -> 322). `(c as i32) == 324` -> 42 verifies the PRODUCT.
+#   V4_bf16_roundtrip: f32 1.1 -> bf16 RNE -> 1.1015625 (truncation -> 1.09375);
+#     bf16 -> f32 (identity) must equal the known 1.1015625_f32 reference -> 42
+#     (fail-closed: a truncating conversion stores 1.09375 and exits 0). NB the
+#     bf16 LITERAL fold is now RNE too (rne_f32_bits_to_bf16) -- consistent with
+#     the `as bf16` cast and the arith round-back.
+# (f16 arith uses F16C [vcvtph2ps/vcvtps2ph, Ivy Bridge/Jaguar 2012+]; bf16 needs
+# only SSE2. The V4 corpus gates bf16 arith bit-exactly; f16 shares the same
+# convert-op-convert structure -- documented as the f16-arith hardware floor.)
+chk "$GENC/V4_bf16_add.hx" 42
+chk "$GENC/V4_bf16_mul.hx" 42
+chk "$GENC/V4_bf16_roundtrip.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 107 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 7 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42 -- bf16-arith-bound RETIRED, now SHIPPED in V4] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug] + 3 v1.3 V3 capturing-closure-by-value [V3_capture_arg x=40;|y| x+y; apply(c,2)->42 -- a CAPTURING closure passed by value + invoked, reads its capture; the v1.2 M-6 capturing bound SHIPS; V3_multi_capture 3 captures a+b+c+y->42; V3_modify_after capture-by-value-at-creation, modify-after->still 42 not 1001] + 3 v1.3 V4 bf16/f16 arithmetic [V4_bf16_add 256+3 f32-sum-259 RNE->260 vs trunc-258 (==260->42), V4_bf16_mul 17*19 f32-prod-323 RNE->324 vs trunc-322 (==324->42), V4_bf16_roundtrip f32-1.1->bf16-RNE-1.1015625 roundtrip==ref->42 -- convert-op-convert, round-to-nearest-even (bf16 literal fold ALSO RNE now -- consistent across literal/cast/arith); the bf16/f16 storage-only bound SHIPS, arm_bf16_arith_bound RETIRED])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -557,7 +596,21 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 #   with a tagged env-index value + env-based indirect dispatch. parser.hx +
 #   kovc.hx changed -> fixpoint sha MOVES; K2==K3==K4 byte-identical (no closures
 #   in the self-host source). Capture semantics: by-value at closure-creation.
-if [ "$pass" -lt 103 ]; then echo "  CORPUS REGRESSION (pass=$pass < 103)"; GATE_OK=0; fi
+# v1.3 V3 (2026-06-04): bumped 103 -> 105 for the multi-capture + modify-after
+#   semantics tests (no source change; same fixpoint sha 794790f9): V3_multi_capture
+#   (a closure capturing 3 locals passed by value reads all of them -> 42) and
+#   V3_modify_after (capture-by-value-at-creation: modify the captured local AFTER
+#   creation, closure STILL sees the old value -> 42, not 1001).
+# v1.3 V4 (2026-06-04): bumped 105 -> 107 for bf16/f16 ARITHMETIC (charter §1 V4):
+#   net +2 = +3 V4 rows (V4_bf16_add / V4_bf16_mul / V4_bf16_roundtrip, each ->42
+#   on a BIT-EXACT internal compare) -1 retired (arm_bf16_arith_bound ->132, the
+#   bf16/f16-arith-traps bound, now SHIPPED). bf16/f16 add+mul compute convert-op-
+#   convert with round-to-nearest-even; each V4 row asserts BIT-EXACT vs the rounded
+#   f32 value (RNE distinguished from truncation by the chosen operands: add 259->260
+#   not 258, mul 323->324 not 322, roundtrip 1.1->1.1015625 not 1.09375). kovc.hx
+#   changed (the convert-back register fix + RNE literal/cast) -> fixpoint sha MOVES;
+#   K2==K3==K4 byte-identical (the self-host source uses no bf16/f16 arithmetic).
+if [ "$pass" -lt 107 ]; then echo "  CORPUS REGRESSION (pass=$pass < 107)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure

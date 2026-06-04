@@ -536,6 +536,71 @@ fn emit_subss() -> i32 { emit_sse_binop(0x5C) }
 fn emit_mulss() -> i32 { emit_sse_binop(0x59) }
 fn emit_divss() -> i32 { emit_sse_binop(0x5E) }
 
+// v1.3 V4 (2026-06-04): bf16/f16 ARITHMETIC via convert-op-convert.
+// bf16/f16 are STORAGE-only in v1.2 (arith traps SIGILL 2001/4001 etc.).
+// V4 ships correct add/mul by computing in f32 and rounding back.
+//
+// STORAGE (set by the literal codegen, tags 42/80):
+//   bf16  = the f32 bit pattern with the low 16 mantissa bits zeroed
+//           (`f32bits & 0xFFFF0000`). The stored 32-bit value IS already a
+//           valid f32 equal to the bf16 value -> bf16->f32 is the IDENTITY.
+//   f16   = the IEEE-754 half bit pattern (5-exp/10-mant) in the low 16 of
+//           an i32 slot (via f32_to_f16_bits) -> needs a real half<->single
+//           conversion (done in hardware by F16C below).
+//
+// emit_round_f32_to_bf16: round-to-nearest-even truncate of an f32 result
+// in eax down to bf16 precision (clear the low 16 mantissa bits with RNE).
+//   RNE bias = 0x7FFF + the bf16-LSB (= bit 16 of the f32). Adding the bias
+//   then masking 0xFFFF0000 rounds half-to-even. (NaN stays NaN: a quiet
+//   NaN's top mantissa bit is at bit 22 > 16, so the mask preserves it; the
+//   bias add cannot clear it.)
+//     mov ecx, eax            89 C1
+//     shr ecx, 16             C1 E9 10
+//     and ecx, 1              83 E1 01            (ecx = bf16 LSB)
+//     add ecx, 32767          81 C1 FF 7F 00 00   (bias = 0x7FFF + LSB)
+//     add eax, ecx            01 C8
+//     and eax, 0xFFFF0000     25 00 00 FF FF      (= and eax, 0-65536)
+// 18 bytes. eax now holds the rounded bf16 pattern (low 16 = 0), f32-valid.
+fn emit_round_f32_to_bf16() -> i32 {
+    emit_byte(0x89); emit_byte(0xC1);                                        // mov ecx, eax
+    emit_byte(0xC1); emit_byte(0xE9); emit_byte(0x10);                       // shr ecx, 16
+    emit_byte(0x83); emit_byte(0xE1); emit_byte(0x01);                       // and ecx, 1
+    emit_byte(0x81); emit_byte(0xC1); emit_u32_le(32767);                    // add ecx, 0x7FFF
+    emit_byte(0x01); emit_byte(0xC8);                                        // add eax, ecx
+    emit_byte(0x25); emit_u32_le(0 - 65536);                                 // and eax, 0xFFFF0000
+    18
+}
+// emit_bf16_binop: bf16 op bf16 -> bf16. Operands' bf16 patterns (already
+// f32-valid) are in eax (left) and ecx (right). Compute the exact f32 result
+// (addss/mulss), then RNE-round back to bf16. opcode 0x58=add, 0x59=mul.
+// SSE2-only (no F16C needed for bf16). 34 bytes.
+fn emit_bf16_binop(opcode: i32) -> i32 {
+    emit_sse_binop(opcode) + emit_round_f32_to_bf16()
+}
+// emit_f16_binop: f16 op f16 -> f16. Operands' IEEE-half patterns are in
+// eax (left) and ecx (right). Widen each to f32 with F16C vcvtph2ps, compute
+// in f32 (addss/mulss in xmm0), narrow back to half with vcvtps2ph imm8=0
+// (round-to-nearest-even), leave the 16-bit half pattern in eax.
+//   movd xmm0, eax          66 0F 6E C0
+//   vcvtph2ps xmm0, xmm0    C4 E2 79 13 C0     (xmm0 = f32 left)
+//   movd xmm1, ecx          66 0F 6E C9
+//   vcvtph2ps xmm1, xmm1    C4 E2 79 13 C9     (xmm1 = f32 right)
+//   [add|mul]ss xmm0, xmm1  F3 0F (58|59) C1   (xmm0 = f32 result)
+//   vcvtps2ph $0, xmm0,xmm0 C4 E3 79 1D C0 00  (xmm0 lane0 = half, RNE)
+//   movd eax, xmm0          66 0F 7E C0        (eax = half bits)
+// 32 bytes. REQUIRES the F16C ISA extension (AVX-era x86, Ivy Bridge / Jaguar
+// 2012+); bf16 needs only SSE2. Documented as the f16-arith hardware floor.
+fn emit_f16_binop(opcode: i32) -> i32 {
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);         // movd xmm0, eax
+    emit_byte(0xC4); emit_byte(0xE2); emit_byte(0x79); emit_byte(0x13); emit_byte(0xC0); // vcvtph2ps xmm0,xmm0
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC9);         // movd xmm1, ecx
+    emit_byte(0xC4); emit_byte(0xE2); emit_byte(0x79); emit_byte(0x13); emit_byte(0xC9); // vcvtph2ps xmm1,xmm1
+    emit_byte(0xF3); emit_byte(0x0F); emit_byte(opcode); emit_byte(0xC1);       // [op]ss xmm0,xmm1
+    emit_byte(0xC4); emit_byte(0xE3); emit_byte(0x79); emit_byte(0x1D); emit_byte(0xC0); emit_byte(0x00); // vcvtps2ph $0,xmm0,xmm0
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);         // movd eax, xmm0
+    32
+}
+
 // Phase 1.10 step 7d: SSE2 double-precision binary-op suffix. Used by
 // AST_ADD/SUB/MUL/DIV when both operands are f64. Same shape as
 // emit_sse_binop but with REX.W on movd (turning movd into movq) and
@@ -1810,6 +1875,16 @@ fn is_u64_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
 // cascade, producing 32-bit int ops on float bit patterns — garbage.
 fn is_bf16_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     if expr_type(idx, bind_state, bn_state) == 4 { 1 } else { 0 }
+}
+
+// v1.3 V4 (2026-06-04): is_f16_expr — type predicate for IEEE-754 half
+// (tag 5). DISTINCT from bf16 (tag 4): f16 is stored as a 16-bit half
+// pattern (5-exp/10-mant) and its arithmetic widens via F16C (vcvtph2ps),
+// whereas bf16 is stored as the top-16 of an f32 and computes directly in
+// SSE2. expr_type maps AST_FLOATLIT_F16 (tag 80) and the `f16` type ident
+// to tag 5 so the two 16-bit floats route to their correct convert path.
+fn is_f16_expr(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
+    if expr_type(idx, bind_state, bn_state) == 5 { 1 } else { 0 }
 }
 
 // Audit follow-up Finding #1: width-class helper used by AST_FN_DECL's
@@ -6286,6 +6361,29 @@ fn count_float_digits(p1: i32, p2: i32) -> i32 {
     digits
 }
 
+// v1.3 V4 (2026-06-04): host-side round-to-nearest-even of an f32 bit
+// pattern down to bf16 precision (clear the low 16 mantissa bits, RNE).
+// This MIRRORS the emitted machine-code RNE in emit_round_f32_to_bf16
+// so that f32->bf16 conversion is RNE-CONSISTENT across all three sites:
+// the compile-time bf16 LITERAL fold (this helper, tag 42), a runtime
+// `as bf16` CAST (emit_round_f32_to_bf16), and bf16 ARITHMETIC round-back
+// (emit_bf16_binop). Pre-V4 the literal TRUNCATED (`bits & 0xFFFF0000`),
+// which made `1.1_bf16` (-> 1.09375) disagree with `(1.1_f32) as bf16`
+// (-> RNE 1.1015625); V4 unifies them to RNE.
+//   lsb  = bit 16 of bits (the bf16 unit-in-the-last-place)
+//   biased = bits + 0x7FFF + lsb   (round-half-to-even bias)
+//   result = biased & 0xFFFF0000
+// Operates on the NON-NEGATIVE f32 pattern produced by parse_float_bits
+// (positive literals; a leading '-' is a separate unary-neg path), so the
+// `bits / 65536` top-16 extraction is exact. NaN/inf (exp all-ones) sit in
+// the [0x7F80.. , 0x7FFF_FFFF] range where the bias add could overflow i32;
+// bf16 literals are finite real numbers within ~10^9 (count_float_digits
+// caps at 9 digits), so that range is unreachable here.
+fn rne_f32_bits_to_bf16(bits: i32) -> i32 {
+    let lsb = (bits / 65536) & 1;
+    let biased = bits + 32767 + lsb;
+    biased & 0 - 65536
+}
 // K1.F18b helper (2026-05-27): compute 2^n by repeated doubling.
 // Used by the f16 gradual-underflow branch to derive the
 // runtime-variable mantissa-shift divisor (n in [14, 24] for the f16
@@ -7136,7 +7234,52 @@ fn cast_is_i64_tag(tag: i32) -> i32 {
 fn emit_rexw_if(want64: i32) -> i32 {
     if want64 == 1 { emit_byte(0x48); 1 } else { 0 }
 }
+// v1.3 V4 (2026-06-04): bf16/f16 cast support. A bf16 source (tag 4) is
+// stored as f32-valid bits, so `bf16 as X` == `f32 as X` (no widen needed).
+// An f16 source (tag 5) is a half pattern -> widen to f32 with F16C first,
+// then it behaves like an f32 source. A cast TO bf16 (tag 4) rounds the f32
+// to bf16 (RNE); a cast TO f16 (tag 5) narrows with F16C. Casts among the
+// two 16-bit floats or bf16/f16 <-> int compose: normalize the source to
+// f32, run the f32-based core, then narrow to the 16-bit target if needed.
+// emit_cast_conv_core handles the original (non-16-bit-float) matrix.
+fn emit_widen_half_in_eax_to_f32() -> i32 {
+    // movd xmm0, eax ; vcvtph2ps xmm0,xmm0 ; movd eax,xmm0  (eax = f32 bits)
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);         // movd xmm0, eax
+    emit_byte(0xC4); emit_byte(0xE2); emit_byte(0x79); emit_byte(0x13); emit_byte(0xC0); // vcvtph2ps xmm0,xmm0
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);         // movd eax, xmm0
+    13
+}
+fn emit_narrow_f32_in_eax_to_f16() -> i32 {
+    // movd xmm0, eax ; vcvtps2ph $0,xmm0,xmm0 ; movd eax,xmm0  (eax = half bits, RNE)
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x6E); emit_byte(0xC0);         // movd xmm0, eax
+    emit_byte(0xC4); emit_byte(0xE3); emit_byte(0x79); emit_byte(0x1D); emit_byte(0xC0); emit_byte(0x00); // vcvtps2ph $0,xmm0,xmm0
+    emit_byte(0x66); emit_byte(0x0F); emit_byte(0x7E); emit_byte(0xC0);         // movd eax, xmm0
+    11
+}
+fn cast_is_half_tag(tag: i32) -> i32 {
+    if tag == 4 { 1 } else { if tag == 5 { 1 } else { 0 } }
+}
 fn emit_cast_conv(src_tag: i32, tgt_tag: i32) -> i32 {
+    let src_half = cast_is_half_tag(src_tag);
+    let tgt_half = cast_is_half_tag(tgt_tag);
+    if src_half == 1 {
+        // Normalize the 16-bit-float source to an f32 value in eax: bf16 is
+        // already f32-valid (0 bytes); f16 widens via F16C. Then the source
+        // behaves as f32 (tag 1) for the core, and we narrow at the end.
+        let nw = if src_tag == 5 { emit_widen_half_in_eax_to_f32() } else { 0 };
+        nw + emit_cast_conv(1, tgt_tag)
+    } else { if tgt_half == 1 {
+        // Source is a real (non-16-bit-float) type; produce its f32 value via
+        // the core (tag 1 target), then narrow: bf16 = RNE round-to-top-16,
+        // f16 = F16C narrow.
+        let nc = emit_cast_conv(src_tag, 1);
+        let nn = if tgt_tag == 4 { emit_round_f32_to_bf16() } else { emit_narrow_f32_in_eax_to_f16() };
+        nc + nn
+    } else {
+        emit_cast_conv_core(src_tag, tgt_tag)
+    }}
+}
+fn emit_cast_conv_core(src_tag: i32, tgt_tag: i32) -> i32 {
     let src_f = cast_is_float_tag(src_tag);
     let tgt_f = cast_is_float_tag(tgt_tag);
     if src_f == 0 {
@@ -7559,20 +7702,25 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // existing tuple-lit codegen above.
         0
     } else { if t == 42 {
-        // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). bf16 = f32 with the
-        // low 16 mantissa bits truncated to zero. Compute the f32 IEEE
-        // 754 bit pattern via parse_float_bits, then mask off the low
-        // 16 (`bits & 0xFFFF0000`, expressed as `bits & (0 - 65536)`
-        // since Helix bootstrap has no hex literals). The resulting
-        // value is i32-shaped storage of the bf16 pattern (top 16 bits
-        // = sign + 8-bit exp + 7-bit mantissa; low 16 bits = 0).
+        // Stage 1.5: AST_FLOATLIT_BF16 (tag 42). bf16 = f32 narrowed to
+        // an 8-bit-exp/7-bit-mantissa top-16 pattern. Compute the f32 IEEE
+        // 754 bit pattern via parse_float_bits, then narrow to bf16.
+        // [v1.3 V4 2026-06-04: now ROUND-TO-NEAREST-EVEN (rne_f32_bits_to_bf16)
+        // instead of the Stage-1.5 plain truncation (`bits & 0xFFFF0000`).
+        // RNE makes the bf16 LITERAL agree with a runtime `as bf16` CAST and
+        // with bf16 ARITHMETIC round-back -- all three f32->bf16 sites are now
+        // RNE-consistent. The stored value is still i32-shaped (top 16 = sign
+        // + 8-bit exp + 7-bit mantissa; low 16 = 0), f32-valid (bf16->f32 is
+        // the identity). Exactly-representable literals (1.5/2.5/256/3/17/19)
+        // are unchanged by RNE; only inexact ones (e.g. 1.1) round up to the
+        // nearest bf16 (1.1015625) instead of down (1.09375).]
         // Stage 1.5 audit fix: overflow guard. parse_float_bits uses
         // i32 accumulators internally; > 9 digits silently wraps.
         // Speedup #4 wire-in: bf16 lit overflow trap id 42002.
         let digits = count_float_digits(p1, p2);
         if digits > 9 { emit_trap_with_id(42002) } else {
             let bits = parse_float_bits(p1, p2);
-            let bf16_bits = bits & 0 - 65536;
+            let bf16_bits = rne_f32_bits_to_bf16(bits);
             emit_ast_int(bf16_bits)
         }
     } else { if t == 80 {
@@ -7769,8 +7917,20 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        // Speedup #4 wire-in: bf16 trap with id = 2001 (AST_ADD * 1000 + 1).
-        let na = if l_bf == 1 { emit_trap_with_id(2001) } else { if r_bf == 1 { emit_trap_with_id(2001) } else {
+        // v1.3 V4 (2026-06-04): bf16/f16 ADD ships via convert-op-convert.
+        // bf16+bf16 (l_bf16==r_bf16==1) -> emit_bf16_binop (addss on the
+        // f32-valid stored patterns, then RNE-round back to bf16). f16+f16
+        // (both tag 5) -> emit_f16_binop (F16C widen, addss, narrow RNE). A
+        // bf16/f16 mixed with a non-16-bit-float operand still TRAPS 2001
+        // (fail-closed; no implicit widening of a 16-bit float into f32/i32).
+        let l_bf16 = is_bf16_expr(p1, bind_state, bn_state);
+        let r_bf16 = is_bf16_expr(p2, bind_state, bn_state);
+        let l_f16 = is_f16_expr(p1, bind_state, bn_state);
+        let r_f16 = is_f16_expr(p2, bind_state, bn_state);
+        let na = if l_bf16 == 1 { if r_bf16 == 1 { emit_bf16_binop(0x58) } else { emit_trap_with_id(2001) } }
+        else { if r_bf16 == 1 { emit_trap_with_id(2001) }
+        else { if l_f16 == 1 { if r_f16 == 1 { emit_f16_binop(0x58) } else { emit_trap_with_id(2001) } }
+        else { if r_f16 == 1 { emit_trap_with_id(2001) } else {
             // Speedup #4 wire-in: AST_ADD mixed-type trap ids 2010-2041.
             //   2010: l_d=1, r_d=0  (f64 + non-f64)
             //   2011: r_d=1, l_d=0  (non-f64 + f64)
@@ -7871,7 +8031,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                     }}
                 }}
             }}
-        }};
+        }}}};
         n1 + np + n2 + nm + no + na
     } else { if t == 3 {
         // Stage 1+2.4b: AST_SUB 5-way dispatch (i32/i64/u64/f32/f64).
@@ -8016,8 +8176,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let no = emit_pop_rax();
         let l_f = is_f32_expr(p1, bind_state, bn_state);
         let r_f = is_f32_expr(p2, bind_state, bn_state);
-        // Speedup #4 wire-in: bf16 trap id = 4001 (AST_MUL * 1000 + 1).
-        let na = if l_bf == 1 { emit_trap_with_id(4001) } else { if r_bf == 1 { emit_trap_with_id(4001) } else {
+        // v1.3 V4 (2026-06-04): bf16/f16 MUL ships via convert-op-convert
+        // (mulss = SSE opcode 0x59). Same dispatch as ADD: bf16*bf16 ->
+        // emit_bf16_binop(0x59); f16*f16 -> emit_f16_binop(0x59); a 16-bit
+        // float mixed with a non-16-bit-float operand TRAPS 4001 (fail-closed).
+        let l_bf16 = is_bf16_expr(p1, bind_state, bn_state);
+        let r_bf16 = is_bf16_expr(p2, bind_state, bn_state);
+        let l_f16 = is_f16_expr(p1, bind_state, bn_state);
+        let r_f16 = is_f16_expr(p2, bind_state, bn_state);
+        let na = if l_bf16 == 1 { if r_bf16 == 1 { emit_bf16_binop(0x59) } else { emit_trap_with_id(4001) } }
+        else { if r_bf16 == 1 { emit_trap_with_id(4001) }
+        else { if l_f16 == 1 { if r_f16 == 1 { emit_f16_binop(0x59) } else { emit_trap_with_id(4001) } }
+        else { if r_f16 == 1 { emit_trap_with_id(4001) } else {
             // Speedup #4 wire-in: AST_MUL mixed-type trap ids 4010-4041.
             // K1.F8 / K1.F8b closed both i64 mismatch directions (4020 +
             // 4021) via signed widening.
@@ -8092,7 +8262,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                     }}
                 }}
             }}
-        }};
+        }}}};
         n1 + np + n2 + nm + no + na
     } else { if t == 5 {
         // Stage 1: AST_DIV 4-way dispatch.

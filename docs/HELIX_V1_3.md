@@ -35,14 +35,66 @@ detached runner + foreground-poll; never the Monitor tool; `timeout`-wrap GPU ru
   (`5_000_000_000_u64 / 1e8 = 50` exact), `V2_u64_lit_near_max` (`2⁶⁴-1 > 2⁶³-1` unsigned → 42),
   `V2_u64_lit_div_max` (`(2⁶⁴-1)/(2⁶³-1) = 2` unsigned). Fixpoint K2==K3==K4 byte-identical
   (sha 28024fbf), GPU-PTX regression clean.
-- **V3 — capturing closures as values/arguments.** Today a capturing closure passed by value
-  traps (SIGSEGV). **DoD:** a real closure object (heap env + fn-pointer); a capturing
-  closure passed as an argument + invoked reads its captured variables correctly; gated test;
-  the v1.2 M-6 capturing bound becomes shipped.
-- **V4 — bf16/f16 arithmetic.** Today bf16/f16 are storage-only (arith traps). **DoD:**
-  bf16/f16 add/mul/convert compute correctly within the format precision vs an f32 reference
-  (CPU at minimum); gated test; the v1.2 bf16/f16 bound becomes shipped. (Foundation for a
-  future G4 bf16-`wmma`.)
+- **V3 — capturing closures as values/arguments. ✅ SHIPPED (2026-06-04).** **DoD:** a real
+  closure object (heap env + fn-pointer); a capturing closure passed as an argument + invoked
+  reads its captured variables correctly; gated test; the v1.2 M-6 capturing bound becomes
+  shipped. **Done:** a capturing closure compiles to a real CLOSURE OBJECT in the runtime
+  arena — cells `[code_ptr, cap0, cap1, ...]` — and the closure VALUE is the object's
+  env-index OR-ed with a tag bit (`0x40000000`). The tagged index is a small positive i32 that
+  survives a by-value i32 param because the runtime arena is a low `.data` address (< 2³⁰).
+  The synthesized `__closure_<id>` body takes the env-index as a hidden leading param
+  (`__cenv`) and reads each capture from object cell `1+k` via `__arena_get(__cenv + 1 + k)`
+  (parser.hx `mk_capture_read`). The indirect-call dispatch (kovc.hx `emit_closure_dispatch`)
+  tag-tests the value: **bit-30-clear** = a non-capturing raw code pointer → env-less
+  `call r11` (the M-6 path, byte-identical); **bit-30-set** = a capturing object → untag, load
+  the code ptr from `arena[env]`, pass the env in `rdi`, shift the user args up one register,
+  `call r11`. The by-name capturing path (`let c=|y| x+y; c(2)`) now ALSO uses the object
+  (cl_var_tab registration retired for capturing closures, so `c(args)` flows through the same
+  indirect dispatch — the old positional-capture injection is gone). **Capture semantics:
+  CAPTURE-BY-VALUE AT CLOSURE-CREATION** (each captured local's value is snapshotted into the
+  object when the `|...|` literal is evaluated; later mutation of the original does NOT change
+  what the closure sees — this is by-value-at-creation, not Rust-style by-reference capture).
+  The i32-only capture bound is retained (a non-i32 capture would be truncated in a 4-byte
+  arena cell → fail-closed trap 76003, not silent). Gated: `V3_capture_arg`
+  (`x=40; c=|y| x+y; apply(c,2) → 42`, a capturing closure passed by value + invoked, capture
+  flows + is read — the charter probe, pre-fix a SIGSEGV), `V3_multi_capture` (a closure
+  capturing 3 locals passed by value reads all of them → 42), `V3_modify_after`
+  (capture-by-value-at-creation: modify the captured local after creation → closure still sees
+  the old value → 42, not 1001). Fixpoint K2==K3==K4 byte-identical (sha 794790f9; the
+  self-host source has no closure literals), GPU-PTX regression clean (x86-only fix).
+- **V4 — bf16/f16 arithmetic. ✅ SHIPPED (2026-06-04).** **DoD:** bf16/f16 add/mul/convert
+  compute correctly within the format precision vs an f32 reference (CPU at minimum); gated
+  test; the v1.2 bf16/f16 bound becomes shipped. **Done:** bf16/f16 add+mul go
+  **convert-op-convert** — the operands convert to f32, the op runs in f32 (`addss`/`mulss`),
+  and the f32 result rounds back to the 16-bit float. **Rounding is ROUND-TO-NEAREST-EVEN**
+  (the IEEE default) at every f32→bf16 site, made consistent across the three of them:
+  (1) the **bf16 LITERAL** fold (`rne_f32_bits_to_bf16`, a host-side RNE that replaced the
+  Stage-1.5 plain truncation), (2) a runtime **`as bf16` CAST** (`emit_round_f32_to_bf16`:
+  add the round-half-to-even bias `0x7FFF + lsb`, mask `0xFFFF0000`), and (3) bf16
+  **ARITHMETIC** round-back (`emit_bf16_binop` = `addss`/`mulss` then the same RNE). bf16→f32
+  is the identity (bf16 is stored as the f32-valid top-16). bf16 needs only **SSE2**; **f16**
+  uses the **F16C** ISA extension (`vcvtph2ps`/`vcvtps2ph` imm8=0 RNE — Ivy Bridge/Jaguar 2012+,
+  the documented f16-arith hardware floor) and shares the same convert-op-convert structure +
+  cast path. A 16-bit float mixed with a non-16-bit-float operand still **TRAPS** (2001/4001;
+  fail-closed — no implicit widening). Gated, each a **BIT-EXACT** internal compare returning
+  a 42/0 sentinel (RNE distinguished from truncation by the operands; the sentinel keeps the
+  assertion exact while fitting the 8-bit exit byte): `V4_bf16_add` (`256.0 + 3.0`: f32 sum
+  259.0 → RNE bf16 **260** not trunc-258 → `(c as i32)==260` → 42), `V4_bf16_mul`
+  (`17.0 * 19.0`: f32 product 323.0 → RNE bf16 **324** not trunc-322 → 42), `V4_bf16_roundtrip`
+  (`1.1_bf16` → RNE bf16 **1.1015625** not trunc-1.09375; bf16→f32 identity `== 1.1015625_f32`
+  → 42). The corpus moved 105 → 107 (+3 V4, −1 retired `arm_bf16_arith_bound` neg test).
+  Fixpoint K2==K3==K4 byte-identical (the self-host source uses no bf16/f16 arithmetic),
+  GPU-PTX regression clean (x86-only change). (Foundation for a future G4 bf16-`wmma`.)
+  _Note: the convert-op-convert arith was found WRONG on first attempt (a `mov ecx,eax` vs
+  `mov eax,ecx` register-direction typo in the RNE round, + the literal still truncating); the
+  bit-exact gate caught it (it had only previously RED'd on the obsolete trap test), and it was
+  fixed before ship — fail-closed beat silent._
+
+> **V1–V4 "types first-class" group: ✅ COMPLETE (2026-06-04).** The four type-correctness
+> items are all shipped + gated: V1 (i64/u64/f64 wide struct fields — the silent-truncation
+> residual CLOSED), V2 (full-range u64 literals), V3 (capturing closures as values/args), V4
+> (bf16/f16 arithmetic, RNE). Remaining v1.3 work is the TRUST-deepening group (V5 DDC breadth,
+> V6 trusted-C) + V7 spec, then the 5-audit finale.
 
 ### Trust — deepen (honest improvement; document any residual)
 - **V5 — broaden the DDC toward the v1.1 surface.** Today 44/53 witness-reachable arms; the
