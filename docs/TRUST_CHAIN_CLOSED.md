@@ -70,7 +70,11 @@ claim is precise, not inflated.
    **to PTX**; below PTX it relies on NVIDIA's **closed `ptxas`** (PTX→SASS) and driver.
    The **CPU** path is all-the-way-down from raw binary; the **GPU** path is
    from-hex0-to-PTX-then-`ptxas`. This is the one trusted-once boundary on the GPU side,
-   stated openly.
+   stated openly. _(v1.3 V6: the GPU **host launcher** — `helixc/runtime/cuda_launch.c` +
+   `train_transformer.c` — is the C-FFI half of this same boundary: it makes the closed
+   `libcuda` driver-API calls Helix cannot. Porting it to Helix would **move**, not close,
+   this boundary, so it stays trusted-once C. This residual **STANDS** unchanged. Full
+   trusted-C inventory + the V6 dead-C prune: `docs/TRUSTED_C_INVENTORY.md`.)_
 
 ## 3. Phase 2 (the user's to start — not auto-started)
 

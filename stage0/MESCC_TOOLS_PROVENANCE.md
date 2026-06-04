@@ -75,8 +75,36 @@ header `ELF-amd64-debug.hex2` the link step consumes.
 
 GPL-3.0-or-later headers are present verbatim at the top of each `.c`/`.h`
 (mescc-tools / M2-Planet copyright, Jeremiah Orians et al.). Each tool directory
-carries its **full compile closure** (its own local `M2libc/bootstrappable.{c,h}`,
-and `stringify.c` where the tool needs it) so it can be built standalone.
+carries `stringify.c` where the tool needs it.
+
+> **v1.3 V6 prune (2026-06-04).** The per-tool-local `M2libc/bootstrappable.{c,h}`
+> copies that formerly sat under `M1/M2libc/`, `blood-elf/M2libc/`, and
+> `hex2-linker/M2libc/` are **removed** (6 files, 708 LOC). The 3 `.c` were
+> **byte-identical** (SHA-256 `efe16699…`) to the single canonical
+> `M2-Planet/M2libc/bootstrappable.c`. The 3 `.h` were byte-identical **to each
+> other** (SHA-256 `81b0e0e9…`); note the M2-Planet M2libc subset vendors **no**
+> `bootstrappable.h` at all, so the `.h` duplicated nothing the build uses — after
+> the prune `git ls-files "*bootstrappable.h"` is empty and the tools still build.
+> All 6 were **never on any build path**: the three mescc-tool `build.sh` (`M1`,
+> `blood-elf`, `hex2-linker`) and the seed `helixc-bootstrap/build.sh` all `-f`
+> `../M2-Planet/M2libc/bootstrappable.c` (`MLIB=../M2-Planet/M2libc`, or `LIB=` in
+> the seed script), never the local copies; the only references to the local files
+> are the `#include "M2libc/bootstrappable.h"` lines (`M1.c`, `blood-elf.c`,
+> `hex2.h`), which are **no-ops under M2** (`--expand-includes` off). Verified by
+> grepping every `*.sh` + source in the tree (current + full git history via
+> `git log -S`, which is empty) and by the absence of any per-tool `run_tests.sh`.
+> Removing them is a real, honest shrink of the apparent trusted-C surface with
+> **zero loss of unique trusted content**: standalone buildability is unchanged
+> (each tool builds against the byte-identical canonical `M2-Planet` `.c`, which is
+> what the scripts already do). **Proven safe by build (2026-06-04):** with the 6
+> files removed, all three mescc-tools were rebuilt from their `build.sh` and each
+> produced a valid x86-64 ELF that **passed its in-script capability self-check**
+> (M1.bin assembles defs+libc-core; blood-elf.bin emits a debug footer; hex2.bin
+> links a runnable ELF that exits 0) — every script `set -euo pipefail` and exited
+> 0. The full main gate (`scripts/gate_kovc.sh`) then re-ran **GREEN** after the
+> prune. See `docs/TRUSTED_C_INVENTORY.md` §4 for the per-tool ELF sizes + log
+> paths. The single canonical `bootstrappable.c` the tools DO build against remains
+> under `M2-Planet/M2libc/`, recorded below.
 
 ### `M1/` — the macro-assembler (upstream `M1-macro.c`)
 
@@ -84,8 +112,8 @@ and `stringify.c` where the tool needs it) so it can be built standalone.
 |---|---|---|---|
 | `M1/M1.c` | 19912 | `d0528b3fb6f54961c1b455f2a72e06f213ab9b8d8bd04b92b31ae753c30b8700` | mescc-tools `5adfbf33` `M1-macro.c` |
 | `M1/stringify.c` | 2517 | `2cc09fd299c2bdff1a5e32d1baf84bd92a01f4447c475a671a80fa6549bf1302` | mescc-tools `5adfbf33` `stringify.c` |
-| `M1/M2libc/bootstrappable.c` | 3815 | `efe16699e165d1ebad2d8f942383aea11c23dcc783f291c3dbf7b6d199fdc831` | M2libc `b8bb2a01` `bootstrappable.c` |
-| `M1/M2libc/bootstrappable.h` | 1096 | `81b0e0e9047a90ba766786367060f033b4ca2b8448c8f8e12820f999c6d1ec77` | M2libc `b8bb2a01` `bootstrappable.h` |
+
+_(v1.3 V6: `M1/M2libc/bootstrappable.{c,h}` removed — dead duplicates (`.c` byte-identical to canonical `M2-Planet/M2libc/bootstrappable.c`; `.h` byte-identical to the other deleted `.h`, no canonical `.h` exists). The M1 build `-f`s `../M2-Planet/M2libc/bootstrappable.c`; the `.h` was only `#include`d (a no-op under M2). Prune verified by rebuilding M1.bin green.)_
 
 ### `blood-elf/` — the debug-symbol footer generator
 
@@ -93,8 +121,8 @@ and `stringify.c` where the tool needs it) so it can be built standalone.
 |---|---|---|---|
 | `blood-elf/blood-elf.c` | 13904 | `f052b106acc267990b8b4de14a5684d3d96eb468a2eb71bbbea96d7ec98adfaf` | mescc-tools `5adfbf33` `blood-elf.c` |
 | `blood-elf/stringify.c` | 2517 | `2cc09fd299c2bdff1a5e32d1baf84bd92a01f4447c475a671a80fa6549bf1302` | mescc-tools `5adfbf33` `stringify.c` |
-| `blood-elf/M2libc/bootstrappable.c` | 3815 | `efe16699e165d1ebad2d8f942383aea11c23dcc783f291c3dbf7b6d199fdc831` | M2libc `b8bb2a01` `bootstrappable.c` |
-| `blood-elf/M2libc/bootstrappable.h` | 1096 | `81b0e0e9047a90ba766786367060f033b4ca2b8448c8f8e12820f999c6d1ec77` | M2libc `b8bb2a01` `bootstrappable.h` |
+
+_(v1.3 V6: `blood-elf/M2libc/bootstrappable.{c,h}` removed — dead duplicates (`.c` byte-identical to canonical `M2-Planet/M2libc/bootstrappable.c`; `.h` byte-identical to the other deleted `.h`, no canonical `.h` exists). The blood-elf build `-f`s `../M2-Planet/M2libc/bootstrappable.c`; the `.h` was only `#include`d (a no-op under M2). Prune verified by rebuilding blood-elf.bin green.)_
 
 ### `hex2-linker/` — the flag-driven linker (upstream `hex2.c` + family)
 
@@ -105,8 +133,8 @@ and `stringify.c` where the tool needs it) so it can be built standalone.
 | `hex2-linker/hex2.h` | 1494 | `de9ba5397afa35d73452c7ac5e48da700d2612ec34b548c629837255dcfa687a` | mescc-tools `5adfbf33` `hex2.h` |
 | `hex2-linker/hex2_globals.h` | 1684 | `6826a9adb174fa73ad57d5b83885b989adfc4bca95a9ae064d0685eb5879a5f2` | mescc-tools `5adfbf33` `hex2_globals.h` |
 | `hex2-linker/hex2_word.c` | 9160 | `9843574faa7597d21bca30df318e09fed0e771538724ed086f6744142969fc46` | mescc-tools `5adfbf33` `hex2_word.c` |
-| `hex2-linker/M2libc/bootstrappable.c` | 3815 | `efe16699e165d1ebad2d8f942383aea11c23dcc783f291c3dbf7b6d199fdc831` | M2libc `b8bb2a01` `bootstrappable.c` |
-| `hex2-linker/M2libc/bootstrappable.h` | 1096 | `81b0e0e9047a90ba766786367060f033b4ca2b8448c8f8e12820f999c6d1ec77` | M2libc `b8bb2a01` `bootstrappable.h` |
+
+_(v1.3 V6: `hex2-linker/M2libc/bootstrappable.{c,h}` removed — dead duplicates (`.c` byte-identical to canonical `M2-Planet/M2libc/bootstrappable.c`; `.h` byte-identical to the other deleted `.h`, no canonical `.h` exists). The hex2 build `-f`s `../M2-Planet/M2libc/bootstrappable.c`; the `.h` was only `#include`d (a no-op under M2). Prune verified by rebuilding hex2.bin green.)_
 
 ### into the existing M2-Planet M2libc tree — the debug ELF header
 
@@ -138,7 +166,11 @@ and `stringify.c` where the tool needs it) so it can be built standalone.
 
 Across all three tools the **only** non-system (local, double-quote) include is
 `M2libc/bootstrappable.h`; the hex2 family additionally chains
-`hex2_globals.h → hex2.h`. Full map:
+`hex2_globals.h → hex2.h`. These are the *upstream textual* `#include`s and are
+**no-ops under our M2 build** (`--expand-includes` is off, so M2 ignores every
+`#include`; each symbol comes from the explicit `-f` unit passed on the command
+line — see the build scripts, which `-f` `../M2-Planet/M2libc/bootstrappable.c`
+directly). The map below is the upstream source closure for provenance:
 
 ```
 M1.c          -> <stdlib.h> <stdio.h> <string.h>            + "M2libc/bootstrappable.h"

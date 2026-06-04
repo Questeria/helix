@@ -1,5 +1,15 @@
 # K3 trusted seed — scoping (2026-05-30, counter 424)
 
+> **v1.3 V6 cross-ref (2026-06-04):** the **full trusted-C inventory** (every committed
+> `.c`/`.h`: role / LOC / in-or-out of the fixpoint / on-build-path-or-dead / portable-or-
+> irreducible), the V6 **dead-C prune** (6 dead duplicate `M2libc/bootstrappable.{c,h}` removed —
+> the 3 `.c` byte-identical to the canonical `M2-Planet/M2libc/bootstrappable.c`, the 3 `.h`
+> identical to each other with no canonical `.h` in the tree; proven safe by rebuilding all 3
+> mescc-tools GREEN from their `build.sh` without the files plus the full main gate GREEN after the
+> prune), and the precise trusted-C boundary now live in **`docs/TRUSTED_C_INVENTORY.md`**. This
+> scoping doc remains the deep-dive on the seed (the irreducible root) specifically;
+> `TRUSTED_C_INVENTORY.md` is the repo-wide C surface.
+
 Scoping the GATING build-order item "K3 trusted seed" (the trust root that lets
 the Python compiler `helixc/` be deleted). Three read-only agents mapped the
 Python build path, the intent/roadmap, and the bootstrap's self-rebuild gaps;
