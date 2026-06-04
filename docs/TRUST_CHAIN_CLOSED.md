@@ -57,12 +57,16 @@ claim is precise, not inflated.
 3. **DDC coverage is 44/53 witness-reachable arms.** The v1.1-surface (generics, traits,
    closures, turbofish, wide-field store, bf16) is **un-DDC'd** by the frozen Python witness
    — a named open residual, not full coverage.
-4. **Documented language bounds.** One **silent** residual: **i64/u64 wide struct-field reads
-   truncate to low-32** (a 64-bit-looking value silently truncated — flagged **v-next**).
-   Everything else fails **loud**: f64 wide fields, bf16/f16 arithmetic, and u64 ≥2³²
-   literals trap (SIGILL / compile error, no output); capturing-closure-as-argument traps
-   (SIGSEGV). Borrows (`&mut` non-aliasing), `const`/`static`, module privacy, and match
-   exhaustiveness are **documented design bounds**, not enforced.
+4. **Documented language bounds.** **No silent-wrong residual remains** (the v1.2 i64/u64
+   wide struct-field low-32 truncation was closed by v1.3 V1; the f16 same-type-arith
+   silent-miscompute that Finale Audit 2 caught was closed by the 2026-06-04 f16 GAP FIX —
+   `f16` ident/literal now map to type tag 5 so the F16C path is reached, gated by
+   `V4_f16_add`/`V4_f16_mul`). **bf16 and f16 same-type add/mul compute correctly + are
+   bit-exact-gated**; a 16-bit float **mixed** with a non-16-bit-float operand fails **loud**
+   (traps 2001/4001, no implicit widening). f64 wide fields and u64 ≥2³² literals compute
+   full-range; a closure capture wider than i32 fails **loud** (trap 76003). Borrows
+   (`&mut` non-aliasing), `const`/`static`, module privacy, and match exhaustiveness are
+   **documented design bounds**, not enforced.
 5. **G4 (bf16 `wmma`) is a STRETCH and was not taken.** Not claimed done.
 6. **Single hardware target.** Only `sm_86` (RTX 3070 Laptop) is tested. No cross-arch
    (sm_80/sm_90) or multi-vendor (AMD) validation.
@@ -83,8 +87,10 @@ claim is precise, not inflated.
   the capstone on A100/H100.
 - **AMD / ROCm:** a genuinely separate backend (CDNA MFMA, rocBLAS reference, no native
   TF32) — currently unimplemented.
-- **v-next codegen:** i64/u64 wide struct fields (close the one silent residual), capturing
-  closures as values, bf16/f16 arithmetic, G4 bf16 `wmma`.
+- **v-next codegen:** G4 bf16 `wmma` (GPU tensor-core path) remains the open stretch. (The
+  v1.3 cycle SHIPPED what this line previously listed as v-next: i64/u64 wide struct fields
+  [V1 — the silent residual closed], capturing closures as values [V3], and bf16/f16
+  arithmetic [V4 + the 2026-06-04 f16 GAP FIX, both bit-exact-gated].)
 - **Broaden the DDC** to the v1.1 language surface.
 
 ## 4. Bottom line

@@ -82,13 +82,37 @@ detached runner + foreground-poll; never the Monitor tool; `timeout`-wrap GPU ru
   259.0 → RNE bf16 **260** not trunc-258 → `(c as i32)==260` → 42), `V4_bf16_mul`
   (`17.0 * 19.0`: f32 product 323.0 → RNE bf16 **324** not trunc-322 → 42), `V4_bf16_roundtrip`
   (`1.1_bf16` → RNE bf16 **1.1015625** not trunc-1.09375; bf16→f32 identity `== 1.1015625_f32`
-  → 42). The corpus moved 105 → 107 (+3 V4, −1 retired `arm_bf16_arith_bound` neg test).
+  → 42).
   Fixpoint K2==K3==K4 byte-identical (the self-host source uses no bf16/f16 arithmetic),
   GPU-PTX regression clean (x86-only change). (Foundation for a future G4 bf16-`wmma`.)
   _Note: the convert-op-convert arith was found WRONG on first attempt (a `mov ecx,eax` vs
   `mov eax,ecx` register-direction typo in the RNE round, + the literal still truncating); the
   bit-exact gate caught it (it had only previously RED'd on the obsolete trap test), and it was
   fixed before ship — fail-closed beat silent._
+
+- **V4 f16 GAP FIX — ✅ (2026-06-04, post Finale Audit 2).** The V4 ship above gated **bf16**
+  bit-exactly but shipped **f16 arithmetic without an f16 fixture** — and Finale Audit 2 then
+  caught that f16 same-type arith was **SILENTLY MISCOMPUTING with no trap**: the original V4
+  wired `is_f16_expr` to fire on type tag **5**, but NOTHING produced tag 5 — `ty_ident_to_tag`
+  (parser.hx, + its two twin inline resolvers for typed-params and return-types) had no
+  `f16`→5 case, and `expr_type` mapped the f16 literal (AST tag 80) to **4 (bf16)**, not 5. So
+  `is_f16_expr` was permanently 0 and `emit_f16_binop` (the F16C `vcvtph2ps`/`vcvtps2ph` path)
+  was **UNREACHABLE DEAD CODE**; f16 arith mis-routed to the bf16 path (a half pattern misread
+  as a bf16 top-16 → a tiny denormal → cast to ~0), returning a wrong value with no SIGILL.
+  Repro: `100.0_f16 + 28.0_f16` (= 128 exact) → exit 0 (expected 42); zero F16C bytes in any
+  emitted f16 binary. **Fix (Option A — make the claim TRUE):** map the `f16` ident + the f16
+  literal to tag 5 (all three resolvers + `expr_type`), plus the matching `type_width_class`
+  (f16 → 2 bytes) and a fail-closed f16-binding assign trap (8017). `emit_f16_binop` is now
+  reached; the f16 literal already stored the IEEE-754 half via `f32_to_f16_bits`, exactly what
+  `vcvtph2ps` widens. **Now gated** by two SHARP rows: `V4_f16_add` (`100+28` → 128 exact; the
+  old silent path gave ~0) and `V4_f16_mul` (`7.0_f16 * 293.0_f16`: f32 product **2051** →
+  **RNE** f16 **2052**, distinct from a truncating narrow's 2048 AND from the old ~0 — proving
+  the F16C path is genuinely used, not coincidentally right; `vcvtph2ps`/`vcvtps2ph` bytes
+  verified present in the emitted binary). f16 **mixed-operand still TRAPS** (unchanged). The
+  corpus moved **107 → 109** (+2 f16 rows); fixpoint K2==K3==K4 byte-identical, GPU-PTX clean.
+  _Note: the finale streak RESET to 0 on this gap; the fix lands GATED before the finale
+  restarts. Twice now (V4 bf16 typo, then this f16 dead-code) the bit-exact gate — not the
+  spec prose — caught a 16-bit-float defect: fail-closed/gated beats a confident claim._
 
 > **V1–V4 "types first-class" group: ✅ COMPLETE (2026-06-04).** The four type-correctness
 > items are all shipped + gated: V1 (i64/u64/f64 wide struct fields — the silent-truncation

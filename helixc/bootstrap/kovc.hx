@@ -1386,6 +1386,12 @@ fn assign_store_general_4b(off: i32, bind_ty: i32, val_ty: i32) -> i32 {
     } else { if bind_ty == 4 {
         if val_ty == 4 { emit_mov_local_eax(off) }
         else { emit_trap_with_id(8016) }
+    } else { if bind_ty == 5 {
+        // v1.3 f16 GAP FIX: f16 binding (tag 5). 4-byte store preserves the
+        // IEEE-754 half pattern (low 16 of eax); a non-f16 value FAILS CLOSED
+        // (trap 8017) -- never silently widen/reinterpret an f16 slot.
+        if val_ty == 5 { emit_mov_local_eax(off) }
+        else { emit_trap_with_id(8017) }
     } else { if bind_ty == 0 {
         if val_ty == 0 { emit_mov_local_eax(off) }
         else { emit_trap_with_id(8005) }
@@ -1393,7 +1399,7 @@ fn assign_store_general_4b(off: i32, bind_ty: i32, val_ty: i32) -> i32 {
         // Unknown bind_ty (e.g. user struct, not yet typed): fall
         // back to legacy 4-byte store. Pre-Finding-#4 behaviour.
         emit_mov_local_eax(off)
-    }}}}
+    }}}}}
 }
 
 // --------------------------------------------------------------
@@ -1656,7 +1662,7 @@ fn expr_type(idx: i32, bind_state: i32, bn_state: i32) -> i32 {
     else { if t == 40 { 11 }                          // AST_INTLIT_I16 (Stage 2.5c)
     else { if t == 41 { 8 }                           // AST_INTLIT_U16 (Stage 2.5c)
     else { if t == 42 { 4 }                           // AST_FLOATLIT_BF16 (Stage 1.5)
-    else { if t == 80 { 4 }                           // AST_FLOATLIT_F16 (K1.F15 2026-05-27) -- 16-bit shape; arith traps via is_bf16_expr predicate (same handling as bf16)
+    else { if t == 80 { 5 }                           // AST_FLOATLIT_F16 -- v1.3 f16 GAP FIX: tag 5 (was 4=bf16, the silent-wrong miscompute); reaches is_f16_expr -> emit_f16_binop (F16C). Literal stores the IEEE-754 half via f32_to_f16_bits (line ~7736), which is exactly what vcvtph2ps widens.
     else { if t == 81 { p2 }                           // AST_CAST (K1.CAST) -- static type is the target tag (slot p2 = tgt_tag from ty_ident_to_tag)
     else { if t == 50 { 3 }                            // AST_TUPLE_LIT (Stage 4) — 64-bit pointer (treat as i64 for storage)
     else { if t == 52 {
@@ -1913,11 +1919,12 @@ fn type_width_class(ty: i32) -> i32 {
     else { if ty == 3 { 8 }
     else { if ty == 9 { 8 }
     else { if ty == 4 { 2 }
+    else { if ty == 5 { 2 }                       // v1.3 f16 GAP FIX: f16 is a 16-bit float (2 bytes), like bf16; without this it fell to the >=100 struct default (4)
     else { if ty == 8 { 2 }
     else { if ty == 11 { 2 }
     else { if ty == 7 { 1 }
     else { if ty == 10 { 1 }
-    else { type_width_class_struct(ty) } } } } } } } }
+    else { type_width_class_struct(ty) } } } } } } } } }
 }
 
 // Parity fix (2026-05-29): body-vs-ret-ty width class for the 14002
@@ -1933,7 +1940,7 @@ fn type_width_class(ty: i32) -> i32 {
 // width trap must treat the whole {i32,u32,u8,u16,i8,i16} family as
 // one class to match. The genuine silent-data-loss cases the trap
 // guards — the 8-byte boundary (i64/u64/f64 -> tag 2/3/9, class 8)
-// and the true 16-bit floats (bf16/f16 -> tag 4, class 2, distinct
+// and the true 16-bit floats (bf16 -> tag 4, f16 -> tag 5, class 2, distinct
 // codegen) — keep their own classes and still trap on mismatch.
 // type_width_class itself is left unchanged (it has exactly one
 // caller: the 14002 trap site, which now routes through this).
@@ -7204,9 +7211,10 @@ fn emit_index_store_cpu(idx: i32, bind_state: i32, patch_state: i32, bn_state: i
 // emitted. The inner expression has already been emitted by the caller
 // (its value is in eax for 32-bit-shaped types, rax for 64-bit). Type
 // tags: i32=0, f32=1, f64=2, i64=3, u32=6, u8=7, u16=8, u64=9, i8=10,
-// i16=11. 16-bit floats (bf16=4, f16=80) have no SSE half-conversion
-// in Phase-0, so any cast touching them is a 0-byte no-op (matches the
-// pre-existing type-erased behaviour for those shapes).
+// i16=11. 16-bit floats (bf16=4, f16=5) are intercepted by the
+// emit_cast_conv WRAPPER (below): a cast to/from bf16 RNE-rounds the
+// top-16, and to/from f16 widens/narrows via F16C (vcvtph2ps/vcvtps2ph).
+// emit_cast_conv_core handles only the non-16-bit-float matrix described here.
 //
 // Conversion rules:
 //   int  -> int   : 0 bytes (value already in the right GPR shape).

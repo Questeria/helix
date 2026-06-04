@@ -1661,8 +1661,9 @@ fn ty_ident_to_tag(ty_s: i32, ty_l: i32) -> i32 {
         let b1 = __arena_get(ty_s + 1);
         let b2 = __arena_get(ty_s + 2);
         if b0 == 102 {
-            if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
-            else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
+            if b1 == 54 { if b2 == 52 { 2 } else { 0 } }                              // f64
+            else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } }                       // f32
+            else { if b1 == 49 { if b2 == 54 { 5 } else { 0 } } else { 0 } } }        // v1.3 f16 GAP FIX: f16 (f-1-6) -> tag 5 (reaches emit_f16_binop F16C path)
         } else { if b0 == 105 {
             if b1 == 54 { if b2 == 52 { 3 } else { 0 } }                              // i64
             else { if b1 == 51 { if b2 == 50 { 0 } else { 0 } }                       // i32
@@ -13135,8 +13136,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
                 let b1 = __arena_get(ty_s + 1);
                 let b2 = __arena_get(ty_s + 2);
                 if b0 == 102 {
-                    if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
-                    else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
+                    if b1 == 54 { if b2 == 52 { 2 } else { 0 } }                // f64
+                    else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } }         // f32
+                    else { if b1 == 49 { if b2 == 54 { 5 } else { 0 } } else { 0 } } }  // v1.3 f16 GAP FIX: f16 -> tag 5 (typed-param resolver)
                 } else { if b0 == 105 {
                     if b1 == 54 { if b2 == 52 { 3 } else { 0 } }                // i64
                     else { if b1 == 49 { if b2 == 54 { 11 } else { 0 } } else { 0 } }  // i16 (Stage 2.5c)
@@ -13422,8 +13424,9 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
         let b1 = __arena_get(rt_s + 1);
         let b2 = __arena_get(rt_s + 2);
         if b0 == 102 {
-            if b1 == 54 { if b2 == 52 { 2 } else { 0 } }
-            else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } } else { 0 } }
+            if b1 == 54 { if b2 == 52 { 2 } else { 0 } }                // f64
+            else { if b1 == 51 { if b2 == 50 { 1 } else { 0 } }         // f32
+            else { if b1 == 49 { if b2 == 54 { 5 } else { 0 } } else { 0 } } }  // v1.3 f16 GAP FIX: f16 -> tag 5 (return-type resolver)
         } else { if b0 == 105 {
             if b1 == 54 { if b2 == 52 { 3 } else { 0 } }                // i64
             else { if b1 == 49 { if b2 == 54 { 11 } else { 0 } } else { 0 } }  // i16 (Stage 2.5c)
