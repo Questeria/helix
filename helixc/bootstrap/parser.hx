@@ -404,6 +404,26 @@ fn gp_marker_encode(gp_idx: i32) -> i32 { gp_marker_base() + gp_idx }
 fn gp_marker_is(v: i32) -> i32 {
     if v >= gp_marker_base() { 1 } else { 0 }
 }
+// v1.3 V1 (P0): 8-byte SCALAR struct-field width encoding. The field-decl
+// slot (parse_struct_decl) stores the field's struct_idx if it is a nested
+// struct (>=0), a 200+gp_idx generic-param marker, or -1 for a scalar. Pre-
+// fix EVERY scalar encoded as -1, so the field READ (parse_primary ~2810 +
+// kovc.hx AST_TUPLE_FIELD) emitted only a 4-byte load -- an i64/u64 wide
+// field silently truncated to low-32, an f64 wide field came out i32-typed
+// (-> mixed-type guard SIGILL). The fix: a scalar field whose type is 8-byte
+// (f64=tag2, i64=tag3, u64=tag9) instead encodes `0 - (100 + tag)`. The read
+// site decodes `<= -100` -> `0 - v` = `100 + tag` into AST_TUPLE_FIELD.p3, so
+// (a) codegen emits a REX.W 8-byte load (p3 >= 100), and (b) expr_type returns
+// `p3 - 100` = the real tag (2/3/9) -- f64 fields type as f64 (SSE arith),
+// i64/u64 as 8-byte ints. 4-byte scalars (i32/f32/u32/u8/u16/i8/i16/bf16/f16)
+// stay -1 (the unchanged 4-byte path). Negative-side encoding (not 200+) keeps
+// it disjoint from struct_idx (>=0) and the gp markers (200+).
+fn wide_scalar_field_enc(ty_tag: i32) -> i32 {
+    if ty_tag == 2 { 0 - (100 + 2) }                  // f64 -> -102
+    else { if ty_tag == 3 { 0 - (100 + 3) }           // i64 -> -103
+    else { if ty_tag == 9 { 0 - (100 + 9) }           // u64 -> -109
+    else { 0 - 1 } } }                                // 4-byte scalar -> -1 (unchanged)
+}
 // Stage 28.11 INC-3b: struct_gp_tab helpers. Parallel to struct_tab,
 // keyed by struct_idx. Each entry stores (struct_idx, gp_count,
 // gp_names_head) where gp_names_head is the arena address of a chain
@@ -2807,6 +2827,16 @@ fn parse_unary(tok_base: i32, sb: i32) -> i32 {
                                     cur_struct_idx = 0 - 1;
                                 };
                             } else {
+                                // v1.3 V1 (P0): wide-scalar channel now LIVE.
+                                // f_struct_idx <= -100 encodes an 8-byte scalar
+                                // field (-102 f64 / -103 i64 / -109 u64, set by
+                                // wide_scalar_field_enc in parse_struct_decl).
+                                // Decode to p3 = 0-f_struct_idx = 100+tag: codegen
+                                // emits a REX.W 8-byte field load (p3 >= 100) and
+                                // expr_type returns p3-100 (the real tag) so f64
+                                // fields type f64 (SSE), i64/u64 as 8-byte ints.
+                                // A 4-byte scalar field stays -1 here -> p3sc = 0
+                                // (the unchanged 4-byte i32-shaped read).
                                 let p3sc = if f_struct_idx <= (0 - 100) { 0 - f_struct_idx } else { 0 };
                                 prim = mk_node(52, prim, f_idx, p3sc);
                                 cur_struct_idx = 0 - 1;
@@ -15496,7 +15526,14 @@ fn parse_struct_decl(tok_base: i32, sb: i32) -> i32 {
             let f_struct_idx = if gp_idx >= 0 {
                 gp_marker_encode(gp_idx)
             } else {
-                struct_tab_lookup_idx(sb, t_s, t_l)
+                // v1.3 V1 (P0): a scalar field that is NOT a registered struct
+                // gets its 8-byte width encoded (f64/i64/u64 -> 0-(100+tag));
+                // 4-byte scalars stay -1. struct_tab_lookup_idx returns -1 for
+                // any non-struct type IDENT, so wide_scalar_field_enc only
+                // applies to genuine scalars (the type IDENT resolves to an
+                // 8-byte tag) -- a nested-struct field keeps its >=0 idx.
+                let sidx = struct_tab_lookup_idx(sb, t_s, t_l);
+                if sidx >= 0 { sidx } else { wide_scalar_field_enc(ty_ident_to_tag(t_s, t_l)) }
             };
             // Push (name_s, name_l, field_struct_idx) triple into
             // fields region. Capture fields_ptr from the FIRST push so

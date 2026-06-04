@@ -7248,7 +7248,18 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         let n_pre_trap = if p2 > 15 { emit_trap_with_id(52001) } else { 0 };
         let n_inner = emit_ast_code(p1, bind_state, patch_state, bn_state);
         let off = p2 * 8;
-        let n_load = if p3 == 1 {
+        // v1.3 V1 (P0): an 8-byte field READ. Two encodings drive the REX.W
+        // 64-bit load: p3 == 1 (a nested-struct child POINTER, Stage 5 Iter D)
+        // and p3 >= 100 (an 8-byte SCALAR field -- 102 f64 / 103 i64 / 109 u64,
+        // set via wide_scalar_field_enc in parse_struct_decl -> the read site
+        // decodes 100+tag). Pre-fix only p3 == 1 took the 8-byte path, so an
+        // i64/u64 scalar field silently truncated to its low 32 bits and an f64
+        // field came out 4-byte/i32-typed (-> mixed-type guard SIGILL). The full
+        // 8 bytes now land in rax: for an i64/u64 field that is the full value;
+        // for an f64 field it is the IEEE-754 bit pattern, and expr_type tags the
+        // node f64 (p3-100 == 2) so the consuming arithmetic routes through SSE.
+        let wide8 = if p3 == 1 { 1 } else { if p3 >= 100 { 1 } else { 0 } };
+        let n_load = if wide8 == 1 {
             // mov rax, [rax + disp8]  (REX.W: 48 8B 40 disp8 = 4 bytes)
             emit_byte(0x48); emit_byte(0x8B); emit_byte(0x40); emit_byte(off);
             4
@@ -9652,7 +9663,14 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         // post-K3.D the codegen emits trap 79001 BEFORE the store so
         // the bug surfaces loudly. The struct-ptr (field_p3 == 1) path
         // uses REX.W and is unaffected.
-        let n_width_trap = if field_p3 == 0 {
+        // v1.3 V1 (P0): an 8-byte SCALAR field now carries field_p3 >= 100
+        // (102 f64 / 103 i64 / 109 u64). Its STORE must also be REX.W
+        // 8-byte so `p.wide = v` round-trips full-width -- and the 79001
+        // width trap must NOT fire (it is i64/u64/f64-INTO-a-4-byte-slot
+        // that the trap guards; here the slot is 8-byte). Gate `wide8`
+        // (p3 == 1 OR p3 >= 100) the same way the READ side does.
+        let wide8 = if field_p3 == 1 { 1 } else { if field_p3 >= 100 { 1 } else { 0 } };
+        let n_width_trap = if wide8 == 0 {
             let val_ty = expr_type(val_node, bind_state, bn_state);
             if val_ty == 3 {
                 emit_trap_with_id(79001)
@@ -9662,7 +9680,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
                 emit_trap_with_id(79001)
             } else { 0 } } }
         } else { 0 };
-        let n_store = if field_p3 == 1 {
+        let n_store = if wide8 == 1 {
             // mov [rcx + disp8], rax  (REX.W: 48 89 41 disp8 = 4 bytes)
             emit_byte(0x48); emit_byte(0x89); emit_byte(0x41); emit_byte(off);
             4

@@ -270,19 +270,22 @@ chk "$GENC/arm_block_comment.hx" 42; chk "$GENC/arm_radix_lits.hx" 42
 chk "$GENC/arm_char_lit.hx" 42; chk "$GENC/arm_continue.hx" 42
 chk "$GENC/arm_early_return.hx" 42; chk "$GENC/arm_tuple_struct.hx" 42
 chk "$GENC/arm_bf16_f16_decl.hx" 42; chk "$GENC/arm_bf16_arith_bound.hx" 132
-# T3 §1.6 M-3 (2026-06-03) DOCUMENT-AS-BOUND + negative test: 8-byte SCALAR struct
-# fields (f64/i64/u64) are not fully supported -- the field READ (AST_TUPLE_FIELD)
-# only emits an 8-byte REX.W load when p3==1, which the parser sets ONLY for nested-
-# struct (pointer) fields, NOT for f64/i64/u64 scalar fields (decl-time struct_idx
-# == -1, indistinguishable from i32). So a field read takes only the LOW 32 bits.
-# f64 path fails CLOSED: the 4-byte-read result is i32-typed, so `a.v + 0.0_f64`
-# hits the mixed-type guard -> ud2/SIGILL 132 (never wrong float math). (i64/u64
-# field read silently truncates low-32 -- the one silent-wrong residual, recorded
-# v-next.) Full fix = decl 8-byte-scalar detection + p3==1 read + f64 field-result
-# typing + generic use-site monomorph (INC-3b) = v-next. The non-generic 4-byte
-# path is gated (gen_box_f32 ->5; sret_*field ->42). NO kovc.hx/parser change here
-# -> fixpoint stays 9cc8f20b.
-chk "$GENC/M3_wide_field_bound.hx" 132
+# v1.3 V1 (P0, 2026-06-03) -- the silent-bug FIX (charter §1 V1). The v1.2 M-3
+# bound (an i64/u64 wide struct-field READ silently truncated to low-32; an f64
+# wide field failed closed SIGILL 132) is now CLOSED. Root cause: the field READ
+# (AST_TUPLE_FIELD) only emitted an 8-byte REX.W load when p3==1, which the parser
+# set ONLY for nested-struct (pointer) fields -- a f64/i64/u64 SCALAR field encoded
+# struct_idx == -1 (indistinguishable from i32) so it took the 4-byte path. The fix:
+# parse_struct_decl (wide_scalar_field_enc) encodes an 8-byte scalar field as
+# 0-(100+tag); the read site decodes 100+tag into AST_TUPLE_FIELD.p3, codegen emits
+# a REX.W 8-byte load (p3 >= 100), and expr_type returns p3-100 (the real tag) so
+# f64 fields type f64 (SSE arith) and i64/u64 type as 8-byte ints. Field WRITE
+# (AST_FIELD_STORE) also REX.W-stores wide fields. The M3_wide_field_bound negative
+# test is RETIRED (its bound is closed). This is the i64-first commit: V1_i64 reads
+# a runtime-derived field holding 5_000_000_000 (> 2^32); 5e9/1e8 == 50 EXACT (the
+# pre-fix low-32 truncation gave 7). parser.hx + kovc.hx changed -> the fixpoint sha
+# MOVES (the self-host source uses wide fields) but K2==K3==K4 stay byte-identical.
+chk "$GENC/V1_i64_wide_field.hx" 50
 # T3 §1.6 PARSER-DESUGAR promotions (2026-06-03, charter §1.6 MED/LOW): three desugars
 # that were already implemented in parser.hx but had no gated corpus row. The self-host
 # source uses plain `while` / `x = x + ...` / nested `if`, NEVER the new syntax, so these
@@ -409,7 +412,7 @@ chk "$GENC/M4_turbofish_enum.hx" 42; chk "$GENC/gen_option_i32.hx" 42
 #     (the fix must not disturb the capture path) -> 42.
 chk "$GENC/M6_closure_arg.hx" 42; chk "$GENC/t6_closure_arg.hx" 42
 chk "$GENC/M6_capture_regression.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 96 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 1 T3 M-3 8-byte-struct-field doc-as-bound [M3_wide_field_bound ->132])"
+echo "  CORPUS: $pass passed, $fail failed (expect 96 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 1 v1.3 V1 i64 wide struct field [V1_i64_wide_field 5e9/1e8->50 EXACT, the silent-bug fix; M-3 bound RETIRED])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -481,6 +484,9 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 5 ]; then echo "  CHECK_ERR REGRESSION (
 #   byte-identical 9cc8f20b) -- pure promotions of already-implemented arms.
 # T3 (2026-06-03): bumped 95 -> 96 for M-3 8-byte-struct-field DOCUMENT-AS-BOUND
 #   (M3_wide_field_bound ->132, f64 wide-field read fails closed). No source change.
+# v1.3 V1 (2026-06-03): the M-3 bound is now CLOSED (the silent-bug fix). Count stays
+#   96: -1 (M3_wide_field_bound bound test RETIRED) +1 (V1_i64_wide_field ->50, the
+#   i64-first commit). The u64/f64/multi V1 tests land in the follow-up commit (98).
 if [ "$pass" -lt 96 ]; then echo "  CORPUS REGRESSION (pass=$pass < 96)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
