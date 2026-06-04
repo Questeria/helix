@@ -169,44 +169,11 @@ fn skip_block_comment(src_start: i32, src_len: i32, pos: i32) -> i32 {
     p
 }
 
-// Stage 1.5 audit fix helpers: u64 lex overflow detection for 10-digit
-// values. Returns the i'th byte of "4294967295" (2^32-1, the max valid
-// 10-digit u64 literal via the two's-complement bit-trick).
-fn ref_byte_4294967295(i: i32) -> i32 {
-    if i == 0 { 52 }       // '4'
-    else { if i == 1 { 50 }  // '2'
-    else { if i == 2 { 57 }  // '9'
-    else { if i == 3 { 52 }  // '4'
-    else { if i == 4 { 57 }  // '9'
-    else { if i == 5 { 54 }  // '6'
-    else { if i == 6 { 55 }  // '7'
-    else { if i == 7 { 50 }  // '2'
-    else { if i == 8 { 57 }  // '9'
-    else { if i == 9 { 53 }  // '5'
-    else { 0 } } } } } } } } } }
-}
-
-// Returns 1 if the 10-digit literal at p1..p1+10 represents a u64
-// value > 4294967295 (= 2^32-1). Used by the u64 oversize guard to
-// catch the [4294967296, 9999999999] range that the partial fix in
-// 471b27f missed (those values are 10-digit but multi-wrap the i32
-// accumulator). Caller must verify literal is exactly 10 digits.
-fn check_u64_10digit_overflow(p1: i32) -> i32 {
-    let mut i: i32 = 0;
-    let mut keep: i32 = 1;
-    let mut result: i32 = 0;
-    while keep == 1 {
-        if i >= 10 { keep = 0; }
-        else {
-            let lit_b = __arena_get(p1 + i);
-            let ref_b = ref_byte_4294967295(i);
-            if lit_b > ref_b { result = 1; keep = 0; }
-            else { if lit_b < ref_b { keep = 0; }
-            else { i = i + 1; } };
-        };
-    }
-    result
-}
+// v1.3 V2: the former u64 lex-overflow helpers (ref_byte_4294967295 +
+// check_u64_10digit_overflow) are REMOVED. They backed the L-2 fail-closed
+// cap on u64 literals >= 2^32; that feature now SHIPS (the literal text is
+// decoded full-width via the i64 limb path in kovc.hx tag 38), so the cap
+// and its helpers are retired.
 
 // --------------------------------------------------------------
 // Lex an integer literal starting at byte index `pos`. Recognises a
@@ -577,44 +544,30 @@ fn lex_int(src_start: i32, src_len: i32, pos: i32) -> i32 {
         // Stage 2.3: TK_INTLIT_U8  (tag 35) for _u8-suffixed literals;
         // Stage 2.4: TK_INTLIT_U64 (tag 36) for _u64-suffixed literals;
         // TK_INT (tag 1) for plain or _i32-suffixed.
-        // Stage 2.4b audit fix: loud-failure guard for u64 literal
-        // overflow. The lex_int decimal accumulator is i32; values
-        // >= 2^32 silently truncate. Cap: if the digit run is > 10
-        // chars AND `_u64` suffix, emit token tag 40 (no parser arm
-        // → falls through to AST_ERR → ud2 at codegen). 10 digits
-        // accept up to 9_999_999_999 (slightly over 2^32-1 =
-        // 4294967295); values in [2^32, 9_999_999_999] still wrap
-        // silently — proper fix is the queued lex-side accumulator
-        // widening. 11+ digits definitely overflow u64? No, u64 max
-        // is 18_446_744_073_709_551_615 (20 digits). So 11+ digits
-        // are NOT inherently invalid — they're just past what i32
-        // can hold. The cap intentionally errs toward LESS conservative
-        // here so legal valuese.g. 2147483648_u64 (= 2^31, 10 digits)
-        // still work via the hi32=0 partial fix from commit 09c8858.
-        // Stage 1.5 audit fix (post-bf16 sweep): u64 lex overflow guard.
-        // The partial fix in 471b27f caught > 10 digits via tk=40. But
-        // 10-digit values in the range [4294967296, 9999999999] also
-        // wrap silently in the i32 accumulator (multi-wrap, bit-trick
-        // doesn't preserve high half). Catch via digit-by-digit lex
-        // compare against "4294967295" (= 2^32-1, max valid 10-digit
-        // value via the two's-complement bit-trick + hi32=0 fix from
-        // 09c8858). If 10-digit literal lex-greater than "4294967295",
-        // set u64_oversize.
-        let digit_count = length - 4;
-        let u64_oversize = if is_u64_suffix == 1 {
-            if digit_count > 10 { 1 }
-            else { if digit_count == 10 {
-                check_u64_10digit_overflow(pos)
-            } else { 0 } }
-        } else { 0 };
-        let tk = if u64_oversize == 1 { 40 }
-                 else { if is_i64_suffix == 1 { 33 }
+        //
+        // v1.3 V2 (SHIPS the v1.2 L-2 bound): a u64 literal >= 2^32 is now
+        // FULLY SUPPORTED. The token carries the literal's source-text ref
+        // (src_start=pos, src_len=length, passed below to push_token), and
+        // the parser/codegen (parser.hx TK 36 -> AST 38, kovc.hx tag 38)
+        // decode the decimal text into the full 64-bit value via UNSIGNED
+        // i32-multi-word 16-bit limbs (the i64 tag-35 limb path, no sign
+        // extension). So the entire u64 range [0, 2^64-1] lexes + computes
+        // correctly. The `value` payload (i32 accumulator, may be truncated
+        // for big literals) is now VESTIGIAL for u64/i64 -- codegen ignores
+        // it and re-decodes from the text -- but is preserved as the payload
+        // for the i32/u32/u8/... narrow tags that still read tok_p1.
+        //
+        // The former L-2 loud-failure guard (tag 40 for u64 literals > 2^32
+        // via check_u64_10digit_overflow) is RETIRED: it fail-closed on a
+        // feature that now ships. No over-range u64 literal cap remains;
+        // a literal beyond 2^64-1 wraps mod 2^64 (out-of-range source).
+        let tk = if is_i64_suffix == 1 { 33 }
                  else { if is_u32_suffix == 1 { 34 }
                  else { if is_u8_suffix == 1 { 35 }
                  else { if is_u64_suffix == 1 { 36 }
                  else { if is_i8_suffix == 1 { 37 }
                  else { if is_i16_suffix == 1 { 38 }
-                 else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } } };
+                 else { if is_u16_suffix == 1 { 39 } else { 1 } } } } } } };
         push_token(tk, value, pos, length);
     } } };  // K1.F15: +1 brace for new is_f16_suffix outer arm
     p

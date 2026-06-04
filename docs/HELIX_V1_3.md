@@ -25,8 +25,16 @@ detached runner + foreground-poll; never the Monitor tool; `timeout`-wrap GPU ru
   proves infeasible, the residual must at minimum become **fail-closed (loud), not silent.**
 
 ### Types — first-class (retire the fail-closed bounds where feasible)
-- **V2 — u64 ≥2³² literals.** **DoD:** a u64 literal > 2³² parses + computes correctly;
-  gated test; the v1.2 L-2 bound becomes shipped.
+- **V2 — u64 ≥2³² literals. ✅ SHIPPED (2026-06-04).** **DoD:** a u64 literal > 2³² parses +
+  computes correctly; gated test; the v1.2 L-2 bound becomes shipped. **Done:** the parser
+  stores the u64 literal's source-text ref and codegen (kovc.hx tag 38) decodes it full-width
+  via the i64 16-bit-limb path **UNSIGNED** (no sign extension) — the H5 wide-literal decode
+  mirrored for u64. The lexer's L-2 over-range cap (+ its `check_u64_10digit_overflow` /
+  `ref_byte_4294967295` helpers) is **RETIRED**, and the `L2_u64_over_2p32` fail-closed negative
+  test is **retired** (a shipped feature must not assert fail-closed). Gated: `V2_u64_lit_over_2p32`
+  (`5_000_000_000_u64 / 1e8 = 50` exact), `V2_u64_lit_near_max` (`2⁶⁴-1 > 2⁶³-1` unsigned → 42),
+  `V2_u64_lit_div_max` (`(2⁶⁴-1)/(2⁶³-1) = 2` unsigned). Fixpoint K2==K3==K4 byte-identical
+  (sha 28024fbf), GPU-PTX regression clean.
 - **V3 — capturing closures as values/arguments.** Today a capturing closure passed by value
   traps (SIGSEGV). **DoD:** a real closure object (heap env + fn-pointer); a capturing
   closure passed as an argument + invoked reads its captured variables correctly; gated test;

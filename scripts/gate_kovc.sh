@@ -301,6 +301,28 @@ chk "$GENC/V1_i64_wide_field.hx" 50
 chk "$GENC/V1_u64_wide_field.hx" 50
 chk "$GENC/V1_f64_wide_field.hx" 42
 chk "$GENC/V1_multi_wide_field.hx" 42
+# v1.3 V2 (2026-06-03, charter §1 V2) -- u64 LITERALS >= 2^32 SHIP. Pre-V2 the
+# lexer's i32 decimal accumulator capped any u64 literal > 2^32-1 and FAILED
+# CLOSED (token 40 -> compile error; the v1.2 L-2 bound). The fix stores the
+# literal's source-text ref (parser.hx TK 36 -> AST 38) and decodes it full-width
+# via the i64 16-bit-limb path UNSIGNED (no sign extension; kovc.hx tag 38) -- the
+# same H5 wide-literal decode mirrored for u64. The lex over-range cap + its two
+# helpers (check_u64_10digit_overflow / ref_byte_4294967295) are RETIRED, and the
+# L2_u64_over_2p32 fail-closed neg test is RETIRED (replaced by these positives).
+# parser.hx + lexer.hx + kovc.hx changed -> the fixpoint sha MOVES (the self-host
+# source uses u64 literals -- the ELF magic/header constants) but K2==K3==K4 stay
+# byte-identical.
+#   V2_u64_lit_over_2p32 : 5_000_000_000_u64 (> 2^32) / 1e8 = 50 EXACT, unsigned
+#     divide (a low-32 truncation would give 7). Gate (a): u64 literal > 2^32 read
+#     back exact.
+#   V2_u64_lit_near_max  : 18446744073709551615_u64 (= 2^64-1, full range) >
+#     9223372036854775807_u64 (= 2^63-1) -> 42 unsigned; a sign/trunc bug -> 0.
+#     Gate (b): full unsigned range, unsigned-vs-signed compare discriminator.
+#   V2_u64_lit_div_max   : (2^64-1) / (2^63-1) = 2 unsigned (independent divide-path
+#     discriminator; signed/trunc bug -> 0).
+chk "$GENC/V2_u64_lit_over_2p32.hx" 50
+chk "$GENC/V2_u64_lit_near_max.hx" 42
+chk "$GENC/V2_u64_lit_div_max.hx" 2
 # T3 §1.6 PARSER-DESUGAR promotions (2026-06-03, charter §1.6 MED/LOW): three desugars
 # that were already implemented in parser.hx but had no gated corpus row. The self-host
 # source uses plain `while` / `x = x + ...` / nested `if`, NEVER the new syntax, so these
@@ -427,7 +449,7 @@ chk "$GENC/M4_turbofish_enum.hx" 42; chk "$GENC/gen_option_i32.hx" 42
 #     (the fix must not disturb the capture path) -> 42.
 chk "$GENC/M6_closure_arg.hx" 42; chk "$GENC/t6_closure_arg.hx" 42
 chk "$GENC/M6_capture_regression.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 99 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42])"
+echo "  CORPUS: $pass passed, $fail failed (expect 102 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -460,22 +482,18 @@ chk_err "$GENC/err_at_l1.hx" 1 20
 chk_err "$GENC/err_let_rhs.hx" 1 28
 chk_err "$GENC/err_multiline_l3.hx" 3 13
 chk_err "$GENC/err_after_op_l2.hx" 2 9
-# T3 §1.6 L-2 (2026-06-03) DOCUMENT-AS-BOUND + negative test: a u64 LITERAL whose
-# decimal magnitude exceeds 2^32-1 is lex-capped (i32 accumulator) and FAILS CLOSED
-# -- lexer tags it token 40 (no parser arm, lexer.hx:580-617 + check_u64_10digit_
-# overflow), the parser unexpected-token catch-all makes an AST_ERR, and the H-3
-# diagnostic prints `<path>:line:col: parse error: unexpected token` + non-zero exit
-# + NO ELF. `5_000_000_000_u64` is the offending token at line 25 col 20 of the
-# fixture. (i64 >= 2^32 literals work via the limb path -- i64_cmp/L2_i64_bigger;
-# u64 >= 2^32 is reachable by COMPUTATION -- u64_shr; only the u64 *literal* is
-# capped. Lex-accumulator widening = v-next.) Proves the bound never silent-wrongs.
-chk_err "$GENC/L2_u64_over_2p32.hx" 25 20
-echo "  CHECK_ERR: $epass passed, $efail failed (expect 5: file:line:col correct + non-zero exit + no ELF)"
+# v1.3 V2 (2026-06-03): the former L-2 negative test (L2_u64_over_2p32.hx, which
+# asserted a u64 LITERAL > 2^32 FAILS CLOSED at compile time) is RETIRED -- that
+# bound is now SHIPPED (a u64 literal up to 2^64-1 parses + computes correctly via
+# the i64 limb decode; see the V2_u64_lit_* positives above). A now-shipped feature
+# must NOT still assert fail-closed, so the chk_err row + its fixture are removed.
+# CHECK_ERR drops 5 -> 4 (the 4 remaining `@`-token diagnostics).
+echo "  CHECK_ERR: $epass passed, $efail failed (expect 4: file:line:col correct + non-zero exit + no ELF)"
 
 echo "=== GATE VERDICT ==="
 # H-3 (2026-06-03): the check_err negative corpus must be all-green (correct
 # path:line:col + non-zero compile exit). Any miss fails the gate.
-if [ "$efail" -ne 0 ] || [ "$epass" -lt 5 ]; then echo "  CHECK_ERR REGRESSION (epass=$epass efail=$efail; want 5/0)"; GATE_OK=0; fi
+if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (epass=$epass efail=$efail; want 4/0)"; GATE_OK=0; fi
 # regression guard: the u64_shr must now PASS, and we must not drop below the full corpus count.
 # T3 (2026-06-02): bumped 56 -> 59 for the 3 new >6-arg SysV stack-pass cases.
 # T3 (2026-06-03): bumped 59 -> 60 for the L-1 index-store program.
@@ -505,7 +523,13 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 5 ]; then echo "  CHECK_ERR REGRESSION (
 # v1.3 V1 (2026-06-03): bumped 96 -> 99 for the remaining wide-field cases
 #   (V1_u64 ->50, V1_f64 ->42, V1_multi ->42). Same one-line fix, no further source
 #   change -> the fixpoint stays byte-identical (sha a6a17ed4).
-if [ "$pass" -lt 99 ]; then echo "  CORPUS REGRESSION (pass=$pass < 99)"; GATE_OK=0; fi
+# v1.3 V2 (2026-06-03): bumped 99 -> 102 for u64 LITERALS >= 2^32 (charter §1 V2):
+#   V2_u64_lit_over_2p32 ->50 (5e9/1e8 exact), V2_u64_lit_near_max ->42 (2^64-1 >
+#   2^63-1 unsigned), V2_u64_lit_div_max ->2 ((2^64-1)/(2^63-1) unsigned). The v1.2
+#   L-2 bound SHIPS; the L2_u64_over_2p32 fail-closed neg test is RETIRED (CHECK_ERR
+#   5 -> 4). parser.hx + lexer.hx + kovc.hx changed -> fixpoint sha MOVES, K2==K3==K4
+#   stay byte-identical.
+if [ "$pass" -lt 102 ]; then echo "  CORPUS REGRESSION (pass=$pass < 102)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure

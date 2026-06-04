@@ -3615,16 +3615,25 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
         cur_advance(sb);
         mk_node(37, v, 0, 0)
     } else { if t == 36 {
-        // Approach A Stage 2.4: TK_INTLIT_U64 (tag 36) -> AST_INTLIT_U64
-        // (tag 38). Codegen emits 8-byte `movabs rax, imm64` (same as
-        // i64 literal). x86 64-bit ops work for both signed and
-        // unsigned operands; only DIV/MOD and comparisons differ —
-        // u64 dispatches to `48 31 D2; 48 F7 F1` (xor rdx,rdx; div rcx)
-        // for unsigned division, setb/seta/setbe/setae for unsigned
-        // comparisons. expr_type returns 9 (u64) for type tracking.
-        let v = tok_p1(tok_base, k);
+        // Approach A Stage 2.4 + v1.3 V2: TK_INTLIT_U64 (tag 36) ->
+        // AST_INTLIT_U64 (tag 38). v1.3 V2 mirrors the i64 tag-33 path
+        // (and the f64 tag-34 path): store the literal TEXT ref
+        // (byte_start in p1, byte_len in p2) instead of the lex-time
+        // i32-truncated value, which wrapped any u64 literal >= 2^32
+        // (e.g. 5_000_000_000_u64). Codegen (kovc tag 38) now decodes the
+        // decimal text into the full 64-bit (lo,hi) via UNSIGNED
+        // i32-multi-word 16-bit-limb accumulation -- NO sign extension --
+        // then emits `movabs rax, imm64`, so the entire u64 literal range
+        // [0, 2^64-1] survives exactly. x86 64-bit ops work for both
+        // signed and unsigned operands; only DIV/MOD and comparisons
+        // differ -- u64 dispatches to `48 31 D2; 48 F7 F1`
+        // (xor rdx,rdx; div rcx) for unsigned division, setb/seta/setbe/
+        // setae for unsigned comparisons. expr_type returns 9 (u64) for
+        // type tracking. The v1.2 L-2 lex-cap bound is now SHIPPED.
+        let body_s = tok_p2(tok_base, k);
+        let body_l = tok_p3(tok_base, k);
         cur_advance(sb);
-        mk_node(38, v, 0, 0)
+        mk_node(38, body_s, body_l, 0)
     } else { if t == 37 {
         // Approach A Stage 2.5b: TK_INTLIT_I8 (tag 37) -> AST_INTLIT_I8
         // (tag 39). Same minimal scaffold as u8 / u32 — codegen emits
