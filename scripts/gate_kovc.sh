@@ -286,6 +286,21 @@ chk "$GENC/arm_bf16_f16_decl.hx" 42; chk "$GENC/arm_bf16_arith_bound.hx" 132
 # pre-fix low-32 truncation gave 7). parser.hx + kovc.hx changed -> the fixpoint sha
 # MOVES (the self-host source uses wide fields) but K2==K3==K4 stay byte-identical.
 chk "$GENC/V1_i64_wide_field.hx" 50
+# v1.3 V1 (2026-06-03) -- the remaining wide-field cases (same one-line fix; these
+# extend coverage to u64, f64, and a mixed multi-field struct):
+#   V1_u64  : a u64 field holding 5_000_000_000 (built by arithmetic; u64 >=2^32
+#             literals are L-2-capped) read full-width via unsigned divide; 5e9/1e8
+#             == 50 EXACT (pre-fix low-32 truncation -> 7).
+#   V1_f64  : an f64 field read full 8 bytes AND f64-typed -- `b.v * 2.0_f64` routes
+#             through SSE and equals an independent f64 LOCAL reference (the program
+#             emits 42 ONLY if the field read matches the reference, else 0; pre-fix
+#             this SIGILL'd 132 -- the fail-closed bound, now CLOSED).
+#   V1_multi: struct { big: i64 @slot0, d: f64 @slot1, small: i32 @slot2 } -- each
+#             field read at its correct OFFSET and WIDTH (8/8/4 byte); 60+22+40-80
+#             == 42. Catches an offset/width bug a single-field struct cannot.
+chk "$GENC/V1_u64_wide_field.hx" 50
+chk "$GENC/V1_f64_wide_field.hx" 42
+chk "$GENC/V1_multi_wide_field.hx" 42
 # T3 §1.6 PARSER-DESUGAR promotions (2026-06-03, charter §1.6 MED/LOW): three desugars
 # that were already implemented in parser.hx but had no gated corpus row. The self-host
 # source uses plain `while` / `x = x + ...` / nested `if`, NEVER the new syntax, so these
@@ -412,7 +427,7 @@ chk "$GENC/M4_turbofish_enum.hx" 42; chk "$GENC/gen_option_i32.hx" 42
 #     (the fix must not disturb the capture path) -> 42.
 chk "$GENC/M6_closure_arg.hx" 42; chk "$GENC/t6_closure_arg.hx" 42
 chk "$GENC/M6_capture_regression.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 96 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 1 v1.3 V1 i64 wide struct field [V1_i64_wide_field 5e9/1e8->50 EXACT, the silent-bug fix; M-3 bound RETIRED])"
+echo "  CORPUS: $pass passed, $fail failed (expect 99 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -484,10 +499,13 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 5 ]; then echo "  CHECK_ERR REGRESSION (
 #   byte-identical 9cc8f20b) -- pure promotions of already-implemented arms.
 # T3 (2026-06-03): bumped 95 -> 96 for M-3 8-byte-struct-field DOCUMENT-AS-BOUND
 #   (M3_wide_field_bound ->132, f64 wide-field read fails closed). No source change.
-# v1.3 V1 (2026-06-03): the M-3 bound is now CLOSED (the silent-bug fix). Count stays
-#   96: -1 (M3_wide_field_bound bound test RETIRED) +1 (V1_i64_wide_field ->50, the
-#   i64-first commit). The u64/f64/multi V1 tests land in the follow-up commit (98).
-if [ "$pass" -lt 96 ]; then echo "  CORPUS REGRESSION (pass=$pass < 96)"; GATE_OK=0; fi
+# v1.3 V1 (2026-06-03): the M-3 bound is now CLOSED (the silent-bug fix). Count went
+#   95 -> 96: -1 (M3_wide_field_bound bound test RETIRED) +1 (V1_i64_wide_field ->50,
+#   the i64-first commit).
+# v1.3 V1 (2026-06-03): bumped 96 -> 99 for the remaining wide-field cases
+#   (V1_u64 ->50, V1_f64 ->42, V1_multi ->42). Same one-line fix, no further source
+#   change -> the fixpoint stays byte-identical (sha a6a17ed4).
+if [ "$pass" -lt 99 ]; then echo "  CORPUS REGRESSION (pass=$pass < 99)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure
