@@ -379,6 +379,54 @@ median GEMM @ 2048^3 >= 40% of measured cuBLAS-TF32 = >= 4.26 TFLOP/s** (0.40 x 
 numbers (absolute TFLOP/s and the cuBLAS-TF32 ratio) are reported always. The absolute 15
 floor is documented here as superseded by the relative measure on this specific box.
 
+### Reproduce from scratch
+
+```
+# CORRECTNESS @ 2e-3 over 16x8x128 .. 2048^3 distinct-input + the ENFORCED G3 PERF gate
+# at 2048^3 (>= 4.26 TFLOP/s = 40% cuBLAS-TF32, OR >= 15 absolute) + both negative controls,
+# entirely from COMMITTED sources (re-mints the kovc PTX driver from the raw-binary seed if absent):
+wsl.exe bash -c "bash /mnt/c/Projects/Kovostov-Native/scripts/gpu_tf32_corpus.sh"
+# -> emits the kovc TF32 mma PTX (NOT nvcc), provenance greps (mma.sync.m16n8k8 + .tf32 +
+#    cvt.rna.tf32.f32 + .version 8.3 + sm_86, NO fma.rn.f32 on the accumulators), ptxas-accepts
+#    via the 12.8 ptxas, builds the host launcher WITH the cuBLAS-TF32 oracle (-lcublas), runs the
+#    correctness corpus THROUGH 2048^3 (0 bad cells @2e-3, C[1,1]=487.125 == cuBLAS-TF32), the
+#    median-of-50 cuEvent perf gate at 2048^3, and the comparator-teeth + mma-strip neg-controls.
+# Verdict line: GPU_TF32_PASS
+#   (kovc TF32 mma == cuBLAS-TF32 @2e-3 over 16x8x128..2048^3 ... PERF @2048^3 >= the 40% floor 4.26)
+#
+# full self-host gate (re-mints kovc from the seed, ~28 min on /mnt/c; this script change is a
+# TEST/script change, NOT a kovc.hx edit, so the fixpoint K2==K3==K4 stays byte-identical 9cc8f20b):
+wsl.exe bash -c "bash /mnt/c/Projects/Kovostov-Native/scripts/gate_kovc.sh"   # -> GATE_PASS
+```
+
+Kernel: `helixc/examples/tf32_matmul_kernel.hx` (the warp-tiled `emit_ptx_tf32_matmul_mma`
+emitter in `helixc/bootstrap/kovc.hx`, NB=4 / WP=4). Host mode `gemm_tf32` in
+`helixc/runtime/cuda_launch.c` (cuBLAS-TF32 `cublasGemmEx(COMPUTE_32F_FAST_TF32, TENSOR_OP)`
+oracle + the work-capped CPU/f32-cuBLAS meta-anchor + the cuEvent median-of-50 timing). The CPU
+triple-loop reference is work-capped at ~735^3, so 2048^3 completes in ~1 s wall (the correctness
+rests on the O(M*N) GPU-side kovc-vs-cuBLAS-TF32 cell compare, itself anchored == CPU at the small
+sizes). **Measured 5.354 TFLOP/s @2048^3 on 2026-06-02 (50.3% cuBLAS-TF32); a 2026-06-03 re-run on
+a cooler box read 5.755 TFLOP/s (54.1%)** — both well above the 4.26 (40%) floor; the laptop
+throttles ~6–8% run-to-run, so the figure varies, but every read clears the relative floor with
+margin. (The committed headline is the conservative 5.354 from the original measurement.)
+
+### What G3 proves / does not prove
+
+**Proves:** kovc's own PTX codegen emits a correct, warp-tiled TF32 `mma.sync.aligned.m16n8k8`
+Tensor-Core GEMM that runs on real sm_86 hardware and matches an independent cuBLAS-TF32 oracle
+cell-by-cell at a tight 2e-3 relative tol THROUGH 2048^3 (0 bad, maxrel 0), at >= 40% of measured
+cuBLAS-TF32 throughput; the `mma.sync` it emits are load-bearing (stripping them mis-computes) and
+the accumulators are mma-only (no `fma.rn.f32` scalar path could be silently computing the answer).
+
+**Does NOT prove (carried forward):** this is the TF32 committed-parity tier — NOT bf16 wmma (G4,
+stretch). It is still Path-2 (manual `ld.global.f32` + `cvt.rna.tf32`, NO `ldmatrix`/SMEM staging —
+the next intensity lever, not needed to clear the committed-parity floor). The cuBLAS-TF32 oracle is
+a same-vendor reference (catches codegen/scheduling errors + confirms numerical agreement at 2e-3,
+the right tol for TF32's ~10-bit mantissa; a defect shared by kovc's emitter and cuBLAS's TF32 path
+is outside its reach, mitigated by the f32-cuBLAS==CPU anchor at the small sizes). 5.354 (or 5.755)
+TFLOP/s is the median of a throttling laptop; the floor (min-time ~2.58–2.94 ms) implies a higher
+unthrottled peak — the median is the reported, conservative figure.
+
 ## G4 — bf16 wmma (STRETCH) — pending
 
 ## M4 item 2 -- block-reduction softmax + layernorm (2026-06-02)
