@@ -449,7 +449,28 @@ chk "$GENC/M4_turbofish_enum.hx" 42; chk "$GENC/gen_option_i32.hx" 42
 #     (the fix must not disturb the capture path) -> 42.
 chk "$GENC/M6_closure_arg.hx" 42; chk "$GENC/t6_closure_arg.hx" 42
 chk "$GENC/M6_capture_regression.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 102 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug])"
+# v1.3 V3 CAPTURING CLOSURE AS A VALUE/ARGUMENT (2026-06-04, charter §1 V3): the
+# v1.2 M-6 residual -- a CAPTURING closure passed BY VALUE trapped (SIGSEGV). The
+# fix: a capturing closure compiles to a real closure OBJECT (an arena env pair
+# {code_ptr, captured-values}); its VALUE is a tagged env-index (0x40000000 |
+# env), which survives a by-value i32 param because the runtime arena is a low
+# (.data) address (< 2^30). The synthesized __closure_<id> body takes the env as
+# a hidden leading param __cenv and reads each capture from object cell (1+k) via
+# __arena_get(__cenv+1+k). The indirect-call dispatch (emit_closure_dispatch)
+# tag-tests the value: bit-30-clear = a non-capturing raw code ptr -> env-less
+# `call r11` (the M-6 path, byte-identical); bit-30-set = a capturing object ->
+# untag, load code from arena[env], pass env in rdi, shift user args up one reg,
+# `call r11`. The by-name capturing path (`let c=|y| x+y; c(2)`) now ALSO uses the
+# object (cl_var_tab registration RETIRED for capturing closures, so c(args)
+# flows through the same indirect dispatch). Capture semantics: CAPTURE-BY-VALUE
+# AT CLOSURE-CREATION (each captured local's value is snapshotted into the object
+# when the |...| literal is evaluated). parser.hx + kovc.hx changed -> fixpoint
+# sha MOVES; K2==K3==K4 stay byte-identical (the self-host source has no closures).
+#   V3_capture_arg: x=40 (loop-derived); c=|y| x+y; apply(c,2) -> c(2) -> 42
+#     (a CAPTURING closure passed by value + invoked, reads its capture). This is
+#     the charter probe; pre-fix it SIGSEGV'd. The v1.2 M-6 capturing bound SHIPS.
+chk "$GENC/V3_capture_arg.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 103 pass: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 8 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42, bf16-arith-bound ->132] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug] + 1 v1.3 V3 capturing-closure-by-value [V3_capture_arg x=40;|y| x+y; apply(c,2)->42 -- a CAPTURING closure passed by value + invoked, reads its capture; the v1.2 M-6 capturing bound SHIPS; capture-by-value at creation])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -529,7 +550,14 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 #   L-2 bound SHIPS; the L2_u64_over_2p32 fail-closed neg test is RETIRED (CHECK_ERR
 #   5 -> 4). parser.hx + lexer.hx + kovc.hx changed -> fixpoint sha MOVES, K2==K3==K4
 #   stay byte-identical.
-if [ "$pass" -lt 102 ]; then echo "  CORPUS REGRESSION (pass=$pass < 102)"; GATE_OK=0; fi
+# v1.3 V3 (2026-06-04): bumped 102 -> 103 for capturing-closure-by-value
+#   (V3_capture_arg: a CAPTURING closure passed BY VALUE as an arg + invoked reads
+#   its capture -> 42; the v1.2 M-6 capturing pass-by-value bound SHIPS). A
+#   capturing closure now compiles to a real arena closure OBJECT {code_ptr, caps}
+#   with a tagged env-index value + env-based indirect dispatch. parser.hx +
+#   kovc.hx changed -> fixpoint sha MOVES; K2==K3==K4 byte-identical (no closures
+#   in the self-host source). Capture semantics: by-value at closure-creation.
+if [ "$pass" -lt 103 ]; then echo "  CORPUS REGRESSION (pass=$pass < 103)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure

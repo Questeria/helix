@@ -1032,6 +1032,134 @@ fn emit_call_r11() -> i32 {
     3
 }
 
+// v1.3 V3 (2026-06-04): runtime arena push with the value ALREADY in eax.
+// This is the body of the __arena_push builtin (kovc.hx:4595) minus the arg
+// eval -- factored so AST_MKCLOSURE can push N closure-object cells without
+// re-deriving the cursor each time. Bounds-checked: on overflow returns -1 in
+// eax (no write); otherwise writes the value at cell[cursor], bumps the cursor,
+// and returns the OLD cursor in eax. 38 bytes. `arena_base_s`/`arena_base_l`
+// name the .data arena symbol for the patch table (len always 18).
+fn emit_arena_push_eax(patch_state: i32, arena_base_s: i32) -> i32 {
+    emit_byte(0x89); emit_byte(0xC2);                  // mov edx, eax (val)
+    let disp_slot = emit_lea_rax_rip_placeholder();    // 7 bytes
+    patch_table_add(patch_state, disp_slot, arena_base_s, 18);
+    emit_byte(0x8B); emit_byte(0x08);                  // mov ecx, [rax] (cursor)
+    emit_byte(0x81); emit_byte(0xF9);                  // cmp ecx, CAP (6 bytes)
+    emit_u32_le(helix_arena_cap());
+    emit_byte(0x72); emit_byte(0x07);                  // jb in_bounds (skip 7)
+    emit_byte(0xB8); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF); emit_byte(0xFF);  // mov eax,-1
+    emit_byte(0xEB); emit_byte(0x0C);                  // jmp end (skip 12)
+    emit_byte(0x89); emit_byte(0x54); emit_byte(0x88); emit_byte(0x04);  // mov [rax+rcx*4+4], edx
+    emit_byte(0x89); emit_byte(0xCA);                  // mov edx, ecx (save old cursor)
+    emit_byte(0xFF); emit_byte(0xC1);                  // inc ecx
+    emit_byte(0x89); emit_byte(0x08);                  // mov [rax], ecx (update cursor)
+    emit_byte(0x89); emit_byte(0xD0);                  // mov eax, edx (return old cursor)
+    2 + 7 + 2 + 6 + 2 + 5 + 2 + 4 + 2 + 2 + 2 + 2
+}
+
+// v1.3 V3: the closure-object tag bit. A closure VALUE is an i32 that is
+// EITHER a non-capturing closure's raw code address (< 2^30; a .text address
+// ~4-27MB, bit 30 clear) OR a capturing closure's arena env-index OR-ed with
+// this tag (bit 30 set). The indirect-call dispatch tests bit 30 to choose the
+// env-less `call r11` (non-capturing, unchanged) vs the env-based call
+// (capturing: untag -> env-index -> load code from arena, pass env in rdi).
+// Bit 30 (not 31) is used so the value stays a positive i32 (no sign issues in
+// the i32-only seed/codegen). Code addrs < 2^30 (image << 1GB) and arena
+// env-indices < 2^30 (cap 6.29M cells) both fit with the tag bit free.
+fn closure_tag_bit() -> i32 { 1073741824 }    // 0x40000000
+
+// v1.3 V3: emit a `pop` into SysV integer arg register #r (0=rdi, 1=rsi,
+// 2=rdx, 3=rcx, 4=r8, 5=r9). Returns the byte count. Mirrors the pop encodings
+// in the AST_CALL pass-2 reg load; factored so the closure dispatch can pop
+// args into either the unshifted (nocap) or shifted-by-one (cap, env in rdi)
+// register layout.
+fn emit_pop_into_reg(r: i32) -> i32 {
+    if r == 0 { emit_byte(0x5F); 1 }                       // pop rdi
+    else { if r == 1 { emit_byte(0x5E); 1 }                // pop rsi
+    else { if r == 2 { emit_byte(0x5A); 1 }                // pop rdx
+    else { if r == 3 { emit_byte(0x59); 1 }                // pop rcx
+    else { if r == 4 { emit_byte(0x41); emit_byte(0x58); 2 }   // pop r8
+    else { if r == 5 { emit_byte(0x41); emit_byte(0x59); 2 }   // pop r9
+    else { 0 } }}}}}
+}
+
+// v1.3 V3 (2026-06-04): the closure-value indirect dispatch. Replaces the bare
+// `emit_mov_r11d_local + pops + emit_call_r11` for an indirect call whose
+// callee is a LOCAL (callee_off != 0) -- i.e. a call through a closure value.
+//
+// PRECONDITION: the N user args (arg0..arg(N-1)) are on the runtime stack,
+// arg(N-1) on top (the AST_CALL pass-1 push order). This helper consumes them.
+//
+// The closure value (in the local at callee_off) is EITHER:
+//   * a non-capturing closure = a raw code address (bit 30 clear): pop the
+//     args into rdi,rsi,... and `call r11` -- byte-identical to the pre-V3
+//     A2b path (the M-6 non-capturing pass-by-value behavior is preserved).
+//   * a capturing closure = (0x40000000 | env_index) (bit 30 set): untag to
+//     the arena env-index, pass it in rdi (the body's `__cenv` hidden param 0),
+//     load the code pointer from arena cell[env] into r11, pop the user args
+//     SHIFTED into rsi,rdx,... (one register up, making room for env in rdi),
+//     and `call r11`. The body reads its captures from arena cell[env+1+k].
+//
+// Closure params are capped at 4 (parser cl_param_tab), so the cap branch uses
+// at most env + 4 = 5 arg registers (<= the 6 SysV int regs); no stack args.
+fn emit_closure_dispatch(callee_off: i32, arg_count: i32, patch_state: i32, arena_base_s: i32) -> i32 {
+    let mut nb: i32 = 0;
+    // Load the (tagged) closure value into r11 (32-bit zero-extended load).
+    nb = nb + emit_mov_r11d_local(callee_off);
+    // test r11d, 0x40000000  -> 41 F7 C3 imm32 (7 bytes). ZF set iff bit clear.
+    emit_byte(0x41); emit_byte(0xF7); emit_byte(0xC3);
+    emit_u32_le(closure_tag_bit());
+    nb = nb + 7;
+    // je nocap (jump when bit 30 clear = non-capturing).
+    let je_slot = emit_je_rel32_placeholder();
+    nb = nb + 6;
+    // ===== CAP BRANCH (bit 30 set) =====
+    // eax = r11d (44 89 D8 = mov eax, r11d, 3 bytes).
+    emit_byte(0x44); emit_byte(0x89); emit_byte(0xD8);
+    nb = nb + 3;
+    // and eax, 0x3FFFFFFF  (25 imm32, 5 bytes) -> eax = env_index.
+    emit_byte(0x25); emit_u32_le(closure_tag_bit() - 1);
+    nb = nb + 5;
+    // mov edi, eax (89 C7, 2 bytes) -> env in rdi (hidden arg0).
+    emit_byte(0x89); emit_byte(0xC7);
+    nb = nb + 2;
+    // Load code ptr = arena[env]: mov ecx, eax; lea rax,[arena];
+    //   mov r11d, [rax + rcx*4 + 4].
+    emit_byte(0x89); emit_byte(0xC1);                       // mov ecx, eax (index)
+    nb = nb + 2;
+    let lea_slot = emit_lea_rax_rip_placeholder();          // 7 bytes
+    patch_table_add(patch_state, lea_slot, arena_base_s, 18);
+    nb = nb + 7;
+    emit_byte(0x44); emit_byte(0x8B); emit_byte(0x5C); emit_byte(0x88); emit_byte(0x04);  // mov r11d,[rax+rcx*4+4]
+    nb = nb + 5;
+    // Pop the user args SHIFTED: arg_i -> reg[i+1] (rsi,rdx,r8,r9). Pop top
+    // (arg(N-1)) first into reg[N], down to arg0 into reg[1].
+    let mut pc: i32 = arg_count - 1;
+    while pc >= 0 {
+        nb = nb + emit_pop_into_reg(pc + 1);
+        pc = pc - 1;
+    }
+    nb = nb + emit_call_r11();
+    // jmp done.
+    let jmp_slot = emit_jmp_rel32_placeholder();
+    nb = nb + 5;
+    // ===== NOCAP BRANCH (bit 30 clear) ===== (je lands here)
+    let nocap_label = __arena_len();
+    patch_rel32(je_slot, nocap_label);
+    // Pop the user args UNSHIFTED: arg_i -> reg[i] (rdi,rsi,...). Same as the
+    // pre-V3 pass-2 order; r11 still holds the raw code address.
+    let mut pn: i32 = arg_count - 1;
+    while pn >= 0 {
+        nb = nb + emit_pop_into_reg(pn);
+        pn = pn - 1;
+    }
+    nb = nb + emit_call_r11();
+    // done:
+    let done_label = __arena_len();
+    patch_rel32(jmp_slot, done_label);
+    nb
+}
+
 // T3 §1.6 aggregate-return-by-value fix (2026-06-03): the number of
 // 8-byte slots the caller copies out of a callee's by-value aggregate
 // return. A struct/enum value is represented as a POINTER to a run of
@@ -7100,6 +7228,45 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
     let p2 = __arena_get(idx + 2);
     if t == 0 {
         emit_ast_int(p1)
+    } else { if t == 82 {
+        // v1.3 V3 (2026-06-04): AST_MKCLOSURE -- build a capturing closure's
+        // runtime OBJECT in the arena and yield its tagged env-index.
+        //   p1 = elements AST_ARG (tag 17) chain: element 0 = the code-pointer
+        //        expr (AST_VAR(__closure_<id>) -> a .text address via A2a),
+        //        elements 1.. = the captured-var exprs (AST_VAR in the
+        //        enclosing scope -> the captured values snapshotted NOW =
+        //        capture-by-value at closure creation).
+        //   p2 = element count (1 + cap_count).
+        // Codegen: push each element into the arena (__arena_push). The FIRST
+        // push's returned cursor IS the object's env-index (cell 0 = code ptr);
+        // save it, push the rest, then OR in the tag bit (0x40000000) so the
+        // indirect-call dispatch recognizes this value as a capturing closure.
+        // The (tagged) env-index is the closure VALUE left in eax; it is a small
+        // i32 (arena cursor | tag) that survives a 4-byte param slot, so the
+        // closure can be passed by value. The body reads its captures from
+        // cell[env+1+k] (the mk_capture_read lowering, parser.hx).
+        let arena_base_mk = bn_helix_arena_base_s(bn_state);
+        let mut nb_mk: i32 = 0;
+        // Element 0: the code pointer. Evaluate -> eax, push, env-index in eax.
+        let el0_expr = __arena_get(p1 + 1);
+        nb_mk = nb_mk + emit_ast_code(el0_expr, bind_state, patch_state, bn_state);
+        nb_mk = nb_mk + emit_arena_push_eax(patch_state, arena_base_mk);
+        // Save the env-index (= cell-0 cursor) in a fresh frame slot.
+        let env_off = bind_alloc_offset(bind_state);
+        nb_mk = nb_mk + emit_mov_local_eax(env_off);
+        // Elements 1.. : the captures. Evaluate each -> eax, push (discard ret).
+        let mut el_cur: i32 = __arena_get(p1 + 2);
+        while el_cur != 0 {
+            let el_expr = __arena_get(el_cur + 1);
+            nb_mk = nb_mk + emit_ast_code(el_expr, bind_state, patch_state, bn_state);
+            nb_mk = nb_mk + emit_arena_push_eax(patch_state, arena_base_mk);
+            el_cur = __arena_get(el_cur + 2);
+        }
+        // Reload env-index, OR in the tag bit -> the closure value in eax.
+        nb_mk = nb_mk + emit_mov_eax_local(env_off);
+        emit_byte(0x0D); emit_u32_le(closure_tag_bit());   // or eax, 0x40000000
+        nb_mk = nb_mk + 5;
+        nb_mk
     } else { if t == 81 {
         // K1.CAST (2026-05-29): AST_CAST (tag 81). p1 = inner expr idx,
         // p2 = target type tag (from ty_ident_to_tag). Emit the inner
@@ -9468,46 +9635,33 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
             let n_agg7 = if agg_ret == 1 { emit_agg_ret_copy(agg_dest0_off) } else { 0 };
             bytes_emitted + n_sub + n_rev + n_load + n_call + n_clean + n_agg7
         } else {
-        // Pass 2: pop into SysV regs in reverse-of-push order.
-        // pushed: arg0, arg1, ..., argN-1 (top is argN-1).
-        // We want rdi=arg0, rsi=arg1, ..., r9=argN-1.
-        // So pop top first (=argN-1) into the LAST register, then
-        // unwind backwards: pop into arg(N-2)'s reg, ..., pop into rdi.
-        // Encodings: pop rdi=5F, pop rsi=5E, pop rdx=5A, pop rcx=59,
-        //            pop r8=41 58, pop r9=41 59.
-        // We emit pops in order: register-for-argN-1, argN-2, ..., arg0.
-        let mut pi: i32 = arg_count - 1;
-        while pi >= 0 {
-            if pi == 0 {
-                emit_byte(0x5F); bytes_emitted = bytes_emitted + 1;       // pop rdi
-            } else { if pi == 1 {
-                emit_byte(0x5E); bytes_emitted = bytes_emitted + 1;       // pop rsi
-            } else { if pi == 2 {
-                emit_byte(0x5A); bytes_emitted = bytes_emitted + 1;       // pop rdx
-            } else { if pi == 3 {
-                emit_byte(0x59); bytes_emitted = bytes_emitted + 1;       // pop rcx
-            } else { if pi == 4 {
-                emit_byte(0x41); emit_byte(0x58);
-                bytes_emitted = bytes_emitted + 2;                        // pop r8
-            } else { if pi == 5 {
-                emit_byte(0x41); emit_byte(0x59);
-                bytes_emitted = bytes_emitted + 2;                        // pop r9
-            } else {} }}}}};
-            pi = pi - 1;
-        }
-        let n_call = if callee_off == 0 {
+        // v1.3 V3 (2026-06-04): an INDIRECT call (callee is a local holding a
+        // callable value = a closure) goes through emit_closure_dispatch, which
+        // tag-tests the closure value and does the appropriate per-branch pops
+        // + call (env-less for a non-capturing fn-ptr; env-based for a capturing
+        // closure object). It CONSUMES the stacked args itself, so the pre-V3
+        // pass-2 pop loop must NOT also run for this case.
+        let n_call_total = if callee_off == 0 {
+            // Named call: pass-2 pops into SysV regs in reverse-of-push order.
+            // pushed arg0..argN-1 (top=argN-1) -> rdi=arg0,...; pop top first
+            // (=argN-1) into the LAST register, unwind to rdi.
+            let mut pi: i32 = arg_count - 1;
+            while pi >= 0 {
+                bytes_emitted = bytes_emitted + emit_pop_into_reg(pi);
+                pi = pi - 1;
+            }
             let disp_slot = emit_call_rel32_placeholder();
             patch_table_add(patch_state, disp_slot, p1, p2);
             5
         } else {
-            let n_ld = emit_mov_r11d_local(callee_off);
-            n_ld + emit_call_r11()
+            let arena_base_disp = bn_helix_arena_base_s(bn_state);
+            emit_closure_dispatch(callee_off, arg_count, patch_state, arena_base_disp)
         };
         // T3 §1.6: by-value aggregate return -- copy the callee's just-built
         // aggregate (pointer in rax, still-live callee frame) into the
         // caller-owned buffer reserved above; rax then points at the copy.
         let n_agg = if agg_ret == 1 { emit_agg_ret_copy(agg_dest0_off) } else { 0 };
-        bytes_emitted + n_call + n_agg
+        bytes_emitted + n_call_total + n_agg
         }
         }
     } else { if t == 13 {
@@ -9775,7 +9929,7 @@ fn emit_ast_code(idx: i32, bind_state: i32, patch_state: i32, bn_state: i32) -> 
         } else {
             emit_trap_with_id(99001)
         }
-    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 AST_FIELD_STORE; K1.F15: +1 AST_FLOATLIT_F16 (tag 80); K1.CAST: +1 AST_CAST (tag 81)
+    }}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}     // K1.AC + K1.AD: +2; K1.F6: +1 AST_FIELD_STORE; K1.F15: +1 AST_FLOATLIT_F16 (tag 80); K1.CAST: +1 AST_CAST (tag 81); v1.3 V3: +1 AST_MKCLOSURE (tag 82)
 }
 
 // --------------------------------------------------------------

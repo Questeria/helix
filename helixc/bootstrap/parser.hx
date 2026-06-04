@@ -894,26 +894,34 @@ fn cl_param_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     }
     hit
 }
-// Append a closure-capture entry IF NOT already present (dedup). Returns 0
-// on success/dedup, -1 on overflow (cap 4 → trap 76002).
+// Append a closure-capture entry IF NOT already present (dedup). Returns the
+// capture's INDEX (0..3, its position in the capture table) on success/dedup,
+// -1 on overflow (cap 4 → trap 76002).
+//
+// v1.3 V3 (2026-06-04): the return value is now the capture index, not a bare
+// 0/dedup flag. parse_closure_lit lays out the runtime closure object as
+// [code_ptr, cap0, cap1, ...] (cap_k at object cell 1+k), so a captured-var
+// read in the body lowers to `__arena_get(__cenv + 1 + k)` -- the index k IS
+// this return value, and it is stable across the first add and all later dedup
+// hits (the table order never changes once an entry is appended).
 fn cl_capture_tab_add_dedup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     let base = cl_capture_tab_base(sb);
     let count = cl_capture_tab_count(sb);
     let mut i: i32 = 0;
-    let mut found: i32 = 0;
+    let mut found_idx: i32 = 0 - 1;
     while i < count {
         let entry = base + i * 2;
         let ns = __arena_get(entry);
         let nl = __arena_get(entry + 1);
         if byte_eq(name_s, name_l, ns, nl) == 1 {
-            found = 1;
+            found_idx = i;
             i = count;
         } else {
             i = i + 1;
         };
     }
-    if found == 1 {
-        0
+    if found_idx >= 0 {
+        found_idx
     } else { if count >= 4 {
         0 - 1
     } else {
@@ -921,7 +929,7 @@ fn cl_capture_tab_add_dedup(sb: i32, name_s: i32, name_l: i32) -> i32 {
         __arena_set(entry, name_s);
         __arena_set(entry + 1, name_l);
         __arena_set(sb + 51, count + 1);
-        0
+        count
     }}
 }
 // Register a closure-bound variable. Returns the entry idx (0..3) on success,
@@ -968,6 +976,63 @@ fn cl_var_tab_lookup(sb: i32, name_s: i32, name_l: i32) -> i32 {
     }
     found
 }
+// v1.3 V3 (2026-06-04): closure-object env-read lowering.
+//
+// A capturing closure now compiles to a real heap/arena closure OBJECT --
+// a run of arena cells [code_ptr, cap0, cap1, ...] -- and the closure VALUE
+// passed around is that object's env-index (tagged with bit 30; see
+// parse_closure_lit). The synthesized `__closure_<id>` body takes the
+// (untagged) env-index as its FIRST param, named `__cenv`. A captured-var
+// reference in the body is therefore NOT a free variable resolved by a
+// leading capture-param (the old by-name-only scheme); instead it reads the
+// captured value out of the object: cap_k lives at object cell (1 + k), i.e.
+// `__arena_get(__cenv + 1 + k)`. This is what lets a capturing closure be
+// PASSED BY VALUE (the captures travel inside the arena object, reachable
+// from the env-index alone) instead of trapping (the v1.2 M-6 bound).
+//
+// Capture semantics: CAPTURE-BY-VALUE AT CLOSURE-CREATION. parse_closure_lit
+// snapshots each captured local's CURRENT value into the object's cells when
+// the `|...|` literal is evaluated; later mutation of the original local does
+// NOT change what the closure sees. (Documented + gated by V3_modify_after.)
+
+// Push the fixed env-param name "__cenv" (bytes _ _ c e n v = 95 95 99 101
+// 110 118) into the arena. Returns the start offset; the length is always 6.
+fn push_cenv_name() -> i32 {
+    let s = __arena_len();
+    __arena_push(95); __arena_push(95);
+    __arena_push(99); __arena_push(101); __arena_push(110); __arena_push(118);
+    s
+}
+
+// Push the builtin name "__arena_get" (11 bytes: _ _ a r e n a _ g e t =
+// 95 95 97 114 101 110 97 95 103 101 116) into the arena. Returns the start
+// offset; the length is always 11. codegen's try_emit_builtin_call matches
+// these bytes and inlines the arena cell load.
+fn push_arena_get_name() -> i32 {
+    let s = __arena_len();
+    __arena_push(95); __arena_push(95);
+    __arena_push(97); __arena_push(114); __arena_push(101); __arena_push(110);
+    __arena_push(97); __arena_push(95);
+    __arena_push(103); __arena_push(101); __arena_push(116);
+    s
+}
+
+// Build the AST for a captured-var read: `__arena_get(__cenv + (1 + k))`.
+// Lowers to AST_CALL(__arena_get, AST_ARG(AST_ADD(AST_VAR(__cenv),
+// AST_INT(1+k)), 0)). All sub-nodes are standalone arena records built in
+// order (no fn_decl-slot interleaving -- the body tree is fully built before
+// parse_closure_lit allocates the AST_FN_DECL). Tags: AST_INT=0, AST_VAR=1,
+// AST_ADD=2, AST_CALL=16, AST_ARG=17.
+fn mk_capture_read(sb: i32, k: i32) -> i32 {
+    let cenv_s = push_cenv_name();
+    let var_node = mk_node(1, cenv_s, 6, 0);             // AST_VAR(__cenv)
+    let idx_node = mk_node(0, 1 + k, 0, 0);              // AST_INT(1 + k)
+    let add_node = mk_node(2, var_node, idx_node, 0);    // __cenv + (1+k)
+    let arg_node = mk_node(17, add_node, 0, 0);          // AST_ARG(add, end)
+    let name_s = push_arena_get_name();
+    mk_node(16, name_s, 11, arg_node)                    // __arena_get(...)
+}
+
 // Stage 9: build an AST_VAR node, hooking capture-recording when active.
 // Replaces the 3 `mk_node(1, id_start, id_len, 0)` sites in parse_primary
 // so any IDENT used inside a closure body that isn't a closure-param gets
@@ -993,20 +1058,30 @@ fn mk_var_with_capture(sb: i32, id_s: i32, id_l: i32) -> i32 {
     };
     let active = cl_active(sb);
     let mut cap_overflow: i32 = 0;
+    let mut cap_idx: i32 = 0 - 1;
     if active == 1 {
         let is_param = cl_param_tab_lookup(sb, id_s, id_l);
         if is_param == 0 {
             let r = cl_capture_tab_add_dedup(sb, id_s, id_l);
             if r < 0 {
                 cap_overflow = 1;
+            } else {
+                cap_idx = r;
             };
         };
     };
     if cap_overflow == 1 {
         mk_node(99, 76002, 0, 0)
+    } else { if cap_idx >= 0 {
+        // v1.3 V3: a captured-var read inside a closure body lowers to a read
+        // from the closure object's env cell (1 + k), not a bare AST_VAR. This
+        // is what makes the capture travel with a BY-VALUE closure (the body
+        // reads it from the arena object via the env-index, not from an
+        // in-scope local). cap_idx is the capture's stable object position.
+        mk_capture_read(sb, cap_idx)
     } else {
         mk_node(1, id_s, id_l, 0)
-    }
+    }}
 }
 // K1.F7 (2026-05-27): const_tab accessors. Cap = 512 entries (K3.G
 // audit-fix 2026-05-27, bumped from K3.C's 64, originally 16); each
@@ -3040,57 +3115,49 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         __arena_push(101); __arena_push(95);
         let n_digits = push_tag_digits(closure_id);
         let name_len = 10 + n_digits;
-        // Build the AST_PARAM chain: (captures..., closure_params...).
+        // Build the AST_PARAM chain.
         // Each AST_PARAM is 5 slots (tag, name_s, name_l, next, type_tag).
         // mk_node + arena_push for each one is fine — they're standalone
         // contiguous records. Linking is done via __arena_set on prev.p3.
         //
-        // Audit 28.8 B4 (trap 76003): closure-capture type tags used to
-        // be hardcoded to 0 (i32) regardless of the captured variable's
-        // real type. For `let pi = 3.14_f64; let c = |x| x + pi;` the
-        // low 32 bits of the f64 bit pattern were captured as i32 —
-        // silent garbage arithmetic. Phase-0 fix: detect a non-i32
-        // capture via var_type_tab_lookup and emit AST_ERR(76003) so
-        // the user gets a loud diagnostic instead of silent corruption.
-        // The full fix (stride-3 cl_capture_tab + per-capture type tag)
-        // is deferred to a later cycle (see audit doc B4); the loud
-        // failure here is enough to block the silent-corruption window.
+        // v1.3 V3 (2026-06-04): for a CAPTURING closure the leading params are
+        // NO LONGER one-per-capture. The closure now compiles to an arena
+        // OBJECT [code_ptr, cap0, ...] and the body takes a SINGLE leading
+        // param `__cenv` (the env-index); each captured-var read in the body
+        // was already lowered (mk_var_with_capture -> mk_capture_read) to
+        // `__arena_get(__cenv + 1 + k)`. So the param chain is
+        // (__cenv, closure_params...). A NON-capturing closure is unchanged:
+        // no env param, just (closure_params...) -- it stays a flat fn pointer.
+        //
+        // Audit 28.8 B4 (trap 76003): closure-capture type tags must be i32.
+        // A captured value is stored in a 4-byte arena cell; a non-i32 capture
+        // (f64/i64/...) would be truncated to its low 32 bits -- silent garbage.
+        // We still detect that via var_type_tab_lookup and emit AST_ERR(76003)
+        // (loud trap) rather than silently corrupt. (The i32-only capture bound
+        // is unchanged from v1.2; only the PASS-BY-VALUE bound is lifted here.)
         let mut params_head: i32 = 0;
         let mut prev_p: i32 = 0;
         let mut nonint_capture: i32 = 0;
+        // Type-check each capture (i32-only); the object cells are 4-byte.
         let mut ki: i32 = 0;
         while ki < cap_count {
             let pair = captures_persist_ptr + ki * 2;
             let ns = __arena_get(pair);
             let nl = __arena_get(pair + 1);
-            // Audit 28.8 B4: probe captured var's type tag. Tag 0 = i32
-            // (the only safe Phase-0 case); any other value (including
-            // -1 = not-tracked) means we'd be silently truncating.
-            //
-            // Audit 28.8 cycle 3 D2: extend the let-inference to also
-            // tag Call-RHS / non-literal-RHS lets with a "potentially
-            // non-i32" sentinel (tag 12) so trap 76003 fires for the
-            // common idiom `let pi = get_pi(); let c = |x| x + pi;`.
-            // The capture-site guard stays `> 0`; the change is at the
-            // let-inference site below — Call RHS now registers tag 12
-            // unless the user wrote an explicit annotation. Function
-            // params remain untracked (-1) and still pass cleanly so
-            // we don't over-trap legitimate i32 param captures.
             let cap_ty_tag = var_type_tab_lookup(sb, ns, nl);
             if cap_ty_tag > 0 {
                 nonint_capture = 1;
             };
-            let new_p = mk_node(18, ns, nl, 0);
-            __arena_push(0);                     // type tag = 0 (i32)
-            if params_head == 0 {
-                params_head = new_p;
-                prev_p = new_p;
-            } else {
-                __arena_set(prev_p + 3, new_p);
-                prev_p = new_p;
-            };
             ki = ki + 1;
         }
+        // Prepend the single `__cenv` env param for a capturing closure.
+        if cap_count > 0 {
+            let cenv_s = push_cenv_name();
+            let cenv_p = mk_node(18, cenv_s, 6, 0);
+            __arena_push(0);                     // type tag = 0 (i32 env-index)
+            params_head = cenv_p;
+            prev_p = cenv_p;
+        };
         // Stage 29 fix (2026-05-12): bootstrap parser doesn't support
         // `return` keyword. Rewrote early-return as if/else expression
         // so the bootstrap parser can self-host. Helix is expression-
@@ -3158,39 +3225,55 @@ fn parse_closure_lit(tok_base: i32, sb: i32) -> i32 {
         set_last_closure_idx(sb, closure_id);
         __arena_set(sb + 58, captures_persist_ptr);
         __arena_set(sb + 59, cap_count);
-        // T3 §1.6 M-6 (2026-06-03): the closure literal's VALUE node.
+        // The closure literal's VALUE node.
         //
-        // For a NON-CAPTURING closure, the synthesized `__closure_<id>` is a
-        // plain top-level fn whose runtime address IS a valid function
-        // pointer. Returning AST_VAR(`__closure_<id>`) makes the closure a
-        // first-class value: codegen's A2a arm (an AST_VAR naming a known fn)
-        // emits `lea rax, [rip+__closure_<id>]`, so the closure can be PASSED
-        // AS AN ARGUMENT and invoked indirectly inside the callee via A2b
-        // (`call r11` through the bound param). Closes M-6 for the no-capture
-        // case (charter probe `apply(|y| y+1, 41)`): pre-fix the literal
-        // returned AST_INT(0), the fn pointer was lost, and the callee did
-        // `call *0` -> SIGSEGV(139).
+        // NON-CAPTURING (cap_count == 0): unchanged from T3 §1.6 M-6. The
+        // synthesized `__closure_<id>` is a plain top-level fn whose runtime
+        // address IS a valid function pointer. AST_VAR(`__closure_<id>`) makes
+        // the closure a first-class value: codegen A2a emits
+        // `lea rax,[rip+__closure_<id>]`, so it can be passed by value + invoked
+        // indirectly via A2b (`call r11`). The by-name path `g(args)` is a
+        // direct `__closure_<id>(args...)` named call (cl_var_tab, cap_count 0).
         //
-        // The existing local-binding path (`let g = |x| ...; g(...)`) is
-        // UNAFFECTED: parse_let still registers `g` in cl_var_tab off
-        // last_closure_idx, so `g(args)` rewrites to the DIRECT
-        // `__closure_<id>(args...)` named call; the fn pointer now stored in
-        // g's slot is simply unused on that by-name path (harmless), and is
-        // the correct value if `g` is later passed BY VALUE as an argument.
+        // CAPTURING (cap_count > 0): v1.3 V3 (2026-06-04) -- a REAL CLOSURE
+        // OBJECT. AST_MKCLOSURE builds an arena object [code_ptr, cap0, ...]
+        // and yields the tagged env-index (0x40000000 | env). Element 0 is
+        // AST_VAR(`__closure_<id>`) (codegen A2a -> the code address); elements
+        // 1.. are AST_VAR(cap_k) in the ENCLOSING scope -- so codegen snapshots
+        // each captured local's CURRENT value into the object (capture-by-value
+        // at creation). The object pointer (env-index) survives a 4-byte-erased
+        // i32 param slot because the runtime arena is a low (.data) address
+        // (< 2^32), so the closure can be PASSED BY VALUE: the body reads its
+        // captures from the object via `__arena_get(__cenv + 1 + k)` (the
+        // mk_capture_read lowering above), reachable from the env-index alone.
+        // The by-name path `c(args)` ALSO uses the object: c holds the tagged
+        // value, so c(args) is just an indirect call through a local -> codegen
+        // routes it to the same env-based dispatch (the old positional-capture
+        // injection at the call site is RETIRED; see cl_var_tab_lookup below).
+        // This SHIPS the v1.2 M-6 capturing-pass-by-value bound.
         //
-        // For a CAPTURING closure we keep AST_INT(0): the synthesized fn
-        // takes the captures as extra LEADING params
-        // (`__closure_<id>(cap0, ..., params...)`), so a bare flat fn pointer
-        // cannot carry the captured environment. The by-name local-call path
-        // (which injects the captures positionally at the call site) still
-        // works for `let c = |x| x+n; c(2)`. Passing a CAPTURING closure as a
-        // value/argument is a documented v1.2 bound (needs a heap closure
-        // object: env + fn-ptr); the 0 placeholder makes that case fail LOUD
-        // (`call *0` -> SIGSEGV) rather than silently dropping the capture.
+        // p1 = elements AST_ARG chain (head = code_ptr, then caps in order);
+        // p2 = element count (1 + cap_count); p3 = 0. mk_capture chain is built
+        // in REVERSE so it comes out forward (elem 0 = code_ptr).
         if cap_count == 0 {
             mk_node(1, name_start, name_len, 0)
         } else {
-            mk_node(0, 0, 0, 0)
+            // Build caps chain back-to-front: cap(N-1) .. cap0, then prepend
+            // the code-ptr element (AST_VAR(__closure_<id>)) as element 0.
+            let mut obj_head: i32 = 0;
+            let mut oi: i32 = cap_count;
+            while oi > 0 {
+                oi = oi - 1;
+                let pair = captures_persist_ptr + oi * 2;
+                let cns = __arena_get(pair);
+                let cnl = __arena_get(pair + 1);
+                let cap_var = mk_node(1, cns, cnl, 0);     // AST_VAR(cap_k)
+                let new_arg = mk_node(17, cap_var, obj_head, 0);
+                obj_head = new_arg;
+            }
+            let code_var = mk_node(1, name_start, name_len, 0);  // AST_VAR(__closure_<id>)
+            let code_arg = mk_node(17, code_var, obj_head, 0);
+            mk_node(82, code_arg, 1 + cap_count, 0)        // AST_MKCLOSURE
         }
         }      // Stage 29 fix: closes the `else` branch of nonint_capture
     }
@@ -7036,15 +7119,28 @@ fn parse_primary(tok_base: i32, sb: i32) -> i32 {
                     };
                 };
             };
-            // Stage 9: if the value was a closure literal, register the
-            // binding (name -> closure_id, captures_ptr, capture_count) in
-            // cl_var_tab so call-site lowering can rewrite `name(args)` to
-            // `__closure_<id>(captured_vars..., args...)`.
+            // Stage 9 / v1.3 V3: if the value was a closure literal, maybe
+            // register the binding in cl_var_tab so call-site lowering can
+            // rewrite `name(args)` to a DIRECT `__closure_<id>(args...)` named
+            // call.
+            //
+            // v1.3 V3 (2026-06-04): ONLY non-capturing closures register here.
+            // A CAPTURING closure now compiles to a real closure OBJECT and its
+            // binding holds the tagged env-index (an ordinary i32 value); so
+            // `c(args)` must flow through the NORMAL indirect-call path (codegen
+            // sees `c` as a local holding a callable -> env-based dispatch),
+            // NOT the old positional-capture injection. Skipping cl_var_tab for
+            // capturing closures makes cl_var_tab_lookup miss `c`, so `c(args)`
+            // falls through to AST_CALL's indirect dispatch -- the SAME path a
+            // by-value closure arg uses. Non-capturing closures keep the direct
+            // named-call path (caps_count 0; the working t3/t6b behavior).
             let cl_idx_b = last_closure_idx(sb);
             if cl_idx_b >= 0 {
                 let caps_ptr = __arena_get(sb + 58);
                 let caps_count = __arena_get(sb + 59);
-                cl_var_tab_add(sb, name_start, name_len, caps_ptr, caps_count, cl_idx_b);
+                if caps_count == 0 {
+                    cl_var_tab_add(sb, name_start, name_len, caps_ptr, caps_count, cl_idx_b);
+                };
                 set_last_closure_idx(sb, 0 - 1);
                 __arena_set(sb + 58, 0);
                 __arena_set(sb + 59, 0);
