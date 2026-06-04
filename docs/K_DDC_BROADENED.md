@@ -511,4 +511,4 @@ cross-checked (MKCLOSURE/CLOSURE_DISP/WIDEFIELD8/BF16_ARITH) beyond the Stage-30
 cross-check). Honest residual: behavioral-not-byte (impossible by construction here), the
 shared-bug DDC residual, f16-arith un-fixtured, no rows unreachable this run. Fence intact —
 1 committed `.py`; the interpreter + corpus + harness + results stay gitignored. No
-toolchain change → no re-mint. Commit `<filled at commit>`.*
+toolchain change → no re-mint. Commit `9ef461d` (V5 docs section + tracker entry).*
