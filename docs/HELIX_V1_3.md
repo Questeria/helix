@@ -137,14 +137,19 @@ detached runner + foreground-poll; never the Monitor tool; `timeout`-wrap GPU ru
 - **V7 — update the language spec + the DoD** to reflect v1.3 (the now-first-class types, the
   closed silent residual, the broadened DDC, the trusted-C inventory). No silent overclaim.
 
-## 2. FINALE — 5 consecutive clean INDEPENDENT adversarial audits
-Same protocol as v1.2 §1.4: 5 fresh, context-isolated, adversarial auditors, each REPRODUCING
-its claims, distinct lenses — incl. **(a) the i64/u64/f64 wide-field fix is real + no NEW
-silent residual was introduced; (b) closures/bf16/f16/u64-lit are correct, not papered-over;
-(c) the broadened DDC is genuinely more independent + the remaining residual is honest;
-(d) the trusted-C inventory is accurate + nothing hidden; (e) the whole-repo overclaim sweep +
-the v1.2 invariants (from-raw ladder byte-identical, fixpoint, fence) still hold.** Any real
-gap → fix (gated) → RESET the streak to 0. 5-in-a-row → finale passed.
+## 2. FINALE — 5 consecutive clean context-isolated, same-model-family adversarial reproductions
+Same protocol as v1.2 §1.4: 5 fresh, context-isolated, **same-model-family (Claude)**
+adversarial reproductions, each REPRODUCING its claims, distinct lenses — incl. **(a) the
+i64/u64/f64 wide-field fix is real + no NEW silent residual was introduced; (b)
+closures/bf16/f16/u64-lit are correct, not papered-over; (c) the broadened DDC is genuinely
+more independent + the remaining residual is honest; (d) the trusted-C inventory is accurate
++ nothing hidden; (e) the whole-repo overclaim sweep + the v1.2 invariants (from-raw ladder
+byte-identical, fixpoint, fence) still hold.** Any real gap → fix (gated) → RESET the streak
+to 0. 5-in-a-row → finale passed. **Honest scope:** these 5 are same model lineage as the
+build and share its blind spots (the monomorphic-dispatch ceiling — `docs/HELIX_COMPLETION.md`
+~749/767), so each must be a re-verification producing a reproducible artifact, not a debate;
+and a **different-lineage cross-model review (ChatGPT, read-only)** was since run and its
+findings remediated (a doc/logic review, not an independent build reproduction).
 
 ## 3. RELEASE
 T1-style invariants + V1–V7 done + 5 clean audits → **JOINT trust re-verification with the

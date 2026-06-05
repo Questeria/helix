@@ -196,7 +196,7 @@ grad+float (42) · i64 cast/cmp/neg · i64 mul-beyond-i32 (6) · i64 div-beyond-
 u64 logical-shift (1) · u8/u16 wrap-cast (42) · i16 overflow (42) · left-assoc sub/div · comparisons (ne/ge/le) · bitwise (and-or/xor/shl) · array literal+index · while + break · **f64** add/mul · **tuples** · **impl-method** (self) · **match or/range patterns** · **collections** (Vec-on-arena POC →45). **35/35 on the self-hosted K2 (2026-06-01).**
 
 Since v1.0 the gated corpus is **`scripts/gate_kovc.sh`** (run via the universal gate, every
-program compiled + run through the fresh self-hosted **K2**). It has grown to **107 passing
+program compiled + run through the fresh self-hosted **K2**). It has grown to **109 passing
 programs** (the v1.0 35 + the v1.1/v1.2/v1.3 feature, desugar, document-as-bound, and
 type-completeness additions), each row asserting an exact exit code. The **v1.3** additions
 specifically (see §9): `V1_{i64,u64,f64,multi}_wide_field`, `V2_u64_lit_{over_2p32,near_max,
@@ -226,7 +226,7 @@ the codegen cited; nothing here is asserted from memory.
 deepening, not new syntax. The design bounds in §7 (borrows/`&mut` non-aliasing, `const`/
 `static`, module privacy, match exhaustiveness, bare non-i32 generics) remain
 **unenforced-by-design** and are each locked by a `*_bound` corpus row. The universal gate
-(self-host fixpoint K2==K3==K4 byte-identical + GPU-PTX regression + the 107-program corpus)
+(self-host fixpoint K2==K3==K4 byte-identical + GPU-PTX regression + the 109-program corpus)
 stays green; the Python fence stays at exactly **1** committed `.py`.
 
 ---

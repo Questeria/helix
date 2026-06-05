@@ -4,8 +4,14 @@
 This document records the verified state of Helix at `v1.2-complete`. It is the honest
 record on which the *formal, public* "trust chain closed" declaration rests — that
 declaration is the project owner's to make (a deliberate joint re-examination), not an
-automated one. Everything below was reproduced by independent adversarial auditors, and
-every limitation is stated plainly.
+automated one. Everything below was reproduced by **context-isolated, same-model-family
+(Claude) adversarial reproductions** — separate prompts/contexts, but the same model
+lineage that drove the build, so they share its blind spots (the monomorphic-dispatch
+ceiling disclosed at `docs/HELIX_COMPLETION.md` ~749/767). A **different-lineage
+cross-model review (ChatGPT, with read-only repo access)** was since performed and its
+findings remediated, so verification now spans **both** same-family reproduction **and** a
+cross-model review (a read-only doc/logic review, not an independent build reproduction).
+Every limitation is stated plainly.
 
 Tag: `v1.2-complete` · Finalization commit: `291f0ec` · Fixpoint: `K2==K3==K4 = 9cc8f20b…`
 (NOTE: the stale `v2.0.0`–`v3.1.0` git tags are from a **superseded MLIR exploration line**;
@@ -43,10 +49,18 @@ Tag: `v1.2-complete` · Finalization commit: `291f0ec` · Fixpoint: `K2==K3==K4 
   (~0.97× the tuned f32-SMEM GEMM — 312 ms vs 274 ms; `docs/HELIX_GPU_PERF_RESULT.md` ~634).
   A TF32 mma op-set is *emitted and selectable* (`HX_OPT=2`, parity verified) but is NOT the
   performance path on this hardware. `mma.sync`/TF32 is therefore proven-correct-but-not-the-default.
-- **Verification.** **5 consecutive clean, independent, adversarial audits** (distinct
-  lenses: trust chain/DDC, GPU perf, capstone correctness + oracle independence,
-  language/codegen + bounds, overclaim/completeness). Each auditor *reproduced* its
-  claims; the audits found no faked result and no undisclosed residual.
+- **Verification.** **5 consecutive clean, context-isolated, same-model-family (Claude)
+  adversarial reproductions** (distinct lenses: trust chain/DDC, GPU perf, capstone
+  correctness + oracle independence, language/codegen + bounds, overclaim/completeness).
+  Each auditor *reproduced* its claims; the audits found no faked result and no undisclosed
+  residual. **Honest scope:** these 5 share a model lineage with the build, so they catch
+  reasoning/consistency/reproducibility gaps but not blind spots shared by author and
+  auditor (the monomorphic-dispatch ceiling — `docs/HELIX_COMPLETION.md` ~749/767).
+  Verification was since **broadened across model families**: a different-lineage
+  **cross-model review (ChatGPT, read-only repo access)** was performed and its findings
+  remediated. That cross-model pass was a doc/logic review, **not** an independent build
+  reproduction — so it does not substitute for external reproduction by an independent
+  operator/toolchain (residual #10 below).
 
 ## 2. The honest boundaries (residuals — all disclosed)
 
@@ -90,6 +104,31 @@ claim is precise, not inflated.
    this boundary, so it stays trusted-once C. This residual **STANDS** unchanged. Full
    trusted-C inventory + the V6 dead-C prune: `docs/TRUSTED_C_INVENTORY.md`.)_
 
+> **Front-door residuals (8–10) — the limits most likely to surprise an outside reader.**
+> Stated prominently because they bound what "complete" and "reproducible" mean here.
+
+8. **Complete to PTX, NOT to GPU machine code.** The hand-auditable from-raw chain ends at
+   **PTX text**. The **trusted computing base below the from-raw chain** is therefore the
+   **closed NVIDIA `ptxas`** (PTX→SASS assembler) + the **CUDA driver** + the **GPU
+   hardware** + the **OS/kernel** + the **C host launcher** (`helixc/runtime/cuda_launch.c`
+   / `train_transformer.c`). None of these are reproduced from raw binary; they are
+   trusted-once. "Complete to PTX" is the precise claim — *not* complete to GPU machine code.
+9. **The V5 v1.1-surface behavioral DDC (44/44) is NOT clean-checkout reproducible.** The
+   second-witness tree-walking interpreter is **gitignored, was never committed, and has no
+   clean restore path**, so the 44/44 v1.1-surface behavioral cross-check is replayable
+   **only with an out-of-tree auditor artifact**, not from a fresh clone. By contrast, the
+   **CORE chain IS clean-checkout reproducible**: the from-raw ladder (hex0→…→seed→kovc),
+   the self-host fixpoint K2==K3==K4, the gcc-DDC of seed→K1, and the 109-program corpus all
+   rebuild from a clean checkout. The reproducibility boundary runs between the core chain
+   (in-tree) and the V5 behavioral witness (out-of-tree).
+10. **Process residual — internal audit logs are evidence, not external reproduction.** The
+    `.stage33-logs/` and `docs/audit-*` records are useful evidence, but they are **NOT a
+    substitute for external reproduction by an independent operator/toolchain**. The
+    cross-model **ChatGPT review was a read-only doc/logic review, not a build reproduction**
+    — it raised and we remediated documentation/logic findings, but no third party has yet
+    rebuilt the chain from raw on independent hardware. External operator reproduction
+    remains open.
+
 ## 3. Phase 2 (the user's to start — not auto-started)
 
 - **Datacenter scaling (Runpod):** parameterize the PTX target (`sm_80`/`sm_90`, Hopper
@@ -107,6 +146,8 @@ claim is precise, not inflated.
 
 From a hand-typed hex0 seed, with no trusted pre-built compiler, Helix self-hosts
 byte-reproducibly, is independently cross-compiled, and trains a real neural network on its
-own GPU kernels — verified by five independent adversarial reproductions, with every
-limitation documented. **The trust chain is complete to PTX and the residuals are honest.**
+own GPU kernels — verified by five context-isolated, same-model-family (Claude) adversarial
+reproductions **plus** a different-lineage cross-model (ChatGPT, read-only) review whose
+findings were remediated, with every limitation documented. **The trust chain is complete
+to PTX and the residuals are honest.**
 The formal declaration that it is "closed" is reserved for the project owner's review.
