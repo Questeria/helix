@@ -23,24 +23,32 @@ GATE_OK=1
 echo "=== [0] regenerate sources from the edited kovc.hx ==="
 bash assemble_k1.sh >/dev/null 2>&1 && echo "  assembled" || { echo "FATAL assemble"; exit 8; }
 
-echo "=== [1] GPU PTX reference (committed sm_86 baseline; fallback: OLD driver) ==="
+echo "=== [1] GPU PTX reference (committed sm_86 baseline) ==="
+# FAIL-CLOSED vs FAIL-OPEN distinction (v1.3 audit-remediation A1): the GPU PTX
+# REGRESSION is PURE TEXT -- emit a kernel's PTX from the (re-minted) driver and
+# byte-cmp it to the COMMITTED reference. It needs NO GPU and NO ptxas. The ONLY
+# legitimate "skip" in this gate is running a .ptx ON A GPU (kernel EXECUTION),
+# which this gate never does. Therefore a MISSING committed reference is NOT a
+# benign GPU-absent skip -- it means the text regression cannot run at all, so it
+# is a REAL gate FAILURE (GATE_OK=0), never a WARN. (Genuine GPU-hardware-absent
+# execution skips live in scripts/capstone_audit.sh, not here.)
 Kern=$EX/vector_add_kernel.hx
-# T2/M0 (2026-06-02): the GPU PTX regression guard now anchors to a COMMITTED
-# reference PTX (vector_add_kernel.ref.ptx), not the gitignored on-disk driver.
-# M0 INTENTIONALLY changed the emitted PTX (.target sm_75 -> sm_86 for the sm_86
-# reference box, kovc.hx:11839-11843); the new committed reference IS the sm_86
-# baseline, so the guard becomes "re-minted PTX matches the committed reference."
-# Reason recorded: helixc/examples/vector_add_kernel.ref.ptx (sha pinned by git;
-# .gitattributes eol=lf). If a later T2 milestone intentionally changes PTX again,
-# re-mint + re-commit this reference with its reason (charter 1.0 step 2).
+# T2/M0 (2026-06-02): the GPU PTX regression guard anchors to a COMMITTED
+# reference PTX (vector_add_kernel.ref.ptx). M0 INTENTIONALLY changed the emitted
+# PTX (.target sm_75 -> sm_86 for the sm_86 reference box, kovc.hx:11839-11843);
+# the committed reference IS the sm_86 baseline, so the guard is "re-minted PTX
+# matches the committed reference." Reason recorded: helixc/examples/
+# vector_add_kernel.ref.ptx (sha pinned by git; .gitattributes eol=lf). If a later
+# T2 milestone intentionally changes PTX again, re-mint + re-commit this reference
+# with its reason (charter 1.0 step 2).
 REF=$EX/vector_add_kernel.ref.ptx
 if [ -s "$REF" ]; then
   cp "$REF" /tmp/ref.ptx; echo "  ref.ptx <- committed $REF ($(stat -c%s /tmp/ref.ptx) bytes, sm_86 baseline)"
-elif [ -f "$Kern" ] && [ -x ./_kovc_ptx_driver.bin ]; then
-  cp "$Kern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
-  timeout 30 ./_kovc_ptx_driver.bin >/dev/null 2>&1 || true
-  if [ -s /tmp/out.ptx ]; then cp /tmp/out.ptx /tmp/ref.ptx; echo "  ref.ptx $(stat -c%s /tmp/ref.ptx) bytes (old on-disk driver)"; else echo "  WARN: old driver emitted no PTX"; fi
-else echo "  WARN: missing committed ref, kernel, or driver -- skipping GPU ref"; fi
+else
+  # A1: committed text reference missing -> the text regression has no anchor -> FAIL-CLOSED.
+  echo "  FAIL: committed PTX reference missing/empty ($REF) -- the PTX text regression has no anchor"; GATE_OK=0
+  rm -f /tmp/ref.ptx
+fi
 
 echo "=== [2] SELF-HOST FIXPOINT from edited kovc.hx ==="
 t0=$SECONDS
@@ -54,15 +62,24 @@ S2=$(sha256sum /tmp/K2.bin|awk '{print $1}'); S3=$(sha256sum /tmp/K3.bin|awk '{p
 echo "  K2=$S2"; echo "  K3=$S3"; echo "  K4=$S4"
 if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ]; then echo "  FIXPOINT OK (K2==K3==K4 byte-identical)"; else echo "  FIXPOINT FAIL"; GATE_OK=0; fi
 
-echo "=== [3] re-mint PTX driver + GPU PTX regression ==="
+echo "=== [3] re-mint PTX driver + GPU PTX regression (TEXT-only; no GPU) ==="
 t0=$SECONDS
 timeout 400 ./seed.bin k1ptxdrv.hx /tmp/newdrv.bin; echo "  seed->newdrv rc=$? ($((SECONDS-t0))s)"
-if [ -s /tmp/newdrv.bin ] && [ -s /tmp/ref.ptx ]; then
+# A1 FAIL-CLOSED: seed->newdrv is a PURE x86 build; an empty newdrv means the
+# driver failed to mint, so the PTX text regression cannot run -> REAL FAILURE.
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: seed->newdrv produced an empty driver -- cannot emit PTX (x86 build failure, not a GPU skip)"; GATE_OK=0
+elif [ ! -s /tmp/ref.ptx ]; then
+  echo "  FAIL: no committed PTX reference to diff against (see [1]) -- text regression cannot run"; GATE_OK=0
+else
   chmod +x /tmp/newdrv.bin; cp "$Kern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
   timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
-  if cmp -s /tmp/out.ptx /tmp/ref.ptx; then echo "  GPU PTX REGRESSION OK (PTX byte-identical pre/post fix)";
+  if [ ! -s /tmp/out.ptx ]; then
+    # The emit is pure text generation (no GPU); no /tmp/out.ptx = the emitter ran but produced nothing -> REAL FAILURE.
+    echo "  FAIL: re-minted driver emitted no /tmp/out.ptx (PTX text emit failed -- not a GPU-execution skip)"; GATE_OK=0
+  elif cmp -s /tmp/out.ptx /tmp/ref.ptx; then echo "  GPU PTX REGRESSION OK (PTX byte-identical pre/post fix)";
   else echo "  GPU PTX CHANGED -- inspect (x86-only fix should NOT alter PTX)"; GATE_OK=0; fi
-else echo "  WARN: could not run PTX regression (no newdrv or ref)"; fi
+fi
 
 # T2/M1 (2026-06-02): tiled-GEMM PTX regression. The SMEM tiled kernel is a
 # committed reference (helixc/examples/tiled_matmul_kernel.ref.ptx); re-emit it from
@@ -76,7 +93,16 @@ else echo "  WARN: could not run PTX regression (no newdrv or ref)"; fi
 # commit_group + wait_group double-buffer signature in the OUTPUT.
 TREF=$EX/tiled_matmul_kernel.ref.ptx
 TKern=$EX/tiled_matmul_kernel.hx
-if [ -s /tmp/newdrv.bin ] && [ -s "$TREF" ] && [ -f "$TKern" ]; then
+# A1 FAIL-CLOSED: the tiled PTX regression is ALSO pure text (cmp vs the committed
+# tiled_matmul_kernel.ref.ptx + grep the OUTPUT for provenance). A missing newdrv /
+# committed reference / kernel source means the regression cannot run -> REAL FAILURE.
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: no re-minted driver -- cannot run the tiled PTX text regression (x86 build failure)"; GATE_OK=0
+elif [ ! -s "$TREF" ]; then
+  echo "  FAIL: committed tiled PTX reference missing/empty ($TREF) -- text regression has no anchor"; GATE_OK=0
+elif [ ! -f "$TKern" ]; then
+  echo "  FAIL: tiled kernel source missing ($TKern) -- cannot emit tiled PTX"; GATE_OK=0
+else
   cp "$TKern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
   timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
   if [ -s /tmp/out.ptx ]; then
@@ -88,8 +114,8 @@ if [ -s /tmp/newdrv.bin ] && [ -s "$TREF" ] && [ -f "$TKern" ]; then
        && grep -q 'cp\.async\.commit_group' /tmp/out.ptx \
        && grep -q 'cp\.async\.wait_group' /tmp/out.ptx; then echo "  TILED PROVENANCE OK (.shared + bar.sync + cp.async double-buffer in the OUTPUT)";
     else echo "  TILED PROVENANCE FAIL (missing .shared/bar.sync/cp.async in emitted PTX)"; GATE_OK=0; fi
-  else echo "  WARN: tiled kernel emitted no PTX"; GATE_OK=0; fi
-else echo "  WARN: could not run tiled PTX regression (no newdrv/ref/kernel)"; fi
+  else echo "  FAIL: tiled kernel emitted no /tmp/out.ptx (PTX text emit failed -- not a GPU-execution skip)"; GATE_OK=0; fi
+fi
 
 echo "=== [4] FEATURE CORPUS via new K2 ==="
 gen() { cat > "$CD/$1"; }

@@ -88,7 +88,11 @@ echo "=== [5] numpy oracle (independent) + within-2% compare ==="
 cd $RT
 python3 "$ORACLE" > /tmp/ca_oracle.log 2>&1; orc=$?
 echo "  oracle rc=$orc"
-if [ "$orc" != "0" ]; then echo "  ORACLE ERROR"; tail -4 /tmp/ca_oracle.log | sed 's/^/    /'; OK=0; fi
+# v1.3 audit-remediation A6: a NONZERO oracle exit is a GATE FAILURE. With A5 the
+# oracle now exits 1 on a failed backward self-check (analytic backprop vs finite-
+# diff), so this branch gates the oracle self-check END-TO-END (self-check FAIL ->
+# oracle rc!=0 -> ORACLE ERROR -> OK=0 -> CAPSTONE_AUDIT_FAIL). A clean run exits 0.
+if [ "$orc" != "0" ]; then echo "  ORACLE ERROR (rc=$orc -- incl a FAILED backward self-check via A5)"; tail -4 /tmp/ca_oracle.log | sed 's/^/    /'; OK=0; fi
 if [ -s $RT/oracle_curve.csv ] && [ -s $RT/loss_curve.csv ]; then
   paste -d',' $RT/loss_curve.csv $RT/oracle_curve.csv > /tmp/ca_cmp.csv
   worst=$(awk -F',' 'NF>=4 { h=$2; o=$4; if(o!=0){ d=(h-o)/o; if(d<0)d=-d; if(d>m)m=d; n++ } } END{ if(n>0) printf "%.8f", m; else printf "NaN" }' /tmp/ca_cmp.csv)

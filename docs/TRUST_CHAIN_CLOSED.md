@@ -24,15 +24,25 @@ Tag: `v1.2-complete` · Finalization commit: `291f0ec` · Fixpoint: `K2==K3==K4 
   (`9cc8f20b…`). Reproduced live by auditors.
 - **Diverse double-compile (DDC).** `gcc` (independent lineage) and the frozen Python
   witness independently produce a byte-identical seed `K1` — Wheeler DDC against a
-  trusting-trust attack. `gcc` is an **auditor**, never the shipped root.
+  trusting-trust attack. `gcc` is an **auditor**, never the shipped root. **v1.3 note (honest
+  scope):** the byte-identical `K1` DDC covers the *seed/K1* surface; the v1.3 **V5**
+  broadening over the **v1.1 language surface** (generics, traits, closures, turbofish,
+  wide-field, bf16) is a **BEHAVIORAL** cross-check (kovc(from-raw) vs a zero-lineage Python
+  *interpreter* agree on the program's exit), **NOT a byte-identical** second-compiler
+  reproduction — the witness emits no code, so byte-identity is impossible there by
+  construction (`docs/K_DDC_BROADENED.md`). f16-arith is not yet cross-checked.
 - **Python-free shipped toolchain.** Exactly **1** committed `.py` in the repo
   (`verification/oracle/oracle_train.py`), a fenced verification witness never referenced
   by the toolchain. The compiler/runtime are Helix + a small hand-authored C subset.
 - **Real capability.** A ≥2-layer transformer trains **end-to-end on Helix-emitted GPU
-  kernels** (a TF32 Tensor-Core op-set) and converges to within **2% of an independent
-  numpy oracle** — reproduced at **~0%** loss difference. The oracle was adversarially
-  proven genuinely independent (it reads only the *shared initial* weights, never Helix's
-  trajectory; f32-vs-f64 curves are close-but-not-bit-identical).
+  kernels** and converges to within **2% of an independent numpy oracle** — reproduced at
+  **~0%** loss difference. The oracle was adversarially proven genuinely independent (it
+  reads only the *shared initial* weights, never Helix's trajectory; f32-vs-f64 curves are
+  close-but-not-bit-identical). **The WINNING GEMM is the f32-SMEM `cp.async` double-buffered
+  tile**, not TF32: on the reference RTX 3070 Laptop TF32 Tensor-Core mma is *slower*
+  (~0.97× the tuned f32-SMEM GEMM — 312 ms vs 274 ms; `docs/HELIX_GPU_PERF_RESULT.md` ~634).
+  A TF32 mma op-set is *emitted and selectable* (`HX_OPT=2`, parity verified) but is NOT the
+  performance path on this hardware. `mma.sync`/TF32 is therefore proven-correct-but-not-the-default.
 - **Verification.** **5 consecutive clean, independent, adversarial audits** (distinct
   lenses: trust chain/DDC, GPU perf, capstone correctness + oracle independence,
   language/codegen + bounds, overclaim/completeness). Each auditor *reproduced* its

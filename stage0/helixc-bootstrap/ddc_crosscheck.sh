@@ -34,4 +34,7 @@ if [ "$sm" = "$sg" ]; then
 else
   echo "  DDC_ANCHOR_DIFF -- the two K1 differ. A REAL finding to investigate (seed.c non-determinism/portability, or a compiler-semantics gap)."
   cmp /tmp/K1_m2.bin /tmp/K1_gcc.bin 2>&1 | head -2
+  # v1.3 audit-remediation A2: a DDC anchor MISMATCH is a real finding -- FAIL CLOSED
+  # (previously this branch printed the finding but fell off the end -> exit 0, masking it).
+  exit 3
 fi

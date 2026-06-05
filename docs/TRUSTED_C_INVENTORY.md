@@ -105,7 +105,7 @@ corpus). These two files are compiled **only** by the GPU/capstone scripts
 | Path | LOC | Role | Fixpoint | On build path? | Trusted-why | Portable? |
 |---|---:|---|---|---|---|---|
 | `helixc/runtime/cuda_launch.c` | 1923 | Multi-mode **GPU correctness + perf harness**: loads a kovc-emitted PTX module and drives vector_add / attention / GEMM / TF32-Tensor-Core kernels; times them (cuEvent); checks each against a **CPU oracle** and **cuBLAS**. | **OUT** | GPU scripts only (`gcc -lcuda -lcublas`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; the math it judges is all kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
-| `helixc/runtime/train_transformer.c` | 460 | The **capstone training-loop host**: a 2-layer transformer trained end-to-end on kovc-emitted GPU kernels; verifies every weight gradient vs a finite-difference of the loss; 2% loss-parity vs an independent numpy oracle. | **OUT** | capstone/`m6_*` scripts only (`gcc -lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; all math is kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
+| `helixc/runtime/train_transformer.c` | 460 | The **capstone training-loop host**: a 2-layer transformer trained end-to-end on kovc-emitted GPU kernels; gradient check = a **sampled finite-difference spot-check** (6 gradient tensors × ≤5 sampled indices each vs analytic backprop — `verify` mode, NOT exhaustive); 2% loss-parity vs an independent numpy oracle. | **OUT** | capstone/`m6_*` scripts only (`gcc -lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; all math is kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
 
 **Category B total: 2 files, 2 383 LOC.**
 

@@ -490,11 +490,44 @@ unperturbed; the last GREEN mint `f7d77fc` stands). Verified this run: `git ls-f
 is git-check-ignored (interp.py + v11_corpus.txt + xcheck.sh + _xcheck_results.txt all
 fenced). The only committed change for V5 is **this documentation section** (plus the
 tracker entry); all 44 corpus `.hx` fixtures were already committed under
-`stage0/helixc-bootstrap/corpus_gen/`, so the cross-check is reproducible from the tree.
+`stage0/helixc-bootstrap/corpus_gen/`, so the cross-check is reproducible **after restoring
+the gitignored auditor witness** (see the next section). It is **NOT** reproducible from a
+clean checkout alone — that is the deliberate cost of the Python-free fence.
 
-## Reproduce (WSL, repo root)
+> **v1.3 audit-remediation B4 — reproducibility, stated honestly.** What a *clean checkout*
+> contains and what it does NOT:
+> - **Committed (in the tree):** the 44 cross-check `.hx` fixtures (`stage0/helixc-bootstrap/
+>   corpus_gen/`), the from-raw seed + `kovc.hx`/`parser.hx`/`lexer.hx` (so a clean checkout
+>   CAN build the from-raw `kovc` and emit each fixture's exit). The *expected* exits are in
+>   `verification/py_witness/v11_interp/v11_corpus.txt` — which is gitignored (see below).
+> - **NOT committed (gitignored, `verification/py_witness/`):** the independent witness and its
+>   harness — `v11_interp/interp.py`, `v11_corpus.txt`, `xcheck.sh`, `_xcheck_results.txt`,
+>   and the broad `helixc/` Python compiler used by `run_all_broad.sh`/`crosscheck.sh`. These
+>   are **AUDITOR artifacts**, not part of the shipped toolchain; committing them would break
+>   the 1-committed-`.py` fence. So the *cross-check itself* cannot be re-run on a clean tree
+>   until the witness is restored alongside it.
+> - **Restore reality (investigated, not assumed):** there is **no single clean command** that
+>   regenerates the exact on-disk witness.
+>   - The broad `helixc/` Python witness was **restored from the Stage-30 snapshot inside tag
+>     `v0-pre-k4-full-with-python`** — i.e. `git show v0-pre-k4-full-with-python:HELIX_STAGE30_COMPILER_SNAPSHOT/helixc/...`
+>     (same file set: `helixc/check.py` + `backend/{__init__,elf_dyn,ptx,x86_64}.py`) — but it
+>     was **then extended** for the v1.1 surface, so its blobs no longer match the snapshot
+>     byte-for-byte. The tag is a *starting point*, not an exact restore.
+>   - The **V5 interpreter `v11_interp/interp.py` was never committed in any ref** (`git log
+>     --all -- …interp.py` and `--find-object` both find nothing). A clean checkout **cannot**
+>     reproduce it; it must be supplied by the auditor (preserved out-of-tree). This is stated
+>     plainly rather than implied away.
+> - **Bottom line:** the V5 *result* (44/44 AGREE) is reproducible by anyone holding the
+>   gitignored witness; it is **not** reproducible from the committed tree alone. The fixtures
+>   are committed and the from-raw `kovc` is buildable, but the second-witness comparison
+>   depends on the out-of-tree auditor artifact.
+
+## Reproduce (WSL, repo root) — REQUIRES the gitignored auditor witness present
 
 ```
+# PRECONDITION: verification/py_witness/ must be present (it is gitignored -- an auditor
+# artifact, absent from a clean checkout; restore it out-of-tree before running, see the
+# B4 note above). The .hx fixtures it cross-checks ARE committed under corpus_gen/.
 # one serial session: build the from-raw kovc once, cross-check all 44 v1.1-surface rows
 bash verification/py_witness/v11_interp/xcheck.sh
 #   -> "XCHECK TALLY: rows=44 AGREE=44 DISAGREE=0 UNREACHABLE=0" ; "XCHECK_PASS"

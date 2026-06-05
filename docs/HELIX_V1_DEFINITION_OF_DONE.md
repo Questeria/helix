@@ -41,7 +41,9 @@ self-gradient-checked numpy reference (`verification/oracle/oracle_train.py`, FE
 OFFLINE — never in the Helix path) to **0.0009%** worst-case (step 200) — three
 orders of magnitude inside the 2% bar. Verification chain (no shared-bug escape):
 forward vs numpy 1e-6 (`542b02c`) · GPU backward vs double-precision finite-diff,
-weight-by-weight (`dcce27e`) · GPU training loss drop (`6f82db7`) · full-curve match
+a **sampled spot-check** (6 gradient tensors — dW_lm, dW2[1], dWo[1], dWq[0],
+dW1[0], dWv[1] — × ≤5 sampled indices each, vs analytic backprop; NOT exhaustive)
+(`dcce27e`) · GPU training loss drop (`6f82db7`) · full-curve match
 + oracle backward self-check (`adab69d`). Harness: `helixc/runtime/train_transformer.c`
 (Decision D2 / scope decision 3: a trusted-tool boundary — a tiny, compute-free C launcher
 in the same category as `ld`/`ptxas`; all math is Helix-emitted PTX. NOT ported to FFI —

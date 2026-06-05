@@ -135,6 +135,12 @@ if __name__ == "__main__":
     logits, _ = forward(W, save=True)
     print(f"oracle step0 loss = {loss_of(logits):.6f}")
     ok = selfcheck(read_weights())
+    # v1.3 audit-remediation A5: a failed backward self-check must FAIL CLOSED
+    # (previously `ok` was computed but never gated -> the oracle continued and
+    # exited 0 even on a broken gradient, masking the failure from capstone_audit.sh).
+    if not ok:
+        print("oracle backward self-check FAILED -- aborting (analytic backprop disagrees with finite-diff)")
+        sys.exit(1)
     curve = train(read_weights())
     with open("oracle_curve.csv", "w") as f:
         for t in sorted(curve): f.write(f"{t},{curve[t]:.8f}\n")
