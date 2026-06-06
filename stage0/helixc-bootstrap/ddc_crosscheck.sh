@@ -19,7 +19,8 @@ gcc -std=gnu89 -w $INC -o /tmp/seed_gcc seed.c 2>/tmp/gccerr || { echo "  gcc bu
 if [ ! -s /tmp/seed_gcc ]; then echo "  gcc build FAIL (no /tmp/seed_gcc)"; exit 1; fi
 chmod +x /tmp/seed_gcc
 echo "  seed_gcc = $(stat -c%s /tmp/seed_gcc) bytes"
-/tmp/seed_gcc; echo "  seed_gcc no-arg self-test exit=$? (want 42)"
+/tmp/seed_gcc; stc=$?; echo "  seed_gcc no-arg self-test exit=$stc (want 42)"
+if [ "$stc" -ne 42 ]; then echo "  DDC_FAIL (gcc-seed self-test exit=$stc != 42 -- gcc-built seed misbehaves)"; exit 2; fi
 
 echo "=== [2] both seeds compile the SAME k1src.hx (1.5 MB) -> K1 ==="
 # input sanity: a missing/empty k1src.hx would make BOTH K1 empty -> a vacuous "match".

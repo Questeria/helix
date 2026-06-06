@@ -91,16 +91,19 @@ echo "=== [4b] train_transformer TRAIN: 500 Adam steps on GPU ==="
 # (newer than the marker). A failed/crashed train must not leave a stale loss_curve.csv or
 # init_weights.bin from a prior round to false-pass the convergence / oracle-compare gates.
 rm -f "$RT/loss_curve.csv" "$RT/init_weights.bin"
-_train_marker=/tmp/ca_train_marker; : > "$_train_marker"; sleep 1
+# FRESHNESS via rm-before + non-empty-after (filesystem-agnostic). We DELETED these above, so any
+# non-empty file present after the run was necessarily written THIS run. (The earlier mtime "-nt
+# marker" test was unreliable here: the marker lived in /tmp [WSL ext4] while the artifacts live in
+# $RT under /mnt/c [DrvFs], whose coarse mtime + clock skew made freshly-written files read as STALE.)
+for a in loss_curve.csv init_weights.bin; do [ -e "$RT/$a" ] && { echo "  AUDIT FAIL: could not remove stale $a before run"; OK=0; }; done
 if [ -x /tmp/train ] && [ -s /tmp/combined.ptx ]; then
   cd $RT
   /tmp/train /tmp/combined.ptx > /tmp/ca_train.log 2>&1; trc=$?
   grep -E "train K=|step0 loss" /tmp/ca_train.log | sed 's/^/    /'
-  # fail-closed: outputs must exist, be non-empty, AND be fresh this run
+  # fail-closed: outputs must exist + be non-empty (=> fresh this run, given the rm-before)
   for art in loss_curve.csv init_weights.bin; do
-    if [ ! -s "$RT/$art" ]; then echo "  AUDIT FAIL: train left no/empty $art (rc=$trc)"; OK=0;
-    elif [ ! "$RT/$art" -nt "$_train_marker" ]; then echo "  AUDIT FAIL: $art is STALE (not written this run, rc=$trc)"; OK=0;
-    else echo "  fresh artifact: $art ($(stat -c%s "$RT/$art") B, mtime ok)"; fi
+    if [ ! -s "$RT/$art" ]; then echo "  AUDIT FAIL: train left no/empty $art this run (rc=$trc)"; OK=0;
+    else echo "  fresh artifact: $art ($(stat -c%s "$RT/$art") B, written this run)"; fi
   done
   finalloss=$(tail -1 $RT/loss_curve.csv 2>/dev/null | cut -d',' -f2)
   echo "  final loss = ${finalloss:-NA}  (NC1: must be 0 < L < 1.0)  rc=$trc"
@@ -114,12 +117,13 @@ cd $RT
 # require it fresh after, so a crashed oracle cannot leave a prior round's oracle_curve.csv to
 # false-pass the within-2% compare.
 rm -f "$RT/oracle_curve.csv"
-_oracle_marker=/tmp/ca_oracle_marker; : > "$_oracle_marker"; sleep 1
+# FRESHNESS via rm-before + non-empty-after (filesystem-agnostic; see the [4b] note -- the /tmp-vs-
+# /mnt/c "-nt marker" check was unreliable on DrvFs and false-flagged fresh files as STALE).
+[ -e "$RT/oracle_curve.csv" ] && { echo "  AUDIT FAIL: could not remove stale oracle_curve.csv before run"; OK=0; }
 python3 "$ORACLE" > /tmp/ca_oracle.log 2>&1; orc=$?
 echo "  oracle rc=$orc"
-if [ ! -s "$RT/oracle_curve.csv" ]; then echo "  AUDIT FAIL: oracle left no/empty oracle_curve.csv (rc=$orc)"; OK=0;
-elif [ ! "$RT/oracle_curve.csv" -nt "$_oracle_marker" ]; then echo "  AUDIT FAIL: oracle_curve.csv is STALE (not written this run, rc=$orc)"; OK=0;
-else echo "  fresh artifact: oracle_curve.csv ($(stat -c%s "$RT/oracle_curve.csv") B, mtime ok)"; fi
+if [ ! -s "$RT/oracle_curve.csv" ]; then echo "  AUDIT FAIL: oracle left no/empty oracle_curve.csv this run (rc=$orc)"; OK=0;
+else echo "  fresh artifact: oracle_curve.csv ($(stat -c%s "$RT/oracle_curve.csv") B, written this run)"; fi
 # v1.3 audit-remediation A6: a NONZERO oracle exit is a GATE FAILURE. With A5 the
 # oracle now exits 1 on a failed backward self-check (analytic backprop vs finite-
 # diff), so this branch gates the oracle self-check END-TO-END (self-check FAIL ->
@@ -162,3 +166,6 @@ python3 "$ORACLE" > /tmp/ca_oracle2.log 2>&1 || true
 echo "=================== VERDICT ==================="
 if [ "$OK" = "1" ]; then echo "CAPSTONE_AUDIT_PASS"; else echo "CAPSTONE_AUDIT_FAIL"; fi
 echo "(round $ROUND done $(date -u +%H:%M:%S))"
+# FAIL-CLOSED (v1.3 final-pass): propagate the verdict to the PROCESS EXIT STATUS so a caller
+# (CI / a parent gate) can never read a printed CAPSTONE_AUDIT_FAIL as a success (exit 0).
+if [ "$OK" = "1" ]; then exit 0; else exit 1; fi

@@ -15,6 +15,32 @@ source, with the pre-built outputs removed first."
 
 ---
 
+## Current-head re-verification (2026-06-06, v1.3 "final convergence pass")
+
+The detailed clean-checkout reproduction below was first run at tip `ea54e9b` (2026-06-04). The
+subsequent v1.3 final-pass commits changed **only** verification wrappers + docs
+(`scripts/gate_kovc.sh`, `scripts/capstone_audit.sh`, `stage0/helixc-bootstrap/ddc_crosscheck.sh`,
+doc files) — **no** ladder rung, `seed.c`, or `kovc.hx` compiler source was touched — so the
+from-raw ladder reproduction below carries forward unchanged. The three result-bearing legs were
+**re-verified fresh at the current head** this date, byte-identical to the `ea54e9b` run:
+
+| Leg | Result (current head) | == ea54e9b? |
+|-----|-----------------------|:---:|
+| Self-host fixpoint (`seed→K1→K2→K3→K4`) | `GATE_PASS`, K2==K3==K4 == **`0992dddd…`**, corpus 109/0, check_err 4/0 | ✓ |
+| gcc diverse-double-compile (`seed`→K1) | `DDC_ANCHOR_OK`, K1 byte-identical **`84363adb…`** (gcc == M2-seed) | ✓ |
+| GPU capstone (RTX 3070, kovc-emitted kernels) | `CAPSTONE_AUDIT_PASS` — finite-diff PASS, train loss 62.35→**0.4158**, oracle worst-rel-diff **0.0000088** (bar 0.02), negative-control caught | ✓ |
+
+These three were re-run on a **WSL-native ext4 mirror of the current-head tree** (byte-identical
+committed sources; the mirror exists only to avoid `/mnt/c` DrvFs per-syscall latency, which had
+inflated build wall-time ~75×). It produces the **same** fixpoint `0992dddd…` and the same seed-
+minted PTX driver, confirming the build is location-independent. Two `capstone_audit.sh` freshness
+guards were corrected this pass — a `/tmp`-vs-`/mnt/c` **cross-filesystem `mtime` test** was false-
+flagging freshly-written artifacts as STALE; the run above now reports each artifact `written this
+run`. (A full from-raw `hex0→seed` ladder re-run at the current head is unnecessary for these
+results — the ladder source is unchanged — and remains available on the now-fast ext4 path.)
+
+---
+
 ## Method
 
 **PRIMARY — in-place clean-COMMITTED-SOURCE reproduction in the canonical working dir.**

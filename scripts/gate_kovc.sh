@@ -130,11 +130,13 @@ fi
 
 echo "=== [3] re-mint PTX driver + GPU PTX regression (TEXT-only; no GPU) ==="
 t0=$SECONDS
-timeout 1200 ./seed.bin k1ptxdrv.hx /tmp/newdrv.bin; echo "  seed->newdrv rc=$? ($((SECONDS-t0))s)"
-# A1 FAIL-CLOSED: seed->newdrv is a PURE x86 build; an empty newdrv means the
-# driver failed to mint, so the PTX text regression cannot run -> REAL FAILURE.
-if [ ! -s /tmp/newdrv.bin ]; then
-  echo "  FAIL: seed->newdrv produced an empty driver -- cannot emit PTX (x86 build failure, not a GPU skip)"; GATE_OK=0
+rm -f /tmp/newdrv.bin   # rm-before (v1.3 final-pass): never reuse a STALE driver if the mint fails
+timeout 1200 ./seed.bin k1ptxdrv.hx /tmp/newdrv.bin; ndrc=$?; echo "  seed->newdrv rc=$ndrc ($((SECONDS-t0))s)"
+# A1 FAIL-CLOSED: seed->newdrv is a PURE x86 build (seed is the C-compiled bootstrap, exits 0
+# on success). A nonzero rc OR an empty/stale newdrv means the driver failed to mint, so the
+# PTX text regression cannot run -> REAL FAILURE.
+if [ "$ndrc" -ne 0 ] || [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: seed->newdrv rc=$ndrc / empty driver -- cannot emit PTX (x86 build failure, not a GPU skip)"; GATE_OK=0
 elif [ ! -s /tmp/ref.ptx ]; then
   echo "  FAIL: no committed PTX reference to diff against (see [1]) -- text regression cannot run"; GATE_OK=0
 else

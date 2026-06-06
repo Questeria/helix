@@ -1,7 +1,7 @@
-# Helix — Trust Chain Record (v1.2-complete)
+# Helix — Trust Chain Record (v1.3 — current head; v1.3-release tag pending owner)
 
 **Status: the from-raw-binary trust chain is COMPLETE and independently verified.**
-This document records the verified state of Helix at `v1.2-complete`. It is the honest
+This document records the verified state of Helix across the **v1.3 "Honest-Completeness & Trust"** line (current head; the `v1.3-release` tag is the owner's pending call after a joint re-verify). It is the honest
 record on which the *formal, public* "trust chain closed" declaration rests — that
 declaration is the project owner's to make (a deliberate joint re-examination), not an
 automated one. Everything below was reproduced by **context-isolated, same-model-family
@@ -13,9 +13,9 @@ findings remediated, so verification now spans **both** same-family reproduction
 cross-model review (a read-only doc/logic review, not an independent build reproduction).
 Every limitation is stated plainly.
 
-Tag: `v1.2-complete` · Finalization commit: `291f0ec` · Fixpoint: `K2==K3==K4 = 9cc8f20b…`
+Last formal tag: `v1.2-complete` (`291f0ec`, fixpoint `K2==K3==K4 = 9cc8f20b…`). Current line: **v1.3** — self-host fixpoint `K2==K3==K4 = 0992dddd…` (pinned in `scripts/gate_kovc.sh`, re-verified live this cycle); the `v1.3-release` tag is the owner's pending call after the joint re-verify.
 (NOTE: the stale `v2.0.0`–`v3.1.0` git tags are from a **superseded MLIR exploration line**;
-`v1.2-complete` is the current real head despite being numerically lower.)
+the `v1.3` line is the current real head (`v1.2-complete` was the prior formal tag), despite being numerically lower.)
 
 ---
 
@@ -27,7 +27,7 @@ Tag: `v1.2-complete` · Finalization commit: `291f0ec` · Fixpoint: `K2==K3==K4 
   pre-built binary is trusted. An independent auditor **rebuilt the entire ladder from
   source and every rung reproduced its committed SHA byte-identically** (seed `9837db12…`).
 - **Self-host fixpoint.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-identical**
-  (`9cc8f20b…`). Reproduced live by auditors.
+  (**v1.3: `0992dddd…`**, pinned in the gate + re-verified live this cycle; v1.2 was `9cc8f20b…`). Reproduced live by auditors.
 - **Diverse double-compile (DDC).** These are **two distinct, non-equivalent claims** — kept
   explicitly separate to avoid overclaim:
   - **(i) Byte-identical DDC — `seed`/`K1` surface ONLY.** `gcc` (an independent compiler
