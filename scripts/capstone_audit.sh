@@ -24,6 +24,17 @@ ROUND="${1:-r?}"
 OK=1
 echo "=================== CAPSTONE AUDIT ROUND $ROUND  $(date -u +%H:%M:%S) ==================="
 
+# ---- [0] AMBIENT-ENV NEUTRALIZATION (v1.3 audit-remediation 4a) ----
+# The v1.0 capstone is the DEFAULT (unset) HX_* configuration: train_transformer.c reads
+# HX_S/HX_D/HX_H/HX_V/HX_NL/HX_K/HX_OPT/HX_DGBFUSE/HX_PROF/HX_FASTSYNC/HX_TF32 from the env
+# and a stray value in the caller's environment would silently change the dims/op-set/launch
+# geometry -> a different (non-v1.0) run masquerading as the audit. Unset every HX_* var so
+# this audit is reproducible regardless of the inherited environment, then ASSERT none remain.
+for v in $(env | sed -n 's/^\(HX_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+_leftover=$(env | sed -n 's/^\(HX_[A-Za-z0-9_]*\)=.*/\1/p' | tr '\n' ' ')
+if [ -n "$_leftover" ]; then echo "AUDIT FAIL: residual HX_* env after neutralization: $_leftover"; OK=0; fi
+echo "  ambient HX_* neutralized (v1.0 capstone = default unset config); residual='${_leftover}'"
+
 # ---- [1] toolchain trust spine + FRESH seed-minted PTX driver (kills staleness) ----
 echo "=== [1] gate_kovc.sh (fixpoint + GPU PTX + corpus; mints /tmp/newdrv.bin from seed) ==="
 bash $ROOT/scripts/gate_kovc.sh > /tmp/ca_gate.log 2>&1
@@ -75,9 +86,22 @@ else echo "  cannot run verify (no launcher or ptx)"; OK=0; fi
 
 # ---- [4b] TRAIN on the RTX 3070 -> loss_curve.csv + init_weights.bin ----
 echo "=== [4b] train_transformer TRAIN: 500 Adam steps on GPU ==="
+# STALE-ARTIFACT GUARD (v1.3 audit-remediation 4a): rm the artifacts this leg writes BEFORE
+# the run, drop a timestamp marker, then AFTER assert each output EXISTS and is FRESH this run
+# (newer than the marker). A failed/crashed train must not leave a stale loss_curve.csv or
+# init_weights.bin from a prior round to false-pass the convergence / oracle-compare gates.
+rm -f "$RT/loss_curve.csv" "$RT/init_weights.bin"
+_train_marker=/tmp/ca_train_marker; : > "$_train_marker"; sleep 1
 if [ -x /tmp/train ] && [ -s /tmp/combined.ptx ]; then
+  cd $RT
   /tmp/train /tmp/combined.ptx > /tmp/ca_train.log 2>&1; trc=$?
   grep -E "train K=|step0 loss" /tmp/ca_train.log | sed 's/^/    /'
+  # fail-closed: outputs must exist, be non-empty, AND be fresh this run
+  for art in loss_curve.csv init_weights.bin; do
+    if [ ! -s "$RT/$art" ]; then echo "  AUDIT FAIL: train left no/empty $art (rc=$trc)"; OK=0;
+    elif [ ! "$RT/$art" -nt "$_train_marker" ]; then echo "  AUDIT FAIL: $art is STALE (not written this run, rc=$trc)"; OK=0;
+    else echo "  fresh artifact: $art ($(stat -c%s "$RT/$art") B, mtime ok)"; fi
+  done
   finalloss=$(tail -1 $RT/loss_curve.csv 2>/dev/null | cut -d',' -f2)
   echo "  final loss = ${finalloss:-NA}  (NC1: must be 0 < L < 1.0)  rc=$trc"
   awk -v L="${finalloss:-99}" 'BEGIN{ if (L+0 < 1.0 && L+0 > 0.0) exit 0; else exit 1 }' || { echo "  NC1 FAIL (loss did not converge)"; OK=0; }
@@ -86,8 +110,16 @@ else echo "  cannot train"; OK=0; fi
 # ---- [5] independent numpy oracle + within-2% compare ----
 echo "=== [5] numpy oracle (independent) + within-2% compare ==="
 cd $RT
+# STALE-ARTIFACT GUARD (v1.3 audit-remediation 4a): rm the oracle output BEFORE the run and
+# require it fresh after, so a crashed oracle cannot leave a prior round's oracle_curve.csv to
+# false-pass the within-2% compare.
+rm -f "$RT/oracle_curve.csv"
+_oracle_marker=/tmp/ca_oracle_marker; : > "$_oracle_marker"; sleep 1
 python3 "$ORACLE" > /tmp/ca_oracle.log 2>&1; orc=$?
 echo "  oracle rc=$orc"
+if [ ! -s "$RT/oracle_curve.csv" ]; then echo "  AUDIT FAIL: oracle left no/empty oracle_curve.csv (rc=$orc)"; OK=0;
+elif [ ! "$RT/oracle_curve.csv" -nt "$_oracle_marker" ]; then echo "  AUDIT FAIL: oracle_curve.csv is STALE (not written this run, rc=$orc)"; OK=0;
+else echo "  fresh artifact: oracle_curve.csv ($(stat -c%s "$RT/oracle_curve.csv") B, mtime ok)"; fi
 # v1.3 audit-remediation A6: a NONZERO oracle exit is a GATE FAILURE. With A5 the
 # oracle now exits 1 on a failed backward self-check (analytic backprop vs finite-
 # diff), so this branch gates the oracle self-check END-TO-END (self-check FAIL ->

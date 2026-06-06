@@ -858,7 +858,15 @@ is preserved — this is a reconciliation, not a rewrite):
    same-model debates; they catch reasoning/reproducibility gaps, not blind spots shared by author and
    auditor — a known limit not closed by 5 passes.
 10. **§6 wording tightened.** The realistic no-autotune plateau is stated as **~40–60% of cuBLAS, not
-    70–90%**; the committed 40% / 15-TFLOP floor is unchanged (honest, even conservative).
+    70–90%**. The governing GPU bar is the **relative ≥40% of cuBLAS-TF32**; the **absolute "≥15 TFLOP/s"
+    figure is SUPERSEDED** (see below).
 
-**GPU target confirmed honest and unchanged: ≥15 TFLOP/s TF32 Tensor-Core GEMM at M=N=K=2048 on the
-RTX 3070 Laptop (sm_86), ≥40% of cuBLAS-TF32, with `mma.sync` provably emitted.**
+**GPU target — honest CURRENT figure (the absolute "≥15 TFLOP/s" is SUPERSEDED).** The absolute
+≥15 TFLOP/s number assumed a cuBLAS-TF32 ceiling of ~37.5 TFLOP/s (so 40% ≈ 15) on this box; the
+**measured** cuBLAS-TF32 ceiling on the **RTX 3070 Laptop (sm_86)** is only **~10.6 TFLOP/s**, so the
+real governing bar — **≥40% of cuBLAS-TF32 — is ≈4.26 TFLOP/s**, not 15. Against that bar the TF32
+`mma.sync` GEMM is **GREEN: measured 5.354 TFLOP/s @ M=N=K=2048 = 50.3% of cuBLAS-TF32, with
+`mma.sync` provably emitted** (`docs/HELIX_GPU_PERF_RESULT.md` G3). The fastest GEMM on this hardware
+is in fact the **f32-SMEM `cp.async` double-buffered tile (5.445 TFLOP/s, 67.5% cuBLAS-f32)**, not
+TF32 — `mma.sync`/TF32 is **proven-correct + selectable (`HX_OPT=2`) but is not the performance path
+here**. (Cross-reference the same correction at ~line 75 of this doc.)

@@ -27,6 +27,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <time.h>
+#include <errno.h>   /* strerror(errno) for output-open failure reporting (v1.3 4c) */
 
 /* ---- ENV-parameterized dims (default = the exact v1.0 capstone) ---- */
 static int V = 32, D = 16, S = 16, H = 64, NL = 2, K = 500, OPT = 0;
@@ -390,7 +391,9 @@ int main(int argc, char** argv) {
 
     float* hw = (float*)malloc(NW * sizeof(float));
     gen_weights(hw);
-    FILE* wf = fopen("init_weights.bin", "wb"); if (wf) { fwrite(hw, sizeof(float), NW, wf); fclose(wf); }
+    FILE* wf = fopen("init_weights.bin", "wb");
+    if (!wf) { fprintf(stderr, "ERROR: cannot open init_weights.bin for write: %s\n", strerror(errno)); exit(3); }
+    fwrite(hw, sizeof(float), NW, wf); fclose(wf);
     upload_weights(hw);
     float* hx = (float*)calloc((size_t)SD, sizeof(float)); for (int s = 0; s < S; s++) hx[s * D + (s % D)] = 1.0f;
     CK(cuMemcpyHtoD(x_in, hx, (size_t)SD*sizeof(float)), "h2d x");
@@ -440,6 +443,7 @@ int main(int argc, char** argv) {
     }
     /* TRAIN: K Adam steps (forward -> backward -> Adam per weight). Timed wall-clock. */
     FILE* cf = fopen("loss_curve.csv", "wb");
+    if (!cf) { fprintf(stderr, "ERROR: cannot open loss_curve.csv for write: %s\n", strerror(errno)); exit(3); }
     double loss = loss0;
     CKX(cuCtxSynchronize(), "presync");
     double t_start = now_ms();

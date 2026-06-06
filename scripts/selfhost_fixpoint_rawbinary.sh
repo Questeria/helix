@@ -28,11 +28,19 @@ echo "=== Python-free raw-binary self-host fixpoint ==="
 echo "date: $(date -u +%FT%TZ)"
 echo "kovc.hx sha: $(sha256sum ../../helixc/bootstrap/kovc.hx | awk '{print $1}')"
 echo "[1/5] regenerate k1src.hx/k1input.hx from the CURRENT frozen sources (concatenator only)"
+# rm-before (v1.3 audit-remediation 4b): a failed concatenation must not leave stale inputs.
+rm -f k1src.hx k1input.hx
 bash assemble_k1.sh || { echo "FATAL: assemble"; exit 89; }
+if [ ! -s k1src.hx ] || [ ! -s k1input.hx ]; then echo "FATAL: assemble left empty k1src.hx/k1input.hx"; exit 88; fi
 ls -l k1src.hx k1input.hx | awk '{print "  "$5" "$9}'
 
+# run_gen: a KOVC/Helix-built compiler leg. The Helix compiler returns its OUTPUT BYTE-COUNT as
+# its process exit status (NONZERO on success), so success is validated by output-exists +
+# NON-EMPTY, NOT by rc==0. rm-before (v1.3 4b): a failed generation cannot leave a stale file
+# -> false match.
 run_gen () { # <label> <binary> <expected-out>
   local label="$1" bin="$2" out="$3" t0=$SECONDS rc
+  rm -f "$out"
   "$bin"; rc=$?
   if [ ! -s "$out" ]; then echo "FATAL: $label produced empty $out (exit=$rc)"; exit 80; fi
   echo "  $label exit=$rc (low byte of out size, cosmetic) elapsed=$((SECONDS-t0))s"
@@ -40,7 +48,9 @@ run_gen () { # <label> <binary> <expected-out>
 
 echo "[2/5] K1 = seed.bin(k1src.hx)"
 t0=$SECONDS
+rm -f /tmp/K1.bin                       # rm-before (v1.3 4b): no stale K1 on a failed seed run
 ./seed.bin k1src.hx /tmp/K1.bin; src_rc=$?
+# seed.bin is the raw-binary Helix-built seed compiler -> validate by non-empty, NOT rc==0.
 if [ ! -s /tmp/K1.bin ]; then echo "FATAL: K1 empty (seed exit=$src_rc)"; exit 91; fi
 chmod +x /tmp/K1.bin
 echo "  seed->K1 exit=$src_rc elapsed=$((SECONDS-t0))s"
@@ -67,7 +77,13 @@ done
 echo "=== Helix-native byte-identity check (selfhost_bytecmp.hx, seed-compiled) ==="
 # The load-bearing equality assertion done by a HELIX program built by the raw-binary
 # seed (read_file_to_arena + arena byte-compare), cross-checked against bash cmp.
-./seed.bin selfhost_bytecmp.hx /tmp/bytecmp.bin && chmod +x /tmp/bytecmp.bin
+# rm-before + NON-EMPTY guard (v1.3 4b): the seed is a Helix-built compiler, so it exits
+# NONZERO on success (output byte-count); validate by non-empty, NOT rc==0, and chmod
+# unconditionally (the old `&& chmod` was gated on rc==0 and would skip +x on success).
+rm -f /tmp/bytecmp.bin
+./seed.bin selfhost_bytecmp.hx /tmp/bytecmp.bin; bc_rc=$?
+if [ ! -s /tmp/bytecmp.bin ]; then echo "FATAL: bytecmp build produced empty /tmp/bytecmp.bin (seed exit=$bc_rc)"; exit 79; fi
+chmod +x /tmp/bytecmp.bin
 helix_eq () { cp "$1" /tmp/cmp_a; cp "$2" /tmp/cmp_b; /tmp/bytecmp.bin; echo $?; }
 hx23=$(helix_eq /tmp/K2.bin /tmp/K3.bin)
 hx34=$(helix_eq /tmp/K3.bin /tmp/K4.bin)

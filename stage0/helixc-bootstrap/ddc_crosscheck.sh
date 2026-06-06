@@ -12,15 +12,29 @@ cd "$(dirname "$0")"   # stage0/helixc-bootstrap
 INC="-include stdio.h -include stdlib.h -include unistd.h -include string.h"
 
 echo "=== [1] gcc builds the seed from FROZEN seed.c (no edits) ==="
+# rm-before (v1.3 audit-remediation 4b): no stale gcc-seed on a failed build. This is a
+# C-COMPILED binary leg, so rc==0 IS a valid success assertion (kept).
+rm -f /tmp/seed_gcc
 gcc -std=gnu89 -w $INC -o /tmp/seed_gcc seed.c 2>/tmp/gccerr || { echo "  gcc build FAIL:"; head -8 /tmp/gccerr; exit 1; }
+if [ ! -s /tmp/seed_gcc ]; then echo "  gcc build FAIL (no /tmp/seed_gcc)"; exit 1; fi
 chmod +x /tmp/seed_gcc
 echo "  seed_gcc = $(stat -c%s /tmp/seed_gcc) bytes"
 /tmp/seed_gcc; echo "  seed_gcc no-arg self-test exit=$? (want 42)"
 
 echo "=== [2] both seeds compile the SAME k1src.hx (1.5 MB) -> K1 ==="
+# input sanity: a missing/empty k1src.hx would make BOTH K1 empty -> a vacuous "match".
+if [ ! -s k1src.hx ]; then echo "  DDC_FAIL (k1src.hx missing/empty -- run assemble_k1.sh first)"; exit 2; fi
 chmod +x seed.bin 2>/dev/null
+# rm-before each generation (v1.3 4b). Both K1 outputs are produced by Helix-built seed
+# compilers (M2-seed and gcc-seed BOTH run the Helix seed program), which exit NONZERO on
+# success (output byte-count); success is the NON-EMPTY assert below, NOT rc==0.
+rm -f /tmp/K1_m2.bin /tmp/K1_gcc.bin
 t0=$SECONDS; ./seed.bin    k1src.hx /tmp/K1_m2.bin;  echo "  M2-seed  -> K1_m2  exit=$? $((SECONDS-t0))s ($(stat -c%s /tmp/K1_m2.bin 2>/dev/null) bytes)"
 t0=$SECONDS; /tmp/seed_gcc k1src.hx /tmp/K1_gcc.bin; echo "  gcc-seed -> K1_gcc exit=$? $((SECONDS-t0))s ($(stat -c%s /tmp/K1_gcc.bin 2>/dev/null) bytes)"
+# NON-EMPTY guard immediately after generation, BEFORE the SHA compare (a failed generation
+# must not leave a stale file that produces a false byte-identical match).
+if [ ! -s /tmp/K1_m2.bin ];  then echo "  DDC_FAIL (M2-seed produced empty K1_m2 -- build error)";  exit 2; fi
+if [ ! -s /tmp/K1_gcc.bin ]; then echo "  DDC_FAIL (gcc-seed produced empty K1_gcc -- build error)"; exit 2; fi
 
 echo "=== [3] DDC ANCHOR: K1_gcc == K1_m2 byte-identical? ==="
 if [ ! -s /tmp/K1_gcc.bin ] || [ ! -s /tmp/K1_m2.bin ]; then echo "  DDC_FAIL (a K1 is empty -- build error)"; exit 2; fi

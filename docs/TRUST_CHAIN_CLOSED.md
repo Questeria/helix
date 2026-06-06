@@ -28,15 +28,23 @@ Tag: `v1.2-complete` · Finalization commit: `291f0ec` · Fixpoint: `K2==K3==K4 
   source and every rung reproduced its committed SHA byte-identically** (seed `9837db12…`).
 - **Self-host fixpoint.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-identical**
   (`9cc8f20b…`). Reproduced live by auditors.
-- **Diverse double-compile (DDC).** `gcc` (independent lineage) and the frozen Python
-  witness independently produce a byte-identical seed `K1` — Wheeler DDC against a
-  trusting-trust attack. `gcc` is an **auditor**, never the shipped root. **v1.3 note (honest
-  scope):** the byte-identical `K1` DDC covers the *seed/K1* surface; the v1.3 **V5**
-  broadening over the **v1.1 language surface** (generics, traits, closures, turbofish,
-  wide-field, bf16) is a **BEHAVIORAL** cross-check (kovc(from-raw) vs a zero-lineage Python
-  *interpreter* agree on the program's exit), **NOT a byte-identical** second-compiler
-  reproduction — the witness emits no code, so byte-identity is impossible there by
-  construction (`docs/K_DDC_BROADENED.md`). f16-arith is not yet cross-checked.
+- **Diverse double-compile (DDC).** These are **two distinct, non-equivalent claims** — kept
+  explicitly separate to avoid overclaim:
+  - **(i) Byte-identical DDC — `seed`/`K1` surface ONLY.** `gcc` (an independent compiler
+    lineage with **no M2-Planet ancestry**) and the M2-Planet-built `seed` both compile the
+    same `k1src.hx` into a **BYTE-IDENTICAL** `K1` (`scripts`/`stage0/helixc-bootstrap`
+    DDC runners). Identical `K1` from two independent compilers is a Wheeler diverse-double-
+    compile against a trusting-trust attack — but it covers **only the seed→K1 step**, not the
+    broader language surface. `gcc` is an **auditor**, never the shipped root.
+  - **(ii) BEHAVIORAL cross-check — v1.1 language surface, NOT byte-identical.** The v1.3 **V5**
+    broadening over the **v1.1 language surface** (generics/monomorphization, traits, closures,
+    turbofish, wide-field, bf16) is checked **BEHAVIORALLY ONLY**: `kovc` (built from the raw
+    binary) and a **second, zero-lineage interpreter** are run on the same programs and must
+    agree on each program's exit. This is **NOT a byte-identical second-compiler reproduction**
+    — the interpreter emits no code, so byte-identity is impossible there by construction. It is
+    also **NOT clean-checkout reproducible by a third party**: that cross-check interpreter is
+    **gitignored** (not committed), so a fresh checkout cannot re-run it as-is
+    (`docs/K_DDC_BROADENED.md`). f16-arith is not yet cross-checked.
 - **Python-free shipped toolchain.** Exactly **1** committed `.py` in the repo
   (`verification/oracle/oracle_train.py`), a fenced verification witness never referenced
   by the toolchain. The compiler/runtime are Helix + a small hand-authored C subset.

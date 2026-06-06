@@ -57,7 +57,7 @@ Target: **x86-64 Linux** (static, syscall-only ELF) for CPU; **NVIDIA PTX** for 
 | arrays `[a,b]`, `a[i]` | [proven] | literal + index (`arr_idx`→20); index-store [impl] |
 | `tile<ELEM,N,SPACE>` | [impl] | GPU `@kernel` param type only |
 | references `&T`/`&mut T`, raw pointers `*T` | [unsupported] | `&` is bitwise-AND only |
-| **generics `<T>`/`<T,E>`** | **[erased]** | parsed + depth-balanced-erased; **NO monomorphization** — generic code over differing types is unsafe (see §7). |
+| **generics `<T>`/`<T,E>`** | **[proven, turbofish-directed]** (v1.3 V5) | **explicitly-instantiated generics monomorphize** — a turbofish call/ctor (`id::<i32>(…)`, `Box::<f32>{…}`, `Opt::<i32>::Some(…)`) emits a concrete mangled instance (e.g. `id__i32`) from a skipped generic template, and the concrete type round-trips (corpus `gen_concrete_on_mono`, `M4_turbofish_enum`). **Fail-closed guards** cover the unsupported forms: a **bare** non-i32 generic (`id(3.0_f32)`, no turbofish) defaults `T→i32` rather than mis-emitting (`M5_bare_generic_bound`), and turbofish-on-enum-ctor is correctly routed (no longer hangs). **Residual (see §7):** general monomorphization that *infers* differing element types without an explicit turbofish is still not done. |
 | **closures `\|x\| …`** | **[proven]** (v1.3 V3) | non-capturing → raw fn-pointer; **capturing → a real closure object** (arena `[code_ptr, caps…]`) passable by value/as an argument. **Capture-by-value at creation**; **i32-only captures** (a non-i32 capture would truncate in a 4-byte arena cell → fail-closed trap 76003). See §2.2. |
 
 ### 2.1 Wide struct fields (i64/u64/f64) — full 64-bit (v1.3 V1)
@@ -165,7 +165,7 @@ over-range cap (V2 — wide literals are first-class), the no-capturing-closures
 and the bf16/f16-storage-only bound (V4 — arithmetic computes).
 
 *Still bounded (honest residuals that remain):*
-- **Generics are erased** — `<T>` parsed but no general monomorphization of differing element types; generic code over *differing* element types is unsafe. **This is the most significant remaining gap.** [erased]
+- **Generics — turbofish-directed monomorphization SHIPPED; general type-inferred monomorphization is the residual** (v1.3 V5). Explicitly-instantiated generics (`id::<i32>`, `Box::<f32>`, `Opt::<i32>::Some`) monomorphize to concrete mangled instances and round-trip (corpus `gen_concrete_on_mono`, `M4_turbofish_enum`); the unsupported forms are **fail-closed** (a bare non-i32 generic defaults `T→i32` rather than mis-emitting — `M5_bare_generic_bound`). What remains is **general monomorphization that infers differing element types WITHOUT an explicit turbofish** — that is still not done, so inference-driven generic code over *differing* types must use turbofish. [proven for turbofish; residual for type-inferred] 
 - **Pattern guards erased** — `if`-guards in match arms are not enforced. [erased]
 - **f16 arithmetic — now bit-exact-gated** (was an ungated residual; the f16 GAP FIX of 2026-06-04 closed it). f16 same-type add/mul compute via F16C (`vcvtph2ps`/`vcvtps2ph` RNE) AND are gated by `V4_f16_add`/`V4_f16_mul` (the mul row is a sharp RNE-vs-truncation discriminator). The pre-fix state was worse than "ungated": the F16C path was unreachable dead code, so f16 same-type arithmetic *silently miscomputed* — that silent-wrong path is gone. (Behavioral second-witness cross-check across a zero-kovc-lineage interpreter is still f16-unfixtured — see §9 V5.) [proven, gated]
 - **Closure captures are i32-only** — a wider capture fail-closes (trap 76003), it is not silently truncated. [bounded, fail-closed]
@@ -181,7 +181,7 @@ and the bf16/f16-storage-only bound (V4 — arithmetic computes).
 - **Bare non-i32 scalar generic** — `id(3.0_f32)` defaults `T→i32` (`M5_bare_generic_bound` → 0); the supported idiom is explicit turbofish. [by-design]
 
 **v1.0 SCOPE DECISIONS — RESOLVED 2026-06-01** (see `HELIX_V1_DEFINITION_OF_DONE.md`, "v1.0 SCOPE DECISIONS"):
-1. **generics / traits / closures** — were **post-v1.0** at v1.0 freeze. **Closures now SHIP** (v1.3 V3 — capturing closures as values, §2.2); generics remain **erased** and traits remain **unchecked** (the documented residuals in §7). They extend this spec without changing what v1.0 defines.
+1. **generics / traits / closures** — were **post-v1.0** at v1.0 freeze. **Closures now SHIP** (v1.3 V3 — capturing closures as values, §2.2); **turbofish-directed generic monomorphization now SHIPS** (v1.3 V5 — explicit instantiations emit concrete mangled instances, with the bare-non-i32 case fail-closed; §2/§7), with **general type-inferred monomorphization** the remaining residual; traits remain **unchecked** (the documented residuals in §7). They extend this spec without changing what v1.0 defines.
 2. **`Ok`/`Err`/`Result`** — **user-defined `enum`** (not builtins); proven by `result_inline.hx` (→42). The more Helix-native answer; needs no compiler magic.
 3. **CUDA C launcher** — **documented trusted-tool boundary** (compute-free C shim, same category as `ld`/`ptxas`; NOT FFI). **numpy oracle** — **fenced external verification reference** (`verification/oracle/`), kept because an independent oracle is required for trustworthy verification.
 
