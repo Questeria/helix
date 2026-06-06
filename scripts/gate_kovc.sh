@@ -51,20 +51,86 @@ else
 fi
 
 echo "=== [2] SELF-HOST FIXPOINT from edited kovc.hx ==="
+# A2 STALE-/tmp HARDENING (v1.3 ChatGPT 3rd-pass MAJOR): every K-generation now
+# (a) rm -f's its expected output file BEFORE the run and (b) after the run asserts the
+# produced output is NON-EMPTY. The seed->K1 leg (a C-compiled binary) also asserts rc==0;
+# the kovc self-compile legs (K1->K2->K3->K4) do NOT, because kovc returns its OUTPUT BYTE
+# COUNT as the process exit status (rc = size mod 256 -> 24 for the 698392-byte self-compile,
+# i.e. NONZERO ON SUCCESS) -- those legs are validated by non-empty output + the byte-identical
+# and pinned-SHA fixpoint below, never by rc. On ANY failure we set GATE_OK=0, echo
+# a clear "FIXPOINT FAIL: K<n> generation rc/empty" reason, mark FIX_OK=0, and SKIP
+# the downstream cmp/sha so a STALE /tmp output can NEVER be copied into a later
+# K<n> and yield a FALSE fixpoint match. We do NOT use a global `set -e` (the gate
+# INTENTIONALLY continues past failures to accumulate GATE_OK and report all legs);
+# instead the FIX_OK flag gates ONLY the fixpoint comparison. K1/K2/K3/K4 all read
+# /tmp/k{1,2}_in.hx and write /tmp/k{1,2}_out.bin (filenames hardcoded in the
+# compiler sources k1src.hx:33496 / k1input.hx:33497), so each run's output file is
+# rm'd fresh and re-checked. `set -u` stays in force.
+FIX_OK=1
 t0=$SECONDS
-timeout 400 ./seed.bin k1src.hx /tmp/K1.bin; echo "  seed->K1 rc=$? ($((SECONDS-t0))s)"
-chmod +x /tmp/K1.bin; cp k1input.hx /tmp/k1_in.hx
-timeout 60 /tmp/K1.bin; [ -s /tmp/k1_out.bin ] || { echo "FATAL: K2 build failed (kovc.hx may not self-compile)"; exit 7; }
-cp /tmp/k1_out.bin /tmp/K2.bin; chmod +x /tmp/K2.bin
-cp k1input.hx /tmp/k2_in.hx; timeout 60 /tmp/K2.bin; cp /tmp/k2_out.bin /tmp/K3.bin; chmod +x /tmp/K3.bin
-timeout 60 /tmp/K3.bin; cp /tmp/k2_out.bin /tmp/K4.bin
-S2=$(sha256sum /tmp/K2.bin|awk '{print $1}'); S3=$(sha256sum /tmp/K3.bin|awk '{print $1}'); S4=$(sha256sum /tmp/K4.bin|awk '{print $1}')
-echo "  K2=$S2"; echo "  K3=$S3"; echo "  K4=$S4"
-if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ]; then echo "  FIXPOINT OK (K2==K3==K4 byte-identical)"; else echo "  FIXPOINT FAIL"; GATE_OK=0; fi
+# K1 generation: seed -> K1.bin (PURE x86). rm the target first; check rc + non-empty.
+rm -f /tmp/K1.bin
+timeout 1200 ./seed.bin k1src.hx /tmp/K1.bin; rc=$?; echo "  seed->K1 rc=$rc ($((SECONDS-t0))s)"
+if [ "$rc" -ne 0 ] || [ ! -s /tmp/K1.bin ]; then
+  echo "  FIXPOINT FAIL: K1 generation rc/empty (seed->K1 rc=$rc, /tmp/K1.bin empty/missing)"; GATE_OK=0; FIX_OK=0
+fi
+# K2 generation: K1.bin reads /tmp/k1_in.hx -> writes /tmp/k1_out.bin. rm output first; check rc + non-empty.
+if [ "$FIX_OK" = "1" ]; then
+  chmod +x /tmp/K1.bin; cp k1input.hx /tmp/k1_in.hx; rm -f /tmp/k1_out.bin
+  timeout 240 /tmp/K1.bin; rc=$?; echo "  K1->K2 run rc=$rc (kovc returns output-byte-count as exit status -> nonzero on success; validated by non-empty + SHA, NOT rc==0)"
+  if [ ! -s /tmp/k1_out.bin ]; then
+    echo "  FIXPOINT FAIL: K2 generation produced empty/missing /tmp/k1_out.bin (K1 run rc=$rc -- kovc.hx did not self-compile)"; GATE_OK=0; FIX_OK=0
+  else
+    cp /tmp/k1_out.bin /tmp/K2.bin; chmod +x /tmp/K2.bin
+  fi
+fi
+# K3 generation: K2.bin reads /tmp/k2_in.hx -> writes /tmp/k2_out.bin. rm output first; check rc + non-empty.
+if [ "$FIX_OK" = "1" ]; then
+  cp k1input.hx /tmp/k2_in.hx; rm -f /tmp/k2_out.bin
+  timeout 240 /tmp/K2.bin; rc=$?; echo "  K2->K3 run rc=$rc (kovc byte-count exit; validated by non-empty + SHA)"
+  if [ ! -s /tmp/k2_out.bin ]; then
+    echo "  FIXPOINT FAIL: K3 generation produced empty/missing /tmp/k2_out.bin (K2 run rc=$rc)"; GATE_OK=0; FIX_OK=0
+  else
+    cp /tmp/k2_out.bin /tmp/K3.bin; chmod +x /tmp/K3.bin
+  fi
+fi
+# K4 generation: K3.bin reads /tmp/k2_in.hx -> writes /tmp/k2_out.bin (SAME output path as K2 --
+# hence the rm -f is essential: without it a failed K3 run would leave K2's stale output). check rc + non-empty.
+if [ "$FIX_OK" = "1" ]; then
+  rm -f /tmp/k2_out.bin
+  timeout 240 /tmp/K3.bin; rc=$?; echo "  K3->K4 run rc=$rc (kovc byte-count exit; validated by non-empty + SHA)"
+  if [ ! -s /tmp/k2_out.bin ]; then
+    echo "  FIXPOINT FAIL: K4 generation produced empty/missing /tmp/k2_out.bin (K3 run rc=$rc)"; GATE_OK=0; FIX_OK=0
+  else
+    cp /tmp/k2_out.bin /tmp/K4.bin
+  fi
+fi
+# Only compare/sha if EVERY K-generation succeeded (rc==0 + non-empty). A failed/empty
+# generation short-circuits here so we never sha/cmp a stale file -> no false fixpoint.
+if [ "$FIX_OK" = "1" ]; then
+  S2=$(sha256sum /tmp/K2.bin|awk '{print $1}'); S3=$(sha256sum /tmp/K3.bin|awk '{print $1}'); S4=$(sha256sum /tmp/K4.bin|awk '{print $1}')
+  echo "  K2=$S2"; echo "  K3=$S3"; echo "  K4=$S4"
+  # FAIL-CLOSED: the kovc legs validate by output (rc is the byte-count, not a status). The
+  # byte-identical 3-way self-host fixpoint is the fundamental check; the pinned known-good SHA
+  # additionally rejects a consistent-but-WRONG output (e.g. a deterministic partial write) that
+  # 3-way equality alone could miss.
+  EXPECT_FIX=0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f
+  if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ] && cmp -s /tmp/K2.bin /tmp/K3.bin && cmp -s /tmp/K3.bin /tmp/K4.bin; then
+    if [ "$S2" = "$EXPECT_FIX" ]; then
+      echo "  FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)"
+    else
+      echo "  FIXPOINT FAIL (K2==K3==K4 self-consistent but != pinned known-good $EXPECT_FIX -- toolchain drifted)"; GATE_OK=0
+    fi
+  else
+    echo "  FIXPOINT FAIL (K2/K3/K4 differ)"; GATE_OK=0
+  fi
+else
+  echo "  FIXPOINT FAIL (a K-generation failed/produced empty output -- comparison skipped to avoid a stale-/tmp false match)"
+fi
 
 echo "=== [3] re-mint PTX driver + GPU PTX regression (TEXT-only; no GPU) ==="
 t0=$SECONDS
-timeout 400 ./seed.bin k1ptxdrv.hx /tmp/newdrv.bin; echo "  seed->newdrv rc=$? ($((SECONDS-t0))s)"
+timeout 1200 ./seed.bin k1ptxdrv.hx /tmp/newdrv.bin; echo "  seed->newdrv rc=$? ($((SECONDS-t0))s)"
 # A1 FAIL-CLOSED: seed->newdrv is a PURE x86 build; an empty newdrv means the
 # driver failed to mint, so the PTX text regression cannot run -> REAL FAILURE.
 if [ ! -s /tmp/newdrv.bin ]; then

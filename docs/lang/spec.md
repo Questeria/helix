@@ -1,6 +1,13 @@
 # Helix Language Specification (v0.1 draft)
 
-**Status**: living draft — updated as the implementation teaches us.
+> ⚠️ **HISTORICAL — v0.1 design-vision draft (2026-05-15), NOT the as-built reference.**
+> This document is the **original design vision**, not the current implemented language. It
+> describes intended/aspirational surface (some of it never built, some built differently),
+> and it **underclaims** the current GPU/tile status. **For the current, as-built spec see
+> [`docs/HELIX_V1_LANGUAGE_SPEC.md`](../HELIX_V1_LANGUAGE_SPEC.md).** Kept for historical
+> context only — do not cite it as the reference.
+
+**Status**: HISTORICAL v0.1 design draft (superseded by `docs/HELIX_V1_LANGUAGE_SPEC.md`).
 **Date**: 2026-05-15
 
 Helix is a from-scratch programming language for AGI development and high-certainty computing. Kovostov is its first flagship system, but Helix is meant for any project that needs auditable, reproducible, uncertainty-aware software: AI/AGI, scientific research, medicine, genomics, physics, mathematics, robotics, infrastructure, and other domains where software should reason from evidence rather than hide assumptions. Designed to be (a) AI-author-friendly, (b) tile/tensor-native for GPU kernels, (c) compile cleanly to x86-64 and an early Phase-0 NVIDIA PTX subset without LLVM, (d) shape-typed with optional refinements.

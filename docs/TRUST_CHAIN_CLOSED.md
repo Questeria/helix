@@ -81,6 +81,20 @@ claim is precise, not inflated.
 3. **DDC coverage is 44/53 witness-reachable arms.** The v1.1-surface (generics, traits,
    closures, turbofish, wide-field store, bf16) is **un-DDC'd** by the frozen Python witness
    — a named open residual, not full coverage.
+   **What the DDC does NOT eliminate (the remaining SHARED trusted computing base, named
+   bluntly).** A diverse-double-compile only catches a backdoor that one of the two
+   compilers carries and the other does not. It says **nothing** about anything BOTH sides
+   share. The seed/K1 gcc-vs-M2-Planet DDC (and the behavioral second-witness cross-checks)
+   therefore still trust, untouched, the entire **shared substrate** beneath both compilers:
+   the **shared gcc / libc / binutils / loader** (`ld.so`) used to build and link both seed
+   variants; the **shell + coreutils** (`bash`, `cmp`, `sha256sum`, `cp`, `rm`) that drive
+   and compare the build; the **filesystem**; the **OS / kernel (WSL2 Linux)**; the **CPU +
+   microcode**; the **RAM**; and the **human-readable `seed.c` source itself** — auditable
+   one line at a time, but **trusted-by-reading**, not proven. A backdoor identical in both
+   gcc builds, or living in any of these shared layers, is **invisible** to DDC by
+   construction (the classic Wheeler shared-substrate residual). This is stated so the trust
+   boundary is unambiguous: DDC narrows the compiler-backdoor surface, it does not erase the
+   shared TCB.
 4. **Documented language bounds.** **No silent-wrong residual remains** (the v1.2 i64/u64
    wide struct-field low-32 truncation was closed by v1.3 V1; the f16 same-type-arith
    silent-miscompute that Finale Audit 2 caught was closed by the 2026-06-04 f16 GAP FIX —

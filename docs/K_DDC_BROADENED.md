@@ -435,11 +435,18 @@ re-derives behavior, not a byte-identical second *compiler*.
   proves the two implementations **agree on observable behavior** (the exit value), not that
   kovc's *instruction stream* is independently reproduced. (The R1 byte form above remains
   not-achievable with the Stage-30 witness, unchanged.)
-- **The standard shared-bug DDC residual is unchanged.** A bug present **identically** in
-  both interp.py's re-derivation **and** kovc — or in the **shared host runtime** (the WSL
-  Linux kernel, the process-exit path, the `timeout` harness) — would not be caught. DDC
-  proves *equivalence to a second witness on the reached programs*, not *absolute
-  correctness*. (The Wheeler trusted-runtime residual, as in `K_DDC_RESULT.md`.)
+- **The standard shared-bug DDC residual is unchanged — the SHARED TCB, named bluntly.** A
+  bug or backdoor present **identically** in both interp.py's re-derivation **and** kovc — or
+  in anything the two sides SHARE — is not caught. DDC only catches a divergence between the
+  two witnesses; it says nothing about their common substrate. The diverse-double-compile
+  (and this behavioral cross-check) does **NOT** eliminate, and still fully trusts: the
+  **shared gcc / libc / binutils / loader** (`ld.so`) that builds and links the seed; the
+  **shell + coreutils** (`bash`, `cmp`, `sha256sum`, `cp`, `rm`, `timeout`) that drive and
+  compare the runs; the **filesystem**; the **OS / kernel (WSL2 Linux)** + the process-exit
+  path; the **CPU + microcode**; the **RAM**; and the **human-readable `seed.c` source
+  itself** — auditable by reading, but **trusted-by-reading**, not proven. DDC proves
+  *equivalence to a second witness on the reached programs*, not *absolute correctness*. (The
+  Wheeler shared-substrate / trusted-runtime residual, as in `K_DDC_RESULT.md`.)
 - **f16-arithmetic is NOT fixtured.** The corpus gates **bf16** arithmetic bit-exactly
   (3 rows, the `BF16_ARITH` arm) but has **no f16-arith program**, so the `F16_ARITH` arm
   (F16C `vcvtph2ps`/`vcvtps2ph`) is listed for completeness and **explicitly not counted**
