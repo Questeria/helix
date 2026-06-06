@@ -3,8 +3,9 @@
  * Tiny 2-layer pre-norm transformer (default V=32,d=16,S=16,1 head,H=64). See
  * docs/HELIX_CAPSTONE_TRAIN_PLAN.md. Forward verified vs numpy oracle to 1e-6 (542b02c).
  *
- * STAGE C/D: forward + FULL backward, each weight gradient verified vs a central
- * finite-difference of the loss (INDEPENDENT: uses only the verified forward).
+ * STAGE C/D: forward + FULL backward. The backward is SPOT-CHECKED by a SAMPLED central
+ * finite-difference of the loss (a few gradient tensors x <=5 indices each, "verify" mode --
+ * NOT every weight exhaustively; INDEPENDENT: uses only the verified forward).
  *
  * T2/M6 (capstone re-train): the dims are now ENV-PARAMETERIZED (HX_S/HX_D/HX_H/HX_V/
  * HX_NL/HX_K), DEFAULTING to the exact v1.0 capstone so the v1.0 audit is byte-for-byte

@@ -33,7 +33,10 @@ from-raw ladder reproduction below carries forward unchanged. The three result-b
 These three were re-run on a **WSL-native ext4 mirror of the current-head tree** (byte-identical
 committed sources; the mirror exists only to avoid `/mnt/c` DrvFs per-syscall latency, which had
 inflated build wall-time ~75×). It produces the **same** fixpoint `0992dddd…` and the same seed-
-minted PTX driver, confirming the build is location-independent. Two `capstone_audit.sh` freshness
+minted PTX driver, confirming the build's OUTPUT is deterministic under the documented `/mnt/c`→`~/helix`
+path rewrite (the same controlled rewrite as the canonical-path caveat in "Where it walls" below) —
+this is output-determinism, **not** run-from-arbitrary-checkout portability, which that caveat spells out.
+Two `capstone_audit.sh` freshness
 guards were corrected this pass — a `/tmp`-vs-`/mnt/c` **cross-filesystem `mtime` test** was false-
 flagging freshly-written artifacts as STALE; the run above now reports each artifact `written this
 run`. (A full from-raw `hex0→seed` ladder re-run at the current head is unnecessary for these

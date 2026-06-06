@@ -24,7 +24,8 @@ if [ "$stc" -ne 42 ]; then echo "  DDC_FAIL (gcc-seed self-test exit=$stc != 42 
 
 echo "=== [2] both seeds compile the SAME k1src.hx (1.5 MB) -> K1 ==="
 # input sanity: a missing/empty k1src.hx would make BOTH K1 empty -> a vacuous "match".
-if [ ! -s k1src.hx ]; then echo "  DDC_FAIL (k1src.hx missing/empty -- run assemble_k1.sh first)"; exit 2; fi
+if [ ! -s k1src.hx ]; then echo "  [2.0] k1src.hx absent -- regenerating from committed source via assemble_k1.sh"; bash assemble_k1.sh >/dev/null 2>&1; fi
+if [ ! -s k1src.hx ]; then echo "  DDC_FAIL (k1src.hx still missing/empty after assemble_k1.sh)"; exit 2; fi
 chmod +x seed.bin 2>/dev/null
 # rm-before each generation (v1.3 4b). Both K1 outputs are produced by Helix-built seed
 # compilers (M2-seed and gcc-seed BOTH run the Helix seed program), which exit NONZERO on
@@ -43,9 +44,12 @@ sm=$(sha256sum /tmp/K1_m2.bin  | cut -d' ' -f1)
 sg=$(sha256sum /tmp/K1_gcc.bin | cut -d' ' -f1)
 echo "  K1_m2  sha256=$sm"
 echo "  K1_gcc sha256=$sg"
-if [ "$sm" = "$sg" ]; then
-  echo "  DDC_ANCHOR_OK -- gcc (independent lineage) reproduces the M2-Planet seed's K1 byte-for-byte."
+EXPECT_K1=84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba   # pinned known-good K1 (release-proof anchor)
+if [ "$sm" = "$sg" ] && [ "$sm" = "$EXPECT_K1" ]; then
+  echo "  DDC_ANCHOR_OK -- gcc (independent lineage) reproduces the M2-Planet seed's K1 byte-for-byte AND == pinned known-good."
   echo "  => The seed's behavior is independently double-compiled; identical K1 implies identical K2==K3==K4."
+elif [ "$sm" = "$sg" ]; then
+  echo "  DDC_FAIL (K1 self-consistent = $sm but != pinned known-good $EXPECT_K1 -- toolchain drifted from the release anchor)"; exit 2
 else
   echo "  DDC_ANCHOR_DIFF -- the two K1 differ. A REAL finding to investigate (seed.c non-determinism/portability, or a compiler-semantics gap)."
   cmp /tmp/K1_m2.bin /tmp/K1_gcc.bin 2>&1 | head -2

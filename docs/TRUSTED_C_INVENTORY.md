@@ -220,13 +220,13 @@ the pruned files.
 
 ## 6. The precise trusted-C boundary (the bottom line)
 
-After V6, the trusted C is **24 files / 15 600 LOC**, and the boundary is:
+After V6, the trusted C is **24 files / 15 604 LOC**, and the boundary is:
 
 - **The seed (`seed.c`, 1368 LOC) is the single irreducible trust ROOT** — compiled from raw,
   independently DDC-corroborated (gcc vs M2-Planet → byte-identical K1) + self-host-fixpoint-stable.
 - **The rest of Category A (the vendored bootstrap ladder, ~11 849 LOC) is COMPILED-FROM-RAW**, not
   trusted binaries — each rung built only by the prior rung from `hex0`'s 299 hand-authored bytes.
-- **Category B (the harness, 2 383 LOC) is the CUDA-driver C-FFI host**, outside the self-host
+- **Category B (the harness, 2 387 LOC) is the CUDA-driver C-FFI host**, outside the self-host
   fixpoint, irreducible as a launcher; below PTX it relies on NVIDIA's **closed `ptxas` + driver**
   (`TRUST_CHAIN_CLOSED.md` residual #7 — **STANDS**; V6 does not and cannot close it).
 

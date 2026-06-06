@@ -29,6 +29,16 @@ from-raw `kovc` over a broadened corpus exercising the dark value-codegen arms.
 
 **Net: DDC_BROAD_PASS holds in its behavioral form** (the charter accepts byte **OR**
 behavioral). Item 4 (quince) folds into the campaign's finale audits per the task scope.
+
+> **HONEST SCOPE CAVEAT (v1.3 final pass).** This V5 broadening is a **manually-reconciled
+> behavioral audit**, NOT a one-command clean-checkout executable gate: the second-interpreter
+> witness + R1 shim are **gitignored** (absent from a clean checkout — see the reproducibility
+> note below), the uniform byte-DIFF is reconciled *by explanation* (two different compilers)
+> rather than eliminated, and 2 programs are parse-drift **exclusions**. It is real and
+> load-bearing as a *behavioral* cross-check, but a clean reader cannot reproduce it from a single
+> committed command. The DDC that IS a clean one-command, byte-identical, hash-pinned gate is the
+> separate **seed→K1 gcc-DDC** (`stage0/helixc-bootstrap/ddc_crosscheck.sh`); this V5 layer is the
+> weaker behavioral tier over the broader v1.1 language surface.
 The R1 stronger byte form is reported separately below (best-effort).
 
 ---

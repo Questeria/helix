@@ -163,7 +163,7 @@ DISTINCT adversarial lens; a round is CLEAN only if both pass; any red resets th
 | 1 | harness methodology | PASS | CLEAN — *after forcing fixes to 2 real harness bugs* (the finite-diff check was not actually being invoked; the negative control was vacuous). The audit caught its own holes. |
 | 2 | shared-bug immunity + GPU-execution reality | PASS | CLEAN — no single bug can make GPU+oracle agree-while-wrong (finite-diff catches backward, independent numpy forward catches forward); the close-but-NOT-identical f32/f64 curves are positive proof of real independent execution. |
 | 3 | provenance / raw-binary trust chain | PASS | CLEAN — PTX genuinely seed-derived; the fixpoint + PTX driver are re-derived fresh every round; build path Python-free; hex0 trust root byte-intact. |
-| 4 | completeness / non-degeneracy | PASS | CLEAN — a real NL=2 transformer; attention/LN/GELU-MLP/residuals all real kernels; all 6816 weights (=NW) trained with correct (finite-diff-verified) gradients in both layers; nothing mocked. |
+| 4 | completeness / non-degeneracy | PASS | CLEAN — a real NL=2 transformer; attention/LN/GELU-MLP/residuals all real kernels; all 6816 weights (=NW) trained with backprop gradients, SPOT-CHECKED by a sampled finite-difference (a few tensors x <=5 indices per layer, both layers — not all 6816 exhaustively); nothing mocked. |
 | 5 | holistic certification | PASS | CLEAN — all 8 criteria green-honest, capstone fully supported, no regression; surfaced + forced this finalization (incl. correcting a stale oracle-naming overclaim — the reference is numpy — and adding the seed-pin). |
 
 **Per-round dynamic evidence** (deterministic, byte-identical across all 5 rounds — fixed

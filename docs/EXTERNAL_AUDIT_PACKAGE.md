@@ -100,7 +100,9 @@ THE CLAIMS TO VERIFY (against the repo)
 
 5. REAL CAPABILITY (capstone). A ≥2-layer transformer trains end-to-end on kovc-EMITTED GPU kernels
    (PTX-as-text) on an RTX 3070 (sm_86), converging to ~0% loss difference vs the independent numpy
-   oracle (bar was 2%); the oracle reads only shared INITIAL weights, not Helix's trajectory. VERIFY:
+   oracle (bar was 2%); the oracle computes its OWN loss trajectory from the shared INITIAL weights, then
+   compares against Helix's emitted loss_curve.csv (it reads Helix's curve only for that final compare,
+   never as input to its own computation). VERIFY:
    read verification/oracle/oracle_train.py + the training harness — is the oracle genuinely
    independent, and is "trains a real neural network" honestly supported? Running it is
    [NEEDS-REPRODUCTION].
