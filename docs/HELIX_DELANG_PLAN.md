@@ -41,7 +41,7 @@ EXEMPT (documented, permanent): `stage0/hex0..hex2`, `stage0/catm`, `stage0/M0`,
 | `scripts/helix_status.py` | py | release-progress / status reporter | no (dev) | delete (dev-only) |
 | `scripts/mlir_audit_canaries.py` | py | v3+ proof-loop canaries | no (v3 infra) | defer (v3, not v1.0) |
 | `scripts/proof_artifact_{gate,key,validate}.py` | py | v3+ proof-artifact infra | no (v3 infra) | defer (v3) |
-| `helixc/runtime/oracle_train.py` | py (numpy) | FENCED-OFFLINE capstone audit oracle (D1) | audit-only | **USER DECISION** (keep as documented offline-audit exception, or port to Helix numeric — huge) |
+| `verification/oracle/oracle_train.py` | py (numpy) | FENCED-OFFLINE capstone audit oracle (D1) | audit-only | **USER DECISION** (keep as documented offline-audit exception, or port to Helix numeric — huge) |
 | `helixc/runtime/cuda_launch.c` | C | GPU first-light launcher (CUDA Driver API) | YES (#3) | **BLOCKED on Helix FFI** |
 | `helixc/runtime/train_transformer.c` | C | capstone GPU training launcher (CUDA Driver API) | YES (capstone) | **BLOCKED on Helix FFI** |
 | `scripts/*.sh` (gate_kovc, feature_corpus, selfhost_fixpoint_rawbinary, gpu_corpus, run_all_tests, build.sh, run_tests.sh) | sh | build/test/gate harnesses | YES | interim-exception → Helix test-runner (#7/#13) |

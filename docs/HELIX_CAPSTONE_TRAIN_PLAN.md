@@ -9,7 +9,7 @@ C harness only does cuMemAlloc/cuMemcpy/cuLaunchKernel) within 2% of a numpy ora
   with i=block_idx()*block_dim()+thread_idx(); launch grid=N block=1 for the residual + grad
   sums. NO new kernel needed.
 - ORACLE deps: WSL python3 has NO torch; numpy 2.4.6 installed via pip3 --break-system-packages.
-  Oracle = numpy (helixc/runtime/oracle_train.py), FENCED OFFLINE (D1), reads init_weights.bin,
+  Oracle = numpy (verification/oracle/oracle_train.py), FENCED OFFLINE (D1), reads init_weights.bin,
   NEVER in the Helix path. (numpy is a numeric lib, not an AI API -- allowed.)
 
 ## Config
@@ -68,4 +68,4 @@ D: full backward; spot-check 3-5 elems/weight vs finite-diff (order: dW_lm, dLNf
    zero a dxn1 add -> finite-diff catches it.
 E: Adam + K=500 vs oracle; |loss_C - loss_oracle|/(|loss_oracle|+1e-8) < 0.02 = CAPSTONE. Loss should
    drop by ~step 100. NC: wrong targets -> oracle diverges >2%.
-Files: helixc/runtime/train_transformer.c (~600 lines), helixc/runtime/oracle_train.py (numpy, ~200).
+Files: helixc/runtime/train_transformer.c (~465 lines), verification/oracle/oracle_train.py (numpy, ~200).

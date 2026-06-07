@@ -9,7 +9,9 @@ them **without** relying on the gitignored process logs under `.stage33-logs/`. 
 > An independent operator running a clean clone + publishing logs is the open residual that moves
 > confidence past ~0.9 (see Residuals below). Every number here is reproducible by the commands shown.
 
-- **Head:** the v1.3 final-convergence-pass head (this commit; prior verified tip `828480a`).
+- **Head:** the v1.3 final-convergence-pass line on `main` (verify the live tip: `git rev-parse HEAD`).
+  The trust results below are **byte-stable across these final-pass commits** — `kovc.hx` + `seed.c` are
+  unchanged, so the fixpoint/K1/seed SHAs do not move; only docs + verification wrappers changed.
 - **Date:** 2026-06-06.
 - **Environment:** WSL2 (Linux 6.6 WSL2, x86_64); NVIDIA RTX 3070 Laptop GPU (sm_86), driver 596.21 /
   CUDA 13.2 runtime + 12.x `ptxas`; `gcc` (gnu89) as the independent DDC lineage. Build executed on a
@@ -21,7 +23,7 @@ them **without** relying on the gitignored process logs under `.stage33-logs/`. 
 | Check | Command | Result |
 |-------|---------|--------|
 | Exactly 1 committed `.py` | `git ls-files "*.py" \| wc -l` | **1** — `verification/oracle/oracle_train.py` |
-| 24 committed `.c`/`.h`, 15 604 LOC | `git ls-files "*.c" "*.h" \| wc -l` ; `\| xargs wc -l` | **24 / 15 604** |
+| 24 committed `.c`/`.h`, 15 605 LOC | `git ls-files "*.c" "*.h" \| wc -l` ; `\| xargs wc -l` | **24 / 15 605** |
 | `seed.bin` gitignored + pinned | `git check-ignore` ; `sha256sum` vs `seed.sha256` | ignored; `9837db12…` == `seed.sha256` |
 
 ## The three result-bearing legs (verbatim verdict lines)
@@ -74,3 +76,8 @@ CAPSTONE_AUDIT_PASS
    byte-identical, hash-pinned, one-command DDC is the separate seed→K1 `ddc_crosscheck.sh` (leg 2).
 4. **Path portability** — the fixpoint layer's `assemble_k1.hx` hardcodes the canonical path; a
    noncanonical checkout needs the documented path rewrite (`CLEAN_REPRODUCTION.md` "Where it walls").
+5. **Tracked stage0 rung binaries are REFERENCE artifacts** — the committed `stage0/*/*.bin`
+   (hex0…M2-Planet) are *convenience/reference* copies. "No trusted pre-built binary" means each rung
+   must be **rebuilt from source and compared** to its committed `.bin`/`.sha256` (the ladder rebuild,
+   `CLEAN_REPRODUCTION.md` Step 2 / `stage0/<rung>/build.sh`). Trust rests on that rebuild, not on the
+   committed binaries; a clean-room CI ladder rebuild is the open way to make this push-button.

@@ -4,12 +4,17 @@ This is the fastest path from a fresh checkout to a running Helix program.
 
 ## Prerequisites
 
-- **Python 3.10+** (frontend, IR, optimization passes, code generator)
-- **WSL2 + Linux** on Windows, or any Linux (for running the produced ELFs)
-- (Optional) `nasm` / `as` for cross-checking emitted machine code
+> **NOTE (v1.0+ reality):** the **shipped** Helix toolchain is the **from-raw, Python-free** `kovc`
+> compiler (`hex0 → seed → kovc`; see `docs/CLEAN_REPRODUCTION.md` + `scripts/gate_kovc.sh`). The
+> Python-hosted `helixc` described below is the **historical bootstrap frontend**, retained for
+> reference only — it is NOT in the shipped compile/run path. The repo's sole committed `.py` is the
+> fenced numpy audit oracle (`verification/oracle/oracle_train.py`).
 
-No other dependencies for the current Python-hosted `helixc` compiler. The
-repository also contains the live 299-byte hand-encoded ELF
+- **WSL2 + Linux** on Windows, or any Linux (for the from-raw build + running the produced ELFs)
+- **gcc** (the diverse-double-compile auditor) + a CUDA toolchain & RTX-class GPU (for the capstone)
+- (historical frontend only) **Python 3.10+** — not needed for the from-raw `kovc` toolchain
+
+The repository also contains the live 299-byte hand-encoded ELF
 (`stage0/hex0/hex0.bin`) that serves as the audited bootstrap floor; the later
 bootstrap links and self-hosted compiler remain roadmap targets until they can
 rebuild the compiler reproducibly.

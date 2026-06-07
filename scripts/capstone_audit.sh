@@ -160,8 +160,14 @@ if ! cmp -s /tmp/gelu_bw_bad.hx $EX/gpu_gelu_backward_kernel.hx; then
 else echo "  NC-PERTURB FAIL (perturbation was a no-op: constants not found in kernel)"; OK=0; fi
 
 # ---- restore the GOOD artifacts (the bad run overwrote loss/init) for downstream use ----
-cd $RT; /tmp/train /tmp/combined.ptx > /tmp/ca_restore.log 2>&1 || true
+# Best-effort but VERIFIED: the verdict above already stands; this only protects downstream readers of
+# loss_curve.csv/init_weights.bin -- rm-before then warn loudly if the restore left them stale/empty.
+rm -f "$RT/loss_curve.csv" "$RT/init_weights.bin"
+cd $RT; /tmp/train /tmp/combined.ptx > /tmp/ca_restore.log 2>&1; rrc=$?
 python3 "$ORACLE" > /tmp/ca_oracle2.log 2>&1 || true
+if [ "$rrc" != "0" ] || [ ! -s "$RT/loss_curve.csv" ] || [ ! -s "$RT/init_weights.bin" ]; then
+  echo "  NOTE: post-audit GOOD-artifact restore incomplete (rc=$rrc) -- downstream readers should re-run; the verdict above is unaffected"
+fi
 
 echo "=================== VERDICT ==================="
 if [ "$OK" = "1" ]; then echo "CAPSTONE_AUDIT_PASS"; else echo "CAPSTONE_AUDIT_FAIL"; fi

@@ -51,7 +51,9 @@ the `v1.3` line is the current real head (`v1.2-complete` was the prior formal t
 - **Real capability.** A ≥2-layer transformer trains **end-to-end on Helix-emitted GPU
   kernels** and converges to within **2% of an independent numpy oracle** — reproduced at
   **~0%** loss difference. The oracle was adversarially proven genuinely independent (it
-  reads only the *shared initial* weights, never Helix's trajectory; f32-vs-f64 curves are
+  computes its OWN curve from the *shared initial* weights, then compares against Helix's emitted loss
+  curve (it reads Helix's `loss_curve.csv` only for that comparison, never as input to its own
+  computation); f32-vs-f64 curves are
   close-but-not-bit-identical). **The WINNING GEMM is the f32-SMEM `cp.async` double-buffered
   tile**, not TF32: on the reference RTX 3070 Laptop TF32 Tensor-Core mma is *slower*
   (~0.97× the tuned f32-SMEM GEMM — 312 ms vs 274 ms; `docs/HELIX_GPU_PERF_RESULT.md` ~634).
