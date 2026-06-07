@@ -18,7 +18,7 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
 
 ## 0. Headline
 
-- **Committed C/H after V6: 24 files, 15 604 LOC** (was 30 files / 16 308 LOC; V6 pruned 6 dead
+- **Committed C/H after V6: 24 files, 15 605 LOC** (was 30 files / 16 308 LOC; V6 pruned 6 dead
   files / 708 LOC — see §4).
 - The trusted-C surface is **two disjoint categories**:
   - **A. The from-raw bootstrap ladder** (`stage0/*`, 22 files / 13 217 LOC) — trusted **source**
@@ -27,8 +27,8 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
     irreducible trust root**; the rest are the vendored bootstrap compilers/assemblers/linker that
     carry the chain. Independently corroborated by gcc-DDC (`SEED_DDC_CROSSCHECK.md`) and the
     self-host fixpoint.
-  - **B. The runtime/GPU harness** (`helixc/runtime/`, 2 files / 2 387 LOC) — `cuda_launch.c`
-    (1923) + `train_transformer.c` (464). **Outside** the self-host fixpoint. The genuinely
+  - **B. The runtime/GPU harness** (`helixc/runtime/`, 2 files / 2 388 LOC) — `cuda_launch.c`
+    (1923) + `train_transformer.c` (465). **Outside** the self-host fixpoint. The genuinely
     reducible-looking target — but every line is either a **CUDA driver-API host call** (a closed
     C-FFI boundary Helix cannot cross) or a CPU oracle that **independently verifies** the
     Helix-emitted kernels (and so must *not* be written in Helix).
@@ -105,9 +105,9 @@ corpus). These two files are compiled **only** by the GPU/capstone scripts
 | Path | LOC | Role | Fixpoint | On build path? | Trusted-why | Portable? |
 |---|---:|---|---|---|---|---|
 | `helixc/runtime/cuda_launch.c` | 1923 | Multi-mode **GPU correctness + perf harness**: loads a kovc-emitted PTX module and drives vector_add / attention / GEMM / TF32-Tensor-Core kernels; times them (cuEvent); checks each against a **CPU oracle** and **cuBLAS**. | **OUT** | GPU scripts only (`gcc -lcuda -lcublas`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; the math it judges is all kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
-| `helixc/runtime/train_transformer.c` | 464 | The **capstone training-loop host**: a 2-layer transformer trained end-to-end on kovc-emitted GPU kernels; gradient check = a **sampled finite-difference spot-check** (6 gradient tensors × ≤5 sampled indices each vs analytic backprop — `verify` mode, NOT exhaustive); 2% loss-parity vs an independent numpy oracle. | **OUT** | capstone/`m6_*` scripts only (`gcc -lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; all math is kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
+| `helixc/runtime/train_transformer.c` | 465 | The **capstone training-loop host**: a 2-layer transformer trained end-to-end on kovc-emitted GPU kernels; gradient check = a **sampled finite-difference spot-check** (6 gradient tensors × ≤5 sampled indices each vs analytic backprop — `verify` mode, NOT exhaustive); 2% loss-parity vs an independent numpy oracle. | **OUT** | capstone/`m6_*` scripts only (`gcc -lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; all math is kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
 
-**Category B total: 2 files, 2 387 LOC.**
+**Category B total: 2 files, 2 388 LOC.**
 
 ---
 
@@ -220,13 +220,13 @@ the pruned files.
 
 ## 6. The precise trusted-C boundary (the bottom line)
 
-After V6, the trusted C is **24 files / 15 604 LOC**, and the boundary is:
+After V6, the trusted C is **24 files / 15 605 LOC**, and the boundary is:
 
 - **The seed (`seed.c`, 1368 LOC) is the single irreducible trust ROOT** — compiled from raw,
   independently DDC-corroborated (gcc vs M2-Planet → byte-identical K1) + self-host-fixpoint-stable.
 - **The rest of Category A (the vendored bootstrap ladder, ~11 849 LOC) is COMPILED-FROM-RAW**, not
   trusted binaries — each rung built only by the prior rung from `hex0`'s 299 hand-authored bytes.
-- **Category B (the harness, 2 387 LOC) is the CUDA-driver C-FFI host**, outside the self-host
+- **Category B (the harness, 2 388 LOC) is the CUDA-driver C-FFI host**, outside the self-host
   fixpoint, irreducible as a launcher; below PTX it relies on NVIDIA's **closed `ptxas` + driver**
   (`TRUST_CHAIN_CLOSED.md` residual #7 — **STANDS**; V6 does not and cannot close it).
 

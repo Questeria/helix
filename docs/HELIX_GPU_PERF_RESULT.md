@@ -782,7 +782,11 @@ measured ceiling (7.03–8.70× across framings), GEMM-Amdahl-bounded as enumera
 optimized kernels deliver far more in isolation (tiled GEMM 6.1×, dgb fusion 27×, softmax-fwd 16×); the
 end-to-end ceiling is the Amdahl composition on this small model, honestly stated.
 
-**Reproduce:** `wsl.exe bash -c "bash /mnt/c/Projects/Kovostov-Native/.stage33-logs/m6_cpasync_verify.sh"`
-(mints the driver from the committed `kovc.hx`, proves per-entry cp.async, re-measures all framings + the
-2% parity). **Files:** no source change — investigation + re-measurement only; the probe script
-`.stage33-logs/m6_cpasync_verify.sh`. This RESOLVES the capstone / T2 ≥10× clause.
+**Reproduce — NOTE: the speedup framings are LOCAL HISTORICAL EVIDENCE, not a clean-checkout proof.**
+The framings were measured by the probe `.stage33-logs/m6_cpasync_verify.sh`, which is **gitignored**
+(a local re-measurement script, absent from a fresh checkout) — so the 7.03–8.70× figures are local
+historical measurement, not a committed one-command result. What IS committed-reproducible: the **hard
+2% parity gate** (`bash scripts/capstone_audit.sh` → `CAPSTONE_AUDIT_PASS`, 0.0000% worst rel-diff) and
+the per-entry cp.async PTX emission (`bash scripts/gate_kovc.sh`). **Files:** no source change —
+investigation + re-measurement only. This RESOLVES the capstone / T2 ≥10× clause as DONE-WITH-DOCUMENTED-
+RESIDUAL: parity HELD; the end-to-end speedup is honestly below 10× (Amdahl-bounded), as enumerated above.

@@ -24,8 +24,13 @@ if [ "$stc" -ne 42 ]; then echo "  DDC_FAIL (gcc-seed self-test exit=$stc != 42 
 
 echo "=== [2] both seeds compile the SAME k1src.hx (1.5 MB) -> K1 ==="
 # input sanity: a missing/empty k1src.hx would make BOTH K1 empty -> a vacuous "match".
-if [ ! -s k1src.hx ]; then echo "  [2.0] k1src.hx absent -- regenerating from committed source via assemble_k1.sh"; bash assemble_k1.sh >/dev/null 2>&1; fi
-if [ ! -s k1src.hx ]; then echo "  DDC_FAIL (k1src.hx still missing/empty after assemble_k1.sh)"; exit 2; fi
+# ALWAYS regenerate from committed source -- never trust a possibly-stale ignored k1src.hx (v1.3
+# final pass): a stale nonempty k1src.hx would weaken standalone DDC evidence; the pinned K1 hash
+# below also catches drift, but regenerating removes the dependency entirely.
+echo "  [2.0] regenerating k1src.hx/k1input.hx/k1ptxdrv.hx from committed source via assemble_k1.sh"
+rm -f k1src.hx k1input.hx k1ptxdrv.hx
+bash assemble_k1.sh >/dev/null 2>&1
+if [ ! -s k1src.hx ]; then echo "  DDC_FAIL (k1src.hx missing/empty after assemble_k1.sh)"; exit 2; fi
 chmod +x seed.bin 2>/dev/null
 # rm-before each generation (v1.3 4b). Both K1 outputs are produced by Helix-built seed
 # compilers (M2-seed and gcc-seed BOTH run the Helix seed program), which exit NONZERO on

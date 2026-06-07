@@ -34,8 +34,9 @@ to confirm-or-break each claim against the repo.
  - VERIFY DIRECTLY whatever read access allows: count the committed Python files; read seed.c and the
    bootstrap source; read the build gate; check the trusted-C inventory against the real file list;
    read the language spec, the trust-record doc, and the audit logs for overclaims; recompute the
-   SHA-256 of any committed FILE you can hash (e.g. seed.c against the committed seed.sha256, corpus
-   programs) and compare.
+   SHA-256 of any committed FILE you can hash (NOTE: `seed.sha256` pins the gitignored `seed.bin`, NOT
+   `seed.c` — `seed.c` is the audited SOURCE [verify by reading it + the gcc-DDC byte-identical K1], so
+   hash `seed.bin` against `seed.sha256` only after a rebuild; corpus programs, etc.) and compare.
  - WHAT READ-ONLY ACCESS LIKELY CANNOT DO: rebuild the from-raw ladder (hex0→seed→kovc), run the
    self-host fixpoint, or run the GPU gate — those need a WSL + CUDA + ptxas toolchain you don't have.
    For anything requiring a build/run, treat the stated result as a CLAIM, and give the EXACT commands
