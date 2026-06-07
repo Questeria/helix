@@ -1,0 +1,39 @@
+name: trust-reproduce
+
+# Push-button, external-grade reproduction of the Helix from-raw trust CORE on a clean GitHub
+# runner -- a different machine, a fresh git clone, and zero local state. It rebuilds the entire
+# hex0 -> hex1 -> hex2 -> catm -> M0 -> cc_amd64 -> M2-Planet -> seed ladder (deleting any pre-built
+# rung binaries first), runs the self-host fixpoint, and runs the gcc diverse-double-compile, then
+# asserts every pinned hash (seed 9837db12, fixpoint 0992dddd, gcc-DDC K1 84363adb). The job is GREEN
+# only if all of that reproduces byte-for-byte. This is the "independent operator" reproduction the
+# trust docs name as the step beyond same-machine evidence -- anyone can fork this repo and watch it
+# run, or run scripts/reproduce_trust.sh locally on a throwaway clone.
+#
+# CPU-only by design: GitHub-hosted runners have no GPU, so the transformer CAPSTONE (perf + 2%
+# oracle parity) is NOT run here -- it is verified on a CUDA host via scripts/capstone_audit.sh
+# (a self-hosted GPU runner could add it later as a separate job).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'   # weekly (Mon 06:00 UTC) -- catch any silent drift in the trust core
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (clean clone, no local state)
+        uses: actions/checkout@v4
+
+      - name: Install audit tools (xxd / binutils / gcc / file)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xxd binutils gcc file coreutils
+
+      - name: Reproduce from-raw trust core (ladder + self-host fixpoint + gcc-DDC)
+        run: bash scripts/reproduce_trust.sh
