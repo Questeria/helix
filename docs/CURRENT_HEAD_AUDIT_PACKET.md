@@ -65,19 +65,39 @@ CAPSTONE_AUDIT_PASS
 | `K1` (seed→K1; gcc-DDC pinned) | `84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba` | 697 425 B |
 | self-host fixpoint `K2==K3==K4` | `0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f` | 698 392 B |
 
-## Honest residuals (NOT closed by this packet)
+## Push-button reproduction (v1.3 Path A) — anyone can re-run this
 
-1. **Independent-operator reproduction is still open** — these are our process logs committed to the
-   tree, not a third-party clean-clone run. That external step is what moves confidence > ~0.9.
+The whole trust core above is reproducible by **one committed command on a clean checkout**:
+`bash scripts/reproduce_trust.sh` — it deletes every pre-built rung binary, rebuilds the entire
+`hex0 → seed` ladder (each rung self-verifying its `.sha256`), runs the self-host fixpoint + the gcc
+diverse-double-compile, and asserts the three pinned anchors above, exiting nonzero on any mismatch.
+It applies the disclosed `/mnt/c → checkout` path rewrite automatically, so it runs at any path.
+**Verified PASS on a fresh clean clone, CPU-only, ~1 min.** `.github/workflows/trust-reproduce.yml`
+runs it on a **clean GitHub `ubuntu-latest` runner** (a different machine, fresh clone, zero local
+state) on every push/PR + weekly — so the byte-identical trust core is reproducible push-button by any
+third party who forks the repo or runs the script locally. (The GPU capstone stays a separate CUDA-host
+step, `scripts/capstone_audit.sh`.)
+
+## Honest residuals (status after v1.3 Path A)
+
+1. **Fully-independent THIRD-PARTY reproduction** — a clean-clone reproduction now exists **committed +
+   push-button** (`scripts/reproduce_trust.sh` + the `trust-reproduce.yml` CI on a clean different-machine
+   runner; see above). What remains is a run by an operator who is *not the author* (a genuine outside
+   party / lab) — that final increment is the last step past ~0.9. The mechanism for it is now in place:
+   anyone can fork the repo or clone it and run the one command.
 2. **Shared TCB** — OS / kernel / filesystem / shell / coreutils / gcc / libc / binutils / loader /
    CPU+microcode / RAM, and the audited `seed.c` source, remain trusted (`TRUST_CHAIN_CLOSED.md`).
 3. **V5 v1.1-surface behavioral DDC** — a *manually-reconciled behavioral* audit; its witness is
    gitignored + not clean-checkout reproducible (`K_DDC_BROADENED.md` honest-scope caveat). The
    byte-identical, hash-pinned, one-command DDC is the separate seed→K1 `ddc_crosscheck.sh` (leg 2).
 4. **Path portability** — the fixpoint layer's `assemble_k1.hx` hardcodes the canonical path; a
-   noncanonical checkout needs the documented path rewrite (`CLEAN_REPRODUCTION.md` "Where it walls").
+   noncanonical checkout needs the documented path rewrite — now applied **automatically** by
+   `scripts/reproduce_trust.sh` step [0], so the CI + any clone build at their own path. A native
+   parameterization of the concatenator remains a possible future cleanup.
 5. **Tracked stage0 rung binaries are REFERENCE artifacts** — the committed `stage0/*/*.bin`
    (hex0…M2-Planet) are *convenience/reference* copies. "No trusted pre-built binary" means each rung
    must be **rebuilt from source and compared** to its committed `.bin`/`.sha256` (the ladder rebuild,
    `CLEAN_REPRODUCTION.md` Step 2 / `stage0/<rung>/build.sh`). Trust rests on that rebuild, not on the
-   committed binaries; a clean-room CI ladder rebuild is the open way to make this push-button.
+   committed binaries. **RESOLVED push-button:** `scripts/reproduce_trust.sh` deletes all pre-built
+   rung binaries first and rebuilds the whole ladder from `hex0`, and `trust-reproduce.yml` runs that on
+   a clean runner — so rebuild-and-compare is now one command, not a manual ritual.
