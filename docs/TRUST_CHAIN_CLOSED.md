@@ -1,10 +1,64 @@
-# Helix — Trust Chain Record (v1.3 — current head; v1.3-release tag pending owner)
+# Helix — Trust Chain Record (v1.3 — TRUST CHAIN CLOSED 2026-06-07, tag v1.3-release)
+
+---
+
+## ✅ TRUST CHAIN CLOSED — v1.3 (declared 2026-06-07)
+
+> **Declaration.** The Helix from-raw-binary trust chain is **CLOSED at the `v1.3-release` tag**, in the
+> precise, honestly-scoped sense below: the toolchain is **reproducible from a hand-typed root, self-
+> hosting, defended against a trusting-trust attack at the `seed→K1` rung, demonstrably capable, and
+> Python-free** — verified by independent and reproducible means, **with the residuals in §R disclosed.**
+> This is **not** a claim of absolute or unconditional trust; it is a claim that every link we *can*
+> establish has been established, cross-checked, and made push-button-reproducible by anyone.
+>
+> **What is closed (verified):**
+> 1. **Hand-typed root → compiler.** `hex0` (299 hand-authored bytes) → hex1 → hex2 → catm → M0 →
+>    cc_amd64 → M2-Planet → `seed` (Apache-2.0 C-subset) → `kovc`. Every rung is rebuilt **only by the
+>    prior rung** and matches its committed `.sha256`; `seed.bin` re-derives to `9837db12…`. No pre-built
+>    binary is trusted — the committed rung binaries are reference copies; reproduction deletes them and
+>    rebuilds from raw.
+> 2. **Self-hosting fixpoint.** `seed → K1 → K2 → K3 → K4`, **K2 == K3 == K4 byte-identical =
+>    `0992dddd…`**; the 109-program feature corpus + 4 negative-diagnostic checks pass.
+> 3. **Trusting-trust defense (`seed→K1`).** `gcc` (independent lineage, zero M2-Planet ancestry) and the
+>    from-raw seed both compile `k1src.hx` to a **byte-identical K1 = `84363adb…`** (Wheeler diverse-
+>    double-compile).
+> 4. **Real capability.** A 2-layer transformer trains end-to-end on `kovc`-emitted GPU kernels (RTX
+>    3070), converging to within **0.0009%** of an independent numpy oracle (bar 2%), with a sampled
+>    finite-difference gradient check and a load-bearing negative control.
+> 5. **Python-free toolchain.** Exactly **one** committed `.py` (a fenced numpy audit oracle, never on
+>    the compile/run path); compiler + runtime are Helix + a small hand-authored C subset (24 `.c`/`.h`).
+>
+> **How it was verified (independent + reproducible):**
+> - A **committed one-command reproduction** (`scripts/reproduce_trust.sh`) rebuilds the whole ladder
+>   from raw and asserts every pinned hash — running **GREEN on a clean GitHub `ubuntu-latest` runner**
+>   (different machine, fresh clone, zero local state) via `.github/workflows/trust-reproduce.yml`,
+>   push-button for any third party.
+> - A **different-model-lineage** review (ChatGPT, read-only) across **four** whole-repo passes converged
+>   with **no critical, no fail-open, no hidden code**.
+> - A **context-isolated fresh Claude** auditor independently rebuilt from a clean clone and re-derived
+>   every hash — P(core trust holds) = **0.93**.
+> - A **live joint reproduction** witnessed by the project owner.
+>
+> **§R — Residuals (what "closed" does NOT cover; disclosed in full):**
+> - **Shared TCB:** host OS, kernel, filesystem, shell, coreutils, `gcc`/`libc`/`binutils`/loader, CPU +
+>   microcode, RAM, and the audited `seed.c` source remain trusted. No DDC retires the shared substrate.
+> - **Complete to PTX, not SASS:** the GPU path is hand-auditable `hex0 → PTX`; NVIDIA's closed `ptxas` +
+>   driver + the CUDA-driver-FFI host launcher are trusted past PTX. Single GPU target (sm_86).
+> - **V5 v1.1-surface DDC** is a *manually-reconciled behavioral* audit; its witness is gitignored / not
+>   clean-checkout reproducible. The byte-identical, hash-pinned, one-command DDC is the separate
+>   `seed→K1` `ddc_crosscheck.sh`.
+> - **Independent third party:** reproduction is now push-button on a different machine (CI) and by anyone
+>   who forks the repo; a reproduction by a party with *no connection to the author* remains the one
+>   outstanding increment — now trivially available.
+>
+> **Owner attestation.** "I have witnessed the live reproduction and reviewed the evidence and residuals
+> above, and I declare the Helix v1.3 from-raw trust chain CLOSED at `v1.3-release` on 2026-06-07."
+> — **Questeria** (project owner)
 
 **Status: the from-raw-binary trust chain is COMPLETE and independently verified.**
-This document records the verified state of Helix across the **v1.3 "Honest-Completeness & Trust"** line (current head; the `v1.3-release` tag is the owner's pending call after a joint re-verify). It is the honest
-record on which the *formal, public* "trust chain closed" declaration rests — that
-declaration is the project owner's to make (a deliberate joint re-examination), not an
-automated one. Everything below was reproduced by **context-isolated, same-model-family
+This document records the verified state of Helix across the **v1.3 "Honest-Completeness & Trust"** line, now tagged `v1.3-release` and **declared CLOSED above** (2026-06-07) after a live joint re-verify. It is the honest
+record on which that *formal, public* "trust chain closed" declaration rests — made by the
+project owner after a deliberate joint re-examination, not an automated one. Everything below was reproduced by **context-isolated, same-model-family
 (Claude) adversarial reproductions** — separate prompts/contexts, but the same model
 lineage that drove the build, so they share its blind spots (the monomorphic-dispatch
 ceiling disclosed at `docs/HELIX_COMPLETION.md` ~749/767). A **different-lineage
@@ -13,7 +67,7 @@ findings remediated, so verification now spans **both** same-family reproduction
 cross-model review (a read-only doc/logic review, not an independent build reproduction).
 Every limitation is stated plainly.
 
-Last formal tag: `v1.2-complete` (`291f0ec`, fixpoint `K2==K3==K4 = 9cc8f20b…`). Current line: **v1.3** — self-host fixpoint `K2==K3==K4 = 0992dddd…` (pinned in `scripts/gate_kovc.sh`, re-verified live this cycle); the `v1.3-release` tag is the owner's pending call after the joint re-verify.
+Last formal tag: `v1.2-complete` (`291f0ec`, fixpoint `K2==K3==K4 = 9cc8f20b…`). Current line: **v1.3** — self-host fixpoint `K2==K3==K4 = 0992dddd…` (pinned in `scripts/gate_kovc.sh`, re-verified live this cycle); now tagged **`v1.3-release`** (declared closed 2026-06-07 after the live joint re-verify).
 (NOTE: the stale `v2.0.0`–`v3.1.0` git tags are from a **superseded MLIR exploration line**;
 the `v1.3` line is the current real head (`v1.2-complete` was the prior formal tag), despite being numerically lower.)
 
