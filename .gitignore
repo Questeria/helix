@@ -57,6 +57,11 @@ desktop.ini
 /data/raw/
 /data/cache/
 
+# Generated trust attestations (produced by scripts/gpt2_demo_attest.sh; a fresh
+# attestation is regenerated per run -- the script + the gates it composes are the
+# committed artifacts, not the emitted attestation).
+/attestation/
+
 # Logs
 *.log
 /runs/
