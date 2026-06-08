@@ -40,17 +40,17 @@
 - [IR & lowering passes](part5-compiler/02-ir-and-passes.md)
 - [The x86-64 ELF back end](part5-compiler/03-x86-backend.md)
 
-# Part VI — The From-Raw Bootstrap Ladder *(planned)*
+# Part VI — The From-Raw Bootstrap Ladder
 
-- [hex0 and the raw-binary root *(planned)*]()
-- [The MESCC-lineage rungs to seed *(planned)*]()
-- [seed to kovc: the self-host fixpoint *(planned)*]()
+- [hex0 and the raw-binary root](part6-bootstrap/01-hex0-raw-root.md)
+- [The MESCC-lineage rungs to seed](part6-bootstrap/02-mescc-rungs-to-seed.md)
+- [seed to kovc: the self-host fixpoint](part6-bootstrap/03-seed-to-kovc-fixpoint.md)
 
-# Part VII — GPU Codegen *(planned)*
+# Part VII — GPU Codegen
 
-- [The PTX back end *(planned)*]()
-- [GEMM, tiling & the capstone *(planned)*]()
-- [Honest performance & the PTX boundary *(planned)*]()
+- [The PTX back end](part7-gpu/01-ptx-backend.md)
+- [GEMM, tiling & the capstone](part7-gpu/02-gemm-tiling-capstone.md)
+- [Honest performance & the PTX boundary](part7-gpu/03-honest-performance.md)
 
 # Part VIII — Trust & Verification *(planned)*
 
@@ -71,9 +71,9 @@
 
 - [Appendix A — Glossary *(planned)*]()
 - [Appendix B — Command reference *(planned)*]()
-- [Appendix C — Pinned hashes & anchors *(planned)*]()
+- [Appendix C — Pinned hashes & anchors](appendices/C-pinned-hashes.md)
 - [Appendix D — File & directory map](appendices/D-file-directory-map.md)
 - [Appendix E — Example index](appendices/E-example-index.md)
-- [Appendix F — The trusted computing base *(planned)*]()
+- [Appendix F — The trusted computing base](appendices/F-tcb.md)
 - [Appendix G — Roadmap & Phase 2 *(planned)*]()
 - [Appendix H — Further reading *(planned)*]()
