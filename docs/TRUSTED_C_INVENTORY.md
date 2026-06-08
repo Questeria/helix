@@ -20,6 +20,13 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
 
 - **Committed C/H after V6: 24 files, 15 605 LOC** (was 30 files / 16 308 LOC; V6 pruned 6 dead
   files / 708 LOC — see §4).
+- **Post-v1.3 (GPT-2 inference demo) addendum:** at HEAD the committed C/H is **25 files / 16 545 LOC**.
+  The v1.3 V6 trusted toolchain detailed below (24 files / 15 605 LOC — Category A's from-raw ladder
+  and the `seed.c` trust root) is **UNCHANGED**, and the self-host fixpoint stays `0992dddd`. The
+  GPT-2-on-Helix demo added exactly one **Category-B harness** launcher — `helixc/runtime/gpt2_infer.c`
+  (667 LOC, a CUDA-FFI forward-only launcher like `train_transformer.c`, outside the self-host fixpoint,
+  ptxas-boundary) — and grew `cuda_launch.c` by 273 LOC (GPU kernel verify modes). So Category B is
+  3 files / 3 328 LOC at HEAD (was 2 / 2 388). Nothing in Category A or the trust root changed.
 - The trusted-C surface is **two disjoint categories**:
   - **A. The from-raw bootstrap ladder** (`stage0/*`, 22 files / 13 217 LOC) — trusted **source**
     that is **compiled from raw** by the `hex0 → hex1 → hex2 → catm → M0 → cc_amd64 → M2-Planet`

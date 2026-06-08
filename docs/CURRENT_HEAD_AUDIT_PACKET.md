@@ -23,7 +23,7 @@ them **without** relying on the gitignored process logs under `.stage33-logs/`. 
 | Check | Command | Result |
 |-------|---------|--------|
 | Exactly 1 committed `.py` | `git ls-files "*.py" \| wc -l` | **1** — `verification/oracle/oracle_train.py` |
-| 24 committed `.c`/`.h`, 15 605 LOC | `git ls-files "*.c" "*.h" \| wc -l` ; `\| xargs wc -l` | **24 / 15 605** |
+| committed `.c`/`.h` + LOC | `git ls-files "*.c" "*.h" \| wc -l` ; `\| xargs wc -l` | **25 / 16 545** — the v1.3 trusted toolchain (24 / 15 605, Category A from-raw ladder + seed) is unchanged; +1 = `helixc/runtime/gpt2_infer.c` (the post-v1.3 GPT-2 demo launcher, Category B), and `cuda_launch.c` grew +273 (GPU verify modes) |
 | `seed.bin` gitignored + pinned | `git check-ignore` ; `sha256sum` vs `seed.sha256` | ignored; `9837db12…` == `seed.sha256` |
 
 ## The three result-bearing legs (verbatim verdict lines)

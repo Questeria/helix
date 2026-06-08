@@ -2,7 +2,10 @@
 # reproduce_trust.sh -- ONE-COMMAND clean-room reproduction of the Helix from-raw trust core.
 #
 # What it proves (CPU-only -- runnable on any x86-64 Linux, incl. a CI runner, with NO local state):
-#   [1] static fence            : exactly 1 committed .py, 24 committed .c/.h
+#   [1] static fence            : exactly 1 committed .py, 25 committed .c/.h
+#                                 (24 = the v1.3 from-raw trusted toolchain, UNCHANGED; +1 = the
+#                                  post-v1.3 GPT-2 demo launcher helixc/runtime/gpt2_infer.c, a
+#                                  Category-B CUDA-FFI harness like train_transformer.c)
 #   [2] from-raw ladder         : DELETE every pre-built rung binary, then rebuild hex0->...->seed
 #                                 using ONLY the prior rung (hex0 from hand-authored hex via xxd);
 #                                 each rung self-verifies its committed .sha256; seed == pinned.
@@ -54,7 +57,7 @@ say "[1] static fence"
 NPY=$(git ls-files "*.py" | wc -l | tr -d ' ')
 NCH=$(git ls-files "*.c" "*.h" | wc -l | tr -d ' ')
 if [ "$NPY" = "1" ]; then say "    committed .py = 1 ($(git ls-files '*.py'))"; else bad "committed .py = $NPY (want 1)"; fi
-if [ "$NCH" = "24" ]; then say "    committed .c/.h = 24"; else bad "committed .c/.h = $NCH (want 24)"; fi
+if [ "$NCH" = "25" ]; then say "    committed .c/.h = 25 (24 v1.3 from-raw toolchain UNCHANGED + helixc/runtime/gpt2_infer.c, the post-v1.3 GPT-2 demo launcher)"; else bad "committed .c/.h = $NCH (want 25)"; fi
 
 # --- [2] from-raw ladder ------------------------------------------------------------------------
 say "[2] from-raw ladder (deleting pre-built rung binaries first, then rebuilding each from the prior)"
