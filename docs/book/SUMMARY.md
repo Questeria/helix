@@ -28,17 +28,17 @@
 - [Generics, traits & closures](part3-language/04-generics-traits-closures.md)
 - [Autodiff & the AGI-oriented features](part3-language/05-autodiff-agi-features.md)
 
-# Part IV — The Standard Library *(planned)*
+# Part IV — The Standard Library
 
-- [Stdlib overview *(planned)*]()
-- [Math, transcendentals & activations *(planned)*]()
-- [Tensors, collections & I/O *(planned)*]()
+- [Stdlib overview](part4-stdlib/01-overview.md)
+- [Math, transcendentals & activations](part4-stdlib/02-math-transcendentals-activations.md)
+- [Tensors, collections & I/O](part4-stdlib/03-tensors-collections-io.md)
 
-# Part V — The Compiler (kovc) *(planned)*
+# Part V — The Compiler (kovc)
 
-- [Front end: lexer, parser, typecheck *(planned)*]()
-- [IR & optimization passes *(planned)*]()
-- [The x86-64 ELF back end *(planned)*]()
+- [Front end: lexer, parser, typecheck](part5-compiler/01-front-end.md)
+- [IR & lowering passes](part5-compiler/02-ir-and-passes.md)
+- [The x86-64 ELF back end](part5-compiler/03-x86-backend.md)
 
 # Part VI — The From-Raw Bootstrap Ladder *(planned)*
 
@@ -72,7 +72,7 @@
 - [Appendix A — Glossary *(planned)*]()
 - [Appendix B — Command reference *(planned)*]()
 - [Appendix C — Pinned hashes & anchors *(planned)*]()
-- [Appendix D — File & directory map *(planned)*]()
+- [Appendix D — File & directory map](appendices/D-file-directory-map.md)
 - [Appendix E — Example index](appendices/E-example-index.md)
 - [Appendix F — The trusted computing base *(planned)*]()
 - [Appendix G — Roadmap & Phase 2 *(planned)*]()

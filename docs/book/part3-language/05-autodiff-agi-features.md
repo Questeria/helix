@@ -56,10 +56,13 @@ below are finished. Three tiers will recur:
   the gate. It exists; it is not independently proven here. (The spec's honesty legend, in
   [`docs/HELIX_V1_LANGUAGE_SPEC.md`](../../../docs/HELIX_V1_LANGUAGE_SPEC.md), uses the same `[impl]`
   marker.)
-- **Design-stage** — real committed `.hx` source that the **current** self-hosting compiler
-  does **not** compile, because it depends on intrinsics that only ever existed in the
-  **deleted** Python `helixc` frontend, or because its semantics are deliberately
-  identity-erased (a compile-time-only metadata channel). This is most of the AGI surface.
+- **Design-stage** — real committed `.hx` source with no standing compile-proof under the
+  **current** self-hosting compiler: either it depends on intrinsics that only ever existed in
+  the **deleted** Python `helixc` frontend; or it is within the shipping intrinsic surface but
+  no gate row compiles it (and there is no import to pull in the helpers it needs — e.g.
+  `autodiff.hx` needs `transcendentals.hx`'s f64 functions co-parsed); or its semantics are
+  deliberately identity-erased (a compile-time-only metadata channel). This is most of the AGI
+  surface.
 
 > **For AI agents:** "the deleted Python `helixc` frontend" is a real, load-bearing
 > distinction. The Python reference compiler was removed at K4 (see
@@ -233,17 +236,23 @@ example that exercises `D<f32>` is itself labelled non-running by its own header
 
 The repository ships two hand-written autodiff **libraries** in
 [`helixc/stdlib/`](../../../helixc/stdlib/). They are genuine, committed, carefully written
-Helix source — and they are **not** compiled or run by the gate, and the **current**
-self-hosting `kovc` does **not** compile them, because they depend on math intrinsics
+Helix source — and they are **not** compiled or run by the gate. Their math dependencies
 (`__exp_f64`, `__sigmoid_f64`, `__sqrt_f64`, `__log_stable_f64`, `__sin_f64`, `__cos_f64`, …)
-that exist only in the deleted Python frontend, not in `helixc/bootstrap/`. Documenting them
+are **not compiler intrinsics** — they are ordinary `@pure fn`s defined in
+[`helixc/stdlib/transcendentals.hx`](../../../helixc/stdlib/transcendentals.hx) (see
+[Part IV — Math, transcendentals & activations](../part4-stdlib/02-math-transcendentals-activations.md)).
+So `autodiff.hx` would compile under the shipping `kovc` *only if* `transcendentals.hx` is
+co-parsed alongside it — and there is **no import/module-loader** that does so, and **no gate
+row composes the two**, so neither module carries a standing compile-proof. Documenting them
 honestly means: this is **design-stage** library code, valuable as a record of the intended
 API and numerics, not a proven capability of the shipping toolchain.
 
 > **For AI agents:** none of the `d_*` (forward) or `rev_*` (reverse) functions below appear
-> in `scripts/gate_kovc.sh`, and `autodiff.hx`'s math-intrinsic dependencies are absent from
-> `helixc/bootstrap/kovc.hx`. Do not import these modules expecting them to compile with the
-> shipped `kovc`. The only gate-accepted autodiff is the `grad` rewrite of §2.
+> in `scripts/gate_kovc.sh`, and `autodiff.hx` depends on `transcendentals.hx`'s f64 helpers
+> (`__exp_f64`, `__sqrt_f64`, …) which are library `@pure fn`s, not builtins — with no import to
+> pull them in and no gate row that co-parses both. Do not import these modules expecting them to
+> compile standalone with the shipped `kovc`. The only gate-accepted autodiff is the `grad`
+> rewrite of §2.
 
 ### 4.1 Forward mode by dual numbers — `autodiff.hx`
 

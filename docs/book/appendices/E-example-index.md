@@ -1,14 +1,15 @@
 # Appendix E — Example index
 
 *What this chapter covers: a categorized, navigational index of the real Helix example
-programs that ship under [`helixc/examples/`](../../../helixc/examples/) (100 `.hx` files),
+programs that ship under [`helixc/examples/`](../../../helixc/examples/) (98 `.hx` files),
 grouped by theme, plus the example programs the gate compiles and runs with a fixed exit
 code. For each entry you get the path, a one-line description of what it demonstrates, and —
 where the gate asserts it — the exit code. Use this as a lookup table: find a feature, jump
 to a real file you can compile.*
 
 This appendix is a **reference index**, not a tutorial. It does not re-teach the language
-(Part III, *planned*) or the build (see [Part II — Setup & Build](../part2-setup-build/02-build-from-raw.md)).
+(see [Part III — The Helix Language](../part3-language/01-language-tour.md)) or the build (see
+[Part II — Setup & Build](../part2-setup-build/02-build-from-raw.md)).
 Every file named here exists in the repository at tag `v1.3-release`; the listing was taken
 directly from `helixc/examples/`. Nothing here is invented — if a feature has no real file, it
 is simply not listed.
