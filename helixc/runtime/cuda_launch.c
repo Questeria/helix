@@ -1567,6 +1567,55 @@ int main(int argc, char** argv) {
         return gbad ? 1 : 0;
     }
 
+    /* gelu_big mode (P5 GPT-2): cuda_launch <ptx> gpu_gelu_stable <N> gelu_big [mutate].
+     * The SAME gelu_new (tanh-approx) correctness check as `gelu`, but over GPT-2-SCALE inputs in
+     * [-12,12] (GPT-2's c_fc pre-activation reaches ~+/-12). At x~12 the tanh argument z reaches ~63,
+     * so the DIRECT form e^(2z)=e^126 OVERFLOWS f32 -> +inf -> (inf-1)/(inf+1)=NaN. The reference is
+     * the OVERFLOW-SAFE f64 tanh (tanhf would also be stable); the kovc kernel must match it within
+     * tol 1e-3 AND stay finite at every cell. The committed `gpu_gelu` (direct e^(2z)) FAILS this gate
+     * by producing NaN around x~11.5 (proving the gate is load-bearing); `gpu_gelu_stable` PASSES.
+     * "mutate" perturbs y[0] pre-compare (comparator teeth). */
+    if (strcmp(op, "gelu_big") == 0) {
+        int mutate = (argc > 5 && strcmp(argv[5], "mutate") == 0);
+        size_t ne = (size_t)N;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hy) return 2;
+        /* sweep [-12,12] across N cells (deterministic), so x~11.5 (the empirical NaN point) is hit. */
+        for (size_t i = 0; i < ne; i++) { hx[i] = -12.0f + 24.0f * ((float)(i % 241) / 240.0f); hy[i] = -7.0f; }
+        CUdeviceptr dx, dy;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "H2D y(sentinel)");
+        void* gargs[] = { &dx, &dy, &N };
+        CK(cuLaunchKernel(fn, N, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "launch gelu_big");
+        CK(cuCtxSynchronize(), "sync gelu_big");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        if (mutate) hy[0] += 1.0f;
+        int gbad = 0; float maxrel = 0.0f, maxabs = 0.0f; int nnan = 0; float y0 = hy[0], ref0 = 0.0f;
+        for (size_t i = 0; i < ne; i++) {
+            double xx = (double)hx[i];
+            double x3 = xx * xx * xx;
+            double inner = 0.7978846 * (xx + 0.044715 * x3);
+            double th = tanh(inner);                       /* overflow-safe reference */
+            double ref = 0.5 * xx * (1.0 + th);
+            if (i == 0) ref0 = (float)ref;
+            float got = hy[i];
+            if (isnan(got) || isinf(got)) { nnan++; if (gbad < 4) fprintf(stderr, "gelu_big NON-FINITE y[%zu]=%g (x=%g)\n", i, got, hx[i]); gbad++; continue; }
+            double d = (double)got - ref; if (d < 0) d = -d; if (d > maxabs) maxabs = (float)d;
+            double ar = ref < 0 ? -ref : ref; double rel = d / (ar > 1e-6 ? ar : 1e-6);
+            if (rel > maxrel) maxrel = (float)rel;
+            if (d > 1.0e-3) { if (gbad < 4) fprintf(stderr, "gelu_big mismatch y[%zu]=%g ref %g (x=%g)\n", i, got, ref, hx[i]); gbad++; }
+        }
+        printf("GPU [%s] gelu_big N=%d (gelu_new over [-12,12], GPT-2 scale, overflow-safe ref)%s: y[0]=%g ref %g, maxrel=%.2e maxabs=%.2e non-finite=%d (tol 1e-3), %d bad -> %s\n",
+               gpu, N, mutate ? " [MUTATED]" : "", y0, ref0, maxrel, maxabs, nnan, gbad, gbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(ptx);
+        return gbad ? 1 : 0;
+    }
+
     /* adam mode: cuda_launch <ptx> gpu_adam <N> adam. One in-place Adam step on w (with g,m,v).
      * bc1,bc2 (bias-correction) passed as 1-elem arrays; here bc1=10, bc2=1000 (step t=1). Verify
      * nm,nv (tol 1e-5, exact arithmetic) and new_w (tol 1e-4, rsqrt.approx) vs an independent CPU
