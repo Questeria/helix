@@ -20,13 +20,13 @@
 - [Reproduce & verify the trust chain](part2-setup-build/04-reproduce-verify-trust.md)
 - [Troubleshooting](part2-setup-build/05-troubleshooting.md)
 
-# Part III — The Helix Language *(planned)*
+# Part III — The Helix Language
 
-- [Language tour *(planned)*]()
-- [Types, effects & refinements *(planned)*]()
-- [Functions, control flow & pattern matching *(planned)*]()
-- [Generics, traits & closures *(planned)*]()
-- [Autodiff & the AGI type-system features *(planned)*]()
+- [The language tour](part3-language/01-language-tour.md)
+- [Types: widths, structs & enums](part3-language/02-types.md)
+- [Functions, control flow & pattern matching](part3-language/03-functions-control-flow.md)
+- [Generics, traits & closures](part3-language/04-generics-traits-closures.md)
+- [Autodiff & the AGI-oriented features](part3-language/05-autodiff-agi-features.md)
 
 # Part IV — The Standard Library *(planned)*
 
@@ -73,7 +73,7 @@
 - [Appendix B — Command reference *(planned)*]()
 - [Appendix C — Pinned hashes & anchors *(planned)*]()
 - [Appendix D — File & directory map *(planned)*]()
-- [Appendix E — Example index *(planned)*]()
+- [Appendix E — Example index](appendices/E-example-index.md)
 - [Appendix F — The trusted computing base *(planned)*]()
 - [Appendix G — Roadmap & Phase 2 *(planned)*]()
 - [Appendix H — Further reading *(planned)*]()

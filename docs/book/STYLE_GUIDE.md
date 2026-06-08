@@ -136,9 +136,11 @@ Ground every claim in real source, and cite it so a reader (or agent) can verify
 
 - Cite repo files by their path **relative to the repo root**, as a Markdown link. From a Stage-1
   chapter at `docs/book/partN-.../NN-....md`, the repo root is three levels up, so link like
-  `[scripts/reproduce_trust.sh](../../../scripts/reproduce_trust.sh)`. From this guide
-  (`docs/book/STYLE_GUIDE.md`) it is two levels up: `[scripts/...](../../scripts/...)`. Always
-  show the repo-root-relative path as the **link text** so it reads correctly even unlinked.
+  `` [scripts/reproduce_trust.sh](../../../scripts/reproduce_trust.sh) ``. From this guide
+  (`docs/book/STYLE_GUIDE.md`) it is two levels up: `` [scripts/...](../../scripts/...) ``. Always
+  show the repo-root-relative path as the **link text** so it reads correctly even unlinked. (Both
+  forms here are shown as inline code, not live links, because the correct prefix depends on the
+  citing file's depth.)
 - When you quote code or a command, quote it **verbatim** and cite the exact file (and, where it
   aids verification, the line region, e.g. "`scripts/gate_kovc.sh` step `[1]`").
 - Cite the canonical trust records by name where a trust claim is made:

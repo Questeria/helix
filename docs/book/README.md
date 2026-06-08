@@ -31,19 +31,24 @@ manual, with the non-negotiables, the traps, and copy-paste recipes.
 
 ## Status: a staged book
 
-The book is being written in stages. **Stage 1 has shipped**, covering the three parts you most
-need to get started and to operate Helix safely:
+The book is being written in stages. The shipped parts so far cover what you most need to get
+started, to operate Helix safely, and to learn the language:
 
 - **Part I — Orientation** — what Helix is, a ten-minute tour, how to read this book, and trust at
   a glance.
 - **Part II — Setup & Build** — prerequisites, building from raw, using `kovc`, reproducing and
   verifying the trust chain, and troubleshooting.
+- **Part III — The Helix Language** — the language tour; types; functions, control flow & pattern
+  matching; generics, traits & closures; and autodiff & the AGI-oriented features.
 - **Part IX — For AI Agents** — driving Helix, the non-negotiables, the traps, and recipes.
+- **Appendix E — Example index** — a categorized index of the real example programs under
+  `helixc/examples/`.
 
-Parts **III–VIII** (the language, the standard library, the `kovc` compiler internals, the
-from-raw bootstrap ladder, GPU codegen, and trust & verification) and **Appendices A–H** are
-**planned** and marked as such in the [table of contents](SUMMARY.md). They are outlined now so
-the shape of the whole book is visible; their chapters will be filled in subsequent stages.
+The remaining parts (**IV — The Standard Library**, **V — The Compiler `kovc`**, **VI — The
+From-Raw Bootstrap Ladder**, **VII — GPU Codegen**, **VIII — Trust & Verification**) and the other
+appendices are **planned** and marked as such in the [table of contents](SUMMARY.md). They are
+outlined now so the shape of the whole book is visible; their chapters will be filled in subsequent
+stages.
 
 ## How to start
 
