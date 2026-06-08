@@ -1875,6 +1875,230 @@ int main(int argc, char** argv) {
         return abad ? 1 : 0;
     }
 
+    /* ===== P5 GPT-2 gap-kernel unit gates (HELIX_GPT2_DEMO_EXECUTION_PLAN.md P5 gate 1) ===== */
+
+    /* softmax_causal mode: cuda_launch <ptx> gpu_softmax_causal <Nignored> softmax_causal <S> <S> [mutate].
+     * The NEW causal row-softmax kernel gpu_softmax_causal(x,y,rows,cols): grid=rows(=S) block=1; for
+     * query row i it stable-softmaxes over keys j<=i ONLY and writes y[i,j]=0 for j>i (no -inf literal).
+     * Random [S,S] scores. CPU reference = the same causal softmax (max over [0..=i], expf, normalize;
+     * exact 0 for j>i). Two independent checks: (1) cell-by-cell vs the CPU ref (tol 1e-3, maxrel
+     * reported); (2) each row i sums to ~1 over j<=i AND every y[i,j]==0 for j>i (exact). The "mutate"
+     * arg perturbs one valid output cell pre-compare -> comparator negative control (must FAIL).
+     * cols==rows==S here (square scores). S<=4096 (static scratch). */
+    if (strcmp(op, "softmax_causal") == 0) {
+        int S = (argc > 5) ? atoi(argv[5]) : 64;
+        int cols = (argc > 6) ? atoi(argv[6]) : S;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        if (cols != S) { fprintf(stderr, "softmax_causal: this gate uses square [S,S] scores (cols must==S); got S=%d cols=%d\n", S, cols); return 2; }
+        if (S > 4096) { fprintf(stderr, "softmax_causal: S<=4096; got %d\n", S); return 2; }
+        size_t ne = (size_t)S * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        if (!hx || !hy) return 2;
+        /* pseudo-random scores in ~[-4,4] (deterministic LCG so the run is reproducible). */
+        unsigned int seed = 0x9e3779b9u;
+        for (size_t i = 0; i < ne; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            hx[i] = ((float)(seed >> 8) / (float)0xFFFFFFu) * 8.0f - 4.0f;
+            hy[i] = -7.0f;   /* sentinel: an unwritten cell shows up */
+        }
+        CUdeviceptr dx, dy;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "H2D y(sentinel)");
+        void* sargs[] = { &dx, &dy, &S, &cols };
+        CK(cuLaunchKernel(fn, S, 1, 1, 1, 1, 1, 0, 0, sargs, 0), "launch gpu_softmax_causal");
+        CK(cuCtxSynchronize(), "sync gpu_softmax_causal");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        if (mutate) hy[(size_t)(S - 1) * cols] += 1.0f;  /* perturb a VALID cell (row S-1, col 0): must trip the compare */
+        int sbad = 0; float maxabs = 0.0f, maxrel = 0.0f, maxsumerr = 0.0f, maxzero = 0.0f;
+        for (int r = 0; r < S; r++) {
+            int nvalid = r + 1;
+            float mx = hx[(size_t)r * cols];
+            for (int j = 1; j < nvalid; j++) if (hx[(size_t)r * cols + j] > mx) mx = hx[(size_t)r * cols + j];
+            float sm = 0.0f;
+            for (int j = 0; j < nvalid; j++) sm += expf(hx[(size_t)r * cols + j] - mx);
+            float rowsum = 0.0f;
+            for (int c = 0; c < cols; c++) {
+                float got = hy[(size_t)r * cols + c];
+                float ref = (c < nvalid) ? expf(hx[(size_t)r * cols + c] - mx) / sm : 0.0f;
+                if (c < nvalid) {
+                    rowsum += got;
+                    float e = got - ref; if (e < 0) e = -e; if (e > maxabs) maxabs = e;
+                    float ar = ref < 0 ? -ref : ref; float rel = e / (ar > 1e-6f ? ar : 1e-6f);
+                    if (rel > maxrel) maxrel = rel;
+                    if (isnan(got) || (e > 1.0e-3f && rel > 1.0e-3f)) { if (sbad < 6) fprintf(stderr, "softmax_causal mismatch y[%d,%d]=%g ref %g (abs %.2e rel %.2e)\n", r, c, got, ref, e, rel); sbad++; }
+                } else {
+                    /* masked region: must be EXACTLY 0 (the causal write). */
+                    float az = got < 0 ? -got : got; if (az > maxzero) maxzero = az;
+                    if (isnan(got) || got != 0.0f) { if (sbad < 6) fprintf(stderr, "softmax_causal masked cell y[%d,%d]=%g (want exact 0)\n", r, c, got); sbad++; }
+                }
+            }
+            float ds = rowsum - 1.0f; if (ds < 0) ds = -ds; if (ds > maxsumerr) maxsumerr = ds;
+            if (isnan(rowsum) || ds > 1.0e-3f) { if (sbad < 6) fprintf(stderr, "softmax_causal row %d sum-over-j<=i %g (want 1)\n", r, rowsum); sbad++; }
+        }
+        printf("GPU [%s] softmax_causal S=%d (causal row-softmax, grid=S block=1)%s: maxabs=%.2e maxrel=%.2e (tol=1e-3) max|rowsum-1|=%.2e max|masked|=%.2e, %d bad -> %s\n",
+               gpu, S, mutate ? " [MUTATED]" : "", maxabs, maxrel, maxsumerr, maxzero, sbad, sbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(ptx);
+        return sbad ? 1 : 0;
+    }
+
+    /* layernorm_eps mode: cuda_launch <ptx> gpu_layernorm_fwd_eps <Nignored> layernorm_eps <rows> <cols> [mutate|epscheck].
+     * The NEW affine LayerNorm-WITH-eps kernel gpu_layernorm_fwd_eps(x,y,gamma,beta,cols): grid=rows
+     * block=1; y[r,c]=gamma[c]*(x[r,c]-mean)*rsqrt(var+1e-5)+beta[c], biased/population variance.
+     * Random [rows,cols] (cols=768 for GPT-2). CPU reference = affine LN with eps=1e-5 + biased var
+     * (divide by cols); cell-by-cell tol 1e-3 (maxrel reported).
+     *  - "mutate": perturb one output cell pre-compare -> comparator negative control (must FAIL).
+     *  - "epscheck": EPS-IS-APPLIED negative control. Feed a near-zero-variance row (all entries ~equal)
+     *    and compare the GPU (eps) output against an eps-STRIPPED CPU reference (1/sqrt(var), no eps).
+     *    With var~0 the two MUST DIVERGE (the eps-less ref blows up / differs hugely); a kernel that
+     *    silently dropped eps would instead MATCH the stripped ref. So here a LARGE divergence == PASS
+     *    (eps proven load-bearing); near-agreement == FAIL. */
+    if (strcmp(op, "layernorm_eps") == 0) {
+        int rows = (argc > 5) ? atoi(argv[5]) : 8;
+        int cols = (argc > 6) ? atoi(argv[6]) : 768;
+        int mutate  = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        int epschk  = (argc > 7 && strcmp(argv[7], "epscheck") == 0);
+        const float EPS = 1.0e-5f;
+        size_t ne = (size_t)rows * cols;
+        float* hx = (float*)malloc(ne * sizeof(float));
+        float* hy = (float*)malloc(ne * sizeof(float));
+        float* hg = (float*)malloc((size_t)cols * sizeof(float));
+        float* hb = (float*)malloc((size_t)cols * sizeof(float));
+        if (!hx || !hy || !hg || !hb) return 2;
+        unsigned int seed = 0x12345677u;
+        for (size_t i = 0; i < ne; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            hx[i] = ((float)(seed >> 8) / (float)0xFFFFFFu) * 6.0f - 3.0f;
+            hy[i] = -7.0f;
+        }
+        for (int c = 0; c < cols; c++) { hg[c] = 1.0f + 0.25f * (float)(c % 4); hb[c] = 0.5f * (float)((c % 3) - 1); }
+        /* epscheck: make EVERY row near-zero-variance (a tiny nonzero spread so the eps-less CPU ref is
+         * finite-but-HUGE, not a degenerate 0*inf=NaN). var ~ 1e-8 << eps=1e-5, so 1/sqrt(var) ~ 1e4
+         * (eps-less) vs 1/sqrt(var+eps) ~ 316 (the GPU): the normalized outputs then differ by a large,
+         * finite, measurable amount -> eps proven load-bearing. A kernel that silently dropped eps would
+         * instead match the eps-less ref. Spread = +-1e-4 around 2.5 (alternating) gives var ~ 1e-8. */
+        if (epschk) {
+            for (size_t i = 0; i < ne; i++) hx[i] = 2.5f + ((i & 1) ? 1.0e-4f : -1.0e-4f);
+        }
+        CUdeviceptr dx, dy, dg, db;
+        CK(cuMemAlloc(&dx, ne * sizeof(float)), "alloc x");
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemAlloc(&dg, (size_t)cols * sizeof(float)), "alloc g");
+        CK(cuMemAlloc(&db, (size_t)cols * sizeof(float)), "alloc b");
+        CK(cuMemcpyHtoD(dx, hx, ne * sizeof(float)), "H2D x");
+        CK(cuMemcpyHtoD(dy, hy, ne * sizeof(float)), "H2D y(sentinel)");
+        CK(cuMemcpyHtoD(dg, hg, (size_t)cols * sizeof(float)), "H2D g");
+        CK(cuMemcpyHtoD(db, hb, (size_t)cols * sizeof(float)), "H2D b");
+        void* largs[] = { &dx, &dy, &dg, &db, &cols };   /* 5 params: NO ist save (inference kernel) */
+        CK(cuLaunchKernel(fn, rows, 1, 1, 1, 1, 1, 0, 0, largs, 0), "launch gpu_layernorm_fwd_eps");
+        CK(cuCtxSynchronize(), "sync gpu_layernorm_fwd_eps");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        if (mutate) hy[0] += 1.0f;   /* comparator negative control */
+        if (epschk) {
+            /* compare GPU(eps) row 0 vs an EPS-STRIPPED CPU ref on the near-zero-variance row; they MUST diverge. */
+            float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[c]; mean /= (float)cols;
+            float var = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[c] - mean; var += d * d; } var /= (float)cols;
+            float inv_noeps = 1.0f / sqrtf(var);          /* eps-LESS: var~0 -> huge/inf */
+            float inv_eps   = 1.0f / sqrtf(var + EPS);    /* what the GPU kernel uses */
+            float maxdiv = 0.0f; int finite_ok = 1;
+            for (int c = 0; c < cols; c++) {
+                float ref_noeps = hg[c] * ((hx[c] - mean) * inv_noeps) + hb[c];
+                float got = hy[c];
+                if (isnan(got) || isinf(got)) finite_ok = 0;   /* GPU(eps) must stay finite */
+                float e = got - ref_noeps; if (e < 0) e = -e;
+                if (!isnan(e) && !isinf(e) && e > maxdiv) maxdiv = e;   /* finite divergence only */
+            }
+            /* PASS == the GPU(eps) output is finite AND diverges hugely from the eps-less ref, on a
+             * genuinely near-zero-variance row (var << eps) where eps is the load-bearing term. */
+            int diverged = finite_ok && (maxdiv > 1.0f) && (var < 1.0e-4f);
+            printf("GPU [%s] layernorm_eps EPS-CONTROL rows=%d cols=%d: near-zero var=%.3e, GPU-eps inv=%.4f vs eps-less inv=%.4f, max|GPU-eps - CPU-noeps|=%.3e, GPU finite=%d -> eps-applied=%s -> %s\n",
+                   gpu, rows, cols, var, inv_eps, inv_noeps, maxdiv, finite_ok, diverged ? "YES" : "NO", diverged ? "PASS" : "FAIL");
+            cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db);
+            cuModuleUnload(mod); cuCtxDestroy(ctx);
+            free(hx); free(hy); free(hg); free(hb); free(ptx);
+            return diverged ? 0 : 1;
+        }
+        /* normal correctness gate: CPU affine LN with eps + biased variance, cell-by-cell. */
+        int lbad = 0; float maxabs = 0.0f, maxrel = 0.0f;
+        for (int r = 0; r < rows; r++) {
+            float mean = 0.0f; for (int c = 0; c < cols; c++) mean += hx[(size_t)r * cols + c]; mean /= (float)cols;
+            float var = 0.0f; for (int c = 0; c < cols; c++) { float d = hx[(size_t)r * cols + c] - mean; var += d * d; } var /= (float)cols;
+            float inv = 1.0f / sqrtf(var + EPS);
+            for (int c = 0; c < cols; c++) {
+                float ref = hg[c] * ((hx[(size_t)r * cols + c] - mean) * inv) + hb[c];
+                float got = hy[(size_t)r * cols + c];
+                float e = got - ref; if (e < 0) e = -e; if (e > maxabs) maxabs = e;
+                float ar = ref < 0 ? -ref : ref; float rel = e / (ar > 1e-6f ? ar : 1e-6f);
+                if (rel > maxrel) maxrel = rel;
+                if (isnan(got) || (e > 1.0e-3f && rel > 1.0e-3f)) { if (lbad < 6) fprintf(stderr, "layernorm_eps mismatch y[%d,%d]=%g ref %g (abs %.2e rel %.2e)\n", r, c, got, ref, e, rel); lbad++; }
+            }
+        }
+        printf("GPU [%s] layernorm_eps rows=%d cols=%d (affine + eps=1e-5, biased var, grid=rows block=1)%s: maxabs=%.2e maxrel=%.2e (tol=1e-3), %d bad -> %s\n",
+               gpu, rows, cols, mutate ? " [MUTATED]" : "", maxabs, maxrel, lbad, lbad ? "FAIL" : "PASS");
+        cuMemFree(dx); cuMemFree(dy); cuMemFree(dg); cuMemFree(db);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx); free(hy); free(hg); free(hb); free(ptx);
+        return lbad ? 1 : 0;
+    }
+
+    /* add_bias mode: cuda_launch <ptx> gpu_add_bias_rowbcast <n> add_bias <n> <cols> [mutate].
+     * The NEW row-broadcast bias-add kernel gpu_add_bias_rowbcast(y,bias,n,cols): one thread/element
+     * (vector_add-style launch grid=ceil(n/256) block=256) with an i<n guard; y[i]+=bias[i mod cols].
+     * y starts as x0 (random), bias random length cols (GPT-2: cols in {2304,768,3072}); n is typically
+     * NOT a multiple of cols so the i<n guard + the wrap are both exercised. CPU reference: assert
+     * y[i]==x0[i]+bias[i mod cols] CELL-EXACT (fp32 add of the same two summands -> bit-identical, ==
+     * compare, NOT a tolerance). "mutate" perturbs one cell pre-compare -> comparator neg-control. */
+    if (strcmp(op, "add_bias") == 0) {
+        int n    = (argc > 5) ? atoi(argv[5]) : (768 * 5 + 17);
+        int cols = (argc > 6) ? atoi(argv[6]) : 768;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        if (n <= 0 || cols <= 0) { fprintf(stderr, "add_bias: n>0 and cols>0 required\n"); return 2; }
+        size_t ne = (size_t)n;
+        float* hx0  = (float*)malloc(ne * sizeof(float));     /* original y (=x0) */
+        float* hy   = (float*)malloc(ne * sizeof(float));     /* device result */
+        float* hbias= (float*)malloc((size_t)cols * sizeof(float));
+        if (!hx0 || !hy || !hbias) return 2;
+        unsigned int seed = 0xcafef00du;
+        for (size_t i = 0; i < ne; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            hx0[i] = ((float)(seed >> 8) / (float)0xFFFFFFu) * 20.0f - 10.0f;
+        }
+        for (int c = 0; c < cols; c++) {
+            seed = seed * 1664525u + 1013904223u;
+            hbias[c] = ((float)(seed >> 8) / (float)0xFFFFFFu) * 4.0f - 2.0f;
+        }
+        CUdeviceptr dy, dbias;
+        CK(cuMemAlloc(&dy, ne * sizeof(float)), "alloc y");
+        CK(cuMemAlloc(&dbias, (size_t)cols * sizeof(float)), "alloc bias");
+        CK(cuMemcpyHtoD(dy, hx0, ne * sizeof(float)), "H2D y(=x0)");
+        CK(cuMemcpyHtoD(dbias, hbias, (size_t)cols * sizeof(float)), "H2D bias");
+        int ni = n, ci = cols;
+        void* aargs[] = { &dy, &dbias, &ni, &ci };
+        int tpb = 256; int bpg = (n + tpb - 1) / tpb;
+        CK(cuLaunchKernel(fn, bpg, 1, 1, tpb, 1, 1, 0, 0, aargs, 0), "launch gpu_add_bias_rowbcast");
+        CK(cuCtxSynchronize(), "sync gpu_add_bias_rowbcast");
+        CK(cuMemcpyDtoH(hy, dy, ne * sizeof(float)), "D2H y");
+        if (mutate) hy[n / 2] += 1.0f;   /* perturbed-cell negative control: must trip the == compare */
+        int abad = 0; float maxabs = 0.0f;
+        for (int i = 0; i < n; i++) {
+            int r = i - (i / cols) * cols;            /* i mod cols, the kernel's own formula */
+            float ref = hx0[i] + hbias[r];            /* same two summands -> bit-identical add */
+            float got = hy[i];
+            float e = got - ref; if (e < 0) e = -e; if (e > maxabs) maxabs = e;
+            if (isnan(got) || got != ref) { if (abad < 6) fprintf(stderr, "add_bias mismatch y[%d]=%g ref %g (i mod cols=%d)\n", i, got, ref, r); abad++; }
+        }
+        printf("GPU [%s] add_bias n=%d cols=%d (y[i]+=bias[i mod cols], 1 thread/elem, i<n guard)%s: maxabs=%.2e (cell-exact ==), %d bad -> %s\n",
+               gpu, n, cols, mutate ? " [MUTATED]" : "", maxabs, abad, abad ? "FAIL" : "PASS");
+        cuMemFree(dy); cuMemFree(dbias);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hx0); free(hy); free(hbias); free(ptx);
+        return abad ? 1 : 0;
+    }
+
     size_t bytes = (size_t)N * sizeof(float);
     float* ha = (float*)malloc(bytes);
     float* hb = (float*)malloc(bytes);
