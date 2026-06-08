@@ -375,7 +375,7 @@ end-to-end capstone speedup over the naive op-set is **7.0–8.7×** across thre
 
 ---
 
-**Next:** Part VII's GPU story closes here on the honest boundary; **Part VIII — Trust & Verification**
-*(planned)* picks up the CPU-side defenses — the trusting-trust problem and the **gcc-DDC**, the gate
+**Next:** Part VII's GPU story closes here on the honest boundary; **[Part VIII — Trust & Verification](../part8-trust/01-trusting-trust-and-ddc.md)**
+picks up the CPU-side defenses — the trusting-trust problem and the **gcc-DDC**, the gate
 and the feature corpus, and the full residuals and trusted computing base — beginning with *The
 trusting-trust problem & the gcc-DDC*.

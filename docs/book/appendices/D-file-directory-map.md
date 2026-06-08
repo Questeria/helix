@@ -88,7 +88,7 @@ is *this* code compiling *this* code. Four files:
 |---|---|
 | [`helixc/bootstrap/lexer.hx`](../../../helixc/bootstrap/lexer.hx) | the lexer |
 | [`helixc/bootstrap/parser.hx`](../../../helixc/bootstrap/parser.hx) | the parser |
-| [`helixc/bootstrap/kovc.hx`](../../../helixc/bootstrap/kovc.hx) | typecheck → IR → optimization passes → x86-64 ELF back end (+ the PTX emitter) |
+| [`helixc/bootstrap/kovc.hx`](../../../helixc/bootstrap/kovc.hx) | typecheck → IR → lowering passes → x86-64 ELF back end (+ the PTX emitter) |
 | [`helixc/bootstrap/evaluator.hx`](../../../helixc/bootstrap/evaluator.hx) | a Helix evaluator/interpreter (the zero-lineage behavioral cross-check substrate) |
 
 These three — `lexer.hx`, `parser.hx`, `kovc.hx` — are the canonical source the gate regenerates
@@ -382,7 +382,7 @@ docs/book/
 └── appendices/         this appendix (D) lives here, alongside Appendix E
 ```
 
-The full chapter list — including the parts still marked *(planned)* — is in
+The full chapter list — every Part (I–IX) and every appendix (A–H), all shipped — is in
 [`docs/book/SUMMARY.md`](../../../docs/book/SUMMARY.md). Authors must read
 [`docs/book/STYLE_GUIDE.md`](../../../docs/book/STYLE_GUIDE.md) before writing.
 

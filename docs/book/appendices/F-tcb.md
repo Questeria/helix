@@ -14,8 +14,8 @@ fixpoint, the gcc-DDC, the capstone, the Python-free toolchain, and the pinned h
 [Trust at a glance](../part1-orientation/04-trust-at-a-glance.md); the push-button reproduction is
 [Reproduce & verify the trust chain](../part2-setup-build/04-reproduce-verify-trust.md); the full-depth
 treatment is [Part VII — Honest performance & the PTX boundary](../part7-gpu/03-honest-performance.md)
-and **Part VIII — Trust & Verification** *(planned, the closing chapter is "Residuals & the trusted
-computing base")*. This appendix is the compact, canonical residuals list those chapters expand. Where
+and **[Part VIII — Trust & Verification](../part8-trust/01-trusting-trust-and-ddc.md)** (whose closing chapter is
+[Residuals & the trusted computing base](../part8-trust/03-residuals-and-tcb.md)). This appendix is the compact, canonical residuals list those chapters expand. Where
 this page and a repo source disagree, the source wins.
 
 > **For AI agents:** treat [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) §R and §2
@@ -305,9 +305,9 @@ external third-party reproduction still open.
 
 ---
 
-**Next:** **Appendix G — Roadmap & Phase 2** *(planned)* — the user-started work that would *narrow*
+**Next:** **[Appendix G — Roadmap & Phase 2](G-roadmap-phase2.md)** — the user-started work that would *narrow*
 parts of this TCB (datacenter scaling and a parameterized PTX target for other `sm_` arches, a separate
-AMD/ROCm backend, the bf16 `wmma` stretch, and broadening the DDC to the v1.1 language surface). Until it
-ships, the authoritative roadmap is
+AMD/ROCm backend, the bf16 `wmma` stretch, and broadening the DDC to the v1.1 language surface). The
+authoritative roadmap is
 [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) §3 and
 [`docs/ROADMAP.md`](../../../docs/ROADMAP.md).

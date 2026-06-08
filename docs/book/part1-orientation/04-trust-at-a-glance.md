@@ -5,7 +5,7 @@ ladder, the self-host fixpoint, the `gcc` diverse-double-compile, the capstone, 
 toolchain; the pinned hashes that anchor all of it; how it was verified by independent and
 reproducible means; and the honest residuals that bound what "trustworthy" means here. It is a map,
 not the territory: every claim points to a real record or script, and the full-depth treatment lives
-in **Part VIII — Trust & Verification** *(planned)* and **Part VII — GPU Codegen** *(planned)*.
+in **[Part VIII — Trust & Verification](../part8-trust/01-trusting-trust-and-ddc.md)** and **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)**.
 
 The two canonical records this chapter compresses are
 [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) (the verified state plus every
@@ -276,7 +276,7 @@ ceiling on what may be claimed). The ones most likely to surprise an outside rea
   hardware, and the C host launcher (`helixc/runtime/cuda_launch.c` / `train_transformer.c`). The
   **CPU** path is all-the-way-down from raw binary; the **GPU** path is from-`hex0`-to-PTX-then-`ptxas`.
   "Complete to PTX" is the precise claim — never "complete to GPU machine code." This is detailed in
-  **Part VII — GPU Codegen** *(planned)*.
+  **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)**.
 
 - **GPU performance is a fraction of cuBLAS, not parity.** On the reference RTX 3070 Laptop (sm_86):
   ~56–67.5% of cuBLAS-f32 for the f32 GEMM tiers and ~50–54% of cuBLAS-TF32 for the Tensor-Core

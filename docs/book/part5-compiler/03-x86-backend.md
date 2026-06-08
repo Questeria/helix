@@ -6,7 +6,7 @@ byte-stream primitives that append machine code one slot at a time, the hand-bui
 headers, the two-pass size patch, and the inline syscall sequences for file I/O. It closes the loop
 on a quirk you have already met in Part II and Part IX: a successful `kovc` compile exits **non-zero**
 because the compiler returns its **output byte count** as the process exit status. This is the **CPU**
-back end; the GPU/PTX path is a separate emitter (Part VII, *planned*) and is cross-referenced, not
+back end; the GPU/PTX path is a separate emitter ([Part VII](../part7-gpu/01-ptx-backend.md)) and is cross-referenced, not
 duplicated, here.
 
 This chapter is for contributors and advanced operators. It assumes you have read
@@ -513,7 +513,7 @@ To keep the scope honest:
 - **It is not the GPU path.** `kovc` has a *second*, separate emitter for `@kernel` functions that
   produces **NVIDIA PTX text** (`emit_ptx_*`, beginning at
   [`helixc/bootstrap/kovc.hx`](../../../helixc/bootstrap/kovc.hx) line 10751) rather than ELF binary.
-  That path is covered in **Part VII — GPU Codegen** (*planned*). The honest boundary there is sharp
+  That path is covered in **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)**. The honest boundary there is sharp
   and must not be overstated: the chain is **complete to PTX, not to GPU machine code** — below PTX it
   trusts NVIDIA's closed `ptxas`, the CUDA driver, and the GPU hardware; GPU performance is a
   *fraction* of cuBLAS (~50–67.5% on the reference sm_86), and the end-to-end capstone speedup is
@@ -522,8 +522,8 @@ To keep the scope honest:
 
 ---
 
-**Next:** Part VI — *The From-Raw Bootstrap Ladder* (*planned*): how the binary this back end emits is
+**Next:** [Part VI — *The From-Raw Bootstrap Ladder*](../part6-bootstrap/01-hex0-raw-root.md): how the binary this back end emits is
 itself reachable from 299 hand-authored hex bytes — `hex0 → … → seed → kovc` — and how the self-host
-fixpoint proves `kovc` reproduces itself byte-for-byte. (Until that part ships, see the build narrative
-in [part2-setup-build/03-using-kovc.md](../part2-setup-build/03-using-kovc.md) and the trust record in
+fixpoint proves `kovc` reproduces itself byte-for-byte. (For the operator-side build narrative, see
+[part2-setup-build/03-using-kovc.md](../part2-setup-build/03-using-kovc.md) and the trust record in
 [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md).)

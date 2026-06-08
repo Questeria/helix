@@ -54,8 +54,8 @@ the GPU back end is **complete to PTX, not SASS** (§E.7).
 These seven programs live in `helixc/examples/` **and** are run by the gate's feature corpus
 with a checked exit code. (The corpus also runs many small inline-generated and `corpus_gen/`
 fixtures that are not files under `helixc/examples/`; those are out of scope for an *examples*
-index — the full corpus story is **Part VIII — The gate and the feature corpus** *(planned)*; for
-the overview today see [Trust at a glance](../part1-orientation/04-trust-at-a-glance.md).)
+index — the full corpus story is **[Part VIII — The gate and the feature corpus](../part8-trust/02-the-gate-and-corpus.md)**; for
+the overview see [Trust at a glance](../part1-orientation/04-trust-at-a-glance.md).)
 
 | File (under `helixc/examples/`) | Demonstrates | Gate exit code | `chk` site |
 |---|---|---|---|
@@ -287,7 +287,7 @@ surface (the gate's library-backed corpus fixtures inline these shapes). The 21 
 | [`agi_search.hx`](../../../helixc/stdlib/agi_search.hx) | AGI: search |
 | [`agi_world.hx`](../../../helixc/stdlib/agi_world.hx) | AGI: world model |
 
-For a stdlib walkthrough, see Part IV (*planned*); this index only points at the files an
+For a stdlib walkthrough, see [Part IV](../part4-stdlib/01-overview.md); this index only points at the files an
 example program imports.
 
 ---
@@ -304,7 +304,7 @@ family is the input corpus for the GPU back end and the capstone.
 > performance is a **fraction of cuBLAS** (~50–67.5% on that box), and the end-to-end capstone
 > speedup is **7.0–8.7×** (Amdahl-bound), not ≥10×. Loss parity (the hard gate) holds at ~0%. See
 > [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) §R for every residual, and
-> Part VII (*planned*) for the full GPU story. Never read these kernels as "GPU machine code" —
+> [Part VII](../part7-gpu/01-ptx-backend.md) for the full GPU story. Never read these kernels as "GPU machine code" —
 > they stop at PTX.
 
 How the kernels are gate-checked: the gate does **not** run PTX on a GPU. Instead it performs a
@@ -422,7 +422,7 @@ complete program — the body is omitted):
 
 ---
 
-**Next:** **Appendix F — The trusted computing base** *(planned)* — what the trust chain still
-rests on (the irreducible TCB), and the residuals that bound every claim in this book. Until it
-ships, the authoritative record of the TCB and every residual is
+**Next:** **[Appendix F — The trusted computing base](F-tcb.md)** — what the trust chain still
+rests on (the irreducible TCB), and the residuals that bound every claim in this book. The
+authoritative record of the TCB and every residual is
 [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) §R.

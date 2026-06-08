@@ -29,26 +29,37 @@ Where the guidance for an AI operator differs from the guidance for a human, you
 callout that begins **"For AI agents: …"**. **Part IX — For AI Agents** is the dedicated operator
 manual, with the non-negotiables, the traps, and copy-paste recipes.
 
-## Status: a staged book
+## Status: a complete book
 
-The book is being written in stages. The shipped parts so far cover what you most need to get
-started, to operate Helix safely, and to learn the language:
+The book is **complete**. All nine Parts (I–IX) and all eight Appendices (A–H) are written, and
+every one has a live link in the [table of contents](SUMMARY.md). The nine parts are:
 
-- **Part I — Orientation** — what Helix is, a ten-minute tour, how to read this book, and trust at
-  a glance.
-- **Part II — Setup & Build** — prerequisites, building from raw, using `kovc`, reproducing and
-  verifying the trust chain, and troubleshooting.
-- **Part III — The Helix Language** — the language tour; types; functions, control flow & pattern
-  matching; generics, traits & closures; and autodiff & the AGI-oriented features.
-- **Part IX — For AI Agents** — driving Helix, the non-negotiables, the traps, and recipes.
-- **Appendix E — Example index** — a categorized index of the real example programs under
-  `helixc/examples/`.
+- **[Part I — Orientation](part1-orientation/01-what-is-helix.md)** — what Helix is, a ten-minute
+  tour, how to read this book, and trust at a glance.
+- **[Part II — Setup & Build](part2-setup-build/01-prerequisites.md)** — prerequisites, building
+  from raw, using `kovc`, reproducing and verifying the trust chain, and troubleshooting.
+- **[Part III — The Helix Language](part3-language/01-language-tour.md)** — the language tour;
+  types; functions, control flow & pattern matching; generics, traits & closures; and autodiff &
+  the AGI-oriented features.
+- **[Part IV — The Standard Library](part4-stdlib/01-overview.md)** — overview; math,
+  transcendentals & activations; tensors, collections & I/O.
+- **[Part V — The Compiler (`kovc`)](part5-compiler/01-front-end.md)** — front end (lexer, parser,
+  typecheck); IR & lowering passes; the x86-64 ELF back end.
+- **[Part VI — The From-Raw Bootstrap Ladder](part6-bootstrap/01-hex0-raw-root.md)** — `hex0` and
+  the raw-binary root; the MESCC-lineage rungs to `seed`; `seed` to `kovc`: the self-host fixpoint.
+- **[Part VII — GPU Codegen](part7-gpu/01-ptx-backend.md)** — the PTX back end; GEMM, tiling & the
+  capstone; honest performance & the PTX boundary.
+- **[Part VIII — Trust & Verification](part8-trust/01-trusting-trust-and-ddc.md)** — the
+  trusting-trust problem & the gcc-DDC; the gate and the feature corpus; residuals & the trusted
+  computing base.
+- **[Part IX — For AI Agents](part9-for-ai-agents/01-driving-helix.md)** — driving Helix, the
+  non-negotiables, the traps, and recipes.
 
-The remaining parts (**IV — The Standard Library**, **V — The Compiler `kovc`**, **VI — The
-From-Raw Bootstrap Ladder**, **VII — GPU Codegen**, **VIII — Trust & Verification**) and the other
-appendices are **planned** and marked as such in the [table of contents](SUMMARY.md). They are
-outlined now so the shape of the whole book is visible; their chapters will be filled in subsequent
-stages.
+The eight appendices (A–H) — glossary, command reference, pinned hashes & anchors, file & directory
+map, example index, the trusted computing base, roadmap & Phase 2, and further reading — are
+likewise all written and linked. The only `(planned)` labels left in the whole book sit inside
+**Appendix G**, where they mark genuine, not-yet-started Phase-2 roadmap work — not unwritten
+chapters.
 
 ## How to start
 

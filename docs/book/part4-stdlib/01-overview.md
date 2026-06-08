@@ -141,8 +141,8 @@ fn main() -> i32 {
 
 The remaining builtins — f32/f64 SSE math, the GPU intrinsics emitted inside a `@kernel`, the
 `grad` forward-mode derivative, and the assorted `__hash_i32` / `__strlen` helpers — are the
-subject of [the math chapter](02-math-transcendentals-activations.md) and Part VII (the GPU
-codegen part, *planned*). The capstone-proven ML/tensor op set in particular is documented in
+subject of [the math chapter](02-math-transcendentals-activations.md) and [Part VII (the GPU
+codegen part)](../part7-gpu/01-ptx-backend.md). The capstone-proven ML/tensor op set in particular is documented in
 [`docs/HELIX_V1_STDLIB.md`](../../../docs/HELIX_V1_STDLIB.md) §(d); for the *language*-level taste
 of `grad`, see [the autodiff section of the language tour](../part3-language/05-autodiff-agi-features.md).
 
@@ -409,7 +409,7 @@ The standing compile-proof has a precise edge, and the book holds to it.
 > (~50–67.5% on that box), and the end-to-end capstone speedup is **7.0–8.7×** (Amdahl-bound), not
 > ≥10×. Loss parity (the hard gate) holds at ~0%. Every residual is enumerated in
 > [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) §R; the full GPU story is
-> Part VII (*planned*).
+> [Part VII](../part7-gpu/01-ptx-backend.md).
 
 For a categorized, navigational index of every real program that *uses* these modules — including
 which ones carry a gate-asserted exit code — see

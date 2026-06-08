@@ -327,7 +327,7 @@ the autodiff pass only needs analytic chain rules for the leaf transcendentals (
 > **Note — these are the *CPU* activations.** The capstone's GPU path has its own activation
 > intrinsics emitted to PTX (`__gpu_exp`, `__gpu_rsqrt`, …;
 > [`docs/HELIX_V1_LANGUAGE_SPEC.md`](../../../docs/HELIX_V1_LANGUAGE_SPEC.md) §5), and a
-> `gpu_gelu_kernel.hx` example, covered in the planned **Part VII — GPU Codegen**. Do not conflate
+> `gpu_gelu_kernel.hx` example, covered in **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)**. Do not conflate
 > `transcendentals.hx`'s `__gelu` with the GPU GELU kernel; they are different code on different
 > targets.
 

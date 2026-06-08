@@ -600,8 +600,8 @@ the substrate already has.
 
 ---
 
-**Next:** this concludes Part III — The Helix Language. **Part IV — The Standard Library**
-*(planned)* picks up the proven counterpart to this chapter's designed surface: it inventories
+**Next:** this concludes Part III — The Helix Language. **[Part IV — The Standard Library](../part4-stdlib/01-overview.md)**
+picks up the proven counterpart to this chapter's designed surface: it inventories
 the real compiler-builtin standard library (arena, I/O, math, and the capstone-proven
 tensor/ML op set) with its honest `[capstone-proven]` / `[corpus-proven]` / `[impl]` status.
 Until those chapters ship, [`docs/HELIX_V1_STDLIB.md`](../../../docs/HELIX_V1_STDLIB.md) is the

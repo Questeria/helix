@@ -158,11 +158,11 @@ numerics: prefer a detectable sentinel over a plausible-but-wrong value.
 ## 2. The tensor stack — `tensor.hx`
 
 [`helixc/stdlib/tensor.hx`](../../../helixc/stdlib/tensor.hx) is the largest data module
-(2236 lines) and the one most relevant to the planned capstone chapters. It provides 1-D and
+(2236 lines) and the one most relevant to the [capstone chapter](../part7-gpu/02-gemm-tiling-capstone.md). It provides 1-D and
 2-D tensor primitives over the arena, in **two parallel families**: integer (`ti*` / `t1d_*`)
 and `f32` (`tf*`). It is **CPU-only**: it contains no `@kernel`, `tile<>`, or `__tile_*`
 references — the GPU/PTX path is entirely separate (it lives in `kovc`'s emitters and the
-`gpu_*` example kernels, covered in the planned **Part VII — GPU Codegen**). Do not conflate
+`gpu_*` example kernels, covered in **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)**). Do not conflate
 `tensor.hx`'s `tf2d_matmul` with the GPU GEMM kernels; they are different code on different
 targets.
 
@@ -311,7 +311,7 @@ Two deprecation notes you should heed when reading the module:
   `tf2d_in_bounds` check. The module marks both `get`s **deprecated for safety-critical new
   code**.
 
-> **For AI agents:** the planned **Part VII** capstone walks the *GPU* tensor path (PTX
+> **For AI agents:** the **[Part VII](../part7-gpu/02-gemm-tiling-capstone.md)** capstone walks the *GPU* tensor path (PTX
 > kernels: `gpu_matmul_atb`, `gpu_softmax`, `gpu_layernorm_*`, `gpu_adam`, …), not this CPU
 > module. If you need a tensor op proven *end-to-end*, that is the capstone (PTX, the load-
 > bearing ML stdlib, `[capstone-proven]` in
@@ -887,7 +887,7 @@ the library that runs *on* `kovc` to `kovc` itself — the front end (lexer, par
 [IR and lowering passes](../part5-compiler/02-ir-and-passes.md), and the
 [x86-64 ELF back end](../part5-compiler/03-x86-backend.md) that lowers every arena `__arena_*` call
 and `__bits_of_f32` relabel seen in this chapter. The GPU tensor path that the capstone actually
-trains on is **Part VII — GPU Codegen** *(planned)*; until it ships,
+trains on is **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)**;
 [`docs/HELIX_V1_STDLIB.md`](../../../docs/HELIX_V1_STDLIB.md) is the authoritative builtin
 reference and [Part IX — "Driving Helix"](../part9-for-ai-agents/01-driving-helix.md) is the
 operator manual for compiling and running Helix programs.

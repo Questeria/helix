@@ -1,30 +1,27 @@
 # How to read this book
 
-*What this chapter covers: the shape of the whole book (Parts I–IX plus appendices) and which parts have shipped versus which are planned; the two audiences this book serves at once and the conventions that let it serve both; and three concrete reading paths — for a human setting Helix up, for an AI agent operating it, and for a contributor extending it.*
+*What this chapter covers: the shape of the whole book (all nine Parts, I–IX, plus the eight appendices, A–H — all now written); the two audiences this book serves at once and the conventions that let it serve both; and three concrete reading paths — for a human setting Helix up, for an AI agent operating it, and for a contributor extending it.*
 
-This is a long book about a system whose entire reason for existing is **honest, reproducible trust**. You do not need to read it front to back. This chapter is a map: it tells you what is here, what is not here *yet*, how to tell a verified fact from an illustration, and the shortest route from where you are to what you want.
+This is a long book about a system whose entire reason for existing is **honest, reproducible trust**. You do not need to read it front to back. This chapter is a map: it tells you what is here, how to tell a verified fact from an illustration, and the shortest route from where you are to what you want.
 
-## The book is staged — read the table of contents as the source of truth
+## The book is complete — read the table of contents as the source of truth
 
-The book is being written in stages, and that status is visible in the [table of contents](../SUMMARY.md). **Stage 1 has shipped.** It covers the three parts you most need to get started and to operate Helix safely:
+The book is **complete**: all nine Parts (I–IX) and all eight Appendices (A–H) are written, and every one has a live link in the [table of contents](../SUMMARY.md). The whole shape is here:
 
-- **Part I — Orientation** — what Helix is, a ten-minute tour, how to read this book (you are here), and trust at a glance.
-- **Part II — Setup & Build** — prerequisites, building from raw, using `kovc`, reproducing and verifying the trust chain, and troubleshooting.
-- **Part IX — For AI Agents** — driving Helix, the non-negotiables, the traps, and copy-paste recipes.
+- **[Part I — Orientation](01-what-is-helix.md)** — what Helix is, a ten-minute tour, how to read this book (you are here), and trust at a glance.
+- **[Part II — Setup & Build](../part2-setup-build/01-prerequisites.md)** — prerequisites, building from raw, using `kovc`, reproducing and verifying the trust chain, and troubleshooting.
+- **[Part III — The Helix Language](../part3-language/01-language-tour.md)** — the language tour; types (widths, structs & enums); functions, control flow & pattern matching; generics, traits & closures; and autodiff & the AGI-oriented features.
+- **[Part IV — The Standard Library](../part4-stdlib/01-overview.md)** — overview; math, transcendentals & activations; tensors, collections & I/O.
+- **[Part V — The Compiler (`kovc`)](../part5-compiler/01-front-end.md)** — front end: lexer, parser, typecheck; IR & lowering passes; the x86-64 ELF back end.
+- **[Part VI — The From-Raw Bootstrap Ladder](../part6-bootstrap/01-hex0-raw-root.md)** — `hex0` and the raw-binary root; the MESCC-lineage rungs to `seed`; `seed` to `kovc`: the self-host fixpoint.
+- **[Part VII — GPU Codegen](../part7-gpu/01-ptx-backend.md)** — the PTX back end; GEMM, tiling & the capstone; honest performance & the PTX boundary.
+- **[Part VIII — Trust & Verification](../part8-trust/01-trusting-trust-and-ddc.md)** — the trusting-trust problem & the gcc-DDC; the gate and the feature corpus; residuals & the trusted computing base.
+- **[Part IX — For AI Agents](../part9-for-ai-agents/01-driving-helix.md)** — driving Helix, the non-negotiables, the traps, and copy-paste recipes.
+- **Appendices A–H** — [glossary](../appendices/A-glossary.md), [command reference](../appendices/B-command-reference.md), [pinned hashes & anchors](../appendices/C-pinned-hashes.md), [file & directory map](../appendices/D-file-directory-map.md), [example index](../appendices/E-example-index.md), [the trusted computing base](../appendices/F-tcb.md), [roadmap & Phase 2](../appendices/G-roadmap-phase2.md), and [further reading](../appendices/H-further-reading.md).
 
-Parts **III–VIII** and **Appendices A–H** are **planned**. They are *outlined* in the table of contents — with chapter titles each marked *(planned)* — so the shape of the whole book is visible, but their pages are not written yet and will be filled in subsequent stages. The planned parts are:
+> **Note:** The only `*(planned)*` labels remaining anywhere in the book are inside **[Appendix G — Roadmap & Phase 2](../appendices/G-roadmap-phase2.md)**, where they mark genuine future / Phase-2 work that has not been started (datacenter scaling, an AMD/ROCm backend, the bf16 `wmma` stretch, broadening the DDC, and fully-independent third-party reproduction) — not unwritten chapters. Every chapter and appendix this book names is a real, linked page.
 
-- **Part III — The Helix Language** (the language tour; types, effects & refinements; functions, control flow & pattern matching; generics, traits & closures; autodiff and the AGI type-system features).
-- **Part IV — The Standard Library** (overview; math, transcendentals & activations; tensors, collections & I/O).
-- **Part V — The Compiler (`kovc`)** (front end: lexer, parser, typecheck; IR & optimization passes; the x86-64 ELF back end).
-- **Part VI — The From-Raw Bootstrap Ladder** (`hex0` and the raw-binary root; the MESCC-lineage rungs to `seed`; `seed` to `kovc`: the self-host fixpoint).
-- **Part VII — GPU Codegen** (the PTX back end; GEMM, tiling & the capstone; honest performance & the PTX boundary).
-- **Part VIII — Trust & Verification** (the trusting-trust problem & the gcc-DDC; the gate and the feature corpus; residuals & the trusted computing base).
-- **Appendices A–H** — glossary, command reference, pinned hashes & anchors, file & directory map, example index, the trusted computing base, roadmap & Phase 2, and further reading.
-
-> **Note:** A chapter title rendered with *(planned)* and no link in [`SUMMARY.md`](../SUMMARY.md) is an outline entry, not a page. When this book references a topic that lives in a planned part, it points you at the **real repo file** that already documents it (for example, [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) for the full trust record) rather than at an unwritten chapter. Nothing in the shipped chapters depends on a planned chapter being present.
-
-> **For AI agents:** treat [`docs/book/SUMMARY.md`](../SUMMARY.md) as the canonical index of what exists. Do not assume a chapter is available because its topic is named here — resolve the link in `SUMMARY.md` first, and if the entry is marked *(planned)* (no target), fall back to the cited repo source. When a book chapter and a repo source ever disagree, the **repo source wins** and the chapter is the bug; flag it, do not silently follow stale prose.
+> **For AI agents:** treat [`docs/book/SUMMARY.md`](../SUMMARY.md) as the canonical index of what exists; every entry there resolves to a real file. When a book chapter and a repo source ever disagree, the **repo source wins** and the chapter is the bug; flag it, do not silently follow stale prose.
 
 ## Two readers at once
 
@@ -72,7 +69,7 @@ Every factual claim links to the **real repo file** that backs it, by its repo-r
 
 ### A small, fixed vocabulary
 
-The book uses a deliberately small set of terms with fixed meanings — `kovc` (the Helix compiler, written in Helix), `seed` (the Apache-2.0 C-subset compiler that builds `kovc`), **the from-raw ladder**, **the self-host fixpoint**, **gcc-DDC**, **the gate**, and **the capstone**. They are defined where they first appear and collected in the (planned) glossary; the full table lives in the [Style Guide](../STYLE_GUIDE.md). These terms map to real files and real output tokens, so they are used consistently and never given synonyms.
+The book uses a deliberately small set of terms with fixed meanings — `kovc` (the Helix compiler, written in Helix), `seed` (the Apache-2.0 C-subset compiler that builds `kovc`), **the from-raw ladder**, **the self-host fixpoint**, **gcc-DDC**, **the gate**, and **the capstone**. They are defined where they first appear and collected in the [glossary (Appendix A)](../appendices/A-glossary.md); the full table lives in the [Style Guide](../STYLE_GUIDE.md). These terms map to real files and real output tokens, so they are used consistently and never given synonyms.
 
 > **For AI agents:** key your logic off the **exact strings** the book and scripts use, not off English descriptions. The gate prints the literal token `GATE_PASS` on success (`scripts/gate_kovc.sh`); the pinned anchors are ground truth — `seed = 9837db12…`, the self-host fixpoint `K2 == K3 == K4 = 0992dddd…`, and the gcc-DDC `K1 = 84363adb…`. Match those tokens and hashes, not paraphrases of them.
 
@@ -98,7 +95,7 @@ You want to evaluate Helix, build it on your own machine, and convince yourself 
 6. **[Part II — Reproduce & verify the trust chain](../part2-setup-build/04-reproduce-verify-trust.md)** — run the one-command reproduction (`bash scripts/reproduce_trust.sh`) on a clean checkout and confirm every pinned hash. It also runs unattended on a fresh GitHub runner via [`.github/workflows/trust-reproduce.yml`](../../../.github/workflows/trust-reproduce.yml).
 7. If something breaks, **[Part II — Troubleshooting](../part2-setup-build/05-troubleshooting.md)**.
 
-When you want to go deeper into *how* the language, compiler, ladder, GPU back end, or verification actually work, those are the **planned** Parts III–VIII; until they ship, the cited repo docs (starting with [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) and [`docs/CLEAN_REPRODUCTION.md`](../../../docs/CLEAN_REPRODUCTION.md)) are the authoritative source.
+When you want to go deeper into *how* the language, compiler, ladder, GPU back end, or verification actually work, read **[Part III](../part3-language/01-language-tour.md)** through **[Part VIII](../part8-trust/01-trusting-trust-and-ddc.md)**; and remember that the cited repo docs (starting with [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) and [`docs/CLEAN_REPRODUCTION.md`](../../../docs/CLEAN_REPRODUCTION.md)) remain the authoritative source whenever a chapter and the repo ever disagree.
 
 ### Path B — An AI agent operating Helix
 
@@ -118,7 +115,7 @@ Use Part I and Part II as reference when you need the human-readable "why" behin
 You want to add to the compiler, the standard library, the GPU back end — or to write the next chapters of this book.
 
 1. Start with **Path A** so you can build and reproduce the chain yourself; you cannot extend a trust chain you have not verified.
-2. Read the deep, *current* engineering record in the repo: [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) (the verified state and every residual), [`docs/CLEAN_REPRODUCTION.md`](../../../docs/CLEAN_REPRODUCTION.md) (rebuild from a clean checkout), and the canonical scripts [`scripts/gate_kovc.sh`](../../../scripts/gate_kovc.sh) and [`scripts/reproduce_trust.sh`](../../../scripts/reproduce_trust.sh). Until Parts III–VIII ship, these repo files are the authoritative documentation of the internals those parts will cover.
+2. Read the deep, *current* engineering record in the repo: [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) (the verified state and every residual), [`docs/CLEAN_REPRODUCTION.md`](../../../docs/CLEAN_REPRODUCTION.md) (rebuild from a clean checkout), and the canonical scripts [`scripts/gate_kovc.sh`](../../../scripts/gate_kovc.sh) and [`scripts/reproduce_trust.sh`](../../../scripts/reproduce_trust.sh). Parts III–VIII narrate those internals, but these repo files remain the authoritative record: where a chapter and the repo ever disagree, the repo source wins.
 3. Before any change, internalize **[Part IX — Non-negotiables](../part9-for-ai-agents/02-non-negotiables.md)**: a contribution that breaks the gate, weakens a residual disclosure, or moves a pinned hash without justification is a regression, no matter how good it looks.
 4. **If you are authoring or amending a chapter,** the [Style Guide](../STYLE_GUIDE.md) is binding. In short: serve both audiences; tag every fence; label every block **Verified example** or **Fragment**; actually compile (and run) every Verified example and cite its source path before it ships; quote commands verbatim from the real scripts; cite real repo paths you have opened; and never exceed [`docs/TRUST_CHAIN_CLOSED.md`](../../../docs/TRUST_CHAIN_CLOSED.md) §R when stating what Helix can do. Hallucination is the one unforgivable error in this book.
 

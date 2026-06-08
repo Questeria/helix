@@ -52,11 +52,11 @@
 - [GEMM, tiling & the capstone](part7-gpu/02-gemm-tiling-capstone.md)
 - [Honest performance & the PTX boundary](part7-gpu/03-honest-performance.md)
 
-# Part VIII — Trust & Verification *(planned)*
+# Part VIII — Trust & Verification
 
-- [The trusting-trust problem & the gcc-DDC *(planned)*]()
-- [The gate and the feature corpus *(planned)*]()
-- [Residuals & the trusted computing base *(planned)*]()
+- [The trusting-trust problem & the gcc-DDC](part8-trust/01-trusting-trust-and-ddc.md)
+- [The gate and the feature corpus](part8-trust/02-the-gate-and-corpus.md)
+- [Residuals & how trust was verified](part8-trust/03-residuals-and-tcb.md)
 
 # Part IX — For AI Agents
 
@@ -69,11 +69,11 @@
 
 # Appendices
 
-- [Appendix A — Glossary *(planned)*]()
-- [Appendix B — Command reference *(planned)*]()
+- [Appendix A — Glossary](appendices/A-glossary.md)
+- [Appendix B — Command reference](appendices/B-command-reference.md)
 - [Appendix C — Pinned hashes & anchors](appendices/C-pinned-hashes.md)
 - [Appendix D — File & directory map](appendices/D-file-directory-map.md)
 - [Appendix E — Example index](appendices/E-example-index.md)
 - [Appendix F — The trusted computing base](appendices/F-tcb.md)
-- [Appendix G — Roadmap & Phase 2 *(planned)*]()
-- [Appendix H — Further reading *(planned)*]()
+- [Appendix G — Roadmap & Phase 2](appendices/G-roadmap-phase2.md)
+- [Appendix H — Further reading](appendices/H-further-reading.md)
