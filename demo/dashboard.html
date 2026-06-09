@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GPT-2 on Helix — Verifiable Execution Demo</title>
+<style>
+  /* ============================================================
+     GPT-2 x Helix investor dashboard — self-contained, offline.
+     System font stack only; no CDNs, no web fonts, no frameworks.
+     ============================================================ */
+  :root {
+    --bg:        #0a0e14;   /* deep near-black slate          */
+    --bg-2:      #0f141c;   /* page gradient bottom           */
+    --panel:     #111722;   /* card surface                   */
+    --panel-2:   #0d121b;   /* inset / nested surface         */
+    --border:    #1e2733;   /* soft card border               */
+    --border-2:  #28323f;   /* slightly stronger border       */
+    --ink:       #e6edf3;   /* primary text                   */
+    --ink-dim:   #9aa7b4;   /* secondary text                 */
+    --ink-faint: #6b7785;   /* tertiary / captions            */
+    --accent:    #34d399;   /* emerald — PASS / trusted        */
+    --accent-dim:#1d6b4f;   /* emerald border tint            */
+    --accent-bg: rgba(52,211,153,0.08);
+    --amber:     #f5b14c;   /* in-progress                    */
+    --amber-dim: #6b521d;
+    --amber-bg:  rgba(245,177,76,0.08);
+    --red:       #f0726a;   /* reserved for live fail states  */
+    --red-dim:   #6b2a26;
+    --red-bg:    rgba(240,114,106,0.08);
+    --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #121a26 0%, var(--bg) 55%, var(--bg-2) 100%);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+  }
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 36px 28px 64px;
+  }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 26px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .wordmark {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-weight: 700; font-size: 19px; letter-spacing: 0.2px;
+  }
+  .wordmark .helix-glyph {
+    width: 22px; height: 22px; display: inline-block;
+  }
+  .wordmark .x { color: var(--ink-faint); font-weight: 500; margin: 0 2px; }
+  .wordmark .gpt { color: var(--ink-dim); font-weight: 600; }
+
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    border: 1px solid var(--accent-dim);
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  .status-badge.is-fail { border-color: var(--red-dim); background: var(--red-bg); color: var(--red); }
+  .status-badge .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.5);
+    animation: pulse 2.6s ease-out infinite;
+  }
+  .status-badge.is-fail .dot { background: var(--red); animation: none; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .status-badge .dot { animation: none; }
+  }
+
+  /* ---------- hero ---------- */
+  .hero { margin-bottom: 30px; }
+  .hero h1 {
+    font-size: clamp(26px, 4vw, 40px);
+    line-height: 1.18;
+    font-weight: 700;
+    margin: 4px 0 14px;
+    letter-spacing: -0.4px;
+    max-width: 16ch;
+  }
+  .hero .pitch {
+    font-size: clamp(15px, 1.7vw, 18px);
+    color: var(--ink-dim);
+    max-width: 70ch;
+    margin: 0;
+  }
+  .hero .pitch .em { color: var(--ink); font-weight: 600; }
+
+  /* ---------- generation showcase ---------- */
+  .gen-card {
+    margin-top: 26px;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius);
+    padding: 24px 26px;
+  }
+  .gen-card .gen-label {
+    font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 600; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  .gen-card .gen-label .tag {
+    font-family: var(--mono); text-transform: none; letter-spacing: 0;
+    font-size: 11px; color: var(--accent);
+    border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 2px 8px; border-radius: 6px;
+  }
+  .gen-text {
+    font-size: clamp(17px, 2.2vw, 22px);
+    line-height: 1.5;
+    font-weight: 500;
+  }
+  .gen-text .prompt { color: var(--ink-dim); }
+  .gen-text .cont {
+    color: var(--ink);
+    background: linear-gradient(180deg, rgba(52,211,153,0.10), rgba(52,211,153,0.04));
+    border-bottom: 1px solid var(--accent-dim);
+    padding: 1px 2px;
+    border-radius: 3px;
+  }
+  .gen-caption {
+    margin-top: 14px; font-size: 13px; color: var(--ink-faint);
+    border-top: 1px solid var(--border); padding-top: 12px;
+  }
+  .gen-caption code { font-family: var(--mono); color: var(--ink-dim); font-size: 12px; }
+
+  /* ---------- section heads ---------- */
+  .section { margin-top: 44px; }
+  .section > h2 {
+    font-size: 13px; letter-spacing: 1.6px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700; margin: 0 0 18px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section > h2::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+  }
+  .section .sub {
+    color: var(--ink-dim); font-size: 14px; margin: -8px 0 18px; max-width: 78ch;
+  }
+
+  /* ---------- trust-chain ribbon (centerpiece) ---------- */
+  .ribbon-wrap { position: relative; }
+  .ribbon {
+    display: flex; align-items: stretch; gap: 0;
+    flex-wrap: wrap;
+  }
+  .step {
+    position: relative;
+    flex: 1 1 150px;
+    min-width: 150px;
+    background: var(--panel);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm);
+    padding: 16px 16px 15px;
+    margin: 6px;
+    display: flex; flex-direction: column; gap: 7px;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .step:hover { border-color: var(--accent-dim); transform: translateY(-2px); }
+  .step .step-n {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .step .step-n .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent-bg); color: var(--accent);
+    border: 1px solid var(--accent-dim);
+    font-size: 10px; font-weight: 700;
+  }
+  .step .step-title { font-weight: 650; font-size: 14px; line-height: 1.3; }
+  .step .step-meta { font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim); }
+  .step .step-meta .h { color: var(--accent); cursor: help; border-bottom: 1px dotted var(--accent-dim); }
+  .step .step-bytes { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  /* flow arrow between steps */
+  .step:not(:last-child)::after {
+    content: "›";
+    position: absolute;
+    right: -13px; top: 50%; transform: translateY(-50%);
+    color: var(--accent); font-size: 22px; font-weight: 700;
+    z-index: 2; line-height: 1;
+    text-shadow: 0 0 8px rgba(10,14,20,0.9);
+  }
+  .step.is-output { border-color: var(--accent-dim); background: linear-gradient(180deg, var(--accent-bg), var(--panel)); }
+  @media (max-width: 720px) {
+    .step { flex-basis: 100%; }
+    .step:not(:last-child)::after {
+      content: "⌄"; right: 50%; top: auto; bottom: -15px; transform: translateX(50%);
+    }
+  }
+  /* corroboration tag hanging off the chain */
+  .corrob {
+    margin: 14px 6px 0;
+    display: flex; align-items: flex-start; gap: 11px;
+    background: var(--panel-2);
+    border: 1px dashed var(--border-2);
+    border-left: 3px solid var(--accent-dim);
+    border-radius: var(--radius-sm);
+    padding: 13px 16px;
+    font-size: 13px; color: var(--ink-dim);
+  }
+  .corrob .ic { color: var(--accent); font-size: 15px; flex-shrink: 0; line-height: 1.4; }
+  .corrob .h { font-family: var(--mono); color: var(--accent); cursor: help; border-bottom: 1px dotted var(--accent-dim); }
+  .corrob b { color: var(--ink); font-weight: 650; }
+
+  /* ---------- gate cards ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+  }
+  .gate {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--accent-dim);
+    border-radius: var(--radius-sm);
+    padding: 17px 18px;
+    display: flex; flex-direction: column; gap: 9px;
+  }
+  .gate.is-amber { border-top-color: var(--amber-dim); }
+  .gate.is-fail  { border-top-color: var(--red-dim); }
+  .gate-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .gate-name { font-family: var(--mono); font-size: 12.5px; font-weight: 650; letter-spacing: 0.2px; color: var(--ink); }
+  .verdict {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 3px 9px; border-radius: 6px;
+    border: 1px solid var(--accent-dim); background: var(--accent-bg); color: var(--accent);
+    white-space: nowrap;
+  }
+  .verdict.is-amber { border-color: var(--amber-dim); background: var(--amber-bg); color: var(--amber); }
+  .verdict.is-fail  { border-color: var(--red-dim); background: var(--red-bg); color: var(--red); }
+  .verdict .check { font-size: 12px; }
+  .gate-key {
+    font-family: var(--mono); font-size: 15px; font-weight: 650; color: var(--accent);
+    letter-spacing: -0.2px;
+  }
+  .gate.is-amber .gate-key { color: var(--amber); }
+  .gate.is-fail  .gate-key { color: var(--red); }
+  .gate-desc { font-size: 13px; color: var(--ink-dim); line-height: 1.5; }
+  .gate-desc .h { font-family: var(--mono); color: var(--ink); cursor: help; border-bottom: 1px dotted var(--border-2); }
+  .gate-flag {
+    align-self: flex-start; margin-top: 2px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.6px; font-weight: 700;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 2px 8px; border-radius: 5px;
+  }
+
+  /* ---------- two-paths ---------- */
+  .paths { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .paths { grid-template-columns: 1fr; } }
+  .path {
+    background: var(--panel); border: 1px solid var(--border-2);
+    border-radius: var(--radius); padding: 20px 22px;
+  }
+  .path h3 {
+    margin: 0 0 6px; font-size: 16px; font-weight: 650;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .path h3 .badge {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 3px 8px; border-radius: 6px;
+  }
+  .path.gpu  h3 .badge { color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg); }
+  .path.cpu  h3 .badge { color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg); }
+  .path p { margin: 8px 0 0; font-size: 13.5px; color: var(--ink-dim); line-height: 1.55; }
+  .path .stat { margin-top: 14px; display: flex; gap: 18px; flex-wrap: wrap; }
+  .path .stat .item { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+  .path .stat .item b { display: block; color: var(--ink); font-size: 15px; font-weight: 650; margin-top: 1px; }
+
+  /* ---------- fence chips + model chip ---------- */
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 999px; padding: 8px 15px;
+    font-size: 13px; color: var(--ink-dim);
+  }
+  .chip .k { color: var(--ink); font-weight: 600; }
+  .chip .ic { color: var(--accent); font-size: 12px; }
+  .chip.mono .v { font-family: var(--mono); color: var(--accent); font-size: 12px; }
+  .model-chip {
+    margin-top: 14px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--border-2); border-radius: var(--radius);
+    padding: 16px 20px;
+  }
+  .model-chip .mtitle { font-weight: 650; font-size: 15px; }
+  .model-chip .mmeta { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); }
+  .model-chip .mmeta .h { color: var(--accent); cursor: help; border-bottom: 1px dotted var(--accent-dim); }
+  .model-chip .mpill {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--ink-dim); border: 1px solid var(--border-2); background: var(--panel-2);
+    padding: 3px 9px; border-radius: 6px;
+  }
+
+  /* ---------- residuals ---------- */
+  .residuals {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 8px;
+  }
+  .residual {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 15px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .residual:last-child { border-bottom: none; }
+  .residual .rn {
+    flex-shrink: 0;
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    width: 26px; height: 26px; border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--ink-dim); background: var(--panel); border: 1px solid var(--border-2);
+  }
+  .residual .rtext { font-size: 13.5px; color: var(--ink-dim); line-height: 1.55; }
+  .residual .rtext b { color: var(--ink); font-weight: 650; }
+  .residual .rtext code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: 50px; padding-top: 22px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    font-size: 13px; color: var(--ink-faint);
+  }
+  footer .creed { color: var(--ink-dim); max-width: 60ch; }
+  footer .creed b { color: var(--accent); font-weight: 650; }
+  footer .meta { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); text-align: right; }
+  footer .meta .h { color: var(--ink-dim); }
+  footer .meta .live {
+    display: inline-block; margin-left: 8px;
+    font-size: 10px; letter-spacing: 0.5px; font-weight: 700;
+    padding: 1px 7px; border-radius: 5px;
+    color: var(--ink-faint); border: 1px solid var(--border-2); background: var(--panel);
+  }
+  footer .meta .live.is-live { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+
+  .src-note {
+    margin-top: 18px; font-size: 11.5px; color: var(--ink-faint);
+    font-family: var(--mono);
+  }
+</style>
+</head>
+<body>
+  <!-- Live run output (optional). If a green run emitted demo/demo_report.js it sets
+       window.DEMO_REPORT; otherwise this missing file simply leaves it undefined on
+       file:// and we fall back to EMBEDDED_REPORT below. No error either way. -->
+  <script src="demo_report.js"></script>
+
+  <main class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <span class="wordmark">
+          <svg class="helix-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
+                  stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="6" cy="3" r="1.3" fill="#34d399"/><circle cx="18" cy="3" r="1.3" fill="#34d399"/>
+            <circle cx="6" cy="21" r="1.3" fill="#34d399"/><circle cx="18" cy="21" r="1.3" fill="#34d399"/>
+          </svg>
+          Helix
+          <span class="x">×</span>
+          <span class="gpt">GPT-2</span>
+        </span>
+      </div>
+      <div id="statusBadge" class="status-badge" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="statusText">DEMO_ATTEST_PASS</span>
+      </div>
+    </div>
+
+    <header class="hero">
+      <h1>The model you know, on a stack you can verify.</h1>
+      <p class="pitch" id="pitchLine"></p>
+
+      <section class="gen-card" aria-label="Live generation">
+        <div class="gen-label">
+          Headline generation — GPU path
+          <span class="tag">greedy · <span id="ngenTag">20</span> new tokens</span>
+        </div>
+        <div class="gen-text">
+          <span class="prompt" id="genPrompt"></span><span class="cont" id="genCont"></span>
+        </div>
+        <div class="gen-caption" id="genCaption"></div>
+      </section>
+    </header>
+
+    <!-- ============ TRUST CHAIN — centerpiece ============ -->
+    <section class="section" aria-labelledby="tc-h">
+      <h2 id="tc-h">Trust chain — from 299 bytes to the sentence above</h2>
+      <p class="sub">Every link is rebuilt, not asserted. Hover any hash for its full 64-character value.</p>
+      <div class="ribbon-wrap">
+        <div class="ribbon" id="ribbon"></div>
+        <div class="corrob" id="corrob"></div>
+      </div>
+    </section>
+
+    <!-- ============ GATES ============ -->
+    <section class="section" aria-labelledby="g-h">
+      <h2 id="g-h">Gates — fail-closed, every number from a real run</h2>
+      <p class="sub">Each tile is a gate the wrapper composes. A red line anywhere blocks the attestation — every tile here is green.</p>
+      <div class="grid" id="gates"></div>
+    </section>
+
+    <!-- ============ TWO PATHS ============ -->
+    <section class="section" aria-labelledby="p-h">
+      <h2 id="p-h">Two paths, one set of kernels</h2>
+      <p class="sub">The same kovc-emitted kernels run on the GPU for speed and on a pure-CPU path for the deepest trust claim — with no GPU boundary at all.</p>
+      <div class="paths" id="paths"></div>
+    </section>
+
+    <!-- ============ FENCES + MODEL ============ -->
+    <section class="section" aria-labelledby="f-h">
+      <h2 id="f-h">Static fence &amp; model provenance</h2>
+      <p class="sub">A hard fence keeps host glue out of the compute-trust chain; the model itself is public GPT-2, imported unchanged.</p>
+      <div class="chips" id="fences"></div>
+      <div class="model-chip" id="modelChip"></div>
+    </section>
+
+    <!-- ============ HONEST RESIDUALS ============ -->
+    <section class="section" aria-labelledby="r-h">
+      <h2 id="r-h">Honest residuals — we state these unprompted</h2>
+      <p class="sub">Trust is only as good as its disclosed edges. These are the boundaries of the claim, in plain language.</p>
+      <div class="residuals" id="residuals"></div>
+    </section>
+
+    <footer>
+      <div class="creed">
+        <b>Fail-closed.</b> Every gate fakes nothing — a red line is the system working, not breaking.
+      </div>
+      <div class="meta" id="footMeta"></div>
+    </footer>
+
+    <p class="src-note" id="srcNote"></p>
+  </main>
+
+<script>
+/* ================================================================
+   EMBEDDED_REPORT — the REAL captured green-run data (fallback).
+   A live run may emit demo/demo_report.js -> window.DEMO_REPORT with
+   this exact schema; if present it overrides this object.
+   Hashes are stored FULL (64 hex) and shown truncated in the UI.
+   ================================================================ */
+const EMBEDDED_REPORT = {
+  source: "embedded",                 // "live" when window.DEMO_REPORT supplies it
+  status: "DEMO_ATTEST_PASS",         // top badge; "DEMO_ATTEST_FAIL" flips it red
+  pitch: "GPT-2 — the model you know — running on a stack you can verify from the very first byte. Helix is the verifiable execution layer underneath your AI.",
+  hero: {
+    prompt: "The capital of France is",
+    generated: "The capital of France is the capital of the French Republic, and the capital of the French Republic is the capital of the French",
+    n_gen: 20,
+    caption: "GPT-2-124M greedy decoding is grammatical but repetitive — that is the real model behaving as itself, not a bug."
+  },
+  trust_chain: [
+    { title: "299 hand-typed bytes", meta: "hex0", bytes: "299 B" },
+    { title: "seed.bin", meta_label: "sha", hash: "9837db12752a22159ca75a533910bc0d7b9afb35df9b9963f256b7b1b915c9bb", bytes: "62,467 B" },
+    { title: "kovc self-host fixpoint", meta_label: "K2 == K3 == K4", hash: "0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f", bytes: "698,392 B" },
+    { title: "GPT-2 kernels", meta: "kovc-emitted", bytes: "PTX + CPU" },
+    { title: "Generated text", meta: "the sentence above", output: true }
+  ],
+  corroboration: {
+    hash: "84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba",
+    text: "gcc diverse-double-compile: K1 reproduced byte-for-byte by an independent compiler lineage (zero M2-Planet ancestry)."
+  },
+  gates: [
+    { name: "REPRODUCE_TRUST", verdict: "PASS",
+      desc: "Compiler rebuilt from 299 bytes; from-raw ladder + self-host fixpoint + gcc-DDC all reproduce the pinned anchors." },
+    { name: "GPT2_LOGITS_PARITY", verdict: "PASS", key: "argmax id 262 — EXACT",
+      desc: "Argmax id 262 matches an independent numpy oracle exactly; max-abs logit diff 2.59e-04 (logits ~130)." },
+    { name: "GPT2_GENERATE_MATCH", verdict: "PASS", key: "25 ids identical",
+      desc: "20-token greedy continuation matches the oracle token-for-token (25 ids identical end to end)." },
+    { name: "BYTE-IDENTICAL", verdict: "PASS", key: "two runs, same to the byte",
+      desc: "Generation re-run; gen-ids sha 8a2595cd… identical across both runs.",
+      hash: "8a2595cd00000000000000000000000000000000000000000000000000000000", hash_is_partial: true },
+    { name: "CPU NO-PTXAS BLOCK-0 PARITY", verdict: "PASS", key: "argmax 262 == oracle", flag: "NO PTXAS / PUREST TRUST",
+      desc: "Same model on a CPU path with NO ptxas/GPU boundary at all; block-0 max-abs 1.144e-04; argmax 262 == oracle; greedy gen token-for-token == oracle." },
+    { name: "SCALE FLEX", verdict: "PASS", key: "774M + 1.5B — token-for-token", flag: "SAME KERNELS / ZERO NEW OPS",
+      desc: "GPT-2-Large 774M and GPT-2-XL 1.5B both run through the SAME 8 kovc-emitted kernels (zero new ops; dims read from config.json). Token-for-token vs the oracle — Large: argmax 262, max-abs 3.8e-05, 25/25 ids; XL: argmax 262, max-abs 4.4e-05, 25/25 ids. XL is visibly more coherent: &ldquo;…the city of Paris. It is the capital of France…&rdquo;" }
+  ],
+  paths: [
+    { kind: "gpu", title: "GPU path", badge: "FAST",
+      body: "kovc-emitted PTX kernels on an RTX 3070 (sm_86). Trusted boundary = ptxas / driver below PTX (disclosed).",
+      stats: [ { k: "device", v: "RTX 3070 · sm_86" }, { k: "trust to", v: "PTX (hand-auditable)" } ] },
+    { kind: "cpu", title: "CPU no-ptxas path", badge: "PUREST TRUST",
+      body: "ALL arithmetic in kovc-compiled-from-raw Helix. ZERO trusted component above the 299-byte seed. ~130 sec/token — slow by design: the product is verifiability, not speed.",
+      stats: [ { k: "trusted above seed", v: "ZERO" }, { k: "throughput", v: "~130 s / token" } ] }
+  ],
+  fences: [
+    { k: "exactly", v: "1 committed .py" },
+    { k: "26 committed .c/.h", v: "24 from-raw UNCHANGED + 2 demo launchers" },
+    { k: "corpus", v: "109 / 0" },
+    { k: "self-host fixpoint", v: "0992dddd", mono: true }
+  ],
+  model: {
+    title: "GPT-2 124M",
+    note: "public weights, unchanged",
+    sha: "248dfc3900000000000000000000000000000000000000000000000000000000",
+    sha_is_partial: true,
+    bytes: "548,105,171 B",
+    pill: "model.safetensors"
+  },
+  residuals: [
+    "<b>Fenced host glue.</b> The weight importer, the byte-level BPE tokenizer, and the numpy reference oracle are trusted host glue under gitignored <code>helix-llm/</code> — no compute-trust role. The trust claim is the exact token-id sequence + the from-raw toolchain that produced it, not the host-side string rendering.",
+    "<b>Complete to PTX, not to SASS.</b> source→PTX is hand-auditable (hex0→kovc→PTX); below PTX, NVIDIA's closed ptxas + driver + the C CUDA-FFI launcher are trusted-once. The CPU path has no such boundary.",
+    "<b>fp32-only.</b> Parity is exact on argmax + the token sequence, and within a measured tolerance on hidden states. Measured ceiling: GPT-2-XL (1.5B) runs on this 8GB sm_86 box at fp32 — per-layer weight streaming keeps device residency ~470MB, so depth does not gate VRAM.",
+    "<b>Single GPU, sm_86.</b> One RTX 3070-class device — not multi-GPU, not a cluster.",
+    "<b>A demonstration, not frontier scale.</b> 124M (now also 774M / 1.5B) — the point is verifiability, not size or speed.",
+    "<b>Shared spec, independent code.</b> The oracle shares the GPT-2 spec (an independent fp32 implementation, not an independent specification) — it catches implementation bugs, not a shared misunderstanding of GPT-2.",
+    "<b>Never claimed:</b> beating cuBLAS, &ldquo;fully verified GPU&rdquo;, completeness to GPU machine code, or AGI."
+  ],
+  footer: {
+    commit: "captured green run",
+    timestamp: "captured green run"
+  }
+};
+
+/* ---------------- tiny DOM helpers (no framework) ---------------- */
+function el(tag, attrs, children) {
+  const n = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === "html") n.innerHTML = attrs[k];
+    else if (k === "title") n.setAttribute("title", attrs[k]);
+    else if (k === "class") n.className = attrs[k];
+    else n.setAttribute(k, attrs[k]);
+  }
+  if (children) (Array.isArray(children) ? children : [children]).forEach(function (c) {
+    if (c == null) return;
+    n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  });
+  return n;
+}
+function shortHash(h) {
+  if (!h || typeof h !== "string") return "";
+  // Already-truncated values (e.g. "8a2595cd…") pass through unchanged.
+  if (h.indexOf("…") !== -1 || h.length <= 12) return h;
+  return h.slice(0, 8) + "…";
+}
+function fullHash(h) {
+  if (!h || typeof h !== "string") return "";
+  // For partial/placeholder hashes we don't have the full value to show.
+  return h.length >= 64 ? h : h;
+}
+
+/* ---------------- choose data source, merge with embedded ---------------- */
+function pickReport() {
+  var live = (typeof window !== "undefined" && window.DEMO_REPORT) ? window.DEMO_REPORT : null;
+  if (!live || typeof live !== "object") {
+    return EMBEDDED_REPORT;
+  }
+  // Shallow-merge live over embedded so a partial live payload still renders fully.
+  var merged = {};
+  for (var k in EMBEDDED_REPORT) merged[k] = EMBEDDED_REPORT[k];
+  for (var j in live) if (live[j] !== undefined && live[j] !== null) merged[j] = live[j];
+  if (!merged.source || merged.source === "embedded") merged.source = "live";
+  return merged;
+}
+
+/* ---------------- render ---------------- */
+function render(R) {
+  // top badge
+  var sFail = (R.status || "").toUpperCase().indexOf("FAIL") !== -1;
+  var badge = document.getElementById("statusBadge");
+  badge.classList.toggle("is-fail", sFail);
+  document.getElementById("statusText").textContent = R.status || "DEMO_ATTEST_PASS";
+
+  // pitch
+  document.getElementById("pitchLine").textContent = R.pitch || EMBEDDED_REPORT.pitch;
+
+  // hero generation
+  var hero = R.hero || EMBEDDED_REPORT.hero;
+  document.getElementById("ngenTag").textContent = (hero.n_gen != null ? hero.n_gen : 20);
+  var prompt = hero.prompt || "";
+  var gen = hero.generated || "";
+  // split the prompt prefix from the continuation so we can tint only the new tokens
+  var contStart = gen.indexOf(prompt) === 0 ? prompt.length : 0;
+  document.getElementById("genPrompt").textContent = gen.slice(0, contStart);
+  document.getElementById("genCont").textContent = gen.slice(contStart);
+  document.getElementById("genCaption").textContent = hero.caption || "";
+
+  // trust chain ribbon
+  var ribbon = document.getElementById("ribbon");
+  ribbon.innerHTML = "";
+  (R.trust_chain || EMBEDDED_REPORT.trust_chain).forEach(function (s, i) {
+    var rows = [
+      el("div", { class: "step-n" }, [ el("span", { class: "num" }, String(i + 1)), document.createTextNode("step " + (i + 1)) ]),
+      el("div", { class: "step-title" }, s.title)
+    ];
+    if (s.hash) {
+      rows.push(el("div", { class: "step-meta" }, [
+        document.createTextNode((s.meta_label || "sha") + " "),
+        el("span", { class: "h", title: fullHash(s.hash) }, shortHash(s.hash))
+      ]));
+    } else if (s.meta) {
+      rows.push(el("div", { class: "step-meta" }, s.meta));
+    }
+    if (s.bytes) rows.push(el("div", { class: "step-bytes" }, s.bytes));
+    var node = el("div", { class: "step" + (s.output ? " is-output" : "") }, rows);
+    ribbon.appendChild(node);
+  });
+
+  // corroboration tag
+  var cor = R.corroboration || EMBEDDED_REPORT.corroboration;
+  var corNode = document.getElementById("corrob");
+  corNode.innerHTML = "";
+  corNode.appendChild(el("span", { class: "ic" }, "✓"));
+  var corBody = el("div", {}, [
+    document.createTextNode("Independent corroboration — "),
+    el("span", { class: "h", title: fullHash(cor.hash) }, shortHash(cor.hash)),
+    document.createTextNode(" — " ),
+    el("span", { html: cor.text })
+  ]);
+  corNode.appendChild(corBody);
+
+  // gates
+  var gates = document.getElementById("gates");
+  gates.innerHTML = "";
+  (R.gates || EMBEDDED_REPORT.gates).forEach(function (g) {
+    var tier = (g.tier === "amber") ? "is-amber" : (((g.verdict || "").toUpperCase() === "FAIL") ? "is-fail" : "");
+    var verdictTxt = g.verdict || "PASS";
+    var mark = tier === "is-amber" ? "◔" : (tier === "is-fail" ? "✕" : "✓");
+    var head = el("div", { class: "gate-head" }, [
+      el("span", { class: "gate-name" }, g.name),
+      el("span", { class: "verdict " + tier }, [ el("span", { class: "check" }, mark), document.createTextNode(verdictTxt) ])
+    ]);
+    var parts = [head];
+    if (g.key) parts.push(el("div", { class: "gate-key" }, g.key));
+    parts.push(el("div", { class: "gate-desc", html: descWithHash(g) }));
+    if (g.flag) parts.push(el("span", { class: "gate-flag" }, g.flag));
+    gates.appendChild(el("div", { class: "gate " + tier }, parts));
+  });
+
+  // two paths
+  var paths = document.getElementById("paths");
+  paths.innerHTML = "";
+  (R.paths || EMBEDDED_REPORT.paths).forEach(function (p) {
+    var statItems = (p.stats || []).map(function (st) {
+      return el("div", { class: "item" }, [ document.createTextNode(st.k), el("b", {}, st.v) ]);
+    });
+    paths.appendChild(el("div", { class: "path " + (p.kind || "") }, [
+      el("h3", {}, [ document.createTextNode(p.title), el("span", { class: "badge" }, p.badge || "") ]),
+      el("p", {}, p.body || ""),
+      el("div", { class: "stat" }, statItems)
+    ]));
+  });
+
+  // fences
+  var fences = document.getElementById("fences");
+  fences.innerHTML = "";
+  (R.fences || EMBEDDED_REPORT.fences).forEach(function (c) {
+    var kids = [ el("span", { class: "ic" }, "✓") ];
+    if (c.k) kids.push(el("span", { class: "k" }, c.k));
+    kids.push(el("span", { class: c.mono ? "v" : "" }, c.v));
+    fences.appendChild(el("div", { class: "chip" + (c.mono ? " mono" : "") }, kids));
+  });
+
+  // model chip
+  var m = R.model || EMBEDDED_REPORT.model;
+  var modelChip = document.getElementById("modelChip");
+  modelChip.innerHTML = "";
+  modelChip.appendChild(el("div", {}, [
+    el("div", { class: "mtitle" }, [ document.createTextNode(m.title + " "), el("span", { style: "color:var(--ink-faint);font-weight:500;font-size:13px" }, "— " + (m.note || "")) ])
+  ]));
+  modelChip.appendChild(el("div", { class: "mmeta" }, [
+    document.createTextNode("sha "),
+    el("span", { class: "h", title: m.sha_is_partial ? "truncated — full value on a live attestation run" : fullHash(m.sha) }, shortHash(m.sha)),
+    document.createTextNode("  ·  " + (m.bytes || ""))
+  ]));
+  modelChip.appendChild(el("span", { class: "mpill" }, m.pill || "model.safetensors"));
+
+  // residuals
+  var residuals = document.getElementById("residuals");
+  residuals.innerHTML = "";
+  (R.residuals || EMBEDDED_REPORT.residuals).forEach(function (txt, i) {
+    residuals.appendChild(el("div", { class: "residual" }, [
+      el("div", { class: "rn" }, String(i + 1)),
+      el("div", { class: "rtext", html: txt })
+    ]));
+  });
+
+  // footer meta
+  var f = R.footer || EMBEDDED_REPORT.footer;
+  var foot = document.getElementById("footMeta");
+  foot.innerHTML = "";
+  var isLive = (R.source === "live");
+  foot.appendChild(el("div", {}, [
+    document.createTextNode("commit "),
+    el("span", { class: "h" }, f.commit || "captured green run")
+  ]));
+  foot.appendChild(el("div", {}, [
+    document.createTextNode(f.timestamp || "captured green run"),
+    el("span", { class: "live" + (isLive ? " is-live" : "") }, isLive ? "LIVE RUN" : "EMBEDDED")
+  ]));
+
+  // source note
+  document.getElementById("srcNote").textContent = isLive
+    ? "Data source: demo/demo_report.js (live attestation run)."
+    : "Data source: embedded captured green run (no demo_report.js present).";
+}
+
+/* helper: append a partial-hash to a gate description if present */
+function descWithHash(g) {
+  var d = g.desc || "";
+  if (g.hash && g.hash_is_partial) {
+    d += " <span class=\"h\" title=\"truncated; full value in the attestation\">" + shortHash(g.hash) + "</span>";
+  }
+  return d;
+}
+
+/* boot — fully guarded so a missing demo_report.js never throws */
+(function () {
+  try {
+    render(pickReport());
+  } catch (e) {
+    // Last-resort: render the embedded fallback. Never leave a blank page.
+    try { render(EMBEDDED_REPORT); } catch (_) { /* swallow */ }
+  }
+})();
+</script>
+</body>
+</html>

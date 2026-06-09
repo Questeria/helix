@@ -62,6 +62,11 @@ desktop.ini
 # committed artifacts, not the emitted attestation).
 /attestation/
 
+# Live demo report emitted by scripts/gpt2_demo_attest.sh on the green path -- run
+# output that feeds demo/dashboard.html (the dashboard itself IS committed and falls
+# back to its embedded report when this file is absent).
+demo/demo_report.js
+
 # Logs
 *.log
 /runs/
