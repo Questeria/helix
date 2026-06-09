@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GPT-2-XL on Helix — captured run (replay widget)</title>
+<style>
+  /* ============================================================
+     demo/embed.html — EMBEDDABLE widget (iframe-friendly).
+     Replays the REAL captured run from demo/captured_run.js with
+     unmistakable "captured run (replay)" labeling. Self-contained:
+     no CDNs, no external fonts, no frameworks; renders from file://.
+     Honesty contract identical to index.html's replay mode: every
+     id/string/total is from the gated capture; pacing is compressed
+     and labeled; this widget NEVER claims to be live.
+     Suggested embed:
+       <iframe src=".../embed.html" width="100%" height="380"
+               style="border:0" title="GPT-2-XL on Helix — captured run"></iframe>
+     ============================================================ */
+  :root {
+    --bg: #0a0e14; --panel: #111722; --panel-2: #0d121b;
+    --border: #1e2733; --border-2: #28323f;
+    --ink: #e6edf3; --ink-dim: #9aa7b4; --ink-faint: #6b7785;
+    --accent: #34d399; --accent-dim: #1d6b4f; --accent-bg: rgba(52,211,153,0.08);
+    --blue: #6cb6f5; --blue-dim: #29516f; --blue-bg: rgba(108,182,245,0.07);
+    --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(700px 380px at 50% -10%, #121a26 0%, var(--bg) 60%);
+    color: var(--ink); font-family: var(--sans); line-height: 1.5;
+    -webkit-font-smoothing: antialiased; min-height: 100%;
+  }
+  .card {
+    max-width: 860px; margin: 0 auto; padding: 14px 16px 12px;
+    display: flex; flex-direction: column; gap: 10px; min-height: 100vh;
+  }
+  .head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .glyph { width: 18px; height: 18px; flex: none; }
+  .name { font-weight: 700; font-size: 14.5px; letter-spacing: 0.2px; }
+  .name .x { color: var(--ink-faint); font-weight: 500; }
+  .tag {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--blue); border: 1px solid var(--blue-dim); background: var(--blue-bg);
+    padding: 2px 7px; border-radius: 5px; white-space: nowrap;
+  }
+  .tag.idle { color: var(--ink-faint); border-color: var(--border-2); background: var(--panel-2); }
+  .spacer { flex: 1; }
+  .meta { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+
+  .text {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border-2); border-radius: 10px;
+    padding: 12px 14px; font-size: clamp(14px, 2.4vw, 17px); font-weight: 500;
+    min-height: 86px; white-space: pre-wrap; word-break: break-word;
+  }
+  .text .prompt { color: var(--ink-dim); }
+  .text .cont {
+    color: var(--ink);
+    background: linear-gradient(180deg, rgba(52,211,153,0.10), rgba(52,211,153,0.04));
+    border-bottom: 1px solid var(--accent-dim); border-radius: 3px; padding: 1px 1px;
+  }
+  .text .caret {
+    display: inline-block; width: 7px; height: 1em; background: var(--accent);
+    vertical-align: text-bottom; margin-left: 1px; animation: blink 1s step-start infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .ladder { display: flex; align-items: center; gap: 10px; }
+  .rungs { display: grid; grid-template-columns: repeat(48, 1fr); gap: 2px; flex: 1; }
+  .rung { height: 9px; border-radius: 2px; background: var(--panel-2); border: 1px solid var(--border); }
+  .rung.done { background: var(--accent-dim); border-color: var(--accent-dim); }
+  .rung.cur { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px rgba(52,211,153,0.7); }
+  .lnum { font-family: var(--mono); font-size: 10.5px; color: var(--accent); min-width: 64px; text-align: right; }
+
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); }
+  .stats b { color: var(--accent); font-weight: 650; }
+  .stats .s { background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; }
+
+  .foot {
+    margin-top: auto; border-top: 1px solid var(--border); padding-top: 8px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 10.5px; color: var(--ink-faint);
+  }
+  .foot a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .foot a:hover { text-decoration: underline; }
+  .missing {
+    border: 1px solid var(--border-2); background: var(--panel-2); border-radius: 10px;
+    color: var(--ink-dim); font-size: 13px; padding: 14px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .text .caret { animation: none; }
+  }
+</style>
+</head>
+<body>
+  <!-- optional sibling data file; absent -> honest "missing" card -->
+  <script src="captured_run.js"></script>
+  <div class="card">
+    <div class="head">
+      <svg class="glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
+              stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span class="name">GPT-2-XL <span class="x">on</span> Helix</span>
+      <span class="tag" id="tagEl">REPLAY · CAPTURED RUN — NOT LIVE</span>
+      <span class="spacer"></span>
+      <span class="meta" id="metaEl"></span>
+    </div>
+    <div id="bodyEl"></div>
+    <div class="ladder" id="ladderRow" hidden>
+      <div class="rungs" id="rungsEl"></div>
+      <span class="lnum" id="lnumEl">L —/48</span>
+    </div>
+    <div class="stats" id="statsEl" hidden></div>
+    <div class="foot">
+      <span>A <b style="color:var(--ink-dim)">real, gated</b> GPT-2-XL run on the from-raw Helix stack
+        (served output == independent oracle, token-for-token 25/25), replayed time-compressed.
+        Real cadence: ≈ 9.8 s/token — trust, not speed.</span>
+      <span class="spacer"></span>
+      <a id="openLink" href="index.html?source=replay" target="_blank" rel="noopener">Open the full demo →</a>
+    </div>
+  </div>
+
+<script>
+"use strict";
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, txt) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (txt != null) n.textContent = txt;
+    return n;
+  }
+  var C = window.HELIX_CAPTURED_RUN;
+  var body = $("bodyEl");
+
+  if (!(C && C.kind === "captured-replay" && C.tokenize && C.tokens && C.done)) {
+    var miss = el("div", "missing",
+      "Captured-run data (captured_run.js) is not present next to this widget, so there is " +
+      "nothing real to replay — and this widget never fabricates a run. ");
+    var a = document.createElement("a");
+    a.href = "index.html"; a.target = "_blank"; a.rel = "noopener";
+    a.textContent = "Open the full demo instead →";
+    a.style.color = "var(--accent)";
+    miss.appendChild(a);
+    body.appendChild(miss);
+    $("tagEl").textContent = "NO DATA";
+    $("tagEl").className = "tag idle";
+    return;
+  }
+
+  $("metaEl").textContent = C.params + " · " + C.n_layer + " layers · fp32 · " + C.device;
+
+  /* text area */
+  var textBox = el("div", "text");
+  var promptSpan = el("span", "prompt", C.prompt);
+  var contSpan = el("span", "cont", "");
+  var caret = el("span", "caret");
+  textBox.appendChild(promptSpan); textBox.appendChild(contSpan);
+  body.appendChild(textBox);
+
+  /* ladder */
+  $("ladderRow").hidden = false;
+  var rungs = [];
+  for (var i = 0; i < C.n_layer; i++) {
+    var r = el("div", "rung");
+    rungs.push(r); $("rungsEl").appendChild(r);
+  }
+
+  /* stats */
+  var stats = $("statsEl"); stats.hidden = false;
+  function setStats(tok, secs) {
+    stats.innerHTML = "";
+    var s1 = el("span", "s"); s1.innerHTML = "tokens <b>" + tok + "</b> / " + C.done.n_gen;
+    var s2 = el("span", "s"); s2.innerHTML = "real elapsed <b>" + secs.toFixed(1) + " s</b>";
+    var s3 = el("span", "s"); s3.innerHTML = "real rate <b>" + C.done.tok_per_s.toFixed(2) + " tok/s</b>";
+    var s4 = el("span", "s", "replay is time-compressed");
+    stats.appendChild(s1); stats.appendChild(s2); stats.appendChild(s3); stats.appendChild(s4);
+  }
+  setStats(0, 0);
+
+  /* ---- replay loop (real data only; compressed pacing, labeled) ---- */
+  var N = C.tokens.length, NL = C.n_layer;
+  var PER_TOKEN_MS = 650;             /* compressed; the REAL pace was ~9800 ms */
+  var PER_LAYER_MS = Math.max(4, Math.floor((PER_TOKEN_MS * 0.8) / NL));
+  var loops = 0, MAX_LOOPS = 20;
+
+  function resetRun() {
+    contSpan.textContent = "";
+    textBox.appendChild(caret);
+    for (var i = 0; i < NL; i++) rungs[i].className = "rung";
+    $("lnumEl").textContent = "L —/" + NL;
+    setStats(0, 0);
+  }
+
+  function runOnce(doneCb) {
+    resetRun();
+    var step = 0;
+    function doStep() {
+      if (document.hidden) { setTimeout(doStep, 800); return; } /* pause when not visible */
+      var L = 0;
+      function sweep() {
+        if (L > 0) { rungs[L - 1].className = "rung done"; }
+        if (L < NL) {
+          rungs[L].className = "rung cur";
+          $("lnumEl").textContent = "L " + (L + 1) + "/" + NL;
+          L++;
+          setTimeout(sweep, PER_LAYER_MS);
+          return;
+        }
+        /* layer sweep finished -> emit the REAL captured token */
+        var tk = C.tokens[step];
+        contSpan.textContent += tk.string;
+        setStats(step + 1, (step + 1) / N * C.done.seconds);
+        step++;
+        if (step < N) { setTimeout(doStep, 60); }
+        else {
+          if (caret.parentNode) caret.parentNode.removeChild(caret);
+          doneCb();
+        }
+      }
+      sweep();
+    }
+    doStep();
+  }
+
+  function loop() {
+    runOnce(function () {
+      loops++;
+      if (loops < MAX_LOOPS) setTimeout(loop, 4500); /* idle pause, then replay again */
+    });
+  }
+  setTimeout(loop, 700);
+})();
+</script>
+</body>
+</html>

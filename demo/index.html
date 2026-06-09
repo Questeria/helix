@@ -702,6 +702,47 @@
     .ladder-grid { grid-template-columns: repeat(8, 1fr); }
   }
 
+  /* ---------- conversation tools (context carry-over + model switcher) ---------- */
+  .conv-tools { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+  .ctx-toggle {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim);
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .ctx-toggle input { accent-color: var(--accent); width: 13px; height: 13px; cursor: pointer; }
+  .ctx-toggle input:disabled { cursor: not-allowed; }
+  .ctx-clear {
+    background: none; border: 1px solid var(--border-2); color: var(--ink-faint);
+    border-radius: 6px; cursor: pointer; font-family: var(--mono); font-size: 10px;
+    padding: 2px 8px; line-height: 1.4;
+  }
+  .ctx-clear:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-dim); }
+  .ctx-clear:disabled { opacity: 0.45; cursor: not-allowed; }
+  .model-select {
+    background: var(--panel-2); border: 1px solid var(--border-2); color: var(--ink);
+    border-radius: 6px; font-family: var(--mono); font-size: 11px; padding: 3px 7px;
+    cursor: pointer;
+  }
+  .model-select:disabled { opacity: 0.5; cursor: not-allowed; }
+  .turn.model .bubble .carried-mark {
+    color: var(--ink-faint); font-style: italic; font-size: 0.82em;
+    border-bottom: 1px dotted var(--border-2); cursor: help; margin-right: 2px;
+  }
+
+  /* ---------- verify outcome detail (contract: docs/HELIX_VERIFY_UX_PLAN.md) ---------- */
+  .verify-result.is-pass { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .verify-result.is-fail { color: var(--red); border-color: var(--red-dim); background: var(--red-bg); }
+  .verify-detail {
+    display: inline-flex; flex-wrap: wrap; gap: 5px; margin-left: 6px; vertical-align: middle;
+  }
+  .verify-detail .vd {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-dim);
+    border: 1px solid var(--border-2); background: var(--panel-2);
+    padding: 1px 7px; border-radius: 5px; white-space: nowrap;
+  }
+  .verify-detail .vd.ok { color: var(--accent); border-color: var(--accent-dim); }
+  .verify-detail .vd.bad { color: var(--red); border-color: var(--red-dim); }
+
   /* ---------- REPLAY (captured-run backup mode) styling ---------- */
   .status-badge.is-replay { border-color: var(--blue-dim); background: var(--blue-bg); color: var(--blue); }
   .status-badge.is-replay .dot { background: var(--blue); animation: none; }
@@ -880,7 +921,17 @@
       <section class="conv-col" aria-label="Completion playground conversation">
         <div class="conv-head">
           <span class="ch-title">Conversation — text completion</span>
-          <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
+          <span class="conv-tools">
+            <label class="ctx-toggle" id="ctxToggleWrap"
+              title="When on, each new message is appended to the conversation so far and the WHOLE text is sent as the completion prompt — that is the honest way to give a 2019 base model 'memory'. The live server enforces its --max-ctx token cap and errors honestly beyond it.">
+              <input type="checkbox" id="ctxCarry" checked /> carry context
+            </label>
+            <button class="ctx-clear" id="ctxClear" type="button"
+              title="Forget the carried text (the visible transcript stays)">clear ctx</button>
+            <select id="modelSelect" class="model-select" hidden
+              aria-label="Model served by the live backend"></select>
+            <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
+          </span>
         </div>
 
         <div class="transcript" id="transcript" aria-live="polite" aria-busy="false">
@@ -901,6 +952,8 @@
             <button class="seed-chip" type="button">In the beginning</button>
             <button class="seed-chip" type="button">The three laws of robotics are</button>
             <button class="seed-chip" type="button">Once upon a time</button>
+            <button class="seed-chip" type="button">Once there was a compiler that</button>
+            <button class="seed-chip" type="button">A proof is convincing when</button>
           </div>
           <div class="composer-row">
             <textarea id="promptInput" rows="2"
@@ -916,7 +969,7 @@
               <button class="send-btn" id="sendBtn" type="button">Continue</button>
             </div>
           </div>
-          <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="charCount"></span></div>
+          <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="ctxInfo"></span><span id="charCount"></span></div>
           <div class="busy-hint" id="busyHint">GPU busy — one generation at a time (single-flight, matching the strictly-serial GPU).</div>
         </div>
       </section>
@@ -1590,12 +1643,16 @@ var LiveSSESource = (function () {
     var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var cancelled = false;
 
-    var body = JSON.stringify({
+    var reqObj = {
       prompt: prompt,
       n_gen: Math.max(1, Math.min(nGen | 0, 256)),
       request_id: (typeof crypto !== "undefined" && crypto.randomUUID)
         ? crypto.randomUUID() : ("req-" + Date.now())
-    });
+    };
+    /* ADDITIVE field, only ever present when /api/health advertised a
+       models[] capability (today's server never does -> never sent). */
+    if (UI.selectedModel) reqObj.model = UI.selectedModel;
+    var body = JSON.stringify(reqObj);
 
     fetch("/api/generate?detail=op", {
       method: "POST",
@@ -1672,8 +1729,11 @@ function replayPrompt() {
    ================================================================ */
 var UI = {
   busy: false,
-  lastRequest: null,      /* {prompt, nGen} of the most recent request (retry) */
+  lastRequest: null,      /* {prompt, nGen} of the most recent USER request (retry re-derives carry) */
   autoReplayed: false,    /* the one-shot auto-start of the captured replay */
+  contextText: "",        /* carried conversation text (multi-turn completion prompt prefix) */
+  lastSentPrompt: null,   /* the full prompt actually sent for the in-flight turn */
+  selectedModel: null,    /* only ever set when /api/health advertises models[] (live capability) */
   ladder: { total: RUNBOOK.n_layer, current: -1, done: 0, ms: [] },
   kernelCounts: {},
   reply: { step: 0, nGen: 0, layersDone: 0, totalPasses: 0 },
@@ -1872,6 +1932,12 @@ var handlers = {
 
   onDone: function (d) {
     finishStreamingBubble();
+    /* multi-turn: the next turn's context = everything sent + everything
+       generated this turn (replay never carries) */
+    if (TELEMETRY_SOURCE !== "replay" && UI.lastSentPrompt != null) {
+      UI.contextText = UI.lastSentPrompt + (d.text != null ? d.text : "");
+      updateCtxInfo();
+    }
     /* reconcile the live gauges with the final measured seconds/tok_per_s
        so the right-column gauges agree with the run summary (during the
        stream they show real elapsed; here they settle to the reported totals). */
@@ -2005,12 +2071,26 @@ function addUserTurn(text) {
   scrollTranscript();
 }
 
-function addModelTurn(prompt) {
+function addModelTurn(prompt, carriedLen) {
   var labelKids = [
     document.createTextNode("GPT-2-XL"),
     el("span", { class: "ml-pill" }, "continuation")
   ];
-  var promptEcho = el("span", { class: "prompt-echo" }, prompt);
+  var promptEcho = el("span", { class: "prompt-echo" });
+  if (carriedLen) {
+    /* a context prefix was carried: the FULL text was sent as the prompt;
+       the bubble collapses the prefix to an inspectable marker (hover for
+       the tail of what was actually sent) */
+    var tail = UI.contextText.slice(-300);
+    promptEcho.appendChild(el("span", {
+      class: "carried-mark",
+      title: "carried context — the prompt actually sent starts with the conversation so far (" +
+             carriedLen + " chars). Ends with: …" + tail
+    }, "⟨…carried " + carriedLen + " chars⟩ "));
+    promptEcho.appendChild(document.createTextNode(prompt.slice(carriedLen)));
+  } else {
+    promptEcho.appendChild(document.createTextNode(prompt));
+  }
   var contEl = el("span", { class: "cont" });
   var caretEl = el("span", { class: "caret", "aria-hidden": "true" });
   var bubble = el("div", { class: "bubble" }, [ promptEcho, contEl, caretEl ]);
@@ -2055,6 +2135,18 @@ function finalizeTurnMeta(d) {
   ));
   if (TELEMETRY_SOURCE === "replay") {
     meta.appendChild(el("span", { class: "replay-tag" }, "REPLAY · captured run"));
+    /* shareable permalink: same page, ?source=replay (works wherever this
+       page + captured_run.js are hosted; no server involved) */
+    var shareBtn = el("button", { class: "tm-btn", type: "button" }, "copy replay link");
+    shareBtn.addEventListener("click", function () {
+      var url = window.location.href.split("?")[0].split("#")[0] + "?source=replay";
+      function done_(ok) { shareBtn.textContent = ok ? "link copied ✓" : url; shareBtn.disabled = true; }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { done_(true); },
+                                                function () { done_(false); });
+      } else { done_(false); }
+    });
+    meta.appendChild(shareBtn);
   } else if (TELEMETRY_SOURCE !== "sse") {
     meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
   }
@@ -2075,23 +2167,49 @@ function finalizeTurnMeta(d) {
     verifyBtn.textContent = "verifying…";
     runVerify(d, function (res) {
       verifyBtn.remove();
-      resultSlot.innerHTML = "";
-      if (res.verdict === "UNAVAILABLE") {
-        resultSlot.appendChild(el("span", { class: "verify-result is-unavail" }, "verify: UNAVAILABLE"));
-        resultSlot.appendChild(document.createTextNode(" "));
-        resultSlot.appendChild(el("a", { href: "dashboard.html" }, "see the real numbers →"));
-      } else {
-        /* DEAD-BY-DESIGN: /api/verify only ever returns UNAVAILABLE (handled above); this PASS branch
-         * is unreachable. Kept robust, never fabricated -- see the note on runVerify(). */
-        var cls = res.verdict === "PASS" ? "verify-result" : "verify-result is-unavail";
-        resultSlot.appendChild(el("span", { class: cls }, "verify: " + res.verdict));
-        resultSlot.appendChild(document.createTextNode(" "));
-        resultSlot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
-      }
+      /* DEAD-BY-DESIGN today: the server only ever answers UNAVAILABLE; the
+         PASS/FAIL rendering is the documented future contract
+         (docs/HELIX_VERIFY_UX_PLAN.md) and renders server fields only. */
+      renderVerifyOutcome(resultSlot, res);
     });
   });
   meta.appendChild(verifyBtn);
   meta.appendChild(resultSlot);
+}
+
+/* Render an /api/verify outcome. TODAY the only verdict the server ever
+   returns is UNAVAILABLE (by design — see runVerify below). The PASS/FAIL
+   branch implements the documented FUTURE contract for a REAL on-demand
+   gated parity check (docs/HELIX_VERIFY_UX_PLAN.md): it renders ONLY the
+   fields the server actually supplied — argmax_match, token_for_token,
+   max_abs_logit_diff, oracle, gated_ref — and never defaults a missing
+   field to a green check. Nothing here can synthesize a verdict. */
+function renderVerifyOutcome(slot, res) {
+  slot.innerHTML = "";
+  var v = (res && res.verdict) || "UNAVAILABLE";
+  if (v === "UNAVAILABLE") {
+    slot.appendChild(el("span", { class: "verify-result is-unavail" }, "verify: UNAVAILABLE"));
+    if (res && res.note) slot.appendChild(el("span", { class: "verify-detail" }, [ el("span", { class: "vd" }, res.note) ]));
+    slot.appendChild(document.createTextNode(" "));
+    slot.appendChild(el("a", { href: "dashboard.html" }, "see the real numbers →"));
+    return;
+  }
+  var cls = v === "PASS" ? "verify-result is-pass" : "verify-result is-fail";
+  slot.appendChild(el("span", { class: cls }, "verify: " + v));
+  var det = el("span", { class: "verify-detail" });
+  function chip(txt, ok) {
+    det.appendChild(el("span", { class: "vd" + (ok === true ? " ok" : ok === false ? " bad" : "") }, txt));
+  }
+  if (res.argmax_match === true) chip("argmax ✓", true);
+  if (res.argmax_match === false) chip("argmax ✕", false);
+  if (res.token_for_token === true) chip("token-for-token ✓", true);
+  if (res.token_for_token === false) chip("token-for-token ✕", false);
+  if (typeof res.max_abs_logit_diff === "number") chip("max|Δlogit| " + res.max_abs_logit_diff.toExponential(2));
+  if (res.oracle) chip("oracle: " + res.oracle);
+  if (res.gated_ref) chip("gated check: " + res.gated_ref);
+  if (det.children.length) slot.appendChild(det);
+  slot.appendChild(document.createTextNode(" "));
+  slot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
 }
 
 /* on-demand verify: hits POST /api/verify only in live mode; mock always
@@ -2149,16 +2267,9 @@ function paintRunSummary(d) {
     btn.disabled = true; btn.textContent = "verifying…";
     runVerify(d, function (res) {
       btn.remove();
-      slot.innerHTML = "";
-      if (res.verdict === "UNAVAILABLE") {
-        slot.appendChild(document.createTextNode("oracle UNAVAILABLE (python-free demo path) — "));
-        slot.appendChild(el("a", { href: "dashboard.html" }, "see the real parity numbers →"));
-      } else {
-        /* DEAD-BY-DESIGN: /api/verify only ever returns UNAVAILABLE (handled above); unreachable PASS
-         * branch, kept robust, never fabricated -- see the note on runVerify(). */
-        slot.appendChild(document.createTextNode("verify: " + res.verdict + " — "));
-        slot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
-      }
+      /* DEAD-BY-DESIGN today: UNAVAILABLE is the only live verdict; see
+         renderVerifyOutcome + docs/HELIX_VERIFY_UX_PLAN.md. */
+      renderVerifyOutcome(slot, res);
     });
   });
   row.appendChild(btn);
@@ -2267,11 +2378,15 @@ function configureComposerForSource() {
     up.disabled = true; down.disabled = true;
     send.textContent = "▶ Replay the captured run";
     hint.textContent = "REPLAY mode — prompt pinned to the captured run. ?source=mock explores the layout; start the backend + ?source=sse to go live.";
+    $("ctxCarry").disabled = true;
+    $("ctxClear").disabled = true;
   } else {
     input.disabled = false;
     ng.disabled = false; up.disabled = false; down.disabled = false;
     send.textContent = "Continue";
     hint.textContent = "Enter ↵ to run · Shift+Enter for a newline";
+    $("ctxCarry").disabled = false;
+    $("ctxClear").disabled = false;
   }
   /* seed chips: in replay only the captured prompt is replayable */
   var chips = $("seedRow").querySelectorAll(".seed-chip");
@@ -2284,11 +2399,35 @@ function configureComposerForSource() {
   }
 }
 
+/* ---- multi-turn context carry-over helpers ---- */
+function carryEnabled() {
+  var cb = $("ctxCarry");
+  return !!(cb && cb.checked) && TELEMETRY_SOURCE !== "replay";
+}
+function updateCtxInfo() {
+  var n = UI.contextText.length;
+  var elx = $("ctxInfo");
+  if (!elx) return;
+  if (carryEnabled() && n > 0) {
+    /* chars-only is the honest unit here; ÷4 is a clearly-labeled rough
+       token estimate. The REAL token count appears in the tokenize event,
+       and the live server fail-closes past --max-ctx (default 320). */
+    var estTok = Math.round(n / 4);
+    var s = "carrying " + n + " chars (≈" + estTok + " tok, rough ÷4 estimate)";
+    if (estTok > 240) s += " · nearing the live --max-ctx cap (320 tok default)";
+    elx.textContent = s;
+  } else {
+    elx.textContent = "";
+  }
+}
+
 function setBusy(b) {
   UI.busy = b;
   $("sendBtn").disabled = b;
   $("busyHint").classList.toggle("show", b);
   $("transcript").setAttribute("aria-busy", b ? "true" : "false");
+  var ms = $("modelSelect");
+  if (ms && !ms.hidden) ms.disabled = b;
   var chips = $("seedRow").querySelectorAll(".seed-chip");
   for (var i = 0; i < chips.length; i++) {
     chips[i].disabled = b ||
@@ -2312,7 +2451,20 @@ function startGeneration(prompt, nGen) {
   }
   prompt = (prompt || "").replace(/\s+$/g, "");
   if (!prompt) return;
+  /* retry stores the USER text; carry-over is re-derived at send time so a
+     retried turn builds the identical effective prompt */
   UI.lastRequest = { prompt: prompt, nGen: nGen };
+
+  /* multi-turn: prepend the carried conversation (completion-model "memory"
+     = literally resending the text so far; nothing hidden, marker in the
+     bubble shows what was carried) */
+  var displayPrompt = prompt;
+  var carriedLen = 0;
+  if (carryEnabled() && UI.contextText) {
+    carriedLen = UI.contextText.length;
+    prompt = UI.contextText + prompt;
+  }
+  UI.lastSentPrompt = prompt;
 
   setBusy(true);
 
@@ -2333,9 +2485,10 @@ function startGeneration(prompt, nGen) {
   $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
   $("ladderOpNow").innerHTML = "&nbsp;";
 
-  /* transcript turns */
-  addUserTurn(prompt);
-  addModelTurn(prompt);
+  /* transcript turns: the user bubble shows what was typed; the model bubble
+     echoes the FULL sent prompt with the carried prefix collapsed */
+  addUserTurn(displayPrompt);
+  addModelTurn(prompt, carriedLen);
 
   /* subscribe once; the source does the rest */
   var src = getTelemetrySource();
@@ -2376,6 +2529,13 @@ function initControls() {
   /* Escape closes the mobile internals drawer */
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") openDrawer(false);
+  });
+
+  /* multi-turn context controls */
+  $("ctxCarry").addEventListener("change", updateCtxInfo);
+  $("ctxClear").addEventListener("click", function () {
+    UI.contextText = "";
+    updateCtxInfo();
   });
 
   /* seed chips fill the box and (when idle) fire immediately */
@@ -2434,6 +2594,7 @@ function gateLiveReadiness() {
       if (j === null) return; /* already fell back */
       if (j && j.ready) {
         setConnState("live", "LIVE · " + (j.device || RUNBOOK.device) + " · fp32");
+        populateModelSelect(j);
       } else {
         /* reachable worker, still warming (XL weights + PTX load) —
            honest connecting state + keep reconnecting for ~2 minutes */
@@ -2445,6 +2606,35 @@ function gateLiveReadiness() {
     }).catch(fallbackToBackup);
   }
   poll();
+}
+
+/* Capability-gated model switcher. TODAY'S server advertises no "models"
+   field, so this never renders and nothing about the live contract changes.
+   When a future gated server advertises  models:[{id,label,default}]  in
+   /api/health (contract extension: docs/HELIX_VERIFY_UX_PLAN.md §4 — needs
+   the GPU build + helix_serve_gate.sh re-gate in Claude Code), the switcher
+   appears and the chosen id is sent as an ADDITIVE "model" field on
+   /api/generate. The page never invents a model list. */
+function populateModelSelect(health) {
+  var sel = $("modelSelect");
+  if (!sel || !health || !Object.prototype.hasOwnProperty.call(health, "models")) return;
+  var models = health.models;
+  if (!models || !models.length) return;
+  sel.innerHTML = "";
+  var def = null;
+  for (var i = 0; i < models.length; i++) {
+    var m = models[i];
+    if (!m || !m.id) continue;
+    sel.appendChild(el("option", { value: m.id }, m.label || m.id));
+    if (m.default) def = m.id;
+  }
+  if (!sel.children.length) return;
+  sel.value = def || (health.model || sel.children[0].value);
+  UI.selectedModel = sel.value;
+  sel.hidden = false;
+  sel.addEventListener("change", function () {
+    UI.selectedModel = sel.value;
+  });
 }
 
 /* While sitting in replay/mock fallback, quietly watch for the backend
@@ -2471,6 +2661,9 @@ function startUpgradeWatch() {
    already wrapped in the unmistakable REPLAY labeling. */
 function maybeAutoReplay() {
   if (TELEMETRY_SOURCE !== "replay" || UI.autoReplayed) return;
+  try {
+    if (new URLSearchParams(window.location.search).get("autoplay") === "0") return;
+  } catch (e) { /* keep autoplay on engines without URLSearchParams */ }
   UI.autoReplayed = true;
   setTimeout(function () {
     if (!UI.busy && TELEMETRY_SOURCE === "replay") {
