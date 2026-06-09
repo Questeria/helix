@@ -13,7 +13,7 @@ from‑raw‑binary, Python‑free `kovc` compiler (`hex0 → seed → kovc`).
 ## What ships
 
 The Helix toolchain is built **entirely from a raw‑binary root — there is no trusted pre‑built
-compiler**. `hex0` (299 hand‑authored hex bytes) → … → `seed` (an Apache‑2.0 C‑subset compiler) →
+compiler**. `hex0` (299 hand‑authored hex bytes) → … → `seed` (the C‑subset bootstrap compiler) →
 `kovc` (the Helix compiler, `helixc/bootstrap/{lexer,parser,kovc}.hx`, self‑hosted in Helix), each
 rung built **only by the prior rung**. The toolchain is **Python‑free**: the repo holds **exactly
 one** committed `.py` (`verification/oracle/oracle_train.py`), a fenced numpy verification *oracle*

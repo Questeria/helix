@@ -16,7 +16,7 @@ Snapshot date: 2026-05-16. **Stage 35 CLOSED at restart 65** (Increment 82 — t
 | **Current stage** | Stage 35 CLOSED; Stage 36 opens next | Stage 35 progress ledger Increment 82 |
 | **Backend targets with tests** | x86-64 ELF, PTX text emission | `helixc/backend/` and tests |
 | **Optimization passes** | const-fold, CSE, DCE, FDCE, hash-cons | `helixc/ir/passes/` and frontend hash-cons |
-| **License** | Apache 2.0 (in `LICENSE`); CC-BY 4.0 and CC0 are stated policy, not yet file-resident | source / docs / future weights |
+| **License** | Helix Non-Commercial License (in `LICENSE`) — free for non-commercial use; commercial use reserved; not open-source | source |
 
 ## Important Honesty Notes
 
