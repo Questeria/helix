@@ -65,7 +65,7 @@ bug):
 > **"The capital of France is the capital of the French Republic, and the capital of the French
 > Republic is the capital of the French"**
 
-Parity vs the independent f64 numpy oracle (same prompt): **last‑token argmax matches exactly** (id
+Parity vs the independent fp32 numpy oracle (same prompt): **last‑token argmax matches exactly** (id
 262), max‑abs logit diff `2.59e‑04` on logits of magnitude ~130; the 20‑token greedy continuation
 matches the oracle **token‑for‑token** (25 ids identical).
 
@@ -112,10 +112,12 @@ State the edges before you're asked — the honesty *is* the pitch:
    PTX**, NVIDIA's closed `ptxas` + the GPU driver + the C CUDA‑FFI launcher are trusted‑once. (The
    CPU path — a planned upgrade — has *no* such boundary.)
 3. **fp32‑only**, parity exact on argmax + the token sequence, within a measured tolerance on hidden
-   states. This bounds the scale the stack generalizes to (~≤1.5 B params on this 8 GB box).
+   states. This bounds the scale the stack generalizes to (**measured: up to 1.5 B params — GPT‑2‑XL —
+   runs on this 8 GB sm_86 box at fp32**; the same `kovc`‑emitted kernels also pass token‑for‑token at
+   GPT‑2‑Large 774 M. See `scripts/gpt2_scale.sh`.).
 4. **Single GPU, `sm_86`.** One RTX 3070‑class device; not multi‑GPU, not a cluster.
 5. **A 124 M demonstration, not frontier scale.** The point is *verifiability*, not size or speed.
-6. **The oracle shares the GPT‑2 spec** (independent f64 implementation, not an independent
+6. **The oracle shares the GPT‑2 spec** (independent fp32 implementation, not an independent
    specification) — it catches implementation bugs, not a shared misunderstanding of GPT‑2.
 7. **Never claimed:** beating cuBLAS, "fully verified GPU," completeness to GPU machine code, or AGI.
 
@@ -147,5 +149,15 @@ State the edges before you're asked — the honesty *is* the pitch:
 
 **The MVP demo is complete.** Optional upgrades (the *full* demo + beyond): the CPU path
 (no‑`ptxas` purest‑trust closer), re‑authoring the importer/tokenizer in C/Helix for a
-"Python‑free toolchain" public claim, and a scale flex (GPT‑2‑XL, or a modern Apache‑2.0
-Llama‑arch model with the 4 extra ops).
+"Python‑free toolchain" public claim, and (a modern Apache‑2.0 Llama‑arch model with the 4 extra ops).
+
+**Scale flex — DONE.** The "same code, bigger model" generalization is now demonstrated:
+GPT‑2‑Large (774 M, 36 layers) **and** GPT‑2‑XL (1.5 B, 48 layers) both run a real forward + greedy
+generation through the **exact same 8 `kovc`‑emitted PTX kernels** as the 124 M MVP — **zero new
+ops/kernels**, only dimension changes (read from each model's `config.json`). Both pass token‑for‑token
+vs the fenced numpy oracle (Large argmax id 262, max‑abs logit diff 3.8e‑05, 25/25 ids; XL argmax id
+262, max‑abs logit diff 4.4e‑05, 25/25 ids; XL output: *"The capital of France is the city of Paris.
+It is the capital of France and the largest city in France. It is"*). Reproducible via the fail‑closed
+gate `scripts/gpt2_scale.sh` (`MODEL=gpt2-large|gpt2-xl`). This **measures** the fp32 ceiling residual:
+1.5 B fits the 8 GB sm_86 box (the committed `gpt2_infer.c` is dimension‑generic; per‑layer weight
+streaming keeps device residency low, so layer count does not gate VRAM).

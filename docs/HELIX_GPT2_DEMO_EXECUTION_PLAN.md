@@ -49,7 +49,8 @@ The deliverable is a ~2–3 minute live demo with a one-command trust wrapper th
 6. A **pre-recorded backup** of a gated, green run exists and shows the same four success artifacts.
 7. An **honest-residuals card** is in the runbook and the operator can state the residuals unprompted
    (complete-to-PTX-not-SASS; a fraction of cuBLAS; single GPU sm_86; importer/tokenizer are fenced
-   host glue; fp32-only ⇒ ~1.5 B-param ceiling).
+   host glue; fp32-only ⇒ ~1.5 B-param ceiling — **measured: GPT-2-XL 1.5 B runs on the 8 GB box;
+   see `scripts/gpt2_scale.sh`**).
 
 **Full Demo — MVP plus:**
 
@@ -61,7 +62,9 @@ The deliverable is a ~2–3 minute live demo with a one-command trust wrapper th
     out, binding prompt + the three pinned hashes + the parity diff + the output hash + date.
 
 **Explicitly OUT of the DoD (forbidden overclaims):** beating cuBLAS; "fully verified GPU";
-"complete to GPU machine code"; any AGI claim; `gpt2-xl`/Llama scale beats (optional Phase 8).
+"complete to GPU machine code"; any AGI claim; `gpt2-xl`/Llama *performance* beats. (The `gpt2-xl`
+*generalization* flex — same kernels, bigger model, no speed claim — was the optional Phase 8 and is
+now DONE: GPT-2-Large 774 M + GPT-2-XL 1.5 B pass token-for-token via `scripts/gpt2_scale.sh`.)
 
 ---
 
@@ -89,12 +92,18 @@ The deliverable is a ~2–3 minute live demo with a one-command trust wrapper th
   `ptxas` + driver + the C CUDA-FFI launcher are trusted-once. **The CPU path has no such boundary**
   — that is its entire reason to exist.
 - **fp32-only ⇒ ~1.5 B-param ceiling on the 8 GB sm_86 box; single GPU target.** GPT-2 124M (and even
-  XL 1.5 B) fit; the ceiling bounds what "this stack runs" generalizes to.
-- **Parity is fp32-vs-f64 within a measured tolerance on hidden states; EXACT on argmax + token
+  XL 1.5 B) fit; the ceiling bounds what "this stack runs" generalizes to. **Measured (2026-06-08):**
+  GPT-2-Large (774 M) **and** GPT-2-XL (1.5 B) both run a real forward + greedy generation through the
+  identical `kovc`-emitted PTX kernels (zero new ops) and pass token-for-token vs the oracle — the fp32
+  1.5 B ceiling is confirmed by direct measurement, not estimated. Reproduce: `scripts/gpt2_scale.sh`
+  (`MODEL=gpt2-large|gpt2-xl`). The committed `gpt2_infer.c` is already dimension-generic (dims via
+  `HX_*` env, read from `config.json`); per-layer weight streaming keeps device residency to one layer
+  plus the tied head, so the 36-/48-layer depth does not gate VRAM.
+- **Parity is fp32-vs-fp32 within a measured tolerance on hidden states; EXACT on argmax + token
   sequence.** Never conflate "matches the reference" (within-tol floats) with "reproduces itself"
   (bit-exact, Helix-vs-Helix).
 - **The oracle shares the architecture spec.** It is independent in *implementation* (separate code,
-  f64) but not in *specification* (same GPT-2 math). It catches implementation bugs, not a shared
+  fp32) but not in *specification* (same GPT-2 math). It catches implementation bugs, not a shared
   misunderstanding of GPT-2.
 
 ---
@@ -537,7 +546,7 @@ and the importer extension, so it measures the orientation end-to-end); P4 token
 `--generate` ids (v1 reuses the oracle's BPE). **Risks:** `ptxas` boundary (inherent, disclosed —
 CPU path is the airtight one); single-head→12-head host loop is highest bug-density (block-0 anchor
 flushes it); S/vocab padding correctness (enforce zeroed pad rows + slice logits to 50257);
-fp32-vs-f64 numeric drift (per-op unit gates + block-0 anchor catch it; argmax+top-k is the honest
+fp32-vs-fp32 numeric drift (per-op unit gates + block-0 anchor catch it; argmax+top-k is the honest
 fallback gate the demo actually needs).
 
 ---
@@ -776,7 +785,7 @@ red" + pre-recorded green parity → projector-only → mp4 + slides.
 
 **Net honest residuals carried into the attestation + pitch:** (1) fenced host glue (importer +
 tokenizer + oracle, no compute-trust role); (2) the `ptxas` boundary on the GPU path only; (3) fp32-
-only ⇒ ~1.5 B ceiling, single sm_86 GPU; (4) parity is fp32-vs-f64 within a measured tolerance on
+only ⇒ ~1.5 B ceiling, single sm_86 GPU; (4) parity is fp32-vs-fp32 within a measured tolerance on
 hidden states but EXACT on argmax+tokens (never conflate "matches the reference" with "reproduces
 itself"); (5) the oracle is implementation-independent but spec-shared; (6) no third-party
 reproduction of the GPT-2 leg yet (the CPU path is the route to closing it).
