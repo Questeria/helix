@@ -12,6 +12,9 @@
      glyph, badge, .gen-text/.cont, section heads and panel surfaces
      are reused VERBATIM from demo/dashboard.html so the two pages
      are visually one product.
+     2026-06 UX pass (fable/chat-demo-ux): visual elevation only —
+     no event renames, no new deps, mock cadence now mirrors the
+     MEASURED live XL rate (~9.8 s/token, scripts/_gate_run.log).
      ============================================================ */
   :root {
     --bg:        #0a0e14;   /* deep near-black slate          */
@@ -32,6 +35,9 @@
     --red:       #f0726a;   /* live fail states               */
     --red-dim:   #6b2a26;
     --red-bg:    rgba(240,114,106,0.08);
+    --blue:      #6cb6f5;   /* mlp-phase tint (kernel ticker)  */
+    --blue-dim:  #29516f;
+    --blue-bg:   rgba(108,182,245,0.07);
     --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --radius: 14px;
@@ -48,7 +54,26 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     min-height: 100vh;
+    position: relative;
   }
+  /* faint engineering-grid overlay — pure CSS, static (no motion) */
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(52,211,153,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(52,211,153,0.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+    -webkit-mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+  }
+  .wrap { position: relative; z-index: 1; }
+  /* dark scrollbars to match the slate surface (WebKit + Firefox) */
+  * { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
+  *::-webkit-scrollbar-thumb:hover { background: #34414f; }
+  *::-webkit-scrollbar-track { background: transparent; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .wrap {
@@ -149,23 +174,45 @@
   .nav-link .arr { color: var(--accent); }
 
   /* ---------- hero strip (compact) ---------- */
-  .hero-strip { margin-bottom: 22px; }
+  .hero-strip { margin-bottom: 22px; position: relative; }
   .hero-strip h1 {
-    font-size: clamp(20px, 2.6vw, 28px);
-    line-height: 1.2;
+    font-size: clamp(22px, 3vw, 34px);
+    line-height: 1.18;
     font-weight: 700;
-    margin: 0 0 8px;
-    letter-spacing: -0.3px;
-    max-width: 40ch;
+    margin: 0 0 10px;
+    letter-spacing: -0.4px;
+    max-width: 44ch;
   }
-  .hero-strip h1 .em { color: var(--accent); }
+  .hero-strip h1 .em {
+    color: var(--accent);
+    background: linear-gradient(92deg, #6ee7b7 0%, var(--accent) 55%, #11b981 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
   .hero-strip .frame {
-    font-size: clamp(13px, 1.4vw, 15px);
+    font-size: clamp(13.5px, 1.4vw, 15.5px);
     color: var(--ink-dim);
     max-width: 92ch;
     margin: 0;
   }
   .hero-strip .frame b { color: var(--ink); font-weight: 600; }
+  /* hero fact chips — real, documented figures only (no marketing numbers) */
+  .hero-facts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+  .hero-facts .hf {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    border: 1px solid var(--border-2); background: var(--panel);
+    padding: 4px 11px; border-radius: 999px; white-space: nowrap;
+  }
+  .hero-facts .hf b { color: var(--ink); font-weight: 650; }
+  .hero-facts .hf.is-accent { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .hero-facts .hf.is-slow { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-bg); }
+  /* large watermark helix glyph, decorative only */
+  .hero-watermark {
+    position: absolute; right: -10px; top: -34px;
+    width: 190px; height: 190px; opacity: 0.05; pointer-events: none;
+    user-select: none;
+  }
+  @media (max-width: 980px) { .hero-watermark { display: none; } }
 
   /* ---------- two-column app shell ---------- */
   .shell {
@@ -329,7 +376,10 @@
     font-family: var(--sans); font-size: 15px; line-height: 1.45;
     padding: 11px 13px; resize: vertical; min-height: 50px; max-height: 160px;
   }
-  .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
+  .composer textarea:focus {
+    outline: none; border-color: var(--accent-dim);
+    box-shadow: 0 0 0 3px rgba(52,211,153,0.10);
+  }
   .composer textarea::placeholder { color: var(--ink-faint); }
   .composer-ctl { display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 132px; }
   .stepper {
@@ -354,12 +404,17 @@
   .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .stepper input { -moz-appearance: textfield; }
   .send-btn {
-    background: var(--accent-bg); border: 1px solid var(--accent-dim); color: var(--accent);
+    background: linear-gradient(180deg, rgba(52,211,153,0.16), rgba(52,211,153,0.07));
+    border: 1px solid var(--accent-dim); color: var(--accent);
     border-radius: var(--radius-sm); padding: 10px 14px; cursor: pointer;
     font-weight: 700; font-size: 14px; letter-spacing: 0.3px;
-    transition: background .15s ease;
+    transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
   }
-  .send-btn:hover:not(:disabled) { background: rgba(52,211,153,0.14); }
+  .send-btn:hover:not(:disabled) {
+    background: linear-gradient(180deg, rgba(52,211,153,0.24), rgba(52,211,153,0.10));
+    border-color: var(--accent);
+    box-shadow: 0 0 14px -4px rgba(52,211,153,0.5);
+  }
   .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .busy-hint {
     font-family: var(--mono); font-size: 10.5px; color: var(--amber);
@@ -376,12 +431,17 @@
     padding-right: 2px;
   }
   .panel {
-    background: var(--panel);
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 130%);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 15px 16px;
+    transition: border-color .18s ease;
   }
-  .panel.is-star { border-color: var(--border-2); }
+  .panel:hover { border-color: var(--border-2); }
+  .panel.is-star {
+    border-color: var(--border-2);
+    box-shadow: 0 0 0 1px rgba(52,211,153,0.06), 0 8px 28px -18px rgba(52,211,153,0.25);
+  }
 
   /* trust strip */
   .trust-strip .ts-flow {
@@ -433,7 +493,10 @@
   }
   .tok-chip .piece { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: pre; }
   .tok-chip .id { font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-top: 1px; }
-  .tok-chip.is-gen { border-color: var(--accent-dim); background: var(--accent-bg); }
+  .tok-chip.is-gen {
+    border-color: var(--accent-dim); background: var(--accent-bg);
+    box-shadow: 0 0 6px -2px rgba(52,211,153,0.5);
+  }
   .tok-chip.is-gen .piece { color: var(--accent); }
   .tok-empty { font-size: 12px; color: var(--ink-faint); font-style: italic; }
 
@@ -449,20 +512,32 @@
   .ladder-grid {
     display: grid;
     grid-template-columns: repeat(12, 1fr);
-    gap: 4px;
+    gap: 5px;
   }
   .rung {
-    height: 16px; border-radius: 3px;
+    height: 19px; border-radius: 4px;
     background: var(--panel-2); border: 1px solid var(--border);
-    transition: background .12s ease, border-color .12s ease, box-shadow .12s ease;
+    transition: background .14s ease, border-color .14s ease, box-shadow .14s ease, transform .14s ease;
   }
-  .rung.done { background: var(--accent-dim); border-color: var(--accent-dim); }
+  .rung.done {
+    background: linear-gradient(180deg, #1f8a64 0%, var(--accent-dim) 100%);
+    border-color: var(--accent-dim);
+  }
   .rung.current {
-    background: var(--accent); border-color: var(--accent);
-    box-shadow: 0 0 8px rgba(52,211,153,0.6);
+    background: linear-gradient(180deg, #6ee7b7 0%, var(--accent) 100%);
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(52,211,153,0.75), 0 0 3px rgba(52,211,153,0.9);
+    transform: scale(1.18);
     animation: rungPulse 0.9s ease-in-out infinite;
   }
   @keyframes rungPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  /* the live op readout under the ladder — REAL op events only */
+  .ladder-opnow {
+    margin-top: 10px; font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ladder-opnow .lo-l { color: var(--ink-dim); }
+  .ladder-opnow .lo-k { color: var(--accent); }
   .ladder-spark {
     margin-top: 11px; display: flex; align-items: flex-end; gap: 2px; height: 30px;
     border-top: 1px solid var(--border); padding-top: 8px;
@@ -486,6 +561,9 @@
   .kt-line .lab { color: var(--ink); }
   .kt-line .arr { color: var(--accent); }
   .kt-line .kfn { color: var(--accent); }
+  /* phase tinting straight from the real op event's `phase` field */
+  .kt-line.is-mlp .arr { color: var(--blue); }
+  .kt-line.is-mlp .kfn { color: var(--blue); }
   .kt-line.is-head { color: var(--amber); }
   .kt-line.is-head .kfn { color: var(--amber); }
   .kt-feed-empty { color: var(--ink-faint); font-style: italic; }
@@ -510,9 +588,15 @@
     flex: 1; background: var(--panel-2); border: 1px solid var(--border-2);
     border-radius: 6px; padding: 9px 11px;
   }
-  .stream-panel .gauge .gv { font-family: var(--mono); font-size: 18px; font-weight: 650; color: var(--accent); letter-spacing: -0.3px; }
+  .stream-panel .gauge .gv { font-family: var(--mono); font-size: 21px; font-weight: 650; color: var(--accent); letter-spacing: -0.4px; }
   .stream-panel .gauge .gv.is-idle { color: var(--ink-faint); }
   .stream-panel .gauge .gl { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); letter-spacing: 0.4px; }
+  /* honest-latency footnote under the gauges (set per source by JS) */
+  .stream-panel .tp-note {
+    font-size: 11px; color: var(--ink-faint); line-height: 1.5;
+    border-top: 1px solid var(--border); margin-top: 4px; padding-top: 9px;
+  }
+  .stream-panel .tp-note b { color: var(--amber); font-weight: 650; }
   .stream-tokens {
     font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
     max-height: 90px; overflow-y: auto; color: var(--ink-dim);
@@ -528,8 +612,13 @@
     font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 9px;
   }
   .progress-panel .pp-meta .accent { color: var(--accent); }
-  .pbar { height: 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
-  .pbar .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); transition: width .15s ease; }
+  .pbar { height: 9px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
+  .pbar .fill {
+    height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent-dim), var(--accent) 85%, #6ee7b7);
+    box-shadow: 0 0 8px rgba(52,211,153,0.4);
+    transition: width .15s ease;
+  }
 
   /* run summary */
   .summary-panel .sum-grid {
@@ -616,10 +705,11 @@
   /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
   @media (prefers-reduced-motion: reduce) {
     .status-badge .dot { animation: none; }
-    .rung.current { animation: none; }
+    .rung.current { animation: none; transform: none; }
     .turn.model .bubble .caret { animation: none; }
     .transcript { scroll-behavior: auto; }
     .internals-col { transition: none; }
+    .panel, .send-btn, .rung, .pbar .fill, .composer textarea { transition: none; }
     /* Data still updates (token/layer state is data); only decorative motion is disabled. */
   }
 </style>
@@ -639,7 +729,9 @@
         This page is showing mock telemetry; the live verified backend (C HTTP+SSE worker on an RTX 3070)
         EXISTS and is gated green by <code>scripts/helix_serve_gate.sh</code> — start it and open
         <code>?source=sse</code> to connect. Layer sweeps, kernel names and the per-layer op order are
-        structurally faithful; only the numbers are mock.
+        structurally faithful; only the numbers are mock. <b>The preview animation is time-compressed:</b>
+        live XL really runs at ≈ 10 s/token (~3 min for 20 tokens) — by design, the demo is about
+        verifiability, not speed.
       </span>
       <button class="pb-x" id="previewDismiss" title="Hide this banner (PREVIEW state stays in the badge)">dismiss</button>
     </div>
@@ -676,12 +768,22 @@
          HERO STRIP (compact) — the hero is verified compute.
          ============================================================ -->
     <header class="hero-strip">
+      <svg class="hero-watermark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
+              stroke="#34d399" stroke-width="1.1" stroke-linecap="round"/>
+      </svg>
       <h1>Watch a 1.5-billion-parameter model think on a stack you can <span class="em">rebuild from 299 bytes</span>.</h1>
       <p class="frame">
         <b>GPT-2-XL is a 2019 base completion model.</b> It continues text; it is not tuned to chat,
         follow instructions, or be factual. The live thing being proven here is the verified compute
         underneath — every layer and kernel comes from the from-raw Helix toolchain.
       </p>
+      <div class="hero-facts" aria-label="Demo facts">
+        <span class="hf"><b>1.5B</b> params · 48 layers</span>
+        <span class="hf is-accent"><b>8</b> kovc-emitted kernels</span>
+        <span class="hf">fp32 · forward-only · greedy</span>
+        <span class="hf is-slow">live XL ≈ <b>10 s/token</b> — intentionally slow; the pitch is trust, not speed</span>
+      </div>
     </header>
 
     <!-- ============================================================
@@ -773,6 +875,7 @@
             <span class="lbl" id="ladderStep"></span>
           </div>
           <div class="ladder-grid" id="ladderGrid"></div>
+          <div class="ladder-opnow" id="ladderOpNow" aria-live="off">&nbsp;</div>
           <div class="ladder-spark" id="ladderSpark"></div>
           <div class="ladder-spark-lbl">per-layer ms (real per-layer host-clock ms when live; illustrative (mock) here)</div>
         </div>
@@ -793,6 +896,7 @@
             <div class="gauge"><div class="gv is-idle" id="gaugeSecs">0.0</div><div class="gl">seconds</div></div>
           </div>
           <div class="stream-tokens" id="streamTokens"><span class="stream-tokens-empty">tokens (id · piece · logit) stream here…</span></div>
+          <div class="tp-note" id="tpNote"></div>
         </div>
 
         <!-- forward progress -->
@@ -1082,25 +1186,33 @@ var MockTelemetryGenerator = (function () {
     });
 
     /* schedule the generation loop.
-       REAL wall-clock budget is BOUNDED so a mock run feels like tens of
-       seconds without being absurd, regardless of n_gen: we target a total
-       real timeline of ~min(3 + n*0.5, 16) s and divide it across the nested
-       step×layer×op loops. The visible heartbeat is the layer sweep (ops
-       batch on rAF and don't need real spacing). The 'mock seconds' REPORTED
-       in token/done is a separate, honest XL-style number (~1.3 s/token). */
+       The PREVIEW ANIMATION is deliberately TIME-COMPRESSED so a layout
+       preview finishes in tens of seconds regardless of n_gen: total real
+       wall time ~min(3 + n*0.5, 16) s divided across the nested
+       step×layer×op loops. This compressed timeline is NOT representative
+       of live XL latency, and the page says so (preview banner + the
+       tp-note under the gauges).
+
+       The seconds / tok_per_s NUMBERS reported in token/done, however,
+       reflect the MEASURED live XL cadence so the mock never paints the
+       demo faster than it really is:
+         scripts/_gate_run.log (real gated XL serve run):
+           seconds:195.513  n_gen:20  tok_per_s:0.102  →  ~9.78 s/token.
+       We round to 9.8 s/token. Anything snappier here would be a speed
+       overclaim on a trust-not-speed demo. */
     var contextLen = T0;
     var genCount = Math.max(1, Math.min(nGen, contPieces.length, 256));
 
     var clock = 420;                                   /* ms cursor into the real mock timeline */
-    var REAL_BUDGET_MS = Math.min(3000 + genCount * 500, 16000); /* total real wall time */
+    var REAL_BUDGET_MS = Math.min(3000 + genCount * 500, 16000); /* total real wall time (compressed preview) */
     var perStep = REAL_BUDGET_MS / genCount;
     var perLayer = (perStep * 0.86) / N_LAYERS;        /* most of a step is the 48-layer sweep */
     var STEP_GAP = Math.max(0.4, (perLayer * 0.7) / LAYER_OPS.length); /* ms between op emits */
     var LAYER_GAP = Math.max(1, perLayer * 0.15);      /* ms padding at each layer boundary */
 
-    /* Honest MOCK throughput shown to the user (NOT the real timeline):
-       a plausible XL-on-3070 cadence in the seconds-to-tens-of-seconds band. */
-    var MOCK_SECONDS = +(genCount * 1.3 + 0.8).toFixed(1);
+    /* MOCK-reported throughput = the measured live XL cadence (see above). */
+    var XL_SECONDS_PER_TOKEN = 9.8;                    /* measured: 195.513 s / 20 tok (gate log) */
+    var MOCK_SECONDS = +(genCount * XL_SECONDS_PER_TOKEN).toFixed(1);
     var mockTokSeconds = function (k) { return +((k / genCount) * MOCK_SECONDS).toFixed(1); };
 
     for (var step = 0; step < genCount; step++) {
@@ -1164,7 +1276,7 @@ var MockTelemetryGenerator = (function () {
           h.onToken && h.onToken({
             seq: S(), step: step, id: (piece === " the" || /\bParis/.test(piece)) ? 262 : h2,
             string: piece, logit: mockLogit(step), context_len: stepCtx + 1,
-            _mock_elapsed: mockTokSeconds(step + 1) /* mock-only: honest XL-style elapsed for the gauge */
+            _mock_elapsed: mockTokSeconds(step + 1) /* mock-only: elapsed at the MEASURED live XL cadence (~9.8 s/token) for the gauge */
           });
         });
         clock += 40;
@@ -1173,8 +1285,9 @@ var MockTelemetryGenerator = (function () {
 
     /* --- done --- */
     after(clock + 60, function () {
-      /* seconds/tok_per_s are the honest MOCK XL-style numbers, NOT the
-         compressed real timeline. They match the per-token gauge basis. */
+      /* seconds/tok_per_s reflect the MEASURED live XL cadence (~9.8 s/token,
+         scripts/_gate_run.log), NOT the compressed preview timeline. They
+         match the per-token gauge basis and are labeled MOCK in the UI. */
       var gen_ids = contPieces.slice(0, genCount).map(function (p) {
         var hh = 0; for (var c = 0; c < p.length; c++) hh = (hh * 131 + p.charCodeAt(c)) % 50257; return hh;
       });
@@ -1457,10 +1570,10 @@ var handlers = {
     /* token & throughput panel */
     UI.run.tokens++;
     var gt = $("gaugeToks"); gt.textContent = UI.run.tokens; gt.classList.remove("is-idle");
-    /* In mock mode the event carries an honest XL-style elapsed (_mock_elapsed)
-       so the gauge reads a realistic seconds/tok-per-s and stays consistent with
-       the run summary. In live mode there is no _mock_elapsed, so we use the real
-       wall clock since the stream began. */
+    /* In mock mode the event carries _mock_elapsed — elapsed at the MEASURED
+       live XL cadence (~9.8 s/token) — so the gauge never reads faster than the
+       real demo and stays consistent with the run summary. In live mode there
+       is no _mock_elapsed, so we use the real wall clock since the stream began. */
     var secs = (d._mock_elapsed != null)
       ? d._mock_elapsed
       : (UI.run.t0 ? (performance.now() - UI.run.t0) / 1000 : 0);
@@ -1526,6 +1639,15 @@ function flushOpsNow() {
   var ops = UI.pendingOps;
   UI.pendingOps = [];
   for (var i = Math.max(0, ops.length - 4); i < ops.length; i++) pushKernelLine(ops[i]);
+  /* live op readout under the ladder — the latest REAL op event */
+  var last = ops[ops.length - 1];
+  if (last && !last.head) {
+    var lon = $("ladderOpNow");
+    lon.innerHTML = "";
+    lon.appendChild(el("span", { class: "lo-l" }, "L" + last.layer + " · " + last.label + " "));
+    lon.appendChild(document.createTextNode("→ "));
+    lon.appendChild(el("span", { class: "lo-k" }, last.kernel));
+  }
   refreshKernelLegendCounts();
 }
 
@@ -1541,7 +1663,7 @@ function pushKernelLine(op) {
       el("span", { class: "kfn" }, op.kernel)
     ]);
   } else {
-    line = el("div", { class: "kt-line" }, [
+    line = el("div", { class: "kt-line" + (op.phase === "mlp" ? " is-mlp" : "") }, [
       el("span", { class: "lyr" }, "L" + op.layer + " · "),
       el("span", { class: "lab" }, op.label),
       el("span", { class: "arr" }, " → "),
@@ -1717,7 +1839,8 @@ function paintRunSummary(d) {
   body.appendChild(grid);
 
   if (TELEMETRY_SOURCE !== "sse") {
-    body.appendChild(el("div", { class: "sum-mock" }, "MOCK NUMBERS — not a real run"));
+    body.appendChild(el("div", { class: "sum-mock" },
+      "MOCK NUMBERS — not a real run · cadence mirrors measured live XL (≈ 9.8 s/token)"));
   }
 
   /* verify control (mirrors per-turn one; no automatic verdict here) */
@@ -1774,6 +1897,17 @@ function applySourceHonesty() {
     $("previewBanner").hidden = false;
     $("convMode").textContent = "GPT-2-XL · fp32 · greedy · (mock)";
   }
+  /* honest-latency footnote under the throughput gauges (both sources) */
+  var note = $("tpNote");
+  if (note) {
+    if (TELEMETRY_SOURCE === "sse") {
+      note.innerHTML = "Live XL runs at ≈ <b>10 s/token</b> by design — verified compute, not a speed demo.";
+    } else {
+      note.innerHTML = "<b>MOCK cadence</b> — the numbers shown mirror the measured live XL rate " +
+        "(≈ 9.8 s/token; 195.5 s for 20 tokens, gated run). The preview animation itself is " +
+        "time-compressed and NOT representative of live latency.";
+    }
+  }
 }
 
 function setBusy(b) {
@@ -1812,6 +1946,7 @@ function startGeneration(prompt, nGen) {
   $("gaugeSecs").textContent = "0.0"; $("gaugeSecs").classList.add("is-idle");
   $("streamTokens").innerHTML = '<span class="stream-tokens-empty">streaming…</span>';
   $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
+  $("ladderOpNow").innerHTML = "&nbsp;";
 
   /* transcript turns */
   addUserTurn(prompt);

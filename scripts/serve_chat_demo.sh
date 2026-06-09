@@ -59,6 +59,9 @@ MERGES=$SRC/helix-llm/models/gpt2-xl/merges.txt
 echo
 echo "  >>> Once it prints 'listening', open:  http://127.0.0.1:$PORT/?source=sse   <<<"
 echo "      (the page shows a LIVE indicator + hides the PREVIEW banner when the worker is ready)"
+echo "      NOTE: live XL ~= 10 s/token (~3 min for 20 tokens; measured 195.5 s / 20 tok, gated run)."
+echo "            By design -- the demo sells verifiability, not speed. Use gpt2_gpu_mvp.sh (124M)"
+echo "            when you need a snappy live generation."
 echo
 exec /tmp/gpt2_chat_server --port $PORT --root $SRC/demo \
   --ptx /tmp/gpt2_chat.ptx --weights "$XL_WEIGHTS" \

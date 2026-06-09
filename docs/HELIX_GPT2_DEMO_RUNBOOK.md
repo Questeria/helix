@@ -40,7 +40,11 @@ operator script and the MVP Definition‑of‑Done closeout.
   `$HOME/gpt2_ext4/Kovostov-Native`, the fast ext4 build mirror), and `HELIX_XL_WEIGHTS` (default
   `$HOME/gpt2_ext4/gpt2-xl.weights`). Put the converted file at `$HELIX_XL_WEIGHTS` (or export it to your
   own path). `scripts/helix_serve_gate.sh` then certifies the served XL output == the offline numpy‑oracle
-  reference token‑for‑token.
+  reference token‑for‑token. **Latency, stated plainly: live XL runs ≈ 10 s/token (~3 min for 20 tokens;
+  measured 195.5 s / 20 tok in the gated serve run).** The XL chat is the *verifiability* flex, not a speed
+  flex — use the 124M MVP path (`gpt2_gpu_mvp.sh`) when the room needs a snappy live generation. The chat
+  page's MOCK preview animation is time‑compressed for layout review and says so on‑page; its *reported*
+  mock numbers mirror the measured live cadence so the demo is never painted faster than it really is.
 - **Warm‑up (do this before the slot):** run the hero command once so the ext4 mirror + the seed‑minted
   PTX are warm and you've captured a green transcript as the backup (see §3). A cold full run is a few
   minutes (the from‑raw rebuild dominates); a warm GPU generation is seconds.
