@@ -548,8 +548,8 @@ const EMBEDDED_REPORT = {
       body: "kovc-emitted PTX kernels on an RTX 3070 (sm_86). Trusted boundary = ptxas / driver below PTX (disclosed).",
       stats: [ { k: "device", v: "RTX 3070 · sm_86" }, { k: "trust to", v: "PTX (hand-auditable)" } ] },
     { kind: "cpu", title: "CPU no-ptxas path", badge: "PUREST TRUST",
-      body: "ALL arithmetic in kovc-compiled-from-raw Helix. ZERO trusted component above the 299-byte seed. ~130 sec/token — slow by design: the product is verifiability, not speed.",
-      stats: [ { k: "trusted above seed", v: "ZERO" }, { k: "throughput", v: "~130 s / token" } ] }
+      body: "ALL arithmetic in kovc-compiled-from-raw Helix. ZERO trusted ARITHMETIC above the seed (no ptxas / GPU vendor boundary). ~130 sec/token — slow by design: the product is verifiability, not speed.",
+      stats: [ { k: "trusted compute above seed", v: "ZERO" }, { k: "throughput", v: "~130 s / token" } ] }
   ],
   fences: [
     { k: "exactly", v: "1 committed .py" },
@@ -563,12 +563,14 @@ const EMBEDDED_REPORT = {
     sha: "248dfc3900000000000000000000000000000000000000000000000000000000",
     sha_is_partial: true,
     bytes: "548,105,171 B",
-    pill: "model.safetensors"
+    pill: "model.safetensors",
+    scale_note: "The signed end-to-end attestation here is the 124M MVP. GPT-2-Large (774M) and GPT-2-XL (1.5B) — the model on the playground page — run the SAME kovc-emitted kernels at scale (the SCALE-FLEX gate above + scripts/scale_results.txt)."
   },
   residuals: [
     "<b>Fenced host glue.</b> The weight importer, the byte-level BPE tokenizer, and the numpy reference oracle are trusted host glue under gitignored <code>helix-llm/</code> — no compute-trust role. The trust claim is the exact token-id sequence + the from-raw toolchain that produced it, not the host-side string rendering.",
     "<b>Complete to PTX, not to SASS.</b> source→PTX is hand-auditable (hex0→kovc→PTX); below PTX, NVIDIA's closed ptxas + driver + the C CUDA-FFI launcher are trusted-once. The CPU path has no such boundary.",
-    "<b>fp32-only.</b> Parity is exact on argmax + the token sequence, and within a measured tolerance on hidden states. Measured ceiling: GPT-2-XL (1.5B) runs on this 8GB sm_86 box at fp32 — per-layer weight streaming keeps device residency ~470MB, so depth does not gate VRAM.",
+    "<b>Shared TCB.</b> Below the audited seed, the usual platform is still trusted: OS / kernel / gcc / libc / binutils / coreutils / loader / CPU + microcode / RAM, plus the audited <code>seed.c</code> source itself. The &ldquo;zero trusted compute above the seed&rdquo; claim is about <em>arithmetic</em> (no ptxas / GPU vendor boundary on the CPU path), not this shared host TCB.",
+    "<b>fp32-only.</b> Parity is exact on argmax + the token sequence, and within a measured tolerance on hidden states. Measured ceiling: GPT-2-XL (1.5B) runs on this 8GB sm_86 box at fp32 — per-layer weight streaming keeps device residency low, so layer count does not gate VRAM.",
     "<b>Single GPU, sm_86.</b> One RTX 3070-class device — not multi-GPU, not a cluster.",
     "<b>A demonstration, not frontier scale.</b> 124M (now also 774M / 1.5B) — the point is verifiability, not size or speed.",
     "<b>Shared spec, independent code.</b> The oracle shares the GPT-2 spec (an independent fp32 implementation, not an independent specification) — it catches implementation bugs, not a shared misunderstanding of GPT-2.",
@@ -732,6 +734,7 @@ function render(R) {
     document.createTextNode("  ·  " + (m.bytes || ""))
   ]));
   modelChip.appendChild(el("span", { class: "mpill" }, m.pill || "model.safetensors"));
+  if (m.scale_note) modelChip.appendChild(el("div", { class: "mmeta", style: "margin-top:6px;color:var(--ink-faint);font-size:12px;line-height:1.45" }, m.scale_note));
 
   // residuals
   var residuals = document.getElementById("residuals");

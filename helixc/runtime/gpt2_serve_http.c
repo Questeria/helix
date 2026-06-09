@@ -64,6 +64,15 @@
  * so a malicious/oversized Content-Length cannot drive a multi-GB malloc (DoS). */
 #define MAX_BODY (256 * 1024)
 
+/* Worst-case worker telemetry line: the `tokenize` event (ids[]+strings[] for up to a max-ctx
+ * prompt) and the `done` event (gen_ids[] up to n_gen=256 + the decoded text). At max-ctx 320 +
+ * n_gen 256 these are a few KB; we size the per-line pump + SSE framing buffers WELL above that so a
+ * pathological long prompt can never truncate a valid tokenize/done JSON line into invalid JSON that
+ * the browser would silently drop. snprintf still truncates safely (no overflow); this just makes
+ * the line buffer comfortably exceed the worst case so no real event is ever cut. */
+#define LINE_BUF  (256 * 1024)                 /* worker stdout line pump */
+#define SSE_BUF   (LINE_BUF + 256)             /* SSE frame = data line + small id:/event: header */
+
 /* ============================ config ============================ */
 typedef struct {
     int   port;
@@ -281,13 +290,20 @@ static char* build_worker_frame(const char* body) {
 
 static void sse_write_event(int fd, const char* seq, const char* ev, const char* data_line) {
     /* data_line includes its own trailing '\n'; strip it for the SSE data: field. */
-    char buf[16384];
+    char buf[SSE_BUF];
     /* copy data_line minus trailing newline */
     size_t dl = strlen(data_line);
     while (dl > 0 && (data_line[dl-1] == '\n' || data_line[dl-1] == '\r')) dl--;
+    /* `ev` is ALWAYS a non-empty whitelisted contract event: handle_generate only calls this after
+     * is_telemetry_event(ev) passed, and the 3 error call sites pass the literal "error". So there is
+     * no decorative/empty fallback -- the SSE event field is always a known telemetry name. */
     int n = snprintf(buf, sizeof buf, "id: %s\nevent: %s\ndata: %.*s\n\n",
-                     (seq && seq[0]) ? seq : "0", (ev && ev[0]) ? ev : "message", (int)dl, data_line);
-    if (n > 0) write_all(fd, buf, (size_t)n);
+                     (seq && seq[0]) ? seq : "0", ev, (int)dl, data_line);
+    if (n > 0) {
+        /* snprintf truncates safely; clamp the write to what actually fit in the buffer. */
+        size_t wn = (n < (int)sizeof buf) ? (size_t)n : sizeof buf - 1;
+        write_all(fd, buf, wn);
+    }
 }
 
 static void handle_generate(int fd, const char* body) {
@@ -327,8 +343,10 @@ static void handle_generate(int fd, const char* body) {
     }
     free(frame);
 
-    /* pump worker stdout lines -> SSE until done/fatal-error (or worker EOF). */
-    char line[16384];
+    /* pump worker stdout lines -> SSE until done/fatal-error (or worker EOF).
+     * LINE_BUF is sized well above the worst-case tokenize/done JSON line (max-ctx 320 + n_gen 256)
+     * so a valid event is never split into invalid JSON the browser would drop. */
+    char line[LINE_BUF];
     int saw_terminal = 0;
     for (;;) {
         ssize_t r = read_line_fd(g_worker.from_worker, line, sizeof line);

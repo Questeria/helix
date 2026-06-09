@@ -28,6 +28,19 @@ operator script and the MVP Definition‑of‑Done closeout.
   demo legs need these public weights fetched + converted. The fenced numpy oracle
   (`helix-llm/tools/gpt2_numpy_ref.py`, an independent reference — kept Python by design) needs
   `python3 -m pip install --break-system-packages regex` (or `--user` on a non‑PEP‑668 box).
+- **Live chat server (GPT‑2‑XL) — producing the XL `.weights` + paths (third party, fresh clone).**
+  The live interactive chat (`scripts/serve_chat_demo.sh`) serves **GPT‑2‑XL (1.5 B)**. Its `.weights`
+  file is gitignored (not in a clone); produce it with the **same Python‑free path** used for 124M:
+  download **HuggingFace `openai-community/gpt2-xl`** (MIT — `model.safetensors`, `vocab.json`,
+  `merges.txt`, `config.json`), then convert with the committed `helixc/runtime/gpt2_pack.c`
+  (`gcc -O2 helixc/runtime/gpt2_pack.c -o gpt2_pack && ./gpt2_pack gpt2-xl/model.safetensors gpt2-xl.weights`),
+  and place `gpt2-xl/{vocab.json,merges.txt,config.json}` under `helix-llm/models/gpt2-xl/`. The server
+  + serve gate read three **overridable env vars** with sensible defaults (so they run on a machine
+  other than the author's): `HELIX_SRC` (default = this checkout), `HELIX_WORK` (default
+  `$HOME/gpt2_ext4/Kovostov-Native`, the fast ext4 build mirror), and `HELIX_XL_WEIGHTS` (default
+  `$HOME/gpt2_ext4/gpt2-xl.weights`). Put the converted file at `$HELIX_XL_WEIGHTS` (or export it to your
+  own path). `scripts/helix_serve_gate.sh` then certifies the served XL output == the offline numpy‑oracle
+  reference token‑for‑token.
 - **Warm‑up (do this before the slot):** run the hero command once so the ext4 mirror + the seed‑minted
   PTX are warm and you've captured a green transcript as the backup (see §3). A cold full run is a few
   minutes (the from‑raw rebuild dominates); a warm GPU generation is seconds.
@@ -144,7 +157,9 @@ State the edges before you're asked — the honesty *is* the pitch:
 
 - **No GPU in the room / projector laptop has no CUDA:** show the **CI** — the `trust-reproduce`
   GitHub Actions run is green on a clean Ubuntu runner (the from‑raw core, a different machine), and
-  play the captured §3 transcript + show a pre‑generated `attestation/gpt2_attest.txt`.
+  play the captured §3 transcript + show the attestation you captured during warm‑up (§0). (`attestation/`
+  is gitignored — a fresh attestation is regenerated per run — so there is no committed file in a clone;
+  the artifact to show is the one your own §0 warm‑up wrote.)
 - **Full run too slow for the slot:** pre‑run leg A (the from‑raw rebuild) during warm‑up; live‑run
   only the GPU **generation** (`scripts/gpt2_gpu_mvp.sh`, seconds when warm) + show the attestation.
 - **A leg goes red live:** that's the system working — every gate is fail‑closed and never fakes. Show

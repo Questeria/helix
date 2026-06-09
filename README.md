@@ -67,6 +67,14 @@ What works today:
 - Did-you-mean error suggestions, algebraic identity folds (x*0, x-x, etc.)
 - Property test verifying forward and reverse AD agree numerically
 
+## Investor demo (GPT-2 on Helix)
+
+A self-contained demo runs **GPT-2 — the real, unchanged public model (a 2019 base completion model, not an assistant)** on this from-raw stack, and proves it. The pitch is **trust, not speed**: a bring-your-weights *verifiable execution layer* whose every layer and kernel traces back to 299 hand-typed bytes, output matched **token-for-token** to an independent numpy reference and reproducible bit-for-bit.
+
+- **Runbook (start here):** [`docs/HELIX_GPT2_DEMO_RUNBOOK.md`](docs/HELIX_GPT2_DEMO_RUNBOOK.md) — the operator script, honest-residuals card, and how a third party produces the weights from HuggingFace.
+- **Live chat (GPT-2-XL on Helix):** `bash scripts/serve_chat_demo.sh`, then open <http://127.0.0.1:8848/?source=sse>. Bound to 127.0.0.1; gated green by `scripts/helix_serve_gate.sh`.
+- **One-command attestation:** `bash scripts/gpt2_demo_attest.sh` — fail-closed; rebuilds the compiler from raw, runs GPT-2 124M through kovc-emitted kernels token-for-token vs the oracle, re-runs byte-identical, and writes a signed attestation. The proof dashboard is `demo/dashboard.html`.
+
 See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_PURPOSE.md`](docs/HELIX_PURPOSE.md) for the broad Helix purpose, [`docs/HELIX_FINAL_PRODUCT_RESEARCH.md`](docs/HELIX_FINAL_PRODUCT_RESEARCH.md) for the research-backed final-product blueprint, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
 
 ## License

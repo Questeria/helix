@@ -12,7 +12,7 @@ them **without** relying on the gitignored process logs under `.stage33-logs/`. 
 - **Head:** the v1.3 final-convergence-pass line on `main` (verify the live tip: `git rev-parse HEAD`).
   The trust results below are **byte-stable across these final-pass commits** — `kovc.hx` + `seed.c` are
   unchanged, so the fixpoint/K1/seed SHAs do not move; only docs + verification wrappers changed.
-- **Date:** 2026-06-06.
+- **Date:** 2026-06-09.
 - **Environment:** WSL2 (Linux 6.6 WSL2, x86_64); NVIDIA RTX 3070 Laptop GPU (sm_86), driver 596.21 /
   CUDA 13.2 runtime + 12.x `ptxas`; `gcc` (gnu89) as the independent DDC lineage. Build executed on a
   WSL-native **ext4 mirror** of the committed tree for speed (DrvFs per-syscall latency, ~75x); output

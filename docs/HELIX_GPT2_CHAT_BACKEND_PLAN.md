@@ -107,11 +107,11 @@ $ git ls-files "*.c" "*.h" | wc -l
 ```
 
 The **real committed `.c`/`.h` count is 28** (6 in `helixc/runtime/` + 22 in `stage0/`), matching
-`docs/TRUSTED_C_INVENTORY.md` §0 ("at HEAD the committed C/H is 28 files / 18 131 LOC"). The from-raw
-Category-A ladder is **24 files / 15 605 LOC UNCHANGED** (Category A's 22 from-raw + nothing else moved;
-the inventory's "24" tally = the 22 stage0 files counted in the from-raw ladder plus the trust-root
-accounting it uses — see that doc). The fence implication of this plan is therefore stated against the
-**true base of 28** in §5/G6, not 26.
+`docs/TRUSTED_C_INVENTORY.md` §0 ("at HEAD the committed C/H is 28 files / 18 131 LOC"). The **24-file
+v1.3 trusted-C total** breaks down as the **Category-A ladder = 22 files / 13 217 LOC, byte-identical**
+(`stage0/`, the from-raw ladder) plus the 2 v1.3 GPU harnesses; nothing in the 22-file ladder moved
+(see `docs/TRUSTED_C_INVENTORY.md` for the exact tally). The fence implication of this plan is therefore
+stated against the **true base of 28** in §5/G6, not 26.
 
 ---
 
@@ -717,8 +717,10 @@ by the **trust-inventory owner**, not in this task (G6, and risk R10 coordinatio
 ## 6. Build steps (LATER — nothing built now)
 
 1. **PREREQ (owned elsewhere, must be green first):** the Python-free pipeline (`gpt2_tok.c`,
-   `gpt2_pack.c`, `gpt2_pyfree.sh`) and the XL weights/config under `helix-llm/` — already exist; **do
-   NOT modify**. Confirm `gpt2_scale.sh MODEL=gpt2-xl` is green as the G1 reference oracle.
+   `gpt2_pack.c`, `gpt2_pyfree.sh`) and the XL weights/config under `helix-llm/` — **do NOT modify**.
+   The XL `.weights` is gitignored (not in a clone); a third party derives it from HuggingFace
+   `openai-community/gpt2-xl` via the committed `gpt2_pack.c` and places it at the documented `HELIX_XL_WEIGHTS`
+   path — see `docs/HELIX_GPT2_DEMO_RUNBOOK.md` §0. Confirm `gpt2_scale.sh MODEL=gpt2-xl` is green as the G1 reference oracle.
 2. **Design freeze (this doc + the contract):** telemetry schema + SSE framing locked so frontend (mock)
    and backend share one wire format.
 3. **Frontend on mock (now, no builds):** `demo/index.html` + `demo/app.js` with the mock source default

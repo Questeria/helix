@@ -18,9 +18,16 @@
 # gates each take many minutes on the GPU and are STRICTLY SERIAL).
 #
 # Prints HELIX_SERVE_GATE_PASS / HELIX_SERVE_GATE_FAIL and exits 0 only on PASS. Run as a FILE under WSL.
+#   Portability (run on a machine other than the author's): override any of
+#     HELIX_SRC         (default: auto-detected from script location, else /mnt/c/Projects/Kovostov-Native) -- the committed repo
+#     HELIX_WORK        (default: $HOME/gpt2_ext4/Kovostov-Native)    -- the fast ext4 build mirror
+#     HELIX_XL_WEIGHTS  (default: $HOME/gpt2_ext4/gpt2-xl.weights)    -- the XL flat .weights file
+#   See docs/HELIX_GPT2_DEMO_RUNBOOK.md §0 for how to PRODUCE gpt2-xl.weights (HuggingFace + gpt2_pack.c).
 set -u
 
-WORK=/home/legoa/gpt2_ext4/Kovostov-Native
+SRC="${HELIX_SRC:-}"; if [ -z "$SRC" ]; then _sd="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"; if [ -n "$_sd" ] && [ -f "$_sd/scripts/reproduce_trust.sh" ]; then SRC="$_sd"; else SRC="/mnt/c/Projects/Kovostov-Native"; fi; fi
+WORK="${HELIX_WORK:-$HOME/gpt2_ext4/Kovostov-Native}"
+XL_WEIGHTS="${HELIX_XL_WEIGHTS:-$HOME/gpt2_ext4/gpt2-xl.weights}"
 BS=$WORK/stage0/helixc-bootstrap
 SEED_PIN=9837db12
 PORT="${PORT:-8848}"
@@ -28,7 +35,6 @@ NGEN="${NGEN:-20}"
 PROMPT="${PROMPT:-The capital of France is}"
 FULL="${FULL:-0}"                       # FULL=1 also runs gpt2_gpu_mvp.sh + gpt2_scale.sh xl (long, serial)
 OK=1; G1=0; GHEALTH=0; G7=0; GFIX=0
-SRC=/mnt/c/Projects/Kovostov-Native
 echo "=================== HELIX SERVE GATE  $(date -u +%H:%M:%S) ==================="
 
 # XL dims (env-driven, exactly as gpt2_scale.sh drives the committed dimension-generic launcher).
@@ -41,7 +47,7 @@ cp -r $SRC/stage0/helixc-bootstrap/. "$BS"/
 cp $SRC/helixc/bootstrap/lexer.hx  "$WORK/helixc/bootstrap/"
 cp $SRC/helixc/bootstrap/parser.hx "$WORK/helixc/bootstrap/"
 cp $SRC/helixc/bootstrap/kovc.hx   "$WORK/helixc/bootstrap/"
-sed -i 's#/mnt/c/Projects/Kovostov-Native/#/home/legoa/gpt2_ext4/Kovostov-Native/#g' "$BS/assemble_k1.hx"
+sed -i "s#/mnt/c/Projects/Kovostov-Native/#$WORK/#g" "$BS/assemble_k1.hx"
 _seedsha=$(sha256sum "$BS/seed.bin" 2>/dev/null | cut -c1-8)
 if [ "$_seedsha" != "$SEED_PIN" ]; then echo "  FAIL: ext4 seed.bin sha $_seedsha != pinned $SEED_PIN"; OK=0;
 else echo "  ext4 seed.bin sha=$_seedsha (== pinned $SEED_PIN)"; fi
@@ -84,6 +90,11 @@ gcc gpt2_serve_http.c -O2 -lpthread -o /tmp/gpt2_serve_http 2>/tmp/sg_server_gcc
 # This mints its OWN PTX from the same raw seed and runs --generate 20 token-for-token vs the numpy
 # oracle, dumping the 25-id sequence to /tmp/helix_gen_ids.txt. We capture THAT as the G1 target.
 echo "=== [OFFLINE] gpt2_scale.sh MODEL=gpt2-xl (the G1 token-for-token reference) ==="
+# G1 HARD-REQUIRES a GENUINE PRIMARY oracle PASS here: the offline gen-ids are only an honest G1
+# anchor if gpt2_scale.sh did a full-logits token-for-token PASS vs the numpy oracle (printed
+# ^GPT2_SCALE_PARITY_PASS). If the oracle OOMs/degrades to the helix-only block-0+coherence FALLBACK,
+# /tmp/helix_gen_ids.txt would be helix-vs-helix -- so we FAIL-CLOSE (OK=0), never compare served==offline
+# against an unverified offline reference.
 OFFLINE_IDS=""
 if [ "$OK" = "1" ]; then
   tr -d '\r' < $SRC/scripts/gpt2_scale.sh > /tmp/sg_scale.sh
@@ -92,16 +103,20 @@ if [ "$OK" = "1" ]; then
     if grep -q '^GPT2_SCALE_PARITY_PASS' /tmp/sg_scale.log; then
       echo "  gpt2_scale.sh xl: GPT2_SCALE_PARITY_PASS"
     else
-      echo "  WARN: gpt2_scale.sh did not print PASS (capturing its gen-ids anyway for the token-for-token compare)"
+      echo "  FAIL: gpt2_scale.sh did NOT print GPT2_SCALE_PARITY_PASS -- offline reference is not a"
+      echo "        genuine PRIMARY oracle token-for-token PASS (refusing a helix-vs-helix G1 anchor)."
       tail -6 /tmp/sg_scale.log | sed 's/^/    /'
+      OK=0
     fi
   else
-    echo "  WARN: gpt2_scale.sh exited nonzero; tail:"; tail -8 /tmp/sg_scale.log | sed 's/^/    /'
+    echo "  FAIL: gpt2_scale.sh exited nonzero (no genuine oracle PASS for the G1 reference); tail:"
+    tail -8 /tmp/sg_scale.log | sed 's/^/    /'
+    OK=0
   fi
-  if [ -s /tmp/helix_gen_ids.txt ]; then
+  if [ "$OK" = "1" ] && [ -s /tmp/helix_gen_ids.txt ]; then
     OFFLINE_IDS=$(tr -s ' \n' ' ' < /tmp/helix_gen_ids.txt | sed 's/^ //; s/ $//')
     echo "  OFFLINE gen-ids (25): $OFFLINE_IDS"
-  else
+  elif [ "$OK" = "1" ]; then
     echo "  FAIL: gpt2_scale.sh produced no /tmp/helix_gen_ids.txt (no G1 reference)"; OK=0
   fi
 fi
@@ -114,7 +129,7 @@ if [ "$OK" = "1" ]; then
   MERGES=$SRC/helix-llm/models/gpt2-xl/merges.txt
   HX_NL=48 HX_D=1600 HX_HEADS=25 HX_V=50257 HX_CTX=1024 HX_DFF=6400 \
   /tmp/gpt2_serve_http --port $PORT --root $SRC/demo \
-    --ptx /tmp/gpt2_serve.ptx --weights /home/legoa/gpt2_ext4/gpt2-xl.weights \
+    --ptx /tmp/gpt2_serve.ptx --weights "$XL_WEIGHTS" \
     --worker-bin /tmp/gpt2_infer_serve --vocab "$VOCAB" --merges "$MERGES" \
     --max-ctx 320 --detail op --oracle $SRC/helix-llm/tools --model gpt2-xl \
     >/tmp/sg_server.log 2>&1 &

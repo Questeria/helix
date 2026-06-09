@@ -3,8 +3,12 @@
 #
 # What it proves (CPU-only -- runnable on any x86-64 Linux, incl. a CI runner, with NO local state):
 #   [1] static fence            : exactly 1 committed .py, 29 committed .c/.h
-#                                 (24 = the v1.3 from-raw trusted toolchain, UNCHANGED; +5 Category-B
-#                                  host harnesses, all OUTSIDE the self-host fixpoint:
+#                                 (22 from-raw ladder (byte-identical to v1.3, incl. seed.c) + 7 Category-B
+#                                  host harnesses (cuda_launch.c grew +273 LOC post-v1.3, so the v1.3
+#                                  24-file trusted-C set is NOT all unchanged -- only the 22-file from-raw
+#                                  ladder is byte-identical), all OUTSIDE the self-host fixpoint. The 7 =
+#                                  the 2 v1.3 GPU harnesses (cuda_launch.c + train_transformer.c) + the 5
+#                                  newest GPT-2 demo host tools:
 #                                    helixc/runtime/gpt2_infer.c  -- post-v1.3 GPT-2 demo launcher
 #                                                                    (CUDA-FFI, ptxas boundary); now
 #                                                                    also carries the ADDITIVE,

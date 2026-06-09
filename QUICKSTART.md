@@ -2,6 +2,8 @@
 
 This is the fastest path from a fresh checkout to a running Helix program.
 
+> **Investor demo (GPT-2 on Helix):** to see the real (unchanged) GPT-2 — a 2019 base model, trust not speed — run on this from-raw stack, see [`docs/HELIX_GPT2_DEMO_RUNBOOK.md`](docs/HELIX_GPT2_DEMO_RUNBOOK.md). Live chat: `bash scripts/serve_chat_demo.sh` then open <http://127.0.0.1:8848/?source=sse>. One-command attestation: `bash scripts/gpt2_demo_attest.sh`.
+
 ## Prerequisites
 
 > **NOTE (v1.0+ reality):** the **shipped** Helix toolchain is the **from-raw, Python-free** `kovc`

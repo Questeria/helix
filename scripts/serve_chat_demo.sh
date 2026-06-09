@@ -10,10 +10,16 @@
 # Runs in the foreground; Ctrl-C to stop (the server reaps the worker child).
 #
 # Env knobs: PORT (default 8848), DETAIL (op|layer, default op), MAXCTX (default 320).
+#   Portability (run on a machine other than the author's): override any of
+#     HELIX_SRC         (default: auto-detected from script location, else /mnt/c/Projects/Kovostov-Native) -- the committed repo
+#     HELIX_WORK        (default: $HOME/gpt2_ext4/Kovostov-Native)    -- the fast ext4 build mirror
+#     HELIX_XL_WEIGHTS  (default: $HOME/gpt2_ext4/gpt2-xl.weights)    -- the XL flat .weights file
+#   See docs/HELIX_GPT2_DEMO_RUNBOOK.md §0 for how to PRODUCE gpt2-xl.weights (HuggingFace + gpt2_pack.c).
 # Run as a FILE under WSL.
 set -u
-SRC=/mnt/c/Projects/Kovostov-Native
-WORK=/home/legoa/gpt2_ext4/Kovostov-Native
+SRC="${HELIX_SRC:-}"; if [ -z "$SRC" ]; then _sd="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"; if [ -n "$_sd" ] && [ -f "$_sd/scripts/reproduce_trust.sh" ]; then SRC="$_sd"; else SRC="/mnt/c/Projects/Kovostov-Native"; fi; fi
+WORK="${HELIX_WORK:-$HOME/gpt2_ext4/Kovostov-Native}"
+XL_WEIGHTS="${HELIX_XL_WEIGHTS:-$HOME/gpt2_ext4/gpt2-xl.weights}"
 BS=$WORK/stage0/helixc-bootstrap
 SEED_PIN=9837db12
 PORT="${PORT:-8848}"
@@ -25,7 +31,7 @@ echo "=== [1/3] mint XL PTX from the raw seed ($SEED_PIN) ==="
 mkdir -p "$BS" "$WORK/helixc/bootstrap" "$WORK/helixc/runtime"
 cp -r $SRC/stage0/helixc-bootstrap/. "$BS"/
 cp $SRC/helixc/bootstrap/lexer.hx $SRC/helixc/bootstrap/parser.hx $SRC/helixc/bootstrap/kovc.hx "$WORK/helixc/bootstrap/"
-sed -i 's#/mnt/c/Projects/Kovostov-Native/#/home/legoa/gpt2_ext4/Kovostov-Native/#g' "$BS/assemble_k1.hx"
+sed -i "s#/mnt/c/Projects/Kovostov-Native/#$WORK/#g" "$BS/assemble_k1.hx"
 _seedsha=$(sha256sum "$BS/seed.bin" 2>/dev/null | cut -c1-8)
 [ "$_seedsha" = "$SEED_PIN" ] || { echo "FAIL: seed sha $_seedsha != $SEED_PIN"; exit 1; }
 cd "$BS" || exit 1
@@ -55,6 +61,6 @@ echo "  >>> Once it prints 'listening', open:  http://127.0.0.1:$PORT/?source=ss
 echo "      (the page shows a LIVE indicator + hides the PREVIEW banner when the worker is ready)"
 echo
 exec /tmp/gpt2_chat_server --port $PORT --root $SRC/demo \
-  --ptx /tmp/gpt2_chat.ptx --weights /home/legoa/gpt2_ext4/gpt2-xl.weights \
+  --ptx /tmp/gpt2_chat.ptx --weights "$XL_WEIGHTS" \
   --worker-bin /tmp/gpt2_chat_worker --vocab "$VOCAB" --merges "$MERGES" \
   --max-ctx "$MAXCTX" --detail "$DETAIL" --oracle $SRC/helix-llm/tools --model gpt2-xl

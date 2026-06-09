@@ -636,8 +636,10 @@
       <span class="pb-tag">PREVIEW · MOCK TELEMETRY</span>
       <span class="pb-text">
         <b>Simulated internals for layout preview — not a real GPT-2 run.</b>
-        The live verified backend (C HTTP+SSE worker on an RTX 3070) is pending. Layer sweeps,
-        kernel names and the per-layer op order are structurally faithful; only the numbers are mock.
+        This page is showing mock telemetry; the live verified backend (C HTTP+SSE worker on an RTX 3070)
+        EXISTS and is gated green by <code>scripts/helix_serve_gate.sh</code> — start it and open
+        <code>?source=sse</code> to connect. Layer sweeps, kernel names and the per-layer op order are
+        structurally faithful; only the numbers are mock.
       </span>
       <button class="pb-x" id="previewDismiss" title="Hide this banner (PREVIEW state stays in the badge)">dismiss</button>
     </div>
