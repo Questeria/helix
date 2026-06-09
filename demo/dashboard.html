@@ -397,9 +397,62 @@
     margin-top: 18px; font-size: 11.5px; color: var(--ink-faint);
     font-family: var(--mono);
   }
+
+  /* ---------- 2026-06 UI-finish pass (visual parity with page 1) ---------- */
+  body { position: relative; }
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(52,211,153,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(52,211,153,0.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+    -webkit-mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+  }
+  .wrap { position: relative; z-index: 1; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
+  *::-webkit-scrollbar-thumb:hover { background: #34414f; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+  }
+  .hero h1 .em {
+    color: var(--accent);
+    background: linear-gradient(92deg, #6ee7b7 0%, var(--accent) 55%, #11b981 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .residual { transition: background .15s ease; border-radius: 8px; }
+  .residual:hover { background: rgba(52,211,153,0.03); }
+  .residual:hover .rn { color: var(--accent); border-color: var(--accent-dim); }
+  .gate { transition: border-color .15s ease, transform .15s ease; }
+  .gate:hover { border-color: var(--border-2); transform: translateY(-2px); }
+  footer .footnav { flex-basis: 100%; }
+  footer .footnav a {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 8px 15px; border-radius: 999px; text-decoration: none;
+  }
+  footer .footnav a:hover { border-color: var(--accent); }
+  noscript .noscript-note {
+    display: block; margin: 14px auto; max-width: 900px;
+    background: var(--amber-bg); border: 1px solid var(--amber-dim); border-radius: 9px;
+    color: var(--amber); font-size: 13.5px; padding: 12px 16px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .step, .gate, .residual, .pagenav .back { transition: none; }
+    .step:hover, .gate:hover { transform: none; }
+    .pagenav .back:hover { transform: none; }
+  }
 </style>
 </head>
 <body>
+  <noscript><span class="noscript-note">This page renders entirely with local, inline JavaScript
+  (no CDNs, no trackers, nothing external). Enable JavaScript to see the proof dashboard.</span></noscript>
   <!-- Live run output (optional). If a green run emitted demo/demo_report.js it sets
        window.DEMO_REPORT; otherwise this missing file simply leaves it undefined on
        file:// and we fall back to EMBEDDED_REPORT below. No error either way. -->
@@ -436,7 +489,7 @@
     </div>
 
     <header class="hero">
-      <h1>The model you know, on a stack you can verify.</h1>
+      <h1>The model you know, on a stack you can <span class="em">verify</span>.</h1>
       <p class="pitch" id="pitchLine"></p>
 
       <section class="gen-card" aria-label="Live generation">
@@ -495,6 +548,9 @@
         <b>Fail-closed.</b> Every gate fakes nothing — a red line is the system working, not breaking.
       </div>
       <div class="meta" id="footMeta"></div>
+      <div class="footnav">
+        <a href="index.html"><span aria-hidden="true">←</span> Watch it think — the interactive chat demo</a>
+      </div>
     </footer>
 
     <p class="src-note" id="srcNote"></p>

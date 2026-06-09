@@ -702,6 +702,80 @@
     .ladder-grid { grid-template-columns: repeat(8, 1fr); }
   }
 
+  /* ---------- REPLAY (captured-run backup mode) styling ---------- */
+  .status-badge.is-replay { border-color: var(--blue-dim); background: var(--blue-bg); color: var(--blue); }
+  .status-badge.is-replay .dot { background: var(--blue); animation: none; }
+  .preview-banner.is-replay { background: var(--blue-bg); border-color: var(--blue-dim); }
+  .preview-banner.is-replay .pb-tag { color: var(--blue); border-color: var(--blue-dim); background: rgba(108,182,245,0.12); }
+  .preview-banner.is-replay .pb-text b { color: var(--blue); }
+  .preview-banner.is-replay .pb-x { color: var(--blue); border-color: var(--blue-dim); }
+  .turn-meta .replay-tag {
+    color: var(--blue); border: 1px solid var(--blue-dim); background: var(--blue-bg);
+    padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  }
+  .summary-panel .sum-replay {
+    margin-top: 2px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--blue); border: 1px solid var(--blue-dim); background: var(--blue-bg);
+    padding: 2px 8px; border-radius: 5px; display: inline-block;
+  }
+
+  /* ---------- busy (409) bubble — amber, not an error ---------- */
+  .turn.model .bubble.is-busy {
+    border-color: var(--amber-dim);
+    background: var(--amber-bg);
+    color: var(--amber);
+    font-size: 14px;
+  }
+
+  /* ---------- "backend came up" upgrade notice ---------- */
+  .upgrade-bar {
+    display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 14px; padding: 9px 14px;
+    background: var(--accent-bg); border: 1px solid var(--accent-dim);
+    border-radius: var(--radius-sm);
+    font-size: 12.5px; color: var(--accent);
+  }
+  .upgrade-bar.show { display: flex; }
+  .upgrade-bar a {
+    font-weight: 700; border: 1px solid var(--accent-dim); border-radius: 6px;
+    padding: 3px 10px; background: rgba(52,211,153,0.12);
+  }
+
+  /* ---------- composer hint ---------- */
+  .composer-hint {
+    margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  }
+  .composer textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+  .stepper input:disabled, .stepper button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ---------- accessibility: visible focus + skip link ---------- */
+  a:focus-visible, button:focus-visible, textarea:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+  }
+  .skip-link {
+    position: absolute; left: -9999px; top: 0; z-index: 100;
+    background: var(--panel); color: var(--accent); border: 1px solid var(--accent-dim);
+    padding: 9px 16px; border-radius: 0 0 9px 0; font-weight: 700; font-size: 13px;
+  }
+  .skip-link:focus { left: 0; text-decoration: none; }
+
+  noscript .noscript-note {
+    display: block; margin: 14px auto; max-width: 900px;
+    background: var(--amber-bg); border: 1px solid var(--amber-dim); border-radius: 9px;
+    color: var(--amber); font-size: 13.5px; padding: 12px 16px;
+  }
+
+  /* ---------- hero eyebrow ---------- */
+  .hero-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 1.6px;
+    text-transform: uppercase; color: var(--accent);
+    border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 4px 12px; border-radius: 999px; margin-bottom: 12px;
+  }
+  .hero-eyebrow .he-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+
   /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
   @media (prefers-reduced-motion: reduce) {
     .status-badge .dot { animation: none; }
@@ -715,6 +789,9 @@
 </style>
 </head>
 <body>
+  <a class="skip-link" href="#promptInput">Skip to the prompt box</a>
+  <noscript><span class="noscript-note">This page renders entirely with local, inline JavaScript
+  (no CDNs, no trackers, nothing external). Enable JavaScript to see the demo.</span></noscript>
   <main class="wrap">
 
     <!-- ============================================================
@@ -723,8 +800,8 @@
          source. Cannot be mistaken for a real run.
          ============================================================ -->
     <div class="preview-banner" id="previewBanner" role="alert">
-      <span class="pb-tag">PREVIEW · MOCK TELEMETRY</span>
-      <span class="pb-text">
+      <span class="pb-tag" id="pbTag">PREVIEW · MOCK TELEMETRY</span>
+      <span class="pb-text" id="pbText">
         <b>Simulated internals for layout preview — not a real GPT-2 run.</b>
         This page is showing mock telemetry; the live verified backend (C HTTP+SSE worker on an RTX 3070)
         EXISTS and is gated green by <code>scripts/helix_serve_gate.sh</code> — start it and open
@@ -734,6 +811,13 @@
         verifiability, not speed.
       </span>
       <button class="pb-x" id="previewDismiss" title="Hide this banner (PREVIEW state stays in the badge)">dismiss</button>
+    </div>
+
+    <!-- "live backend detected" notice (shown only if /api/health becomes
+         ready while the page is sitting in replay/mock fallback) -->
+    <div class="upgrade-bar" id="upgradeBar" role="status">
+      <span>Live backend detected — the GPU worker is ready.</span>
+      <a href="?source=sse">Switch to LIVE</a>
     </div>
 
     <!-- ============================================================
@@ -772,6 +856,7 @@
         <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
               stroke="#34d399" stroke-width="1.1" stroke-linecap="round"/>
       </svg>
+      <div class="hero-eyebrow"><span class="he-dot" aria-hidden="true"></span>Helix — the verifiable execution layer</div>
       <h1>Watch a 1.5-billion-parameter model think on a stack you can <span class="em">rebuild from 299 bytes</span>.</h1>
       <p class="frame">
         <b>GPT-2-XL is a 2019 base completion model.</b> It continues text; it is not tuned to chat,
@@ -798,7 +883,7 @@
           <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
         </div>
 
-        <div class="transcript" id="transcript" aria-live="polite">
+        <div class="transcript" id="transcript" aria-live="polite" aria-busy="false">
           <div class="transcript-empty" id="transcriptEmpty">
             <div class="te-glyph" aria-hidden="true">⌨</div>
             <div class="te-title">Give GPT-2 some text to continue</div>
@@ -831,6 +916,7 @@
               <button class="send-btn" id="sendBtn" type="button">Continue</button>
             </div>
           </div>
+          <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="charCount"></span></div>
           <div class="busy-hint" id="busyHint">GPU busy — one generation at a time (single-flight, matching the strictly-serial GPU).</div>
         </div>
       </section>
@@ -877,7 +963,7 @@
           <div class="ladder-grid" id="ladderGrid"></div>
           <div class="ladder-opnow" id="ladderOpNow" aria-live="off">&nbsp;</div>
           <div class="ladder-spark" id="ladderSpark"></div>
-          <div class="ladder-spark-lbl">per-layer ms (real per-layer host-clock ms when live; illustrative (mock) here)</div>
+          <div class="ladder-spark-lbl" id="ladderSparkLbl">per-layer ms</div>
         </div>
 
         <!-- kernel ticker -->
@@ -937,6 +1023,14 @@
     </div>
   </main>
 
+  <!-- Captured-run data (OPTIONAL). When present it enables the REPLAY backup
+       mode: a real, gated XL run recorded earlier, replayed with clear
+       labeling — so a visitor with no GPU/backend still sees something REAL.
+       If the file is absent this silently leaves window.HELIX_CAPTURED_RUN
+       undefined and the page falls back to the labeled MOCK preview — the
+       same graceful sibling-script pattern page 2 uses for demo_report.js. -->
+  <script src="captured_run.js"></script>
+
 <script>
 "use strict";
 /* ================================================================
@@ -958,28 +1052,50 @@
    ================================================================ */
 
 /* =====================  THE ONE FLAG TO FLIP  ===================== */
-/* false = MOCK telemetry (standalone, offline, no GPU/Python/backend).
+/* false = no live backend assumed: the page uses the REPLAY backup mode
+           (a real captured run, clearly labeled) when demo/captured_run.js
+           is present, else the labeled MOCK preview.
    true  = real SSE backend (POST /api/generate, streamed events).
-   Also overridable at load time with ?source=mock | ?source=sse.      */
+   Also overridable at load time with ?source=sse | ?source=replay |
+   ?source=mock.                                                       */
 var USE_LIVE_BACKEND = false;
 /* ================================================================= */
 
+/* A non-live source override resolved from the query string. */
+var SOURCE_OVERRIDE = null;
+
 /* Query-param + global override so reviewers can force a source without
-   editing the file:  index.html?source=sse   or   ?source=mock        */
+   editing the file:  ?source=sse | ?source=replay | ?source=mock      */
 (function resolveSource() {
   try {
     var qs = new URLSearchParams(window.location.search);
     var q = qs.get("source");
     if (q === "sse") USE_LIVE_BACKEND = true;
-    else if (q === "mock") USE_LIVE_BACKEND = false;
+    else if (q === "mock") { USE_LIVE_BACKEND = false; SOURCE_OVERRIDE = "mock"; }
+    else if (q === "replay") { USE_LIVE_BACKEND = false; SOURCE_OVERRIDE = "replay"; }
     if (typeof window.__HELIX_FORCE_SOURCE === "string") {
       USE_LIVE_BACKEND = (window.__HELIX_FORCE_SOURCE === "sse");
+      if (!USE_LIVE_BACKEND &&
+          (window.__HELIX_FORCE_SOURCE === "mock" || window.__HELIX_FORCE_SOURCE === "replay")) {
+        SOURCE_OVERRIDE = window.__HELIX_FORCE_SOURCE;
+      }
     }
   } catch (e) { /* file:// without URLSearchParams support — stay on default */ }
 })();
 
-/* TELEMETRY_SOURCE is the human-readable name of the active source. */
-var TELEMETRY_SOURCE = USE_LIVE_BACKEND ? "sse" : "mock";
+/* True when the committed captured-run transcript is loaded. */
+function replayAvailable() {
+  var c = (typeof window !== "undefined") ? window.HELIX_CAPTURED_RUN : null;
+  return !!(c && c.kind === "captured-replay" && c.tokenize && c.tokens && c.done);
+}
+
+/* TELEMETRY_SOURCE is the human-readable name of the active source:
+   "sse" (live) | "replay" (captured real run, NOT live) | "mock". */
+var TELEMETRY_SOURCE = USE_LIVE_BACKEND
+  ? "sse"
+  : (SOURCE_OVERRIDE === "replay" && !replayAvailable())
+    ? "mock"  /* ?source=replay without the data file: honest mock fallback */
+    : (SOURCE_OVERRIDE || (replayAvailable() ? "replay" : "mock"));
 
 /* ================================================================
    STATIC TRUST / DEVICE CONSTANTS
@@ -1060,29 +1176,33 @@ function pieceForChip(s) {
    the UI is forced into the unmistakable PREVIEW state, so this mock
    can never render as a real run.
    ================================================================ */
+/* Real per-layer op order from forward_layer_gpt2 (12 per-head launches
+   COLLAPSED into 3 aggregate attention ops, per the design contract).
+   SHARED by the mock generator AND the captured-run replay, so the
+   structural walk is identical everywhere. */
+var HELIX_LAYER_OPS = [
+  { label: "ln_1",            kernel: "gpu_layernorm_fwd_eps", phase: "attn" },
+  { label: "qkv_gemm",        kernel: "tiled_matmul",          phase: "attn" },
+  { label: "qkv_bias",        kernel: "gpu_add_bias_rowbcast", phase: "attn" },
+  { label: "attn_scores",     kernel: "tiled_matmul_abt",      phase: "attn" }, /* collapsed head loop */
+  { label: "attn_scale",      kernel: "gpu_scale_rt",          phase: "attn" },
+  { label: "attn_softmax",    kernel: "gpu_softmax_causal",    phase: "attn" }, /* collapsed head loop */
+  { label: "attn_av",         kernel: "tiled_matmul",          phase: "attn" }, /* collapsed head loop */
+  { label: "attn_proj_gemm",  kernel: "tiled_matmul",          phase: "attn" },
+  { label: "attn_proj_bias",  kernel: "gpu_add_bias_rowbcast", phase: "attn" },
+  { label: "attn_residual",   kernel: "vector_add",            phase: "attn" },
+  { label: "ln_2",            kernel: "gpu_layernorm_fwd_eps", phase: "mlp"  },
+  { label: "fc_gemm",         kernel: "tiled_matmul",          phase: "mlp"  },
+  { label: "fc_bias",         kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
+  { label: "gelu",            kernel: "gpu_gelu_stable",       phase: "mlp"  },
+  { label: "proj2_gemm",      kernel: "tiled_matmul",          phase: "mlp"  },
+  { label: "proj2_bias",      kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
+  { label: "mlp_residual",    kernel: "vector_add",            phase: "mlp"  }
+];
+
 var MockTelemetryGenerator = (function () {
 
-  /* Real per-layer op order from forward_layer_gpt2 (12 per-head launches
-     COLLAPSED into 3 aggregate attention ops, per the design contract). */
-  var LAYER_OPS = [
-    { label: "ln_1",            kernel: "gpu_layernorm_fwd_eps", phase: "attn" },
-    { label: "qkv_gemm",        kernel: "tiled_matmul",          phase: "attn" },
-    { label: "qkv_bias",        kernel: "gpu_add_bias_rowbcast", phase: "attn" },
-    { label: "attn_scores",     kernel: "tiled_matmul_abt",      phase: "attn" }, /* collapsed head loop */
-    { label: "attn_scale",      kernel: "gpu_scale_rt",          phase: "attn" },
-    { label: "attn_softmax",    kernel: "gpu_softmax_causal",    phase: "attn" }, /* collapsed head loop */
-    { label: "attn_av",         kernel: "tiled_matmul",          phase: "attn" }, /* collapsed head loop */
-    { label: "attn_proj_gemm",  kernel: "tiled_matmul",          phase: "attn" },
-    { label: "attn_proj_bias",  kernel: "gpu_add_bias_rowbcast", phase: "attn" },
-    { label: "attn_residual",   kernel: "vector_add",            phase: "attn" },
-    { label: "ln_2",            kernel: "gpu_layernorm_fwd_eps", phase: "mlp"  },
-    { label: "fc_gemm",         kernel: "tiled_matmul",          phase: "mlp"  },
-    { label: "fc_bias",         kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
-    { label: "gelu",            kernel: "gpu_gelu_stable",       phase: "mlp"  },
-    { label: "proj2_gemm",      kernel: "tiled_matmul",          phase: "mlp"  },
-    { label: "proj2_bias",      kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
-    { label: "mlp_residual",    kernel: "vector_add",            phase: "mlp"  }
-  ];
+  var LAYER_OPS = HELIX_LAYER_OPS; /* the shared real op order above */
 
   /* A tiny shipped id map so the example seeds show plausible REAL-style ids.
      For the pinned 'The capital of France is' the contract's real ids are
@@ -1276,7 +1396,7 @@ var MockTelemetryGenerator = (function () {
           h.onToken && h.onToken({
             seq: S(), step: step, id: (piece === " the" || /\bParis/.test(piece)) ? 262 : h2,
             string: piece, logit: mockLogit(step), context_len: stepCtx + 1,
-            _mock_elapsed: mockTokSeconds(step + 1) /* mock-only: elapsed at the MEASURED live XL cadence (~9.8 s/token) for the gauge */
+            _nonlive_elapsed: mockTokSeconds(step + 1) /* non-live only: elapsed at the MEASURED live XL cadence (~9.8 s/token) for the gauge */
           });
         });
         clock += 40;
@@ -1303,6 +1423,149 @@ var MockTelemetryGenerator = (function () {
   }
 
   return { start: start, isMock: true };
+})();
+
+/* ================================================================
+   CAPTURED-RUN REPLAY SOURCE  (the website "backup mode")
+   ----------------------------------------------------------------
+   Replays the REAL run committed in demo/captured_run.js (see that
+   file's provenance header: every value is transcribed from the
+   fail-closed serve gate's G1 capture in scripts/_gate_run.log).
+   Nothing is invented: ids / strings / text / totals are verbatim;
+   logits not retained in the log are null (rendered "—"); per-layer
+   ms was not captured and is emitted 0 (= untimed, per the contract,
+   never fabricated). The layer/op sweep re-walks the run's REAL
+   structure (48 layers × 17 ops × 20 steps — exactly the captured
+   event histogram). Pacing is time-compressed and the page says so;
+   the REPORTED totals stay the run's real 195.513 s / 0.102 tok/s.
+   Same start(prompt, nGen, handlers) interface as the other sources;
+   the prompt/nGen arguments are pinned to the captured run.
+   ================================================================ */
+var ReplaySource = (function () {
+  function start(promptIgnored, nGenIgnored, h) {
+    var C = (typeof window !== "undefined") ? window.HELIX_CAPTURED_RUN : null;
+    var cancelled = false, timers = [];
+    function after(ms, fn) {
+      var t = setTimeout(function () { if (!cancelled) fn(); }, ms);
+      timers.push(t); return t;
+    }
+    function cancel() { cancelled = true; timers.forEach(clearTimeout); }
+    if (!C || !C.tokenize || !C.tokens || !C.done) {
+      setTimeout(function () {
+        h.onError && h.onError({ where: "load", message: "captured_run.js missing or invalid", fatal: true });
+      }, 0);
+      return { cancel: cancel };
+    }
+
+    var seq = 0; function S() { return ++seq; }
+    var NL = C.n_layer || 48;
+    var N = C.tokens.length;
+
+    /* --- hello: the captured run's real constants (ptx_bytes 44019 is
+       the gate log's seed-minted PTX size) --- */
+    after(40, function () {
+      h.onHello && h.onHello({
+        seq: S(), schema_version: C.schema_version || 1, model: C.model,
+        params: C.params, n_layer: NL, n_head: C.n_head, d_model: C.d_model,
+        d_ff: C.d_ff, n_vocab: C.n_vocab, device: C.device, sm: C.sm,
+        precision: C.precision, seed_sha: RUNBOOK.seed_sha,
+        fixpoint_sha: RUNBOOK.fixpoint_sha, ptx_bytes: C.ptx_bytes,
+        kernels: RUNBOOK.kernels.slice(), build: C.build, mode: "replay"
+      });
+    });
+
+    /* --- tokenize: verbatim captured event --- */
+    after(200, function () {
+      h.onTokenize && h.onTokenize({
+        seq: S(), ids: C.tokenize.ids.slice(), strings: C.tokenize.strings.slice(),
+        n_prompt: C.tokenize.n_prompt, s_pad: C.tokenize.s_pad
+      });
+    });
+
+    /* Pacing: time-compressed exactly like the mock preview (disclosed
+       on-page). REPORTED numbers are the run's real totals. */
+    var clock = 380;
+    var REAL_BUDGET_MS = Math.min(3000 + N * 500, 16000);
+    var perStep = REAL_BUDGET_MS / N;
+    var perLayer = (perStep * 0.86) / NL;
+    var OP_GAP = Math.max(0.4, (perLayer * 0.7) / HELIX_LAYER_OPS.length);
+    var LAYER_GAP = Math.max(1, perLayer * 0.15);
+    /* gauge basis: interpolated from the run's REAL total (195.513 s) */
+    var realElapsed = function (k) { return +((k / N) * C.done.seconds).toFixed(1); };
+
+    for (var step = 0; step < N; step++) {
+      (function (step) {
+        var ctx = C.tokenize.n_prompt + step;
+        after(clock, function () {
+          h.onForwardBegin && h.onForwardBegin({
+            seq: S(), step: step, context_len: ctx, s_pad: C.tokenize.s_pad, n_layers: NL
+          });
+        });
+        clock += 26;
+        after(clock, function () {
+          h.onEmbed && h.onEmbed({ seq: S(), step: step, t: ctx, d_model: C.d_model });
+        });
+        clock += 20;
+        for (var L = 0; L < NL; L++) {
+          (function (L) {
+            after(clock, function () {
+              h.onLayerBegin && h.onLayerBegin({ seq: S(), step: step, idx: L, total: NL });
+            });
+            clock += LAYER_GAP;
+            for (var o = 0; o < HELIX_LAYER_OPS.length; o++) {
+              (function (o) {
+                var op = HELIX_LAYER_OPS[o];
+                after(clock, function () {
+                  h.onOp && h.onOp({
+                    seq: S(), step: step, layer: L, seq_in_layer: o,
+                    kernel: op.kernel, phase: op.phase, label: op.label
+                  });
+                });
+                clock += OP_GAP;
+              })(o);
+            }
+            after(clock, function () {
+              /* ms:0 = untimed — per-layer timing was not retained in the
+                 capture log; never fabricated. */
+              h.onLayerEnd && h.onLayerEnd({ seq: S(), step: step, idx: L, ms: 0, ops: HELIX_LAYER_OPS.length });
+            });
+            clock += LAYER_GAP;
+          })(L);
+        }
+        after(clock, function () {
+          h.onHead && h.onHead({ seq: S(), step: step, label: "ln_f", kernel: "gpu_layernorm_fwd_eps" });
+        });
+        clock += 14;
+        after(clock, function () {
+          h.onHead && h.onHead({ seq: S(), step: step, label: "lm_head", kernel: "tiled_matmul_abt" });
+        });
+        clock += 14;
+        after(clock, function () {
+          var tk = C.tokens[step];
+          h.onToken && h.onToken({
+            seq: S(), step: step, id: tk.id, string: tk.string,
+            logit: tk.logit, /* null where the log did not retain it -> "—" */
+            context_len: tk.context_len,
+            _nonlive_elapsed: realElapsed(step + 1)
+          });
+        });
+        clock += 30;
+      })(step);
+    }
+
+    /* --- done: verbatim captured event --- */
+    after(clock + 50, function () {
+      var d = C.done;
+      h.onDone && h.onDone({
+        seq: S(), n_prompt: d.n_prompt, n_gen: d.n_gen, n_total: d.n_total,
+        seconds: d.seconds, tok_per_s: d.tok_per_s, text: d.text,
+        gen_ids: d.gen_ids.slice(), nonfinite: d.nonfinite
+      });
+    });
+
+    return { cancel: cancel };
+  }
+  return { start: start, isMock: false, isReplay: true };
 })();
 
 /* ================================================================
@@ -1394,7 +1657,14 @@ var LiveSSESource = (function () {
    SOURCE SELECTION — the single uniform interface the page consumes.
    ================================================================ */
 function getTelemetrySource() {
-  return USE_LIVE_BACKEND ? LiveSSESource : MockTelemetryGenerator;
+  if (TELEMETRY_SOURCE === "sse") return LiveSSESource;
+  if (TELEMETRY_SOURCE === "replay" && replayAvailable()) return ReplaySource;
+  return MockTelemetryGenerator;
+}
+
+/* the captured run's pinned prompt ("" when replay data is absent) */
+function replayPrompt() {
+  return replayAvailable() ? window.HELIX_CAPTURED_RUN.prompt : "";
 }
 
 /* ================================================================
@@ -1402,6 +1672,8 @@ function getTelemetrySource() {
    ================================================================ */
 var UI = {
   busy: false,
+  lastRequest: null,      /* {prompt, nGen} of the most recent request (retry) */
+  autoReplayed: false,    /* the one-shot auto-start of the captured replay */
   ladder: { total: RUNBOOK.n_layer, current: -1, done: 0, ms: [] },
   kernelCounts: {},
   reply: { step: 0, nGen: 0, layersDone: 0, totalPasses: 0 },
@@ -1570,12 +1842,13 @@ var handlers = {
     /* token & throughput panel */
     UI.run.tokens++;
     var gt = $("gaugeToks"); gt.textContent = UI.run.tokens; gt.classList.remove("is-idle");
-    /* In mock mode the event carries _mock_elapsed — elapsed at the MEASURED
-       live XL cadence (~9.8 s/token) — so the gauge never reads faster than the
-       real demo and stays consistent with the run summary. In live mode there
-       is no _mock_elapsed, so we use the real wall clock since the stream began. */
-    var secs = (d._mock_elapsed != null)
-      ? d._mock_elapsed
+    /* In mock/replay mode the event carries _nonlive_elapsed — elapsed at the
+       MEASURED live XL cadence (mock) or interpolated from the captured run's
+       real total (replay) — so the gauge never reads faster than the real demo
+       and stays consistent with the run summary. In live mode there is no
+       _nonlive_elapsed, so we use the real wall clock since the stream began. */
+    var secs = (d._nonlive_elapsed != null)
+      ? d._nonlive_elapsed
       : (UI.run.t0 ? (performance.now() - UI.run.t0) / 1000 : 0);
     $("gaugeSecs").textContent = secs.toFixed(1); $("gaugeSecs").classList.remove("is-idle");
     if (secs > 0) { var tps = $("gaugeTps"); tps.textContent = (UI.run.tokens / secs).toFixed(2); tps.classList.remove("is-idle"); }
@@ -1614,13 +1887,29 @@ var handlers = {
 
   onError: function (d) {
     flushOpsNow();
+    /* a 409 single-flight rejection is a BUSY state, not a failure — amber,
+       with an honest explanation and a retry, never a red scare */
+    var isBusy409 = !!(d && d.message === "busy");
     if (UI.activeBubble) {
-      UI.activeBubble.bubble.classList.add("is-error");
       finishStreamingBubble();
-      UI.activeBubble.bubble.textContent = "⚠ error (" + (d.where || "?") + "): " + (d.message || "unknown");
+      var bub = UI.activeBubble.bubble;
+      bub.classList.add(isBusy409 ? "is-busy" : "is-error");
+      bub.textContent = isBusy409
+        ? "⏳ GPU busy — another generation holds the single-flight lock (one at a time, matching the strictly-serial GPU). Try again in a moment."
+        : "⚠ error (" + (d.where || "?") + "): " + (d.message || "unknown");
+      /* retry affordance: re-fires the exact same request */
+      if (UI.lastRequest) {
+        var meta = UI.activeBubble.metaEl;
+        meta.innerHTML = "";
+        var retry = el("button", { class: "tm-btn", type: "button" }, isBusy409 ? "try again" : "retry");
+        retry.addEventListener("click", function () {
+          if (!UI.busy) startGeneration(UI.lastRequest.prompt, UI.lastRequest.nGen);
+        });
+        meta.appendChild(retry);
+      }
     }
     setBusy(false);
-    if (d.fatal && TELEMETRY_SOURCE === "sse") {
+    if (d.fatal && TELEMETRY_SOURCE === "sse" && !isBusy409) {
       setConnState("fail", "ERROR · " + (d.where || "driver"));
     }
   }
@@ -1760,12 +2049,15 @@ function finalizeTurnMeta(d) {
   if (!UI.activeBubble) return;
   var meta = UI.activeBubble.metaEl;
   meta.innerHTML = "";
-  var isMock = (TELEMETRY_SOURCE !== "sse");
   meta.appendChild(document.createTextNode(
     "continued " + d.n_gen + " tokens · " + d.seconds + " s · " + d.tok_per_s +
     " tok/s · GPT-2-XL fp32 · greedy"
   ));
-  if (isMock) meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
+  if (TELEMETRY_SOURCE === "replay") {
+    meta.appendChild(el("span", { class: "replay-tag" }, "REPLAY · captured run"));
+  } else if (TELEMETRY_SOURCE !== "sse") {
+    meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
+  }
 
   /* internals toggle (scrolls/opens the right column) */
   var internalsBtn = el("button", { class: "tm-btn", type: "button" }, "view internals for this turn");
@@ -1813,7 +2105,10 @@ function finalizeTurnMeta(d) {
    wire up a fake live PASS here: the only honest live verdict is UNAVAILABLE -> "see the real numbers". */
 function runVerify(doneEvent, cb) {
   if (TELEMETRY_SOURCE !== "sse") {
-    setTimeout(function () { cb({ verdict: "UNAVAILABLE", note: "mock telemetry — no oracle" }); }, 350);
+    var why = (TELEMETRY_SOURCE === "replay")
+      ? "replay of a captured run — no live oracle (the run itself was oracle-verified in the gate)"
+      : "mock telemetry — no oracle";
+    setTimeout(function () { cb({ verdict: "UNAVAILABLE", note: why }); }, 350);
     return;
   }
   fetch("/api/verify", {
@@ -1838,7 +2133,10 @@ function paintRunSummary(d) {
   ]);
   body.appendChild(grid);
 
-  if (TELEMETRY_SOURCE !== "sse") {
+  if (TELEMETRY_SOURCE === "replay") {
+    body.appendChild(el("div", { class: "sum-replay" },
+      "CAPTURED RUN (REPLAY) — totals verbatim from the real gated run · replay animation time-compressed"));
+  } else if (TELEMETRY_SOURCE !== "sse") {
     body.appendChild(el("div", { class: "sum-mock" },
       "MOCK NUMBERS — not a real run · cadence mirrors measured live XL (≈ 9.8 s/token)"));
   }
@@ -1879,34 +2177,110 @@ function scrollTranscript() {
    ================================================================ */
 function setConnState(kind, text) {
   var badge = $("connBadge");
-  badge.classList.remove("is-preview", "is-fail");
+  badge.classList.remove("is-preview", "is-fail", "is-replay");
   if (kind === "preview") badge.classList.add("is-preview");
+  else if (kind === "replay") badge.classList.add("is-replay");
   else if (kind === "fail") badge.classList.add("is-fail");
   $("connText").textContent = text;
 }
 
-/* Force the unmistakable PREVIEW state whenever not on a real SSE source. */
+/* Force the unmistakable non-live state whenever not on a real SSE source:
+   amber PREVIEW for mock, blue REPLAY for the captured real run. A viewer
+   can never mistake either for a live run. */
 function applySourceHonesty() {
+  var banner = $("previewBanner");
   if (TELEMETRY_SOURCE === "sse") {
     /* will flip to LIVE on the hello event; until then show connecting */
     setConnState("preview", "CONNECTING · awaiting worker /api/health…");
-    $("previewBanner").hidden = true;
+    banner.hidden = true;
+    $("upgradeBar").classList.remove("show");
     $("convMode").textContent = "GPT-2-XL · fp32 · greedy · LIVE";
+  } else if (TELEMETRY_SOURCE === "replay") {
+    setConnState("replay", "REPLAY · CAPTURED REAL RUN (not live)");
+    banner.hidden = false;
+    banner.classList.add("is-replay");
+    $("pbTag").textContent = "REPLAY · CAPTURED RUN";
+    $("pbText").innerHTML =
+      "<b>Captured run (replay) — a real, gated GPT-2-XL run recorded earlier. Not live right now.</b> " +
+      "ids, text and totals are verbatim from the fail-closed serve gate (served output == oracle " +
+      "token-for-token, 25/25; 195.5 s for 20 tokens ≈ 9.8 s/token). The replay animation is " +
+      "time-compressed; per-layer timings were not captured, so they are shown untimed — never " +
+      "invented. Start the backend and open <code>?source=sse</code> to watch it live.";
+    $("convMode").textContent = "GPT-2-XL · fp32 · greedy · REPLAY (captured)";
   } else {
     setConnState("preview", "PREVIEW · MOCK TELEMETRY (no GPU connected)");
-    $("previewBanner").hidden = false;
+    banner.hidden = false;
+    banner.classList.remove("is-replay");
+    $("pbTag").textContent = "PREVIEW · MOCK TELEMETRY";
+    $("pbText").innerHTML =
+      "<b>Simulated internals for layout preview — not a real GPT-2 run.</b> " +
+      "This page is showing mock telemetry; the live verified backend (C HTTP+SSE worker on an RTX 3070) " +
+      "EXISTS and is gated green by <code>scripts/helix_serve_gate.sh</code> — start it and open " +
+      "<code>?source=sse</code> to connect. Layer sweeps, kernel names and the per-layer op order are " +
+      "structurally faithful; only the numbers are mock. <b>The preview animation is time-compressed:</b> " +
+      "live XL really runs at ≈ 10 s/token (~3 min for 20 tokens) — by design, the demo is about " +
+      "verifiability, not speed.";
     $("convMode").textContent = "GPT-2-XL · fp32 · greedy · (mock)";
   }
-  /* honest-latency footnote under the throughput gauges (both sources) */
+
+  /* honest-latency footnote under the throughput gauges (every source) */
   var note = $("tpNote");
   if (note) {
     if (TELEMETRY_SOURCE === "sse") {
       note.innerHTML = "Live XL runs at ≈ <b>10 s/token</b> by design — verified compute, not a speed demo.";
+    } else if (TELEMETRY_SOURCE === "replay") {
+      note.innerHTML = "<b>REPLAY</b> — totals shown are the captured run's real measured values " +
+        "(195.513 s / 20 tok ≈ 9.8 s/token · 0.10 tok/s). The animation is time-compressed; " +
+        "the real run took ~3¼ minutes.";
     } else {
       note.innerHTML = "<b>MOCK cadence</b> — the numbers shown mirror the measured live XL rate " +
         "(≈ 9.8 s/token; 195.5 s for 20 tokens, gated run). The preview animation itself is " +
         "time-compressed and NOT representative of live latency.";
     }
+  }
+
+  /* per-source sparkline caption (never implies timing we don't have) */
+  var sl = $("ladderSparkLbl");
+  if (sl) {
+    sl.textContent = (TELEMETRY_SOURCE === "sse")
+      ? "per-layer ms — real host-clock timing from the live worker (--timing 1)"
+      : (TELEMETRY_SOURCE === "replay")
+        ? "per-layer ms — untimed in replay (not retained in the capture log)"
+        : "per-layer ms — illustrative (mock), not measured";
+  }
+
+  configureComposerForSource();
+}
+
+/* In REPLAY mode the composer is pinned to the captured run (replaying is
+   the only honest thing we can do without a backend); in sse/mock it is a
+   free completion playground. */
+function configureComposerForSource() {
+  var input = $("promptInput"), ng = $("nGen"), send = $("sendBtn");
+  var up = $("nGenUp"), down = $("nGenDown"), hint = $("composerHint");
+  var isReplay = (TELEMETRY_SOURCE === "replay");
+  if (isReplay) {
+    var C = window.HELIX_CAPTURED_RUN;
+    input.value = C.prompt;
+    input.disabled = true;
+    ng.value = C.n_gen || 20; ng.disabled = true;
+    up.disabled = true; down.disabled = true;
+    send.textContent = "▶ Replay the captured run";
+    hint.textContent = "REPLAY mode — prompt pinned to the captured run. ?source=mock explores the layout; start the backend + ?source=sse to go live.";
+  } else {
+    input.disabled = false;
+    ng.disabled = false; up.disabled = false; down.disabled = false;
+    send.textContent = "Continue";
+    hint.textContent = "Enter ↵ to run · Shift+Enter for a newline";
+  }
+  /* seed chips: in replay only the captured prompt is replayable */
+  var chips = $("seedRow").querySelectorAll(".seed-chip");
+  for (var i = 0; i < chips.length; i++) {
+    var pinnedOut = isReplay && chips[i].textContent !== replayPrompt();
+    chips[i].disabled = UI.busy || pinnedOut;
+    chips[i].title = pinnedOut
+      ? "Replay mode can only replay the captured run (no backend connected)"
+      : "";
   }
 }
 
@@ -1914,8 +2288,12 @@ function setBusy(b) {
   UI.busy = b;
   $("sendBtn").disabled = b;
   $("busyHint").classList.toggle("show", b);
+  $("transcript").setAttribute("aria-busy", b ? "true" : "false");
   var chips = $("seedRow").querySelectorAll(".seed-chip");
-  for (var i = 0; i < chips.length; i++) chips[i].disabled = b;
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].disabled = b ||
+      (TELEMETRY_SOURCE === "replay" && chips[i].textContent !== replayPrompt());
+  }
   /* count chip on tokenizer + ladder header reflect activity */
   if (b) $("tokCount").classList.remove("is-idle");
 }
@@ -1926,8 +2304,15 @@ function setBusy(b) {
 var activeStream = null;
 function startGeneration(prompt, nGen) {
   if (UI.busy) return;
+  if (TELEMETRY_SOURCE === "replay") {
+    /* replay can only honestly replay the captured run */
+    var C = window.HELIX_CAPTURED_RUN;
+    prompt = C.prompt;
+    nGen = C.n_gen || 20;
+  }
   prompt = (prompt || "").replace(/\s+$/g, "");
   if (!prompt) return;
+  UI.lastRequest = { prompt: prompt, nGen: nGen };
 
   setBusy(true);
 
@@ -1982,6 +2367,17 @@ function initControls() {
     }
   });
 
+  /* lightweight typing feedback (chars only — token count is the
+     tokenizer's job and is shown truthfully once a run tokenizes) */
+  input.addEventListener("input", function () {
+    $("charCount").textContent = input.value.length ? (input.value.length + " chars") : "";
+  });
+
+  /* Escape closes the mobile internals drawer */
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") openDrawer(false);
+  });
+
   /* seed chips fill the box and (when idle) fire immediately */
   var chips = $("seedRow").querySelectorAll(".seed-chip");
   for (var i = 0; i < chips.length; i++) {
@@ -2016,27 +2412,71 @@ function openDrawer(open) {
    so the page is never blank if the backend is down.
    ================================================================ */
 function gateLiveReadiness() {
-  if (TELEMETRY_SOURCE !== "sse") return;
-  function fallbackToMock() {
-    /* backend absent/unreachable: fall back to mock with the honest PREVIEW
-       state so the page is never blank and never claims a live run it can't back. */
+  if (TELEMETRY_SOURCE !== "sse") { startUpgradeWatch(); return; }
+  var tries = 0;
+  function fallbackToBackup() {
+    /* backend absent/unreachable: fall back to the labeled captured-run
+       REPLAY when available (real data, clearly "not live"), else the
+       labeled MOCK preview — the page is never blank and never claims a
+       live run it can't back. */
     USE_LIVE_BACKEND = false;
-    TELEMETRY_SOURCE = "mock";
+    TELEMETRY_SOURCE = replayAvailable() ? "replay" : "mock";
     applySourceHonesty();
+    maybeAutoReplay();
+    startUpgradeWatch();
   }
-  fetch("/api/health").then(function (r) {
-    /* a 404/500 from a static server (no backend) is NOT a live worker */
-    if (!r.ok) { fallbackToMock(); return null; }
-    return r.json();
-  }).then(function (j) {
-    if (j === null) return; /* already fell back */
-    if (j && j.ready) {
-      setConnState("live", "LIVE · " + (j.device || RUNBOOK.device) + " · fp32");
-    } else {
-      /* reachable worker, not warm yet — honest connecting state */
-      setConnState("preview", "CONNECTING · worker not ready…");
+  function poll() {
+    fetch("/api/health").then(function (r) {
+      /* a 404/500 from a static server (no backend) is NOT a live worker */
+      if (!r.ok) { fallbackToBackup(); return null; }
+      return r.json();
+    }).then(function (j) {
+      if (j === null) return; /* already fell back */
+      if (j && j.ready) {
+        setConnState("live", "LIVE · " + (j.device || RUNBOOK.device) + " · fp32");
+      } else {
+        /* reachable worker, still warming (XL weights + PTX load) —
+           honest connecting state + keep reconnecting for ~2 minutes */
+        tries++;
+        setConnState("preview", "CONNECTING · worker not ready (check " + tries + ")…");
+        if (tries <= 30) setTimeout(poll, 4000);
+        else fallbackToBackup();
+      }
+    }).catch(fallbackToBackup);
+  }
+  poll();
+}
+
+/* While sitting in replay/mock fallback, quietly watch for the backend
+   coming up and OFFER live mode (a visible "Switch to LIVE" notice — we
+   never auto-switch mid-replay, and we never claim LIVE while not). Skipped
+   entirely on file:// where no backend can exist. */
+function startUpgradeWatch() {
+  if (TELEMETRY_SOURCE === "sse") return;
+  if (window.location.protocol === "file:") return;
+  var tries = 0;
+  (function watch() {
+    if (++tries > 30) return; /* give up quietly after ~5 min */
+    fetch("/api/health").then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.ready) $("upgradeBar").classList.add("show");
+        else setTimeout(watch, 10000);
+      })
+      .catch(function () { setTimeout(watch, 10000); });
+  })();
+}
+
+/* One-shot auto-start of the captured replay, so a website visitor with no
+   backend sees the real captured run playing within a second of landing —
+   already wrapped in the unmistakable REPLAY labeling. */
+function maybeAutoReplay() {
+  if (TELEMETRY_SOURCE !== "replay" || UI.autoReplayed) return;
+  UI.autoReplayed = true;
+  setTimeout(function () {
+    if (!UI.busy && TELEMETRY_SOURCE === "replay") {
+      startGeneration(replayPrompt(), (window.HELIX_CAPTURED_RUN.n_gen || 20));
     }
-  }).catch(fallbackToMock);
+  }, 900);
 }
 
 /* ================================================================
@@ -2054,6 +2494,7 @@ function gateLiveReadiness() {
     applySourceHonesty();
     initControls();
     gateLiveReadiness();
+    maybeAutoReplay();
   } catch (e) {
     /* never leave a dead page; surface the error honestly */
     try { setConnState("fail", "UI ERROR — see console"); } catch (_) {}
