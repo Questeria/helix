@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GPT-2-XL on Helix — Completion Playground</title>
+<style>
+  /* ============================================================
+     GPT-2-XL x Helix — COMPLETION PLAYGROUND (page 1, the MAIN page).
+     Self-contained, offline. System font stack only; no CDNs,
+     no web fonts, no frameworks. :root tokens, topbar, wordmark,
+     glyph, badge, .gen-text/.cont, section heads and panel surfaces
+     are reused VERBATIM from demo/dashboard.html so the two pages
+     are visually one product.
+     ============================================================ */
+  :root {
+    --bg:        #0a0e14;   /* deep near-black slate          */
+    --bg-2:      #0f141c;   /* page gradient bottom           */
+    --panel:     #111722;   /* card surface                   */
+    --panel-2:   #0d121b;   /* inset / nested surface         */
+    --border:    #1e2733;   /* soft card border               */
+    --border-2:  #28323f;   /* slightly stronger border       */
+    --ink:       #e6edf3;   /* primary text                   */
+    --ink-dim:   #9aa7b4;   /* secondary text                 */
+    --ink-faint: #6b7785;   /* tertiary / captions            */
+    --accent:    #34d399;   /* emerald — verified / live       */
+    --accent-dim:#1d6b4f;   /* emerald border tint            */
+    --accent-bg: rgba(52,211,153,0.08);
+    --amber:     #f5b14c;   /* in-progress / PREVIEW          */
+    --amber-dim: #6b521d;
+    --amber-bg:  rgba(245,177,76,0.08);
+    --red:       #f0726a;   /* live fail states               */
+    --red-dim:   #6b2a26;
+    --red-bg:    rgba(240,114,106,0.08);
+    --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #121a26 0%, var(--bg) 55%, var(--bg-2) 100%);
+    background-attachment: fixed;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 24px 28px 40px;
+  }
+
+  /* ---------- PREVIEW / MOCK banner (honesty, non-optional on mock) ---------- */
+  .preview-banner {
+    background: var(--amber-bg);
+    border: 1px solid var(--amber-dim);
+    border-radius: var(--radius-sm);
+    padding: 11px 16px;
+    margin-bottom: 18px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    font-size: 13.5px; color: var(--amber);
+  }
+  .preview-banner .pb-tag {
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.6px;
+    color: var(--amber); border: 1px solid var(--amber-dim); background: rgba(245,177,76,0.12);
+    padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .preview-banner .pb-text { color: var(--ink-dim); flex: 1; min-width: 220px; }
+  .preview-banner .pb-text b { color: var(--amber); font-weight: 650; }
+  .preview-banner .pb-x {
+    background: none; border: 1px solid var(--amber-dim); color: var(--amber);
+    border-radius: 6px; cursor: pointer; font-family: var(--mono); font-size: 11px;
+    padding: 4px 10px; line-height: 1;
+  }
+  .preview-banner .pb-x:hover { background: rgba(245,177,76,0.14); }
+  .preview-banner[hidden] { display: none; }
+
+  /* ---------- top bar (reused from dashboard) ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 22px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .wordmark {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-weight: 700; font-size: 19px; letter-spacing: 0.2px;
+  }
+  .wordmark .helix-glyph { width: 22px; height: 22px; display: inline-block; }
+  .wordmark .x { color: var(--ink-faint); font-weight: 500; margin: 0 2px; }
+  .wordmark .gpt { color: var(--ink-dim); font-weight: 600; }
+  .sub-pill {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.7px;
+    color: var(--ink-dim); border: 1px solid var(--border-2); background: var(--panel-2);
+    padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .model-tag {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+    border: 1px solid var(--border); background: var(--panel);
+    padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  }
+  .model-tag b { color: var(--ink-dim); font-weight: 600; }
+
+  .topbar-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 9px 16px;
+    border-radius: 999px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    border: 1px solid var(--accent-dim);
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  /* amber = PREVIEW/mock; red = error */
+  .status-badge.is-preview { border-color: var(--amber-dim); background: var(--amber-bg); color: var(--amber); }
+  .status-badge.is-fail { border-color: var(--red-dim); background: var(--red-bg); color: var(--red); }
+  .status-badge .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.5);
+    animation: pulse 2.6s ease-out infinite;
+  }
+  .status-badge.is-preview .dot { background: var(--amber); animation: none; }
+  .status-badge.is-fail .dot { background: var(--red); animation: none; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  .nav-link {
+    font-size: 13px; font-weight: 600; color: var(--ink-dim);
+    border: 1px solid var(--border-2); background: var(--panel);
+    padding: 9px 15px; border-radius: 999px;
+  }
+  .nav-link:hover { color: var(--accent); border-color: var(--accent-dim); text-decoration: none; }
+  .nav-link .arr { color: var(--accent); }
+
+  /* ---------- hero strip (compact) ---------- */
+  .hero-strip { margin-bottom: 22px; }
+  .hero-strip h1 {
+    font-size: clamp(20px, 2.6vw, 28px);
+    line-height: 1.2;
+    font-weight: 700;
+    margin: 0 0 8px;
+    letter-spacing: -0.3px;
+    max-width: 40ch;
+  }
+  .hero-strip h1 .em { color: var(--accent); }
+  .hero-strip .frame {
+    font-size: clamp(13px, 1.4vw, 15px);
+    color: var(--ink-dim);
+    max-width: 92ch;
+    margin: 0;
+  }
+  .hero-strip .frame b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- two-column app shell ---------- */
+  .shell {
+    display: grid;
+    grid-template-columns: 1.62fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  /* ---------- shared section-head treatment (from dashboard) ---------- */
+  .panel-head {
+    font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700; margin: 0 0 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .panel-head::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+  }
+  .panel-head .count {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0; text-transform: none;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 2px 8px; border-radius: 6px;
+  }
+  .panel-head .count.is-idle { color: var(--ink-faint); border-color: var(--border-2); background: var(--panel-2); }
+
+  /* ---------- LEFT: conversation ---------- */
+  .conv-col {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius);
+    display: flex; flex-direction: column;
+    min-height: 560px;
+    max-height: calc(100vh - 220px);
+    overflow: hidden;
+  }
+  .conv-head {
+    padding: 16px 22px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .conv-head .ch-title {
+    font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700;
+  }
+  .conv-head .ch-mode {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+  }
+  .transcript {
+    flex: 1; overflow-y: auto;
+    padding: 20px 22px 8px;
+    display: flex; flex-direction: column; gap: 18px;
+    scroll-behavior: smooth;
+  }
+  .transcript-empty {
+    margin: auto; text-align: center; color: var(--ink-faint);
+    max-width: 46ch; padding: 30px 10px;
+  }
+  .transcript-empty .te-glyph { font-size: 30px; opacity: 0.5; margin-bottom: 10px; }
+  .transcript-empty .te-title { color: var(--ink-dim); font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+  .transcript-empty .te-sub { font-size: 13px; line-height: 1.55; }
+
+  .turn { display: flex; flex-direction: column; gap: 5px; }
+  .turn .turn-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--ink-faint);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .turn.user .turn-label { color: var(--ink-dim); }
+  .turn.model .turn-label .ml-pill {
+    font-size: 9.5px; letter-spacing: 0.5px; color: var(--accent);
+    border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 1px 6px; border-radius: 5px; text-transform: none;
+  }
+  .turn.user .bubble {
+    align-self: flex-end;
+    max-width: 88%;
+    background: var(--panel-2);
+    border: 1px solid var(--border-2);
+    border-radius: 12px 12px 4px 12px;
+    padding: 11px 15px;
+    font-size: 15px; color: var(--ink);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  /* model continuation bubble — reuses dashboard .gen-text / .cont look */
+  .turn.model .bubble {
+    align-self: flex-start;
+    max-width: 95%;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border);
+    border-radius: 12px 12px 12px 4px;
+    padding: 13px 16px;
+    font-size: clamp(15px, 1.5vw, 17px); line-height: 1.5; font-weight: 500;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .turn.model .bubble .prompt-echo { color: var(--ink-dim); }
+  .turn.model .bubble .cont {
+    color: var(--ink);
+    background: linear-gradient(180deg, rgba(52,211,153,0.10), rgba(52,211,153,0.04));
+    border-bottom: 1px solid var(--accent-dim);
+    padding: 1px 1px;
+    border-radius: 3px;
+  }
+  .turn.model .bubble .tok-new {
+    background: rgba(52,211,153,0.28);
+    border-radius: 3px;
+    transition: background 0.5s ease;
+  }
+  .turn.model .bubble .caret {
+    display: inline-block; width: 8px; height: 1.05em;
+    background: var(--accent); vertical-align: text-bottom; margin-left: 1px;
+    animation: blink 1s step-start infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .turn.model .bubble.is-error {
+    border-color: var(--red-dim);
+    background: var(--red-bg);
+    color: var(--red);
+  }
+  .turn-meta {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint);
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 2px;
+  }
+  .turn-meta .mock-tag {
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  }
+  .turn-meta .tm-btn {
+    background: none; border: 1px solid var(--border-2); color: var(--ink-dim);
+    border-radius: 6px; cursor: pointer; font-family: var(--mono); font-size: 10.5px;
+    padding: 3px 9px;
+  }
+  .turn-meta .tm-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .verify-result {
+    font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 5px;
+    border: 1px solid var(--border-2); color: var(--ink-dim);
+  }
+  .verify-result.is-unavail { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-bg); }
+
+  /* ---------- composer ---------- */
+  .composer {
+    border-top: 1px solid var(--border);
+    padding: 14px 18px 16px;
+    background: var(--panel-2);
+  }
+  .seed-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 11px; }
+  .seed-chip {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 999px; padding: 6px 13px;
+    font-size: 12.5px; color: var(--ink-dim); cursor: pointer;
+    transition: border-color .15s ease, color .15s ease;
+  }
+  .seed-chip:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .seed-chip:disabled { opacity: 0.45; cursor: not-allowed; }
+  .composer-row { display: flex; gap: 10px; align-items: flex-end; }
+  .composer textarea {
+    flex: 1;
+    background: var(--panel); border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.45;
+    padding: 11px 13px; resize: vertical; min-height: 50px; max-height: 160px;
+  }
+  .composer textarea:focus { outline: none; border-color: var(--accent-dim); }
+  .composer textarea::placeholder { color: var(--ink-faint); }
+  .composer-ctl { display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 132px; }
+  .stepper {
+    display: flex; align-items: center; gap: 0;
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    background: var(--panel); overflow: hidden;
+  }
+  .stepper label {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    letter-spacing: 0.5px; padding: 0 8px; white-space: nowrap;
+  }
+  .stepper button {
+    background: var(--panel-2); border: none; color: var(--ink-dim);
+    width: 26px; height: 30px; cursor: pointer; font-size: 16px; line-height: 1;
+  }
+  .stepper button:hover { color: var(--accent); }
+  .stepper input {
+    width: 38px; text-align: center; background: var(--panel); border: none;
+    color: var(--ink); font-family: var(--mono); font-size: 13px; height: 30px;
+    border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+  }
+  .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .stepper input { -moz-appearance: textfield; }
+  .send-btn {
+    background: var(--accent-bg); border: 1px solid var(--accent-dim); color: var(--accent);
+    border-radius: var(--radius-sm); padding: 10px 14px; cursor: pointer;
+    font-weight: 700; font-size: 14px; letter-spacing: 0.3px;
+    transition: background .15s ease;
+  }
+  .send-btn:hover:not(:disabled) { background: rgba(52,211,153,0.14); }
+  .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .busy-hint {
+    font-family: var(--mono); font-size: 10.5px; color: var(--amber);
+    margin-top: 9px; display: none;
+  }
+  .busy-hint.show { display: block; }
+
+  /* ---------- RIGHT: live internals ---------- */
+  .internals-col {
+    position: sticky; top: 18px;
+    display: flex; flex-direction: column; gap: 14px;
+    max-height: calc(100vh - 36px);
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 15px 16px;
+  }
+  .panel.is-star { border-color: var(--border-2); }
+
+  /* trust strip */
+  .trust-strip .ts-flow {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11px;
+  }
+  .trust-strip .ts-node {
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 4px 8px; color: var(--ink-dim);
+    white-space: nowrap;
+  }
+  .trust-strip .ts-node b { color: var(--ink); font-weight: 650; }
+  .trust-strip .ts-node .hash { color: var(--accent); cursor: help; border-bottom: 1px dotted var(--accent-dim); }
+  .trust-strip .ts-node.is-output { border-color: var(--accent-dim); background: var(--accent-bg); color: var(--accent); }
+  .trust-strip .ts-arr { color: var(--accent); font-weight: 700; }
+  .trust-strip .ts-corrob {
+    margin-top: 10px; font-size: 11px; color: var(--ink-faint);
+    border-top: 1px solid var(--border); padding-top: 9px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .trust-strip .ts-corrob .ic { color: var(--accent); }
+  .trust-strip .ts-corrob .hash { color: var(--accent); cursor: help; border-bottom: 1px dotted var(--accent-dim); font-family: var(--mono); }
+  .trust-strip .ts-link { margin-top: 9px; font-size: 11.5px; }
+
+  /* device chip panel */
+  .device-panel .dev-chip {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    font-family: var(--mono); font-size: 12px;
+  }
+  .device-panel .dev-chip .seg {
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 4px 9px; color: var(--ink-dim);
+  }
+  .device-panel .dev-chip .seg b { color: var(--ink); font-weight: 650; }
+  .device-panel .dev-chip .seg.accent { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .device-panel .dev-note { font-size: 11px; color: var(--ink-faint); margin-top: 9px; }
+
+  /* tokenizer panel */
+  .tok-panel .tok-meta {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-bottom: 10px;
+    display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  }
+  .tok-panel .tok-meta .ctx { color: var(--accent); }
+  .tok-panel .tok-chips { display: flex; flex-wrap: wrap; gap: 5px; max-height: 132px; overflow-y: auto; }
+  .tok-chip {
+    display: inline-flex; flex-direction: column; align-items: center;
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 3px 7px 4px; min-width: 30px;
+  }
+  .tok-chip .piece { font-family: var(--mono); font-size: 12px; color: var(--ink); white-space: pre; }
+  .tok-chip .id { font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-top: 1px; }
+  .tok-chip.is-gen { border-color: var(--accent-dim); background: var(--accent-bg); }
+  .tok-chip.is-gen .piece { color: var(--accent); }
+  .tok-empty { font-size: 12px; color: var(--ink-faint); font-style: italic; }
+
+  /* layer ladder — the centerpiece */
+  .ladder-panel .ladder-meta {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 11px;
+  }
+  .ladder-panel .ladder-meta .big {
+    font-family: var(--mono); font-size: 20px; font-weight: 650; color: var(--accent); letter-spacing: -0.3px;
+  }
+  .ladder-panel .ladder-meta .big.is-idle { color: var(--ink-faint); }
+  .ladder-panel .ladder-meta .lbl { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .ladder-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 4px;
+  }
+  .rung {
+    height: 16px; border-radius: 3px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    transition: background .12s ease, border-color .12s ease, box-shadow .12s ease;
+  }
+  .rung.done { background: var(--accent-dim); border-color: var(--accent-dim); }
+  .rung.current {
+    background: var(--accent); border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(52,211,153,0.6);
+    animation: rungPulse 0.9s ease-in-out infinite;
+  }
+  @keyframes rungPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .ladder-spark {
+    margin-top: 11px; display: flex; align-items: flex-end; gap: 2px; height: 30px;
+    border-top: 1px solid var(--border); padding-top: 8px;
+  }
+  .ladder-spark .bar {
+    flex: 1; background: var(--accent-dim); border-radius: 1px 1px 0 0; min-height: 2px;
+    transition: height .1s ease;
+  }
+  .ladder-spark-lbl { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-top: 6px; }
+
+  /* kernel ticker */
+  .kernel-panel .kt-feed {
+    font-family: var(--mono); font-size: 11.5px;
+    height: 122px; overflow-y: auto;
+    display: flex; flex-direction: column-reverse; gap: 3px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+  }
+  .kt-line { color: var(--ink-dim); white-space: nowrap; }
+  .kt-line .lyr { color: var(--ink-faint); }
+  .kt-line .lab { color: var(--ink); }
+  .kt-line .arr { color: var(--accent); }
+  .kt-line .kfn { color: var(--accent); }
+  .kt-line.is-head { color: var(--amber); }
+  .kt-line.is-head .kfn { color: var(--amber); }
+  .kt-feed-empty { color: var(--ink-faint); font-style: italic; }
+  .kt-legend { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+  .kt-kernel {
+    font-family: var(--mono); font-size: 10px;
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 5px; padding: 2px 7px; color: var(--ink-faint);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .kt-kernel .nm { color: var(--ink-dim); }
+  .kt-kernel .ct {
+    color: var(--accent); font-weight: 700; min-width: 14px; text-align: right;
+  }
+  .kt-kernel.fired .nm { color: var(--ink); }
+
+  /* token & throughput */
+  .stream-panel .gauges {
+    display: flex; gap: 10px; margin-bottom: 11px;
+  }
+  .stream-panel .gauge {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 9px 11px;
+  }
+  .stream-panel .gauge .gv { font-family: var(--mono); font-size: 18px; font-weight: 650; color: var(--accent); letter-spacing: -0.3px; }
+  .stream-panel .gauge .gv.is-idle { color: var(--ink-faint); }
+  .stream-panel .gauge .gl { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); letter-spacing: 0.4px; }
+  .stream-tokens {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+    max-height: 90px; overflow-y: auto; color: var(--ink-dim);
+  }
+  .stream-tokens .stk { white-space: nowrap; }
+  .stream-tokens .stk .piece { color: var(--ink); }
+  .stream-tokens .stk .lg { color: var(--ink-faint); }
+  .stream-tokens-empty { color: var(--ink-faint); font-style: italic; }
+
+  /* forward progress */
+  .progress-panel .pp-meta {
+    display: flex; justify-content: space-between; gap: 10px;
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 9px;
+  }
+  .progress-panel .pp-meta .accent { color: var(--accent); }
+  .pbar { height: 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
+  .pbar .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); transition: width .15s ease; }
+
+  /* run summary */
+  .summary-panel .sum-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 11px;
+  }
+  .summary-panel .sum-item {
+    background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 6px; padding: 8px 10px;
+  }
+  .summary-panel .sum-item .sv { font-family: var(--mono); font-size: 15px; font-weight: 650; color: var(--ink); }
+  .summary-panel .sum-item .sv.ok { color: var(--accent); }
+  .summary-panel .sum-item .sl { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .summary-panel .sum-empty { font-size: 12px; color: var(--ink-faint); font-style: italic; }
+  .summary-panel .sum-mock {
+    margin-top: 2px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    padding: 2px 8px; border-radius: 5px; display: inline-block;
+  }
+  .summary-panel .sum-verify {
+    margin-top: 11px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    border-top: 1px solid var(--border); padding-top: 11px;
+  }
+  .summary-panel .sv-btn {
+    background: none; border: 1px solid var(--border-2); color: var(--ink-dim);
+    border-radius: 7px; cursor: pointer; font-family: var(--mono); font-size: 11px; padding: 5px 11px;
+  }
+  .summary-panel .sv-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-dim); }
+  .summary-panel .sv-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .summary-panel .sv-note { font-size: 11px; color: var(--ink-faint); }
+  .summary-panel .sv-note a { font-size: 11px; }
+
+  /* ---------- honest residuals footer ---------- */
+  .residuals-foot {
+    margin-top: 26px; padding-top: 18px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    font-size: 12.5px; color: var(--ink-faint);
+  }
+  .residuals-foot .rf-text { color: var(--ink-dim); max-width: 70ch; }
+  .residuals-foot .rf-text b { color: var(--ink); font-weight: 650; }
+  .residuals-foot .rf-text .res { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .residuals-foot .rf-link a { font-weight: 600; }
+
+  /* ---------- mobile drawer toggle (hidden on desktop) ---------- */
+  .drawer-toggle { display: none; }
+
+  /* ---------- responsive: < 980px collapses to one column ---------- */
+  @media (max-width: 980px) {
+    .wrap { padding: 18px 16px 40px; }
+    .shell { grid-template-columns: 1fr; }
+    .conv-col { max-height: none; min-height: 460px; }
+    .internals-col {
+      position: fixed; top: 0; right: 0; bottom: 0;
+      width: min(420px, 92vw);
+      background: var(--bg-2);
+      border-left: 1px solid var(--border-2);
+      box-shadow: -12px 0 40px rgba(0,0,0,0.5);
+      padding: 56px 16px 20px;
+      max-height: none; z-index: 40;
+      transform: translateX(100%);
+      transition: transform .25s ease;
+    }
+    .internals-col.open { transform: translateX(0); }
+    .drawer-toggle {
+      display: inline-flex; align-items: center; gap: 8px;
+      position: fixed; right: 16px; bottom: 16px; z-index: 50;
+      background: var(--accent-bg); border: 1px solid var(--accent-dim); color: var(--accent);
+      border-radius: 999px; padding: 11px 17px; cursor: pointer;
+      font-weight: 700; font-size: 13px; font-family: var(--sans);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    }
+    .drawer-close {
+      position: absolute; top: 14px; right: 14px;
+      background: none; border: 1px solid var(--border-2); color: var(--ink-dim);
+      border-radius: 7px; cursor: pointer; font-size: 13px; padding: 5px 11px;
+    }
+  }
+  @media (min-width: 981px) { .drawer-close { display: none; } }
+
+  /* compact ladder readout for very small screens (still real, idx/48) */
+  @media (max-width: 420px) {
+    .ladder-grid { grid-template-columns: repeat(8, 1fr); }
+  }
+
+  /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    .status-badge .dot { animation: none; }
+    .rung.current { animation: none; }
+    .turn.model .bubble .caret { animation: none; }
+    .transcript { scroll-behavior: auto; }
+    .internals-col { transition: none; }
+    /* Data still updates (token/layer state is data); only decorative motion is disabled. */
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+
+    <!-- ============================================================
+         PREVIEW / MOCK banner. Visible ONLY while on mock telemetry.
+         Toggled by setSourceState() based on the active telemetry
+         source. Cannot be mistaken for a real run.
+         ============================================================ -->
+    <div class="preview-banner" id="previewBanner" role="alert">
+      <span class="pb-tag">PREVIEW · MOCK TELEMETRY</span>
+      <span class="pb-text">
+        <b>Simulated internals for layout preview — not a real GPT-2 run.</b>
+        The live verified backend (C HTTP+SSE worker on an RTX 3070) is pending. Layer sweeps,
+        kernel names and the per-layer op order are structurally faithful; only the numbers are mock.
+      </span>
+      <button class="pb-x" id="previewDismiss" title="Hide this banner (PREVIEW state stays in the badge)">dismiss</button>
+    </div>
+
+    <!-- ============================================================
+         TOP BAR — reused .topbar / .brand / .wordmark / glyph / badge
+         ============================================================ -->
+    <div class="topbar">
+      <div class="brand">
+        <span class="wordmark">
+          <svg class="helix-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
+                  stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="6" cy="3" r="1.3" fill="#34d399"/><circle cx="18" cy="3" r="1.3" fill="#34d399"/>
+            <circle cx="6" cy="21" r="1.3" fill="#34d399"/><circle cx="18" cy="21" r="1.3" fill="#34d399"/>
+          </svg>
+          Helix
+          <span class="x">×</span>
+          <span class="gpt">GPT-2</span>
+        </span>
+        <span class="sub-pill">COMPLETION PLAYGROUND</span>
+        <span class="model-tag"><b>GPT-2-XL</b> · 1.5B · 2019 base model · not an assistant</span>
+      </div>
+      <div class="topbar-right">
+        <div id="connBadge" class="status-badge is-preview" role="status" aria-live="polite">
+          <span class="dot" aria-hidden="true"></span>
+          <span id="connText">PREVIEW · MOCK TELEMETRY (no GPU connected)</span>
+        </div>
+        <a class="nav-link" href="dashboard.html">Proof &amp; attestation <span class="arr">&rarr;</span></a>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         HERO STRIP (compact) — the hero is verified compute.
+         ============================================================ -->
+    <header class="hero-strip">
+      <h1>Watch a 1.5-billion-parameter model think on a stack you can <span class="em">rebuild from 299 bytes</span>.</h1>
+      <p class="frame">
+        <b>GPT-2-XL is a 2019 base completion model.</b> It continues text; it is not tuned to chat,
+        follow instructions, or be factual. The live thing being proven here is the verified compute
+        underneath — every layer and kernel comes from the from-raw Helix toolchain.
+      </p>
+    </header>
+
+    <!-- ============================================================
+         TWO-COLUMN APP SHELL
+         ============================================================ -->
+    <div class="shell">
+
+      <!-- ===================== LEFT: conversation ===================== -->
+      <section class="conv-col" aria-label="Completion playground conversation">
+        <div class="conv-head">
+          <span class="ch-title">Conversation — text completion</span>
+          <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
+        </div>
+
+        <div class="transcript" id="transcript" aria-live="polite">
+          <div class="transcript-empty" id="transcriptEmpty">
+            <div class="te-glyph" aria-hidden="true">⌨</div>
+            <div class="te-title">Give GPT-2 some text to continue</div>
+            <div class="te-sub">
+              Pick a seed below or type your own. GPT-2-XL will continue it token-by-token while the
+              48 transformer layers and kovc kernels light up on the right. It is a base model — expect
+              continuations, not answers.
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="seed-row" id="seedRow" aria-label="Example completion seeds">
+            <button class="seed-chip" type="button">The capital of France is</button>
+            <button class="seed-chip" type="button">In the beginning</button>
+            <button class="seed-chip" type="button">The three laws of robotics are</button>
+            <button class="seed-chip" type="button">Once upon a time</button>
+          </div>
+          <div class="composer-row">
+            <textarea id="promptInput" rows="2"
+              placeholder="Give GPT-2 some text to continue…  (e.g. &quot;The capital of France is&quot;)"
+              aria-label="Text for GPT-2 to continue"></textarea>
+            <div class="composer-ctl">
+              <div class="stepper" title="Number of new tokens to generate">
+                <label for="nGen">n_tokens</label>
+                <button type="button" id="nGenDown" aria-label="fewer tokens">−</button>
+                <input id="nGen" type="number" value="20" min="1" max="256" aria-label="number of tokens" />
+                <button type="button" id="nGenUp" aria-label="more tokens">+</button>
+              </div>
+              <button class="send-btn" id="sendBtn" type="button">Continue</button>
+            </div>
+          </div>
+          <div class="busy-hint" id="busyHint">GPU busy — one generation at a time (single-flight, matching the strictly-serial GPU).</div>
+        </div>
+      </section>
+
+      <!-- ===================== RIGHT: live internals ===================== -->
+      <button class="drawer-toggle" id="drawerToggle" type="button" aria-expanded="false">
+        <span aria-hidden="true">📊</span> Live internals
+      </button>
+      <aside class="internals-col" id="internalsCol" aria-label="Live Helix internals">
+        <button class="drawer-close" id="drawerClose" type="button">close ✕</button>
+
+        <!-- trust strip -->
+        <div class="panel trust-strip" id="trustStrip">
+          <h3 class="panel-head">Verified stack</h3>
+          <div class="ts-flow" id="tsFlow"></div>
+          <div class="ts-corrob" id="tsCorrob"></div>
+          <div class="ts-link"><a href="dashboard.html">Full trust chain &rarr;</a></div>
+        </div>
+
+        <!-- device / precision -->
+        <div class="panel device-panel" id="devicePanel">
+          <h3 class="panel-head">Where it runs</h3>
+          <div class="dev-chip" id="devChip"></div>
+          <div class="dev-note" id="devNote">Hand-auditable to PTX; ptxas / driver trusted-once. Forward-only.</div>
+        </div>
+
+        <!-- tokenizer -->
+        <div class="panel tok-panel" id="tokPanel">
+          <h3 class="panel-head">Prompt &rarr; tokens <span class="count is-idle" id="tokCount">idle</span></h3>
+          <div class="tok-meta">
+            <span>Python-free C tokenizer (gpt2_tok)</span>
+            <span class="ctx" id="ctxLen">T = 0</span>
+          </div>
+          <div class="tok-chips" id="tokChips"><span class="tok-empty">awaiting a prompt…</span></div>
+        </div>
+
+        <!-- layer ladder — centerpiece -->
+        <div class="panel is-star ladder-panel" id="ladderPanel">
+          <h3 class="panel-head">48 transformer layers</h3>
+          <div class="ladder-meta">
+            <span><span class="big is-idle" id="ladderBig">—</span> <span class="lbl">/ <span id="ladderTotal">48</span></span></span>
+            <span class="lbl" id="ladderStep"></span>
+          </div>
+          <div class="ladder-grid" id="ladderGrid"></div>
+          <div class="ladder-spark" id="ladderSpark"></div>
+          <div class="ladder-spark-lbl">per-layer ms (real CUDA-event timing when live; mock here)</div>
+        </div>
+
+        <!-- kernel ticker -->
+        <div class="panel kernel-panel" id="kernelPanel">
+          <h3 class="panel-head">kovc-emitted kernels firing</h3>
+          <div class="kt-feed" id="ktFeed"><span class="kt-feed-empty">no kernels launched yet</span></div>
+          <div class="kt-legend" id="ktLegend"></div>
+        </div>
+
+        <!-- token & throughput -->
+        <div class="panel stream-panel" id="streamPanel">
+          <h3 class="panel-head">Tokens &amp; throughput</h3>
+          <div class="gauges">
+            <div class="gauge"><div class="gv is-idle" id="gaugeToks">0</div><div class="gl">tokens</div></div>
+            <div class="gauge"><div class="gv is-idle" id="gaugeTps">—</div><div class="gl">tok/s</div></div>
+            <div class="gauge"><div class="gv is-idle" id="gaugeSecs">0.0</div><div class="gl">seconds</div></div>
+          </div>
+          <div class="stream-tokens" id="streamTokens"><span class="stream-tokens-empty">tokens (id · piece · logit) stream here…</span></div>
+        </div>
+
+        <!-- forward progress -->
+        <div class="panel progress-panel" id="progressPanel">
+          <h3 class="panel-head">This reply</h3>
+          <div class="pp-meta">
+            <span>token step <span class="accent" id="ppStep">0</span> / <span id="ppNgen">0</span></span>
+            <span>layer-passes <span class="accent" id="ppPasses">0</span> / <span id="ppTotalPasses">0</span></span>
+          </div>
+          <div class="pbar"><div class="fill" id="ppFill"></div></div>
+        </div>
+
+        <!-- run summary -->
+        <div class="panel summary-panel" id="summaryPanel">
+          <h3 class="panel-head">Run summary</h3>
+          <div id="sumBody"><div class="sum-empty">runs once a completion finishes…</div></div>
+        </div>
+
+      </aside>
+    </div>
+
+    <!-- ============================================================
+         HONEST RESIDUALS footer — points to page 2 for the full list.
+         ============================================================ -->
+    <div class="residuals-foot">
+      <div class="rf-text">
+        <b>Honest residuals:</b>
+        <span class="res">fp32-only</span> ·
+        <span class="res">complete-to-PTX-not-SASS</span> ·
+        <span class="res">single GPU (sm_86)</span> ·
+        <span class="res">base-model-not-assistant</span> ·
+        <span class="res">oracle-shares-spec</span> ·
+        <span class="res">never-claimed-AGI</span>.
+        This is a demonstration of verifiable execution — not a claim of model quality, speed records,
+        or full-GPU verification. No live parity verdict appears in this chat.
+      </div>
+      <div class="rf-link"><a href="dashboard.html">Full residuals &amp; the real numbers &rarr;</a></div>
+    </div>
+  </main>
+
+<script>
+"use strict";
+/* ================================================================
+   GPT-2-XL x Helix — Completion Playground front-end logic.
+   Vanilla JS, no framework, no deps. Passes `node --check`.
+
+   ARCHITECTURE
+   ------------
+   - ONE flag decides the data source: USE_LIVE_BACKEND (below).
+   - Both sources expose the SAME interface:
+         startGeneration(prompt, nGen, handlers) -> returns a {cancel()} handle
+     where handlers = {onHello,onTokenize,onForwardBegin,onEmbed,
+       onLayerBegin,onOp,onLayerEnd,onHead,onToken,onDone,onError}.
+   - The render layer subscribes once and does not know or care which
+     source is live. Swapping sources = swapping which factory builds
+     the stream. To go live: flip USE_LIVE_BACKEND to true (the real
+     SSE source is stubbed below and ready to wire to POST /api/generate).
+   ================================================================ */
+
+/* =====================  THE ONE FLAG TO FLIP  ===================== */
+/* false = MOCK telemetry (standalone, offline, no GPU/Python/backend).
+   true  = real SSE backend (POST /api/generate, streamed events).
+   Also overridable at load time with ?source=mock | ?source=sse.      */
+var USE_LIVE_BACKEND = false;
+/* ================================================================= */
+
+/* Query-param + global override so reviewers can force a source without
+   editing the file:  index.html?source=sse   or   ?source=mock        */
+(function resolveSource() {
+  try {
+    var qs = new URLSearchParams(window.location.search);
+    var q = qs.get("source");
+    if (q === "sse") USE_LIVE_BACKEND = true;
+    else if (q === "mock") USE_LIVE_BACKEND = false;
+    if (typeof window.__HELIX_FORCE_SOURCE === "string") {
+      USE_LIVE_BACKEND = (window.__HELIX_FORCE_SOURCE === "sse");
+    }
+  } catch (e) { /* file:// without URLSearchParams support — stay on default */ }
+})();
+
+/* TELEMETRY_SOURCE is the human-readable name of the active source. */
+var TELEMETRY_SOURCE = USE_LIVE_BACKEND ? "sse" : "mock";
+
+/* ================================================================
+   STATIC TRUST / DEVICE CONSTANTS
+   These mirror the values the real 'hello' event carries and the
+   constants demo/dashboard.html's EMBEDDED_REPORT.trust_chain uses,
+   so page 1 and page 2 agree. In live mode the 'hello' event
+   overrides the dynamic ones (device, ptx_bytes, kernels, hashes).
+   ================================================================ */
+var RUNBOOK = {
+  schema_version: 1,
+  model: "gpt2-xl",
+  params: "1.5B",
+  n_layer: 48,
+  n_head: 25,
+  d_model: 1600,
+  d_ff: 6400,
+  n_vocab: 50257,
+  device: "RTX 3070",
+  sm: "sm_86",
+  precision: "fp32",
+  build: "forward-only",
+  seed_sha: "9837db12752a22159ca75a533910bc0d7b9afb35df9b9963f256b7b1b915c9bb",
+  fixpoint_sha: "0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f",
+  gcc_ddc_sha: "84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba",
+  ptx_bytes: null,   /* unknown on mock -- the live backend fills the real minted-PTX byte length; never invent a number next to the verified anchors */
+  /* the literal cuModuleGetFunction names — the 8 real kovc kernels */
+  kernels: [
+    "tiled_matmul",
+    "tiled_matmul_abt",
+    "gpu_layernorm_fwd_eps",
+    "gpu_softmax_causal",
+    "gpu_add_bias_rowbcast",
+    "gpu_gelu_stable",
+    "vector_add",
+    "gpu_scale_rt"
+  ]
+};
+
+/* ================================================================
+   tiny DOM helpers (no framework) — same spirit as dashboard.html
+   ================================================================ */
+function $(id) { return document.getElementById(id); }
+function el(tag, attrs, children) {
+  var n = document.createElement(tag);
+  if (attrs) for (var k in attrs) {
+    if (k === "html") n.innerHTML = attrs[k];
+    else if (k === "class") n.className = attrs[k];
+    else n.setAttribute(k, attrs[k]);
+  }
+  if (children != null) (Array.isArray(children) ? children : [children]).forEach(function (c) {
+    if (c == null) return;
+    n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  });
+  return n;
+}
+function shortHash(h) {
+  if (!h || typeof h !== "string") return "";
+  return h.length <= 12 ? h : h.slice(0, 8) + "…";
+}
+/* Render GPT-2 'Ġ' leading-space marker as a visible middot-space for chips,
+   but keep real spaces in the streamed text. */
+function pieceForChip(s) {
+  if (s == null) return "";
+  return s.replace(/^ /, "·").replace(/\n/g, "⏎");
+}
+
+/* ================================================================
+   MOCK TELEMETRY GENERATOR
+   ----------------------------------------------------------------
+   A SINGLE, clearly-named, isolated object. It emits the EXACT same
+   event names/shapes as the real backend, on realistic timers, so the
+   whole page is demoable with zero backend / GPU / Python.
+
+   HONESTY: the 8 kernel names and the per-layer op order below are
+   copied from gpt2_infer's real forward_layer_gpt2 sequence, so the
+   mock is STRUCTURALLY faithful — only the numbers (ms, logits,
+   seconds, tok/s) are fabricated. While TELEMETRY_SOURCE !== 'sse'
+   the UI is forced into the unmistakable PREVIEW state, so this mock
+   can never render as a real run.
+   ================================================================ */
+var MockTelemetryGenerator = (function () {
+
+  /* Real per-layer op order from forward_layer_gpt2 (12 per-head launches
+     COLLAPSED into 3 aggregate attention ops, per the design contract). */
+  var LAYER_OPS = [
+    { label: "ln_1",            kernel: "gpu_layernorm_fwd_eps", phase: "attn" },
+    { label: "qkv_gemm",        kernel: "tiled_matmul",          phase: "attn" },
+    { label: "qkv_bias",        kernel: "gpu_add_bias_rowbcast", phase: "attn" },
+    { label: "attn_scores",     kernel: "tiled_matmul_abt",      phase: "attn" }, /* collapsed head loop */
+    { label: "attn_scale",      kernel: "gpu_scale_rt",          phase: "attn" },
+    { label: "attn_softmax",    kernel: "gpu_softmax_causal",    phase: "attn" }, /* collapsed head loop */
+    { label: "attn_av",         kernel: "tiled_matmul",          phase: "attn" }, /* collapsed head loop */
+    { label: "attn_proj_gemm",  kernel: "tiled_matmul",          phase: "attn" },
+    { label: "attn_proj_bias",  kernel: "gpu_add_bias_rowbcast", phase: "attn" },
+    { label: "attn_residual",   kernel: "vector_add",            phase: "attn" },
+    { label: "ln_2",            kernel: "gpu_layernorm_fwd_eps", phase: "mlp"  },
+    { label: "fc_gemm",         kernel: "tiled_matmul",          phase: "mlp"  },
+    { label: "fc_bias",         kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
+    { label: "gelu",            kernel: "gpu_gelu_stable",       phase: "mlp"  },
+    { label: "proj2_gemm",      kernel: "tiled_matmul",          phase: "mlp"  },
+    { label: "proj2_bias",      kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
+    { label: "mlp_residual",    kernel: "vector_add",            phase: "mlp"  }
+  ];
+
+  /* A tiny shipped id map so the example seeds show plausible REAL-style ids.
+     For the pinned 'The capital of France is' the contract's real ids are
+     464 3139 286 4881 318. Other seeds get a deterministic pseudo-id. */
+  var SEED_TABLE = {
+    "The capital of France is": {
+      ids:     [464, 3139, 286, 4881, 318],
+      pieces:  ["The", " capital", " of", " France", " is"]
+    }
+  };
+
+  /* Canned continuations (mock text only). The capital-of-France seed uses
+     the runbook XL sentence so the mock mirrors the documented real output. */
+  var CONTINUATIONS = {
+    "The capital of France is":
+      " the city of Paris. It is the capital of France and the largest city in France. It is",
+    "In the beginning":
+      " there was the Word, and the Word was with God, and the Word was God. The same was in",
+    "The three laws of robotics are":
+      " as follows: A robot may not injure a human being or, through inaction, allow a human being to come",
+    "Once upon a time":
+      " there was a little girl who lived in a small village near the forest. She was very kind and"
+  };
+  var DEFAULT_CONT =
+    " the same as it was before, and the world continued on its way, much as it had always done, and";
+
+  /* crude byte-piece tokenizer for arbitrary prompts (mock-only). Splits on
+     whitespace, prefixes a 'Ġ'-style leading space like GPT-2 BPE display. */
+  function mockTokenize(prompt) {
+    var ids = [], pieces = [];
+    var parts = prompt.match(/\s*\S+/g) || [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      pieces.push(p);
+      /* deterministic pseudo-id from the chars, kept in GPT-2 vocab range */
+      var h = 0;
+      for (var c = 0; c < p.length; c++) h = (h * 131 + p.charCodeAt(c)) % 50257;
+      ids.push(h);
+    }
+    if (ids.length === 0) { ids = [464]; pieces = ["The"]; }
+    return { ids: ids, pieces: pieces };
+  }
+
+  function splitContinuation(text) {
+    /* split a canned continuation into GPT-2-ish token pieces */
+    return text.match(/\s*\S+|\s+/g) || [text];
+  }
+
+  /* deterministic-ish mock logit so the number looks real but is clearly mock */
+  function mockLogit(i) { return +(112 + 18 * Math.sin(i * 1.7) + (i % 3) * 1.3).toFixed(2); }
+  function mockMs()      { return +(2.0 + Math.random() * 5.5).toFixed(2); }
+
+  function start(prompt, nGen, h) {
+    var cancelled = false;
+    var timers = [];
+    function after(ms, fn) {
+      var t = setTimeout(function () { if (!cancelled) fn(); }, ms);
+      timers.push(t);
+      return t;
+    }
+    function cancel() { cancelled = true; timers.forEach(clearTimeout); }
+
+    var seq = 0;
+    function S() { return ++seq; }
+
+    var N_LAYERS = RUNBOOK.n_layer;
+
+    /* resolve tokens for the prompt */
+    var tok = SEED_TABLE[prompt.trim()];
+    var promptIds, promptPieces;
+    if (tok) { promptIds = tok.ids.slice(); promptPieces = tok.pieces.slice(); }
+    else { var mt = mockTokenize(prompt); promptIds = mt.ids; promptPieces = mt.pieces; }
+    var T0 = promptIds.length;
+    var sPad = Math.ceil((T0 + 1) / 64) * 64;
+
+    /* resolve continuation text -> generated pieces */
+    var contText = CONTINUATIONS[prompt.trim()] || DEFAULT_CONT;
+    var contPieces = splitContinuation(contText).filter(function (s) { return s.length; });
+
+    var t0 = performance.now();
+
+    /* --- hello (once) --- */
+    after(40, function () {
+      h.onHello && h.onHello({
+        seq: S(), schema_version: RUNBOOK.schema_version, model: RUNBOOK.model,
+        params: RUNBOOK.params, n_layer: RUNBOOK.n_layer, n_head: RUNBOOK.n_head,
+        d_model: RUNBOOK.d_model, d_ff: RUNBOOK.d_ff, n_vocab: RUNBOOK.n_vocab,
+        device: RUNBOOK.device, sm: RUNBOOK.sm, precision: RUNBOOK.precision,
+        seed_sha: RUNBOOK.seed_sha, fixpoint_sha: RUNBOOK.fixpoint_sha,
+        ptx_bytes: RUNBOOK.ptx_bytes, kernels: RUNBOOK.kernels.slice(),
+        build: RUNBOOK.build, mode: "serve"
+      });
+    });
+
+    /* --- tokenize (once) --- */
+    after(220, function () {
+      h.onTokenize && h.onTokenize({
+        seq: S(), ids: promptIds.slice(), strings: promptPieces.slice(),
+        n_prompt: T0, s_pad: sPad
+      });
+    });
+
+    /* schedule the generation loop.
+       REAL wall-clock budget is BOUNDED so a mock run feels like tens of
+       seconds without being absurd, regardless of n_gen: we target a total
+       real timeline of ~min(3 + n*0.5, 16) s and divide it across the nested
+       step×layer×op loops. The visible heartbeat is the layer sweep (ops
+       batch on rAF and don't need real spacing). The 'mock seconds' REPORTED
+       in token/done is a separate, honest XL-style number (~1.3 s/token). */
+    var contextLen = T0;
+    var genCount = Math.max(1, Math.min(nGen, contPieces.length, 256));
+
+    var clock = 420;                                   /* ms cursor into the real mock timeline */
+    var REAL_BUDGET_MS = Math.min(3000 + genCount * 500, 16000); /* total real wall time */
+    var perStep = REAL_BUDGET_MS / genCount;
+    var perLayer = (perStep * 0.86) / N_LAYERS;        /* most of a step is the 48-layer sweep */
+    var STEP_GAP = Math.max(0.4, (perLayer * 0.7) / LAYER_OPS.length); /* ms between op emits */
+    var LAYER_GAP = Math.max(1, perLayer * 0.15);      /* ms padding at each layer boundary */
+
+    /* Honest MOCK throughput shown to the user (NOT the real timeline):
+       a plausible XL-on-3070 cadence in the seconds-to-tens-of-seconds band. */
+    var MOCK_SECONDS = +(genCount * 1.3 + 0.8).toFixed(1);
+    var mockTokSeconds = function (k) { return +((k / genCount) * MOCK_SECONDS).toFixed(1); };
+
+    for (var step = 0; step < genCount; step++) {
+      (function (step) {
+        var stepCtx = contextLen + step; /* T grows by 1 each generated token */
+
+        after(clock, function () {
+          h.onForwardBegin && h.onForwardBegin({
+            seq: S(), step: step, context_len: stepCtx,
+            s_pad: Math.ceil((stepCtx + 1) / 64) * 64, n_layers: N_LAYERS
+          });
+        });
+        clock += 30;
+        after(clock, function () {
+          h.onEmbed && h.onEmbed({ seq: S(), step: step, t: stepCtx, d_model: RUNBOOK.d_model });
+        });
+        clock += 24;
+
+        for (var L = 0; L < N_LAYERS; L++) {
+          (function (L) {
+            after(clock, function () {
+              h.onLayerBegin && h.onLayerBegin({ seq: S(), step: step, idx: L, total: N_LAYERS });
+            });
+            clock += LAYER_GAP;
+            var opCount = 0;
+            for (var o = 0; o < LAYER_OPS.length; o++) {
+              (function (o) {
+                var op = LAYER_OPS[o];
+                after(clock, function () {
+                  h.onOp && h.onOp({
+                    seq: S(), step: step, layer: L, seq_in_layer: o,
+                    kernel: op.kernel, phase: op.phase, label: op.label
+                  });
+                });
+                clock += STEP_GAP;
+              })(o);
+              opCount++;
+            }
+            after(clock, function () {
+              h.onLayerEnd && h.onLayerEnd({ seq: S(), step: step, idx: L, ms: mockMs(), ops: opCount });
+            });
+            clock += LAYER_GAP;
+          })(L);
+        }
+
+        /* head x2: ln_f then lm_head */
+        after(clock, function () {
+          h.onHead && h.onHead({ seq: S(), step: step, label: "ln_f", kernel: "gpu_layernorm_fwd_eps" });
+        });
+        clock += 18;
+        after(clock, function () {
+          h.onHead && h.onHead({ seq: S(), step: step, label: "lm_head", kernel: "tiled_matmul_abt" });
+        });
+        clock += 18;
+
+        /* token */
+        after(clock, function () {
+          var piece = contPieces[step] != null ? contPieces[step] : "";
+          var h2 = 0;
+          for (var c = 0; c < piece.length; c++) h2 = (h2 * 131 + piece.charCodeAt(c)) % 50257;
+          h.onToken && h.onToken({
+            seq: S(), step: step, id: (piece === " the" || /\bParis/.test(piece)) ? 262 : h2,
+            string: piece, logit: mockLogit(step), context_len: stepCtx + 1,
+            _mock_elapsed: mockTokSeconds(step + 1) /* mock-only: honest XL-style elapsed for the gauge */
+          });
+        });
+        clock += 40;
+      })(step);
+    }
+
+    /* --- done --- */
+    after(clock + 60, function () {
+      /* seconds/tok_per_s are the honest MOCK XL-style numbers, NOT the
+         compressed real timeline. They match the per-token gauge basis. */
+      var gen_ids = contPieces.slice(0, genCount).map(function (p) {
+        var hh = 0; for (var c = 0; c < p.length; c++) hh = (hh * 131 + p.charCodeAt(c)) % 50257; return hh;
+      });
+      var fullText = contPieces.slice(0, genCount).join("");
+      h.onDone && h.onDone({
+        seq: S(), n_prompt: T0, n_gen: genCount, n_total: T0 + genCount,
+        seconds: MOCK_SECONDS, tok_per_s: +(genCount / MOCK_SECONDS).toFixed(2),
+        text: fullText, gen_ids: gen_ids, nonfinite: 0
+      });
+    });
+
+    return { cancel: cancel };
+  }
+
+  return { start: start, isMock: true };
+})();
+
+/* ================================================================
+   LIVE SSE SOURCE  (stub — ready to wire when USE_LIVE_BACKEND=true)
+   ----------------------------------------------------------------
+   Same start(prompt,nGen,handlers) interface as the mock. Uses
+   fetch + ReadableStream because EventSource is GET-only and the
+   real endpoint is POST /api/generate with an SSE body. It parses
+   each 'event:'/'data:' frame and dispatches to the matching handler.
+   The render layer is identical for both sources.
+   ================================================================ */
+var LiveSSESource = (function () {
+  var EVENT_TO_HANDLER = {
+    hello: "onHello", tokenize: "onTokenize", forward_begin: "onForwardBegin",
+    embed: "onEmbed", layer_begin: "onLayerBegin", op: "onOp",
+    layer_end: "onLayerEnd", head: "onHead", token: "onToken",
+    done: "onDone", error: "onError"
+  };
+
+  function start(prompt, nGen, h) {
+    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var cancelled = false;
+
+    var body = JSON.stringify({
+      prompt: prompt,
+      n_gen: Math.max(1, Math.min(nGen | 0, 256)),
+      request_id: (typeof crypto !== "undefined" && crypto.randomUUID)
+        ? crypto.randomUUID() : ("req-" + Date.now())
+    });
+
+    fetch("/api/generate?detail=op", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      body: body,
+      signal: controller ? controller.signal : undefined
+    }).then(function (res) {
+      if (res.status === 409) { h.onError && h.onError({ where: "driver", message: "busy", fatal: true }); return; }
+      if (!res.ok || !res.body) { h.onError && h.onError({ where: "load", message: "HTTP " + res.status, fatal: true }); return; }
+
+      var reader = res.body.getReader();
+      var decoder = new TextDecoder("utf-8");
+      var buf = "";
+
+      function dispatch(evName, dataLine) {
+        if (!evName) return;
+        var handlerName = EVENT_TO_HANDLER[evName];
+        if (!handlerName || !h[handlerName]) return;
+        var payload;
+        try { payload = JSON.parse(dataLine); } catch (e) { return; }
+        h[handlerName](payload);
+      }
+
+      function pump() {
+        return reader.read().then(function (r) {
+          if (cancelled) return;
+          if (r.done) return;
+          buf += decoder.decode(r.value, { stream: true });
+          /* SSE frames are separated by a blank line */
+          var frames = buf.split("\n\n");
+          buf = frames.pop(); /* keep the trailing partial */
+          frames.forEach(function (frame) {
+            if (!frame || frame[0] === ":") return; /* heartbeat comment */
+            var evName = null, dataLine = "";
+            frame.split("\n").forEach(function (line) {
+              if (line.indexOf("event:") === 0) evName = line.slice(6).trim();
+              else if (line.indexOf("data:") === 0) dataLine += line.slice(5).trim();
+            });
+            dispatch(evName, dataLine);
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function (err) {
+      if (cancelled) return; /* normal close after done shows up as an abort */
+      h.onError && h.onError({ where: "driver", message: String(err && err.message || err), fatal: true });
+    });
+
+    return {
+      cancel: function () { cancelled = true; if (controller) try { controller.abort(); } catch (e) {} }
+    };
+  }
+
+  return { start: start, isMock: false };
+})();
+
+/* ================================================================
+   SOURCE SELECTION — the single uniform interface the page consumes.
+   ================================================================ */
+function getTelemetrySource() {
+  return USE_LIVE_BACKEND ? LiveSSESource : MockTelemetryGenerator;
+}
+
+/* ================================================================
+   RENDER / UI STATE
+   ================================================================ */
+var UI = {
+  busy: false,
+  ladder: { total: RUNBOOK.n_layer, current: -1, done: 0, ms: [] },
+  kernelCounts: {},
+  reply: { step: 0, nGen: 0, layersDone: 0, totalPasses: 0 },
+  run: { tokens: 0, t0: 0 },
+  activeBubble: null,     /* {contEl, caretEl} for the streaming model turn */
+  activeMeta: null,       /* {n_gen,...} captured for verify */
+  pendingOps: [],         /* batched op events flushed on rAF (anti-flood) */
+  rafScheduled: false
+};
+
+/* ---- one-time static panel population (from RUNBOOK / 'hello') ---- */
+function paintTrustStrip(d) {
+  var flow = $("tsFlow");
+  flow.innerHTML = "";
+  function node(html, cls) { return el("span", { class: "ts-node" + (cls ? " " + cls : ""), html: html }); }
+  function arr() { return el("span", { class: "ts-arr" }, "›"); }
+  flow.appendChild(node("<b>299 B</b> seed"));
+  flow.appendChild(arr());
+  flow.appendChild(node('seed <span class="hash" title="' + d.seed_sha + '">' + shortHash(d.seed_sha) + "</span>"));
+  flow.appendChild(arr());
+  flow.appendChild(node('fixpoint <span class="hash" title="' + d.fixpoint_sha + '">' + shortHash(d.fixpoint_sha) + "</span>"));
+  flow.appendChild(arr());
+  flow.appendChild(node("<b>" + (d.kernels ? d.kernels.length : 8) + "</b> kovc kernels"));
+  flow.appendChild(arr());
+  flow.appendChild(node("this output", "is-output"));
+
+  var cor = $("tsCorrob");
+  cor.innerHTML = "";
+  cor.appendChild(el("span", { class: "ic" }, "✓"));
+  cor.appendChild(el("span", { html:
+    'gcc-DDC <span class="hash" title="' + RUNBOOK.gcc_ddc_sha + '">' + shortHash(RUNBOOK.gcc_ddc_sha) + "</span> corroborated"
+  }));
+}
+
+function paintDevice(d) {
+  var chip = $("devChip");
+  chip.innerHTML = "";
+  function seg(html, accent) { return el("span", { class: "seg" + (accent ? " accent" : ""), html: html }); }
+  chip.appendChild(seg("<b>" + (d.device || RUNBOOK.device) + "</b>", true));
+  chip.appendChild(seg(d.sm || RUNBOOK.sm));
+  chip.appendChild(seg("8 GB"));
+  chip.appendChild(seg(d.precision || RUNBOOK.precision));
+  chip.appendChild(seg(d.build || RUNBOOK.build));
+}
+
+function paintKernelLegend(kernels) {
+  var leg = $("ktLegend");
+  leg.innerHTML = "";
+  (kernels || RUNBOOK.kernels).forEach(function (k) {
+    UI.kernelCounts[k] = UI.kernelCounts[k] || 0;
+    var node = el("span", { class: "kt-kernel", "data-k": k }, [
+      el("span", { class: "nm" }, k),
+      el("span", { class: "ct" }, "0")
+    ]);
+    leg.appendChild(node);
+  });
+}
+
+function buildLadder(total) {
+  UI.ladder.total = total;
+  $("ladderTotal").textContent = total;
+  var grid = $("ladderGrid");
+  grid.innerHTML = "";
+  for (var i = 0; i < total; i++) {
+    grid.appendChild(el("div", { class: "rung", "data-i": i, title: "layer " + i }));
+  }
+  /* sparkline placeholders */
+  var spark = $("ladderSpark");
+  spark.innerHTML = "";
+  for (var j = 0; j < total; j++) spark.appendChild(el("div", { class: "bar", style: "height:2px" }));
+}
+
+function resetLadder() {
+  UI.ladder.current = -1;
+  UI.ladder.done = 0;
+  UI.ladder.ms = [];
+  var rungs = $("ladderGrid").children;
+  for (var i = 0; i < rungs.length; i++) rungs[i].className = "rung";
+  var big = $("ladderBig"); big.textContent = "0"; big.classList.remove("is-idle");
+}
+
+/* ================================================================
+   EVENT HANDLERS — the uniform interface both sources call into.
+   ================================================================ */
+var handlers = {
+  onHello: function (d) {
+    paintTrustStrip(d);
+    paintDevice(d);
+    paintKernelLegend(d.kernels);
+    buildLadder(d.n_layer || RUNBOOK.n_layer);
+    /* connection text: in mock we stay PREVIEW; in live we go LIVE. */
+    if (TELEMETRY_SOURCE === "sse") {
+      setConnState("live", "LIVE · " + (d.device || RUNBOOK.device) + " " + (d.sm || RUNBOOK.sm) + " · " + (d.precision || RUNBOOK.precision));
+    }
+  },
+
+  onTokenize: function (d) {
+    var chips = $("tokChips");
+    chips.innerHTML = "";
+    for (var i = 0; i < d.ids.length; i++) {
+      chips.appendChild(el("div", { class: "tok-chip" }, [
+        el("div", { class: "piece" }, pieceForChip(d.strings[i])),
+        el("div", { class: "id" }, String(d.ids[i]))
+      ]));
+    }
+    $("tokCount").textContent = d.n_prompt + " tok";
+    $("tokCount").classList.remove("is-idle");
+    $("ctxLen").textContent = "T = " + d.n_prompt;
+    UI.promptTokenChipCount = d.ids.length;
+  },
+
+  onForwardBegin: function (d) {
+    UI.reply.step = d.step;
+    $("ppStep").textContent = (d.step + 1);
+    $("ctxLen").textContent = "T = " + d.context_len;
+    resetLadder();
+    updateProgress();
+  },
+
+  onEmbed: function (d) {
+    /* cheap; reflected via context-len which already updated. No-op visual. */
+  },
+
+  onLayerBegin: function (d) {
+    var rungs = $("ladderGrid").children;
+    if (UI.ladder.current >= 0 && rungs[UI.ladder.current]) {
+      rungs[UI.ladder.current].classList.remove("current");
+      rungs[UI.ladder.current].classList.add("done");
+    }
+    UI.ladder.current = d.idx;
+    if (rungs[d.idx]) rungs[d.idx].classList.add("current");
+    var big = $("ladderBig"); big.textContent = (d.idx + 1); big.classList.remove("is-idle");
+    $("ladderStep").textContent = "step " + (UI.reply.step + 1) + " / " + UI.reply.nGen;
+    updateProgress();
+  },
+
+  onOp: function (d) {
+    /* anti-flood: batch op events and flush once per animation frame */
+    UI.pendingOps.push(d);
+    if (UI.kernelCounts[d.kernel] != null) UI.kernelCounts[d.kernel]++;
+    scheduleOpFlush();
+  },
+
+  onLayerEnd: function (d) {
+    var rungs = $("ladderGrid").children;
+    if (rungs[d.idx]) { rungs[d.idx].classList.remove("current"); rungs[d.idx].classList.add("done"); }
+    UI.ladder.done = d.idx + 1;
+    /* sparkline */
+    UI.ladder.ms[d.idx] = d.ms || 0;
+    var maxMs = Math.max.apply(null, UI.ladder.ms.concat([0.01]));
+    var bars = $("ladderSpark").children;
+    if (bars[d.idx]) {
+      var hgt = Math.max(2, Math.round((d.ms || 0) / maxMs * 30));
+      bars[d.idx].style.height = hgt + "px";
+    }
+    UI.reply.layersDone = UI.reply.step * UI.ladder.total + (d.idx + 1);
+    updateProgress();
+  },
+
+  onHead: function (d) {
+    pushKernelLine({ head: true, label: d.label, kernel: d.kernel });
+  },
+
+  onToken: function (d) {
+    appendToken(d);
+    /* token & throughput panel */
+    UI.run.tokens++;
+    var gt = $("gaugeToks"); gt.textContent = UI.run.tokens; gt.classList.remove("is-idle");
+    /* In mock mode the event carries an honest XL-style elapsed (_mock_elapsed)
+       so the gauge reads a realistic seconds/tok-per-s and stays consistent with
+       the run summary. In live mode there is no _mock_elapsed, so we use the real
+       wall clock since the stream began. */
+    var secs = (d._mock_elapsed != null)
+      ? d._mock_elapsed
+      : (UI.run.t0 ? (performance.now() - UI.run.t0) / 1000 : 0);
+    $("gaugeSecs").textContent = secs.toFixed(1); $("gaugeSecs").classList.remove("is-idle");
+    if (secs > 0) { var tps = $("gaugeTps"); tps.textContent = (UI.run.tokens / secs).toFixed(2); tps.classList.remove("is-idle"); }
+    var st = $("streamTokens");
+    if (st.querySelector(".stream-tokens-empty")) st.innerHTML = "";
+    st.appendChild(el("span", { class: "stk" }, [
+      document.createTextNode(d.id + "·"),
+      el("span", { class: "piece" }, pieceForChip(d.string) + " "),
+      el("span", { class: "lg" }, "(" + (d.logit != null ? d.logit.toFixed(2) : "—") + ")  ")
+    ]));
+    st.scrollTop = st.scrollHeight;
+    /* grow tokenizer context with a generated chip */
+    var chips = $("tokChips");
+    chips.appendChild(el("div", { class: "tok-chip is-gen", title: "generated" }, [
+      el("div", { class: "piece" }, pieceForChip(d.string)),
+      el("div", { class: "id" }, String(d.id))
+    ]));
+    chips.scrollTop = chips.scrollHeight;
+    $("ctxLen").textContent = "T = " + d.context_len;
+  },
+
+  onDone: function (d) {
+    finishStreamingBubble();
+    /* reconcile the live gauges with the final measured seconds/tok_per_s
+       so the right-column gauges agree with the run summary (during the
+       stream they show real elapsed; here they settle to the reported totals). */
+    if (d.seconds != null) $("gaugeSecs").textContent = (+d.seconds).toFixed(1);
+    if (d.tok_per_s != null) $("gaugeTps").textContent = (+d.tok_per_s).toFixed(2);
+    if (d.n_gen != null) $("gaugeToks").textContent = d.n_gen;
+    paintRunSummary(d);
+    setBusy(false);
+    /* meta footer on the model turn */
+    finalizeTurnMeta(d);
+    flushKernelLegendCounts();
+  },
+
+  onError: function (d) {
+    flushOpsNow();
+    if (UI.activeBubble) {
+      UI.activeBubble.bubble.classList.add("is-error");
+      finishStreamingBubble();
+      UI.activeBubble.bubble.textContent = "⚠ error (" + (d.where || "?") + "): " + (d.message || "unknown");
+    }
+    setBusy(false);
+    if (d.fatal && TELEMETRY_SOURCE === "sse") {
+      setConnState("fail", "ERROR · " + (d.where || "driver"));
+    }
+  }
+};
+
+/* ---- op flush (requestAnimationFrame batching) ---- */
+function scheduleOpFlush() {
+  if (UI.rafScheduled) return;
+  UI.rafScheduled = true;
+  (window.requestAnimationFrame || function (f) { return setTimeout(f, 16); })(flushOpsNow);
+}
+function flushOpsNow() {
+  UI.rafScheduled = false;
+  if (!UI.pendingOps.length) return;
+  /* render only the most recent few op lines to keep the feed light */
+  var ops = UI.pendingOps;
+  UI.pendingOps = [];
+  for (var i = Math.max(0, ops.length - 4); i < ops.length; i++) pushKernelLine(ops[i]);
+  refreshKernelLegendCounts();
+}
+
+function pushKernelLine(op) {
+  var feed = $("ktFeed");
+  if (feed.querySelector(".kt-feed-empty")) feed.innerHTML = "";
+  var line;
+  if (op.head) {
+    line = el("div", { class: "kt-line is-head" }, [
+      el("span", { class: "lyr" }, "HEAD · "),
+      el("span", { class: "lab" }, op.label),
+      el("span", { class: "arr" }, " → "),
+      el("span", { class: "kfn" }, op.kernel)
+    ]);
+  } else {
+    line = el("div", { class: "kt-line" }, [
+      el("span", { class: "lyr" }, "L" + op.layer + " · "),
+      el("span", { class: "lab" }, op.label),
+      el("span", { class: "arr" }, " → "),
+      el("span", { class: "kfn" }, op.kernel)
+    ]);
+  }
+  /* column-reverse flex: newest goes first */
+  feed.insertBefore(line, feed.firstChild);
+  /* cap DOM lines */
+  while (feed.children.length > 60) feed.removeChild(feed.lastChild);
+}
+
+function refreshKernelLegendCounts() {
+  var leg = $("ktLegend").children;
+  for (var i = 0; i < leg.length; i++) {
+    var k = leg[i].getAttribute("data-k");
+    var ct = UI.kernelCounts[k] || 0;
+    leg[i].querySelector(".ct").textContent = ct;
+    if (ct > 0) leg[i].classList.add("fired");
+  }
+}
+function flushKernelLegendCounts() { refreshKernelLegendCounts(); }
+
+/* ---- progress bar ---- */
+function updateProgress() {
+  var total = UI.reply.totalPasses || (UI.reply.nGen * UI.ladder.total);
+  var done = UI.reply.step * UI.ladder.total + Math.max(0, UI.ladder.current + 1);
+  if (done > total) done = total;
+  $("ppPasses").textContent = done;
+  $("ppTotalPasses").textContent = total;
+  var pct = total > 0 ? (done / total) * 100 : 0;
+  $("ppFill").style.width = pct.toFixed(1) + "%";
+}
+
+/* ================================================================
+   CONVERSATION (transcript) rendering
+   ================================================================ */
+function clearEmptyState() {
+  var e = $("transcriptEmpty");
+  if (e) e.remove();
+}
+
+function addUserTurn(text) {
+  clearEmptyState();
+  var turn = el("div", { class: "turn user" }, [
+    el("div", { class: "turn-label" }, "You"),
+    el("div", { class: "bubble" }, text)
+  ]);
+  $("transcript").appendChild(turn);
+  scrollTranscript();
+}
+
+function addModelTurn(prompt) {
+  var labelKids = [
+    document.createTextNode("GPT-2-XL"),
+    el("span", { class: "ml-pill" }, "continuation")
+  ];
+  var promptEcho = el("span", { class: "prompt-echo" }, prompt);
+  var contEl = el("span", { class: "cont" });
+  var caretEl = el("span", { class: "caret", "aria-hidden": "true" });
+  var bubble = el("div", { class: "bubble" }, [ promptEcho, contEl, caretEl ]);
+  var metaEl = el("div", { class: "turn-meta" });
+  var turn = el("div", { class: "turn model" }, [
+    el("div", { class: "turn-label" }, labelKids),
+    bubble,
+    metaEl
+  ]);
+  $("transcript").appendChild(turn);
+  UI.activeBubble = { bubble: bubble, contEl: contEl, caretEl: caretEl, metaEl: metaEl };
+  scrollTranscript();
+}
+
+function appendToken(d) {
+  if (!UI.activeBubble) return;
+  var contEl = UI.activeBubble.contEl;
+  /* de-highlight the previous just-arrived token */
+  var prev = contEl.querySelector(".tok-new");
+  if (prev) prev.classList.remove("tok-new");
+  var span = el("span", { class: "tok-new" }, d.string);
+  contEl.appendChild(span);
+  scrollTranscript();
+}
+
+function finishStreamingBubble() {
+  if (!UI.activeBubble) return;
+  if (UI.activeBubble.caretEl && UI.activeBubble.caretEl.parentNode) {
+    UI.activeBubble.caretEl.parentNode.removeChild(UI.activeBubble.caretEl);
+  }
+  var last = UI.activeBubble.contEl.querySelector(".tok-new");
+  if (last) last.classList.remove("tok-new");
+}
+
+function finalizeTurnMeta(d) {
+  if (!UI.activeBubble) return;
+  var meta = UI.activeBubble.metaEl;
+  meta.innerHTML = "";
+  var isMock = (TELEMETRY_SOURCE !== "sse");
+  meta.appendChild(document.createTextNode(
+    "continued " + d.n_gen + " tokens · " + d.seconds + " s · " + d.tok_per_s +
+    " tok/s · GPT-2-XL fp32 · greedy"
+  ));
+  if (isMock) meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
+
+  /* internals toggle (scrolls/opens the right column) */
+  var internalsBtn = el("button", { class: "tm-btn", type: "button" }, "view internals for this turn");
+  internalsBtn.addEventListener("click", function () {
+    if (window.matchMedia && window.matchMedia("(max-width: 980px)").matches) openDrawer(true);
+    else $("internalsCol").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  meta.appendChild(internalsBtn);
+
+  /* on-demand verify (NEVER an automatic verdict; honest UNAVAILABLE on mock) */
+  var verifyBtn = el("button", { class: "tm-btn", type: "button" }, "verify this continuation");
+  var resultSlot = el("span", {});
+  verifyBtn.addEventListener("click", function () {
+    verifyBtn.disabled = true;
+    verifyBtn.textContent = "verifying…";
+    runVerify(d, function (res) {
+      verifyBtn.remove();
+      resultSlot.innerHTML = "";
+      if (res.verdict === "UNAVAILABLE") {
+        resultSlot.appendChild(el("span", { class: "verify-result is-unavail" }, "verify: UNAVAILABLE"));
+        resultSlot.appendChild(document.createTextNode(" "));
+        resultSlot.appendChild(el("a", { href: "dashboard.html" }, "see the real numbers →"));
+      } else {
+        var cls = res.verdict === "PASS" ? "verify-result" : "verify-result is-unavail";
+        resultSlot.appendChild(el("span", { class: cls }, "verify: " + res.verdict));
+        resultSlot.appendChild(document.createTextNode(" "));
+        resultSlot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
+      }
+    });
+  });
+  meta.appendChild(verifyBtn);
+  meta.appendChild(resultSlot);
+}
+
+/* on-demand verify: hits POST /api/verify only in live mode; mock always
+   returns UNAVAILABLE (python-free demo path), never a fake PASS. */
+function runVerify(doneEvent, cb) {
+  if (TELEMETRY_SOURCE !== "sse") {
+    setTimeout(function () { cb({ verdict: "UNAVAILABLE", note: "mock telemetry — no oracle" }); }, 350);
+    return;
+  }
+  fetch("/api/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ gen_ids: doneEvent.gen_ids })
+  }).then(function (r) { return r.json(); })
+    .then(function (j) { cb(j || { verdict: "UNAVAILABLE" }); })
+    .catch(function () { cb({ verdict: "UNAVAILABLE", note: "verify endpoint unreachable" }); });
+}
+
+function paintRunSummary(d) {
+  var body = $("sumBody");
+  body.innerHTML = "";
+  var grid = el("div", { class: "sum-grid" }, [
+    el("div", { class: "sum-item" }, [ el("div", { class: "sv" }, String(d.n_prompt)), el("div", { class: "sl" }, "prompt") ]),
+    el("div", { class: "sum-item" }, [ el("div", { class: "sv" }, String(d.n_gen)), el("div", { class: "sl" }, "generated") ]),
+    el("div", { class: "sum-item" }, [ el("div", { class: "sv" }, String(d.n_total)), el("div", { class: "sl" }, "total") ]),
+    el("div", { class: "sum-item" }, [ el("div", { class: "sv" }, d.seconds + "s"), el("div", { class: "sl" }, "wall clock") ]),
+    el("div", { class: "sum-item" }, [ el("div", { class: "sv" }, String(d.tok_per_s)), el("div", { class: "sl" }, "tok/s") ]),
+    el("div", { class: "sum-item" }, [ el("div", { class: "sv " + (d.nonfinite === 0 ? "ok" : "") }, "nonfinite=" + d.nonfinite), el("div", { class: "sl" }, d.nonfinite === 0 ? "healthy" : "CHECK") ])
+  ]);
+  body.appendChild(grid);
+
+  if (TELEMETRY_SOURCE !== "sse") {
+    body.appendChild(el("div", { class: "sum-mock" }, "MOCK NUMBERS — not a real run"));
+  }
+
+  /* verify control (mirrors per-turn one; no automatic verdict here) */
+  var row = el("div", { class: "sum-verify" });
+  var btn = el("button", { class: "sv-btn", type: "button" }, "verify this continuation");
+  var slot = el("span", { class: "sv-note" });
+  btn.addEventListener("click", function () {
+    btn.disabled = true; btn.textContent = "verifying…";
+    runVerify(d, function (res) {
+      btn.remove();
+      slot.innerHTML = "";
+      if (res.verdict === "UNAVAILABLE") {
+        slot.appendChild(document.createTextNode("oracle UNAVAILABLE (python-free demo path) — "));
+        slot.appendChild(el("a", { href: "dashboard.html" }, "see the real parity numbers →"));
+      } else {
+        slot.appendChild(document.createTextNode("verify: " + res.verdict + " — "));
+        slot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
+      }
+    });
+  });
+  row.appendChild(btn);
+  row.appendChild(el("span", { class: "sv-note" }, "No live parity verdict in chat — the real numbers live on page 2."));
+  body.appendChild(row);
+  body.appendChild(slot);
+}
+
+function scrollTranscript() {
+  var t = $("transcript");
+  t.scrollTop = t.scrollHeight;
+}
+
+/* ================================================================
+   CONNECTION / BUSY STATE + PREVIEW honesty
+   ================================================================ */
+function setConnState(kind, text) {
+  var badge = $("connBadge");
+  badge.classList.remove("is-preview", "is-fail");
+  if (kind === "preview") badge.classList.add("is-preview");
+  else if (kind === "fail") badge.classList.add("is-fail");
+  $("connText").textContent = text;
+}
+
+/* Force the unmistakable PREVIEW state whenever not on a real SSE source. */
+function applySourceHonesty() {
+  if (TELEMETRY_SOURCE === "sse") {
+    /* will flip to LIVE on the hello event; until then show connecting */
+    setConnState("preview", "CONNECTING · awaiting worker /api/health…");
+    $("previewBanner").hidden = true;
+    $("convMode").textContent = "GPT-2-XL · fp32 · greedy · LIVE";
+  } else {
+    setConnState("preview", "PREVIEW · MOCK TELEMETRY (no GPU connected)");
+    $("previewBanner").hidden = false;
+    $("convMode").textContent = "GPT-2-XL · fp32 · greedy · (mock)";
+  }
+}
+
+function setBusy(b) {
+  UI.busy = b;
+  $("sendBtn").disabled = b;
+  $("busyHint").classList.toggle("show", b);
+  var chips = $("seedRow").querySelectorAll(".seed-chip");
+  for (var i = 0; i < chips.length; i++) chips[i].disabled = b;
+  /* count chip on tokenizer + ladder header reflect activity */
+  if (b) $("tokCount").classList.remove("is-idle");
+}
+
+/* ================================================================
+   DRIVE A GENERATION (uniform: works for mock OR sse)
+   ================================================================ */
+var activeStream = null;
+function startGeneration(prompt, nGen) {
+  if (UI.busy) return;
+  prompt = (prompt || "").replace(/\s+$/g, "");
+  if (!prompt) return;
+
+  setBusy(true);
+
+  /* reset per-run UI state */
+  UI.kernelCounts = {};
+  paintKernelLegend(RUNBOOK.kernels);
+  UI.run.tokens = 0;
+  UI.run.t0 = performance.now();
+  UI.reply.step = 0;
+  UI.reply.nGen = nGen;
+  UI.reply.totalPasses = nGen * RUNBOOK.n_layer;
+  $("ppNgen").textContent = nGen;
+  $("ladderStep").textContent = "step 1 / " + nGen;
+  $("gaugeToks").textContent = "0"; $("gaugeToks").classList.add("is-idle");
+  $("gaugeTps").textContent = "—"; $("gaugeTps").classList.add("is-idle");
+  $("gaugeSecs").textContent = "0.0"; $("gaugeSecs").classList.add("is-idle");
+  $("streamTokens").innerHTML = '<span class="stream-tokens-empty">streaming…</span>';
+  $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
+
+  /* transcript turns */
+  addUserTurn(prompt);
+  addModelTurn(prompt);
+
+  /* subscribe once; the source does the rest */
+  var src = getTelemetrySource();
+  activeStream = src.start(prompt, nGen, handlers);
+}
+
+/* ================================================================
+   WIRE UP THE COMPOSER + CONTROLS
+   ================================================================ */
+function clampNGen(v) {
+  v = parseInt(v, 10);
+  if (isNaN(v)) v = 20;
+  return Math.max(1, Math.min(256, v));
+}
+
+function initControls() {
+  var input = $("promptInput");
+  var nGenInput = $("nGen");
+
+  $("sendBtn").addEventListener("click", function () {
+    startGeneration(input.value, clampNGen(nGenInput.value));
+  });
+
+  /* Enter to send, Shift+Enter for newline */
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!UI.busy) startGeneration(input.value, clampNGen(nGenInput.value));
+    }
+  });
+
+  /* seed chips fill the box and (when idle) fire immediately */
+  var chips = $("seedRow").querySelectorAll(".seed-chip");
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].addEventListener("click", function (e) {
+      if (UI.busy) return;
+      var seed = e.currentTarget.textContent;
+      input.value = seed;
+      startGeneration(seed, clampNGen(nGenInput.value));
+    });
+  }
+
+  /* stepper */
+  $("nGenUp").addEventListener("click", function () { nGenInput.value = clampNGen(+nGenInput.value + 1); });
+  $("nGenDown").addEventListener("click", function () { nGenInput.value = clampNGen(+nGenInput.value - 1); });
+  nGenInput.addEventListener("change", function () { nGenInput.value = clampNGen(nGenInput.value); });
+
+  /* preview banner dismiss (badge stays PREVIEW — only the banner hides) */
+  $("previewDismiss").addEventListener("click", function () { $("previewBanner").hidden = true; });
+
+  /* mobile drawer */
+  $("drawerToggle").addEventListener("click", function () { openDrawer(true); });
+  $("drawerClose").addEventListener("click", function () { openDrawer(false); });
+}
+
+function openDrawer(open) {
+  $("internalsCol").classList.toggle("open", open);
+  $("drawerToggle").setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+/* ================================================================
+   LIVE-MODE READINESS GATE (/api/health) — graceful fallback to mock
+   so the page is never blank if the backend is down.
+   ================================================================ */
+function gateLiveReadiness() {
+  if (TELEMETRY_SOURCE !== "sse") return;
+  function fallbackToMock() {
+    /* backend absent/unreachable: fall back to mock with the honest PREVIEW
+       state so the page is never blank and never claims a live run it can't back. */
+    USE_LIVE_BACKEND = false;
+    TELEMETRY_SOURCE = "mock";
+    applySourceHonesty();
+  }
+  fetch("/api/health").then(function (r) {
+    /* a 404/500 from a static server (no backend) is NOT a live worker */
+    if (!r.ok) { fallbackToMock(); return null; }
+    return r.json();
+  }).then(function (j) {
+    if (j === null) return; /* already fell back */
+    if (j && j.ready) {
+      setConnState("live", "LIVE · " + (j.device || RUNBOOK.device) + " · fp32");
+    } else {
+      /* reachable worker, not warm yet — honest connecting state */
+      setConnState("preview", "CONNECTING · worker not ready…");
+    }
+  }).catch(fallbackToMock);
+}
+
+/* ================================================================
+   BOOT
+   ================================================================ */
+(function boot() {
+  try {
+    /* paint static panels from the runbook constants up front so the
+       idle state is informative even before the first 'hello'. */
+    paintTrustStrip(RUNBOOK);
+    paintDevice(RUNBOOK);
+    paintKernelLegend(RUNBOOK.kernels);
+    buildLadder(RUNBOOK.n_layer);
+    $("ladderBig").classList.add("is-idle");
+    applySourceHonesty();
+    initControls();
+    gateLiveReadiness();
+  } catch (e) {
+    /* never leave a dead page; surface the error honestly */
+    try { setConnState("fail", "UI ERROR — see console"); } catch (_) {}
+    if (window.console) console.error("boot error", e);
+  }
+})();
+</script>
+</body>
+</html>

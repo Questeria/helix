@@ -50,6 +50,28 @@
     padding: 36px 28px 64px;
   }
 
+  /* ---------- page nav (back to live demo) ---------- */
+  .pagenav {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .pagenav .back {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+    letter-spacing: 0.2px; text-decoration: none;
+    color: var(--accent);
+    border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 7px 14px; border-radius: 999px;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .pagenav .back:hover { border-color: var(--accent); transform: translateX(-2px); }
+  .pagenav .back .arr { font-size: 14px; line-height: 1; }
+  .pagenav .reframe {
+    font-size: 12.5px; color: var(--ink-faint); line-height: 1.5;
+  }
+  .pagenav .reframe b { color: var(--ink-dim); font-weight: 650; }
+  @media (max-width: 560px) { .pagenav .reframe { flex-basis: 100%; } }
+
   /* ---------- top bar ---------- */
   .topbar {
     display: flex;
@@ -384,6 +406,15 @@
   <script src="demo_report.js"></script>
 
   <main class="wrap">
+    <nav class="pagenav" aria-label="Demo navigation">
+      <a class="back" href="index.html">
+        <span class="arr" aria-hidden="true">←</span> Back to the chat demo
+      </a>
+      <span class="reframe">
+        <b>Page 2 — the proof.</b> The rigorous attestation view behind the conversation: every claim on the chat page, rebuilt from raw bytes rather than asserted.
+      </span>
+    </nav>
+
     <div class="topbar">
       <div class="brand">
         <span class="wordmark">
