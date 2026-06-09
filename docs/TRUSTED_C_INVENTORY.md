@@ -20,11 +20,15 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
 
 - **Committed C/H after V6: 24 files, 15 605 LOC** (was 30 files / 16 308 LOC; V6 pruned 6 dead
   files / 708 LOC — see §4).
-- **Post-v1.3 (GPT-2 inference demos) addendum:** at HEAD the committed C/H is **29 files / 19 158 LOC
+- **Post-v1.3 (GPT-2 inference demos) addendum:** at HEAD the committed C/H is **29 files
   = 22 from-raw ladder (byte-identical to v1.3, incl. `seed.c`) + 7 Category-B host harnesses (OUTSIDE
-  the self-host fixpoint, zero arithmetic on the trust path)**. The **22 from-raw ladder** (Category A —
-  the `hex0 → seed` chain + the `seed.c` trust root, 13 217 LOC) is **byte-identical to v1.3**, and the
-  self-host fixpoint stays `0992dddd`. The **7 Category-B host harnesses** are the 2 v1.3 GPU harnesses
+  the self-host fixpoint, zero arithmetic on the trust path)**. **The load-bearing fence is the file
+  COUNT: exactly 1 committed `.py` + 29 committed `.c`/`.h`, of which 22 are the from-raw ladder.** LOC
+  totals are **informational and approximate** — they drift with doc/hardening edits to the Category-B
+  host harnesses and are NOT exact self-verify outputs that must match to the line (grand total
+  **~19 217 LOC** at this writing). The **22 from-raw ladder** (Category A — the `hex0 → seed` chain +
+  the `seed.c` trust root, 13 217 LOC, byte-identical to v1.3) and the self-host fixpoint `0992dddd` are
+  the invariants that DO NOT move. The **7 Category-B host harnesses** are the 2 v1.3 GPU harnesses
   (`cuda_launch.c` [grew +273 LOC post-v1.3 for GPU verify modes — so the v1.3 set is **not** all
   "unchanged"; only the 22 from-raw ladder is byte-identical] + `train_transformer.c`) plus the **five
   post-v1.3 GPT-2 demo host tools** — `helixc/runtime/gpt2_infer.c`
@@ -42,9 +46,9 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
   pretokenizer, no regex lib; byte↔id bookkeeping only, **ZERO arithmetic on the trust path**; it now
   also links into the `--serve` worker via `GPT2_TOK_LIB` — its four entrypoints are exposed and the
   pure-bookkeeping `decode_one`/`decode_range` helpers added — so the live server tokenizes in-process,
-  Python-free) and `helixc/runtime/gpt2_pack.c` (345 LOC, safetensors→`.weights` importer: byte-movement
+  Python-free) and `helixc/runtime/gpt2_pack.c` (safetensors→`.weights` importer: byte-movement
   only, **ZERO arithmetic on the trust path**) — and the **NEW** `helixc/runtime/gpt2_serve_http.c`
-  (549 LOC, the dependency-light, **NO-Python** C HTTP+SSE server for the live chat demo: POSIX sockets +
+  (the dependency-light, **NO-Python** C HTTP+SSE server for the live chat demo: POSIX sockets +
   libc only, no third-party deps; serves `demo/` static files [GET `/`→`index.html`, `/dashboard.html`,
   assets with correct MIME, rejects `..` traversal] + `GET /api/health` + the `POST /api/generate`
   `text/event-stream` bridge that spawns ONE persistent `gpt2_infer --serve` worker over two pipes and
@@ -149,8 +153,12 @@ outside the fixpoint with **zero arithmetic on the trust path**, and all but `gp
 
 **Category B (v1.3 V6) total: 2 files, 2 388 LOC.** At HEAD, with the five post-v1.3 demo host tools
 (`gpt2_infer.c` 1 125 + `cpu_host.c` 579 + `gpt2_tok.c` 682 + `gpt2_pack.c` 345 + `gpt2_serve_http.c`
-549) and `cuda_launch.c`'s +273 growth, **Category B = 7 files / 5 941 LOC** (see Headline addendum +
-§2a). Verified: `git ls-files "helixc/runtime/*.c" "helixc/runtime/*.h" | xargs wc -l` → 5 941.
+608) and `cuda_launch.c`'s GPU-verify-mode growth, **Category B = 7 files** (see Headline addendum +
+§2a). The **file COUNT (7) is the invariant**; the LOC subtotal is **informational and approximate**
+(it drifts as these host harnesses are hardened — currently **~6 000 LOC**:
+`git ls-files "helixc/runtime/*.c" "helixc/runtime/*.h" | xargs wc -l` → ~6 000), and is **not** an
+exact self-verify number that must match to the line. None of this LOC sits on the trust path
+(zero arithmetic; outside the self-host fixpoint).
 
 ### 2a. Post-v1.3 Category-B addendum — the GPT-2 demo host tools
 
@@ -169,7 +177,7 @@ one is the live-chat HTTP+SSE server (`gpt2_serve_http.c` — HTTP/byte-pump onl
 | `helixc/runtime/cpu_host.c` | 579 | **CPU no-ptxas** forward-only GPT-2 demo launcher: a **CUDA-FREE** byte-movement harness (mmap the P1 weights, host embedding gather, multi-head pack/scatter, GEMM N-tiling, per-op `/tmp/gpc` file staging into the 25 MB Helix arena). **ZERO arithmetic on the trust path** — every layernorm/softmax/matmul/GELU/residual runs inside the kovc-compiled `gpt2_cpu_ops.hx` ELF. Gated by `scripts/gpt2_cpu_parity.sh` (block-0 parity vs the numpy oracle, fail-closed). | **OUT** | `scripts/gpt2_cpu_parity.sh` only (`gcc -O2 -lm`, **no** `-lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher that does **no math**; all arithmetic is in the kovc-from-raw Helix ELF | **IRREDUCIBLE** as a host launcher (mmap/file-staging glue), but does **NOT** rely on `ptxas`/driver — it is CUDA-free |
 | `helixc/runtime/gpt2_tok.c` | 682 | **Offline byte-level BPE tokenizer** (encode + decode): the 256-entry byte↔unicode map, the GPT-2 pretokenization split **hand-written (NO regex lib)**, merges.txt rank-ordered merges, vocab.json id map. Replaces the Python tokenizer on the demo's production path. **ZERO arithmetic on the trust path** (string↔token-id bookkeeping only). Gated by `scripts/gpt2_pyfree.sh` (bit-exact encode/decode parity vs the Python oracle + the pinned demo prompt + the hero decode, fail-closed). | **OUT** | `scripts/gpt2_pyfree.sh` only (`gcc -O2`), **never** in `gate_kovc.sh` | Trusted-once **host** tool that does **no math**; the trust claim is the token-id sequence + the from-raw toolchain, not the host string rendering — and parity is bit-exact-gated vs the independent Python oracle | **IRREDUCIBLE** as a host tool (no compute-trust role); Helix-native is blocked today (1 MB read-buffer ud2 trap < the ~1.04 MB vocab.json; no regex) |
 | `helixc/runtime/gpt2_pack.c` | 345 | **Offline safetensors→`.weights` importer**: parse the JSON header (hand-rolled), stream the F32 tensors in the same `build_order` as `gpt2_import.py`, UN-transposed, write the 64-byte HXGW header + flat fp32 body. Replaces the Python importer on the demo's production path. **ZERO arithmetic on the trust path** (byte-movement only; streamed to keep RAM bounded). Gated by `scripts/gpt2_pyfree.sh` (output sha256 **byte-identical** to the Python importer's `.weights`, fail-closed). | **OUT** | `scripts/gpt2_pyfree.sh` only (`gcc -O2`), **never** in `gate_kovc.sh` | Trusted-once **host** tool that does **no math**; byte-identity to the independent Python importer is sha-gated | **IRREDUCIBLE** as a host tool (no compute-trust role) |
-| `helixc/runtime/gpt2_serve_http.c` | 549 | **Live-chat HTTP+SSE server** (NO-Python, dependency-light): POSIX sockets + libc only; serves `demo/` static files [rejects `..` traversal] + `GET /api/health` + the `POST /api/generate` `text/event-stream` bridge that spawns ONE persistent `gpt2_infer --serve` worker over pipes and re-frames each recognized worker telemetry line as one SSE event [single-flight: a concurrent generation gets 409] + an honest `POST /api/verify` that degrades to `UNAVAILABLE` and never fakes a verdict. **HTTP/byte-pump only, ZERO arithmetic on the trust path.** Gated by `scripts/helix_serve_gate.sh` (served==offline token-for-token + single-flight + fixpoint-clean, fail-closed). | **OUT** | `scripts/helix_serve_gate.sh` only (`gcc -O2 -lpthread`), **never** in `gate_kovc.sh` | Trusted-once **host** server that does **no math**; the served token-ids equal the offline `--generate` chain (G1 exact string compare) | **IRREDUCIBLE** as a host server (sockets/pipe glue; no compute-trust role) |
+| `helixc/runtime/gpt2_serve_http.c` | 608 | **Live-chat HTTP+SSE server** (NO-Python, dependency-light): POSIX sockets + libc only; serves `demo/` static files [rejects `..` traversal] + `GET /api/health` + the `POST /api/generate` `text/event-stream` bridge that spawns ONE persistent `gpt2_infer --serve` worker over pipes and re-frames each recognized worker telemetry line as one SSE event [single-flight: a concurrent generation gets 409] + an honest `POST /api/verify` that degrades to `UNAVAILABLE` and never fakes a verdict. **HTTP/byte-pump only, ZERO arithmetic on the trust path.** Gated by `scripts/helix_serve_gate.sh` (served==offline token-for-token + single-flight + fixpoint-clean, fail-closed). | **OUT** | `scripts/helix_serve_gate.sh` only (`gcc -O2 -lpthread`), **never** in `gate_kovc.sh` | Trusted-once **host** server that does **no math**; the served token-ids equal the offline `--generate` chain (G1 exact string compare) | **IRREDUCIBLE** as a host server (sockets/pipe glue; no compute-trust role) |
 
 > Companion source: `helixc/runtime/gpt2_cpu_ops.hx` (the pure-Helix op ELF holding **all** CPU-path
 > arithmetic) is a `.hx`, so it is **not** counted by the `.c`/`.h` fence — freely committable, no fence

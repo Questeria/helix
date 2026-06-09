@@ -28,6 +28,12 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 
 ## Status (v1.3, 2026-06-05)
 
+> **On the date:** `2026-06-05` is the v1.3 **trust core** — which is **byte-stable** (the `seed.c` +
+> `kovc.hx` sources are unchanged, so the fixpoint / K1 / seed SHAs do not move). The **GPT-2 demo
+> layers** (the bring-your-weights verified execution layer, below) were added **later (2026-06-09)** on
+> top of that byte-stable core; the demo's host harnesses live outside the self-host fixpoint. So this
+> date is the trust core's date, not the demo's.
+
 **The from-raw-binary trust chain is COMPLETE to PTX, and Python has been deleted from the toolchain.** The Helix-native compiler — `helixc/bootstrap/{lexer,parser,kovc}.hx`, a from-scratch compiler written *in Helix* that emits x86-64 ELF directly (no assembler/linker/libc) — is built **entirely from the raw-binary root** (`hex0` → … → `seed` → `kovc`), with **no trusted pre-built compiler** anywhere in the chain. The two honest records are **[`docs/TRUST_CHAIN_CLOSED.md`](docs/TRUST_CHAIN_CLOSED.md)** (the verified state + every residual, stated plainly) and **[`docs/CLEAN_REPRODUCTION.md`](docs/CLEAN_REPRODUCTION.md)** (rebuild the core chain from a clean checkout) — read those for the full, precise claims.
 
 What is verified:

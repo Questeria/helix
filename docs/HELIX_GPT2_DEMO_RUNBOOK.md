@@ -51,6 +51,44 @@ operator script and the MVP Definition‑of‑Done closeout.
 
 ---
 
+## 0.1 Reproducibility tiers (read this before claiming "reproducible")
+
+Be precise about what a *third party* can reproduce. There are two tiers, and only Tier A is
+repo‑only:
+
+- **TIER A — the trust core (FULLY third‑party‑reproducible from the committed repo alone).**
+  `scripts/reproduce_trust.sh` + the `trust-reproduce.yml` CI rebuild the entire `hex0 → seed → kovc`
+  ladder from raw, run the byte‑identical self‑host fixpoint (`K2 == K3 == K4`) and the gcc
+  diverse‑double‑compile, and assert the pinned anchors. This needs **NO model weights and NO
+  oracle** — it runs CPU‑only from a clean clone in ~1 min, and the CI proves it on a clean,
+  different‑machine `ubuntu-latest` runner. **This is the load‑bearing trust claim**, and it is the
+  only tier that is repo‑only reproducible.
+
+- **TIER B — the GPT‑2 demo legs (parity / scale / serve / attestation).** These additionally require
+  **external artifacts that are NOT in the committed repo** and live under the gitignored
+  `helix-llm/`:
+  1. **The public GPT‑2 weights + vocab/merges.** Fetch from HuggingFace
+     **`openai-community/gpt2`** (and `gpt2-xl` for the live chat) — **MIT‑licensed** —
+     (`model.safetensors`, `vocab.json`, `merges.txt`, `config.json`), then convert to the demo's flat
+     `.weights` with the **committed, Python‑free** importer `helixc/runtime/gpt2_pack.c` and tokenize
+     with the **committed** `helixc/runtime/gpt2_tok.c` (both gated byte/bit‑exact vs the Python
+     originals by `scripts/gpt2_pyfree.sh`).
+  2. **The independent numpy reference oracle** (`helix-llm/tools/gpt2_numpy_ref.py`) — an
+     **OUT‑OF‑FIXPOINT verifier** that 6 parity gates depend on (`gpt2_gpu_mvp.sh`, `gpt2_scale.sh`,
+     `gpt2_cpu_parity.sh`, `gpt2_gpu_parity.sh`, `gpt2_pyfree.sh`, `gpt2_demo_attest.sh`; transitively
+     `helix_serve_gate.sh` via `gpt2_scale.sh`). It is **kept DELIBERATELY uncommitted** to preserve
+     the toolchain's **exactly‑1‑committed‑`.py` fence** (`verification/oracle/oracle_train.py` is the
+     only committed `.py`). A third party can either **use OUR fenced oracle** (shipped with the demo
+     bundle, not the public repo) **OR supply their OWN independent numpy GPT‑2 forward** — independence
+     is precisely the point of a cross‑check, so any honest independent reimplementation is acceptable.
+
+  **Do NOT claim the demo parity legs are repo‑only‑reproducible.** Only Tier A is. The Tier‑B legs are
+  reproducible *given the public weights + an (our‑bundled or own) independent oracle*. Keeping the
+  oracle uncommitted is the **honest fix**, not a gap to be closed by committing it — committing it
+  would break the 1‑`.py` fence.
+
+---
+
 ## 1. The live demo (≤ 3 minutes)
 
 **Beat 1 — the frame (~15 s).**

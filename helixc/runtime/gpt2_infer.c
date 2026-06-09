@@ -10,8 +10,12 @@
  *
  * THIS BUILD targets the P5 gate-2 anchor: run GPT-2 BLOCK 0 on the GPU through the kovc PTX
  * kernels for the canonical prompt ids [464,3139,286,4881,318] (T=5), dump the post-block-0
- * hidden [T,768], and compare to helix-llm/ref/ref_block0.npy at max-abs-rel < 1e-3. Block-0
- * parity proves embedding + causal mask + eps-LN + multi-head + bias + GEMM orientation at once.
+ * hidden [T,768], and compare to helix-llm/ref/ref_block0.npy at FLOORED max-abs-rel < 1e-3
+ * (the gate metric is re_floor = |g-o| / max(|o|, 1), so |o|<=1 cells degrade to absolute error
+ * and |o|>1 cells are relative; see the GATE printout below). NOTE: this GPU block-0 bar is
+ * DISTINCT from (and looser than) the CPU block-0 gate in cpu_host.c, which uses the stricter
+ * LITERAL max_abs < 1e-3 AND mean_abs < 1e-4. Block-0 parity proves embedding + causal mask +
+ * eps-LN + multi-head + bias + GEMM orientation at once.
  *
  * Kernel selection (per-op, the fork picks its own CUfunction handles):
  *   - GEMMs (N in {768,2304,3072}, all > 1024): the TILED OPT kernels tiled_matmul /

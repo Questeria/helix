@@ -1,226 +1,150 @@
 # Helix — Build and Run Quickstart
 
-This is the fastest path from a fresh checkout to a running Helix program.
+This is the fastest path from a fresh checkout to the **shipped** Helix toolchain: the
+from‑raw‑binary, Python‑free `kovc` compiler (`hex0 → seed → kovc`).
 
-> **Investor demo (GPT-2 on Helix):** to see the real (unchanged) GPT-2 — a 2019 base model, trust not speed — run on this from-raw stack, see [`docs/HELIX_GPT2_DEMO_RUNBOOK.md`](docs/HELIX_GPT2_DEMO_RUNBOOK.md). Live chat: `bash scripts/serve_chat_demo.sh` then open <http://127.0.0.1:8848/?source=sse>. One-command attestation: `bash scripts/gpt2_demo_attest.sh`.
+> **Source of truth.** For the verified status + every honest residual, read **[`README.md` §Status](README.md#status-v13-2026-06-05)**
+> and **[`docs/CLEAN_REPRODUCTION.md`](docs/CLEAN_REPRODUCTION.md)** (rebuild the core chain from a
+> clean checkout). This page is an entry‑point; those docs are the authority for the precise claims,
+> and nothing here is meant to contradict them.
+
+> **Investor demo (GPT‑2 on Helix):** to see the real (unchanged) GPT‑2 — a 2019 base model, trust not speed — run on this from‑raw stack, see [`docs/HELIX_GPT2_DEMO_RUNBOOK.md`](docs/HELIX_GPT2_DEMO_RUNBOOK.md). Live chat: `bash scripts/serve_chat_demo.sh` then open <http://127.0.0.1:8848/?source=sse>. One‑command attestation: `bash scripts/gpt2_demo_attest.sh`.
+
+## What ships
+
+The Helix toolchain is built **entirely from a raw‑binary root — there is no trusted pre‑built
+compiler**. `hex0` (299 hand‑authored hex bytes) → … → `seed` (an Apache‑2.0 C‑subset compiler) →
+`kovc` (the Helix compiler, `helixc/bootstrap/{lexer,parser,kovc}.hx`, self‑hosted in Helix), each
+rung built **only by the prior rung**. The toolchain is **Python‑free**: the repo holds **exactly
+one** committed `.py` (`verification/oracle/oracle_train.py`), a fenced numpy verification *oracle*
+that is **never** part of the compile/run path. `gcc` is used only as an independent *auditor* (the
+diverse‑double‑compile of the seed), never to produce a shipped artifact.
+
+The trust chain is **complete to PTX**: a real GPT‑2 forward runs through `kovc`‑emitted GPU (PTX)
+kernels, gated green token‑for‑token vs an independent reference. Below PTX it relies on NVIDIA's
+closed `ptxas` + driver — the one trusted‑once boundary, stated openly in `README.md` §Status. The
+CPU path is all‑the‑way‑down from raw binary.
 
 ## Prerequisites
 
-> **NOTE (v1.0+ reality):** the **shipped** Helix toolchain is the **from-raw, Python-free** `kovc`
-> compiler (`hex0 → seed → kovc`; see `docs/CLEAN_REPRODUCTION.md` + `scripts/gate_kovc.sh`). The
-> Python-hosted `helixc` described below is the **historical bootstrap frontend**, retained for
-> reference only — it is NOT in the shipped compile/run path. The repo's sole committed `.py` is the
-> fenced numpy audit oracle (`verification/oracle/oracle_train.py`).
+- **WSL2 + Linux** on Windows, or any Linux (for the from‑raw build + running the produced ELFs)
+- **gcc** (the diverse‑double‑compile auditor) + a CUDA toolchain & RTX‑class GPU (for the GPU
+  capstone / GPT‑2 demo). The CPU trust core needs **no GPU**.
 
-- **WSL2 + Linux** on Windows, or any Linux (for the from-raw build + running the produced ELFs)
-- **gcc** (the diverse-double-compile auditor) + a CUDA toolchain & RTX-class GPU (for the capstone)
-- (historical frontend only) **Python 3.10+** — not needed for the from-raw `kovc` toolchain
+No Python is required for the shipped toolchain. (Python 3.10+ is needed only for the fenced numpy
+audit oracle and the historical frontend in the appendix below.)
 
-The repository also contains the live 299-byte hand-encoded ELF
-(`stage0/hex0/hex0.bin`) that serves as the audited bootstrap floor; the later
-bootstrap links and self-hosted compiler remain roadmap targets until they can
-rebuild the compiler reproducibly.
+## Reproduce the trust core (one command, no GPU)
 
-## Build status
-
-This is an early in-development language. **Stage 35 is CLOSED** (3/3
-clean gates, achieved at restart 65 — Increment 82 in the Stage 35
-progress ledger). Restart 65 collected **2,556+ live `helixc/tests`
-pytest tests** (see Increments 70 onward in the progress ledger for
-the per-restart canary chain since restart 50; Increments 80 + 81 + 82
-are the three consecutive clean-gate records that closed Stage 35).
-Stage 36 opens next. Run
-`python -m pytest helixc/tests --collect-only -q -p no:cacheprovider`
-for the live count.
-
-Working today:
-
-| Layer | Status |
-|---|---|
-| Lexer/parser/AST | working and covered by pytest |
-| Type checker | working, with refinements/effects/shapes under active audit |
-| Presburger constraint solver | working |
-| Tensor IR | working |
-| Tile IR | data structures plus PTX-oriented lowering paths under Stage 35 audit |
-| Const folding / CSE / DCE / FDCE | working and integrated |
-| Forward and reverse autodiff | working for the covered symbolic/runtime paths |
-| x86-64 backend | works for scalars, control flow, arrays, floats, arena-backed tensors |
-| PTX backend | text emission for covered kernels; GPU execution is still not a shipped capability |
-| stage0 hex0 monitor | working 299-byte binary fixture |
-
-## Compile and run a Helix program
+The byte‑identical from‑raw trust core is reproducible by **one committed command on a clean
+checkout** — CPU‑only, ~1 minute:
 
 ```bash
-# 1. Write a .hx file
-cat > hello.hx <<'EOF'
-fn fib(n: i32) -> i32 {
-    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
-}
-
-fn main() -> i32 {
-    fib(9)
-}
-EOF
-
-# 2. Compile to a Linux ELF
-python -m helixc.backend.x86_64 hello.hx hello.bin
-
-# 3. Run it (Linux/WSL)
-chmod +x hello.bin
-./hello.bin
-echo $?     # prints: 34   (Fibonacci(9))
+bash scripts/reproduce_trust.sh
 ```
 
-CLI flags for `python -m helixc.backend.x86_64` (the `python -m helixc.check`
-driver accepts the same set plus the `--emit-*`, `--check-only`, `--doc`,
-and `-o` modes — see `python -m helixc.check --help` for the canonical
-list):
-- `--strict` — make totality/effect warnings hard errors
-- `--no-opt` or `-O0` — disable optimization passes (const-fold + CSE + DCE + FDCE)
-- `-O1` (default) / `-O2` / `-O3` — optimization level
-- `--stdlib` (default) / `--no-stdlib` — bundle (or skip) `helixc/stdlib/*.hx`
-- `-Wad=warn|error` / `-Wdeprecated=warn|error` — warning policy
-- `-l <libname>` / `-l<libname>` — mark external library (FFI prerequisite;
-  no-op for backends that don't link)
-- `--no-color` / `--color` — disable / force ANSI escapes (also: `NO_COLOR` env)
-- `--hash` / `--hash-cons` — structural hash / dedup helpers (no-op in
-  backends; meaningful in `helixc.check`)
+It deletes every pre‑built rung binary, rebuilds the whole `hex0 → seed` ladder (each rung
+self‑verifying its `.sha256`), runs the self‑host fixpoint (`seed → K1 → K2 → K3 → K4` with
+**K2 == K3 == K4 byte‑for‑byte**) and the gcc diverse‑double‑compile, and asserts the pinned anchors,
+exiting nonzero on any mismatch. `.github/workflows/trust-reproduce.yml` runs it on a clean
+`ubuntu-latest` runner on every push/PR, so the core is reproducible push‑button by any third party.
 
-Run with no arguments to see the full banner. `python -m helixc.check --help`
-is the canonical source of truth for accepted flags.
+## Compile a Helix program with the shipped `kovc`
 
-## Type-check only (no codegen)
+The universal gate is the source of truth for what `kovc` accepts and proves:
 
 ```bash
-python -m helixc.frontend.typecheck hello.hx
+bash scripts/gate_kovc.sh
 ```
 
-If there are type errors, you get Rust-style messages with source-line
-context:
+It runs the self‑host fixpoint + a 109‑program feature corpus (integer widths; floats incl.
+bf16/f16 arithmetic; control flow; generics; traits + default methods; closures incl.
+capturing‑by‑value; pattern matching; wide struct fields; structured `path:line:col` diagnostics) +
+a `ptxas`‑free PTX byte‑diff + diagnostics, and prints `GATE_PASS` only when all legs are green.
 
-```
-error: call to 'matmul': shape constraint violated (-1 == 0)
-   --> hello.hx:3:5
-    |
-  3 |     matmul(x, z)
-    |     ^
-```
+To build `kovc` from the raw seed and compile your own `.hx`, follow `docs/CLEAN_REPRODUCTION.md`
+(Step 2 builds the ladder; the seed‑minted `kovc` then compiles Helix programs — including its own
+source — directly to a Linux x86‑64 ELF, no assembler/linker/libc).
 
-## Symbolic autodiff
+## What works today
 
-```bash
-cat > loss.hx <<'EOF'
-fn loss(x: f32) -> f32 { x * x }
-fn cubic(x: f32) -> f32 { x * x * x }
-fn linear(x: f32, y: f32) -> f32 { 3.0 * x + 5.0 * y }
-EOF
+- Hand‑authored 299‑byte ELF (`stage0/hex0/hex0.bin`) — the raw‑binary foundation.
+- **Self‑hosting Helix‑native compiler** (`helixc/bootstrap/{lexer,parser,kovc}.hx`, `kovc`): a
+  complete lexer + parser + x86‑64‑ELF code generator written *in Helix*, built from the raw‑binary
+  `seed` (no Python) into a native binary that compiles Helix programs — including its own source.
+  Proven **byte‑identical self‑host fixpoint** (K2 == K3 == K4), gated by the 109‑program corpus.
+- **GPU path complete to PTX**: `kovc`‑emitted GPU kernels run a real GPT‑2 forward, gated
+  token‑for‑token vs an independent numpy reference (`docs/HELIX_GPT2_DEMO_RUNBOOK.md`).
+- **Source‑level forward + reverse‑mode autodiff** as language built‑ins (`grad`, `grad_rev`,
+  `grad_rev_all`), with chain rules across user‑defined calls (via inlining) and stdlib
+  transcendentals (analytic rules).
+- **Verifier‑gated reflection runtime** (mutable cells; `quote`/`splice_f`/`modify_f` call your
+  verifier before committing) and **IR‑level effect verification** (`@pure` transitively prohibited
+  from effectful code).
+- 8 unique compile‑time AGI type‑system features (Presburger shapes, `D<T>`, memory tiers, agents,
+  etc.) and a stdlib in `helixc/stdlib/*.hx` (see `helix_website/HELIX_REFERENCE.md` for live
+  per‑module counts).
+- 6 dogfood programs running real ML in Helix‑emitted binaries (gradient descent, linear regression,
+  affine fit, ReLU/XOR net, logistic regression w/ sigmoid+BCE+multi‑output AD, and a
+  self‑improving‑agent flagship).
 
-python -m helixc.frontend.autodiff_cli loss.hx loss
-# d(loss)/d(x) = (x + x)
-
-python -m helixc.frontend.autodiff_cli loss.hx cubic
-# d(cubic)/d(x) = (((x + x) * x) + (x * x))
-
-python -m helixc.frontend.autodiff_cli loss.hx linear x
-# d(linear)/d(x) = 3
-
-python -m helixc.frontend.autodiff_cli loss.hx linear y
-# d(linear)/d(y) = 5
-```
-
-### Round-trip: generate a derivative function, then compile and run it
-
-The CLI's `--as-function` flag emits a full Helix function definition,
-ready to paste into another file:
-
-```bash
-$ cat my_loss.hx
-fn loss(x: f32) -> f32 {
-    let pred = x * 2.0 + 3.0;
-    let target = 7.0;
-    let diff = pred - target;
-    diff * diff
-}
-
-$ python -m helixc.frontend.autodiff_cli my_loss.hx loss --as-function
-fn loss__grad(x: f32) -> f32 {
-    ((2 * (((x * 2) + 3) - 7)) + ((((x * 2) + 3) - 7) * 2))
-}
-```
-
-Paste that into your file, compile, and you have a working
-`loss__grad(x)` function.
-
-Helix's autodiff path is built around compile-time symbolic AST manipulation:
-the result is another Helix function you can read, edit, optimize, or
-hand-tune.
-
-## Run the test suite
-
-```bash
-bash scripts/run_all_tests.sh
-```
-
-The gate infrastructure still uses historical `stage31` log names, but it is
-the current full-suite smoke gate used during Stage 35 audit cleanup. You
-should see something like:
-
-```
-pytest (current sharded gate; historical stage31 log names):
-pytest-no-codegen: rc=0 log=.stage31-logs/pytest-no-codegen.log
-pytest-codegen-shard-1-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-1-of-4.log
-pytest-codegen-shard-2-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-2-of-4.log
-pytest-codegen-shard-3-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-3-of-4.log
-pytest-codegen-shard-4-of-4: rc=0 log=.stage31-logs/pytest-codegen-shard-4-of-4.log
-snapshot-check: rc=0 log=.stage31-logs/snapshot-check.log
-snapshot-compile: rc=0 log=.stage31-logs/snapshot-compile.log
-snapshot-run: rc=42
-
-stage0/hex0:
-PASS 03-empty
-Results: 3 passed, 0 failed
-
-=============================
-pytest gate rc: 0
-stage0/hex0 rc: 0
-TOTAL: all gates passed
-```
+> The older "Stage NN" / "K‑bootstrap chunk counter" / Python‑parity‑matrix framing is **superseded**
+> (see `README.md` §Status). For live state, read `git log --oneline -8`,
+> `docs/TRUST_CHAIN_CLOSED.md`, `docs/CLEAN_REPRODUCTION.md`, and `scripts/gate_kovc.sh`.
 
 ## Project layout
 
 ```
 Kovostov-Native/
-├── stage0/hex0/        # Hand-encoded raw-binary ELF (the bootstrap floor)
+├── stage0/                # The from-raw ladder: hex0 (299-byte ELF) → … → seed (the C-subset compiler)
 ├── helixc/
-│   ├── frontend/       # lexer, parser, AST, typecheck, presburger, autodiff
-│   ├── ir/             # Tensor IR, Tile IR, lowering passes
-│   │   └── passes/     # const_fold, dce
-│   ├── backend/        # x86_64 (works), ptx (text-emit stub)
-│   ├── examples/       # working .hx programs
-│   └── tests/          # pytest suite; audits keep adding regressions
+│   ├── bootstrap/         # kovc: the self-hosted Helix compiler (lexer.hx, parser.hx, kovc.hx)
+│   ├── stdlib/            # Helix stdlib (*.hx)
+│   ├── runtime/           # Category-B host harnesses (GPU/CPU launchers, tokenizer, importer, serve)
+│   └── (historical frontend; see appendix)
 ├── docs/
-│   ├── PLAN.md
-│   ├── lang/
-│   │   ├── spec.md          # formal language reference
-│   │   ├── tutorial.md      # 10-step beginner guide
-│   │   └── agi-features.md  # what makes Helix different
-│   └── research-log.md      # day-by-day implementation log
-└── scripts/run_all_tests.sh
+│   ├── CLEAN_REPRODUCTION.md      # rebuild the core chain from a clean checkout
+│   ├── TRUST_CHAIN_CLOSED.md      # verified state + every residual
+│   ├── HELIX_GPT2_DEMO_RUNBOOK.md # the GPT-2-on-Helix investor demo
+│   └── lang/{spec,tutorial,agi-features}.md
+└── scripts/
+    ├── reproduce_trust.sh         # one-command from-raw trust core (CPU-only)
+    └── gate_kovc.sh               # universal gate (self-host fixpoint + corpus + PTX)
 ```
 
 ## What makes Helix different
 
 Helix is being built to combine:
-1. **Compile-time tensor shape checking** via Presburger arithmetic — catches matmul dimension bugs before code runs.
+1. **Compile‑time tensor shape checking** via Presburger arithmetic — catches matmul dimension bugs before code runs.
 2. **Effect/capability typing** — `@pure` cannot accidentally call `@io`.
 3. **Differentiable types `D<T>`** — gradient flow tracked at the type level.
-4. **Memory-tier types** — `WorkingMem` / `EpisodicMem` / `SemanticMem` / `ProceduralMem` distinguished, transitions explicit.
-5. **Reflection primitives** — `quote { ... }`, `splice`, `modify` (verifier-gated).
-6. **Agent declarations** — society-of-mind cognitive architecture in the type system.
+4. **Memory‑tier types** — `WorkingMem` / `EpisodicMem` / `SemanticMem` / `ProceduralMem` distinguished, transitions explicit.
+5. **Reflection primitives** — `quote { ... }`, `splice`, `modify` (verifier‑gated).
+6. **Agent declarations** — society‑of‑mind cognitive architecture in the type system.
 7. **Symbolic autodiff** — derivatives computed at compile time, not at runtime.
 
-See `docs/lang/agi-features.md` for the deep dive.
+Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where
+ergonomics conflicts with structural regularity, structural regularity wins. See
+`docs/lang/agi-features.md` for the deep dive.
 
 ## License
 
-Apache 2.0 (code, in `LICENSE`); CC-BY 4.0 (docs, stated policy); CC0 (model weights when produced, stated policy).
+Apache 2.0 (code, in `LICENSE`); CC‑BY 4.0 (docs, stated policy); CC0 (model weights when produced, stated policy).
+
+---
+
+## Appendix — the historical Python frontend (NOT the shipped path)
+
+> **This section is historical and is NOT the shipped compile/run path.** The early Python‑hosted
+> `helixc` frontend (`python -m helixc.backend.x86_64`, `python -m helixc.frontend.*`) was the
+> bootstrap‑era prototype. It is retained for reference only and is **not** part of the from‑raw,
+> Python‑free `kovc` toolchain that ships (the repo's sole committed `.py` is the fenced numpy audit
+> oracle). Do not use these commands to evaluate the project — use the from‑raw `kovc` path above.
+
+The historical frontend exposed a Python CLI for compiling, type‑checking, and emitting symbolic
+derivatives from `.hx` source (`python -m helixc.backend.x86_64 in.hx out.bin`,
+`python -m helixc.frontend.typecheck`, `python -m helixc.frontend.autodiff_cli`). Those drivers, the
+historical pytest suite, and the `helixc/frontend|ir|backend` Python packages predate the self‑hosted
+`kovc` and are no longer the path the project's claims rest on. The shipped equivalents are: build
+`kovc` from raw (`docs/CLEAN_REPRODUCTION.md`) and gate it with `scripts/gate_kovc.sh`; autodiff is a
+language built‑in in `kovc` (`grad` / `grad_rev` / `grad_rev_all`).

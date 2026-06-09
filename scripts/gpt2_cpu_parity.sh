@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# P2 gate: GPT-2 124M CPU BLOCK-0 HIDDEN PARITY through kovc-compiled pure Helix,
-# with NO ptxas / NO GPU boundary. The purest-trust artifact.
+# P2 gate: GPT-2 124M CPU PARITY through kovc-compiled pure Helix, with NO ptxas /
+# NO GPU boundary. The purest-trust artifact. TWO legs, BOTH required to pass:
+#   - BLOCK-0 hidden parity (step [5]): post-block-0 hidden [5,768] vs the numpy
+#     oracle's helix-llm/ref/ref_block0.npy at max_abs<1e-3 AND mean_abs<1e-4
+#     (this LITERAL max_abs/mean_abs bar is STRICTER than the GPU block-0 gate in
+#     gpt2_infer.c, which uses a FLOORED max-abs-rel < 1e-3).
+#   - FULL-FORWARD logits-argmax parity (step [6]): one full CPU forward, comparing
+#     the last-token argmax AND the max-abs logit diff to the SAME numpy oracle
+#     (argmax match AND max_abs<1e-2). This is what backs the dashboard's "CPU
+#     full-forward argmax 262 == oracle" GATED claim (re-runnable, not measured-once).
 #
 # Modeled on scripts/gpt2_gpu_parity.sh but with ZERO GPU: mint the self-hosted
 # kovc FRESH from the 299-byte raw seed (seed -> K1 -> K2, the full-language
 # self-host compiler), compile the pure-Helix op-dispatch ELF
 # (helixc/runtime/gpt2_cpu_ops.hx) with that kovc, build the CUDA-FREE
-# byte-movement harness (helixc/runtime/cpu_host.c), run GPT-2 block 0 for the
-# canonical prompt, and compare the post-block-0 hidden [5,768] to
-# helix-llm/ref/ref_block0.npy at max_abs<1e-3 AND mean_abs<1e-4.
+# byte-movement harness (helixc/runtime/cpu_host.c), then run BOTH legs above.
 # (The .hx + .c are the COMMITTED tracked sources; only the model weights +
 #  the numpy-oracle ref remain fenced under helix-llm/.)
 #
 #   bash scripts/gpt2_cpu_parity.sh
 #
-# Emits GPT2_CPU_BLOCK0_PARITY_PASS / GPT2_CPU_BLOCK0_PARITY_FAIL and propagates
-# the verdict to the PROCESS EXIT STATUS (fail-closed: a printed FAIL is never
-# exit 0). ALL ARITHMETIC stays in the kovc-emitted Helix ELF; the C harness does
-# only byte-movement (mmap weights, embedding gather, head pack/scatter, GEMM
+# Emits GPT2_CPU_BLOCK0_PARITY_PASS + GPT2_CPU_LOGITS_PARITY_PASS on success (or
+# GPT2_CPU_BLOCK0_PARITY_FAIL on any failure) and propagates the COMBINED verdict
+# (both legs must pass) to the PROCESS EXIT STATUS (fail-closed: a printed FAIL is
+# never exit 0). ALL ARITHMETIC stays in the kovc-emitted Helix ELF; the C harness
+# does only byte-movement (mmap weights, embedding gather, head pack/scatter, GEMM
 # N-tiling, per-op file staging). STRICTLY SERIAL (one kovc/build at a time).
 #
 # Speed: the build mints kovc from the raw seed (seed->K1->K2). Set CPU_BUILD_DIR
