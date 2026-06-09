@@ -32,6 +32,9 @@ BS=$ROOT/stage0/helixc-bootstrap
 SRC=$ROOT/helixc/runtime
 WEIGHTS=$ROOT/helix-llm/models/gpt2/gpt2_124M.weights
 REF=$ROOT/helix-llm/ref/ref_block0.npy
+REFDIR=$ROOT/helix-llm/ref
+TOOLS=$ROOT/helix-llm/tools
+PROMPT="The capital of France is"
 BD=${CPU_BUILD_DIR:-$HOME/gpt2cpu/bs}
 WD=${CPU_WORK_DIR:-$HOME/gpt2cpu/work}
 OK=1
@@ -172,5 +175,53 @@ else
   echo "  PARITY FAIL: prerequisites missing"; OK=0
 fi
 
+# ---- [6] full-forward LOGITS parity (CPU argmax == oracle, fail-closed) ----
+# Extends the block-0 gate to the WHOLE forward: one full CPU forward (~2 min) through the
+# kovc-from-raw Helix ELF, comparing the last-token argmax (the discrete next-token decision)
+# AND the max-abs logit diff to the independent numpy oracle. This makes the dashboard's
+# "CPU argmax 262 == oracle" claim a re-runnable gate, not a measured-once scratch number.
+# cpu_host.c --logits already does the compare + emits GPT2_CPU_LOGITS_PARITY_PASS (argmax
+# match AND max_abs<1e-2). The oracle full-logits ref is the SAME numpy oracle (Python verifier).
+echo "=== [6] CPU full-logits parity (argmax == oracle; max_abs<1e-2; fail-closed) ==="
+LOGITS_OK=0
+if [ "$OK" = "1" ] && [ -x "$WD/cpu_host" ] && [ -s "$WD/gpt2_cpu_ops.bin" ] && [ -s "$WEIGHTS" ]; then
+  # (6a) oracle full-logits ref: ref_logits_last.bin + ref_argmax.txt + ref_ids.txt (cheap: 5-token prompt).
+  rm -f "$REFDIR/ref_logits_last.bin" "$REFDIR/ref_argmax.txt" "$REFDIR/ref_ids.txt"
+  if [ -s "$TOOLS/gpt2_numpy_ref.py" ]; then
+    ( cd "$TOOLS" && python3 gpt2_numpy_ref.py dump-logits "$PROMPT" ) >/tmp/gpc_orc_logits.log 2>&1 \
+      || { echo "  ORACLE full-logits FAIL"; tail -6 /tmp/gpc_orc_logits.log | sed 's/^/    /'; OK=0; }
+    sed 's/^/    /' /tmp/gpc_orc_logits.log
+  else
+    echo "  ORACLE FAIL: missing $TOOLS/gpt2_numpy_ref.py (fenced oracle)"; OK=0
+  fi
+  if [ ! -s "$REFDIR/ref_logits_last.bin" ] || [ ! -s "$REFDIR/ref_argmax.txt" ]; then
+    echo "  ORACLE FAIL: no ref_logits_last.bin / ref_argmax.txt produced"; OK=0
+  else
+    echo "  oracle argmax=$(cat "$REFDIR/ref_argmax.txt" 2>/dev/null); ids=[$(cat "$REFDIR/ref_ids.txt" 2>/dev/null)]"
+  fi
+  # (6b) CPU full forward -> compare argmax + logit-diff (stale-artifact guard: rm dump, require fresh).
+  if [ "$OK" = "1" ]; then
+    rm -f /tmp/gpc/helix_logits_last.bin
+    "$WD/cpu_host" "$WEIGHTS" "$WD/gpt2_cpu_ops.bin" --logits \
+      "$REFDIR/ref_logits_last.bin" "$REFDIR/ref_argmax.txt" "$REFDIR/ref_ids.txt" > /tmp/gpc_logits.log 2>&1 ; lrc=$?
+    sed 's/^/    /' /tmp/gpc_logits.log
+    if [ ! -s /tmp/gpc/helix_logits_last.bin ]; then echo "  LOGITS FAIL: run left no /tmp/gpc/helix_logits_last.bin (rc=$lrc)"; OK=0;
+    else echo "  fresh artifact: /tmp/gpc/helix_logits_last.bin ($(stat -c%s /tmp/gpc/helix_logits_last.bin) B)"; fi
+    if grep -q '^GPT2_CPU_LOGITS_PARITY_PASS' /tmp/gpc_logits.log; then LOGITS_OK=1;
+    else echo "  LOGITS FAIL (no GPT2_CPU_LOGITS_PARITY_PASS line; rc=$lrc)"; OK=0; fi
+  fi
+else
+  echo "  LOGITS FAIL: prerequisites missing"; OK=0
+fi
+[ "$LOGITS_OK" = "1" ] && echo "  CPU full-logits argmax == oracle (gate-backed)" || true
+
 echo "=================================================================="
-if [ "$OK" = "1" ]; then echo "GPT2_CPU_BLOCK0_PARITY_PASS"; exit 0; else echo "GPT2_CPU_BLOCK0_PARITY_FAIL"; exit 1; fi
+# Fail-closed combined verdict: BOTH block-0 hidden parity AND full-logits argmax parity must pass.
+if [ "$OK" = "1" ] && [ "$LOGITS_OK" = "1" ]; then
+  echo "GPT2_CPU_BLOCK0_PARITY_PASS"
+  echo "GPT2_CPU_LOGITS_PARITY_PASS"
+  exit 0
+else
+  echo "GPT2_CPU_BLOCK0_PARITY_FAIL"
+  exit 1
+fi

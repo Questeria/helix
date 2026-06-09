@@ -16,8 +16,18 @@ operator script and the MVP Definition‑of‑Done closeout.
 - **Machine:** WSL2 (Ubuntu) on Windows, an NVIDIA RTX 3070‑class GPU (`sm_86`, 8 GB), CUDA 12.x
   driver + a PTX‑8.3‑capable `ptxas` on `PATH`. `nvidia-smi` should list the GPU.
 - **Repo + weights:** the repo at `C:\Projects\Kovostov-Native`; the GPT‑2 weights + the P1 flat
-  weight file + the fenced oracle live (gitignored) under `helix-llm/` (re‑downloadable via
-  `helix-llm/tools/gpt2_import.py` if absent). `python3 -m pip install --user regex` for the oracle.
+  weight file + the fenced numpy oracle live **gitignored** under `helix-llm/` (large binaries +
+  the independent verifier — not in a clone). **To obtain them from scratch** (a third party on a
+  fresh clone): download the model from **HuggingFace `openai-community/gpt2`** (MIT license —
+  `model.safetensors`, `vocab.json`, `merges.txt`, `config.json`), then convert to the demo's flat
+  `.weights` with the **committed, Python‑free** importer `helixc/runtime/gpt2_pack.c`
+  (`gcc -O2 helixc/runtime/gpt2_pack.c -o gpt2_pack && ./gpt2_pack model.safetensors gpt2_124M.weights`)
+  and tokenize prompts with the **committed** `helixc/runtime/gpt2_tok.c` — both gated byte/bit‑exact
+  vs the Python originals by `scripts/gpt2_pyfree.sh`. The from‑raw trust **core** is fully
+  third‑party‑reproducible from the repo alone (`scripts/reproduce_trust.sh` + CI); only the GPT‑2
+  demo legs need these public weights fetched + converted. The fenced numpy oracle
+  (`helix-llm/tools/gpt2_numpy_ref.py`, an independent reference — kept Python by design) needs
+  `python3 -m pip install --break-system-packages regex` (or `--user` on a non‑PEP‑668 box).
 - **Warm‑up (do this before the slot):** run the hero command once so the ext4 mirror + the seed‑minted
   PTX are warm and you've captured a green transcript as the backup (see §3). A cold full run is a few
   minutes (the from‑raw rebuild dominates); a warm GPU generation is seconds.
@@ -168,6 +178,8 @@ ops/kernels**, only dimension changes (read from each model's `config.json`). Bo
 vs the fenced numpy oracle (Large argmax id 262, max‑abs logit diff 3.8e‑05, 25/25 ids; XL argmax id
 262, max‑abs logit diff 4.4e‑05, 25/25 ids; XL output: *"The capital of France is the city of Paris.
 It is the capital of France and the largest city in France. It is"*). Reproducible via the fail‑closed
-gate `scripts/gpt2_scale.sh` (`MODEL=gpt2-large|gpt2-xl`). This **measures** the fp32 ceiling residual:
-1.5 B fits the 8 GB sm_86 box (the committed `gpt2_infer.c` is dimension‑generic; per‑layer weight
-streaming keeps device residency low, so layer count does not gate VRAM).
+gate `scripts/gpt2_scale.sh` (`MODEL=gpt2-large|gpt2-xl`); the verbatim **PRIMARY‑mode** verdict
+evidence for both (mode line, argmax‑exact, the `max_abs logit diff=` line, token‑for‑token, gen‑ids)
+is committed in `scripts/scale_results.txt` so these figures trace to a real run. This **measures** the
+fp32 ceiling residual: 1.5 B fits the 8 GB sm_86 box (the committed `gpt2_infer.c` is dimension‑generic;
+per‑layer weight streaming keeps device residency low, so layer count does not gate VRAM).

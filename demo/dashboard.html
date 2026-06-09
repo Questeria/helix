@@ -538,8 +538,8 @@ const EMBEDDED_REPORT = {
     { name: "BYTE-IDENTICAL", verdict: "PASS", key: "two runs, same to the byte",
       desc: "Generation re-run; gen-ids sha 8a2595cd… identical across both runs.",
       hash: "8a2595cd00000000000000000000000000000000000000000000000000000000", hash_is_partial: true },
-    { name: "CPU NO-PTXAS BLOCK-0 PARITY", verdict: "PASS", key: "argmax 262 == oracle", flag: "NO PTXAS / PUREST TRUST",
-      desc: "Same model on a CPU path with NO ptxas/GPU boundary at all; block-0 max-abs 1.144e-04; argmax 262 == oracle; greedy gen token-for-token == oracle." },
+    { name: "CPU NO-PTXAS PARITY", verdict: "PASS", key: "argmax 262 == oracle", flag: "NO PTXAS / PUREST TRUST",
+      desc: "Same model on a CPU path with NO ptxas/GPU boundary at all. GATED (fail-closed, re-runnable via scripts/gpt2_cpu_parity.sh): block-0 hidden max-abs 1.144e-04, AND full-forward argmax 262 == oracle (max-abs logit diff 2.75e-04). MEASURED (full greedy run, ~130 s/token — too slow to gate): greedy generation token-for-token == oracle." },
     { name: "SCALE FLEX", verdict: "PASS", key: "774M + 1.5B — token-for-token", flag: "SAME KERNELS / ZERO NEW OPS",
       desc: "GPT-2-Large 774M and GPT-2-XL 1.5B both run through the SAME 8 kovc-emitted kernels (zero new ops; dims read from config.json). Token-for-token vs the oracle — Large: argmax 262, max-abs 3.8e-05, 25/25 ids; XL: argmax 262, max-abs 4.4e-05, 25/25 ids. XL is visibly more coherent: &ldquo;…the city of Paris. It is the capital of France…&rdquo;" }
   ],
@@ -553,7 +553,7 @@ const EMBEDDED_REPORT = {
   ],
   fences: [
     { k: "exactly", v: "1 committed .py" },
-    { k: "26 committed .c/.h", v: "24 from-raw UNCHANGED + 2 demo launchers" },
+    { k: "29 committed .c/.h", v: "22 from-raw ladder (byte-identical) + 7 Category-B host harnesses" },
     { k: "corpus", v: "109 / 0" },
     { k: "self-host fixpoint", v: "0992dddd", mono: true }
   ],

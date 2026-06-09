@@ -1,0 +1,34 @@
+# GPT-2 SCALE-FLEX results digest (committed provenance for the dashboard/runbook numbers)
+#
+# Source of truth for the Large/XL scale figures shown on demo/dashboard.html (SCALE FLEX card),
+# docs/HELIX_GPT2_DEMO_RUNBOOK.md (Scale flex), scripts/gpt2_demo_attest.sh, and
+# docs/HELIX_GPT2_CHAT_BACKEND_PLAN.md. Each block is the verbatim PRIMARY-mode verdict evidence
+# from a real run of: MODEL=<model> bash scripts/gpt2_scale.sh   (GPU, sm_86, strictly serial).
+# PRIMARY mode = full-logits last-token argmax-EXACT vs the fenced numpy oracle + the max-abs
+# logit-diff under the diagnostic bar + greedy generation token-for-token (NOT the block-0 fallback).
+# The PTX is minted fresh from the 299-byte raw seed (9837db12) every run; gpt2_infer.c is the
+# committed, dimension-generic launcher (zero new kernels -- only HX_* dims change per model).
+#
+# Regenerate: run  MODEL=gpt2-large bash scripts/gpt2_scale.sh  and  MODEL=gpt2-xl bash
+# scripts/gpt2_scale.sh  (serial), then copy each VERDICT block (and the argmax / max-abs /
+# token-for-token / gen-ids lines from that run's stdout) into the per-model sections below.
+# Last run (UTC): 2026-06-09T07:48:18Z on NVIDIA GeForce RTX 3070 Laptop GPU
+
+## gpt2-large
+- VERDICT (gpt2-large, mode: full-logits + token-for-token generation)
+- GPT2_SCALE_PARITY_PASS
+- argmax: helix argmax=262 (logit=8.7656)  oracle argmax=262  -> ARGMAX_MATCH
+- max_abs logit diff=3.81470e-05 at id 180 (helix=-32.9912 ref=-32.9911)  [diag bar 5e-2: ok]
+- token-for-token: TOKEN_FOR_TOKEN_MATCH (25 ids)
+- gen-ids: 464 3139 286 4881 318 262 3139 286 4881 13 198 198 464 3139 286 4881 318 262 3139 286 4881 13 198 198 464
+- text: $'The capital of France is the capital of France.\n\nThe capital of France is the capital of France.\n\nThe'
+
+## gpt2-xl
+- VERDICT (gpt2-xl, mode: full-logits + token-for-token generation)
+- GPT2_SCALE_PARITY_PASS
+- argmax: helix argmax=262 (logit=8.7916)  oracle argmax=262  -> ARGMAX_MATCH
+- max_abs logit diff=4.38690e-05 at id 197 (helix=-27.1431 ref=-27.1432)  [diag bar 5e-2: ok]
+- token-for-token: TOKEN_FOR_TOKEN_MATCH (25 ids)
+- gen-ids: 464 3139 286 4881 318 262 1748 286 6342 13 632 318 262 3139 286 4881 290 262 4387 1748 287 4881 13 632 318
+- text: The\ capital\ of\ France\ is\ the\ city\ of\ Paris.\ It\ is\ the\ capital\ of\ France\ and\ the\ largest\ city\ in\ France.\ It\ is
+

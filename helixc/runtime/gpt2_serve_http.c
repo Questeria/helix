@@ -59,6 +59,11 @@
 #define PATH_MAX 4096
 #endif
 
+/* Upper bound on a request body (the only POST payloads are tiny JSON: a prompt + n_gen).
+ * A client-supplied Content-Length above this is rejected with 413 BEFORE any allocation,
+ * so a malicious/oversized Content-Length cannot drive a multi-GB malloc (DoS). */
+#define MAX_BODY (256 * 1024)
+
 /* ============================ config ============================ */
 typedef struct {
     int   port;
@@ -80,7 +85,7 @@ typedef struct {
     int   to_worker;           /* server -> worker stdin (write) */
     int   from_worker;         /* worker stdout -> server (read) */
     int   ready;               /* GPT2_SERVE_READY seen */
-    char  device[256];         /* parsed from the worker's first hello (best-effort) */
+    char  device[256];         /* real device name, captured from the worker's first hello SSE event */
     pthread_mutex_t lock;      /* single-flight: one generation at a time */
 } Worker;
 
@@ -137,6 +142,20 @@ static void json_str_field(const char* line, const char* key, char* out, size_t 
         while (*p && *p != ',' && *p != '}' && *p != ' ' && k + 1 < outcap) out[k++] = *p++;
         out[k] = 0;
     }
+}
+
+/* The telemetry contract: the ONLY worker "_ev" values that may be re-framed onto the SSE wire.
+ * Any worker stdout line that is not a JSON object carrying one of these is DROPPED (it never
+ * reaches the browser) so the stream stays pure newline-JSON telemetry -- no decorative
+ * "event: message" leak, no internal diagnostic line on a wire that may be web-exposed. */
+static int is_telemetry_event(const char* ev) {
+    if (!ev || !ev[0]) return 0;
+    static const char* const CONTRACT[] = {
+        "hello", "tokenize", "forward_begin", "embed", "layer_begin", "op",
+        "layer_end", "head", "token", "done", "error", NULL
+    };
+    for (int i = 0; CONTRACT[i]; i++) if (!strcmp(ev, CONTRACT[i])) return 1;
+    return 0;
 }
 
 /* ============================ static file serving ============================ */
@@ -224,8 +243,9 @@ static void handle_health(int fd) {
 /* ============================ /api/generate (SSE bridge) ============================ */
 /* read the HTTP request body given the already-read header (Content-Length). */
 static char* read_body(int fd, const char* hdr_end, const char* hdrbuf, size_t hdrlen, int content_len) {
-    if (content_len <= 0) return NULL;
+    if (content_len <= 0 || content_len > MAX_BODY) return NULL;   /* bound the allocation */
     char* body = (char*)malloc((size_t)content_len + 1);
+    if (!body) return NULL;                                        /* no NULL-deref below */
     /* bytes already in the header buffer past hdr_end */
     size_t have = 0;
     size_t consumed = (size_t)(hdr_end - hdrbuf);
@@ -251,6 +271,7 @@ static char* build_worker_frame(const char* body) {
      * after stripping any trailing newline and ensuring exactly one. The worker clamps n_gen. */
     size_t n = body ? strlen(body) : 0;
     char* frame = (char*)malloc(n + 2);
+    if (!frame) return NULL;                  /* caller handles NULL (no deref) */
     size_t k = 0;
     for (size_t i = 0; i < n; i++) { if (body[i] == '\n' || body[i] == '\r') continue; frame[k++] = body[i]; }
     frame[k++] = '\n';
@@ -296,6 +317,10 @@ static void handle_generate(int fd, const char* body) {
 
     /* write the request frame to the worker stdin. */
     char* frame = build_worker_frame(body);
+    if (!frame) {
+        sse_write_event(fd, "0", "error", "{\"_ev\":\"error\",\"where\":\"driver\",\"message\":\"out of memory\",\"fatal\":true}\n");
+        g_busy = 0; pthread_mutex_unlock(&g_worker.lock); return;
+    }
     if (write_all(g_worker.to_worker, frame, strlen(frame)) < 0) {
         sse_write_event(fd, "0", "error", "{\"_ev\":\"error\",\"where\":\"driver\",\"message\":\"worker stdin closed\",\"fatal\":true}\n");
         free(frame); g_busy = 0; pthread_mutex_unlock(&g_worker.lock); return;
@@ -315,7 +340,18 @@ static void handle_generate(int fd, const char* body) {
         }
         char ev[64], seq[32];
         json_str_field(line, "_ev", ev, sizeof ev);
+        /* TELEMETRY PURITY: only forward lines that are valid telemetry JSON objects carrying a
+         * recognized "_ev". Drop anything else (e.g. a stray worker diagnostic) -- log it to our
+         * stderr so it is not silently lost, but never leak it onto the SSE wire as "event: message". */
+        if (!is_telemetry_event(ev)) {
+            fprintf(stderr, "[serve] dropped non-telemetry worker line: %s%s",
+                    line, (line[0] && line[strlen(line)-1] == '\n') ? "" : "\n");
+            continue;
+        }
         json_str_field(line, "seq", seq, sizeof seq);
+        /* opportunistically capture the real device name from the first hello for /api/health. */
+        if (!strcmp(ev, "hello") && !g_worker.device[0])
+            json_str_field(line, "device", g_worker.device, sizeof g_worker.device);
         sse_write_event(fd, seq, ev, line);
         if (!strcmp(ev, "done")) { saw_terminal = 1; break; }
         if (!strcmp(ev, "error")) {
@@ -405,6 +441,11 @@ static void* handle_conn(void* arg) {
         if (!strcmp(path, "/api/health")) handle_health(fd);
         else serve_static(fd, path);
     } else if (!strcmp(method, "POST")) {
+        if (content_len > MAX_BODY) {   /* reject oversized bodies before allocating */
+            send_status(fd, 413, "Payload Too Large", "application/json; charset=utf-8",
+                        "{\"error\":\"request body too large\"}");
+            close(fd); return NULL;
+        }
         char* body = read_body(fd, hdr_end, hdrbuf, hlen, content_len);
         if (!strcmp(path, "/api/generate")) handle_generate(fd, body ? body : "");
         else if (!strcmp(path, "/api/verify")) handle_verify(fd, body ? body : "");

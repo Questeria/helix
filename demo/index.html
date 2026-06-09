@@ -847,7 +847,8 @@
    - The render layer subscribes once and does not know or care which
      source is live. Swapping sources = swapping which factory builds
      the stream. To go live: flip USE_LIVE_BACKEND to true (the real
-     SSE source is stubbed below and ready to wire to POST /api/generate).
+     SSE source is implemented below — a complete fetch+ReadableStream
+     POST /api/generate client, gated green by scripts/helix_serve_gate.sh).
    ================================================================ */
 
 /* =====================  THE ONE FLAG TO FLIP  ===================== */
@@ -1190,7 +1191,8 @@ var MockTelemetryGenerator = (function () {
 })();
 
 /* ================================================================
-   LIVE SSE SOURCE  (stub — ready to wire when USE_LIVE_BACKEND=true)
+   LIVE SSE SOURCE  (IMPLEMENTED — used when USE_LIVE_BACKEND=true;
+   gated green by scripts/helix_serve_gate.sh, G1 token-for-token)
    ----------------------------------------------------------------
    Same start(prompt,nGen,handlers) interface as the mock. Uses
    fetch + ReadableStream because EventSource is GET-only and the

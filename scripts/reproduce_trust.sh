@@ -88,7 +88,7 @@ say "[1] static fence"
 NPY=$(git ls-files "*.py" | wc -l | tr -d ' ')
 NCH=$(git ls-files "*.c" "*.h" | wc -l | tr -d ' ')
 if [ "$NPY" = "1" ]; then say "    committed .py = 1 ($(git ls-files '*.py'))"; else bad "committed .py = $NPY (want 1)"; fi
-if [ "$NCH" = "29" ]; then say "    committed .c/.h = 29 (24 v1.3 from-raw toolchain UNCHANGED + 5 Category-B host tools: gpt2_infer.c GPU demo [+additive forward-only --serve mode] + cpu_host.c CPU no-ptxas demo + gpt2_tok.c byte-level BPE tokenizer [+--serve in-process tok] + gpt2_pack.c safetensors importer + gpt2_serve_http.c NO-Python C HTTP+SSE chat server; all OUTSIDE the fixpoint, zero arithmetic on the trust path)"; else bad "committed .c/.h = $NCH (want 29)"; fi
+if [ "$NCH" = "29" ]; then say "    committed .c/.h = 29 (22 from-raw ladder [byte-identical to v1.3, incl. seed.c] + 7 Category-B host harnesses [OUTSIDE the self-host fixpoint, zero arithmetic on the trust path]; the 5 newest are the GPT-2 demo tools: gpt2_infer.c GPU demo [+additive forward-only --serve mode] + cpu_host.c CPU no-ptxas demo + gpt2_tok.c byte-level BPE tokenizer [+--serve in-process tok] + gpt2_pack.c safetensors importer + gpt2_serve_http.c NO-Python C HTTP+SSE chat server)"; else bad "committed .c/.h = $NCH (want 29)"; fi
 
 # --- [2] from-raw ladder ------------------------------------------------------------------------
 say "[2] from-raw ladder (deleting pre-built rung binaries first, then rebuilding each from the prior)"
