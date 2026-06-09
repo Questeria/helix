@@ -2,10 +2,16 @@
 # reproduce_trust.sh -- ONE-COMMAND clean-room reproduction of the Helix from-raw trust core.
 #
 # What it proves (CPU-only -- runnable on any x86-64 Linux, incl. a CI runner, with NO local state):
-#   [1] static fence            : exactly 1 committed .py, 25 committed .c/.h
-#                                 (24 = the v1.3 from-raw trusted toolchain, UNCHANGED; +1 = the
-#                                  post-v1.3 GPT-2 demo launcher helixc/runtime/gpt2_infer.c, a
-#                                  Category-B CUDA-FFI harness like train_transformer.c)
+#   [1] static fence            : exactly 1 committed .py, 26 committed .c/.h
+#                                 (24 = the v1.3 from-raw trusted toolchain, UNCHANGED; +2 Category-B
+#                                  host harnesses, both OUTSIDE the self-host fixpoint:
+#                                    helixc/runtime/gpt2_infer.c  -- post-v1.3 GPT-2 demo launcher
+#                                                                    (CUDA-FFI, ptxas boundary), and
+#                                    helixc/runtime/cpu_host.c    -- post-v1.3 CPU no-ptxas demo
+#                                                                    launcher (CUDA-FREE byte-movement
+#                                                                    harness; ZERO arithmetic on the
+#                                                                    trust path; all math in the
+#                                                                    kovc-compiled gpt2_cpu_ops.hx))
 #   [2] from-raw ladder         : DELETE every pre-built rung binary, then rebuild hex0->...->seed
 #                                 using ONLY the prior rung (hex0 from hand-authored hex via xxd);
 #                                 each rung self-verifies its committed .sha256; seed == pinned.
@@ -57,7 +63,7 @@ say "[1] static fence"
 NPY=$(git ls-files "*.py" | wc -l | tr -d ' ')
 NCH=$(git ls-files "*.c" "*.h" | wc -l | tr -d ' ')
 if [ "$NPY" = "1" ]; then say "    committed .py = 1 ($(git ls-files '*.py'))"; else bad "committed .py = $NPY (want 1)"; fi
-if [ "$NCH" = "25" ]; then say "    committed .c/.h = 25 (24 v1.3 from-raw toolchain UNCHANGED + helixc/runtime/gpt2_infer.c, the post-v1.3 GPT-2 demo launcher)"; else bad "committed .c/.h = $NCH (want 25)"; fi
+if [ "$NCH" = "26" ]; then say "    committed .c/.h = 26 (24 v1.3 from-raw toolchain UNCHANGED + 2 Category-B launchers: helixc/runtime/gpt2_infer.c GPT-2 demo + helixc/runtime/cpu_host.c CPU no-ptxas demo)"; else bad "committed .c/.h = $NCH (want 26)"; fi
 
 # --- [2] from-raw ladder ------------------------------------------------------------------------
 say "[2] from-raw ladder (deleting pre-built rung binaries first, then rebuilding each from the prior)"

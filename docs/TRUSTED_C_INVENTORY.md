@@ -20,13 +20,17 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
 
 - **Committed C/H after V6: 24 files, 15 605 LOC** (was 30 files / 16 308 LOC; V6 pruned 6 dead
   files / 708 LOC — see §4).
-- **Post-v1.3 (GPT-2 inference demo) addendum:** at HEAD the committed C/H is **25 files / 16 545 LOC**.
+- **Post-v1.3 (GPT-2 inference demos) addendum:** at HEAD the committed C/H is **26 files / 17 124 LOC**.
   The v1.3 V6 trusted toolchain detailed below (24 files / 15 605 LOC — Category A's from-raw ladder
   and the `seed.c` trust root) is **UNCHANGED**, and the self-host fixpoint stays `0992dddd`. The
-  GPT-2-on-Helix demo added exactly one **Category-B harness** launcher — `helixc/runtime/gpt2_infer.c`
+  GPT-2-on-Helix demos added **two Category-B harness launchers** — `helixc/runtime/gpt2_infer.c`
   (667 LOC, a CUDA-FFI forward-only launcher like `train_transformer.c`, outside the self-host fixpoint,
-  ptxas-boundary) — and grew `cuda_launch.c` by 273 LOC (GPU kernel verify modes). So Category B is
-  3 files / 3 328 LOC at HEAD (was 2 / 2 388). Nothing in Category A or the trust root changed.
+  ptxas-boundary) and `helixc/runtime/cpu_host.c` (579 LOC, the CPU **no-ptxas** demo launcher — a
+  CUDA-FREE byte-movement harness, outside the self-host fixpoint, **ZERO arithmetic on the trust path**;
+  all math lives in the kovc-compiled `helixc/runtime/gpt2_cpu_ops.hx`, which is a `.hx` and so does NOT
+  count against the `.c`/`.h` fence) — and grew `cuda_launch.c` by 273 LOC (GPU kernel verify modes).
+  So Category B is 4 files / 3 907 LOC at HEAD (was 2 / 2 388). Nothing in Category A or the trust root
+  changed.
 - The trusted-C surface is **two disjoint categories**:
   - **A. The from-raw bootstrap ladder** (`stage0/*`, 22 files / 13 217 LOC) — trusted **source**
     that is **compiled from raw** by the `hex0 → hex1 → hex2 → catm → M0 → cc_amd64 → M2-Planet`
@@ -105,16 +109,35 @@ vendored one (the build needs none).
 
 **Outside the self-host fixpoint** (the gate, `scripts/gate_kovc.sh`, never compiles these — it
 runs the pure-x86 `seed → K1 → K2 → K3 → K4` fixpoint + a ptxas-free PTX byte-diff + the feature
-corpus). These two files are compiled **only** by the GPU/capstone scripts
+corpus). The two **v1.3 V6** files below are compiled **only** by the GPU/capstone scripts
 (`scripts/gpu_*.sh`, `scripts/capstone_audit.sh`, and the `.stage33-logs/_g3_*`/`m6_*` probes) via
-`gcc … -lcuda -lcublas -lm`.
+`gcc … -lcuda -lcublas -lm`. (The two **post-v1.3** Category-B launchers — `helixc/runtime/gpt2_infer.c`
+and `helixc/runtime/cpu_host.c` — are itemized in the Headline addendum above; both are outside the
+fixpoint too, and `cpu_host.c` is **CUDA-FREE** with **zero arithmetic on the trust path** — see §2a.)
 
 | Path | LOC | Role | Fixpoint | On build path? | Trusted-why | Portable? |
 |---|---:|---|---|---|---|---|
 | `helixc/runtime/cuda_launch.c` | 1923 | Multi-mode **GPU correctness + perf harness**: loads a kovc-emitted PTX module and drives vector_add / attention / GEMM / TF32-Tensor-Core kernels; times them (cuEvent); checks each against a **CPU oracle** and **cuBLAS**. | **OUT** | GPU scripts only (`gcc -lcuda -lcublas`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; the math it judges is all kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
 | `helixc/runtime/train_transformer.c` | 465 | The **capstone training-loop host**: a 2-layer transformer trained end-to-end on kovc-emitted GPU kernels; gradient check = a **sampled finite-difference spot-check** (6 gradient tensors × ≤5 sampled indices each vs analytic backprop — `verify` mode, NOT exhaustive); 2% loss-parity vs an independent numpy oracle. | **OUT** | capstone/`m6_*` scripts only (`gcc -lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; all math is kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (see §3) |
 
-**Category B total: 2 files, 2 388 LOC.**
+**Category B (v1.3 V6) total: 2 files, 2 388 LOC.** At HEAD, with the two post-v1.3 demo launchers
+(`gpt2_infer.c` 667 + `cpu_host.c` 579) and `cuda_launch.c`'s +273 growth, **Category B = 4 files /
+3 907 LOC** (see Headline addendum + §2a).
+
+### 2a. Post-v1.3 Category-B addendum — the GPT-2 demo launchers
+
+Two forward-only GPT-2-on-Helix demo launchers were added after v1.3. Both are **outside the self-host
+fixpoint** (`gate_kovc.sh` never compiles them) and **trusted-once host launchers** — every arithmetic
+op they exercise is emitted by the kovc-compiled Helix, not by the C.
+
+| Path | LOC | Role | Fixpoint | On build path? | Trusted-why | Portable? |
+|---|---:|---|---|---|---|---|
+| `helixc/runtime/gpt2_infer.c` | 667 | **GPU** forward-only GPT-2 demo launcher (CUDA-FFI), the `train_transformer.c` twin minus the training loop. | **OUT** | GPU demo scripts only (`gcc -lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher; all math is kovc-emitted PTX | **IRREDUCIBLE** as a host launcher (closed `ptxas`/driver boundary, §3) |
+| `helixc/runtime/cpu_host.c` | 579 | **CPU no-ptxas** forward-only GPT-2 demo launcher: a **CUDA-FREE** byte-movement harness (mmap the P1 weights, host embedding gather, multi-head pack/scatter, GEMM N-tiling, per-op `/tmp/gpc` file staging into the 25 MB Helix arena). **ZERO arithmetic on the trust path** — every layernorm/softmax/matmul/GELU/residual runs inside the kovc-compiled `gpt2_cpu_ops.hx` ELF. Gated by `scripts/gpt2_cpu_parity.sh` (block-0 parity vs the numpy oracle, fail-closed). | **OUT** | `scripts/gpt2_cpu_parity.sh` only (`gcc -O2 -lm`, **no** `-lcuda`), **never** in `gate_kovc.sh` | Trusted-once **host** launcher that does **no math**; all arithmetic is in the kovc-from-raw Helix ELF | **IRREDUCIBLE** as a host launcher (mmap/file-staging glue), but does **NOT** rely on `ptxas`/driver — it is CUDA-free |
+
+> Companion source: `helixc/runtime/gpt2_cpu_ops.hx` (the pure-Helix op ELF holding **all** CPU-path
+> arithmetic) is a `.hx`, so it is **not** counted by the `.c`/`.h` fence — freely committable, no fence
+> impact. Design doc: `helixc/runtime/README_CPU_PATH.md`.
 
 ---
 

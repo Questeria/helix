@@ -23,7 +23,7 @@ them **without** relying on the gitignored process logs under `.stage33-logs/`. 
 | Check | Command | Result |
 |-------|---------|--------|
 | Exactly 1 committed `.py` | `git ls-files "*.py" \| wc -l` | **1** — `verification/oracle/oracle_train.py` |
-| committed `.c`/`.h` + LOC | `git ls-files "*.c" "*.h" \| wc -l` ; `\| xargs wc -l` | **25 / 16 545** — the v1.3 trusted toolchain (24 / 15 605, Category A from-raw ladder + seed) is unchanged; +1 = `helixc/runtime/gpt2_infer.c` (the post-v1.3 GPT-2 demo launcher, Category B), and `cuda_launch.c` grew +273 (GPU verify modes) |
+| committed `.c`/`.h` + LOC | `git ls-files "*.c" "*.h" \| wc -l` ; `\| xargs wc -l` | **26 / 17 124** — the v1.3 trusted toolchain (24 / 15 605, Category A from-raw ladder + seed) is unchanged; +2 Category-B launchers = `helixc/runtime/gpt2_infer.c` (post-v1.3 GPT-2 demo launcher, CUDA-FFI) and `helixc/runtime/cpu_host.c` (+579 LOC, the post-v1.3 CPU no-ptxas demo launcher — CUDA-FREE byte-movement harness, ZERO arithmetic on the trust path), and `cuda_launch.c` grew +273 (GPU verify modes) |
 | `seed.bin` gitignored + pinned | `git check-ignore` ; `sha256sum` vs `seed.sha256` | ignored; `9837db12…` == `seed.sha256` |
 
 ## The three result-bearing legs (verbatim verdict lines)
