@@ -9,16 +9,19 @@ You MAY use, run, build with, study, modify, and share Helix FREELY for any
 NON-COMMERCIAL purpose — personal projects, learning, teaching, academic and
 other non-commercial research, evaluation, and non-profit use.
 
-You MAY NOT use Helix for any COMMERCIAL purpose — anything intended for or
-directed toward commercial advantage or monetary compensation — without a
-separate commercial license from the Licensor. Commercial use includes, for
-example: running Helix, or any product or service built with it, in a DATA
+You MAY NOT use Helix for any COMMERCIAL purpose without a separate commercial
+license from the Licensor. Commercial use is drawn BROADLY: it includes anything
+intended for or directed toward commercial advantage or monetary compensation,
+AND ANY use by or for a company or other for-profit business — of any size, for
+ANY purpose, including internal, evaluation, testing, or development use — AND any
+commercial or paid use of a MODIFIED or derived version of Helix. For example:
+running Helix, or any product or service built with or derived from it, in a DATA
 CENTER or cloud / hosted service; use by an AI, MACHINE-LEARNING, data, or other
 TECHNOLOGY COMPANY to train, fine-tune, serve, or build models, products, or
 services; offering Helix or anything built with it as a PAID, HOSTED, or
-SOFTWARE-AS-A-SERVICE product; use in a FOR-PROFIT company's products, services,
-or revenue-generating operations; and ADVERTISING- or SUBSCRIPTION-supported
-services. (Section 3 gives the full definition and more examples.)
+SOFTWARE-AS-A-SERVICE product; use in or for a FOR-PROFIT company's products,
+services, or operations; and ADVERTISING- or SUBSCRIPTION-supported services.
+(Section 3 gives the full, binding definition.)
 
 Third-party components vendored under stage0/ keep their own upstream licenses
 (GPLv3, etc.) — this license does not apply to them. "Helix" is a trademark of
@@ -51,7 +54,11 @@ non-commercial use; it is intentionally NOT an OSI-approved open-source license
    Non-Commercial Purpose (Section 3), provided that every copy You distribute
    retains this License and all copyright, trademark, and attribution notices,
    and that any modified files carry prominent notices stating that You changed
-   them.
+   them. This grant covers Your modifications and derivatives ONLY for a
+   Non-Commercial Purpose: any Commercial Use of the Licensed Work, OR of any
+   modification, derivative, or work that incorporates or is based on any part of
+   it, is NOT granted and requires the Licensor's prior written consent
+   (Section 3).
 
 3. NON-COMMERCIAL PURPOSE; COMMERCIAL USE RESERVED.
    A "Non-Commercial Purpose" is any use that is NOT primarily intended for or
@@ -61,12 +68,21 @@ non-commercial use; it is intentionally NOT an OSI-approved open-source license
    governmental organization for its non-commercial activities, is a
    Non-Commercial Purpose.
 
-   "Commercial Use" — any use that is primarily intended for or directed toward
-   commercial advantage or monetary compensation, OR any use by or on behalf of a
-   for-profit entity in connection with its products, services, or
-   revenue-generating operations — is NOT granted by this License and requires a
-   separate commercial license from the Licensor. Commercial Use includes,
-   without limitation:
+   "Commercial Use" — drawn broadly, and meaning ANY of the following, whether or
+   not done for direct profit — is NOT granted by this License and requires the
+   Licensor's prior written consent (a separate commercial license):
+     (i)   any use primarily intended for or directed toward commercial advantage
+           or monetary compensation;
+     (ii)  ANY use by, for, on behalf of, or for the benefit of any for-profit or
+           commercial entity of any kind — including any company, corporation,
+           partnership, LLC, or other business, of any size — for ANY purpose,
+           including internal, evaluation, testing, research, or development use; or
+     (iii) any use in, by, or as part of a paid, monetized, or revenue-generating
+           product, service, or activity.
+   For the avoidance of doubt, using any MODIFICATION or DERIVATIVE of the
+   Licensed Work, or any work that incorporates or is based on any part of it,
+   for any Commercial Use is equally prohibited without the Licensor's prior
+   written consent. Commercial Use includes, without limitation:
      (a) running the Licensed Work, or any product or service built with or
          derived from it, in a data center, cloud platform, or hosted service;
      (b) use by an artificial-intelligence, machine-learning, data, or other
