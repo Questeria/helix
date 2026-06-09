@@ -75,6 +75,14 @@
  *     retry). Cheap counter guarded by a mutex; the single-flight GPU mutex is a SEPARATE layer that
  *     only serializes /api/generate and does NOT bound connection/thread growth. */
 #define CONN_RCVTIMEO_SEC 10
+/* per-connection WRITE deadline -- the symmetric complement to SO_RCVTIMEO. A client that stops
+ * READING the SSE stream would otherwise fill the socket send buffer and block write() forever WHILE
+ * this thread holds the single-flight g_worker.lock, pinning the one GPU generation slot indefinitely
+ * (every other /api/generate then 409s -- the round-5 starvation vector). With SO_SNDTIMEO a stalled
+ * write returns EAGAIN after CONN_SNDTIMEO_SEC; handle_generate then stops writing to the dead client
+ * but KEEPS draining the worker to its terminal event, so the persistent worker stays protocol-
+ * coherent and the mutex hold is bounded to one generation instead of forever. */
+#define CONN_SNDTIMEO_SEC 20
 #define MAX_CONN          16
 
 /* Worst-case worker telemetry line: the `tokenize` event (ids[]+strings[] for up to a max-ctx
@@ -306,7 +314,7 @@ static char* build_worker_frame(const char* body) {
     return frame;
 }
 
-static void sse_write_event(int fd, const char* seq, const char* ev, const char* data_line) {
+static int sse_write_event(int fd, const char* seq, const char* ev, const char* data_line) {
     /* data_line includes its own trailing '\n'; strip it for the SSE data: field. */
     char buf[SSE_BUF];
     /* copy data_line minus trailing newline */
@@ -320,8 +328,9 @@ static void sse_write_event(int fd, const char* seq, const char* ev, const char*
     if (n > 0) {
         /* snprintf truncates safely; clamp the write to what actually fit in the buffer. */
         size_t wn = (n < (int)sizeof buf) ? (size_t)n : sizeof buf - 1;
-        write_all(fd, buf, wn);
+        return (write_all(fd, buf, wn) < 0) ? -1 : 0;   /* -1 == client gone / send timed out */
     }
+    return 0;
 }
 
 static void handle_generate(int fd, const char* body) {
@@ -366,11 +375,12 @@ static void handle_generate(int fd, const char* body) {
      * so a valid event is never split into invalid JSON the browser would drop. */
     char line[LINE_BUF];
     int saw_terminal = 0;
+    int client_gone  = 0;   /* set when an SSE write times out/fails; we then drain the worker only */
     for (;;) {
         ssize_t r = read_line_fd(g_worker.from_worker, line, sizeof line);
         if (r <= 0) {
             /* worker EOF/exit mid-stream: emit an honest terminal error so the UI never hangs. */
-            if (!saw_terminal)
+            if (!saw_terminal && !client_gone)
                 sse_write_event(fd, "0", "error", "{\"_ev\":\"error\",\"where\":\"driver\",\"message\":\"worker stream ended\",\"fatal\":true}\n");
             break;
         }
@@ -388,7 +398,14 @@ static void handle_generate(int fd, const char* body) {
         /* opportunistically capture the real device name from the first hello for /api/health. */
         if (!strcmp(ev, "hello") && !g_worker.device[0])
             json_str_field(line, "device", g_worker.device, sizeof g_worker.device);
-        sse_write_event(fd, seq, ev, line);
+        if (!client_gone && sse_write_event(fd, seq, ev, line) < 0) {
+            /* client stopped reading (SO_SNDTIMEO fired) or closed the socket: stop writing to the
+             * dead fd, but keep reading the worker stream to its terminal so the persistent worker
+             * does not block on a full stdout pipe and stays in sync for the next request. The GPU
+             * mutex (released below) is then held for at most the rest of THIS generation. */
+            fprintf(stderr, "[serve] client write timed out/closed mid-stream; draining worker to terminal\n");
+            client_gone = 1;
+        }
         if (!strcmp(ev, "done")) { saw_terminal = 1; break; }
         if (!strcmp(ev, "error")) {
             /* terminal only if fatal:true */
@@ -461,6 +478,10 @@ static void* handle_conn(void* arg) {
      * read_line_fd() then see r<0 (errno != EINTR) and bail, and conn_done() reclaims the slot. */
     struct timeval rcvto; rcvto.tv_sec = CONN_RCVTIMEO_SEC; rcvto.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvto, sizeof rcvto);
+    /* per-connection WRITE deadline (see CONN_SNDTIMEO_SEC): bounds a write() to a client that has
+     * stopped reading so it can never pin the single-flight GPU mutex forever. */
+    struct timeval sndto; sndto.tv_sec = CONN_SNDTIMEO_SEC; sndto.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sndto, sizeof sndto);
 
     /* read the request header (until \r\n\r\n). */
     char hdrbuf[16384]; size_t hlen = 0;
