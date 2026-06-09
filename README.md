@@ -1,87 +1,70 @@
-# Kovostov-Native
+# Helix
 
-**A source-available, fully auditable AGI-aspirational system and Helix language stack, bootstrapped from raw binary up.**
+**A source-available, fully auditable programming language whose entire compiler is rebuildable from 299 hand-typed bytes — and runs real neural networks on the GPU, verifiably.**
 
-This is the from-scratch implementation of Kovostov and Helix. Kovostov is the first flagship AGI-aspirational system built on the stack; Helix is the general-purpose language and compiler meant to serve any serious AGI project, scientific system, or high-certainty industrial system where correctness, provenance, and uncertainty reduction matter.
+Helix is a from-scratch, self-hosting language and compiler for machine learning and high-certainty systems work. Its defining property: the *whole toolchain* is built from a raw-binary root with **no trusted pre-built compiler** anywhere in the chain — so you can audit it from the very first byte up to the GPU kernels it runs. Helix exists to remove uncertainty wherever software honestly can: deterministic self-hosting, reproducible binaries, explicit provenance, source-level autodiff, typed effects, and verifier-gated reflection.
 
-## Helix purpose
+## What makes Helix different
 
-Helix is not meant to stay an internal language for Kovostov only. The long-term goal is for Helix to become the dominant open language for AGI development and for any field that benefits from auditable, reproducible, high-certainty computation: AI/AGI research, scientific discovery, medicine, genomics, physics, mathematics, robotics, climate, energy, infrastructure, education, and future industries that need machines to reason with evidence instead of guesswork.
+- **Verifiable from raw binary.** The bootstrap chain begins with hand-encoded bytes you can audit one at a time: `hex0` (299 hand-authored hex bytes) → `hex1` → `hex2` → `catm` → `M0` → `cc_amd64` → `M2-Planet` → `seed` (a C-subset bootstrap compiler) → `kovc` (the Helix compiler, written *in Helix*). Each rung is built **only by the prior rung** — there is no trusted pre-built compiler, and **no Python in the toolchain** (the repo holds exactly one committed `.py`: a fenced numpy verification *oracle*, never part of the compiler).
+- **Self-hosting, proven byte-identical.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-for-byte** — the compiler written in Helix reproduces itself exactly.
+- **Anti-"trusting-trust."** An independent `gcc` lineage (zero M2-Planet ancestry) and the from-raw build produce a **byte-identical** seed/`K1` — a Wheeler diverse-double-compile. `gcc` is only an *auditor*, never the shipped root.
+- **Runs real ML on the GPU.** `kovc` emits PTX for a covered transformer-kernel set that executes on real NVIDIA hardware: a ≥2-layer transformer trains end-to-end on kovc-emitted GPU kernels to within ~2% (reproduced ~0%) loss of an independent numpy oracle, and GPT-2 (124M and the 1.5B XL) runs **token-for-token-verified** on the same stack (see the demo).
+- **ML-native language.** Forward + reverse-mode autodiff as built-ins (`grad`, `grad_rev`, `grad_rev_all`), tile/tensor types, an effect system (`@pure`), and a verifier-gated reflection runtime — language features, not libraries.
 
-The purpose of Helix is to remove uncertainty wherever software can honestly remove it: through typed effects, refinement and confidence types, proof-carrying compilation, deterministic self-hosting, explicit provenance, reproducible binaries, and verifier-gated self-improvement. Kovostov is the first major user of this language, not the boundary of its ambition.
+The two authoritative trust records are **[`docs/TRUST_CHAIN_CLOSED.md`](docs/TRUST_CHAIN_CLOSED.md)** (the verified state + every residual, stated plainly) and **[`docs/CLEAN_REPRODUCTION.md`](docs/CLEAN_REPRODUCTION.md)** (rebuild the chain from a clean checkout). Read those for the full, precise claims.
 
-## Hard constraints
+## Status — trust core v1.3 (byte-stable as of 2026-06-05)
 
-1. **Raw binary as the starting point.** The bootstrap chain begins with hand-encoded bytes the user can audit one byte at a time, and the toolchain is built **entirely from that raw root — there is no trusted pre-built compiler**. `hex0` (299 hand-authored hex bytes) → … → `seed` (the C-subset bootstrap compiler) → `kovc` (the Helix compiler), each rung built only by the prior rung. The toolchain is **Python-free**: the repo holds **exactly one** committed `.py` (`verification/oracle/oracle_train.py`), a fenced numpy verification *oracle* that is **never** part of the toolchain. Existing tools (gcc, objdump, nasm) are used only as independent *auditors* (e.g. the gcc diverse-double-compile of the seed), never to produce shipped artifacts.
-2. **Source-available + fully auditable.** All code (compiler, runtime, model architecture, training scripts), training-data references, and documentation are public so that anyone can read, build, and reproduce them to **verify** the system end-to-end. The source is provided under a **source-available, verify-only license** (the Helix Source-Available License; see `LICENSE`): you may audit and reproduce it, but use beyond verification requires a separate license. This is intentionally **not** an open-source / permissive license. Vendored third-party bootstrap tools under `stage0/` keep their own upstream licenses (GPLv3, etc.).
-3. **Public training data only.** No proprietary datasets, no Claude/GPT/Gemini outputs as training data. Corpora drawn from FineWeb-Edu, SlimPajama, The Stack v2, Wikipedia, public math (Lean mathlib, ProofPile), public code, public ARC-AGI-3 puzzles.
-4. **Eventual AGI.** The end goal is an artificial general intelligence — a system that exhibits sample-efficient learning, continual learning without catastrophic forgetting, compositional generalization, causal reasoning, and recursive self-improvement under verifier gates. This is a multi-year direction, not a release date.
-5. **Consumer hardware.** Bootstrap and primary development on Windows 11 + RTX 3070 laptop / RTX 5090 desktop. Cloud bursts allowed for big training pushes.
+> The `seed.c` + `kovc.hx` sources are byte-stable, so the fixpoint / `K1` / seed SHAs do not move. The **GPT-2 demo layers** (the bring-your-weights verified-execution layer, below) were added later (2026-06) on top of that byte-stable core; the demo's host harnesses live *outside* the self-host fixpoint.
 
-## Stack identity
+**The from-raw-binary trust chain is COMPLETE to PTX, and Python has been deleted from the toolchain.**
 
-- **System / AI**: Kovostov, the first flagship AGI-aspirational system built on Helix
-- **Language**: Helix (`.hx` source files), a general AGI and high-certainty computing language
-- **Compiler**: `helixc`
-- **Runtime**: `helixrt`
-- **From-raw bootstrap chain (as built, no trusted pre-built compiler)**: `hex0` (299 hand-authored hex bytes) → `hex1` → `hex2` → `catm` → `M0` → `cc_amd64` → `M2-Planet` → `seed` (the C-subset bootstrap compiler) → `kovc` (the Helix compiler, `helixc/bootstrap/{lexer,parser,kovc}.hx`, self-hosted in Helix). Each rung is built **only by the prior rung**; no Python anywhere in the chain.
+Verified:
+- **Self-host fixpoint, byte-identical** — `K2 == K3 == K4` (the same test a self-hosted C compiler uses: stage2 == stage3 == stage4).
+- **Python-free toolchain** — exactly one committed `.py` (the fenced numpy oracle, never in the compile/run path); `git ls-files "*.py"` == 1.
+- **Diverse-double-compile of the seed** — `gcc` and the from-raw `M2-Planet` build independently produce a byte-identical seed/`K1`.
+- **Real capability (the capstone)** — a transformer trains end-to-end on kovc-emitted PTX kernels, converging to within ~2% (reproduced ~0%) of an *independent* numpy oracle (it reads only the shared initial weights, never Helix's trajectory).
 
-## Status (v1.3, 2026-06-05)
+**Honest residuals (no overclaim — full list in [`docs/TRUST_CHAIN_CLOSED.md`](docs/TRUST_CHAIN_CLOSED.md)):**
+- **GPU performance is ~50–67% of cuBLAS, NOT parity** (reference RTX 3070 Laptop, sm_86). Helix emits correct, reasonably-performant kernels; it does **not** beat NVIDIA's hand-tuned library. End-to-end capstone speedup is **7.0–8.7×** (Amdahl-bound); loss parity (the hard gate) holds at ~0%.
+- **Complete to PTX, NOT to GPU machine code.** The hand-auditable chain ends at **PTX text**; below it trusts NVIDIA's closed `ptxas` + CUDA driver + GPU hardware + the C host launcher. The **CPU** path is all-the-way-down from raw binary; the **GPU** path is from-hex0-to-PTX-then-`ptxas` — the one trusted-once boundary, stated openly.
+- **Verification scope.** The byte-identical DDC covers the seed surface; the broader v1.1 language surface (generics/traits/closures/turbofish/wide-field/bf16) is cross-checked **behaviorally** by a zero-lineage interpreter (a byte-identical second compiler is impossible by construction). Single hardware target (sm_86); fp32; **external operator reproduction on independent hardware remains open.**
 
-> **On the date:** `2026-06-05` is the v1.3 **trust core** — which is **byte-stable** (the `seed.c` +
-> `kovc.hx` sources are unchanged, so the fixpoint / K1 / seed SHAs do not move). The **GPT-2 demo
-> layers** (the bring-your-weights verified execution layer, below) were added **later (2026-06-09)** on
-> top of that byte-stable core; the demo's host harnesses live outside the self-host fixpoint. So this
-> date is the trust core's date, not the demo's.
+> For live state, read in order: `git log --oneline -8`, [`docs/TRUST_CHAIN_CLOSED.md`](docs/TRUST_CHAIN_CLOSED.md), [`docs/CLEAN_REPRODUCTION.md`](docs/CLEAN_REPRODUCTION.md), and `scripts/gate_kovc.sh` (the universal gate: self-host fixpoint + 109-program corpus + PTX regression + diagnostics).
 
-**The from-raw-binary trust chain is COMPLETE to PTX, and Python has been deleted from the toolchain.** The Helix-native compiler — `helixc/bootstrap/{lexer,parser,kovc}.hx`, a from-scratch compiler written *in Helix* that emits x86-64 ELF directly (no assembler/linker/libc) — is built **entirely from the raw-binary root** (`hex0` → … → `seed` → `kovc`), with **no trusted pre-built compiler** anywhere in the chain. The two honest records are **[`docs/TRUST_CHAIN_CLOSED.md`](docs/TRUST_CHAIN_CLOSED.md)** (the verified state + every residual, stated plainly) and **[`docs/CLEAN_REPRODUCTION.md`](docs/CLEAN_REPRODUCTION.md)** (rebuild the core chain from a clean checkout) — read those for the full, precise claims.
+## What works today
 
-What is verified:
+- The hand-authored 299-byte ELF (`stage0/hex0/hex0.bin`) — the raw-binary foundation.
+- **Self-hosting Helix-native compiler** (`helixc/bootstrap/{lexer,parser,kovc}.hx`): a complete lexer + parser + x86-64-ELF code generator written *in Helix*, built from the raw `seed` (no Python) into a native binary that compiles Helix programs — including its own source. Byte-identical self-host fixpoint, gated by a **109-program feature corpus** (`scripts/gate_kovc.sh`) spanning integer widths, floats (incl. bf16/f16), control flow, generics, traits + default methods, closures (incl. capture-by-value), pattern matching, wide struct fields, and `path:line:col` diagnostics.
+- **Source-level forward + reverse-mode autodiff** as built-ins (`grad`, `grad_rev`, `grad_rev_all`), with chain rules across user-defined functions (via inlining) and stdlib transcendentals (analytic rules).
+- **Verifier-gated reflection runtime** — `quote` / `splice_f` / `modify_f` call your verifier function before committing a mutation (64 mutable cells in the binary's writable region).
+- **IR-level effect verification** — `@pure` functions are transitively prohibited from effectful code.
+- **GPU codegen** — `kovc` emits PTX for a covered transformer-kernel set (matmul/attention/softmax/layernorm/RMSNorm/RoPE/SwiGLU/activations) that runs on real NVIDIA GPUs, each gated for numerical parity against an independent oracle.
+- **Compile-time type-system research features** — Presburger-checked shapes, confidence types `D<T>`, memory tiers, agent types, and more.
+- **Stdlib** in `helixc/stdlib/*.hx` (16 modules, ~455 functions): math + range-reduced transcendentals, activations (sigmoid/tanh/silu/gelu/softplus/relu), losses (mse/mae/bce/huber), PRNG, optimizer steps, reverse-AD, search/match/memory primitives, hashmap, tensor/iterator/vec/string/result helpers.
+- Real ML programs running in Helix-emitted binaries: 1-param gradient descent, 4-point linear regression, an affine fit with f32 cells, a 2-layer ReLU XOR net, logistic regression with sigmoid + BCE + multi-output autodiff, and a flagship agent that composes everything.
 
-- **Self-host fixpoint, byte-identical.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-for-byte** (the same test a self-hosted C compiler uses: stage2 == stage3 == stage4). The compiler written in Helix reproduces itself exactly.
-- **Python-free toolchain.** The repo holds **exactly one** committed `.py` — `verification/oracle/oracle_train.py`, a fenced numpy verification *oracle* **never part of the compile/run toolchain** — used only by the independent verification gates (e.g. `scripts/capstone_audit.sh` references it strictly as the independent within-2% comparator), never to produce a shipped artifact (`git ls-files "*.py"` == 1). The compiler/runtime are Helix plus a small hand-authored C subset (the `seed`).
-- **Diverse-double-compile of the seed (anti-trusting-trust).** `gcc` (an independent lineage with zero M2-Planet ancestry) and the from-raw M2-Planet build independently produce a **byte-identical** seed/`K1` — a Wheeler DDC. `gcc` is an **auditor**, never the shipped root.
-- **Real capability — the capstone.** A ≥2-layer transformer trains **end-to-end on kovc-emitted GPU (PTX) kernels** and converges to within **~2% (reproduced at ~0%) loss difference** of an *independent* numpy oracle (proven genuinely independent — it reads only the shared initial weights, never Helix's trajectory).
-
-**Honest residuals (no overclaim — see `docs/TRUST_CHAIN_CLOSED.md` for the full list):**
-
-- **GPU performance is a fraction of cuBLAS, NOT parity.** On the reference RTX 3070 Laptop (sm_86): ~50–67% of cuBLAS (G1 56%, G2 67.5%, G3 TF32 50–54%). Helix emits correct, reasonably-performant kernels; it does **not** beat NVIDIA's hand-tuned library. End-to-end capstone speedup is **7.0–8.7×** (Amdahl-bound), not the originally-estimated ≥10×; loss parity (the hard gate) holds at ~0%.
-- **Complete to PTX, NOT to GPU machine code.** The hand-auditable from-raw chain ends at **PTX text**. Below PTX it trusts NVIDIA's **closed `ptxas`** + CUDA driver + GPU hardware + the C host launcher. The **CPU** path is all-the-way-down from raw binary; the **GPU** path is from-hex0-to-PTX-then-`ptxas` — the one trusted-once boundary, stated openly.
-- **DDC + verification scope.** The seed/K1 byte-identical DDC covers the seed surface; the v1.1 language surface (generics/traits/closures/turbofish/wide-field/bf16) is cross-checked **behaviorally** by a zero-lineage interpreter (not a byte-identical second compiler — impossible by construction). The 5 clean adversarial reproductions plus a cross-model (ChatGPT, read-only) review share the build's model lineage / are a doc-logic review — **external operator reproduction on independent hardware remains open.** Single hardware target (sm_86); no cross-arch/AMD validation.
-
-> The older "Stage NN" / "K-bootstrap chunk counter" / Python-parity-matrix framing is superseded. For live state, read in order: `git log --oneline -8`, `docs/TRUST_CHAIN_CLOSED.md`, `docs/CLEAN_REPRODUCTION.md`, `scripts/gate_kovc.sh` (the universal gate: self-host fixpoint + 109-program corpus + PTX regression + diagnostics).
-
-Major direction shift this session: Helix is now being optimized **for AI to USE and EXTEND, not for human developers**. Where ergonomics conflicts with structural regularity, structural regularity wins.
-
-What works today:
-- Hand-authored 299-byte ELF (`stage0/hex0/hex0.bin`) — the raw-binary foundation
-- Working Helix compiler (`helixc`): parse → typecheck → IR → const-fold + CSE + DCE + fdce + effect-check → x86-64 → Linux ELF
-- **Self-hosting Helix-native compiler** (`helixc/bootstrap/{lexer,parser,kovc}.hx`, `kovc`): a complete lexer + parser + x86-64-ELF code generator written *in Helix*, built from the raw-binary `seed` (no Python) into a native binary that compiles Helix programs — including its own source. Proven **byte-identical self-host fixpoint** (K2 == K3 == K4) and gated by a **109-program feature corpus** (`scripts/gate_kovc.sh`) spanning integer widths, floats incl. bf16/f16 arithmetic, control flow, generics, traits + default methods, closures (incl. capturing-by-value), pattern matching, wide struct fields, and structured `path:line:col` diagnostics
-- **Source-level forward + reverse-mode autodiff** as language built-ins (`grad`, `grad_rev`, `grad_rev_all`), with chain rules across user-defined function calls (via inlining) and stdlib transcendentals (analytic rules)
-- **Verifier-gated reflection runtime**: 64 mutable cells in the binary's writable region. `quote`/`splice_f`/`modify_f` actually call your verifier function before committing
-- **IR-level effect verification**: @pure functions transitively prohibited from effectful code
-- 8 unique compile-time AGI type-system features (Presburger shapes, D<T>, memory tiers, agents, etc.)
-- Stdlib in `helixc/stdlib/*.hx` (16 modules, ~455 functions; see `helix_website/HELIX_REFERENCE.md` Standard Library section for live per-module counts): math + range-reduced transcendentals, modern activations (sigmoid/tanh/silu/gelu/softplus/relu), losses (mse/mae/bce/huber), PRNG, optimizer steps, reverse-AD, AGI search/match/memory/world primitives, hashmap, tensor/iterator/vec/string/result helpers. AD chain rules wired for all activations.
-- I/O: `print_str`, `write_file`, `read_file_int` via raw syscalls
-- 6 programs total (5 dogfood + 1 self-improving-agent flagship) running real ML in Helix-emitted binaries:
-  - 1-param gradient descent
-  - 4-point linear regression (i32 cells)
-  - Affine fit with f32 cells (200 iterations)
-  - 2-layer ReLU net touching XOR
-  - Logistic regression w/ sigmoid + BCE + multi-output AD ✨
-  - Self-improving agent (flagship, composes everything)
-- Did-you-mean error suggestions, algebraic identity folds (x*0, x-x, etc.)
-- Property test verifying forward and reverse AD agree numerically
-
-## Investor demo (GPT-2 on Helix)
+## Demo — GPT-2 on Helix (verifiable execution)
 
 A self-contained demo runs **GPT-2 — the real, unchanged public model (a 2019 base completion model, not an assistant)** on this from-raw stack, and proves it. The pitch is **trust, not speed**: a bring-your-weights *verifiable execution layer* whose every layer and kernel traces back to 299 hand-typed bytes, output matched **token-for-token** to an independent numpy reference and reproducible bit-for-bit.
 
 - **Runbook (start here):** [`docs/HELIX_GPT2_DEMO_RUNBOOK.md`](docs/HELIX_GPT2_DEMO_RUNBOOK.md) — the operator script, honest-residuals card, and how a third party produces the weights from HuggingFace.
-- **Live chat (GPT-2-XL on Helix):** `bash scripts/serve_chat_demo.sh`, then open <http://127.0.0.1:8848/?source=sse>. Bound to 127.0.0.1; gated green by `scripts/helix_serve_gate.sh`.
+- **Live chat (GPT-2-XL on Helix):** `bash scripts/serve_chat_demo.sh`, then open <http://127.0.0.1:8848/?source=sse>. Bound to `127.0.0.1`; gated green by `scripts/helix_serve_gate.sh`.
 - **One-command attestation:** `bash scripts/gpt2_demo_attest.sh` — fail-closed; rebuilds the compiler from raw, runs GPT-2 124M through kovc-emitted kernels token-for-token vs the oracle, re-runs byte-identical, and writes a signed attestation. The proof dashboard is `demo/dashboard.html`.
 
-See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_PURPOSE.md`](docs/HELIX_PURPOSE.md) for the broad Helix purpose, [`docs/HELIX_FINAL_PRODUCT_RESEARCH.md`](docs/HELIX_FINAL_PRODUCT_RESEARCH.md) for the research-backed final-product blueprint, [`docs/ROADMAP.md`](docs/ROADMAP.md) for prioritized roadmap, [`docs/research/WAVE1_FINDINGS.md`](docs/research/WAVE1_FINDINGS.md) for the synthesized research direction, `docs/lang/spec.md` for the language reference, `docs/lang/tutorial.md` for a beginner guide, `docs/lang/agi-features.md` for the AGI-specific features deep dive.
+## Repository layout
+
+- `stage0/` — the from-raw bootstrap ladder (`hex0` … `M2-Planet`, then the `helixc-bootstrap/seed`). Vendored rungs keep their own upstream licenses.
+- `helixc/` — the Helix compiler: `bootstrap/{lexer,parser,kovc}.hx` (the self-hosting compiler), `stdlib/`, `runtime/`, `examples/`.
+- `demo/` — the GPT-2-on-Helix verified-execution demo (live chat + proof dashboard).
+- `scripts/` — the gates and runbooks (`gate_kovc.sh`, `reproduce_trust.sh`, `capstone_audit.sh`, the demo scripts).
+- `docs/` — trust records, language reference, and the development history.
+- `verification/` — the single fenced numpy oracle used by the independent gates.
+
+## Build & docs
+
+See **[QUICKSTART.md](QUICKSTART.md)** to build and run. Language reference: `docs/lang/spec.md`; beginner tutorial: `docs/lang/tutorial.md`; the full reference (features, stdlib, compiler internals): [`helix_website/HELIX_REFERENCE.md`](helix_website/HELIX_REFERENCE.md).
 
 ## License
 
@@ -90,7 +73,3 @@ See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_
 Vendored third-party components under `stage0/` (M2-Planet, M2libc, blood-elf, and the hex/M0/M1/catm/cc_amd64 rungs) remain under their own upstream licenses (GPLv3, etc.); using them to build Helix does not place Helix under those licenses.
 
 > **Note on earlier documents:** some historical planning/design docs in this repo (kept for transparency and provenance) describe an *intended* Apache-2.0 / open-source / CC-BY / CC0 release. Those reflect earlier intent and are **superseded** by [`LICENSE`](LICENSE). The Licensor may choose to open-source Helix in the future but makes no such commitment here.
-
-## Relation to the Kovostov framework at C:/Projects/Kovostov
-
-The original `Kovostov` directory is the Claude-Code-shell framework that has been the cognitive scaffold while this from-scratch implementation is built. Once Kovostov-Native is operational, the shell-framework can be retired or repurposed as a development tool. The two share a name and a goal; they are different substrates.
