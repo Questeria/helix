@@ -104,10 +104,17 @@ the `trust-reproduce` GitHub Actions CI (the from‑raw core, on a clean differe
 
 State the edges before you're asked — the honesty *is* the pitch:
 
-1. **Fenced host glue.** The weight importer, the byte‑level BPE tokenizer, and the numpy reference
-   oracle are trusted host glue under gitignored `helix-llm/` — no compute‑trust role. The trust claim
-   is the **exact token‑id sequence + the from‑raw toolchain that produced it**, not the host‑side
-   string rendering.
+1. **Host glue (now Python‑free on the production path).** The demo's two offline steps — the
+   byte‑level BPE tokenizer and the safetensors→`.weights` importer — are **committed C host tools**
+   (`helixc/runtime/gpt2_tok.c` + `helixc/runtime/gpt2_pack.c`): Category‑B, **outside** the self‑host
+   fixpoint, **zero arithmetic on the compute‑trust path** (exactly like `cpu_host.c`). So the demo now
+   runs with **zero Python installed** — fail‑closed‑gated bit‑exact by `scripts/gpt2_pyfree.sh`
+   (tokenizer encode/decode parity + the pinned prompt + the hero decode; importer output byte‑identical,
+   sha256, to the reference). The independent **numpy reference oracle** (`helix-llm/tools/gpt2_numpy_ref.py`)
+   **stays Python on purpose** — it is the cross‑check verifier and its independence is the whole point.
+   The trust claim is still the **exact token‑id sequence + the from‑raw toolchain that executes it**, not
+   the host‑side string rendering. (The tokenizer's Unicode tables are a generated DATA `.inc`, bit‑exact
+   with Python's `regex`; it is not a `.c`/`.h`, so no fence cost.)
 2. **Complete to PTX, not to SASS.** Source → PTX is hand‑auditable (`hex0` → `kovc` → PTX); **below
    PTX**, NVIDIA's closed `ptxas` + the GPU driver + the C CUDA‑FFI launcher are trusted‑once. (The
    CPU path — a planned upgrade — has *no* such boundary.)
@@ -148,8 +155,11 @@ State the edges before you're asked — the honesty *is* the pitch:
 | 7 | Honest‑residuals card, operator can state unprompted | ✅ (§4) |
 
 **The MVP demo is complete.** Optional upgrades (the *full* demo + beyond): the CPU path
-(no‑`ptxas` purest‑trust closer), re‑authoring the importer/tokenizer in C/Helix for a
-"Python‑free toolchain" public claim, and (a modern Apache‑2.0 Llama‑arch model with the 4 extra ops).
+(no‑`ptxas` purest‑trust closer) — **done**; re‑authoring the importer/tokenizer in C for a
+"Python‑free production data path" claim — **done** (`helixc/runtime/gpt2_tok.c` +
+`helixc/runtime/gpt2_pack.c`, fail‑closed‑gated by `scripts/gpt2_pyfree.sh`: the demo runs with **zero
+Python installed**; the independent numpy oracle stays Python as the verifier); and (a modern
+Apache‑2.0 Llama‑arch model with the 4 extra ops).
 
 **Scale flex — DONE.** The "same code, bigger model" generalization is now demonstrated:
 GPT‑2‑Large (774 M, 36 layers) **and** GPT‑2‑XL (1.5 B, 48 layers) both run a real forward + greedy
