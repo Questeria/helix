@@ -6,6 +6,17 @@ and was NOT verified); every GPU-execution and parity claim is **deferred to the
 gate pass (Opus)**. This plan deliberately mirrors the GPT-2 demo's structure so the same honesty
 machinery (fail-closed gates, independent oracle, residuals card) carries over unchanged.
 
+**UPDATE 2026-06-09 (Opus, Claude Code) — G-L0 PASS (all 3 kernels).** Compiled via the seed-built
+from-raw kovc, ptxas-accepted at sm_86, and matched the numpy oracle to <2e-6 (rmsnorm 3.8e-6, rope
+2.4e-7, silu_mul 1.9e-6); the per-kernel negative-controls all bit. One real kovc codegen bug was
+found + fixed in `gpu_silu_mul`: a `let mut amag = gi; if g<0 { amag = 0-gi }` aliased `amag` onto
+`gi` and clobbered it to `|gi|` for g<0, so silu emerged as -reference on every negative-g element
+(G-L0 caught it at max-abs ~1.9; compile + ptxas had passed it silently). Rewritten to
+`gpu_gelu_stable`'s constant-seeded `sgn` idiom (only `sgn` mutable, `gi` pristine). Gate:
+`scripts/llama_ops_parity.sh` (from-raw compile -> ptxas sm_86 -> parity vs oracle + mutate
+negative-controls). STILL REMAINING (Code, gated): G-L1 block-0, G-L2 logits + token-for-token (need
+the host wiring + a SmolLM2-135M import), G-L3 regression sweep, G-L4 fence accounting.
+
 ## 0. The pitch extension (why this is the headline long-shot)
 
 GPT-2 (2019) proved the stack. A **current-generation, Apache-2.0, Llama-architecture model running
