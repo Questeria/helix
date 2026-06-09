@@ -48,7 +48,7 @@
 
 ### The 30-second elevator pitch
 
-> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one auditable stack. The toolchain is **source-available** under a verify-only license (the Helix Source-Available License; see `LICENSE`) — auditable and reproducible by anyone, but not open-source. Helix is the foundation of the Kovostov AGI project: an attempt to build AGI on a fully auditable, reproducible-from-raw stack.
+> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one auditable stack. The toolchain is **source-available** under a verify-only license (the Helix Source-Available License; see `LICENSE`) — auditable and reproducible by anyone, but not open-source. The whole stack is auditable and reproducible from a 299-byte raw-binary root.
 
 ---
 
@@ -908,7 +908,7 @@ This is in the spirit of [Bootstrappable Builds](https://bootstrappable.org) and
 ### Repo layout
 
 ```
-Kovostov-Native/
+helix/
 ├── stage0/             # hex0, hex1, M0, M1, M2-Planet
 │   ├── hex0/           # 299-byte audited bootstrap root
 │   ├── hex1/
@@ -1083,7 +1083,7 @@ error: undefined function `__exf`
 
 ### Training data policy
 
-The Kovostov AGI project (which Helix is the foundation for) commits to training only on publicly licensed or public-domain data. No GPT, Claude, or Gemini outputs in the training set. No copyrighted code without explicit license. Full provenance for every byte.
+Any models trained or shipped with Helix use only publicly licensed or public-domain data — no GPT, Claude, or Gemini outputs in the training set, no copyrighted code without an explicit license, and full provenance for every byte.
 
 ### Reproducibility
 
@@ -1095,7 +1095,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 
 ### Governance
 
-- **BDFL**: project initiator (currently the Kovostov-Native author).
+- **BDFL**: the Helix project initiator.
 - **RFC process**: language changes require an RFC issue + 14-day comment period.
 - **Code review**: every commit requires at least one reviewer.
 - **Audit cycles**: every stage transition requires multi-agent audit + clean cycle.

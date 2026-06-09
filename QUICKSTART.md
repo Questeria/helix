@@ -95,7 +95,7 @@ source — directly to a Linux x86‑64 ELF, no assembler/linker/libc).
 ## Project layout
 
 ```
-Kovostov-Native/
+helix/
 ├── stage0/                # The from-raw ladder: hex0 (299-byte ELF) → … → seed (the C-subset compiler)
 ├── helixc/
 │   ├── bootstrap/         # kovc: the self-hosted Helix compiler (lexer.hx, parser.hx, kovc.hx)
