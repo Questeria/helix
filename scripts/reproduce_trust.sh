@@ -2,11 +2,17 @@
 # reproduce_trust.sh -- ONE-COMMAND clean-room reproduction of the Helix from-raw trust core.
 #
 # What it proves (CPU-only -- runnable on any x86-64 Linux, incl. a CI runner, with NO local state):
-#   [1] static fence            : exactly 1 committed .py, 28 committed .c/.h
-#                                 (24 = the v1.3 from-raw trusted toolchain, UNCHANGED; +4 Category-B
+#   [1] static fence            : exactly 1 committed .py, 29 committed .c/.h
+#                                 (24 = the v1.3 from-raw trusted toolchain, UNCHANGED; +5 Category-B
 #                                  host harnesses, all OUTSIDE the self-host fixpoint:
 #                                    helixc/runtime/gpt2_infer.c  -- post-v1.3 GPT-2 demo launcher
-#                                                                    (CUDA-FFI, ptxas boundary),
+#                                                                    (CUDA-FFI, ptxas boundary); now
+#                                                                    also carries the ADDITIVE,
+#                                                                    forward-only --serve mode (a 4th
+#                                                                    branch + a printf-only telemetry
+#                                                                    emit module) for the live chat
+#                                                                    demo -- numeric path byte-identical,
+#                                                                    fixpoint untouched,
 #                                    helixc/runtime/cpu_host.c    -- post-v1.3 CPU no-ptxas demo
 #                                                                    launcher (CUDA-FREE byte-movement
 #                                                                    harness; ZERO arithmetic on the
@@ -14,9 +20,19 @@
 #                                                                    kovc-compiled gpt2_cpu_ops.hx),
 #                                    helixc/runtime/gpt2_tok.c    -- offline byte-level BPE tokenizer
 #                                                                    (Python-free demo data path; ZERO
-#                                                                    arithmetic on the trust path), and
+#                                                                    arithmetic on the trust path); also
+#                                                                    links into the --serve worker
+#                                                                    (GPT2_TOK_LIB) for in-process,
+#                                                                    Python-free prompt tokenization,
 #                                    helixc/runtime/gpt2_pack.c   -- offline safetensors->.weights
 #                                                                    importer (byte-movement only; ZERO
+#                                                                    arithmetic on the trust path), and
+#                                    helixc/runtime/gpt2_serve_http.c -- the NEW dependency-light, NO-
+#                                                                    Python C HTTP+SSE server for the
+#                                                                    live chat demo (POSIX sockets,
+#                                                                    static files + /api/health +
+#                                                                    /api/generate SSE bridge +
+#                                                                    /api/verify; byte-pump only, ZERO
 #                                                                    arithmetic on the trust path).
 #                                  The Unicode range tables gpt2_tok.c uses live in a generated DATA
 #                                  file, helixc/runtime/gpt2_unicode_ranges.inc -- a .inc, NOT a .c/.h,
@@ -72,7 +88,7 @@ say "[1] static fence"
 NPY=$(git ls-files "*.py" | wc -l | tr -d ' ')
 NCH=$(git ls-files "*.c" "*.h" | wc -l | tr -d ' ')
 if [ "$NPY" = "1" ]; then say "    committed .py = 1 ($(git ls-files '*.py'))"; else bad "committed .py = $NPY (want 1)"; fi
-if [ "$NCH" = "28" ]; then say "    committed .c/.h = 28 (24 v1.3 from-raw toolchain UNCHANGED + 4 Category-B host tools: gpt2_infer.c GPU demo + cpu_host.c CPU no-ptxas demo + gpt2_tok.c byte-level BPE tokenizer + gpt2_pack.c safetensors importer; all OUTSIDE the fixpoint, zero arithmetic on the trust path)"; else bad "committed .c/.h = $NCH (want 28)"; fi
+if [ "$NCH" = "29" ]; then say "    committed .c/.h = 29 (24 v1.3 from-raw toolchain UNCHANGED + 5 Category-B host tools: gpt2_infer.c GPU demo [+additive forward-only --serve mode] + cpu_host.c CPU no-ptxas demo + gpt2_tok.c byte-level BPE tokenizer [+--serve in-process tok] + gpt2_pack.c safetensors importer + gpt2_serve_http.c NO-Python C HTTP+SSE chat server; all OUTSIDE the fixpoint, zero arithmetic on the trust path)"; else bad "committed .c/.h = $NCH (want 29)"; fi
 
 # --- [2] from-raw ladder ------------------------------------------------------------------------
 say "[2] from-raw ladder (deleting pre-built rung binaries first, then rebuilding each from the prior)"

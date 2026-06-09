@@ -38,6 +38,27 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <time.h>
+
+/* ===== serve-mode tokenizer linkage (ADDITIVE; used ONLY by --serve) =====
+ * When built as the serve worker, gpt2_tok.c is co-compiled with GPT2_TOK_LIB
+ * defined (its main() #ifdef'd out) and these four entrypoints + three
+ * decode-to-buffer helpers exposed (static dropped). The four existing modes
+ * (--block0/--logits/--generate) never call these, so a plain single-file
+ * build of gpt2_infer.c (the scale/MVP/CPU gates) is unaffected: these are
+ * declared but only referenced under the --serve branch, and the linker only
+ * needs them when --serve code is reached. To keep the 4 existing gates'
+ * single-file `gcc gpt2_infer.c` build working unchanged, the serve symbols
+ * are weak-referenced via GPT2_SERVE only. */
+#ifdef GPT2_SERVE
+void  build_byte_unicode(void);
+void  load_vocab(const char* path);
+void  load_merges(const char* path);
+int*  encode_bytes(const unsigned char* text, size_t n, int* out_n);
+/* decode helpers (pure byte concatenation of g_id2bytes[id]); zero arithmetic */
+char* decode_one(int id);                         /* one id  -> malloc'd C string */
+char* decode_range(const int* ids, int n);        /* n ids   -> malloc'd C string */
+#endif
 
 /* ---- GPT-2 124M dims (env-overridable, defaulting to the public model) ---- */
 static int NL = 12, DM = 768, NH = 12, NV = 50257, NC = 1024, DFF = 3072;
@@ -269,16 +290,221 @@ static void dbg_row(const char* tag, CUdeviceptr d, int r, int cols) {
     fprintf(stderr, "\n");
 }
 
+/* ===================== SERVE-MODE TELEMETRY EMIT MODULE (ADDITIVE) =====================
+ * A tiny printf-to-an-fd side-effect layer. EVERY writer reads values ALREADY in host
+ * scope (step, layer index, literal kernel-name strings, the already-D2H'd argmax logit).
+ * It reads NO device memory in any new way, adds NO cuCtxSynchronize, mutates NO buffer,
+ * and changes NO kernel argument. When g_serve==0 (the 4 existing modes) every emit is a
+ * no-op, so --block0/--logits/--generate stay byte-identical in behavior. The numeric
+ * forward path (forward_full/forward_layer_gpt2) is unchanged; G1 token-for-token proves it.
+ *
+ * Wire format: one compact JSON object per line, '\n'-terminated, written to g_emit_fd.
+ * Each object carries "_ev" (event name) + "seq" (monotone). The HTTP server reads those
+ * to set the SSE event:/id: lines and forwards data: verbatim (no double schema). */
+extern char g_gpu[256];          /* device name (cuDeviceGetName); defined in the device-init section */
+static int  g_serve     = 0;     /* set in the --serve branch; gates all emits */
+static int  g_emit_fd   = 1;     /* fd the JSON lines go to (default stdout) */
+static long g_seq       = 0;     /* monotone ordering token (server mirrors -> SSE id:) */
+static int  g_emit_step = 0;     /* current generation step (read by op hooks) */
+static int  g_emit_layer= 0;     /* current layer index (read by op hooks) */
+static int  g_layer_ops = 0;     /* op count within the current layer (for layer_end.ops) */
+static int  g_timing    = 0;     /* --timing 1: real per-layer host-clock ms; else 0 */
+static long g_ptx_len   = 0;     /* minted-PTX byte length captured in device_init */
+#define DETAIL_LAYER 0
+#define DETAIL_OP    1
+static int  g_detail    = DETAIL_OP;
+
+/* pinned trust anchors (the REAL hashes; same values demo/dashboard.html embeds). */
+static const char* SEED_SHA_PIN     = "9837db12752a22159ca75a533910bc0d7b9afb35df9b9963f256b7b1b915c9bb";
+static const char* FIXPOINT_SHA_PIN = "0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f";
+static const char* GCC_DDC_SHA_PIN  = "84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba";
+
+static double now_seconds(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+static void emit_raw(const char* json) {        /* json has a trailing '\n' */
+    if (g_emit_fd < 0) return;
+    size_t n = strlen(json), off = 0;
+    while (off < n) { ssize_t w = write(g_emit_fd, json + off, n - off); if (w <= 0) break; off += (size_t)w; }
+}
+
+/* JSON-escape a byte string into out (caps at outcap-1). Only the GPT-2 byte pieces can
+ * contain control bytes / quotes / backslashes / newlines; everything else is ASCII. */
+static void jesc(const char* s, char* out, size_t outcap) {
+    size_t k = 0;
+    if (!s) { out[0] = 0; return; }
+    for (size_t i = 0; s[i] && k + 7 < outcap; i++) {
+        unsigned char c = (unsigned char)s[i];
+        switch (c) {
+            case '"':  out[k++]='\\'; out[k++]='"';  break;
+            case '\\': out[k++]='\\'; out[k++]='\\'; break;
+            case '\n': out[k++]='\\'; out[k++]='n';  break;
+            case '\r': out[k++]='\\'; out[k++]='r';  break;
+            case '\t': out[k++]='\\'; out[k++]='t';  break;
+            default:
+                if (c < 0x20) { /* other control bytes -> \u00XX */
+                    static const char* H = "0123456789abcdef";
+                    out[k++]='\\'; out[k++]='u'; out[k++]='0'; out[k++]='0';
+                    out[k++]=H[(c>>4)&0xF]; out[k++]=H[c&0xF];
+                } else out[k++] = (char)c;       /* keep raw UTF-8 bytes verbatim */
+        }
+    }
+    out[k] = 0;
+}
+
+static void emit_init(int fd, const char* detail) {
+    g_serve = 1; g_emit_fd = fd; g_seq = 0;
+    g_detail = (detail && strcmp(detail, "layer") == 0) ? DETAIL_LAYER : DETAIL_OP;
+}
+
+/* hello: static model/trust/device header. ALL values are real: dims from the live globals
+ * (set from the HX_ env / the verified weight header), device = cuDeviceGetName, ptx_bytes =
+ * the minted-PTX byte length, kernels = the 8 literal cuModuleGetFunction names, seed/fixpoint
+ * = the pinned anchors. */
+static void emit_hello(void) {
+    if (!g_serve) return;
+    char b[1400];
+    snprintf(b, sizeof b,
+      "{\"_ev\":\"hello\",\"seq\":%ld,\"schema_version\":1,\"model\":\"gpt2-xl\",\"params\":\"1.5B\","
+      "\"n_layer\":%d,\"n_head\":%d,\"d_model\":%d,\"d_ff\":%d,\"n_vocab\":%d,"
+      "\"device\":\"%s\",\"sm\":\"sm_86\",\"precision\":\"fp32\",\"build\":\"forward-only\",\"mode\":\"serve\","
+      "\"ptx_bytes\":%ld,\"seed_sha\":\"%s\",\"fixpoint_sha\":\"%s\",\"gcc_ddc_sha\":\"%s\","
+      "\"kernels\":[\"tiled_matmul\",\"tiled_matmul_abt\",\"gpu_layernorm_fwd_eps\",\"gpu_softmax_causal\","
+      "\"gpu_add_bias_rowbcast\",\"gpu_gelu_stable\",\"vector_add\",\"gpu_scale_rt\"]}\n",
+      g_seq++, NL, NH, DM, DFF, NV, g_gpu, g_ptx_len, SEED_SHA_PIN, FIXPOINT_SHA_PIN, GCC_DDC_SHA_PIN);
+    emit_raw(b);
+}
+
+/* tokenize: the real prompt ids + their decoded display pieces + n_prompt + s_pad. */
+static void emit_tokenize(const int* ids, int T0, int s_pad) {
+    if (!g_serve) return;
+    /* ids array */
+    size_t cap = (size_t)T0 * 12 + 64; char* idbuf = (char*)malloc(cap); size_t k = 0;
+    for (int i = 0; i < T0; i++) k += (size_t)snprintf(idbuf + k, cap - k, "%s%d", i ? "," : "", ids[i]);
+    /* strings array (decode each id; escape) */
+    size_t scap = (size_t)T0 * 24 + 64; char* sbuf = (char*)malloc(scap); size_t sk = 0;
+    sk += (size_t)snprintf(sbuf + sk, scap - sk, "[");
+#ifdef GPT2_SERVE
+    for (int i = 0; i < T0; i++) {
+        char* piece = decode_one(ids[i]); char esc[256]; jesc(piece ? piece : "", esc, sizeof esc);
+        /* grow if needed */
+        size_t need = sk + strlen(esc) + 8;
+        if (need >= scap) { scap = need * 2; sbuf = (char*)realloc(sbuf, scap); }
+        sk += (size_t)snprintf(sbuf + sk, scap - sk, "%s\"%s\"", i ? "," : "", esc);
+        free(piece);
+    }
+#endif
+    sk += (size_t)snprintf(sbuf + sk, scap - sk, "]");
+    size_t obcap = cap + scap + 128; char* ob = (char*)malloc(obcap);
+    snprintf(ob, obcap,
+      "{\"_ev\":\"tokenize\",\"seq\":%ld,\"ids\":[%s],\"strings\":%s,\"n_prompt\":%d,\"s_pad\":%d}\n",
+      g_seq++, idbuf, sbuf, T0, s_pad);
+    emit_raw(ob);
+    free(idbuf); free(sbuf); free(ob);
+}
+
+static void emit_forward_begin(int step, int context_len, int s_pad, int n_layers) {
+    if (!g_serve) return;
+    char b[160];
+    snprintf(b, sizeof b,
+      "{\"_ev\":\"forward_begin\",\"seq\":%ld,\"step\":%d,\"context_len\":%d,\"s_pad\":%d,\"n_layers\":%d}\n",
+      g_seq++, step, context_len, s_pad, n_layers);
+    emit_raw(b);
+}
+static void emit_embed(int step, int t, int d_model) {
+    if (!g_serve) return;
+    char b[128];
+    snprintf(b, sizeof b, "{\"_ev\":\"embed\",\"seq\":%ld,\"step\":%d,\"t\":%d,\"d_model\":%d}\n",
+             g_seq++, step, t, d_model);
+    emit_raw(b);
+}
+static void emit_layer_begin(int step, int idx, int total) {
+    if (!g_serve) return;
+    g_layer_ops = 0;
+    char b[128];
+    snprintf(b, sizeof b, "{\"_ev\":\"layer_begin\",\"seq\":%ld,\"step\":%d,\"idx\":%d,\"total\":%d}\n",
+             g_seq++, step, idx, total);
+    emit_raw(b);
+}
+/* op: wraps a REAL cuLaunchKernel. Dropped entirely at --detail layer (a real subset). */
+static void emit_op(int layer, int seq_in_layer, const char* kernel, const char* phase,
+                    const char* label, int agg) {
+    if (!g_serve || g_detail < DETAIL_OP) return;
+    char b[256];
+    snprintf(b, sizeof b,
+      "{\"_ev\":\"op\",\"seq\":%ld,\"step\":%d,\"layer\":%d,\"seq_in_layer\":%d,"
+      "\"kernel\":\"%s\",\"phase\":\"%s\",\"label\":\"%s\",\"agg\":%d}\n",
+      g_seq++, g_emit_step, layer, seq_in_layer, kernel, phase, label, agg);
+    emit_raw(b); g_layer_ops++;
+}
+static void emit_layer_end(int step, int idx, double ms) {
+    if (!g_serve) return;
+    char b[160];
+    snprintf(b, sizeof b, "{\"_ev\":\"layer_end\",\"seq\":%ld,\"step\":%d,\"idx\":%d,\"ms\":%.3f,\"ops\":%d}\n",
+             g_seq++, step, idx, ms, g_layer_ops);
+    emit_raw(b);
+}
+static void emit_head(int step, const char* label, const char* kernel) {
+    if (!g_serve) return;
+    char b[160];
+    snprintf(b, sizeof b, "{\"_ev\":\"head\",\"seq\":%ld,\"step\":%d,\"label\":\"%s\",\"kernel\":\"%s\"}\n",
+             g_seq++, step, label, kernel);
+    emit_raw(b);
+}
+static void emit_token(int step, int id, const char* string, double logit, int context_len) {
+    if (!g_serve) return;
+    char esc[256]; jesc(string ? string : "", esc, sizeof esc);
+    char b[512];
+    snprintf(b, sizeof b,
+      "{\"_ev\":\"token\",\"seq\":%ld,\"step\":%d,\"id\":%d,\"string\":\"%s\",\"logit\":%.5f,\"context_len\":%d}\n",
+      g_seq++, step, id, esc, logit, context_len);
+    emit_raw(b);
+}
+static void emit_done(int n_prompt, int n_gen, int n_total, double seconds, double tok_per_s,
+                      const char* text, const int* gen_ids, int ngi, int nonfinite) {
+    if (!g_serve) return;
+    char escbuf[8192]; jesc(text ? text : "", escbuf, sizeof escbuf);
+    size_t gcap = (size_t)ngi * 12 + 64; char* gbuf = (char*)malloc(gcap); size_t k = 0;
+    for (int i = 0; i < ngi; i++) k += (size_t)snprintf(gbuf + k, gcap - k, "%s%d", i ? "," : "", gen_ids[i]);
+    size_t obcap = sizeof(escbuf) + gcap + 256; char* ob = (char*)malloc(obcap);
+    snprintf(ob, obcap,
+      "{\"_ev\":\"done\",\"seq\":%ld,\"n_prompt\":%d,\"n_gen\":%d,\"n_total\":%d,"
+      "\"seconds\":%.3f,\"tok_per_s\":%.3f,\"text\":\"%s\",\"gen_ids\":[%s],\"nonfinite\":%d}\n",
+      g_seq++, n_prompt, n_gen, n_total, seconds, tok_per_s, escbuf, gbuf, nonfinite);
+    emit_raw(ob);
+    free(gbuf); free(ob);
+}
+static void emit_error(const char* where, const char* message, int fatal) {
+    if (!g_serve) return;
+    char em[512]; jesc(message ? message : "", em, sizeof em);
+    char b[640];
+    snprintf(b, sizeof b, "{\"_ev\":\"error\",\"seq\":%ld,\"where\":\"%s\",\"message\":\"%s\",\"fatal\":%s}\n",
+             g_seq++, where ? where : "driver", em, fatal ? "true" : "false");
+    emit_raw(b);
+}
+
 /* forward_layer_gpt2(x): x is the [Spad,DM] residual stream (in-place updated).
  *   ln_eps(ln_1) -> mm_AB QKV + bias -> 12-head { pack Q/K/V, mm_ABt scores, scale, causal
  *   softmax, mm_AB @V, scatter } -> mm_AB c_proj + bias -> residual add
  *   -> ln_eps(ln_2) -> mm_AB c_fc + bias -> gelu -> mm_AB mlp c_proj + bias -> residual add. */
 static void forward_layer_gpt2(void) {
+    /* Emit hooks are printf-only on host-scope values (g_emit_layer/g_emit_step + literal
+     * kernel-name strings). They wrap the SAME real launches; they read no device memory,
+     * add no sync, and change no arg. The 12 per-head launches stay emit-silent; the 3
+     * dominating attention kernels are reported once after the head loop as aggregates
+     * (agg=NH), so the frontend sees a faithful 17-op/layer map without 12 events/layer. */
+    int L = g_emit_layer;
     /* --- attention --- */
     dbg_row("x_in", d_x, 0, DM);
+    emit_op(L, 0, "gpu_layernorm_fwd_eps", "attn", "ln_1", 1);
     ln_eps(d_x, d_xn, d_ln1g, d_ln1b, Spad, DM);
     dbg_row("ln1", d_xn, 0, DM);
+    emit_op(L, 1, "tiled_matmul", "attn", "qkv_gemm", 1);
     mm_AB(d_xn, d_attW, d_qkv, Spad, DM, 3*DM);
+    emit_op(L, 2, "gpu_add_bias_rowbcast", "attn", "qkv_bias", 1);
     add_bias(d_qkv, d_attb, Spad*3*DM, 3*DM);
     dbg_row("qkv", d_qkv, 0, 3*DM);
     for (int h = 0; h < NH; h++) {
@@ -293,21 +519,36 @@ static void forward_layer_gpt2(void) {
         if (g_dbg && h==0) { dbg_row("scores_h0", d_scores, 0, Spad); dbg_row("attnw_h0", d_attnw, 0, Spad); dbg_row("aoh_h0", d_aoh, 0, DH); }
         scatter_head(d_ctx, qb, d_aoh);
     }
+    /* the 3 aggregate attention ops (one per real per-head kernel; agg=NH launches each) */
+    emit_op(L, 3, "tiled_matmul_abt", "attn", "attn_scores", NH);
+    emit_op(L, 4, "gpu_scale_rt",     "attn", "attn_scale",  NH);
+    emit_op(L, 5, "gpu_softmax_causal","attn","attn_softmax", NH);
+    emit_op(L, 6, "tiled_matmul",     "attn", "attn_av",     NH);
     dbg_row("ctx", d_ctx, 0, DM);
+    emit_op(L, 7, "tiled_matmul", "attn", "attn_proj_gemm", 1);
     mm_AB(d_ctx, d_prjW, d_proj, Spad, DM, DM);
+    emit_op(L, 8, "gpu_add_bias_rowbcast", "attn", "attn_proj_bias", 1);
     add_bias(d_proj, d_prjb, Spad*DM, DM);
     dbg_row("proj", d_proj, 0, DM);
+    emit_op(L, 9, "vector_add", "attn", "attn_residual", 1);
     vadd(d_x, d_proj, d_x, Spad*DM);                     /* x = x + attn_proj (residual) */
     dbg_row("x_after_attn", d_x, 0, DM);
     /* --- MLP --- */
+    emit_op(L, 10, "gpu_layernorm_fwd_eps", "mlp", "ln_2", 1);
     ln_eps(d_x, d_xn2, d_ln2g, d_ln2b, Spad, DM);
+    emit_op(L, 11, "tiled_matmul", "mlp", "fc_gemm", 1);
     mm_AB(d_xn2, d_fcW, d_mlp1, Spad, DM, DFF);
+    emit_op(L, 12, "gpu_add_bias_rowbcast", "mlp", "fc_bias", 1);
     add_bias(d_mlp1, d_fcb, Spad*DFF, DFF);
+    emit_op(L, 13, "gpu_gelu_stable", "mlp", "gelu", 1);
     gelu(d_mlp1, d_mlp1g, Spad*DFF);
     dbg_row("gelu", d_mlp1g, 0, DFF);
+    emit_op(L, 14, "tiled_matmul", "mlp", "proj2_gemm", 1);
     mm_AB(d_mlp1g, d_pjW, d_mlp2, Spad, DFF, DM);
     dbg_row("mlp2", d_mlp2, 0, DM);
+    emit_op(L, 15, "gpu_add_bias_rowbcast", "mlp", "proj2_bias", 1);
     add_bias(d_mlp2, d_pjb, Spad*DM, DM);
+    emit_op(L, 16, "vector_add", "mlp", "mlp_residual", 1);
     vadd(d_x, d_mlp2, d_x, Spad*DM);                     /* x = x + mlp (residual) */
     dbg_row("x_final", d_x, 0, DM);
 }
@@ -337,10 +578,28 @@ static void embed_gather(const int* ids, int T, int S) {
 static void forward_full(const int* ids, int T, float* out_last_logits) {
     int S = ((T + 63) / 64) * 64;
     Spad = S;                                  /* the layer kernels read the global Spad */
+    /* SERVE no-leak safety: d_ctx is cuMemsetD8-zeroed only at alloc, then written by
+     * scatter_head per layer. A smaller-T request after a larger-T one could otherwise see
+     * a previous request's stale pad rows (rows >= T). This zeroes ONLY pad/unused rows to a
+     * deterministic state; real-token rows are fully overwritten by scatter_head, so the
+     * argmaxed last real row is unaffected -> served ids unchanged (G1 confirms). No-op for
+     * the 4 non-serve modes (g_serve==0). */
+    if (g_serve) CKX(cuMemsetD8(d_ctx, 0, (size_t)S*DM*sizeof(float)), "serve zero d_ctx");
     embed_gather(ids, T, S);
-    for (int L = 0; L < NL; L++) { upload_layer(L); forward_layer_gpt2(); }
+    emit_embed(g_emit_step, T, DM);            /* one per token-step (no-op when !g_serve) */
+    for (int L = 0; L < NL; L++) {
+        g_emit_layer = L;
+        double t_layer = (g_serve && g_timing) ? now_seconds() : 0.0;
+        upload_layer(L);
+        emit_layer_begin(g_emit_step, L, NL);  /* primary heartbeat; after upload, before compute */
+        forward_layer_gpt2();
+        double ms = (g_serve && g_timing) ? (now_seconds() - t_layer) * 1e3 : 0.0;
+        emit_layer_end(g_emit_step, L, ms);
+    }
+    emit_head(g_emit_step, "ln_f", "gpu_layernorm_fwd_eps");
     ln_eps(d_x, d_xn, d_lnfg, d_lnfb, S, DM);  /* final LayerNorm (reuse d_xn as ln_f output) */
     /* tied head: logits[S,NVpad] = xnorm[S,DM] @ wte_pad[NVpad,DM]^T (wte rows ARE the tied head). */
+    emit_head(g_emit_step, "lm_head", "tiled_matmul_abt");
     mm_ABt(d_xn, d_wte_pad, d_logits, S, DM, NVpad);
     /* copy ONLY the last real-token row's first NV logits to the host (greedy decision row). */
     CKX(cuMemcpyDtoH(out_last_logits, d_logits + (CUdeviceptr)((size_t)(T-1)*NVpad*sizeof(float)),
@@ -376,7 +635,7 @@ static float* read_npy_f4(const char* path, size_t expect_elems) {
 
 /* ===================== shared device init ===================== */
 static CUmodule g_mod;
-static char     g_gpu[256];
+char            g_gpu[256];       /* non-static: read by the emit module's hello (declared extern above) */
 static char*    g_ptx = NULL;
 
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
@@ -384,6 +643,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
     g_ptx=(char*)malloc(psz+1); if (fread(g_ptx,1,psz,pf)!=(size_t)psz) { fclose(pf); return 2; } g_ptx[psz]=0; fclose(pf);
+    g_ptx_len = psz;                          /* real minted-PTX byte length for the hello event */
     CK(cuInit(0), "init");
     CUdevice dev; CK(cuDeviceGet(&dev,0), "dev");
     g_gpu[0]=0; cuDeviceGetName(g_gpu,256,dev);
@@ -597,6 +857,187 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
     return pass ? 0 : 1;
 }
 
+/* ===================== --serve: persistent forward+generate worker (ADDITIVE) =====================
+ * Does the expensive setup (device_init -> mint/load PTX + 8 kernel handles + weight mmap;
+ * alloc_buffers; setup_head) ONCE, then loops reading one request frame per stdin line:
+ *   {"prompt":"...","n_gen":N,"request_id":"..."}   (in-process tokenize via gpt2_tok), OR
+ *   {"ids":[..],"n_gen":N,"request_id":"..."}        (pre-tokenized fallback), OR
+ *   {"cmd":"quit"}                                    -> teardown.
+ * For each request: tokenize -> emit hello+tokenize -> for each of n_gen steps run the UNCHANGED
+ * forward_full (telemetry hooks fire inside) -> host argmax -> emit token -> emit done. The
+ * numeric path is byte-identical to --generate; only printf-on-host-scope hooks were added. */
+
+/* minimal request-frame fields parsed off one JSON line (only what serve needs). */
+typedef struct {
+    char* prompt; size_t prompt_len;
+    int   ids[1024]; int n_ids;            /* pre-tokenized fallback */
+    int   n_gen;
+    int   is_quit;
+} ServeReq;
+
+/* find a top-level "key" and return a pointer just past the ':' (or NULL). */
+static const char* json_find_key(const char* s, const char* key) {
+    char pat[64]; snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char* p = strstr(s, pat);
+    if (!p) return NULL;
+    p += strlen(pat);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p != ':') return NULL;
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    return p;
+}
+
+/* parse one request line. Returns 0 on success, 1 on bad json. */
+static int parse_req_json(const char* line, ServeReq* r) {
+    memset(r, 0, sizeof *r);
+    r->n_gen = 20;
+    const char* p;
+    if ((p = json_find_key(line, "cmd")) && *p == '"' && strncmp(p + 1, "quit", 4) == 0) {
+        r->is_quit = 1; return 0;
+    }
+    if ((p = json_find_key(line, "n_gen")) != NULL) r->n_gen = atoi(p);
+    /* prompt (a JSON string with \n \t \" \\ escapes) */
+    if ((p = json_find_key(line, "prompt")) != NULL && *p == '"') {
+        p++;
+        size_t cap = strlen(p) + 1; char* out = (char*)malloc(cap); size_t k = 0;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1]) {
+                p++;
+                switch (*p) {
+                    case 'n': out[k++] = '\n'; break;
+                    case 't': out[k++] = '\t'; break;
+                    case 'r': out[k++] = '\r'; break;
+                    case '"': out[k++] = '"';  break;
+                    case '\\': out[k++] = '\\'; break;
+                    case '/': out[k++] = '/';  break;
+                    case 'u': { /* \uXXXX -> UTF-8 (BMP only; sufficient for prompts) */
+                        unsigned v = 0; for (int i = 0; i < 4 && p[1]; i++) { p++;
+                            char h = *p; v <<= 4;
+                            if (h>='0'&&h<='9') v|=(unsigned)(h-'0');
+                            else if (h>='a'&&h<='f') v|=(unsigned)(h-'a'+10);
+                            else if (h>='A'&&h<='F') v|=(unsigned)(h-'A'+10); }
+                        if (v < 0x80) out[k++] = (char)v;
+                        else if (v < 0x800) { out[k++] = (char)(0xC0|(v>>6)); out[k++] = (char)(0x80|(v&0x3F)); }
+                        else { out[k++] = (char)(0xE0|(v>>12)); out[k++] = (char)(0x80|((v>>6)&0x3F)); out[k++] = (char)(0x80|(v&0x3F)); }
+                        break;
+                    }
+                    default: out[k++] = *p; break;
+                }
+                p++;
+            } else out[k++] = *p++;
+        }
+        out[k] = 0; r->prompt = out; r->prompt_len = k;
+    }
+    /* pre-tokenized ids fallback: "ids":[a,b,c] */
+    if (!r->prompt && (p = json_find_key(line, "ids")) != NULL && *p == '[') {
+        p++; int n = 0;
+        while (*p && *p != ']' && n < 1024) {
+            while (*p == ' ' || *p == ',') p++;
+            if (*p == ']' || !*p) break;
+            r->ids[n++] = atoi(p);
+            while (*p && *p != ',' && *p != ']') p++;
+        }
+        r->n_ids = n;
+    }
+    if (!r->prompt && r->n_ids == 0) return 1;     /* nothing to run */
+    return 0;
+}
+
+static int run_serve(const char* ptx_path, const char* wpath,
+                     int emit_fd, int max_ctx, int timing, const char* detail,
+                     const char* vocab, const char* merges) {
+    emit_init(emit_fd, detail);
+    g_timing = timing;
+    if (device_init(ptx_path, wpath)) { emit_error("load", "device_init failed", 1); return 2; }
+    int Smax = ((max_ctx + 63) / 64) * 64; if (Smax < 64) Smax = 64;
+    if (alloc_buffers(Smax)) { emit_error("load", "alloc_buffers failed", 1); return 2; }
+    if (setup_head(Smax))    { emit_error("load", "setup_head failed", 1);    return 2; }
+
+    int in_proc_tok = (vocab && merges);
+#ifdef GPT2_SERVE
+    if (in_proc_tok) { build_byte_unicode(); load_vocab(vocab); load_merges(merges); }
+#else
+    in_proc_tok = 0;   /* tokenizer not linked in a plain single-file build */
+#endif
+
+    /* readiness line on stderr (the HTTP server's /api/health waits for this; stdout stays
+     * pure newline-JSON telemetry so the server can pump it 1:1). */
+    fprintf(stderr, "GPT2_SERVE_READY\n"); fflush(stderr);
+
+    char* line = NULL; size_t cap = 0; ssize_t got;
+    while ((got = getline(&line, &cap, stdin)) > 0) {
+        ServeReq req;
+        if (parse_req_json(line, &req)) { emit_error("load", "bad request json", 0); continue; }
+        if (req.is_quit) { free(req.prompt); break; }
+
+        int  T0; int* ids; int free_ids = 0;
+        if (in_proc_tok && req.prompt) {
+#ifdef GPT2_SERVE
+            ids = encode_bytes((const unsigned char*)req.prompt, req.prompt_len, &T0); free_ids = 1;
+#else
+            ids = NULL; T0 = 0;
+#endif
+        } else if (req.n_ids > 0) {
+            ids = req.ids; T0 = req.n_ids;
+        } else {
+            emit_error("tokenize", "no in-process tokenizer and no pre-tokenized ids", 0);
+            free(req.prompt); continue;
+        }
+        if (!ids || T0 <= 0) { emit_error("tokenize", "empty/failed tokenization", 0);
+            if (free_ids) free(ids); free(req.prompt); continue; }
+
+        int Ngen = clampi(req.n_gen, 1, 256);
+        if (((T0 + Ngen + 63) / 64) * 64 > Smax) {     /* honest bound, not a hang */
+            emit_error("forward", "context exceeds --max-ctx; raise --max-ctx", 0);
+            if (free_ids) free(ids); free(req.prompt); continue;
+        }
+
+        emit_hello();
+        emit_tokenize(ids, T0, ((T0 + 63) / 64) * 64);
+
+        /* working id buffer: prompt + room for Ngen generated ids. */
+        int* work = (int*)malloc((size_t)(T0 + Ngen) * sizeof(int));
+        memcpy(work, ids, (size_t)T0 * sizeof(int));
+        int T = T0;
+        float* logits = (float*)malloc((size_t)NV * sizeof(float));
+        int* gen_ids  = (int*)malloc((size_t)Ngen * sizeof(int));
+        int nonfinite = 0;
+        double t0 = now_seconds();
+        for (int step = 0; step < Ngen; step++) {
+            g_emit_step = step;
+            emit_forward_begin(step, T, ((T + 63) / 64) * 64, NL);
+            forward_full(work, T, logits);             /* UNCHANGED arithmetic; hooks fire inside */
+            for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite = 1; break; }
+            int nxt = argmax_row(logits, NV);
+#ifdef GPT2_SERVE
+            char* piece = decode_one(nxt);
+#else
+            char* piece = NULL;
+#endif
+            emit_token(step, nxt, piece ? piece : "", (double)logits[nxt], T + 1);
+            free(piece);
+            gen_ids[step] = nxt;
+            work[T++] = nxt;
+        }
+        double secs = now_seconds() - t0;
+        double tps = secs > 0 ? (double)Ngen / secs : 0.0;
+#ifdef GPT2_SERVE
+        char* full = decode_range(gen_ids, Ngen);
+#else
+        char* full = NULL;
+#endif
+        emit_done(T0, Ngen, T, secs, tps, full ? full : "", gen_ids, Ngen, nonfinite);
+        free(full);
+
+        free(work); free(logits); free(gen_ids);
+        if (free_ids) free(ids);
+        free(req.prompt);
+    }
+    free(line);
+    return 0;
+}
+
 int main(int argc, char** argv) {
     /* env dim overrides (default = GPT-2 124M) */
     const char* e;
@@ -616,8 +1057,10 @@ int main(int argc, char** argv) {
           "usage:\n"
           "  %s <combined.ptx> <weights> --block0 <ref_block0.npy>\n"
           "  %s <combined.ptx> <weights> --logits <ref_logits_last.bin> <ref_argmax.txt> <ref_ids.txt>\n"
-          "  %s <combined.ptx> <weights> --generate <N> <ref_ids.txt> [<ref_gen_ids.txt>]\n",
-          argv[0], argv[0], argv[0]);
+          "  %s <combined.ptx> <weights> --generate <N> <ref_ids.txt> [<ref_gen_ids.txt>]\n"
+          "  %s <combined.ptx> <weights> --serve [--emit-fd N] [--max-ctx M] [--timing 0|1]\n"
+          "                                      [--detail op|layer] [--vocab v.json --merges m.txt]\n",
+          argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     const char* ptx_path = argv[1];
@@ -654,6 +1097,21 @@ int main(int argc, char** argv) {
         if (alloc_buffers(Smax)) return 2;
         if (setup_head(Smax)) return 2;
         rc = run_generate(Ngen, ids_path, ref_gen_path);
+    } else if (strcmp(mode, "--serve") == 0) {
+        /* additive 4th mode: persistent forward+generate worker over stdin/stdout JSON. */
+        int   emit_fd = 1, max_ctx = 320, timing = 0;
+        const char* detail = "op";
+        const char* vocab  = NULL;
+        const char* merges = NULL;
+        for (int i = 4; i < argc; i++) {
+            if      (!strcmp(argv[i], "--emit-fd") && i+1 < argc) emit_fd = atoi(argv[++i]);
+            else if (!strcmp(argv[i], "--max-ctx") && i+1 < argc) max_ctx = atoi(argv[++i]);
+            else if (!strcmp(argv[i], "--timing")  && i+1 < argc) timing  = atoi(argv[++i]);
+            else if (!strcmp(argv[i], "--detail")  && i+1 < argc) detail  = argv[++i];
+            else if (!strcmp(argv[i], "--vocab")   && i+1 < argc) vocab   = argv[++i];
+            else if (!strcmp(argv[i], "--merges")  && i+1 < argc) merges  = argv[++i];
+        }
+        rc = run_serve(ptx_path, wpath, emit_fd, max_ctx, timing, detail, vocab, merges);
     } else {
         fprintf(stderr, "unknown mode '%s'\n", mode);
         return 2;

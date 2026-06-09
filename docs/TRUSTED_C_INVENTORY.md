@@ -20,21 +20,37 @@ Every claim below was verified against the **live tree** (`git ls-files "*.c" "*
 
 - **Committed C/H after V6: 24 files, 15 605 LOC** (was 30 files / 16 308 LOC; V6 pruned 6 dead
   files / 708 LOC — see §4).
-- **Post-v1.3 (GPT-2 inference demos) addendum:** at HEAD the committed C/H is **28 files / 18 128 LOC**.
+- **Post-v1.3 (GPT-2 inference demos) addendum:** at HEAD the committed C/H is **29 files / 19 158 LOC**.
   The v1.3 V6 trusted toolchain detailed below (24 files / 15 605 LOC — Category A's from-raw ladder
   and the `seed.c` trust root) is **UNCHANGED**, and the self-host fixpoint stays `0992dddd`. The
-  GPT-2-on-Helix demos added **four Category-B host tools** — `helixc/runtime/gpt2_infer.c`
-  (667 LOC, a CUDA-FFI forward-only launcher like `train_transformer.c`, outside the self-host fixpoint,
-  ptxas-boundary), `helixc/runtime/cpu_host.c` (579 LOC, the CPU **no-ptxas** demo launcher — a
+  GPT-2-on-Helix demos added **five Category-B host tools** — `helixc/runtime/gpt2_infer.c`
+  (a CUDA-FFI forward-only launcher like `train_transformer.c`, outside the self-host fixpoint,
+  ptxas-boundary; it now also carries the **ADDITIVE, forward-only `--serve` mode** for the live chat
+  demo: a 4th `main()` branch that does `device_init`/`alloc_buffers`/`setup_head` ONCE then loops on
+  stdin request frames running the **unchanged** `forward_full`, plus a tiny printf-only telemetry emit
+  module whose hooks read only host-scope values — the numeric path is **byte-identical** to `--generate`
+  and the fixpoint is structurally untouched, proven token-for-token by `scripts/helix_serve_gate.sh` G1),
+  `helixc/runtime/cpu_host.c` (579 LOC, the CPU **no-ptxas** demo launcher — a
   CUDA-FREE byte-movement harness, outside the self-host fixpoint, **ZERO arithmetic on the trust path**;
   all math lives in the kovc-compiled `helixc/runtime/gpt2_cpu_ops.hx`, which is a `.hx` and so does NOT
-  count against the `.c`/`.h` fence), and the two **Python-free-data-path** offline tools —
-  `helixc/runtime/gpt2_tok.c` (659 LOC, byte-level BPE tokenizer: encode/decode, hand-written GPT-2
-  pretokenizer, no regex lib; byte↔id bookkeeping only, **ZERO arithmetic on the trust path**) and
-  `helixc/runtime/gpt2_pack.c` (345 LOC, safetensors→`.weights` importer: byte-movement only, **ZERO
-  arithmetic on the trust path**) — and grew `cuda_launch.c` by 273 LOC (GPU kernel verify modes).
-  So Category B is 6 files / 4 911 LOC at HEAD (was 2 / 2 388). Nothing in Category A or the trust root
-  changed. The tokenizer's Unicode `\p{L}`/`\p{N}`/`\s` range tables are a generated DATA file,
+  count against the `.c`/`.h` fence), the two **Python-free-data-path** offline tools —
+  `helixc/runtime/gpt2_tok.c` (byte-level BPE tokenizer: encode/decode, hand-written GPT-2
+  pretokenizer, no regex lib; byte↔id bookkeeping only, **ZERO arithmetic on the trust path**; it now
+  also links into the `--serve` worker via `GPT2_TOK_LIB` — its four entrypoints are exposed and the
+  pure-bookkeeping `decode_one`/`decode_range` helpers added — so the live server tokenizes in-process,
+  Python-free) and `helixc/runtime/gpt2_pack.c` (345 LOC, safetensors→`.weights` importer: byte-movement
+  only, **ZERO arithmetic on the trust path**) — and the **NEW** `helixc/runtime/gpt2_serve_http.c`
+  (549 LOC, the dependency-light, **NO-Python** C HTTP+SSE server for the live chat demo: POSIX sockets +
+  libc only, no third-party deps; serves `demo/` static files [GET `/`→`index.html`, `/dashboard.html`,
+  assets with correct MIME, rejects `..` traversal] + `GET /api/health` + the `POST /api/generate`
+  `text/event-stream` bridge that spawns ONE persistent `gpt2_infer --serve` worker over two pipes and
+  re-frames each worker JSON line as one SSE event [single-flight: a concurrent generation gets 409] +
+  an honest `POST /api/verify` that degrades to `UNAVAILABLE` and never fakes a verdict; **HTTP/byte-pump
+  only, ZERO arithmetic on the trust path, OUTSIDE the self-host fixpoint** — `gate_kovc.sh` never
+  compiles it — exactly the classification of `cpu_host.c`/`gpt2_tok.c`/`gpt2_pack.c`) — and grew
+  `cuda_launch.c` by 273 LOC (GPU kernel verify modes).
+  So Category B is **7 files** at HEAD (was 6; from the original 2 / 2 388). Nothing in Category A or the
+  trust root changed. The tokenizer's Unicode `\p{L}`/`\p{N}`/`\s` range tables are a generated DATA file,
   `helixc/runtime/gpt2_unicode_ranges.inc` — a `.inc`, NOT a `.c`/`.h`, so outside the fence (like a `.hx`).
 - The trusted-C surface is **two disjoint categories**:
   - **A. The from-raw bootstrap ladder** (`stage0/*`, 22 files / 13 217 LOC) — trusted **source**

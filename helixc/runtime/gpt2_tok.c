@@ -99,7 +99,9 @@ static char* slurp_stdin(size_t* out_len) {
  * map to 256+k. We need the INVERSE: codepoint -> byte (u2b). Build it once. */
 static int g_b2u[256];        /* byte -> codepoint */
 static int g_u2b[512];        /* codepoint -> byte (-1 if none); max codepoint is 323 */
-static void build_byte_unicode(void) {
+/* LIB-EXPOSED (serve mode links gpt2_tok.c with GPT2_TOK_LIB; gpt2_infer.c calls these
+ * four + the three decode helpers below). Standalone build keeps the same behavior. */
+void build_byte_unicode(void) {
     int bs[256], used[256];
     memset(used, 0, sizeof(used));
     int nbs = 0;
@@ -246,7 +248,7 @@ static int parse_json_string_to_bytes(const char* s, size_t n, size_t* i, unsign
 }
 
 /* load vocab.json: { "<key>": <id>, ... }. */
-static void load_vocab(const char* path) {
+void load_vocab(const char* path) {
     size_t n; char* s = slurp(path, &n);
     /* first pass: count entries (number of ':' at object depth 1) is overkill; just
      * size generously to vocab_size ~50257; grow id arrays as needed. */
@@ -350,7 +352,7 @@ static int field_to_bytes(const char* s, size_t n, size_t* i, unsigned char* out
     return olen;
 }
 
-static void load_merges(const char* path) {
+void load_merges(const char* path) {
     size_t n; char* s = slurp(path, &n);
     mtab_init(60000);
     size_t i = 0;
@@ -469,7 +471,7 @@ static void emit_chunk(const unsigned char* text, size_t b0, size_t b1,
     free(tmp);
 }
 
-static int* encode_bytes(const unsigned char* text, size_t n, int* out_n) {
+int* encode_bytes(const unsigned char* text, size_t n, int* out_n) {
     /* build codepoint index */
     CP* cps = (CP*)xmalloc((n + 1) * sizeof(CP));
     int ncp = 0;
@@ -592,7 +594,27 @@ static void decode_ids(const int* ids, int n) {
     }
 }
 
+/* ============================ decode-to-buffer (serve mode; LIB-EXPOSED) ============================ */
+/* Pure byte concatenation of g_id2bytes[id] -- the SAME bytes decode_ids() writes to stdout,
+ * returned as a NUL-terminated malloc'd C string instead. ZERO arithmetic; out-of-range ids
+ * are rendered as the empty string (never abort the long-lived serve worker). The contract's
+ * per-id strings[], per-token token.string, and final done.text all come from these. */
+char* decode_range(const int* ids, int n) {
+    size_t cap = 64; char* out = (char*)xmalloc(cap); size_t k = 0;
+    for (int i = 0; i < n; i++) {
+        int id = ids[i];
+        if (id < 0 || id >= g_nvocab || g_id2bytes[id] == NULL) continue;
+        int len = g_id2len[id];
+        if (k + (size_t)len + 1 >= cap) { while (k + (size_t)len + 1 >= cap) cap <<= 1; out = (char*)xrealloc(out, cap); }
+        memcpy(out + k, g_id2bytes[id], (size_t)len); k += (size_t)len;
+    }
+    out[k] = 0;
+    return out;
+}
+char* decode_one(int id) { return decode_range(&id, 1); }
+
 /* ============================ main ============================ */
+#ifndef GPT2_TOK_LIB
 int main(int argc, char** argv) {
     if (argc < 4) {
         fprintf(stderr,
@@ -657,3 +679,4 @@ int main(int argc, char** argv) {
         return 2;
     }
 }
+#endif /* GPT2_TOK_LIB */
