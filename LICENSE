@@ -1,112 +1,119 @@
-Helix Source-Available License (Verify-Only), Version 1.0
+Helix Non-Commercial License, Version 1.0
 
 Copyright (c) 2026 Anthony DeMarco (Questeria). All rights reserved except as expressly granted below.
 
 ================================================================================
 PLAIN-LANGUAGE SUMMARY (informative; the binding terms are in Sections 1–10)
 ================================================================================
-You MAY read, study, build, run, and reproduce Helix for ONE purpose: to VERIFY
-for yourself that it is what it claims to be — that the from-raw trust chain
-reproduces, that the tests and gates pass, and that the code hides nothing. You
-may share verbatim copies for that same verification purpose.
+You MAY use, run, build with, study, modify, and share Helix FREELY for any
+NON-COMMERCIAL purpose — personal projects, learning, teaching, academic and
+other non-commercial research, evaluation, and non-profit use.
 
-You MAY NOT use Helix — in whole, in part, or its ideas — in any product,
-service, or workload, commercial or not, without a separate written license from
+You MAY NOT use Helix for any COMMERCIAL purpose — anything intended for or
+directed toward commercial advantage or monetary compensation — without a
+separate commercial license from the Licensor. Commercial use includes, for
+example: running Helix, or any product or service built with it, in a DATA
+CENTER or cloud / hosted service; use by an AI, MACHINE-LEARNING, data, or other
+TECHNOLOGY COMPANY to train, fine-tune, serve, or build models, products, or
+services; offering Helix or anything built with it as a PAID, HOSTED, or
+SOFTWARE-AS-A-SERVICE product; use in a FOR-PROFIT company's products, services,
+or revenue-generating operations; and ADVERTISING- or SUBSCRIPTION-supported
+services. (Section 3 gives the full definition and more examples.)
+
+Third-party components vendored under stage0/ keep their own upstream licenses
+(GPLv3, etc.) — this license does not apply to them. "Helix" is a trademark of
 the Licensor.
 
-Third-party components vendored in this repository (the stage0 bootstrap tools
-under stage0/M2-Planet/ and stage0/M2libc/, and the hex0/hex1/hex2/M0/M1/catm/
-cc_amd64 rungs) keep their OWN upstream licenses — this license does not apply to
-them. "Helix" is a trademark of the Licensor.
-
-This is a SOURCE-AVAILABLE license. It is intentionally NOT an open-source
-license: it grants the right to verify, not a general right to use.
+This is a SOURCE-AVAILABLE, NON-COMMERCIAL license. It grants broad freedom for
+non-commercial use; it is intentionally NOT an OSI-approved open-source license
+(those may not restrict commercial use).
 ================================================================================
 
 1. DEFINITIONS.
    "Licensed Work" means the original works of authorship in this repository
-   created by the Licensor — including the Helix compiler sources (helixc/, and
-   the Helix lexer/parser/kovc sources), the seed (stage0/helixc-bootstrap/
-   seed.c), the runtime, demo, scripts, and documentation — but EXCLUDING the
-   Third-Party Components.
-   "Third-Party Components" means software vendored from third parties —
+   created by the Licensor — the Helix compiler sources, the seed
+   (stage0/helixc-bootstrap/seed.c), the runtime, demo, scripts, and
+   documentation — but EXCLUDING the Third-Party Components.
+   "Third-Party Components" means software vendored from third parties:
    specifically, ALL contents of the stage0/ directory EXCEPT
-   stage0/helixc-bootstrap/ (which is part of the Licensed Work). This includes,
-   without limitation, stage0/M2-Planet/, stage0/M2libc/, and stage0/blood-elf/
-   (each under the GNU General Public License, version 3.0) and the hex0, hex1,
-   hex2, M0, M1, catm, and cc_amd64 bootstrap rungs, each licensed under its own
-   terms by its respective authors (see the LICENSE / COPYING files in those
-   directories). Using these third-party tools to build the Licensed Work does
-   not place the Licensed Work under their licenses (the output of a build tool
-   is not a derivative of the tool); their license files are retained for
-   license compliance and must not be removed.
-   "Verify" / "Verification" means reading, studying, compiling, executing, and
-   reproducing the Licensed Work for the sole purpose of independently
-   confirming its integrity, provenance, correctness, and the claims made about
-   it (for example, running reproduce_trust.sh and the test and gate suites),
-   and reporting or discussing the results.
+   stage0/helixc-bootstrap/. This includes, without limitation, stage0/M2-Planet/,
+   stage0/M2libc/, and stage0/blood-elf/ (each under the GNU General Public
+   License, version 3.0) and the hex0, hex1, hex2, M0, M1, catm, and cc_amd64
+   rungs, each under its own upstream license (see the LICENSE / COPYING files in
+   those directories).
    "Licensor" means the copyright holder named above.
    "You" means the individual or entity exercising permissions under this License.
 
-2. GRANT — VERIFICATION ONLY. Subject to your compliance with this License, the
-   Licensor grants You a worldwide, royalty-free, non-exclusive, non-transferable,
-   revocable license to:
-   (a) obtain, view, and study the source of the Licensed Work;
-   (b) compile, run, and reproduce the Licensed Work solely to Verify it; and
-   (c) make and distribute verbatim copies of the Licensed Work, and make and
-       share modifications solely to the extent necessary for Verification (e.g.,
-       to test a hypothesis about the build), provided every copy retains this
-       License and all copyright, trademark, and attribution notices.
+2. GRANT — NON-COMMERCIAL USE. Subject to Your compliance with this License, the
+   Licensor grants You a worldwide, royalty-free, non-exclusive license to use,
+   run, reproduce, build with, study, modify, and distribute the Licensed Work
+   and Your modifications of it, in source or binary form, SOLELY for a
+   Non-Commercial Purpose (Section 3), provided that every copy You distribute
+   retains this License and all copyright, trademark, and attribution notices,
+   and that any modified files carry prominent notices stating that You changed
+   them.
 
-3. RESERVATION — NO USE GRANT. ALL OTHER RIGHTS ARE RESERVED. Without a separate
-   written license from the Licensor, You may NOT:
-   (a) use, execute, or deploy the Licensed Work, in whole or in part, for any
-       purpose other than Verification — including any production, commercial,
-       research-output, or personal-utility use;
-   (b) incorporate the Licensed Work, or a substantial part of the source or the
-       specific expression in it, into any other software, product, or service;
-   (c) distribute the Licensed Work or any derivative for the purpose of enabling
-       its use by others; or
-   (d) offer the Licensed Work, modified or not, as a hosted or managed service.
-   For any such use, contact the Licensor for a commercial license (Section 8).
+3. NON-COMMERCIAL PURPOSE; COMMERCIAL USE RESERVED.
+   A "Non-Commercial Purpose" is any use that is NOT primarily intended for or
+   directed toward commercial advantage or monetary compensation. Use by an
+   individual for personal or private purposes, by students or educators for
+   education, by researchers for non-commercial research, and by a non-profit or
+   governmental organization for its non-commercial activities, is a
+   Non-Commercial Purpose.
+
+   "Commercial Use" — any use that is primarily intended for or directed toward
+   commercial advantage or monetary compensation, OR any use by or on behalf of a
+   for-profit entity in connection with its products, services, or
+   revenue-generating operations — is NOT granted by this License and requires a
+   separate commercial license from the Licensor. Commercial Use includes,
+   without limitation:
+     (a) running the Licensed Work, or any product or service built with or
+         derived from it, in a data center, cloud platform, or hosted service;
+     (b) use by an artificial-intelligence, machine-learning, data, or other
+         technology company to train, fine-tune, evaluate, serve, or build any
+         model, product, or service;
+     (c) offering the Licensed Work, or anything built with it, as a paid,
+         hosted, managed, or software-as-a-service product or service;
+     (d) use in or for a for-profit entity's commercial products, services,
+         internal business operations, or other revenue-generating activity;
+     (e) any service or product supported by advertising, subscriptions, fees, or
+         other monetization; and
+     (f) sublicensing, reselling, or redistributing the Licensed Work for a fee.
+   If You are unsure whether a use is permitted, or to obtain a commercial
+   license, contact the Licensor (Section 10).
 
 4. THIRD-PARTY COMPONENTS. This License does not apply to the Third-Party
    Components, which remain licensed solely under their own upstream terms.
-   Nothing here grants or restricts any right in them; your rights in the
-   Third-Party Components come from their respective licenses, and where those
-   conflict with this License as to a given component, the component's license
-   governs that component.
+   Building the Licensed Work with those tools does not place the Licensed Work
+   under their licenses (the output of a build tool is not a derivative of the
+   tool); their license files are retained for compliance and must not be removed.
 
-5. TRADEMARKS. "Helix" and associated names, logos, and any "Helix-Certified" or
-   verification marks are trademarks of the Licensor. This License grants no
-   trademark rights except the nominative right to refer truthfully to the
-   Licensed Work by name (e.g., "I independently verified Helix").
+5. TRADEMARKS. "Helix" and associated names, logos, and marks are trademarks of
+   the Licensor. This License grants no trademark rights except the nominative
+   right to refer to the Licensed Work truthfully by name.
 
-6. OPTIONAL FUTURE OPEN RELEASE. The Licensor may, at its sole discretion and at
-   any time, release any version of the Licensed Work under additional or
-   different terms, including an open-source license. Unless and until the
-   Licensor does so in writing for a given version, this License governs that
-   version. No such future release is promised, and this License does NOT
-   automatically convert to any other license.
+6. NO OTHER RIGHTS; OPTIONAL FUTURE RELEASE. All rights not expressly granted are
+   reserved. The Licensor may, at its sole discretion and at any time, release
+   any version of the Licensed Work under additional or different terms,
+   including an open-source license. Unless and until the Licensor does so in
+   writing for a given version, this License governs that version. No such future
+   release is promised, and this License does not automatically convert.
 
-7. TERMINATION. Any use outside the scope of Section 2 automatically terminates
-   this License. On termination You must cease all use and destroy your copies,
-   except copies retained solely for ongoing Verification remain permitted under
-   Section 2.
+7. TERMINATION. Any use outside the scope of this License — including any
+   Commercial Use without a separate commercial license — automatically
+   terminates the rights granted here. The Licensor may reinstate them in writing.
 
-8. COMMERCIAL LICENSING. To license Helix for any use beyond Verification,
-   contact the Licensor via the Helix project on GitHub:
-   https://github.com/Questeria/helix (open an issue, or use the contact listed
-   on the @Questeria profile).
+8. DISCLAIMER OF WARRANTY. THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY
+   OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
 
-9. DISCLAIMER OF WARRANTY. THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT
-   WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-   WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
-   NON-INFRINGEMENT.
+9. LIMITATION OF LIABILITY. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY
+   CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT, OR OTHERWISE,
+   ARISING FROM, OUT OF, OR IN CONNECTION WITH THE LICENSED WORK OR ITS USE OR
+   OTHER DEALINGS IN THE LICENSED WORK.
 
-10. LIMITATION OF LIABILITY. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY
-    CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT, OR OTHERWISE,
-    ARISING FROM, OUT OF, OR IN CONNECTION WITH THE LICENSED WORK OR ITS USE OR
-    OTHER DEALINGS IN THE LICENSED WORK.
+10. COMMERCIAL LICENSING. For any Commercial Use, contact the Licensor via the
+    Helix project on GitHub: https://github.com/Questeria/helix (open an issue, or
+    use the contact listed on the @Questeria profile).
 
 END OF TERMS.

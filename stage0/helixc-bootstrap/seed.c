@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: LicenseRef-Helix-Source-Available-Verify-Only-1.0
+/* SPDX-License-Identifier: LicenseRef-Helix-Non-Commercial-1.0
  * helixc-bootstrap seed -- the trusted Helix-subset bootstrap compiler.
  *
  * The first ORIGINAL rung of the Kovostov-Native ladder (everything below it is
@@ -8,7 +8,7 @@
  * (helixc/bootstrap/{kovc,parser,lexer}.hx) is written in, minting the first
  * helixc WITHOUT Python -- replacing Python as the K1 minter.
  *
- * Source-available, verify-only (see /LICENSE); statically separable from the
+ * Source-available, non-commercial (see /LICENSE); statically separable from the
  * GPL-3.0 vendored M2-Planet/M2libc (we only BUILD with those; none of their
  * source is copied here).
  *

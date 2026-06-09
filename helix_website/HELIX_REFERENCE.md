@@ -40,7 +40,7 @@
 
 ### Three-pillar pitch (use as feature triplet)
 
-🔍 **Source-available + auditable from raw.** Provided under the Helix Source-Available License (verify-only; in `LICENSE`): read, build, and reproduce it to verify — use beyond verification needs a separate license. Not an open-source/permissive license. Public training data only.
+🔍 **Source-available + free for non-commercial use.** Provided under the Helix Non-Commercial License (in `LICENSE`): use it freely for any non-commercial purpose; commercial use (data centers, AI/tech companies, paid/SaaS, any for-profit use) needs a separate license. Not an open-source/permissive license. Public training data only.
 
 ⚙️ **Bootstrapped from raw binary.** The verified hex0 bootstrap root is 299 bytes. The long-term chain is designed to climb from that root toward a self-hosted Helix compiler; today the production compiler is still Python-hosted `helixc`.
 
@@ -48,7 +48,7 @@
 
 ### The 30-second elevator pitch
 
-> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one auditable stack. The toolchain is **source-available** under a verify-only license (the Helix Source-Available License; see `LICENSE`) — auditable and reproducible by anyone, but not open-source. The whole stack is auditable and reproducible from a 299-byte raw-binary root.
+> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one auditable stack. The toolchain is **source-available** and free for non-commercial use (the Helix Non-Commercial License; see `LICENSE`) — auditable and reproducible by anyone, but not open-source, and commercial use is reserved. The whole stack is auditable and reproducible from a 299-byte raw-binary root.
 
 ---
 
@@ -82,7 +82,7 @@ Functions are checked for structural recursion at compile time. Non-terminating 
 
 ### 5. Auditable by commitment
 
-- **Code**: source-available under the Helix Source-Available License (verify-only; in `LICENSE`) — audit and reproduce freely; other use needs a separate license
+- **Code**: source-available under the Helix Non-Commercial License (in `LICENSE`) — free for non-commercial use; commercial use (data centers, AI/tech companies, paid/SaaS, for-profit) needs a separate license
 - **Documentation**: covered by the same license (provided for verification and reference)
 - **Model weights**: license to be determined when produced
 - **Training data**: only data with explicit public-use rights
@@ -1075,7 +1075,7 @@ error: undefined function `__exf`
 
 ### Licenses
 
-- **Source code**: the Helix Source-Available License (Verify-Only), file-resident in `LICENSE` — read, build, and reproduce it to verify; use beyond verification requires a separate license. Not open-source.
+- **Source code**: the Helix Non-Commercial License, file-resident in `LICENSE` — free for non-commercial use (personal, academic, research, non-profit); commercial use (data centers, AI/tech companies, paid/SaaS, for-profit) requires a separate license. Not open-source.
 - **Documentation**: covered by the same license (provided for verification and reference).
 - **Logos and brand**: "Helix" and related marks are trademarks of the Licensor; all rights reserved.
 - **Model weights** (when shipped): license to be determined.

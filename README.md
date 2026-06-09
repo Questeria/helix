@@ -68,7 +68,7 @@ See **[QUICKSTART.md](QUICKSTART.md)** to build and run. Language reference: `do
 
 ## License
 
-**Helix is source-available, not open-source.** The Licensed Work is provided under the **Helix Source-Available License (Verify-Only)** — see [`LICENSE`](LICENSE). You may read, build, run, and reproduce it to **verify** its integrity and claims, and share verbatim copies for that purpose; any other use (production, commercial, or otherwise) requires a separate license from the Licensor (contact via GitHub).
+**Helix is source-available and free for non-commercial use — but not open-source.** The Licensed Work is provided under the **Helix Non-Commercial License** — see [`LICENSE`](LICENSE). You may use, run, build with, study, modify, and share Helix freely for any **non-commercial** purpose (personal, learning, academic and other non-commercial research, evaluation, non-profit). **Commercial use is reserved** and requires a separate license — for example: running it (or anything built with it) in a **data center** or hosted/cloud service; use by an **AI/ML or other technology company** to train, serve, or build models, products, or services; offering it as a **paid or software-as-a-service** product; or any other **for-profit, revenue-generating** use. Contact via GitHub for a commercial license.
 
 Vendored third-party components under `stage0/` (M2-Planet, M2libc, blood-elf, and the hex/M0/M1/catm/cc_amd64 rungs) remain under their own upstream licenses (GPLv3, etc.); using them to build Helix does not place Helix under those licenses.
 

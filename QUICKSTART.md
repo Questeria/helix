@@ -129,7 +129,7 @@ ergonomics conflicts with structural regularity, structural regularity wins. See
 
 ## License
 
-**Source-available, verify-only** — the Helix Source-Available License; see [`LICENSE`](LICENSE). You may audit and reproduce Helix to verify it; other use requires a separate license. Vendored `stage0/` tools keep their own (GPLv3, etc.) licenses. (Earlier docs mention an intended Apache-2.0 / open-source release; those are superseded by `LICENSE`.)
+**Source-available, free for non-commercial use** — the **Helix Non-Commercial License**; see [`LICENSE`](LICENSE). Use, build with, study, modify, and share Helix freely for any non-commercial purpose; **commercial use** (data centers, AI/tech companies, paid/SaaS products, any for-profit revenue-generating use) requires a separate license. Vendored `stage0/` tools keep their own (GPLv3, etc.) licenses. (Earlier docs mention an intended Apache-2.0 / open-source release; those are superseded by `LICENSE`.)
 
 ---
 
