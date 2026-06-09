@@ -19,7 +19,7 @@
 11. [Bootstrap Chain](#bootstrap-chain)
 12. [Compiler Architecture](#compiler-architecture)
 13. [Tooling & CLI](#tooling--cli)
-14. [Open-Source Commitments](#open-source-commitments)
+14. [Licensing & Verification Commitments](#licensing--verification-commitments)
 15. [Comparisons](#comparisons)
 16. [Code Samples Gallery](#code-samples-gallery)
 17. [Glossary](#glossary)
@@ -40,7 +40,7 @@
 
 ### Three-pillar pitch (use as feature triplet)
 
-🔓 **Open-source weights, data, and code.** Apache 2.0 source (in `LICENSE`) · CC-BY 4.0 docs (stated policy) · CC0 model weights when produced (stated policy). Public training data only.
+🔍 **Source-available + auditable from raw.** Provided under the Helix Source-Available License (verify-only; in `LICENSE`): read, build, and reproduce it to verify — use beyond verification needs a separate license. Not an open-source/permissive license. Public training data only.
 
 ⚙️ **Bootstrapped from raw binary.** The verified hex0 bootstrap root is 299 bytes. The long-term chain is designed to climb from that root toward a self-hosted Helix compiler; today the production compiler is still Python-hosted `helixc`.
 
@@ -48,7 +48,7 @@
 
 ### The 30-second elevator pitch
 
-> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one open stack. The toolchain is open source under permissive licenses (Apache 2.0 code, CC-BY 4.0 docs, CC0 model weights when produced). Helix is the foundation of the Kovostov AGI project: an attempt to build AGI on a fully open, fully auditable stack.
+> Helix is a programming language designed for machine learning and auditable systems work. The project starts from a 299-byte raw-binary bootstrap root and is working toward a self-hosted compiler, while today's production compiler remains Python-hosted `helixc`. It aims to combine type safety, symbolic autodiff, tensor/tile primitives, and verifier-gated self-improvement in one auditable stack. The toolchain is **source-available** under a verify-only license (the Helix Source-Available License; see `LICENSE`) — auditable and reproducible by anyone, but not open-source. Helix is the foundation of the Kovostov AGI project: an attempt to build AGI on a fully auditable, reproducible-from-raw stack.
 
 ---
 
@@ -80,11 +80,11 @@ Helix is designed for the kind of code ML researchers actually write: numerical 
 
 Functions are checked for structural recursion at compile time. Non-terminating functions must be explicitly marked `@partial`. This rules out a class of "stuck infinite loop" bugs that plague Python ML code.
 
-### 5. Open by commitment
+### 5. Auditable by commitment
 
-- **Code**: Apache 2.0 (file-resident in `LICENSE`; you can use it commercially)
-- **Documentation**: CC-BY 4.0 (stated policy, not yet file-resident)
-- **Model weights**: CC0 (public domain; stated policy for weights when produced)
+- **Code**: source-available under the Helix Source-Available License (verify-only; in `LICENSE`) — audit and reproduce freely; other use needs a separate license
+- **Documentation**: covered by the same license (provided for verification and reference)
+- **Model weights**: license to be determined when produced
 - **Training data**: only data with explicit public-use rights
 
 ---
@@ -1071,14 +1071,15 @@ error: undefined function `__exf`
 
 ---
 
-## Open-Source Commitments
+## Licensing & Verification Commitments
 
 ### Licenses
 
-- **Source code**: Apache 2.0 (file-resident in `LICENSE`)
-- **Documentation**: CC-BY 4.0 (stated policy, not yet file-resident)
-- **Logos and brand**: CC-BY 4.0 (stated policy, not yet file-resident)
-- **Model weights** (when shipped): CC0 (public domain; stated policy)
+- **Source code**: the Helix Source-Available License (Verify-Only), file-resident in `LICENSE` — read, build, and reproduce it to verify; use beyond verification requires a separate license. Not open-source.
+- **Documentation**: covered by the same license (provided for verification and reference).
+- **Logos and brand**: "Helix" and related marks are trademarks of the Licensor; all rights reserved.
+- **Model weights** (when shipped): license to be determined.
+- **Vendored bootstrap tools** under `stage0/`: remain under their own upstream licenses (GPLv3, etc.).
 
 ### Training data policy
 
@@ -1118,7 +1119,7 @@ The Kovostov AGI project (which Helix is the foundation for) commits to training
 
 | Dimension | Helix | Mojo |
 |-----------|-------|------|
-| License | Apache 2.0, fully open | Proprietary (partial) |
+| License | Source-available, verify-from-raw | Proprietary (partial) |
 | Bootstrap | Self-host target growing from live `hex0` | Closed-source binary |
 | Tile types | First-class | First-class |
 | Autodiff | Built-in | External (uses MAX engine) |
@@ -1487,7 +1488,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 │   A compiler being built toward self-hosting                 │
 │   from a 299-byte audited root.                              │
 │                                                             │
-│   The open-source ML language with autodiff,                │
+│   The verifiable ML language with autodiff,                 │
 │   tile types, and GPU-oriented codegen — with                │
 │   reproducible self-hosting as the bootstrap target.         │
 │                                                             │
@@ -1582,7 +1583,7 @@ Or: a single character `λ` in monospace inside a hex bracket `[λ]`. Clean, sho
 
 ## Closing Note
 
-Helix is built to last. Every design decision favors transparency, reproducibility, and the long-term goal of an open-source AGI stack. The website should communicate this: not just "here's another language", but "here's a serious, principled effort to build the foundation for the next generation of ML systems — and you can verify every byte yourself."
+Helix is built to last. Every design decision favors transparency, reproducibility, and the long-term goal of an auditable, verifiable AGI stack. The website should communicate this: not just "here's another language", but "here's a serious, principled effort to build the foundation for the next generation of ML systems — and you can verify every byte yourself."
 
 The website is the public face of that effort. Make it as honest, technical, and beautiful as the language itself.
 

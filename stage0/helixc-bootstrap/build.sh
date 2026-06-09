@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# build.sh -- compile the helixc-bootstrap seed (seed.c, Apache-2.0) using ONLY
+# build.sh -- compile the helixc-bootstrap seed (seed.c, source-available/verify-only) using ONLY
 # our stage0 ladder: M2-Planet (rung 7) compiles it, then catm + M0 + hex2 link
 # it into a self-contained ELF. No external toolchain. Run under WSL.
 #
 # Trust chain: hex0 (hand-authored) -> hex1 -> hex2 -> catm -> M0 -> cc_amd64 ->
-# M2-Planet -> (this seed). The seed source is OURS (Apache-2.0); we only BUILD
-# with the GPL-3.0 vendored M2-Planet/M2libc, copying none of their source here.
+# M2-Planet -> (this seed). The seed source is OURS (verify-only; see /LICENSE); we
+# only BUILD with the GPL-3.0 vendored M2-Planet/M2libc, copying none of their source here.
 set -euo pipefail
 cd "$(dirname "$0")"
 

@@ -129,7 +129,7 @@ ergonomics conflicts with structural regularity, structural regularity wins. See
 
 ## License
 
-Apache 2.0 (code, in `LICENSE`); CC‑BY 4.0 (docs, stated policy); CC0 (model weights when produced, stated policy).
+**Source-available, verify-only** — the Helix Source-Available License; see [`LICENSE`](LICENSE). You may audit and reproduce Helix to verify it; other use requires a separate license. Vendored `stage0/` tools keep their own (GPLv3, etc.) licenses. (Earlier docs mention an intended Apache-2.0 / open-source release; those are superseded by `LICENSE`.)
 
 ---
 

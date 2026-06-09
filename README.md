@@ -1,6 +1,6 @@
 # Kovostov-Native
 
-**An open-source AGI-aspirational system and Helix language stack, bootstrapped from raw binary up.**
+**A source-available, fully auditable AGI-aspirational system and Helix language stack, bootstrapped from raw binary up.**
 
 This is the from-scratch implementation of Kovostov and Helix. Kovostov is the first flagship AGI-aspirational system built on the stack; Helix is the general-purpose language and compiler meant to serve any serious AGI project, scientific system, or high-certainty industrial system where correctness, provenance, and uncertainty reduction matter.
 
@@ -12,8 +12,8 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 
 ## Hard constraints
 
-1. **Raw binary as the starting point.** The bootstrap chain begins with hand-encoded bytes the user can audit one byte at a time, and the toolchain is built **entirely from that raw root — there is no trusted pre-built compiler**. `hex0` (299 hand-authored hex bytes) → … → `seed` (an Apache-2.0 C-subset compiler) → `kovc` (the Helix compiler), each rung built only by the prior rung. The toolchain is **Python-free**: the repo holds **exactly one** committed `.py` (`verification/oracle/oracle_train.py`), a fenced numpy verification *oracle* that is **never** part of the toolchain. Existing tools (gcc, objdump, nasm) are used only as independent *auditors* (e.g. the gcc diverse-double-compile of the seed), never to produce shipped artifacts.
-2. **Open source, end-to-end.** All code (compiler, runtime, model architecture, training scripts), all weights, all training data references, and all documentation are public under permissive licenses. The source license is Apache 2.0 (see `LICENSE`); the documentation license is CC-BY 4.0 (stated policy) and trained-model weights, when produced, will be released under CC0 (stated policy).
+1. **Raw binary as the starting point.** The bootstrap chain begins with hand-encoded bytes the user can audit one byte at a time, and the toolchain is built **entirely from that raw root — there is no trusted pre-built compiler**. `hex0` (299 hand-authored hex bytes) → … → `seed` (the C-subset bootstrap compiler) → `kovc` (the Helix compiler), each rung built only by the prior rung. The toolchain is **Python-free**: the repo holds **exactly one** committed `.py` (`verification/oracle/oracle_train.py`), a fenced numpy verification *oracle* that is **never** part of the toolchain. Existing tools (gcc, objdump, nasm) are used only as independent *auditors* (e.g. the gcc diverse-double-compile of the seed), never to produce shipped artifacts.
+2. **Source-available + fully auditable.** All code (compiler, runtime, model architecture, training scripts), training-data references, and documentation are public so that anyone can read, build, and reproduce them to **verify** the system end-to-end. The source is provided under a **source-available, verify-only license** (the Helix Source-Available License; see `LICENSE`): you may audit and reproduce it, but use beyond verification requires a separate license. This is intentionally **not** an open-source / permissive license. Vendored third-party bootstrap tools under `stage0/` keep their own upstream licenses (GPLv3, etc.).
 3. **Public training data only.** No proprietary datasets, no Claude/GPT/Gemini outputs as training data. Corpora drawn from FineWeb-Edu, SlimPajama, The Stack v2, Wikipedia, public math (Lean mathlib, ProofPile), public code, public ARC-AGI-3 puzzles.
 4. **Eventual AGI.** The end goal is an artificial general intelligence — a system that exhibits sample-efficient learning, continual learning without catastrophic forgetting, compositional generalization, causal reasoning, and recursive self-improvement under verifier gates. This is a multi-year direction, not a release date.
 5. **Consumer hardware.** Bootstrap and primary development on Windows 11 + RTX 3070 laptop / RTX 5090 desktop. Cloud bursts allowed for big training pushes.
@@ -24,7 +24,7 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 - **Language**: Helix (`.hx` source files), a general AGI and high-certainty computing language
 - **Compiler**: `helixc`
 - **Runtime**: `helixrt`
-- **From-raw bootstrap chain (as built, no trusted pre-built compiler)**: `hex0` (299 hand-authored hex bytes) → `hex1` → `hex2` → `catm` → `M0` → `cc_amd64` → `M2-Planet` → `seed` (Apache-2.0 C-subset compiler) → `kovc` (the Helix compiler, `helixc/bootstrap/{lexer,parser,kovc}.hx`, self-hosted in Helix). Each rung is built **only by the prior rung**; no Python anywhere in the chain.
+- **From-raw bootstrap chain (as built, no trusted pre-built compiler)**: `hex0` (299 hand-authored hex bytes) → `hex1` → `hex2` → `catm` → `M0` → `cc_amd64` → `M2-Planet` → `seed` (the C-subset bootstrap compiler) → `kovc` (the Helix compiler, `helixc/bootstrap/{lexer,parser,kovc}.hx`, self-hosted in Helix). Each rung is built **only by the prior rung**; no Python anywhere in the chain.
 
 ## Status (v1.3, 2026-06-05)
 
@@ -85,9 +85,11 @@ See [QUICKSTART.md](QUICKSTART.md) for build-and-run instructions, [`docs/HELIX_
 
 ## License
 
-Apache License 2.0. See `LICENSE`.
+**Helix is source-available, not open-source.** The Licensed Work is provided under the **Helix Source-Available License (Verify-Only)** — see [`LICENSE`](LICENSE). You may read, build, run, and reproduce it to **verify** its integrity and claims, and share verbatim copies for that purpose; any other use (production, commercial, or otherwise) requires a separate license from the Licensor (contact via GitHub).
 
-Trained model weights, when produced, will be released under CC0 (public domain dedication) to maximize freedom for the AI community.
+Vendored third-party components under `stage0/` (M2-Planet, M2libc, blood-elf, and the hex/M0/M1/catm/cc_amd64 rungs) remain under their own upstream licenses (GPLv3, etc.); using them to build Helix does not place Helix under those licenses.
+
+> **Note on earlier documents:** some historical planning/design docs in this repo (kept for transparency and provenance) describe an *intended* Apache-2.0 / open-source / CC-BY / CC0 release. Those reflect earlier intent and are **superseded** by [`LICENSE`](LICENSE). The Licensor may choose to open-source Helix in the future but makes no such commitment here.
 
 ## Relation to the Kovostov framework at C:/Projects/Kovostov
 
