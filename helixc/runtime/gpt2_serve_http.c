@@ -49,6 +49,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>           /* struct timeval for SO_RCVTIMEO */
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -63,6 +64,18 @@
  * A client-supplied Content-Length above this is rejected with 413 BEFORE any allocation,
  * so a malicious/oversized Content-Length cannot drive a multi-GB malloc (DoS). */
 #define MAX_BODY (256 * 1024)
+
+/* DoS hardening for the accept loop (the listener is 127.0.0.1-only, but a local slow-loris could
+ * otherwise dribble partial headers and pin one thread + FD + 16KB stack per connection forever,
+ * and there was no cap on concurrent connections):
+ *   - CONN_RCVTIMEO_SEC: a per-accepted-connection SO_RCVTIMEO read deadline so a stalled header
+ *     (or body) read returns EAGAIN/EWOULDBLOCK instead of blocking a thread indefinitely.
+ *   - MAX_CONN: a hard cap on concurrent connection-handler threads. Beyond it the listener closes
+ *     the new fd immediately (the kernel still has the backlog from listen(); legitimate clients
+ *     retry). Cheap counter guarded by a mutex; the single-flight GPU mutex is a SEPARATE layer that
+ *     only serializes /api/generate and does NOT bound connection/thread growth. */
+#define CONN_RCVTIMEO_SEC 10
+#define MAX_CONN          16
 
 /* Worst-case worker telemetry line: the `tokenize` event (ids[]+strings[] for up to a max-ctx
  * prompt) and the `done` event (gen_ids[] up to n_gen=256 + the decoded text). At max-ctx 320 +
@@ -101,6 +114,11 @@ typedef struct {
 static Cfg     g_cfg;
 static Worker  g_worker;
 static volatile int g_busy = 0;   /* reflected in /api/health */
+
+/* concurrent-connection cap (DoS): incremented when a handler thread starts, decremented when it
+ * ends; the accept loop refuses (closes) a new fd once g_conns >= MAX_CONN. */
+static int             g_conns = 0;
+static pthread_mutex_t g_conns_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* ============================ small helpers ============================ */
 static void die(const char* msg) { fprintf(stderr, "gpt2_serve_http: %s: %s\n", msg, strerror(errno)); exit(2); }
@@ -427,8 +445,22 @@ static void handle_verify(int fd, const char* body) {
 }
 
 /* ============================ connection handler ============================ */
+static void conn_done(int fd) {
+    /* single teardown for every handle_conn exit: close the fd + release the concurrency slot. */
+    close(fd);
+    pthread_mutex_lock(&g_conns_lock);
+    if (g_conns > 0) g_conns--;
+    pthread_mutex_unlock(&g_conns_lock);
+}
+
 static void* handle_conn(void* arg) {
     int fd = (int)(intptr_t)arg;
+
+    /* per-connection read deadline (DoS / slow-loris): a stalled header or body read returns
+     * EAGAIN/EWOULDBLOCK after CONN_RCVTIMEO_SEC instead of pinning this thread forever. read()/
+     * read_line_fd() then see r<0 (errno != EINTR) and bail, and conn_done() reclaims the slot. */
+    struct timeval rcvto; rcvto.tv_sec = CONN_RCVTIMEO_SEC; rcvto.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvto, sizeof rcvto);
 
     /* read the request header (until \r\n\r\n). */
     char hdrbuf[16384]; size_t hlen = 0;
@@ -441,7 +473,7 @@ static void* handle_conn(void* arg) {
         hdr_end = strstr(hdrbuf, "\r\n\r\n");
         if (hdr_end) { hdr_end += 4; break; }
     }
-    if (!hdr_end) { close(fd); return NULL; }
+    if (!hdr_end) { conn_done(fd); return NULL; }
 
     /* method + path */
     char method[16] = {0}, path[2048] = {0};
@@ -462,7 +494,7 @@ static void* handle_conn(void* arg) {
         if (content_len > MAX_BODY) {   /* reject oversized bodies before allocating */
             send_status(fd, 413, "Payload Too Large", "application/json; charset=utf-8",
                         "{\"error\":\"request body too large\"}");
-            close(fd); return NULL;
+            conn_done(fd); return NULL;
         }
         char* body = read_body(fd, hdr_end, hdrbuf, hlen, content_len);
         if (!strcmp(path, "/api/generate")) handle_generate(fd, body ? body : "");
@@ -478,8 +510,8 @@ static void* handle_conn(void* arg) {
     } else {
         send_status(fd, 405, "Method Not Allowed", "text/plain", "method not allowed\n");
     }
-    close(fd);
     (void)pathq;
+    conn_done(fd);
     return NULL;
 }
 
@@ -522,6 +554,13 @@ static void spawn_worker(void) {
         av[n++] = "--serve";
         av[n++] = "--emit-fd"; av[n++] = "1";
         av[n++] = "--max-ctx"; av[n++] = maxctx;
+        /* --timing 1: per-layer ms is REAL host wall-clock. Every kernel launch in forward_layer_gpt2
+         * goes through LX/LX2, each of which calls cuCtxSynchronize() (gpt2_infer.c:90-91), so the GPU
+         * is fully synced at both the first and last launch of a layer. The now_seconds() delta around
+         * forward_layer_gpt2() therefore measures genuine per-layer GPU compute time (not launch-enqueue
+         * noise). NOT CUDA-event timing -- host-clock around a per-layer barrier. Without this flag the
+         * worker reports ms:0.000 for every layer, so a LIVE viewer would see a flat zero chart. */
+        av[n++] = "--timing"; av[n++] = "1";
         av[n++] = "--detail";  av[n++] = g_cfg.detail[0] ? g_cfg.detail : (char*)"op";
         if (g_cfg.vocab[0] && g_cfg.merges[0]) {
             av[n++] = "--vocab";  av[n++] = g_cfg.vocab;
@@ -600,8 +639,23 @@ int main(int argc, char** argv) {
     for (;;) {
         int fd = accept(s, NULL, NULL);
         if (fd < 0) { if (errno == EINTR) continue; break; }
+        /* concurrent-connection cap (DoS): refuse beyond MAX_CONN in-flight handler threads.
+         * Reserve the slot BEFORE spawning so the count can't be raced past the cap; release it in
+         * conn_done() (or here on a failed pthread_create). The kernel keeps the listen() backlog,
+         * so a legitimate client that hits the cap simply retries. */
+        pthread_mutex_lock(&g_conns_lock);
+        int over = (g_conns >= MAX_CONN);
+        if (!over) g_conns++;
+        pthread_mutex_unlock(&g_conns_lock);
+        if (over) { close(fd); continue; }      /* at capacity: drop this connection */
         pthread_t th;
-        if (pthread_create(&th, NULL, handle_conn, (void*)(intptr_t)fd) != 0) { close(fd); continue; }
+        if (pthread_create(&th, NULL, handle_conn, (void*)(intptr_t)fd) != 0) {
+            /* spawn failed: release the slot we reserved and drop the connection */
+            pthread_mutex_lock(&g_conns_lock);
+            if (g_conns > 0) g_conns--;
+            pthread_mutex_unlock(&g_conns_lock);
+            close(fd); continue;
+        }
         pthread_detach(th);
     }
     return 0;

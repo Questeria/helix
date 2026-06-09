@@ -774,7 +774,7 @@
           </div>
           <div class="ladder-grid" id="ladderGrid"></div>
           <div class="ladder-spark" id="ladderSpark"></div>
-          <div class="ladder-spark-lbl">per-layer ms (real CUDA-event timing when live; mock here)</div>
+          <div class="ladder-spark-lbl">per-layer ms (real per-layer host-clock ms when live; illustrative (mock) here)</div>
         </div>
 
         <!-- kernel ticker -->
@@ -1667,6 +1667,8 @@ function finalizeTurnMeta(d) {
         resultSlot.appendChild(document.createTextNode(" "));
         resultSlot.appendChild(el("a", { href: "dashboard.html" }, "see the real numbers →"));
       } else {
+        /* DEAD-BY-DESIGN: /api/verify only ever returns UNAVAILABLE (handled above); this PASS branch
+         * is unreachable. Kept robust, never fabricated -- see the note on runVerify(). */
         var cls = res.verdict === "PASS" ? "verify-result" : "verify-result is-unavail";
         resultSlot.appendChild(el("span", { class: cls }, "verify: " + res.verdict));
         resultSlot.appendChild(document.createTextNode(" "));
@@ -1679,7 +1681,14 @@ function finalizeTurnMeta(d) {
 }
 
 /* on-demand verify: hits POST /api/verify only in live mode; mock always
-   returns UNAVAILABLE (python-free demo path), never a fake PASS. */
+   returns UNAVAILABLE (python-free demo path), never a fake PASS.
+
+   HONEST-LIVE-STATE / DEAD-BY-DESIGN: /api/verify in the C server (gpt2_serve_http.c handle_verify)
+   ALWAYS returns verdict:"UNAVAILABLE" -- it NEVER returns "PASS". The deep token-for-token re-check
+   loads the full ~6.4GB fp32 numpy oracle and is the OFFLINE gate (scripts/gpt2_scale.sh, surfaced on
+   page 2), never a live hot-path check. So the verdict==="PASS" branches in the two renderers below are
+   UNREACHABLE-by-design and kept ONLY so the renderer is robust if the contract ever changes. DO NOT
+   wire up a fake live PASS here: the only honest live verdict is UNAVAILABLE -> "see the real numbers". */
 function runVerify(doneEvent, cb) {
   if (TELEMETRY_SOURCE !== "sse") {
     setTimeout(function () { cb({ verdict: "UNAVAILABLE", note: "mock telemetry — no oracle" }); }, 350);
@@ -1724,6 +1733,8 @@ function paintRunSummary(d) {
         slot.appendChild(document.createTextNode("oracle UNAVAILABLE (python-free demo path) — "));
         slot.appendChild(el("a", { href: "dashboard.html" }, "see the real parity numbers →"));
       } else {
+        /* DEAD-BY-DESIGN: /api/verify only ever returns UNAVAILABLE (handled above); unreachable PASS
+         * branch, kept robust, never fabricated -- see the note on runVerify(). */
         slot.appendChild(document.createTextNode("verify: " + res.verdict + " — "));
         slot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
       }

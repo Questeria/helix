@@ -491,15 +491,20 @@ static void emit_error(const char* where, const char* message, int fatal) {
 }
 
 /* forward_layer_gpt2(x): x is the [Spad,DM] residual stream (in-place updated).
- *   ln_eps(ln_1) -> mm_AB QKV + bias -> 12-head { pack Q/K/V, mm_ABt scores, scale, causal
+ *   ln_eps(ln_1) -> mm_AB QKV + bias -> NH-head { pack Q/K/V, mm_ABt scores, scale, causal
  *   softmax, mm_AB @V, scatter } -> mm_AB c_proj + bias -> residual add
- *   -> ln_eps(ln_2) -> mm_AB c_fc + bias -> gelu -> mm_AB mlp c_proj + bias -> residual add. */
+ *   -> ln_eps(ln_2) -> mm_AB c_fc + bias -> gelu -> mm_AB mlp c_proj + bias -> residual add.
+ * NOTE: the "12-head"/"per-head" figures below describe the 124M default (NH=12); at XL the
+ * runtime overrides NH=25 (and NL=48) via the HX_* env (see main(): HX_HEADS/HX_NL). The head
+ * loop is `for (h=0; h<NH; h++)`, so it is dimension-generic -- the comment counts are illustrative
+ * of the 124M case, not a fixed 12. */
 static void forward_layer_gpt2(void) {
     /* Emit hooks are printf-only on host-scope values (g_emit_layer/g_emit_step + literal
      * kernel-name strings). They wrap the SAME real launches; they read no device memory,
-     * add no sync, and change no arg. The 12 per-head launches stay emit-silent; the 3
+     * add no sync, and change no arg. The NH per-head launches stay emit-silent; the 3
      * dominating attention kernels are reported once after the head loop as aggregates
-     * (agg=NH), so the frontend sees a faithful 17-op/layer map without 12 events/layer. */
+     * (agg=NH), so the frontend sees a faithful 17-op/layer map without NH events/layer.
+     * (NH=12 at the 124M default; NH=25 at XL via HX_HEADS.) */
     int L = g_emit_layer;
     /* --- attention --- */
     dbg_row("x_in", d_x, 0, DM);
@@ -557,7 +562,9 @@ static void forward_layer_gpt2(void) {
     dbg_row("x_final", d_x, 0, DM);
 }
 
-/* ===================== full forward (12 layers + ln_f + tied head) ===================== */
+/* ===================== full forward (NL layers + ln_f + tied head) ===================== */
+/* NL=12 at the 124M default; NL=48 at XL via HX_NL. The layer loop below is `for (L=0; L<NL; L++)`,
+ * so this path is dimension-generic -- "NL layers" is not a fixed 12. */
 /* HOST embedding gather into d_x: x[s,:] = wte[ids[s]] + wpe[s] for s<T, zero pad rows.
  * Byte-movement only (host glue) -- no arithmetic-on-the-trust-path beyond the add the capstone
  * itself does for its input injection. */
@@ -668,7 +675,8 @@ static int device_init(const char* ptx_path, const char* wpath) {
     return 0;
 }
 
-/* allocate the layer-weight device buffers (reused across all 12 layers) + the per-Smax activations. */
+/* allocate the layer-weight device buffers (reused across all NL layers; NL=12 at the 124M default,
+ * NL=48 at XL via HX_NL) + the per-Smax activations. One layer's weights resident at a time. */
 static int alloc_buffers(int Smax) {
     Spad_max = Smax;
     /* layer-weight buffers (one layer resident at a time; upload_layer() refills them per layer). */

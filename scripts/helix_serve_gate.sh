@@ -91,20 +91,36 @@ gcc gpt2_serve_http.c -O2 -lpthread -o /tmp/gpt2_serve_http 2>/tmp/sg_server_gcc
 # oracle, dumping the 25-id sequence to /tmp/helix_gen_ids.txt. We capture THAT as the G1 target.
 echo "=== [OFFLINE] gpt2_scale.sh MODEL=gpt2-xl (the G1 token-for-token reference) ==="
 # G1 HARD-REQUIRES a GENUINE PRIMARY oracle PASS here: the offline gen-ids are only an honest G1
-# anchor if gpt2_scale.sh did a full-logits token-for-token PASS vs the numpy oracle (printed
-# ^GPT2_SCALE_PARITY_PASS). If the oracle OOMs/degrades to the helix-only block-0+coherence FALLBACK,
+# anchor if gpt2_scale.sh did a full-logits token-for-token PASS vs the numpy oracle. The PASS marker
+# ^GPT2_SCALE_PARITY_PASS is printed in BOTH modes (PRIMARY full-logits + token-for-token AND the
+# helix-only block-0+coherence FALLBACK), so we ALSO require the PRIMARY-mode VERDICT line
+# ('mode: full-logits + token-for-token generation') and REJECT the FALLBACK line
+# ('mode: block-0 hidden parity + generation coherence'). If the oracle OOMs/degrades to FALLBACK,
 # /tmp/helix_gen_ids.txt would be helix-vs-helix -- so we FAIL-CLOSE (OK=0), never compare served==offline
-# against an unverified offline reference.
+# against an unverified offline reference. We also echo the scale sub-run's mode line into our own log.
 OFFLINE_IDS=""
 if [ "$OK" = "1" ]; then
   tr -d '\r' < $SRC/scripts/gpt2_scale.sh > /tmp/sg_scale.sh
   rm -f /tmp/helix_gen_ids.txt
   if MODEL=gpt2-xl NGEN=$NGEN PROMPT="$PROMPT" bash /tmp/sg_scale.sh >/tmp/sg_scale.log 2>&1; then
-    if grep -q '^GPT2_SCALE_PARITY_PASS' /tmp/sg_scale.log; then
-      echo "  gpt2_scale.sh xl: GPT2_SCALE_PARITY_PASS"
+    # Echo the scale sub-run's VERDICT/mode line into OUR log so the captured _gate_run.log is
+    # self-evidencing about PRIMARY-vs-FALLBACK (a reviewer reading this transcript can see the mode).
+    SCALE_VERDICT=$(grep 'VERDICT.*mode:' /tmp/sg_scale.log | head -1)
+    echo "  gpt2_scale.sh ${SCALE_VERDICT:-(no VERDICT line found)}"
+    # GPT2_SCALE_PARITY_PASS alone is NOT enough: gpt2_scale.sh prints it in BOTH the PRIMARY
+    # (full-logits + token-for-token vs the numpy oracle) AND the helix-only FALLBACK (block-0 +
+    # generation coherence, no oracle token-match) modes. The G1 anchor /tmp/helix_gen_ids.txt is
+    # only honest if it came from a PRIMARY token-for-token PASS -- so we additionally REQUIRE the
+    # PRIMARY-mode VERDICT line and REJECT the FALLBACK-mode line. This matches the fail-closed
+    # promise in the header above (refuse a helix-vs-helix anchor if the oracle OOMs to fallback).
+    if grep -q '^GPT2_SCALE_PARITY_PASS' /tmp/sg_scale.log \
+       && grep -q 'mode: full-logits + token-for-token generation' /tmp/sg_scale.log \
+       && ! grep -q 'mode: block-0 hidden parity + generation coherence' /tmp/sg_scale.log; then
+      echo "  gpt2_scale.sh xl: GPT2_SCALE_PARITY_PASS (PRIMARY full-logits + token-for-token -- genuine oracle anchor)"
     else
-      echo "  FAIL: gpt2_scale.sh did NOT print GPT2_SCALE_PARITY_PASS -- offline reference is not a"
-      echo "        genuine PRIMARY oracle token-for-token PASS (refusing a helix-vs-helix G1 anchor)."
+      echo "  FAIL: gpt2_scale.sh did NOT produce a genuine PRIMARY oracle token-for-token PASS"
+      echo "        (need GPT2_SCALE_PARITY_PASS AND 'mode: full-logits + token-for-token generation',"
+      echo "        and NOT the helix-only 'block-0 ... coherence' FALLBACK -- refusing a helix-vs-helix G1 anchor)."
       tail -6 /tmp/sg_scale.log | sed 's/^/    /'
       OK=0
     fi

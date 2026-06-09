@@ -99,19 +99,22 @@ These are the **real** values the `hello`/`trust-strip` events carry (`fixpoint_
 ### 0.5 The fence count — VERIFIED LIVE (correcting the contract's parenthetical)
 
 The chat DESIGN CONTRACT prompt said *"each new .c/.h bumps the count from 26"*. **That figure is
-stale.** Verified against the live tree at HEAD (`86abedf`):
+stale.** Verified against the live tree at the current HEAD:
 
 ```
 $ git ls-files "*.c" "*.h" | wc -l
-28
+29
 ```
 
-The **real committed `.c`/`.h` count is 28** (6 in `helixc/runtime/` + 22 in `stage0/`), matching
-`docs/TRUSTED_C_INVENTORY.md` §0 ("at HEAD the committed C/H is 28 files / 18 131 LOC"). The **24-file
-v1.3 trusted-C total** breaks down as the **Category-A ladder = 22 files / 13 217 LOC, byte-identical**
-(`stage0/`, the from-raw ladder) plus the 2 v1.3 GPU harnesses; nothing in the 22-file ladder moved
-(see `docs/TRUSTED_C_INVENTORY.md` for the exact tally). The fence implication of this plan is therefore
-stated against the **true base of 28** in §5/G6, not 26.
+The **real committed `.c`/`.h` count is 29** (7 in `helixc/runtime/` + 22 in `stage0/`), matching
+`docs/TRUSTED_C_INVENTORY.md` §0. The canonical decomposition is **22-file from-raw ladder + 7 Category-B
+= 29**: the **Category-A from-raw ladder = 22 files (byte-identical to v1.3)** (`stage0/`, the hex0→seed
+ladder incl. `seed.c`), plus **7 Category-B host harnesses** in `helixc/runtime/` (the 2 v1.3 GPU
+harnesses — `cuda_launch.c`, `train_transformer.c` — and the 5 demo tools `gpt2_infer.c`/`cpu_host.c`/
+`gpt2_tok.c`/`gpt2_pack.c`/`gpt2_serve_http.c`). The **24-file v1.3 trusted-C total** = the 22-file ladder
++ the 2 v1.3 GPU harnesses; nothing in the 22-file ladder moved (see `docs/TRUSTED_C_INVENTORY.md` for the
+exact tally). `gpt2_serve_http.c`, the file this very plan designs, is the +1 that took the count 28→29.
+The fence implication of this plan is therefore stated against the **true base of 29** in §5/G6, not 26.
 
 ---
 
@@ -149,8 +152,10 @@ gpt2_infer <ptx> <weights> --serve [--emit-fd N] [--detail op|layer]
 - `--max-ctx M`: the serve-session max sequence length (prompt cap + max `n_gen`); buffers are sized
   **once** for `Smax = ((M+63)/64)*64`. Default `M = 320` (covers a generous prompt + `n_gen ≤ 256`,
   but the server clamps `n_gen` to `1..256` per the contract; size to whatever cap the operator sets).
-- `--timing 1`: enable real CUDA-event/host-clock per-layer timing for `layer_end.ms`; `0` (default)
-  emits `ms:0` (the contract permits `0` = "untimed", **never fabricated**).
+- `--timing 1`: enable real **host-clock** per-layer timing for `layer_end.ms` (a `now_seconds()` delta
+  around `forward_layer_gpt2()`; meaningful because every kernel launch syncs via `cuCtxSynchronize`, so
+  the GPU is idle at both ends of the layer — **not** CUDA-event timing). The live server passes `--timing 1`;
+  `0` (the bare-binary default) emits `ms:0` (the contract permits `0` = "untimed", **never fabricated**).
 
 Env dims arrive exactly as today (`HX_*`), so XL = `HX_NL=48 …` in front of the binary; **no new dim
 parsing**.
@@ -264,7 +269,7 @@ nothing and stay byte-identical in behavior):
 | `embed` | inside `forward_full`, right after `embed_gather` returns | `step`, `t=T`, `d_model=DM`. One per token-step. |
 | `layer_begin` | top of the `for L` body in `forward_full`, **after** `upload_layer(L)`, **before** `forward_layer_gpt2()` | `step`, `idx=L`, `total=NL`. Primary heartbeat. Per-layer, never per-row. |
 | `op` | inside `forward_layer_gpt2`, around each real `cuLaunchKernel`, in execution order | `step`, `layer`, `seq`, `kernel` (literal CUfunction), `phase`, `label`. The 12 per-head launches are **collapsed into 3 aggregate attention ops** (`attn_scores`/`attn_softmax`/`attn_av`) emitted **once after the head loop** with the dominating kernel; the head loop itself emits **no** per-head events. ~16 ops/layer. NO `op` that does not wrap a real launch. |
-| `layer_end` | bottom of the `for L` body, after `forward_layer_gpt2()` returns + `cuCtxSynchronize` drained | `step`, `idx=L`, `ms` (real CUDA-event/host-clock duration when `--timing 1`, else `0`), `ops` emitted this layer. |
+| `layer_end` | bottom of the `for L` body, after `forward_layer_gpt2()` returns + `cuCtxSynchronize` drained | `step`, `idx=L`, `ms` (real **host-clock** per-layer duration when `--timing 1` — host-clock around a per-layer sync, **not** CUDA-event timing; else `0`), `ops` emitted this layer. |
 | `head` (×2) | in `forward_full` after the 48 layers: around the final `ln_eps`(`ln_f`) and around the tied-head `mm_ABt` | `label='ln_f'`/`'lm_head'`; `kernel='gpu_layernorm_fwd_eps'`/`'tiled_matmul_abt'`. |
 | `token` | serve loop, after `argmax_row`, before append | `step`, `id`, `string` (gpt2_tok decode of the one id), `logit=logits[id]`, `context_len=T+1`. Exactly `Ngen` per reply. |
 | `done` | serve loop, after the gen loop | real `seconds`/`tok_per_s` (clock around the loop), `text` (decode of `gen_ids`), `gen_ids`, `nonfinite`. Terminal. |
@@ -683,11 +688,12 @@ fresh from the `9837db12` seed; strictly serial GPU). **Nothing is built now.**
 
 ## 5. Honest Category-B fence accounting (G6 detail)
 
-**Verified base (this plan's ground truth):** the live committed `.c`/`.h` count at HEAD is **28**
-(`git ls-files "*.c" "*.h" | wc -l` = 28), **not 26** as the contract prompt's parenthetical stated. The
-24-file / 15 605-LOC from-raw Category-A ladder + trust root is **UNCHANGED** and the self-host fixpoint
-stays `0992dddd`. (The "26" figure does not match either the live tree or `docs/TRUSTED_C_INVENTORY.md`;
-the truthful base is 28 — see §0.5.)
+**Verified base (this plan's ground truth):** the live committed `.c`/`.h` count at HEAD is now **29**
+(`git ls-files "*.c" "*.h" | wc -l` = 29, after this plan's `gpt2_serve_http.c` landed), **not 26** as the
+contract prompt's parenthetical stated. The **22-file from-raw Category-A ladder** + trust root is
+**UNCHANGED** (byte-identical) and the self-host fixpoint stays `0992dddd`. (The "26" figure does not
+match either the live tree or `docs/TRUSTED_C_INVENTORY.md`; the truthful base is 29 = 22 ladder + 7
+Category-B — see §0.5.)
 
 **What this chat-demo backend adds to the fence:**
 
@@ -780,8 +786,8 @@ by the **trust-inventory owner**, not in this task (G6, and risk R10 coordinatio
   load-bearing proof the hooks changed nothing); **G2** 124M/scale stay green; **G3** CPU no-ptxas green;
   **G4** fixpoint byte-identical (seed `9837db12`, fixpoint `0992dddd`, gcc-DDC `84363adb`); **G5**
   Python-free preserved; **G6** honest fence accounting; **G7** single-flight 409 verified.
-- **Fence implication:** verified live base is **28** committed `.c`/`.h` (correcting the contract's stale
-  "26"). The chat-demo backend adds **exactly one** new committed `.c` —
+- **Fence implication:** verified live base is **29** committed `.c`/`.h` (correcting the contract's stale
+  "26"). The chat-demo backend added **exactly one** new committed `.c` —
   `helixc/runtime/gpt2_serve_http.c`, a **Category-B host tool** (HTTP/byte-pump, zero compute-trust
-  arithmetic) — bringing the count to **29**; the `--serve` work stays inside the existing
-  `gpt2_infer.c`. The 24-file from-raw ladder stays **UNCHANGED**.
+  arithmetic) — which brought the count 28→**29** (= 22 from-raw ladder + 7 Category-B); the `--serve`
+  work stays inside the existing `gpt2_infer.c`. The 22-file from-raw ladder stays **UNCHANGED**.

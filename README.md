@@ -39,7 +39,7 @@ The purpose of Helix is to remove uncertainty wherever software can honestly rem
 What is verified:
 
 - **Self-host fixpoint, byte-identical.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-for-byte** (the same test a self-hosted C compiler uses: stage2 == stage3 == stage4). The compiler written in Helix reproduces itself exactly.
-- **Python-free toolchain.** The repo holds **exactly one** committed `.py` — `verification/oracle/oracle_train.py`, a fenced numpy verification *oracle* **never** referenced by the toolchain (`git ls-files "*.py"` == 1). The compiler/runtime are Helix plus a small hand-authored C subset (the `seed`).
+- **Python-free toolchain.** The repo holds **exactly one** committed `.py` — `verification/oracle/oracle_train.py`, a fenced numpy verification *oracle* **never part of the compile/run toolchain** — used only by the independent verification gates (e.g. `scripts/capstone_audit.sh` references it strictly as the independent within-2% comparator), never to produce a shipped artifact (`git ls-files "*.py"` == 1). The compiler/runtime are Helix plus a small hand-authored C subset (the `seed`).
 - **Diverse-double-compile of the seed (anti-trusting-trust).** `gcc` (an independent lineage with zero M2-Planet ancestry) and the from-raw M2-Planet build independently produce a **byte-identical** seed/`K1` — a Wheeler DDC. `gcc` is an **auditor**, never the shipped root.
 - **Real capability — the capstone.** A ≥2-layer transformer trains **end-to-end on kovc-emitted GPU (PTX) kernels** and converges to within **~2% (reproduced at ~0%) loss difference** of an *independent* numpy oracle (proven genuinely independent — it reads only the shared initial weights, never Helix's trajectory).
 

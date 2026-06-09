@@ -52,7 +52,7 @@ KEY FILES TO READ (start here, but you may read anything in the repo):
  - scripts/gate_kovc.sh                                 — the UNIVERSAL build gate (read its logic)
  - docs/TRUST_CHAIN_CLOSED.md                           — the owner's honest trust record + residuals
  - docs/HELIX_V1_LANGUAGE_SPEC.md                       — the as-built language spec (+ v1.3 deltas)
- - docs/TRUSTED_C_INVENTORY.md                          — the 24-file / 15600-LOC trusted-C inventory
+ - docs/TRUSTED_C_INVENTORY.md                          — the trusted-C inventory (22-file from-raw ladder + 7 Category-B = 29)
  - docs/K_DDC_BROADENED.md                              — the diverse-double-compile story
  - docs/HELIX_V1_DEFINITION_OF_DONE.md, HELIX_V1_1_HARDENING.md, HELIX_COMPLETION.md, HELIX_V1_3.md
                                                         — the campaign charters / definitions of done
@@ -113,10 +113,14 @@ THE CLAIMS TO VERIFY (against the repo)
    ≥10× target NOT met; Amdahl-bound). VERIFY: read the perf docs; check every number is paired with
    its scope; flag any bare "parity"/"beats cuBLAS". The measurements are [NEEDS-REPRODUCTION].
 
-7. TRUSTED-C SURFACE. 24 committed .c/.h, 15600 LOC; seed.c (1368) = single irreducible root; the rest
-   = vendored bootstrap ladder (compiled-from-raw) + GPU host launcher (cuda_launch.c / train_transformer.c,
-   makes the closed NVIDIA driver/cuBLAS calls). VERIFY DIRECTLY: `git ls-files "*.c" "*.h"` → expect 24;
-   confirm EVERY file is in docs/TRUSTED_C_INVENTORY.md (no hidden trusted C); spot-check LOC.
+7. TRUSTED-C SURFACE. 29 committed .c/.h = 22-file from-raw ladder + 7 Category-B host harnesses; seed.c
+   (1368) = single irreducible root; the rest of the ladder = vendored bootstrap (compiled-from-raw); the
+   7 Category-B = the 2 v1.3 GPU host harnesses (cuda_launch.c / train_transformer.c, which make the closed
+   NVIDIA driver calls) + the 5 GPT-2-demo host tools (gpt2_infer.c / cpu_host.c / gpt2_tok.c / gpt2_pack.c /
+   gpt2_serve_http.c), all OUTSIDE the self-host fixpoint with zero arithmetic on the compute-trust path.
+   (The 24-file v1.3 trusted-C total = the 22-file ladder + the 2 v1.3 GPU harnesses.) VERIFY DIRECTLY:
+   `git ls-files "*.c" "*.h"` → expect 29; confirm EVERY file is in docs/TRUSTED_C_INVENTORY.md (no hidden
+   trusted C); spot-check LOC.
 
 8. INTERNAL VERIFICATION (what you double-check). v1.3 shipped V1–V7; then a FINALE of 5 consecutive
    clean independent adversarial audits, each rebuilt-from-raw (lenses: silent-residual / type-
