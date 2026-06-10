@@ -303,3 +303,127 @@
     starsG.appendChild(c);
   }
 })();
+
+// ---------- Black hole: gravitationally lensed orbiting bodies ----------
+// Bodies orbit in the accretion-disc plane. While a body passes BEHIND the
+// hole, its light is bent around the photon sphere (point-mass lens
+// approximation): the primary image is displaced outward toward the Einstein
+// radius, stretched tangentially into an arc, and a fainter counter-image
+// appears on the opposite side. In front, bodies pass undistorted.
+(function () {
+  const backG = document.getElementById("bh-back-bodies");
+  const frontG = document.getElementById("bh-front-bodies");
+  if (!backG || !frontG) return;
+  const ns = "http://www.w3.org/2000/svg";
+
+  const TILT = (-14 * Math.PI) / 180; // disc tilt (matches the SVG groups)
+  const COS_T = Math.cos(TILT), SIN_T = Math.sin(TILT);
+  const THETA_E = 46;   // Einstein radius, px (just outside the photon ring)
+  const MAX_STRETCH = 3.2;
+
+  const BODIES = [
+    { a: 78,  b: 22, period: 14, r: 3.2, fill: "url(#bhPlanetA)",     phase: 0.0 },
+    { a: 118, b: 34, period: 22, r: 2.6, fill: "url(#bhPlanetB)",     phase: 2.1 },
+    { a: 158, b: 22, period: 34, r: 3.8, fill: "url(#bhPlanetC)",     phase: 4.2 },
+    { a: 54,  b: 16, period: 9,  r: 0.9, fill: "oklch(96% 0.06 80)",  phase: 1.1 },
+    { a: 100, b: 28, period: 18, r: 0.8, fill: "oklch(96% 0.04 220)", phase: 3.3 },
+  ];
+
+  function mkEllipse(fill, parent) {
+    const e = document.createElementNS(ns, "ellipse");
+    e.setAttribute("fill", fill);
+    parent.appendChild(e);
+    return e;
+  }
+
+  const nodes = BODIES.map((cfg) => ({
+    cfg,
+    img: mkEllipse(cfg.fill, frontG),     // primary image (reparented as needed)
+    ghost: mkEllipse(cfg.fill, backG),    // lensed counter-image (back only)
+  }));
+
+  function place(t) {
+    for (const { cfg, img, ghost } of nodes) {
+      const phi = (t / cfg.period) * 2 * Math.PI + cfg.phase;
+      // Disc-plane position (orbit ellipse already encodes the projection)
+      const xd = cfg.a * Math.cos(phi);
+      const yd = cfg.b * Math.sin(phi);
+      // Rotate into the black hole's screen frame (disc is tilted -14°)
+      const xs = xd * COS_T - yd * SIN_T;
+      const ys = xd * SIN_T + yd * COS_T;
+      const behind = yd < 0 ? Math.min(1, -yd / cfg.b) : 0; // 0 → in front/at limb
+
+      if (behind === 0) {
+        if (img.parentNode !== frontG) frontG.appendChild(img);
+        img.setAttribute("cx", xs.toFixed(2));
+        img.setAttribute("cy", ys.toFixed(2));
+        img.setAttribute("rx", cfg.r);
+        img.setAttribute("ry", cfg.r);
+        img.removeAttribute("transform");
+        img.setAttribute("opacity", "1");
+        ghost.setAttribute("opacity", "0");
+        continue;
+      }
+
+      // --- point-mass lens: beta -> theta_plus = (beta + sqrt(beta^2 + 4*thetaE^2)) / 2
+      if (img.parentNode !== backG) backG.appendChild(img);
+      const beta = Math.max(6, Math.hypot(xs, ys));
+      const thetaP = 0.5 * (beta + Math.sqrt(beta * beta + 4 * THETA_E * THETA_E));
+      const dApp = beta + behind * (thetaP - beta);   // blend in the deflection
+      const ux = xs / beta, uy = ys / beta;
+      const px = ux * dApp, py = uy * dApp;
+
+      // tangential stretch (magnification) — the image smears into an arc
+      const mu = 1 + behind * (Math.min(MAX_STRETCH, thetaP / beta) - 1);
+      const ang = (Math.atan2(py, px) * 180) / Math.PI + 90; // tangent direction
+      img.setAttribute("cx", "0");
+      img.setAttribute("cy", "0");
+      img.setAttribute("rx", (cfg.r * mu).toFixed(2));
+      img.setAttribute("ry", (cfg.r / Math.sqrt(mu)).toFixed(2));
+      img.setAttribute("transform", `translate(${px.toFixed(2)} ${py.toFixed(2)}) rotate(${ang.toFixed(1)})`);
+      img.setAttribute("opacity", (0.8 + 0.2 * behind).toFixed(2));
+
+      // counter-image: opposite side, inside the Einstein ring, demagnified
+      const dGhost = Math.max(40, (THETA_E * THETA_E) / thetaP);
+      const gAng = ang + 180;
+      ghost.setAttribute("cx", "0");
+      ghost.setAttribute("cy", "0");
+      ghost.setAttribute("rx", (cfg.r * 0.8 * Math.min(2, mu)).toFixed(2));
+      ghost.setAttribute("ry", (cfg.r * 0.5).toFixed(2));
+      ghost.setAttribute("transform", `translate(${(-ux * dGhost).toFixed(2)} ${(-uy * dGhost).toFixed(2)}) rotate(${gAng.toFixed(1)})`);
+      ghost.setAttribute("opacity", (0.45 * behind * behind).toFixed(2));
+    }
+  }
+
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced) {
+    place(0); // static composition, no animation
+    return;
+  }
+
+  let running = false;
+  let rafId = 0;
+  const t0 = performance.now();
+  function tick(now) {
+    if (!running) return;
+    place((now - t0) / 1000);
+    rafId = requestAnimationFrame(tick);
+  }
+  function setRunning(on) {
+    if (on === running) return;
+    running = on;
+    if (on) rafId = requestAnimationFrame(tick);
+    else cancelAnimationFrame(rafId);
+  }
+
+  const svg = backG.ownerSVGElement;
+  if ("IntersectionObserver" in window && svg) {
+    const io = new IntersectionObserver(
+      (entries) => setRunning(entries.some((e) => e.isIntersecting)),
+      { rootMargin: "60px" }
+    );
+    io.observe(svg);
+  } else {
+    setRunning(true);
+  }
+})();

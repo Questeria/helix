@@ -73,59 +73,85 @@ import Base from "../layouts/Base.astro";
           <stop offset="60%"  stop-color="oklch(55% 0.10 120)"/>
           <stop offset="100%" stop-color="oklch(18% 0.04 130)"/>
         </radialGradient>
+        <linearGradient id="bhDoppler" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="oklch(99% 0.10 90)" stop-opacity="0.95"/>
+          <stop offset="30%"  stop-color="oklch(96% 0.16 75)" stop-opacity="0.35"/>
+          <stop offset="62%"  stop-color="oklch(55% 0.16 35)" stop-opacity="0.10"/>
+          <stop offset="100%" stop-color="oklch(25% 0.09 285)" stop-opacity="0.55"/>
+        </linearGradient>
+        <linearGradient id="bhDopplerStroke" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="oklch(99% 0.12 90)"/>
+          <stop offset="45%"  stop-color="oklch(95% 0.18 75)"/>
+          <stop offset="100%" stop-color="oklch(60% 0.17 35)"/>
+        </linearGradient>
+        <radialGradient id="bhDiscBand" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"  stop-color="#000"/>
+          <stop offset="34%" stop-color="#000"/>
+          <stop offset="42%" stop-color="#fff"/>
+          <stop offset="56%" stop-color="#eee"/>
+          <stop offset="74%" stop-color="#777"/>
+          <stop offset="100%" stop-color="#000"/>
+        </radialGradient>
+        <mask id="bhDiscMask" maskUnits="userSpaceOnUse" x="-140" y="-40" width="280" height="80">
+          <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscBand)"/>
+        </mask>
+        <filter id="bhGlow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="1.7" result="b"/>
+          <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
         <clipPath id="bhTopHalf"><rect x="-260" y="-260" width="520" height="260"/></clipPath>
         <clipPath id="bhBotHalf"><rect x="-260" y="0"    width="520" height="260"/></clipPath>
       </defs>
-      <g transform="translate(1240 110)" opacity="0.95">
+      <g id="bh" transform="translate(1240 110)" opacity="0.95">
+        <!-- Soft dusty halo -->
         <circle r="190" fill="url(#bhHalo)"></circle>
+
+        <!-- Bodies BEHIND the hole — gravitationally lensed; positions, arc-stretch
+             and counter-images are computed each frame in hero.js -->
+        <g id="bh-back-bodies"></g>
+
+        <!-- Accretion disc (tilted frame) -->
         <g transform="rotate(-14)">
+          <!-- near rim of the disc behind the hole -->
           <g clip-path="url(#bhTopHalf)">
             <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscRadial)" opacity="0.95"></ellipse>
+            <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDoppler)" mask="url(#bhDiscMask)" opacity="0.9"></ellipse>
             <ellipse cx="0" cy="0" rx="68" ry="12" fill="none" stroke="oklch(98% 0.18 85)" stroke-width="1.6" opacity="0.55"></ellipse>
-            <circle r="3.2" fill="url(#bhPlanetA)">
-              <animateMotion dur="14s" repeatCount="indefinite" rotate="auto"><mpath href="#bh-orbit-1"/></animateMotion>
-            </circle>
-            <circle r="2.6" fill="url(#bhPlanetB)">
-              <animateMotion dur="22s" repeatCount="indefinite" rotate="auto" begin="-6s"><mpath href="#bh-orbit-2"/></animateMotion>
-            </circle>
-            <circle r="3.8" fill="url(#bhPlanetC)">
-              <animateMotion dur="34s" repeatCount="indefinite" rotate="auto" begin="-12s"><mpath href="#bh-orbit-3"/></animateMotion>
-            </circle>
-            <circle r="0.9" fill="oklch(96% 0.06 80)" opacity="0.85">
-              <animateMotion dur="9s" repeatCount="indefinite" begin="-2s"><mpath href="#bh-orbit-4"/></animateMotion>
-            </circle>
-            <circle r="0.8" fill="oklch(96% 0.04 220)" opacity="0.75">
-              <animateMotion dur="18s" repeatCount="indefinite" begin="-8s"><mpath href="#bh-orbit-5"/></animateMotion>
-            </circle>
           </g>
-          <path d="M -118 0 A 118 22 0 0 1 118 0" fill="none" stroke="oklch(98% 0.18 85)" stroke-width="1.8" opacity="0.9"></path>
-          <path d="M -92 -1 A 92 14 0 0 1 92 -1" fill="none" stroke="oklch(94% 0.20 80)" stroke-width="1.1" opacity="0.65"></path>
+
+          <!-- The FAR side of the disc, lensed over the top of the hole:
+               light from behind bends around the photon sphere, so the disc's
+               back half appears as bright arcs above (and faintly below) the
+               event horizon — brighter on the side rotating toward the viewer. -->
+          <g filter="url(#bhGlow)">
+            <path d="M -62 -3 A 62 28 0 0 1 62 -3" fill="none"
+                  stroke="url(#bhDopplerStroke)" stroke-width="2.6" opacity="0.95" stroke-linecap="round"></path>
+            <path d="M -52 -3 A 52 40 0 0 1 52 -3" fill="none"
+                  stroke="url(#bhDopplerStroke)" stroke-width="1.1" opacity="0.5" stroke-linecap="round"></path>
+            <path d="M -118 0 A 118 22 0 0 1 118 0" fill="none"
+                  stroke="url(#bhDopplerStroke)" stroke-width="1.6" opacity="0.75"></path>
+            <path d="M -92 -1 A 92 14 0 0 1 92 -1" fill="none"
+                  stroke="oklch(94% 0.20 80)" stroke-width="1.0" opacity="0.55"></path>
+            <!-- secondary (under-bent) image of the far side, fainter -->
+            <path d="M -46 3 A 46 13 0 0 0 46 3" fill="none"
+                  stroke="url(#bhDopplerStroke)" stroke-width="1.2" opacity="0.45" stroke-linecap="round"></path>
+          </g>
         </g>
+
+        <!-- Event horizon + photon ring -->
         <circle r="36" fill="url(#bhCore)"></circle>
+        <circle r="39.5" fill="none" stroke="oklch(97% 0.16 80)" stroke-width="1.05"
+                opacity="0.8" filter="url(#bhGlow)"></circle>
+
+        <!-- Front half of the disc -->
         <g transform="rotate(-14)" clip-path="url(#bhBotHalf)">
           <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscRadial)" opacity="0.95"></ellipse>
+          <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDoppler)" mask="url(#bhDiscMask)" opacity="0.9"></ellipse>
           <ellipse cx="0" cy="0" rx="68" ry="12" fill="none" stroke="oklch(98% 0.18 85)" stroke-width="1.6" opacity="0.55"></ellipse>
-          <circle r="3.2" fill="url(#bhPlanetA)">
-            <animateMotion dur="14s" repeatCount="indefinite" rotate="auto"><mpath href="#bh-orbit-1"/></animateMotion>
-          </circle>
-          <circle r="2.6" fill="url(#bhPlanetB)">
-            <animateMotion dur="22s" repeatCount="indefinite" rotate="auto" begin="-6s"><mpath href="#bh-orbit-2"/></animateMotion>
-          </circle>
-          <circle r="3.8" fill="url(#bhPlanetC)">
-            <animateMotion dur="34s" repeatCount="indefinite" rotate="auto" begin="-12s"><mpath href="#bh-orbit-3"/></animateMotion>
-          </circle>
-          <circle r="0.9" fill="oklch(96% 0.06 80)" opacity="0.85">
-            <animateMotion dur="9s" repeatCount="indefinite" begin="-2s"><mpath href="#bh-orbit-4"/></animateMotion>
-          </circle>
-          <circle r="0.8" fill="oklch(96% 0.04 220)" opacity="0.75">
-            <animateMotion dur="18s" repeatCount="indefinite" begin="-8s"><mpath href="#bh-orbit-5"/></animateMotion>
-          </circle>
         </g>
-        <path id="bh-orbit-1" d="M -78 0  A 78  22 0 1 1 78  0  A 78  22 0 1 1 -78  0" fill="none"></path>
-        <path id="bh-orbit-2" d="M -118 0 A 118 34 0 1 1 118 0  A 118 34 0 1 1 -118 0" fill="none"></path>
-        <path id="bh-orbit-3" d="M -158 0 A 158 22 0 1 1 158 0  A 158 22 0 1 1 -158 0" fill="none"></path>
-        <path id="bh-orbit-4" d="M -54 0  A 54  16 0 1 1 54  0  A 54  16 0 1 1 -54  0" fill="none"></path>
-        <path id="bh-orbit-5" d="M -100 0 A 100 28 0 1 1 100 0  A 100 28 0 1 1 -100 0" fill="none"></path>
+
+        <!-- Bodies IN FRONT of the hole (JS-driven, undistorted) -->
+        <g id="bh-front-bodies"></g>
       </g>
 
       <g id="stars" fill="oklch(92% 0.06 285)"></g>
@@ -191,7 +217,7 @@ import Base from "../layouts/Base.astro";
           <span>GPT-2-XL 1.5B · <b>25/25</b> · logit diff ≤ <b>4.4e-05</b></span>
           <span>SmolLM2-135M (Llama arch, 2024) · <b>25/25</b> · ≤ <b>4.9e-05</b></span>
           <span>byte-identical across runs · <b>sha 8a2595cd…</b></span>
-          <span>live GPT-2-XL ≈ <b>10 s/token</b> — trust, not speed</span>
+          <span>live GPT-2-XL ≈ <b>10 s/token</b> today — trust first; faster as it matures</span>
         </div>
 
         <div class="card-grid" style="margin-top: 28px;">
@@ -263,7 +289,7 @@ import Base from "../layouts/Base.astro";
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2 L4 6 V12 C4 17 8 21 12 22 C16 21 20 17 20 12 V6 Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 12 l2 2 l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
           <h3>Source-available &amp; fully auditable.</h3>
-          <p>The entire toolchain is inspectable, from the 299-byte hand-typed root to the PTX it emits. Free for non-commercial use — individuals, students, researchers, non-profits — under the Helix Non-Commercial License; commercial use requires the author's consent. Not open source, and it says so plainly.</p>
+          <p>The entire toolchain is inspectable, from the 299-byte hand-typed root to the PTX it emits. Free for non-commercial use — individuals, students, researchers, non-profits — under the Helix Non-Commercial License; commercial use requires the author's consent. Not open source yet: a restriction intended to be temporary while the project secures investors, revenue, and industry partners.</p>
           <div class="pillar-foot"><span>Helix NC License v1.0</span><span>source-available</span></div>
         </article>
 

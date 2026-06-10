@@ -34,7 +34,7 @@ import Base from "../layouts/Base.astro";
         <div class="prose">
           <p>The ladder runs nine rungs — hex0 → hex1 → hex2 → catm → M0 → cc_amd64 → M2-Planet → seed → kovc — from raw hand-typed binary up to kovc, the Helix compiler written in Helix. The seed is a C-subset bootstrap compiler (sha <code>9837db12…</code>); the self-host fixpoint is byte-identical across generations, K2 == K3 == K4 (sha <code>0992dddd…</code>).</p>
           <p>The toolchain is Python-free: the repository carries exactly one committed <code>.py</code> file, a fenced numpy verification oracle that is never on the compile or run path. Every kovc build passes the universal gate, <code>scripts/gate_kovc.sh</code> — the self-host fixpoint, a 109-program feature corpus, 4 negative-diagnostic checks, and a PTX regression.</p>
-          <p>On top of that core sit the verified-execution legs: GPT-2 124M and GPT-2-XL 1.5B — 2019 base completion models, unchanged public weights — and SmolLM2-135M, a 2024 Llama-architecture model (GQA + RoPE + SwiGLU + RMSNorm, 30 layers), all running token-for-token-identical (25/25 greedy ids) to an independent numpy oracle on kovc-emitted GPU kernels. The honest edges are stated, not buried: verified to PTX, not SASS; fp32; a single sm_86 GPU; live XL at roughly 10 s/token by design — trust, not speed.</p>
+          <p>On top of that core sit the verified-execution legs: GPT-2 124M and GPT-2-XL 1.5B — 2019 base completion models, unchanged public weights — and SmolLM2-135M, a 2024 Llama-architecture model (GQA + RoPE + SwiGLU + RMSNorm, 30 layers), all running token-for-token-identical (25/25 greedy ids) to an independent numpy oracle on kovc-emitted GPU kernels. The honest edges are stated, not buried: verified to PTX, not SASS; fp32; a single sm_86 GPU; live XL at roughly 10 s/token today, by design — trust first, with performance an active roadmap focus that will improve as Helix develops.</p>
           <div class="stat-strip" aria-label="Core figures">
             <span>trust root <b>299 bytes</b></span>
             <span>ladder <b>9 rungs</b></span>
@@ -144,7 +144,7 @@ import Base from "../layouts/Base.astro";
         <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
           <span class="lc-kicker">Roadmap · datacenter scaling</span>
           <h3>Beyond a single sm_86 GPU</h3>
-          <p>Parameterize the PTX target for sm_80/sm_90, validate across architectures, and bring the verified path to A100/H100-class hardware.</p>
+          <p>Parameterize the PTX target for sm_80/sm_90, validate across architectures, optimize for absolute throughput, and bring the verified path to A100/H100-class hardware — the same verified stack, made faster.</p>
           <span class="lc-arrow">trust record →</span>
         </a>
         <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
@@ -179,7 +179,7 @@ import Base from "../layouts/Base.astro";
           <span class="eyebrow">Contact &amp; records</span>
           <h2 class="section-title">One owner, one repo, two authoritative records.</h2>
         </div>
-        <p class="section-lede">Helix is built by Questeria (Anthony DeMarco). Reach the project through GitHub issues or the @Questeria profile.</p>
+        <p class="section-lede">Helix is built by Questeria (Anthony DeMarco). Reach the project through the <a href="/contact/" style="color: var(--violet); text-decoration: underline;">contact page</a>, GitHub issues, or the @Questeria profile.</p>
       </div>
 
       <div class="card-grid two">
@@ -204,7 +204,7 @@ import Base from "../layouts/Base.astro";
         <a class="link-card" href="/license/">
           <span class="lc-kicker">Licensing</span>
           <h3>Commercial licensing</h3>
-          <p>Helix is source-available and free for non-commercial use; commercial use needs a separate license. Start with the license page, then open a GitHub issue.</p>
+          <p>Helix is source-available and free for non-commercial use; commercial use needs a separate license — a restriction intended to be temporary as the project secures funding. Start with the license page, then reach out via the contact page.</p>
           <span class="lc-arrow">/license/ →</span>
         </a>
       </div>

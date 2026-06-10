@@ -3,7 +3,7 @@ import Base from "../layouts/Base.astro";
 ---
 <Base
   title="License — source-available, free for non-commercial use"
-  description="Helix ships under the Helix Non-Commercial License v1.0: source-available and free for non-commercial use — personal, academic, research, non-profit. Not open source, on purpose: any commercial use requires a separate license."
+  description="Helix ships under the Helix Non-Commercial License v1.0: source-available and free for non-commercial use — personal, academic, research, non-profit. Not open source yet: a deliberately temporary restriction while the project secures investors, revenue, and industry partners to fund Helix's expansion."
 >
   <!-- ============================================================
        01 PAGE HERO
@@ -11,8 +11,8 @@ import Base from "../layouts/Base.astro";
   <section class="page-hero dark">
     <div class="wrap">
       <span class="eyebrow">helix non-commercial license · v1.0 · © 2026 anthony demarco (questeria)</span>
-      <h1>Source-available. <em>Not open source.</em> On purpose.</h1>
-      <p class="lede">Every byte of Helix is published and auditable, and it is free for non-commercial use — personal projects, learning, teaching, academic research, non-profits. It is deliberately not an OSI-approved open-source license, because those licenses may not restrict commercial use, and this one does: any commercial use requires a separate license from the author. We say that plainly, without embarrassment.</p>
+      <h1>Source-available. <em>Not open source — yet.</em></h1>
+      <p class="lede">Every byte of Helix is published and auditable, and it is free for non-commercial use — personal projects, learning, teaching, academic research, non-profits. Commercial use currently requires a separate license from the author — and that restriction is intended to be temporary. It exists so a self-funded project can secure investors, generate early revenue, and establish industry partnerships to fund Helix's expansion. As that foundation solidifies, the goal is to open Helix progressively further. Until then, the LICENSE file is what governs.</p>
       <div class="btn-row">
         <a class="btn btn-primary" href="https://github.com/Questeria/helix/blob/main/LICENSE">Read the full text <span class="arrow">→</span></a>
         <a class="btn btn-ghost" href="#faq">Licensing FAQ</a>
@@ -36,6 +36,12 @@ import Base from "../layouts/Base.astro";
       <div class="notice">
         <p class="notice-title">Plain-language summary — not legal advice</p>
         <p>The binding terms are Sections 1–10 of the <a href="https://github.com/Questeria/helix/blob/main/LICENSE" style="color: var(--violet); text-decoration: underline;">LICENSE</a> file in the repository. This page summarizes them; where the two differ, the LICENSE wins.</p>
+      </div>
+
+      <div class="notice">
+        <p class="notice-title">A temporary stance, stated honestly</p>
+        <p>Helix is being built without corporate backing. The non-commercial restriction keeps the project's early commercial value with the project itself — so it can attract investors, generate revenue through commercial licensing, and establish the industry partnerships that will fund full-time development and expansion.</p>
+        <p>The intent is to relax this restriction as that footing is reached: progressively more open terms, potentially a full open-source release, once Helix is financially self-sustaining. Formally, intent is not a contract — the LICENSE governs until the Licensor releases a version under new terms (its Section 6 contemplates exactly that) — but the direction of travel is toward more open, not less.</p>
       </div>
 
       <div class="fact-table">
@@ -119,7 +125,7 @@ import Base from "../layouts/Base.astro";
           <p>"Helix" is a trademark of the Licensor. The license grants exactly one right to the name: the nominative right to refer to the work truthfully by it. It does not grant the right to brand your fork, product, or service as Helix.</p>
 
           <h3>Future versions</h3>
-          <p>The Licensor may release future versions of Helix under different terms — possibly, one day, terms with no commercial restriction at all. That is explicitly contemplated, and explicitly not promised. There is no automatic conversion: what you have is this license, for this version.</p>
+          <p>The Licensor may release future versions of Helix under different terms — including, eventually, terms with no commercial restriction at all. That is the stated direction: the current restriction is intended to be a temporary, bootstrap-phase measure while the project secures investment, revenue, and industry partners. Formally there is no automatic conversion — what you have is this license, for this version, until a new version is released — but the plan is to open up as funding solidifies.</p>
           <p>Some historical planning documents in the repository describe an earlier intended permissive release. Those documents are superseded by the LICENSE file.</p>
         </div>
       </div>
@@ -143,7 +149,7 @@ import Base from "../layouts/Base.astro";
         <details>
           <summary>Why isn't Helix open source?</summary>
           <div class="faq-body">
-            <p>Because OSI-approved licenses may not restrict commercial use, and this one deliberately does. Helix is source-available: the full source — compiler, toolchain, bootstrap ladder, trust records — is published for anyone to read, audit, build, and use non-commercially. The author keeps commercial use behind a separate license. That trade-off is intentional and stated up front.</p>
+            <p>Not yet — and the reason is funding, not philosophy. OSI-approved licenses may not restrict commercial use, and right now commercial licensing is how a self-funded project pays for its own expansion. Helix is source-available: the full source — compiler, toolchain, bootstrap ladder, trust records — is published for anyone to read, audit, build, and use non-commercially. As investors, revenue, and industry partnerships put the project on a sustainable footing, the intent is to progressively open the license.</p>
           </div>
         </details>
         <details>
@@ -185,7 +191,7 @@ import Base from "../layouts/Base.astro";
         <details>
           <summary>Will the license ever change?</summary>
           <div class="faq-body">
-            <p>Possibly. The Licensor may release future versions under different terms, including terms without the commercial restriction. That is contemplated, not promised, and there is no automatic conversion. Some historical planning documents in the repo describe an earlier intended permissive release; the LICENSE file supersedes them.</p>
+            <p>That is the plan. The non-commercial restriction is intended as a temporary, bootstrap-phase measure while the project secures investors, revenue, and industry partners; the stated direction is toward progressively more open terms, including a possible full open-source release once Helix is self-sustaining. Formally there is no automatic conversion — the LICENSE governs each version until the Licensor releases new terms. Some historical planning documents in the repo describe an earlier intended permissive release; the LICENSE file supersedes them.</p>
           </div>
         </details>
         <details>

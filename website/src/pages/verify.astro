@@ -12,7 +12,7 @@ import Base from "../layouts/Base.astro";
     <div class="wrap">
       <span class="eyebrow">verifiable execution · bring your weights</span>
       <h1>Run the model you know. <em>Verify every byte</em> beneath it.</h1>
-      <p class="lede">Helix is a verifiable execution layer for AI. Bring your weights: every layer and every kernel beneath them traces back to 299 hand-typed bytes, and the output is matched token-for-token against an independent reference. Audit instead of trust. Trust, not speed.</p>
+      <p class="lede">Helix is a verifiable execution layer for AI. Bring your weights: every layer and every kernel beneath them traces back to 299 hand-typed bytes, and the output is matched token-for-token against an independent reference. Audit instead of trust. Trust first — with performance improving as Helix develops.</p>
       <div class="btn-row">
         <a class="btn btn-primary" href="/demo/">Watch the real run <span class="arrow">→</span></a>
         <a class="btn btn-ghost" href="/demo/dashboard.html">See the proof</a>
@@ -39,7 +39,7 @@ import Base from "../layouts/Base.astro";
         <span>byte-identical reruns <b>gen-ids sha256 8a2595cd…</b></span>
         <span>hardware <b>1× sm_86 · RTX 3070-class · 8 GB</b></span>
         <span>precision <b>fp32 only</b></span>
-        <span>live GPT-2-XL <b>≈ 10 s/token — by design</b></span>
+        <span>live GPT-2-XL <b>≈ 10 s/token today — faster as it matures</b></span>
       </div>
 
       <div class="fact-table" style="margin-top: 28px;">
@@ -92,7 +92,7 @@ import Base from "../layouts/Base.astro";
       </div>
 
       <p style="margin-top: 24px; color: var(--fg-soft); font-size: 13.5px; max-width: 78ch;">
-        All three GPT-2 sizes run through the exact same 8 kovc-emitted PTX kernels — only the dimensions change, read from <code class="mono">config.json</code>. GPT-2-XL at 1.5B parameters fits the 8 GB sm_86 box at fp32 via per-layer weight streaming. Verified complete to PTX, not SASS. The live GPT-2-XL chat ran at ≈ 10 s/token (measured 195.5 s for 20 tokens in the gated serve run) — that is the verifiability flex, not a speed flex.
+        All three GPT-2 sizes run through the exact same 8 kovc-emitted PTX kernels — only the dimensions change, read from <code class="mono">config.json</code>. GPT-2-XL at 1.5B parameters fits the 8 GB sm_86 box at fp32 via per-layer weight streaming. Verified complete to PTX, not SASS. The live GPT-2-XL chat ran at ≈ 10 s/token (measured 195.5 s for 20 tokens in the gated serve run) — that is the verifiability flex, not a speed flex. It also won't stay there: throughput optimization and datacenter-class GPUs are next on the roadmap, so Helix will get faster as it develops.
       </p>
     </div>
   </section>
@@ -206,7 +206,7 @@ bash scripts/llama_model_gate.sh     <span class="cmt"># SmolLM2-135M gate · fi
         </details>
         <details>
           <summary>Why ≈ 10 seconds per token for GPT-2-XL?</summary>
-          <div class="faq-body"><p>By design. fp32 only, a single 8 GB sm_86 GPU, per-layer weight streaming, and kernels built for auditability. Helix is a trust play, not a speed play — the measured figure (195.5 s for 20 tokens in the gated serve run) is published as-is.</p></div>
+          <div class="faq-body"><p>By design, for now. fp32 only, a single 8 GB sm_86 GPU, per-layer weight streaming, and kernels built first for auditability. Helix leads with trust, and the measured figure (195.5 s for 20 tokens in the gated serve run) is published as-is — but speed is an active roadmap focus: throughput optimization and datacenter-class hardware are next, and Helix will get faster as it develops.</p></div>
         </details>
         <details>
           <summary>Why is the 124M output so repetitive?</summary>
@@ -237,7 +237,7 @@ bash scripts/llama_model_gate.sh     <span class="cmt"># SmolLM2-135M gate · fi
         <li><b>Complete to PTX, not SASS.</b> Below PTX, the GPU path trusts NVIDIA's closed ptxas, the driver, and the C CUDA-FFI host launcher — trusted-once, and disclosed as such.</li>
         <li><b>fp32 only.</b> Parity is exact on argmax and on the token sequence, and within measured tolerance on hidden states. No other precision is claimed.</li>
         <li><b>Single GPU, sm_86.</b> One RTX 3070-class card with 8 GB. Not multi-GPU, not a cluster.</li>
-        <li><b>A demonstration at up to 1.5B parameters, not frontier scale.</b> The point is verifiability, not size — and not speed.</li>
+        <li><b>A demonstration at up to 1.5B parameters, not frontier scale.</b> The point today is verifiability, not size or speed — though performance is an active roadmap focus and will improve as Helix develops.</li>
         <li><b>The oracle shares the model's spec.</b> It is an independent implementation, not an independent specification. It catches implementation bugs; it cannot catch a misunderstanding both implementations share.</li>
         <li><b>RoPE cos/sin tables are trusted-once host data.</b> Like the weights themselves, they enter the run as data, not as verified computation.</li>
         <li><b>Never claimed:</b> beating cuBLAS, a “fully verified GPU”, or completeness down to GPU machine code.</li>
