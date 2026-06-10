@@ -94,3 +94,37 @@ A beginner layer over the live telemetry — same SSE events, no new event types
 - All consumers are defensive about missing/extra event fields; works identically in mock,
   replay, and live (verified in-browser on mock + replay + the sse→replay fallback; inline
   script passes `node --check`).
+
+## 7. Source <-> execution link + Why-Helix drawer + speed-mode toggle (SHIPPED 2026-06, demo/index.html only)
+
+- **Source link**: every kernel name in the telemetry (op-ticker lines, legend chips, the
+  ladder op readout, the explain-mode current-op line) carries `.klink` + `data-kn` and opens
+  a modal (`#ksrcOverlay`) showing the kernel's REAL Helix source, embedded VERBATIM in the
+  inline script (`KERNEL_SOURCES`, transcribed from `helixc/examples/*.hx`: the 8 GPT-2 serve
+  kernels, the 3 Llama-arch kernels, and the 3 fast-decode KV kernels). The framing is
+  source-aware ("the kernel that just ran" only on live AND a fired op — `data-ran`); a gate
+  status chip is shown per kernel, and the KV trio is labeled "parity gate IN PROGRESS"
+  (amber) — nothing is claimed for them until their gate is green. Unknown kernel names
+  degrade to an honest "source not bundled" message. Comment/keyword tinting is DOM-built
+  (textContent only) — the source text is never parsed as HTML.
+- **Why-Helix drawer** (`#whyOverlay`, header button "Why Helix"): six capability cards, each
+  = one claim + a real code snippet + "what this enables" + the repo path(s) that back it.
+  Every claim was verified against the repo before inclusion; two candidates were dropped as
+  not backed by the live kovc (standalone @pure effect-system enforcement — only the
+  reverse-AD @checkpoint purity scan in helixc/bootstrap/parser.hx is enforced today — and
+  Presburger shape checking, which lived in the retired Python frontend), and the drawer's
+  footer states the drops explicitly.
+- **Speed mode** (`#speedToggle`, next to the model switcher): `glass box` = today's per-op
+  behavior, unchanged (default). `fast` sends an ADDITIVE `detail:"token"` field on
+  /api/generate (same additive pattern as `"model"`, mirrored in the query string) and
+  consumes a SUBSET of the same SSE events — hello/tokenize/forward_begin/token/done; no
+  event renames. The fast option is enabled ONLY when /api/health advertises the capability
+  (`"fast": true`, or a `models[]` entry carrying `fast: true`); otherwise it stays visible
+  but disabled with "needs the fast-decode backend". Honest labels: glass box = "every kernel
+  shown and synchronized — slower, fully observable"; fast = "same verified kernels, no
+  per-op instrumentation — the speed is from caching and not approximation". In fast mode the
+  per-op surfaces (kernel ticker, ladder readout, explain caption) say "per-op detail is off
+  in fast mode — switch to glass box to watch every kernel"; token progress, the tokenizer
+  panel and the transcript stream unchanged. No tokens/sec figure is invented anywhere.
+- All three features work in mock, replay and live, and from file:// (no new network calls);
+  the inline JS passes `node --check`.

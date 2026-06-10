@@ -992,6 +992,108 @@
   .ob-card p { margin: 0 0 16px; font-size: 13.5px; color: var(--ink-dim); line-height: 1.65; }
   .ob-card p b { color: var(--ink); font-weight: 650; }
 
+  /* ============================================================
+     SOURCE <-> EXECUTION LINK + WHY-HELIX DRAWER + SPEED MODE
+     (2026-06, source-link pass). New classes only — nothing above
+     this block is modified.
+     ============================================================ */
+  /* any kernel name in the telemetry is clickable -> source modal */
+  .klink { cursor: pointer; border-bottom: 1px dotted currentColor; }
+  .klink:hover { filter: brightness(1.3); }
+  .kt-kernel.klink { border-bottom-style: solid; }
+  .kt-kernel.klink:hover { border-color: var(--accent-dim); }
+
+  /* kernel source modal */
+  .ksrc-overlay {
+    position: fixed; inset: 0; z-index: 90;
+    background: rgba(6, 9, 14, 0.88);
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .ksrc-overlay[hidden] { display: none; }
+  .ksrc-card {
+    width: min(780px, 94vw); max-height: 88vh; overflow-y: auto;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--accent-dim); border-radius: var(--radius);
+    padding: 20px 22px; box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+  }
+  .ksrc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  .ksrc-head h2 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 650; color: var(--accent); letter-spacing: -0.2px; word-break: break-all; }
+  .ksrc-close {
+    background: none; border: 1px solid var(--border-2); color: var(--ink-dim);
+    border-radius: 7px; cursor: pointer; font-size: 12px; padding: 5px 11px; white-space: nowrap;
+  }
+  .ksrc-close:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .ksrc-path { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-bottom: 8px; word-break: break-all; }
+  .ksrc-status {
+    display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 2px 9px; border-radius: 5px; margin-bottom: 10px; line-height: 1.5;
+  }
+  .ksrc-status.is-pending { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-bg); }
+  .ksrc-status[hidden] { display: none; }
+  .ksrc-frame { font-size: 12.5px; color: var(--ink-dim); line-height: 1.6; margin: 0 0 12px; }
+  .ksrc-frame b { color: var(--ink); font-weight: 650; }
+  .ksrc-pre {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; margin: 0;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+    overflow-x: auto; white-space: pre; color: var(--ink);
+  }
+  .ksrc-pre .hx-c { color: var(--ink-faint); }
+  .ksrc-pre .hx-k { color: var(--accent); }
+  .ksrc-pre .hx-at { color: var(--amber); }
+  .ksrc-foot { margin-top: 10px; font-size: 11.5px; }
+
+  /* WHY HELIX drawer */
+  button.nav-link { cursor: pointer; font-family: var(--sans); font-size: 13px; }
+  .why-overlay {
+    position: fixed; inset: 0; z-index: 85;
+    background: rgba(6, 9, 14, 0.94);
+    overflow-y: auto; padding: 30px 18px 40px;
+  }
+  .why-overlay[hidden] { display: none; }
+  .why-wrap { max-width: 1140px; margin: 0 auto; }
+  .why-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .why-head h2 { margin: 0; font-size: 22px; font-weight: 700; color: var(--ink); letter-spacing: -0.3px; }
+  .why-sub { font-size: 13px; color: var(--ink-dim); max-width: 88ch; line-height: 1.6; margin: 0 0 18px; }
+  .why-sub b { color: var(--ink); font-weight: 650; }
+  .why-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+  .why-card {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 130%);
+    border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+    padding: 15px 16px; display: flex; flex-direction: column; gap: 9px;
+  }
+  .why-card h3 { margin: 0; font-size: 14.5px; font-weight: 700; color: var(--accent); letter-spacing: -0.1px; }
+  .why-card .wc-what { font-size: 12.5px; color: var(--ink-dim); line-height: 1.6; }
+  .why-card .wc-what b { color: var(--ink); font-weight: 650; }
+  .why-card pre {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
+    padding: 9px 11px; margin: 0;
+    font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--ink);
+    overflow-x: auto; white-space: pre; max-height: 200px; overflow-y: auto;
+  }
+  .why-card .wc-enables { font-size: 11.5px; color: var(--ink-dim); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 8px; }
+  .why-card .wc-enables b { color: var(--accent); font-weight: 700; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.7px; text-transform: uppercase; display: block; margin-bottom: 2px; }
+  .why-card .wc-ev { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); line-height: 1.6; }
+  .why-card .wc-ev b { color: var(--ink-dim); font-weight: 650; }
+  .why-foot { margin-top: 16px; font-size: 11.5px; color: var(--ink-faint); line-height: 1.6; max-width: 110ch; }
+  .why-foot b { color: var(--ink-dim); font-weight: 650; }
+
+  /* speed-mode selector (glass box / fast) — near the model switcher */
+  .speed-toggle {
+    display: inline-flex; align-items: center; gap: 3px;
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 999px; padding: 2px;
+  }
+  .speed-toggle .sp-btn {
+    background: none; border: 1px solid transparent; color: var(--ink-dim);
+    border-radius: 999px; padding: 2px 9px; cursor: pointer;
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.3px;
+  }
+  .speed-toggle .sp-btn:hover:not(:disabled) { color: var(--ink); }
+  .speed-toggle .sp-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); cursor: default; }
+  .speed-toggle .sp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
   /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
   @media (prefers-reduced-motion: reduce) {
     .status-badge .dot { animation: none; }
@@ -1063,6 +1165,8 @@
           <span class="dot" aria-hidden="true"></span>
           <span id="connText">PREVIEW · MOCK TELEMETRY (no GPU connected)</span>
         </div>
+        <button class="nav-link" id="whyHelixBtn" type="button"
+          title="What the Helix language can actually do — real code + the repo path for every claim">Why Helix <span class="arr">&rarr;</span></button>
         <a class="nav-link" href="compare.html">Models &amp; paths <span class="arr">&rarr;</span></a>
         <a class="nav-link" href="dashboard.html">Proof &amp; attestation <span class="arr">&rarr;</span></a>
       </div>
@@ -1107,6 +1211,10 @@
             </label>
             <button class="ctx-clear" id="ctxClear" type="button"
               title="Forget the carried text (the visible transcript stays)">clear ctx</button>
+            <span class="speed-toggle" id="speedToggle" role="group" aria-label="Telemetry detail mode">
+              <button class="sp-btn" id="speedGlass" type="button" aria-pressed="true">glass box</button>
+              <button class="sp-btn" id="speedFast" type="button" aria-pressed="false" disabled>fast</button>
+            </span>
             <select id="modelSelect" class="model-select" hidden
               aria-label="Model served by the live backend"></select>
             <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
@@ -1229,6 +1337,8 @@
           <div class="xp-opcap" id="xpOpCap">run a prompt and this line explains each step in plain language.</div>
           <div class="xp-why" id="xpWhy"></div>
           <div class="xp-links">
+            <a href="#" id="xpViewSrc" hidden
+              title="Read the real Helix source of the kernel running right now">view the Helix source &rarr;</a>
             <a href="#" id="xpExpertLink">full expert op-stream &rarr;</a>
             <a href="dashboard.html">proof &amp; attestation &rarr;</a>
           </div>
@@ -1347,6 +1457,177 @@
         are watching the <b>live GPU</b>, a <b>replay of a real recorded run</b>, or a <b>mock preview</b>.
       </p>
       <button class="send-btn" id="onboardDismiss" type="button">Got it — let's watch</button>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       KERNEL SOURCE MODAL — the source <-> execution link. Filled by
+       openKernelSource(); the kernel text is embedded VERBATIM in the
+       inline script (KERNEL_SOURCES, transcribed from the repo's
+       helixc/examples/*.hx files). Framing is source-aware: only live
+       mode says the kernel "just ran". Unknown kernel names degrade
+       to an honest "source not bundled" message.
+       ============================================================ -->
+  <div class="ksrc-overlay" id="ksrcOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="ksrcTitle">
+    <div class="ksrc-card">
+      <div class="ksrc-head">
+        <h2 id="ksrcTitle">kernel</h2>
+        <button class="ksrc-close" id="ksrcClose" type="button">close ✕</button>
+      </div>
+      <div class="ksrc-path" id="ksrcPath"></div>
+      <span class="ksrc-status" id="ksrcStatus" hidden></span>
+      <p class="ksrc-frame" id="ksrcFrame"></p>
+      <pre class="ksrc-pre" id="ksrcPre"></pre>
+      <div class="ksrc-foot"><a href="dashboard.html">the gates &amp; the full trust chain &rarr;</a></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       WHY HELIX drawer — six real language/stack capabilities. Every
+       card cites the repo path(s) where its claim can be checked; the
+       snippets are real code (verbatim, or marked as an excerpt /
+       schematic). Two candidate cards were checked against the repo
+       and deliberately left out — see the footer inside the drawer.
+       ============================================================ -->
+  <div class="why-overlay" id="whyOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="whyTitle">
+    <div class="why-wrap">
+      <div class="why-head">
+        <h2 id="whyTitle">Why Helix — what the language actually does</h2>
+        <button class="ksrc-close" id="whyClose" type="button">close ✕</button>
+      </div>
+      <p class="why-sub">
+        Six concrete capabilities, each with <b>real code</b> and the <b>repo path</b> where it
+        lives, so every claim is checkable. Nothing aspirational is listed: candidates the repo
+        could not back were dropped (footer).
+      </p>
+      <div class="why-grid">
+
+        <div class="why-card">
+          <h3>GPU kernels are written in Helix itself</h3>
+          <div class="wc-what">
+            Every kernel in the telemetry is an <b>@kernel function in the Helix language</b>,
+            compiled to PTX by kovc. No CUDA C does the tensor math; no vendor ML library sits
+            underneath. This one is verbatim and complete:
+          </div>
+          <pre>@kernel
+fn vector_add(a: f32, b: f32, c: f32, n: i32) {
+    let i = block_idx() * block_dim() + thread_idx();
+    c[i] = a[i] + b[i]
+}</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            Click any kernel name in the live panels and read the exact source that produced the
+            PTX running on the GPU — the whole math stack is auditable in one language.</div>
+          <div class="wc-ev"><b>where it lives:</b> helixc/examples/vector_add_kernel.hx (+13 more bundled on this page) · docs/HELIX_V1_LANGUAGE_SPEC.md (@kernel &rarr; PTX) · docs/HELIX_V1_DEFINITION_OF_DONE.md #3 (GPU corpus green on hardware)</div>
+        </div>
+
+        <div class="why-card">
+          <h3>Autodiff is a language built-in</h3>
+          <div class="wc-what">
+            <b>grad / grad_rev / grad_rev_all</b> are built into the language — source-level
+            forward- and reverse-mode differentiation with chain rules across user functions.
+            Below (excerpt): a committed program doing real gradient descent inside a
+            Helix-emitted binary.
+          </div>
+          <pre>@pure
+fn loss(w: f32) -> f32 {
+    let d = w - 7.0;
+    d * d
+}
+// ... five steps of gradient descent:
+let g = grad_rev(loss)(w_now as f32);
+let w_new_f = (w_now as f32) - lr * g;</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            Training loops where the compiler derives the gradients — and the reverse-AD boundary
+            compile-time-rejects impure bodies (the purity scan in helixc/bootstrap/parser.hx).
+            Honesty note: CPU autodiff is corpus-proven; the GPU capstone&rsquo;s backward pass used
+            hand-written kernels verified against finite differences — a stronger check than
+            auto-emitted, unverified code (grad-emits-GPU is post-v1.0).</div>
+          <div class="wc-ev"><b>where it lives:</b> helixc/examples/dogfood_01_one_param.hx · README.md &ldquo;What works today&rdquo; · docs/HELIX_V1_DEFINITION_OF_DONE.md #4 (autodiff GREEN)</div>
+        </div>
+
+        <div class="why-card">
+          <h3>The toolchain rebuilds from 299 hand-typed bytes</h3>
+          <div class="wc-what">
+            <b>stage0/hex0/hex0.bin is literally 299 bytes on disk</b> — a hand-authored ELF whose
+            annotated source is hex0.hex (excerpt below). The ladder hex0 &rarr; hex1 &rarr; M0
+            &rarr; M1 &rarr; M2-Planet &rarr; seed rebuilds the whole compiler from it. The hero
+            line of this page is this file.
+          </div>
+          <pre>7F 45 4C 46            ; 0x00  e_ident[EI_MAG]      = "\x7fELF"
+02                     ; 0x04  EI_CLASS             = ELFCLASS64
+01                     ; 0x05  EI_DATA              = ELFDATA2LSB
+...
+02 00                  ; 0x10  e_type               = ET_EXEC (2)
+3E 00                  ; 0x12  e_machine            = EM_X86_64 (0x3E)</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            No binary blob has to be trusted: every byte from the seed up is auditable, and the
+            seed is small enough to check by hand.</div>
+          <div class="wc-ev"><b>where it lives:</b> stage0/hex0/hex0.bin (299 B) · stage0/hex0/hex0.hex (annotated byte-by-byte) · README.md</div>
+        </div>
+
+        <div class="why-card">
+          <h3>Self-hosting, proven byte-identical — and Python-free</h3>
+          <div class="wc-what">
+            kovc is written in Helix and compiles itself to a <b>byte-identical fixpoint</b>
+            starting from the raw-binary seed; an independent gcc-built lineage corroborates it
+            (a Wheeler diverse-double-compile). The live toolchain contains <b>zero Python</b> —
+            the only .py left is the fenced external oracle the gates compare against.
+            Schematic of the recorded result (real numbers from the DoD):
+          </div>
+          <pre>seed.bin (62 KB, from the hex0 ladder)
+   compiles kovc.hx  ->  K1
+K1 -> K2 -> K3 -> K4
+K2 == K3 == K4        # byte-identical, 601707 B,
+                      # sha b52d7d6f...  (DoD #1)</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            The &ldquo;trusting trust&rdquo; answer: the compiler you audited is provably the
+            compiler that compiled the kernels you are watching.</div>
+          <div class="wc-ev"><b>where it lives:</b> scripts/selfhost_fixpoint_rawbinary.sh · docs/HELIX_V1_DEFINITION_OF_DONE.md #1 / #5 / #6 · docs/K_DDC_POST_K4.md · verification/oracle/ (the fenced oracle)</div>
+        </div>
+
+        <div class="why-card">
+          <h3>Models ship only through fail-closed parity gates</h3>
+          <div class="wc-what">
+            A model appears in this demo only after its served output <b>matched an independent
+            oracle</b> — GPT-2 token-for-token via the serve gate; the Llama-arch leg (SmolLM2)
+            through its own full-model gate with a negative control. Verbatim from the committed
+            gate script:
+          </div>
+          <pre># FAIL-CLOSED legs (all must pass for LLAMA_MODEL_GATE_PASS):
+#   [4] G-L1: GPU post-layer-0 residual vs oracle (compare-block0, tol 2e-3)
+#   [5] G-L2a: full-model last-row logits vs oracle (argmax EXACT + max-abs &lt; 5e-2)</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            The continuation you read was produced by kernels that already proved they reproduce
+            the reference model exactly — verification is the product, not a footnote.</div>
+          <div class="wc-ev"><b>where it lives:</b> scripts/helix_serve_gate.sh (GPT-2, token-for-token) · scripts/llama_model_gate.sh (SmolLM2) · demo/dashboard.html (the recorded numbers)</div>
+        </div>
+
+        <div class="why-card">
+          <h3>Optimised, then re-proven — never trusted on speed</h3>
+          <div class="wc-what">
+            Standing property of this stack: an optimisation ships only after it <b>re-passes the
+            token-for-token gate</b>. Right now the KV-cache fast-decode kernels are <b>in
+            gating</b> — authored, on disk, and claiming nothing until the gate is green. Their
+            own header says so, verbatim:
+          </div>
+          <pre>// Mathematically the SAME dot products as tiled_matmul_abt -- the token-for-token
+// gate must prove the KV path emits IDENTICAL ids to the full re-forward.</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            Speed comes from caching and better kernels, never from approximation — and this
+            page&rsquo;s &ldquo;fast&rdquo; mode only unlocks once the gated backend advertises it.</div>
+          <div class="wc-ev"><b>where it lives:</b> helixc/examples/gpu_gemv_abt_kernel.hx / gpu_gemv_ab_kernel.hx / gpu_softmax_row_kernel.hx (in gating now) · scripts/gate_kovc.sh · demo/dashboard.html</div>
+        </div>
+
+      </div>
+      <div class="why-foot">
+        <b>Checked and deliberately left out:</b> a standalone &ldquo;effect system&rdquo; card —
+        in the live self-hosted compiler, purity is enforced at the reverse-AD boundary (the
+        @checkpoint purity scan in helixc/bootstrap/parser.hx); @pure elsewhere is annotation,
+        not yet enforcement — and a &ldquo;Presburger shape-checking&rdquo; card — that lived in
+        the retired Python reference frontend (docs/lang/spec.md notes
+        helixc/frontend/typecheck.py, deleted when the toolchain went Python-free), not in the
+        live kovc. This drawer lists only what the repo can back today.
+      </div>
     </div>
   </div>
 
@@ -1941,9 +2222,16 @@ var LiveSSESource = (function () {
     /* ADDITIVE field, only ever present when /api/health advertised a
        models[] capability (the dual-model server does; single-model servers omit models[] -> never sent). */
     if (UI.selectedModel) reqObj.model = UI.selectedModel;
+    /* ADDITIVE field, same pattern as "model": detail:"token" is sent ONLY
+       when the user picked fast mode AND the live backend advertised the
+       fast-decode capability on /api/health — otherwise the wire bytes are
+       exactly today's. In fast mode the stream is a SUBSET of the same
+       events (hello/tokenize/forward_begin/token/done) — no renames. */
+    var fastReq = (SPEED.mode === "fast" && SPEED.fastAvailable);
+    if (fastReq) reqObj.detail = "token";
     var body = JSON.stringify(reqObj);
 
-    fetch("/api/generate?detail=op", {
+    fetch(fastReq ? "/api/generate?detail=token" : "/api/generate?detail=op", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
       body: body,
@@ -2040,6 +2328,7 @@ var UI = {
   run: { tokens: 0, t0: 0 },
   activeBubble: null,     /* {contEl, caretEl} for the streaming model turn */
   activeMeta: null,       /* {n_gen,...} captured for verify */
+  fastRun: false,         /* current run requested with detail:"token" (fast mode, live only) */
   pendingOps: [],         /* batched op events flushed on rAF (anti-flood) */
   rafScheduled: false
 };
@@ -2084,12 +2373,12 @@ function paintKernelLegend(kernels) {
   leg.innerHTML = "";
   (kernels || RUNBOOK.kernels).forEach(function (k) {
     UI.kernelCounts[k] = UI.kernelCounts[k] || 0;
-    var node = el("span", { class: "kt-kernel", "data-k": k }, [
+    var node = el("span", { class: "kt-kernel klink", "data-k": k, "data-kn": k }, [
       el("span", { class: "nm" }, k),
       el("span", { class: "ct" }, "0")
     ]);
     /* plain-language tooltip for every kernel name in the legend */
-    node.title = opTooltip({ kernel: k });
+    node.title = opTooltip({ kernel: k }) + " — click to read this kernel's Helix source";
     leg.appendChild(node);
   });
 }
@@ -2330,7 +2619,7 @@ function flushOpsNow() {
     lon.innerHTML = "";
     lon.appendChild(el("span", { class: "lo-l" }, "L" + last.layer + " · " + last.label + " "));
     lon.appendChild(document.createTextNode("→ "));
-    lon.appendChild(el("span", { class: "lo-k" }, last.kernel));
+    lon.appendChild(el("span", { class: "lo-k klink", "data-kn": last.kernel, "data-ran": "1", title: "view the Helix source of this kernel" }, last.kernel));
     lon.title = opTooltip(last); /* hover-only plain-language meaning */
     xpOnOp(last);                /* explain map: half + caption */
   }
@@ -2347,14 +2636,14 @@ function pushKernelLine(op) {
       el("span", { class: "lyr" }, "HEAD · "),
       el("span", { class: "lab" }, op.label),
       el("span", { class: "arr" }, " → "),
-      el("span", { class: "kfn" }, op.kernel)
+      el("span", { class: "kfn klink", "data-kn": op.kernel, "data-ran": "1", title: "view the Helix source of this kernel" }, op.kernel)
     ]);
   } else {
     line = el("div", { class: "kt-line" + (op.phase === "mlp" ? " is-mlp" : "") }, [
       el("span", { class: "lyr" }, "L" + op.layer + " · "),
       el("span", { class: "lab" }, op.label),
       el("span", { class: "arr" }, " → "),
-      el("span", { class: "kfn" }, op.kernel)
+      el("span", { class: "kfn klink", "data-kn": op.kernel, "data-ran": "1", title: "view the Helix source of this kernel" }, op.kernel)
     ]);
   }
   /* column-reverse flex: newest goes first */
@@ -2988,6 +3277,9 @@ function setBusy(b) {
   $("transcript").setAttribute("aria-busy", b ? "true" : "false");
   var ms = $("modelSelect");
   if (ms && !ms.hidden) ms.disabled = b;
+  var sg = $("speedGlass"), sf = $("speedFast");
+  if (sg) sg.disabled = b;
+  if (sf) sf.disabled = b || !SPEED.fastAvailable;
   var chips = $("seedRow").querySelectorAll(".seed-chip");
   for (var i = 0; i < chips.length; i++) {
     chips[i].disabled = b ||
@@ -3098,6 +3390,15 @@ function startGeneration(prompt, nGen) {
   $("streamTokens").innerHTML = '<span class="stream-tokens-empty">streaming…</span>';
   $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
   $("ladderOpNow").innerHTML = "&nbsp;";
+  /* fast mode (live-only): per-op events won't arrive — say so up front
+     instead of leaving "launching kernels…" dangling. Token progress and
+     the transcript stream exactly as in glass box. */
+  UI.fastRun = (TELEMETRY_SOURCE === "sse" && SPEED.mode === "fast" && SPEED.fastAvailable);
+  if (UI.fastRun) {
+    $("ktFeed").innerHTML = "";
+    $("ktFeed").appendChild(el("span", { class: "kt-feed-empty" }, FAST_OFF_MSG));
+    $("ladderOpNow").textContent = FAST_OFF_MSG;
+  }
   xpRunStart();
 
   updateCtxInfo();
@@ -3201,6 +3502,7 @@ function gateLiveReadiness() {
     USE_LIVE_BACKEND = false;
     TELEMETRY_SOURCE = replayAvailable() ? "replay" : "mock";
     applySourceHonesty();
+    applyFastAvailability(null);
     maybeAutoReplay();
     startUpgradeWatch();
   }
@@ -3214,6 +3516,7 @@ function gateLiveReadiness() {
       if (j && j.ready) {
         setConnState("live", "LIVE · " + (j.device || RUNBOOK.device) + " · fp32");
         populateModelSelect(j);
+        applyFastAvailability(j);
       } else {
         /* reachable worker, still warming (XL weights + PTX load) —
            honest connecting state + keep reconnecting for ~2 minutes */
@@ -3390,7 +3693,8 @@ function opTooltip(op) {
 var XP = {
   layerTotal: null,   /* from layer_begin.total / forward_begin.n_layers — never hardcoded */
   whyTimer: null,
-  whyIdx: 0
+  whyIdx: 0,
+  currentKernel: null  /* latest op's kernel name (explain-mode "view source" link) */
 };
 
 function xpText(id, s) { var n = $(id); if (n) n.textContent = s; }
@@ -3413,7 +3717,9 @@ function xpRunStart() {
   xpLayerFillPct(0);
   xpText("xpOutTok", "—");
   var on = $("xpOpNow"); if (on) { on.innerHTML = "&nbsp;"; on.title = ""; }
-  xpText("xpOpCap", "watching for the first kernel…");
+  xpText("xpOpCap", UI.fastRun ? FAST_OFF_MSG : "watching for the first kernel…");
+  XP.currentKernel = null;
+  var vsr = $("xpViewSrc"); if (vsr) vsr.hidden = true;
   var p = $("xpProgress"); if (p) { p.textContent = "running"; p.classList.remove("is-idle"); }
 }
 
@@ -3471,7 +3777,11 @@ function xpOnOp(d) {
     var where = (typeof d.layer === "number" ? "L" + d.layer : "") +
                 (d.label != null ? (typeof d.layer === "number" ? " · " : "") + d.label : "");
     on.appendChild(document.createTextNode(where + (where ? " → " : "")));
-    on.appendChild(el("span", { class: "k" }, String(d.kernel != null ? d.kernel : "?")));
+    var kkn = (d.kernel != null) ? String(d.kernel) : null;
+    if (kkn) on.appendChild(el("span", { class: "k klink", "data-kn": kkn, "data-ran": "1", title: "view the Helix source of this kernel" }, kkn));
+    else on.appendChild(el("span", { class: "k" }, "?"));
+    XP.currentKernel = kkn;
+    var vsl = $("xpViewSrc"); if (vsl) vsl.hidden = !kkn;
     on.title = opTooltip(d);
   }
   xpText("xpOpCap", explainForOp(d));
@@ -3502,7 +3812,11 @@ function xpOnHead(d) {
   if (on) {
     on.innerHTML = "";
     on.appendChild(document.createTextNode("HEAD · " + (d.label != null ? d.label : "?") + " → "));
-    on.appendChild(el("span", { class: "k" }, String(d.kernel != null ? d.kernel : "?")));
+    var kkn = (d.kernel != null) ? String(d.kernel) : null;
+    if (kkn) on.appendChild(el("span", { class: "k klink", "data-kn": kkn, "data-ran": "1", title: "view the Helix source of this kernel" }, kkn));
+    else on.appendChild(el("span", { class: "k" }, "?"));
+    XP.currentKernel = kkn;
+    var vsl = $("xpViewSrc"); if (vsl) vsl.hidden = !kkn;
     on.title = opTooltip(d);
   }
   xpText("xpOpCap", explainForOp(d));
@@ -3655,6 +3969,275 @@ function initOnboarding() {
 }
 
 /* ================================================================
+   SOURCE <-> EXECUTION LINK (2026-06)
+   ----------------------------------------------------------------
+   Every kernel name shown in the telemetry (the op ticker, the
+   legend chips, the ladder readout, the explain-mode current-op
+   line) is clickable and opens a modal with the kernel's REAL Helix
+   source — embedded VERBATIM below, transcribed from the repo's
+   helixc/examples/*.hx files. HONESTY: the modal framing is
+   source-aware ("just ran" only in live mode), the gate status chip
+   distinguishes gated kernels from the fast-decode ones whose parity
+   gate is still IN PROGRESS, and an unknown kernel name degrades to
+   "source not bundled" — never a broken modal, never an invented
+   claim.
+   ================================================================ */
+var KERNEL_SOURCES = {
+  "tiled_matmul": {
+    file: "helixc/examples/tiled_matmul_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU corpus kernel (T2/M1): shared-memory TILED matrix multiply C = A*B,\n// the GPU critical-path kernel. A single FUSED intrinsic emits the WHOLE\n// tiled kernel body (cooperative GMEM->SMEM staging + bar.sync + a runtime\n// k-tile loop + a register micro-tile FMA accumulate + epilogue store) --\n// see emit_ptx_tiled_matmul_smem in kovc.hx. Tile params for the RTX 3070\n// (sm_86): BM=BN=64, BK=8, TM=TN=4, threadblock 16x16=256, grid=(N/BN, M/BM).\n//\n// Unlike naive_matmul (one thread per output cell, register-only, zero\n// .shared/bar.sync), this kernel cooperatively stages 64x8 A-tiles and 8x64\n// B-tiles into shared memory and reuses them across a 4x4 register micro-tile\n// per thread -- the throughput-unlocking data reuse. Requires M%64==N%64==\n// K%8==0 (no boundary guard, like naive_matmul). Validated cell-by-cell vs a\n// CPU GEMM oracle by: cuda_launch out.ptx tiled_matmul 0 gemm_perf <M> <K> <N>.\n//\n// mm (M) is unused in the body (the row block comes from ctaid.y); the kernel\n// derives every index from the launch geometry + K/N strides.\n@kernel\nfn tiled_matmul(a: f32, b: f32, c: f32, mm: i32, kk: i32, nn: i32) {\n    __tiled_matmul_smem(a, b, c, mm, kk, nn)\n}\n"
+  },
+  "tiled_matmul_abt": {
+    file: "helixc/examples/tiled_matmul_abt_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU corpus kernel (T2/M4): shared-memory TILED A @ B^T, the SMEM-tiled\n// sibling of the naive gpu_matmul_abt (needed for d_attn = dOut @ V^T in the\n// attention backward pass). A single FUSED intrinsic emits the WHOLE tiled\n// kernel body (cooperative scalar GMEM->SMEM staging with TRANSPOSED B index\n// + bar.sync + a runtime k-tile loop + a 4x4 register micro-tile FMA\n// accumulate + epilogue store) -- see emit_ptx_tiled_matmul_t (mode 0) in\n// kovc.hx.\n//\n// Given A[M,K] (a[i*K+t]) and B[N,K] (b[j*K+t], accessed transposed), computes\n// C[M,N] with C[i,j]=sum_t A[i,t]*B[j,t]. Reuses the forward tiled GEMM's\n// SMEM layout + register micro-tile; only B's GMEM->SMEM load index differs\n// (b[(colbase+col)*K + k] instead of b[k*N + col]). Tile params for the RTX\n// 3070 (sm_86): BM=BN=64, BK=8, TM=TN=4, threadblock 16x16=256, grid=(N/64,\n// M/64). Requires M%64==0, N%64==0, K%8==0 (no boundary guard). Validated\n// cell-by-cell vs a CPU A@B^T oracle AND faster than the naive non-tiled\n// gpu_matmul_abt by: cuda_launch out.ptx tiled_matmul_abt 0 gemm_abt <M> <K> <N>.\n//\n// mm (M) is unused in the body (the row block comes from ctaid.y); the kernel\n// derives every index from the launch geometry + K/N strides.\n@kernel\nfn tiled_matmul_abt(a: f32, b: f32, c: f32, mm: i32, kk: i32, nn: i32) {\n    __matmul_abt_smem(a, b, c, mm, kk, nn)\n}\n"
+  },
+  "gpu_layernorm_fwd_eps": {
+    file: "helixc/examples/gpu_layernorm_fwd_eps_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU LayerNorm forward WITH affine AND epsilon (P5 GPT-2 gap kernel). Hand-written copy of the naive\n// gpu_layernorm_fwd_save body (helixc/examples/gpu_layernorm_fwd_save_kernel.hx, which has affine but\n// NO eps) with one change: __gpu_rsqrt(var) -> __gpu_rsqrt(var + 0.00001) (GPT-2 layer_norm_epsilon\n// = 1e-5). NOT an edit of the fused __layernorm_fwd_save_blockred intrinsic in kovc.hx (so the\n// self-host fixpoint 0992dddd is untouched). Drops the inference-irrelevant `ist` save (5 params).\n//   y[row,c] = gamma[c]*(x[row,c]-mean)*rsqrt(var+eps) + beta[c]\n// Biased/population variance (divide by cols) to match numpy x.var() and layer_norm_f32 (nn.hx:680).\n// One thread per row (gridDim.x=rows, blockDim.x=1). Launch: cuda_launch out.ptx gpu_layernorm_fwd_eps <N> layernorm_eps <rows> <cols>\n@kernel\nfn gpu_layernorm_fwd_eps(x: f32, y: f32, gamma: f32, beta: f32, cols: i32) {\n    let row = block_idx() * block_dim() + thread_idx();\n    let base = row * cols;\n    let colsf = __gpu_i2f(cols);\n    let mut sm = x[base] - x[base];\n    let mut j = 0;\n    while j < cols { sm = sm + x[base + j]; j = j + 1 };\n    let mean = sm / colsf;\n    let mut vs = x[base] - x[base];\n    let mut k = 0;\n    while k < cols { vs = vs + (x[base + k] - mean) * (x[base + k] - mean); k = k + 1 };\n    let var = vs / colsf;\n    let inv = __gpu_rsqrt(var + 0.00001);\n    let mut t = 0;\n    while t < cols { y[base + t] = gamma[t] * ((x[base + t] - mean) * inv) + beta[t]; t = t + 1 }\n}\n"
+  },
+  "gpu_softmax_causal": {
+    file: "helixc/examples/gpu_softmax_causal_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU CAUSAL softmax (P5 GPT-2 gap kernel). Hand-written copy of the naive gpu_softmax body\n// (helixc/examples/gpu_softmax_kernel.hx) with a causal mask folded in -- NOT an edit of the\n// fused __softmax_blockred intrinsic in kovc.hx (so the self-host fixpoint 0992dddd is untouched).\n// One thread per query row (launch gridDim.x=rows=S, blockDim.x=1 so row=block_idx() is valid).\n// For query row i, reduce over keys j in [0..=i] ONLY and write y[i,j]=0 for j>i -- numerically\n// identical to adding -inf to masked scores, with no -inf literal. Scores must already carry the\n// 1/sqrt(64)=0.125 scale (applied by gpu_scale_rt before this kernel). `rows` is the grid dim (unused\n// in the body); `cols` = S (total keys). `0.0` is written as x[base]-x[base] (no f32 literal needed).\n// Launch: cuda_launch out.ptx gpu_softmax_causal <N> softmax_causal <rows> <cols>\n@kernel\nfn gpu_softmax_causal(x: f32, y: f32, rows: i32, cols: i32) {\n    let row = block_idx() * block_dim() + thread_idx();\n    let base = row * cols;\n    let nvalid = row + 1;\n    let mut m = x[base];\n    let mut j = 1;\n    while j < nvalid {\n        if x[base + j] > m { m = x[base + j] };\n        j = j + 1\n    };\n    let mut s = x[base] - x[base];\n    let mut k = 0;\n    while k < nvalid {\n        let e = __gpu_exp(x[base + k] - m);\n        y[base + k] = e;\n        s = s + e;\n        k = k + 1\n    };\n    let mut z = nvalid;\n    while z < cols {\n        y[base + z] = x[base] - x[base];\n        z = z + 1\n    };\n    let mut t = 0;\n    while t < nvalid {\n        y[base + t] = y[base + t] / s;\n        t = t + 1\n    }\n}\n"
+  },
+  "gpu_add_bias_rowbcast": {
+    file: "helixc/examples/gpu_add_bias_rowbcast_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU row-broadcast bias add (P5 GPT-2 gap kernel). y[i] += bias[i mod cols], one thread per element\n// (launch like vector_add: gridDim.x*blockDim.x >= n, with an `i < n` bounds guard). Dimension-generic\n// over cols in {2304 (qkv), 768 (proj/embd), 3072 (mlp_fc)}. Computes `i mod cols` as i-(i/cols)*cols\n// (integer div+mul+sub) to avoid relying on a '%' operator. Standalone hand-written kernel; NO change\n// to kovc.hx, so the self-host fixpoint 0992dddd is untouched.\n//\n// GUARD FORM: the `i < n` bound is expressed as a `while`-loop that runs AT MOST ONCE (a `done` flag\n// flips after the single store, so the loop body executes only when i<n and never twice). This is\n// semantically identical to `if i < n { y[i]+=bias[i mod cols] }` but ends the function on a `while`\n// statement rather than a bare trailing `if`. The kovc PTX emitter mis-lowers a bare `if` used as the\n// final statement of a @kernel body (it reaches for the then-branch's \"value\", and a store-statement\n// has none -> it emits an invalid `mov.s32 %r12, %r-1`, which the ptxas/driver JIT rejects with a\n// syntax error near '-'). The committed naive kernels (vector_add, gpu_scale_inplace) dodge this by\n// omitting the guard entirely (exact launch geometry); GPT-2 over-launches the last block when n is\n// not a multiple of the block size, so the guard is load-bearing here and is kept via this while-form.\n// Launch: cuda_launch out.ptx gpu_add_bias_rowbcast <n> add_bias <n> <cols>\n@kernel\nfn gpu_add_bias_rowbcast(y: f32, bias: f32, n: i32, cols: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    let mut active = 0;\n    if i < n { active = 1 };\n    while active > 0 {\n        let r = i - (i / cols) * cols;\n        y[i] = y[i] + bias[r];\n        active = 0\n    }\n}\n"
+  },
+  "gpu_gelu_stable": {
+    file: "helixc/examples/gpu_gelu_stable_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU GELU, NUMERICALLY STABLE for GPT-2-scale inputs (P5 GPT-2 gap kernel). Same tanh-approx\n// gelu_new as gpu_gelu (Hendrycks & Gimpel, = stdlib __gelu, transcendentals.hx:523) but with an\n// OVERFLOW-SAFE tanh. The committed gpu_gelu computes tanh(z)=(e^(2z)-1)/(e^(2z)+1) directly; for\n// GPT-2 the c_fc pre-activation reaches ~+/-12, so z=0.7978846*(x+0.044715*x^3) reaches ~63 and\n// e^(2z)=e^126 OVERFLOWS f32 (>3.4e38) -> +inf -> (inf-1)/(inf+1)=NaN. (gpu_gelu's own header notes\n// it was validated only on [-3,3] where e^(2z) never saturates.) This kernel uses the standard\n// stable identity tanh(z) = sign(z) * (1 - e^(-|2z|)) / (1 + e^(-|2z|)): the exp argument is ALWAYS\n// <= 0, so e^(-|2z|) lies in (0,1] and never overflows; large |z| -> e->0 -> tanh-> +/-1 (graceful\n// saturation, matching numpy's np.tanh). Bit-for-bit equal to gpu_gelu on small inputs; finite and\n// correct on the large inputs GPT-2 actually produces. Only __gpu_exp + arithmetic + one `if`\n// (sign/abs) -- no new kovc.hx intrinsic, so the self-host fixpoint 0992dddd is untouched. One thread\n// per element (gridDim.x=N, blockDim.x=1, no bounds guard -> blocks*threads must == n). Ends on a\n// store (not a bare trailing `if`) so the PTX emitter lowers it cleanly.\n// Launch: cuda_launch out.ptx gpu_gelu_stable <N> gelu\n@kernel\nfn gpu_gelu_stable(x: f32, y: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    let xi = x[i];\n    let x3 = xi * xi * xi;\n    let inner = 0.7978846 * (xi + (0.044715 * x3));\n    let two = 2.0 * inner;\n    let mut amag = two;\n    let mut sgn = 1.0;\n    if inner < 0.0 { amag = 0.0 - two; sgn = 0.0 - 1.0 };\n    let e = __gpu_exp(0.0 - amag);\n    let th = sgn * ((1.0 - e) / (1.0 + e));\n    y[i] = 0.5 * xi * (1.0 + th)\n}\n"
+  },
+  "vector_add": {
+    file: "helixc/examples/vector_add_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU first-light kernel (Helix v1.0 DoD criterion #3 -- \"GPU executes\").\n//\n// A concrete, NON-generic @kernel: c[i] = a[i] + b[i] over f32 global arrays,\n// using the canonical grid-stride index  block_idx()*block_dim() + thread_idx()\n// (the exact pattern kovc's PTX emitter is built for -- see kovc.hx:11002,\n// thread_idx->%tid.x / block_idx->%ctaid.x / block_dim->%ntid.x).\n//\n// Deliberately NON-generic (no [N] clause) -- the PTX emitter has no\n// monomorphize pass, so a generic @kernel would mis-lower. The count param n is\n// present so the host arg array void*[]={&a,&b,&c,&N} (helixc/runtime/cuda_launch.c)\n// lines up positionally, but n is UNUSED in the body: the emitter declares every\n// param as .param .b64, so reading a 32-bit n would mis-decode; and with N=256,\n// threads-per-block=256, blocks=1 every index is in-bounds, so no  if i < n  guard\n// is needed.\n//\n// Pipeline:  kovc (k1ptxdrv main) reads this -> emits /tmp/out.ptx\n//            -> cuda_launch /tmp/out.ptx vector_add 256  runs it on the GPU.\n@kernel\nfn vector_add(a: f32, b: f32, c: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    c[i] = a[i] + b[i]\n}\n"
+  },
+  "gpu_scale_rt": {
+    file: "helixc/examples/gpu_scale_rt_kernel.hx",
+    pending: false,
+    status: "live GPT-2 serve path \u2014 fail-closed serve gate green (served ids == offline oracle, token-for-token; scripts/helix_serve_gate.sh)",
+    src: "// GPU in-place scale by a RUNTIME factor (T2/M6 capstone re-train). a[i] = s[0]*a[i],\n// where the scalar s is a 1-element device buffer (the SAME runtime-scalar pattern Adam\n// uses for bias-correction). Dimension-agnostic: the attention 1/sqrt(d) factor is passed\n// at launch, so the kernel works at ANY head dim d (unlike gpu_scale_inplace, which bakes\n// the d=16 literal 0.25). Used by the optimized capstone re-train to scale the tiled-GEMM\n// QK^T scores (forward) and dQ/dK (backward) by 1/sqrt(d). One thread per element\n// (gridDim.x=N, blockDim.x=1). 3 params, 1 let-var. Uses only already-gated emitter\n// features (no kovc.hx change). Launch: cuda_launch out.ptx gpu_scale_rt <N> scale_rt\n@kernel\nfn gpu_scale_rt(a: f32, s: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    a[i] = s[0] * a[i]\n}\n"
+  },
+  "gpu_rmsnorm_fwd_eps": {
+    file: "helixc/examples/gpu_rmsnorm_fwd_eps_kernel.hx",
+    pending: false,
+    status: "Llama-arch serve path (SmolLM2) \u2014 full-model parity gate green (G-L1/G-L2 + negative control; scripts/llama_model_gate.sh)",
+    src: "// GPU RMSNorm forward WITH weight AND epsilon (LLAMA-ARCH op 1 of 4; AUTHORED for the\n// modern-model leg -- NEEDS GPU BUILD + PARITY GATE IN CLAUDE CODE before any claim).\n// Written in the exact style of gpu_layernorm_fwd_eps_kernel.hx (the P5 GPT-2 gap kernel):\n// same one-thread-per-row contract, same baked epsilon precedent, same accumulator-init\n// idiom (x[base]-x[base] = f32 zero from the element type).\n//   y[row,c] = w[c] * x[row,c] * rsqrt( mean_c(x[row,c]^2) + eps )\n// RMSNorm (Zhang & Sennrich 2019) = LayerNorm minus the mean-subtract and minus beta;\n// population mean over cols to match numpy (x*x).mean(-1) in the oracle\n// (helix-llm/tools/llama_ops_numpy_ref.py, kept uncommitted like the GPT-2 oracle).\n// eps is BAKED as 0.00001 (1e-5) -- the rms_norm_eps of both candidate models\n// (SmolLM2-135M and TinyLlama-1.1B, config.json rms_norm_eps=1e-5), mirroring how\n// gpu_layernorm_fwd_eps bakes GPT-2's layer_norm_epsilon=1e-5. A model with a different\n// eps gets a sibling kernel, not a runtime scalar (keeps the 4-param shape simple).\n// Uses ONLY already-gated emitter features (__gpu_i2f, __gpu_rsqrt, while/if, f32\n// indexing) -- NO kovc.hx change, so the self-host fixpoint 0992dddd is untouched.\n// One thread per row (gridDim.x=rows, blockDim.x=1).\n// Launch: cuda_launch out.ptx gpu_rmsnorm_fwd_eps <rows> rmsnorm <rows> <cols>\n@kernel\nfn gpu_rmsnorm_fwd_eps(x: f32, y: f32, w: f32, cols: i32) {\n    let row = block_idx() * block_dim() + thread_idx();\n    let base = row * cols;\n    let colsf = __gpu_i2f(cols);\n    let mut ss = x[base] - x[base];\n    let mut j = 0;\n    while j < cols { ss = ss + x[base + j] * x[base + j]; j = j + 1 };\n    let inv = __gpu_rsqrt(ss / colsf + 0.00001);\n    let mut t = 0;\n    while t < cols { y[base + t] = w[t] * (x[base + t] * inv); t = t + 1 }\n}\n"
+  },
+  "gpu_rope_rot": {
+    file: "helixc/examples/gpu_rope_rot_kernel.hx",
+    pending: false,
+    status: "Llama-arch serve path (SmolLM2) \u2014 full-model parity gate green (G-L1/G-L2 + negative control; scripts/llama_model_gate.sh)",
+    src: "// GPU RoPE rotation, HF-Llama rotate_half convention (LLAMA-ARCH op 2 of 4; AUTHORED for\n// the modern-model leg -- NEEDS GPU BUILD + PARITY GATE IN CLAUDE CODE before any claim).\n// Applies rotary position embedding IN-PLACE to ONE packed head buffer q of shape\n// [rows, 2*half] (rows = sequence positions, 2*half = head_dim), using HOST-PRECOMPUTED\n// cos/sin tables of shape [rows, half]:\n//   a = q[p, i]          (first half,  i in [0, half))\n//   b = q[p, half + i]   (second half)\n//   q[p, i]        = a*cos[p,i] - b*sin[p,i]\n//   q[p, half + i] = b*cos[p,i] + a*sin[p,i]\n// This is EXACTLY HuggingFace Llama's  q*cos + rotate_half(q)*sin  with rotate_half(q) =\n// concat(-q2, q1): pairs are (i, i+half), NOT interleaved (i, i+1) -- the oracle\n// (llama_ops_numpy_ref.py) pins this convention, and the importer must NOT permute.\n// The host precomputes cos/sin from inv_freq = base^(-2i/head_dim) (base = rope_theta\n// from config.json: 1e5 for SmolLM2, 1e4 for TinyLlama) once per context length --\n// kovc has no sin/cos intrinsic and none is added (NO kovc.hx change; the self-host\n// fixpoint 0992dddd is untouched). Tables are DATA computed by trusted-once host glue,\n// exactly like the weights themselves; the kernel does all the arithmetic that touches\n// activations. In-place mutation follows the gpu_scale_rt precedent. The full forward\n// recomputes positions 0..S-1 each step (gpt2_infer-style, no KV cache), so row == the\n// absolute position and the table rows line up 1:1.\n// One thread per row (gridDim.x=rows, blockDim.x=1).\n// Launch: cuda_launch out.ptx gpu_rope_rot <rows> rope <rows> <half>\n@kernel\nfn gpu_rope_rot(q: f32, cosT: f32, sinT: f32, half: i32) {\n    let row = block_idx() * block_dim() + thread_idx();\n    let base = row * (half + half);\n    let tbase = row * half;\n    let mut i = 0;\n    while i < half {\n        let a = q[base + i];\n        let b = q[base + half + i];\n        let cv = cosT[tbase + i];\n        let sv = sinT[tbase + i];\n        q[base + i] = a * cv - b * sv;\n        q[base + half + i] = b * cv + a * sv;\n        i = i + 1\n    }\n}\n"
+  },
+  "gpu_silu_mul": {
+    file: "helixc/examples/gpu_silu_mul_kernel.hx",
+    pending: false,
+    status: "Llama-arch serve path (SmolLM2) \u2014 full-model parity gate green (G-L1/G-L2 + negative control; scripts/llama_model_gate.sh)",
+    src: "// GPU fused SiLU-gate multiply, NUMERICALLY STABLE (LLAMA-ARCH op 3 of 4; AUTHORED for the\n// modern-model leg -- NEEDS GPU BUILD + PARITY GATE IN CLAUDE CODE before any claim).\n// The SwiGLU MLP's elementwise half:  y[i] = silu(g[i]) * u[i],  silu(x) = x*sigmoid(x),\n// where g = x@W_gate and u = x@W_up come from the existing tiled_matmul (SwiGLU needs NO new\n// GEMM -- only this gate).\n//\n// Sigmoid uses the PROVEN gpu_gelu_stable_kernel.hx idiom: a `mut sgn` seeded from a CONSTANT\n// (never from another local), the magnitude as an IMMUTABLE amag = sgn*gi, and the stable\n// identity sigmoid(g) = 0.5*(1 + sgn*(1-e)/(1+e)), e = exp(-|g|).\n// CRITICAL: gi (read in the final store) is never the init-source of a reassigned mutable. An\n// earlier `let mut amag = gi; if g<0 { amag = 0-gi }` form made kovc ALIAS amag onto gi, so the\n// reassignment clobbered gi to |gi| and silu came out +|g|*sig*u for g<0 -- G-L0 parity caught\n// it as kernel == -reference on every g<0 element (max-abs ~1.9). The exp argument is ALWAYS\n// <= 0 so __gpu_exp never overflows f32; large +g -> sigmoid->1, large -g -> sigmoid->0\n// (graceful saturation, matching numpy). Uses ONLY already-gated emitter features (__gpu_exp +\n// arithmetic + one `if`) -- NO kovc.hx change; the self-host fixpoint 0992dddd is untouched.\n// One thread per element (gridDim.x=N, blockDim.x=1, blocks*threads == n). Ends on a store.\n// Oracle: llama_ops_numpy_ref.py silu_mul().\n// Launch: cuda_launch out.ptx gpu_silu_mul <N> silu_mul\n@kernel\nfn gpu_silu_mul(g: f32, u: f32, y: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    let gi = g[i];\n    let mut sgn = 1.0;\n    if gi < 0.0 { sgn = 0.0 - 1.0 };\n    let amag = sgn * gi;\n    let e = __gpu_exp(0.0 - amag);\n    let th = sgn * ((1.0 - e) / (1.0 + e));\n    let sig = 0.5 * (1.0 + th);\n    y[i] = gi * sig * u[i]\n}\n"
+  },
+  "gpu_gemv_abt": {
+    file: "helixc/examples/gpu_gemv_abt_kernel.hx",
+    pending: true,
+    status: "fast-decode (KV-cache) leg \u2014 kernel parity (G-KV0) + token-for-token A/B (G-KV) passed in the build session; the INDEPENDENT re-gate is pending before this is called verified",
+    src: "// GPU GEMV A.Bt (KV-CACHE DECODE kernel 1 of 3; AUTHORED for the fast-decode leg --\n// NEEDS GPU BUILD + PARITY GATE before any claim). The tiled_matmul_abt requires\n// M%64==0; incremental decoding computes ONE row (M=1), so this is the M=1 form:\n//   y[n] = sum_j x[j] * w[n*k + j]        (x: [1,k], w: [n_out, k] UN-TRANSPOSED, y: [1,n_out])\n// Covers every decode-step GEMM (q/k/v/o, gate/up/down, the tied head) AND the\n// attention scores against the cached K (w = Kcache [t, head_dim], k = head_dim,\n// n_out = t -- n_out and k are BOTH arbitrary, no %64 constraint: one thread per\n// output element with a serial j-loop, the gpu_rmsnorm accumulator idiom).\n// Mathematically the SAME dot products as tiled_matmul_abt -- the token-for-token\n// gate must prove the KV path emits IDENTICAL ids to the full re-forward.\n// One thread per output (gridDim.x = n_out, blockDim.x = 1).\n// Launch: cuda_launch out.ptx gpu_gemv_abt <n_out> gemv_abt <k>\n@kernel\nfn gpu_gemv_abt(x: f32, w: f32, y: f32, k: i32) {\n    let n = block_idx() * block_dim() + thread_idx();\n    let base = n * k;\n    let mut acc = x[0] - x[0];\n    let mut j = 0;\n    while j < k {\n        acc = acc + x[j] * w[base + j];\n        j = j + 1\n    };\n    y[n] = acc\n}\n"
+  },
+  "gpu_gemv_ab": {
+    file: "helixc/examples/gpu_gemv_ab_kernel.hx",
+    pending: true,
+    status: "fast-decode (KV-cache) leg \u2014 kernel parity (G-KV0) + token-for-token A/B (G-KV) passed in the build session; the INDEPENDENT re-gate is pending before this is called verified",
+    src: "// GPU GEMV A.B (KV-CACHE DECODE kernel 2 of 3; AUTHORED for the fast-decode leg --\n// NEEDS GPU BUILD + PARITY GATE before any claim). The probs x Vcache product of one\n// decode step: a [1,tlen] row of attention probabilities against the cached V slab\n// [tlen, ncols] (row-major, UN-transposed):\n//   y[n] = sum_t p[t] * m[t*ncols + n]      (p: [1,tlen], m: [tlen,ncols], y: [1,ncols])\n// tlen (context length so far) and ncols (head_dim) are BOTH arbitrary -- no %64\n// constraint. Same accumulator idiom as gpu_rmsnorm / gpu_gemv_abt; mathematically\n// the same dot products as tiled_matmul on a single row.\n// One thread per output column (gridDim.x = ncols, blockDim.x = 1).\n// Launch: cuda_launch out.ptx gpu_gemv_ab <ncols> gemv_ab <tlen> <ncols>\n@kernel\nfn gpu_gemv_ab(p: f32, m: f32, y: f32, tlen: i32, ncols: i32) {\n    let n = block_idx() * block_dim() + thread_idx();\n    let mut acc = p[0] - p[0];\n    let mut t = 0;\n    while t < tlen {\n        acc = acc + p[t] * m[t * ncols + n];\n        t = t + 1\n    };\n    y[n] = acc\n}\n"
+  },
+  "gpu_softmax_row": {
+    file: "helixc/examples/gpu_softmax_row_kernel.hx",
+    pending: true,
+    status: "fast-decode (KV-cache) leg \u2014 kernel parity (G-KV0) + token-for-token A/B (G-KV) passed in the build session; the INDEPENDENT re-gate is pending before this is called verified",
+    src: "// GPU FULL-ROW softmax (KV-CACHE DECODE kernel 3 of 3; AUTHORED for the fast-decode\n// leg -- NEEDS GPU BUILD + PARITY GATE before any claim). Hand-written copy of the\n// gpu_softmax_causal body MINUS the causal mask: in incremental decoding the new\n// token's score row attends EVERY cached position (all positions <= t), so the full\n// row is valid -- the causal structure is enforced by what is IN the cache, not by\n// masking. Numerically identical to the causal kernel's row t-1 over t valid columns.\n// Same max-subtract / exp / normalize idiom; `cols` = the live context length t\n// (arbitrary, no %64 constraint).\n// One thread per row (gridDim.x = rows, blockDim.x = 1; decode uses rows=1).\n// Launch: cuda_launch out.ptx gpu_softmax_row <rows> softmax_row <rows> <cols>\n@kernel\nfn gpu_softmax_row(x: f32, y: f32, cols: i32) {\n    let row = block_idx() * block_dim() + thread_idx();\n    let base = row * cols;\n    let mut m = x[base];\n    let mut j = 1;\n    while j < cols {\n        if x[base + j] > m { m = x[base + j] };\n        j = j + 1\n    };\n    let mut s = x[base] - x[base];\n    let mut k = 0;\n    while k < cols {\n        let e = __gpu_exp(x[base + k] - m);\n        y[base + k] = e;\n        s = s + e;\n        k = k + 1\n    };\n    let mut t = 0;\n    while t < cols {\n        y[base + t] = y[base + t] / s;\n        t = t + 1\n    }\n}\n"
+  }
+};
+
+/* framing line above the source — adapted per telemetry source so it
+   never claims an execution that didn't happen */
+function ksrcFraming(ranNow) {
+  if (TELEMETRY_SOURCE === "sse") {
+    return ranNow
+      ? "This is the real Helix source of the kernel that just ran. It was compiled to PTX by kovc — a compiler you can rebuild from 299 hand-typed bytes — and that PTX is what executes on the GPU."
+      : "This is the real Helix source of this kernel — part of the live serve path. It was compiled to PTX by kovc — a compiler you can rebuild from 299 hand-typed bytes — and that PTX is what executes on the GPU.";
+  }
+  if (TELEMETRY_SOURCE === "replay") {
+    return "This is the real Helix source of this kernel. When the captured run was recorded, kovc — a compiler you can rebuild from 299 hand-typed bytes — had compiled exactly this source to PTX, and that PTX is what executed on the GPU. (You are watching a replay, not a live run.)";
+  }
+  return "This is the real Helix source of this kernel. This preview is mock telemetry — no kernel is running right now — but on the live backend kovc, a compiler you can rebuild from 299 hand-typed bytes, compiles exactly this source to PTX, and that PTX is what executes on the GPU.";
+}
+
+/* very light syntax tinting: comments dimmed, a few keywords tinted.
+   Pure DOM/textContent — the source is NEVER parsed as HTML. */
+var HX_KEYWORD_RE = /^(fn|let|mut|while|if|else|return|enum|struct|match|impl)$/;
+function ksrcTintLine(line) {
+  var frag = document.createDocumentFragment();
+  var ci = line.indexOf("//");
+  var code = ci >= 0 ? line.slice(0, ci) : line;
+  var comment = ci >= 0 ? line.slice(ci) : "";
+  if (code) {
+    var parts = code.split(/(@?[A-Za-z_][A-Za-z0-9_]*)/);
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (!p) continue;
+      if (p.charAt(0) === "@") frag.appendChild(el("span", { class: "hx-at" }, p));
+      else if (HX_KEYWORD_RE.test(p)) frag.appendChild(el("span", { class: "hx-k" }, p));
+      else frag.appendChild(document.createTextNode(p));
+    }
+  }
+  if (comment) frag.appendChild(el("span", { class: "hx-c" }, comment));
+  frag.appendChild(document.createTextNode("\n"));
+  return frag;
+}
+
+function openKernelSource(name, ranNow) {
+  var ov = $("ksrcOverlay");
+  if (!ov) return;
+  var entry = KERNEL_SOURCES[name];
+  $("ksrcTitle").textContent = String(name || "?");
+  var pathEl = $("ksrcPath"), statusEl = $("ksrcStatus"),
+      frameEl = $("ksrcFrame"), pre = $("ksrcPre");
+  pre.innerHTML = "";
+  if (entry) {
+    pathEl.textContent = entry.file + " — shown verbatim";
+    statusEl.textContent = entry.status;
+    statusEl.classList.toggle("is-pending", !!entry.pending);
+    statusEl.hidden = false;
+    frameEl.textContent = ksrcFraming(!!ranNow);
+    var lines = entry.src.replace(/\r\n/g, "\n").split("\n");
+    /* drop one trailing empty line so the <pre> ends cleanly */
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    for (var i = 0; i < lines.length; i++) pre.appendChild(ksrcTintLine(lines[i]));
+  } else {
+    /* defensive: a kernel name this page doesn't carry — never break */
+    pathEl.textContent = "";
+    statusEl.hidden = true;
+    frameEl.textContent = "Source not bundled for this kernel — the op stream announced a kernel name this page does not carry. The committed kernels live in helixc/examples/.";
+    pre.appendChild(document.createTextNode('// source not bundled for "' + String(name) + '"'));
+  }
+  ov.hidden = false;
+}
+function closeKernelSource() {
+  var ov = $("ksrcOverlay");
+  if (ov) ov.hidden = true;
+}
+
+function initKernelSourceUI() {
+  /* delegated click: ANY element carrying data-kn opens the modal
+     (.klink is the visual affordance; data-ran marks "this op fired") */
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    while (t && t !== document && !(t.getAttribute && t.getAttribute("data-kn"))) t = t.parentNode;
+    if (!t || t === document) return;
+    var kn = t.getAttribute("data-kn");
+    if (!kn) return;
+    e.preventDefault();
+    openKernelSource(kn, t.getAttribute("data-ran") === "1");
+  });
+  var x = $("ksrcClose");
+  if (x) x.addEventListener("click", closeKernelSource);
+  var ov = $("ksrcOverlay");
+  if (ov) ov.addEventListener("click", function (e) { if (e.target === ov) closeKernelSource(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { closeKernelSource(); openWhyHelix(false); }
+  });
+  /* explain-mode affordance: "view the Helix source →" for the current op */
+  var v = $("xpViewSrc");
+  if (v) v.addEventListener("click", function (e) {
+    e.preventDefault();
+    if (XP.currentKernel) openKernelSource(XP.currentKernel, true);
+  });
+}
+
+/* ================================================================
+   WHY HELIX drawer — static cards (markup above); JS only opens/closes.
+   ================================================================ */
+function openWhyHelix(open) {
+  var ov = $("whyOverlay");
+  if (ov) ov.hidden = !open;
+}
+function initWhyHelix() {
+  var b = $("whyHelixBtn");
+  if (b) b.addEventListener("click", function () { openWhyHelix(true); });
+  var c = $("whyClose");
+  if (c) c.addEventListener("click", function () { openWhyHelix(false); });
+  var ov = $("whyOverlay");
+  if (ov) ov.addEventListener("click", function (e) { if (e.target === ov) openWhyHelix(false); });
+}
+
+/* ================================================================
+   SPEED MODE — glass box / fast (UI only; the backend lands separately)
+   ----------------------------------------------------------------
+   glass box = today's behavior: per-op telemetry, synced (the showcase).
+   fast      = the page sends an ADDITIVE detail:"token" field on
+               /api/generate (same pattern as "model") and consumes a
+               SUBSET of the same SSE events: hello/tokenize/
+               forward_begin/token/done. No event renames.
+   HONESTY: the fast option is enabled ONLY when the live backend
+   advertises the capability on /api/health ("fast":true, or a models[]
+   entry carrying fast:true) — otherwise it stays visible but disabled
+   with "needs the fast-decode backend". No tokens/sec are invented
+   anywhere; fast-mode speed claims are limited to "caching, not
+   approximation", which is the gated contract of the fast-decode leg.
+   ================================================================ */
+var FAST_OFF_MSG = "per-op detail is off in fast mode — switch to glass box to watch every kernel";
+var SPEED = { mode: "glass", fastAvailable: false };
+var SPEED_TITLE_GLASS = "glass box — every kernel shown and synchronized — slower, fully observable";
+var SPEED_TITLE_FAST_ON = "fast — same verified kernels, no per-op instrumentation — the speed is from caching and not approximation";
+var SPEED_TITLE_FAST_OFF = "needs the fast-decode backend";
+
+function setSpeedMode(m) {
+  if (m === "fast" && !SPEED.fastAvailable) m = "glass";
+  SPEED.mode = m;
+  var g = $("speedGlass"), f = $("speedFast");
+  if (g) g.setAttribute("aria-pressed", m === "glass" ? "true" : "false");
+  if (f) f.setAttribute("aria-pressed", m === "fast" ? "true" : "false");
+}
+
+function applyFastAvailability(health) {
+  /* defensive: any missing/odd health shape = NOT advertised */
+  var adv = false;
+  try {
+    if (health && health.fast === true) adv = true;
+    else if (health && health.models && typeof health.models.length === "number") {
+      for (var i = 0; i < health.models.length; i++) {
+        var m = health.models[i];
+        if (m && m.fast === true) { adv = true; break; }
+      }
+    }
+  } catch (e) { adv = false; }
+  SPEED.fastAvailable = !!adv && TELEMETRY_SOURCE === "sse";
+  var f = $("speedFast");
+  if (f) {
+    f.disabled = !SPEED.fastAvailable || UI.busy;
+    f.title = SPEED.fastAvailable ? SPEED_TITLE_FAST_ON : SPEED_TITLE_FAST_OFF;
+  }
+  if (!SPEED.fastAvailable && SPEED.mode === "fast") setSpeedMode("glass");
+}
+
+function initSpeedToggle() {
+  var g = $("speedGlass"), f = $("speedFast");
+  if (g) { g.title = SPEED_TITLE_GLASS; g.addEventListener("click", function () { setSpeedMode("glass"); }); }
+  if (f) { f.title = SPEED_TITLE_FAST_OFF; f.addEventListener("click", function () { setSpeedMode("fast"); }); }
+}
+
+/* ================================================================
    BOOT
    ================================================================ */
 (function boot() {
@@ -3670,6 +4253,9 @@ function initOnboarding() {
     initControls();
     initExplain();      /* Explain/Expert toggle + why-thread (default: Explain) */
     initOnboarding();   /* first-visit 3-sentence overlay (localStorage) */
+    initKernelSourceUI(); /* source <-> execution link: kernel names open the real .hx source */
+    initWhyHelix();     /* "Why Helix" capability drawer (header button) */
+    initSpeedToggle();  /* glass box / fast selector (fast is backend-gated) */
     gateLiveReadiness();
     maybeAutoReplay();
   } catch (e) {
