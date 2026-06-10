@@ -27,7 +27,7 @@ WTS="$MODELD/smollm2-135m.weights"
 OUT="$ROOT/.m1probe"; mkdir -p "$OUT"
 WORK="${HELIX_WORK:-$HOME/gpt2_ext4/Kovostov-Native}"
 BS_W="$WORK/stage0/helixc-bootstrap"
-DRV=/tmp/llama_kovc_drv.bin
+DRV="${LLAMA_DRV:-$HOME/gpt2_ext4/llama_kovc_drv.bin}"   # ext4: survives WSL /tmp resets
 PTXAS="${PTXAS:-/usr/local/cuda-12.8/bin/ptxas}"; [ -x "$PTXAS" ] || PTXAS="/usr/local/cuda/bin/ptxas"
 PROMPT="${PROMPT:-The capital of France is}"
 NGEN="${NGEN:-20}"

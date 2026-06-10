@@ -43,7 +43,7 @@ mkdir -p "$OUT"
 HB="$ROOT/stage0/helixc-bootstrap"
 WORK="${HELIX_WORK:-$HOME/gpt2_ext4/Kovostov-Native}"   # fast ext4 build mirror (proven serve_chat_demo.sh pattern)
 BS_W="$WORK/stage0/helixc-bootstrap"
-DRV="/tmp/llama_kovc_drv.bin"
+DRV="${LLAMA_DRV:-$HOME/gpt2_ext4/llama_kovc_drv.bin}"   # ext4: survives WSL /tmp resets
 PTXAS="${PTXAS:-/usr/local/cuda-12.8/bin/ptxas}"   # kovc emits .version 8.3 (TF32 mma); 12.0 ptxas rejects 8.3
 [ -x "$PTXAS" ] || PTXAS="/usr/local/cuda/bin/ptxas"
 REMINT="${REMINT:-1}"

@@ -34,7 +34,7 @@ echo "=== [1] PTX + binaries (working tree) ==="
 if [ ! -s /tmp/llama_model.ptx ]; then
   echo "  no minted PTX in /tmp -- minting from the raw seed (self-sufficient gate)"
   BS_W="$WORK/stage0/helixc-bootstrap"
-  DRV=/tmp/llama_kovc_drv.bin
+  DRV="${LLAMA_DRV:-$HOME/gpt2_ext4/llama_kovc_drv.bin}"   # ext4: survives WSL /tmp resets
   if [ ! -x "$DRV" ]; then
     mkdir -p "$BS_W" "$WORK/helixc/bootstrap"
     cp -r "$ROOT/stage0/helixc-bootstrap/." "$BS_W"/

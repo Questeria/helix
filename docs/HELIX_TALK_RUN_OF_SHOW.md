@@ -4,12 +4,12 @@
 and that the verification has real teeth (it catches a real bug, live).
 
 **Total: ~10 minutes.** All commands run under WSL in `C:/Projects/Kovostov-Native`.
-The live loop is `bash scripts/talk_demo.sh gate` (~15–25 s once prewarmed).
+The live loop is `bash scripts/talk_demo.sh gate` (REHEARSED: ~8 s per cycle once prewarmed; the full green->plant->RED->restore->green sequence verified on this machine 2026-06-09).
 
 ## Before the talk (once, ~5 min)
 1. Stop anything on the GPU (the chat demo): check `bash scripts/talk_demo.sh status` → "GPU: free".
-2. `bash scripts/talk_demo.sh prewarm` — mints the from-raw compiler driver + runs a green
-   baseline gate. After this the live gate loop is ~15–25 s.
+2. `bash scripts/talk_demo.sh prewarm` — mints the from-raw compiler driver (cached on ext4,
+   survives WSL restarts) + runs a green baseline gate. After this the live gate loop is ~8 s.
 3. Optional bookend: have the live chat demo on a second machine/window (`bash
    scripts/serve_chat_demo.sh`, http://127.0.0.1:8848/?source=sse) — but do NOT leave it
    running on the talk GPU (serial-GPU rule).
