@@ -1,0 +1,447 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="Helix — a compiler that builds itself from 299 hand-typed bytes"
+  description="Helix is a source-available, ML-native systems language whose entire compiler is rebuildable from 299 hand-authored bytes — and runs real neural networks (GPT-2, SmolLM2) on the GPU, verified token-for-token against an independent reference."
+>
+  <!-- ============================================================
+       01 HERO
+       ============================================================ -->
+  <section class="hero dark" data-screen-label="01 Hero">
+    <svg class="room" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="backdrop" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="oklch(4% 0.018 268)"/>
+          <stop offset="30%"  stop-color="oklch(8% 0.040 274)"/>
+          <stop offset="50%"  stop-color="oklch(18% 0.110 285)"/>
+          <stop offset="60%"  stop-color="oklch(40% 0.190 292)"/>
+          <stop offset="60.001%" stop-color="oklch(40% 0.190 292)"/>
+          <stop offset="75%"  stop-color="oklch(14% 0.075 280)"/>
+          <stop offset="100%" stop-color="oklch(4% 0.020 268)"/>
+        </linearGradient>
+        <linearGradient id="horizonGlow" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%"   stop-color="oklch(50% 0.18 280)" stop-opacity="0"/>
+          <stop offset="50%"  stop-color="oklch(95% 0.22 290)" stop-opacity="1"/>
+          <stop offset="100%" stop-color="oklch(50% 0.18 275)" stop-opacity="0"/>
+        </linearGradient>
+        <radialGradient id="horizonBloom" cx="800" cy="540" r="1400" fx="800" fy="540" gradientUnits="userSpaceOnUse">
+          <stop offset="0%"   stop-color="oklch(82% 0.24 290)" stop-opacity="0.55"/>
+          <stop offset="15%"  stop-color="oklch(60% 0.20 285)" stop-opacity="0.30"/>
+          <stop offset="40%"  stop-color="oklch(35% 0.14 280)" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="oklch(10% 0.04 270)" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <rect x="-200" y="-200" width="2000" height="1300" fill="url(#backdrop)"></rect>
+      <rect x="-200" y="-200" width="2000" height="1300" fill="url(#horizonBloom)"></rect>
+
+      <!-- Black hole in the sky — event horizon, accretion disc, orbiting bodies -->
+      <defs>
+        <radialGradient id="bhHalo" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stop-color="oklch(75% 0.18 55)" stop-opacity="0"/>
+          <stop offset="55%"  stop-color="oklch(60% 0.16 45)" stop-opacity="0.10"/>
+          <stop offset="78%"  stop-color="oklch(45% 0.14 285)" stop-opacity="0.18"/>
+          <stop offset="100%" stop-color="oklch(15% 0.06 270)" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="bhCore" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stop-color="oklch(0% 0 0)" stop-opacity="1"/>
+          <stop offset="88%"  stop-color="oklch(0% 0 0)" stop-opacity="1"/>
+          <stop offset="94%"  stop-color="oklch(96% 0.10 75)" stop-opacity="0.9"/>
+          <stop offset="100%" stop-color="oklch(96% 0.10 75)" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="bhDiscRadial" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"   stop-color="oklch(98% 0.20 85)" stop-opacity="0"/>
+          <stop offset="34%"  stop-color="oklch(98% 0.20 85)" stop-opacity="0"/>
+          <stop offset="42%"  stop-color="oklch(98% 0.20 85)" stop-opacity="1"/>
+          <stop offset="55%"  stop-color="oklch(82% 0.22 60)" stop-opacity="0.95"/>
+          <stop offset="72%"  stop-color="oklch(62% 0.20 35)" stop-opacity="0.55"/>
+          <stop offset="100%" stop-color="oklch(45% 0.16 25)" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="bhPlanetA" cx="35%" cy="35%" r="65%">
+          <stop offset="0%"   stop-color="oklch(82% 0.10 80)"/>
+          <stop offset="60%"  stop-color="oklch(48% 0.12 40)"/>
+          <stop offset="100%" stop-color="oklch(15% 0.04 35)"/>
+        </radialGradient>
+        <radialGradient id="bhPlanetB" cx="35%" cy="35%" r="65%">
+          <stop offset="0%"   stop-color="oklch(78% 0.10 240)"/>
+          <stop offset="60%"  stop-color="oklch(40% 0.12 250)"/>
+          <stop offset="100%" stop-color="oklch(12% 0.05 260)"/>
+        </radialGradient>
+        <radialGradient id="bhPlanetC" cx="35%" cy="35%" r="65%">
+          <stop offset="0%"   stop-color="oklch(86% 0.06 90)"/>
+          <stop offset="60%"  stop-color="oklch(55% 0.10 120)"/>
+          <stop offset="100%" stop-color="oklch(18% 0.04 130)"/>
+        </radialGradient>
+        <clipPath id="bhTopHalf"><rect x="-260" y="-260" width="520" height="260"/></clipPath>
+        <clipPath id="bhBotHalf"><rect x="-260" y="0"    width="520" height="260"/></clipPath>
+      </defs>
+      <g transform="translate(1240 110)" opacity="0.95">
+        <circle r="190" fill="url(#bhHalo)"></circle>
+        <g transform="rotate(-14)">
+          <g clip-path="url(#bhTopHalf)">
+            <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscRadial)" opacity="0.95"></ellipse>
+            <ellipse cx="0" cy="0" rx="68" ry="12" fill="none" stroke="oklch(98% 0.18 85)" stroke-width="1.6" opacity="0.55"></ellipse>
+            <circle r="3.2" fill="url(#bhPlanetA)">
+              <animateMotion dur="14s" repeatCount="indefinite" rotate="auto"><mpath href="#bh-orbit-1"/></animateMotion>
+            </circle>
+            <circle r="2.6" fill="url(#bhPlanetB)">
+              <animateMotion dur="22s" repeatCount="indefinite" rotate="auto" begin="-6s"><mpath href="#bh-orbit-2"/></animateMotion>
+            </circle>
+            <circle r="3.8" fill="url(#bhPlanetC)">
+              <animateMotion dur="34s" repeatCount="indefinite" rotate="auto" begin="-12s"><mpath href="#bh-orbit-3"/></animateMotion>
+            </circle>
+            <circle r="0.9" fill="oklch(96% 0.06 80)" opacity="0.85">
+              <animateMotion dur="9s" repeatCount="indefinite" begin="-2s"><mpath href="#bh-orbit-4"/></animateMotion>
+            </circle>
+            <circle r="0.8" fill="oklch(96% 0.04 220)" opacity="0.75">
+              <animateMotion dur="18s" repeatCount="indefinite" begin="-8s"><mpath href="#bh-orbit-5"/></animateMotion>
+            </circle>
+          </g>
+          <path d="M -118 0 A 118 22 0 0 1 118 0" fill="none" stroke="oklch(98% 0.18 85)" stroke-width="1.8" opacity="0.9"></path>
+          <path d="M -92 -1 A 92 14 0 0 1 92 -1" fill="none" stroke="oklch(94% 0.20 80)" stroke-width="1.1" opacity="0.65"></path>
+        </g>
+        <circle r="36" fill="url(#bhCore)"></circle>
+        <g transform="rotate(-14)" clip-path="url(#bhBotHalf)">
+          <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscRadial)" opacity="0.95"></ellipse>
+          <ellipse cx="0" cy="0" rx="68" ry="12" fill="none" stroke="oklch(98% 0.18 85)" stroke-width="1.6" opacity="0.55"></ellipse>
+          <circle r="3.2" fill="url(#bhPlanetA)">
+            <animateMotion dur="14s" repeatCount="indefinite" rotate="auto"><mpath href="#bh-orbit-1"/></animateMotion>
+          </circle>
+          <circle r="2.6" fill="url(#bhPlanetB)">
+            <animateMotion dur="22s" repeatCount="indefinite" rotate="auto" begin="-6s"><mpath href="#bh-orbit-2"/></animateMotion>
+          </circle>
+          <circle r="3.8" fill="url(#bhPlanetC)">
+            <animateMotion dur="34s" repeatCount="indefinite" rotate="auto" begin="-12s"><mpath href="#bh-orbit-3"/></animateMotion>
+          </circle>
+          <circle r="0.9" fill="oklch(96% 0.06 80)" opacity="0.85">
+            <animateMotion dur="9s" repeatCount="indefinite" begin="-2s"><mpath href="#bh-orbit-4"/></animateMotion>
+          </circle>
+          <circle r="0.8" fill="oklch(96% 0.04 220)" opacity="0.75">
+            <animateMotion dur="18s" repeatCount="indefinite" begin="-8s"><mpath href="#bh-orbit-5"/></animateMotion>
+          </circle>
+        </g>
+        <path id="bh-orbit-1" d="M -78 0  A 78  22 0 1 1 78  0  A 78  22 0 1 1 -78  0" fill="none"></path>
+        <path id="bh-orbit-2" d="M -118 0 A 118 34 0 1 1 118 0  A 118 34 0 1 1 -118 0" fill="none"></path>
+        <path id="bh-orbit-3" d="M -158 0 A 158 22 0 1 1 158 0  A 158 22 0 1 1 -158 0" fill="none"></path>
+        <path id="bh-orbit-4" d="M -54 0  A 54  16 0 1 1 54  0  A 54  16 0 1 1 -54  0" fill="none"></path>
+        <path id="bh-orbit-5" d="M -100 0 A 100 28 0 1 1 100 0  A 100 28 0 1 1 -100 0" fill="none"></path>
+      </g>
+
+      <g id="stars" fill="oklch(92% 0.06 285)"></g>
+      <g id="mountains" fill="none" stroke-linejoin="miter" stroke-linecap="square"></g>
+      <g id="ground-lines"></g>
+      <g id="hex-grid"></g>
+      <path d="M 120 566 Q 800 540 1480 566" fill="none" stroke="url(#horizonGlow)" stroke-width="2" opacity="0.5"></path>
+    </svg>
+
+    <div class="wrap">
+      <div class="hero-grid">
+        <div class="hero-text reveal">
+          <span class="eyebrow">trust chain closed · v1.3 · source-available</span>
+          <h1 class="hero-headline">A compiler that builds itself from <em>299 bytes</em> of hand-typed hex.</h1>
+          <p class="hero-sub">Helix is a from-scratch, ML-native systems language — autodiff, tile types and GPU codegen built into the language, bootstrapped from raw binary with no trusted pre-built compiler. And it runs the real GPT-2, verified token-for-token.</p>
+          <div class="btn-row">
+            <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
+            <a class="btn btn-ghost" href="#bootstrap">Explore the bootstrap</a>
+          </div>
+        </div>
+
+        <div class="hero-3d" id="hero-3d" role="img" aria-label="3D rendering of a double helix — one strand carbon, one strand silicon"></div>
+      </div>
+
+      <!-- byte ribbon -->
+      <div class="byte-ribbon" aria-hidden="true">
+        <div class="byte-ribbon-track" id="byte-track"></div>
+      </div>
+    </div>
+
+    <template id="hero-3d-fallback-tpl">
+      <div class="hero-3d-fallback" aria-hidden="true">
+        <svg viewBox="0 0 200 300" fill="none">
+          <path d="M50 20 Q 100 70 150 20 M50 90 Q 100 140 150 90 M50 160 Q 100 210 150 160 M50 230 Q 100 280 150 230"
+                stroke="oklch(78% 0.10 290)" stroke-width="5" stroke-linecap="round"/>
+          <path d="M150 55 Q 100 5 50 55 M150 125 Q 100 75 50 125 M150 195 Q 100 145 50 195 M150 265 Q 100 215 50 265"
+                stroke="oklch(35% 0.02 270)" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="100" cy="45" r="6" fill="oklch(60% 0.18 290)"/>
+          <circle cx="100" cy="115" r="6" fill="oklch(65% 0.20 340)"/>
+          <circle cx="100" cy="185" r="6" fill="oklch(72% 0.14 220)"/>
+          <circle cx="100" cy="255" r="6" fill="oklch(60% 0.18 290)"/>
+        </svg>
+      </div>
+    </template>
+  </section>
+
+  <!-- ============================================================
+       02 VERIFIABLE EXECUTION — the headline story
+       ============================================================ -->
+  <section id="verified" data-screen-label="02 Verifiable execution">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <div>
+          <span class="eyebrow">Verifiable execution</span>
+          <h2 class="section-title">Real neural networks. Proof, not promises.</h2>
+        </div>
+        <p class="section-lede">GPT-2 — the real, unchanged public model — runs on this stack token-for-token-identical to an independent reference. So does a 2024 Llama-architecture model. Bring your weights; audit instead of trust.</p>
+      </div>
+
+      <div class="reveal">
+        <div class="stat-strip" aria-label="Verified-execution results">
+          <span>GPT-2 124M · token-for-token <b>25/25</b></span>
+          <span>GPT-2-XL 1.5B · <b>25/25</b> · logit diff ≤ <b>4.4e-05</b></span>
+          <span>SmolLM2-135M (Llama arch, 2024) · <b>25/25</b> · ≤ <b>4.9e-05</b></span>
+          <span>byte-identical across runs · <b>sha 8a2595cd…</b></span>
+          <span>live GPT-2-XL ≈ <b>10 s/token</b> — trust, not speed</span>
+        </div>
+
+        <div class="card-grid" style="margin-top: 28px;">
+          <a class="link-card" href="/demo/">
+            <span class="lc-kicker">Replay · committed run</span>
+            <h3>Watch the real run</h3>
+            <p>A replay of a real, captured GPT-2-on-Helix session — clearly labeled, never simulated. The models are 2019/2024 base completion models, not assistants.</p>
+            <span class="lc-arrow">demo/ →</span>
+          </a>
+          <a class="link-card" href="/demo/dashboard.html">
+            <span class="lc-kicker">Proof · gate outputs</span>
+            <h3>See the proof</h3>
+            <p>The proof dashboard: from-raw anchors, parity gates, byte-identical reruns, and the signed attestation each demo run writes.</p>
+            <span class="lc-arrow">demo/dashboard.html →</span>
+          </a>
+          <a class="link-card" href="/verify/">
+            <span class="lc-kicker">The full story</span>
+            <h3>What “verified” means here</h3>
+            <p>Independent numpy oracle, fail-closed gates, honest residuals — the precise claim, stated edge-first, and how a third party reproduces it.</p>
+            <span class="lc-arrow">Verifiable execution →</span>
+          </a>
+        </div>
+
+        <p style="margin-top: 24px; color: var(--fg-soft); font-size: 13.5px; max-width: 70ch;">
+          The models were verified by fail-closed gates on real hardware; this website runs nothing live — it links to committed replays and gate records.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 BOOTSTRAP CHAIN
+       ============================================================ -->
+  <section id="bootstrap" class="chain-section dark" data-screen-label="03 Bootstrap chain">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <div>
+          <span class="eyebrow">The bootstrap chain</span>
+          <h2 class="section-title">Nine rungs. 299 bytes you have to trust.</h2>
+        </div>
+        <p class="section-lede">Each rung is built only by the rung before it — no pre-built compiler is ever trusted. Select any node to inspect it; one committed command reproduces the whole ladder.</p>
+      </div>
+
+      <div class="chain reveal">
+        <div class="chain-line" aria-hidden="true"></div>
+        <div class="chain-track" id="chain-track"></div>
+        <div class="chain-detail" id="chain-detail" aria-live="polite"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       04 PILLARS
+       ============================================================ -->
+  <section id="why" data-screen-label="04 Pillars">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <div>
+          <span class="eyebrow">Three commitments</span>
+          <h2 class="section-title">A foundation, not another framework.</h2>
+        </div>
+        <p class="section-lede">Helix exists to remove uncertainty wherever software honestly can — every byte inspectable, every step reproducible, every limit stated plainly.</p>
+      </div>
+
+      <div class="pillars reveal">
+        <article class="pillar">
+          <div class="pillar-num">01</div>
+          <div class="pillar-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2 L4 6 V12 C4 17 8 21 12 22 C16 21 20 17 20 12 V6 Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 12 l2 2 l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h3>Source-available &amp; fully auditable.</h3>
+          <p>The entire toolchain is inspectable, from the 299-byte hand-typed root to the PTX it emits. Free for non-commercial use — individuals, students, researchers, non-profits — under the Helix Non-Commercial License; commercial use requires the author's consent. Not open source, and it says so plainly.</p>
+          <div class="pillar-foot"><span>Helix NC License v1.0</span><span>source-available</span></div>
+        </article>
+
+        <article class="pillar">
+          <div class="pillar-num">02</div>
+          <div class="pillar-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 6 H21 M3 12 H21 M3 18 H21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="6" r="1.4" fill="currentColor"/><circle cx="13" cy="12" r="1.4" fill="currentColor"/><circle cx="17" cy="18" r="1.4" fill="currentColor"/></svg>
+          </div>
+          <h3>Bootstrapped from raw binary.</h3>
+          <p>No trusted pre-built compiler, anywhere. The hex0 root is 299 hand-authored bytes of x86-64; nine rungs compile each other up to kovc, the Helix compiler written in Helix — with a byte-identical self-host fixpoint and no Python in the toolchain.</p>
+          <div class="pillar-foot"><span>299 B → kovc</span><span>K2 == K3 == K4</span></div>
+        </article>
+
+        <article class="pillar">
+          <div class="pillar-num">03</div>
+          <div class="pillar-icon">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 18 C 8 18 8 6 12 6 C 16 6 16 18 20 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="20" cy="18" r="1.6" fill="currentColor"/></svg>
+          </div>
+          <h3>ML-first language design.</h3>
+          <p>Forward- and reverse-mode autodiff are language features, not libraries. Tiles and tensors are types. Effects are verified at the IR level, reflection is verifier-gated, and the same compiler emits x86-64 ELF and PTX for real GPUs.</p>
+          <div class="pillar-foot"><span>grad / grad_rev_all</span><span>tile&lt;f32, [N,N], REG&gt;</span></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       05 LANGUAGE — autodiff feature + code gallery
+       ============================================================ -->
+  <section id="autodiff" class="dark" data-screen-label="05 Language">
+    <div class="wrap">
+      <div class="feature-grid">
+        <div class="code-card reveal">
+          <div class="code-head">
+            <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span>autodiff.hx · grad</span>
+          </div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">loss</span>(x: <span class="ty">f64</span>, y: <span class="ty">f64</span>) -&gt; <span class="ty">f64</span> &#123;
+    x * y + x * x
+&#125;
+
+<span class="kw">struct</span> <span class="ty">Grad</span> &#123; dx: <span class="ty">f64</span>, dy: <span class="ty">f64</span> &#125;
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f64</span> &#123;
+    <span class="cmt">// reverse-mode AD, all gradients in one sweep</span>
+    <span class="kw">let</span> g = <span class="fn">grad_rev_all</span>(loss)(<span class="num">2.0_f64</span>, <span class="num">3.0_f64</span>);
+    g.dx
+&#125;</pre>
+          <div class="code-foot">
+            <span>kovc loss.hx -O2</span>
+            <span class="out">→ 7.0_f64</span>
+          </div>
+        </div>
+
+        <div class="feature-text reveal">
+          <span class="eyebrow">Autodiff, in the language</span>
+          <h2>Gradients are a keyword, not a library.</h2>
+          <p>Forward- and reverse-mode autodiff lower into the program at compile time — no runtime tape, no tracing, no Python overhead. Stdlib transcendentals carry analytic chain rules.</p>
+          <ul class="feature-list">
+            <li><b><code>grad(f)(x)</code></b><span>Forward-mode derivative. Symbolic, fully inlined.</span></li>
+            <li><b><code>grad_rev_all(f)(...)</code></b><span>Reverse-mode adjoints; returns a struct of all partials.</span></li>
+            <li><b><code>@pure</code></b><span>IR-level effect verification — pure functions are transitively barred from effectful code.</span></li>
+            <li><b><code>quote / modify_f</code></b><span>Verifier-gated reflection: your verifier runs before any mutation commits.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-head reveal" style="margin-top: clamp(64px, 8vw, 112px);">
+        <div>
+          <span class="eyebrow">In Helix, this compiles</span>
+          <h2 class="section-title">A real systems language. With math notation.</h2>
+        </div>
+        <p class="section-lede">Pattern matching, generics, traits, closures, tiles, reflection — every kovc build is gated by a 109-program feature corpus. Three samples:</p>
+      </div>
+
+      <div class="gallery reveal">
+        <div class="code-card">
+          <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>fib.hx</span></div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">fib</span>(n: <span class="ty">i32</span>) -&gt; <span class="ty">i32</span> &#123;
+    <span class="kw">if</span> n &lt; <span class="num">2</span> &#123; n &#125;
+    <span class="kw">else</span> &#123; <span class="fn">fib</span>(n - <span class="num">1</span>) + <span class="fn">fib</span>(n - <span class="num">2</span>) &#125;
+&#125;
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> &#123; <span class="fn">fib</span>(<span class="num">10</span>) &#125;</pre>
+          <div class="code-foot"><span>recursion</span><span class="out">→ 55</span></div>
+        </div>
+
+        <div class="code-card">
+          <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>matmul.hx</span></div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f32</span> &#123;
+    <span class="kw">let</span> a = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
+    <span class="kw">let</span> b = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
+    <span class="kw">let</span> c = <span class="fn">tile_matmul</span>(a, b);
+    c.<span class="fn">get</span>(<span class="num">2</span>, <span class="num">3</span>)
+&#125;</pre>
+          <div class="code-foot"><span>tiles · compile-time shapes</span><span class="out">→ 4.0_f32</span></div>
+        </div>
+
+        <div class="code-card">
+          <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>reflect.hx</span></div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">always_true</span>(_: <span class="ty">i32</span>) -&gt; <span class="ty">i32</span> &#123; <span class="num">1</span> &#125;
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> &#123;
+    <span class="kw">let</span> h = <span class="fn">Quote</span>(<span class="num">0</span>);
+    <span class="fn">modify</span>(h, <span class="num">42</span>, <span class="fn">always_true</span>(<span class="num">0</span>));
+    <span class="fn">Splice</span>(h)
+&#125;</pre>
+          <div class="code-foot"><span>reflection · verifier-gated</span><span class="out">→ 42</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       06 NUMBERS
+       ============================================================ -->
+  <section class="numbers-section" data-screen-label="06 Numbers">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <div>
+          <span class="eyebrow">By the numbers</span>
+          <h2 class="section-title">Hard numbers, every one of them grounded.</h2>
+        </div>
+        <p class="section-lede">Every figure here resolves to a committed file, gate output, or trust record — pull the repo and verify any of them.</p>
+      </div>
+
+      <div class="numbers reveal">
+        <div class="num-cell">
+          <div class="num-val">299<span class="unit">bytes</span></div>
+          <div class="num-label">hex0 — the hand-authored trust root</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">9<span class="unit">rungs</span></div>
+          <div class="num-label">raw binary → kovc, each built only by the prior rung</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">1<span class="unit">.py</span></div>
+          <div class="num-label">exactly one committed Python file — a fenced oracle, never in the toolchain</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">109<span class="unit">programs</span></div>
+          <div class="num-label">feature corpus gating every kovc build</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">8<span class="unit">kernels</span></div>
+          <div class="num-label">kovc-emitted PTX set that runs GPT-2 124M → XL</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">25/25<span class="unit">tokens</span></div>
+          <div class="num-label">greedy continuation matches the independent oracle — GPT-2 &amp; SmolLM2</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">4.9e-5<span class="unit">max abs</span></div>
+          <div class="num-label">SmolLM2-135M logit difference vs the oracle, across 49,152 logits</div>
+        </div>
+        <div class="num-cell">
+          <div class="num-val">1.5B<span class="unit">params</span></div>
+          <div class="num-label">GPT-2-XL at fp32 on one 8 GB sm_86 GPU</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       07 CTA
+       ============================================================ -->
+  <section class="cta dark" data-screen-label="07 CTA">
+    <div class="wrap reveal">
+      <span class="eyebrow">Carbon meets silicon</span>
+      <h2>Compile something honest today.</h2>
+      <p>Rebuild the entire compiler from 299 hand-typed bytes with one committed command — then watch the real GPT-2 run on it, verified token-for-token against an independent reference.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/trust-chain/">Reproduce the chain</a>
+      </div>
+    </div>
+  </section>
+
+  <script src="../scripts/chain.js"></script>
+  <script src="../scripts/hero.js"></script>
+</Base>
