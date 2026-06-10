@@ -107,6 +107,13 @@ typedef struct {
     char  detail[16];
     char  oracle_dir[1024];    /* dir containing gpt2_numpy_ref.py (optional) */
     char  model[64];
+    /* ---- ADDITIVE second model (2026-06, the modern-model leg): all five --*2 flags must
+     * be given to enable it. Same worker binary; the v2 weight header makes it self-config. */
+    char  model2[64];
+    char  ptx2[1024];
+    char  weights2[1024];
+    char  vocab2[1024];
+    char  merges2[1024];
 } Cfg;
 
 /* ============================ worker child ============================ */
@@ -120,8 +127,20 @@ typedef struct {
 } Worker;
 
 static Cfg     g_cfg;
-static Worker  g_worker;
+#define MAX_MODELS 2
+static Worker  g_workers[MAX_MODELS];     /* [0] = the primary model; [1] = the optional second */
+static int     g_nmodels = 1;
+#define g_worker (g_workers[0])           /* existing single-model references stay valid */
+/* ONE GLOBAL GPU mutex: generations are single-flight ACROSS models (strictly serial GPU).
+ * The per-worker .lock fields remain but the cross-model gate is this one. */
+static pthread_mutex_t g_gpu_lock = PTHREAD_MUTEX_INITIALIZER;
 static volatile int g_busy = 0;   /* reflected in /api/health */
+
+/* model-i config view (keeps the v1 scalar fields untouched for model 0) */
+static const char* cfg_model_name(int i) {
+    if (i == 1) return g_cfg.model2;
+    return g_cfg.model[0] ? g_cfg.model : "gpt2-xl";
+}
 
 /* concurrent-connection cap (DoS): incremented when a handler thread starts, decremented when it
  * ends; the accept loop refuses (closes) a new fd once g_conns >= MAX_CONN. */
@@ -265,13 +284,26 @@ static void serve_static(int fd, const char* urlpath) {
 
 /* ============================ /api/health ============================ */
 static void handle_health(int fd) {
-    char body[512];
+    /* top-level model/ready/device keep describing model 0 (frontend backward-compat);
+     * the ADDITIVE models[] array advertises every loaded model (the switcher capability). */
+    char models[512]; size_t mo = 0;
+    mo += (size_t)snprintf(models + mo, sizeof models - mo, "[");
+    for (int i = 0; i < g_nmodels; i++) {
+        mo += (size_t)snprintf(models + mo, sizeof models - mo,
+            "%s{\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\"}",
+            i ? "," : "", cfg_model_name(i),
+            g_workers[i].ready ? "true" : "false",
+            g_workers[i].device[0] ? g_workers[i].device : "");
+    }
+    snprintf(models + mo, sizeof models - mo, "]");
+    char body[1024];
     snprintf(body, sizeof body,
-        "{\"ok\":true,\"serve\":true,\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\",\"busy\":%s}",
-        g_cfg.model[0] ? g_cfg.model : "gpt2-xl",
+        "{\"ok\":true,\"serve\":true,\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\",\"busy\":%s,\"models\":%s}",
+        cfg_model_name(0),
         g_worker.ready ? "true" : "false",
         g_worker.device[0] ? g_worker.device : "",
-        g_busy ? "true" : "false");
+        g_busy ? "true" : "false",
+        models);
     send_status(fd, 200, "OK", "application/json; charset=utf-8", body);
 }
 
@@ -334,15 +366,33 @@ static int sse_write_event(int fd, const char* seq, const char* ev, const char* 
 }
 
 static void handle_generate(int fd, const char* body) {
-    /* single-flight: try-lock the worker; if busy -> 409. */
-    if (pthread_mutex_trylock(&g_worker.lock) != 0) {
+    /* model routing (ADDITIVE): an optional "model" field in the request body picks the
+     * worker; absent -> model 0 (unchanged v1 behavior). Unknown model -> honest 404. */
+    int midx = 0;
+    {
+        char want[64] = {0};
+        json_str_field(body, "model", want, sizeof want);
+        if (want[0]) {
+            midx = -1;
+            for (int i = 0; i < g_nmodels; i++)
+                if (strcmp(want, cfg_model_name(i)) == 0) { midx = i; break; }
+            if (midx < 0) {
+                send_status(fd, 404, "Not Found", "application/json; charset=utf-8", "{\"error\":\"unknown model\"}");
+                return;
+            }
+        }
+    }
+    Worker* w = &g_workers[midx];
+
+    /* single-flight ACROSS models: try-lock the ONE GPU mutex; if busy -> 409. */
+    if (pthread_mutex_trylock(&g_gpu_lock) != 0) {
         send_status(fd, 409, "Conflict", "application/json; charset=utf-8", "{\"error\":\"busy\"}");
         return;
     }
     g_busy = 1;
 
-    if (!g_worker.ready) {
-        g_busy = 0; pthread_mutex_unlock(&g_worker.lock);
+    if (!w->ready) {
+        g_busy = 0; pthread_mutex_unlock(&g_gpu_lock);
         send_status(fd, 503, "Service Unavailable", "application/json; charset=utf-8", "{\"error\":\"worker not ready\"}");
         return;
     }
@@ -362,11 +412,11 @@ static void handle_generate(int fd, const char* body) {
     char* frame = build_worker_frame(body);
     if (!frame) {
         sse_write_event(fd, "0", "error", "{\"_ev\":\"error\",\"where\":\"driver\",\"message\":\"out of memory\",\"fatal\":true}\n");
-        g_busy = 0; pthread_mutex_unlock(&g_worker.lock); return;
+        g_busy = 0; pthread_mutex_unlock(&g_gpu_lock); return;
     }
-    if (write_all(g_worker.to_worker, frame, strlen(frame)) < 0) {
+    if (write_all(w->to_worker, frame, strlen(frame)) < 0) {
         sse_write_event(fd, "0", "error", "{\"_ev\":\"error\",\"where\":\"driver\",\"message\":\"worker stdin closed\",\"fatal\":true}\n");
-        free(frame); g_busy = 0; pthread_mutex_unlock(&g_worker.lock); return;
+        free(frame); g_busy = 0; pthread_mutex_unlock(&g_gpu_lock); return;
     }
     free(frame);
 
@@ -377,7 +427,7 @@ static void handle_generate(int fd, const char* body) {
     int saw_terminal = 0;
     int client_gone  = 0;   /* set when an SSE write times out/fails; we then drain the worker only */
     for (;;) {
-        ssize_t r = read_line_fd(g_worker.from_worker, line, sizeof line);
+        ssize_t r = read_line_fd(w->from_worker, line, sizeof line);
         if (r <= 0) {
             /* worker EOF/exit mid-stream: emit an honest terminal error so the UI never hangs. */
             if (!saw_terminal && !client_gone)
@@ -396,8 +446,8 @@ static void handle_generate(int fd, const char* body) {
         }
         json_str_field(line, "seq", seq, sizeof seq);
         /* opportunistically capture the real device name from the first hello for /api/health. */
-        if (!strcmp(ev, "hello") && !g_worker.device[0])
-            json_str_field(line, "device", g_worker.device, sizeof g_worker.device);
+        if (!strcmp(ev, "hello") && !w->device[0])
+            json_str_field(line, "device", w->device, sizeof w->device);
         if (!client_gone && sse_write_event(fd, seq, ev, line) < 0) {
             /* client stopped reading (SO_SNDTIMEO fired) or closed the socket: stop writing to the
              * dead fd, but keep reading the worker stream to its terminal so the persistent worker
@@ -414,7 +464,7 @@ static void handle_generate(int fd, const char* body) {
     }
 
     g_busy = 0;
-    pthread_mutex_unlock(&g_worker.lock);
+    pthread_mutex_unlock(&g_gpu_lock);
     /* one-shot: close the connection after the stream. */
 }
 
@@ -537,23 +587,32 @@ static void* handle_conn(void* arg) {
 }
 
 /* ============================ worker spawn + readiness ============================ */
-/* read worker stderr until GPT2_SERVE_READY (or EOF), logging lines to our stderr. */
+/* read worker i's stderr until GPT2_SERVE_READY (or EOF), logging lines to our stderr. */
+typedef struct { int fd; int idx; } DrainArg;
 static void* drain_worker_stderr(void* arg) {
-    int fd = (int)(intptr_t)arg;
+    DrainArg* da = (DrainArg*)arg;
+    int fd = da->fd, idx = da->idx;
+    free(da);
     char line[4096];
     for (;;) {
         ssize_t r = read_line_fd(fd, line, sizeof line);
         if (r <= 0) break;
-        fprintf(stderr, "[worker] %s", line);
-        if (strstr(line, "GPT2_SERVE_READY")) { g_worker.ready = 1; }
+        fprintf(stderr, "[worker:%s] %s", cfg_model_name(idx), line);
+        if (strstr(line, "GPT2_SERVE_READY")) { g_workers[idx].ready = 1; }
     }
     close(fd);
     return NULL;
 }
 
-static void spawn_worker(void) {
+/* spawn worker `idx` (0 = the primary model; 1 = the optional --*2 model). */
+static void spawn_worker(int idx) {
     int in_pipe[2], out_pipe[2], err_pipe[2];
     if (pipe(in_pipe) || pipe(out_pipe) || pipe(err_pipe)) die("pipe");
+
+    const char* w_ptx     = idx ? g_cfg.ptx2     : g_cfg.ptx;
+    const char* w_weights = idx ? g_cfg.weights2 : g_cfg.weights;
+    const char* w_vocab   = idx ? g_cfg.vocab2   : g_cfg.vocab;
+    const char* w_merges  = idx ? g_cfg.merges2  : g_cfg.merges;
 
     pid_t pid = fork();
     if (pid < 0) die("fork");
@@ -570,8 +629,8 @@ static void spawn_worker(void) {
         char maxctx[16]; snprintf(maxctx, sizeof maxctx, "%d", g_cfg.max_ctx);
         char* av[24]; int n = 0;
         av[n++] = g_cfg.worker_bin;
-        av[n++] = g_cfg.ptx;
-        av[n++] = g_cfg.weights;
+        av[n++] = (char*)w_ptx;
+        av[n++] = (char*)w_weights;
         av[n++] = "--serve";
         av[n++] = "--emit-fd"; av[n++] = "1";
         av[n++] = "--max-ctx"; av[n++] = maxctx;
@@ -583,9 +642,9 @@ static void spawn_worker(void) {
          * worker reports ms:0.000 for every layer, so a LIVE viewer would see a flat zero chart. */
         av[n++] = "--timing"; av[n++] = "1";
         av[n++] = "--detail";  av[n++] = g_cfg.detail[0] ? g_cfg.detail : (char*)"op";
-        if (g_cfg.vocab[0] && g_cfg.merges[0]) {
-            av[n++] = "--vocab";  av[n++] = g_cfg.vocab;
-            av[n++] = "--merges"; av[n++] = g_cfg.merges;
+        if (w_vocab[0] && w_merges[0]) {
+            av[n++] = "--vocab";  av[n++] = (char*)w_vocab;
+            av[n++] = "--merges"; av[n++] = (char*)w_merges;
         }
         av[n] = NULL;
         execv(g_cfg.worker_bin, av);
@@ -594,14 +653,16 @@ static void spawn_worker(void) {
     }
     /* parent */
     close(in_pipe[0]); close(out_pipe[1]); close(err_pipe[1]);
-    g_worker.pid         = pid;
-    g_worker.to_worker   = in_pipe[1];
-    g_worker.from_worker = out_pipe[0];
-    pthread_mutex_init(&g_worker.lock, NULL);
+    g_workers[idx].pid         = pid;
+    g_workers[idx].to_worker   = in_pipe[1];
+    g_workers[idx].from_worker = out_pipe[0];
+    pthread_mutex_init(&g_workers[idx].lock, NULL);
 
-    /* drain stderr in the background; it sets g_worker.ready when GPT2_SERVE_READY appears. */
+    /* drain stderr in the background; it sets g_workers[idx].ready when GPT2_SERVE_READY appears. */
+    DrainArg* da = (DrainArg*)malloc(sizeof *da);
+    da->fd = err_pipe[0]; da->idx = idx;
     pthread_t th;
-    pthread_create(&th, NULL, drain_worker_stderr, (void*)(intptr_t)err_pipe[0]);
+    pthread_create(&th, NULL, drain_worker_stderr, da);
     pthread_detach(th);
 }
 
@@ -646,16 +707,29 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--detail")    && i+1 < argc) snprintf(g_cfg.detail, sizeof g_cfg.detail, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--oracle")    && i+1 < argc) snprintf(g_cfg.oracle_dir, sizeof g_cfg.oracle_dir, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--model")     && i+1 < argc) snprintf(g_cfg.model, sizeof g_cfg.model, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--model2")    && i+1 < argc) snprintf(g_cfg.model2, sizeof g_cfg.model2, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--ptx2")      && i+1 < argc) snprintf(g_cfg.ptx2, sizeof g_cfg.ptx2, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--weights2")  && i+1 < argc) snprintf(g_cfg.weights2, sizeof g_cfg.weights2, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--vocab2")    && i+1 < argc) snprintf(g_cfg.vocab2, sizeof g_cfg.vocab2, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--merges2")   && i+1 < argc) snprintf(g_cfg.merges2, sizeof g_cfg.merges2, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
     }
     if (!g_cfg.root[0] || !g_cfg.ptx[0] || !g_cfg.weights[0] || !g_cfg.worker_bin[0]) {
         usage(argv[0]); return 2;
     }
+    /* the second model needs all of model2/ptx2/weights2 (vocab2/merges2 too for chat). */
+    if (g_cfg.model2[0]) {
+        if (!g_cfg.ptx2[0] || !g_cfg.weights2[0]) {
+            fprintf(stderr, "--model2 requires --ptx2 and --weights2\n"); return 2;
+        }
+        g_nmodels = 2;
+    }
 
-    spawn_worker();
+    for (int m = 0; m < g_nmodels; m++) spawn_worker(m);
     int s = listen_local(g_cfg.port);
-    fprintf(stderr, "gpt2_serve_http: listening on http://127.0.0.1:%d/  (root=%s, worker pid=%d)\n",
-            g_cfg.port, g_cfg.root, (int)g_worker.pid);
+    fprintf(stderr, "gpt2_serve_http: listening on http://127.0.0.1:%d/  (root=%s, worker pid=%d%s)\n",
+            g_cfg.port, g_cfg.root, (int)g_worker.pid,
+            g_nmodels > 1 ? " + a second-model worker" : "");
 
     for (;;) {
         int fd = accept(s, NULL, NULL);

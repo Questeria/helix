@@ -17,6 +17,27 @@ found + fixed in `gpu_silu_mul`: a `let mut amag = gi; if g<0 { amag = 0-gi }` a
 negative-controls). STILL REMAINING (Code, gated): G-L1 block-0, G-L2 logits + token-for-token (need
 the host wiring + a SmolLM2-135M import), G-L3 regression sweep, G-L4 fence accounting.
 
+**UPDATE 2026-06-09 (Fable 5 builder run, branch fable/demo-complete) — G-L1 + G-L2 PASS; the
+full model runs.** `scripts/llama_model_gate.sh` (fail-closed, first run, 72 s): SmolLM2-135M
+imported by the additive `gpt2_pack --arch llama` (BF16 bit-shift widening; HXGW v2 header carries
+arch/NKV/rope_theta/rms_eps; GPT-2 repack regression byte-identical sha c661e224) and run by the
+additive `--arch llama` path in gpt2_infer.c (v2-header self-config; separate q/k/v A.Bt GEMMs on
+untransposed HF [out,in] weights; GQA host mapping; host-built RoPE tables; SwiGLU; tied head):
+- **G-L1** post-layer-0 residual: max-abs **3.2e-05** (tol 2e-3) — PASS
+- **G-L2a** full-model last-row logits: argmax **EXACT** (260), max-abs **4.9e-05** over 49,152 — PASS
+- **G-L2b** 20-token greedy: **TOKEN_FOR_TOKEN_MATCH 25/25** vs the independent oracle — PASS
+- negative control (corrupted weights) correctly FAILED — the comparator has teeth.
+The full-model oracle is `helix-llm/tools/llama_numpy_ref.py` (uncommitted; reads the ORIGINAL HF
+safetensors — independent of both the importer and the GPU path; its own greedy run produces
+coherent text, sanity-validating every pinned convention).
+**G-L4 fence accounting: ZERO new committed .c/.h/.py** — both host changes are additive
+extensions of existing Category-B files (gpt2_pack.c, gpt2_infer.c); the fence stays 1 .py /
+29 .c-h; the self-host fixpoint inputs are untouched. G-L3 (full GPT-2 serve-gate regression on
+the changed worker) run in the same session — see scripts/_serve_regate3.log. Serve integration
+(model switcher, §6.6): gpt2_serve_http.c gained an additive second-model worker + models[] in
+/api/health + per-request model routing with ONE cross-model GPU mutex; gated by
+scripts/llama_serve_smoke.sh. PENDING: the independent Opus re-gate before merge to main.
+
 ## 0. The pitch extension (why this is the headline long-shot)
 
 GPT-2 (2019) proved the stack. A **current-generation, Apache-2.0, Llama-architecture model running

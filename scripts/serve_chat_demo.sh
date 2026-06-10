@@ -40,7 +40,10 @@ rm -f /tmp/scd_a.bin /tmp/scd_d.bin /tmp/out.ptx
 ( ulimit -s unlimited; timeout 600 /tmp/scd_a.bin ) >/tmp/scd_concat.log 2>&1
 ( ulimit -s unlimited; timeout 1200 ./seed.bin k1ptxdrv.hx /tmp/scd_d.bin ) >/tmp/scd_drv.log 2>&1; chmod +x /tmp/scd_d.bin 2>/dev/null
 : > /tmp/kernel_in.hx
-for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt; do
+# 8 GPT-2 kernels + the 3 G-L0-gated llama kernels (rmsnorm/rope/silu_mul): ONE 11-kernel
+# module serves both architectures (each worker looks up only the entries it needs; the
+# llama worker self-configures from the v2 weight header, overriding the HX_* XL env).
+for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul; do
   tr -d '\r' < $SRC/helixc/examples/${k}_kernel.hx >> /tmp/kernel_in.hx; echo "" >> /tmp/kernel_in.hx
 done
 ( ulimit -s unlimited; /tmp/scd_d.bin ) >/tmp/scd_emit.log 2>&1 || true
@@ -63,7 +66,18 @@ echo "      NOTE: live XL ~= 10 s/token (~3 min for 20 tokens; measured 195.5 s 
 echo "            By design -- the demo sells verifiability, not speed. Use gpt2_gpu_mvp.sh (124M)"
 echo "            when you need a snappy live generation."
 echo
+# ADDITIVE second model (the modern-model leg): when the SmolLM2 pack exists, serve it
+# alongside XL -- two persistent workers, ONE shared GPU mutex (generations strictly serial).
+SM_WTS="${HELIX_SM_WEIGHTS:-$SRC/helix-llm/models/smollm2-135m/smollm2-135m.weights}"
+SM_DIR="$SRC/helix-llm/models/smollm2-135m"
+SM_ARGS=""
+if [ -s "$SM_WTS" ] && [ -s "$SM_DIR/vocab.json" ] && [ -s "$SM_DIR/merges.txt" ]; then
+  SM_ARGS="--model2 smollm2-135m --ptx2 /tmp/gpt2_chat.ptx --weights2 $SM_WTS --vocab2 $SM_DIR/vocab.json --merges2 $SM_DIR/merges.txt"
+  echo "  second model: smollm2-135m (llama-arch) ENABLED"
+else
+  echo "  second model: smollm2-135m weights not found -- serving XL only"
+fi
 exec /tmp/gpt2_chat_server --port $PORT --root $SRC/demo \
   --ptx /tmp/gpt2_chat.ptx --weights "$XL_WEIGHTS" \
   --worker-bin /tmp/gpt2_chat_worker --vocab "$VOCAB" --merges "$MERGES" \
-  --max-ctx "$MAXCTX" --detail "$DETAIL" --oracle $SRC/helix-llm/tools --model gpt2-xl
+  --max-ctx "$MAXCTX" --detail "$DETAIL" --oracle $SRC/helix-llm/tools --model gpt2-xl $SM_ARGS

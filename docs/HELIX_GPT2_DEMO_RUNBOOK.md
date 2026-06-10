@@ -240,3 +240,31 @@ evidence for both (mode line, argmax‑exact, the `max_abs logit diff=` line, to
 is committed in `scripts/scale_results.txt` so these figures trace to a real run. This **measures** the
 fp32 ceiling residual: 1.5 B fits the 8 GB sm_86 box (the committed `gpt2_infer.c` is dimension‑generic;
 per‑layer weight streaming keeps device residency low, so layer count does not gate VRAM).
+
+## 8. The modern-model leg — SmolLM2-135M (Llama architecture), verified
+
+**The claim (precise):** a 2024 **Llama-architecture** model (SmolLM2-135M: GQA 9/3 heads, RoPE
+theta=1e5, SwiGLU, RMSNorm, 30 layers, tied head) runs its full forward on the SAME from-raw
+stack and matches an independent numpy oracle **token-for-token (25/25)**, logits argmax exact,
+max-abs logit diff 4.9e-05 over 49,152. The architecture family powering today's open models —
+"modern architecture, verifiably executed", NOT "modern capability" (135 M is a small base model;
+its honest greedy completion of the pinned prompt is repetitive base-model English).
+
+- **Produce the weights** (third party, from HuggingFace `HuggingFaceTB/SmolLM2-135M`, Apache-2.0):
+  download `model.safetensors`, `config.json`, `vocab.json`, `merges.txt` into
+  `helix-llm/models/smollm2-135m/`, then
+  `gcc helixc/runtime/gpt2_pack.c -O2 -o /tmp/gpt2_pack && /tmp/gpt2_pack model.safetensors
+  config.json smollm2-135m.weights --arch llama` (BF16 is widened to f32 by bit-shift; the
+  GPT-2 repack stays byte-identical — regression sha c661e224).
+- **Gate it:** `bash scripts/llama_model_gate.sh` — fail-closed: G-L1 layer-0 parity, G-L2
+  full-model logits + 20-token token-for-token vs `helix-llm/tools/llama_numpy_ref.py` (the
+  uncommitted oracle reads the ORIGINAL safetensors; independent of the importer AND the GPU
+  path), plus a corrupted-weights negative control. First gated run: 72 s, all legs PASS.
+- **Serve it:** `scripts/serve_chat_demo.sh` auto-enables the second model when the pack exists
+  (two persistent workers, ONE cross-model GPU mutex — generations stay strictly serial; the
+  page's model switcher reads `/api/health` `models[]`). Dual-model serve gate:
+  `bash scripts/llama_serve_smoke.sh`.
+- **Honest residuals for this leg** (say unprompted): same trusted-once boundary (PTX -> ptxas);
+  fp32; the oracle shares the architecture *spec* (it is an independent *implementation*, not an
+  independent *specification*); RoPE cos/sin tables are trusted-once host data (like weights);
+  SmolLM2-135M is small — TinyLlama-1.1B is the same-kernels scale flex, not yet gated.
