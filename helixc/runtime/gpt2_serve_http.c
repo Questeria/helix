@@ -638,8 +638,8 @@ static void spawn_worker(int idx) {
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
         /* per-model chat config travels via env (the worker reads HX_SPECIALS/HX_EOS). */
-        if (w_specials) setenv("HX_SPECIALS", "1", 1);
-        if (w_eos >= 0) { char eb[16]; snprintf(eb, sizeof eb, "%d", w_eos); setenv("HX_EOS", eb, 1); }
+        if (w_specials) setenv("HX_SPECIALS", "1", 1); else unsetenv("HX_SPECIALS");   /* never inherited from the launch shell */
+        if (w_eos >= 0) { char eb[16]; snprintf(eb, sizeof eb, "%d", w_eos); setenv("HX_EOS", eb, 1); } else unsetenv("HX_EOS");
         /* exec the worker: gpt2_infer <ptx> <weights> --serve --emit-fd 1 --max-ctx M
          *                  --detail D --vocab v --merges m */
         char maxctx[16]; snprintf(maxctx, sizeof maxctx, "%d", g_cfg.max_ctx);

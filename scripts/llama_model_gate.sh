@@ -123,7 +123,7 @@ echo "  G-L2b: $GL2B"
 
 echo "=== [7] NEGATIVE CONTROL: corrupted weights must FAIL the logits leg ==="
 cp "$WTS" /tmp/llama_corrupt.weights
-# zero out 1 MB of layer-15 weights (offset well past the 64B header)
+# zero out 1 MB of mid-file weights at the 200 MB offset (well past the 64B header; model-agnostic)
 dd if=/dev/zero of=/tmp/llama_corrupt.weights bs=1M seek=200 count=1 conv=notrunc 2>/dev/null
 if /tmp/llama_infer /tmp/llama_model.ptx /tmp/llama_corrupt.weights --logits "$REFD/llama_ref_logits_last.bin" "$REFD/llama_ref_argmax.txt" "$REFD/llama_ref_ids.txt" \
      2>&1 | grep -q 'GPT2_LOGITS_PARITY_PASS'; then

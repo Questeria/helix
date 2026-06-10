@@ -2950,7 +2950,14 @@ function updateCtxInfo() {
   var n = UI.contextText.length;
   var elx = $("ctxInfo");
   if (!elx) return;
-  if (carryEnabled() && n > 0) {
+  if (isChatModel() && TELEMETRY_SOURCE === "sse") {
+    /* chat mode: turns (whole user/assistant exchanges) are what the template carries */
+    var nt = UI.chatTurns.length;
+    elx.textContent = nt > 0
+      ? "chat · " + nt + " turn(s) carried in the ChatML template · oldest turns drop first when over budget"
+      : "chat · fresh conversation (the ChatML template carries each completed turn)";
+    elx.classList.remove("is-warn");
+  } else if (carryEnabled() && n > 0) {
     /* HONEST METER: ÷4 is a clearly-labeled rough token estimate (the
        browser has no GPT-2 BPE); the REAL count appears in the tokenize
        event and the live server fail-closes past --max-ctx (320). */

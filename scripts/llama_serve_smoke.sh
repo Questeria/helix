@@ -15,6 +15,7 @@
 #       oracle refs TOKEN-FOR-TOKEN (C-side special-token tokenize parity + stop-at-im_end)
 # Prints LLAMA_SERVE_SMOKE_PASS / _FAIL. Kills the server (by PID) on exit.
 set -u
+set -o pipefail   # consistent rigor with llama_model_gate.sh
 ROOT="${HELIX_SRC:-}"; if [ -z "$ROOT" ]; then ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"; fi
 [ -d "$ROOT/helixc/examples" ] || ROOT="/mnt/c/Projects/Kovostov-Native"
 WORK="${HELIX_WORK:-$HOME/gpt2_ext4/Kovostov-Native}"
@@ -110,7 +111,11 @@ echo "  both workers READY"
 echo "=== [3] /api/health models[] ==="
 H=$(curl -s -m 5 "http://127.0.0.1:$PORT/api/health")
 echo "  $H"
-echo "$H" | grep -q '"model":"gpt2-xl"' && echo "$H" | grep -q '"model":"smollm2-135m"' \
+HEALTH_OK=1
+echo "$H" | grep -q '"model":"gpt2-xl"' || HEALTH_OK=0
+echo "$H" | grep -q '"model":"smollm2-135m"' || HEALTH_OK=0
+if [ -s "$SI_WTS" ]; then echo "$H" | grep -q '"model":"smollm2-360m-instruct"' || HEALTH_OK=0; fi
+[ "$HEALTH_OK" = "1" ] \
   && echo "  HEALTH_MODELS_OK" || { echo "  HEALTH_MODELS_FAIL"; RC=1; }
 
 echo "=== [4] smollm2 generation: served ids token-for-token vs oracle ==="
