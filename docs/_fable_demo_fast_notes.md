@@ -40,3 +40,13 @@ One lesson per entry; why it mattered.
    (passing) edits. Atomic per-edit writes + a syntax check after each batch is the only
    sane pattern at this file size. (Plus the known traps: heredoc strips one backslash
    level; several files are CRLF; anchors with backslashes or trailing whitespace lie.)
+
+8. **Wall-clock perf varies run-to-run -- persist the evidence and report the clean run.** Three
+   measurements of the same configs: 46x (first session), 14x (mid-session, three serve workers
+   still shutting down), 39x (clean-GPU, persisted: scripts/_perf_decode_clean.log -- canonical:
+   0.48 -> 3.92 -> 18.69 tok/s baseline -> KV -> KV+fast). The fair claim is "roughly 40x on this
+   GPU, run-to-run variance real"; the INVARIANT claim is ids-identical, which never varied.
+
+9. **The verifier was right that uncommitted /tmp evidence is no evidence.** Every gate verdict
+   now has a persisted log under scripts/_: _gemv_gl0.log, _gate_360i_kv2.log (clean-env),
+   _lss_final.log (incl. the fast A/B leg), _perf_decode_clean.log.

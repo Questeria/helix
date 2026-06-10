@@ -4199,7 +4199,7 @@ function initWhyHelix() {
 var FAST_OFF_MSG = "per-op detail is off in fast mode — switch to glass box to watch every kernel";
 var SPEED = { mode: "glass", fastAvailable: false };
 var SPEED_TITLE_GLASS = "glass box — every kernel shown and synchronized — slower, fully observable";
-var SPEED_TITLE_FAST_ON = "fast — same verified kernels, no per-op instrumentation — the speed is from caching and not approximation";
+var SPEED_TITLE_FAST_ON = "fast — same gated kernels (independent re-gate pending), no per-op instrumentation — the speed is from caching and not approximation";
 var SPEED_TITLE_FAST_OFF = "needs the fast-decode backend";
 
 function setSpeedMode(m) {

@@ -555,6 +555,7 @@ static void emit_forward_begin(int step, int context_len, int s_pad, int n_layer
     emit_raw(b);
 }
 static void emit_embed(int step, int t, int d_model) {
+    if (g_fast) return;
     if (!g_serve) return;
     char b[128];
     snprintf(b, sizeof b, "{\"_ev\":\"embed\",\"seq\":%ld,\"step\":%d,\"t\":%d,\"d_model\":%d}\n",
@@ -562,6 +563,7 @@ static void emit_embed(int step, int t, int d_model) {
     emit_raw(b);
 }
 static void emit_layer_begin(int step, int idx, int total) {
+    if (g_fast) return;   /* fast mode: token-level heartbeat only (forward_begin/token/done) */
     if (!g_serve) return;
     g_layer_ops = 0;
     char b[128];
@@ -581,6 +583,7 @@ static void emit_op(int layer, int seq_in_layer, const char* kernel, const char*
     emit_raw(b); g_layer_ops++;
 }
 static void emit_layer_end(int step, int idx, double ms) {
+    if (g_fast) return;
     if (!g_serve) return;
     char b[160];
     snprintf(b, sizeof b, "{\"_ev\":\"layer_end\",\"seq\":%ld,\"step\":%d,\"idx\":%d,\"ms\":%.3f,\"ops\":%d}\n",
@@ -588,6 +591,7 @@ static void emit_layer_end(int step, int idx, double ms) {
     emit_raw(b);
 }
 static void emit_head(int step, const char* label, const char* kernel) {
+    if (g_fast) return;
     if (!g_serve) return;
     char b[160];
     snprintf(b, sizeof b, "{\"_ev\":\"head\",\"seq\":%ld,\"step\":%d,\"label\":\"%s\",\"kernel\":\"%s\"}\n",

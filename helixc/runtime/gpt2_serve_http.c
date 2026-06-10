@@ -644,6 +644,7 @@ static void spawn_worker(int idx) {
         if (w_specials) setenv("HX_SPECIALS", "1", 1); else unsetenv("HX_SPECIALS");   /* never inherited from the launch shell */
         if (w_eos >= 0) { char eb[16]; snprintf(eb, sizeof eb, "%d", w_eos); setenv("HX_EOS", eb, 1); } else unsetenv("HX_EOS");
         if (w_kv) { setenv("HX_KV", "1", 1); setenv("HX_RESIDENT", "1", 1); } else { unsetenv("HX_KV"); unsetenv("HX_RESIDENT"); }
+        unsetenv("HX_FAST");   /* fast is per-request (detail:token), never process-wide */
         /* exec the worker: gpt2_infer <ptx> <weights> --serve --emit-fd 1 --max-ctx M
          *                  --detail D --vocab v --merges m */
         char maxctx[16]; snprintf(maxctx, sizeof maxctx, "%d", g_cfg.max_ctx);

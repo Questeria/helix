@@ -150,6 +150,8 @@ sys_p = "You are a helpful AI assistant named SmolLM, trained by Hugging Face"
 user = "What is the capital of France?"
 tmpl = "<|im_start|>system"+chr(10)+sys_p+"<|im_end|>"+chr(10)+"<|im_start|>user"+chr(10)+user+"<|im_end|>"+chr(10)+"<|im_start|>assistant"+chr(10)
 print(json.dumps({"prompt": tmpl, "n_gen": 40, "model": "smollm2-360m-instruct"}))
+import io as _io
+_io.open("/tmp/lss_chat_body_fast.json","w").write(json.dumps({"prompt": tmpl, "n_gen": 40, "model": "smollm2-360m-instruct", "detail": "token"}))
 PYB
   sleep 2   # let the prior generation's lock fully release
   CHTTP=$(curl -s -N -m 600 -o /tmp/lss_chat_sse.txt -w "%{http_code}" -X POST "http://127.0.0.1:$PORT/api/generate?detail=op" -H "Content-Type: application/json" --data @/tmp/lss_chat_body.json)
@@ -169,6 +171,21 @@ PYB
   fi
 else
   echo "  (instruct weights absent -- leg skipped)"
+fi
+
+echo "=== [8] FAST-MODE A/B over HTTP: same chat, detail=token -> SAME gen ids + event-name SUBSET ==="
+if [ -s "$SI_WTS" ] && [ -s /tmp/lss_chat_sse.txt ]; then
+  FHTTP=$(curl -s -N -m 600 -o /tmp/lss_fast_sse.txt -w "%{http_code}" -X POST "http://127.0.0.1:$PORT/api/generate?detail=token" -H "Content-Type: application/json" --data @/tmp/lss_chat_body_fast.json)
+  echo "  fast HTTP code: $FHTTP ($(wc -c < /tmp/lss_fast_sse.txt) bytes)"
+  GIDS_GB=$(grep -o '"gen_ids":[[][0-9, ]*]' /tmp/lss_chat_sse.txt | head -1)
+  GIDS_FA=$(grep -o '"gen_ids":[[][0-9, ]*]' /tmp/lss_fast_sse.txt | head -1)
+  echo "  glassbox: $GIDS_GB"
+  echo "  fast    : $GIDS_FA"
+  if [ -n "$GIDS_FA" ] && [ "$GIDS_GB" = "$GIDS_FA" ]; then echo "  FAST_AB_IDS_OK (identical gen_ids)"; else echo "  FAST_AB_IDS_FAIL"; RC=1; fi
+  BADEV=$(grep -o '"_ev":"[a-z_]*"' /tmp/lss_fast_sse.txt | sort -u | grep -vE '"(hello|tokenize|forward_begin|token|done|error)"' || true)
+  if [ -z "$BADEV" ]; then echo "  FAST_SUBSET_OK (only heartbeat events)"; else echo "  FAST_SUBSET_FAIL: $BADEV"; RC=1; fi
+else
+  echo "  (instruct weights or glassbox capture absent -- leg skipped)"
 fi
 
 echo "=== [5] unknown model -> 404 ==="

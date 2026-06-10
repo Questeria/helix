@@ -114,7 +114,7 @@ grep -E 'argmax|max_abs' "$OUT/llama_gl2a.log" | sed 's/^/  /'
 echo "  G-L2a: $GL2A"
 
 echo "=== [6] G-L2b: $NGEN-token greedy token-for-token ==="
-if /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --generate "$NGEN" "$REFD/llama_ref_ids.txt" "$REFD/llama_ref_gen_ids.txt" \
+if env -u HX_KV -u HX_RESIDENT -u HX_FAST /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --generate "$NGEN" "$REFD/llama_ref_ids.txt" "$REFD/llama_ref_gen_ids.txt" \
      2>&1 | tee "$OUT/llama_gl2b.log" | grep -q 'TOKEN_FOR_TOKEN_MATCH'; then
   GL2B=PASS
 else GL2B=FAIL; RC=1; fi

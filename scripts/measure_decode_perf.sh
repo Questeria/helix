@@ -8,6 +8,7 @@
 # REQUIREMENT: ids must be IDENTICAL across all configs (checked; mismatch = FAIL).
 # Run as a FILE under WSL; GPU must be free. Prints MEASURED numbers only.
 set -u
+PERF_RC=0
 ROOT="${HELIX_SRC:-}"; if [ -z "$ROOT" ]; then ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"; fi
 [ -d "$ROOT/helixc/examples" ] || ROOT="/mnt/c/Projects/Kovostov-Native"
 MODELD="$ROOT/helix-llm/models/smollm2-360m-instruct"
@@ -23,9 +24,12 @@ echo "=================== DECODE PERF (SmolLM2-360M-Instruct, chat prompt) =====
 run_cfg () { # $1=name $2=envs
   local name="$1"; shift
   local t2 t42
+  rm -f /tmp/helix_gen_ids.txt
   t2=$( { /usr/bin/time -f %e env "$@" /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --generate 2 "$REFD/llama_ref_ids.txt" >/tmp/perf_g2.log; } 2>&1 | tail -1 )
+  [ -s /tmp/helix_gen_ids.txt ] || { echo "  $name: NGEN=2 produced no ids (CRASH) -> FAIL"; PERF_RC=1; return 1; }
   cp /tmp/helix_gen_ids.txt "/tmp/perf_ids_${name}_2.txt"
   t42=$( { /usr/bin/time -f %e env "$@" /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --generate 42 "$REFD/llama_ref_ids.txt" >/tmp/perf_g42.log; } 2>&1 | tail -1 )
+  [ -s /tmp/helix_gen_ids.txt ] || { echo "  $name: NGEN=42 produced no ids (CRASH) -> FAIL"; PERF_RC=1; return 1; }
   cp /tmp/helix_gen_ids.txt "/tmp/perf_ids_${name}_42.txt"
   local dt; dt=$(python3 -c "print(max(0.0001, $t42 - $t2))")
   local tps; tps=$(python3 -c "print(round(40.0 / $dt, 2))")
@@ -41,7 +45,9 @@ run_cfg kvfast HX_KV=1 HX_RESIDENT=1 HX_FAST=1
 
 echo "--- ids identical across configs? (REQUIRED) ---"
 ok=1
+cmp -s /tmp/perf_ids_baseline_2.txt /tmp/perf_ids_kv_2.txt || { echo "  MISMATCH baseline vs kv (NGEN=2)"; ok=0; }
+cmp -s /tmp/perf_ids_baseline_2.txt /tmp/perf_ids_kvfast_2.txt || { echo "  MISMATCH baseline vs kvfast (NGEN=2)"; ok=0; }
 cmp -s /tmp/perf_ids_baseline_42.txt /tmp/perf_ids_kv_42.txt || { echo "  MISMATCH baseline vs kv"; ok=0; }
 cmp -s /tmp/perf_ids_baseline_42.txt /tmp/perf_ids_kvfast_42.txt || { echo "  MISMATCH baseline vs kvfast"; ok=0; }
 [ "$ok" = "1" ] && echo "  IDS_IDENTICAL across all 3 configs (42-token runs)"
-[ "$ok" = "1" ] && echo "PERF_MEASURE_OK" || { echo "PERF_MEASURE_FAIL"; exit 1; }
+[ "$ok" = "1" ] && [ "$PERF_RC" = "0" ] && echo "PERF_MEASURE_OK" || { echo "PERF_MEASURE_FAIL"; exit 1; }
