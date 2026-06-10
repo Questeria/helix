@@ -817,6 +817,53 @@
   }
   .hero-eyebrow .he-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 
+  /* ---------- multi-turn honesty: context meter + budget cut ---------- */
+  .conv-honesty {
+    font-size: 11px; color: var(--ink-faint); line-height: 1.5;
+    margin-bottom: 9px;
+  }
+  .conv-honesty b { color: var(--ink-dim); font-weight: 650; }
+  .ctx-meter { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .ctx-meter.is-warn { color: var(--amber); }
+  .ctx-cut-note {
+    display: none; margin-top: 8px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--amber); line-height: 1.5;
+    border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    border-radius: 6px; padding: 6px 10px;
+  }
+  .ctx-cut-note.show { display: block; }
+  .turn.model .bubble .cut-mark {
+    color: var(--amber); font-style: italic; font-size: 0.82em;
+    border-bottom: 1px dotted var(--amber-dim); cursor: help; margin-right: 2px;
+  }
+
+  /* ---------- 409 polite-wait (single-flight; NO fake queue numbers) ---------- */
+  .busy-wait {
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 11px; color: var(--amber); line-height: 1.5;
+    border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    border-radius: 7px; padding: 7px 11px; max-width: 95%;
+  }
+  .busy-wait .bw-count { color: var(--ink-dim); white-space: nowrap; }
+
+  /* ---------- verify teaching explainer ---------- */
+  .verify-explain {
+    margin-top: 7px; max-width: 95%;
+    font-size: 11.5px; color: var(--ink-dim); line-height: 1.55;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-dim);
+    border-radius: 7px; padding: 9px 12px;
+  }
+  .verify-explain[hidden] { display: none; }
+  .verify-explain .ve-h {
+    display: block; font-family: var(--mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.6px; text-transform: uppercase; color: var(--ink-faint); margin: 7px 0 2px;
+  }
+  .verify-explain .ve-h.first { margin-top: 0; }
+  .verify-explain b { color: var(--ink); font-weight: 650; }
+  .verify-explain .ve-no { color: var(--amber); }
+  .verify-explain a { font-weight: 600; }
+
   /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
   @media (prefers-reduced-motion: reduce) {
     .status-badge .dot { animation: none; }
@@ -885,6 +932,7 @@
           <span class="dot" aria-hidden="true"></span>
           <span id="connText">PREVIEW · MOCK TELEMETRY (no GPU connected)</span>
         </div>
+        <a class="nav-link" href="compare.html">Models &amp; paths <span class="arr">&rarr;</span></a>
         <a class="nav-link" href="dashboard.html">Proof &amp; attestation <span class="arr">&rarr;</span></a>
       </div>
     </div>
@@ -947,6 +995,13 @@
         </div>
 
         <div class="composer">
+          <div class="conv-honesty">
+            <b>Conversation = repeated completion with carried context.</b>
+            Each turn re-sends the conversation so far as one completion prompt — the model itself is
+            stateless between requests: a 2019 <b>base completion model, not an assistant</b>. The live
+            server caps the prompt at ~320 tokens (<code>--max-ctx</code>); when the carried text would
+            blow that budget, the <b>oldest text is cut first</b> and the page says so.
+          </div>
           <div class="seed-row" id="seedRow" aria-label="Example completion seeds">
             <button class="seed-chip" type="button">The capital of France is</button>
             <button class="seed-chip" type="button">In the beginning</button>
@@ -969,8 +1024,9 @@
               <button class="send-btn" id="sendBtn" type="button">Continue</button>
             </div>
           </div>
-          <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="ctxInfo"></span><span id="charCount"></span></div>
-          <div class="busy-hint" id="busyHint">GPU busy — one generation at a time (single-flight, matching the strictly-serial GPU).</div>
+          <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="ctxInfo" class="ctx-meter"></span><span id="charCount"></span></div>
+          <div class="ctx-cut-note" id="ctxCutNote" role="status"></div>
+          <div class="busy-hint" id="busyHint">GPU busy — one generation at a time (single-flight; the server keeps no queue, so the page just waits politely and retries).</div>
         </div>
       </section>
 
@@ -1186,6 +1242,21 @@ var RUNBOOK = {
     "gpu_scale_rt"
   ]
 };
+
+/* ================================================================
+   MULTI-TURN CONTEXT BUDGET (honest, client-side estimate)
+   ----------------------------------------------------------------
+   The live serve worker enforces --max-ctx (default 320 TOKENS) and
+   fail-closes past it. The browser has no GPT-2 BPE tokenizer, so the
+   meter below is a clearly-labeled ROUGH chars/4 estimate — the
+   server-side C tokenizer is always the ground truth. When the carried
+   conversation would blow the budget, the page cuts from the OLDEST
+   text first and says so visibly (never silently).
+   ================================================================ */
+var MAX_CTX_TOKENS = 320;     /* live server --max-ctx default */
+var CTX_CHARS_PER_TOK = 4;    /* rough estimate, labeled as such in the UI */
+var CTX_SAFETY_TOKENS = 8;    /* margin for estimate error */
+function estTokens(s) { return Math.ceil(((s || "").length) / CTX_CHARS_PER_TOK); }
 
 /* ================================================================
    tiny DOM helpers (no framework) — same spirit as dashboard.html
@@ -1724,6 +1795,12 @@ function replayPrompt() {
   return replayAvailable() ? window.HELIX_CAPTURED_RUN.prompt : "";
 }
 
+/* honest turn label: the capability-advertised model when one was chosen
+   (live /api/health models[] only), else the page's default GPT-2-XL */
+function currentModelLabel() {
+  return UI.selectedModelLabel || "GPT-2-XL";
+}
+
 /* ================================================================
    RENDER / UI STATE
    ================================================================ */
@@ -1733,7 +1810,10 @@ var UI = {
   autoReplayed: false,    /* the one-shot auto-start of the captured replay */
   contextText: "",        /* carried conversation text (multi-turn completion prompt prefix) */
   lastSentPrompt: null,   /* the full prompt actually sent for the in-flight turn */
+  lastTrim: 0,            /* chars cut from the OLDEST carried text on the last send */
   selectedModel: null,    /* only ever set when /api/health advertises models[] (live capability) */
+  selectedModelLabel: null, /* its human label, for honest turn labeling */
+  busyWait: null,         /* 409 polite-wait state: {attempt, timer, tick} */
   ladder: { total: RUNBOOK.n_layer, current: -1, done: 0, ms: [] },
   kernelCounts: {},
   reply: { step: 0, nGen: 0, layersDone: 0, totalPasses: 0 },
@@ -1820,6 +1900,8 @@ function resetLadder() {
    ================================================================ */
 var handlers = {
   onHello: function (d) {
+    /* if we were politely waiting out a 409, the slot just opened */
+    clearBusyWait(true);
     paintTrustStrip(d);
     paintDevice(d);
     paintKernelLegend(d.kernels);
@@ -1831,6 +1913,7 @@ var handlers = {
   },
 
   onTokenize: function (d) {
+    clearBusyWait(true); /* belt-and-braces: stream is definitely flowing */
     var chips = $("tokChips");
     chips.innerHTML = "";
     for (var i = 0; i < d.ids.length; i++) {
@@ -1953,9 +2036,17 @@ var handlers = {
 
   onError: function (d) {
     flushOpsNow();
-    /* a 409 single-flight rejection is a BUSY state, not a failure — amber,
-       with an honest explanation and a retry, never a red scare */
+    /* a 409 single-flight rejection is a BUSY state, not a failure — in live
+       mode the page now WAITS politely and auto-retries with backoff+jitter
+       (enterBusyWait), keeping this turn's bubble pending. The server keeps
+       NO queue, so there is no honest position number to show — and we never
+       invent one. */
     var isBusy409 = !!(d && d.message === "busy");
+    if (isBusy409 && TELEMETRY_SOURCE === "sse" && UI.activeBubble) {
+      enterBusyWait();
+      return; /* still busy: the slot watch owns this turn now */
+    }
+    clearBusyWait(false); /* non-busy error while waiting: stop the timers */
     if (UI.activeBubble) {
       finishStreamingBubble();
       var bub = UI.activeBubble.bubble;
@@ -2054,6 +2145,111 @@ function updateProgress() {
 }
 
 /* ================================================================
+   409 POLITE-WAIT — "your turn" UX for the single-flight server.
+   ----------------------------------------------------------------
+   HONESTY CONTRACT: the server is single-flight with NO queue
+   (gpt2_serve_http answers 409 busy; it cannot issue tickets or
+   positions). So this UX never shows a queue position or an ETA —
+   it states plainly that another visitor holds the slot, retries
+   with exponential backoff + jitter, and proceeds in-place the
+   moment a retry lands. A cancel button stops the waiting.
+   ================================================================ */
+var BUSY_RETRY_BASE_MS = 4000;   /* first retry ~4 s */
+var BUSY_RETRY_MAX_MS  = 30000;  /* backoff cap */
+var BUSY_RETRY_MAX_ATTEMPTS = 20;
+
+function clearBusyWait(slotOpened) {
+  var w = UI.busyWait;
+  if (!w) return;
+  if (w.timer) clearTimeout(w.timer);
+  if (w.tick) clearInterval(w.tick);
+  UI.busyWait = null;
+  if (slotOpened && w.box && w.box.parentNode) {
+    w.box.parentNode.removeChild(w.box); /* slot opened: stream owns the turn */
+  }
+}
+
+function enterBusyWait() {
+  var attempt = UI.busyWait ? UI.busyWait.attempt + 1 : 1;
+  /* stop any previous timers but keep the meta box if it exists */
+  if (UI.busyWait) {
+    if (UI.busyWait.timer) clearTimeout(UI.busyWait.timer);
+    if (UI.busyWait.tick) clearInterval(UI.busyWait.tick);
+  }
+  var meta = UI.activeBubble ? UI.activeBubble.metaEl : null;
+  if (!meta) { UI.busyWait = null; setBusy(false); return; }
+  meta.innerHTML = "";
+
+  if (attempt > BUSY_RETRY_MAX_ATTEMPTS) {
+    /* waited a long time (~7+ min) — stop politely, hand control back */
+    UI.busyWait = null;
+    finishStreamingBubble();
+    setBusy(false);
+    var giveUp = el("div", { class: "busy-wait" }, [
+      el("span", {}, "the GPU stayed busy through " + BUSY_RETRY_MAX_ATTEMPTS +
+        " retries — stopped waiting so you keep control. Nothing was generated for this turn.")
+    ]);
+    var again = el("button", { class: "tm-btn", type: "button" }, "try again");
+    again.addEventListener("click", function () {
+      if (!UI.busy && UI.lastRequest) startGeneration(UI.lastRequest.prompt, UI.lastRequest.nGen);
+    });
+    giveUp.appendChild(again);
+    meta.appendChild(giveUp);
+    return;
+  }
+
+  /* exponential backoff + ±20% jitter (no thundering herd, no fake ETA) */
+  var base = Math.min(BUSY_RETRY_BASE_MS * Math.pow(1.5, attempt - 1), BUSY_RETRY_MAX_MS);
+  var delayMs = Math.round(base * (0.8 + Math.random() * 0.4));
+  var dueAt = Date.now() + delayMs;
+
+  var count = el("span", { class: "bw-count" }, "");
+  var cancelBtn = el("button", { class: "tm-btn", type: "button" }, "stop waiting");
+  var box = el("div", { class: "busy-wait", role: "status" }, [
+    el("span", {}, "⏳ another visitor is generating — the GPU runs one verified " +
+      "generation at a time (single-flight; the server keeps no queue, so there is " +
+      "no honest position number to show)."),
+    count, cancelBtn
+  ]);
+  meta.appendChild(box);
+
+  function paintCountdown() {
+    var s = Math.max(0, Math.ceil((dueAt - Date.now()) / 1000));
+    count.textContent = "retrying in " + s + " s · attempt " + attempt + "/" + BUSY_RETRY_MAX_ATTEMPTS;
+  }
+  paintCountdown();
+
+  var w = { attempt: attempt, box: box, timer: null, tick: null };
+  w.tick = setInterval(paintCountdown, 1000);
+  w.timer = setTimeout(function () {
+    if (UI.busyWait !== w) return;
+    if (w.tick) clearInterval(w.tick);
+    count.textContent = "retrying now…";
+    /* re-fire the SAME request into the SAME turn; a fresh 409 lands back
+       in enterBusyWait with attempt+1, success streams into this bubble */
+    var src = getTelemetrySource();
+    activeStream = src.start(UI.lastSentPrompt, UI.reply.nGen, handlers);
+  }, delayMs);
+  UI.busyWait = w;
+
+  cancelBtn.addEventListener("click", function () {
+    if (UI.busyWait !== w) return;
+    clearBusyWait(false);
+    finishStreamingBubble();
+    setBusy(false);
+    meta.innerHTML = "";
+    var note = el("div", { class: "busy-wait" },
+      el("span", {}, "stopped waiting — nothing was generated for this turn."));
+    var again = el("button", { class: "tm-btn", type: "button" }, "try again");
+    again.addEventListener("click", function () {
+      if (!UI.busy && UI.lastRequest) startGeneration(UI.lastRequest.prompt, UI.lastRequest.nGen);
+    });
+    note.appendChild(again);
+    meta.appendChild(note);
+  });
+}
+
+/* ================================================================
    CONVERSATION (transcript) rendering
    ================================================================ */
 function clearEmptyState() {
@@ -2071,12 +2267,23 @@ function addUserTurn(text) {
   scrollTranscript();
 }
 
-function addModelTurn(prompt, carriedLen) {
+function addModelTurn(prompt, carriedLen, trimmedChars) {
   var labelKids = [
-    document.createTextNode("GPT-2-XL"),
+    document.createTextNode(currentModelLabel()),
     el("span", { class: "ml-pill" }, "continuation")
   ];
   var promptEcho = el("span", { class: "prompt-echo" });
+  if (trimmedChars > 0) {
+    /* the honest budget cut: the OLDEST carried text was dropped to fit the
+       live server's ~320-token --max-ctx — shown, never silent */
+    promptEcho.appendChild(el("span", {
+      class: "cut-mark",
+      title: "context budget: the oldest " + trimmedChars + " chars (≈" +
+             Math.ceil(trimmedChars / CTX_CHARS_PER_TOK) + " tok, rough estimate) of the " +
+             "carried conversation were CUT so the prompt fits the live server's ~" +
+             MAX_CTX_TOKENS + "-token --max-ctx. The model no longer sees that oldest text."
+    }, "✂ oldest " + trimmedChars + " chars cut "));
+  }
   if (carriedLen) {
     /* a context prefix was carried: the FULL text was sent as the prompt;
        the bubble collapses the prefix to an inspectable marker (hover for
@@ -2175,6 +2382,9 @@ function finalizeTurnMeta(d) {
   });
   meta.appendChild(verifyBtn);
   meta.appendChild(resultSlot);
+
+  /* the teaching affordance: what verification means here, honestly */
+  attachVerifyExplainer(meta);
 }
 
 /* Render an /api/verify outcome. TODAY the only verdict the server ever
@@ -2188,8 +2398,11 @@ function renderVerifyOutcome(slot, res) {
   slot.innerHTML = "";
   var v = (res && res.verdict) || "UNAVAILABLE";
   if (v === "UNAVAILABLE") {
-    slot.appendChild(el("span", { class: "verify-result is-unavail" }, "verify: UNAVAILABLE"));
-    if (res && res.note) slot.appendChild(el("span", { class: "verify-detail" }, [ el("span", { class: "vd" }, res.note) ]));
+    slot.appendChild(el("span", { class: "verify-result is-unavail" }, "verify: UNAVAILABLE (by design)"));
+    var note = (res && res.note)
+      ? res.note
+      : "the real parity check runs offline in the gated pipeline, not in-request";
+    slot.appendChild(el("span", { class: "verify-detail" }, [ el("span", { class: "vd" }, note) ]));
     slot.appendChild(document.createTextNode(" "));
     slot.appendChild(el("a", { href: "dashboard.html" }, "see the real numbers →"));
     return;
@@ -2210,6 +2423,73 @@ function renderVerifyOutcome(slot, res) {
   if (det.children.length) slot.appendChild(det);
   slot.appendChild(document.createTextNode(" "));
   slot.appendChild(el("a", { href: "dashboard.html" }, "details →"));
+}
+
+/* ================================================================
+   VERIFY TEACHING EXPLAINER (docs/HELIX_VERIFY_UX_PLAN.md)
+   ----------------------------------------------------------------
+   The point of "verify this continuation" is NOT a button that goes
+   green — it is teaching what verification MEANS on this stack. The
+   explainer states, per source, exactly what CAN be checked live
+   today and why a live parity verdict is UNAVAILABLE by design. It
+   renders page copy about the system's design — never a verdict.
+   ================================================================ */
+function buildVerifyExplainer() {
+  var box = el("div", { class: "verify-explain", hidden: "" });
+
+  box.appendChild(el("span", { class: "ve-h first" }, "What CAN be checked, live, today"));
+  if (TELEMETRY_SOURCE === "sse") {
+    box.appendChild(el("span", { html:
+      "<b>1 — provenance:</b> the token ids in this continuation were produced by the gated " +
+      "stack — the serve gate (<code>scripts/helix_serve_gate.sh</code>) certifies, fail-closed, " +
+      "that this server's output matched the offline oracle token-for-token before it was exposed. " +
+      "<b>2 — determinism:</b> decoding is greedy and deterministic — re-run the same prompt and " +
+      "the same ids must come back, byte-identical. Try it: that re-runnability is itself a check " +
+      "anyone can do from this page."
+    }));
+  } else if (TELEMETRY_SOURCE === "replay") {
+    box.appendChild(el("span", { html:
+      "This is a <b>replay of a captured real run</b> — its ids were verified token-for-token " +
+      "against the independent oracle when the run was recorded (serve gate, 25/25). There is " +
+      "nothing live here to re-check; what you can verify is the committed evidence behind the capture."
+    }));
+  } else {
+    box.appendChild(el("span", { html:
+      "<b>Nothing — this is mock telemetry.</b> No model ran, so there is nothing real to verify. " +
+      "On the live page you could check provenance (the served ids come from the gated stack) and " +
+      "determinism (greedy decoding re-runs to the same ids)."
+    }));
+  }
+
+  box.appendChild(el("span", { class: "ve-h" }, "What a real parity verdict needs (and why not here)"));
+  box.appendChild(el("span", { html:
+    "A real check re-runs the <b>independent fp32 numpy oracle</b> over the exact ids — a " +
+    "multi-GB offline job that lives in the <b>gated pipeline</b> (<code>scripts/gpt2_scale.sh</code>, " +
+    "<code>scripts/helix_serve_gate.sh</code>), not in a chat request. So <code>/api/verify</code> " +
+    "answers <span class='ve-no'>UNAVAILABLE by design</span> in live chat — a verdict computed " +
+    "mid-demo by the same box would be weaker than the committed offline evidence, and this page " +
+    "<b>never shows a green checkmark it didn't earn</b>."
+  }));
+
+  box.appendChild(el("span", { class: "ve-h" }, "Where the real evidence lives"));
+  box.appendChild(el("span", { html:
+    "<a href='dashboard.html'>The proof page</a> — gate verdicts, parity numbers, the trust chain, " +
+    "and the one-command from-raw rebuild you can run yourself."
+  }));
+  return box;
+}
+
+/* attach the "what can be verified?" toggle + panel after a meta row */
+function attachVerifyExplainer(meta) {
+  var box = buildVerifyExplainer();
+  var btn = el("button", { class: "tm-btn", type: "button" }, "what can be verified?");
+  btn.addEventListener("click", function () {
+    box.hidden = !box.hidden;
+    btn.textContent = box.hidden ? "what can be verified?" : "hide";
+  });
+  meta.appendChild(btn);
+  if (meta.parentNode) meta.parentNode.appendChild(box);
+  else meta.appendChild(box);
 }
 
 /* on-demand verify: hits POST /api/verify only in live mode; mock always
@@ -2274,8 +2554,17 @@ function paintRunSummary(d) {
   });
   row.appendChild(btn);
   row.appendChild(el("span", { class: "sv-note" }, "No live parity verdict in chat — the real numbers live on page 2."));
+  /* teaching affordance (same honest explainer as the per-turn one) */
+  var expBox = buildVerifyExplainer();
+  var expBtn = el("button", { class: "sv-btn", type: "button" }, "what can be verified?");
+  expBtn.addEventListener("click", function () {
+    expBox.hidden = !expBox.hidden;
+    expBtn.textContent = expBox.hidden ? "what can be verified?" : "hide";
+  });
+  row.appendChild(expBtn);
   body.appendChild(row);
   body.appendChild(slot);
+  body.appendChild(expBox);
 }
 
 function scrollTranscript() {
@@ -2409,16 +2698,27 @@ function updateCtxInfo() {
   var elx = $("ctxInfo");
   if (!elx) return;
   if (carryEnabled() && n > 0) {
-    /* chars-only is the honest unit here; ÷4 is a clearly-labeled rough
-       token estimate. The REAL token count appears in the tokenize event,
-       and the live server fail-closes past --max-ctx (default 320). */
-    var estTok = Math.round(n / 4);
-    var s = "carrying " + n + " chars (≈" + estTok + " tok, rough ÷4 estimate)";
-    if (estTok > 240) s += " · nearing the live --max-ctx cap (320 tok default)";
-    elx.textContent = s;
+    /* HONEST METER: ÷4 is a clearly-labeled rough token estimate (the
+       browser has no GPT-2 BPE); the REAL count appears in the tokenize
+       event and the live server fail-closes past --max-ctx (320). */
+    var estTok = estTokens(UI.contextText);
+    elx.textContent = "context ≈ " + estTok + "/" + MAX_CTX_TOKENS +
+      " tok used (rough ÷4 estimate) · oldest text is cut first when over";
+    elx.classList.toggle("is-warn", estTok > MAX_CTX_TOKENS - 80);
   } else {
     elx.textContent = "";
+    elx.classList.remove("is-warn");
   }
+}
+
+/* visible, transient notice that the oldest carried text was cut (or that
+   the user's own text alone is over the estimated budget) */
+function showCtxCutNote(msg) {
+  var note = $("ctxCutNote");
+  if (!note) return;
+  if (!msg) { note.classList.remove("show"); note.textContent = ""; return; }
+  note.textContent = msg;
+  note.classList.add("show");
 }
 
 function setBusy(b) {
@@ -2460,10 +2760,35 @@ function startGeneration(prompt, nGen) {
      bubble shows what was carried) */
   var displayPrompt = prompt;
   var carriedLen = 0;
+  var trimmedChars = 0;
+  showCtxCutNote(null);
   if (carryEnabled() && UI.contextText) {
+    /* HONEST BUDGET CUT: the live server fail-closes past --max-ctx (320
+       tokens, prompt + generation). Using the labeled rough ÷4 estimate,
+       leave room for this turn's n_gen + a safety margin; when the carried
+       text would blow that, cut from the OLDEST text first — visibly. */
+    var budgetTok = Math.max(16, MAX_CTX_TOKENS - nGen - CTX_SAFETY_TOKENS);
+    var budgetChars = budgetTok * CTX_CHARS_PER_TOK;
+    if (UI.contextText.length + prompt.length > budgetChars) {
+      var keep = Math.max(0, budgetChars - prompt.length);
+      trimmedChars = UI.contextText.length - keep;
+      UI.contextText = keep > 0 ? UI.contextText.slice(-keep) : "";
+      showCtxCutNote("✂ context over the ~" + MAX_CTX_TOKENS + "-token budget — cut the OLDEST " +
+        trimmedChars + " chars (≈" + Math.ceil(trimmedChars / CTX_CHARS_PER_TOK) +
+        " tok, rough estimate) of the carried conversation. The model no longer sees that text. " +
+        "(Estimate only — the server's tokenizer is the ground truth and fail-closes past --max-ctx.)");
+    }
     carriedLen = UI.contextText.length;
-    prompt = UI.contextText + prompt;
+    if (carriedLen) prompt = UI.contextText + prompt;
+  } else if (carryEnabled() && estTokens(prompt) + nGen + CTX_SAFETY_TOKENS > MAX_CTX_TOKENS) {
+    /* nothing carried to cut — the typed text alone is over the estimate.
+       Never cut the user's own words: warn, send as-is, let the server
+       answer honestly. */
+    showCtxCutNote("⚠ your text alone is ≈" + estTokens(prompt) + " tok (rough estimate) — past the live " +
+      "server's ~" + MAX_CTX_TOKENS + "-token --max-ctx budget with n_tokens=" + nGen +
+      ". Sent unchanged; a live server will refuse honestly rather than truncate your words.");
   }
+  UI.lastTrim = trimmedChars;
   UI.lastSentPrompt = prompt;
 
   setBusy(true);
@@ -2485,10 +2810,12 @@ function startGeneration(prompt, nGen) {
   $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
   $("ladderOpNow").innerHTML = "&nbsp;";
 
+  updateCtxInfo();
+
   /* transcript turns: the user bubble shows what was typed; the model bubble
      echoes the FULL sent prompt with the carried prefix collapsed */
   addUserTurn(displayPrompt);
-  addModelTurn(prompt, carriedLen);
+  addModelTurn(prompt, carriedLen, trimmedChars);
 
   /* subscribe once; the source does the rest */
   var src = getTelemetrySource();
@@ -2536,6 +2863,7 @@ function initControls() {
   $("ctxClear").addEventListener("click", function () {
     UI.contextText = "";
     updateCtxInfo();
+    showCtxCutNote(null);
   });
 
   /* seed chips fill the box and (when idle) fire immediately */
@@ -2630,11 +2958,18 @@ function populateModelSelect(health) {
   }
   if (!sel.children.length) return;
   sel.value = def || (health.model || sel.children[0].value);
-  UI.selectedModel = sel.value;
-  sel.hidden = false;
-  sel.addEventListener("change", function () {
+  function syncSelected() {
     UI.selectedModel = sel.value;
-  });
+    var opt = sel.options[sel.selectedIndex];
+    UI.selectedModelLabel = opt ? opt.textContent : sel.value;
+    /* keep the conversation header honest about WHICH model will run */
+    if (TELEMETRY_SOURCE === "sse") {
+      $("convMode").textContent = UI.selectedModelLabel + " · fp32 · greedy · LIVE";
+    }
+  }
+  syncSelected();
+  sel.hidden = false;
+  sel.addEventListener("change", syncSelected);
 }
 
 /* While sitting in replay/mock fallback, quietly watch for the backend

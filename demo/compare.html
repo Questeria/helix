@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Helix — models &amp; paths, measured side by side</title>
+<style>
+  /* ============================================================
+     demo/compare.html — the MODELS & PATHS comparison page.
+     Self-contained, offline, ZERO JavaScript: every figure below is
+     static text transcribed from committed gate evidence
+     (docs/HELIX_GPT2_DEMO_RUNBOOK.md + the dashboard's embedded
+     report). No CDNs, no web fonts, no frameworks; renders from
+     file://. Visual language shared verbatim with index.html /
+     dashboard.html (same :root palette, topbar, panel treatment).
+
+     HONESTY RULES OF THIS PAGE:
+     - numbers appear ONLY where a committed fail-closed gate
+       produced them; otherwise the cell says "not yet measured";
+     - SmolLM2-135M is GATING IN PROGRESS — nothing about it is
+       claimed beyond its committed kernel-parity gate status;
+     - no projections, no estimates, no vendor comparisons.
+     ============================================================ */
+  :root {
+    --bg:        #0a0e14;
+    --bg-2:      #0f141c;
+    --panel:     #111722;
+    --panel-2:   #0d121b;
+    --border:    #1e2733;
+    --border-2:  #28323f;
+    --ink:       #e6edf3;
+    --ink-dim:   #9aa7b4;
+    --ink-faint: #6b7785;
+    --accent:    #34d399;
+    --accent-dim:#1d6b4f;
+    --accent-bg: rgba(52,211,153,0.08);
+    --amber:     #f5b14c;
+    --amber-dim: #6b521d;
+    --amber-bg:  rgba(245,177,76,0.08);
+    --red:       #f0726a;
+    --red-dim:   #6b2a26;
+    --red-bg:    rgba(240,114,106,0.08);
+    --blue:      #6cb6f5;
+    --blue-dim:  #29516f;
+    --blue-bg:   rgba(108,182,245,0.07);
+    --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #121a26 0%, var(--bg) 55%, var(--bg-2) 100%);
+    background-attachment: fixed;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    position: relative;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(52,211,153,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(52,211,153,0.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+    -webkit-mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+  }
+  .wrap { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 30px 28px 60px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  /* ---------- topbar (shared language) ---------- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .wordmark {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-weight: 700; font-size: 19px; letter-spacing: 0.2px;
+  }
+  .wordmark .helix-glyph { width: 22px; height: 22px; display: inline-block; }
+  .sub-pill {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.7px;
+    color: var(--ink-dim); border: 1px solid var(--border-2); background: var(--panel-2);
+    padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .nav-link {
+    font-size: 13px; font-weight: 600; color: var(--ink-dim);
+    border: 1px solid var(--border-2); background: var(--panel);
+    padding: 9px 15px; border-radius: 999px;
+  }
+  .nav-link:hover { color: var(--accent); border-color: var(--accent-dim); text-decoration: none; }
+  .nav-link .arr { color: var(--accent); }
+  .topbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  /* ---------- hero ---------- */
+  .hero { margin-bottom: 28px; }
+  .hero h1 {
+    font-size: clamp(24px, 3.4vw, 36px); line-height: 1.18; font-weight: 700;
+    margin: 0 0 10px; letter-spacing: -0.4px; max-width: 30ch;
+  }
+  .hero h1 .em {
+    color: var(--accent);
+    background: linear-gradient(92deg, #6ee7b7 0%, var(--accent) 55%, #11b981 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .hero .sub { font-size: 14.5px; color: var(--ink-dim); max-width: 92ch; margin: 0; }
+  .hero .sub b { color: var(--ink); font-weight: 650; }
+
+  /* ---------- section heads ---------- */
+  .section { margin-top: 38px; }
+  .section > h2 {
+    font-size: 13px; letter-spacing: 1.6px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700; margin: 0 0 16px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section > h2::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+  }
+  .section .lede { color: var(--ink-dim); font-size: 13.5px; margin: -6px 0 16px; max-width: 86ch; }
+
+  /* ---------- path cards ---------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 130%);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--accent-dim);
+    border-radius: var(--radius-sm);
+    padding: 17px 18px 16px;
+    display: flex; flex-direction: column; gap: 9px;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .card:hover { border-color: var(--border-2); transform: translateY(-2px); }
+  .card.is-flagship { border-top-color: var(--accent); box-shadow: 0 0 0 1px rgba(52,211,153,0.07), 0 10px 30px -20px rgba(52,211,153,0.3); }
+  .card.is-amber { border-top-color: var(--amber-dim); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .card-name { font-size: 15.5px; font-weight: 700; }
+  .card-name .path-tag { color: var(--ink-faint); font-weight: 500; font-size: 12.5px; }
+  .badge {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+  }
+  .badge.is-amber { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-bg); }
+  .card .arch { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .card .proves { font-size: 13px; color: var(--ink-dim); line-height: 1.55; }
+  .card .proves b { color: var(--ink); font-weight: 650; }
+  .stats { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 2px; }
+  .stat {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 4px 9px;
+  }
+  .stat b { color: var(--accent); font-weight: 650; }
+  .stat.is-slow b { color: var(--amber); }
+  .stat.is-na { color: var(--ink-faint); font-style: italic; }
+  .card .boundary {
+    margin-top: 4px; border-top: 1px solid var(--border); padding-top: 9px;
+    font-size: 11.5px; color: var(--ink-faint); line-height: 1.5;
+  }
+  .card .boundary b { color: var(--ink-dim); font-weight: 650; }
+  .card .gate-src { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .card .gate-src code { color: var(--ink-dim); }
+
+  /* SmolLM2 honest-status callout */
+  .wip-note {
+    border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    border-radius: 7px; padding: 9px 12px;
+    font-size: 12px; color: var(--amber); line-height: 1.55;
+  }
+  .wip-note b { font-weight: 700; }
+
+  /* ---------- comparison table (dashboard's .cmp language) ---------- */
+  .cmp-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 860px; font-size: 12.5px; }
+  .cmp th, .cmp td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .cmp th {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.8px; text-transform: uppercase;
+    color: var(--ink-faint); background: var(--panel-2); white-space: nowrap;
+  }
+  .cmp tr:last-child td { border-bottom: none; }
+  .cmp td { color: var(--ink-dim); }
+  .cmp td b { color: var(--ink); font-weight: 650; }
+  .cmp td .num { font-family: var(--mono); color: var(--accent); }
+  .cmp td .pass {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 1px 7px; border-radius: 5px; white-space: nowrap;
+  }
+  .cmp td .wip {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    padding: 1px 7px; border-radius: 5px; white-space: nowrap;
+  }
+  .cmp td .slow { font-family: var(--mono); font-size: 11px; color: var(--amber); }
+  .cmp td .na { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); font-style: italic; }
+  .cmp tbody tr:hover { background: rgba(52,211,153,0.025); }
+  .cmp-note { margin-top: 10px; font-size: 11.5px; color: var(--ink-faint); line-height: 1.55; }
+  .cmp-note code { font-family: var(--mono); color: var(--ink-dim); font-size: 11px; }
+
+  /* ---------- boundary explainers ---------- */
+  .bounds { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 14px; }
+  .bound {
+    background: var(--panel); border: 1px solid var(--border-2);
+    border-radius: var(--radius-sm); padding: 16px 18px;
+  }
+  .bound h3 { margin: 0 0 7px; font-size: 14.5px; font-weight: 650; display: flex; align-items: center; gap: 9px; }
+  .bound h3 .b-tag {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.5px;
+    color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 2px 7px; border-radius: 5px;
+  }
+  .bound p { margin: 0; font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; }
+  .bound p b { color: var(--ink); font-weight: 650; }
+  .bound p code { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: 46px; padding-top: 20px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-faint);
+  }
+  footer .creed { color: var(--ink-dim); max-width: 70ch; }
+  footer .creed b { color: var(--accent); font-weight: 650; }
+  footer .links { display: flex; gap: 9px; flex-wrap: wrap; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card { transition: none; }
+    .card:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+
+    <div class="topbar">
+      <div class="brand">
+        <span class="wordmark">
+          <svg class="helix-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
+                  stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="6" cy="3" r="1.3" fill="#34d399"/><circle cx="18" cy="3" r="1.3" fill="#34d399"/>
+            <circle cx="6" cy="21" r="1.3" fill="#34d399"/><circle cx="18" cy="21" r="1.3" fill="#34d399"/>
+          </svg>
+          Helix
+        </span>
+        <span class="sub-pill">MODELS &amp; PATHS</span>
+      </div>
+      <div class="topbar-right">
+        <a class="nav-link" href="landing.html">Start here <span class="arr">&rarr;</span></a>
+        <a class="nav-link" href="index.html">Chat demo <span class="arr">&rarr;</span></a>
+        <a class="nav-link" href="dashboard.html">Proof &amp; attestation <span class="arr">&rarr;</span></a>
+      </div>
+    </div>
+
+    <header class="hero">
+      <h1>One verified stack. <span class="em">Pick your model, pick your trust boundary.</span></h1>
+      <p class="sub">
+        Every path below runs through the <b>same from-raw Helix toolchain</b> — a compiler rebuildable
+        from 299 hand-typed bytes, emitting the kernels that execute the model. What differs is the
+        model size, the hardware path, and exactly <b>where the trusted-once boundary sits</b>. Every
+        number on this page is transcribed from a committed fail-closed gate output
+        (<code style="font-family:var(--mono);font-size:12px">docs/HELIX_GPT2_DEMO_RUNBOOK.md</code> + the gate logs it cites);
+        where a number does not exist yet, the cell says <b>not yet measured</b> — never an estimate.
+      </p>
+    </header>
+
+    <!-- ===================== PATH CARDS ===================== -->
+    <section class="section" aria-labelledby="cards-h">
+      <h2 id="cards-h">The paths, one by one</h2>
+      <div class="cards">
+
+        <!-- GPT-2 124M GPU -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-name">GPT-2 124M <span class="path-tag">· GPU</span></span>
+            <span class="badge">ATTESTED MVP</span>
+          </div>
+          <div class="arch">124M params · 12 layers · fp32 · greedy · 8 kovc-emitted PTX kernels</div>
+          <div class="proves"><b>What it proves:</b> the full end-to-end claim — the real, unchanged
+            public model generating on the from-raw stack, parity-checked against an independent
+            oracle, byte-identical across re-runs, bound into a signed attestation. The snappy one:
+            a warm generation takes seconds, so this is the path to run live in a room.</div>
+          <div class="stats">
+            <span class="stat">argmax id 262 <b>EXACT</b></span>
+            <span class="stat"><b>25/25</b> ids vs oracle</span>
+            <span class="stat">max-abs logit diff <b>2.59e-04</b> (logits ~130)</span>
+            <span class="stat">re-runs <b>byte-identical</b> (gen-ids sha 8a2595cd…)</span>
+            <span class="stat">warm generation: <b>seconds</b></span>
+          </div>
+          <div class="boundary"><b>Trusted-once boundary:</b> hand-auditable from hex0 → kovc → PTX;
+            below PTX, NVIDIA's closed ptxas + GPU driver + the C CUDA-FFI launcher are trusted-once.
+            <span class="gate-src">gates: <code>gpt2_gpu_mvp.sh</code> · <code>gpt2_demo_attest.sh</code></span></div>
+        </div>
+
+        <!-- GPT-2-Large 774M GPU -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-name">GPT-2-Large 774M <span class="path-tag">· GPU</span></span>
+            <span class="badge">SCALE PROOF</span>
+          </div>
+          <div class="arch">774M params · 36 layers · fp32 · greedy · the SAME 8 kernels, zero new ops</div>
+          <div class="proves"><b>What it proves:</b> the stack generalizes — a 6× bigger model runs
+            through the exact same kernel set with only dimension changes (read from the model's
+            <code style="font-family:var(--mono);font-size:11px">config.json</code>), and still matches the
+            oracle token-for-token.</div>
+          <div class="stats">
+            <span class="stat">argmax id <b>262</b></span>
+            <span class="stat"><b>25/25</b> ids vs oracle</span>
+            <span class="stat">max-abs logit diff <b>3.8e-05</b></span>
+            <span class="stat is-na">speed: not separately timed (same kernels)</span>
+          </div>
+          <div class="boundary"><b>Trusted-once boundary:</b> same as 124M GPU — to PTX, then
+            ptxas/driver trusted-once.
+            <span class="gate-src">gate: <code>gpt2_scale.sh</code> (evidence: <code>scripts/scale_results.txt</code>)</span></div>
+        </div>
+
+        <!-- GPT-2-XL GPU — flagship -->
+        <div class="card is-flagship">
+          <div class="card-head">
+            <span class="card-name">GPT-2-XL 1.5B <span class="path-tag">· GPU</span></span>
+            <span class="badge">FLAGSHIP · THE CHAT MODEL</span>
+          </div>
+          <div class="arch">1.5B params · 48 layers · fp32 · greedy · same 8 kernels · per-layer weight streaming</div>
+          <div class="proves"><b>What it proves:</b> the measured fp32 ceiling — 1.5&nbsp;billion
+            parameters on one 8&nbsp;GB sm_86 box, served live over SSE with the served output
+            certified equal to the offline oracle before exposure. This is the model behind the
+            <a href="index.html">chat playground</a>. It is intentionally slow:
+            <b>the pitch is trust, not speed.</b></div>
+          <div class="stats">
+            <span class="stat">argmax id <b>262</b></span>
+            <span class="stat"><b>25/25</b> ids vs oracle</span>
+            <span class="stat">max-abs logit diff <b>4.4e-05</b></span>
+            <span class="stat">served == offline oracle <b>token-for-token</b></span>
+            <span class="stat is-slow"><b>≈ 9.8 s/token</b> measured (195.5 s / 20 tok, serve gate)</span>
+          </div>
+          <div class="boundary"><b>Trusted-once boundary:</b> same as 124M GPU — to PTX, then
+            ptxas/driver trusted-once.
+            <span class="gate-src">gates: <code>gpt2_scale.sh</code> · <code>helix_serve_gate.sh</code> (<code>scripts/_gate_run.log</code>)</span></div>
+        </div>
+
+        <!-- CPU no-ptxas -->
+        <div class="card">
+          <div class="card-head">
+            <span class="card-name">GPT-2 124M <span class="path-tag">· CPU, no ptxas</span></span>
+            <span class="badge">PUREST TRUST</span>
+          </div>
+          <div class="arch">124M params · 12 layers · fp32 · greedy · all arithmetic in kovc-compiled-from-raw Helix</div>
+          <div class="proves"><b>What it proves:</b> the deepest trust claim — the entire forward pass
+            with <b>no GPU vendor boundary at all</b>: zero trusted <i>arithmetic</i> above the
+            299-byte seed (the shared host TCB — OS/gcc/libc/CPU — is disclosed, not hidden).
+            ~130&nbsp;s/token, slow by design: this path exists to remove ptxas from the story, not to
+            serve traffic.</div>
+          <div class="stats">
+            <span class="stat">argmax id 262 <b>== oracle</b></span>
+            <span class="stat">max-abs logit diff <b>2.75e-04</b></span>
+            <span class="stat">block-0 hidden max-abs <b>1.144e-04</b></span>
+            <span class="stat">token-for-token <b>measured</b> (full greedy run; too slow to gate routinely)</span>
+            <span class="stat is-slow"><b>≈ 130 s/token</b></span>
+          </div>
+          <div class="boundary"><b>Trusted-once boundary:</b> none on the arithmetic side — no
+            ptxas, no driver, no GPU. The disclosed residual is the shared host TCB
+            (OS / kernel / gcc / libc / CPU + microcode) below the audited seed.
+            <span class="gate-src">gate: <code>gpt2_cpu_parity.sh</code></span></div>
+        </div>
+
+        <!-- SmolLM2 — gating in progress -->
+        <div class="card is-amber">
+          <div class="card-head">
+            <span class="card-name">SmolLM2-135M <span class="path-tag">· GPU · Llama-arch</span></span>
+            <span class="badge is-amber">NEW · GATING IN PROGRESS</span>
+          </div>
+          <div class="arch">135M params · 30 layers per its config (gates read dims from config.json) ·
+            RMSNorm · RoPE · SwiGLU · GQA · Apache-2.0</div>
+          <div class="proves"><b>What it will prove (once its gates are green):</b> that the same
+            verified stack extends from 2019's GPT-2 family to the <b>modern Llama architecture
+            family</b> — 3 new kovc-emitted kernels (rmsnorm, rope, silu_mul) + 5 reused, with the
+            same fail-closed gate machinery and the same independent-oracle parity bar. No change to
+            the compiler: the self-host fixpoint is untouched.</div>
+          <div class="wip-note"><b>Honest status, right now:</b> the fail-closed gates for this model
+            are being run as this page ships. Committed so far: the kernel-level parity gate
+            (G-L0, <code style="font-family:var(--mono)">scripts/llama_ops_parity.sh</code>) passed for all 3 new kernels.
+            Full-model parity vs the oracle, serve integration, and any speed number are
+            <b>not yet measured</b> — and per the house rule, nothing is claimed here until its gate
+            is green. This card carries no performance or parity numbers yet on purpose.</div>
+          <div class="boundary"><b>Trusted-once boundary (once gated):</b> same as the GPU paths —
+            to PTX, then ptxas/driver trusted-once.
+            <span class="gate-src">plan + status: <code>docs/HELIX_LLAMA_PLAN.md</code></span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ===================== THE TABLE ===================== -->
+    <section class="section" aria-labelledby="tbl-h">
+      <h2 id="tbl-h">Measured, side by side</h2>
+      <p class="lede">Same columns as the proof page's table, extended with the in-progress row.
+        Every green pill cites a committed fail-closed gate; amber means the gates are still running.</p>
+      <div class="cmp-wrap">
+        <table class="cmp">
+          <thead>
+            <tr>
+              <th>Model · path</th><th>Params · layers</th><th>Parity vs independent oracle</th>
+              <th>max-abs logit diff</th><th>Measured speed</th><th>Trusted-once boundary</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>GPT-2 124M</b> · GPU</td>
+              <td>124M · 12</td>
+              <td><span class="pass">argmax 262 EXACT</span> <span class="pass">25/25 ids</span></td>
+              <td><span class="num">2.59e-04</span> <span style="color:var(--ink-faint)">(logits ~130)</span></td>
+              <td>seconds (warm) — <code style="font-family:var(--mono);font-size:11px">gpt2_gpu_mvp.sh</code></td>
+              <td>hand-auditable to PTX; ptxas/driver trusted-once</td>
+            </tr>
+            <tr>
+              <td><b>GPT-2-Large 774M</b> · GPU</td>
+              <td>774M · 36</td>
+              <td><span class="pass">argmax 262</span> <span class="pass">25/25 ids</span></td>
+              <td><span class="num">3.8e-05</span></td>
+              <td><span class="na">not separately timed (same kernels)</span> — <code style="font-family:var(--mono);font-size:11px">gpt2_scale.sh</code></td>
+              <td>same as 124M GPU — zero new ops at scale</td>
+            </tr>
+            <tr>
+              <td><b>GPT-2-XL 1.5B</b> · GPU <span style="color:var(--ink-faint)">(the chat model)</span></td>
+              <td>1.5B · 48</td>
+              <td><span class="pass">argmax 262</span> <span class="pass">25/25 ids</span> <span class="pass">served == offline</span></td>
+              <td><span class="num">4.4e-05</span></td>
+              <td><span class="slow">≈ 9.8 s/token</span> (195.5 s / 20 tok, serve gate)</td>
+              <td>same as 124M GPU — fits the 8 GB sm_86 box at fp32</td>
+            </tr>
+            <tr>
+              <td><b>GPT-2 124M</b> · CPU <span style="color:var(--ink-faint)">no-ptxas</span></td>
+              <td>124M · 12</td>
+              <td><span class="pass">argmax 262 == oracle</span> <span class="pass">token-for-token (measured)</span></td>
+              <td><span class="num">2.75e-04</span> <span style="color:var(--ink-faint)">(block-0 hidden: 1.144e-04)</span></td>
+              <td><span class="slow">≈ 130 s/token</span> — slow by design</td>
+              <td><b>no GPU boundary at all</b> — zero trusted <i>arithmetic</i> above the seed (shared host TCB disclosed)</td>
+            </tr>
+            <tr>
+              <td><b>SmolLM2-135M</b> · GPU <span style="color:var(--ink-faint)">Llama-arch, NEW</span></td>
+              <td>135M · 30 <span style="color:var(--ink-faint)">(per config)</span></td>
+              <td><span class="wip">GATING IN PROGRESS</span> <span class="na">full-model parity not yet measured</span></td>
+              <td><span class="na">not yet measured</span></td>
+              <td><span class="na">not yet measured</span></td>
+              <td>same as the GPU paths once gated; 3 new kernels passed kernel-level parity (G-L0)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cmp-note">Sources: <code>scripts/gpt2_gpu_mvp.sh</code>, <code>scripts/gpt2_scale.sh</code>
+        (+ committed PRIMARY-mode evidence in <code>scripts/scale_results.txt</code>),
+        <code>scripts/gpt2_cpu_parity.sh</code>, <code>scripts/helix_serve_gate.sh</code>
+        (<code>scripts/_gate_run.log</code>), <code>scripts/llama_ops_parity.sh</code> (SmolLM2 G-L0;
+        full-model gates in progress — <code>docs/HELIX_LLAMA_PLAN.md</code>). fp32 everywhere; greedy
+        decoding; the oracle is an independent numpy fp32 implementation of each model's spec. No
+        cuBLAS/vendor comparisons are claimed anywhere — that is not what this stack is for.</p>
+    </section>
+
+    <!-- ===================== BOUNDARIES EXPLAINED ===================== -->
+    <section class="section" aria-labelledby="b-h">
+      <h2 id="b-h">"Trusted once" — what each boundary actually means</h2>
+      <p class="lede">Verification is only honest if you can say exactly where it stops. These are the
+        stops, in plain language (the full residuals list lives on the <a href="dashboard.html">proof page</a>).</p>
+      <div class="bounds">
+        <div class="bound">
+          <h3>GPU paths <span class="b-tag">TO PTX</span></h3>
+          <p>Everything from the <b>299 hand-typed bytes</b> up to the PTX text of the kernels is
+            rebuildable and hand-auditable (<code>hex0 → seed → kovc → PTX</code>). Below PTX,
+            NVIDIA's closed <code>ptxas</code> assembler, the GPU driver, and the C CUDA-FFI launcher
+            are <b>trusted-once</b>: audited at the interface, not rebuilt from source. That boundary
+            is stated on every page — "complete to PTX, not to SASS."</p>
+        </div>
+        <div class="bound">
+          <h3>CPU path <span class="b-tag">NO VENDOR BOUNDARY</span></h3>
+          <p>The no-ptxas path removes the GPU vendor entirely: <b>every arithmetic operation</b> in
+            the forward pass runs in code compiled by the from-raw toolchain. Zero trusted
+            <i>arithmetic</i> above the seed. The price is honesty's favorite number on this site:
+            ≈ 130 s/token.</p>
+        </div>
+        <div class="bound">
+          <h3>Both paths <span class="b-tag">SHARED HOST TCB</span></h3>
+          <p>Below the audited seed, the usual platform is still trusted: OS / kernel / gcc (for the
+            bootstrap harness) / libc / binutils / loader / CPU + microcode / RAM. Disclosed, not
+            hidden — the claim has always been about the compute stack <b>above</b> the seed. The
+            independent oracle also shares each model's <i>spec</i> (not its code): it catches
+            implementation bugs, not a shared misunderstanding of the architecture.</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="creed"><b>Fail-closed.</b> A number appears on this page only after a gate produced
+        it; "not yet measured" is what honesty looks like while the gates run.</div>
+      <div class="links">
+        <a class="nav-link" href="landing.html">Start here</a>
+        <a class="nav-link" href="index.html">Chat demo</a>
+        <a class="nav-link" href="dashboard.html">Proof &amp; attestation</a>
+        <a class="nav-link" href="onepager.html">One-pager</a>
+      </div>
+    </footer>
+  </main>
+</body>
+</html>

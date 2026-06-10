@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Helix — the model you know, on a stack you can verify from the first byte</title>
+<style>
+  /* ============================================================
+     demo/landing.html — the PUBLIC LANDING page (the 5-second
+     pitch + honest orientation). Self-contained, offline: no CDNs,
+     no web fonts, no frameworks; works from file://. Same visual
+     language as index.html / dashboard.html (identical :root
+     palette, topbar, wordmark, panel surfaces).
+
+     HONESTY RULES OF THIS PAGE:
+     - it never claims liveness: the demo defaults to a clearly
+       labeled REPLAY of a real captured run; LIVE is an explicit,
+       health-gated upgrade on the chat page itself;
+     - the "what this is / is not" card states the edges unprompted
+       (base model not assistant; ~10 s/token by design;
+       source-available non-commercial, NOT open-source);
+     - every number is from a committed gate output.
+     ============================================================ */
+  :root {
+    --bg:        #0a0e14;
+    --bg-2:      #0f141c;
+    --panel:     #111722;
+    --panel-2:   #0d121b;
+    --border:    #1e2733;
+    --border-2:  #28323f;
+    --ink:       #e6edf3;
+    --ink-dim:   #9aa7b4;
+    --ink-faint: #6b7785;
+    --accent:    #34d399;
+    --accent-dim:#1d6b4f;
+    --accent-bg: rgba(52,211,153,0.08);
+    --amber:     #f5b14c;
+    --amber-dim: #6b521d;
+    --amber-bg:  rgba(245,177,76,0.08);
+    --red:       #f0726a;
+    --red-dim:   #6b2a26;
+    --red-bg:    rgba(240,114,106,0.08);
+    --blue:      #6cb6f5;
+    --blue-dim:  #29516f;
+    --blue-bg:   rgba(108,182,245,0.07);
+    --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --radius: 14px;
+    --radius-sm: 9px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 700px at 50% -10%, #121a26 0%, var(--bg) 55%, var(--bg-2) 100%);
+    background-attachment: fixed;
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    position: relative;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(52,211,153,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(52,211,153,0.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+    -webkit-mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
+  }
+  .wrap { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 30px 28px 60px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  /* ---------- topbar ---------- */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 30px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .wordmark {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-weight: 700; font-size: 19px; letter-spacing: 0.2px;
+  }
+  .wordmark .helix-glyph { width: 22px; height: 22px; display: inline-block; }
+  .sub-pill {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.7px;
+    color: var(--ink-dim); border: 1px solid var(--border-2); background: var(--panel-2);
+    padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .repo-link {
+    font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink-dim);
+    border: 1px solid var(--border-2); background: var(--panel);
+    padding: 8px 14px; border-radius: 999px;
+  }
+  .repo-link:hover { color: var(--accent); border-color: var(--accent-dim); text-decoration: none; }
+
+  /* ---------- hero: the 5-second pitch ---------- */
+  .hero { text-align: left; margin-bottom: 30px; }
+  .hero-eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 1.6px;
+    text-transform: uppercase; color: var(--accent);
+    border: 1px solid var(--accent-dim); background: var(--accent-bg);
+    padding: 4px 12px; border-radius: 999px; margin-bottom: 14px;
+  }
+  .hero-eyebrow .he-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .hero h1 {
+    font-size: clamp(28px, 4.6vw, 46px); line-height: 1.14; font-weight: 700;
+    margin: 0 0 14px; letter-spacing: -0.6px; max-width: 24ch;
+  }
+  .hero h1 .em {
+    color: var(--accent);
+    background: linear-gradient(92deg, #6ee7b7 0%, var(--accent) 55%, #11b981 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .hero .sub { font-size: clamp(14px, 1.6vw, 16.5px); color: var(--ink-dim); max-width: 78ch; margin: 0 0 14px; }
+  .hero .sub b { color: var(--ink); font-weight: 650; }
+  .hero-facts { display: flex; flex-wrap: wrap; gap: 7px; }
+  .hero-facts .hf {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    border: 1px solid var(--border-2); background: var(--panel);
+    padding: 4px 11px; border-radius: 999px; white-space: nowrap;
+  }
+  .hero-facts .hf b { color: var(--ink); font-weight: 650; }
+  .hero-facts .hf.is-accent { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .hero-facts .hf.is-slow { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-bg); }
+
+  /* ---------- big destination links ---------- */
+  .dests { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin: 26px 0 0; }
+  .dest {
+    display: flex; flex-direction: column; gap: 7px;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 130%);
+    border: 1px solid var(--border-2); border-radius: var(--radius);
+    padding: 18px 20px; color: var(--ink); text-decoration: none;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .dest:hover { border-color: var(--accent-dim); transform: translateY(-2px); text-decoration: none; }
+  .dest.is-primary { border-color: var(--accent-dim); box-shadow: 0 0 0 1px rgba(52,211,153,0.07), 0 10px 30px -20px rgba(52,211,153,0.35); }
+  .dest .d-kicker {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+  .dest .d-title { font-size: 16.5px; font-weight: 700; }
+  .dest .d-title .arr { color: var(--accent); }
+  .dest .d-sub { font-size: 12.5px; color: var(--ink-dim); line-height: 1.5; }
+
+  /* ---------- section heads ---------- */
+  .section { margin-top: 40px; }
+  .section > h2 {
+    font-size: 13px; letter-spacing: 1.6px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700; margin: 0 0 16px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section > h2::after {
+    content: ""; flex: 1; height: 1px;
+    background: linear-gradient(90deg, var(--border) 0%, transparent 100%);
+  }
+
+  /* ---------- dual-mode card ---------- */
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .modes { grid-template-columns: 1fr; } }
+  .mode {
+    background: var(--panel); border: 1px solid var(--border-2);
+    border-radius: var(--radius); padding: 18px 20px;
+  }
+  .mode h3 { margin: 0 0 7px; font-size: 15.5px; font-weight: 650; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .mode h3 .m-tag {
+    font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 3px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .mode.live h3 .m-tag { color: var(--accent); border: 1px solid var(--accent-dim); background: var(--accent-bg); }
+  .mode.replay h3 .m-tag { color: var(--blue); border: 1px solid var(--blue-dim); background: var(--blue-bg); }
+  .mode p { margin: 6px 0 0; font-size: 13px; color: var(--ink-dim); line-height: 1.55; }
+  .mode p b { color: var(--ink); font-weight: 650; }
+  .mode-note { margin-top: 12px; font-size: 12px; color: var(--ink-faint); line-height: 1.55; max-width: 92ch; }
+  .mode-note b { color: var(--ink-dim); }
+
+  /* ---------- prove-it ---------- */
+  .prove {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--accent-dim); border-radius: var(--radius);
+    padding: 20px 22px;
+  }
+  .prove p { margin: 0 0 4px; font-size: 13.5px; color: var(--ink-dim); line-height: 1.55; }
+  .prove p b { color: var(--ink); font-weight: 650; }
+  .cmd-row { display: flex; gap: 8px; align-items: stretch; margin: 12px 0; flex-wrap: wrap; }
+  .prove .cmd {
+    flex: 1; min-width: 260px;
+    display: block; font-family: var(--mono); font-size: 13px; color: var(--accent);
+    background: #0a1118; border: 1px solid var(--border-2); border-radius: 8px;
+    padding: 12px 15px; overflow-x: auto; white-space: pre;
+  }
+  .copy-btn {
+    background: var(--accent-bg); border: 1px solid var(--accent-dim); color: var(--accent);
+    border-radius: 8px; cursor: pointer; font-family: var(--mono); font-size: 11.5px;
+    font-weight: 700; padding: 0 16px;
+  }
+  .copy-btn:hover { border-color: var(--accent); }
+  .prove .fine { font-size: 12px; color: var(--ink-faint); margin: 0; }
+
+  /* ---------- is / is-not ---------- */
+  .isnot { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .isnot { grid-template-columns: 1fr; } }
+  .isnot .col {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 17px 20px;
+  }
+  .isnot .col.is { border-top: 2px solid var(--accent-dim); }
+  .isnot .col.not { border-top: 2px solid var(--amber-dim); }
+  .isnot h3 {
+    margin: 0 0 10px; font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 1.2px; text-transform: uppercase;
+  }
+  .isnot .col.is h3 { color: var(--accent); }
+  .isnot .col.not h3 { color: var(--amber); }
+  .isnot ul { margin: 0; padding-left: 18px; }
+  .isnot li { font-size: 13px; color: var(--ink-dim); line-height: 1.55; margin-bottom: 8px; }
+  .isnot li b { color: var(--ink); font-weight: 650; }
+  .isnot li code { font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim); }
+
+  /* ---------- footer ---------- */
+  footer {
+    margin-top: 46px; padding-top: 20px; border-top: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-faint);
+  }
+  footer .creed { color: var(--ink-dim); max-width: 62ch; }
+  footer .creed b { color: var(--accent); font-weight: 650; }
+  footer .flinks { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dest { transition: none; }
+    .dest:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+
+    <div class="topbar">
+      <div class="brand">
+        <span class="wordmark">
+          <svg class="helix-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
+                  stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="6" cy="3" r="1.3" fill="#34d399"/><circle cx="18" cy="3" r="1.3" fill="#34d399"/>
+            <circle cx="6" cy="21" r="1.3" fill="#34d399"/><circle cx="18" cy="21" r="1.3" fill="#34d399"/>
+          </svg>
+          Helix
+        </span>
+        <span class="sub-pill">THE VERIFIABLE EXECUTION LAYER</span>
+      </div>
+      <a class="repo-link" href="https://github.com/Questeria/helix" rel="noopener">github.com/Questeria/helix</a>
+    </div>
+
+    <!-- ================= THE 5-SECOND PITCH ================= -->
+    <header class="hero">
+      <div class="hero-eyebrow"><span class="he-dot" aria-hidden="true"></span>Real models · from-raw compiler · fail-closed proof</div>
+      <h1>The model you know, on a stack you can <span class="em">verify from the first byte</span>.</h1>
+      <p class="sub">
+        Real, unchanged <b>GPT-2-XL (1.5B)</b> generating text on a compiler you can rebuild from
+        <b>299 hand-typed bytes</b> — its output matched <b>token-for-token against an independent
+        oracle</b>, byte-reproducible, with every per-layer kernel launch streamed to your browser as
+        it happens. <b>SmolLM2-135M</b> (modern Llama architecture) is being added on the same stack —
+        its fail-closed gates are running now, and it appears here only when they are green.
+      </p>
+      <div class="hero-facts" aria-label="Measured facts">
+        <span class="hf"><b>299 B</b> → full compiler, rebuilt in ~1 min</span>
+        <span class="hf is-accent">token-for-token vs independent oracle · <b>25/25</b></span>
+        <span class="hf"><b>1.5B</b> params on one 8 GB GPU · fp32</span>
+        <span class="hf is-slow">live XL ≈ <b>10 s/token</b> — by design: trust, not speed</span>
+      </div>
+
+      <!-- ================= BIG LINKS ================= -->
+      <nav class="dests" aria-label="Demo destinations">
+        <a class="dest is-primary" href="index.html">
+          <span class="d-kicker">Watch it think</span>
+          <span class="d-title">Chat playground <span class="arr">→</span></span>
+          <span class="d-sub">Give GPT-2-XL text to continue while all 48 layers and every
+            compiler-emitted kernel light up live. Multi-turn, with an honest context budget.</span>
+        </a>
+        <a class="dest" href="dashboard.html">
+          <span class="d-kicker">The evidence</span>
+          <span class="d-title">Proof &amp; attestation <span class="arr">→</span></span>
+          <span class="d-sub">The trust chain from 299 bytes to the generated sentence: gates, parity
+            numbers, residuals — every figure from a committed fail-closed run.</span>
+        </a>
+        <a class="dest" href="compare.html">
+          <span class="d-kicker">Pick your boundary</span>
+          <span class="d-title">Models &amp; paths <span class="arr">→</span></span>
+          <span class="d-sub">124M vs 774M vs 1.5B, GPU vs the no-ptxas CPU path, and the in-progress
+            SmolLM2 — what each proves and where "trusted once" sits.</span>
+        </a>
+        <a class="dest" href="onepager.html">
+          <span class="d-kicker">The leave-behind</span>
+          <span class="d-title">One-pager <span class="arr">→</span></span>
+          <span class="d-sub">The whole story on one printable page (browser Print → PDF).</span>
+        </a>
+      </nav>
+    </header>
+
+    <!-- ================= DUAL MODE, HONESTLY ================= -->
+    <section class="section" aria-labelledby="m-h">
+      <h2 id="m-h">Two honest modes — the page always tells you which one you're in</h2>
+      <div class="modes">
+        <div class="mode live">
+          <h3>Live <span class="m-tag">WHEN THE GPU BOX IS UP</span></h3>
+          <p>A C HTTP+SSE worker streams the real forward pass from an RTX 3070 — every
+            <code style="font-family:var(--mono);font-size:11.5px">layer_begin</code>, every kernel launch, every token, as it
+            happens, at the real ≈ 10 s/token pace. Liveness is <b>health-gated</b>: the chat page
+            claims LIVE only after <code style="font-family:var(--mono);font-size:11.5px">/api/health</code> reports a ready
+            worker, and the GPU runs <b>one generation at a time</b> (you may briefly wait your turn —
+            the page says so plainly).</p>
+        </div>
+        <div class="mode replay">
+          <h3>Captured replay <span class="m-tag">ALWAYS AVAILABLE</span></h3>
+          <p>No GPU online? You still see something <b>real</b>: a replay of an actual gated
+            GPT-2-XL run — its ids, text and totals are <b>verbatim from the fail-closed serve gate</b>
+            (served output == oracle, token-for-token 25/25). The replay is labeled on every surface,
+            its animation is disclosed as time-compressed, and it <b>never pretends to be live</b>.</p>
+        </div>
+      </div>
+      <p class="mode-note"><b>The default is replay.</b> The public page never claims a live run it
+        cannot back; when the backend comes up, the chat page offers an explicit "Switch to LIVE" —
+        it never silently upgrades. (A third state, an amber MOCK layout preview, exists for
+        development and is unmistakably labeled as simulated.)</p>
+    </section>
+
+    <!-- ================= PROVE IT YOURSELF ================= -->
+    <section class="section" aria-labelledby="p-h">
+      <h2 id="p-h">Prove it yourself — one command, no faith required</h2>
+      <div class="prove">
+        <p><b>Don't take this site's word for any of it.</b> On any x86-64 Linux box — no GPU, no
+          Python, no model weights:</p>
+        <div class="cmd-row">
+          <code class="cmd" id="cloneCmd">git clone https://github.com/Questeria/helix && cd helix && bash scripts/reproduce_trust.sh</code>
+          <button class="copy-btn" id="copyBtn" type="button" title="Copy the command">copy</button>
+        </div>
+        <p class="fine">Deletes every pre-built compiler rung, rebuilds <b>hex0 → seed → kovc</b> from
+          the 299 hand-typed bytes, re-runs the self-host fixpoint and the gcc diverse-double-compile,
+          and asserts the pinned anchors — printing <b>REPRODUCE_TRUST: PASS</b> in about a minute.
+          The same check runs green in CI on a clean <code style="font-family:var(--mono)">ubuntu-latest</code> runner.
+          (The GPT-2 demo legs additionally need the public HuggingFace weights + an independent
+          oracle — see the <a href="dashboard.html">proof page</a> for the two reproducibility tiers.)</p>
+      </div>
+    </section>
+
+    <!-- ================= WHAT THIS IS / IS NOT ================= -->
+    <section class="section" aria-labelledby="i-h">
+      <h2 id="i-h">What this is — and what it is not</h2>
+      <div class="isnot">
+        <div class="col is">
+          <h3>This is</h3>
+          <ul>
+            <li><b>A verifiable execution layer:</b> real public models, unchanged, running on a
+              compiler stack rebuildable from 299 hand-typed bytes — with the rebuild one command away.</li>
+            <li><b>Fail-closed and deterministic:</b> greedy decoding, byte-identical re-runs, every
+              claim behind a gate that refuses to fake a green.</li>
+            <li><b>Independently cross-checked:</b> output matched token-for-token against an
+              independent numpy oracle (25/25 at 124M, 774M and 1.5B).</li>
+            <li><b>Honest about its edges:</b> the residuals are stated unprompted on every page —
+              verified to PTX (not SASS) on the GPU path, fp32-only, single GPU, oracle shares the
+              spec.</li>
+          </ul>
+        </div>
+        <div class="col not">
+          <h3>This is not</h3>
+          <ul>
+            <li><b>Not an assistant.</b> GPT-2-XL is a 2019 <b>base completion model</b>: it continues
+              text. It doesn't follow instructions, chat, or aim for factual accuracy — and this site
+              never dresses it up as if it did.</li>
+            <li><b>Not fast.</b> Live XL runs at ≈ 10 s/token measured (the CPU purest-trust path:
+              ≈ 130 s/token). Deliberate: the product is <b>trust, not speed</b> — no speed claims are
+              made anywhere.</li>
+            <li><b>Not open-source.</b> The code is <b>source-available, non-commercial</b> under the
+              Helix Non-Commercial License — free to use, study, modify and share for any
+              non-commercial purpose; commercial use requires a separate license. Read the
+              <a href="https://github.com/Questeria/helix/blob/main/LICENSE" rel="noopener">LICENSE</a>
+              (the <code>LICENSE</code> file at the repo root).</li>
+            <li><b>Not a frontier-capability claim.</b> No "fully verified GPU", no benchmark-beating,
+              no AGI — never claimed, anywhere.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="creed"><b>Fail-closed.</b> Every number on this site comes from a real gate output;
+        a red line is the system working, not breaking.</div>
+      <div class="flinks">
+        <a href="index.html">chat</a>
+        <a href="dashboard.html">proof</a>
+        <a href="compare.html">models &amp; paths</a>
+        <a href="onepager.html">one-pager</a>
+        <a href="embed.html">embed widget</a>
+        <a href="https://github.com/Questeria/helix" rel="noopener">repo</a>
+      </div>
+    </footer>
+  </main>
+
+<script>
+"use strict";
+/* Single enhancement: copy the prove-it command. Fully optional — the page
+   is complete without JavaScript (the command is plain selectable text). */
+(function () {
+  var btn = document.getElementById("copyBtn");
+  var cmd = document.getElementById("cloneCmd");
+  if (!btn || !cmd) return;
+  btn.addEventListener("click", function () {
+    var text = cmd.textContent;
+    function done(ok) {
+      btn.textContent = ok ? "copied ✓" : "select it manually";
+      setTimeout(function () { btn.textContent = "copy"; }, 2200);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); },
+                                               function () { done(false); });
+    } else {
+      /* clipboard API unavailable (e.g. file://): select the text instead */
+      try {
+        var range = document.createRange();
+        range.selectNodeContents(cmd);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        done(false);
+      } catch (e) { done(false); }
+    }
+  });
+})();
+</script>
+</body>
+</html>
