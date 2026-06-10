@@ -137,25 +137,10 @@
   // ---------- hex0 wave grid ----------
   const hexG = document.querySelector("#hex-grid");
   if (hexG) {
-    const PER_TABLE = {
-      92: 80.0, 93: 76.5, 94: 74.0, 95: 75.0, 96: 72.0,
-      97: 78.5, 98: 71.0, 99: 70.0, 100: 68.0, 101: 67.5,
-      102: 64.5, 103: 67.0, 104: 64.0, 105: 64.5, 106: 64.5,
-      107: 60.0, 108: 57.5, 109: 56.0, 110: 54.5, 111: 54.5,
-      112: 50.5, 113: 50.0, 114: 44.5, 115: 37.5,
-      116: 33.5, 117: 24.5, 118: 18.0, 119: 8.5,
-      120: 0.0,
-      121: -8.5, 122: -18.0, 123: -24.5, 124: -33.5,
-      125: -37.5, 126: -44.5, 127: -50.0, 128: -50.5,
-      129: -54.5, 130: -54.5, 131: -56.0, 132: -57.5, 133: -60.0,
-      134: -64.5, 135: -64.5, 136: -64.0, 137: -67.0, 138: -64.5,
-      139: -67.5, 140: -68.0, 141: -70.0, 142: -71.0, 143: -78.5,
-      144: -72.0, 145: -75.0, 146: -74.0, 147: -76.5, 148: -80.0,
-    };
-    function tiltFor(col) {
-      if (col in PER_TABLE) return PER_TABLE[col];
-      return col < 120 ? 82 : -82;
-    }
+    // Tilt = the screen-space lean of this column's grid line off vertical.
+    // Rotating each glyph by exactly that angle (then applying the global
+    // vertical foreshortening) lays the byte flat into the floor plane, with
+    // its vertical strokes converging to the same vanishing line as the grid.
     const HEX_POOL = ["48","89","C7","BA","CD","80","EB","C3","B0","3C","0F","05","7F","45","4C","46","B8","01","00","BB","31","C0","E8","5D","FF","D2","83","EC","C1","E9","C6","D1","F8","74","75","FE"];
     let hseed = 7;
     const hrand = () => { hseed = (hseed * 9301 + 49297) % 233280; return hseed / 233280; };
@@ -189,7 +174,9 @@
         text.setAttribute("text-anchor", "middle");
         text.setAttribute("dominant-baseline", "central");
         text.setAttribute("font-size", (18 * Math.pow(1 - tb * tb, 1.3) + 1.5).toFixed(2));
-        const tilt = tiltFor(i) * -1;
+        const dxRay = xh - xf;
+        const dyUp = YA - HY;
+        const tilt = (Math.atan2(dxRay, dyUp) * 180) / Math.PI;
         text.setAttribute(
           "transform",
           `translate(${x.toFixed(2)} ${yAt.toFixed(2)}) ` +
