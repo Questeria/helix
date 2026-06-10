@@ -63,7 +63,7 @@ const NODES = [
     hex: "$ sha256sum seed.bin\n9837db12752a22159ca75a533910bc0d…\n\n; every reproduction deletes the\n; committed binary and rebuilds it\n; from the rung below",
   },
   {
-    id: "kovc", name: "kovc", size: "587,092 B",
+    id: "kovc", name: "kovc", size: "698,392 B",
     tag: "09 / Self-hosted",
     title: "kovc, written in Helix",
     desc: "The Helix compiler — lexer, parser, and x86-64-ELF + PTX code generator, written in Helix (helixc/bootstrap/{lexer,parser,kovc}.hx). It compiles its own source: seed → K1 → K2 → K3 → K4 with K2 == K3 == K4 byte-identical (fixpoint 0992dddd…). The chain closes.",
