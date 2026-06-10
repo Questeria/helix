@@ -70,6 +70,16 @@ static int DH = 64;          /* head dim = DM/NH */
 static int Spad = 64;        /* S padded up to a multiple of 64 for the tiled GEMMs */
 static float ATTN_SCALE = 0.125f;  /* 1/sqrt(head_dim)=1/sqrt(64) */
 
+/* ---- ADDITIVE --arch llama (2026-06): SmolLM2/TinyLlama-class models on the SAME
+ * launcher. ARCH + the llama dims come from the v2 weight header (gpt2_pack --arch llama):
+ * bytes 40..55 = u32 arch(1=llama), u32 n_kv_heads, f32 rope_theta, f32 rms_eps. The gpt2
+ * path (v1 header) is untouched; every llama difference branches on ARCH==1. */
+static int   ARCH = 0;             /* 0=gpt2 (v1 header), 1=llama (v2 header) */
+static int   NKV = 0;              /* llama: n_kv_heads (GQA); KVD = NKV*DH */
+static int   KVD = 0;
+static float ROPE_THETA = 0.0f;
+static float RMS_EPS = 1e-5f;
+
 /* ---- P1 weight-file header (must match helix-llm/tools/gpt2_import.py) ---- */
 #define MAGIC   0x48584757u   /* 'HXGW' little-endian */
 #define VERSION 1u
@@ -85,6 +95,8 @@ static int check(CUresult r, const char* what) {
 static CUcontext ctx;
 /* the forward-only kernel handles (fork picks per-op) */
 static CUfunction f_mm_t, f_abt_t, f_ln_eps, f_sm_causal, f_bias, f_gelu, f_add, f_scale_rt;
+/* llama-arch kernel handles (G-L0-verified; loaded only when ARCH==1) */
+static CUfunction f_rms, f_rope, f_silu;
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); SYNC("sync " #fn); } while (0)
@@ -132,6 +144,22 @@ static void gelu(CUdeviceptr x, CUdeviceptr y, int n) {
     int nn=n; void* ar[] = { &x,&y,&nn };
     int blk=1; int cand[]={256,128,64,32,1}; for (int i=0;i<5;i++) if (n%cand[i]==0){blk=cand[i];break;}
     LX(f_gelu, (unsigned)(n/blk), (unsigned)blk, ar);
+}
+
+/* ---- llama kernel wrappers (EXACT G-L0-verified launch geometry: one thread per row/elem,
+ * grid=rows|n, block=1 -- the same shapes scripts/llama_ops_parity.sh gated green). ---- */
+static CUdeviceptr d_cos, d_sin;   /* host-precomputed RoPE tables [Smax, DH/2] (uploaded once) */
+/* RMSNorm y[r,:]=x[r,:]*w/rms(x[r,:]), eps baked 1e-5 in the kernel. grid=rows block=1. */
+static void rms_norm_k(CUdeviceptr x, CUdeviceptr y, CUdeviceptr w, int rows, int cols) {
+    int c=cols; void* ar[] = { &x,&y,&w,&c }; LX(f_rms, (unsigned)rows, 1, ar);
+}
+/* RoPE rotate_half IN-PLACE on a packed [rows,DH] head slab; table row s == q row s == position s. */
+static void rope_k(CUdeviceptr q, int rows) {
+    int half = DH/2; void* ar[] = { &q,&d_cos,&d_sin,&half }; LX(f_rope, (unsigned)rows, 1, ar);
+}
+/* SwiGLU gate y[i] = u[i]*silu(g[i]) over n elems. grid=n block=1 (G-L0 geometry). */
+static void silu_mul_k(CUdeviceptr g, CUdeviceptr u, CUdeviceptr y, int n) {
+    int nn=n; void* ar[] = { &g,&u,&y,&nn }; LX(f_silu, (unsigned)n, 1, ar);
 }
 
 static CUdeviceptr A(size_t nf) { CUdeviceptr p; CKX(cuMemAlloc(&p, nf * sizeof(float)), "alloc"); return p; }
@@ -182,6 +210,31 @@ static long off_wpe(void)  { return off_globals() + (long)NV*DM; }
 static long off_lnfg(void) { return off_globals() + (long)NV*DM + (long)NC*DM; }
 static long off_lnfb(void) { return off_lnfg() + DM; }
 
+/* ---- llama (v2) layout: per layer in_ln[DM] q[DM,DM] k[KVD,DM] v[KVD,DM] o[DM,DM]
+ * post_ln[DM] gate[DFF,DM] up[DFF,DM] down[DM,DFF]; globals embed[NV,DM] norm[DM].
+ * All Linear weights [out,in] UN-TRANSPOSED (HF order) -- every llama GEMM is mm_ABt. */
+static long per_layer_floats_ll(void) {
+    return (long)DM + (long)DM*DM + 2L*(long)KVD*DM + (long)DM*DM
+         + (long)DM + 2L*(long)DFF*DM + (long)DM*DFF;
+}
+typedef struct { long inln, qW, kW, vW, oW, postln, gateW, upW, downW; } LayerOffLL;
+static LayerOffLL layer_offsets_ll(void) {
+    LayerOffLL o; long p = 0;
+    o.inln   = p; p += DM;
+    o.qW     = p; p += (long)DM*DM;
+    o.kW     = p; p += (long)KVD*DM;
+    o.vW     = p; p += (long)KVD*DM;
+    o.oW     = p; p += (long)DM*DM;
+    o.postln = p; p += DM;
+    o.gateW  = p; p += (long)DFF*DM;
+    o.upW    = p; p += (long)DFF*DM;
+    o.downW  = p; p += (long)DM*DFF;
+    return o;
+}
+static long off_layer_ll(int L)  { return (long)L * per_layer_floats_ll(); }
+static long off_embed_ll(void)   { return (long)NL * per_layer_floats_ll(); }
+static long off_normf_ll(void)   { return off_embed_ll() + (long)NV*DM; }
+
 static int load_gpt2_weights(const char* path) {
     g_fd = open(path, O_RDONLY);
     if (g_fd < 0) { fprintf(stderr, "open weights '%s': %s\n", path, strerror(errno)); return 2; }
@@ -195,7 +248,8 @@ static int load_gpt2_weights(const char* path) {
     memcpy(&nh,&hb[16],4); memcpy(&nv,&hb[20],4); memcpy(&nc,&hb[24],4); memcpy(&dff,&hb[28],4);
     memcpy(&nfloat,&hb[32],8);
     if (magic != MAGIC) { fprintf(stderr, "bad magic 0x%08x (want 0x%08x)\n", magic, MAGIC); return 2; }
-    if (ver != VERSION) { fprintf(stderr, "bad version %u\n", ver); return 2; }
+    if (ver != VERSION && ver != 2u) { fprintf(stderr, "bad version %u\n", ver); return 2; }
+    if ((ver == 2u) != (ARCH == 1)) { fprintf(stderr, "header ver %u vs ARCH %d mismatch (peek failed?)\n", ver, ARCH); return 2; }
     if ((int)nl!=NL || (int)dm!=DM || (int)nh!=NH || (int)nv!=NV || (int)nc!=NC || (int)dff!=DFF) {
         fprintf(stderr, "header dims (nl=%u dm=%u nh=%u nv=%u nc=%u dff=%u) != config\n", nl,dm,nh,nv,nc,dff); return 2;
     }
@@ -203,11 +257,42 @@ static int load_gpt2_weights(const char* path) {
     if (g_maplen < want) { fprintf(stderr, "short weight file: %zu < %zu\n", g_maplen, want); return 2; }
     g_nfloat = (size_t)nfloat;
     /* sanity: the computed float layout must total n_float exactly. */
-    size_t expect = (size_t)off_globals() + (size_t)NV*DM + (size_t)NC*DM + DM + DM;
+    size_t expect = ARCH
+        ? (size_t)off_normf_ll() + DM
+        : (size_t)off_globals() + (size_t)NV*DM + (size_t)NC*DM + DM + DM;
     if (expect != g_nfloat) { fprintf(stderr, "layout %zu floats != header n_float %zu\n", expect, g_nfloat); return 2; }
     g_wbase = (const float*)(hb + HDR_BYTES);
-    printf("[wt] mmap %zu B, n_float=%zu, layout verified (per_layer=%ld globals_off=%ld)\n",
-           g_maplen, g_nfloat, per_layer_floats(), off_globals());
+    printf("[wt] mmap %zu B, n_float=%zu, arch=%s layout verified (per_layer=%ld)\n",
+           g_maplen, g_nfloat, ARCH ? "llama" : "gpt2", ARCH ? per_layer_floats_ll() : per_layer_floats());
+    return 0;
+}
+
+/* peek the weight header BEFORE device init: a v2 (llama) file is self-describing, so it
+ * SETS the model dims + arch fields (the HX_* env defaults describe gpt2 family only). */
+static int peek_weights_header(const char* path) {
+    FILE* f = fopen(path, "rb"); if (!f) { fprintf(stderr, "open weights '%s': %s\n", path, strerror(errno)); return 2; }
+    unsigned char hb[HDR_BYTES];
+    if (fread(hb, 1, HDR_BYTES, f) != HDR_BYTES) { fclose(f); fprintf(stderr, "short weights header\n"); return 2; }
+    fclose(f);
+    uint32_t magic, ver; memcpy(&magic, hb, 4); memcpy(&ver, hb+4, 4);
+    if (magic != MAGIC) { fprintf(stderr, "peek: bad magic\n"); return 2; }
+    if (ver == 2u) {
+        uint32_t nl,dm,nh,nv,nc,dff,arch,nkv; float th, ep;
+        memcpy(&nl,hb+8,4); memcpy(&dm,hb+12,4); memcpy(&nh,hb+16,4); memcpy(&nv,hb+20,4);
+        memcpy(&nc,hb+24,4); memcpy(&dff,hb+28,4);
+        memcpy(&arch,hb+40,4); memcpy(&nkv,hb+44,4); memcpy(&th,hb+48,4); memcpy(&ep,hb+52,4);
+        if (arch != 1u) { fprintf(stderr, "peek: v2 header with unknown arch %u\n", arch); return 2; }
+        ARCH = 1; NL=(int)nl; DM=(int)dm; NH=(int)nh; NV=(int)nv; NC=(int)nc; DFF=(int)dff;
+        NKV=(int)nkv; ROPE_THETA=th; RMS_EPS=ep;
+        DH = DM / NH; KVD = NKV * DH;
+        ATTN_SCALE = 1.0f / sqrtf((float)DH);
+        if (NKV <= 0 || NH % NKV) { fprintf(stderr, "peek: bad GQA heads %d/%d\n", NH, NKV); return 2; }
+        /* the rmsnorm kernel BAKES eps=1e-5 (G-L0-verified); fail closed on any other eps
+         * rather than run silently-wrong numerics. */
+        if (fabsf(RMS_EPS - 1e-5f) > 1e-9f) { fprintf(stderr, "peek: rms_eps %g != the kernel's baked 1e-5\n", (double)RMS_EPS); return 2; }
+        printf("[peek] llama v2 header: NL=%d DM=%d NH=%d NKV=%d NV=%d NC=%d DFF=%d theta=%g\n",
+               NL, DM, NH, NKV, NV, NC, DFF, (double)ROPE_THETA);
+    }
     return 0;
 }
 
@@ -236,6 +321,12 @@ static CUdeviceptr d_mlp1;     /* c_fc output [Spad,DFF] */
 static CUdeviceptr d_mlp1g;    /* gelu output [Spad,DFF] */
 static CUdeviceptr d_mlp2;     /* mlp c_proj output [Spad,DM] */
 static CUdeviceptr d_scale;    /* 1-elem attn scale buffer */
+/* llama-arch extras (ARCH==1 only) */
+static void upload_layer_ll(int L);                                  /* defined after alloc_buffers */
+static int  read_ids_file(const char* path, int* ids, int maxn);     /* defined with the modes */
+static CUdeviceptr d_qW, d_kW, d_vW, d_oW, d_gateW, d_upW, d_downW;  /* layer weights */
+static CUdeviceptr d_q, d_k, d_v;    /* q/k/v GEMM outputs (carved from d_qkv) */
+static CUdeviceptr d_mlp1c;          /* silu_mul output [Spad,DFF] */
 /* full-model (--logits / --generate) extras */
 static CUdeviceptr d_lnfg, d_lnfb;   /* ln_f gamma/beta */
 static CUdeviceptr d_wte_pad;        /* tied LM head: wte padded [NVpad,DM], rows>=NV zeroed */
@@ -570,15 +661,75 @@ static void forward_layer_gpt2(void) {
  * itself does for its input injection. */
 static void embed_gather(const int* ids, int T, int S) {
     float* hx = (float*)calloc((size_t)S*DM, sizeof(float));
-    const float* wte = &g_wbase[off_wte()];
-    const float* wpe = &g_wbase[off_wpe()];
-    for (int s = 0; s < T; s++) {
-        const float* rw = &wte[(size_t)ids[s]*DM];
-        const float* rp = &wpe[(size_t)s*DM];
-        for (int c = 0; c < DM; c++) hx[(size_t)s*DM + c] = rw[c] + rp[c];
+    if (ARCH) {
+        /* llama: token embedding ONLY (RoPE replaces positional embeddings) -- pure row copy. */
+        const float* emb = &g_wbase[off_embed_ll()];
+        for (int s = 0; s < T; s++)
+            memcpy(&hx[(size_t)s*DM], &emb[(size_t)ids[s]*DM], (size_t)DM*sizeof(float));
+    } else {
+        const float* wte = &g_wbase[off_wte()];
+        const float* wpe = &g_wbase[off_wpe()];
+        for (int s = 0; s < T; s++) {
+            const float* rw = &wte[(size_t)ids[s]*DM];
+            const float* rp = &wpe[(size_t)s*DM];
+            for (int c = 0; c < DM; c++) hx[(size_t)s*DM + c] = rw[c] + rp[c];
+        }
     }
     CKX(cuMemcpyHtoD(d_x, hx, (size_t)S*DM*sizeof(float)), "h2d x_in (gather)");
     free(hx);
+}
+
+/* forward_layer_llama(x): the Llama-arch block on the SAME machinery (docs/HELIX_LLAMA_PLAN.md
+ * section 2; 5 reused GPT-2 kernels + the 3 G-L0-verified new ones; GQA is host indexing only):
+ *   rmsnorm -> q/k/v GEMMs (A.Bt, HF [out,in] weights untransposed) -> per q-head { pack q
+ *   (DM cols) + k/v from the kv head kv=h/(NH/NKV) (KVD cols), RoPE q+k, scores=Q.Kt, *scale,
+ *   causal softmax, @V, scatter } -> o_proj (A.Bt, no bias) -> residual -> rmsnorm ->
+ *   SwiGLU { gate=A.Bt, up=A.Bt, y=u*silu(g) } -> down (A.Bt) -> residual. NO biases anywhere. */
+static void forward_layer_llama(void) {
+    int L = g_emit_layer;
+    int group = NH / NKV;                 /* GQA group size (9/3 = 3 for SmolLM2) */
+    emit_op(L, 0, "gpu_rmsnorm_fwd_eps", "attn", "rms_1", 1);
+    rms_norm_k(d_x, d_xn, d_ln1g, Spad, DM);
+    emit_op(L, 1, "tiled_matmul_abt", "attn", "q_gemm", 1);
+    mm_ABt(d_xn, d_qW, d_q, Spad, DM, DM);
+    emit_op(L, 2, "tiled_matmul_abt", "attn", "k_gemm", 1);
+    mm_ABt(d_xn, d_kW, d_k, Spad, DM, KVD);
+    emit_op(L, 3, "tiled_matmul_abt", "attn", "v_gemm", 1);
+    mm_ABt(d_xn, d_vW, d_v, Spad, DM, KVD);
+    for (int h = 0; h < NH; h++) {
+        int kv = h / group;               /* the pinned GQA mapping (oracle: gqa_kv_head) */
+        pack_head(d_Qh, d_q, h*DH,  DM);
+        pack_head(d_Kh, d_k, kv*DH, KVD);
+        pack_head(d_Vh, d_v, kv*DH, KVD);
+        rope_k(d_Qh, Spad);               /* rotate_half RoPE in-place, position == row */
+        rope_k(d_Kh, Spad);
+        mm_ABt(d_Qh, d_Kh, d_scores, Spad, DH, Spad);
+        scale_rt(d_scores, d_scale, Spad*Spad);
+        softmax_causal(d_scores, d_attnw, Spad, Spad);
+        mm_AB(d_attnw, d_Vh, d_aoh, Spad, Spad, DH);
+        scatter_head(d_ctx, h*DH, d_aoh);
+    }
+    emit_op(L, 4, "gpu_rope_rot",       "attn", "rope_qk",      2*NH);
+    emit_op(L, 5, "tiled_matmul_abt",   "attn", "attn_scores",  NH);
+    emit_op(L, 6, "gpu_scale_rt",       "attn", "attn_scale",   NH);
+    emit_op(L, 7, "gpu_softmax_causal", "attn", "attn_softmax", NH);
+    emit_op(L, 8, "tiled_matmul",       "attn", "attn_av",      NH);
+    emit_op(L, 9, "tiled_matmul_abt",   "attn", "attn_proj", 1);
+    mm_ABt(d_ctx, d_oW, d_proj, Spad, DM, DM);
+    emit_op(L, 10, "vector_add", "attn", "attn_residual", 1);
+    vadd(d_x, d_proj, d_x, Spad*DM);
+    emit_op(L, 11, "gpu_rmsnorm_fwd_eps", "mlp", "rms_2", 1);
+    rms_norm_k(d_x, d_xn2, d_ln2g, Spad, DM);
+    emit_op(L, 12, "tiled_matmul_abt", "mlp", "fc_gate", 1);
+    mm_ABt(d_xn2, d_gateW, d_mlp1, Spad, DM, DFF);
+    emit_op(L, 13, "tiled_matmul_abt", "mlp", "fc_up", 1);
+    mm_ABt(d_xn2, d_upW, d_mlp1g, Spad, DM, DFF);
+    emit_op(L, 14, "gpu_silu_mul", "mlp", "silu_mul", 1);
+    silu_mul_k(d_mlp1, d_mlp1g, d_mlp1c, Spad*DFF);
+    emit_op(L, 15, "tiled_matmul_abt", "mlp", "proj_down", 1);
+    mm_ABt(d_mlp1c, d_downW, d_mlp2, Spad, DFF, DM);
+    emit_op(L, 16, "vector_add", "mlp", "mlp_residual", 1);
+    vadd(d_x, d_mlp2, d_x, Spad*DM);
 }
 
 /* run the full GPT-2 forward for ids[0..T) and copy the LAST REAL-TOKEN row of logits [NV] into
@@ -601,14 +752,19 @@ static void forward_full(const int* ids, int T, float* out_last_logits) {
     for (int L = 0; L < NL; L++) {
         g_emit_layer = L;
         double t_layer = (g_serve && g_timing) ? now_seconds() : 0.0;
-        upload_layer(L);
+        if (ARCH) upload_layer_ll(L); else upload_layer(L);
         emit_layer_begin(g_emit_step, L, NL);  /* primary heartbeat; after upload, before compute */
-        forward_layer_gpt2();
+        if (ARCH) forward_layer_llama(); else forward_layer_gpt2();
         double ms = (g_serve && g_timing) ? (now_seconds() - t_layer) * 1e3 : 0.0;
         emit_layer_end(g_emit_step, L, ms);
     }
-    emit_head(g_emit_step, "ln_f", "gpu_layernorm_fwd_eps");
-    ln_eps(d_x, d_xn, d_lnfg, d_lnfb, S, DM);  /* final LayerNorm (reuse d_xn as ln_f output) */
+    if (ARCH) {
+        emit_head(g_emit_step, "norm_f", "gpu_rmsnorm_fwd_eps");
+        rms_norm_k(d_x, d_xn, d_lnfg, S, DM);  /* final RMSNorm (llama has no final bias) */
+    } else {
+        emit_head(g_emit_step, "ln_f", "gpu_layernorm_fwd_eps");
+        ln_eps(d_x, d_xn, d_lnfg, d_lnfb, S, DM);  /* final LayerNorm (reuse d_xn as ln_f output) */
+    }
     /* tied head: logits[S,NVpad] = xnorm[S,DM] @ wte_pad[NVpad,DM]^T (wte rows ARE the tied head). */
     emit_head(g_emit_step, "lm_head", "tiled_matmul_abt");
     mm_ABt(d_xn, d_wte_pad, d_logits, S, DM, NVpad);
@@ -671,6 +827,11 @@ static int device_init(const char* ptx_path, const char* wpath) {
     CK(cuModuleGetFunction(&f_gelu,     g_mod, "gpu_gelu_stable"),      "gpu_gelu_stable");
     CK(cuModuleGetFunction(&f_add,      g_mod, "vector_add"),           "vector_add");
     CK(cuModuleGetFunction(&f_scale_rt, g_mod, "gpu_scale_rt"),         "gpu_scale_rt");
+    if (ARCH) {   /* the 3 G-L0-verified llama kernels (present in the 11-kernel llama PTX mint) */
+        CK(cuModuleGetFunction(&f_rms,  g_mod, "gpu_rmsnorm_fwd_eps"),  "gpu_rmsnorm_fwd_eps");
+        CK(cuModuleGetFunction(&f_rope, g_mod, "gpu_rope_rot"),         "gpu_rope_rot");
+        CK(cuModuleGetFunction(&f_silu, g_mod, "gpu_silu_mul"),         "gpu_silu_mul");
+    }
     if (load_gpt2_weights(wpath)) return 2;
     return 0;
 }
@@ -705,24 +866,100 @@ static int alloc_buffers(int Smax) {
     d_scale  = A(1);
     CK(cuMemcpyHtoD(d_scale, &ATTN_SCALE, sizeof(float)), "h2d scale");
     CK(cuMemsetD8(d_ctx, 0, (size_t)Smax*DM*sizeof(float)), "zero ctx");
+    if (ARCH) {   /* llama extras: separate-GEMM weights, the SwiGLU 3rd slab, RoPE tables */
+        d_qW    = A((size_t)DM*DM);
+        d_kW    = A((size_t)KVD*DM);
+        d_vW    = A((size_t)KVD*DM);
+        d_oW    = A((size_t)DM*DM);
+        d_gateW = A((size_t)DFF*DM);
+        d_upW   = A((size_t)DFF*DM);
+        d_downW = A((size_t)DM*DFF);
+        d_mlp1c = A((size_t)Smax*DFF);
+        /* q/k/v GEMM outputs are CARVED out of the (larger) fused d_qkv slab:
+         * q[Smax,DM] @ 0, k[Smax,KVD] after it, v[Smax,KVD] after that
+         * (DM + 2*KVD <= 3*DM always, since KVD <= DM). */
+        d_q = d_qkv;
+        d_k = d_qkv + (CUdeviceptr)((size_t)Smax*DM*sizeof(float));
+        d_v = d_k   + (CUdeviceptr)((size_t)Smax*KVD*sizeof(float));
+        /* RoPE tables [Smax, DH/2]: HF inv_freq convention, host-built in double, cast f32
+         * (cos/sin tables are DATA like weights -- the plan's pinned convention). */
+        int half = DH/2;
+        float* hc = (float*)malloc((size_t)Smax*half*sizeof(float));
+        float* hs = (float*)malloc((size_t)Smax*half*sizeof(float));
+        for (int s = 0; s < Smax; s++) {
+            for (int j = 0; j < half; j++) {
+                double inv = pow((double)ROPE_THETA, -2.0*(double)j/(double)DH);
+                double ang = (double)s * inv;
+                hc[(size_t)s*half+j] = (float)cos(ang);
+                hs[(size_t)s*half+j] = (float)sin(ang);
+            }
+        }
+        d_cos = A((size_t)Smax*half);
+        d_sin = A((size_t)Smax*half);
+        CK(cuMemcpyHtoD(d_cos, hc, (size_t)Smax*half*sizeof(float)), "h2d rope cos");
+        CK(cuMemcpyHtoD(d_sin, hs, (size_t)Smax*half*sizeof(float)), "h2d rope sin");
+        free(hc); free(hs);
+    }
     return 0;
+}
+
+/* upload llama layer L's 9 tensors (reuses d_ln1g for input_ln, d_ln2g for post_ln). */
+static void upload_layer_ll(int L) {
+    LayerOffLL lo = layer_offsets_ll();
+    long b = off_layer_ll(L);
+    CKX(cuMemcpyHtoD(d_ln1g,  &g_wbase[b+lo.inln],   (size_t)DM*sizeof(float)),      "up in_ln");
+    CKX(cuMemcpyHtoD(d_qW,    &g_wbase[b+lo.qW],     (size_t)DM*DM*sizeof(float)),   "up qW");
+    CKX(cuMemcpyHtoD(d_kW,    &g_wbase[b+lo.kW],     (size_t)KVD*DM*sizeof(float)),  "up kW");
+    CKX(cuMemcpyHtoD(d_vW,    &g_wbase[b+lo.vW],     (size_t)KVD*DM*sizeof(float)),  "up vW");
+    CKX(cuMemcpyHtoD(d_oW,    &g_wbase[b+lo.oW],     (size_t)DM*DM*sizeof(float)),   "up oW");
+    CKX(cuMemcpyHtoD(d_ln2g,  &g_wbase[b+lo.postln], (size_t)DM*sizeof(float)),      "up post_ln");
+    CKX(cuMemcpyHtoD(d_gateW, &g_wbase[b+lo.gateW],  (size_t)DFF*DM*sizeof(float)),  "up gateW");
+    CKX(cuMemcpyHtoD(d_upW,   &g_wbase[b+lo.upW],    (size_t)DFF*DM*sizeof(float)),  "up upW");
+    CKX(cuMemcpyHtoD(d_downW, &g_wbase[b+lo.downW],  (size_t)DM*DFF*sizeof(float)),  "up downW");
 }
 
 /* set up the tied LM head: ln_f buffers + the padded wte [NVpad,DM] on device + the logits buffer.
  * The tied head is wte itself (logits = x @ wte^T); we copy the NV real rows into a NVpad-row device
  * buffer whose pad rows [NV..NVpad) are zeroed so their logits are 0 and never argmaxed. */
 static int setup_head(int Smax) {
-    NVpad = ((NV + 63) / 64) * 64;     /* 50257 -> 50304 */
-    d_lnfg = up_slice(off_lnfg(), DM);
-    d_lnfb = up_slice(off_lnfb(), DM);
+    NVpad = ((NV + 63) / 64) * 64;     /* 50257 -> 50304 (llama 49152 is already %64) */
+    if (ARCH) {
+        d_lnfg = up_slice(off_normf_ll(), DM);   /* final RMSNorm weight (no bias in llama) */
+        d_lnfb = 0;
+    } else {
+        d_lnfg = up_slice(off_lnfg(), DM);
+        d_lnfb = up_slice(off_lnfb(), DM);
+    }
+    long emb = ARCH ? off_embed_ll() : off_wte();
     d_wte_pad = A((size_t)NVpad*DM);
     CK(cuMemsetD8(d_wte_pad, 0, (size_t)NVpad*DM*sizeof(float)), "zero wte_pad");   /* zero pad rows */
-    CK(cuMemcpyHtoD(d_wte_pad, &g_wbase[off_wte()], (size_t)NV*DM*sizeof(float)), "h2d wte_pad");
+    CK(cuMemcpyHtoD(d_wte_pad, &g_wbase[emb], (size_t)NV*DM*sizeof(float)), "h2d wte_pad");
     d_logits = A((size_t)Smax*NVpad);
     return 0;
 }
 
 /* ===================== modes ===================== */
+
+/* --block0-dump <ids.txt> <out.bin>: run ONE layer (either arch) and dump the post-layer-0
+ * residual rows 0..T as flat <f4 to out.bin. COMPARISON lives in the readable oracle
+ * (llama_numpy_ref.py compare-block0) -- this side only computes and dumps (G-L1). */
+static int run_block0_dump(const char* ids_path, const char* out_path) {
+    int ids[1024];
+    int T = read_ids_file(ids_path, ids, 1024);
+    if (T <= 0) { fprintf(stderr, "no ids in %s\n", ids_path); return 2; }
+    int S = ((T + 63) / 64) * 64;
+    Spad = S;
+    embed_gather(ids, T, S);
+    if (ARCH) { upload_layer_ll(0); forward_layer_llama(); }
+    else      { upload_layer(0);    forward_layer_gpt2(); }
+    float* hx = (float*)malloc((size_t)T*DM*sizeof(float));
+    CKX(cuMemcpyDtoH(hx, d_x, (size_t)T*DM*sizeof(float)), "d2h block0");
+    FILE* of = fopen(out_path, "wb");
+    if (!of) { fprintf(stderr, "open out '%s': %s\n", out_path, strerror(errno)); free(hx); return 2; }
+    fwrite(hx, sizeof(float), (size_t)T*DM, of); fclose(of); free(hx);
+    printf("BLOCK0_DUMP_OK arch=%s T=%d DM=%d -> %s\n", ARCH ? "llama" : "gpt2", T, DM, out_path);
+    return 0;
+}
 
 /* --block0: run ONE GPT-2 block on the canonical prompt + compare to ref_block0.npy (the committed
  * P5 gate-2 anchor; behaviour byte-identical to the prior single-block build). */
@@ -1080,7 +1317,16 @@ int main(int argc, char** argv) {
     const char* mode     = argv[3];
     int rc = 2;
 
-    if (strcmp(mode, "--block0") == 0) {
+    /* a v2 (llama) weight file is self-describing: peek sets ARCH + all dims (incl. GQA/RoPE)
+     * BEFORE any device or buffer setup. gpt2 v1 files leave the env-configured dims as-is. */
+    if (peek_weights_header(wpath)) return 2;
+
+    if (strcmp(mode, "--block0-dump") == 0) {
+        if (argc < 6) { fprintf(stderr, "--block0-dump needs <ids.txt> <out.bin>\n"); return 2; }
+        if (device_init(ptx_path, wpath)) return 2;
+        if (alloc_buffers(128)) return 2;          /* prompt-sized: 128 padded rows */
+        rc = run_block0_dump(argv[4], argv[5]);
+    } else if (strcmp(mode, "--block0") == 0) {
         if (argc < 5) { fprintf(stderr, "--block0 needs <ref_block0.npy>\n"); return 2; }
         if (device_init(ptx_path, wpath)) return 2;
         if (alloc_buffers(Spad)) return 2;          /* block0: Spad (default 64) is enough */

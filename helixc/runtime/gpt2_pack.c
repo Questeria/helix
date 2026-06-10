@@ -42,6 +42,12 @@
 #define HDR_BYTES 64
 
 /* ============================ config.json (minimal hand-rolled) ============================ */
+/* ARCH note (ADDITIVE --arch llama, 2026-06): the same byte-mover also packs Llama-arch
+ * checkpoints (SmolLM2/TinyLlama): different tensor names/order, BF16 source tensors
+ * (widened to f32 by BIT-SHIFT u32 = u16<<16 -- bit movement, not arithmetic), no biases,
+ * tied lm_head (absent from the file; the consumer reuses the embedding). Header VERSION=2
+ * with the arch fields in the formerly-zero bytes 40..55: u32 arch(1=llama), u32 n_kv_heads,
+ * f32 rope_theta, f32 rms_eps. GPT-2 packs still emit VERSION=1 byte-identical to before. */
 /* find an integer-valued field "key": <int> in a small JSON blob. Returns 1 + sets *out. */
 static int json_find_int(const char* s, size_t n, const char* key, long* out) {
     size_t klen = strlen(key);
@@ -64,7 +70,26 @@ static int json_find_int(const char* s, size_t n, const char* key, long* out) {
 /* ============================ safetensors header parse ============================ */
 /* We need, per tensor name: dtype (must be F32), shape product, and [data_offset_start,
  * data_offset_end) into the blob (the bytes AFTER the 8-byte length + the JSON header). */
-typedef struct { char name[128]; long nbytes; long off_start; long off_end; long shape[8]; int ndim; } STensor;
+typedef struct { char name[128]; long nbytes; long off_start; long off_end; long shape[8]; int ndim; int bf16; } STensor;
+
+/* find a float-valued field "key": <num> (handles 1e-05 scientific notation). */
+static int json_find_float(const char* s, size_t n, const char* key, double* out) {
+    size_t klen = strlen(key);
+    for (size_t i = 0; i + klen + 2 < n; i++) {
+        if (s[i] == '"' && memcmp(s + i + 1, key, klen) == 0 && s[i + 1 + klen] == '"') {
+            size_t j = i + 1 + klen + 1;
+            while (j < n && (s[j] == ' ' || s[j] == ':' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r')) j++;
+            if (j >= n || !((s[j] >= '0' && s[j] <= '9') || s[j] == '-' || s[j] == '.')) continue;
+            char buf[64]; int o = 0;
+            while (j < n && o < 63 && ((s[j] >= '0' && s[j] <= '9') || s[j] == '-' || s[j] == '+' ||
+                                       s[j] == '.' || s[j] == 'e' || s[j] == 'E')) buf[o++] = s[j++];
+            buf[o] = 0;
+            *out = atof(buf);
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* parse a JSON string at s[*i]=='"' into out (ASCII tensor names only); advance *i. */
 static int parse_str(const char* s, size_t n, size_t* i, char* out, int cap) {
@@ -165,7 +190,9 @@ static int parse_safetensors_header(const char* j, size_t jn, STensor* ts, int m
         strncpy(t->name, name, sizeof(t->name) - 1); t->name[sizeof(t->name)-1] = 0;
         t->ndim = ndim; for (int d = 0; d < ndim; d++) t->shape[d] = shape[d];
         t->off_start = off0; t->off_end = off1; t->nbytes = off1 - off0;
-        if (strcmp(dtype, "F32") != 0) { fprintf(stderr, "tensor %s dtype %s != F32\n", name, dtype); exit(2); }
+        if (strcmp(dtype, "F32") == 0) t->bf16 = 0;
+        else if (strcmp(dtype, "BF16") == 0) t->bf16 = 1;
+        else { fprintf(stderr, "tensor %s dtype %s not F32/BF16\n", name, dtype); exit(2); }
         if (off0 < 0 || off1 < 0) { fprintf(stderr, "tensor %s missing data_offsets\n", name); exit(2); }
     }
     return nt;
@@ -212,19 +239,51 @@ static int build_order(OrderEntry* ord, int cap, int NL, int DM, int NV, int NC,
     return n;
 }
 
+/* Llama-arch build order (HF LlamaForCausalLM names). Per layer: input_layernorm,
+ * q/k/v/o_proj (HF Linear [out,in], stored UN-TRANSPOSED; the consumer's GEMMs are A.Bt),
+ * post_attention_layernorm, gate/up/down_proj. Globals: embed_tokens, final norm.
+ * lm_head is TIED (absent); KVD = n_kv_heads * head_dim. */
+static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, int DF, int KVD) {
+    int n = 0;
+#define ADD1(NM, S0)        do { snprintf(ord[n].name, 128, "%s", NM); ord[n].ndim=1; ord[n].shape[0]=(S0); n++; } while(0)
+#define ADD2(NM, S0, S1)    do { snprintf(ord[n].name, 128, "%s", NM); ord[n].ndim=2; ord[n].shape[0]=(S0); ord[n].shape[1]=(S1); n++; } while(0)
+    char nm[128];
+    for (int L = 0; L < NL; L++) {
+        snprintf(nm, sizeof(nm), "model.layers.%d.input_layernorm.weight", L);          ADD1(nm, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.q_proj.weight", L);         ADD2(nm, DM, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.k_proj.weight", L);         ADD2(nm, KVD, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.v_proj.weight", L);         ADD2(nm, KVD, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.o_proj.weight", L);         ADD2(nm, DM, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.post_attention_layernorm.weight", L); ADD1(nm, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.mlp.gate_proj.weight", L);            ADD2(nm, DF, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.mlp.up_proj.weight", L);              ADD2(nm, DF, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.mlp.down_proj.weight", L);            ADD2(nm, DM, DF);
+        if (n > cap - 16) { fprintf(stderr, "order overflow\n"); exit(2); }
+    }
+    ADD2("model.embed_tokens.weight", NV, DM);
+    ADD1("model.norm.weight", DM);
+#undef ADD1
+#undef ADD2
+    return n;
+}
+
 static long shape_prod(const long* s, int nd) { long p = 1; for (int i = 0; i < nd; i++) p *= s[i]; return p; }
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights>\n", argv[0]);
+        fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights> [--arch llama]\n", argv[0]);
         return 2;
     }
     const char* safet_path = argv[1];
     const char* cfg_path   = argv[2];
     const char* out_path   = argv[3];
+    int arch_llama = 0;
+    for (int a = 4; a < argc; a++)
+        if (strcmp(argv[a], "--arch") == 0 && a + 1 < argc && strcmp(argv[a+1], "llama") == 0) arch_llama = 1;
 
-    /* ---- config dims ---- */
-    long NL=0, DM=0, NH=0, NV=0, NC=0, DF=0, n_inner=0;
+    /* ---- config dims (keys differ per arch; dims ALWAYS from config, never a table) ---- */
+    long NL=0, DM=0, NH=0, NV=0, NC=0, DF=0, n_inner=0, NKV=0;
+    double rope_theta = 0.0, rms_eps = 0.0;
     {
         int fd = open(cfg_path, O_RDONLY);
         if (fd < 0) { fprintf(stderr, "open config '%s': %s\n", cfg_path, strerror(errno)); return 2; }
@@ -233,21 +292,43 @@ int main(int argc, char** argv) {
         ssize_t got = read(fd, cfg, (size_t)st.st_size); close(fd);
         if (got < 0) { fprintf(stderr, "read config\n"); return 2; }
         cfg[got] = 0;
-        if (!json_find_int(cfg, (size_t)got, "n_layer", &NL)) { fprintf(stderr, "config: no n_layer\n"); return 2; }
-        if (!json_find_int(cfg, (size_t)got, "n_embd",  &DM)) { fprintf(stderr, "config: no n_embd\n"); return 2; }
-        if (!json_find_int(cfg, (size_t)got, "n_head",  &NH)) { fprintf(stderr, "config: no n_head\n"); return 2; }
-        if (!json_find_int(cfg, (size_t)got, "vocab_size", &NV)) NV = 50257;
-        if (!json_find_int(cfg, (size_t)got, "n_ctx", &NC)) { if (!json_find_int(cfg,(size_t)got,"n_positions",&NC)) NC = 1024; }
-        /* d_ff = n_inner if present (and >0), else 4*n_embd */
-        if (json_find_int(cfg, (size_t)got, "n_inner", &n_inner) && n_inner > 0) DF = n_inner;
-        else DF = 4 * DM;
+        if (arch_llama) {
+            if (!json_find_int(cfg, (size_t)got, "num_hidden_layers", &NL))   { fprintf(stderr, "config: no num_hidden_layers\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "hidden_size", &DM))         { fprintf(stderr, "config: no hidden_size\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "num_attention_heads", &NH)) { fprintf(stderr, "config: no num_attention_heads\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "num_key_value_heads", &NKV)){ fprintf(stderr, "config: no num_key_value_heads\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "intermediate_size", &DF))   { fprintf(stderr, "config: no intermediate_size\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "vocab_size", &NV))          { fprintf(stderr, "config: no vocab_size\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "max_position_embeddings", &NC)) NC = 2048;
+            if (!json_find_float(cfg, (size_t)got, "rope_theta", &rope_theta)){ fprintf(stderr, "config: no rope_theta\n"); return 2; }
+            if (!json_find_float(cfg, (size_t)got, "rms_norm_eps", &rms_eps)) { fprintf(stderr, "config: no rms_norm_eps\n"); return 2; }
+            if (NH <= 0 || NKV <= 0 || (NH % NKV) != 0) { fprintf(stderr, "config: bad GQA heads %ld/%ld\n", NH, NKV); return 2; }
+        } else {
+            if (!json_find_int(cfg, (size_t)got, "n_layer", &NL)) { fprintf(stderr, "config: no n_layer\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "n_embd",  &DM)) { fprintf(stderr, "config: no n_embd\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "n_head",  &NH)) { fprintf(stderr, "config: no n_head\n"); return 2; }
+            if (!json_find_int(cfg, (size_t)got, "vocab_size", &NV)) NV = 50257;
+            if (!json_find_int(cfg, (size_t)got, "n_ctx", &NC)) { if (!json_find_int(cfg,(size_t)got,"n_positions",&NC)) NC = 1024; }
+            /* d_ff = n_inner if present (and >0), else 4*n_embd */
+            if (json_find_int(cfg, (size_t)got, "n_inner", &n_inner) && n_inner > 0) DF = n_inner;
+            else DF = 4 * DM;
+        }
         free(cfg);
     }
-    long per_layer = (DM + DM + (long)DM*3*DM + 3*DM + (long)DM*DM + DM
+    long KVD = arch_llama ? (NKV * (DM / NH)) : 0;     /* n_kv_heads * head_dim */
+    long per_layer, N_FLOAT;
+    if (arch_llama) {
+        /* in_ln[DM] q[DM*DM] k[KVD*DM] v[KVD*DM] o[DM*DM] post_ln[DM] gate[DF*DM] up[DF*DM] down[DM*DF] */
+        per_layer = DM + (long)DM*DM + (long)KVD*DM + (long)KVD*DM + (long)DM*DM
+                  + DM + (long)DF*DM + (long)DF*DM + (long)DM*DF;
+        N_FLOAT = NL * per_layer + (long)NV*DM + DM;   /* + embed + final norm (lm_head TIED) */
+    } else {
+        per_layer = (DM + DM + (long)DM*3*DM + 3*DM + (long)DM*DM + DM
                       + DM + DM + (long)DM*DF + DF + (long)DF*DM + DM);
-    long N_FLOAT = NL * per_layer + (long)NV*DM + (long)NC*DM + DM + DM;
-    fprintf(stderr, "[pack] dims NL=%ld DM=%ld NH=%ld NV=%ld NC=%ld DF=%ld -> N_FLOAT=%ld (%ld B file)\n",
-            NL, DM, NH, NV, NC, DF, N_FLOAT, (long)HDR_BYTES + N_FLOAT * 4);
+        N_FLOAT = NL * per_layer + (long)NV*DM + (long)NC*DM + DM + DM;
+    }
+    fprintf(stderr, "[pack] arch=%s dims NL=%ld DM=%ld NH=%ld NKV=%ld NV=%ld NC=%ld DF=%ld -> N_FLOAT=%ld (%ld B file)\n",
+            arch_llama ? "llama" : "gpt2", NL, DM, NH, NKV, NV, NC, DF, N_FLOAT, (long)HDR_BYTES + N_FLOAT * 4);
 
     /* ---- mmap safetensors ---- */
     int fd = open(safet_path, O_RDONLY);
@@ -266,25 +347,37 @@ int main(int argc, char** argv) {
 
     /* ---- build order ---- */
     OrderEntry* ord = (OrderEntry*)malloc(sizeof(OrderEntry) * (NL * 12 + 8 + 16));
-    int no = build_order(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)NC, (int)DF);
+    int no = arch_llama
+        ? build_order_llama(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)DF, (int)KVD)
+        : build_order(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)NC, (int)DF);
 
-    /* ---- open output, write 64-byte header ---- */
+    /* ---- open output, write 64-byte header (v2 carries the llama arch fields) ---- */
     FILE* of = fopen(out_path, "wb");
     if (!of) { fprintf(stderr, "open out '%s': %s\n", out_path, strerror(errno)); return 2; }
     {
-        uint32_t h32[8] = { MAGIC, VERSION, (uint32_t)NL, (uint32_t)DM, (uint32_t)NH, (uint32_t)NV, (uint32_t)NC, (uint32_t)DF };
+        uint32_t ver = arch_llama ? 2u : VERSION;
+        uint32_t h32[8] = { MAGIC, ver, (uint32_t)NL, (uint32_t)DM, (uint32_t)NH, (uint32_t)NV, (uint32_t)NC, (uint32_t)DF };
         unsigned char hdr[HDR_BYTES];
         memset(hdr, 0, sizeof(hdr));
         for (int k = 0; k < 8; k++) { memcpy(hdr + k*4, &h32[k], 4); }   /* little-endian host assumed (x86-64) */
         uint64_t nf = (uint64_t)N_FLOAT;
-        memcpy(hdr + 32, &nf, 8);                                        /* bytes 40..63 stay zero */
+        memcpy(hdr + 32, &nf, 8);
+        if (arch_llama) {                                                /* v2 extension: bytes 40..55 */
+            uint32_t arch = 1u, nkv = (uint32_t)NKV;
+            float th = (float)rope_theta, ep = (float)rms_eps;
+            memcpy(hdr + 40, &arch, 4);
+            memcpy(hdr + 44, &nkv, 4);
+            memcpy(hdr + 48, &th, 4);
+            memcpy(hdr + 52, &ep, 4);
+        }                                                                /* else bytes 40..63 stay zero (v1) */
         if (fwrite(hdr, 1, HDR_BYTES, of) != HDR_BYTES) { fprintf(stderr, "write hdr\n"); return 2; }
     }
 
-    /* ---- stream tensors in build order (DIRECT byte copy; no transpose, no math) ---- */
+    /* ---- stream tensors in build order (byte copy; BF16 widened by BIT-SHIFT, no transpose, no math) ---- */
     long total_floats = 0;
     long written_bytes = 0;
     unsigned char buf[1 << 20];
+    uint32_t wide[1 << 18];                       /* 256K floats per chunk for the bf16 widen path */
     for (int e = 0; e < no; e++) {
         STensor* t = find_tensor(ts, nt, ord[e].name);
         if (!t) { fprintf(stderr, "missing tensor %s\n", ord[e].name); return 2; }
@@ -293,39 +386,58 @@ int main(int argc, char** argv) {
         long have = shape_prod(t->shape, t->ndim);
         if (want != have) { fprintf(stderr, "tensor %s shape product %ld != expected %ld\n", ord[e].name, have, want); return 2; }
         long nbytes = t->nbytes;
-        if (nbytes != have * 4) { fprintf(stderr, "tensor %s nbytes %ld != floats*4 %ld\n", ord[e].name, nbytes, have * 4); return 2; }
-        /* copy [off_start, off_end) from blob to out, chunked (RAM bounded) */
-        long pos = 0;
+        long esz = t->bf16 ? 2 : 4;
+        if (nbytes != have * esz) { fprintf(stderr, "tensor %s nbytes %ld != floats*%ld %ld\n", ord[e].name, nbytes, esz, have * esz); return 2; }
         const unsigned char* src = blob + t->off_start;
-        while (pos < nbytes) {
-            long chunk = nbytes - pos; if (chunk > (long)sizeof(buf)) chunk = (long)sizeof(buf);
-            memcpy(buf, src + pos, (size_t)chunk);                       /* mmap demand-pages; small buffer */
-            if (fwrite(buf, 1, (size_t)chunk, of) != (size_t)chunk) { fprintf(stderr, "write body %s\n", ord[e].name); return 2; }
-            pos += chunk;
+        if (!t->bf16) {
+            /* F32: direct chunked byte copy (unchanged v1 path) */
+            long pos = 0;
+            while (pos < nbytes) {
+                long chunk = nbytes - pos; if (chunk > (long)sizeof(buf)) chunk = (long)sizeof(buf);
+                memcpy(buf, src + pos, (size_t)chunk);                   /* mmap demand-pages; small buffer */
+                if (fwrite(buf, 1, (size_t)chunk, of) != (size_t)chunk) { fprintf(stderr, "write body %s\n", ord[e].name); return 2; }
+                pos += chunk;
+            }
+            written_bytes += nbytes;
+        } else {
+            /* BF16 -> F32: u32 = (u32)u16 << 16 (bf16 IS the top half of f32 -- a bit move, no rounding,
+             * no arithmetic; exactly what numpy's (u16.astype(u32)<<16).view(f32) does in the oracle). */
+            long done = 0;
+            while (done < have) {
+                long n = have - done; if (n > (long)(sizeof(wide)/4)) n = (long)(sizeof(wide)/4);
+                const unsigned char* sp = src + done * 2;
+                for (long i = 0; i < n; i++) {
+                    uint16_t u; memcpy(&u, sp + i*2, 2);
+                    wide[i] = ((uint32_t)u) << 16;
+                }
+                if (fwrite(wide, 4, (size_t)n, of) != (size_t)n) { fprintf(stderr, "write body %s\n", ord[e].name); return 2; }
+                done += n;
+            }
+            written_bytes += have * 4;
         }
         total_floats += have;
-        written_bytes += nbytes;
     }
     fclose(of);
 
-    /* ---- accounting: confirm float total + the leftover-skip set (attn.bias masks) ---- */
+    /* ---- accounting: confirm float total + the leftover-skip set ---- */
     if (total_floats != N_FLOAT) { fprintf(stderr, "FATAL: wrote %ld floats != N_FLOAT %ld\n", total_floats, N_FLOAT); return 2; }
-    /* leftover tensors must be exactly the NL causal-mask buffers h.<L>.attn.bias */
+    /* gpt2: leftovers must be exactly the NL causal-mask buffers h.<L>.attn.bias.
+     * llama (tied embeddings): there must be ZERO leftovers -- every tensor consumed. */
     int consumed_ok = 1, leftover = 0, masks = 0;
     for (int i = 0; i < nt; i++) {
         int used = 0;
         for (int e = 0; e < no; e++) if (strcmp(ord[e].name, ts[i].name) == 0) { used = 1; break; }
         if (!used) {
             leftover++;
-            /* expected form: h.<L>.attn.bias */
             const char* nm = ts[i].name;
             int is_mask = 0;
-            if (strncmp(nm, "h.", 2) == 0) { const char* dot = strstr(nm, ".attn.bias"); if (dot && dot[10] == 0) is_mask = 1; }
+            if (!arch_llama && strncmp(nm, "h.", 2) == 0) { const char* dot = strstr(nm, ".attn.bias"); if (dot && dot[10] == 0) is_mask = 1; }
             if (is_mask) masks++; else { consumed_ok = 0; fprintf(stderr, "UNEXPECTED leftover tensor: %s\n", nm); }
         }
     }
-    if (!consumed_ok || masks != NL) {
-        fprintf(stderr, "FATAL: leftover accounting off (leftover=%d masks=%d want NL=%ld)\n", leftover, masks, NL);
+    if (arch_llama ? (leftover != 0) : (!consumed_ok || masks != NL)) {
+        fprintf(stderr, "FATAL: leftover accounting off (arch=%s leftover=%d masks=%d NL=%ld)\n",
+                arch_llama ? "llama" : "gpt2", leftover, masks, NL);
         return 2;
     }
 
