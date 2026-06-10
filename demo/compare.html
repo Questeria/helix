@@ -17,8 +17,9 @@
      HONESTY RULES OF THIS PAGE:
      - numbers appear ONLY where a committed fail-closed gate
        produced them; otherwise the cell says "not yet measured";
-     - SmolLM2-135M is GATING IN PROGRESS — nothing about it is
-       claimed beyond its committed kernel-parity gate status;
+     - SmolLM2-135M is VERIFIED via its committed fail-closed full-model
+       gate (G-L1/G-L2); only its measured numbers are claimed (speed
+       is left "not yet measured" because no benchmark was taken);
      - no projections, no estimates, no vendor comparisons.
      ============================================================ */
   :root {
@@ -378,28 +379,30 @@
             <span class="gate-src">gate: <code>gpt2_cpu_parity.sh</code></span></div>
         </div>
 
-        <!-- SmolLM2 — gating in progress -->
-        <div class="card is-amber">
+        <!-- SmolLM2 — modern architecture, verified -->
+        <div class="card">
           <div class="card-head">
             <span class="card-name">SmolLM2-135M <span class="path-tag">· GPU · Llama-arch</span></span>
-            <span class="badge is-amber">NEW · GATING IN PROGRESS</span>
+            <span class="badge">NEW · VERIFIED (GATED)</span>
           </div>
           <div class="arch">135M params · 30 layers per its config (gates read dims from config.json) ·
-            RMSNorm · RoPE · SwiGLU · GQA · Apache-2.0</div>
-          <div class="proves"><b>What it will prove (once its gates are green):</b> that the same
-            verified stack extends from 2019's GPT-2 family to the <b>modern Llama architecture
-            family</b> — 3 new kovc-emitted kernels (rmsnorm, rope, silu_mul) + 5 reused, with the
-            same fail-closed gate machinery and the same independent-oracle parity bar. No change to
-            the compiler: the self-host fixpoint is untouched.</div>
-          <div class="wip-note"><b>Honest status, right now:</b> the fail-closed gates for this model
-            are being run as this page ships. Committed so far: the kernel-level parity gate
-            (G-L0, <code style="font-family:var(--mono)">scripts/llama_ops_parity.sh</code>) passed for all 3 new kernels.
-            Full-model parity vs the oracle, serve integration, and any speed number are
-            <b>not yet measured</b> — and per the house rule, nothing is claimed here until its gate
-            is green. This card carries no performance or parity numbers yet on purpose.</div>
-          <div class="boundary"><b>Trusted-once boundary (once gated):</b> same as the GPU paths —
-            to PTX, then ptxas/driver trusted-once.
-            <span class="gate-src">plan + status: <code>docs/HELIX_LLAMA_PLAN.md</code></span></div>
+            RMSNorm · RoPE · SwiGLU · GQA · Apache-2.0 weights</div>
+          <div class="proves"><b>What it proves:</b> the same verified stack extends from 2019's
+            GPT-2 family to the <b>modern Llama architecture family</b> — 3 new kovc-emitted kernels
+            (rmsnorm, rope, silu_mul) + 5 reused, run with the same fail-closed gate machinery and
+            the same independent-oracle parity bar. No change to the compiler: the self-host fixpoint
+            is untouched. This is <b>modern architecture, verifiably executed</b> — not modern
+            capability (135M is a small base model).</div>
+          <div class="wip-note"><b>Gated results:</b> layer-0 parity max-abs <b>3.2e-05</b>; full-model
+            last-row logits <b>argmax-exact</b> with max-abs <b>4.9e-05</b> over 49,152 logits;
+            20-token greedy generation <b>token-for-token identical</b> (25/25) to an independent
+            numpy oracle that reads the original safetensors; corrupted-weights negative control
+            correctly failed. Also served via the model switcher (token-for-token over HTTP). Speed
+            is <b>not yet measured</b> (left honest — no benchmark was taken). Fail-closed gate:
+            <code style="font-family:var(--mono)">scripts/llama_model_gate.sh</code> (G-L1/G-L2).</div>
+          <div class="boundary"><b>Trusted-once boundary:</b> same as the GPU paths —
+            verified to PTX, then ptxas/driver trusted-once; fp32.
+            <span class="gate-src">plan + results: <code>docs/HELIX_LLAMA_PLAN.md</code></span></div>
         </div>
 
       </div>
@@ -454,10 +457,10 @@
             <tr>
               <td><b>SmolLM2-135M</b> · GPU <span style="color:var(--ink-faint)">Llama-arch, NEW</span></td>
               <td>135M · 30 <span style="color:var(--ink-faint)">(per config)</span></td>
-              <td><span class="wip">GATING IN PROGRESS</span> <span class="na">full-model parity not yet measured</span></td>
+              <td><b>token-for-token 25/25</b>; argmax-exact, max-abs 4.9e-05 / 49,152</td>
               <td><span class="na">not yet measured</span></td>
-              <td><span class="na">not yet measured</span></td>
-              <td>same as the GPU paths once gated; 3 new kernels passed kernel-level parity (G-L0)</td>
+              <td>3.2e-05 <span style="color:var(--ink-faint)">(layer-0 parity)</span></td>
+              <td>same as the GPU paths; verified to PTX, then ptxas/driver trusted-once</td>
             </tr>
           </tbody>
         </table>
