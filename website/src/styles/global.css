@@ -1148,4 +1148,7 @@ footer {
   .js .reveal { opacity: 1; transform: none; transition: none; }
   .byte-ribbon-track { animation: none; padding-left: 0; }
   .hex-byte { animation: none; opacity: 0.35; }
-  .btn, .btn .arrow, 
+  .btn, .btn .arrow, .link-card, .chain-dot { transition: none; }
+  .btn:hover, .link-card:hover { transform: none; }
+  .room :is(animate, animateMotion) { display: none; }
+}
