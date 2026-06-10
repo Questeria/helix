@@ -43,7 +43,7 @@ rm -f /tmp/scd_a.bin /tmp/scd_d.bin /tmp/out.ptx
 # 8 GPT-2 kernels + the 3 G-L0-gated llama kernels (rmsnorm/rope/silu_mul): ONE 11-kernel
 # module serves both architectures (each worker looks up only the entries it needs; the
 # llama worker self-configures from the v2 weight header, overriding the HX_* XL env).
-for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul; do
+for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul gpu_gemv_abt gpu_gemv_ab gpu_softmax_row; do
   tr -d '\r' < $SRC/helixc/examples/${k}_kernel.hx >> /tmp/kernel_in.hx; echo "" >> /tmp/kernel_in.hx
 done
 ( ulimit -s unlimited; /tmp/scd_d.bin ) >/tmp/scd_emit.log 2>&1 || true
@@ -72,7 +72,7 @@ SM_WTS="${HELIX_SM_WEIGHTS:-$SRC/helix-llm/models/smollm2-135m/smollm2-135m.weig
 SM_DIR="$SRC/helix-llm/models/smollm2-135m"
 SM_ARGS=""
 if [ -s "$SM_WTS" ] && [ -s "$SM_DIR/vocab.json" ] && [ -s "$SM_DIR/merges.txt" ]; then
-  SM_ARGS="--model2 smollm2-135m --ptx2 /tmp/gpt2_chat.ptx --weights2 $SM_WTS --vocab2 $SM_DIR/vocab.json --merges2 $SM_DIR/merges.txt"
+  SM_ARGS="--model2 smollm2-135m --ptx2 /tmp/gpt2_chat.ptx --weights2 $SM_WTS --vocab2 $SM_DIR/vocab.json --merges2 $SM_DIR/merges.txt --kv2 1"
   echo "  second model: smollm2-135m (llama-arch) ENABLED"
 else
   echo "  second model: smollm2-135m weights not found -- serving XL only"
@@ -83,7 +83,7 @@ SI_WTS="${HELIX_SI_WEIGHTS:-$SRC/helix-llm/models/smollm2-360m-instruct/smollm2-
 SI_DIR="$SRC/helix-llm/models/smollm2-360m-instruct"
 SI_ARGS=""
 if [ -n "$SM_ARGS" ] && [ -s "$SI_WTS" ] && [ -s "$SI_DIR/vocab.json" ] && [ -s "$SI_DIR/merges.txt" ]; then
-  SI_ARGS="--model3 smollm2-360m-instruct --ptx3 /tmp/gpt2_chat.ptx --weights3 $SI_WTS --vocab3 $SI_DIR/vocab.json --merges3 $SI_DIR/merges.txt --specials3 1 --eos3 2"
+  SI_ARGS="--model3 smollm2-360m-instruct --ptx3 /tmp/gpt2_chat.ptx --weights3 $SI_WTS --vocab3 $SI_DIR/vocab.json --merges3 $SI_DIR/merges.txt --specials3 1 --eos3 2 --kv3 1"
   echo "  third model: smollm2-360m-instruct (CHAT) ENABLED"
 else
   echo "  third model: smollm2-360m-instruct weights not found -- serving without the instruct leg"

@@ -124,6 +124,8 @@ typedef struct {
     char  merges3[1024];
     int   specials3;
     int   eos3;
+    int   kv2;                /* HX_KV+HX_RESIDENT for slot 1 (KV-cache decode; small llama models) */
+    int   kv3;                /* same for slot 2 */
 } Cfg;
 
 /* ============================ worker child ============================ */
@@ -309,7 +311,7 @@ static void handle_health(int fd) {
     snprintf(models + mo, sizeof models - mo, "]");
     char body[1024];
     snprintf(body, sizeof body,
-        "{\"ok\":true,\"serve\":true,\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\",\"busy\":%s,\"models\":%s}",
+        "{\"ok\":true,\"serve\":true,\"fast\":true,\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\",\"busy\":%s,\"models\":%s}",
         cfg_model_name(0),
         g_worker.ready ? "true" : "false",
         g_worker.device[0] ? g_worker.device : "",
@@ -626,6 +628,7 @@ static void spawn_worker(int idx) {
     const char* w_merges  = (idx == 2) ? g_cfg.merges3  : idx ? g_cfg.merges2  : g_cfg.merges;
     int w_specials = (idx == 2) ? g_cfg.specials3 : (idx == 1) ? g_cfg.specials2 : 0;
     int w_eos      = (idx == 2) ? g_cfg.eos3      : (idx == 1) ? g_cfg.eos2      : -1;
+    int w_kv       = (idx == 2) ? g_cfg.kv3       : (idx == 1) ? g_cfg.kv2       : 0;
 
     pid_t pid = fork();
     if (pid < 0) die("fork");
@@ -640,6 +643,7 @@ static void spawn_worker(int idx) {
         /* per-model chat config travels via env (the worker reads HX_SPECIALS/HX_EOS). */
         if (w_specials) setenv("HX_SPECIALS", "1", 1); else unsetenv("HX_SPECIALS");   /* never inherited from the launch shell */
         if (w_eos >= 0) { char eb[16]; snprintf(eb, sizeof eb, "%d", w_eos); setenv("HX_EOS", eb, 1); } else unsetenv("HX_EOS");
+        if (w_kv) { setenv("HX_KV", "1", 1); setenv("HX_RESIDENT", "1", 1); } else { unsetenv("HX_KV"); unsetenv("HX_RESIDENT"); }
         /* exec the worker: gpt2_infer <ptx> <weights> --serve --emit-fd 1 --max-ctx M
          *                  --detail D --vocab v --merges m */
         char maxctx[16]; snprintf(maxctx, sizeof maxctx, "%d", g_cfg.max_ctx);
@@ -738,6 +742,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--merges3")   && i+1 < argc) snprintf(g_cfg.merges3, sizeof g_cfg.merges3, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--specials3") && i+1 < argc) g_cfg.specials3 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--eos3")      && i+1 < argc) g_cfg.eos3 = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--kv2")       && i+1 < argc) g_cfg.kv2 = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--kv3")       && i+1 < argc) g_cfg.kv3 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
     }
     if (!g_cfg.root[0] || !g_cfg.ptx[0] || !g_cfg.weights[0] || !g_cfg.worker_bin[0]) {

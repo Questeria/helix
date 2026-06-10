@@ -63,7 +63,7 @@ if [ ! -s /tmp/llama_model.ptx ]; then
     chmod +x "$DRV"
   fi
   : > /tmp/kernel_in.hx
-  for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul; do
+  for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul gpu_gemv_abt gpu_gemv_ab gpu_softmax_row; do
     tr -d '\r' < "$ROOT/helixc/examples/${k}_kernel.hx" >> /tmp/kernel_in.hx; echo "" >> /tmp/kernel_in.hx
   done
   rm -f /tmp/out.ptx
@@ -73,7 +73,7 @@ if [ ! -s /tmp/llama_model.ptx ]; then
   echo "  minted /tmp/llama_model.ptx ($(stat -c%s /tmp/llama_model.ptx) B)"
 fi
 NENT=$(grep -c '\.entry' /tmp/llama_model.ptx)
-[ "$NENT" = "11" ] || { echo "FATAL: PTX kernel count $NENT != 11"; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 8; }
+[ "$NENT" = "14" ] || { echo "FATAL: PTX kernel count $NENT != 14"; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 8; }
 mkdir -p "$WORK/helixc/runtime"
 cp "$ROOT/helixc/runtime/gpt2_infer.c" "$ROOT/helixc/runtime/gpt2_tok.c" "$ROOT/helixc/runtime/gpt2_serve_http.c" "$ROOT/helixc/runtime/gpt2_unicode_ranges.inc" "$WORK/helixc/runtime/"
 cd "$WORK/helixc/runtime" || exit 8
@@ -82,7 +82,7 @@ gcc gpt2_serve_http.c -O2 -lpthread -o /tmp/lss_server 2>/tmp/lss_sgcc.log || { 
 echo "  built worker + server"
 
 SI_SPAWN_ARGS=""
-[ -s "$SI_WTS" ] && SI_SPAWN_ARGS="--model3 smollm2-360m-instruct --ptx3 /tmp/llama_model.ptx --weights3 $SI_WTS --vocab3 $SI_DIR/vocab.json --merges3 $SI_DIR/merges.txt --specials3 1 --eos3 2"
+[ -s "$SI_WTS" ] && SI_SPAWN_ARGS="--model3 smollm2-360m-instruct --ptx3 /tmp/llama_model.ptx --weights3 $SI_WTS --vocab3 $SI_DIR/vocab.json --merges3 $SI_DIR/merges.txt --specials3 1 --eos3 2 --kv3 1"
 echo "=== [2] spawn multi-model server on :$PORT ==="
 export HX_NL=48 HX_D=1600 HX_HEADS=25 HX_V=50257 HX_CTX=1024 HX_DFF=6400
 /tmp/lss_server --port "$PORT" --root "$ROOT/demo" \
@@ -91,7 +91,7 @@ export HX_NL=48 HX_D=1600 HX_HEADS=25 HX_V=50257 HX_CTX=1024 HX_DFF=6400
   --vocab "$ROOT/helix-llm/models/gpt2-xl/vocab.json" --merges "$ROOT/helix-llm/models/gpt2-xl/merges.txt" \
   --max-ctx 320 --detail op --model gpt2-xl \
   --model2 smollm2-135m --ptx2 /tmp/llama_model.ptx --weights2 "$SM_WTS" \
-  --vocab2 "$SM_DIR/vocab.json" --merges2 "$SM_DIR/merges.txt" $SI_SPAWN_ARGS \
+  --vocab2 "$SM_DIR/vocab.json" --merges2 "$SM_DIR/merges.txt" --kv2 1 $SI_SPAWN_ARGS \
   > /tmp/lss_server.log 2>&1 &
 SRV_PID=$!
 trap 'kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null' EXIT
@@ -124,7 +124,7 @@ PROMPT="The capital of France is"
     -H 'Content-Type: application/json' \
     -d "{\"prompt\":\"$PROMPT\",\"n_gen\":20,\"model\":\"smollm2-135m\"}" > /tmp/lss_sse.txt ) &
 CURL_PID=$!
-sleep 3
+sleep 0.3   # KV decode finishes 20 tokens in ~1-2s now -- probe EARLY to land mid-generation
 echo "=== [6] single-flight across models: concurrent request must 409 ==="
 B=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/api/generate" \
      -H 'Content-Type: application/json' -d '{"prompt":"hi","n_gen":1}')
@@ -151,7 +151,11 @@ user = "What is the capital of France?"
 tmpl = "<|im_start|>system"+chr(10)+sys_p+"<|im_end|>"+chr(10)+"<|im_start|>user"+chr(10)+user+"<|im_end|>"+chr(10)+"<|im_start|>assistant"+chr(10)
 print(json.dumps({"prompt": tmpl, "n_gen": 40, "model": "smollm2-360m-instruct"}))
 PYB
-  curl -s -N -m 600 -X POST "http://127.0.0.1:$PORT/api/generate?detail=op" -H "Content-Type: application/json" --data @/tmp/lss_chat_body.json > /tmp/lss_chat_sse.txt
+  sleep 2   # let the prior generation's lock fully release
+  CHTTP=$(curl -s -N -m 600 -o /tmp/lss_chat_sse.txt -w "%{http_code}" -X POST "http://127.0.0.1:$PORT/api/generate?detail=op" -H "Content-Type: application/json" --data @/tmp/lss_chat_body.json)
+  echo "  chat HTTP code: $CHTTP ($(wc -c < /tmp/lss_chat_sse.txt) bytes)"
+  cp /tmp/lss_chat_sse.txt "$ROOT/.m1probe/lss_chat_sse_last.txt" 2>/dev/null
+  cp /tmp/lss_server.log "$ROOT/.m1probe/lss_server_last.log" 2>/dev/null
   CGOT=$(grep -o '"_ev":"token"[^}]*"id":[0-9]*' /tmp/lss_chat_sse.txt | grep -o '"id":[0-9]*' | cut -d: -f2 | tr '\n' ' ')
   CPROMPT=$(grep -o '"_ev":"tokenize"[^]]*]' /tmp/lss_chat_sse.txt | head -1 | grep -o '[[][0-9, ]*]' | tr ',' ' ' | tr -d '[]')
   CSERVED="$(echo $CPROMPT $CGOT | tr -s ' ')"

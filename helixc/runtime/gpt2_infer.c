@@ -81,7 +81,10 @@ static int   NKV = 0;              /* llama: n_kv_heads (GQA); KVD = NKV*DH */
 static int   KVD = 0;
 static float ROPE_THETA = 0.0f;
 static int   EOS_ID = -1;
-static int   g_specials_on = 0;    /* HX_SPECIALS: ChatML control-token tokenize (serve, instruct) */          /* HX_EOS: stop greedy generation after emitting this id (chat eos; oracle convention: append then stop) */
+static int   g_specials_on = 0;    /* HX_SPECIALS: ChatML control-token tokenize (serve, instruct) */
+static int   KV_ON = 0;            /* HX_KV: incremental decoding with device K/V caches (llama path) */
+static int   RESIDENT = 0;         /* HX_RESIDENT: keep ALL layer weights on-device (small models) */
+static int   g_fast = 0;           /* fast mode: skip per-op host syncs + per-op emits (same kernels, same ids) */          /* HX_EOS: stop greedy generation after emitting this id (chat eos; oracle convention: append then stop) */
 static float RMS_EPS = 1e-5f;
 
 /* ---- P1 weight-file header (must match helix-llm/tools/gpt2_import.py) ---- */
@@ -101,10 +104,12 @@ static CUcontext ctx;
 static CUfunction f_mm_t, f_abt_t, f_ln_eps, f_sm_causal, f_bias, f_gelu, f_add, f_scale_rt;
 /* llama-arch kernel handles (G-L0-verified; loaded only when ARCH==1) */
 static CUfunction f_rms, f_rope, f_silu;
+/* KV-cache decode kernels (G-KV0-gated; loaded only when ARCH && KV_ON) */
+static CUfunction f_gv_abt, f_gv_ab, f_smrow;
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
-#define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); SYNC("sync " #fn); } while (0)
-#define LX2(fn, gx, gy, bx, by, args)    do { CKX(cuLaunchKernel((fn),(gx),(gy),1,(bx),(by),1,0,0,(args),0), #fn); SYNC("sync " #fn); } while (0)
+#define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
+#define LX2(fn, gx, gy, bx, by, args)    do { CKX(cuLaunchKernel((fn),(gx),(gy),1,(bx),(by),1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
 
 /* C[M,N] = A[M,K] @ B[K,N]  via the SMEM-tiled GEMM. grid=(N/64,M/64) block=(16,16).
  * M%64==N%64==K%8==0 enforced by the caller's padding (Spad=64; DM=768,DFF=3072,DH=64). */
@@ -161,9 +166,31 @@ static void rms_norm_k(CUdeviceptr x, CUdeviceptr y, CUdeviceptr w, int rows, in
 static void rope_k(CUdeviceptr q, int rows) {
     int half = DH/2; void* ar[] = { &q,&d_cos,&d_sin,&half }; LX(f_rope, (unsigned)rows, 1, ar);
 }
+/* RoPE at an EXPLICIT position: same kernel, table base offset so buffer row 0 pairs with
+ * table row `pos` (decode: the new token's single row at position pos). */
+static void rope_at(CUdeviceptr q, int rows, int pos) {
+    int half = DH/2;
+    CUdeviceptr c = d_cos + (CUdeviceptr)((size_t)pos * half * sizeof(float));
+    CUdeviceptr sn = d_sin + (CUdeviceptr)((size_t)pos * half * sizeof(float));
+    void* ar[] = { &q,&c,&sn,&half }; LX(f_rope, (unsigned)rows, 1, ar);
+}
 /* SwiGLU gate y[i] = u[i]*silu(g[i]) over n elems. grid=n block=1 (G-L0 geometry). */
 static void silu_mul_k(CUdeviceptr g, CUdeviceptr u, CUdeviceptr y, int n) {
     int nn=n; void* ar[] = { &g,&u,&y,&nn }; LX(f_silu, (unsigned)n, 1, ar);
+}
+
+/* ---- KV-decode wrappers (G-KV0 launch geometry: one thread per output, grid=N block=1) ---- */
+/* y[1,N] = x[1,K] . W[N,K]^T  (covers every decode GEMM incl. attention scores vs cached K) */
+static void gemv_abt(CUdeviceptr x, CUdeviceptr w, CUdeviceptr y, int N, int K) {
+    int k=K; void* ar[] = { &x,&w,&y,&k }; LX(f_gv_abt, (unsigned)N, 1, ar);
+}
+/* y[1,N] = p[1,T] . M[T,N]  (decode probs x cached V) */
+static void gemv_ab(CUdeviceptr p, CUdeviceptr m, CUdeviceptr y, int N, int T) {
+    int t=T,n=N; void* ar[] = { &p,&m,&y,&t,&n }; LX(f_gv_ab, (unsigned)N, 1, ar);
+}
+/* full-row softmax over [rows,cols], NO causal mask (the decode row attends every cached pos) */
+static void smrow(CUdeviceptr x, CUdeviceptr y, int rows, int cols) {
+    int c=cols; void* ar[] = { &x,&y,&c }; LX(f_smrow, (unsigned)rows, 1, ar);
 }
 
 static CUdeviceptr A(size_t nf) { CUdeviceptr p; CKX(cuMemAlloc(&p, nf * sizeof(float)), "alloc"); return p; }
@@ -331,6 +358,20 @@ static int  read_ids_file(const char* path, int* ids, int maxn);     /* defined 
 static CUdeviceptr d_qW, d_kW, d_vW, d_oW, d_gateW, d_upW, d_downW;  /* layer weights */
 static CUdeviceptr d_q, d_k, d_v;    /* q/k/v GEMM outputs (carved from d_qkv) */
 static CUdeviceptr d_mlp1c;          /* silu_mul output [Spad,DFF] */
+/* ---- KV-cache decode state (HX_KV=1; llama path only) ---- */
+static CUdeviceptr d_kcache = 0, d_vcache = 0;  /* [NL][NKV][kv_cap][DH] roped K / V (device) */
+static int kv_cap = 0;               /* cache rows per (layer, kv-head) == Smax */
+static int kv_len = 0;               /* valid cached positions (== tokens processed) */
+/* decode (M=1) work buffers */
+static CUdeviceptr d_x1, d_xn1, d_q1, d_k1, d_v1, d_sc1, d_pr1, d_ao1, d_ctx1, d_pj1, d_xn21, d_g1, d_u1, d_m1, d_mo1, d_lg1;
+/* resident weights (HX_RESIDENT=1; small models): per-layer device copies, ptr-swap on use */
+#define MAX_RES_LAYERS 64
+static CUdeviceptr res_inln[MAX_RES_LAYERS], res_qW[MAX_RES_LAYERS], res_kW[MAX_RES_LAYERS],
+                   res_vW[MAX_RES_LAYERS], res_oW[MAX_RES_LAYERS], res_postln[MAX_RES_LAYERS],
+                   res_gateW[MAX_RES_LAYERS], res_upW[MAX_RES_LAYERS], res_downW[MAX_RES_LAYERS];
+static int res_loaded = 0;
+/* cache slab offset (floats) for (layer, kv-head, position 0) */
+static size_t kvoff(int L, int kv) { return (((size_t)L * NKV + (size_t)kv) * (size_t)kv_cap) * (size_t)DH; }
 /* full-model (--logits / --generate) extras */
 static CUdeviceptr d_lnfg, d_lnfb;   /* ln_f gamma/beta */
 static CUdeviceptr d_wte_pad;        /* tied LM head: wte padded [NVpad,DM], rows>=NV zeroed */
@@ -531,7 +572,7 @@ static void emit_layer_begin(int step, int idx, int total) {
 /* op: wraps a REAL cuLaunchKernel. Dropped entirely at --detail layer (a real subset). */
 static void emit_op(int layer, int seq_in_layer, const char* kernel, const char* phase,
                     const char* label, int agg) {
-    if (!g_serve || g_detail < DETAIL_OP) return;
+    if (!g_serve || g_fast || g_detail < DETAIL_OP) return;
     char b[256];
     snprintf(b, sizeof b,
       "{\"_ev\":\"op\",\"seq\":%ld,\"step\":%d,\"layer\":%d,\"seq_in_layer\":%d,"
@@ -712,6 +753,13 @@ static void forward_layer_llama(void) {
         softmax_causal(d_scores, d_attnw, Spad, Spad);
         mm_AB(d_attnw, d_Vh, d_aoh, Spad, Spad, DH);
         scatter_head(d_ctx, h*DH, d_aoh);
+        if (KV_ON && (h % group) == 0) {
+            /* PREFILL CAPTURE: d_Kh holds kv-head kv's ROPED K rows [Spad,DH]; d_Vh its V.
+             * Pad rows land beyond kv_len and are overwritten by later appends -- decode
+             * only ever reads rows [0, kv_len). */
+            CKX(cuMemcpyDtoD(d_kcache + (CUdeviceptr)(kvoff(L, kv) * sizeof(float)), d_Kh, (size_t)Spad*DH*sizeof(float)), "kv capture K");
+            CKX(cuMemcpyDtoD(d_vcache + (CUdeviceptr)(kvoff(L, kv) * sizeof(float)), d_Vh, (size_t)Spad*DH*sizeof(float)), "kv capture V");
+        }
     }
     emit_op(L, 4, "gpu_rope_rot",       "attn", "rope_qk",      2*NH);
     emit_op(L, 5, "tiled_matmul_abt",   "attn", "attn_scores",  NH);
@@ -762,6 +810,7 @@ static void forward_full(const int* ids, int T, float* out_last_logits) {
         double ms = (g_serve && g_timing) ? (now_seconds() - t_layer) * 1e3 : 0.0;
         emit_layer_end(g_emit_step, L, ms);
     }
+    if (ARCH && KV_ON) kv_len = T;   /* prefill done: T real positions cached */
     if (ARCH) {
         emit_head(g_emit_step, "norm_f", "gpu_rmsnorm_fwd_eps");
         rms_norm_k(d_x, d_xn, d_lnfg, S, DM);  /* final RMSNorm (llama has no final bias) */
@@ -775,6 +824,79 @@ static void forward_full(const int* ids, int T, float* out_last_logits) {
     /* copy ONLY the last real-token row's first NV logits to the host (greedy decision row). */
     CKX(cuMemcpyDtoH(out_last_logits, d_logits + (CUdeviceptr)((size_t)(T-1)*NVpad*sizeof(float)),
                      (size_t)NV*sizeof(float)), "d2h last-row logits");
+}
+
+/* ===================== KV-CACHE incremental decode (HX_KV=1; llama only) =====================
+ * One step: forward ONLY the new token at position `pos` against the cached K/V.
+ * Greedy-identical to the full re-forward BY CONSTRUCTION (same weights, same math per
+ * position); the A/B leg of the model gate PROVES the ids match. Decode GEMMs use the
+ * G-KV0-gated gpu_gemv_* kernels (M=1, no %64 constraint); softmax is the full-row form
+ * (every cached position is attendable -- causality lives in WHAT is cached). */
+static void decode_step_llama(int new_id, int pos, float* out_logits) {
+    int T = pos + 1;
+    int group = NH / NKV;
+    const float* emb = &g_wbase[off_embed_ll()];
+    CKX(cuMemcpyHtoD(d_x1, &emb[(size_t)new_id*DM], (size_t)DM*sizeof(float)), "h2d x1");
+    for (int L = 0; L < NL; L++) {
+        g_emit_layer = L;
+        upload_layer_ll(L);
+        emit_layer_begin(g_emit_step, L, NL);
+        emit_op(L, 0, "gpu_rmsnorm_fwd_eps", "attn", "rms_1", 1);
+        rms_norm_k(d_x1, d_xn1, d_ln1g, 1, DM);
+        emit_op(L, 1, "gpu_gemv_abt", "attn", "q_gemv", 1);
+        gemv_abt(d_xn1, d_qW, d_q1, DM, DM);
+        emit_op(L, 2, "gpu_gemv_abt", "attn", "k_gemv", 1);
+        gemv_abt(d_xn1, d_kW, d_k1, KVD, DM);
+        emit_op(L, 3, "gpu_gemv_abt", "attn", "v_gemv", 1);
+        gemv_abt(d_xn1, d_vW, d_v1, KVD, DM);
+        for (int h = 0; h < NH; h++)
+            rope_at(d_q1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)), 1, pos);
+        for (int kv = 0; kv < NKV; kv++) {
+            CUdeviceptr ks = d_k1 + (CUdeviceptr)((size_t)kv*DH*sizeof(float));
+            rope_at(ks, 1, pos);
+            CKX(cuMemcpyDtoD(d_kcache + (CUdeviceptr)((kvoff(L,kv) + (size_t)pos*DH)*sizeof(float)), ks, (size_t)DH*sizeof(float)), "kv app K");
+            CKX(cuMemcpyDtoD(d_vcache + (CUdeviceptr)((kvoff(L,kv) + (size_t)pos*DH)*sizeof(float)),
+                             d_v1 + (CUdeviceptr)((size_t)kv*DH*sizeof(float)), (size_t)DH*sizeof(float)), "kv app V");
+        }
+        emit_op(L, 4, "gpu_rope_rot", "attn", "rope_qk", NH + NKV);
+        for (int h = 0; h < NH; h++) {
+            int kv = h / group;
+            gemv_abt(d_q1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)),
+                     d_kcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float)), d_sc1, T, DH);
+            scale_rt(d_sc1, d_scale, T);
+            smrow(d_sc1, d_pr1, 1, T);
+            gemv_ab(d_pr1, d_vcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float)), d_ao1, DH, T);
+            CKX(cuMemcpyDtoD(d_ctx1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)), d_ao1, (size_t)DH*sizeof(float)), "ctx1");
+        }
+        emit_op(L, 5, "gpu_gemv_abt",    "attn", "attn_scores",  NH);
+        emit_op(L, 6, "gpu_scale_rt",    "attn", "attn_scale",   NH);
+        emit_op(L, 7, "gpu_softmax_row", "attn", "attn_softmax", NH);
+        emit_op(L, 8, "gpu_gemv_ab",     "attn", "attn_av",      NH);
+        emit_op(L, 9, "gpu_gemv_abt",    "attn", "attn_proj", 1);
+        gemv_abt(d_ctx1, d_oW, d_pj1, DM, DM);
+        emit_op(L, 10, "vector_add", "attn", "attn_residual", 1);
+        vadd(d_x1, d_pj1, d_x1, DM);
+        emit_op(L, 11, "gpu_rmsnorm_fwd_eps", "mlp", "rms_2", 1);
+        rms_norm_k(d_x1, d_xn21, d_ln2g, 1, DM);
+        emit_op(L, 12, "gpu_gemv_abt", "mlp", "fc_gate", 1);
+        gemv_abt(d_xn21, d_gateW, d_g1, DFF, DM);
+        emit_op(L, 13, "gpu_gemv_abt", "mlp", "fc_up", 1);
+        gemv_abt(d_xn21, d_upW, d_u1, DFF, DM);
+        emit_op(L, 14, "gpu_silu_mul", "mlp", "silu_mul", 1);
+        silu_mul_k(d_g1, d_u1, d_m1, DFF);
+        emit_op(L, 15, "gpu_gemv_abt", "mlp", "proj_down", 1);
+        gemv_abt(d_m1, d_downW, d_mo1, DM, DFF);
+        emit_op(L, 16, "vector_add", "mlp", "mlp_residual", 1);
+        vadd(d_x1, d_mo1, d_x1, DM);
+        emit_layer_end(g_emit_step, L, 0.0);
+    }
+    emit_head(g_emit_step, "norm_f", "gpu_rmsnorm_fwd_eps");
+    rms_norm_k(d_x1, d_xn1, d_lnfg, 1, DM);
+    emit_head(g_emit_step, "lm_head", "gpu_gemv_abt");
+    gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
+    if (!g_fast) SYNC("decode end");
+    CKX(cuMemcpyDtoH(out_logits, d_lg1, (size_t)NV*sizeof(float)), "d2h logits1");
+    kv_len = T;
 }
 
 /* host argmax over a [NV] logit row (host argmax on the final logits is acceptable demo glue). */
@@ -835,6 +957,11 @@ static int device_init(const char* ptx_path, const char* wpath) {
         CK(cuModuleGetFunction(&f_rms,  g_mod, "gpu_rmsnorm_fwd_eps"),  "gpu_rmsnorm_fwd_eps");
         CK(cuModuleGetFunction(&f_rope, g_mod, "gpu_rope_rot"),         "gpu_rope_rot");
         CK(cuModuleGetFunction(&f_silu, g_mod, "gpu_silu_mul"),         "gpu_silu_mul");
+        if (KV_ON) {   /* the 3 G-KV0-gated decode kernels (present in the 14-kernel mint) */
+            CK(cuModuleGetFunction(&f_gv_abt, g_mod, "gpu_gemv_abt"),    "gpu_gemv_abt");
+            CK(cuModuleGetFunction(&f_gv_ab,  g_mod, "gpu_gemv_ab"),     "gpu_gemv_ab");
+            CK(cuModuleGetFunction(&f_smrow,  g_mod, "gpu_softmax_row"), "gpu_softmax_row");
+        }
     }
     if (load_gpt2_weights(wpath)) return 2;
     return 0;
@@ -903,12 +1030,49 @@ static int alloc_buffers(int Smax) {
         CK(cuMemcpyHtoD(d_cos, hc, (size_t)Smax*half*sizeof(float)), "h2d rope cos");
         CK(cuMemcpyHtoD(d_sin, hs, (size_t)Smax*half*sizeof(float)), "h2d rope sin");
         free(hc); free(hs);
+        if (KV_ON) {
+            /* K/V caches: NL x NKV x Smax x DH floats each (360M @ Smax 384: ~31 MB x2) */
+            kv_cap = Smax; kv_len = 0;
+            size_t cfl = (size_t)NL * NKV * kv_cap * DH;
+            d_kcache = A(cfl); d_vcache = A(cfl);
+            /* M=1 decode buffers */
+            d_x1 = A(DM); d_xn1 = A(DM); d_q1 = A(DM); d_k1 = A(KVD); d_v1 = A(KVD);
+            d_sc1 = A((size_t)Smax); d_pr1 = A((size_t)Smax); d_ao1 = A(DH);
+            d_ctx1 = A(DM); d_pj1 = A(DM); d_xn21 = A(DM);
+            d_g1 = A(DFF); d_u1 = A(DFF); d_m1 = A(DFF); d_mo1 = A(DM);
+            d_lg1 = A((size_t)((NV + 63) / 64) * 64);
+        }
+        if (RESIDENT && NL <= MAX_RES_LAYERS) {
+            /* upload EVERY layer once; upload_layer_ll becomes a pointer swap (decode is
+             * H2D-free). 360M fp32 = 1.45 GB on-device -- small models only by policy. */
+            LayerOffLL lo2 = layer_offsets_ll();
+            for (int L = 0; L < NL; L++) {
+                long b2 = off_layer_ll(L);
+                res_inln[L]   = A(DM);              CKX(cuMemcpyHtoD(res_inln[L],   &g_wbase[b2+lo2.inln],   (size_t)DM*sizeof(float)),      "res in_ln");
+                res_qW[L]     = A((size_t)DM*DM);   CKX(cuMemcpyHtoD(res_qW[L],     &g_wbase[b2+lo2.qW],     (size_t)DM*DM*sizeof(float)),   "res qW");
+                res_kW[L]     = A((size_t)KVD*DM);  CKX(cuMemcpyHtoD(res_kW[L],     &g_wbase[b2+lo2.kW],     (size_t)KVD*DM*sizeof(float)),  "res kW");
+                res_vW[L]     = A((size_t)KVD*DM);  CKX(cuMemcpyHtoD(res_vW[L],     &g_wbase[b2+lo2.vW],     (size_t)KVD*DM*sizeof(float)),  "res vW");
+                res_oW[L]     = A((size_t)DM*DM);   CKX(cuMemcpyHtoD(res_oW[L],     &g_wbase[b2+lo2.oW],     (size_t)DM*DM*sizeof(float)),   "res oW");
+                res_postln[L] = A(DM);              CKX(cuMemcpyHtoD(res_postln[L], &g_wbase[b2+lo2.postln], (size_t)DM*sizeof(float)),      "res post_ln");
+                res_gateW[L]  = A((size_t)DFF*DM);  CKX(cuMemcpyHtoD(res_gateW[L],  &g_wbase[b2+lo2.gateW],  (size_t)DFF*DM*sizeof(float)),  "res gateW");
+                res_upW[L]    = A((size_t)DFF*DM);  CKX(cuMemcpyHtoD(res_upW[L],    &g_wbase[b2+lo2.upW],    (size_t)DFF*DM*sizeof(float)),  "res upW");
+                res_downW[L]  = A((size_t)DM*DFF);  CKX(cuMemcpyHtoD(res_downW[L],  &g_wbase[b2+lo2.downW],  (size_t)DM*DFF*sizeof(float)),  "res downW");
+            }
+            res_loaded = 1;
+                        printf("[kv] resident weights: %d layers on-device\n", NL);
+        }
     }
     return 0;
 }
 
 /* upload llama layer L's 9 tensors (reuses d_ln1g for input_ln, d_ln2g for post_ln). */
 static void upload_layer_ll(int L) {
+    if (res_loaded) {   /* resident: zero-copy pointer swap */
+        d_ln1g = res_inln[L]; d_qW = res_qW[L]; d_kW = res_kW[L]; d_vW = res_vW[L];
+        d_oW = res_oW[L]; d_ln2g = res_postln[L]; d_gateW = res_gateW[L];
+        d_upW = res_upW[L]; d_downW = res_downW[L];
+        return;
+    }
     LayerOffLL lo = layer_offsets_ll();
     long b = off_layer_ll(L);
     CKX(cuMemcpyHtoD(d_ln1g,  &g_wbase[b+lo.inln],   (size_t)DM*sizeof(float)),      "up in_ln");
@@ -1080,7 +1244,8 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
     float* logits = (float*)malloc((size_t)NV*sizeof(float));
     int nonfinite_any = 0;
     for (int step = 0; step < Ngen; step++) {
-        forward_full(ids, T, logits);
+        if (ARCH && KV_ON && step > 0) decode_step_llama(ids[T-1], T-1, logits);
+        else forward_full(ids, T, logits);
         for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
         int nxt = argmax_row(logits, NV);
         ids[T++] = nxt;
@@ -1255,6 +1420,14 @@ static int run_serve(const char* ptx_path, const char* wpath,
         emit_tokenize(ids, T0, ((T0 + 63) / 64) * 64);
 
         /* working id buffer: prompt + room for Ngen generated ids. */
+        /* per-request FAST mode: "detail":"token" drops per-op syncs + op/layer events for
+         * THIS generation (same kernels, same ids -- instrumentation only). KV caches are
+         * per-request: a fresh prefill fills them (kv_len reset). */
+        {
+            const char* dp = json_find_key(line, "detail");
+            g_fast = (dp && *dp == '"' && strncmp(dp + 1, "token", 5) == 0) ? 1 : 0;
+        }
+        kv_len = 0;
         int* work = (int*)malloc((size_t)(T0 + Ngen) * sizeof(int));
         memcpy(work, ids, (size_t)T0 * sizeof(int));
         int T = T0;
@@ -1265,7 +1438,8 @@ static int run_serve(const char* ptx_path, const char* wpath,
         for (int step = 0; step < Ngen; step++) {
             g_emit_step = step;
             emit_forward_begin(step, T, ((T + 63) / 64) * 64, NL);
-            forward_full(work, T, logits);             /* UNCHANGED arithmetic; hooks fire inside */
+            if (ARCH && KV_ON && step > 0) decode_step_llama(work[T-1], T-1, logits);
+            else forward_full(work, T, logits);             /* UNCHANGED arithmetic; hooks fire inside */
             for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite = 1; break; }
             int nxt = argmax_row(logits, NV);
 #ifdef GPT2_SERVE
@@ -1310,6 +1484,9 @@ int main(int argc, char** argv) {
     if ((e=getenv("HX_DBG")))   g_dbg=atoi(e);
     if ((e=getenv("HX_EOS")))   EOS_ID=atoi(e);
     if ((e=getenv("HX_SPECIALS"))) g_specials_on=atoi(e);
+    if ((e=getenv("HX_KV")))       KV_ON=atoi(e);
+    if ((e=getenv("HX_RESIDENT"))) RESIDENT=atoi(e);
+    if ((e=getenv("HX_FAST")))     g_fast=atoi(e);
     DH = DM / NH;
     ATTN_SCALE = 1.0f / sqrtf((float)DH);
 

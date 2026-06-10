@@ -69,7 +69,7 @@ else
   echo "  reusing minted driver $DRV ($(stat -c%s "$DRV") B)"
 fi
 : > /tmp/kernel_in.hx
-for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul; do
+for k in tiled_matmul tiled_matmul_abt gpu_softmax_causal gpu_layernorm_fwd_eps gpu_add_bias_rowbcast gpu_gelu_stable vector_add gpu_scale_rt gpu_rmsnorm_fwd_eps gpu_rope_rot gpu_silu_mul gpu_gemv_abt gpu_gemv_ab gpu_softmax_row; do
   tr -d '\r' < "$EX/${k}_kernel.hx" >> /tmp/kernel_in.hx; echo "" >> /tmp/kernel_in.hx
 done
 rm -f /tmp/out.ptx
@@ -77,8 +77,8 @@ rm -f /tmp/out.ptx
 [ -s /tmp/out.ptx ] || { echo "FATAL: kovc emitted no PTX"; echo "LLAMA_MODEL_GATE_FAIL"; exit 6; }
 NENT=$(grep -c '\.entry' /tmp/out.ptx)
 cp /tmp/out.ptx /tmp/llama_model.ptx
-echo "  PTX $(stat -c%s /tmp/llama_model.ptx) B, $NENT .entry kernels (want 11)"
-[ "$NENT" = "11" ] || { echo "FATAL: kernel count $NENT != 11"; echo "LLAMA_MODEL_GATE_FAIL"; exit 6; }
+echo "  PTX $(stat -c%s /tmp/llama_model.ptx) B, $NENT .entry kernels (want 14)"
+[ "$NENT" = "14" ] || { echo "FATAL: kernel count $NENT != 14"; echo "LLAMA_MODEL_GATE_FAIL"; exit 6; }
 "$PTXAS" -arch=sm_86 /tmp/llama_model.ptx -o /tmp/llama_model.cubin 2>"$OUT/llama_model_ptxas.log" \
   && echo "  PTXAS_ACCEPT (sm_86)" || { echo "  PTXAS_REJECT"; cat "$OUT/llama_model_ptxas.log"; RC=2; }
 
@@ -121,6 +121,19 @@ else GL2B=FAIL; RC=1; fi
 grep -E 'HELIX_GEN_IDS|TOKEN' "$OUT/llama_gl2b.log" | sed 's/^/  /'
 echo "  G-L2b: $GL2B"
 
+echo "=== [6b] G-KV: KV-cache decode A/B -- ids MUST equal the non-KV run AND the oracle ==="
+cp /tmp/helix_gen_ids.txt /tmp/helix_gen_ids_fullfwd.txt 2>/dev/null || true
+if HX_KV=1 HX_RESIDENT=1 /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --generate "$NGEN" "$REFD/llama_ref_ids.txt" "$REFD/llama_ref_gen_ids.txt"      2>&1 | tee "$OUT/llama_gkv.log" | grep -q 'TOKEN_FOR_TOKEN_MATCH'; then
+  GKV=PASS
+else GKV=FAIL; RC=1; fi
+if [ -s /tmp/helix_gen_ids_fullfwd.txt ] && cmp -s /tmp/helix_gen_ids.txt /tmp/helix_gen_ids_fullfwd.txt; then
+  echo "  A/B: KV ids == full-reforward ids (byte-identical id files)"
+else
+  echo "  A/B FAIL: KV ids differ from the full-reforward ids"; GKV=FAIL; RC=1
+fi
+grep -E 'HELIX_GEN_IDS|TOKEN' "$OUT/llama_gkv.log" | tail -2 | sed 's/^/  /'
+echo "  G-KV: $GKV"
+
 echo "=== [7] NEGATIVE CONTROL: corrupted weights must FAIL the logits leg ==="
 cp "$WTS" /tmp/llama_corrupt.weights
 # zero out 1 MB of mid-file weights at the 200 MB offset (well past the 64B header; model-agnostic)
@@ -137,8 +150,9 @@ echo "=================== LLAMA MODEL GATE VERDICT (wall $(( $(date +%s) - T0 ))
 echo "  G-L1 block0   : $GL1"
 echo "  G-L2a logits  : $GL2A"
 echo "  G-L2b gen     : $GL2B"
+echo "  G-KV  kv-decode: ${GKV:-SKIPPED}"
 echo "  NEG control   : $NEG"
-if [ "$GL1$GL2A$GL2B$NEG" = "PASSPASSPASSPASS" ] && [ "$RC" = "0" ]; then
+if [ "$GL1$GL2A$GL2B${GKV:-FAIL}$NEG" = "PASSPASSPASSPASSPASS" ] && [ "$RC" = "0" ]; then
   echo "LLAMA_MODEL_GATE_PASS"; exit 0
 else
   echo "LLAMA_MODEL_GATE_FAIL (rc=$RC)"; exit 1
