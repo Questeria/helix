@@ -1172,4 +1172,33 @@ footer {
 }
 .hero-portrait-row > div { flex: 1 1 420px; }
 .hero-portrait {
-  width:
+  width: clamp(128px, 15vw, 184px);
+  height: clamp(128px, 15vw, 184px);
+  object-fit: cover;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Reveal-on-scroll
+   ============================================================ */
+
+/* Reveal styles only apply when JS is present (html.js set inline in <head>),
+   so content is never hidden from no-JS users or crawlers. */
+.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity 700ms cubic-bezier(.2,.7,.2,1), transform 700ms cubic-bezier(.2,.7,.2,1); }
+.js .reveal.in { opacity: 1; transform: none; }
+
+/* ============================================================
+   Reduced motion — kill all decorative animation
+   ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .js .reveal { opacity: 1; transform: none; transition: none; }
+  .byte-ribbon-track { animation: none; padding-left: 0; }
+  .hex-byte { animation: none; opacity: 0.35; }
+  .btn, .btn .arrow, .link-card, .chain-dot { transition: none; }
+  .btn:hover, .link-card:hover { transform: none; }
+  .room :is(animate, animateMotion) { display: none; }
+}
