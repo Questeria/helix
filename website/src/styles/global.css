@@ -291,8 +291,9 @@ section { padding: var(--section-y) 0; position: relative; }
 }
 .room .horizon-glow { stroke: oklch(80% 0.18 280 / 0.55); stroke-width: 1; }
 @media (max-width: 880px) {
-  #hex-grid { display: none; }
-  .room { display: none; }
+  /* The scene stays visible on mobile (portrait recrop happens in hero.js);
+     slightly dimmed so the stacked text keeps full contrast. */
+  .room { opacity: 0.9; }
 }
 
 .hero-grid {

@@ -57,19 +57,59 @@
     return;
   }
 
+  let handle = null;
+  let contextLost = false;
+
   async function mount() {
     try {
       const { mountHelix } = await import("./helix-logo.js");
-      const handle = mountHelix(slot, { autoRotate: true });
+      slot.innerHTML = "";
+      contextLost = false;
+      handle = mountHelix(slot, { autoRotate: true });
       handle.setTheme(true); // hero is always the dark carbon scene
-      window.addEventListener("pagehide", () => {
-        try { handle.dispose(); } catch (_) { /* no-op */ }
-      }, { once: true });
+      const canvas = slot.querySelector("canvas");
+      if (canvas) {
+        canvas.addEventListener("webglcontextlost", (e) => {
+          e.preventDefault();
+          contextLost = true;
+        });
+        canvas.addEventListener("webglcontextrestored", () => {
+          contextLost = false;
+        });
+      }
     } catch (err) {
       console.error("Helix 3D failed to mount:", err);
       showFallback();
     }
   }
+
+  function glDead() {
+    const canvas = slot.querySelector("canvas");
+    if (!canvas) return true;
+    if (contextLost) return true;
+    try {
+      const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+      return !!gl && gl.isContextLost();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function remount() {
+    try { if (handle) handle.dispose(); } catch (_) { /* no-op */ }
+    handle = null;
+    mount();
+  }
+
+  // Browsers may kill the WebGL context while the tab is backgrounded, and
+  // back/forward-cache restores can revive the page with a dead canvas.
+  // Whenever the page becomes visible again, remount if the context is gone.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && handle && glDead()) remount();
+  });
+  window.addEventListener("pageshow", (e) => {
+    if (handle && (e.persisted || glDead())) remount();
+  });
 
   if ("IntersectionObserver" in window) {
     const io = new IntersectionObserver(
@@ -304,6 +344,25 @@
     c.setAttribute("r", r); c.setAttribute("opacity", o);
     starsG.appendChild(c);
   }
+
+  // ---------- Mobile framing ----------
+  // On narrow screens the 1600x900 scene is recropped to a portrait window
+  // and the black hole is moved into the visible sky, so the machine-code
+  // grid and the black hole stay behind the rotating helix.
+  const svg = groundG.ownerSVGElement;
+  const bh = document.getElementById("bh");
+  const mobile = window.matchMedia("(max-width: 880px)");
+  function frameScene() {
+    if (mobile.matches) {
+      svg.setAttribute("viewBox", "440 40 720 860");
+      if (bh) bh.setAttribute("transform", "translate(865 462) scale(0.62)");
+    } else {
+      svg.setAttribute("viewBox", "0 0 1600 900");
+      if (bh) bh.setAttribute("transform", "translate(1240 110)");
+    }
+  }
+  frameScene();
+  if (mobile.addEventListener) mobile.addEventListener("change", frameScene);
 })();
 
 // ---------- Black hole: gravitationally lensed orbiting bodies ----------
