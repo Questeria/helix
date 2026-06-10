@@ -2936,25 +2936,31 @@ function gateLiveReadiness() {
   poll();
 }
 
-/* Capability-gated model switcher. TODAY'S server advertises no "models"
-   field, so this never renders and nothing about the live contract changes.
-   When a future gated server advertises  models:[{id,label,default}]  in
-   /api/health (contract extension: docs/HELIX_VERIFY_UX_PLAN.md §4 — needs
-   the GPU build + helix_serve_gate.sh re-gate in Claude Code), the switcher
-   appears and the chosen id is sent as an ADDITIVE "model" field on
-   /api/generate. The page never invents a model list. */
+/* Capability-gated model switcher. When /api/health advertises a models[] array
+   (the dual-model serve build does; single-model servers omit it), the switcher
+   renders and the chosen model is sent as an ADDITIVE "model" field on
+   /api/generate. Accepts BOTH the {model,ready,device} shape the live server
+   emits and the {id,label,default} shape named in docs/HELIX_VERIFY_UX_PLAN.md §4.
+   The page never invents a model list. */
 function populateModelSelect(health) {
   var sel = $("modelSelect");
   if (!sel || !health || !Object.prototype.hasOwnProperty.call(health, "models")) return;
   var models = health.models;
   if (!models || !models.length) return;
+  /* The live server emits {model, ready, device}; the §4 plan named {id, label, default}.
+     Accept EITHER field so the switcher renders against the real backend, and synthesize a
+     friendly label when the server doesn't send one. */
+  var PRETTY_MODEL = { "gpt2-xl": "GPT-2-XL · 1.5B", "gpt2-large": "GPT-2 Large · 774M",
+                       "gpt2": "GPT-2 · 124M", "smollm2-135m": "SmolLM2-135M · Llama-arch" };
   sel.innerHTML = "";
   var def = null;
   for (var i = 0; i < models.length; i++) {
     var m = models[i];
-    if (!m || !m.id) continue;
-    sel.appendChild(el("option", { value: m.id }, m.label || m.id));
-    if (m.default) def = m.id;
+    var mid = m && (m.id || m.model);
+    if (!mid) continue;
+    var label = m.label || PRETTY_MODEL[mid] || mid;
+    sel.appendChild(el("option", { value: mid }, label));
+    if (m.default) def = mid;
   }
   if (!sel.children.length) return;
   sel.value = def || (health.model || sel.children[0].value);
