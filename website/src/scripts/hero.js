@@ -189,7 +189,9 @@
         text.setAttribute("text-anchor", "middle");
         text.setAttribute("dominant-baseline", "central");
         text.setAttribute("font-size", (18 * Math.pow(1 - tb * tb, 1.3) + 1.5).toFixed(2));
-        const tilt = tiltFor(i) * -1;
+        // Apply the hand-tuned per-column tilts exactly as authored in the
+        // design handoff (design_files/index.html applyTilt uses tiltFor directly).
+        const tilt = tiltFor(i);
         text.setAttribute(
           "transform",
           `translate(${x.toFixed(2)} ${yAt.toFixed(2)}) ` +
