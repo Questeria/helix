@@ -11,7 +11,7 @@ interface Props {
 }
 
 const { title, description, path } = Astro.props;
-const site = Astro.site ?? new URL("https://helix-website.pages.dev");
+const site = Astro.site ?? new URL("https://299bytes.com");
 const canonical = new URL(path ?? Astro.url.pathname, site);
 const ogImage = new URL("/og.png", site);
 ---

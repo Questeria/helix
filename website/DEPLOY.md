@@ -14,10 +14,11 @@ npm run build        # -> website/dist/
 npm run preview      # serve dist/ locally to check it
 ```
 
-Set `SITE_URL` to your production origin so canonical / Open Graph URLs are absolute:
+Canonical / Open Graph URLs default to the production origin **https://299bytes.com**
+(set in `astro.config.mjs`). Override only for a staging origin:
 
 ```bash
-SITE_URL=https://your-domain.example npm run build
+SITE_URL=https://staging.example npm run build
 ```
 
 ## Cloudflare Pages (recommended)
@@ -26,11 +27,14 @@ Create a Pages project connected to the GitHub repo with:
 
 | Setting                | Value           |
 | ---------------------- | --------------- |
-| Production branch      | `main` (or `cowork/website` while reviewing) |
+| Production branch      | `main`          |
 | Root directory         | `website`       |
 | Build command          | `npm run build` |
 | Build output directory | `dist`          |
-| Environment variable   | `SITE_URL=https://<your-domain>` |
+| Environment variable   | none needed (canonical defaults to `https://299bytes.com`; set `SITE_URL` only to override) |
+
+Then add **299bytes.com** as a Custom Domain on the Pages project (Pages → your project →
+Custom domains). If the domain is in the same Cloudflare account, DNS is wired automatically.
 
 Cloudflare clones the full repo, so the build's `../demo` copy step finds the demo
 artifacts. Every push redeploys; preview deployments are created per-branch.
@@ -50,7 +54,7 @@ build with plain `npm run build` and `SITE_URL=https://<your-domain>`.
 
 ## Owner checklist before going live
 
-- [ ] Set the real domain via `SITE_URL` (canonical + Open Graph URLs depend on it).
+- [x] Production domain **299bytes.com** is the default in `astro.config.mjs` (canonical + Open Graph resolve to it; verified in `dist/`).
 - [ ] The nav/footer "demo" links point at the copied `/demo/` artifacts. If you would
       rather host the live chat demo elsewhere, update the links on `/verify/` and in
       `src/components/{Nav,Footer}.astro`.

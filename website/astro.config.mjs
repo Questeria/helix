@@ -1,11 +1,9 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 
-// Set SITE_URL at build time to your production origin so canonical / Open
-// Graph URLs are absolute, e.g.:
-//   SITE_URL=https://helix.example.com npm run build
-// Defaults to the Cloudflare Pages preview origin placeholder.
-const SITE_URL = process.env.SITE_URL || "https://helix-website.pages.dev";
+// Production origin for absolute canonical / Open Graph URLs.
+// Override at build time if needed:  SITE_URL=https://staging.example npm run build
+const SITE_URL = process.env.SITE_URL || "https://299bytes.com";
 
 export default defineConfig({
   site: SITE_URL,
