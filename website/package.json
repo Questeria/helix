@@ -1,0 +1,17 @@
+{
+  "name": "helix-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Marketing website for Helix — the source-available, from-raw-binary, ML-native systems language.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && node scripts/copy-demo.mjs",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "astro": "^5.7.0",
+    "three": "0.160.1"
+  }
+}

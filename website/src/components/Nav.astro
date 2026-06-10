@@ -1,0 +1,40 @@
+---
+import BrandMark from "./BrandMark.astro";
+
+const links = [
+  { href: "/", label: "Overview" },
+  { href: "/verify/", label: "Verifiable Execution" },
+  { href: "/trust-chain/", label: "Trust Chain" },
+  { href: "/language/", label: "Language" },
+  { href: "/license/", label: "License" },
+  { href: "/about/", label: "About" },
+  { href: "/contact/", label: "Contact" },
+];
+
+const path = Astro.url.pathname.replace(/\/+$/, "") || "/";
+const isCurrent = (href) => (href.replace(/\/+$/, "") || "/") === path;
+---
+<nav class="nav" aria-label="Main">
+  <div class="wrap nav-inner">
+    <a href="/" class="nav-brand" aria-label="Helix — home">
+      <BrandMark />
+      <span>Helix</span>
+    </a>
+    <button
+      class="nav-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="nav-links"
+      aria-label="Toggle navigation menu"
+    >
+      <svg class="icon-open" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <svg class="icon-close" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <div class="nav-links" id="nav-links">
+      {links.map((l) => (
+        <a href={l.href} aria-current={isCurrent(l.href) ? "page" : undefined}>{l.label}</a>
+      ))}
+      <a href="/demo/" class="nav-cta">Watch the run →</a>
+    </div>
+  </div>
+</nav>

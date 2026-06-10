@@ -1,0 +1,259 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="The Trust Chain — Helix"
+  description="Nine rungs from 299 hand-typed bytes to kovc, the Helix compiler — a byte-identical self-host fixpoint, a gcc diverse double-compile, one-command reproduction in about a minute, and every residual disclosed. Declared closed 2026-06-07 at v1.3-release."
+>
+  <!-- ============================================================
+       01 PAGE HERO
+       ============================================================ -->
+  <section class="page-hero dark" data-screen-label="01 Hero">
+    <div class="wrap">
+      <span class="eyebrow">from raw binary · trust chain closed · v1.3-release</span>
+      <h1>Nine rungs from <em>299 bytes</em> to a compiler.</h1>
+      <p class="lede">No pre-built compiler is trusted anywhere in the chain. Each rung is built only by the rung before it, starting from 299 hand-authored bytes you can verify by reading. The chain was declared closed on 2026-06-07, after a live joint reproduction — with every residual disclosed alongside the claim.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#reproduce">Reproduce it (1 min, CPU-only) <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">Read the full record</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       02 THE LADDER
+       ============================================================ -->
+  <section data-screen-label="02 The ladder">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">The ladder</span>
+          <h2 class="section-title">Every rung built only by the rung before it.</h2>
+        </div>
+        <p class="section-lede">From hex characters typed by hand to kovc, the Helix compiler written in Helix. Nothing on this ladder was ever compiled by a compiler you didn't watch get built.</p>
+      </div>
+
+      <div class="stat-strip" aria-label="Trust chain summary">
+        <span>rungs <b>9</b></span>
+        <span>trust root <b>299 hand-typed bytes</b></span>
+        <span>fixpoint K2 == K3 == K4 <b>sha 0992dddd…</b></span>
+        <span>gcc-DDC K1 <b>sha 84363adb…</b></span>
+        <span>reproduction <b>~1 min · CPU-only</b></span>
+      </div>
+
+      <div class="fact-table" style="margin-top: 28px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Rung</th>
+              <th>Size</th>
+              <th>Role</th>
+              <th>Built by</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="mono">hex0</span></td>
+              <td>299 B</td>
+              <td>Hex characters → bytes. The only thing you trust by reading — 299 hand-authored bytes at <span class="mono">stage0/hex0/hex0.bin</span>, sha <span class="mono">cc1d1741…</span></td>
+              <td class="ok">your own eyes</td>
+            </tr>
+            <tr>
+              <td><span class="mono">hex1</span></td>
+              <td>622 B</td>
+              <td>Adds single-character labels</td>
+              <td><span class="mono">hex0</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">hex2</span></td>
+              <td>1,519 B</td>
+              <td>Long labels and linking</td>
+              <td><span class="mono">hex1</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">catm</span></td>
+              <td>299 B</td>
+              <td>File concatenation</td>
+              <td><span class="mono">hex2</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">M0</span></td>
+              <td>1,684 B</td>
+              <td>Macro assembler</td>
+              <td><span class="mono">catm + hex2</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">cc_amd64</span></td>
+              <td>17,976 B</td>
+              <td>Minimal C compiler</td>
+              <td><span class="mono">M0</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">M2-Planet</span></td>
+              <td>200,561 B</td>
+              <td>Full C compiler — the last vendored rung</td>
+              <td><span class="mono">cc_amd64</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">seed</span></td>
+              <td>62,467 B</td>
+              <td>Original C-subset bootstrap compiler — <span class="mono">seed.c</span>, sha256 <span class="mono">9837db12…</span></td>
+              <td><span class="mono">M2-Planet</span></td>
+            </tr>
+            <tr>
+              <td><span class="mono">kovc</span></td>
+              <td>698,392 B</td>
+              <td>The Helix compiler, written in Helix — <span class="mono">helixc/bootstrap/&#123;lexer,parser,kovc&#125;.hx</span></td>
+              <td><span class="mono">seed</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="notice" style="margin-top: 28px;">
+        <p class="notice-title">About the committed binaries</p>
+        <p>The rung binaries committed in the repo are reference copies only — the reproduction script deletes every one of them and rebuilds the entire ladder from raw before checking a single hash. The vendored rungs (through M2-Planet) come from upstream bootstrap projects and keep their own upstream licenses.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 FOUR CLAIMS, SEPARATELY VERIFIED
+       ============================================================ -->
+  <section class="dark" data-screen-label="03 Four claims">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">The evidence</span>
+          <h2 class="section-title">Four claims, separately verified.</h2>
+        </div>
+        <p class="section-lede">Each claim stands on its own check, with its own pinned hashes — none of them depends on believing the others.</p>
+      </div>
+
+      <div class="card-grid two">
+        <div class="link-card">
+          <span class="lc-kicker">Claim I · provenance</span>
+          <h3>A hand-typed root becomes a compiler</h3>
+          <p>Nine rungs, each built only by the prior rung, every artifact's SHA pinned — from <code class="mono">hex0</code> (sha <code class="mono">cc1d1741…</code>) through the audited <code class="mono">seed.c</code> (sha256 <code class="mono">9837db12…</code>) up to kovc. No pre-built compiler is trusted anywhere.</p>
+        </div>
+        <div class="link-card">
+          <span class="lc-kicker">Claim II · self-host fixpoint</span>
+          <h3>K2 == K3 == K4, byte-identical</h3>
+          <p>seed compiles K1, K1 compiles K2, and onward: K2, K3 and K4 are byte-identical — sha <code class="mono">0992dddd…</code>. This is the same test a self-hosted C compiler passes when stage2 equals stage3, and it is asserted on every reproduction.</p>
+        </div>
+        <div class="link-card">
+          <span class="lc-kicker">Claim III · trusting-trust defense</span>
+          <h3>Wheeler diverse double-compile</h3>
+          <p>gcc — an independent lineage with zero M2-Planet ancestry — and the from-raw seed both compile <code class="mono">k1src.hx</code> to a byte-identical K1: sha <code class="mono">84363adb…</code>. gcc is only an auditor, never the shipped root. Scope, stated plainly: the DDC covers the seed→K1 rung.</p>
+        </div>
+        <div class="link-card">
+          <span class="lc-kicker">Claim IV · real capability</span>
+          <h3>The transformer capstone</h3>
+          <p>A 2-layer transformer trains end-to-end on kovc-emitted GPU kernels (RTX 3070), converging to within 0.0009% of an independent numpy oracle — the bar was 2% — with a sampled finite-difference gradient check and a load-bearing negative control. The oracle computes its own loss curve from the shared initial weights; it never reads Helix's trajectory as input.</p>
+        </div>
+      </div>
+
+      <div class="notice" style="margin-top: 28px;">
+        <p class="notice-title">No Python in the toolchain</p>
+        <p>Exactly one committed <code class="mono">.py</code> file exists in the repo — <code class="mono">verification/oracle/oracle_train.py</code>, a fenced numpy audit oracle that is never on the compile or run path. The compiler and runtime are Helix plus a small hand-authored C subset.</p>
+      </div>
+
+      <div class="prose" style="margin-top: 36px; max-width: 78ch;">
+        <h3>How the chain was declared closed</h3>
+        <p>The trust chain was declared closed on 2026-06-07, at tag <code>v1.3-release</code>, by the project owner after a live joint reproduction. The declaration rests on: the committed one-command reproduction running green in CI; four whole-repo read-only review passes by a reviewer of a different model lineage (ChatGPT), with findings remediated; a context-isolated fresh auditor that independently rebuilt from a clean clone and re-derived every hash; and five earlier context-isolated adversarial reproductions.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       04 REPRODUCE IT YOURSELF
+       ============================================================ -->
+  <section id="reproduce" data-screen-label="04 Reproduce">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Reproduce it yourself</span>
+          <h2 class="section-title">One committed command. About a minute.</h2>
+        </div>
+        <p class="section-lede">On a clean checkout, CPU-only, no GPU, no model weights, no oracle. Fail-closed: it exits nonzero if anything mismatches.</p>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head">
+          <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span>clean checkout · tier A · trust core</span>
+        </div>
+<pre class="code-body">git clone https://github.com/Questeria/helix &amp;&amp; cd helix
+bash scripts/reproduce_trust.sh</pre>
+        <div class="code-foot">
+          <span>~1 minute · CPU-only · fail-closed</span>
+          <span class="out">asserts: seed 9837db12 · fixpoint 0992dddd · DDC K1 84363adb</span>
+        </div>
+      </div>
+
+      <div class="prose" style="margin-top: 36px; max-width: 78ch;">
+        <p>What that one command does: it <strong>deletes every pre-built rung binary</strong> in the checkout, rebuilds the entire ladder from the raw sources, runs the self-host fixpoint and the gcc diverse double-compile, asserts the pinned anchors, and exits nonzero on any mismatch. It runs green in CI on a clean GitHub ubuntu-latest runner (<code>.github/workflows/trust-reproduce.yml</code>) on every push — push-button for any third party with a fork.</p>
+        <p>Beyond the trust core, every kovc build is held to the universal gate, <code>scripts/gate_kovc.sh</code>: the self-host fixpoint, a 109-program feature corpus, 4 negative-diagnostic checks, and a PTX byte-diff.</p>
+        <p>Further reading: <a href="https://github.com/Questeria/helix/blob/main/docs/CLEAN_REPRODUCTION.md">CLEAN_REPRODUCTION.md</a> · <a href="https://github.com/Questeria/helix/blob/main/QUICKSTART.md">QUICKSTART.md</a> · <a href="https://github.com/Questeria/helix/blob/main/scripts/reproduce_trust.sh">reproduce_trust.sh itself</a>.</p>
+      </div>
+
+      <div class="faq" style="margin-top: 36px;">
+        <details>
+          <summary>Isn't this just “Reflections on Trusting Trust” again?</summary>
+          <div class="faq-body"><p>It's the answer to it, scoped honestly. Wheeler's diverse double-compile uses two compilers of independent lineage: if gcc (zero M2-Planet ancestry) and the from-raw seed produce a byte-identical K1, a self-reproducing backdoor would have to live in both independent lineages at once. The DDC covers the seed→K1 rung — that scope is stated, not hidden.</p></div>
+        </details>
+        <details>
+          <summary>Why are there binaries in the repo at all?</summary>
+          <div class="faq-body"><p>Convenience only. They are reference copies — the reproduction script deletes them before doing anything else and rebuilds from raw. Nothing in the verification path ever executes a committed binary it didn't just rebuild and hash-match.</p></div>
+        </details>
+        <details>
+          <summary>Who has checked this besides the author?</summary>
+          <div class="faq-body"><p>A different-model-lineage reviewer (ChatGPT) made four whole-repo read-only review passes, with findings remediated; a context-isolated fresh auditor rebuilt from a clean clone and re-derived every hash; five earlier context-isolated adversarial reproductions preceded that; and the public CI reruns the whole thing on every push. Reproduction by a party with no connection to the author is the one outstanding increment — now push-button via the public CI and a fork.</p></div>
+        </details>
+        <details>
+          <summary>If gcc is involved, doesn't the chain trust gcc?</summary>
+          <div class="faq-body"><p>No. gcc is only an auditor in the diverse double-compile — a second, independent lineage used to cross-check one rung. The shipped root is the from-raw ladder; nothing that ships was built by gcc.</p></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       05 THE HONEST BOUNDARY
+       ============================================================ -->
+  <section class="dark" data-screen-label="05 Honest boundary">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">The honest boundary</span>
+          <h2 class="section-title">What remains trusted, stated plainly.</h2>
+        </div>
+        <p class="section-lede">These residuals are stated so the claim is precise, not inflated. A closed trust chain has edges; here are all of them.</p>
+      </div>
+
+      <ol class="resid-list">
+        <li><b>The shared TCB.</b> Host OS and kernel, filesystem, shell and coreutils, gcc/libc/binutils/loader, CPU and microcode, RAM — and the audited <code class="mono">seed.c</code> source — remain trusted. A diverse double-compile says nothing about layers both compilers share. <code class="mono">seed.c</code> is auditable line-by-line, but it is trusted-by-reading, and we say so.</li>
+        <li><b>Complete to PTX, not SASS.</b> The CPU path is all-the-way-down from raw binary. The GPU path is hex0→PTX, then trusts NVIDIA's closed ptxas — the one trusted-once boundary — plus the C host launcher. Porting the launcher to Helix would move that boundary, not close it.</li>
+        <li><b>GPU performance is ~50–67% of cuBLAS, not parity.</b> The end-to-end capstone speedup is 7.0–8.7×, Amdahl-bound. Helix emits correct, reasonably-performant kernels; it does not beat NVIDIA's hand-tuned library, and never claimed to.</li>
+        <li><b>The broader v1.1 language surface is checked behaviorally, not byte-identically.</b> Generics, traits, closures, turbofish, wide-field, bf16 are cross-checked by a zero-lineage interpreter — byte-identical comparison is impossible by construction there — and that witness is kept out-of-tree, so it is not clean-checkout reproducible. The byte-identical, hash-pinned DDC covers the seed→K1 rung.</li>
+        <li><b>Single hardware target.</b> sm_86, fp32. No other targets or precisions are claimed.</li>
+        <li><b>One increment outstanding.</b> Reproduction by a party with no connection to the author — now push-button via the public CI and a fork.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       06 CTA
+       ============================================================ -->
+  <section class="cta dark" data-screen-label="06 CTA">
+    <div class="wrap">
+      <span class="eyebrow">From 299 bytes to GPT-2</span>
+      <h2>See what runs on it.</h2>
+      <p>The same chain that closes here emits the GPU kernels that ran GPT-2 and SmolLM2 — verified token-for-token against an independent reference.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/verify/">Verifiable execution <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/Questeria/helix">Browse the repo</a>
+      </div>
+    </div>
+  </section>
+</Base>

@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Helix — A compiler that builds itself from 120 bytes</title>
+<meta name="description" content="Helix is a from-scratch ML-native systems language. Bootstrapped from 120 bytes of hex, with autodiff, tiles and GPU codegen built into the language.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.1/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<!-- ============================================================
+     NAV
+     ============================================================ -->
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a href="#" class="nav-brand">
+      <svg class="nav-brand-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M5 3 Q 12 8 19 3 M5 12 Q 12 17 19 12 M5 21 Q 12 16 19 21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="12" cy="6" r="1.6" fill="currentColor"/>
+        <circle cx="12" cy="18" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      </svg>
+      <span>Helix</span>
+    </a>
+    <div class="nav-links">
+      <a href="#why">Why Helix</a>
+      <a href="#bootstrap">Bootstrap</a>
+      <a href="#autodiff">Autodiff</a>
+      <a href="#code">Code</a>
+      <a href="#" class="nav-cta">Playground →</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============================================================
+     HERO
+     ============================================================ -->
+<section class="hero dark" data-screen-label="01 Hero">
+  <svg class="room" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <!-- ONE full-canvas vertical gradient: bright violet at the horizon,
+           fading to deep night above and to deep night below. No hard edges. -->
+      <linearGradient id="backdrop" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%"   stop-color="oklch(4% 0.018 268)"/>
+        <stop offset="30%"  stop-color="oklch(8% 0.040 274)"/>
+        <stop offset="50%"  stop-color="oklch(18% 0.110 285)"/>
+        <stop offset="60%"  stop-color="oklch(40% 0.190 292)"/>
+        <stop offset="60.001%" stop-color="oklch(40% 0.190 292)"/>
+        <stop offset="75%"  stop-color="oklch(14% 0.075 280)"/>
+        <stop offset="100%" stop-color="oklch(4% 0.020 268)"/>
+      </linearGradient>
+      <linearGradient id="horizonGlow" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%"   stop-color="oklch(50% 0.18 280)" stop-opacity="0"/>
+        <stop offset="50%"  stop-color="oklch(95% 0.22 290)" stop-opacity="1"/>
+        <stop offset="100%" stop-color="oklch(50% 0.18 275)" stop-opacity="0"/>
+      </linearGradient>
+      <!-- Soft elliptical bloom centered on the horizon, very wide so its
+           outer edge sits well past the visible canvas (no rectangular edge). -->
+      <radialGradient id="horizonBloom" cx="800" cy="540" r="1400" fx="800" fy="540" gradientUnits="userSpaceOnUse">
+        <stop offset="0%"   stop-color="oklch(82% 0.24 290)" stop-opacity="0.55"/>
+        <stop offset="15%"  stop-color="oklch(60% 0.20 285)" stop-opacity="0.30"/>
+        <stop offset="40%"  stop-color="oklch(35% 0.14 280)" stop-opacity="0.12"/>
+        <stop offset="100%" stop-color="oklch(10% 0.04 270)" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+
+    <!-- Single full-canvas backdrop — NO rectangular sub-bands -->
+    <rect x="-200" y="-200" width="2000" height="1300" fill="url(#backdrop)"></rect>
+    <!-- Soft horizon bloom, painted on a full-canvas rect so no edge reads -->
+    <rect x="-200" y="-200" width="2000" height="1300" fill="url(#horizonBloom)"></rect>
+
+    <!-- Subtle black hole in the sky — event horizon, glowing accretion disc, orbiting bodies -->
+    <defs>
+      <radialGradient id="bhHalo" cx="50%" cy="50%" r="50%">
+        <stop offset="0%"   stop-color="oklch(75% 0.18 55)" stop-opacity="0"/>
+        <stop offset="55%"  stop-color="oklch(60% 0.16 45)" stop-opacity="0.10"/>
+        <stop offset="78%"  stop-color="oklch(45% 0.14 285)" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="oklch(15% 0.06 270)" stop-opacity="0"/>
+      </radialGradient>
+      <radialGradient id="bhCore" cx="50%" cy="50%" r="50%">
+        <stop offset="0%"   stop-color="oklch(0% 0 0)" stop-opacity="1"/>
+        <stop offset="88%"  stop-color="oklch(0% 0 0)" stop-opacity="1"/>
+        <stop offset="94%"  stop-color="oklch(96% 0.10 75)" stop-opacity="0.9"/>
+        <stop offset="100%" stop-color="oklch(96% 0.10 75)" stop-opacity="0"/>
+      </radialGradient>
+      <!-- Accretion disc gradients — radial so they look HOT in the inner
+           edge and cool/fade outward, painted onto an annulus path. -->
+      <radialGradient id="bhDiscRadial" cx="50%" cy="50%" r="50%">
+        <stop offset="0%"   stop-color="oklch(98% 0.20 85)" stop-opacity="0"/>
+        <stop offset="34%"  stop-color="oklch(98% 0.20 85)" stop-opacity="0"/>
+        <stop offset="42%"  stop-color="oklch(98% 0.20 85)" stop-opacity="1"/>
+        <stop offset="55%"  stop-color="oklch(82% 0.22 60)" stop-opacity="0.95"/>
+        <stop offset="72%"  stop-color="oklch(62% 0.20 35)" stop-opacity="0.55"/>
+        <stop offset="100%" stop-color="oklch(45% 0.16 25)" stop-opacity="0"/>
+      </radialGradient>
+      <!-- Planet shading: highlight on one side, dark on the other -->
+      <radialGradient id="bhPlanetA" cx="35%" cy="35%" r="65%">
+        <stop offset="0%"   stop-color="oklch(82% 0.10 80)"/>
+        <stop offset="60%"  stop-color="oklch(48% 0.12 40)"/>
+        <stop offset="100%" stop-color="oklch(15% 0.04 35)"/>
+      </radialGradient>
+      <radialGradient id="bhPlanetB" cx="35%" cy="35%" r="65%">
+        <stop offset="0%"   stop-color="oklch(78% 0.10 240)"/>
+        <stop offset="60%"  stop-color="oklch(40% 0.12 250)"/>
+        <stop offset="100%" stop-color="oklch(12% 0.05 260)"/>
+      </radialGradient>
+      <radialGradient id="bhPlanetC" cx="35%" cy="35%" r="65%">
+        <stop offset="0%"   stop-color="oklch(86% 0.06 90)"/>
+        <stop offset="60%"  stop-color="oklch(55% 0.10 120)"/>
+        <stop offset="100%" stop-color="oklch(18% 0.04 130)"/>
+      </radialGradient>
+      <!-- Clip the bottom half of the disc-tilted frame so we can render the
+           BEHIND vs IN-FRONT halves of the disc and the orbits separately. -->
+      <clipPath id="bhTopHalf"><rect x="-260" y="-260" width="520" height="260"/></clipPath>
+      <clipPath id="bhBotHalf"><rect x="-260" y="0"    width="520" height="260"/></clipPath>
+    </defs>
+    <g transform="translate(1240 110)" opacity="0.95">
+      <!-- Soft dusty halo (largest, sits beneath everything) -->
+      <circle r="190" fill="url(#bhHalo)"></circle>
+
+      <!-- ACCRETION DISC + ORBITS — back half (clip to top of tilted frame) -->
+      <g transform="rotate(-14)">
+        <g clip-path="url(#bhTopHalf)">
+          <!-- Disc back half: radial-painted annulus -->
+          <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscRadial)" opacity="0.95"></ellipse>
+          <!-- Subtle inner-edge highlight on the back of the disc -->
+          <ellipse cx="0" cy="0" rx="68" ry="12" fill="none"
+                   stroke="oklch(98% 0.18 85)" stroke-width="1.6" opacity="0.55"></ellipse>
+
+          <!-- (orbit lines removed) -->
+
+          <!-- Planets/stars — back half. The animateMotion paths run a full
+               loop; we clip so only the rear arc renders, giving the
+               illusion of passing behind the black hole. -->
+          <circle r="3.2" fill="url(#bhPlanetA)">
+            <animateMotion dur="14s" repeatCount="indefinite" rotate="auto">
+              <mpath href="#bh-orbit-1"/>
+            </animateMotion>
+          </circle>
+          <circle r="2.6" fill="url(#bhPlanetB)">
+            <animateMotion dur="22s" repeatCount="indefinite" rotate="auto" begin="-6s">
+              <mpath href="#bh-orbit-2"/>
+            </animateMotion>
+          </circle>
+          <circle r="3.8" fill="url(#bhPlanetC)">
+            <animateMotion dur="34s" repeatCount="indefinite" rotate="auto" begin="-12s">
+              <mpath href="#bh-orbit-3"/>
+            </animateMotion>
+          </circle>
+          <circle r="0.9" fill="oklch(96% 0.06 80)" opacity="0.85">
+            <animateMotion dur="9s" repeatCount="indefinite" begin="-2s">
+              <mpath href="#bh-orbit-4"/>
+            </animateMotion>
+          </circle>
+          <circle r="0.8" fill="oklch(96% 0.04 220)" opacity="0.75">
+            <animateMotion dur="18s" repeatCount="indefinite" begin="-8s">
+              <mpath href="#bh-orbit-5"/>
+            </animateMotion>
+          </circle>
+        </g>
+
+        <!-- Bright lensed arcs — the back of the disc curling above the BH.
+             Drawn AFTER the back half but BEFORE the core, so they read as
+             part of the disc but inside the disc plane. -->
+        <path d="M -118 0 A 118 22 0 0 1 118 0" fill="none"
+              stroke="oklch(98% 0.18 85)" stroke-width="1.8" opacity="0.9"></path>
+        <path d="M -92 -1 A 92 14 0 0 1 92 -1" fill="none"
+              stroke="oklch(94% 0.20 80)" stroke-width="1.1" opacity="0.65"></path>
+      </g>
+
+      <!-- Event horizon + photon ring (in front of back orbits, behind front) -->
+      <circle r="36" fill="url(#bhCore)"></circle>
+
+      <!-- ACCRETION DISC + ORBITS — front half -->
+      <g transform="rotate(-14)" clip-path="url(#bhBotHalf)">
+        <!-- Disc front half: same radial annulus, just the bottom -->
+        <ellipse cx="0" cy="0" rx="118" ry="22" fill="url(#bhDiscRadial)" opacity="0.95"></ellipse>
+        <ellipse cx="0" cy="0" rx="68" ry="12" fill="none"
+                 stroke="oklch(98% 0.18 85)" stroke-width="1.6" opacity="0.55"></ellipse>
+
+        <!-- (orbit lines removed) -->
+
+        <!-- Planets/stars — front half (same animations, second copy clipped
+             to the bottom). The two halves play in sync so each body
+             appears to pass behind the BH and re-emerge on the other side. -->
+        <circle r="3.2" fill="url(#bhPlanetA)">
+          <animateMotion dur="14s" repeatCount="indefinite" rotate="auto">
+            <mpath href="#bh-orbit-1"/>
+          </animateMotion>
+        </circle>
+        <circle r="2.6" fill="url(#bhPlanetB)">
+          <animateMotion dur="22s" repeatCount="indefinite" rotate="auto" begin="-6s">
+            <mpath href="#bh-orbit-2"/>
+          </animateMotion>
+        </circle>
+        <circle r="3.8" fill="url(#bhPlanetC)">
+          <animateMotion dur="34s" repeatCount="indefinite" rotate="auto" begin="-12s">
+            <mpath href="#bh-orbit-3"/>
+          </animateMotion>
+        </circle>
+        <circle r="0.9" fill="oklch(96% 0.06 80)" opacity="0.85">
+          <animateMotion dur="9s" repeatCount="indefinite" begin="-2s">
+            <mpath href="#bh-orbit-4"/>
+          </animateMotion>
+        </circle>
+        <circle r="0.8" fill="oklch(96% 0.04 220)" opacity="0.75">
+          <animateMotion dur="18s" repeatCount="indefinite" begin="-8s">
+            <mpath href="#bh-orbit-5"/>
+          </animateMotion>
+        </circle>
+      </g>
+
+      <!-- (outer Einstein ring removed) -->
+
+      <!-- Orbit paths — clean ellipses around the BH. Bodies travel in
+           front of the event horizon on the lower arc and slightly above
+           on the upper arc, so they stay continuously visible without
+           any awkward bending. -->
+      <path id="bh-orbit-1" d="M -78 0  A 78  22 0 1 1 78  0  A 78  22 0 1 1 -78  0" fill="none"></path>
+      <path id="bh-orbit-2" d="M -118 0 A 118 34 0 1 1 118 0  A 118 34 0 1 1 -118 0" fill="none"></path>
+      <path id="bh-orbit-3" d="M -158 0 A 158 22 0 1 1 158 0  A 158 22 0 1 1 -158 0" fill="none"></path>
+      <path id="bh-orbit-4" d="M -54 0  A 54  16 0 1 1 54  0  A 54  16 0 1 1 -54  0" fill="none"></path>
+      <path id="bh-orbit-5" d="M -100 0 A 100 28 0 1 1 100 0  A 100 28 0 1 1 -100 0" fill="none"></path>
+    </g>
+
+    <!-- Stars -->
+    <g id="stars" fill="oklch(92% 0.06 285)"></g>
+
+    <!-- Mountain ranges (line silhouettes) -->
+    <g id="mountains" fill="none" stroke-linejoin="miter" stroke-linecap="square"></g>
+
+    <!-- Code streams now live in an HTML overlay (true CSS-3D ground plane) -->
+
+    <!-- Ground grid -->
+    <g id="ground-lines"></g>
+    <g id="hex-grid"></g>
+
+    <!-- Horizon line — gentle Earth-curve arc, soft glow only -->
+    <path d="M 120 566 Q 800 540 1480 566" fill="none" stroke="url(#horizonGlow)" stroke-width="2" opacity="0.5"></path>
+  </svg>
+
+  
+  <script>
+  (() => {
+    const ns = 'http://www.w3.org/2000/svg';
+    const groundG = document.querySelector('#ground-lines');
+    const starsG  = document.querySelector('#stars');
+    const mtnsG   = document.querySelector('#mountains');
+    const VPX = 800, HY = 540, BOT = 900;
+
+    function line(parent, cls, x1, y1, x2, y2) {
+      const ln = document.createElementNS(ns, 'line');
+      ln.setAttribute('class', cls);
+      ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+      ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+      parent.appendChild(ln);
+    }
+    // Curved cross-band: ends bow downward by `bow` px, so the horizon reads
+    // as a gentle Earth-curve arc rather than a straight line.
+    function curvedBand(parent, cls, yCenter, bow) {
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('class', cls);
+      const yEdge = yCenter + bow;
+      // Quadratic with control point above the center to land at yCenter at x=800
+      const yCtrl = yCenter - bow;
+      path.setAttribute('d', `M -200 ${yEdge} Q 800 ${yCtrl} 1800 ${yEdge}`);
+      path.setAttribute('fill', 'none');
+      parent.appendChild(path);
+    }
+
+    // ---------- Ground grid ----------
+    // Synthwave-style one-point-ish perspective: lines converge to a short
+    // horizontal target on the horizon, sourced from a VERY wide foreground
+    // band so they reach the left/right screen edges all the way up to the
+    // horizon (no empty wedges near the corners).
+    const HXL = 540, HXR = 1060;
+    const FXL = -18000, FXR = 19600;
+    const COLS = 240;
+    for (let i = 0; i <= COLS; i++) {
+      const t = i / COLS;
+      const xf = FXL + (FXR - FXL) * t;
+      const xh = HXL + (HXR - HXL) * t;
+      const cls = (i % 8 === 0) ? 'ln-b' : 'ln';
+      line(groundG, cls, xf, BOT + 100, xh, HY);
+    }
+    // Cross-bands: equal spacing on the ground, foreshortened on screen.
+    // Each band extends from interpolated left edge to interpolated right edge
+    // so it only narrows as the grid recedes — meeting the horizon as a line.
+    // Cross-bands: power-law spacing — wider gaps in the foreground, packing
+    // tighter as they approach the horizon. Each band curves gently downward
+    // toward the screen edges so the grid wraps around an Earth-like horizon.
+    const ROWS = 24;
+    const MAX_BOW = 26; // px the horizon dips at the screen edges
+    for (let k = 1; k <= ROWS; k++) {
+      const t = Math.pow(k / ROWS, 0.5);
+      const yCenter = BOT - (BOT - HY) * t;
+      const bow = MAX_BOW * t;     // bands curve more as they approach horizon
+      const cls = (k % 3 === 0) ? 'ln-b' : 'ln';
+      curvedBand(groundG, cls, yCenter, bow);
+    }
+
+    // ---------- Hex0 wave grid ----------
+    // Perspective grid of hex0 bytes pulsing diagonally via pure CSS animation.
+    // Each byte's animation-delay is a function of its (row, col), so the
+    // wave sweeps across the floor with zero JS per-frame cost.
+    const hexG = document.querySelector('#hex-grid');
+    // Per-column tilt defaults — baked from a manual tune of the front row.
+    // Cols 112..128 are user-tuned; outer columns extrapolate smoothly toward
+    // ~88° at the screen edges so the rotation reads continuously across the
+    // whole grid (foreground rows + back rows on the same column inherit it).
+    const PER_TABLE = {
+      // Left flank — cols 92..111
+       92:  80.00,  93:  76.50,  94:  74.00,  95:  75.00,  96:  72.00,
+       97:  78.50,  98:  71.00,  99:  70.00, 100:  68.00, 101:  67.50,
+      102:  64.50, 103:  67.00, 104:  64.00, 105:  64.50, 106:  64.50,
+      107:  60.00, 108:  57.50, 109:  56.00, 110:  54.50, 111:  54.50,
+      // Center — cols 112..128
+      112:  50.50, 113:  50.00, 114:  44.50, 115:  37.50,
+      116:  33.50, 117:  24.50, 118:  18.00, 119:   8.50,
+      120:   0.00,
+      121:  -8.50, 122: -18.00, 123: -24.50, 124: -33.50,
+      125: -37.50, 126: -44.50, 127: -50.00, 128: -50.50,
+      // Right flank — cols 129..148 (mirror of left)
+      129: -54.50, 130: -54.50, 131: -56.00, 132: -57.50, 133: -60.00,
+      134: -64.50, 135: -64.50, 136: -64.00, 137: -67.00, 138: -64.50,
+      139: -67.50, 140: -68.00, 141: -70.00, 142: -71.00, 143: -78.50,
+      144: -72.00, 145: -75.00, 146: -74.00, 147: -76.50, 148: -80.00
+    };
+    function tiltDefault(col) {
+      if (col in PER_TABLE) return PER_TABLE[col];
+      // Outside the tuned band: flat ±82° (sign mirrors across col 120).
+      return col < 120 ? 82 : -82;
+    }
+    const HEX_POOL = ['48','89','C7','BA','CD','80','EB','C3','B0','3C','0F','05','7F','45','4C','46','B8','01','00','BB','31','C0','E8','5D','FF','D2','83','EC','C1','E9','C6','D1','F8','74','75','FE'];
+    // Hex bytes sit at every (vertical grid line × cross-band) intersection.
+    // Reuse the grid's exact ROWS / MAX_BOW / Bezier math so each byte lands
+    // dead-center on the visual grid intersection.
+    let hseed = 7;
+    const hrand = () => { hseed = (hseed * 9301 + 49297) % 233280; return hseed / 233280; };
+
+    // Debug guides — only on the FRONT (closest) row. Each front-row hex byte
+    // gets a flanking pair of short lines that share the byte's rotation, so
+    // user can sight-align that single front row with the grid verticals.
+    const guideG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    guideG.setAttribute('id', 'hex-guides');
+    hexG.parentNode.insertBefore(guideG, hexG);
+    const denomY = HY - (BOT + 100);
+    for (let i = 0; i < COLS; i++) {
+      const t = i / COLS;
+      const xf = FXL + (FXR - FXL) * t;
+      const xh = HXL + (HXR - HXL) * t;
+      for (let k = 1; k <= ROWS; k++) {
+        const tb = Math.pow(k / ROWS, 0.5);
+        const yC = BOT - (BOT - HY) * tb;
+        const bow = MAX_BOW * tb;
+        const yEdge = yC + bow;
+        const yCtrl = yC - bow;
+        // Solve ray ∩ band-curve. Ray y is linear in d; band y is quadratic in
+        // x (and x linear in d), so two fixed-point iterations converge fast.
+        const YA = BOT + 100;
+        const dy = HY - YA;
+        let d = (yC - YA) / dy;
+        let x = xf + (xh - xf) * d;
+        let u = (x + 200) / 2000;
+        for (let j = 0; j < 2; j++) {
+          const yBand = yEdge - 4 * bow * u * (1 - u);
+          d = (yBand - YA) / dy;
+          x = xf + (xh - xf) * d;
+          u = (x + 200) / 2000;
+        }
+        if (x < -20 || x > 1620) continue;        // off-canvas at this band
+        const yAt = yEdge - 4 * bow * u * (1 - u);
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('class', 'hex-byte');
+        text.setAttribute('x', x.toFixed(2));
+        text.setAttribute('y', yAt.toFixed(2));
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('dominant-baseline', 'central');
+        text.setAttribute('font-size', (18 * Math.pow(1 - tb*tb, 1.3) + 1.5).toFixed(2));
+        // Match the ROTATION of the vertical grid line (ray) at this point.
+        // Ray vector in screen coords: (xh-xf, HY-(BOT+100)). Rotate text so
+        // its baseline tilts the same direction the ray tilts off vertical.
+        const dxRay = xh - xf;
+        const dyUp = (BOT + 100) - HY;
+        const rayAng = -Math.atan2(dxRay, dyUp) * 180 / Math.PI;
+        let tilt = rayAng * 0.45;
+        if (tilt > 22) tilt = 22; else if (tilt < -22) tilt = -22;
+        text.__x = x;
+        text.__y = yAt;
+        text.__ra = rayAng;
+        text.__per = -tiltDefault(i);
+        text.__col = i;             // grid-line column index (links column behavior)
+        if (k === 1) text.__front = true;
+        // (No flanking debug lines.)
+        text.setAttribute('transform',
+          `translate(${x.toFixed(2)} ${yAt.toFixed(2)}) ` +
+          `scale(1 0.42) rotate(${tilt.toFixed(2)}) ` +
+          `translate(${(-x).toFixed(2)} ${(-yAt).toFixed(2)})`);
+        text.textContent = HEX_POOL[Math.floor(hrand() * HEX_POOL.length)];
+        const phase = tb * 1.5 + (i / COLS) * 0.8 + hrand() * 0.2;
+        text.style.animationDelay = (-phase * 4).toFixed(2) + 's';
+        hexG.appendChild(text);
+      }
+    }
+
+    // Tilt slider — live-tunes how strongly hex bytes follow ray rotation.
+    const tiltSlider = document.getElementById('tilt-slider');
+    const tiltVal    = document.getElementById('tilt-value');
+    const tiltCapEl  = document.getElementById('tilt-cap');
+    const tiltCapVal = document.getElementById('tilt-cap-value');
+    const allBytes   = Array.from(hexG.querySelectorAll('.hex-byte'));
+    // Single source of truth for user-tuned per-column rotations.
+    // Map<col, deg>. Columns NOT in this map fall back to tiltDefault.
+    const userTilt = new Map();
+    function tiltFor(col) {
+      return userTilt.has(col) ? userTilt.get(col) : tiltDefault(col);
+    }
+    function applyTilt(scope) {
+      let targets;
+      if (scope === 'selected' && selectedByte) targets = [selectedByte];
+      else if (scope === 'col-pair' && selectedByte) {
+        const cols = new Set([selectedByte.__col]);
+        if (selectedByte.__mirror) cols.add(selectedByte.__mirror.__col);
+        targets = allBytes.filter(b => cols.has(b.__col));
+      } else targets = allBytes;
+      for (const t of targets) {
+        // Per-column tilt is authoritative — fully owned by tiltFor.
+        const tilt = tiltFor(t.__col);
+        const tr = `translate(${t.__x.toFixed(2)} ${t.__y.toFixed(2)}) ` +
+                   `scale(1 0.42) rotate(${tilt.toFixed(2)}) ` +
+                   `translate(${(-t.__x).toFixed(2)} ${(-t.__y).toFixed(2)})`;
+        t.setAttribute('transform', tr);
+        if (t.__guides) {
+          const grot = `rotate(${tilt.toFixed(2)} ${t.__x.toFixed(2)} ${t.__y.toFixed(2)})`;
+          for (const g of t.__guides) g.setAttribute('transform', grot);
+        }
+      }
+    }
+    // Apply baked-in rotations on load (the tuning panel is gone but the
+    // per-column system stays as the source of truth).
+    applyTilt('all');
+    if (tiltSlider && tiltCapEl) {
+      tiltSlider.addEventListener('input', () => applyTilt(selectedByte ? 'col-pair' : 'all'));
+      tiltCapEl.addEventListener('input',   () => applyTilt(selectedByte ? 'col-pair' : 'all'));
+    }
+
+    const perRow      = document.getElementById('per-byte-row');
+    const perSlider   = document.getElementById('per-edit-slider');
+    const perValueLab = document.getElementById('per-edit-value');
+    const colToBtn    = new Map(); // hoisted: edge col → its per-switch button
+    let selectedByte = null;
+    let selectedBtn  = null;
+    function deselect() {
+      if (selectedBtn) selectedBtn.classList.remove('on');
+      selectedBtn = null;
+      selectedByte = null;
+      if (perSlider) { perSlider.disabled = true; perSlider.value = '0'; }
+      if (perValueLab) perValueLab.textContent = '0°';
+    }
+    if (perRow && perSlider) {
+      // One button per column that has a visible byte. The bottommost byte
+      // for each column is used so the on-screen target is easy to spot.
+      const byCol = new Map();
+      for (const b of allBytes) {
+        const prev = byCol.get(b.__col);
+        if (!prev || b.__y > prev.__y) byCol.set(b.__col, b);
+      }
+      const frontBytes = [...byCol.values()].sort((a, b) => a.__col - b.__col);
+      // Mirror pairs across column 120 so left/right edges move together.
+      for (const b of frontBytes) {
+        const mirrorCol = 240 - b.__col;
+        b.__mirror = byCol.get(mirrorCol) || null;
+      }
+      for (const b of frontBytes) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'per-switch';
+        // Mark cols that already have a baked-in default rotation, so the
+        // user can tell at a glance which buttons NOT to re-tune.
+        if (b.__col in PER_TABLE) btn.classList.add('tuned');
+        if (userTilt.has(b.__col)) btn.classList.add('tuned');
+        btn.textContent = b.textContent;
+        colToBtn.set(b.__col, btn);
+        btn.addEventListener('click', () => {
+          if (selectedBtn === btn) { deselect(); return; }
+          if (selectedBtn) selectedBtn.classList.remove('on');
+          selectedBtn = btn; btn.classList.add('on');
+          selectedByte = b;
+          perSlider.disabled = false;
+          perSlider.value = String(tiltFor(b.__col));
+          perValueLab.textContent = tiltFor(b.__col).toFixed(1) + '°';
+        });
+        perRow.appendChild(btn);
+      }
+      function markTuned(col) {
+        const btn = colToBtn.get(col);
+        if (btn) btn.classList.add('tuned');
+      }
+      perSlider.addEventListener('input', () => {
+        if (!selectedByte) return;
+        const v = parseFloat(perSlider.value);
+        perValueLab.textContent = v.toFixed(1) + '°';
+        const myCol = selectedByte.__col;
+        const mirrorCol = selectedByte.__mirror ? selectedByte.__mirror.__col : null;
+        userTilt.set(myCol, v);
+        markTuned(myCol);
+        if (mirrorCol != null) { userTilt.set(mirrorCol, -v); markTuned(mirrorCol); }
+        applyTilt('col-pair');
+        refreshDump();
+      });
+    }
+
+    // Dump current per-column rotations so they can be baked in.
+    const dumpBtn  = document.getElementById('dump-btn');
+    const applyBtn = document.getElementById('apply-btn');
+    const dumpOut  = document.getElementById('dump-out');
+    function buildDumpString() {
+      // Dump ONLY user-tuned columns — the changes you made via the slider.
+      const entries = [...userTilt.entries()].sort((a, b) => a[0] - b[0]);
+      return '{ ' + entries.map(([c, v]) => c + ': ' + Number(v).toFixed(2)).join(', ') + ' }';
+    }
+    function refreshDump() {
+      if (dumpOut && document.activeElement !== dumpOut) {
+        dumpOut.value = buildDumpString();
+      }
+    }
+    if (dumpBtn && dumpOut) {
+      dumpBtn.addEventListener('click', () => {
+        dumpOut.value = buildDumpString();
+        console.log('helix per-column rotations:', dumpOut.value);
+      });
+    }
+    if (applyBtn && dumpOut) {
+      applyBtn.addEventListener('click', () => {
+        const raw = dumpOut.value.trim();
+        if (!raw) return;
+        // Accept either strict JSON or `{ 112: 72.00, ... }` (unquoted keys).
+        let obj = null;
+        try { obj = JSON.parse(raw); } catch (_) {}
+        if (!obj) {
+          try {
+            // Quote bare integer keys, then parse.
+            const fixed = raw.replace(/([{,]\s*)(-?\d+)\s*:/g, '$1"$2":');
+            obj = JSON.parse(fixed);
+          } catch (e) { console.error('apply parse failed:', e); return; }
+        }
+        // Replace user-tuned map with the pasted set.
+        userTilt.clear();
+        for (const k of Object.keys(obj)) userTilt.set(parseInt(k, 10), Number(obj[k]));
+        // Reflect new tuned state on the button strip.
+        for (const [col, btn] of colToBtn) {
+          btn.classList.toggle('tuned', userTilt.has(col));
+        }
+        applyTilt('all');
+        refreshDump();
+      });
+    }
+    // Keep dump live as the slider moves.
+    if (perSlider) perSlider.addEventListener('input', refreshDump);
+    refreshDump();
+
+    // ---------- Mountains ----------
+    // Fractal midpoint-displacement ridgelines drawn as connected straight
+    // segments — 4 ranges, far→near, lighter→bolder. Inside each silhouette
+    // we fill with VERTICAL lines running from the baseline up to the
+    // ridgeline top, so the mountain massing reads as a vertical hatch.
+    let seed = 7;
+    const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+
+    // Horizon curve baseline — matches the floor cross-band Earth-curve bow.
+    // Center sits at HY, edges arc down by ~CURVE_AMP. Mountains plant their
+    // bases on this curve so there is no straight-line gap at edges.
+    const CURVE_AMP = 32;
+    function horizonY(x) {
+      const u = (x - 800) / 800;
+      return HY + CURVE_AMP * (u * u);
+    }
+
+    function ridgePoints(xStart, xEnd, baseFn, amp, roughness) {
+      const yS = baseFn(xStart), yE = baseFn(xEnd);
+      let pts = [
+        [xStart, yS + 4],
+        [xStart + (xEnd-xStart)*0.18, baseFn(xStart + (xEnd-xStart)*0.18) - amp*0.6],
+        [xStart + (xEnd-xStart)*0.42, baseFn(xStart + (xEnd-xStart)*0.42) - amp*0.95],
+        [xStart + (xEnd-xStart)*0.66, baseFn(xStart + (xEnd-xStart)*0.66) - amp*0.55],
+        [xStart + (xEnd-xStart)*0.84, baseFn(xStart + (xEnd-xStart)*0.84) - amp*0.78],
+        [xEnd, yE + 4]
+      ];
+      for (let pass = 0; pass < 5; pass++) {
+        const next = [pts[0]];
+        const disp = amp * roughness * Math.pow(0.55, pass);
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = pts[i], b = pts[i+1];
+          next.push([(a[0]+b[0])/2, (a[1]+b[1])/2 + (rand()-0.5)*disp], b);
+        }
+        pts = next;
+      }
+      for (const p of pts) {
+        const floor = baseFn(p[0]) - amp;
+        if (p[1] < floor) p[1] = floor + (rand()*4);
+      }
+      return pts;
+    }
+
+    function ridgeFn(pts) {
+      pts = pts.slice().sort((a,b) => a[0] - b[0]);
+      return function(x) {
+        for (let i = 0; i < pts.length - 1; i++) {
+          if (x >= pts[i][0] && x <= pts[i+1][0]) {
+            const u = (x - pts[i][0]) / (pts[i+1][0] - pts[i][0] || 1);
+            return pts[i][1] + (pts[i+1][1] - pts[i][1]) * u;
+          }
+        }
+        return pts[pts.length-1][1];
+      };
+    }
+
+    function drawRange(opts) {
+      const { xStart, xEnd, yBase, amp, roughness, stroke, sw, opacity, fillStep, fillOpacity } = opts;
+      const baseFn = (typeof yBase === 'function') ? yBase : (() => yBase);
+      const pts = ridgePoints(xStart, xEnd, baseFn, amp, roughness);
+      const fn = ridgeFn(pts);
+
+      // Interior vertical fill: ridge top → horizon-curve baseline
+      for (let x = xStart; x <= xEnd; x += fillStep) {
+        const yTop = fn(x);
+        const yBot = baseFn(x);
+        if (yTop >= yBot) continue;
+        const ln = document.createElementNS(ns, 'line');
+        ln.setAttribute('x1', x.toFixed(1)); ln.setAttribute('y1', (yBot + 1).toFixed(1));
+        ln.setAttribute('x2', x.toFixed(1)); ln.setAttribute('y2', yTop.toFixed(1));
+        ln.setAttribute('stroke', stroke);
+        ln.setAttribute('stroke-width', sw * 0.7);
+        ln.setAttribute('opacity', fillOpacity);
+        mtnsG.appendChild(ln);
+      }
+      // Ridgeline outline as straight segments
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i+1];
+        const ln = document.createElementNS(ns, 'line');
+        ln.setAttribute('x1', a[0].toFixed(1)); ln.setAttribute('y1', a[1].toFixed(1));
+        ln.setAttribute('x2', b[0].toFixed(1)); ln.setAttribute('y2', b[1].toFixed(1));
+        ln.setAttribute('stroke', stroke);
+        ln.setAttribute('stroke-width', sw);
+        ln.setAttribute('opacity', opacity);
+        mtnsG.appendChild(ln);
+      }
+    }
+
+    // Far range — split into left/right groups so center sky stays clean
+    seed = 11; drawRange({ xStart: -40, xEnd: 560, yBase: horizonY, amp: 26, roughness: 0.55,
+      stroke: 'oklch(58% 0.10 280)', sw: 0.8, opacity: 0.55,
+      fillStep: 4, fillOpacity: 0.32 });
+    seed = 19; drawRange({ xStart: 1040, xEnd: 1640, yBase: horizonY, amp: 26, roughness: 0.55,
+      stroke: 'oklch(58% 0.10 280)', sw: 0.8, opacity: 0.55,
+      fillStep: 4, fillOpacity: 0.32 });
+    // Mid ranges flanking the sides
+    seed = 29; drawRange({ xStart: -40, xEnd: 520, yBase: horizonY, amp: 38, roughness: 0.65,
+      stroke: 'oklch(66% 0.13 285)', sw: 0.9, opacity: 0.7,
+      fillStep: 3, fillOpacity: 0.45 });
+    seed = 47; drawRange({ xStart: 1080, xEnd: 1640, yBase: horizonY, amp: 38, roughness: 0.65,
+      stroke: 'oklch(66% 0.13 285)', sw: 0.9, opacity: 0.7,
+      fillStep: 3, fillOpacity: 0.45 });
+    // Near ranges hugging left/right edges
+    seed = 71; drawRange({ xStart: -40, xEnd: 460, yBase: horizonY, amp: 54, roughness: 0.72,
+      stroke: 'oklch(74% 0.15 287)', sw: 1.1, opacity: 0.85,
+      fillStep: 2, fillOpacity: 0.6 });
+    seed = 97; drawRange({ xStart: 1140, xEnd: 1640, yBase: horizonY, amp: 54, roughness: 0.72,
+      stroke: 'oklch(74% 0.15 287)', sw: 1.1, opacity: 0.85,
+      fillStep: 2, fillOpacity: 0.6 });
+
+    // ---------- Stars ----------
+    seed = 3;
+    for (let i = 0; i < 110; i++) {
+      const x = rand() * 1600;
+      const y = rand() * 460 + 10;
+      const r = rand() * 0.9 + 0.35;
+      const o = rand() * 0.55 + 0.2;
+      const c = document.createElementNS(ns, 'circle');
+      c.setAttribute('cx', x); c.setAttribute('cy', y);
+      c.setAttribute('r', r); c.setAttribute('opacity', o);
+      starsG.appendChild(c);
+    }
+  })();
+  </script>
+  <div class="cyber-room" aria-hidden="true" hidden>
+    <div class="cyber-face cyber-floor"></div>
+    <div class="cyber-face cyber-ceiling"></div>
+    <div class="cyber-face cyber-wall-l"></div>
+    <div class="cyber-face cyber-wall-r"></div>
+    <div class="cyber-face cyber-back"></div>
+  </div>
+  <div class="cyber-rays" aria-hidden="true"></div>
+  <div class="vp" aria-hidden="true"></div>
+  <div class="horizon" aria-hidden="true"></div>
+
+
+  <div class="wrap">
+    <div class="hero-grid">
+      <div class="hero-text reveal">
+        <span class="eyebrow">v0.7 · self-hosting · apache 2.0</span>
+        <h1 class="hero-headline">A compiler that builds itself from <em>120 bytes</em> of hex.</h1>
+        <p class="hero-sub">Helix is a from-scratch, ML-native systems language with autodiff, tile types and GPU codegen built into the language — bootstrapped from raw binary, with zero toolchain dependencies.</p>
+        <div class="btn-row">
+          <a class="btn btn-primary" href="#">Try the playground <span class="arrow">→</span></a>
+          <a class="btn btn-ghost" href="#bootstrap">See the bootstrap</a>
+        </div>
+      </div>
+
+      <div class="hero-3d" id="hero-3d" aria-label="3D rendering of a double helix — one strand carbon, one strand silicon"></div>
+
+    </div>
+
+    <!-- byte ribbon -->
+    <div class="byte-ribbon" aria-hidden="true">
+      <div class="byte-ribbon-track" id="byte-track"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     PILLARS
+     ============================================================ -->
+<section id="why" data-screen-label="02 Pillars">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div>
+        <span class="eyebrow">Three commitments</span>
+        <h2 class="section-title">A foundation, not another framework.</h2>
+      </div>
+      <p class="section-lede">Helix exists to be the substrate the next generation of ML systems can be built and verified on — every byte open, every step reproducible.</p>
+    </div>
+
+    <div class="pillars reveal">
+      <article class="pillar">
+        <div class="pillar-num">01</div>
+        <div class="pillar-icon">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 2 L4 6 V12 C4 17 8 21 12 22 C16 21 20 17 20 12 V6 Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M9 12 l2 2 l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Open by commitment.</h3>
+        <p>Apache 2.0 source. CC-BY 4.0 docs. CC0 model weights. Training data: only public-license. No proprietary outputs in the loop, ever.</p>
+        <div class="pillar-foot"><span>Apache 2.0</span><span>CC-BY 4.0</span><span>CC0</span></div>
+      </article>
+
+      <article class="pillar">
+        <div class="pillar-num">02</div>
+        <div class="pillar-icon">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M3 6 H21 M3 12 H21 M3 18 H21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="7" cy="6" r="1.4" fill="currentColor"/><circle cx="13" cy="12" r="1.4" fill="currentColor"/><circle cx="17" cy="18" r="1.4" fill="currentColor"/></svg>
+        </div>
+        <h3>Bootstrapped from binary.</h3>
+        <p>No NASM. No GCC. No Cargo. The hex0 root is 120 bytes of hand-encoded x86-64. Six layers compile each other up to a self-hosted compiler.</p>
+        <div class="pillar-foot"><span>120 B → 50 KB</span><span>0 deps</span></div>
+      </article>
+
+      <article class="pillar">
+        <div class="pillar-num">03</div>
+        <div class="pillar-icon">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 18 C 8 18 8 6 12 6 C 16 6 16 18 20 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="20" cy="18" r="1.6" fill="currentColor"/></svg>
+        </div>
+        <h3>ML-first language design.</h3>
+        <p>Forward and reverse-mode autodiff are language features. Tiles and tensors are types. <code style="font-family:var(--mono);font-size:0.92em;">@checkpoint</code> rematerialization, x86 + PTX backends — built in, not bolted on.</p>
+        <div class="pillar-foot"><span>grad / grad_rev_all</span><span>tile&lt;f32, [N,N], REG&gt;</span></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     BOOTSTRAP CHAIN
+     ============================================================ -->
+<section id="bootstrap" class="chain-section dark" data-screen-label="03 Bootstrap chain">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div>
+        <span class="eyebrow">The bootstrap chain</span>
+        <h2 class="section-title">Seven links. One byte you have to trust.</h2>
+      </div>
+      <p class="section-lede">Click any node to inspect its source. Each link compiles the next — you can verify the whole chain end-to-end on your own machine.</p>
+    </div>
+
+    <div class="chain reveal">
+      <div class="chain-line" aria-hidden="true"></div>
+      <div class="chain-track" id="chain-track"></div>
+      <div class="chain-detail" id="chain-detail"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     AUTODIFF FEATURE
+     ============================================================ -->
+<section id="autodiff" data-screen-label="04 Autodiff">
+  <div class="wrap">
+    <div class="feature-grid">
+      <div class="code-card reveal">
+        <div class="code-head">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <span>autodiff.hx · grad</span>
+        </div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">loss</span>(x: <span class="ty">f64</span>, y: <span class="ty">f64</span>) -&gt; <span class="ty">f64</span> {
+    x * y + x * x
+}
+
+<span class="kw">struct</span> <span class="ty">Grad</span> { dx: <span class="ty">f64</span>, dy: <span class="ty">f64</span> }
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f64</span> {
+    <span class="cmt">// reverse-mode AD, all gradients in one sweep</span>
+    <span class="kw">let</span> g = <span class="fn">grad_rev_all</span>(loss)(<span class="num">2.0_f64</span>, <span class="num">3.0_f64</span>);
+    g.dx
+}</pre>
+        <div class="code-foot">
+          <span>kovc loss.hx -O2</span>
+          <span class="out">→ 7.0_f64</span>
+        </div>
+      </div>
+
+      <div class="feature-text reveal">
+        <span class="eyebrow">Autodiff, in the language</span>
+        <h2>Gradients are a keyword, not a library.</h2>
+        <p>Forward and reverse-mode autodiff lower into the AST at compile time — no runtime tape, no tracing, no Python overhead. Every transcendental in the standard library participates in the chain rule.</p>
+        <ul class="feature-list">
+          <li><b><code>grad(f)(x)</code></b><span>Forward-mode derivative. Symbolic, fully inlined.</span></li>
+          <li><b><code>grad_rev_all(f)(...)</code></b><span>Reverse-mode adjoints; returns a struct of all partials.</span></li>
+          <li><b><code>@checkpoint</code></b><span>Rematerialize segments instead of caching activations.</span></li>
+          <li><b><code>@kernel</code></b><span>Emit the same function as a PTX kernel for the GPU.</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     CODE GALLERY
+     ============================================================ -->
+<section id="code" class="chain-section dark" data-screen-label="05 Code gallery">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div>
+        <span class="eyebrow">In Helix, this compiles</span>
+        <h2 class="section-title">A real systems language. With math notation.</h2>
+      </div>
+      <p class="section-lede">Twenty samples ship with the playground — pattern matching, generics, tiles, reflection. Three of them, here.</p>
+    </div>
+
+    <div class="gallery reveal">
+      <div class="code-card">
+        <div class="code-head"><div class="dots"><span></span><span></span><span></span></div><span>fib.hx</span></div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">fib</span>(n: <span class="ty">i32</span>) -&gt; <span class="ty">i32</span> {
+    <span class="kw">if</span> n &lt; <span class="num">2</span> { n }
+    <span class="kw">else</span> { <span class="fn">fib</span>(n - <span class="num">1</span>) + <span class="fn">fib</span>(n - <span class="num">2</span>) }
+}
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> { <span class="fn">fib</span>(<span class="num">10</span>) }</pre>
+        <div class="code-foot"><span>recursion · totality-checked</span><span class="out">→ 55</span></div>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><div class="dots"><span></span><span></span><span></span></div><span>matmul.hx</span></div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f32</span> {
+    <span class="kw">let</span> a = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
+    <span class="kw">let</span> b = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
+    <span class="kw">let</span> c = <span class="fn">tile_matmul</span>(a, b);
+    c.<span class="fn">get</span>(<span class="num">2</span>, <span class="num">3</span>)
+}</pre>
+        <div class="code-foot"><span>tiles · compile-time shapes</span><span class="out">→ 4.0_f32</span></div>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><div class="dots"><span></span><span></span><span></span></div><span>reflect.hx</span></div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">always_true</span>(_: <span class="ty">i32</span>) -&gt; <span class="ty">i32</span> { <span class="num">1</span> }
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
+    <span class="kw">let</span> h = <span class="fn">Quote</span>(<span class="num">0</span>);
+    <span class="fn">modify</span>(h, <span class="num">42</span>, <span class="fn">always_true</span>(<span class="num">0</span>));
+    <span class="fn">Splice</span>(h)
+}</pre>
+        <div class="code-foot"><span>reflection · verifier-gated</span><span class="out">→ 42</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     NUMBERS
+     ============================================================ -->
+<section class="numbers-section" data-screen-label="06 Numbers">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div>
+        <span class="eyebrow">By the numbers</span>
+        <h2 class="section-title">Hard numbers, every one of them grounded.</h2>
+      </div>
+      <p class="section-lede">Every figure here resolves to a file, a commit, or a passing test. No marketing math — pull the repo and verify any of them.</p>
+    </div>
+
+    <div class="numbers reveal">
+      <div class="num-cell">
+        <div class="num-val">120<span class="unit">bytes</span></div>
+        <div class="num-label">hex0 — the trust root</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">3,000<span class="unit">+</span></div>
+        <div class="num-label">tests passing across 50+ suites</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">23<span class="unit">disclosed</span></div>
+        <div class="num-label">Silent-corruption bugs found and traced</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">9<span class="unit">passes</span></div>
+        <div class="num-label">Multi-agent audit cycles, Stage 4+</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">0<span class="unit">deps</span></div>
+        <div class="num-label">Toolchain dependencies for bootstrap</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">12<span class="unit">types</span></div>
+        <div class="num-label">i8…u64 · f32 · f64 · bf16</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">39<span class="unit">stages</span></div>
+        <div class="num-label">Approach A roadmap + amendments</div>
+      </div>
+      <div class="num-cell">
+        <div class="num-val">~50<span class="unit">KB</span></div>
+        <div class="num-label">Self-hosted kovc compiler binary</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     CTA
+     ============================================================ -->
+<section class="cta dark" data-screen-label="07 CTA">
+  <div class="wrap reveal">
+    <span class="eyebrow">Carbon meets silicon</span>
+    <h2>Compile something honest today.</h2>
+    <p>The playground runs the real <code style="font-family:var(--mono);">kovc</code> in your browser. Pick a sample, hit Run, and watch the bytes come out the other side.</p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="#">Open the playground <span class="arrow">→</span></a>
+      <a class="btn btn-ghost" href="#">Read the spec</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     FOOTER
+     ============================================================ -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-col">
+        <a href="#" class="nav-brand" style="margin-bottom:14px;display:inline-flex;">
+          <svg class="nav-brand-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 3 Q 12 8 19 3 M5 12 Q 12 17 19 12 M5 21 Q 12 16 19 21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="12" cy="6" r="1.6" fill="currentColor"/>
+            <circle cx="12" cy="18" r="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          </svg>
+          <span>Helix</span>
+        </a>
+        <p style="color:var(--fg-mute); font-size:13px; max-width:32ch; line-height:1.55;">A from-scratch ML-native systems language. Foundation of the Kovostov AGI project.</p>
+      </div>
+
+      <div class="foot-col">
+        <h5>Language</h5>
+        <ul>
+          <li><a href="#">Spec</a></li>
+          <li><a href="#">Standard library</a></li>
+          <li><a href="#">Roadmap</a></li>
+          <li><a href="#">Audits</a></li>
+        </ul>
+      </div>
+      <div class="foot-col">
+        <h5>Build</h5>
+        <ul>
+          <li><a href="#">Playground</a></li>
+          <li><a href="#">Bootstrap chain</a></li>
+          <li><a href="#">Compare</a></li>
+          <li><a href="#">Examples</a></li>
+        </ul>
+      </div>
+      <div class="foot-col">
+        <h5>Project</h5>
+        <ul>
+          <li><a href="#">GitHub</a></li>
+          <li><a href="#">Blog</a></li>
+          <li><a href="#">Contribute</a></li>
+          <li><a href="#">Governance</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-fineprint">
+      <span>Apache 2.0 · CC-BY 4.0 · CC0 weights</span>
+      <span>kovc v0.7 · 2026-05-09</span>
+    </div>
+  </div>
+</footer>
+
+<script src="landing.js"></script>
+</body>
+</html>

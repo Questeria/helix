@@ -1,0 +1,58 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="Privacy — Helix"
+  description="The Helix website collects nothing: no cookies, no analytics, no tracking, no accounts, no forms. What inherently happens when you load a static site, stated plainly."
+>
+  <section class="page-hero dark">
+    <div class="wrap">
+      <span class="eyebrow">privacy · effective 2026-06-10</span>
+      <h1>This site collects <em>nothing</em>.</h1>
+      <p class="lede">No cookies, no analytics, no tracking pixels, no ads, no accounts, no forms. The same discipline the project applies to its trust claims applies here: what little does happen when you load a static page is listed below, completely.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">The policy</span>
+          <h2>Everything that happens, listed.</h2>
+          <p>A static website has a short and finite list of data flows. This is all of them.</p>
+        </div>
+        <div class="prose">
+          <h3>What this site does not do</h3>
+          <p>It sets no cookies and uses no local storage. It loads no analytics, advertising, or tracking scripts of any kind. It has no user accounts, no comment systems, and no contact forms — contact happens over email or GitHub, on those services' own terms. Nothing you do on this site is recorded by this site.</p>
+
+          <h3>Hosting logs</h3>
+          <p>The site is served as static files by a hosting provider (for example Cloudflare Pages or GitHub Pages). Like any web server, the host may keep standard access logs — IP address, user agent, requested URL, timestamp — to operate and secure the service. Those logs belong to and are governed by the hosting provider's own privacy policy; this project does not add to them, enrich them, or use them for tracking.</p>
+
+          <h3>Fonts</h3>
+          <p>Pages load the Geist and JetBrains Mono typefaces from the Google Fonts CDN. When your browser fetches those font files, it sends Google a standard web request (your IP address and user agent), governed by Google's privacy policy. The committed demo pages under <code>/demo/</code> are dependency-free and load no external fonts or scripts at all.</p>
+
+          <h3>The demo replays</h3>
+          <p>The demo pages are replays of real, captured runs, committed as self-contained files. They execute entirely in your browser from that committed data. Nothing you type or click in them is transmitted anywhere — there is no backend, and this site runs nothing live.</p>
+
+          <h3>External links</h3>
+          <p>Links to GitHub, Hugging Face, and other external sites leave this site; their privacy policies apply there.</p>
+
+          <h3>Changes &amp; questions</h3>
+          <p>If anything on this list changes, this page changes with it, with a new effective date. Questions: the <a href="/contact/">contact page</a>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta dark">
+    <div class="wrap">
+      <span class="eyebrow">The same rule everywhere</span>
+      <h2>Nothing hidden, here either.</h2>
+      <p>The project's whole premise is that you shouldn't have to take anyone's word for what software does — including this website.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/trust-chain/">See the trust chain <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/contact/">Contact</a>
+      </div>
+    </div>
+  </section>
+</Base>

@@ -1,0 +1,221 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="License — source-available, free for non-commercial use"
+  description="Helix ships under the Helix Non-Commercial License v1.0: source-available and free for non-commercial use — personal, academic, research, non-profit. Not open source yet: a deliberately temporary restriction while the project secures investors, revenue, and industry partners to fund Helix's expansion."
+>
+  <!-- ============================================================
+       01 PAGE HERO
+       ============================================================ -->
+  <section class="page-hero dark">
+    <div class="wrap">
+      <span class="eyebrow">helix non-commercial license · v1.0 · © 2026 anthony demarco (questeria)</span>
+      <h1>Source-available. <em>Not open source — yet.</em></h1>
+      <p class="lede">Every byte of Helix is published and auditable, and it is free for non-commercial use — personal projects, learning, teaching, academic research, non-profits. Commercial use currently requires a separate license from the author — and that restriction is intended to be temporary. It exists so a self-funded project can secure investors, generate early revenue, and establish industry partnerships to fund Helix's expansion. As that foundation solidifies, the goal is to open Helix progressively further. Until then, the LICENSE file is what governs.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="https://github.com/Questeria/helix/blob/main/LICENSE">Read the full text <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="#faq">Licensing FAQ</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       02 YOU MAY / YOU MAY NOT — light
+       ============================================================ -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">The deal</span>
+          <h2 class="section-title">One table. No fine-print surprises.</h2>
+        </div>
+        <p class="section-lede">Non-commercial use is broadly granted. Commercial Use is drawn broadly too — and all of it requires a separate commercial license.</p>
+      </div>
+
+      <div class="notice">
+        <p class="notice-title">Plain-language summary — not legal advice</p>
+        <p>The binding terms are Sections 1–10 of the <a href="https://github.com/Questeria/helix/blob/main/LICENSE" style="color: var(--violet); text-decoration: underline;">LICENSE</a> file in the repository. This page summarizes them; where the two differ, the LICENSE wins.</p>
+      </div>
+
+      <div class="notice">
+        <p class="notice-title">A temporary stance, stated honestly</p>
+        <p>Helix is being built without corporate backing. The non-commercial restriction keeps the project's early commercial value with the project itself — so it can attract investors, generate revenue through commercial licensing, and establish the industry partnerships that will fund full-time development and expansion.</p>
+        <p>The intent is to relax this restriction as that footing is reached: progressively more open terms, potentially a full open-source release, once Helix is financially self-sustaining. Formally, intent is not a contract — the LICENSE governs until the Licensor releases a version under new terms (its Section 6 contemplates exactly that) — but the direction of travel is toward more open, not less.</p>
+      </div>
+
+      <div class="fact-table">
+        <table>
+          <tr>
+            <th>Scenario</th>
+            <th>Status</th>
+          </tr>
+          <tr>
+            <td>Use, run, reproduce, build with, and study Helix for personal projects, learning, and teaching</td>
+            <td class="ok">Granted</td>
+          </tr>
+          <tr>
+            <td>Academic and other non-commercial research; evaluation by individuals</td>
+            <td class="ok">Granted</td>
+          </tr>
+          <tr>
+            <td>Non-profit and governmental non-commercial use</td>
+            <td class="ok">Granted</td>
+          </tr>
+          <tr>
+            <td>Modify the work, and distribute it or your modifications — source or binary — non-commercially, with notices intact and change marks on modified files</td>
+            <td class="ok">Granted</td>
+          </tr>
+          <tr>
+            <td>Any use primarily intended for commercial advantage or monetary compensation</td>
+            <td class="mono">Commercial license required</td>
+          </tr>
+          <tr>
+            <td>Any use by, for, or on behalf of a for-profit entity of any size, for any purpose — including internal, evaluation, testing, or development use</td>
+            <td class="mono">Commercial license required</td>
+          </tr>
+          <tr>
+            <td>Running Helix, or anything built or derived from it, in a data center, cloud platform, or hosted service</td>
+            <td class="mono">Commercial license required</td>
+          </tr>
+          <tr>
+            <td>Use by an AI/ML/data/technology company to train, fine-tune, evaluate, serve, or build models, products, or services</td>
+            <td class="mono">Commercial license required</td>
+          </tr>
+          <tr>
+            <td>Offering it as a paid, hosted, managed, or software-as-a-service product; ad- or subscription-supported services</td>
+            <td class="mono">Commercial license required</td>
+          </tr>
+          <tr>
+            <td>Sublicensing or reselling for a fee</td>
+            <td class="mono">Commercial license required</td>
+          </tr>
+          <tr>
+            <td>Derivatives and modified versions</td>
+            <td>Equally covered — same terms, both directions</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="notice">
+        <p class="notice-title">Conditions on every copy</p>
+        <p>Keep the license and all copyright, trademark, and attribution notices on every copy you distribute, source or binary. Files you modify must carry prominent change notices.</p>
+        <p>Breach automatically terminates the grant; reinstatement is possible in writing. The work ships with no warranty and no liability.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 THE EDGES — dark
+       ============================================================ -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">The edges</span>
+          <h2>Where this license stops.</h2>
+          <p>Three boundaries worth knowing exactly: the vendored bootstrap tools, the name, and the future.</p>
+        </div>
+        <div class="prose">
+          <h3>Third-party components</h3>
+          <p>Everything vendored under <code>stage0/</code> — except <code>stage0/helixc-bootstrap/</code> — keeps its own upstream license. M2-Planet, M2libc, and blood-elf are GPLv3; the hex0 through cc_amd64 rungs carry their own licenses. The Helix Non-Commercial License does not apply to them.</p>
+          <p>And the converse holds: building Helix with those tools does not place Helix under their licenses. The output of a build tool is not a derivative of the tool.</p>
+
+          <h3>The trademark</h3>
+          <p>"Helix" is a trademark of the Licensor. The license grants exactly one right to the name: the nominative right to refer to the work truthfully by it. It does not grant the right to brand your fork, product, or service as Helix.</p>
+
+          <h3>Future versions</h3>
+          <p>The Licensor may release future versions of Helix under different terms — including, eventually, terms with no commercial restriction at all. That is the stated direction: the current restriction is intended to be a temporary, bootstrap-phase measure while the project secures investment, revenue, and industry partners. Formally there is no automatic conversion — what you have is this license, for this version, until a new version is released — but the plan is to open up as funding solidifies.</p>
+          <p>Some historical planning documents in the repository describe an earlier intended permissive release. Those documents are superseded by the LICENSE file.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       04 FAQ — light
+       ============================================================ -->
+  <section id="faq">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Licensing FAQ</span>
+          <h2 class="section-title">Straight answers to the usual questions.</h2>
+        </div>
+        <p class="section-lede">If your situation isn't covered here, read Sections 1–10 of the LICENSE — or just ask via a GitHub issue.</p>
+      </div>
+
+      <div class="faq">
+        <details>
+          <summary>Why isn't Helix open source?</summary>
+          <div class="faq-body">
+            <p>Not yet — and the reason is funding, not philosophy. OSI-approved licenses may not restrict commercial use, and right now commercial licensing is how a self-funded project pays for its own expansion. Helix is source-available: the full source — compiler, toolchain, bootstrap ladder, trust records — is published for anyone to read, audit, build, and use non-commercially. As investors, revenue, and industry partnerships put the project on a sustainable footing, the intent is to progressively open the license.</p>
+          </div>
+        </details>
+        <details>
+          <summary>Can I use Helix for my studies or research?</summary>
+          <div class="faq-body">
+            <p>Yes. Personal projects, learning, teaching, academic and other non-commercial research, and evaluation are all granted — you can use, run, build with, study, modify, and distribute the work and your modifications, in source or binary form. Keep the notices on every copy, and mark the files you change.</p>
+          </div>
+        </details>
+        <details>
+          <summary>Can my startup evaluate Helix internally?</summary>
+          <div class="faq-body">
+            <p>No — not under this license. Commercial Use is drawn broadly: any use by, for, or on behalf of any for-profit entity, of any size, for any purpose — explicitly including internal, evaluation, testing, and development use — requires a separate commercial license. A two-person startup and a trillion-dollar company are in the same position here.</p>
+          </div>
+        </details>
+        <details>
+          <summary>Can I run Helix in the cloud or a data center?</summary>
+          <div class="faq-body">
+            <p>Running Helix — or anything built or derived from it — in a data center, cloud platform, or hosted service is one of the license's explicit examples of Commercial Use. So is use by an AI/ML/data/technology company to train, fine-tune, evaluate, serve, or build models, products, or services. Both need a commercial license.</p>
+          </div>
+        </details>
+        <details>
+          <summary>Can I ship a product built on a modified Helix?</summary>
+          <div class="faq-body">
+            <p>Derivatives and modified versions are equally covered by the license. If the product is paid, monetized, or revenue-generating — including ad- or subscription-supported — you need a commercial license. If it is genuinely non-commercial, you may distribute it with the notices intact and prominent change marks on modified files.</p>
+          </div>
+        </details>
+        <details>
+          <summary>What about the vendored bootstrap tools?</summary>
+          <div class="faq-body">
+            <p>Everything under <code>stage0/</code> except <code>stage0/helixc-bootstrap/</code> keeps its own upstream license: M2-Planet, M2libc, and blood-elf are GPLv3, and the hex0 through cc_amd64 rungs have their own licenses. The Helix license does not apply to them — and building Helix with those tools does not place Helix under their licenses, because the output of a build tool is not a derivative of the tool.</p>
+          </div>
+        </details>
+        <details>
+          <summary>What happens if I breach the license?</summary>
+          <div class="faq-body">
+            <p>The grant terminates automatically. Reinstatement is possible, in writing. There is no warranty and no liability either way — the work is provided as-is.</p>
+          </div>
+        </details>
+        <details>
+          <summary>Will the license ever change?</summary>
+          <div class="faq-body">
+            <p>That is the plan. The non-commercial restriction is intended as a temporary, bootstrap-phase measure while the project secures investors, revenue, and industry partners; the stated direction is toward progressively more open terms, including a possible full open-source release once Helix is self-sustaining. Formally there is no automatic conversion — the LICENSE governs each version until the Licensor releases new terms. Some historical planning documents in the repo describe an earlier intended permissive release; the LICENSE file supersedes them.</p>
+          </div>
+        </details>
+        <details>
+          <summary>How do I get a commercial license?</summary>
+          <div class="faq-body">
+            <p>Email <a href="mailto:ajdemarco10@gmail.com">ajdemarco10@gmail.com</a> or reach out on <a href="https://www.linkedin.com/in/anthony-demarco10/" rel="noopener">LinkedIn</a> with who you are and what you want to build — terms are negotiated directly, without intermediaries. (The LICENSE also lists the Helix GitHub project as a contact route.)</p>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       05 CTA
+       ============================================================ -->
+  <section class="cta dark">
+    <div class="wrap">
+      <span class="eyebrow">Sections 1–10 are the contract</span>
+      <h2>Read the actual words.</h2>
+      <p>This page is the summary. The LICENSE file in the repository is the agreement — ten sections, plainly written, committed next to the code it governs.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="https://github.com/Questeria/helix/blob/main/LICENSE">Read the full LICENSE <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/about/">About the project</a>
+      </div>
+    </div>
+  </section>
+</Base>

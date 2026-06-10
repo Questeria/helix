@@ -1,0 +1,54 @@
+---
+import BrandMark from "./BrandMark.astro";
+const repo = "https://github.com/Questeria/helix";
+---
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-col">
+        <a href="/" class="nav-brand" style="margin-bottom:14px;display:inline-flex;">
+          <BrandMark />
+          <span>Helix</span>
+        </a>
+        <p style="color:var(--fg-mute); font-size:13px; max-width:34ch; line-height:1.55;">
+          A source-available, ML-native systems language whose entire compiler is
+          rebuildable from 299 hand-typed bytes — and runs real neural networks on
+          the GPU, verifiably.
+        </p>
+      </div>
+
+      <div class="foot-col">
+        <h2>Language</h2>
+        <ul>
+          <li><a href="/language/">Language tour</a></li>
+          <li><a href={`${repo}/blob/main/docs/lang/spec.md`} rel="noopener">Spec</a></li>
+          <li><a href={`${repo}/blob/main/docs/lang/tutorial.md`} rel="noopener">Tutorial</a></li>
+          <li><a href={`${repo}/blob/main/QUICKSTART.md`} rel="noopener">Quickstart</a></li>
+        </ul>
+      </div>
+      <div class="foot-col">
+        <h2>Verify</h2>
+        <ul>
+          <li><a href="/verify/">Verifiable execution</a></li>
+          <li><a href="/trust-chain/">Trust chain</a></li>
+          <li><a href="/demo/">Demo replay</a></li>
+          <li><a href="/demo/dashboard.html">Proof dashboard</a></li>
+        </ul>
+      </div>
+      <div class="foot-col">
+        <h2>Project</h2>
+        <ul>
+          <li><a href={repo} rel="noopener">GitHub</a></li>
+          <li><a href="/license/">License</a></li>
+          <li><a href="/about/">About &amp; status</a></li>
+          <li><a href="/contact/">Contact</a></li>
+          <li><a href={`${repo}/blob/main/docs/TRUST_CHAIN_CLOSED.md`} rel="noopener">Trust record</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-fineprint">
+      <span>Helix Non-Commercial License v1.0 · source-available · <a href="/privacy/" style="text-decoration: underline;">Privacy</a> · <a href="/contact/" style="text-decoration: underline;">Contact</a></span>
+      <span>trust chain closed · v1.3-release · 2026-06-07</span>
+    </div>
+  </div>
+</footer>
