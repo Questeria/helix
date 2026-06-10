@@ -272,7 +272,15 @@ section { padding: var(--section-y) 0; position: relative; }
   pointer-events: none;
   z-index: 0;
   display: block;
+  /* Perf: isolate the animated scene on its own compositor layer so byte
+     pulses never invalidate the text layers above. */
+  transform: translateZ(0);
 }
+
+/* Perf: while the hero is scrolled offscreen, its per-frame CSS animations
+   (byte pulse, code ribbon) are paused by hero.js — zero visual change. */
+.scene-paused .hex-byte { animation-play-state: paused; }
+.scene-paused .byte-ribbon-track { animation-play-state: paused; }
 .room .ln    { stroke: oklch(70% 0.12 270 / 0.32); stroke-width: 1; }
 .room .ln-d  { stroke: oklch(60% 0.10 285 / 0.15); stroke-width: 1; }
 .room .ln-b  { stroke: oklch(78% 0.16 275 / 0.55); stroke-width: 1.5; }
@@ -1179,6 +1187,20 @@ footer {
   border-radius: 50%;
   border: 2px solid var(--line-strong);
   flex-shrink: 0;
+}
+
+/* ============================================================
+   Performance — skip rendering below-fold sections until they
+   approach the viewport (layout is preserved; nothing visual changes)
+   ============================================================ */
+
+main > section:not(.hero) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 900px;
+}
+body > footer {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
 }
 
 /* ============================================================

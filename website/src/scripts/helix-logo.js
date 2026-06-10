@@ -657,6 +657,8 @@ export function mountHelix(container, opts = {}) {
   // ---------- Animate ----------
   const clock = new THREE.Clock();
   let baseSpin = 0;
+  let rafId = 0;
+  let paused = false;
 
   function tick() {
     const dt = clock.getDelta();
@@ -693,7 +695,7 @@ export function mountHelix(container, opts = {}) {
     }
 
     renderer.render(scene, camera);
-    requestAnimationFrame(tick);
+    rafId = requestAnimationFrame(tick);
   }
   tick();
 
@@ -787,7 +789,21 @@ export function mountHelix(container, opts = {}) {
       }
       siliconMat.needsUpdate = true;
     },
+    setPaused(v) {
+      // Stops/starts the render loop. Used while the canvas is offscreen —
+      // pure perf, zero visual change (the clock gap is swallowed on resume).
+      const pNew = !!v;
+      if (pNew === paused) return;
+      paused = pNew;
+      if (paused) {
+        cancelAnimationFrame(rafId);
+      } else {
+        clock.getDelta();
+        rafId = requestAnimationFrame(tick);
+      }
+    },
     dispose() {
+      cancelAnimationFrame(rafId);
       ro.disconnect();
       renderer.dispose();
       tubeGeoA.dispose(); tubeGeoB.dispose();

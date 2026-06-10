@@ -122,6 +122,16 @@
       { rootMargin: "200px" }
     );
     io.observe(slot);
+
+    // Perf: stop the 3D render loop entirely while the helix is offscreen.
+    const vis = new IntersectionObserver(
+      (entries) => {
+        const on = entries.some((e) => e.isIntersecting);
+        if (handle && handle.setPaused) handle.setPaused(!on);
+      },
+      { rootMargin: "80px" }
+    );
+    vis.observe(slot);
   } else {
     mount();
   }
@@ -297,6 +307,7 @@
 
   function drawRange(opts) {
     const { xStart, xEnd, yBase, amp, roughness, stroke, sw, opacity, fillStep, fillOpacity } = opts;
+    const parent = opts.parent || mtnsG;
     const baseFn = typeof yBase === "function" ? yBase : () => yBase;
     const pts = ridgePoints(xStart, xEnd, baseFn, amp, roughness);
     const fn = ridgeFn(pts);
@@ -311,7 +322,7 @@
       ln.setAttribute("stroke", stroke);
       ln.setAttribute("stroke-width", sw * 0.7);
       ln.setAttribute("opacity", fillOpacity);
-      mtnsG.appendChild(ln);
+      parent.appendChild(ln);
     }
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1];
@@ -321,7 +332,7 @@
       ln.setAttribute("stroke", stroke);
       ln.setAttribute("stroke-width", sw);
       ln.setAttribute("opacity", opacity);
-      mtnsG.appendChild(ln);
+      parent.appendChild(ln);
     }
   }
 
@@ -345,6 +356,21 @@
     starsG.appendChild(c);
   }
 
+  // ---------- Mobile mountains ----------
+  // The desktop ranges flank x<560 / x>1040, outside the portrait crop.
+  // These extra ridges live inside the mobile window and are hidden on desktop.
+  const mtnsMobileG = document.createElementNS(ns, "g");
+  mtnsMobileG.setAttribute("id", "mountains-mobile");
+  mtnsMobileG.setAttribute("fill", "none");
+  mtnsMobileG.setAttribute("display", "none");
+  mtnsG.parentNode.insertBefore(mtnsMobileG, mtnsG.nextSibling);
+  seed = 23; drawRange({ parent: mtnsMobileG, xStart: 600, xEnd: 1000, yBase: horizonY, amp: 20, roughness: 0.5,
+    stroke: "oklch(58% 0.10 280)", sw: 0.8, opacity: 0.5, fillStep: 5, fillOpacity: 0.3 });
+  seed = 31; drawRange({ parent: mtnsMobileG, xStart: 560, xEnd: 800, yBase: horizonY, amp: 38, roughness: 0.65,
+    stroke: "oklch(66% 0.13 285)", sw: 0.9, opacity: 0.7, fillStep: 3, fillOpacity: 0.45 });
+  seed = 53; drawRange({ parent: mtnsMobileG, xStart: 840, xEnd: 1070, yBase: horizonY, amp: 46, roughness: 0.7,
+    stroke: "oklch(72% 0.14 286)", sw: 1.0, opacity: 0.8, fillStep: 3, fillOpacity: 0.55 });
+
   // ---------- Mobile framing ----------
   // On narrow screens the 1600x900 scene is recropped to a portrait window
   // and the black hole is moved into the visible sky, so the machine-code
@@ -356,13 +382,28 @@
     if (mobile.matches) {
       svg.setAttribute("viewBox", "440 40 720 860");
       if (bh) bh.setAttribute("transform", "translate(865 462) scale(0.62)");
+      mtnsMobileG.removeAttribute("display");
     } else {
       svg.setAttribute("viewBox", "0 0 1600 900");
       if (bh) bh.setAttribute("transform", "translate(1240 110)");
+      mtnsMobileG.setAttribute("display", "none");
     }
   }
   frameScene();
   if (mobile.addEventListener) mobile.addEventListener("change", frameScene);
+
+  // Perf: pause the byte-pulse + ribbon CSS animations while the hero is
+  // offscreen (they repaint every frame otherwise). Zero visual change.
+  const hero = svg.closest("section");
+  if (hero && "IntersectionObserver" in window) {
+    const sceneIO = new IntersectionObserver(
+      (entries) => {
+        hero.classList.toggle("scene-paused", !entries.some((e) => e.isIntersecting));
+      },
+      { rootMargin: "40px" }
+    );
+    sceneIO.observe(svg);
+  }
 })();
 
 // ---------- Black hole: gravitationally lensed orbiting bodies ----------
