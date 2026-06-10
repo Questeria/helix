@@ -11,6 +11,8 @@
 #       greedy ids TOKEN-FOR-TOKEN (the same llama_ref_gen_ids.txt the model gate used)
 #   [5] unknown model -> 404 {"error":"unknown model"}
 #   [6] single-flight ACROSS models: a request DURING the smollm2 generation -> 409 busy
+#   [7] INSTRUCT leg: templated ChatML prompt to smollm2-360m-instruct; served ids == chat
+#       oracle refs TOKEN-FOR-TOKEN (C-side special-token tokenize parity + stop-at-im_end)
 # Prints LLAMA_SERVE_SMOKE_PASS / _FAIL. Kills the server (by PID) on exit.
 set -u
 ROOT="${HELIX_SRC:-}"; if [ -z "$ROOT" ]; then ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"; fi
@@ -20,6 +22,9 @@ XL_WEIGHTS="${HELIX_XL_WEIGHTS:-$HOME/gpt2_ext4/gpt2-xl.weights}"
 SM_DIR="$ROOT/helix-llm/models/smollm2-135m"
 SM_WTS="$SM_DIR/smollm2-135m.weights"
 REFD="$ROOT/helix-llm/ref"
+SI_DIR="$ROOT/helix-llm/models/smollm2-360m-instruct"
+SI_WTS="$SI_DIR/smollm2-360m-instruct.weights"
+TOOLS="$ROOT/helix-llm/tools"
 PORT="${PORT:-8851}"
 BS="$WORK/stage0/helixc-bootstrap"
 RC=0
@@ -27,7 +32,13 @@ T0=$(date +%s)
 
 echo "=================== LLAMA DUAL-MODEL SERVE SMOKE  $(date -u +%H:%M:%S) ==================="
 [ -s "$SM_WTS" ] || { echo "FATAL: no $SM_WTS"; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 9; }
-[ -s "$REFD/llama_ref_gen_ids.txt" ] || { echo "FATAL: no oracle gen ids (run llama_model_gate first)"; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 9; }
+echo "=== [0] regenerate oracle refs PER MODEL (ref/ filenames are shared) ==="
+( cd "$TOOLS" && LLAMA_MODEL_DIR="$SM_DIR" LLAMA_CHAT=0 python3 llama_numpy_ref.py dump-gen "The capital of France is" 20 ) >/tmp/lss_ref_base.log 2>&1 || { echo "FATAL base-ref dump"; tail -3 /tmp/lss_ref_base.log; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 9; }
+cp "$REFD/llama_ref_gen_ids.txt" /tmp/lss_ref_base_ids.txt
+if [ -s "$SI_WTS" ]; then
+  ( cd "$TOOLS" && LLAMA_MODEL_DIR="$SI_DIR" LLAMA_CHAT=1 python3 llama_numpy_ref.py dump-gen "What is the capital of France?" 40 ) >/tmp/lss_ref_chat.log 2>&1 || { echo "FATAL chat-ref dump"; tail -3 /tmp/lss_ref_chat.log; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 9; }
+  cp "$REFD/llama_ref_gen_ids.txt" /tmp/lss_ref_chat_ids.txt
+fi
 [ -s "$XL_WEIGHTS" ] || { echo "FATAL: no XL weights"; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 9; }
 
 echo "=== [1] PTX + binaries (working tree) ==="
@@ -69,7 +80,9 @@ gcc -DGPT2_SERVE -DGPT2_TOK_LIB gpt2_infer.c gpt2_tok.c -O2 -I/usr/local/cuda/in
 gcc gpt2_serve_http.c -O2 -lpthread -o /tmp/lss_server 2>/tmp/lss_sgcc.log || { echo "FAIL server build"; cat /tmp/lss_sgcc.log; echo "LLAMA_SERVE_SMOKE_FAIL"; exit 8; }
 echo "  built worker + server"
 
-echo "=== [2] spawn dual-model server on :$PORT ==="
+SI_SPAWN_ARGS=""
+[ -s "$SI_WTS" ] && SI_SPAWN_ARGS="--model3 smollm2-360m-instruct --ptx3 /tmp/llama_model.ptx --weights3 $SI_WTS --vocab3 $SI_DIR/vocab.json --merges3 $SI_DIR/merges.txt --specials3 1 --eos3 2"
+echo "=== [2] spawn multi-model server on :$PORT ==="
 export HX_NL=48 HX_D=1600 HX_HEADS=25 HX_V=50257 HX_CTX=1024 HX_DFF=6400
 /tmp/lss_server --port "$PORT" --root "$ROOT/demo" \
   --ptx /tmp/llama_model.ptx --weights "$XL_WEIGHTS" \
@@ -77,14 +90,15 @@ export HX_NL=48 HX_D=1600 HX_HEADS=25 HX_V=50257 HX_CTX=1024 HX_DFF=6400
   --vocab "$ROOT/helix-llm/models/gpt2-xl/vocab.json" --merges "$ROOT/helix-llm/models/gpt2-xl/merges.txt" \
   --max-ctx 320 --detail op --model gpt2-xl \
   --model2 smollm2-135m --ptx2 /tmp/llama_model.ptx --weights2 "$SM_WTS" \
-  --vocab2 "$SM_DIR/vocab.json" --merges2 "$SM_DIR/merges.txt" \
+  --vocab2 "$SM_DIR/vocab.json" --merges2 "$SM_DIR/merges.txt" $SI_SPAWN_ARGS \
   > /tmp/lss_server.log 2>&1 &
 SRV_PID=$!
 trap 'kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null' EXIT
 READY=0
 for i in $(seq 1 90); do
   H=$(curl -s -m 2 "http://127.0.0.1:$PORT/api/health" 2>/dev/null || true)
-  if echo "$H" | grep -q '"models":\[' && [ "$(echo "$H" | grep -o '"ready":true' | wc -l)" -ge 3 ]; then READY=1; break; fi
+  WANT_READY=3; [ -s "$SI_WTS" ] && WANT_READY=4
+  if echo "$H" | grep -q '"models":\[' && [ "$(echo "$H" | grep -o '"ready":true' | wc -l)" -ge "$WANT_READY" ]; then READY=1; break; fi
   sleep 2
 done
 if [ "$READY" != "1" ]; then
@@ -114,13 +128,38 @@ wait $CURL_PID
 GOT_IDS=$(grep -o '"_ev":"token"[^}]*"id":[0-9]*' /tmp/lss_sse.txt | grep -o '"id":[0-9]*' | cut -d: -f2 | tr '\n' ' ')
 PROMPT_IDS=$(grep -o '"_ev":"tokenize"[^]]*\]' /tmp/lss_sse.txt | head -1 | grep -o '\[[0-9, ]*\]' | tr ',' ' ' | tr -d '[]' )
 SERVED="$(echo $PROMPT_IDS $GOT_IDS | tr -s ' ')"
-REF="$(tr -s ' \n' '  ' < "$REFD/llama_ref_gen_ids.txt" | sed 's/^ *//;s/ *$//')"
+REF="$(tr -s ' \n' '  ' < /tmp/lss_ref_base_ids.txt | sed 's/^ *//;s/ *$//')"
 echo "  served: $SERVED"
 echo "  oracle: $REF"
 if [ "$(echo "$SERVED" | sed 's/^ *//;s/ *$//')" = "$REF" ]; then
   echo "  SERVE_TOKEN_FOR_TOKEN_OK"
 else
   echo "  SERVE_TOKEN_FOR_TOKEN_FAIL"; RC=1
+fi
+
+echo "=== [7] INSTRUCT leg: templated ChatML chat over HTTP (specials + eos-stop) ==="
+if [ -s "$SI_WTS" ]; then
+  python3 - > /tmp/lss_chat_body.json <<PYB
+import json
+sys_p = "You are a helpful AI assistant named SmolLM, trained by Hugging Face"
+user = "What is the capital of France?"
+tmpl = "<|im_start|>system"+chr(10)+sys_p+"<|im_end|>"+chr(10)+"<|im_start|>user"+chr(10)+user+"<|im_end|>"+chr(10)+"<|im_start|>assistant"+chr(10)
+print(json.dumps({"prompt": tmpl, "n_gen": 40, "model": "smollm2-360m-instruct"}))
+PYB
+  curl -s -N -m 600 -X POST "http://127.0.0.1:$PORT/api/generate?detail=op" -H "Content-Type: application/json" --data @/tmp/lss_chat_body.json > /tmp/lss_chat_sse.txt
+  CGOT=$(grep -o '"_ev":"token"[^}]*"id":[0-9]*' /tmp/lss_chat_sse.txt | grep -o '"id":[0-9]*' | cut -d: -f2 | tr '\n' ' ')
+  CPROMPT=$(grep -o '"_ev":"tokenize"[^]]*]' /tmp/lss_chat_sse.txt | head -1 | grep -o '[[][0-9, ]*]' | tr ',' ' ' | tr -d '[]')
+  CSERVED="$(echo $CPROMPT $CGOT | tr -s ' ')"
+  CREF="$(tr -s ' \n' '  ' < /tmp/lss_ref_chat_ids.txt | sed 's/^ *//;s/ *$//')"
+  echo "  served: $CSERVED"
+  echo "  oracle: $CREF"
+  if [ "$(echo "$CSERVED" | sed 's/^ *//;s/ *$//')" = "$CREF" ]; then
+    echo "  CHAT_TOKEN_FOR_TOKEN_OK (incl. C-tokenizer specials parity + eos-stop)"
+  else
+    echo "  CHAT_TOKEN_FOR_TOKEN_FAIL"; RC=1
+  fi
+else
+  echo "  (instruct weights absent -- leg skipped)"
 fi
 
 echo "=== [5] unknown model -> 404 ==="

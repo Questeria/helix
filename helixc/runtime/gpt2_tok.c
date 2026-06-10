@@ -471,6 +471,64 @@ static void emit_chunk(const unsigned char* text, size_t b0, size_t b1,
     free(tmp);
 }
 
+/* ---- ADDITIVE: special-token-aware encode (instruct-model chat, 2026-06) ----
+ * ChatML control tokens (<|im_start|>, <|im_end|>, ...) live IN vocab.json but are
+ * never produced by BPE merges, so encode must SPLIT on the literal strings first.
+ * tok_enable_specials() registers every vocab entry of the form <...> (longest-first);
+ * encode_bytes_special() then emits gap-text through the UNCHANGED encode_bytes() and
+ * splices the special ids. Mirrors the python oracle (llama_numpy_ref.encode_special);
+ * parity is part of the gated token-for-token claim. Byte movement + table lookup only. */
+int* encode_bytes(const unsigned char* text, size_t n, int* out_n);   /* defined below */
+typedef struct { const unsigned char* bytes; int len; int id; } SpecialTok;
+static SpecialTok g_specials[64];
+static int g_nspecials = 0;
+void tok_enable_specials(void) {
+    g_nspecials = 0;
+    for (int id = 0; id < g_nvocab && g_nspecials < 64; id++) {
+        const unsigned char* b = g_id2bytes[id]; int l = g_id2len[id];
+        if (b && l >= 3 && b[0] == '<' && b[l-1] == '>') {
+            g_specials[g_nspecials].bytes = b; g_specials[g_nspecials].len = l;
+            g_specials[g_nspecials].id = id; g_nspecials++;
+        }
+    }
+    /* longest-first so <|im_start|> beats any shorter overlapping form */
+    for (int i = 0; i < g_nspecials; i++)
+        for (int j = i + 1; j < g_nspecials; j++)
+            if (g_specials[j].len > g_specials[i].len) { SpecialTok t = g_specials[i]; g_specials[i] = g_specials[j]; g_specials[j] = t; }
+    fprintf(stderr, "[tok] specials enabled: %d control tokens\n", g_nspecials);
+}
+int* encode_bytes_special(const unsigned char* text, size_t n, int* out_n) {
+    int cap = 1024, nids = 0;
+    int* ids = (int*)xmalloc((size_t)cap * sizeof(int));
+    size_t i = 0;
+    while (i < n) {
+        /* earliest (then longest) special match at or after i */
+        size_t best_pos = n; int best = -1;
+        for (int k = 0; k < g_nspecials; k++) {
+            const SpecialTok* sp = &g_specials[k];
+            for (size_t j = i; j + (size_t)sp->len <= n && j <= best_pos; j++) {
+                if (text[j] == sp->bytes[0] && memcmp(text + j, sp->bytes, (size_t)sp->len) == 0) {
+                    if (j < best_pos) { best_pos = j; best = k; }
+                    break;
+                }
+            }
+        }
+        size_t seg_end = (best >= 0) ? best_pos : n;
+        if (seg_end > i) {
+            int m = 0; int* seg = encode_bytes(text + i, seg_end - i, &m);
+            if (nids + m + 1 > cap) { while (nids + m + 1 > cap) cap <<= 1; ids = (int*)xrealloc(ids, (size_t)cap * sizeof(int)); }
+            memcpy(ids + nids, seg, (size_t)m * sizeof(int)); nids += m; free(seg);
+        }
+        if (best >= 0) {
+            if (nids + 1 > cap) { cap <<= 1; ids = (int*)xrealloc(ids, (size_t)cap * sizeof(int)); }
+            ids[nids++] = g_specials[best].id;
+            i = best_pos + (size_t)g_specials[best].len;
+        } else break;
+    }
+    *out_n = nids;
+    return ids;
+}
+
 int* encode_bytes(const unsigned char* text, size_t n, int* out_n) {
     /* build codepoint index */
     CP* cps = (CP*)xmalloc((n + 1) * sizeof(CP));

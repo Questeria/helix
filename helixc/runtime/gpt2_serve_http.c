@@ -114,6 +114,16 @@ typedef struct {
     char  weights2[1024];
     char  vocab2[1024];
     char  merges2[1024];
+    int   specials2;          /* HX_SPECIALS for slot 1 (ChatML control tokens; instruct models) */
+    int   eos2;               /* HX_EOS for slot 1 (-1 = none) */
+    /* slot 2 (third model -- e.g. the instruct model alongside XL + the base model) */
+    char  model3[64];
+    char  ptx3[1024];
+    char  weights3[1024];
+    char  vocab3[1024];
+    char  merges3[1024];
+    int   specials3;
+    int   eos3;
 } Cfg;
 
 /* ============================ worker child ============================ */
@@ -127,7 +137,7 @@ typedef struct {
 } Worker;
 
 static Cfg     g_cfg;
-#define MAX_MODELS 2
+#define MAX_MODELS 3
 static Worker  g_workers[MAX_MODELS];     /* [0] = the primary model; [1] = the optional second */
 static int     g_nmodels = 1;
 #define g_worker (g_workers[0])           /* existing single-model references stay valid */
@@ -138,6 +148,7 @@ static volatile int g_busy = 0;   /* reflected in /api/health */
 
 /* model-i config view (keeps the v1 scalar fields untouched for model 0) */
 static const char* cfg_model_name(int i) {
+    if (i == 2) return g_cfg.model3;
     if (i == 1) return g_cfg.model2;
     return g_cfg.model[0] ? g_cfg.model : "gpt2-xl";
 }
@@ -609,10 +620,12 @@ static void spawn_worker(int idx) {
     int in_pipe[2], out_pipe[2], err_pipe[2];
     if (pipe(in_pipe) || pipe(out_pipe) || pipe(err_pipe)) die("pipe");
 
-    const char* w_ptx     = idx ? g_cfg.ptx2     : g_cfg.ptx;
-    const char* w_weights = idx ? g_cfg.weights2 : g_cfg.weights;
-    const char* w_vocab   = idx ? g_cfg.vocab2   : g_cfg.vocab;
-    const char* w_merges  = idx ? g_cfg.merges2  : g_cfg.merges;
+    const char* w_ptx     = (idx == 2) ? g_cfg.ptx3     : idx ? g_cfg.ptx2     : g_cfg.ptx;
+    const char* w_weights = (idx == 2) ? g_cfg.weights3 : idx ? g_cfg.weights2 : g_cfg.weights;
+    const char* w_vocab   = (idx == 2) ? g_cfg.vocab3   : idx ? g_cfg.vocab2   : g_cfg.vocab;
+    const char* w_merges  = (idx == 2) ? g_cfg.merges3  : idx ? g_cfg.merges2  : g_cfg.merges;
+    int w_specials = (idx == 2) ? g_cfg.specials3 : (idx == 1) ? g_cfg.specials2 : 0;
+    int w_eos      = (idx == 2) ? g_cfg.eos3      : (idx == 1) ? g_cfg.eos2      : -1;
 
     pid_t pid = fork();
     if (pid < 0) die("fork");
@@ -624,6 +637,9 @@ static void spawn_worker(int idx) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
+        /* per-model chat config travels via env (the worker reads HX_SPECIALS/HX_EOS). */
+        if (w_specials) setenv("HX_SPECIALS", "1", 1);
+        if (w_eos >= 0) { char eb[16]; snprintf(eb, sizeof eb, "%d", w_eos); setenv("HX_EOS", eb, 1); }
         /* exec the worker: gpt2_infer <ptx> <weights> --serve --emit-fd 1 --max-ctx M
          *                  --detail D --vocab v --merges m */
         char maxctx[16]; snprintf(maxctx, sizeof maxctx, "%d", g_cfg.max_ctx);
@@ -692,6 +708,7 @@ int main(int argc, char** argv) {
     signal(SIGPIPE, SIG_IGN);                       /* a closed browser socket must not kill us */
     memset(&g_cfg, 0, sizeof g_cfg);
     g_cfg.port = 8848; g_cfg.max_ctx = 320;
+    g_cfg.eos2 = -1; g_cfg.eos3 = -1;
     snprintf(g_cfg.detail, sizeof g_cfg.detail, "op");
     snprintf(g_cfg.model, sizeof g_cfg.model, "gpt2-xl");
 
@@ -712,6 +729,15 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--weights2")  && i+1 < argc) snprintf(g_cfg.weights2, sizeof g_cfg.weights2, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--vocab2")    && i+1 < argc) snprintf(g_cfg.vocab2, sizeof g_cfg.vocab2, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--merges2")   && i+1 < argc) snprintf(g_cfg.merges2, sizeof g_cfg.merges2, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--specials2") && i+1 < argc) g_cfg.specials2 = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--eos2")      && i+1 < argc) g_cfg.eos2 = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--model3")    && i+1 < argc) snprintf(g_cfg.model3, sizeof g_cfg.model3, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--ptx3")      && i+1 < argc) snprintf(g_cfg.ptx3, sizeof g_cfg.ptx3, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--weights3")  && i+1 < argc) snprintf(g_cfg.weights3, sizeof g_cfg.weights3, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--vocab3")    && i+1 < argc) snprintf(g_cfg.vocab3, sizeof g_cfg.vocab3, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--merges3")   && i+1 < argc) snprintf(g_cfg.merges3, sizeof g_cfg.merges3, "%s", argv[++i]);
+        else if (!strcmp(argv[i], "--specials3") && i+1 < argc) g_cfg.specials3 = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--eos3")      && i+1 < argc) g_cfg.eos3 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
     }
     if (!g_cfg.root[0] || !g_cfg.ptx[0] || !g_cfg.weights[0] || !g_cfg.worker_bin[0]) {
@@ -723,6 +749,13 @@ int main(int argc, char** argv) {
             fprintf(stderr, "--model2 requires --ptx2 and --weights2\n"); return 2;
         }
         g_nmodels = 2;
+    }
+    if (g_cfg.model3[0]) {
+        if (g_nmodels < 2) { fprintf(stderr, "--model3 requires --model2\n"); return 2; }
+        if (!g_cfg.ptx3[0] || !g_cfg.weights3[0]) {
+            fprintf(stderr, "--model3 requires --ptx3 and --weights3\n"); return 2;
+        }
+        g_nmodels = 3;
     }
 
     for (int m = 0; m < g_nmodels; m++) spawn_worker(m);

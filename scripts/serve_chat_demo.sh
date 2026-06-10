@@ -77,7 +77,18 @@ if [ -s "$SM_WTS" ] && [ -s "$SM_DIR/vocab.json" ] && [ -s "$SM_DIR/merges.txt" 
 else
   echo "  second model: smollm2-135m weights not found -- serving XL only"
 fi
+# ADDITIVE third model (the INSTRUCT leg): a small instruction-tuned model that genuinely
+# chats -- ChatML control-token tokenization (--specials3) + stop-at-im_end (--eos3 2).
+SI_WTS="${HELIX_SI_WEIGHTS:-$SRC/helix-llm/models/smollm2-360m-instruct/smollm2-360m-instruct.weights}"
+SI_DIR="$SRC/helix-llm/models/smollm2-360m-instruct"
+SI_ARGS=""
+if [ -n "$SM_ARGS" ] && [ -s "$SI_WTS" ] && [ -s "$SI_DIR/vocab.json" ] && [ -s "$SI_DIR/merges.txt" ]; then
+  SI_ARGS="--model3 smollm2-360m-instruct --ptx3 /tmp/gpt2_chat.ptx --weights3 $SI_WTS --vocab3 $SI_DIR/vocab.json --merges3 $SI_DIR/merges.txt --specials3 1 --eos3 2"
+  echo "  third model: smollm2-360m-instruct (CHAT) ENABLED"
+else
+  echo "  third model: smollm2-360m-instruct weights not found -- serving without the instruct leg"
+fi
 exec /tmp/gpt2_chat_server --port $PORT --root $SRC/demo \
   --ptx /tmp/gpt2_chat.ptx --weights "$XL_WEIGHTS" \
   --worker-bin /tmp/gpt2_chat_worker --vocab "$VOCAB" --merges "$MERGES" \
-  --max-ctx "$MAXCTX" --detail "$DETAIL" --oracle $SRC/helix-llm/tools --model gpt2-xl $SM_ARGS
+  --max-ctx "$MAXCTX" --detail "$DETAIL" --oracle $SRC/helix-llm/tools --model gpt2-xl $SM_ARGS $SI_ARGS

@@ -157,3 +157,22 @@ State unprompted, alongside the existing card: the oracle again shares the archi
 rope tables are trusted-once host data (like weights); SmolLM2-135M is a small modern model, not a
 frontier one (TinyLlama is the scale flex, same kernels); fp32-only still bounds scale; "modern
 architecture, verifiably executed" is the claim — NOT "modern capability."
+
+**UPDATE 2026-06-10 (Fable 5, branch fable/demo-agentic) — the INSTRUCT leg: a chat-capable
+model, gated.** SmolLM2-360M-Instruct (Apache-2.0; 32L / 960 / 15:5 GQA / head_dim 64 / dff 2560 /
+theta 1e5 / eps 1e-5 / tied) runs on the SAME gated kernels with ZERO kernel or arch changes —
+the additions are tokenizer + protocol only: ChatML special-token encode (gpt2_tok.c
+`encode_bytes_special`, opt-in per worker via HX_SPECIALS; mirrored in the oracle's
+`encode_special`) and an eos-stop (HX_EOS; pinned convention: append `<|im_end|>` then stop).
+Gate results (`scripts/llama_model_gate.sh`, model-parameterized via LLAMA_MODEL_D + LLAMA_CHAT=1,
+TEMPLATED chat prompt, 121 s): **G-L1** layer-0 max-abs **2.4e-04** (tol 2e-3, T=37);
+**G-L2a** logits argmax EXACT; **G-L2b** greedy **TOKEN_FOR_TOKEN_MATCH 45/45** — the verified
+output is a genuine assistant answer ("The capital of France is Paris.<|im_end|>"), generation
+stopping at eos exactly like the independent oracle; corrupted-weights negative control FAILED
+correctly. Serve integration: the server now takes a third model slot (--model3/--specials3/--eos3);
+`scripts/llama_serve_smoke.sh` adds leg [7] — the templated conversation over real HTTP matches
+the oracle TOKEN-FOR-TOKEN including the C tokenizer's special-token parity and the eos-stop
+(`CHAT_TOKEN_FOR_TOKEN_OK`, full smoke PASS 64 s, 3 models READY). Honest framing: 360M is a
+SMALL instruct model — "real chat, verifiably executed", not frontier capability. Fences: the
+.py/.c-h counts are unchanged (all host edits are to existing Category-B files). PENDING: the
+independent Opus re-gate + honesty audit before merge.

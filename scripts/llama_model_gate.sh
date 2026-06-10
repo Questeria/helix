@@ -23,8 +23,11 @@ ROOT="${HELIX_SRC:-}"; if [ -z "$ROOT" ]; then ROOT="$(cd "$(dirname "$0")/.." 2
 [ -d "$ROOT/helixc/examples" ] || ROOT="/mnt/c/Projects/Kovostov-Native"
 EX="$ROOT/helixc/examples"
 TOOLS="$ROOT/helix-llm/tools"
-MODELD="$ROOT/helix-llm/models/smollm2-135m"
-WTS="$MODELD/smollm2-135m.weights"
+MODELD="${LLAMA_MODEL_D:-$ROOT/helix-llm/models/smollm2-135m}"   # override: LLAMA_MODEL_D=<dir>
+WTS="${LLAMA_WTS:-$MODELD/$(basename "$MODELD").weights}"
+export LLAMA_MODEL_DIR="$MODELD"                  # the oracle reads the SAME model dir
+export LLAMA_CHAT="${LLAMA_CHAT:-0}"              # 1 = templated-chat prompt mode (instruct models)
+[ "$LLAMA_CHAT" = "1" ] && export HX_EOS="${HX_EOS:-2}"   # worker stops after <|im_end|> exactly like the oracle
 OUT="$ROOT/.m1probe"; mkdir -p "$OUT"
 WORK="${HELIX_WORK:-$HOME/gpt2_ext4/Kovostov-Native}"
 BS_W="$WORK/stage0/helixc-bootstrap"
@@ -35,7 +38,7 @@ NGEN="${NGEN:-20}"
 RC=0
 
 echo "=================== HELIX LLAMA MODEL GATE (G-L1/G-L2)  $(date -u +%H:%M:%S) ==================="
-echo "  root=$ROOT  model=$MODELD  prompt='$PROMPT' n_gen=$NGEN"
+echo "  root=$ROOT  model=$MODELD  chat=$LLAMA_CHAT  prompt='$PROMPT' n_gen=$NGEN"
 
 echo "=== [0] oracle present + ops selftest ==="
 [ -f "$TOOLS/llama_numpy_ref.py" ] || { echo "FATAL: no full-model oracle"; echo "LLAMA_MODEL_GATE_FAIL"; exit 9; }

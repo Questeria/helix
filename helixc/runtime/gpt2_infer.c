@@ -59,6 +59,8 @@ void  build_byte_unicode(void);
 void  load_vocab(const char* path);
 void  load_merges(const char* path);
 int*  encode_bytes(const unsigned char* text, size_t n, int* out_n);
+int*  encode_bytes_special(const unsigned char* text, size_t n, int* out_n);  /* chat control tokens */
+void  tok_enable_specials(void);
 /* decode helpers (pure byte concatenation of g_id2bytes[id]); zero arithmetic */
 char* decode_one(int id);                         /* one id  -> malloc'd C string */
 char* decode_range(const int* ids, int n);        /* n ids   -> malloc'd C string */
@@ -78,6 +80,8 @@ static int   ARCH = 0;             /* 0=gpt2 (v1 header), 1=llama (v2 header) */
 static int   NKV = 0;              /* llama: n_kv_heads (GQA); KVD = NKV*DH */
 static int   KVD = 0;
 static float ROPE_THETA = 0.0f;
+static int   EOS_ID = -1;
+static int   g_specials_on = 0;    /* HX_SPECIALS: ChatML control-token tokenize (serve, instruct) */          /* HX_EOS: stop greedy generation after emitting this id (chat eos; oracle convention: append then stop) */
 static float RMS_EPS = 1e-5f;
 
 /* ---- P1 weight-file header (must match helix-llm/tools/gpt2_import.py) ---- */
@@ -1080,6 +1084,7 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
         for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
         int nxt = argmax_row(logits, NV);
         ids[T++] = nxt;
+        if (EOS_ID >= 0 && nxt == EOS_ID) break;   /* chat eos-stop (matches the oracle: append eos, then stop) */
     }
     free(logits);
     /* dump produced ids (prompt + generated). */
@@ -1205,7 +1210,8 @@ static int run_serve(const char* ptx_path, const char* wpath,
 
     int in_proc_tok = (vocab && merges);
 #ifdef GPT2_SERVE
-    if (in_proc_tok) { build_byte_unicode(); load_vocab(vocab); load_merges(merges); }
+    if (in_proc_tok) { build_byte_unicode(); load_vocab(vocab); load_merges(merges);
+        if (g_specials_on) tok_enable_specials(); }
 #else
     in_proc_tok = 0;   /* tokenizer not linked in a plain single-file build */
 #endif
@@ -1223,7 +1229,10 @@ static int run_serve(const char* ptx_path, const char* wpath,
         int  T0; int* ids; int free_ids = 0;
         if (in_proc_tok && req.prompt) {
 #ifdef GPT2_SERVE
-            ids = encode_bytes((const unsigned char*)req.prompt, req.prompt_len, &T0); free_ids = 1;
+            ids = g_specials_on
+                ? encode_bytes_special((const unsigned char*)req.prompt, req.prompt_len, &T0)
+                : encode_bytes((const unsigned char*)req.prompt, req.prompt_len, &T0);
+            free_ids = 1;
 #else
             ids = NULL; T0 = 0;
 #endif
@@ -1268,6 +1277,7 @@ static int run_serve(const char* ptx_path, const char* wpath,
             free(piece);
             gen_ids[step] = nxt;
             work[T++] = nxt;
+            if (EOS_ID >= 0 && nxt == EOS_ID) { Ngen = step + 1; break; }  /* chat eos-stop; done reports the REAL count */
         }
         double secs = now_seconds() - t0;
         double tps = secs > 0 ? (double)Ngen / secs : 0.0;
@@ -1298,6 +1308,8 @@ int main(int argc, char** argv) {
     if ((e=getenv("HX_DFF")))   DFF=atoi(e);
     if ((e=getenv("HX_SPAD")))  Spad=atoi(e);
     if ((e=getenv("HX_DBG")))   g_dbg=atoi(e);
+    if ((e=getenv("HX_EOS")))   EOS_ID=atoi(e);
+    if ((e=getenv("HX_SPECIALS"))) g_specials_on=atoi(e);
     DH = DM / NH;
     ATTN_SCALE = 1.0f / sqrtf((float)DH);
 
@@ -1349,7 +1361,10 @@ int main(int argc, char** argv) {
         const char* ref_gen_path = (argc > 6) ? argv[6] : NULL;
         if (device_init(ptx_path, wpath)) return 2;
         /* size buffers for the FINAL padded length: prompt(~5) + Ngen, rounded up to a multiple of 64. */
-        int Tmax = 5 + Ngen + 4;
+        /* templated chat prompts are ~40 ids, not ~5: pre-read the file for the REAL count. */
+        int T0_real = 5;
+        if (ids_path) { int _tmp[1024]; int _n = read_ids_file(ids_path, _tmp, 1024); if (_n > 0) T0_real = _n; }
+        int Tmax = T0_real + Ngen + 4;
         int Smax = ((Tmax + 63) / 64) * 64;
         if (Smax < 64) Smax = 64;
         if (alloc_buffers(Smax)) return 2;
