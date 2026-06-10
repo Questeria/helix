@@ -46,7 +46,8 @@ case "${1:-}" in
     if cmp -s "$K" "$GOOD"; then echo "kernel: GOOD (verified)";
     elif cmp -s "$K" "$BUGGY"; then echo "kernel: BUGGY (planted)";
     else echo "kernel: HAND-EDITED (live-coded state)"; fi
-    [ -x /tmp/llama_kovc_drv.bin ] && echo "driver: cached ($(stat -c%s /tmp/llama_kovc_drv.bin) B) -- gate is fast" || echo "driver: NOT cached -- run prewarm"
+    DRVP="${LLAMA_DRV:-$HOME/gpt2_ext4/llama_kovc_drv.bin}"
+    [ -x "$DRVP" ] && echo "driver: cached ($(stat -c%s "$DRVP") B) -- gate is fast" || echo "driver: NOT cached -- run prewarm"
     nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader | grep -q . && echo "GPU: BUSY" || echo "GPU: free"
     ;;
   *)

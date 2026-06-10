@@ -17,6 +17,7 @@
 # safetensors -- independent of gpt2_pack and of the GPU path. Weights file produced by:
 #   gpt2_pack model.safetensors config.json smollm2-135m.weights --arch llama
 set -u
+set -o pipefail   # VERIFIER FINDING: without this, `oracle | tee` tested tee's exit, not the oracle's (G-L1 would fail open)
 T0=$(date +%s)
 ROOT="${HELIX_SRC:-}"; if [ -z "$ROOT" ]; then ROOT="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"; fi
 [ -d "$ROOT/helixc/examples" ] || ROOT="/mnt/c/Projects/Kovostov-Native"

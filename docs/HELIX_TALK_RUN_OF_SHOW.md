@@ -26,7 +26,7 @@ The live loop is `bash scripts/talk_demo.sh gate` (REHEARSED: ~8 s per cycle onc
 4. **Plant the bug (2 min).** `bash scripts/talk_demo.sh plant` (or live-type the `let mut
    amag = gi` form). Tell them it's a REAL bug this project hit: the compiler aliases the
    mutable onto `gi` and clobbers it. **It compiles. ptxas accepts it. It runs.**
-5. **The catch (1 min).** `gate` → `silu_mul max-abs err = 1.9e+00 -> FAIL`,
+5. **The catch (1 min).** `gate` → `silu_mul max-abs err = 4.0e+01 -> FAIL`,
    `LLAMA_GL0_FAIL`, and the NEG-CONTROL line showing the comparator has teeth. "Compile
    passed, the GPU ran it — only *verification against an independent reference* caught it."
 6. **Fix live (1 min).** `restore` (or live-edit back) → `gate` → green at 1.9e-06.

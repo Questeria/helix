@@ -1721,7 +1721,7 @@ var LiveSSESource = (function () {
         ? crypto.randomUUID() : ("req-" + Date.now())
     };
     /* ADDITIVE field, only ever present when /api/health advertised a
-       models[] capability (today's server never does -> never sent). */
+       models[] capability (the dual-model server does; single-model servers omit models[] -> never sent). */
     if (UI.selectedModel) reqObj.model = UI.selectedModel;
     var body = JSON.stringify(reqObj);
 
