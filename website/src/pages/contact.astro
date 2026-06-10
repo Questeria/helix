@@ -7,12 +7,17 @@ import Base from "../layouts/Base.astro";
 >
   <section class="page-hero dark">
     <div class="wrap">
-      <span class="eyebrow">contact · questeria</span>
-      <h1>One project. <em>One inbox.</em></h1>
-      <p class="lede">Helix is built by Questeria (Anthony DeMarco). There is no sales funnel and no support tier — questions, licensing, investment, and bug reports all reach the same person who wrote the 299 bytes at the bottom of the chain.</p>
-      <div class="btn-row">
-        <a class="btn btn-primary" href="mailto:ajdemarco10@gmail.com">Email the project <span class="arrow">→</span></a>
-        <a class="btn btn-ghost" href="https://www.linkedin.com/in/anthony-demarco10/" rel="noopener">Connect on LinkedIn</a>
+      <div class="hero-portrait-row">
+        <div>
+          <span class="eyebrow">contact · questeria</span>
+          <h1>One project. <em>One inbox.</em></h1>
+          <p class="lede">Helix is built by Questeria (Anthony DeMarco). There is no sales funnel and no support tier — questions, licensing, investment, and bug reports all reach the same person who wrote the 299 bytes at the bottom of the chain.</p>
+          <div class="btn-row">
+            <a class="btn btn-primary" href="mailto:ajdemarco10@gmail.com">Email the project <span class="arrow">→</span></a>
+            <a class="btn btn-ghost" href="https://www.linkedin.com/in/anthony-demarco10/" rel="noopener">Connect on LinkedIn</a>
+          </div>
+        </div>
+        <img class="hero-portrait" src="/anthony-demarco.jpg" alt="Portrait of Anthony DeMarco, founder of Helix" width="800" height="800" />
       </div>
     </div>
   </section>
@@ -66,10 +71,4 @@ import Base from "../layouts/Base.astro";
       <span class="eyebrow">Before you write</span>
       <h2>See it run first.</h2>
       <p>The verified GPT-2 and SmolLM2 runs, the proof dashboard, and the one-command reproduction answer most first questions better than email can.</p>
-      <div class="btn-row">
-        <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
-        <a class="btn btn-ghost" href="/trust-chain/">Reproduce the chain</a>
-      </div>
-    </div>
-  </section>
-</Base>
+      <div

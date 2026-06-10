@@ -1131,24 +1131,45 @@ footer {
 }
 
 /* ============================================================
-   Reveal-on-scroll
+   Founder / portrait
    ============================================================ */
 
-/* Reveal styles only apply when JS is present (html.js set inline in <head>),
-   so content is never hidden from no-JS users or crawlers. */
-.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity 700ms cubic-bezier(.2,.7,.2,1), transform 700ms cubic-bezier(.2,.7,.2,1); }
-.js .reveal.in { opacity: 1; transform: none; }
-
-/* ============================================================
-   Reduced motion — kill all decorative animation
-   ============================================================ */
-
-@media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  .js .reveal { opacity: 1; transform: none; transition: none; }
-  .byte-ribbon-track { animation: none; padding-left: 0; }
-  .hex-byte { animation: none; opacity: 0.35; }
-  .btn, .btn .arrow, .link-card, .chain-dot { transition: none; }
-  .btn:hover, .link-card:hover { transform: none; }
-  .room :is(animate, animateMotion) { display: none; }
+.founder {
+  display: flex;
+  align-items: center;
+  gap: clamp(20px, 3vw, 36px);
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: var(--bg-elev);
+  margin-bottom: 28px;
+  flex-wrap: wrap;
 }
+.founder img {
+  width: clamp(120px, 16vw, 176px);
+  height: clamp(120px, 16vw, 176px);
+  object-fit: cover;
+  border-radius: 18px;
+  border: 1px solid var(--line-strong);
+  flex-shrink: 0;
+}
+.founder h3 {
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 10px 0 8px;
+}
+.founder p { color: var(--fg-mute); font-size: 15px; max-width: 52ch; margin: 0 0 14px; }
+.founder .stat-strip { margin: 0; }
+
+.hero-portrait-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(24px, 4vw, 56px);
+  flex-wrap: wrap;
+}
+.hero-portrait-row > div { flex: 1 1 420px; }
+.hero-portrait {
+  width:
