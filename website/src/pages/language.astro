@@ -1,0 +1,332 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="The Helix language — autodiff, shapes, and GPU codegen as language features"
+  description="Forward- and reverse-mode autodiff as built-ins, Presburger-checked tensor shapes, verifier-gated reflection, IR-level effect verification, and PTX codegen for real GPUs — every kovc build gated by a 109-program corpus. Self-hosting: the compiler is written in Helix."
+>
+  <!-- ============================================================
+       01 PAGE HERO
+       ============================================================ -->
+  <section class="page-hero dark">
+    <div class="wrap">
+      <span class="eyebrow">the language · self-hosting · corpus-gated</span>
+      <h1>Autodiff is a keyword. <em>The compiler is the proof.</em></h1>
+      <p class="lede">Helix is a source-available, fully auditable, from-scratch self-hosting language for ML and high-certainty systems work. Its compiler, kovc — complete lexer, parser, and x86-64-ELF code generator, written in Helix (<code>helixc/bootstrap/&#123;lexer,parser,kovc&#125;.hx</code>) — is built from the raw seed into a native binary that compiles Helix programs, including its own source. It emits self-contained Linux x86-64 ELFs directly: no assembler, no linker, no libc.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#start">Get started <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/verify/">See the verified run</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       02 AUTODIFF — light
+       ============================================================ -->
+  <section>
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">Differentiation, built in</span>
+          <h2>Gradients are a language feature, not a library.</h2>
+          <p>Source-level forward- and reverse-mode autodiff as built-ins: <code>grad</code>, <code>grad_rev</code>, <code>grad_rev_all</code>. Chain rules compose across user-defined functions via inlining and across stdlib transcendentals via analytic rules.</p>
+        </div>
+        <div>
+          <div class="code-card">
+            <div class="code-head">
+              <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <span>autodiff.hx · grad_rev_all</span>
+            </div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">loss</span>(x: <span class="ty">f64</span>, y: <span class="ty">f64</span>) -&gt; <span class="ty">f64</span> &#123;
+    x * y + x * x
+&#125;
+
+<span class="kw">struct</span> <span class="ty">Grad</span> &#123; dx: <span class="ty">f64</span>, dy: <span class="ty">f64</span> &#125;
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f64</span> &#123;
+    <span class="cmt">// reverse-mode AD, all gradients in one sweep</span>
+    <span class="kw">let</span> g = <span class="fn">grad_rev_all</span>(loss)(<span class="num">2.0_f64</span>, <span class="num">3.0_f64</span>);
+    g.dx
+&#125;</pre>
+            <div class="code-foot">
+              <span>kovc loss.hx -O2</span>
+              <span class="out">→ 7.0_f64</span>
+            </div>
+          </div>
+          <p style="margin: 24px 0 0; color: var(--fg-mute); font-size: 15px; max-width: 60ch;">
+            Everything is lowered at compile time — no runtime tape, no tracing. The derivative of your program is just more of your program, compiled by the same gated compiler into the same self-contained binary.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 SHAPES + GPU CODEGEN — dark
+       ============================================================ -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">Shapes &amp; silicon</span>
+          <h2>Dimension bugs die at compile time.</h2>
+          <p>Tensor shapes are Presburger-checked: a mismatched matmul is a compile error, not a wrong number at runtime. The same compiler then emits PTX that runs on real NVIDIA GPUs.</p>
+        </div>
+        <div>
+          <div class="code-card">
+            <div class="code-head">
+              <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <span>matmul.hx · compile-time shapes</span>
+            </div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f32</span> &#123;
+    <span class="kw">let</span> a = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
+    <span class="kw">let</span> b = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
+    <span class="kw">let</span> c = <span class="fn">tile_matmul</span>(a, b);
+    c.<span class="fn">get</span>(<span class="num">2</span>, <span class="num">3</span>)
+&#125;</pre>
+            <div class="code-foot">
+              <span>tiles · Presburger-checked shapes</span>
+              <span class="out">→ 4.0_f32</span>
+            </div>
+          </div>
+          <p style="margin: 24px 0 0; color: var(--fg-mute); font-size: 15px; max-width: 60ch;">
+            kovc emits PTX for a covered transformer-kernel set, and every kernel is gated for numerical parity against an independent oracle before it counts as covered. This is the kernel set that runs GPT-2 and SmolLM2 token-for-token against that oracle.
+          </p>
+          <div class="stat-strip" aria-label="Covered PTX kernel set">
+            <span>matmul</span>
+            <span>attention</span>
+            <span>softmax</span>
+            <span>layernorm</span>
+            <span>RMSNorm</span>
+            <span>RoPE</span>
+            <span>SwiGLU</span>
+            <span>activations</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       04 EFFECTS + REFLECTION — light
+       ============================================================ -->
+  <section>
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">Controlled power</span>
+          <h2>Self-modifying code, behind your own verifier.</h2>
+          <p>Reflection in Helix is not a trapdoor. <code>quote</code> / <code>splice_f</code> / <code>modify_f</code> call <em>your</em> verifier function before committing any mutation — 64 mutable cells in the binary's writable region, and nothing changes unless your check passes.</p>
+        </div>
+        <div>
+          <div class="code-card">
+            <div class="code-head">
+              <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+              <span>reflect.hx · verifier-gated</span>
+            </div>
+<pre class="code-body"><span class="kw">fn</span> <span class="fn">always_true</span>(_: <span class="ty">i32</span>) -&gt; <span class="ty">i32</span> &#123; <span class="num">1</span> &#125;
+
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> &#123;
+    <span class="kw">let</span> h = <span class="fn">Quote</span>(<span class="num">0</span>);
+    <span class="fn">modify</span>(h, <span class="num">42</span>, <span class="fn">always_true</span>(<span class="num">0</span>));
+    <span class="fn">Splice</span>(h)
+&#125;</pre>
+            <div class="code-foot">
+              <span>reflection · your verifier decides</span>
+              <span class="out">→ 42</span>
+            </div>
+          </div>
+          <p style="margin: 24px 0 0; color: var(--fg-mute); font-size: 15px; max-width: 60ch;">
+            Effects get the same treatment at the other end: <code>@pure</code> functions are verified at the IR level and transitively prohibited from reaching effectful code. Purity is a checked property, not a comment.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       05 THE GATED SURFACE — dark
+       ============================================================ -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">The gated surface</span>
+          <h2 class="section-title">If it's listed here, a gate enforces it.</h2>
+        </div>
+        <p class="section-lede">Every kovc build passes <code>scripts/gate_kovc.sh</code>: the self-host fixpoint, the 109-program feature corpus, 4 negative-diagnostic checks, and the PTX regression.</p>
+      </div>
+
+      <div class="stat-strip" aria-label="Gate and stdlib figures">
+        <span>feature corpus <b>109 programs</b></span>
+        <span>negative-diagnostic checks <b>4</b></span>
+        <span>stdlib <b>16 modules</b></span>
+        <span>stdlib functions <b>~455</b></span>
+        <span>self-host fixpoint <b>K2 == K3 == K4</b></span>
+      </div>
+
+      <div class="fact-table">
+        <table>
+          <tr>
+            <th>Area</th>
+            <th>In the language today</th>
+          </tr>
+          <tr>
+            <td class="mono">numerics</td>
+            <td>Integer widths; floats including bf16/f16 arithmetic.</td>
+          </tr>
+          <tr>
+            <td class="mono">control &amp; functions</td>
+            <td>Control flow; closures, including capture-by-value.</td>
+          </tr>
+          <tr>
+            <td class="mono">types</td>
+            <td>Generics; traits with default methods; pattern matching; wide struct fields.</td>
+          </tr>
+          <tr>
+            <td class="mono">autodiff</td>
+            <td><code>grad</code>, <code>grad_rev</code>, <code>grad_rev_all</code> — lowered at compile time, no runtime tape.</td>
+          </tr>
+          <tr>
+            <td class="mono">effects &amp; reflection</td>
+            <td><code>@pure</code> verified at the IR level; <code>quote</code> / <code>splice_f</code> / <code>modify_f</code> gated by your verifier.</td>
+          </tr>
+          <tr>
+            <td class="mono">research types</td>
+            <td>Presburger-checked tensor shapes; confidence types <code>D&lt;T&gt;</code>; memory-tier types; agent types — all checked at compile time.</td>
+          </tr>
+          <tr>
+            <td class="mono">gpu</td>
+            <td>PTX for the covered transformer-kernel set, each kernel parity-gated against an independent oracle.</td>
+          </tr>
+          <tr>
+            <td class="mono">diagnostics</td>
+            <td>Structured <code>path:line:col</code> diagnostics, held to the negative-diagnostic checks.</td>
+          </tr>
+          <tr>
+            <td class="mono">stdlib</td>
+            <td>16 modules, ~455 functions: math with range-reduced transcendentals; activations (sigmoid/tanh/silu/gelu/softplus/relu); losses (mse/mae/bce/huber); PRNG; optimizer steps; reverse-AD helpers; hashmap; tensor/iterator/vec/string/result helpers.</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="section-head" style="margin-top: clamp(56px, 7vw, 96px);">
+        <div>
+          <span class="eyebrow">Proof it does ML</span>
+          <h2 class="section-title">Real programs, in Helix-emitted binaries.</h2>
+        </div>
+        <p class="section-lede">Not slideware — these compile with the seed-minted kovc and run as self-contained ELFs.</p>
+      </div>
+
+      <ol class="resid-list">
+        <li><b>One-parameter gradient descent.</b> The smallest honest training loop: a single weight, a real gradient, a converging loss.</li>
+        <li><b>Linear regression.</b> Fit by compiled autodiff, not by a framework.</li>
+        <li><b>An affine fit.</b> Weight and bias learned together through the same compile-time-lowered gradients.</li>
+        <li><b>A 2-layer ReLU XOR net.</b> The classic nonlinearity test, end to end in Helix.</li>
+        <li><b>Logistic regression.</b> Sigmoid + BCE with multi-output autodiff across the whole model.</li>
+        <li><b>A flagship agent.</b> Composes everything above — autodiff, tiles, effects, reflection — in one program.</li>
+      </ol>
+
+      <div class="notice">
+        <p class="notice-title">Documented bounds, loud failures</p>
+        <p>Helix states its design bounds instead of hiding them: borrows, const/static, module privacy, and match exhaustiveness are documented design bounds, not enforced checks. And when something goes wrong at runtime, it fails loudly with trap ids — never silently.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       06 GETTING STARTED — light
+       ============================================================ -->
+  <section id="start">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Getting started</span>
+          <h2 class="section-title">Mint your own compiler first. Then write code.</h2>
+        </div>
+        <p class="section-lede">One committed command rebuilds the whole ladder from the 299-byte root and proves the fixpoint — clean checkout, CPU-only, about a minute. Linux or WSL2.</p>
+      </div>
+
+      <div class="card-grid two" style="align-items: start;">
+        <div class="code-card">
+          <div class="code-head">
+            <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span>terminal · linux / wsl2</span>
+          </div>
+<pre class="code-body"><span class="cmt"># rebuild the toolchain from the 299-byte root</span>
+git clone https://github.com/Questeria/helix
+cd helix
+bash scripts/reproduce_trust.sh
+<span class="cmt"># builds the ladder + proves the fixpoint
+# clean checkout · CPU-only · ~1 min</span>
+
+<span class="cmt"># the universal gate: fixpoint + 109-program corpus
+# + 4 negative-diagnostic checks + PTX regression</span>
+bash scripts/gate_kovc.sh</pre>
+          <div class="code-foot">
+            <span>gcc — only as the independent DDC auditor</span>
+            <span class="out">GPU (CUDA, RTX-class) — only for the GPU legs</span>
+          </div>
+        </div>
+        <div class="prose">
+          <p>After that, the seed-minted kovc compiles your <code>.hx</code> directly to a Linux x86-64 ELF — no assembler, no linker, no libc, and no Python anywhere in the toolchain. The repo carries exactly one committed <code>.py</code> file: a fenced numpy verification oracle that is never on the compile or run path.</p>
+          <p>No pre-built compiler is ever trusted: the ladder runs hex0 → hex1 → hex2 → catm → M0 → cc_amd64 → M2-Planet → seed → kovc, each rung built only by the rung before it.</p>
+        </div>
+      </div>
+
+      <div class="card-grid" style="margin-top: 24px;">
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/QUICKSTART.md">
+          <span class="lc-kicker">Start here</span>
+          <h3>Quickstart</h3>
+          <p>From clone to your first compiled Helix binary, in order, with nothing assumed.</p>
+          <span class="lc-arrow">QUICKSTART.md →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/lang/tutorial.md">
+          <span class="lc-kicker">Learn the language</span>
+          <h3>Tutorial</h3>
+          <p>A guided tour of the surface: numerics, control flow, traits, closures, autodiff.</p>
+          <span class="lc-arrow">docs/lang/tutorial.md →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/lang/spec.md">
+          <span class="lc-kicker">The reference</span>
+          <h3>Language spec</h3>
+          <p>The precise definition of what the corpus-gated language surface means.</p>
+          <span class="lc-arrow">docs/lang/spec.md →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/helix_website/HELIX_REFERENCE.md">
+          <span class="lc-kicker">Everything in one place</span>
+          <h3>Full reference</h3>
+          <p>The complete reference: language, stdlib modules, built-ins, diagnostics.</p>
+          <span class="lc-arrow">HELIX_REFERENCE.md →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/CLEAN_REPRODUCTION.md">
+          <span class="lc-kicker">Trust, hands-on</span>
+          <h3>Clean reproduction</h3>
+          <p>Rebuild everything from a clean checkout and check the hashes yourself.</p>
+          <span class="lc-arrow">docs/CLEAN_REPRODUCTION.md →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix">
+          <span class="lc-kicker">The source</span>
+          <h3>GitHub repository</h3>
+          <p>Every byte of the toolchain, from the hand-authored root to the PTX it emits.</p>
+          <span class="lc-arrow">github.com/Questeria/helix →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       07 CTA
+       ============================================================ -->
+  <section class="cta dark">
+    <div class="wrap">
+      <span class="eyebrow">From keyword to kernel</span>
+      <h2>A language you can audit to the last byte.</h2>
+      <p>The compiler that lowers your gradients was itself built from 299 hand-authored bytes — and the models it runs were verified token-for-token against an independent reference.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/trust-chain/">Reproduce the chain</a>
+      </div>
+    </div>
+  </section>
+</Base>

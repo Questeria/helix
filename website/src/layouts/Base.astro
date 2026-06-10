@@ -26,6 +26,7 @@ const ogImage = new URL("/og.png", site);
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta name="generator" content={Astro.generator} />
     <meta name="theme-color" content="#0b0b10" />
+    <script is:inline>document.documentElement.classList.add("js");</script>
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
@@ -59,6 +60,8 @@ const ogImage = new URL("/og.png", site);
       <slot />
     </main>
     <Footer />
-    <script src="../scripts/site.js"></script>
+    <script>
+      import "../scripts/site.js";
+    </script>
   </body>
 </html>

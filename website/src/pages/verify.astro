@@ -1,0 +1,310 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="Verifiable Execution — Helix"
+  description="Helix is a verifiable execution layer for AI. GPT-2 124M, 774M, 1.5B and SmolLM2-135M run on kovc-emitted GPU kernels and match an independent fp32 numpy reference token-for-token — every layer and kernel traceable to 299 hand-typed bytes."
+>
+  <!-- ============================================================
+       01 PAGE HERO
+       ============================================================ -->
+  <section class="page-hero dark" data-screen-label="01 Hero">
+    <div class="wrap">
+      <span class="eyebrow">verifiable execution · bring your weights</span>
+      <h1>Run the model you know. <em>Verify every byte</em> beneath it.</h1>
+      <p class="lede">Helix is a verifiable execution layer for AI. Bring your weights: every layer and every kernel beneath them traces back to 299 hand-typed bytes, and the output is matched token-for-token against an independent reference. Audit instead of trust. Trust, not speed.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/demo/">Watch the real run <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/demo/dashboard.html">See the proof</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       02 WHAT RAN, AND WHAT MATCHED
+       ============================================================ -->
+  <section data-screen-label="02 What ran">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">The record</span>
+          <h2 class="section-title">What ran, and what matched.</h2>
+        </div>
+        <p class="section-lede">Four real, unchanged public models — base completion models, not assistants — ran on kovc-emitted PTX kernels and were compared against an independent fp32 numpy reference.</p>
+      </div>
+
+      <div class="stat-strip" aria-label="Verified-execution summary">
+        <span>models verified <b>124M → 1.5B</b></span>
+        <span>greedy continuation <b>25/25 ids, all four</b></span>
+        <span>byte-identical reruns <b>gen-ids sha256 8a2595cd…</b></span>
+        <span>hardware <b>1× sm_86 · RTX 3070-class · 8 GB</b></span>
+        <span>precision <b>fp32 only</b></span>
+        <span>live GPT-2-XL <b>≈ 10 s/token — by design</b></span>
+      </div>
+
+      <div class="fact-table" style="margin-top: 28px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Architecture</th>
+              <th>Last-token argmax</th>
+              <th>Max-abs logit diff</th>
+              <th>Greedy continuation</th>
+              <th>PTX kernels</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>GPT-2 124M</td>
+              <td>GPT-2 · 2019 base completion model</td>
+              <td class="ok">id 262 — exact</td>
+              <td><span class="mono">2.59e-04</span> on logits of magnitude ~130</td>
+              <td class="ok">token-for-token · 25/25 ids</td>
+              <td>8</td>
+            </tr>
+            <tr>
+              <td>GPT-2-Large 774M</td>
+              <td>GPT-2 · 36 layers</td>
+              <td class="ok">id 262 — exact</td>
+              <td><span class="mono">3.8e-05</span></td>
+              <td class="ok">token-for-token · 25/25 ids</td>
+              <td>same 8 — zero new</td>
+            </tr>
+            <tr>
+              <td>GPT-2-XL 1.5B</td>
+              <td>GPT-2 · 48 layers</td>
+              <td class="ok">id 262 — exact</td>
+              <td><span class="mono">4.4e-05</span></td>
+              <td class="ok">token-for-token · 25/25 ids</td>
+              <td>same 8 — zero new</td>
+            </tr>
+            <tr>
+              <td>SmolLM2-135M</td>
+              <td>Llama arch · 2024 · GQA + RoPE + SwiGLU + RMSNorm · 30 layers</td>
+              <td class="ok">id 260 — exact</td>
+              <td><span class="mono">4.9e-05</span> over 49,152 logits</td>
+              <td class="ok">token-for-token · 25/25 ids</td>
+              <td>3 new + 5 reused = 8</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="margin-top: 24px; color: var(--fg-soft); font-size: 13.5px; max-width: 78ch;">
+        All three GPT-2 sizes run through the exact same 8 kovc-emitted PTX kernels — only the dimensions change, read from <code class="mono">config.json</code>. GPT-2-XL at 1.5B parameters fits the 8 GB sm_86 box at fp32 via per-layer weight streaming. Verified complete to PTX, not SASS. The live GPT-2-XL chat ran at ≈ 10 s/token (measured 195.5 s for 20 tokens in the gated serve run) — that is the verifiability flex, not a speed flex.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 WHAT "VERIFIED" MEANS HERE
+       ============================================================ -->
+  <section class="dark" data-screen-label="03 What verified means">
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">The definition</span>
+          <h2>What “verified” means here.</h2>
+          <p>One precise claim, checked four ways — and quoted with the model's real output, unedited.</p>
+        </div>
+        <div class="prose">
+          <h3>An independent reference, not a self-check</h3>
+          <p>The oracle is an independent numpy implementation. It reads the original HuggingFace safetensors and computes its own forward pass — independent of Helix's importer <em>and</em> of the GPU path. It must agree with the Helix run token-for-token. Nothing in the comparison loops Helix's own output back as the standard.</p>
+
+          <h3>Fail-closed gates</h3>
+          <p>Every parity check is a gate that exits nonzero on mismatch — gates are never faked and never warn-and-continue. The SmolLM2 leg includes a corrupted-weights negative control that correctly <strong>failed</strong>: the comparator has teeth.</p>
+
+          <h3>Byte-identical reruns</h3>
+          <p>The same run, executed twice, produces byte-identical generated token ids — sha256 <code>8a2595cd…</code> for the GPT-2 demo. Reproducibility is asserted, not assumed.</p>
+
+          <h3>A signed attestation, bound to the from-raw root</h3>
+          <p>One command, <code>scripts/gpt2_demo_attest.sh</code>, rebuilds the compiler from raw, runs GPT-2 through kovc-emitted kernels against the oracle, re-runs byte-identical, and writes a signed attestation binding the three from-raw anchors — seed <code>9837db12…</code>, self-host fixpoint <code>0992dddd…</code>, gcc-DDC K1 <code>84363adb…</code> — to the model run.</p>
+
+          <div class="notice">
+            <p class="notice-title">What the models actually said</p>
+            <p>GPT-2 124M, greedy: <em>“The capital of France is the capital of the French Republic, and the capital of the French Republic is the capital of the French”</em> — grammatical but repetitive. That is the real 2019 model under greedy decoding, not a bug, and quoting it unedited is the point.</p>
+            <p>GPT-2-XL 1.5B, greedy: <em>“The capital of France is the city of Paris. It is the capital of France and the largest city in France. It is”</em> — same stack, same 8 kernels, bigger model.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       04 THE MODERN-MODEL LEG — SmolLM2-135M
+       ============================================================ -->
+  <section data-screen-label="04 Modern architecture">
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">The modern-model leg</span>
+          <h2>The architecture of today's open models.</h2>
+          <p>SmolLM2-135M — gated 2026-06-09 — brings the Llama family onto the same verified stack.</p>
+        </div>
+        <div class="prose">
+          <p>GPT-2 proved the stack on a 2019 architecture. SmolLM2-135M proves it on a 2024 one: grouped-query attention (9 query / 3 kv heads), RoPE with theta 1e5, SwiGLU, RMSNorm, 30 layers, tied head, a 49,152-token vocabulary — the same architectural family as today's open models.</p>
+          <p>Its full forward pass runs on the same stack and matches the independent oracle: layer-0 residual max-abs <code>3.2e-05</code>; full-model logits argmax exact (id 260) with max-abs <code>4.9e-05</code> across all 49,152 logits; 20-token greedy continuation token-for-token, 25/25 ids.</p>
+          <p>It cost <strong>three new kernels</strong> — <code>rmsnorm</code>, <code>rope</code>, <code>silu_mul</code> — plus five reused, for eight again. And it required <strong>no compiler change</strong>: the self-host fixpoint <code>0992dddd…</code> is untouched. The gate, <code>scripts/llama_model_gate.sh</code>, is fail-closed and took 72 seconds on its first run; its corrupted-weights negative control failed exactly as it should.</p>
+          <div class="notice">
+            <p class="notice-title">The precise claim</p>
+            <p>Modern <strong>architecture</strong>, verifiably executed — not modern <strong>capability</strong>. SmolLM2-135M is a small base completion model; its greedy completions are repetitive base-model English. What's demonstrated is that the architecture family runs, verified, on a stack you can audit to the byte.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       05 REPRODUCE IT YOURSELF
+       ============================================================ -->
+  <section class="dark" data-screen-label="05 Reproduce">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Reproduce it yourself</span>
+          <h2 class="section-title">Two tiers. Be precise about which is which.</h2>
+        </div>
+        <p class="section-lede">The trust core reproduces from the repo alone. The model demos additionally need artifacts that are deliberately not in the repo.</p>
+      </div>
+
+      <div class="card-grid two">
+        <div class="link-card">
+          <span class="lc-kicker">Tier A · repo only</span>
+          <h3>The trust core</h3>
+          <p>Fully third-party-reproducible from the committed repo alone: <code class="mono">reproduce_trust.sh</code> plus CI. No weights, no oracle, no GPU — about one minute, CPU-only, fail-closed, green on a clean GitHub ubuntu-latest runner on every push.</p>
+        </div>
+        <div class="link-card">
+          <span class="lc-kicker">Tier B · repo + external artifacts</span>
+          <h3>The model demos</h3>
+          <p>Additionally need the public GPT-2 / SmolLM2 weights from HuggingFace — converted with the committed, Python-free C importer <code class="mono">helixc/runtime/gpt2_pack.c</code> and tokenized with the committed <code class="mono">gpt2_tok.c</code>, both gated bit-exact — plus an independent numpy oracle, deliberately uncommitted to preserve the exactly-one-committed-.py fence. Bring your own honest reimplementation, or use the author's, shipped with the demo bundle. The demo legs are <strong>not</strong> repo-only-reproducible, and we don't claim they are.</p>
+        </div>
+      </div>
+
+      <div class="code-card" style="margin-top: 28px;">
+        <div class="code-head">
+          <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span>reproduce · tier A, then tier B</span>
+        </div>
+<pre class="code-body"><span class="cmt"># Tier A — the trust core. Repo only; no weights, no oracle, no GPU.</span>
+git clone https://github.com/Questeria/helix &amp;&amp; cd helix
+bash scripts/reproduce_trust.sh      <span class="cmt"># ~1 minute · CPU-only · fail-closed</span>
+
+<span class="cmt"># Tier B — the model demos. Public weights + an independent oracle required.</span>
+bash scripts/gpt2_demo_attest.sh     <span class="cmt"># from-raw rebuild → GPT-2 vs oracle → signed attestation</span>
+bash scripts/llama_model_gate.sh     <span class="cmt"># SmolLM2-135M gate · first run 72 s · fail-closed</span></pre>
+        <div class="code-foot">
+          <span>every gate exits nonzero on mismatch</span>
+          <span class="out">anchors: 9837db12 · 0992dddd · 84363adb</span>
+        </div>
+      </div>
+
+      <div class="faq" style="margin-top: 36px;">
+        <details>
+          <summary>Is anything on this site running live?</summary>
+          <div class="faq-body"><p>No. This website runs nothing and proves nothing by itself — it links to committed replays and gate records of real, captured runs. The replay is clearly labeled a replay.</p></div>
+        </details>
+        <details>
+          <summary>Why ≈ 10 seconds per token for GPT-2-XL?</summary>
+          <div class="faq-body"><p>By design. fp32 only, a single 8 GB sm_86 GPU, per-layer weight streaming, and kernels built for auditability. Helix is a trust play, not a speed play — the measured figure (195.5 s for 20 tokens in the gated serve run) is published as-is.</p></div>
+        </details>
+        <details>
+          <summary>Why is the 124M output so repetitive?</summary>
+          <div class="faq-body"><p>Because that's the real, unchanged 2019 base completion model under greedy decoding. A flashier output would have required changing the model or the decoding — and then it wouldn't be the model you know.</p></div>
+        </details>
+        <details>
+          <summary>Does the oracle prove the model is "correct"?</summary>
+          <div class="faq-body"><p>It proves Helix's execution matches an independent implementation of the same spec. The oracle shares the model's spec, so it catches implementation bugs — not a shared misunderstanding. That residual is stated below, unprompted.</p></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       06 HONEST RESIDUALS
+       ============================================================ -->
+  <section data-screen-label="06 Residuals">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Honest residuals</span>
+          <h2 class="section-title">Said before you ask.</h2>
+        </div>
+        <p class="section-lede">The honesty is the pitch. These are the limits of the demo claim, stated unprompted so the claim stays precise.</p>
+      </div>
+
+      <ol class="resid-list">
+        <li><b>Complete to PTX, not SASS.</b> Below PTX, the GPU path trusts NVIDIA's closed ptxas, the driver, and the C CUDA-FFI host launcher — trusted-once, and disclosed as such.</li>
+        <li><b>fp32 only.</b> Parity is exact on argmax and on the token sequence, and within measured tolerance on hidden states. No other precision is claimed.</li>
+        <li><b>Single GPU, sm_86.</b> One RTX 3070-class card with 8 GB. Not multi-GPU, not a cluster.</li>
+        <li><b>A demonstration at up to 1.5B parameters, not frontier scale.</b> The point is verifiability, not size — and not speed.</li>
+        <li><b>The oracle shares the model's spec.</b> It is an independent implementation, not an independent specification. It catches implementation bugs; it cannot catch a misunderstanding both implementations share.</li>
+        <li><b>RoPE cos/sin tables are trusted-once host data.</b> Like the weights themselves, they enter the run as data, not as verified computation.</li>
+        <li><b>Never claimed:</b> beating cuBLAS, a “fully verified GPU”, or completeness down to GPU machine code.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       07 THE DEMO ARTIFACTS
+       ============================================================ -->
+  <section class="dark" data-screen-label="07 Artifacts">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">See it for yourself</span>
+          <h2 class="section-title">The demo, as committed artifacts.</h2>
+        </div>
+        <p class="section-lede">Everything below is copied verbatim onto this site at build time — dependency-free records of real runs, clearly labeled, never simulated as live.</p>
+      </div>
+
+      <div class="card-grid">
+        <a class="link-card" href="/demo/">
+          <span class="lc-kicker">Replay · captured run</span>
+          <h3>The chat replay</h3>
+          <p>A replay of a real, captured GPT-2-on-Helix session. Labeled REPLAY throughout — nothing here is generated on the fly.</p>
+          <span class="lc-arrow">/demo/ →</span>
+        </a>
+        <a class="link-card" href="/demo/landing.html">
+          <span class="lc-kicker">Orientation</span>
+          <h3>Start here</h3>
+          <p>What the demo is, what it claims, and — just as carefully — what it does not claim.</p>
+          <span class="lc-arrow">/demo/landing.html →</span>
+        </a>
+        <a class="link-card" href="/demo/dashboard.html">
+          <span class="lc-kicker">Proof · gate records</span>
+          <h3>The proof dashboard</h3>
+          <p>From-raw anchors, parity gates, byte-identical rerun hashes, and the signed attestation each demo run writes.</p>
+          <span class="lc-arrow">/demo/dashboard.html →</span>
+        </a>
+        <a class="link-card" href="/demo/compare.html">
+          <span class="lc-kicker">Comparison</span>
+          <h3>Helix vs the oracle</h3>
+          <p>The Helix run and the independent numpy reference, side by side, down to the token ids.</p>
+          <span class="lc-arrow">/demo/compare.html →</span>
+        </a>
+        <a class="link-card" href="/demo/onepager.html">
+          <span class="lc-kicker">Summary</span>
+          <h3>The one-pager</h3>
+          <p>The whole claim on a single page — numbers, anchors, and residuals included.</p>
+          <span class="lc-arrow">/demo/onepager.html →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       08 CTA
+       ============================================================ -->
+  <section class="cta dark" data-screen-label="08 CTA">
+    <div class="wrap">
+      <span class="eyebrow">All the way down</span>
+      <h2>Audit instead of trust.</h2>
+      <p>The kernels beneath these runs were emitted by a compiler that rebuilds from 299 hand-typed bytes — with one committed command, in about a minute, on your machine.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/trust-chain/">How the trust chain closes <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/Questeria/helix">Browse the repo</a>
+      </div>
+    </div>
+  </section>
+</Base>

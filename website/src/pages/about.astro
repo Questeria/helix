@@ -1,0 +1,233 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="About Helix — status, verification record, and roadmap"
+  description="Helix is a source-available, fully auditable, from-scratch self-hosting language and compiler, rebuildable from a 299-byte hand-authored root. Trust chain declared closed 2026-06-07 at tag v1.3-release. GPT-2 and SmolLM2 run token-for-token against an independent oracle."
+>
+  <!-- ============================================================
+       01 PAGE HERO
+       ============================================================ -->
+  <section class="page-hero dark">
+    <div class="wrap">
+      <span class="eyebrow">the project · questeria · trust chain closed 2026-06-07</span>
+      <h1>Built in the open. <em>Closed with proof.</em></h1>
+      <p class="lede">Helix is a source-available, fully auditable, from-scratch self-hosting language and compiler for ML and high-certainty systems work. The whole toolchain rebuilds from a 299-byte hand-authored root with no trusted pre-built compiler — and the trust chain was declared closed on 2026-06-07, at tag v1.3-release, after a live joint reproduction witnessed by the project owner.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="https://github.com/Questeria/helix">GitHub repository <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">Read the trust record</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       02 WHAT THIS PROJECT IS — light
+       ============================================================ -->
+  <section>
+    <div class="wrap">
+      <div class="split">
+        <div class="split-label">
+          <span class="eyebrow">What this project is</span>
+          <h2>A toolchain you can audit instead of trust.</h2>
+          <p>Every rung of the ladder is built only by the rung before it. The only thing you take on faith is 299 bytes you can read by hand.</p>
+        </div>
+        <div class="prose">
+          <p>The ladder runs nine rungs — hex0 → hex1 → hex2 → catm → M0 → cc_amd64 → M2-Planet → seed → kovc — from raw hand-typed binary up to kovc, the Helix compiler written in Helix. The seed is a C-subset bootstrap compiler (sha <code>9837db12…</code>); the self-host fixpoint is byte-identical across generations, K2 == K3 == K4 (sha <code>0992dddd…</code>).</p>
+          <p>The toolchain is Python-free: the repository carries exactly one committed <code>.py</code> file, a fenced numpy verification oracle that is never on the compile or run path. Every kovc build passes the universal gate, <code>scripts/gate_kovc.sh</code> — the self-host fixpoint, a 109-program feature corpus, 4 negative-diagnostic checks, and a PTX regression.</p>
+          <p>On top of that core sit the verified-execution legs: GPT-2 124M and GPT-2-XL 1.5B — 2019 base completion models, unchanged public weights — and SmolLM2-135M, a 2024 Llama-architecture model (GQA + RoPE + SwiGLU + RMSNorm, 30 layers), all running token-for-token-identical (25/25 greedy ids) to an independent numpy oracle on kovc-emitted GPU kernels. The honest edges are stated, not buried: verified to PTX, not SASS; fp32; a single sm_86 GPU; live XL at roughly 10 s/token by design — trust, not speed.</p>
+          <div class="stat-strip" aria-label="Core figures">
+            <span>trust root <b>299 bytes</b></span>
+            <span>ladder <b>9 rungs</b></span>
+            <span>fixpoint <b>K2 == K3 == K4</b></span>
+            <span>committed python <b>1 fenced oracle</b></span>
+            <span>SmolLM2 logit diff ≤ <b>4.9e-05</b> over 49,152 logits</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 STATUS — dark
+       ============================================================ -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Status</span>
+          <h2 class="section-title">Every date below has a record behind it.</h2>
+        </div>
+        <p class="section-lede">The byte-stable core came first; the trust chain closed on it; the model legs were layered on top, outside the self-host fixpoint.</p>
+      </div>
+
+      <div class="fact-table">
+        <table>
+          <tr>
+            <th>Date</th>
+            <th>Milestone</th>
+            <th>What it means</th>
+          </tr>
+          <tr>
+            <td class="mono">2026-06-05</td>
+            <td>Trust core v1.3 byte-stable</td>
+            <td>The self-hosting core reaches its byte-identical fixpoint and stays there.</td>
+          </tr>
+          <tr>
+            <td class="mono">2026-06-07</td>
+            <td>Trust chain <span class="ok">declared closed</span> · tag v1.3-release</td>
+            <td>A live joint reproduction witnessed by the project owner; owner attestation; residuals disclosed in <code>docs/TRUST_CHAIN_CLOSED.md</code>.</td>
+          </tr>
+          <tr>
+            <td class="mono">2026-06</td>
+            <td>GPT-2 verified-execution demo layers</td>
+            <td>124M MVP, then the Large 774M and XL 1.5B scale legs — added on top of the closed core, outside the self-host fixpoint.</td>
+          </tr>
+          <tr>
+            <td class="mono">2026-06-09</td>
+            <td>SmolLM2-135M Llama-architecture leg gated</td>
+            <td>G-L1/G-L2 PASS, 25/25 greedy ids against the independent oracle — a 2024 architecture (GQA + RoPE + SwiGLU + RMSNorm, 30 layers), not just 2019's.</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="stat-strip" aria-label="Verified-execution figures">
+        <span>greedy continuation <b>25/25 ids</b> · GPT-2 &amp; SmolLM2</span>
+        <span>SmolLM2 max-abs logit diff <b>4.9e-05</b></span>
+        <span>verified to <b>PTX, not SASS</b></span>
+        <span>precision <b>fp32</b></span>
+        <span>hardware <b>single sm_86 GPU</b></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       04 HOW IT WAS VERIFIED — light
+       ============================================================ -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">How it was verified</span>
+          <h2 class="section-title">Four independent ways to catch a lie.</h2>
+        </div>
+        <p class="section-lede">No single check is asked to carry the claim. Each one attacks it from a different angle.</p>
+      </div>
+
+      <ol class="resid-list">
+        <li><b>One-command reproduction, on someone else's machine.</b> <code>bash scripts/reproduce_trust.sh</code> — clean checkout, CPU-only, about a minute — runs green in CI on a clean ubuntu-latest runner, a different machine from the author's.</li>
+        <li><b>Context-isolated adversarial reproductions.</b> Reproductions run without the author's context, looking for the claim to break rather than to confirm it.</li>
+        <li><b>A different-model-lineage read-only review.</b> An independent review with no write access examined the chain; its findings were remediated.</li>
+        <li><b>A live joint reproduction.</b> The closure itself: the chain rebuilt live, witnessed by the project owner, with the attestation and residuals committed to the trust record.</li>
+      </ol>
+
+      <div class="notice">
+        <p class="notice-title">The open increment, stated honestly</p>
+        <p>Reproduction by a party with no connection to the author remains the open increment. It is now push-button: fork the repo or run the CI workflow, and the same one-command reproduction either goes green for you or it doesn't.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       05 WHAT'S NEXT — dark
+       ============================================================ -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Phase 2 · roadmap, not promises</span>
+          <h2 class="section-title">What the owner intends to build next.</h2>
+        </div>
+        <p class="section-lede">From the trust record's Phase 2 plan. None of this is claimed done — that distinction is the whole point of this website.</p>
+      </div>
+
+      <div class="card-grid two">
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
+          <span class="lc-kicker">Roadmap · datacenter scaling</span>
+          <h3>Beyond a single sm_86 GPU</h3>
+          <p>Parameterize the PTX target for sm_80/sm_90, validate across architectures, and bring the verified path to A100/H100-class hardware.</p>
+          <span class="lc-arrow">trust record →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
+          <span class="lc-kicker">Roadmap · second backend</span>
+          <h3>A genuinely separate AMD/ROCm backend</h3>
+          <p>Currently unimplemented, and labeled as such. A second, independent GPU backend rather than a port of the first.</p>
+          <span class="lc-arrow">trust record →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
+          <span class="lc-kicker">Roadmap · broader DDC</span>
+          <h3>Diverse double-compile, wider</h3>
+          <p>Broaden the diverse-double-compile coverage to the v1.1 language surface, extending the independent-auditor check across more of the language.</p>
+          <span class="lc-arrow">trust record →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
+          <span class="lc-kicker">Roadmap · stretch goal</span>
+          <h3>bf16 tensor cores</h3>
+          <p>The bf16 tensor-core path is a stretch goal — explicitly not claimed done, and it will not be claimed until it is gated like everything else.</p>
+          <span class="lc-arrow">trust record →</span>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       06 CONTACT & RECORDS — light
+       ============================================================ -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Contact &amp; records</span>
+          <h2 class="section-title">One owner, one repo, two authoritative records.</h2>
+        </div>
+        <p class="section-lede">Helix is built by Questeria (Anthony DeMarco). Reach the project through GitHub issues or the @Questeria profile.</p>
+      </div>
+
+      <div class="card-grid two">
+        <a class="link-card" href="https://github.com/Questeria/helix">
+          <span class="lc-kicker">Code · issues · contact</span>
+          <h3>The repository</h3>
+          <p>Every byte of the toolchain, the gates, the records, and the issue tracker — github.com/Questeria/helix.</p>
+          <span class="lc-arrow">github.com/Questeria/helix →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md">
+          <span class="lc-kicker">Authoritative record</span>
+          <h3>The trust record</h3>
+          <p>The closure declaration: what was reproduced, who witnessed it, and the residuals — disclosed, not hidden.</p>
+          <span class="lc-arrow">docs/TRUST_CHAIN_CLOSED.md →</span>
+        </a>
+        <a class="link-card" href="https://github.com/Questeria/helix/blob/main/docs/CLEAN_REPRODUCTION.md">
+          <span class="lc-kicker">Authoritative record</span>
+          <h3>Clean reproduction</h3>
+          <p>The exact steps to rebuild everything from a clean checkout and compare hashes — the same steps CI runs.</p>
+          <span class="lc-arrow">docs/CLEAN_REPRODUCTION.md →</span>
+        </a>
+        <a class="link-card" href="/license/">
+          <span class="lc-kicker">Licensing</span>
+          <h3>Commercial licensing</h3>
+          <p>Helix is source-available and free for non-commercial use; commercial use needs a separate license. Start with the license page, then open a GitHub issue.</p>
+          <span class="lc-arrow">/license/ →</span>
+        </a>
+      </div>
+
+      <div class="notice">
+        <p class="notice-title">The rule this site runs on</p>
+        <p>Every number on this site traces to a committed file, a gate output, or a trust record. The site runs nothing live — the demo pages are committed replays of real captured runs, and they say so on every screen.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       07 CTA
+       ============================================================ -->
+  <section class="cta dark">
+    <div class="wrap">
+      <span class="eyebrow">Don't take our word for it</span>
+      <h2>The whole point is that you can check.</h2>
+      <p>One committed command rebuilds the compiler from 299 hand-authored bytes and proves the fixpoint. The verified model runs are gated against an independent oracle. Start anywhere.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="/trust-chain/">Reproduce the chain</a>
+      </div>
+    </div>
+  </section>
+</Base>
