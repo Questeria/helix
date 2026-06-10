@@ -1,0 +1,10 @@
+=================== DECODE PERF (SmolLM2-360M-Instruct, chat prompt) ===================
+--- A: baseline (full re-forward each token; per-op host syncs) ---
+  baseline: NGEN=2 16.05s, NGEN=42 98.59s -> 40 extra tokens in 82.54s = 0.48 tok/s (decode)
+--- B: KV-cache + resident weights ---
+  kv: NGEN=2 11.42s, NGEN=42 21.63s -> 40 extra tokens in 10.209999999999999s = 3.92 tok/s (decode)
+--- C: KV-cache + resident + FAST (no per-op host syncs) ---
+  kvfast: NGEN=2 8.52s, NGEN=42 10.66s -> 40 extra tokens in 2.1400000000000006s = 18.69 tok/s (decode)
+--- ids identical across configs? (REQUIRED) ---
+  IDS_IDENTICAL across all 3 configs (42-token runs)
+PERF_MEASURE_OK

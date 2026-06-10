@@ -1,0 +1,30 @@
+=================== LLAMA DUAL-MODEL SERVE SMOKE  23:14:32 ===================
+=== [0] regenerate oracle refs PER MODEL (ref/ filenames are shared) ===
+=== [1] PTX + binaries (working tree) ===
+  built worker + server
+=== [2] spawn multi-model server on :8851 ===
+  both workers READY
+=== [3] /api/health models[] ===
+  {"ok":true,"serve":true,"fast":true,"model":"gpt2-xl","ready":true,"device":"","busy":false,"models":[{"model":"gpt2-xl","ready":true,"device":""},{"model":"smollm2-135m","ready":true,"device":""},{"model":"smollm2-360m-instruct","ready":true,"device":""}]}
+  HEALTH_MODELS_OK
+=== [4] smollm2 generation: served ids token-for-token vs oracle ===
+=== [6] single-flight across models: concurrent request must 409 ===
+  CONCURRENT_409_OK
+  served: 504 3575 282 4649 314 260 3575 282 260 1798 30 198 198 504 3575 282 4649 314 260 3575 282 260 1798 30 198
+  oracle: 504 3575 282 4649 314 260 3575 282 260 1798 30 198 198 504 3575 282 4649 314 260 3575 282 260 1798 30 198
+  SERVE_TOKEN_FOR_TOKEN_OK
+=== [7] INSTRUCT leg: templated ChatML chat over HTTP (specials + eos-stop) ===
+  chat HTTP code: 200 (724671 bytes)
+  served: 1 9690 198 2683 359 253 5356 5646 11173 3365 3511 308 34519 28 7018 411 407 19712 8182 2 198 1 4093 198 1780 314 260 3575 282 4649 47 2 198 1 520 9531 198 504 3575 282 4649 314 7042 30 2
+  oracle: 1 9690 198 2683 359 253 5356 5646 11173 3365 3511 308 34519 28 7018 411 407 19712 8182 2 198 1 4093 198 1780 314 260 3575 282 4649 47 2 198 1 520 9531 198 504 3575 282 4649 314 7042 30 2
+  CHAT_TOKEN_FOR_TOKEN_OK (incl. C-tokenizer specials parity + eos-stop)
+=== [8] FAST-MODE A/B over HTTP: same chat, detail=token -> SAME gen ids + event-name SUBSET ===
+  fast HTTP code: 200 (3487 bytes)
+  glassbox: "gen_ids":[504,3575,282,4649,314,7042,30,2]
+  fast    : "gen_ids":[504,3575,282,4649,314,7042,30,2]
+  FAST_AB_IDS_OK (identical gen_ids)
+  FAST_SUBSET_OK (only heartbeat events)
+=== [5] unknown model -> 404 ===
+  UNKNOWN_MODEL_404_OK
+=================== SMOKE VERDICT (wall 57s) ===================
+LLAMA_SERVE_SMOKE_PASS

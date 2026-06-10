@@ -1,0 +1,27 @@
+=================== HELIX GEMV/DECODE KERNEL PARITY (G-KV0)  23:12:23 ===================
+  root=/mnt/c/Projects/Kovostov-Native  ptxas=/usr/local/cuda-12.8/bin/ptxas  tol=1e-4
+=== [0] oracle self-test (the 3 decode ops are pinned there) ===
+  oracle selftest PASS
+=== [1] from-raw kovc -> 3-kernel PTX -> ptxas sm_86 ===
+  PTX 6918 B, 3 .entry (want 3)
+  PTXAS_ACCEPT (sm_86)
+=== [2] scratch data-driven launcher (uncommitted /tmp shim; cuda_launch.c idiom) ===
+  built /tmp/gemv_cl
+=== [3] parity driver (oracle ops imported verbatim; write inputs / check outputs) ===
+gemv_cl gemv_abt N=113 K=960 -> /tmp/gemv_gl0/gemv_abt/out.bin
+gemv_abt max-abs err = 9.060e-05 (tol 0.0001) -> PASS
+gemv_cl gemv_abt N=113 K=960 -> /tmp/gemv_gl0/gemv_abt/out.bin [MUTATED]
+  NEG-CONTROL(gemv_abt) OK: mutated output correctly FAILED
+gemv_cl gemv_ab T=37 N=64 -> /tmp/gemv_gl0/gemv_ab/out.bin
+gemv_ab max-abs err = 1.907e-06 (tol 0.0001) -> PASS
+gemv_cl gemv_ab T=37 N=64 -> /tmp/gemv_gl0/gemv_ab/out.bin [MUTATED]
+  NEG-CONTROL(gemv_ab) OK: mutated output correctly FAILED
+gemv_cl softmax_row R=3 C=91 -> /tmp/gemv_gl0/softmax_row/out.bin
+softmax_row max-abs err = 1.788e-07 (tol 0.0001) -> PASS
+gemv_cl softmax_row R=3 C=91 -> /tmp/gemv_gl0/softmax_row/out.bin [MUTATED]
+  NEG-CONTROL(softmax_row) OK: mutated output correctly FAILED
+=================== G-KV0 VERDICT (wall 10s) ===================
+  gpu_gemv_abt       PASS
+  gpu_gemv_ab        PASS
+  gpu_softmax_row    PASS
+GEMV_GL0_PASS
