@@ -1,7 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="oklch(10% 0.005 270)"/>
-  <path d="M16 12 Q 32 24 48 12 M16 32 Q 32 44 48 32 M16 52 Q 32 40 48 52"
-        stroke="oklch(78% 0.10 290)" stroke-width="4" fill="none" stroke-linecap="round"/>
-  <circle cx="32" cy="19" r="4" fill="oklch(60% 0.18 290)"/>
-  <circle cx="32" cy="45" r="4" fill="none" stroke="oklch(72% 0.14 220)" stroke-width="3"/>
+  <rect width="64" height="64" rx="14" fill="#0d0d12"/>
+  <rect x="7" y="18" width="50" height="28" rx="11" fill="none" stroke="#5a5a66" stroke-width="3.2"/>
+  <text x="32" y="37.5" text-anchor="middle" font-family="'JetBrains Mono', ui-monospace, Consolas, monospace" font-size="15.5" font-weight="700" fill="#f7f7f8">299<tspan dx="1.5" font-size="11" font-weight="600" fill="#9a9aa6">B</tspan></text>
 </svg>
