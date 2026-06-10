@@ -864,6 +864,134 @@
   .verify-explain .ve-no { color: var(--amber); }
   .verify-explain a { font-weight: 600; }
 
+  /* ============================================================
+     EXPLAIN MODE (2026-06, beginner view) — new classes only; the
+     expert panels' CSS above is untouched. The .explain-on class on
+     .internals-col switches which panel set is visible. Palette and
+     variables reused from :root verbatim.
+     ============================================================ */
+  .xp-mode {
+    display: flex; gap: 5px; align-items: stretch;
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 999px; padding: 4px;
+  }
+  .xm-btn {
+    flex: 1; background: none; border: 1px solid transparent; color: var(--ink-dim);
+    border-radius: 999px; padding: 7px 12px; cursor: pointer;
+    font-family: var(--sans); font-weight: 700; font-size: 12.5px; letter-spacing: 0.3px;
+    transition: color .15s ease, background .15s ease, border-color .15s ease;
+  }
+  .xm-btn:hover { color: var(--ink); }
+  .xm-btn[aria-pressed="true"] {
+    color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg);
+    cursor: default;
+  }
+
+  /* visibility switch: Explain hides the dense expert panels (their markup
+     and behavior stay exactly as-is); Expert hides the explain panel. */
+  #explainPanel { display: none; }
+  .internals-col.explain-on #explainPanel { display: block; }
+  .internals-col.explain-on #trustStrip,
+  .internals-col.explain-on #devicePanel,
+  .internals-col.explain-on #tokPanel,
+  .internals-col.explain-on #ladderPanel,
+  .internals-col.explain-on #kernelPanel,
+  .internals-col.explain-on #streamPanel,
+  .internals-col.explain-on #progressPanel,
+  .internals-col.explain-on #summaryPanel { display: none; }
+
+  /* source-honesty chip inside the explain panel (mock=amber, replay=blue,
+     live=emerald — same semantics as the top badge) */
+  .xp-source {
+    display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700;
+    letter-spacing: 0.5px; padding: 2px 9px; border-radius: 5px; margin-bottom: 11px;
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+  }
+  .xp-source.is-live { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .xp-source.is-replay { color: var(--blue); border-color: var(--blue-dim); background: var(--blue-bg); }
+
+  /* the structural map */
+  .xp-map { display: flex; flex-direction: column; gap: 2px; }
+  .xp-arr { text-align: center; color: var(--ink-faint); font-size: 11px; line-height: 1.15; }
+  .xp-node {
+    background: var(--panel-2); border: 1px solid var(--border-2);
+    border-radius: 8px; padding: 8px 12px;
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  .xp-node .xn-title { font-size: 13px; font-weight: 650; color: var(--ink-dim); }
+  .xp-node .xn-sub { font-size: 11px; color: var(--ink-faint); line-height: 1.4; }
+  .xp-node.on {
+    border-color: var(--accent); background: var(--accent-bg);
+    box-shadow: 0 0 10px -2px rgba(52,211,153,0.55);
+  }
+  .xp-node.on .xn-title { color: var(--accent); }
+  .xp-node.done { border-color: var(--accent-dim); }
+  .xp-node.done .xn-title { color: var(--ink); }
+  .xp-halves { display: flex; gap: 6px; margin-top: 7px; }
+  .xp-half {
+    flex: 1; background: var(--panel); border: 1px solid var(--border-2);
+    border-radius: 6px; padding: 6px 9px;
+    font-size: 10.5px; color: var(--ink-faint); line-height: 1.35;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .xp-half b { display: block; font-size: 11.5px; color: var(--ink-dim); margin-bottom: 1px; }
+  .xp-half.on { border-color: var(--accent); background: var(--accent-bg); }
+  .xp-half.on b { color: var(--accent); }
+  .xp-half.is-mlp.on { border-color: var(--blue-dim); background: var(--blue-bg); }
+  .xp-half.is-mlp.on b { color: var(--blue); }
+  .xp-layerbar {
+    height: 5px; border-radius: 999px; background: var(--panel);
+    border: 1px solid var(--border); overflow: hidden; margin-top: 7px;
+  }
+  .xp-layerbar .fill {
+    height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+    transition: width .12s ease;
+  }
+  .xp-node.xp-out.pulse { animation: xpPulse 0.7s ease-out; }
+  @keyframes xpPulse {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.6); }
+    100% { box-shadow: 0 0 0 12px rgba(52,211,153,0); }
+  }
+
+  /* current-op line + plain-language caption + why-thread */
+  .xp-opnow {
+    margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px;
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .xp-opnow .k { color: var(--accent); }
+  .xp-opcap { font-size: 12px; color: var(--ink-dim); line-height: 1.5; min-height: 36px; margin-top: 3px; }
+  .xp-why {
+    margin-top: 10px; border-top: 1px solid var(--border); padding-top: 9px;
+    font-size: 11.5px; color: var(--ink-faint); line-height: 1.55;
+    transition: opacity .4s ease;
+  }
+  .xp-why.fade { opacity: 0; }
+  .xp-why .wh {
+    display: block; color: var(--accent); font-family: var(--mono);
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+  .xp-links { margin-top: 11px; font-size: 11.5px; display: flex; gap: 14px; flex-wrap: wrap; }
+
+  /* first-visit onboarding overlay (dismissible, localStorage) */
+  .ob-overlay {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(6, 9, 14, 0.72);
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .ob-overlay[hidden] { display: none; }
+  .ob-card {
+    max-width: 500px;
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--accent-dim); border-radius: var(--radius);
+    padding: 22px 24px; box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+  }
+  .ob-card h2 { margin: 0 0 10px; font-size: 17px; font-weight: 700; color: var(--ink); letter-spacing: -0.2px; }
+  .ob-card p { margin: 0 0 16px; font-size: 13.5px; color: var(--ink-dim); line-height: 1.65; }
+  .ob-card p b { color: var(--ink); font-weight: 650; }
+
   /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
   @media (prefers-reduced-motion: reduce) {
     .status-badge .dot { animation: none; }
@@ -872,6 +1000,9 @@
     .transcript { scroll-behavior: auto; }
     .internals-col { transition: none; }
     .panel, .send-btn, .rung, .pbar .fill, .composer textarea { transition: none; }
+    /* explain-mode decorative motion off too (data still updates) */
+    .xp-node.xp-out.pulse { animation: none; }
+    .xp-node, .xp-half, .xp-layerbar .fill, .xp-why, .xm-btn { transition: none; }
     /* Data still updates (token/layer state is data); only decorative motion is disabled. */
   }
 </style>
@@ -1037,6 +1168,72 @@
       <aside class="internals-col" id="internalsCol" aria-label="Live Helix internals">
         <button class="drawer-close" id="drawerClose" type="button">close ✕</button>
 
+        <!-- ============================================================
+             EXPLAIN / EXPERT switch + the EXPLAIN-mode panel (beginner
+             view). Default ON for first-time visitors (localStorage
+             remembers the choice). Driven by the SAME SSE events as the
+             expert panels below — no new event types, and the expert
+             panels' markup/behavior are untouched.
+             ============================================================ -->
+        <div class="xp-mode" id="xpMode" role="group" aria-label="Detail level for the live internals">
+          <button class="xm-btn" id="modeExplainBtn" type="button" aria-pressed="true"
+            title="Plain-language view — what the model is doing and why it matters">Explain</button>
+          <button class="xm-btn" id="modeExpertBtn" type="button" aria-pressed="false"
+            title="The full op-stream: layer ladder, kernel ticker, gauges">Expert view</button>
+        </div>
+
+        <div class="panel is-star explain-panel" id="explainPanel">
+          <h3 class="panel-head">What the model is doing <span class="count is-idle" id="xpProgress">idle</span></h3>
+          <span class="xp-source" id="xpSource">&nbsp;</span>
+          <div class="xp-map" id="xpMap" aria-label="Model structure, lighting up live as it computes">
+            <div class="xp-node" id="xpEmbed"
+              title="Embedding: the model can only work with numbers, so each token id is looked up in a big learned table and becomes a long list of numbers.">
+              <div class="xn-title">token embedding</div>
+              <div class="xn-sub" id="xpEmbedSub">each word-piece becomes a long list of numbers</div>
+            </div>
+            <div class="xp-arr" aria-hidden="true">↓</div>
+            <div class="xp-node" id="xpLayers"
+              title="The transformer body: the same two-step block (attention, then MLP) repeated layer after layer. Each layer refines every word's numbers a little more.">
+              <div class="xn-title">layer <span id="xpLayerK">—</span> of <span id="xpLayerN">—</span></div>
+              <div class="xn-sub">the same two-step block, repeated layer after layer</div>
+              <div class="xp-halves">
+                <div class="xp-half" id="xpAttn"
+                  title="Attention: the model decides how much each earlier word matters to the current one, then blends them accordingly.">
+                  <b>attention</b>each word looks back at earlier words and decides what matters</div>
+                <div class="xp-half is-mlp" id="xpMlp"
+                  title="MLP: each word is transformed on its own through a wider scratch space — most of the model's parameters live here.">
+                  <b>MLP</b>each word is reworked on its own, through a wider scratch space</div>
+              </div>
+              <div class="xp-layerbar" aria-hidden="true"><div class="fill" id="xpLayerFill"></div></div>
+            </div>
+            <div class="xp-arr" aria-hidden="true">↓</div>
+            <div class="xp-node" id="xpFinal"
+              title="Final norm: one last pass that keeps the numbers in a healthy range before scoring the vocabulary.">
+              <div class="xn-title">final norm</div>
+              <div class="xn-sub">one last tidy-up of the numbers</div>
+            </div>
+            <div class="xp-arr" aria-hidden="true">↓</div>
+            <div class="xp-node" id="xpHead"
+              title="Next-token head: one big multiply that scores every vocabulary piece; greedy decoding picks the highest score.">
+              <div class="xn-title">next-token head</div>
+              <div class="xn-sub">score every vocabulary piece — the highest score wins</div>
+            </div>
+            <div class="xp-arr" aria-hidden="true">↓</div>
+            <div class="xp-node xp-out" id="xpOut"
+              title="The chosen token is appended to the text, and the whole walk above repeats for the next one.">
+              <div class="xn-title">next token</div>
+              <div class="xn-sub" id="xpOutTok">—</div>
+            </div>
+          </div>
+          <div class="xp-opnow" id="xpOpNow">&nbsp;</div>
+          <div class="xp-opcap" id="xpOpCap">run a prompt and this line explains each step in plain language.</div>
+          <div class="xp-why" id="xpWhy"></div>
+          <div class="xp-links">
+            <a href="#" id="xpExpertLink">full expert op-stream &rarr;</a>
+            <a href="dashboard.html">proof &amp; attestation &rarr;</a>
+          </div>
+        </div>
+
         <!-- trust strip -->
         <div class="panel trust-strip" id="trustStrip">
           <h3 class="panel-head">Verified stack</h3>
@@ -1131,6 +1328,27 @@
       <div class="rf-link"><a href="dashboard.html">Full residuals &amp; the real numbers &rarr;</a></div>
     </div>
   </main>
+
+  <!-- ============================================================
+       FIRST-VISIT ONBOARDING — three sentences, dismissible, remembered
+       in localStorage (helix_onboarding_seen). Honest in every source
+       mode: it never claims live; it points at the badge that does the
+       claiming. Hidden by default; boot un-hides it for first-timers.
+       ============================================================ -->
+  <div class="ob-overlay" id="onboardOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="obTitle">
+    <div class="ob-card">
+      <h2 id="obTitle">You're about to watch a model actually compute</h2>
+      <p>
+        This page shows a real AI model (<b>GPT-2-XL</b>, a small 2019 model) running on a fully auditable
+        software stack — one you can rebuild and check starting from a <b>299-byte seed</b>.
+        When a prompt runs, the panel on the right walks through the model's computation step by
+        step: every token, every layer, every GPU kernel.
+        Nothing here pretends to be what it isn't — the badge at the top always says whether you
+        are watching the <b>live GPU</b>, a <b>replay of a real recorded run</b>, or a <b>mock preview</b>.
+      </p>
+      <button class="send-btn" id="onboardDismiss" type="button">Got it — let's watch</button>
+    </div>
+  </div>
 
   <!-- Captured-run data (OPTIONAL). When present it enables the REPLAY backup
        mode: a real, gated XL run recorded earlier, replayed with clear
@@ -1809,6 +2027,8 @@ var UI = {
   lastRequest: null,      /* {prompt, nGen} of the most recent USER request (retry re-derives carry) */
   autoReplayed: false,    /* the one-shot auto-start of the captured replay */
   contextText: "",        /* carried conversation text (multi-turn completion prompt prefix) */
+  chatTurns: [],          /* instruct-chat turns [{user, assistant}] (ChatML carry; live only) */
+  lastChatUser: null,     /* the user text of the in-flight chat turn (recorded at done) */
   lastSentPrompt: null,   /* the full prompt actually sent for the in-flight turn */
   lastTrim: 0,            /* chars cut from the OLDEST carried text on the last send */
   selectedModel: null,    /* only ever set when /api/health advertises models[] (live capability) */
@@ -1868,6 +2088,8 @@ function paintKernelLegend(kernels) {
       el("span", { class: "nm" }, k),
       el("span", { class: "ct" }, "0")
     ]);
+    /* plain-language tooltip for every kernel name in the legend */
+    node.title = opTooltip({ kernel: k });
     leg.appendChild(node);
   });
 }
@@ -1926,6 +2148,7 @@ var handlers = {
     $("tokCount").classList.remove("is-idle");
     $("ctxLen").textContent = "T = " + d.n_prompt;
     UI.promptTokenChipCount = d.ids.length;
+    xpOnTokenize(d);
   },
 
   onForwardBegin: function (d) {
@@ -1934,10 +2157,13 @@ var handlers = {
     $("ctxLen").textContent = "T = " + d.context_len;
     resetLadder();
     updateProgress();
+    xpOnForwardBegin(d);
   },
 
   onEmbed: function (d) {
-    /* cheap; reflected via context-len which already updated. No-op visual. */
+    /* cheap; reflected via context-len which already updated. No-op visual
+       in the expert view; the explain map lights its embedding node. */
+    xpOnEmbed(d);
   },
 
   onLayerBegin: function (d) {
@@ -1951,6 +2177,7 @@ var handlers = {
     var big = $("ladderBig"); big.textContent = (d.idx + 1); big.classList.remove("is-idle");
     $("ladderStep").textContent = "step " + (UI.reply.step + 1) + " / " + UI.reply.nGen;
     updateProgress();
+    xpOnLayerBegin(d);
   },
 
   onOp: function (d) {
@@ -1974,14 +2201,17 @@ var handlers = {
     }
     UI.reply.layersDone = UI.reply.step * UI.ladder.total + (d.idx + 1);
     updateProgress();
+    xpOnLayerEnd(d);
   },
 
   onHead: function (d) {
     pushKernelLine({ head: true, label: d.label, kernel: d.kernel });
+    xpOnHead(d);
   },
 
   onToken: function (d) {
     appendToken(d);
+    xpOnToken(d);
     /* token & throughput panel */
     UI.run.tokens++;
     var gt = $("gaugeToks"); gt.textContent = UI.run.tokens; gt.classList.remove("is-idle");
@@ -2018,7 +2248,13 @@ var handlers = {
     /* multi-turn: the next turn's context = everything sent + everything
        generated this turn (replay never carries) */
     if (TELEMETRY_SOURCE !== "replay" && UI.lastSentPrompt != null) {
-      UI.contextText = UI.lastSentPrompt + (d.text != null ? d.text : "");
+      if (isChatModel() && TELEMETRY_SOURCE === "sse") {
+        /* record the REAL turn (assistant text minus the control token) for the next template */
+        var aTxt = (d.text != null ? d.text : "").replace(/<\|im_end\|>\s*$/, "");
+        if (UI.lastChatUser != null) { UI.chatTurns.push({ user: UI.lastChatUser, assistant: aTxt }); UI.lastChatUser = null; }
+      } else {
+        UI.contextText = UI.lastSentPrompt + (d.text != null ? d.text : "");
+      }
       updateCtxInfo();
     }
     /* reconcile the live gauges with the final measured seconds/tok_per_s
@@ -2032,10 +2268,12 @@ var handlers = {
     /* meta footer on the model turn */
     finalizeTurnMeta(d);
     flushKernelLegendCounts();
+    xpOnDone(d);
   },
 
   onError: function (d) {
     flushOpsNow();
+    xpOnError(d);
     /* a 409 single-flight rejection is a BUSY state, not a failure — in live
        mode the page now WAITS politely and auto-retries with backoff+jitter
        (enterBusyWait), keeping this turn's bubble pending. The server keeps
@@ -2093,6 +2331,8 @@ function flushOpsNow() {
     lon.appendChild(el("span", { class: "lo-l" }, "L" + last.layer + " · " + last.label + " "));
     lon.appendChild(document.createTextNode("→ "));
     lon.appendChild(el("span", { class: "lo-k" }, last.kernel));
+    lon.title = opTooltip(last); /* hover-only plain-language meaning */
+    xpOnOp(last);                /* explain map: half + caption */
   }
   refreshKernelLegendCounts();
 }
@@ -2100,6 +2340,7 @@ function flushOpsNow() {
 function pushKernelLine(op) {
   var feed = $("ktFeed");
   if (feed.querySelector(".kt-feed-empty")) feed.innerHTML = "";
+  var lineTitle = opTooltip(op); /* plain-language tooltip on every ticker line */
   var line;
   if (op.head) {
     line = el("div", { class: "kt-line is-head" }, [
@@ -2117,6 +2358,7 @@ function pushKernelLine(op) {
     ]);
   }
   /* column-reverse flex: newest goes first */
+  line.title = lineTitle;
   feed.insertBefore(line, feed.firstChild);
   /* cap DOM lines */
   while (feed.children.length > 60) feed.removeChild(feed.lastChild);
@@ -2284,7 +2526,15 @@ function addModelTurn(prompt, carriedLen, trimmedChars) {
              MAX_CTX_TOKENS + "-token --max-ctx. The model no longer sees that oldest text."
     }, "✂ oldest " + trimmedChars + " chars cut "));
   }
-  if (carriedLen) {
+  if (isChatModel() && TELEMETRY_SOURCE === "sse") {
+    /* chat mode: the template carries whole TURNS, not a char prefix */
+    promptEcho.appendChild(el("span", {
+      class: "carried-mark",
+      title: "ChatML — the model's REAL chat template (system prompt + " + (UI.lastChatCarried || 0) +
+             " prior turn(s) + your message) was sent verbatim; the tokenize event shows the exact ids sent."
+    }, "⟨ChatML · " + (UI.lastChatCarried || 0) + " prior turn(s)⟩ "));
+    promptEcho.appendChild(document.createTextNode(UI.lastChatUser != null ? UI.lastChatUser : prompt));
+  } else if (carriedLen) {
     /* a context prefix was carried: the FULL text was sent as the prompt;
        the bubble collapses the prefix to an inspectable marker (hover for
        the tail of what was actually sent) */
@@ -2649,6 +2899,9 @@ function applySourceHonesty() {
         : "per-layer ms — illustrative (mock), not measured";
   }
 
+  /* explain-mode source chip + why-thread follow the same source switch */
+  xpApplySource();
+
   configureComposerForSource();
 }
 
@@ -2740,6 +2993,21 @@ function setBusy(b) {
 /* ================================================================
    DRIVE A GENERATION (uniform: works for mock OR sse)
    ================================================================ */
+/* ---- instruct-chat mode (live only): the model REALLY follows instructions because it
+   is an instruction-tuned model used with its REAL ChatML template -- the same template
+   the fail-closed gate verified token-for-token. Nothing is faked: the templated prompt
+   is sent verbatim and shows up in the tokenize telemetry. */
+function isChatModel() { return !!(UI.selectedModel && /instruct/i.test(UI.selectedModel)); }
+var CHAT_SYSTEM = "You are a helpful AI assistant named SmolLM, trained by Hugging Face";
+function buildChatML(turns, userMsg) {
+  var s = "<|im_start|>system\n" + CHAT_SYSTEM + "<|im_end|>\n";
+  for (var i = 0; i < turns.length; i++) {
+    s += "<|im_start|>user\n" + turns[i].user + "<|im_end|>\n";
+    s += "<|im_start|>assistant\n" + turns[i].assistant + "<|im_end|>\n";
+  }
+  return s + "<|im_start|>user\n" + userMsg + "<|im_end|>\n<|im_start|>assistant\n";
+}
+
 var activeStream = null;
 function startGeneration(prompt, nGen) {
   if (UI.busy) return;
@@ -2762,7 +3030,21 @@ function startGeneration(prompt, nGen) {
   var carriedLen = 0;
   var trimmedChars = 0;
   showCtxCutNote(null);
-  if (carryEnabled() && UI.contextText) {
+  if (isChatModel() && TELEMETRY_SOURCE === "sse") {
+    /* CHAT MODE: multi-turn = the model's real ChatML template over the REAL prior turns.
+       Budget honestly: drop the OLDEST whole turns first (visible note), never the new text. */
+    var turns = carryEnabled() ? UI.chatTurns.slice() : [];
+    var budgetTokC = Math.max(16, MAX_CTX_TOKENS - nGen - CTX_SAFETY_TOKENS);
+    var droppedTurns = 0;
+    while (turns.length && estTokens(buildChatML(turns, prompt)) > budgetTokC) { turns.shift(); droppedTurns++; }
+    if (droppedTurns > 0) {
+      showCtxCutNote("✂ chat over the ~" + MAX_CTX_TOKENS + "-token budget — dropped the OLDEST " +
+        droppedTurns + " turn(s) from the template (rough estimate; the server fail-closes past --max-ctx).");
+    }
+    UI.lastChatUser = prompt;
+    UI.lastChatCarried = turns.length;   /* accurate chat mark (turns, not chars) */
+    prompt = buildChatML(turns, prompt);
+  } else if (carryEnabled() && UI.contextText) {
     /* HONEST BUDGET CUT: the live server fail-closes past --max-ctx (320
        tokens, prompt + generation). Using the labeled rough ÷4 estimate,
        leave room for this turn's n_gen + a safety margin; when the carried
@@ -2809,6 +3091,7 @@ function startGeneration(prompt, nGen) {
   $("streamTokens").innerHTML = '<span class="stream-tokens-empty">streaming…</span>';
   $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
   $("ladderOpNow").innerHTML = "&nbsp;";
+  xpRunStart();
 
   updateCtxInfo();
 
@@ -2862,6 +3145,7 @@ function initControls() {
   $("ctxCarry").addEventListener("change", updateCtxInfo);
   $("ctxClear").addEventListener("click", function () {
     UI.contextText = "";
+    UI.chatTurns = [];
     updateCtxInfo();
     showCtxCutNote(null);
   });
@@ -2951,7 +3235,8 @@ function populateModelSelect(health) {
      Accept EITHER field so the switcher renders against the real backend, and synthesize a
      friendly label when the server doesn't send one. */
   var PRETTY_MODEL = { "gpt2-xl": "GPT-2-XL · 1.5B", "gpt2-large": "GPT-2 Large · 774M",
-                       "gpt2": "GPT-2 · 124M", "smollm2-135m": "SmolLM2-135M · Llama-arch" };
+                       "gpt2": "GPT-2 · 124M", "smollm2-135m": "SmolLM2-135M · Llama-arch",
+                       "smollm2-360m-instruct": "SmolLM2-360M-Instruct · real chat" };
   sel.innerHTML = "";
   var def = null;
   for (var i = 0; i < models.length; i++) {
@@ -3014,6 +3299,355 @@ function maybeAutoReplay() {
 }
 
 /* ================================================================
+   EXPLAIN MODE — beginner view (2026-06)
+   ----------------------------------------------------------------
+   - One toggle (Explain / Expert view) switches which panel set in
+     the internals column is visible. Default ON for first-time
+     visitors; localStorage remembers an expert's choice.
+   - The structural map + captions are driven by the SAME events the
+     expert panels consume (hello/tokenize/forward_begin/embed/
+     layer_begin/op/layer_end/head/token/done/error) — no new event
+     types, and every consumer below is defensive about missing
+     fields so additive server changes can't break it.
+   - HONESTY: the explain panel carries its own source chip (LIVE /
+     REPLAY / MOCK) mirroring the top badge, and the why-thread lines
+     are source-aware — the "real GPU execution" line is live-only.
+   ================================================================ */
+var EXPLAIN_LS_KEY = "helix_explain_mode";    /* "1" on / "0" off */
+var ONBOARD_LS_KEY = "helix_onboarding_seen"; /* "1" = dismissed  */
+var EXPLAIN_ON = true;
+
+function lsGet(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* private mode etc.: session-only */ } }
+
+/* ---- plain-language meanings -------------------------------------
+   By LABEL first (most specific), falling back to KERNEL. The kernel
+   table covers every name the current servers emit (the 8 GPT-2 kovc
+   kernels) PLUS the llama-arch names (rmsnorm/rope/silu) the op
+   stream can carry, so future model swaps degrade gracefully. */
+var KERNEL_MEANING = {
+  tiled_matmul:          "a huge grid of multiply-adds — the workhorse behind almost every step",
+  tiled_matmul_abt:      "the same multiply-add grid with one matrix flipped — used to compare each word against the others",
+  gpu_layernorm_fwd_eps: "keeps the numbers in a healthy range so the next step stays stable",
+  gpu_rmsnorm_fwd_eps:   "keeps the numbers in a healthy range so the next step stays stable (the RMS flavour)",
+  gpu_softmax_causal:    "turns raw scores into percentages that add to 100% — and only lets words look backwards, never at the future",
+  gpu_add_bias_rowbcast: "adds a small learned offset to every row of numbers",
+  gpu_gelu_stable:       "the squish that lets the network represent more than straight lines",
+  gpu_silu_mul:          "a squish-and-multiply that lets the network represent more than straight lines",
+  vector_add:            "keeps a running copy of everything learned so far so nothing gets lost",
+  gpu_scale_rt:          "scales the attention scores down so they stay in a workable range",
+  gpu_rope_rot:          "stamps each word with its position so order matters"
+};
+var LABEL_MEANING = {
+  ln_1:           "tidy up the numbers before attention so the math stays stable",
+  rms_1:          "tidy up the numbers before attention so the math stays stable",
+  qkv_gemm:       "build three views of each word: what it's looking for, what it offers, and what it carries",
+  qkv_bias:       "add the learned offsets to those three views",
+  rope:           "stamp each word with its position so order matters",
+  q_rope:         "stamp the 'looking for' view with each word's position so order matters",
+  k_rope:         "stamp the 'offers' view with each word's position so order matters",
+  attn_scores:    "the model decides how much each earlier word matters to the current one",
+  attn_scale:     "scale those scores down so they stay in a workable range",
+  attn_softmax:   "turn the scores into percentages that add to 100%",
+  attn_av:        "blend the earlier words together, weighted by those percentages",
+  attn_proj_gemm: "fold the blended context back into the word's own representation",
+  attn_proj_bias: "add a small learned offset to that result",
+  attn_residual:  "add the attention result onto the running copy, so nothing learned so far is lost",
+  ln_2:           "tidy up the numbers again before the MLP",
+  rms_2:          "tidy up the numbers again before the MLP",
+  fc_gemm:        "spread each word out into a much wider scratch space to work in",
+  fc_bias:        "add the learned offsets in that scratch space",
+  gelu:           "the squish that lets the network represent more than straight lines",
+  silu_mul:       "the squish-and-multiply that lets the network represent more than straight lines",
+  proj2_gemm:     "squeeze the scratch space back down to the word's normal size",
+  proj2_bias:     "add a small learned offset to the squeezed result",
+  mlp_residual:   "add the MLP's contribution onto the running copy — nothing gets lost",
+  ln_f:           "one last tidy-up of the numbers before scoring the vocabulary",
+  lm_head:        "score every vocabulary piece — the highest score becomes the next token"
+};
+function explainForOp(op) {
+  if (!op) return "";
+  if (op.label != null && LABEL_MEANING[op.label]) return LABEL_MEANING[op.label];
+  if (op.kernel != null && KERNEL_MEANING[op.kernel]) return KERNEL_MEANING[op.kernel];
+  /* honest fallback for kernels/labels we don't know yet */
+  return "one of the model's GPU steps — the expert view shows the raw kernel name";
+}
+/* tooltip text for the expert stream: raw kernel name + plain meaning */
+function opTooltip(op) {
+  var base = explainForOp(op);
+  var k = (op && op.kernel) ? String(op.kernel) : "";
+  return k ? (k + " — " + base) : base;
+}
+
+/* ---- structural-map state + event hooks --------------------------- */
+var XP = {
+  layerTotal: null,   /* from layer_begin.total / forward_begin.n_layers — never hardcoded */
+  whyTimer: null,
+  whyIdx: 0
+};
+
+function xpText(id, s) { var n = $(id); if (n) n.textContent = s; }
+function xpState(id, on, done) {
+  var n = $(id); if (!n) return;
+  n.classList.toggle("on", !!on);
+  n.classList.toggle("done", !!done);
+}
+function xpLayerFillPct(doneLayers) {
+  var n = $("xpLayerFill"); if (!n) return;
+  var total = XP.layerTotal;
+  n.style.width = (total > 0 ? Math.min(100, (doneLayers / total) * 100) : 0).toFixed(1) + "%";
+}
+
+/* full reset at the start of a run */
+function xpRunStart() {
+  ["xpEmbed", "xpLayers", "xpFinal", "xpHead", "xpOut"].forEach(function (id) { xpState(id, false, false); });
+  xpState("xpAttn", false, false); xpState("xpMlp", false, false);
+  xpText("xpLayerK", "—");
+  xpLayerFillPct(0);
+  xpText("xpOutTok", "—");
+  var on = $("xpOpNow"); if (on) { on.innerHTML = "&nbsp;"; on.title = ""; }
+  xpText("xpOpCap", "watching for the first kernel…");
+  var p = $("xpProgress"); if (p) { p.textContent = "running"; p.classList.remove("is-idle"); }
+}
+
+function xpOnTokenize(d) {
+  if (!d || !$("xpEmbedSub")) return;
+  if (typeof d.n_prompt === "number") {
+    xpText("xpEmbedSub", d.n_prompt + " prompt token" + (d.n_prompt === 1 ? "" : "s") + " — each becomes a long list of numbers");
+  }
+}
+
+function xpOnForwardBegin(d) {
+  if (!$("xpMap")) return;
+  /* per-token-step reset (the map re-walks for every generated token) */
+  xpState("xpEmbed", false, false); xpState("xpLayers", false, false);
+  xpState("xpFinal", false, false); xpState("xpHead", false, false); xpState("xpOut", false, false);
+  xpState("xpAttn", false, false); xpState("xpMlp", false, false);
+  if (d && typeof d.n_layers === "number" && d.n_layers > 0) {
+    XP.layerTotal = d.n_layers;
+    xpText("xpLayerN", String(d.n_layers));
+  }
+  xpText("xpLayerK", "0");
+  xpLayerFillPct(0);
+  var step = (d && typeof d.step === "number") ? d.step + 1 : null;
+  var p = $("xpProgress");
+  if (p) {
+    p.textContent = step != null ? ("token " + step + " / " + (UI.reply.nGen || "?")) : "running";
+    p.classList.remove("is-idle");
+  }
+}
+
+function xpOnEmbed(d) {
+  xpState("xpEmbed", true, false);
+}
+
+function xpOnLayerBegin(d) {
+  if (!d) return;
+  xpState("xpEmbed", false, true);
+  xpState("xpLayers", true, false);
+  if (typeof d.total === "number" && d.total > 0 && d.total !== XP.layerTotal) {
+    XP.layerTotal = d.total;            /* N always comes from the event */
+    xpText("xpLayerN", String(d.total));
+  }
+  if (typeof d.idx === "number") xpText("xpLayerK", String(d.idx + 1));
+}
+
+/* called from the rAF op flush with the LATEST op event of the batch */
+function xpOnOp(d) {
+  if (!d || !$("xpMap")) return;
+  /* light the half the stage tag names; unknown/missing phase lights neither */
+  xpState("xpAttn", d.phase === "attn", false);
+  xpState("xpMlp", d.phase === "mlp", false);
+  var on = $("xpOpNow");
+  if (on) {
+    on.innerHTML = "";
+    var where = (typeof d.layer === "number" ? "L" + d.layer : "") +
+                (d.label != null ? (typeof d.layer === "number" ? " · " : "") + d.label : "");
+    on.appendChild(document.createTextNode(where + (where ? " → " : "")));
+    on.appendChild(el("span", { class: "k" }, String(d.kernel != null ? d.kernel : "?")));
+    on.title = opTooltip(d);
+  }
+  xpText("xpOpCap", explainForOp(d));
+}
+
+function xpOnLayerEnd(d) {
+  if (!d) return;
+  if (typeof d.idx === "number") xpLayerFillPct(d.idx + 1);
+  if (typeof d.idx === "number" && XP.layerTotal && d.idx + 1 >= XP.layerTotal) {
+    /* the whole stack is done for this token step */
+    xpState("xpLayers", false, true);
+    xpState("xpAttn", false, false); xpState("xpMlp", false, false);
+  }
+}
+
+function xpOnHead(d) {
+  if (!d || !$("xpMap")) return;
+  xpState("xpLayers", false, true);
+  xpState("xpAttn", false, false); xpState("xpMlp", false, false);
+  if (d.label === "ln_f") {
+    xpState("xpFinal", true, false);
+  } else {
+    /* lm_head — and, defensively, any future head label */
+    xpState("xpFinal", false, true);
+    xpState("xpHead", true, false);
+  }
+  var on = $("xpOpNow");
+  if (on) {
+    on.innerHTML = "";
+    on.appendChild(document.createTextNode("HEAD · " + (d.label != null ? d.label : "?") + " → "));
+    on.appendChild(el("span", { class: "k" }, String(d.kernel != null ? d.kernel : "?")));
+    on.title = opTooltip(d);
+  }
+  xpText("xpOpCap", explainForOp(d));
+}
+
+function xpOnToken(d) {
+  if (!d || !$("xpMap")) return;
+  xpState("xpFinal", false, true);
+  xpState("xpHead", false, true);
+  var out = $("xpOut");
+  if (out) {
+    xpState("xpOut", true, false);
+    /* retrigger the pulse animation */
+    out.classList.remove("pulse");
+    void out.offsetWidth;
+    out.classList.add("pulse");
+  }
+  xpText("xpOutTok", "“" + pieceForChip(d.string != null ? d.string : "") + "”" +
+    (d.id != null ? " · id " + d.id : ""));
+}
+
+function xpOnDone(d) {
+  if (!$("xpMap")) return;
+  ["xpEmbed", "xpLayers", "xpFinal", "xpHead", "xpOut"].forEach(function (id) { xpState(id, false, true); });
+  xpState("xpAttn", false, false); xpState("xpMlp", false, false);
+  var p = $("xpProgress");
+  if (p) p.textContent = "done — " + (d && d.n_gen != null ? d.n_gen + " tokens" : "complete");
+  /* timing stays in the expert view / run summary where it is source-labeled;
+     no numbers here that could read as live performance when they aren't.
+     The closing caption is source-aware — "really ran" only when it did. */
+  if (TELEMETRY_SOURCE === "sse") {
+    xpText("xpOpCap", "finished — every step above really ran on the GPU, in that order, for every token.");
+  } else if (TELEMETRY_SOURCE === "replay") {
+    xpText("xpOpCap", "finished — a replay: every step above really ran, in that order, when this run was captured.");
+  } else {
+    xpText("xpOpCap", "finished — a mock walk of the model's real structure; no model actually ran (see the banner).");
+  }
+}
+
+function xpOnError(d) {
+  if (!$("xpMap")) return;
+  ["xpEmbed", "xpLayers", "xpFinal", "xpHead", "xpOut"].forEach(function (id) { xpState(id, false, false); });
+  xpState("xpAttn", false, false); xpState("xpMlp", false, false);
+  var p = $("xpProgress");
+  if (p) { p.textContent = "idle"; p.classList.add("is-idle"); }
+}
+
+/* ---- source-aware honesty inside the explain panel ---------------- */
+function xpApplySource() {
+  var chip = $("xpSource");
+  if (chip) {
+    chip.classList.remove("is-live", "is-replay");
+    if (TELEMETRY_SOURCE === "sse") {
+      chip.classList.add("is-live");
+      chip.textContent = "LIVE — events stream from the real GPU worker";
+    } else if (TELEMETRY_SOURCE === "replay") {
+      chip.classList.add("is-replay");
+      chip.textContent = "REPLAY — a real captured run, not live";
+    } else {
+      chip.textContent = "MOCK — simulated preview, not a real run";
+    }
+  }
+  xpPaintWhy(0); /* re-anchor the why-thread to the (possibly new) source */
+}
+
+/* ---- the "why this is special" thread ------------------------------
+   Short rotating lines tying what's on screen to the trust story.
+   Source-aware: the "real GPU execution" claim appears ONLY in live
+   mode; replay/mock get their own honest versions. */
+function xpWhyLines() {
+  var common = [
+    "Every kernel you see was compiled by a compiler you can rebuild from 299 hand-typed bytes — no black-box toolchain underneath.",
+    "Decoding is greedy and deterministic: the same prompt must reproduce the same tokens, so anyone can re-run and re-check this.",
+    "GPT-2-XL is a small 2019 model — the point is not what it says, but that you can audit how every number was computed.",
+    "Attention, norms, matmuls — the same handful of steps, repeated layer after layer, is all a transformer is."
+  ];
+  if (TELEMETRY_SOURCE === "sse") {
+    return [
+      "Nothing here is a mock — these events come from the real GPU execution, streamed as the worker runs.",
+      "This server's output was checked token-for-token against an independent reference before it was exposed (fail-closed serve gate)."
+    ].concat(common);
+  }
+  if (TELEMETRY_SOURCE === "replay") {
+    return [
+      "These events are a replay of a real captured run — recorded from the GPU and checked token-for-token against an independent reference.",
+      "Not live right now: but the run you're watching really happened, and its tokens are verbatim from the capture."
+    ].concat(common);
+  }
+  return [
+    "Right now this is mock telemetry — the kernel names and op order are the real ones, but the numbers are simulated (the banner above says so).",
+    "On the live backend this exact view streams from the real GPU execution, checked token-for-token against an independent reference."
+  ].concat(common);
+}
+function xpPaintWhy(idx) {
+  var box = $("xpWhy");
+  if (!box) return;
+  var lines = xpWhyLines();
+  XP.whyIdx = ((idx % lines.length) + lines.length) % lines.length;
+  box.innerHTML = "";
+  box.appendChild(el("span", { class: "wh" }, "why this is special"));
+  box.appendChild(document.createTextNode(lines[XP.whyIdx]));
+}
+function xpStartWhy() {
+  xpPaintWhy(0);
+  if (XP.whyTimer) clearInterval(XP.whyTimer);
+  XP.whyTimer = setInterval(function () {
+    var box = $("xpWhy");
+    if (!box || !EXPLAIN_ON) return; /* don't churn while hidden */
+    box.classList.add("fade");
+    setTimeout(function () {
+      xpPaintWhy(XP.whyIdx + 1);
+      box.classList.remove("fade");
+    }, 420);
+  }, 9000);
+}
+
+/* ---- mode toggle ---------------------------------------------------- */
+function setExplainMode(on, persist) {
+  EXPLAIN_ON = !!on;
+  var col = $("internalsCol");
+  if (col) col.classList.toggle("explain-on", EXPLAIN_ON);
+  var be = $("modeExplainBtn"), bx = $("modeExpertBtn");
+  if (be) be.setAttribute("aria-pressed", EXPLAIN_ON ? "true" : "false");
+  if (bx) bx.setAttribute("aria-pressed", EXPLAIN_ON ? "false" : "true");
+  if (persist) lsSet(EXPLAIN_LS_KEY, EXPLAIN_ON ? "1" : "0");
+}
+function initExplain() {
+  /* default ON unless the visitor explicitly chose expert before */
+  setExplainMode(lsGet(EXPLAIN_LS_KEY) !== "0", false);
+  var be = $("modeExplainBtn"), bx = $("modeExpertBtn");
+  if (be) be.addEventListener("click", function () { setExplainMode(true, true); });
+  if (bx) bx.addEventListener("click", function () { setExplainMode(false, true); });
+  var lnk = $("xpExpertLink");
+  if (lnk) lnk.addEventListener("click", function (e) { e.preventDefault(); setExplainMode(false, true); });
+  xpApplySource();
+  xpStartWhy();
+}
+
+/* ---- first-visit onboarding ----------------------------------------- */
+function initOnboarding() {
+  var ov = $("onboardOverlay");
+  if (!ov) return;
+  if (lsGet(ONBOARD_LS_KEY) === "1") return; /* seen before: stays hidden */
+  ov.hidden = false;
+  function dismiss() { ov.hidden = true; lsSet(ONBOARD_LS_KEY, "1"); }
+  var btn = $("onboardDismiss");
+  if (btn) btn.addEventListener("click", dismiss);
+  ov.addEventListener("click", function (e) { if (e.target === ov) dismiss(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !ov.hidden) dismiss(); });
+}
+
+/* ================================================================
    BOOT
    ================================================================ */
 (function boot() {
@@ -3027,6 +3661,8 @@ function maybeAutoReplay() {
     $("ladderBig").classList.add("is-idle");
     applySourceHonesty();
     initControls();
+    initExplain();      /* Explain/Expert toggle + why-thread (default: Explain) */
+    initOnboarding();   /* first-visit 3-sentence overlay (localStorage) */
     gateLiveReadiness();
     maybeAutoReplay();
   } catch (e) {

@@ -62,3 +62,35 @@ listing an ungated model is an overclaim.
   it present, a deliberately corrupted ids array → FAIL (fail-closed negative control).
 - G-V2: verify/generate single-flight (no interleaved GPU use).
 - G-V3: models[] honesty — every advertised id maps to committed parity evidence.
+
+## 6. Explain mode on the chat page (SHIPPED 2026-06, demo/index.html only)
+
+A beginner layer over the live telemetry — same SSE events, no new event types, no wire changes.
+
+- **Toggle**: Explain / Expert segmented control at the top of the internals column. Default
+  Explain for first-time visitors; `localStorage.helix_explain_mode` ("1"/"0") remembers the
+  choice. Expert view = the pre-existing panels (trust strip, ladder, kernel ticker, gauges,
+  progress, summary), markup/behavior untouched — Explain just switches which set is visible
+  via an `.explain-on` class on `#internalsCol`.
+- **Structural map** (`#explainPanel`): [token embedding] → [layer K of N: attention | MLP] →
+  [final norm] → [next-token head] → [next token]. Event mapping: `embed`→embedding node lit;
+  `layer_begin`→K/N (N strictly from the event's `total`/`forward_begin.n_layers`, never
+  hardcoded); `op.phase` (attn/mlp) lights the matching half; `layer_end`→within-stack progress
+  bar; `head` label `ln_f`→final-norm node, anything else→head node (defensive); `token`→output
+  node pulses with the real piece+id; `forward_begin` resets the walk per token step.
+- **Plain-language meanings**: `LABEL_MEANING` (by op label, most specific) falling back to
+  `KERNEL_MEANING` (covers the 8 GPT-2 kovc kernels + rmsnorm/rope/silu llama-arch names), with
+  an honest generic fallback for unknown ops. Shown as the caption under the current-op line in
+  Explain mode, and as `title=` tooltips on every kernel ticker line, legend chip, and the
+  ladder op readout in Expert view (hover-only; no visual change).
+- **Why-this-is-special thread**: rotating one-liners, source-aware. The "real GPU execution"
+  claim renders ONLY when `TELEMETRY_SOURCE === "sse"`; replay says "replay of a real captured
+  run"; mock says "simulated — structure real, numbers mock". The explain panel carries its own
+  LIVE/REPLAY/MOCK chip mirroring the top badge, updated on every source switch (including the
+  /api/health fallback path).
+- **Onboarding**: first-visit 3-sentence overlay (`localStorage.helix_onboarding_seen`),
+  dismissible by button/backdrop/Escape; honest in all modes (it points at the badge rather
+  than claiming live).
+- All consumers are defensive about missing/extra event fields; works identically in mock,
+  replay, and live (verified in-browser on mock + replay + the sse→replay fallback; inline
+  script passes `node --check`).
