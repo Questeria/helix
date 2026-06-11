@@ -91,6 +91,11 @@ table.t tr:last-child td { border-bottom:0 }
 .ovl-card .paths { font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:13px; line-height:1.7 }
 .foot { border-top:1px solid var(--line); margin-top:28px; padding-top:14px; font-size:12px; color:var(--faint); display:flex; gap:14px; flex-wrap:wrap; justify-content:space-between }
 @media print { body { background:#fff; color:#000 } body::before { display:none } }
+
+.tabs { display:flex; gap:4px; background:#101017; border:1px solid #3a3a48; border-radius:12px; padding:4px; margin:2px 0 14px; overflow-x:auto; }
+.tabs .tab { flex:1; text-align:center; font-size:12.5px; font-weight:600; color:#9d9da8; padding:7px 12px; border-radius:9px; white-space:nowrap; text-decoration:none; }
+.tabs .tab:hover { color:#f4f4f8; background:rgba(139,92,246,.1); text-decoration:none; }
+.tabs .tab.here { color:#fff; background:#8b5cf6; }
 </style>
 </head>
 <body>
@@ -98,8 +103,15 @@ table.t tr:last-child td { border-bottom:0 }
   <div class="topbar">
     <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">GPT-2</span></span>
     <span class="rec-badge">▶ RECORDED RESULTS — real gate outputs, not live</span>
-    <div class="top-right"><a class="nav-pill" href="landing.html">Start here</a><a class="nav-pill" href="journey.html">Guided run</a><a class="nav-pill" href="index.html">Expert</a><a class="nav-pill" href="dashboard.html">Proof</a><a class="nav-pill" href="compare.html">Models</a></div>
-  </div>
+    </div>
+  <nav class="tabs" aria-label="Demo pages">
+  <a class="tab" href="landing.html">Start here</a>
+  <a class="tab" href="journey.html">Guided run</a>
+  <a class="tab" href="index.html">Expert playground</a>
+  <a class="tab" href="dashboard.html">Proof</a>
+  <a class="tab" href="compare.html">Models</a>
+  <a class="tab" href="onepager.html">One-pager</a>
+</nav>
   
 <header class="hero">
   <h1>Helix — the verifiable execution layer. <em>One page.</em></h1>
@@ -130,7 +142,7 @@ table.t tr:last-child td { border-bottom:0 }
 <section class="sec">
   <div class="sec-h"><span class="n">WHY IT MATTERS</span><h2>Audit instead of trust</h2></div>
   <div class="cards">
-    <div class="cardb static"><span class="k">FOR AI BUILDERS <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><p>Bring your weights: the execution layer beneath your model becomes fully traceable — same 8 kernels from 124M to 1.5B, zero new ops at scale.</p></div>
+    <div class="cardb static"><span class="k">FOR AI BUILDERS <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><p>Bring your weights: the execution layer beneath your model becomes fully traceable — same 8 kernels from 124M to 1.5B, zero new ops at scale.</p></div>
     <div class="cardb static"><span class="k">FOR AUDITORS</span><p>One command (scripts/reproduce_trust.sh, ~1 min, CPU-only) rebuilds the chain from raw and asserts the anchors: 9837db12 · 0992dddd · 84363adb.</p></div>
     <div class="cardb static"><span class="k">HONEST EDGES</span><p>fp32 · to PTX not SASS · single sm_86 GPU · ≈10 s/token live by design · base models, not assistants · oracle shares the spec.</p></div>
   </div>
@@ -171,6 +183,12 @@ document.addEventListener("click", function (e) {
 });
 document.getElementById("ovlClose").addEventListener("click", function () { ovl.classList.remove("open"); });
 document.addEventListener("keydown", function (e) { if (e.key === "Escape") ovl.classList.remove("open"); });
+</script>
+<script>
+document.querySelectorAll(".tabs .tab").forEach(function (a) {
+  var href = a.getAttribute("href");
+  if (location.pathname.split("/").pop() === href) a.classList.add("here");
+});
 </script>
 </body>
 </html>

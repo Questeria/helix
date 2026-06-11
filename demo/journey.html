@@ -76,6 +76,12 @@ body[data-source="mock"]   .src-badge .dot { background: var(--warn); }
 .nav-pill { font-size: 12.5px; font-weight: 600; color: var(--dim); border: 1px solid var(--line2); background: var(--panel); padding: 7px 13px; border-radius: 999px; }
 .nav-pill:hover { color: var(--violet-soft); border-color: var(--violet); text-decoration: none; }
 
+/* ---------- tab switcher (identical on every demo page) ---------- */
+.tabs { display: flex; gap: 4px; background: var(--panel2); border: 1px solid var(--line2); border-radius: 12px; padding: 4px; margin: 2px 0 14px; overflow-x: auto; }
+.tab { flex: 1; text-align: center; font-size: 12.5px; font-weight: 600; color: var(--dim); padding: 7px 12px; border-radius: 9px; white-space: nowrap; }
+.tab:hover { color: var(--ink); background: rgba(139,92,246,.1); text-decoration: none; }
+.tab.here { color: #fff; background: var(--violet); }
+
 /* ---------- hero strip + helix key ---------- */
 .hero { margin: 14px 0 18px; }
 .hero h1 { font-size: clamp(21px, 3vw, 30px); font-weight: 700; letter-spacing: -.4px; line-height: 1.2; margin: 0 0 8px; max-width: 46ch; }
@@ -112,17 +118,25 @@ body[data-source="mock"]   .src-badge .dot { background: var(--warn); }
 
 /* ---------- composer ---------- */
 .composer { border-top: 1px solid var(--line); padding-top: 10px; }
-/* beginner settings */
-.settings { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 9px; }
-.setting { flex: 1; min-width: 130px; }
+/* run settings — one organized group */
+.set-group { border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); padding: 9px 11px 10px; margin-bottom: 9px; }
+.set-head { font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 7px; }
+.settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 420px) { .settings { grid-template-columns: 1fr; } }
 .setting label { display: block; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; }
-.setting select { width: 100%; background: var(--panel2); color: var(--ink); border: 1px solid var(--line2); border-radius: 8px; padding: 7px 9px; font: 12.5px var(--sans); }
-.setting .s-note { font-size: 10px; color: var(--faint); margin-top: 3px; min-height: 13px; }
-.seeds { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 9px; }
+.setting select { width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line2); border-radius: 8px; padding: 7px 9px; font: 12.5px var(--sans); }
+.group-note { font-size: 10.5px; color: var(--faint); margin-top: 7px; line-height: 1.45; min-height: 14px; }
+.seeds-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.seeds-lbl { font-size: 9.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
+.comp-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; flex-wrap: wrap; }
+.inf-btn { font-family: var(--mono); font-size: 14px; padding: 0 9px; color: var(--dim); border-left: 1px solid var(--line2); line-height: 1; }
+.inf-btn.on { color: var(--vsoft); text-shadow: 0 0 8px rgba(139,92,246,.6); }
+.stepper.unlimited input { color: var(--vsoft); }
+.seeds { display: contents; }
 .seed { font-size: 12px; color: var(--dim); border: 1px solid var(--line2); border-radius: 999px; padding: 4.5px 12px; background: var(--panel2); }
 .seed:hover { color: var(--ink); border-color: var(--violet); }
-.comp-row { display: flex; gap: 9px; align-items: stretch; }
-textarea { flex: 1; resize: none; background: var(--panel2); color: var(--ink); border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; font: 14px/1.5 var(--sans); min-height: 44px; }
+.comp-row { display: block; }
+textarea { width: 100%; resize: none; background: var(--panel2); color: var(--ink); border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; font: 14px/1.5 var(--sans); min-height: 44px; }
 textarea:focus { outline: 2px solid var(--violet); outline-offset: 0; border-color: transparent; }
 .comp-ctl { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
 .stepper { display: flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11px; color: var(--dim); border: 1px solid var(--line2); border-radius: 9px; padding: 4px 7px; background: var(--panel2); }
@@ -262,59 +276,70 @@ body.running .stop { display: inline-block; }
       <span class="pill">GPT-2-XL · 1.5B · 2019 base model — not an assistant</span>
       <div class="top-right">
         <div class="src-badge" role="status" aria-live="polite"><span class="dot"></span><span id="srcText">PREVIEW</span></div>
-        <a class="nav-pill" href="index.html">Expert playground →</a>
-        <a class="nav-pill" href="dashboard.html">Proof →</a>
       </div>
     </div>
+
+    <nav class="tabs" aria-label="Demo pages">
+      <a class="tab" href="landing.html">Start here</a>
+      <a class="tab" href="journey.html">Guided run</a>
+      <a class="tab" href="index.html">Expert playground</a>
+      <a class="tab" href="dashboard.html">Proof</a>
+      <a class="tab" href="compare.html">Models</a>
+      <a class="tab" href="onepager.html">One-pager</a>
+    </nav>
 
     <header class="hero">
       <h1>Watch a 1.5-billion-parameter model think — on a stack you can <em>rebuild from 299 bytes</em>.</h1>
       <p><b>Every box below explains itself</b> — hover for a hint, click for the full story. The model (GPT-2-XL) continues your text token by token; the spine shows each step of that work as it happens, and where it is <b>powered by Helix</b>.</p>
-      <span class="hx-key"><span class="hx-mark" aria-hidden="true"><svg viewBox="0 0 12 14" fill="none"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg></span>
+      <span class="hx-key"><span class="hx-mark" aria-hidden="true"><svg viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span>
         <span>Key: anything marked with this symbol is <b>powered by Helix</b> — compiled from Helix source by kovc, the compiler that rebuilds from 299 hand-typed bytes.</span></span>
     </header>
 
     <div class="shell">
     <section class="chat-col" aria-label="Conversation">
       <div class="chat-panel">
-      <div class="chat-title">conversation <span class="spacer"></span><span style="font-family:var(--mono);font-size:9.5px;letter-spacing:.04em">stays with you as you scroll</span></div>
+      <div class="chat-title">Conversation <span class="spacer"></span><span class="pill" id="chatModelPill">GPT-2-XL · greedy · fp32</span></div>
       <div class="transcript" id="transcript"></div>
       <div class="composer">
-        <div class="settings">
-          <div class="setting">
-            <label for="effortSel">Level of effort <span class="tip" tabindex="0" data-tip="How many word-pieces the model writes. More tokens = more 48-layer walks = more work. On the real GPU each token costs ~10 s.">?</span></label>
-            <select id="effortSel">
-              <option value="8">Quick — 8 tokens</option>
-              <option value="20" selected>Standard — 20 tokens</option>
-              <option value="40">Deep — 40 tokens</option>
-            </select>
-            <div class="s-note" id="effortNote"></div>
+        <div class="set-group">
+          <div class="set-head">Run settings</div>
+          <div class="settings">
+            <div class="setting">
+              <label for="effortSel">Level of effort <span class="tip" tabindex="0" data-tip="How hard the model works on its reply — deeper effort means longer, more thorough continuations and more compute. Max effort removes the length cap entirely.">?</span></label>
+              <select id="effortSel">
+                <option value="quick">Quick — a brief reply</option>
+                <option value="standard" selected>Standard — a full reply</option>
+                <option value="deep">Deep thinking — thorough, 2× compute</option>
+                <option value="max">Max effort — unlimited</option>
+              </select>
+            </div>
+            <div class="setting">
+              <label for="modelSel">Model <span class="tip" tabindex="0" data-tip="Which verified model runs. The recorded replay is the GPT-2-XL run; in live mode this list comes from the backend's /api/health.">?</span></label>
+              <select id="modelSel" title="The recorded replay is the GPT-2-XL run — more models in live mode"><option value="gpt2-xl">GPT-2-XL · 1.5B</option></select>
+            </div>
           </div>
-          <div class="setting">
-            <label for="modelSel">Model <span class="tip" tabindex="0" data-tip="Which verified model runs. The recorded replay is the GPT-2-XL run; in live mode this list comes from the backend's /api/health.">?</span></label>
-            <select id="modelSel"><option value="gpt2-xl">GPT-2-XL · 1.5B</option></select>
-            <div class="s-note" id="modelNote"></div>
-          </div>
+          <div class="group-note" id="effortNote"></div>
         </div>
-        <div class="seeds" id="seeds">
+        <div class="seeds-row" id="seeds">
+          <span class="seeds-lbl">Try:</span>
           <button class="seed" type="button">The capital of France is</button>
           <button class="seed" type="button">Once upon a time</button>
           <button class="seed" type="button">In the beginning</button>
           <button class="seed" type="button">A proof is convincing when</button>
         </div>
         <div class="comp-row">
-          <textarea id="promptInput" rows="1" placeholder="Give GPT-2 some text to continue…" aria-label="Text for GPT-2 to continue"></textarea>
-          <div class="comp-ctl">
-            <span class="stepper" title="How many new tokens (word-pieces) to generate">
+          <textarea id="promptInput" rows="2" placeholder="Give GPT-2 some text to continue…" aria-label="Text for GPT-2 to continue"></textarea>
+          <div class="comp-actions">
+            <span class="stepper" id="stepperWrap" title="How many new tokens (word-pieces) to generate — press ∞ for no cap">
               <button type="button" id="nDown" aria-label="fewer tokens">−</button>
-              <input id="nGen" type="number" value="20" min="1" max="64" aria-label="number of tokens" />
+              <input id="nGen" type="number" value="20" min="1" max="256" aria-label="number of tokens" />
               <button type="button" id="nUp" aria-label="more tokens">+</button>
+              <button type="button" id="infBtn" class="inf-btn" aria-pressed="false" title="Unlimited — keep writing until finished or you press Stop">∞</button>
             </span>
             <button class="go" id="goBtn" type="button">Continue</button>
             <button class="stop" id="stopBtn" type="button" title="Stop — the partial reply is kept">■ Stop</button>
           </div>
         </div>
-        <div class="comp-note"><b>Honest note:</b> a <span class="tip" tabindex="0" data-tip="A model trained only to predict the next word-piece of text — not fine-tuned to chat, follow instructions, or be factual.">base completion model</span> continues text; expect continuations, not answers. Real GPU pacing is ≈ 10 s per token by design — the replay is time-compressed and says so.</div>
       </div>
       </div>
     </section>
@@ -348,7 +373,7 @@ body.running .stop { display: inline-block; }
         <div class="sdot" aria-hidden="true"></div>
         <div class="scell"><button class="stage" data-detail="think" type="button">
           <div class="s-head"><span class="s-num">STEP 2</span><span class="s-title">48 layers think</span>
-            <span class="hx-tag" title="All the math here runs in 8 GPU kernels written in the Helix language and compiled to PTX by kovc — the compiler that rebuilds from 299 bytes."><svg width="9" height="11" viewBox="0 0 12 14" fill="none"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span>
+            <span class="hx-tag" title="All the math here runs in 8 GPU kernels written in the Helix language and compiled to PTX by kovc — the compiler that rebuilds from 299 bytes."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
             <span class="s-status" id="st2">waiting</span></div>
           <div class="s-sub">For every new token, the same two-step block runs 48 times: <span class="tip" tabindex="0" data-tip="Each word looks back at all earlier words and decides how much each one matters right now.">attention</span>, then <span class="tip" tabindex="0" data-tip="Each word is reworked on its own through a wider scratch space — most of the model's 1.5B parameters live here.">MLP</span>.</div>
           <div class="think-row">
@@ -370,7 +395,7 @@ body.running .stop { display: inline-block; }
         <div class="sdot" aria-hidden="true"></div>
         <div class="scell"><button class="stage" data-detail="choose" type="button">
           <div class="s-head"><span class="s-num">STEP 3</span><span class="s-title">Choose the next word</span>
-            <span class="hx-tag" title="The scoring multiply (the next-token head) runs in the same Helix-built kernels."><svg width="9" height="11" viewBox="0 0 12 14" fill="none"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span>
+            <span class="hx-tag" title="The scoring multiply (the next-token head) runs in the same Helix-built kernels."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
             <span class="s-status" id="st3">waiting</span></div>
           <div class="s-sub">All 50,257 vocabulary pieces get a score; the highest wins. Shade = the model's <span class="tip" tabindex="0" data-tip="From the recorded scores (logits). Where the log kept no score, the chip stays neutral and shows “—” — nothing is invented.">recorded confidence</span>.</div>
           <div class="tok-chips" id="genChips"><span class="tchip na">chosen tokens land here…</span></div>
@@ -383,7 +408,7 @@ body.running .stop { display: inline-block; }
         <div class="sdot" aria-hidden="true"></div>
         <div class="scell"><button class="stage" data-detail="verify" type="button">
           <div class="s-head"><span class="s-num">STEP 4</span><span class="s-title">Verify against a referee</span>
-            <span class="hx-tag" title="What gets verified is the Helix-built execution: the same prompt is run by an independent reference implementation, and the token ids must match exactly."><svg width="9" height="11" viewBox="0 0 12 14" fill="none"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>Helix execution under test</span>
+            <span class="hx-tag" title="What gets verified is the Helix-built execution: the same prompt is run by an independent reference implementation, and the token ids must match exactly."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>Helix execution under test</span>
             <span class="s-status" id="st4">waiting</span></div>
           <div class="s-sub">An <span class="tip" tabindex="0" data-tip="A separate numpy program that reads the original public weights and computes its own answer — independent of Helix's importer and GPU path.">independent oracle</span> runs the same prompt. The token ids must match, one for one.</div>
           <div class="race" id="race">
@@ -399,7 +424,7 @@ body.running .stop { display: inline-block; }
     </div><!-- /shell -->
 
     <div class="resid">
-      <span><b>Honest residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · base model, not an assistant · oracle shares the spec · replay pacing is compressed (real: 195.5 s / 20 tokens). This page never invents a number.</span>
+      <span><b>Honest note:</b> GPT-2 is a 2019 <b>base completion model</b> — it continues text; expect continuations, not answers. Real GPU pacing is ≈ 10 s per token by design (recorded: 195.5 s / 20 tokens). <b>Residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · oracle shares the spec. This page never invents a number.</span>
       <span><a href="dashboard.html">full residuals &amp; gate records →</a> · <a href="index.html">expert playground →</a> · <a href="compare.html">models &amp; paths →</a></span>
     </div>
   </main>
@@ -604,7 +629,9 @@ var running = null, lastLayer = -1, genCount = 0, nWanted = 20;
 function startRun(prompt) {
   if (running) return;
   resetSpine();
-  nWanted = Math.max(1, Math.min(64, parseInt($("nGen").value, 10) || 20));
+  nWanted = UNLIMITED
+    ? (SOURCE === "sse" ? 256 : 20)   /* live: server-capped; replay/mock: the full recorded structure */
+    : Math.max(1, Math.min(256, parseInt($("nGen").value, 10) || 20));
   addUser(prompt); addModel();
   document.body.classList.add("running");
   $("goBtn").disabled = true;
@@ -641,8 +668,9 @@ function startRun(prompt) {
       chip.innerHTML = esc(piece) + "<small>" + (logit != null ? "p≈" + logit.toFixed(1) : "—") + "</small>";
       chip.title = id != null ? "token id " + id + (logit != null ? " · recorded score " + logit.toFixed(3) : " · score not recorded — shown as “—”") : "preview token (mock)";
       $("genChips").appendChild(chip);
-      setRow(2, "active"); setStatus("st3", genCount + " / " + nWanted);
-      $("ring").dataset.v = "token\n" + genCount + " / " + nWanted;
+      var den = UNLIMITED ? "∞" : nWanted;
+      setRow(2, "active"); setStatus("st3", genCount + " / " + den);
+      $("ring").dataset.v = "token\n" + genCount + " / " + den;
       ribbon("<b>Token " + genCount + " chosen:</b> “" + esc(piece.trim()) + "”. " +
         (logit != null ? "The model's recorded score for it was " + logit.toFixed(1) + "." : "Now the 48 layers run again for the next one."));
     },
@@ -696,37 +724,68 @@ $("seeds").addEventListener("click", function (e) {
 $("nUp").addEventListener("click", function () { $("nGen").stepUp(); syncEffortFromN(); });
 $("nDown").addEventListener("click", function () { $("nGen").stepDown(); syncEffortFromN(); });
 
-/* ---------- beginner settings: effort + model ---------- */
-function syncEffortFromN() {
-  var n = parseInt($("nGen").value, 10) || 20;
-  var sel = $("effortSel");
-  sel.value = (n === 8) ? "8" : (n === 20) ? "20" : (n === 40) ? "40" : sel.value;
-  effortNote();
+/* ---------- beginner settings: effort levels + unlimited ---------- */
+var UNLIMITED = false;
+var EFFORTS = {
+  quick:    { n: 8,    label: "a brief reply — the least compute" },
+  standard: { n: 20,   label: "a full reply" },
+  deep:     { n: 40,   label: "a longer, more thorough continuation — twice the compute" },
+  max:      { n: null, label: "unlimited — keeps writing until it finishes or you press Stop" }
+};
+function setUnlimited(on) {
+  UNLIMITED = !!on;
+  var inp = $("nGen"), wrap = $("stepperWrap"), btn = $("infBtn");
+  btn.classList.toggle("on", UNLIMITED);
+  btn.setAttribute("aria-pressed", UNLIMITED ? "true" : "false");
+  wrap.classList.toggle("unlimited", UNLIMITED);
+  if (UNLIMITED) { inp.dataset.last = inp.value || "20"; inp.value = ""; inp.placeholder = "∞"; inp.disabled = true; }
+  else { inp.disabled = false; inp.placeholder = ""; if (!inp.value) inp.value = inp.dataset.last || "20"; }
 }
 function effortNote() {
-  var n = parseInt($("nGen").value, 10) || 20;
-  var passes = n * N_LAYERS, ops = passes * LAYER_OPS.length;
-  var note = n + " tokens ≈ " + passes.toLocaleString() + " layer passes · " + ops.toLocaleString() + " kernel ops";
-  if (SOURCE === "replay" && n > 20) note += " — the recorded run has 20 tokens, so the replay stops there";
+  var sel = $("effortSel").value;
+  var e = EFFORTS[sel] || EFFORTS.standard;
+  var note = e.label;
+  if (UNLIMITED || e.n == null) {
+    note += " · every token costs " + N_LAYERS + " layer passes (" + (N_LAYERS * LAYER_OPS.length).toLocaleString() + " kernel ops)";
+    if (SOURCE === "replay") note += " — this replay plays the full recorded run (20 tokens)";
+  } else {
+    var n = e.n, passes = n * N_LAYERS, ops = passes * LAYER_OPS.length;
+    note += " · ≈ " + passes.toLocaleString() + " layer passes · " + ops.toLocaleString() + " kernel ops";
+  }
+  if ((sel === "deep" || sel === "max") && SOURCE !== "sse")
+    note += " · deeper think modes (best-of-N, self-consistency) live in the Expert tab on the live GPU";
   $("effortNote").textContent = note;
 }
+function syncEffortFromN() {
+  if (UNLIMITED) { $("effortSel").value = "max"; effortNote(); return; }
+  var n = parseInt($("nGen").value, 10) || 20;
+  var sel = $("effortSel");
+  sel.value = (n === 8) ? "quick" : (n === 20) ? "standard" : (n === 40) ? "deep" : sel.value;
+  effortNote();
+}
 $("effortSel").addEventListener("change", function () {
-  $("nGen").value = this.value;
+  var e = EFFORTS[this.value] || EFFORTS.standard;
+  if (e.n == null) setUnlimited(true);
+  else { setUnlimited(false); $("nGen").value = e.n; }
   effortNote();
 });
-$("nGen").addEventListener("input", effortNote);
+$("infBtn").addEventListener("click", function () {
+  setUnlimited(!UNLIMITED);
+  if (UNLIMITED) $("effortSel").value = "max"; else syncEffortFromN();
+  effortNote();
+});
+$("nGen").addEventListener("input", function () { syncEffortFromN(); });
 effortNote();
 
 var modelSel = $("modelSel");
 if (SOURCE === "replay") {
   modelSel.innerHTML = '<option value="gpt2-xl">GPT-2-XL · 1.5B (this recorded run)</option>';
   modelSel.disabled = true;
-  $("modelNote").textContent = "the replay is the recorded GPT-2-XL run — more models in live mode";
 } else if (SOURCE === "mock") {
   modelSel.disabled = true;
-  $("modelNote").textContent = "preview — model selection needs the live backend";
+  modelSel.title = "preview — model selection needs the live backend";
 } else {
-  $("modelNote").textContent = "models the live backend advertises";
+  modelSel.title = "models the live backend advertises";
   fetch("/api/health").then(function (r) { return r.json(); }).then(function (h) {
     var ms = (h && h.models) || [];
     if (ms.length) {
@@ -741,7 +800,7 @@ if (SOURCE === "replay") {
 /* ================================================================
    DETAIL OVERLAYS — beginner first, advanced beneath, repo paths last
    ================================================================ */
-var HX = '<span class="hx-mark" aria-hidden="true" style="vertical-align:-2px"><svg viewBox="0 0 12 14" fill="none" width="10" height="12"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg></span>';
+var HX = '<span class="hx-mark" aria-hidden="true" style="vertical-align:-2px"><svg viewBox="0 0 10 12" fill="none" width="9" height="11"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span>';
 var DETAILS = {
   chain: { kicker: "the trust root", title: "From 299 bytes to this reply " + HX,
     body: '<div class="simple">Most software asks you to trust a mountain of tools you can\'t see. Helix starts from <b>299 bytes typed by hand</b> — small enough to read — and every tool above is built only by the tool below it. So everything on this page can be traced, step by step, to something a person can check by eye.</div>' +
@@ -798,6 +857,12 @@ if (SOURCE === "sse") {
     ribbon("<b>No live backend answered /api/health.</b> Start scripts/serve_chat_demo.sh, or drop ?source=sse to use the recorded replay.");
   });
 }
+</script>
+<script>
+document.querySelectorAll(".tabs .tab").forEach(function (a) {
+  var href = a.getAttribute("href");
+  if (location.pathname.split("/").pop() === href) a.classList.add("here");
+});
 </script>
 </body>
 </html>

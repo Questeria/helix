@@ -91,6 +91,11 @@ table.t tr:last-child td { border-bottom:0 }
 .ovl-card .paths { font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:13px; line-height:1.7 }
 .foot { border-top:1px solid var(--line); margin-top:28px; padding-top:14px; font-size:12px; color:var(--faint); display:flex; gap:14px; flex-wrap:wrap; justify-content:space-between }
 @media print { body { background:#fff; color:#000 } body::before { display:none } }
+
+.tabs { display:flex; gap:4px; background:#101017; border:1px solid #3a3a48; border-radius:12px; padding:4px; margin:2px 0 14px; overflow-x:auto; }
+.tabs .tab { flex:1; text-align:center; font-size:12.5px; font-weight:600; color:#9d9da8; padding:7px 12px; border-radius:9px; white-space:nowrap; text-decoration:none; }
+.tabs .tab:hover { color:#f4f4f8; background:rgba(139,92,246,.1); text-decoration:none; }
+.tabs .tab.here { color:#fff; background:#8b5cf6; }
 </style>
 </head>
 <body>
@@ -98,14 +103,21 @@ table.t tr:last-child td { border-bottom:0 }
   <div class="topbar">
     <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">GPT-2</span></span>
     <span class="rec-badge">▶ RECORDED RESULTS — real gate outputs, not live</span>
-    <div class="top-right"><a class="nav-pill" href="landing.html">Start here</a><a class="nav-pill" href="journey.html">Guided run</a><a class="nav-pill" href="index.html">Expert</a><a class="nav-pill" href="dashboard.html">Proof</a><a class="nav-pill here" href="compare.html">Models</a></div>
-  </div>
+    </div>
+  <nav class="tabs" aria-label="Demo pages">
+  <a class="tab" href="landing.html">Start here</a>
+  <a class="tab" href="journey.html">Guided run</a>
+  <a class="tab" href="index.html">Expert playground</a>
+  <a class="tab" href="dashboard.html">Proof</a>
+  <a class="tab" href="compare.html">Models</a>
+  <a class="tab" href="onepager.html">One-pager</a>
+</nav>
   
 <header class="hero">
   <h1>One verified stack. <em>Pick your model</em> and your trust boundary.</h1>
   <p>Every model here earned its place the same way: its output <b>matched an independent referee, token for token</b>,
-  running on the same 8 Helix-built kernels <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span>. Click a card for the full recorded result.</p>
-  <span class="hx-key"><span style="display:inline-flex"><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg></span><span>Key: anything with this symbol is <b>powered by Helix</b> — compiled from Helix source by kovc.</span></span>
+  running on the same 8 Helix-built kernels <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>. Click a card for the full recorded result.</p>
+  <span class="hx-key"><span style="display:inline-flex"><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span><span>Key: anything with this symbol is <b>powered by Helix</b> — compiled from Helix source by kovc.</span></span>
 </header>
   
 <section class="sec">
@@ -113,25 +125,25 @@ table.t tr:last-child td { border-bottom:0 }
   <p class="sec-sub">From the 124M starter to the 1.5B flagship, the GPT-2 family runs on the <b>exact same 8 kernels</b> — only the dimensions change. SmolLM2 brings 2024's Llama architecture onto the same stack with just 3 extra kernels.</p>
   <div class="cards">
     <button class="cardb" data-ovl="m124" type="button">
-      <span class="k">GPT-2 124M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><h3>The quick one</h3>
+      <span class="k">GPT-2 124M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>The quick one</h3>
       <span class="big ok">25/25 · 2.59e-04</span>
       <p>12 layers. The MVP and the fastest live demo — seconds per generation when warm. 2019 base model.</p>
       <span class="more">click for the recorded result ↗</span>
     </button>
     <button class="cardb" data-ovl="m774" type="button">
-      <span class="k">GPT-2-LARGE 774M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><h3>The scale proof</h3>
+      <span class="k">GPT-2-LARGE 774M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>The scale proof</h3>
       <span class="big ok">25/25 · 3.8e-05</span>
       <p>36 layers. Same kernels as 124M, zero new ops — evidence the stack generalizes with size.</p>
       <span class="more">click for the recorded result ↗</span>
     </button>
     <button class="cardb" data-ovl="mxl" type="button">
-      <span class="k">GPT-2-XL 1.5B <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><h3>The flagship</h3>
+      <span class="k">GPT-2-XL 1.5B <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>The flagship</h3>
       <span class="big ok">25/25 · 4.4e-05</span>
       <p>48 layers, 1.5B parameters on one 8 GB GPU at fp32. The model the guided run replays. ≈10 s/token live, by design.</p>
       <span class="more">click for the recorded result ↗</span>
     </button>
     <button class="cardb" data-ovl="msmol" type="button">
-      <span class="k">SMOLLM2-135M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><h3>The modern one</h3>
+      <span class="k">SMOLLM2-135M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>The modern one</h3>
       <span class="big ok">25/25 · 4.9e-05</span>
       <p>2024 Llama architecture (GQA + RoPE + SwiGLU + RMSNorm, 30 layers) — today's open-model family, verified the same way.</p>
       <span class="more">click for the recorded result ↗</span>
@@ -144,13 +156,13 @@ table.t tr:last-child td { border-bottom:0 }
   <p class="sec-sub">Both paths run the same model and pass the same token-for-token gates — they differ only in what you must trust beneath the auditable code.</p>
   <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
     <button class="cardb" data-ovl="gpu" type="button">
-      <span class="k">GPU PATH <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><h3>Fast(er), one trusted-once step</h3>
+      <span class="k">GPU PATH <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>Fast(er), one trusted-once step</h3>
       <span class="big">hex0 → PTX → <span class="tip" tabindex="0" data-tip="NVIDIA's closed assembler that turns auditable PTX into the chip's real instructions.">ptxas</span></span>
       <p>Hand-auditable from the 299-byte root all the way to PTX. Below that, NVIDIA's closed assembler + driver are trusted-once — disclosed, never hidden.</p>
       <span class="more">click for details ↗</span>
     </button>
     <button class="cardb" data-ovl="cpu" type="button">
-      <span class="k">CPU PATH <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><h3>Purest trust — no ptxas at all</h3>
+      <span class="k">CPU PATH <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>Purest trust — no ptxas at all</h3>
       <span class="big">hex0 → x86, all the way down</span>
       <p>The same forward pass on the CPU: every instruction traces to the raw-binary root with no closed assembler anywhere. Slower; built for auditors.</p>
       <span class="more">click for details ↗</span>
@@ -226,6 +238,12 @@ document.addEventListener("click", function (e) {
 });
 document.getElementById("ovlClose").addEventListener("click", function () { ovl.classList.remove("open"); });
 document.addEventListener("keydown", function (e) { if (e.key === "Escape") ovl.classList.remove("open"); });
+</script>
+<script>
+document.querySelectorAll(".tabs .tab").forEach(function (a) {
+  var href = a.getAttribute("href");
+  if (location.pathname.split("/").pop() === href) a.classList.add("here");
+});
 </script>
 </body>
 </html>

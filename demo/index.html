@@ -1539,6 +1539,11 @@
   }
   .ctx-compress { margin-left: 8px; }
   .sp-btn.lens-on { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+
+.tabs { display:flex; gap:4px; background:#101017; border:1px solid #3a3a48; border-radius:12px; padding:4px; margin:2px 0 14px; overflow-x:auto; }
+.tabs .tab { flex:1; text-align:center; font-size:12.5px; font-weight:600; color:#9d9da8; padding:7px 12px; border-radius:9px; white-space:nowrap; text-decoration:none; }
+.tabs .tab:hover { color:#f4f4f8; background:rgba(139,92,246,.1); text-decoration:none; }
+.tabs .tab.here { color:#fff; background:#8b5cf6; }
 </style>
 </head>
 <body>
@@ -1546,6 +1551,16 @@
   <noscript><span class="noscript-note">This page renders entirely with local, inline JavaScript
   (no CDNs, no trackers, nothing external). Enable JavaScript to see the demo.</span></noscript>
   <main class="wrap">
+
+    <nav class="tabs" aria-label="Demo pages">
+  <a class="tab" href="landing.html">Start here</a>
+  <a class="tab" href="journey.html">Guided run</a>
+  <a class="tab" href="index.html">Expert playground</a>
+  <a class="tab" href="dashboard.html">Proof</a>
+  <a class="tab" href="compare.html">Models</a>
+  <a class="tab" href="onepager.html">One-pager</a>
+</nav>
+
 
     <!-- ============================================================
          PREVIEW / MOCK banner. Visible ONLY while on mock telemetry.
@@ -8542,6 +8557,12 @@ function initAssistantUX() {
     if (window.console) console.error("boot error", e);
   }
 })();
+</script>
+<script>
+document.querySelectorAll(".tabs .tab").forEach(function (a) {
+  var href = a.getAttribute("href");
+  if (location.pathname.split("/").pop() === href) a.classList.add("here");
+});
 </script>
 </body>
 </html>
