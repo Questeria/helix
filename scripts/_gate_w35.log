@@ -1,0 +1,54 @@
+=================== HELIX LLAMA MODEL GATE (G-L1/G-L2)  01:30:16 ===================
+  root=/mnt/c/Projects/Kovostov-Native  model=/mnt/c/Projects/Kovostov-Native/helix-llm/models/smollm2-360m-instruct  chat=1  prompt='What is the capital of France?' n_gen=40
+=== [0] oracle present + ops selftest ===
+  ops oracle selftest PASS
+=== [1] from-raw kovc -> 11-kernel PTX -> ptxas sm_86 ===
+  reusing minted driver /home/legoa/gpt2_ext4/llama_kovc_drv.bin (697313 B)
+  PTX 57633 B, 14 .entry kernels (want 14)
+  PTXAS_ACCEPT (sm_86)
+=== [2] build the worker (plain config, working tree) ===
+  built /tmp/llama_infer
+=== [3] oracle reference dumps (pinned prompt) ===
+  oracle refs: 1 9690 198 2683 359 253 5356 5646 11173 3365 3511 308 34519 28 7018 411 407 19712 8182 2 198 1 4093 198 1780 314 260 3575 282 4649 47 2 198 1 520 9531 198 (argmax 504)
+=== [4] G-L1: post-layer-0 residual parity ===
+block0 max-abs err = 2.441e-04 (tol 0.002) over T=37 rows -> PASS
+  G-L1: PASS
+=== [5] G-L2a: full-model logits parity (argmax exact) ===
+    helix argmax=504 (logit=16.197)  oracle argmax=504  -> ARGMAX_MATCH
+    max_abs logit diff=6.00815e-05 at id 13158 (helix=-3.61739 ref=-3.61733)  [diag bar 5e-2: ok]
+  G-L2a: PASS
+=== [6] G-L2b: 40-token greedy token-for-token ===
+  HELIX_GEN_IDS: 1 9690 198 2683 359 253 5356 5646 11173 3365 3511 308 34519 28 7018 411 407 19712 8182 2 198 1 4093 198 1780 314 260 3575 282 4649 47 2 198 1 520 9531 198 504 3575 282 4649 314 7042 30 2
+    TOKEN_FOR_TOKEN_MATCH (45 ids)
+  G-L2b: PASS
+=== [6b] G-KV: KV-cache decode A/B -- ids MUST equal the non-KV run AND the oracle ===
+  A/B: KV ids == full-reforward ids (byte-identical id files)
+  HELIX_GEN_IDS: 1 9690 198 2683 359 253 5356 5646 11173 3365 3511 308 34519 28 7018 411 407 19712 8182 2 198 1 4093 198 1780 314 260 3575 282 4649 47 2 198 1 520 9531 198 504 3575 282 4649 314 7042 30 2
+    TOKEN_FOR_TOKEN_MATCH (45 ids)
+  G-KV: PASS
+=== [6e] G-S: SEEDED SAMPLING token-for-token (pinned cfg, oracle RNG == worker RNG) ===
+  HELIX_GEN_IDS: 1 9690 198 2683 359 253 5356 5646 11173 3365 3511 308 34519 28 7018 411 407 19712 8182 2 198 1 4093 198 1780 314 260 3575 282 4649 47 2 198 1 520 9531 198 57 5248 22657 327 750 9563 28 564 347 253 11743 9433 1552 335 407 19712 8182 506 23778 366 28 339 1326 982 457 1345 29 2256 1594 288 1574 2466
+    TOKEN_FOR_TOKEN_MATCH (69 ids)
+  G-S: PASS
+=== [6r] G-R: seeded REPRODUCIBILITY (same seed -> byte-identical ids, two live runs) ===
+  two seeded runs byte-identical (the user-facing same-seed guarantee)
+  G-R: PASS
+=== [6f] temp-0 REGRESSION: --sample temp 0 ids == the greedy ids (byte cmp) ===
+  temp-0 ids byte-identical to greedy
+  G-T0: PASS
+=== [6L] G-LENS: per-layer logit-lens top-1 vs the oracle (exposed-internal parity rail) ===
+  per-layer lens top-1 ids IDENTICAL (32 layers)
+  G-LENS: PASS
+=== [7] NEGATIVE CONTROL: corrupted weights must FAIL the logits leg ===
+  NEG-CONTROL OK: corrupted weights correctly FAILED
+=================== LLAMA MODEL GATE VERDICT (wall 293s) ===================
+  G-L1 block0   : PASS
+  G-L2a logits  : PASS
+  G-L2b gen     : PASS
+  G-KV  kv-decode: PASS
+  G-S   sampling : PASS
+  G-R   reprod.  : PASS
+  G-T0  temp0    : PASS
+  G-LENS lens    : PASS
+  NEG control   : PASS
+LLAMA_MODEL_GATE_PASS

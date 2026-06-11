@@ -598,13 +598,156 @@ static void emit_head(int step, const char* label, const char* kernel) {
              g_seq++, step, label, kernel);
     emit_raw(b);
 }
+/* ===================== GLASS-BOX TOKEN TELEMETRY + LOGIT LENS (W3/W4, 2026-06) =====================
+ * ALL ADDITIVE: extra FIELDS on the existing "token" event (never a new event name; the
+ * fast path emits none of this). Values are REAL host-side derivations of the same logits
+ * the pick consumed; the lens re-uses the gated rms+gemv kernels read-only between layers.
+ * The lens is opt-in per request ("lens":1), glass-box only, and SLOWER (one extra
+ * NVpad-row GEMV + D2H per layer per token) -- the UI labels it so. Lens parity has its
+ * own gate leg (G-LENS: per-layer top-1 ids vs the oracle's dump-lens). */
+static const char* json_find_key(const char* s, const char* key);   /* fwd (serve module) */
+static int    g_lens_on = 0;                     /* per-request: "lens":1 */
+static int    g_lens_nl = 0;                     /* layers captured this step */
+static int    g_lens_top[MAX_RES_LAYERS][5];     /* per-layer top-5 ids */
+static double g_lens_p[MAX_RES_LAYERS][5];       /* per-layer top-5 softmax probs */
+static int    g_attn_nh = 0;                     /* heads captured (last layer) */
+static int    g_attn_pos[32][8];                 /* per-head top-8 attended positions */
+static double g_attn_w[32][8];                   /* per-head top-8 attention weights */
+static float* g_lens_host = NULL;                /* [NVpad] D2H scratch */
+static char   g_tok_extra[16384];                /* pre-rendered JSON fragment for emit_token */
+
+/* host top-k of a float row (k small): ids by (-v, id) pinned */
+static void host_top5(const float* v, int n, int* oid, double* op) {
+    for (int s = 0; s < 5; s++) { oid[s] = -1; op[s] = -1e30; }
+    for (int i = 0; i < n; i++) {
+        double x = (double)v[i];
+        for (int s = 0; s < 5; s++) {
+            if (x > op[s]) {
+                for (int t = 4; t > s; t--) { op[t] = op[t-1]; oid[t] = oid[t-1]; }
+                op[s] = x; oid[s] = i; break;
+            }
+        }
+    }
+}
+static void host_top8(const float* v, int n, int* oid, double* op) {
+    for (int s = 0; s < 8; s++) { oid[s] = -1; op[s] = 0.0; }
+    for (int i = 0; i < n; i++) {
+        double x = (double)v[i];
+        for (int s = 0; s < 8; s++) {
+            if (oid[s] < 0 || x > op[s]) {
+                for (int t = 7; t > s; t--) { op[t] = op[t-1]; oid[t] = oid[t-1]; }
+                op[s] = x; oid[s] = i; break;
+            }
+        }
+    }
+}
+static float g_attn_host[512];   /* one attention row (T <= Smax <= 512) */
+/* softmax-prob the 5 tops against the full row (double, max-subtract; stats only) */
+static void soft5(const float* row, int n, const int* oid, double* op) {
+    double mx = -1e30; for (int i = 0; i < n; i++) if ((double)row[i] > mx) mx = (double)row[i];
+    double s = 0.0;     for (int i = 0; i < n; i++) s += exp((double)row[i] - mx);
+    for (int t = 0; t < 5; t++) op[t] = (oid[t] >= 0) ? exp((double)row[oid[t]] - mx) / s : 0.0;
+}
+/* chosen-token prob + entropy of the full distribution (double; stats only) */
+static void tok_stats(const float* row, int n, int chosen, double* p_out, double* h_out) {
+    double mx = -1e30; for (int i = 0; i < n; i++) if ((double)row[i] > mx) mx = (double)row[i];
+    double s = 0.0;     for (int i = 0; i < n; i++) s += exp((double)row[i] - mx);
+    double H = 0.0;
+    for (int i = 0; i < n; i++) { double p = exp((double)row[i] - mx) / s; if (p > 1e-12) H -= p * log(p); }
+    *p_out = exp((double)row[chosen] - mx) / s; *h_out = H;
+}
+/* render the additive token-event fields for this step (call AFTER the pick; serve+glassbox only) */
+static void tok_extra_render(const float* logits, int chosen) {
+    g_tok_extra[0] = 0;
+    if (g_fast || !g_serve) return;
+    double p, H; tok_stats(logits, NV, chosen, &p, &H);
+    int aid[5]; double ap[5];
+    host_top5(logits, NV, aid, ap); soft5(logits, NV, aid, ap);
+    size_t k = 0, cap = sizeof g_tok_extra;
+    k += (size_t)snprintf(g_tok_extra + k, cap - k, ",\"p\":%.5f,\"H\":%.3f,\"alts\":[", p, H);
+    for (int t = 0; t < 5; t++) {
+        char esc[64] = "";
+#ifdef GPT2_SERVE
+        if (aid[t] >= 0) { char* pc = decode_one(aid[t]); if (pc) { jesc(pc, esc, sizeof esc); free(pc); } }
+#endif
+        k += (size_t)snprintf(g_tok_extra + k, cap - k, "%s[%d,\"%s\",%.5f]", t ? "," : "", aid[t], esc, ap[t]);
+    }
+    k += (size_t)snprintf(g_tok_extra + k, cap - k, "]");
+    if (g_lens_on && g_lens_nl > 0) {
+        k += (size_t)snprintf(g_tok_extra + k, cap - k, ",\"lens\":[");
+        for (int L = 0; L < g_lens_nl; L++) {
+            k += (size_t)snprintf(g_tok_extra + k, cap - k, "%s[", L ? "," : "");
+            for (int t = 0; t < 5; t++)
+                k += (size_t)snprintf(g_tok_extra + k, cap - k, "%s[%d,%.4f]", t ? "," : "", g_lens_top[L][t], g_lens_p[L][t]);
+            k += (size_t)snprintf(g_tok_extra + k, cap - k, "]");
+        }
+        k += (size_t)snprintf(g_tok_extra + k, cap - k, "]");
+    }
+    if (g_lens_on && g_attn_nh > 0) {
+        k += (size_t)snprintf(g_tok_extra + k, cap - k, ",\"attn\":[");
+        for (int h = 0; h < g_attn_nh; h++) {
+            k += (size_t)snprintf(g_tok_extra + k, cap - k, "%s[", h ? "," : "");
+            for (int t = 0; t < 8; t++)
+                k += (size_t)snprintf(g_tok_extra + k, cap - k, "%s[%d,%.4f]", t ? "," : "", g_attn_pos[h][t], g_attn_w[h][t]);
+            k += (size_t)snprintf(g_tok_extra + k, cap - k, "]");
+        }
+        k += (size_t)snprintf(g_tok_extra + k, cap - k, "]");
+    }
+    g_lens_nl = 0; g_attn_nh = 0;
+}
+/* ---- stop sequences (per request; up to 4 x 31 bytes; matched on the decoded tail) ---- */
+static char g_stops[4][32]; static int g_nstops = 0;
+static char g_tail[256]; static int g_tail_len = 0;
+static void stops_parse(const char* line) {
+    g_nstops = 0; g_tail_len = 0; g_tail[0] = 0;
+    const char* p = json_find_key(line, "stop");
+    if (!p || *p != '[') return;
+    p++;
+    while (g_nstops < 4) {
+        while (*p == ' ' || *p == ',') p++;
+        if (*p != '"') break;
+        p++;
+        int k = 0;
+        while (*p && *p != '"' && k < 31) {
+            if (*p == '\\' && p[1]) { p++; g_stops[g_nstops][k++] = (*p == 'n') ? '\n' : (*p == 't') ? '\t' : *p; p++; }
+            else g_stops[g_nstops][k++] = *p++;
+        }
+        while (*p && *p != '"') p++;
+        if (*p == '"') p++;
+        g_stops[g_nstops][k] = 0;
+        if (k > 0) g_nstops++;
+        while (*p == ' ') p++;
+        if (*p != ',') break;
+    }
+}
+/* append a decoded piece to the tail ring; return 1 if any stop sequence just completed */
+static int stops_hit(const char* piece) {
+    if (g_nstops == 0 || !piece) return 0;
+    size_t pl = strlen(piece);
+    if (pl >= sizeof g_tail) { memcpy(g_tail, piece + (pl - sizeof g_tail + 1), sizeof g_tail - 1); g_tail_len = (int)sizeof g_tail - 1; }
+    else {
+        if (g_tail_len + (int)pl >= (int)sizeof g_tail) {
+            int keep = (int)sizeof g_tail - 1 - (int)pl;
+            memmove(g_tail, g_tail + g_tail_len - keep, (size_t)keep); g_tail_len = keep;
+        }
+        memcpy(g_tail + g_tail_len, piece, pl); g_tail_len += (int)pl;
+    }
+    g_tail[g_tail_len] = 0;
+    for (int i = 0; i < g_nstops; i++) {
+        size_t sl = strlen(g_stops[i]);
+        if ((size_t)g_tail_len >= sl && memcmp(g_tail + g_tail_len - sl, g_stops[i], sl) == 0) return 1;
+    }
+    return 0;
+}
+
 static void emit_token(int step, int id, const char* string, double logit, int context_len) {
     if (!g_serve) return;
     char esc[256]; jesc(string ? string : "", esc, sizeof esc);
-    char b[512];
+    static char b[20480];   /* token + staged glass-box extras */
     snprintf(b, sizeof b,
-      "{\"_ev\":\"token\",\"seq\":%ld,\"step\":%d,\"id\":%d,\"string\":\"%s\",\"logit\":%.5f,\"context_len\":%d}\n",
-      g_seq++, step, id, esc, logit, context_len);
+      "{\"_ev\":\"token\",\"seq\":%ld,\"step\":%d,\"id\":%d,\"string\":\"%s\",\"logit\":%.5f,\"context_len\":%d%s}\n",
+      g_seq++, step, id, esc, logit, context_len, g_tok_extra);
+    g_tok_extra[0] = 0;
     emit_raw(b);
 }
 static void emit_done(int n_prompt, int n_gen, int n_total, double seconds, double tok_per_s,
@@ -869,6 +1012,11 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
                      d_kcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float)), d_sc1, T, DH);
             scale_rt(d_sc1, d_scale, T);
             smrow(d_sc1, d_pr1, 1, T);
+            if (g_lens_on && !g_fast && L == NL - 1 && h < 32 && T <= 512) {
+                CKX(cuMemcpyDtoH(g_attn_host, d_pr1, (size_t)T * sizeof(float)), "d2h attn");
+                host_top8(g_attn_host, T, g_attn_pos[h], g_attn_w[h]);
+                g_attn_nh = (h + 1 > g_attn_nh) ? h + 1 : g_attn_nh;
+            }
             gemv_ab(d_pr1, d_vcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float)), d_ao1, DH, T);
             CKX(cuMemcpyDtoD(d_ctx1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)), d_ao1, (size_t)DH*sizeof(float)), "ctx1");
         }
@@ -892,6 +1040,18 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
         gemv_abt(d_m1, d_downW, d_mo1, DM, DFF);
         emit_op(L, 16, "vector_add", "mlp", "mlp_residual", 1);
         vadd(d_x1, d_mo1, d_x1, DM);
+        if (g_lens_on && !g_fast && L < MAX_RES_LAYERS) {
+            /* LOGIT LENS: decode the residual stream THROUGH the real final-norm + head
+             * (read-only reuse of gated kernels; d_xn1/d_lg1 are free between layers). */
+            rms_norm_k(d_x1, d_xn1, d_lnfg, 1, DM);
+            gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
+            if (!g_lens_host) g_lens_host = (float*)malloc((size_t)NV * sizeof(float));
+            SYNC("lens sync");
+            CKX(cuMemcpyDtoH(g_lens_host, d_lg1, (size_t)NV * sizeof(float)), "d2h lens");
+            host_top5(g_lens_host, NV, g_lens_top[L], g_lens_p[L]);
+            soft5(g_lens_host, NV, g_lens_top[L], g_lens_p[L]);
+            g_lens_nl = L + 1;
+        }
         emit_layer_end(g_emit_step, L, 0.0);
     }
     emit_head(g_emit_step, "norm_f", "gpu_rmsnorm_fwd_eps");
@@ -1555,6 +1715,8 @@ static int run_serve(const char* ptx_path, const char* wpath,
         /* per-request sampling config (defaults = greedy when fields absent). SEEDED
          * sampling is gated token-for-token vs the oracle's identical sampler (G-S leg). */
         sample_cfg_from_json(line);
+        { const char* lp = json_find_key(line, "lens"); g_lens_on = (lp && atoi(lp) != 0) ? 1 : 0; }
+        stops_parse(line);
         kv_len = 0;
         int* work = (int*)malloc((size_t)(T0 + Ngen) * sizeof(int));
         memcpy(work, ids, (size_t)T0 * sizeof(int));
@@ -1575,11 +1737,14 @@ static int run_serve(const char* ptx_path, const char* wpath,
 #else
             char* piece = NULL;
 #endif
+            tok_extra_render(logits, nxt);
             emit_token(step, nxt, piece ? piece : "", (double)logits[nxt], T + 1);
+            int stop_now = stops_hit(piece);
             free(piece);
             gen_ids[step] = nxt;
             work[T++] = nxt;
             if (g_scfg.temp > 0.0) sample_count(nxt);
+            if (stop_now) { Ngen = step + 1; break; }                      /* user stop-sequence hit */
             if (EOS_ID >= 0 && nxt == EOS_ID) { Ngen = step + 1; break; }  /* chat eos-stop; done reports the REAL count */
         }
         double secs = now_seconds() - t0;
@@ -1687,6 +1852,28 @@ int main(int argc, char** argv) {
         if (alloc_buffers(Smax)) return 2;
         if (setup_head(Smax)) return 2;
         rc = run_generate(Ngen, ids_path, ref_gen_path);
+    } else if (strcmp(mode, "--lens-dump") == 0) {
+        /* G-LENS: per-layer logit-lens top-1 for the LAST prompt position (prefill T-1
+         * tokens, lens-decode the last). Requires the llama KV path (HX_KV=1). */
+        if (argc < 6) { fprintf(stderr, "--lens-dump needs <ids.txt> <out.txt>\n"); return 2; }
+        if (!ARCH || !KV_ON) { fprintf(stderr, "--lens-dump needs a llama model + HX_KV=1\n"); return 2; }
+        int lids[1024]; int LT = read_ids_file(argv[4], lids, 1024);
+        if (LT < 2) { fprintf(stderr, "need >= 2 ids\n"); return 2; }
+        if (device_init(ptx_path, wpath)) return 2;
+        int LS = ((LT + 4 + 63) / 64) * 64;
+        if (alloc_buffers(LS)) return 2;
+        if (setup_head(LS)) return 2;
+        float* llg = (float*)malloc((size_t)NV * sizeof(float));
+        forward_full(lids, LT - 1, llg);
+        g_lens_on = 1;
+        decode_step_llama(lids[LT - 1], LT - 1, llg);
+        FILE* lf = fopen(argv[5], "w");
+        if (!lf) return 2;
+        for (int L = 0; L < g_lens_nl; L++) fprintf(lf, "%d\n", g_lens_top[L][0]);
+        fclose(lf);
+        printf("LENS_DUMP_OK %d layers\n", g_lens_nl);
+        free(llg);
+        rc = 0;
     } else if (strcmp(mode, "--serve") == 0) {
         /* additive 4th mode: persistent forward+generate worker over stdin/stdout JSON. */
         int   emit_fd = 1, max_ctx = 320, timing = 0;

@@ -175,6 +175,19 @@ else
 fi
 echo "  G-T0: $GT0"
 
+echo "=== [6L] G-LENS: per-layer logit-lens top-1 vs the oracle (exposed-internal parity rail) ==="
+GLENS=""
+( cd "$TOOLS" && python3 llama_numpy_ref.py dump-lens "$PROMPT" ) > "$OUT/llama_lens_oracle.log" 2>&1 || { GLENS=FAIL; RC=1; echo "  oracle dump-lens FAIL"; tail -3 "$OUT/llama_lens_oracle.log"; }
+if [ -z "$GLENS" ]; then
+  if HX_KV=1 HX_RESIDENT=1 /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --lens-dump "$REFD/llama_ref_ids.txt" /tmp/helix_lens.txt > "$OUT/llama_lens.log" 2>&1 && [ -s /tmp/helix_lens.txt ] && cmp -s /tmp/helix_lens.txt "$REFD/llama_ref_lens.txt"; then
+    GLENS=PASS; echo "  per-layer lens top-1 ids IDENTICAL ($(wc -l < /tmp/helix_lens.txt) layers)"
+  else
+    GLENS=FAIL; RC=1; echo "  G-LENS FAIL (ids differ or run failed)"; tail -2 "$OUT/llama_lens.log" 2>/dev/null
+    paste /tmp/helix_lens.txt "$REFD/llama_ref_lens.txt" 2>/dev/null | head -34 | sed "s/^/    /"
+  fi
+fi
+echo "  G-LENS: $GLENS"
+
 echo "=== [7] NEGATIVE CONTROL: corrupted weights must FAIL the logits leg ==="
 cp "$WTS" /tmp/llama_corrupt.weights
 # zero out 1 MB of mid-file weights at the 200 MB offset (well past the 64B header; model-agnostic)
@@ -195,8 +208,9 @@ echo "  G-KV  kv-decode: ${GKV:-SKIPPED}"
 echo "  G-S   sampling : ${GS:-SKIPPED}"
 echo "  G-R   reprod.  : ${GR:-SKIPPED}"
 echo "  G-T0  temp0    : ${GT0:-SKIPPED}"
+echo "  G-LENS lens    : ${GLENS:-SKIPPED}"
 echo "  NEG control   : $NEG"
-if [ "$GL1$GL2A$GL2B${GKV:-FAIL}${GS:-FAIL}${GR:-FAIL}${GT0:-FAIL}$NEG" = "PASSPASSPASSPASSPASSPASSPASSPASS" ] && [ "$RC" = "0" ]; then
+if [ "$GL1$GL2A$GL2B${GKV:-FAIL}${GS:-FAIL}${GR:-FAIL}${GT0:-FAIL}${GLENS:-FAIL}$NEG" = "PASSPASSPASSPASSPASSPASSPASSPASSPASS" ] && [ "$RC" = "0" ]; then
   echo "LLAMA_MODEL_GATE_PASS"; exit 0
 else
   echo "LLAMA_MODEL_GATE_FAIL (rc=$RC)"; exit 1

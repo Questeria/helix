@@ -124,6 +124,7 @@ typedef struct {
     char  merges3[1024];
     int   specials3;
     int   eos3;
+    int   tool_kernel;        /* --tool-kernel 1: enable /api/tool/kernel (DEFAULT OFF; security-audit-pending) */
     int   kv2;                /* HX_KV+HX_RESIDENT for slot 1 (KV-cache decode; small llama models) */
     int   kv3;                /* same for slot 2 */
 } Cfg;
@@ -296,6 +297,49 @@ static void serve_static(int fd, const char* urlpath) {
 }
 
 /* ============================ /api/health ============================ */
+/* ===================== /api/tool/kernel (W5; DISABLED by default) =====================
+ * Compiles + runs a MODEL/USER-SUPPLIED Helix @kernel via scripts/tool_kernel_sandbox.sh
+ * (from-raw kovc, ptxas, bounded launch -- see that script's documented defense layers).
+ * SECURITY-AUDIT-PENDING: requires the explicit --tool-kernel 1 flag; without it this
+ * endpoint answers 403. Serialized behind the SAME single-flight GPU lock as generation. */
+static void handle_tool_kernel(int fd, const char* body) {
+    if (!g_cfg.tool_kernel) {
+        send_status(fd, 403, "Forbidden", "application/json; charset=utf-8",
+                    "{\"error\":\"kernel tool disabled (security audit pending); start the server with --tool-kernel 1 to enable locally\"}");
+        return;
+    }
+    /* extract + unescape the "code" field (4 KB cap, matching the sandbox). */
+    char raw[8192]; raw[0] = 0;
+    json_str_field(body ? body : "", "code", raw, sizeof raw);
+    if (!raw[0]) { send_status(fd, 400, "Bad Request", "application/json; charset=utf-8", "{\"error\":\"no code field\"}"); return; }
+    char code[8192]; size_t k = 0;
+    for (size_t i = 0; raw[i] && k + 1 < sizeof code; i++) {
+        if (raw[i] == '\\' && raw[i+1]) {
+            i++;
+            code[k++] = (raw[i] == 'n') ? '\n' : (raw[i] == 't') ? '\t' : raw[i];
+        } else code[k++] = raw[i];
+    }
+    code[k] = 0;
+    if (pthread_mutex_trylock(&g_gpu_lock) != 0) {
+        send_status(fd, 409, "Conflict", "application/json; charset=utf-8", "{\"error\":\"busy\"}");
+        return;
+    }
+    char path[64]; snprintf(path, sizeof path, "/tmp/hxtool_%d.hx", (int)getpid());
+    FILE* f = fopen(path, "wb");
+    if (!f) { pthread_mutex_unlock(&g_gpu_lock); send_status(fd, 500, "Internal Server Error", "application/json; charset=utf-8", "{\"error\":\"tmp write\"}"); return; }
+    fwrite(code, 1, k, f); fclose(f);
+    char cmd[2048];
+    snprintf(cmd, sizeof cmd, "bash %s/../scripts/tool_kernel_sandbox.sh %s 2>/dev/null", g_cfg.root, path);
+    FILE* p = popen(cmd, "r");
+    char out[8192]; size_t ol = 0;
+    if (p) { ol = fread(out, 1, sizeof out - 1, p); pclose(p); }
+    out[ol] = 0;
+    unlink(path);
+    pthread_mutex_unlock(&g_gpu_lock);
+    if (ol == 0) { send_status(fd, 500, "Internal Server Error", "application/json; charset=utf-8", "{\"error\":\"sandbox produced no output\"}"); return; }
+    send_status(fd, 200, "OK", "application/json; charset=utf-8", out);
+}
+
 static void handle_health(int fd) {
     /* top-level model/ready/device keep describing model 0 (frontend backward-compat);
      * the ADDITIVE models[] array advertises every loaded model (the switcher capability). */
@@ -582,6 +626,7 @@ static void* handle_conn(void* arg) {
         }
         char* body = read_body(fd, hdr_end, hdrbuf, hlen, content_len);
         if (!strcmp(path, "/api/generate")) handle_generate(fd, body ? body : "");
+        else if (!strcmp(path, "/api/tool/kernel")) handle_tool_kernel(fd, body ? body : "");
         else if (!strcmp(path, "/api/verify")) handle_verify(fd, body ? body : "");
         else send_status(fd, 404, "Not Found", "application/json; charset=utf-8", "{\"error\":\"not found\"}");
         free(body);
@@ -743,6 +788,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--merges3")   && i+1 < argc) snprintf(g_cfg.merges3, sizeof g_cfg.merges3, "%s", argv[++i]);
         else if (!strcmp(argv[i], "--specials3") && i+1 < argc) g_cfg.specials3 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--eos3")      && i+1 < argc) g_cfg.eos3 = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--tool-kernel") && i+1 < argc) g_cfg.tool_kernel = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--kv2")       && i+1 < argc) g_cfg.kv2 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--kv3")       && i+1 < argc) g_cfg.kv3 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(argv[0]); return 0; }
