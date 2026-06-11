@@ -187,7 +187,12 @@ document.addEventListener("keydown", function (e) { if (e.key === "Escape") ovl.
 <script>
 document.querySelectorAll(".tabs .tab").forEach(function (a) {
   var href = a.getAttribute("href");
-  if (location.pathname.split("/").pop() === href) a.classList.add("here");
+  /* Cloudflare Pages serves these at extensionless URLs (/demo/journey, not
+     /demo/journey.html), so match with .html stripped on BOTH sides. */
+  var seg = location.pathname.split("/").pop() || "";
+  var base = seg.replace(/\.html$/, "");
+  if (base === "" || base === "demo") base = "index";   /* the demo dir index is the expert playground */
+  if (seg === href || base === href.replace(/\.html$/, "")) a.classList.add("here");
 });
 </script>
 </body>
