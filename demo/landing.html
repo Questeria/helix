@@ -22,18 +22,18 @@
      - every number is from a committed gate output.
      ============================================================ */
   :root {
-    --bg:        #0a0e14;
-    --bg-2:      #0f141c;
-    --panel:     #111722;
-    --panel-2:   #0d121b;
-    --border:    #1e2733;
-    --border-2:  #28323f;
-    --ink:       #e6edf3;
-    --ink-dim:   #9aa7b4;
-    --ink-faint: #6b7785;
-    --accent:    #34d399;
-    --accent-dim:#1d6b4f;
-    --accent-bg: rgba(52,211,153,0.08);
+    --bg:        #0c0c12;
+    --bg-2:      #0a0a0f;
+    --panel:     #15151d;
+    --panel-2:   #101017;
+    --border:    #2a2a36;
+    --border-2:  #3a3a48;
+    --ink:       #f4f4f8;
+    --ink-dim:   #9d9da8;
+    --ink-faint: #6e6e7a;
+    --accent:    #8b5cf6;
+    --accent-dim:#4c2f8c;
+    --accent-bg: rgba(139,92,246,0.08);
     --amber:     #f5b14c;
     --amber-dim: #6b521d;
     --amber-bg:  rgba(245,177,76,0.08);
@@ -51,7 +51,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    background: radial-gradient(1200px 700px at 50% -10%, #121a26 0%, var(--bg) 55%, var(--bg-2) 100%);
+    background: radial-gradient(1200px 700px at 50% -10%, #15121f 0%, var(--bg) 55%, var(--bg-2) 100%);
     background-attachment: fixed;
     color: var(--ink);
     font-family: var(--sans);
@@ -65,8 +65,8 @@
     content: "";
     position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background-image:
-      linear-gradient(rgba(52,211,153,0.022) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(52,211,153,0.022) 1px, transparent 1px);
+      linear-gradient(rgba(139,92,246,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(139,92,246,0.022) 1px, transparent 1px);
     background-size: 44px 44px;
     mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
     -webkit-mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
@@ -115,7 +115,7 @@
   }
   .hero h1 .em {
     color: var(--accent);
-    background: linear-gradient(92deg, #6ee7b7 0%, var(--accent) 55%, #11b981 100%);
+    background: linear-gradient(92deg, #cdb6ff 0%, var(--accent) 55%, #7c4ce0 100%);
     -webkit-background-clip: text; background-clip: text;
     -webkit-text-fill-color: transparent;
   }
@@ -141,7 +141,7 @@
     transition: border-color .15s ease, transform .15s ease;
   }
   .dest:hover { border-color: var(--accent-dim); transform: translateY(-2px); text-decoration: none; }
-  .dest.is-primary { border-color: var(--accent-dim); box-shadow: 0 0 0 1px rgba(52,211,153,0.07), 0 10px 30px -20px rgba(52,211,153,0.35); }
+  .dest.is-primary { border-color: var(--accent-dim); box-shadow: 0 0 0 1px rgba(139,92,246,0.07), 0 10px 30px -20px rgba(139,92,246,0.35); }
   .dest .d-kicker {
     font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.8px;
     text-transform: uppercase; color: var(--ink-faint);
@@ -246,12 +246,7 @@
     <div class="topbar">
       <div class="brand">
         <span class="wordmark">
-          <svg class="helix-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
-                  stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
-            <circle cx="6" cy="3" r="1.3" fill="#34d399"/><circle cx="18" cy="3" r="1.3" fill="#34d399"/>
-            <circle cx="6" cy="21" r="1.3" fill="#34d399"/><circle cx="18" cy="21" r="1.3" fill="#34d399"/>
-          </svg>
+          <svg class="helix-glyph" viewBox="2.5 9 43 30" fill="none" aria-hidden="true" style="width:31px;height:22px"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg>
           Helix
         </span>
         <span class="sub-pill">THE VERIFIABLE EXECUTION LAYER</span>

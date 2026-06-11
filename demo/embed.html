@@ -18,10 +18,10 @@
                style="border:0" title="GPT-2-XL on Helix — captured run"></iframe>
      ============================================================ */
   :root {
-    --bg: #0a0e14; --panel: #111722; --panel-2: #0d121b;
-    --border: #1e2733; --border-2: #28323f;
-    --ink: #e6edf3; --ink-dim: #9aa7b4; --ink-faint: #6b7785;
-    --accent: #34d399; --accent-dim: #1d6b4f; --accent-bg: rgba(52,211,153,0.08);
+    --bg: #0c0c12; --panel: #15151d; --panel-2: #101017;
+    --border: #2a2a36; --border-2: #3a3a48;
+    --ink: #f4f4f8; --ink-dim: #9d9da8; --ink-faint: #6e6e7a;
+    --accent: #8b5cf6; --accent-dim: #4c2f8c; --accent-bg: rgba(139,92,246,0.08);
     --blue: #6cb6f5; --blue-dim: #29516f; --blue-bg: rgba(108,182,245,0.07);
     --mono: ui-monospace, "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -29,7 +29,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    background: radial-gradient(700px 380px at 50% -10%, #121a26 0%, var(--bg) 60%);
+    background: radial-gradient(700px 380px at 50% -10%, #15121f 0%, var(--bg) 60%);
     color: var(--ink); font-family: var(--sans); line-height: 1.5;
     -webkit-font-smoothing: antialiased; min-height: 100%;
   }
@@ -59,7 +59,7 @@
   .text .prompt { color: var(--ink-dim); }
   .text .cont {
     color: var(--ink);
-    background: linear-gradient(180deg, rgba(52,211,153,0.10), rgba(52,211,153,0.04));
+    background: linear-gradient(180deg, rgba(139,92,246,0.10), rgba(139,92,246,0.04));
     border-bottom: 1px solid var(--accent-dim); border-radius: 3px; padding: 1px 1px;
   }
   .text .caret {
@@ -72,7 +72,7 @@
   .rungs { display: grid; grid-template-columns: repeat(48, 1fr); gap: 2px; flex: 1; }
   .rung { height: 9px; border-radius: 2px; background: var(--panel-2); border: 1px solid var(--border); }
   .rung.done { background: var(--accent-dim); border-color: var(--accent-dim); }
-  .rung.cur { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px rgba(52,211,153,0.7); }
+  .rung.cur { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 6px rgba(139,92,246,0.7); }
   .lnum { font-family: var(--mono); font-size: 10.5px; color: var(--accent); min-width: 64px; text-align: right; }
 
   .stats { display: flex; gap: 8px; flex-wrap: wrap; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); }
@@ -102,7 +102,7 @@
     <div class="head">
       <svg class="glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
-              stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+              stroke="#8b5cf6" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
       <span class="name">GPT-2-XL <span class="x">on</span> Helix</span>
       <span class="tag" id="tagEl">REPLAY · CAPTURED RUN — NOT LIVE</span>

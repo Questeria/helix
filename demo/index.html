@@ -17,18 +17,18 @@
      MEASURED live XL rate (~9.8 s/token, scripts/_gate_run.log).
      ============================================================ */
   :root {
-    --bg:        #0a0e14;   /* deep near-black slate          */
-    --bg-2:      #0f141c;   /* page gradient bottom           */
-    --panel:     #111722;   /* card surface                   */
-    --panel-2:   #0d121b;   /* inset / nested surface         */
-    --border:    #1e2733;   /* soft card border               */
-    --border-2:  #28323f;   /* slightly stronger border       */
-    --ink:       #e6edf3;   /* primary text                   */
-    --ink-dim:   #9aa7b4;   /* secondary text                 */
-    --ink-faint: #6b7785;   /* tertiary / captions            */
-    --accent:    #34d399;   /* emerald — verified / live       */
-    --accent-dim:#1d6b4f;   /* emerald border tint            */
-    --accent-bg: rgba(52,211,153,0.08);
+    --bg:        #0c0c12;   /* deep near-black slate          */
+    --bg-2:      #0a0a0f;   /* page gradient bottom           */
+    --panel:     #15151d;   /* card surface                   */
+    --panel-2:   #101017;   /* inset / nested surface         */
+    --border:    #2a2a36;   /* soft card border               */
+    --border-2:  #3a3a48;   /* slightly stronger border       */
+    --ink:       #f4f4f8;   /* primary text                   */
+    --ink-dim:   #9d9da8;   /* secondary text                 */
+    --ink-faint: #6e6e7a;   /* tertiary / captions            */
+    --accent:    #8b5cf6;   /* emerald — verified / live       */
+    --accent-dim:#4c2f8c;   /* emerald border tint            */
+    --accent-bg: rgba(139,92,246,0.08);
     --amber:     #f5b14c;   /* in-progress / PREVIEW          */
     --amber-dim: #6b521d;
     --amber-bg:  rgba(245,177,76,0.08);
@@ -46,7 +46,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    background: radial-gradient(1200px 700px at 50% -10%, #121a26 0%, var(--bg) 55%, var(--bg-2) 100%);
+    background: radial-gradient(1200px 700px at 50% -10%, #15121f 0%, var(--bg) 55%, var(--bg-2) 100%);
     background-attachment: fixed;
     color: var(--ink);
     font-family: var(--sans);
@@ -61,8 +61,8 @@
     content: "";
     position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background-image:
-      linear-gradient(rgba(52,211,153,0.022) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(52,211,153,0.022) 1px, transparent 1px);
+      linear-gradient(rgba(139,92,246,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(139,92,246,0.022) 1px, transparent 1px);
     background-size: 44px 44px;
     mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
     -webkit-mask-image: radial-gradient(900px 520px at 50% 0%, rgba(0,0,0,0.9), transparent 75%);
@@ -72,7 +72,7 @@
   * { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
   *::-webkit-scrollbar { width: 9px; height: 9px; }
   *::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; }
-  *::-webkit-scrollbar-thumb:hover { background: #34414f; }
+  *::-webkit-scrollbar-thumb:hover { background: #46465a; }
   *::-webkit-scrollbar-track { background: transparent; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -155,15 +155,15 @@
   .status-badge .dot {
     width: 9px; height: 9px; border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0 0 rgba(52,211,153,0.5);
+    box-shadow: 0 0 0 0 rgba(139,92,246,0.5);
     animation: pulse 2.6s ease-out infinite;
   }
   .status-badge.is-preview .dot { background: var(--amber); animation: none; }
   .status-badge.is-fail .dot { background: var(--red); animation: none; }
   @keyframes pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.45); }
-    70%  { box-shadow: 0 0 0 7px rgba(52,211,153,0); }
-    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+    0%   { box-shadow: 0 0 0 0 rgba(139,92,246,0.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(139,92,246,0); }
+    100% { box-shadow: 0 0 0 0 rgba(139,92,246,0); }
   }
   .nav-link {
     font-size: 13px; font-weight: 600; color: var(--ink-dim);
@@ -185,7 +185,7 @@
   }
   .hero-strip h1 .em {
     color: var(--accent);
-    background: linear-gradient(92deg, #6ee7b7 0%, var(--accent) 55%, #11b981 100%);
+    background: linear-gradient(92deg, #cdb6ff 0%, var(--accent) 55%, #7c4ce0 100%);
     -webkit-background-clip: text; background-clip: text;
     -webkit-text-fill-color: transparent;
   }
@@ -321,13 +321,13 @@
   .turn.model .bubble .prompt-echo { color: var(--ink-dim); }
   .turn.model .bubble .cont {
     color: var(--ink);
-    background: linear-gradient(180deg, rgba(52,211,153,0.10), rgba(52,211,153,0.04));
+    background: linear-gradient(180deg, rgba(139,92,246,0.10), rgba(139,92,246,0.04));
     border-bottom: 1px solid var(--accent-dim);
     padding: 1px 1px;
     border-radius: 3px;
   }
   .turn.model .bubble .tok-new {
-    background: rgba(52,211,153,0.28);
+    background: rgba(139,92,246,0.28);
     border-radius: 3px;
     transition: background 0.5s ease;
   }
@@ -388,7 +388,7 @@
   }
   .composer textarea:focus {
     outline: none; border-color: var(--accent-dim);
-    box-shadow: 0 0 0 3px rgba(52,211,153,0.10);
+    box-shadow: 0 0 0 3px rgba(139,92,246,0.10);
   }
   .composer textarea::placeholder { color: var(--ink-faint); }
   .composer-ctl { display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 132px; }
@@ -414,16 +414,16 @@
   .stepper input::-webkit-outer-spin-button, .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   .stepper input { -moz-appearance: textfield; }
   .send-btn {
-    background: linear-gradient(180deg, rgba(52,211,153,0.16), rgba(52,211,153,0.07));
+    background: linear-gradient(180deg, rgba(139,92,246,0.16), rgba(139,92,246,0.07));
     border: 1px solid var(--accent-dim); color: var(--accent);
     border-radius: var(--radius-sm); padding: 10px 14px; cursor: pointer;
     font-weight: 700; font-size: 14px; letter-spacing: 0.3px;
     transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
   }
   .send-btn:hover:not(:disabled) {
-    background: linear-gradient(180deg, rgba(52,211,153,0.24), rgba(52,211,153,0.10));
+    background: linear-gradient(180deg, rgba(139,92,246,0.24), rgba(139,92,246,0.10));
     border-color: var(--accent);
-    box-shadow: 0 0 14px -4px rgba(52,211,153,0.5);
+    box-shadow: 0 0 14px -4px rgba(139,92,246,0.5);
   }
   .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .busy-hint {
@@ -450,7 +450,7 @@
   .panel:hover { border-color: var(--border-2); }
   .panel.is-star {
     border-color: var(--border-2);
-    box-shadow: 0 0 0 1px rgba(52,211,153,0.06), 0 8px 28px -18px rgba(52,211,153,0.25);
+    box-shadow: 0 0 0 1px rgba(139,92,246,0.06), 0 8px 28px -18px rgba(139,92,246,0.25);
   }
 
   /* trust strip */
@@ -505,7 +505,7 @@
   .tok-chip .id { font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); margin-top: 1px; }
   .tok-chip.is-gen {
     border-color: var(--accent-dim); background: var(--accent-bg);
-    box-shadow: 0 0 6px -2px rgba(52,211,153,0.5);
+    box-shadow: 0 0 6px -2px rgba(139,92,246,0.5);
   }
   .tok-chip.is-gen .piece { color: var(--accent); }
   .tok-empty { font-size: 12px; color: var(--ink-faint); font-style: italic; }
@@ -534,9 +534,9 @@
     border-color: var(--accent-dim);
   }
   .rung.current {
-    background: linear-gradient(180deg, #6ee7b7 0%, var(--accent) 100%);
+    background: linear-gradient(180deg, #cdb6ff 0%, var(--accent) 100%);
     border-color: var(--accent);
-    box-shadow: 0 0 12px rgba(52,211,153,0.75), 0 0 3px rgba(52,211,153,0.9);
+    box-shadow: 0 0 12px rgba(139,92,246,0.75), 0 0 3px rgba(139,92,246,0.9);
     transform: scale(1.18);
     animation: rungPulse 0.9s ease-in-out infinite;
   }
@@ -625,8 +625,8 @@
   .pbar { height: 9px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
   .pbar .fill {
     height: 100%; width: 0;
-    background: linear-gradient(90deg, var(--accent-dim), var(--accent) 85%, #6ee7b7);
-    box-shadow: 0 0 8px rgba(52,211,153,0.4);
+    background: linear-gradient(90deg, var(--accent-dim), var(--accent) 85%, #cdb6ff);
+    box-shadow: 0 0 8px rgba(139,92,246,0.4);
     transition: width .15s ease;
   }
 
@@ -789,7 +789,7 @@
   .upgrade-bar.show { display: flex; }
   .upgrade-bar a {
     font-weight: 700; border: 1px solid var(--accent-dim); border-radius: 6px;
-    padding: 3px 10px; background: rgba(52,211,153,0.12);
+    padding: 3px 10px; background: rgba(139,92,246,0.12);
   }
 
   /* ---------- composer hint ---------- */
@@ -932,7 +932,7 @@
   .xp-node .xn-sub { font-size: 11px; color: var(--ink-faint); line-height: 1.4; }
   .xp-node.on {
     border-color: var(--accent); background: var(--accent-bg);
-    box-shadow: 0 0 10px -2px rgba(52,211,153,0.55);
+    box-shadow: 0 0 10px -2px rgba(139,92,246,0.55);
   }
   .xp-node.on .xn-title { color: var(--accent); }
   .xp-node.done { border-color: var(--accent-dim); }
@@ -960,8 +960,8 @@
   }
   .xp-node.xp-out.pulse { animation: xpPulse 0.7s ease-out; }
   @keyframes xpPulse {
-    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.6); }
-    100% { box-shadow: 0 0 0 12px rgba(52,211,153,0); }
+    0%   { box-shadow: 0 0 0 0 rgba(139,92,246,0.6); }
+    100% { box-shadow: 0 0 0 12px rgba(139,92,246,0); }
   }
 
   /* current-op line + plain-language caption + why-thread */
@@ -1180,8 +1180,8 @@
   /* token-confidence shading (renders ONLY when the live token events
      carry the additive p/H/alts fields — real logits, never invented) */
   .tok-c { border-radius: 3px; cursor: pointer; }
-  .tc-4 { background: rgba(52,211,153,0.26); }
-  .tc-3 { background: rgba(52,211,153,0.13); }
+  .tc-4 { background: rgba(139,92,246,0.26); }
+  .tc-3 { background: rgba(139,92,246,0.13); }
   .tc-2 { background: rgba(245,177,76,0.16); }
   .tc-1 { background: rgba(245,177,76,0.30); }
   .tc-0 { background: rgba(240,114,106,0.30); }
@@ -1579,12 +1579,7 @@
     <div class="topbar">
       <div class="brand">
         <span class="wordmark">
-          <svg class="helix-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
-                  stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
-            <circle cx="6" cy="3" r="1.3" fill="#34d399"/><circle cx="18" cy="3" r="1.3" fill="#34d399"/>
-            <circle cx="6" cy="21" r="1.3" fill="#34d399"/><circle cx="18" cy="21" r="1.3" fill="#34d399"/>
-          </svg>
+          <svg class="helix-glyph" viewBox="2.5 9 43 30" fill="none" aria-hidden="true" style="width:31px;height:22px"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg>
           Helix
           <span class="x">×</span>
           <span class="gpt">GPT-2</span>
@@ -1614,7 +1609,7 @@
     <header class="hero-strip">
       <svg class="hero-watermark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
-              stroke="#34d399" stroke-width="1.1" stroke-linecap="round"/>
+              stroke="#8b5cf6" stroke-width="1.1" stroke-linecap="round"/>
       </svg>
       <div class="hero-eyebrow"><span class="he-dot" aria-hidden="true"></span>Helix — the verifiable execution layer</div>
       <h1>Watch a 1.5-billion-parameter model think on a stack you can <span class="em">rebuild from 299 bytes</span>.</h1>
@@ -1700,8 +1695,8 @@
           <span class="conf-sw" style="background:rgba(240,114,106,0.30)" aria-hidden="true"></span><span>&lt;25%</span>
           <span class="conf-sw" style="background:rgba(245,177,76,0.30)" aria-hidden="true"></span><span>25–45%</span>
           <span class="conf-sw" style="background:rgba(245,177,76,0.16)" aria-hidden="true"></span><span>45–70%</span>
-          <span class="conf-sw" style="background:rgba(52,211,153,0.13)" aria-hidden="true"></span><span>70–90%</span>
-          <span class="conf-sw" style="background:rgba(52,211,153,0.26)" aria-hidden="true"></span><span>&ge;90%</span>
+          <span class="conf-sw" style="background:rgba(139,92,246,0.13)" aria-hidden="true"></span><span>70–90%</span>
+          <span class="conf-sw" style="background:rgba(139,92,246,0.26)" aria-hidden="true"></span><span>&ge;90%</span>
           <button class="ctx-clear" id="confToggle" type="button" aria-pressed="true">shading on</button>
         </div>
         <div class="composer">
@@ -7847,7 +7842,7 @@ function openLensOverlay(d) {
         var txt = (d._ctx && d._ctx[en[0]] != null) ? pieceForChip(String(d._ctx[en[0]])) : ("pos " + en[0]);
         headRow.appendChild(el("span", {
           class: "attn-chip",
-          style: "background: rgba(52,211,153," + (0.06 + 0.5 * w).toFixed(3) + ")",
+          style: "background: rgba(139,92,246," + (0.06 + 0.5 * w).toFixed(3) + ")",
           title: "position " + en[0] + " · weight " + w.toFixed(4)
         }, txt));
       }
