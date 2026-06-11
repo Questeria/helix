@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Helix × GPT-2 — the guided run</title>
+<title>Helix — the guided run</title>
 <style>
 /* ============================================================
    demo/journey.html — the GUIDED RUN (beginner-first demo UI).
@@ -270,10 +270,10 @@ body.running .stop { display: inline-block; }
           <rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/>
           <text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text>
         </svg>
-        Helix <span class="x">×</span> <span class="gpt">GPT-2</span>
+        Helix <span class="x">×</span> <span class="gpt" id="brandModel">a verified model</span>
       </span>
       <span class="pill">THE GUIDED RUN</span>
-      <span class="pill">GPT-2-XL · 1.5B · 2019 base model — not an assistant</span>
+      <span class="pill" id="modelTagPill">a verified model on a stack you can rebuild from 299 bytes</span>
       <div class="top-right">
         <div class="src-badge" role="status" aria-live="polite"><span class="dot"></span><span id="srcText">PREVIEW</span></div>
       </div>
@@ -289,8 +289,8 @@ body.running .stop { display: inline-block; }
     </nav>
 
     <header class="hero">
-      <h1>Watch a 1.5-billion-parameter model think — on a stack you can <em>rebuild from 299 bytes</em>.</h1>
-      <p><b>Every box below explains itself</b> — hover for a hint, click for the full story. The model (GPT-2-XL) continues your text token by token; the spine shows each step of that work as it happens, and where it is <b>powered by Helix</b>.</p>
+      <h1 id="heroH1">Watch a transformer think — on a stack you can <em>rebuild from 299 bytes</em>.</h1>
+      <p id="heroLede"><b>Every box below explains itself</b> — hover for a hint, click for the full story. <span id="heroModelClause">The model continues your text token by token</span>; the spine shows each step of that work as it happens, and where it is <b>powered by Helix</b>.</p>
       <span class="hx-key"><span class="hx-mark" aria-hidden="true"><svg viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span>
         <span>Key: anything marked with this symbol is <b>powered by Helix</b> — compiled from Helix source by kovc, the compiler that rebuilds from 299 hand-typed bytes.</span></span>
     </header>
@@ -298,7 +298,7 @@ body.running .stop { display: inline-block; }
     <div class="shell">
     <section class="chat-col" aria-label="Conversation">
       <div class="chat-panel">
-      <div class="chat-title">Conversation <span class="spacer"></span><span class="pill" id="chatModelPill">GPT-2-XL · greedy · fp32</span></div>
+      <div class="chat-title">Conversation <span class="spacer"></span><span class="pill" id="chatModelPill">greedy · fp32</span></div>
       <div class="transcript" id="transcript"></div>
       <div class="composer">
         <div class="set-group">
@@ -328,7 +328,7 @@ body.running .stop { display: inline-block; }
           <button class="seed" type="button">A proof is convincing when</button>
         </div>
         <div class="comp-row">
-          <textarea id="promptInput" rows="2" placeholder="Give GPT-2 some text to continue…" aria-label="Text for GPT-2 to continue"></textarea>
+          <textarea id="promptInput" rows="2" placeholder="Type a message — or some text to continue…" aria-label="Text for the model"></textarea>
           <div class="comp-actions">
             <span class="stepper" id="stepperWrap" title="How many new tokens (word-pieces) to generate — press ∞ for no cap">
               <button type="button" id="nDown" aria-label="fewer tokens">−</button>
@@ -363,7 +363,7 @@ body.running .stop { display: inline-block; }
           <div class="s-head"><span class="s-num">STEP 1</span><span class="s-title">Words become numbers</span>
             <span class="not-hx" title="The tokenizer is a committed C host tool (gpt2_tok.c) — outside the Helix compiler, gated bit-exact against the reference. Honestly labeled: not Helix.">C host tool</span>
             <span class="s-status" id="st1">waiting</span></div>
-          <div class="s-sub">The model can't read letters — your text is split into <span class="tip" tabindex="0" data-tip="Word-pieces from a fixed 50,257-entry vocabulary. Common words are one piece; rare words split into several.">tokens</span>, each with an id number.</div>
+          <div class="s-sub">The model can't read letters — your text is split into <span class="tip" tabindex="0" id="tokTip" data-tip="Word-pieces from a fixed vocabulary. Common words are one piece; rare words split into several.">tokens</span>, each with an id number.</div>
           <div class="tok-chips" id="tokChips"><span class="tchip na">your tokens will appear here…</span></div>
           <span class="s-more">click for details ↗</span>
         </button></div>
@@ -372,14 +372,14 @@ body.running .stop { display: inline-block; }
       <div class="srow" id="row2">
         <div class="sdot" aria-hidden="true"></div>
         <div class="scell"><button class="stage" data-detail="think" type="button">
-          <div class="s-head"><span class="s-num">STEP 2</span><span class="s-title">48 layers think</span>
-            <span class="hx-tag" title="All the math here runs in 8 GPU kernels written in the Helix language and compiled to PTX by kovc — the compiler that rebuilds from 299 bytes."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
+          <div class="s-head"><span class="s-num">STEP 2</span><span class="s-title"><span id="st2Count">the</span> layers think</span>
+            <span class="hx-tag" id="hxTagThink" title="All the math here runs in GPU kernels written in the Helix language and compiled to PTX by kovc — the compiler that rebuilds from 299 bytes."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
             <span class="s-status" id="st2">waiting</span></div>
-          <div class="s-sub">For every new token, the same two-step block runs 48 times: <span class="tip" tabindex="0" data-tip="Each word looks back at all earlier words and decides how much each one matters right now.">attention</span>, then <span class="tip" tabindex="0" data-tip="Each word is reworked on its own through a wider scratch space — most of the model's 1.5B parameters live here.">MLP</span>.</div>
+          <div class="s-sub">For every new token, the same two-step block runs <span id="st2Times">over and over</span>: <span class="tip" tabindex="0" data-tip="Each word looks back at all earlier words and decides how much each one matters right now.">attention</span>, then <span class="tip" tabindex="0" id="mlpTip" data-tip="Each word is reworked on its own through a wider scratch space — most of the model's parameters live here.">MLP</span>.</div>
           <div class="think-row">
             <div class="ring" id="ring" data-v="idle"></div>
             <div style="flex:1;min-width:0">
-              <div class="lticks" id="lticks" aria-label="48 layers, lighting as they run"></div>
+              <div class="lticks" id="lticks" aria-label="the model's layers, lighting as they run"></div>
               <div class="opline" id="opline"><span class="lbl">kernel:</span> —</div>
               <div class="odos">
                 <span class="odo" id="odoOps">0<small>GPU kernel ops</small></span>
@@ -397,7 +397,7 @@ body.running .stop { display: inline-block; }
           <div class="s-head"><span class="s-num">STEP 3</span><span class="s-title">Choose the next word</span>
             <span class="hx-tag" title="The scoring multiply (the next-token head) runs in the same Helix-built kernels."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
             <span class="s-status" id="st3">waiting</span></div>
-          <div class="s-sub">All 50,257 vocabulary pieces get a score; the highest wins. Shade = the model's <span class="tip" tabindex="0" data-tip="From the recorded scores (logits). Where the log kept no score, the chip stays neutral and shows “—” — nothing is invented.">recorded confidence</span>.</div>
+          <div class="s-sub"><span id="vocabPhrase">Every vocabulary piece</span> gets a score; the highest wins. Shade = the model's <span class="tip" tabindex="0" data-tip="From the recorded scores (logits). Where the log kept no score, the chip stays neutral and shows “—” — nothing is invented.">recorded confidence</span>.</div>
           <div class="tok-chips" id="genChips"><span class="tchip na">chosen tokens land here…</span></div>
           <div class="heat-legend"><i style="background:rgba(63,214,143,.20)"></i>sure <i style="background:rgba(63,214,143,.10)"></i>likely <i style="background:rgba(224,164,76,.16)"></i>less sure <i style="background:var(--panel2);border:1px solid var(--line2)"></i>“—” not recorded</div>
           <span class="s-more">click for details ↗</span>
@@ -424,7 +424,7 @@ body.running .stop { display: inline-block; }
     </div><!-- /shell -->
 
     <div class="resid">
-      <span><b>Honest note:</b> GPT-2 is a 2019 <b>base completion model</b> — it continues text; expect continuations, not answers. Real GPU pacing is ≈ 10 s per token by design (recorded: 195.5 s / 20 tokens). <b>Residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · oracle shares the spec. This page never invents a number.</span>
+      <span><b>Honest note:</b> <span id="residModelNote">these are verified transformers — the spine shows their real work, never an invented number.</span> Recorded-run GPU pacing was ≈ 10 s per token by design (the recorded GPT-2-XL replay: 195.5 s / 20 tokens). <b>Residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · oracle shares the spec. This page never invents a number.</span>
       <span><a href="dashboard.html">full residuals &amp; gate records →</a> · <a href="index.html">expert playground →</a> · <a href="compare.html">models &amp; paths →</a></span>
     </div>
   </main>
@@ -465,7 +465,10 @@ $("srcText").textContent = SOURCE === "sse" ? "LIVE · GPU (RTX 3070, sm_86)"
   : SOURCE === "replay" ? "REPLAY · real recorded run (time-compressed)"
   : "PREVIEW · simulated numbers";
 
-/* ---------- real structural constants (from gpt2_infer's layer sequence) ---------- */
+/* ---------- GPT-2's recorded layer sequence (from gpt2_infer's forward_layer_gpt2;
+   matches the captured-run histogram: 17 ops/layer). Used ONLY for the GPT-2
+   recorded replay and for GPT-2's beginner overlay copy — never imposed on any
+   other model. Live runs are narrated from the model's REAL streamed op events. */
 var LAYER_OPS = [
   ["ln_1","gpu_layernorm_fwd_eps"],["qkv_gemm","tiled_matmul"],["qkv_bias","gpu_add_bias_rowbcast"],
   ["attn_scores","tiled_matmul_abt"],["attn_scale","gpu_scale_rt"],["attn_softmax","gpu_softmax_causal"],
@@ -474,7 +477,6 @@ var LAYER_OPS = [
   ["fc_bias","gpu_add_bias_rowbcast"],["gelu","gpu_gelu_stable"],["proj2_gemm","tiled_matmul"],
   ["proj2_bias","gpu_add_bias_rowbcast"],["mlp_residual","vector_add"]
 ];
-var N_LAYERS = 48;
 var OP_WORDS = {
   ln_1: "tidying the numbers (layer norm)", qkv_gemm: "preparing questions & answers (big multiply)",
   qkv_bias: "adding learned offsets", attn_scores: "every word scores every earlier word",
@@ -487,10 +489,114 @@ var OP_WORDS = {
   mlp_residual: "keeping what was already known"
 };
 
+/* Plain-English fallback narration keyed off the REAL streamed kernel name —
+   used in live mode so the op line reads in beginner words even for a kernel we
+   don't have a hand-written gloss for. Substring match; the real kernel name is
+   ALWAYS shown verbatim next to it, so this never invents an op. */
+function kernelGloss(kernel) {
+  var k = String(kernel || "").toLowerCase();
+  if (k.indexOf("rmsnorm") >= 0 || k.indexOf("layernorm") >= 0) return "tidying the numbers (normalize)";
+  if (k.indexOf("rope") >= 0) return "marking word positions (rotary)";
+  if (k.indexOf("softmax") >= 0) return "turning scores into percentages";
+  if (k.indexOf("silu") >= 0 || k.indexOf("gelu") >= 0 || k.indexOf("swiglu") >= 0) return "keeping the useful signals (activation)";
+  if (k.indexOf("bias") >= 0) return "adding learned offsets";
+  if (k.indexOf("residual") >= 0 || (k.indexOf("add") >= 0 && k.indexOf("bias") < 0)) return "keeping what was already known";
+  if (k.indexOf("scale") >= 0) return "keeping scores in range";
+  if (k.indexOf("gemv") >= 0 || k.indexOf("gemm") >= 0 || k.indexOf("matmul") >= 0 || k.indexOf("matvec") >= 0) return "a big multiply";
+  return "a Helix GPU kernel";
+}
+
+/* ================================================================
+   MODEL FACTS — per-model truths so the page is honest for ANY served
+   model. layers/vocab/kernels are the model's KNOWN values used as a
+   sensible default BEFORE a run; the first live forward_begin/op events
+   refine the live numbers. Nothing here is shown as a live measurement —
+   it themes the copy; the spine's live numbers come from real events.
+   ================================================================ */
+var MODEL_FACTS = {
+  "gpt2-xl": {
+    label: "GPT-2-XL", params: "1.5B", year: "2019", kind: "base",
+    layers: 48, vocab: 50257, opsPerLayer: 17,
+    arch: "gpt2", chatml: false,
+    kernelPhrase: "8 GPU kernels (layer-norm, the matmuls, GELU, bias-add, causal-softmax)",
+    kernelSet: "gpu_layernorm_fwd_eps · the tiled matmuls · gpu_gelu_stable · gpu_add_bias_rowbcast · gpu_softmax_causal · gpu_scale_rt · vector_add",
+    opSequence: "ln_1 → qkv_gemm → qkv_bias → attn_scores → attn_scale → attn_softmax → attn_av → attn_proj (+bias) → attn_residual → ln_2 → fc_gemm (+bias) → gelu → proj2_gemm (+bias) → mlp_residual",
+    tokenExample: "“The capital of France is” becomes 5 pieces: 464 · 3139 · 286 · 4881 · 318.",
+    kindNote: "GPT-2 is a 2019 <b>base completion model</b> — it continues text; expect continuations, not answers.",
+    pill: "GPT-2-XL · 1.5B · 2019 base model — not an assistant",
+    mlpNote: "Each word is reworked on its own through a wider scratch space — most of the model's 1.5B parameters live here."
+  },
+  "smollm2-360m-instruct": {
+    label: "SmolLM2-360M-Instruct", params: "360M", year: "2024", kind: "instruct",
+    layers: 32, vocab: 49152, opsPerLayer: null,   /* live op events report the real per-layer count */
+    arch: "llama", chatml: true,
+    kernelPhrase: "GPU kernels (RMS-norm, rotary position, the matmuls/GEMV, SiLU-gated MLP)",
+    kernelSet: "gpu_rmsnorm_fwd_eps · gpu_rope_rot · the matmul / gemv kernels · gpu_silu_mul",
+    opSequence: "RMS-norm → Q/K/V → rotary (RoPE) → attention scores → softmax → attention output → RMS-norm → gate &amp; up (SiLU-gated) → down — no layer-norm, no bias-add, no GELU",
+    tokenExample: "each piece gets an id from a fixed 49,152-piece vocabulary; the real ids for your text appear in the chips below as the run tokenizes it.",
+    kindNote: "SmolLM2-360M-Instruct is a 2024 <b>instruction-tuned chat model</b> — it answers messages (wrapped in its chat template). It is small, so keep expectations modest.",
+    pill: "SmolLM2-360M-Instruct · 360M · 2024 chat model",
+    mlpNote: "Each word is reworked on its own through a wider scratch space (a SiLU-gated MLP) — most of the model's parameters live here."
+  },
+  "smollm2-135m": {
+    label: "SmolLM2-135M", params: "135M", year: "2024", kind: "base",
+    layers: 30, vocab: 49152, opsPerLayer: null,
+    arch: "llama", chatml: false,
+    kernelPhrase: "GPU kernels (RMS-norm, rotary position, the matmuls/GEMV, SiLU-gated MLP)",
+    kernelSet: "gpu_rmsnorm_fwd_eps · gpu_rope_rot · the matmul / gemv kernels · gpu_silu_mul",
+    opSequence: "RMS-norm → Q/K/V → rotary (RoPE) → attention scores → softmax → attention output → RMS-norm → gate &amp; up (SiLU-gated) → down — no layer-norm, no bias-add, no GELU",
+    tokenExample: "each piece gets an id from a fixed 49,152-piece vocabulary; the real ids for your text appear in the chips below as the run tokenizes it.",
+    kindNote: "SmolLM2-135M is a 2024 <b>base completion model</b> — it continues text; expect continuations, not answers.",
+    pill: "SmolLM2-135M · 135M · 2024 base model — not an assistant",
+    mlpNote: "Each word is reworked on its own through a wider scratch space (a SiLU-gated MLP) — most of the model's parameters live here."
+  }
+};
+/* A neutral, model-agnostic facts object for an unknown served id or pure
+   preview — stays generic so we never assert a layer count / kernel / vocab we
+   can't stand behind. The first live forward_begin still corrects the layer #. */
+var GENERIC_FACTS = {
+  label: "a verified model", params: "", year: "", kind: "base",
+  layers: 32, vocab: null, opsPerLayer: null, arch: "generic", chatml: false,
+  kernelPhrase: "GPU kernels written in the Helix language",
+  kernelSet: "the model's Helix-compiled GPU kernels",
+  opSequence: "attention (every word weighs all earlier words) → MLP (each word reworked on its own)",
+  tokenExample: "each piece gets an id from the model's fixed vocabulary; the real ids for your text appear in the chips below as the run tokenizes it.",
+  kindNote: "these are verified transformers — the spine shows their real work, never an invented number.",
+  pill: "a verified model on a stack you can rebuild from 299 bytes",
+  mlpNote: "Each word is reworked on its own through a wider scratch space — most of the model's parameters live here."
+};
+function factsFor(id) {
+  if (id && MODEL_FACTS[id]) return MODEL_FACTS[id];
+  /* tolerate id variants (e.g. a path or a casing/space change) by substring */
+  if (id) { var lo = String(id).toLowerCase();
+    for (var k in MODEL_FACTS) if (MODEL_FACTS.hasOwnProperty(k) && (lo === k || lo.indexOf(k) >= 0)) return MODEL_FACTS[k]; }
+  return GENERIC_FACTS;
+}
+
+/* ---------- dynamic structural state (refined per run from live events) ---------- */
+var currentModelId = null;          /* set by applyModelTheme */
+var N_LAYERS = GENERIC_FACTS.layers; /* sensible default; first forward_begin corrects it */
+var OPS_PER_LAYER = null;            /* GPT-2/replay: known; live: counted from real op events */
+
 /* ---------- spine UI helpers ---------- */
 var lticks = $("lticks");
-for (var i = 0; i < N_LAYERS; i++) { var t = document.createElement("i"); lticks.appendChild(t); }
-var tickEls = lticks.children;
+var tickEls = lticks.children;   /* live HTMLCollection — refreshed by renderTicks */
+function renderTicks(n) {
+  n = Math.max(1, Math.min(512, n | 0));
+  /* cap the DOM tick count for very deep models so the row stays legible;
+     the real layer number is always shown in the ring + status text. */
+  var shown = Math.min(n, 64);
+  var html = ""; for (var i = 0; i < shown; i++) html += "<i></i>";
+  lticks.innerHTML = html;
+  tickEls = lticks.children;
+}
+renderTicks(N_LAYERS);
+/* map a real layer index (0..N_LAYERS-1) onto the (possibly fewer) shown ticks */
+function tickIndexFor(L) {
+  var shown = tickEls.length || 1;
+  if (N_LAYERS <= shown) return L;
+  return Math.min(shown - 1, Math.floor(L * shown / N_LAYERS));
+}
 var rows = [ $("row1"), $("row2"), $("row3"), $("row4") ];
 function setRow(i, st) { rows[i].classList.remove("active", "done"); if (st) rows[i].classList.add(st); }
 function setStatus(id, txt) { $(id).textContent = txt; }
@@ -521,6 +627,79 @@ function confClass(logit) {
   return "lo";
 }
 
+/* ================================================================
+   ChatML — instruct models are chat models: wrap the prompt in the
+   model's real template before sending; strip control tokens from the
+   DISPLAYED reply so the user never sees a raw <|...|> marker.
+   ================================================================ */
+var CHATML_SYS = "You are a helpful AI assistant named SmolLM, trained by Hugging Face";
+function isInstruct(id) { return /instruct/i.test(String(id || "")); }
+function wrapChatML(prompt) {
+  return "<|im_start|>system\n" + CHATML_SYS + "<|im_end|>\n" +
+         "<|im_start|>user\n" + prompt + "<|im_end|>\n" +
+         "<|im_start|>assistant\n";
+}
+/* A token whose ENTIRE text is a control marker (e.g. "<|im_end|>") must not be
+   shown. We blank only fully-control pieces; ordinary text passes through. */
+function stripControlPiece(s) {
+  return /^\s*<\|[^|]*\|>\s*$/.test(String(s)) ? "" : s;
+}
+
+/* ================================================================
+   THEME THE PAGE FOR A MODEL — rewrites every model-specific label so
+   the page is honest for whatever model is selected, BEFORE a run. The
+   live events then refine the live numbers. Guarantees we never name a
+   kernel / vocab / layer-count that doesn't belong to this model.
+   ================================================================ */
+function setText(id, txt) { var el = $(id); if (el) el.textContent = txt; }
+function setTip(id, txt) { var el = $(id); if (el) el.setAttribute("data-tip", txt); }
+function applyModelTheme(id) {
+  currentModelId = id || null;
+  var f = factsFor(id);
+  /* structural defaults (live forward_begin/op refine these per run) */
+  N_LAYERS = f.layers || GENERIC_FACTS.layers;
+  OPS_PER_LAYER = f.opsPerLayer || null;   /* null => count from live ops */
+  renderTicks(N_LAYERS);
+
+  /* topbar + hero */
+  setText("brandModel", f.label);
+  setText("modelTagPill", f.pill || GENERIC_FACTS.pill);
+  setText("heroModelClause", f.kind === "instruct"
+    ? ("The model (" + f.label + ") answers your message token by token")
+    : ("The model (" + f.label + ") continues your text token by token"));
+  setText("heroH1", f.params
+    ? ("Watch a " + f.params + " model think — on a stack you can rebuild from 299 bytes.")
+    : "Watch a transformer think — on a stack you can rebuild from 299 bytes.");
+  /* the <em> styling inside the H1 is lost when we set textContent — restore it */
+  var h1 = $("heroH1");
+  if (h1) h1.innerHTML = h1.textContent.replace("rebuild from 299 bytes",
+    "<em>rebuild from 299 bytes</em>");
+  /* chat pill (keep greedy · fp32; lead with model) */
+  setText("chatModelPill", f.label + " · greedy · fp32");
+  /* STEP 2 — layer count + per-token framing + kernel tooltip.
+     Title reads "<N> layers think" (known count) or "the layers think". */
+  setText("st2Count", f.layers ? String(f.layers) : "the");
+  setText("st2Times", f.layers ? (f.layers + " times") : "once per layer");
+  setTip("mlpTip", f.mlpNote || GENERIC_FACTS.mlpNote);
+  var hxTag = $("hxTagThink");
+  if (hxTag) hxTag.setAttribute("title",
+    "All the math here runs in " + f.kernelPhrase + " — written in the Helix language and compiled to PTX by kovc, the compiler that rebuilds from 299 bytes.");
+  /* STEP 1 — tokenize tooltip vocab */
+  setTip("tokTip", f.vocab
+    ? ("Word-pieces from a fixed " + f.vocab.toLocaleString() + "-entry vocabulary. Common words are one piece; rare words split into several.")
+    : "Word-pieces from a fixed vocabulary. Common words are one piece; rare words split into several.");
+  /* STEP 3 — vocab phrase */
+  setText("vocabPhrase", f.vocab
+    ? ("All " + f.vocab.toLocaleString() + " vocabulary pieces")
+    : "Every vocabulary piece");
+  /* footer honest note */
+  var resid = $("residModelNote");
+  if (resid) resid.innerHTML = f.kindNote || GENERIC_FACTS.kindNote;
+  /* refresh the effort note (uses N_LAYERS) + rebuild overlays for this model */
+  if (typeof effortNote === "function") effortNote();
+  buildDetails(f);
+}
+
 /* ---------- transcript ---------- */
 var transcript = $("transcript");
 function addUser(text) {
@@ -546,6 +725,12 @@ function finishModel(meta) {
    ================================================================ */
 function replaySource() {
   var C = window.HELIX_CAPTURED_RUN;
+  /* drive the replay's structure from the captured run itself, not GPT-2
+     constants: real recorded layer count + the histogram's ops/layer. */
+  var REP_LAYERS = C.n_layer || 48;
+  var REP_OPS = (C.event_histogram && C.event_histogram.layer_begin)
+    ? Math.round(C.event_histogram.op / C.event_histogram.layer_begin)   /* 16320/960 = 17 */
+    : LAYER_OPS.length;
   return { start: function (prompt, nGen, H) {
     var cancelled = false, timers = [];
     function at(ms, fn) { timers.push(setTimeout(function () { if (!cancelled) fn(); }, ms)); }
@@ -553,8 +738,8 @@ function replaySource() {
     var t = 0, STEP = 30, LAYER_MS = 9;          /* compressed pacing — labeled on-page */
     at(t, function () { H.onTokenize(C.tokenize.ids, C.tokenize.strings); }); t += 420;
     for (var s = 0; s < n; s++) (function (s) {
-      for (var L = 0; L < N_LAYERS; L++) (function (L) {
-        at(t, function () { H.onLayer(s, L); }); t += LAYER_MS;
+      for (var L = 0; L < REP_LAYERS; L++) (function (L) {
+        at(t, function () { H.onLayer(s, L, REP_LAYERS, REP_OPS); }); t += LAYER_MS;
       })(L);
       var tok = C.tokens[s];
       at(t, function () { H.onToken(s, tok.id, tok.string, tok.logit); }); t += STEP;
@@ -568,16 +753,20 @@ function replaySource() {
 }
 function mockSource() {
   var PIECES = [" the", " city", " of", " light", ",", " and", " people", " love", " it", "."];
+  /* preview is simulated + labeled PREVIEW. It animates the run's STRUCTURE
+     only: a neutral layer count and GENERIC phase narration — it never names a
+     real kernel or a real token id, since no model actually ran. */
   return { start: function (prompt, nGen, H) {
     var cancelled = false, timers = [];
     function at(ms, fn) { timers.push(setTimeout(function () { if (!cancelled) fn(); }, ms)); }
     var words = prompt.trim().split(/\s+/).slice(0, 8);
-    var ids = words.map(function (w, i) { var h = 7; for (var c = 0; c < w.length; c++) h = (h * 31 + w.charCodeAt(c)) % 50257; return h; });
-    var t = 0;
+    /* ids are illustrative-only (no model is loaded) — keep them clearly mock */
+    var ids = words.map(function (w) { var h = 7; for (var c = 0; c < w.length; c++) h = (h * 31 + w.charCodeAt(c)) % 49152; return h; });
+    var t = 0, PV_LAYERS = N_LAYERS, PV_OPS = OPS_PER_LAYER || 9;
     at(t, function () { H.onTokenize(ids, words); }); t += 420;
     var n = Math.min(nGen, 20);
     for (var s = 0; s < n; s++) (function (s) {
-      for (var L = 0; L < N_LAYERS; L++) (function (L) { at(t, function () { H.onLayer(s, L); }); t += 9; })(L);
+      for (var L = 0; L < PV_LAYERS; L++) (function (L) { at(t, function () { H.onLayer(s, L, PV_LAYERS, PV_OPS); }); t += 9; })(L);
       at(t, function () { H.onToken(s, null, PIECES[s % PIECES.length], null); }); t += 30;
     })(s);
     at(t + 250, function () { H.onDone({ seconds: null, tok_per_s: null, n_gen: n, recordedVerdict: null }); });
@@ -590,9 +779,13 @@ function sseSource() {
     fetch("/api/generate", { method: "POST", signal: ctrl.signal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify((function () {
-        var b = { prompt: prompt, n_gen: nGen };
         var msel = document.getElementById("modelSel");
-        if (msel && !msel.disabled && msel.value) b.model = msel.value;
+        var mid = (msel && !msel.disabled && msel.value) ? msel.value : null;
+        /* instruct models are chat models: send the prompt inside the real
+           ChatML template. Base/completion models get the raw prompt. */
+        var sent = isInstruct(mid) ? wrapChatML(prompt) : prompt;
+        var b = { prompt: sent, n_gen: nGen };
+        if (mid) b.model = mid;
         return b;
       })()) })
     .then(function (res) {
@@ -606,8 +799,14 @@ function sseSource() {
           ln = ln.trim(); if (ln.indexOf("data:") !== 0) return;
           var ev; try { ev = JSON.parse(ln.slice(5)); } catch (e) { return; }
           if (ev._ev === "tokenize") H.onTokenize(ev.ids || [], ev.strings || []);
-          else if (ev._ev === "forward_begin") step += 1;
-          else if (ev._ev === "layer_begin") H.onLayer(Math.max(step, 0), ev.layer || 0);
+          else if (ev._ev === "forward_begin") { step += 1; if (ev.n_layers) H.onLayerCount(ev.n_layers); }
+          else if (ev._ev === "layer_begin") {
+            var idx = (typeof ev.idx === "number") ? ev.idx : (ev.layer || 0);
+            if (ev.total) H.onLayerCount(ev.total);
+            H.onLayer(Math.max(step, 0), idx, ev.total || 0, null);
+          }
+          else if (ev._ev === "op") H.onOp(Math.max(step, 0),
+            (typeof ev.layer === "number" ? ev.layer : -1), ev.kernel, ev.label, ev.phase, ev.seq_in_layer);
           else if (ev._ev === "token") H.onToken(Math.max(step, 0), ev.id, ev.string, (typeof ev.logit === "number" ? ev.logit : null));
           else if (ev._ev === "done") H.onDone({ seconds: ev.seconds, tok_per_s: ev.tok_per_s, n_gen: ev.n_gen, recordedVerdict: null });
           else if (ev._ev === "error") H.onError(ev.message || "server error");
@@ -626,9 +825,19 @@ var source = SOURCE === "sse" ? sseSource() : SOURCE === "replay" ? replaySource
    DRIVE A RUN
    ================================================================ */
 var running = null, lastLayer = -1, genCount = 0, nWanted = 20;
+var LIVE_OPS = false;        /* true only when the source streams real op events (sse) */
+function setRing(L, total) {
+  total = total || N_LAYERS || 1;
+  var deg = Math.round(((L + 1) / total) * 360);
+  $("ring").style.setProperty("--deg", deg + "deg");
+  $("ring").dataset.v = "layer\n" + (L + 1) + " / " + total;
+  var shown = tickEls.length, hot = tickIndexFor(L);
+  for (var k = 0; k < shown; k++) tickEls[k].className = k < hot ? "was" : (k === hot ? "on" : "");
+}
 function startRun(prompt) {
   if (running) return;
   resetSpine();
+  LIVE_OPS = (SOURCE === "sse");
   nWanted = UNLIMITED
     ? (SOURCE === "sse" ? 256 : 20)   /* live: server-capped; replay/mock: the full recorded structure */
     : Math.max(1, Math.min(256, parseInt($("nGen").value, 10) || 20));
@@ -640,6 +849,14 @@ function startRun(prompt) {
   ribbon("<b>Step 1 —</b> your text is being split into tokens (word-pieces with id numbers).");
 
   running = source.start(prompt, nWanted, {
+    /* the live forward_begin/layer_begin tells us the REAL layer count for the
+       running model — adopt it and re-render the spine to match. */
+    onLayerCount: function (n) {
+      n = n | 0; if (!n || n === N_LAYERS) return;
+      N_LAYERS = n; renderTicks(n);
+      setText("st2Count", String(n));
+      setText("st2Times", n + " times");
+    },
     onTokenize: function (ids, strings) {
       var html = "";
       for (var i = 0; i < strings.length; i++)
@@ -647,35 +864,61 @@ function startRun(prompt) {
       $("tokChips").innerHTML = html;
       setStatus("st1", strings.length + " tokens"); setRow(0, "done");
       setRow(1, "active"); setStatus("st2", "running");
-      ribbon("<b>Step 2 —</b> the 48 layers are running for token 1. Watch the ring fill once per token.");
+      ribbon("<b>Step 2 —</b> the " + N_LAYERS + " layers are running for token 1. Watch the ring fill once per token.");
     },
-    onLayer: function (step, L) {
+    /* opsPerLayer is supplied by replay/preview (which synthesize ops); live
+       passes null and drives the op line + op count from real op events. */
+    onLayer: function (step, L, total, opsPerLayer) {
+      if (total && total !== N_LAYERS) { N_LAYERS = total; renderTicks(total); setText("st2Count", String(total)); setText("st2Times", total + " times"); }
       if (L === lastLayer) return;
       lastLayer = L;
-      var deg = Math.round(((L + 1) / N_LAYERS) * 360);
-      $("ring").style.setProperty("--deg", deg + "deg");
-      $("ring").dataset.v = "layer\n" + (L + 1) + " / " + N_LAYERS;
-      for (var k = 0; k < N_LAYERS; k++) tickEls[k].className = k < L ? "was" : (k === L ? "on" : "");
-      var op = LAYER_OPS[L % LAYER_OPS.length];
-      $("opline").innerHTML = '<span class="lbl">kernel:</span> ' + esc(op[1]) + ' <span class="lbl">— ' + esc(OP_WORDS[op[0]] || op[0]) + "</span>";
-      bumpOdos(LAYER_OPS.length, 1);
+      setRing(L, total || N_LAYERS);
+      bumpOdos(0, 1);   /* one real layer pass */
+      if (!LIVE_OPS) {
+        /* replay/preview synthesize the per-layer ops (live mode instead counts
+           ops from real op events). For the GPT-2 recorded replay we narrate the
+           REAL recorded kernel sequence; for generic preview we narrate the PHASE
+           only — never a wrong kernel name. */
+        var per = opsPerLayer || OPS_PER_LAYER || LAYER_OPS.length;
+        if (SOURCE === "replay") {
+          var op = LAYER_OPS[L % LAYER_OPS.length];   /* GPT-2's recorded ops */
+          $("opline").innerHTML = '<span class="lbl">kernel:</span> ' + esc(op[1]) + ' <span class="lbl">— ' + esc(OP_WORDS[op[0]] || op[0]) + "</span>";
+        } else {
+          var phase = (L % 2 === 0) ? "attention — every word weighs all earlier words"
+                                    : "MLP — each word reworked on its own";
+          $("opline").innerHTML = '<span class="lbl">phase:</span> ' + esc(phase) + ' <span class="lbl">(simulated)</span>';
+        }
+        bumpOdos(per, 0);
+      }
+    },
+    /* LIVE only: a real kernel fired. Show its real name + a beginner gloss,
+       and count one real GPU op. Never invents — the kernel string is verbatim. */
+    onOp: function (step, L, kernel, label, phase, seq) {
+      bumpOdos(1, 0);
+      var name = kernel || label || "kernel";
+      var gloss = label && label !== kernel ? label : kernelGloss(kernel);
+      var ph = phase ? (" <span class=\"lbl\">[" + esc(phase) + "]</span>") : "";
+      $("opline").innerHTML = '<span class="lbl">kernel:</span> ' + esc(name) + ' <span class="lbl">— ' + esc(gloss) + "</span>" + ph;
     },
     onToken: function (step, id, piece, logit) {
       genCount += 1;
-      pushTokenText(piece);
+      var shown = stripControlPiece(piece);   /* never display a raw <|...|> control token */
+      pushTokenText(shown);
+      if (shown === "" && piece !== "") return;   /* control token: counted by model, hidden from chips/ribbon */
       var chip = document.createElement("span");
       chip.className = "tchip " + confClass(logit);
-      chip.innerHTML = esc(piece) + "<small>" + (logit != null ? "p≈" + logit.toFixed(1) : "—") + "</small>";
+      chip.innerHTML = esc(shown) + "<small>" + (logit != null ? "p≈" + logit.toFixed(1) : "—") + "</small>";
       chip.title = id != null ? "token id " + id + (logit != null ? " · recorded score " + logit.toFixed(3) : " · score not recorded — shown as “—”") : "preview token (mock)";
       $("genChips").appendChild(chip);
       var den = UNLIMITED ? "∞" : nWanted;
       setRow(2, "active"); setStatus("st3", genCount + " / " + den);
       $("ring").dataset.v = "token\n" + genCount + " / " + den;
-      ribbon("<b>Token " + genCount + " chosen:</b> “" + esc(piece.trim()) + "”. " +
-        (logit != null ? "The model's recorded score for it was " + logit.toFixed(1) + "." : "Now the 48 layers run again for the next one."));
+      ribbon("<b>Token " + genCount + " chosen:</b> “" + esc(shown.trim()) + "”. " +
+        (logit != null ? "The model's recorded score for it was " + logit.toFixed(1) + "." : "Now the " + N_LAYERS + " layers run again for the next one."));
     },
     onDone: function (d) {
-      setRow(1, "done"); setRow(2, "done"); setRow(3, "active"); setStatus("st2", "960 passes"); setStatus("st3", "done");
+      var passLabel = passCount ? (passCount.toLocaleString() + " passes") : "done";
+      setRow(1, "done"); setRow(2, "done"); setRow(3, "active"); setStatus("st2", passLabel); setStatus("st3", "done");
       var meta = SOURCE === "replay"
         ? "real recorded run · " + d.seconds + " s for " + d.n_gen + " tokens (" + d.tok_per_s + " tok/s on the GPU — replayed faster here)"
         : SOURCE === "sse" ? "live GPU run · " + (d.seconds != null ? d.seconds.toFixed(1) + " s · " + d.n_gen + " tokens" : d.n_gen + " tokens")
@@ -708,6 +951,7 @@ function endRun() {
   $("goBtn").disabled = false;
 }
 $("goBtn").addEventListener("click", function () {
+  if (SOURCE === "replay") { startRun("The capital of France is"); return; }   /* play the recorded run regardless of the (pinned) box */
   var p = $("promptInput").value.trim();
   if (p) startRun(p);
 });
@@ -745,12 +989,18 @@ function effortNote() {
   var sel = $("effortSel").value;
   var e = EFFORTS[sel] || EFFORTS.standard;
   var note = e.label;
+  /* only quote a kernel-op number when we KNOW this model's ops/layer
+     (GPT-2 recorded = 17). Otherwise quote layer passes only — never a wrong
+     kernel-op figure for a model whose per-layer op count we haven't measured. */
+  var opl = OPS_PER_LAYER || null;
   if (UNLIMITED || e.n == null) {
-    note += " · every token costs " + N_LAYERS + " layer passes (" + (N_LAYERS * LAYER_OPS.length).toLocaleString() + " kernel ops)";
+    note += " · every token costs " + N_LAYERS + " layer passes";
+    if (opl) note += " (" + (N_LAYERS * opl).toLocaleString() + " kernel ops)";
     if (SOURCE === "replay") note += " — this replay plays the full recorded run (20 tokens)";
   } else {
-    var n = e.n, passes = n * N_LAYERS, ops = passes * LAYER_OPS.length;
-    note += " · ≈ " + passes.toLocaleString() + " layer passes · " + ops.toLocaleString() + " kernel ops";
+    var n = e.n, passes = n * N_LAYERS;
+    note += " · ≈ " + passes.toLocaleString() + " layer passes";
+    if (opl) note += " · " + (passes * opl).toLocaleString() + " kernel ops";
   }
   if ((sel === "deep" || sel === "max") && SOURCE !== "sse")
     note += " · deeper think modes (best-of-N, self-consistency) live in the Expert tab on the live GPU";
@@ -779,62 +1029,128 @@ $("infBtn").addEventListener("click", function () {
 $("nGen").addEventListener("input", function () { syncEffortFromN(); });
 effortNote();
 
+/* parse a parameter size (in millions) from a model id or its known facts, so
+   we can default-select the LARGEST instruction-tuned model. */
+function modelSizeM(id) {
+  var f = MODEL_FACTS[id];
+  var src = (f && f.params) ? f.params : String(id || "");
+  var m = /([0-9]+(?:\.[0-9]+)?)\s*([bm])/i.exec(src);
+  if (m) { var v = parseFloat(m[1]); return /b/i.test(m[2]) ? v * 1000 : v; }
+  var bare = /([0-9]+(?:\.[0-9]+)?)/.exec(src);
+  return bare ? parseFloat(bare[1]) : 0;
+}
+/* the FEATURED model: the largest instruction-tuned model; else the largest
+   model; else the first. */
+function pickDefaultModel(ids) {
+  if (!ids.length) return null;
+  var instruct = ids.filter(function (id) { return isInstruct(id); });
+  var pool = instruct.length ? instruct : ids;
+  return pool.slice().sort(function (a, b) { return modelSizeM(b) - modelSizeM(a); })[0];
+}
+/* pretty label for a dropdown option, honest about kind/size from MODEL_FACTS */
+function optionLabel(id) {
+  var f = MODEL_FACTS[id];
+  if (f) return f.label + " · " + f.params + (f.kind === "instruct" ? " · instruct" : " · base");
+  return id;
+}
 var modelSel = $("modelSel");
-if (SOURCE === "replay") {
-  modelSel.innerHTML = '<option value="gpt2-xl">GPT-2-XL · 1.5B (this recorded run)</option>';
-  modelSel.disabled = true;
-} else if (SOURCE === "mock") {
-  modelSel.disabled = true;
-  modelSel.title = "preview — model selection needs the live backend";
-} else {
-  modelSel.title = "models the live backend advertises";
-  fetch("/api/health").then(function (r) { return r.json(); }).then(function (h) {
-    var ms = (h && h.models) || [];
-    if (ms.length) {
-      modelSel.innerHTML = ms.map(function (m) {
-        var id = m.model || m.id || String(m);
-        return '<option value="' + esc(id) + '">' + esc(id) + "</option>";
-      }).join("");
-    }
-  }).catch(function () { /* health probe elsewhere reports */ });
+function selectModel(id) {   /* set the dropdown + re-theme the whole page */
+  if (id) { modelSel.value = id; }
+  applyModelTheme(modelSel.value || id);
+}
+/* wireModelSelect() runs AFTER buildDetails is defined+seeded (below), so the
+   first applyModelTheme can rebuild the overlays for the real model. */
+function wireModelSelect() {
+  if (SOURCE === "replay") {
+    /* the recorded replay IS the GPT-2-XL run — lock to it and label it so. */
+    modelSel.innerHTML = '<option value="gpt2-xl">GPT-2-XL · 1.5B (this recorded run)</option>';
+    modelSel.disabled = true;
+    applyModelTheme("gpt2-xl");
+    /* pin the prompt to the recorded run + label the play button so ▶ plays it */
+    $("promptInput").value = "The capital of France is";   /* the recorded run's prompt (captured_run.js provenance) */
+    $("promptInput").disabled = true;
+    $("goBtn").textContent = "▶ Replay the captured run";
+  } else if (SOURCE === "mock") {
+    /* preview: no backend, no real model — stay generic + labeled PREVIEW. */
+    modelSel.disabled = true;
+    modelSel.title = "preview — model selection needs the live backend";
+    modelSel.innerHTML = '<option value="">preview — no model loaded</option>';
+    applyModelTheme(null);
+  } else {
+    modelSel.title = "models the live backend advertises";
+    applyModelTheme(null);   /* neutral until /api/health answers */
+    fetch("/api/health").then(function (r) { return r.json(); }).then(function (h) {
+      var ms = (h && h.models) || [];
+      if (ms.length) {
+        var ids = ms.map(function (m) { return m.model || m.id || String(m); });
+        modelSel.innerHTML = ids.map(function (id) {
+          return '<option value="' + esc(id) + '">' + esc(optionLabel(id)) + "</option>";
+        }).join("");
+        var def = pickDefaultModel(ids);   /* feature the best (largest instruct) */
+        selectModel(def || ids[0]);
+      }
+    }).catch(function () { /* health probe elsewhere reports */ });
+  }
+  /* switching the model at ANY time re-themes the page; the next run's live
+     data refines the layer count / kernels. */
+  modelSel.addEventListener("change", function () { applyModelTheme(modelSel.value); });
 }
 
 /* ================================================================
    DETAIL OVERLAYS — beginner first, advanced beneath, repo paths last
    ================================================================ */
 var HX = '<span class="hx-mark" aria-hidden="true" style="vertical-align:-2px"><svg viewBox="0 0 10 12" fill="none" width="9" height="11"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span>';
-var DETAILS = {
-  chain: { kicker: "the trust root", title: "From 299 bytes to this reply " + HX,
+/* The overlays are rebuilt per selected model (buildDetails) so every number,
+   vocab and kernel name in them matches the model the page is themed to. The
+   GPT-2-XL recorded-logits example only appears when GPT-2 is selected — those
+   exact logits are GPT-2's captured data, honestly labeled "recorded". */
+var DETAILS = {};
+function buildDetails(f) {
+  f = f || GENERIC_FACTS;
+  var isGpt2 = (f.arch === "gpt2");
+  var nL = f.layers ? String(f.layers) : "all its";
+  var vocab = f.vocab ? f.vocab.toLocaleString() : "the full";
+  var perTok = (f.layers && f.opsPerLayer)
+    ? ("That’s why one 20-token reply costs <b>" + (20 * f.layers).toLocaleString() + " layer passes</b> and <b>" + (20 * f.layers * f.opsPerLayer).toLocaleString() + " GPU kernel launches</b>.")
+    : (f.layers ? ("That’s " + (20 * f.layers).toLocaleString() + " layer passes for a 20-token reply.") : "");
+
+  DETAILS.chain = { kicker: "the trust root", title: "From 299 bytes to this reply " + HX,
     body: '<div class="simple">Most software asks you to trust a mountain of tools you can\'t see. Helix starts from <b>299 bytes typed by hand</b> — small enough to read — and every tool above is built only by the tool below it. So everything on this page can be traced, step by step, to something a person can check by eye.</div>' +
       '<div class="adv"><h3>The ladder (each rung built only by the previous)</h3>' +
       '<pre>hex0 <span class="k">299 B, hand-typed</span> → hex1 → hex2 → catm → M0\n  → cc_amd64 → M2-Planet → seed <span class="k">sha 9837db12…</span>\n  → kovc <span class="k">the Helix compiler — compiles itself byte-identically\n          (K2 == K3 == K4, sha 0992dddd…)</span></pre>' +
-      '<p>kovc then compiles the <b>8 GPU kernels</b> ' + HX + ' that run every layer of GPT-2 here. One committed command (<b>scripts/reproduce_trust.sh</b>, ~1 min, CPU-only) rebuilds and re-checks the whole ladder.</p>' +
+      '<p>kovc then compiles the <b>' + esc(f.kernelPhrase) + '</b> ' + HX + ' that run every layer of ' + esc(f.label) + ' here. One committed command (<b>scripts/reproduce_trust.sh</b>, ~1 min, CPU-only) rebuilds and re-checks the whole ladder.</p>' +
       '<h3>Honest edge</h3><p>The hand-auditable chain ends at PTX (the GPU assembly); NVIDIA\'s closed assembler and driver below it are trusted-once — stated, never hidden.</p>' +
-      '<div class="paths"><b>check it:</b> stage0/hex0/hex0.bin (299 B) · scripts/reproduce_trust.sh · docs/TRUST_CHAIN_CLOSED.md · <a href="dashboard.html">the proof dashboard</a></div></div>' },
-  tokenize: { kicker: "step 1 · words → numbers", title: "Tokenization <span class='not-hx'>C host tool — not Helix</span>",
-    body: '<div class="simple">A neural network only computes with numbers. Your sentence is chopped into <b>word-pieces</b> ("tokens") from a fixed menu of 50,257, and each piece gets its id. “The capital of France is” becomes 5 pieces: 464 · 3139 · 286 · 4881 · 318.</div>' +
-      '<div class="adv"><h3>Honest labeling</h3><p>The tokenizer is a <b>committed C host tool</b> (helixc/runtime/gpt2_tok.c) — deliberately <b>not</b> marked as Helix-powered. It runs outside the Helix compiler\'s trust fixpoint, does zero math on the compute path, and is gated <b>bit-exact</b> against the reference implementation by scripts/gpt2_pyfree.sh.</p>' +
+      '<div class="paths"><b>check it:</b> stage0/hex0/hex0.bin (299 B) · scripts/reproduce_trust.sh · docs/TRUST_CHAIN_CLOSED.md · <a href="dashboard.html">the proof dashboard</a></div></div>' };
+
+  DETAILS.tokenize = { kicker: "step 1 · words → numbers", title: "Tokenization <span class='not-hx'>C host tool — not Helix</span>",
+    body: '<div class="simple">A neural network only computes with numbers. Your sentence is chopped into <b>word-pieces</b> ("tokens") from a fixed menu of ' + esc(vocab) + ', and each piece gets its id. ' + esc(f.tokenExample) + '</div>' +
+      '<div class="adv"><h3>Honest labeling</h3><p>The tokenizer is a <b>committed C host tool</b> — deliberately <b>not</b> marked as Helix-powered. It runs outside the Helix compiler\'s trust fixpoint, does zero math on the compute path, and is gated <b>bit-exact</b> against the reference implementation.</p>' +
       '<h3>Why pieces, not words?</h3><p>Rare words split into several pieces ("Kovostov" → multiple tokens), so the model can read anything with a small fixed menu. That menu (the BPE vocabulary) ships with the public model.</p>' +
-      '<div class="paths"><b>check it:</b> helixc/runtime/gpt2_tok.c · scripts/gpt2_pyfree.sh (bit-exact gate)</div></div>' },
-  think: { kicker: "step 2 · the 48 layers", title: "Where the thinking happens " + HX,
-    body: '<div class="simple">For <b>every single token</b> it writes, the model runs the same two-step block 48 times: <b>attention</b> (every word looks back at all earlier words and decides what matters) then <b>MLP</b> (each word is reworked on its own). That\'s why one 20-token reply costs <b>960 layer passes</b> and <b>16,320 GPU kernel launches</b>.</div>' +
-      '<div class="adv"><h3>Powered by Helix ' + HX + '</h3><p>All of the math runs in <b>8 kernels written in the Helix language</b> and compiled to PTX by kovc. No CUDA C does the tensor math; no vendor ML library sits underneath. One of them, complete and verbatim:</p>' +
+      '<div class="paths"><b>check it:</b> the committed tokenizer host tool · the bit-exact tokenizer gate</div></div>' };
+
+  DETAILS.think = { kicker: "step 2 · the " + (f.layers ? f.layers + " layers" : "layers"), title: "Where the thinking happens " + HX,
+    body: '<div class="simple">For <b>every single token</b> it writes, the model runs the same two-step block ' + esc(nL) + (f.layers ? ' times' : ' layers') + ': <b>attention</b> (every word looks back at all earlier words and decides what matters) then <b>MLP</b> (each word is reworked on its own). ' + perTok + '</div>' +
+      '<div class="adv"><h3>Powered by Helix ' + HX + '</h3><p>All of the math runs in <b>' + esc(f.kernelPhrase) + '</b> written in the Helix language and compiled to PTX by kovc. No CUDA C does the tensor math; no vendor ML library sits underneath. One of them, complete and verbatim:</p>' +
       '<pre><span class="k">@kernel</span>\nfn vector_add(a: f32, b: f32, c: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    c[i] = a[i] + b[i]\n}</pre>' +
-      '<h3>The 17 operations of one layer</h3><p>ln_1 → qkv_gemm → qkv_bias → attn_scores → attn_scale → attn_softmax → attn_av → attn_proj (+bias) → attn_residual → ln_2 → fc_gemm (+bias) → gelu → proj2_gemm (+bias) → mlp_residual. The “kernel:” line on the stage shows which one is firing, in real time.</p>' +
-      '<div class="paths"><b>check it:</b> helixc/examples/*_kernel.hx (the 8 kernels) · docs/HELIX_GPT2_DEMO_RUNBOOK.md · the layer order: helixc/runtime/gpt2_infer.c (forward_layer_gpt2)</div></div>' },
-  choose: { kicker: "step 3 · scoring the vocabulary", title: "Choosing the next word " + HX,
-    body: '<div class="simple">After the 48 layers, one last multiply scores <b>all 50,257 word-pieces at once</b>. Greedy decoding simply takes the highest score, appends it to your text, and the whole walk starts again for the next token.</div>' +
-      '<div class="adv"><h3>The shading is real (and honest)</h3><p>Chip shade comes from the <b>recorded scores (logits)</b> of the captured run. Where the log kept no score (steps 4-19), the chip shows <b>“—”</b> rather than an invented number. In live mode the real logits stream straight from the GPU.</p>' +
-      '<h3>Recorded example (verbatim)</h3><table><tr><th>piece</th><th>id</th><th>logit</th></tr><tr><td>" the"</td><td>262</td><td>8.79</td></tr><tr><td>" city"</td><td>1748</td><td>9.49</td></tr><tr><td>" of"</td><td>286</td><td>12.82</td></tr><tr><td>" Paris"</td><td>6342</td><td>12.99</td></tr></table>' +
+      '<h3>The operations of one layer</h3><p>' + f.opSequence + '. The “kernel:” line on the stage shows which one is firing' + (isGpt2 ? ', in real time' : ' (in live mode it streams each real kernel; the recorded GPT-2-XL replay shows GPT-2\'s)') + '.</p>' +
+      '<div class="paths"><b>check it:</b> the Helix GPU kernels (helixc/examples/*_kernel.hx) · the model\'s forward pass in helixc/runtime/</div></div>' };
+
+  DETAILS.choose = { kicker: "step 3 · scoring the vocabulary", title: "Choosing the next word " + HX,
+    body: '<div class="simple">After the ' + esc(nL) + (f.layers ? ' layers' : '') + ', one last multiply scores <b>all ' + esc(vocab) + ' word-pieces at once</b>. Greedy decoding simply takes the highest score, appends it to your text, and the whole walk starts again for the next token.</div>' +
+      '<div class="adv"><h3>The shading is real (and honest)</h3><p>Chip shade comes from the <b>recorded scores (logits)</b> of a captured run. Where the log kept no score, the chip shows <b>“—”</b> rather than an invented number. In live mode the real logits stream straight from the GPU.</p>' +
+      (isGpt2 ? ('<h3>Recorded example (verbatim — the GPT-2-XL run)</h3><table><tr><th>piece</th><th>id</th><th>logit</th></tr><tr><td>" the"</td><td>262</td><td>8.79</td></tr><tr><td>" city"</td><td>1748</td><td>9.49</td></tr><tr><td>" of"</td><td>286</td><td>12.82</td></tr><tr><td>" Paris"</td><td>6342</td><td>12.99</td></tr></table>') : '') +
       '<p style="margin-top:8px">This scoring multiply runs in the same Helix-built kernels ' + HX + ' as the layers.</p>' +
-      '<div class="paths"><b>check it:</b> demo/captured_run.js (verbatim capture + provenance notes) · scripts/_gate_run.log</div></div>' },
-  verify: { kicker: "step 4 · the referee", title: "Verification — the whole point " + HX,
-    body: '<div class="simple">How do you know the Helix-built stack ran the model <b>correctly</b>? An independent program (the “oracle”) — plain numpy, reading the original public weights, sharing no code with Helix — runs the same prompt. The token ids must match <b>one for one</b>. For this recorded run they did: <b>25 / 25</b>.</div>' +
+      '<div class="paths"><b>check it:</b> demo/captured_run.js (verbatim GPT-2-XL capture + provenance notes) · the serve-gate log</div></div>' };
+
+  DETAILS.verify = { kicker: "step 4 · the referee", title: "Verification — the whole point " + HX,
+    body: '<div class="simple">How do you know the Helix-built stack ran the model <b>correctly</b>? An independent program (the “oracle”) — plain numpy, reading the original public weights, sharing no code with Helix — runs the same prompt. The token ids must match <b>one for one</b>. For the recorded GPT-2-XL run they did: <b>25 / 25</b>.</div>' +
       '<div class="adv"><h3>Fail-closed, never faked</h3><p>The gates exit red on any mismatch — they never warn-and-continue. The SmolLM2 gate even includes a corrupted-weights <b>negative control</b> that correctly fails, proving the comparator has teeth. And honesty about THIS page: no live verdict is computed here; the replay shows the <b>recorded</b> gate result, and live mode points you at the gate script.</p>' +
-      '<h3>What\'s being verified</h3><p>The Helix execution ' + HX + ': from-raw compiler → 8 kernels → PTX → this output. The oracle is the independent referee, deliberately kept outside that chain.</p>' +
-      '<h3>Honest edge</h3><p>The oracle shares the model\'s <i>spec</i> (it\'s an independent implementation, not an independent specification) — it catches implementation bugs, not a shared misunderstanding of GPT-2.</p>' +
-      '<div class="paths"><b>check it:</b> scripts/helix_serve_gate.sh · scripts/gpt2_demo_attest.sh (writes a signed attestation) · <a href="dashboard.html">the recorded numbers</a></div></div>' }
-};
+      '<h3>What\'s being verified</h3><p>The Helix execution ' + HX + ': from-raw compiler → the GPU kernels → PTX → this output. The oracle is the independent referee, deliberately kept outside that chain.</p>' +
+      '<h3>Honest edge</h3><p>The oracle shares the model\'s <i>spec</i> (it\'s an independent implementation, not an independent specification) — it catches implementation bugs, not a shared misunderstanding of the model.</p>' +
+      '<div class="paths"><b>check it:</b> scripts/helix_serve_gate.sh · the demo attestation script · <a href="dashboard.html">the recorded numbers</a></div></div>' };
+}
+buildDetails(GENERIC_FACTS);   /* seed with neutral copy; applyModelTheme rebuilds per model */
+wireModelSelect();             /* now that buildDetails/HX exist, theme for the real model */
 var ovl = $("ovl");
 function openDetail(key) {
   var d = DETAILS[key]; if (!d) return;
