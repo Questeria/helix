@@ -245,8 +245,8 @@
     border: 1px solid var(--border-2);
     border-radius: var(--radius);
     display: flex; flex-direction: column;
-    min-height: 560px;
-    max-height: calc(100vh - 220px);
+    height: calc(100vh - 96px);
+    min-height: 520px;
     overflow: hidden;
   }
   .conv-head {
@@ -261,6 +261,7 @@
   .conv-head .ch-mode {
     font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
   }
+  .conv-col.has-turns #convHonesty, .conv-col.has-turns #seedRow { display: none; }
   .transcript {
     flex: 1; overflow-y: auto;
     padding: 20px 22px 8px;
@@ -677,7 +678,7 @@
   @media (max-width: 980px) {
     .wrap { padding: 18px 16px 40px; }
     .shell { grid-template-columns: 1fr; }
-    .conv-col { max-height: none; min-height: 460px; }
+    .conv-col { height: auto; max-height: none; min-height: 460px; }
     .internals-col {
       position: fixed; top: 0; right: 0; bottom: 0;
       width: min(420px, 92vw);
@@ -3611,6 +3612,7 @@ function enterBusyWait() {
 function clearEmptyState() {
   var e = $("transcriptEmpty");
   if (e) e.remove();
+  var cc = document.querySelector(".conv-col"); if (cc) cc.classList.add("has-turns");
 }
 
 function addUserTurn(text) {
@@ -5892,6 +5894,7 @@ function renderPath() {
   var t = $("transcript");
   t.innerHTML = "";
   var path = convoPath();
+  var cc = document.querySelector(".conv-col"); if (cc) cc.classList.toggle("has-turns", path.length > 0);
   if (!path.length) {
     t.appendChild(buildEmptyState());
     updateJumpPill();
