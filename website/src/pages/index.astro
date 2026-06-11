@@ -362,7 +362,7 @@ import Base from "../layouts/Base.astro";
           <ul class="feature-list">
             <li><b><code>grad(f)(x)</code></b><span>Forward-mode derivative. Symbolic, fully inlined.</span></li>
             <li><b><code>grad_rev_all(f)(...)</code></b><span>Reverse-mode adjoints; returns a struct of all partials.</span></li>
-            <li><b><code>@pure</code></b><span>IR-level effect verification — pure functions are transitively barred from effectful code.</span></li>
+            <li><b><code>@pure</code></b><span>Enforced at autodiff checkpoint boundaries: a checkpointed function reaching effectful code is rejected.</span></li>
             <li><b><code>quote / modify_f</code></b><span>Verifier-gated reflection: your verifier runs before any mutation commits.</span></li>
           </ul>
         </div>
