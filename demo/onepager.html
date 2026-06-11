@@ -5,144 +5,172 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Helix — the verifiable execution layer (one-pager)</title>
 <style>
-  /* ============================================================
-     demo/onepager.html — investor one-pager. Self-contained (no
-     CDNs/fonts/frameworks), dark on screen, PRINT-READY (light,
-     single A4/Letter page) via @media print -> use the browser's
-     Print to PDF. Every number is from a committed gate output;
-     no projections, no market-size claims, no capability claims.
-     ============================================================ */
-  :root {
-    --bg:#0c0c12; --panel:#15151d; --panel-2:#101017; --border:#2a2a36; --border-2:#3a3a48;
-    --ink:#f4f4f8; --ink-dim:#9d9da8; --ink-faint:#6e6e7a;
-    --accent:#8b5cf6; --accent-dim:#4c2f8c; --accent-bg:rgba(139,92,246,0.08);
-    --amber:#f5b14c; --amber-dim:#6b521d; --amber-bg:rgba(245,177,76,0.08);
-    --mono:ui-monospace,"SFMono-Regular","Consolas","Liberation Mono",Menlo,monospace;
-    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-  }
-  * { box-sizing: border-box; }
-  html,body { margin:0; padding:0; }
-  body { background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.45; }
-  .page { max-width: 820px; margin: 0 auto; padding: 30px 34px 36px; }
-  .top { display:flex; align-items:center; gap:11px; margin-bottom:14px; }
-  .top svg { width:26px; height:26px; }
-  .top .nm { font-size:21px; font-weight:800; letter-spacing:0.2px; }
-  .top .tag { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:1.2px;
-    color:var(--accent); border:1px solid var(--accent-dim); background:var(--accent-bg);
-    padding:3px 10px; border-radius:999px; text-transform:uppercase; }
-  h1 { font-size:25px; line-height:1.22; margin:4px 0 8px; letter-spacing:-0.3px; }
-  h1 .em { color:var(--accent); }
-  .lead { color:var(--ink-dim); font-size:14px; margin:0 0 16px; max-width:72ch; }
-  .lead b { color:var(--ink); }
-  h2 { font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:var(--ink-faint);
-       margin:18px 0 8px; font-weight:700; }
-  .chain { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-family:var(--mono); font-size:11.5px; }
-  .chain .n { background:var(--panel); border:1px solid var(--border-2); border-radius:6px;
-              padding:4px 9px; color:var(--ink-dim); }
-  .chain .n b { color:var(--ink); }
-  .chain .a { color:var(--accent); font-weight:700; }
-  .chain .n.out { color:var(--accent); border-color:var(--accent-dim); background:var(--accent-bg); }
-  table { border-collapse:collapse; width:100%; font-size:12px; }
-  th,td { text-align:left; padding:6px 9px; border-bottom:1px solid var(--border); }
-  th { font-family:var(--mono); font-size:9.5px; letter-spacing:0.8px; text-transform:uppercase;
-       color:var(--ink-faint); }
-  td { color:var(--ink-dim); } td b { color:var(--ink); }
-  td .num { font-family:var(--mono); color:var(--accent); }
-  .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
-  @media (max-width:680px){ .cols { grid-template-columns:1fr; } }
-  ul { margin:6px 0 0; padding-left:18px; color:var(--ink-dim); font-size:12.5px; }
-  li { margin-bottom:4px; } li b { color:var(--ink); }
-  .resid { background:var(--panel-2); border:1px solid var(--border); border-left:3px solid var(--amber-dim);
-           border-radius:8px; padding:10px 14px; font-size:11.5px; color:var(--ink-dim); margin-top:8px; }
-  .resid b { color:var(--amber); }
-  .foot { margin-top:18px; border-top:1px solid var(--border); padding-top:10px;
-          display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
-          font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
-  .foot a { color:var(--accent); text-decoration:none; }
-  .cmd { font-family:var(--mono); font-size:11.5px; color:var(--accent); background:#0a1118;
-         border:1px solid var(--border-2); border-radius:7px; padding:8px 12px; display:block;
-         margin-top:6px; overflow-x:auto; white-space:pre; }
-  @media print {
-    :root { --bg:#ffffff; --panel:#f6f8f7; --panel-2:#f1f4f3; --border:#d7ded9; --border-2:#c3ccc6;
-      --ink:#10201a; --ink-dim:#3c4f46; --ink-faint:#6b7c73; --accent:#0a7d54; --accent-dim:#9fd4bd;
-      --accent-bg:#eaf6f0; --amber:#8a6210; --amber-dim:#e3cf9d; --amber-bg:#faf3e2; }
-    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    .page { padding:8mm 10mm; max-width:none; }
-    .cmd { background:#f1f4f3; color:#0a7d54; }
-    a { color:#0a7d54; }
-  }
+:root { --bg:#0c0c12; --bg2:#0a0a0f; --panel:#15151d; --panel2:#101017; --line:#2a2a36; --line2:#3a3a48;
+  --ink:#f4f4f8; --dim:#9d9da8; --faint:#6e6e7a; --violet:#8b5cf6; --vsoft:#cdb6ff; --cyan:#5ed3f0;
+  --good:#3fd68f; --warn:#e0a44c; --red:#f0726a;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; --r:14px; }
+* { box-sizing:border-box; scrollbar-width:thin; scrollbar-color:var(--line2) transparent; }
+*::-webkit-scrollbar { width:9px;height:9px } *::-webkit-scrollbar-thumb { background:var(--line2);border-radius:8px } *::-webkit-scrollbar-track { background:transparent }
+html,body { margin:0;padding:0 }
+body { background:radial-gradient(1100px 640px at 50% -8%, #15121f 0%, var(--bg) 55%, var(--bg2) 100%); background-attachment:fixed;
+  color:var(--ink); font-family:var(--sans); line-height:1.55; -webkit-font-smoothing:antialiased; min-height:100vh; }
+body::before { content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background-image:linear-gradient(rgba(139,92,246,.025) 1px, transparent 1px),linear-gradient(90deg, rgba(139,92,246,.025) 1px, transparent 1px);
+  background-size:44px 44px; mask-image:radial-gradient(900px 500px at 50% 0%, rgba(0,0,0,.9), transparent 75%); -webkit-mask-image:radial-gradient(900px 500px at 50% 0%, rgba(0,0,0,.9), transparent 75%); }
+a { color:var(--vsoft); text-decoration:none } a:hover { text-decoration:underline }
+button { font:inherit; color:inherit; background:none; border:0; cursor:pointer }
+:focus-visible { outline:2px solid var(--violet); outline-offset:2px; border-radius:5px }
+.wrap { position:relative; z-index:1; max-width:1020px; margin:0 auto; padding:22px 24px 64px }
+.topbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:14px }
+.brand { display:flex; align-items:center; gap:10px; font-weight:700; font-size:18px }
+.badge299 { height:26px; width:38px; flex-shrink:0 }
+.brand .x { color:var(--faint); font-weight:500 } .brand .gpt { color:var(--dim); font-weight:600 }
+.pill { font-family:var(--mono); font-size:10px; letter-spacing:.06em; color:var(--dim); border:1px solid var(--line2); background:var(--panel2); padding:3px 9px; border-radius:6px; white-space:nowrap }
+.top-right { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap }
+.nav-pill { font-size:12.5px; font-weight:600; color:var(--dim); border:1px solid var(--line2); background:var(--panel); padding:7px 13px; border-radius:999px }
+.nav-pill:hover { color:var(--vsoft); border-color:var(--violet); text-decoration:none }
+.nav-pill.here { color:var(--vsoft); border-color:var(--violet); background:rgba(139,92,246,.1) }
+.rec-badge { display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:11.5px; font-weight:600; padding:6px 13px; border-radius:999px; color:var(--warn); border:1px solid #6b521d; background:rgba(224,164,76,.08) }
+.hero h1 { font-size:clamp(22px,3.2vw,32px); font-weight:700; letter-spacing:-.4px; line-height:1.18; margin:8px 0 8px; max-width:44ch }
+.hero h1 em { font-style:normal; font-family:var(--mono); font-size:.85em; background:linear-gradient(95deg, var(--violet), #e0409f 60%, var(--cyan)); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent }
+.hero p { color:var(--dim); font-size:14.5px; max-width:86ch; margin:0 0 10px } .hero p b { color:var(--ink) }
+.hx-key { display:inline-flex; align-items:center; gap:8px; font-size:12.5px; color:var(--dim); border:1px dashed var(--line2); border-radius:999px; padding:6px 14px; background:var(--panel2); margin:4px 0 0 }
+.hx-key b { color:var(--vsoft) }
+.hx-tag { display:inline-flex; align-items:center; gap:5px; font-family:var(--mono); font-size:9.5px; letter-spacing:.05em; color:var(--vsoft); background:rgba(139,92,246,.12); border:1px solid rgba(139,92,246,.45); border-radius:5px; padding:1.5px 7px; white-space:nowrap; cursor:help }
+.not-hx { font-family:var(--mono); font-size:9.5px; color:var(--faint); border:1px solid var(--line); border-radius:5px; padding:1.5px 7px; white-space:nowrap; cursor:help }
+.sec { margin-top:26px }
+.sec-h { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px }
+.sec-h .n { font-family:var(--mono); font-size:11px; color:var(--vsoft); letter-spacing:.08em }
+.sec-h h2 { font-size:18px; font-weight:700; letter-spacing:-.2px; margin:0 }
+.sec-sub { color:var(--dim); font-size:13.5px; margin:0 0 12px; max-width:84ch }
+.cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(225px, 1fr)); gap:10px }
+.cardb { text-align:left; background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:13px 15px; transition:border-color .2s, transform .15s; cursor:pointer; position:relative; display:flex; flex-direction:column; gap:6px }
+.cardb:hover { border-color:var(--violet); transform:translateY(-1px) }
+.cardb .k { font-family:var(--mono); font-size:10px; color:var(--vsoft); letter-spacing:.08em; text-transform:uppercase; display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+.cardb h3 { font-size:14.5px; font-weight:650; margin:0 }
+.cardb .big { font-family:var(--mono); font-size:19px; font-weight:700; color:var(--ink) }
+.cardb .big.ok { color:var(--good) }
+.cardb p { color:var(--dim); font-size:12.5px; margin:0 }
+.cardb .more { margin-top:auto; padding-top:6px; font-family:var(--mono); font-size:9.5px; color:var(--faint) }
+.cardb:hover .more { color:var(--vsoft) }
+.cardb.static { cursor:default } .cardb.static:hover { border-color:var(--line); transform:none }
+.panelx { background:var(--panel); border:1px solid var(--line); border-radius:var(--r); padding:14px 16px }
+.gen { font-size:15px; line-height:1.65; background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px 15px; font-family:var(--mono) }
+.gen .pr { color:var(--cyan) } .gen .cont { color:var(--ink) }
+.ladder { display:flex; gap:5px; flex-wrap:wrap; align-items:center }
+.rung { font-family:var(--mono); font-size:11px; padding:5px 9px; border-radius:7px; border:1px solid var(--line2); background:var(--panel2); cursor:help }
+.rung b { color:var(--vsoft) } .rung .sz { color:var(--faint); font-size:9px; margin-left:4px }
+.rung.root { border-color:var(--violet); background:rgba(139,92,246,.1) }
+.l-arr { color:var(--faint); font-size:11px }
+table.t { width:100%; border-collapse:collapse; font-size:12.5px }
+table.t th { font-family:var(--mono); font-size:10px; letter-spacing:.07em; text-transform:uppercase; color:var(--faint); text-align:left; padding:7px 9px; border-bottom:1px solid var(--line2) }
+table.t td { padding:8px 9px; border-bottom:1px solid var(--line); color:var(--dim); vertical-align:top }
+table.t td b { color:var(--ink) } table.t td .ok { color:var(--good); font-family:var(--mono) }
+table.t tr:last-child td { border-bottom:0 }
+.resid-l { list-style:none; margin:0; padding:0; display:grid; gap:7px }
+.resid-l li { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--warn); border-radius:9px; padding:9px 13px; font-size:12.5px; color:var(--dim) }
+.resid-l li b { color:var(--ink) }
+.code { font-family:var(--mono); font-size:12px; line-height:1.65; background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px 15px; overflow-x:auto; color:var(--dim) }
+.code .c { color:var(--faint) } .code .v { color:var(--vsoft) }
+.tip { border-bottom:1px dotted var(--faint); cursor:help; position:relative }
+.tip:hover::after, .tip:focus::after { content:attr(data-tip); position:absolute; left:0; bottom:calc(100% + 6px); z-index:60;
+  background:#1d1d27; border:1px solid var(--line2); color:var(--ink); font-size:11.5px; line-height:1.45; font-family:var(--sans);
+  padding:7px 10px; border-radius:8px; width:max-content; max-width:270px; white-space:normal }
+.ovl { position:fixed; inset:0; z-index:80; display:none; background:rgba(5,5,9,.7); backdrop-filter:blur(3px) }
+.ovl.open { display:grid; place-items:center; padding:18px }
+.ovl-card { background:var(--panel); border:1px solid var(--line2); border-radius:16px; max-width:640px; width:100%; max-height:86vh; overflow:auto; padding:22px 24px }
+.ovl-card h2 { font-size:18px; margin:0 0 4px }
+.ovl-kicker { font-family:var(--mono); font-size:10.5px; color:var(--vsoft); letter-spacing:.1em; text-transform:uppercase }
+.ovl-close { float:right; border:1px solid var(--line2); border-radius:8px; padding:5px 11px; font-size:12px; color:var(--dim) }
+.ovl-close:hover { color:var(--ink); border-color:var(--violet) }
+.ovl-card .simple { font-size:14px; color:var(--ink); background:rgba(139,92,246,.07); border-left:3px solid var(--violet); border-radius:8px; padding:10px 14px; margin:12px 0 }
+.ovl-card .adv h3 { font-size:12px; letter-spacing:.09em; text-transform:uppercase; color:var(--dim); margin:15px 0 6px }
+.ovl-card .adv p { font-size:13px; color:var(--dim); margin:0 0 9px } .ovl-card .adv b { color:var(--ink) }
+.ovl-card pre { font-family:var(--mono); font-size:11.5px; line-height:1.6; background:var(--panel2); border:1px solid var(--line); border-radius:9px; padding:12px 14px; overflow-x:auto; color:var(--dim) }
+.ovl-card .paths { font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:13px; line-height:1.7 }
+.foot { border-top:1px solid var(--line); margin-top:28px; padding-top:14px; font-size:12px; color:var(--faint); display:flex; gap:14px; flex-wrap:wrap; justify-content:space-between }
+@media print { body { background:#fff; color:#000 } body::before { display:none } }
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="top">
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M6 3c0 6 12 6 12 12M18 3c0 6-12 6-12 12M6 21c0-3 12-3 12 0M6 3c0-1 12-1 12 0"
-            stroke="#8b5cf6" stroke-width="1.6" stroke-linecap="round"/>
-      <circle cx="6" cy="3" r="1.3" fill="#8b5cf6"/><circle cx="18" cy="3" r="1.3" fill="#8b5cf6"/>
-      <circle cx="6" cy="21" r="1.3" fill="#8b5cf6"/><circle cx="18" cy="21" r="1.3" fill="#8b5cf6"/>
-    </svg>
-    <span class="nm">Helix</span>
-    <span class="tag">The verifiable execution layer</span>
+<main class="wrap">
+  <div class="topbar">
+    <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">GPT-2</span></span>
+    <span class="rec-badge">▶ RECORDED RESULTS — real gate outputs, not live</span>
+    <div class="top-right"><a class="nav-pill" href="landing.html">Start here</a><a class="nav-pill" href="journey.html">Guided run</a><a class="nav-pill" href="index.html">Expert</a><a class="nav-pill" href="dashboard.html">Proof</a><a class="nav-pill" href="compare.html">Models</a></div>
   </div>
-
-  <h1>The model you know, on a stack you can <span class="em">verify from the first byte</span>.</h1>
-  <p class="lead">Every AI stack asks for blind trust in compilers built by compilers nobody audits.
-    Helix is a <b>self-hosting compiler rebuildable from 299 hand-typed bytes</b> that runs real,
-    unchanged <b>GPT-2 (124M → 1.5B)</b> inference through its own emitted GPU kernels — output
-    matched <b>token-for-token against an independent oracle</b>, byte-reproducible, with a signed
-    attestation. The product is <b>verified execution</b> — deliberately not speed.</p>
-
-  <h2>The trust chain — rebuilt, not asserted</h2>
-  <div class="chain">
-    <span class="n"><b>299 B</b> hand-typed hex0</span><span class="a">›</span>
-    <span class="n">seed <b>9837db12…</b></span><span class="a">›</span>
-    <span class="n">kovc fixpoint <b>0992dddd…</b> (K2=K3=K4)</span><span class="a">›</span>
-    <span class="n">8 compiler-emitted GPU kernels</span><span class="a">›</span>
-    <span class="n out">GPT-2's verified output</span>
+  
+<header class="hero">
+  <h1>Helix — the verifiable execution layer. <em>One page.</em></h1>
+  <p><b>The claim:</b> real, unchanged GPT-2 (124M → 1.5B) and a 2024 Llama-architecture model run on a software stack
+  rebuildable from <b>299 hand-typed bytes</b>, with outputs matching an independent oracle <b>token-for-token (25/25)</b> — gated fail-closed, reproducible, attested.</p>
+</header>
+  
+<section class="sec">
+  <div class="sec-h"><span class="n">THE CHAIN</span><h2>299 bytes → a compiler → 8 GPU kernels → verified AI</h2></div>
+  <div class="panelx"><div class="ladder">
+    <span class="rung root"><b>hex0</b><span class="sz">299 B · hand-typed</span></span><span class="l-arr">→</span>
+    <span class="rung"><b>seed</b><span class="sz">sha 9837db12…</span></span><span class="l-arr">→</span>
+    <span class="rung"><b>kovc</b><span class="sz">self-hosts · K2==K3==K4 · 0992dddd…</span></span><span class="l-arr">→</span>
+    <span class="rung"><b>8 kernels</b><span class="sz">PTX 44,019 B</span></span><span class="l-arr">→</span>
+    <span class="rung"><b>GPT-2</b><span class="sz">25/25 vs oracle</span></span>
+  </div></div>
+</section>
+<section class="sec">
+  <div class="sec-h"><span class="n">RECORDED RESULTS</span><h2>Every model, gated</h2></div>
+  <div class="panelx" style="overflow-x:auto"><table class="t">
+    <tr><th>model</th><th>argmax</th><th>max score diff</th><th>tokens</th></tr>
+    <tr><td><b>GPT-2 124M</b> · 12 L</td><td><span class="ok">id 262 exact</span></td><td>2.59e-04</td><td><span class="ok">25/25</span></td></tr>
+    <tr><td><b>GPT-2-Large 774M</b> · 36 L</td><td><span class="ok">id 262 exact</span></td><td>3.8e-05</td><td><span class="ok">25/25</span></td></tr>
+    <tr><td><b>GPT-2-XL 1.5B</b> · 48 L</td><td><span class="ok">id 262 exact</span></td><td>4.4e-05</td><td><span class="ok">25/25</span></td></tr>
+    <tr><td><b>SmolLM2-135M</b> · 30 L · Llama arch</td><td><span class="ok">id 260 exact</span></td><td>4.9e-05 / 49,152</td><td><span class="ok">25/25</span></td></tr>
+  </table></div>
+</section>
+<section class="sec">
+  <div class="sec-h"><span class="n">WHY IT MATTERS</span><h2>Audit instead of trust</h2></div>
+  <div class="cards">
+    <div class="cardb static"><span class="k">FOR AI BUILDERS <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 12 14" fill="none" width="10" height="12" aria-hidden="true"><path d="M3.2 0.8 C8.8 3.4, 8.8 5.4, 3.2 8 C8.8 10.6, 8.8 11.4, 3.2 13.2" stroke="#cdb6ff" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M8.8 0.8 C3.2 3.4, 3.2 5.4, 8.8 8 C3.2 10.6, 3.2 11.4, 8.8 13.2" stroke="#8b5cf6" stroke-width="1.25" stroke-linecap="round" fill="none"/><path d="M4.4 2.5 H7.6 M3.8 5.6 H8.2 M4.4 9.6 H7.6" stroke="#cdb6ff" stroke-width="0.9" stroke-linecap="round" opacity="0.8"/></svg>powered by Helix</span></span><p>Bring your weights: the execution layer beneath your model becomes fully traceable — same 8 kernels from 124M to 1.5B, zero new ops at scale.</p></div>
+    <div class="cardb static"><span class="k">FOR AUDITORS</span><p>One command (scripts/reproduce_trust.sh, ~1 min, CPU-only) rebuilds the chain from raw and asserts the anchors: 9837db12 · 0992dddd · 84363adb.</p></div>
+    <div class="cardb static"><span class="k">HONEST EDGES</span><p>fp32 · to PTX not SASS · single sm_86 GPU · ≈10 s/token live by design · base models, not assistants · oracle shares the spec.</p></div>
   </div>
-  <p class="lead" style="font-size:12px;margin-top:8px">Corroborated by gcc diverse-double-compile
-    (<span style="font-family:var(--mono)">84363adb…</span>) — an unrelated compiler lineage reproduces
-    a key rung byte-for-byte: the canonical defense against the Ken Thompson "trusting trust" attack.</p>
-
-  <div class="cols">
-    <div>
-      <h2>Measured results (committed, fail-closed gates)</h2>
-      <table>
-        <tr><th>Leg</th><th>Result</th></tr>
-        <tr><td><b>GPT-2 124M</b> · GPU</td><td><span class="num">argmax exact</span> · <span class="num">25/25 ids</span> vs oracle · max-abs <span class="num">2.59e-04</span></td></tr>
-        <tr><td><b>774M + 1.5B</b> · GPU</td><td>same 8 kernels, zero new ops · <span class="num">25/25 ids</span> · <span class="num">3.8e-05 / 4.4e-05</span></td></tr>
-        <tr><td><b>Live XL chat</b></td><td>served == offline oracle <span class="num">25/25</span> · ≈ 9.8 s/token (by design)</td></tr>
-        <tr><td><b>124M · CPU, no ptxas</b></td><td>zero trusted <b>arithmetic</b> above the seed · token-for-token · ~130 s/token</td></tr>
-        <tr><td><b>Reproducibility</b></td><td>byte-identical re-runs · one-command from-raw rebuild (~1 min, CI-corroborated)</td></tr>
-      </table>
-    </div>
-    <div>
-      <h2>What exists today</h2>
-      <ul>
-        <li><b>From-raw toolchain</b> (hex0→seed→kovc), self-host fixpoint + gcc-DDC, reproducible by anyone in ~1 min.</li>
-        <li><b>Python-free production path</b>: C tokenizer + C weight importer, bit-exact gated.</li>
-        <li><b>Live chat demo</b>: C HTTP+SSE server streams real per-layer/per-kernel telemetry from the XL forward; website-ready replay of a gated captured run.</li>
-        <li><b>Signed attestation</b> binding the anchors, the model hash and the output of each green run.</li>
-        <li><b>Next (authored, pre-gate)</b>: the 3 kernels that extend the same verified stack to a modern Apache-2.0 Llama-arch model (RMSNorm · RoPE · SwiGLU; GQA is host wiring).</li>
-      </ul>
-    </div>
-  </div>
-
-  <h2>The honesty that sells it</h2>
-  <div class="resid"><b>Disclosed residuals, unprompted:</b> verified to PTX, not SASS (ptxas/driver
-    trusted-once — the CPU path removes even that); fp32-only; single RTX-3070-class GPU; the oracle
-    shares GPT-2's spec, not its code; a 2019 base model demonstration, not frontier capability — and
-    never claimed otherwise. Intentionally slow: ≈10 s/token at 1.5B. <b>Trust, not speed.</b></div>
-
-  <h2>Check it yourself (no GPU, no Python, no weights)</h2>
-  <code class="cmd">git clone https://github.com/Questeria/helix && cd helix && bash scripts/reproduce_trust.sh
-# → REPRODUCE_TRUST: PASS  (~1 minute, CPU-only; same check runs green in CI)</code>
+</section>
+<section class="sec"><div class="panelx"><p class="sec-sub" style="margin:0"><b>Contact:</b> ajdemarco10@gmail.com · linkedin.com/in/anthony-demarco10 · github.com/Questeria/helix &nbsp;—&nbsp; <b>Web:</b> 299bytes.com</p></div></section>
 
   <div class="foot">
-    <span>github.com/Questeria/helix · demo: index.html (chat) · dashboard.html (proof)</span>
-    <span>All figures from committed gate logs · 2026-06</span>
+    <span><b>Honest residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · base models, not assistants · the oracle shares the model's spec. Every number on this page is a recorded, committed result.</span>
+    <span><a href="landing.html">start here</a> · <a href="journey.html">guided run</a> · <a href="index.html">expert</a> · <a href="dashboard.html">proof</a> · <a href="compare.html">models</a></span>
+  </div>
+</main>
+<div class="ovl" id="ovl" role="dialog" aria-modal="true" aria-labelledby="ovlTitle">
+  <div class="ovl-card">
+    <button class="ovl-close" id="ovlClose" type="button">close ✕</button>
+    <span class="ovl-kicker" id="ovlKicker"></span>
+    <h2 id="ovlTitle"></h2>
+    <div id="ovlBody"></div>
   </div>
 </div>
+
+<script>
+"use strict";
+var ovl = document.getElementById("ovl");
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("[data-ovl]");
+  if (b) {
+    var tpl = document.getElementById("d-" + b.getAttribute("data-ovl"));
+    if (tpl) {
+      document.getElementById("ovlKicker").textContent = tpl.dataset.kicker || "";
+      document.getElementById("ovlTitle").innerHTML = tpl.dataset.title || "";
+      document.getElementById("ovlBody").innerHTML = tpl.innerHTML;
+      ovl.classList.add("open");
+      document.getElementById("ovlClose").focus();
+    }
+    return;
+  }
+  if (e.target === ovl) ovl.classList.remove("open");
+});
+document.getElementById("ovlClose").addEventListener("click", function () { ovl.classList.remove("open"); });
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") ovl.classList.remove("open"); });
+</script>
 </body>
 </html>
