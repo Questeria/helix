@@ -72,6 +72,18 @@ body[data-source="replay"] .src-badge { color: var(--warn); border-color: #6b521
 body[data-source="replay"] .src-badge .dot { background: var(--warn); }
 body[data-source="mock"]   .src-badge { color: var(--warn); border-color: #6b521d; background: rgba(224,164,76,.08); }
 body[data-source="mock"]   .src-badge .dot { background: var(--warn); }
+/* mode switch — flip between the recorded Replay and a LIVE run on a local backend */
+.mode-switch { display: inline-flex; border: 1px solid var(--line2); border-radius: 999px; overflow: hidden; background: var(--panel2); font-family: var(--mono); }
+.mode-seg { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; color: var(--dim); padding: 6px 13px; border: 0; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: color .15s, background .15s; }
+.mode-seg + .mode-seg { border-left: 1px solid var(--line2); }
+.mode-seg:not(.active):hover { color: var(--vsoft); }
+.mode-seg.active { background: rgba(139,92,246,.16); color: var(--vsoft); cursor: default; }
+.mode-seg .seg-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: background .2s; }
+#modeLive.ready { color: var(--good); }
+#modeLive.ready .seg-dot { background: var(--good); animation: pulse 2.4s ease-out infinite; }
+#modeLive.active { color: var(--vsoft); }
+#modeLive.active .seg-dot { background: var(--good); animation: none; }
+#modeLive.off .seg-dot { background: var(--faint); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(63,214,143,.45); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
 .nav-pill { font-size: 12.5px; font-weight: 600; color: var(--dim); border: 1px solid var(--line2); background: var(--panel); padding: 7px 13px; border-radius: 999px; }
 .nav-pill:hover { color: var(--violet-soft); border-color: var(--violet); text-decoration: none; }
@@ -275,6 +287,10 @@ body.running .stop { display: inline-block; }
       <span class="pill">THE GUIDED RUN</span>
       <span class="pill" id="modelTagPill">a verified model on a stack you can rebuild from 299 bytes</span>
       <div class="top-right">
+        <div class="mode-switch" role="group" aria-label="Run mode — recorded replay or live">
+          <button type="button" id="modeReplay" class="mode-seg" title="Watch the recorded run">Replay</button>
+          <button type="button" id="modeLive" class="mode-seg" title="Run live on a local backend"><span class="seg-dot" aria-hidden="true"></span>Live</button>
+        </div>
         <div class="src-badge" role="status" aria-live="polite"><span class="dot"></span><span id="srcText">PREVIEW</span></div>
       </div>
     </div>
@@ -1175,6 +1191,47 @@ if (SOURCE === "sse") {
     ribbon("<b>No live backend answered /api/health.</b> Start scripts/serve_chat_demo.sh, or drop ?source=sse to use the recorded replay.");
   });
 }
+
+/* ============================================================
+   MODE SWITCH — flip between the recorded Replay and a LIVE run.
+   "Live" lights up only when a local backend answers /api/health.
+   Switching reloads with ?source= so each mode configures cleanly
+   (live: editable prompt + model picker + real streaming; replay:
+   the pinned recorded run). The whole point of the page — watch a
+   real run, then run your own — without touching the URL bar.
+   ============================================================ */
+(function () {
+  var segR = $("modeReplay"), segL = $("modeLive");
+  if (!segR || !segL) return;
+  function go(src) { var u = new URL(location.href); u.searchParams.set("source", src); location.href = u.toString(); }
+  if (SOURCE === "sse") { segL.classList.add("active", "ready"); }
+  else { segR.classList.add("active"); }
+  segR.addEventListener("click", function () { if (SOURCE !== "sse") return; go("replay"); });
+  segL.addEventListener("click", function () {
+    if (SOURCE === "sse") return;
+    if (segL.classList.contains("ready")) { go("sse"); return; }
+    ribbon('<b>No live backend yet.</b> Run <code>scripts/serve_chat_demo.sh</code> then reload, or see <a href="https://299bytes.com/run-local/">how to run it live</a> — meanwhile this is the recorded replay.');
+  });
+  /* probe for a backend (any non-live mode) so Live can light up */
+  if (SOURCE !== "sse") {
+    segL.setAttribute("aria-disabled", "true");
+    segL.title = "Checking for a local backend…";
+    var settled = false, ac = ("AbortController" in window) ? new AbortController() : null;
+    var t = setTimeout(function () { if (!settled && ac) ac.abort(); }, 2500);
+    fetch("/api/health", ac ? { signal: ac.signal } : {})
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(0); })
+      .then(function (h) {
+        settled = true; clearTimeout(t);
+        segL.removeAttribute("aria-disabled");
+        if (h && (h.ready || h.ok)) {
+          segL.classList.add("ready");
+          segL.title = "A local backend is ready — click to run live";
+          if (!running) ribbon('<b>● Live backend detected.</b> Click <b>Live</b> (top-right) to type your own prompt and watch a real run — or press <b>▶</b> to watch the recorded one.');
+        } else { segL.classList.add("off"); segL.title = "No live backend — click to learn how to run it live"; }
+      })
+      .catch(function () { settled = true; clearTimeout(t); segL.removeAttribute("aria-disabled"); segL.classList.add("off"); segL.title = "No live backend — click to learn how to run it live"; });
+  }
+})();
 </script>
 <script>
 document.querySelectorAll(".tabs .tab").forEach(function (a) {
