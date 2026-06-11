@@ -76,12 +76,12 @@ body[data-source="mock"]   .src-badge .dot { background: var(--warn); }
 .mode-switch { display: inline-flex; border: 1px solid var(--line2); border-radius: 999px; overflow: hidden; background: var(--panel2); font-family: var(--mono); }
 .mode-seg { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; color: var(--dim); padding: 6px 13px; border: 0; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: color .15s, background .15s; }
 .mode-seg + .mode-seg { border-left: 1px solid var(--line2); }
-.mode-seg:not(.active):hover { color: var(--vsoft); }
-.mode-seg.active { background: rgba(139,92,246,.16); color: var(--vsoft); cursor: default; }
+.mode-seg:not(.active):hover { color: var(--violet-soft); }
+.mode-seg.active { background: rgba(139,92,246,.16); color: var(--violet-soft); cursor: default; }
 .mode-seg .seg-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: background .2s; }
 #modeLive.ready { color: var(--good); }
 #modeLive.ready .seg-dot { background: var(--good); animation: pulse 2.4s ease-out infinite; }
-#modeLive.active { color: var(--vsoft); }
+#modeLive.active { color: var(--violet-soft); }
 #modeLive.active .seg-dot { background: var(--good); animation: none; }
 #modeLive.off .seg-dot { background: var(--faint); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(63,214,143,.45); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
@@ -142,8 +142,8 @@ body[data-source="mock"]   .src-badge .dot { background: var(--warn); }
 .seeds-lbl { font-size: 9.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
 .comp-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; flex-wrap: wrap; }
 .inf-btn { font-family: var(--mono); font-size: 14px; padding: 0 9px; color: var(--dim); border-left: 1px solid var(--line2); line-height: 1; }
-.inf-btn.on { color: var(--vsoft); text-shadow: 0 0 8px rgba(139,92,246,.6); }
-.stepper.unlimited input { color: var(--vsoft); }
+.inf-btn.on { color: var(--violet-soft); text-shadow: 0 0 8px rgba(139,92,246,.6); }
+.stepper.unlimited input { color: var(--violet-soft); }
 .seeds { display: contents; }
 .seed { font-size: 12px; color: var(--dim); border: 1px solid var(--line2); border-radius: 999px; padding: 4.5px 12px; background: var(--panel2); }
 .seed:hover { color: var(--ink); border-color: var(--violet); }
@@ -223,6 +223,13 @@ body.running .stop { display: inline-block; }
 .race .lane:nth-child(2) .fill { background: var(--violet); }
 .verdict { text-align: center; font-family: var(--mono); font-size: 11.5px; margin-top: 7px; color: var(--faint); }
 .verdict.ok { color: var(--good); }
+.verdict.bad { color: var(--red); }
+.verify-btn { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--violet-soft); border: 1px solid var(--violet); background: rgba(139,92,246,.14); padding: 6px 14px; border-radius: 999px; cursor: pointer; transition: background .15s; }
+.verify-btn:hover { background: rgba(139,92,246,.24); }
+.verify-btn:disabled { opacity: .55; cursor: default; }
+.verify-note { display: block; margin-top: 6px; color: var(--faint); font-size: 10.5px; }
+.spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--line2); border-top-color: var(--violet-soft); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* explain ribbon */
 .ribbon { display: flex; gap: 9px; align-items: flex-start; background: rgba(139,92,246,.08); border: 1px solid rgba(139,92,246,.35); border-radius: 11px; padding: 9px 13px; font-size: 13px; margin-bottom: 16px; min-height: 42px; }
@@ -850,8 +857,45 @@ function setRing(L, total) {
   var shown = tickEls.length, hot = tickIndexFor(L);
   for (var k = 0; k < shown; k++) tickEls[k].className = k < hot ? "was" : (k === hot ? "on" : "");
 }
+/* ---- live verify: run the INDEPENDENT oracle on the just-finished run and
+   show a real, fail-closed token-for-token verdict (never fabricated). ---- */
+var lastRun = null;
+function verifyLastRun() {
+  if (!lastRun || !lastRun.ids.length) return;
+  var v = $("verdict"), btn = $("verifyBtn");
+  if (btn) btn.disabled = true;
+  v.className = "verdict";
+  v.innerHTML = '<span class="spin"></span>running the independent numpy oracle on your prompt… (seconds for the small models; minutes for GPT-2-XL — leave it open)';
+  setStatus("st4", "verifying…");
+  ribbon("<b>Verifying live —</b> an independent numpy program (shares no code with Helix) is re-deriving your run from the original public weights, to compare it token for token.");
+  fetch("/api/verify", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: lastRun.model, prompt: lastRun.prompt, served_ids: lastRun.ids.join(" ") }) })
+    .then(function (r) { return r.json(); })
+    .then(renderVerdict)
+    .catch(function (e) { v.className = "verdict"; v.textContent = "the verify request failed: " + esc(String(e)); setStatus("st4", "error"); if (btn) btn.disabled = false; });
+}
+function renderVerdict(j) {
+  var v = $("verdict"), btn = $("verifyBtn"); if (btn) btn.disabled = false;
+  if (j.verdict === "PASS") {
+    v.className = "verdict ok";
+    v.innerHTML = "✓ TOKEN-FOR-TOKEN MATCH — " + j.matched + " / " + j.total + " ids vs the independent " + esc(j.oracle || "oracle") + " · computed live, just now";
+    setStatus("st4", j.matched + " / " + j.total + " (live)");
+    ribbon("<b>Verified, live.</b> The independent oracle produced the <b>same " + j.total + " token ids</b> as the Helix-GPU run — token for token. Nothing here was recorded; it was computed on demand.");
+  } else if (j.verdict === "FAIL") {
+    v.className = "verdict bad";
+    v.innerHTML = "✗ MISMATCH — " + j.matched + " / " + j.total + " matched (first differs at #" + ((j.first_mismatch | 0) + 1) + ") vs " + esc(j.oracle || "oracle");
+    setStatus("st4", "FAIL " + j.matched + "/" + j.total);
+    ribbon("<b>The oracle disagreed</b> — and the page says so plainly. This is the fail-closed comparator working; it never warns-and-continues.");
+  } else {
+    v.className = "verdict";
+    v.innerHTML = (j.verdict === "TIMEOUT" ? "⧖ " : "• ") + esc(j.note || j.verdict || "unavailable");
+    setStatus("st4", j.verdict === "TIMEOUT" ? "timed out" : (j.verdict === "UNAVAILABLE" ? "see gate" : "—"));
+  }
+}
+
 function startRun(prompt) {
   if (running) return;
+  var genIdList = [], runModel = ($("modelSel") || {}).value || "";
   resetSpine();
   LIVE_OPS = (SOURCE === "sse");
   nWanted = UNLIMITED
@@ -918,6 +962,7 @@ function startRun(prompt) {
     },
     onToken: function (step, id, piece, logit) {
       genCount += 1;
+      if (id != null) genIdList.push(id);   /* collect the GPU's real ids so the live verify can compare them */
       var shown = stripControlPiece(piece);   /* never display a raw <|...|> control token */
       pushTokenText(shown);
       if (shown === "" && piece !== "") return;   /* control token: counted by model, hidden from chips/ribbon */
@@ -945,7 +990,16 @@ function startRun(prompt) {
       setTimeout(function () {
         var v = $("verdict");
         if (SOURCE === "replay" && d.recordedVerdict) { v.className = "verdict ok"; v.textContent = "✓ " + d.recordedVerdict; setStatus("st4", "25 / 25 (recorded)"); }
-        else if (SOURCE === "sse") { v.textContent = "no live verdict is shown — run scripts/helix_serve_gate.sh for the fail-closed gate"; setStatus("st4", "see gate"); }
+        else if (SOURCE === "sse") {
+          lastRun = { model: runModel, prompt: prompt, ids: genIdList.slice() };
+          if (genIdList.length) {
+            v.className = "verdict";
+            v.innerHTML = '<button type="button" id="verifyBtn" class="verify-btn">Verify this run against the oracle &#9656;</button>'
+              + '<span class="verify-note">runs the independent numpy referee on your prompt — a real, fail-closed token-for-token check (no recorded verdict)</span>';
+            $("verifyBtn").addEventListener("click", verifyLastRun);
+            setStatus("st4", "ready to verify");
+          } else { v.textContent = "nothing was generated to verify"; setStatus("st4", "—"); }
+        }
         else { v.textContent = "preview — no verdict (mock runs are never judged)"; setStatus("st4", "n/a"); }
         setRow(3, SOURCE === "replay" ? "done" : "active");
         ribbon(SOURCE === "replay"

@@ -537,35 +537,152 @@ static void handle_generate(int fd, const char* body) {
  *                  re-check is the offline gate; we do NOT fake a PASS here. The note says so and the
  *                  UI links to page 2's real, committed parity numbers.
  * Either way: a fast, structured, honest JSON -- no weight load, no hang, no fabricated verdict. */
-static int file_exists(const char* p) { struct stat st; return stat(p, &st) == 0; }
+/* OPT-IN, never on the generation hot path. When the page's "Verify this run" button posts a
+ * just-finished run, we run the matching INDEPENDENT numpy oracle (gpt2_numpy_ref.py /
+ * llama_numpy_ref.py -- original public weights, shares no code with Helix) on the same prompt,
+ * greedy-decode n tokens, and compare token-for-token against the ids the GPU actually produced.
+ * A REAL verdict -- and fail-closed: any timeout/error/missing-oracle returns NOT-a-PASS, never a
+ * fabricated green. Bounded by timeout(1); serialized so at most one oracle runs at a time; spawned
+ * via execvp with an argv array (the user prompt is a single argument -- no shell, no injection). */
+#define VERIFY_TIMEOUT_SEC 240
+static pthread_mutex_t g_verify_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static int oracle_present(void) {
-    if (!g_cfg.oracle_dir[0]) return 0;
-    char oracle_py[1200];
-    snprintf(oracle_py, sizeof oracle_py, "%s/gpt2_numpy_ref.py", g_cfg.oracle_dir);
-    if (!file_exists(oracle_py)) return 0;
-    if (system("python3 -c 'import numpy' >/dev/null 2>&1") != 0) return 0;   /* cheap; no weights */
-    return 1;
+/* the posted model must be one this server is actually serving (also blocks path traversal). */
+static int model_is_served(const char* model) {
+    for (int i = 0; i < 3; i++) { const char* m = cfg_model_name(i); if (m && m[0] && strcmp(m, model) == 0) return 1; }
+    return 0;
+}
+/* parse up to cap space-separated integers from s; stops at the first non-numeric token
+ * (so it reads exactly the GEN_IDS line and not the following "OUTPUT:" print). */
+static int parse_ids(const char* s, int* out, int cap) {
+    int n = 0;
+    while (*s && n < cap) {
+        while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+        if (!((*s >= '0' && *s <= '9') || (*s == '-' && s[1] >= '0' && s[1] <= '9'))) break;
+        out[n++] = atoi(s);
+        while (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n') s++;
+    }
+    return n;
+}
+
+/* run the oracle subprocess (cwd = oracle_dir, env per arch), capture stdout into buf.
+ * returns the child exit code (0 ok, 124 = timeout(1) killed it), or <0 on spawn failure. */
+static int run_oracle(int is_gpt2, int is_instruct, const char* model,
+                      const char* prompt, int n, char* buf, size_t bufcap) {
+    int out_pipe[2];
+    if (pipe(out_pipe)) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(out_pipe[0]); close(out_pipe[1]); return -1; }
+    if (pid == 0) {                                  /* child */
+        dup2(out_pipe[1], 1); dup2(out_pipe[1], 2);
+        close(out_pipe[0]); close(out_pipe[1]);
+        if (chdir(g_cfg.oracle_dir) != 0) _exit(126);
+        if (is_gpt2) {
+            setenv("HX_GPT2_MODEL", model, 1);
+        } else {
+            char md[1500]; snprintf(md, sizeof md, "%s/../models/%s", g_cfg.oracle_dir, model);
+            setenv("LLAMA_MODEL_DIR", md, 1);
+            setenv("LLAMA_CHAT", is_instruct ? "1" : "0", 1);   /* instruct: oracle applies the ChatML template, exactly like the gate */
+        }
+        char nstr[16];  snprintf(nstr,  sizeof nstr,  "%d", n);
+        char tos[16];   snprintf(tos,   sizeof tos,   "%d", VERIFY_TIMEOUT_SEC);
+        char* script = is_gpt2 ? (char*)"gpt2_numpy_ref.py" : (char*)"llama_numpy_ref.py";
+        char* av[9]; int k = 0;
+        av[k++] = (char*)"timeout"; av[k++] = tos;
+        av[k++] = (char*)"python3"; av[k++] = script;
+        av[k++] = (char*)"dump-gen"; av[k++] = (char*)prompt; av[k++] = nstr;
+        av[k] = NULL;
+        execvp("timeout", av);
+        _exit(127);
+    }
+    close(out_pipe[1]);                              /* parent: read all stdout, bounded */
+    size_t got = 0;
+    for (;;) {
+        if (got + 1 >= bufcap) { char t[1024]; if (read(out_pipe[0], t, sizeof t) <= 0) break; continue; }
+        ssize_t r = read(out_pipe[0], buf + got, bufcap - 1 - got);
+        if (r < 0) { if (errno == EINTR) continue; break; }
+        if (r == 0) break;
+        got += (size_t)r;
+    }
+    buf[got] = 0;
+    close(out_pipe[0]);
+    int status = 0; waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -2;
 }
 
 static void handle_verify(int fd, const char* body) {
-    (void)body;
-    if (!oracle_present()) {
+    char model[64] = {0}, prompt[8192] = {0}, served[16384] = {0};
+    json_str_field(body, "model",      model,  sizeof model);
+    json_str_field(body, "prompt",     prompt, sizeof prompt);
+    json_str_field(body, "served_ids", served, sizeof served);
+
+    if (!model[0] || !prompt[0] || !served[0]) {
         send_status(fd, 200, "OK", "application/json; charset=utf-8",
-            "{\"verdict\":\"UNAVAILABLE\",\"argmax_match\":false,\"token_for_token\":false,"
-            "\"oracle\":\"numpy fp32 (absent)\","
-            "\"note\":\"python/numpy oracle absent -- the live demo path is Python-free by design. "
-            "The real token-for-token XL parity is the committed offline gate; see page 2.\"}");
+            "{\"verdict\":\"ERROR\",\"note\":\"verify needs model + prompt + served_ids\"}");
         return;
     }
-    /* oracle present, but the deep re-derivation loads the full 6.4 GB XL fp32 oracle + re-runs the
-     * forward -- the OFFLINE gate's job, never the hot path. We do NOT fake a PASS. */
-    send_status(fd, 200, "OK", "application/json; charset=utf-8",
-        "{\"verdict\":\"UNAVAILABLE\",\"argmax_match\":false,\"token_for_token\":false,"
-        "\"oracle\":\"numpy fp32 (present, off-hot-path by design)\","
-        "\"note\":\"The fp32 numpy oracle exists but re-running it would load the full XL weights "
-        "and block the single GPU -- it is the OFFLINE gate (scripts/gpt2_scale.sh), not a live "
-        "hot-path check. Not faking a verdict; the real, committed token-for-token XL parity is on page 2.\"}");
+    if (!model_is_served(model)) {
+        send_status(fd, 200, "OK", "application/json; charset=utf-8",
+            "{\"verdict\":\"ERROR\",\"note\":\"unknown model\"}");
+        return;
+    }
+    if (!g_cfg.oracle_dir[0] || system("python3 -c 'import numpy' >/dev/null 2>&1") != 0) {
+        send_status(fd, 200, "OK", "application/json; charset=utf-8",
+            "{\"verdict\":\"UNAVAILABLE\",\"oracle\":\"numpy (absent)\","
+            "\"note\":\"the independent numpy oracle is not available in this checkout -- the live path is Python-free by design; the committed offline gate is the token-for-token check (see run-local).\"}");
+        return;
+    }
+    int n = parse_ids(served, (int[400]){0}, 400);   /* count only */
+    if (n <= 0 || n > 400) {
+        send_status(fd, 200, "OK", "application/json; charset=utf-8",
+            "{\"verdict\":\"ERROR\",\"note\":\"served_ids empty or too long\"}");
+        return;
+    }
+    int is_gpt2     = (strncmp(model, "gpt2", 4) == 0);
+    int is_instruct = (strstr(model, "instruct") != NULL);
+
+    char* obuf = (char*)malloc(1 << 16);
+    if (!obuf) { send_status(fd, 200, "OK", "application/json; charset=utf-8", "{\"verdict\":\"ERROR\",\"note\":\"oom\"}"); return; }
+    obuf[0] = 0;
+    pthread_mutex_lock(&g_verify_lock);
+    int rc = run_oracle(is_gpt2, is_instruct, model, prompt, n, obuf, 1 << 16);
+    char* g = (rc == 0) ? strstr(obuf, "GEN_IDS:") : NULL;
+    /* parse while still holding the lock so obuf can't be clobbered by a concurrent verify */
+    int matched = 0, first_mismatch = -1, on = 0;
+    int oids[512]; char ogen[6144]; ogen[0] = 0;
+    if (g) {
+        on = parse_ids(g + 8, oids, 512);
+        int start = on - n; if (start < 0) start = 0;
+        int sids[512]; int sn = parse_ids(served, sids, 512);
+        size_t op = 0;
+        for (int i = 0; i < n; i++) {
+            int ov = (start + i < on) ? oids[start + i] : -999999;
+            if (start + i < on) op += snprintf(ogen + op, sizeof ogen - op, "%s%d", i ? " " : "", ov);
+            if (i < sn && ov == sids[i]) matched++;
+            else if (first_mismatch < 0) first_mismatch = i;
+        }
+    }
+    pthread_mutex_unlock(&g_verify_lock);
+
+    char out[10240];
+    if (rc != 0 || !g) {
+        const char* verdict = (rc == 124) ? "TIMEOUT" : "ERROR";
+        const char* why = (rc == 124) ? "the oracle timed out -- large models take minutes; use the offline gate (scripts/helix_serve_gate.sh)"
+                        : (rc < 0)    ? "could not launch the independent oracle"
+                        :               "the oracle did not produce a result (its original weights may be absent -- see run-local)";
+        snprintf(out, sizeof out,
+            "{\"verdict\":\"%s\",\"oracle\":\"numpy fp32 (%s)\",\"matched\":0,\"total\":%d,\"note\":\"%s\"}",
+            verdict, model, n, why);
+    } else {
+        const char* verdict = (matched == n && on >= n) ? "PASS" : "FAIL";
+        snprintf(out, sizeof out,
+            "{\"verdict\":\"%s\",\"oracle\":\"numpy fp32 (%s)\",\"matched\":%d,\"total\":%d,\"first_mismatch\":%d,"
+            "\"served_ids\":\"%s\",\"oracle_ids\":\"%s\","
+            "\"note\":\"independently re-derived by the %s numpy oracle (original public weights, shares no code with Helix) and compared token-for-token\"}",
+            verdict, model, matched, n, first_mismatch, served, ogen, is_gpt2 ? "GPT-2" : "Llama");
+    }
+    free(obuf);
+    send_status(fd, 200, "OK", "application/json; charset=utf-8", out);
 }
 
 /* ============================ connection handler ============================ */
