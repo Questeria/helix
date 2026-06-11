@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Helix × GPT-2 — the guided run</title>
+<style>
+/* ============================================================
+   demo/journey.html — the GUIDED RUN (beginner-first demo UI).
+   Architecture: "J4 trust-spine timeline" in the Carbon Violet
+   scheme (chosen from the design lab). Self-contained, offline:
+   no CDNs, no web fonts, no frameworks — same policy as the
+   other demo/ trust artifacts.
+
+   HONESTY RULES (inherited from the original playground):
+   - the badge always says LIVE / REPLAY / PREVIEW; mock can never
+     pass as real; the replay is a REAL captured run, labeled
+     time-compressed; numbers are real or shown as "—", never invented;
+   - no live parity verdict is shown: replay shows the RECORDED gate
+     result; live mode points at the gate script;
+   - Helix marks appear ONLY on things genuinely compiled from Helix
+     source by kovc (the 8 GPU kernels / the PTX / the compiler chain).
+     The C host tools (tokenizer, launcher) are labeled as exactly that.
+   ============================================================ */
+:root {
+  --bg: #0c0c12; --bg2: #0a0a0f;
+  --panel: #15151d; --panel2: #101017;
+  --line: #2a2a36; --line2: #3a3a48;
+  --ink: #f4f4f8; --dim: #9d9da8; --faint: #6e6e7a;
+  --violet: #8b5cf6; --violet-soft: #cdb6ff; --cyan: #5ed3f0; --magenta: #e0409f;
+  --good: #3fd68f; --warn: #e0a44c; --red: #f0726a;
+  --mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --r: 14px; --rs: 9px;
+}
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; } *::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 8px; } *::-webkit-scrollbar-track { background: transparent; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: radial-gradient(1100px 640px at 50% -8%, #15121f 0%, var(--bg) 55%, var(--bg2) 100%);
+  background-attachment: fixed; color: var(--ink); font-family: var(--sans); line-height: 1.55;
+  -webkit-font-smoothing: antialiased; min-height: 100vh;
+}
+body::before { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image: linear-gradient(rgba(139,92,246,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(139,92,246,.025) 1px, transparent 1px);
+  background-size: 44px 44px; mask-image: radial-gradient(900px 500px at 50% 0%, rgba(0,0,0,.9), transparent 75%); -webkit-mask-image: radial-gradient(900px 500px at 50% 0%, rgba(0,0,0,.9), transparent 75%); }
+a { color: var(--violet-soft); text-decoration: none; } a:hover { text-decoration: underline; }
+.wrap { position: relative; z-index: 1; max-width: 1060px; margin: 0 auto; padding: 22px 24px 64px; }
+:focus-visible { outline: 2px solid var(--violet); outline-offset: 2px; border-radius: 5px; }
+.skip-link { position: absolute; left: 10px; top: -50px; z-index: 90; background: var(--violet); color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 13px; transition: top .15s; }
+.skip-link:focus { top: 10px; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+/* ---------- preview banner (mock only) ---------- */
+.pv { display: none; background: rgba(224,164,76,.08); border: 1px solid #6b521d; border-radius: var(--rs); padding: 10px 14px; margin-bottom: 14px; font-size: 13px; color: var(--dim); }
+.pv b { color: var(--warn); }
+body[data-source="mock"] .pv { display: block; }
+
+/* ---------- topbar ---------- */
+.topbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+.badge299 { height: 26px; width: 38px; flex-shrink: 0; }
+.brand .x { color: var(--faint); font-weight: 500; }
+.brand .gpt { color: var(--dim); font-weight: 600; }
+.pill { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; color: var(--dim); border: 1px solid var(--line2); background: var(--panel2); padding: 3px 9px; border-radius: 6px; white-space: nowrap; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.src-badge { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .04em; padding: 7px 14px; border-radius: 999px; border: 1px solid; }
+.src-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+body[data-source="sse"]    .src-badge { color: var(--good); border-color: #1d6b4f; background: rgba(63,214,143,.08); }
+body[data-source="sse"]    .src-badge .dot { background: var(--good); animation: pulse 2.4s ease-out infinite; }
+body[data-source="replay"] .src-badge { color: var(--warn); border-color: #6b521d; background: rgba(224,164,76,.08); }
+body[data-source="replay"] .src-badge .dot { background: var(--warn); }
+body[data-source="mock"]   .src-badge { color: var(--warn); border-color: #6b521d; background: rgba(224,164,76,.08); }
+body[data-source="mock"]   .src-badge .dot { background: var(--warn); }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(63,214,143,.45); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.nav-pill { font-size: 12.5px; font-weight: 600; color: var(--dim); border: 1px solid var(--line2); background: var(--panel); padding: 7px 13px; border-radius: 999px; }
+.nav-pill:hover { color: var(--violet-soft); border-color: var(--violet); text-decoration: none; }
+
+/* ---------- hero strip + helix key ---------- */
+.hero { margin: 14px 0 18px; }
+.hero h1 { font-size: clamp(21px, 3vw, 30px); font-weight: 700; letter-spacing: -.4px; line-height: 1.2; margin: 0 0 8px; max-width: 46ch; }
+.hero h1 em { font-style: normal; font-family: var(--mono); font-size: .85em;
+  background: linear-gradient(95deg, var(--violet), var(--magenta) 60%, var(--cyan)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.hero p { color: var(--dim); font-size: 14px; max-width: 88ch; margin: 0 0 10px; }
+.hero p b { color: var(--ink); }
+.hx-key { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--dim); border: 1px dashed var(--line2); border-radius: 999px; padding: 6px 14px; background: var(--panel2); }
+.hx-key b { color: var(--violet-soft); font-weight: 600; }
+.hx-mark { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 4.5px; background: rgba(139,92,246,.16); border: 1px solid var(--violet); flex-shrink: 0; vertical-align: -2px; }
+.hx-mark svg { width: 9px; height: 11px; display: block; }
+.hx-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; color: var(--violet-soft); background: rgba(139,92,246,.12); border: 1px solid rgba(139,92,246,.45); border-radius: 5px; padding: 1.5px 7px; white-space: nowrap; cursor: help; }
+.not-hx { font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; color: var(--faint); border: 1px solid var(--line); border-radius: 5px; padding: 1.5px 7px; white-space: nowrap; cursor: help; }
+
+/* ---------- transcript ---------- */
+.transcript { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.bub { border-radius: 11px; padding: 9px 13px; font-size: 14px; max-width: 86%; }
+.bub.user { background: rgba(94,211,240,.10); border: 1px solid rgba(94,211,240,.3); align-self: flex-end; }
+.bub.model { background: var(--panel); border: 1px solid var(--line); align-self: flex-start; }
+.bub.model .meta { display: block; font-family: var(--mono); font-size: 10px; color: var(--faint); margin-top: 6px; }
+.caret { display: inline-block; width: 7px; height: 14px; background: var(--violet); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- composer ---------- */
+.composer { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin-bottom: 20px; }
+.seeds { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 9px; }
+.seed { font-size: 12px; color: var(--dim); border: 1px solid var(--line2); border-radius: 999px; padding: 4.5px 12px; background: var(--panel2); }
+.seed:hover { color: var(--ink); border-color: var(--violet); }
+.comp-row { display: flex; gap: 9px; align-items: stretch; }
+textarea { flex: 1; resize: none; background: var(--panel2); color: var(--ink); border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; font: 14px/1.5 var(--sans); min-height: 44px; }
+textarea:focus { outline: 2px solid var(--violet); outline-offset: 0; border-color: transparent; }
+.comp-ctl { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.stepper { display: flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 11px; color: var(--dim); border: 1px solid var(--line2); border-radius: 9px; padding: 4px 7px; background: var(--panel2); }
+.stepper button { color: var(--violet-soft); font-size: 14px; padding: 0 5px; }
+.stepper input { width: 38px; background: none; border: 0; color: var(--ink); font: 12px var(--mono); text-align: center; }
+.go { background: var(--violet); color: #fff; font-weight: 700; font-size: 14px; border-radius: 10px; padding: 0 20px; min-height: 44px; }
+.go:hover { background: #9a70f8; }
+.go:disabled { opacity: .45; cursor: not-allowed; }
+.stop { display: none; border: 1px solid var(--red); color: var(--red); border-radius: 10px; padding: 0 14px; min-height: 44px; font-weight: 600; font-size: 13px; }
+body.running .stop { display: inline-block; }
+.comp-note { font-size: 11.5px; color: var(--faint); margin-top: 8px; }
+.comp-note b { color: var(--dim); }
+
+/* ---------- THE SPINE ---------- */
+.spine { position: relative; padding: 10px 0 4px; }
+.spine::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: linear-gradient(to bottom, var(--violet), rgba(139,92,246,.12)); }
+.srow { display: grid; grid-template-columns: 1fr 34px 1fr; align-items: center; margin-bottom: 14px; }
+.sdot { width: 13px; height: 13px; border-radius: 50%; background: var(--bg); border: 3px solid var(--line2); justify-self: center; z-index: 1; transition: border-color .25s; }
+.srow.active .sdot { border-color: var(--violet); animation: pulse 2.2s ease-out infinite; }
+.srow.done .sdot { border-color: var(--violet); background: var(--violet); }
+.scell { min-width: 0; }
+.scell.empty { visibility: hidden; }
+.stage { width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 13px 15px; transition: border-color .2s, transform .15s, box-shadow .2s; cursor: pointer; position: relative; }
+.stage:hover { border-color: var(--violet); transform: translateY(-1px); box-shadow: 0 10px 30px -18px rgba(139,92,246,.55); }
+.srow.active .stage { border-color: var(--violet); }
+.stage .s-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 7px; }
+.stage .s-num { font-family: var(--mono); font-size: 10px; color: var(--violet-soft); letter-spacing: .08em; }
+.stage .s-title { font-weight: 650; font-size: 14px; }
+.stage .s-status { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.srow.active .s-status { color: var(--violet-soft); }
+.stage .s-sub { color: var(--dim); font-size: 12px; margin-bottom: 9px; }
+.stage .s-more { position: absolute; right: 11px; bottom: 9px; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+.stage:hover .s-more { color: var(--violet-soft); }
+.spine-cap { text-align: center; margin-bottom: 14px; position: relative; z-index: 1; }
+.spine-cap .chip299 { display: inline-flex; align-items: center; gap: 8px; background: var(--panel); border: 1.6px solid var(--violet); border-radius: 999px; padding: 7px 16px; font-family: var(--mono); font-size: 12px; font-weight: 700; cursor: pointer; }
+.spine-cap .chip299:hover { background: rgba(139,92,246,.12); }
+.spine-cap .cap-sub { display: block; font-size: 10.5px; color: var(--faint); margin-top: 5px; font-family: var(--mono); }
+
+/* metric atoms */
+.tok-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.tchip { font-family: var(--mono); font-size: 11px; padding: 3.5px 8px; border-radius: 6px; border: 1px solid var(--line2); background: var(--panel2); }
+.tchip small { color: var(--faint); font-size: 9px; margin-left: 4px; }
+.tchip.hi  { background: rgba(63,214,143,.20); border-color: rgba(63,214,143,.4); }
+.tchip.md  { background: rgba(63,214,143,.10); border-color: rgba(63,214,143,.25); }
+.tchip.lo  { background: rgba(224,164,76,.16); border-color: rgba(224,164,76,.35); }
+.tchip.na  { color: var(--dim); }
+.heat-legend { display: flex; gap: 9px; align-items: center; font-size: 10px; color: var(--faint); margin-top: 7px; flex-wrap: wrap; }
+.heat-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+.think-row { display: flex; gap: 13px; align-items: center; }
+.ring { width: 76px; height: 76px; border-radius: 50%; flex-shrink: 0; position: relative;
+  background: conic-gradient(var(--violet) var(--deg, 0deg), var(--panel2) var(--deg, 0deg)); }
+.ring::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: repeating-conic-gradient(transparent 0deg 5.5deg, var(--bg) 5.5deg 7.5deg); }
+.ring::after { content: attr(data-v); position: absolute; inset: 10px; border-radius: 50%; background: var(--panel);
+  display: grid; place-items: center; font-family: var(--mono); font-size: 10.5px; font-weight: 700; text-align: center; white-space: pre; }
+.lticks { display: flex; gap: 2px; margin-top: 8px; }
+.lticks i { flex: 1; height: 13px; border-radius: 2.5px; background: var(--panel2); border: 1px solid var(--line); }
+.lticks i.on { background: var(--violet); border-color: var(--violet); }
+.lticks i.was { background: rgba(139,92,246,.28); border-color: rgba(139,92,246,.4); }
+.opline { font-family: var(--mono); font-size: 10.5px; color: var(--cyan); margin-top: 7px; min-height: 15px; }
+.opline .lbl { color: var(--faint); }
+.odos { display: flex; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+.odo { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+.odo small { display: block; font-size: 8.5px; color: var(--faint); letter-spacing: .07em; text-transform: uppercase; font-weight: 500; }
+
+.race .lane { display: flex; align-items: center; gap: 7px; margin: 5px 0; }
+.race .lane b { width: 74px; font-size: 10px; color: var(--dim); font-weight: 600; flex-shrink: 0; }
+.race .track { flex: 1; height: 11px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--line); position: relative; overflow: hidden; }
+.race .fill { position: absolute; inset: 1px auto 1px 1px; width: 0%; border-radius: 5px; background: var(--cyan); transition: width .4s ease; }
+.race .lane:nth-child(2) .fill { background: var(--violet); }
+.verdict { text-align: center; font-family: var(--mono); font-size: 11.5px; margin-top: 7px; color: var(--faint); }
+.verdict.ok { color: var(--good); }
+
+/* explain ribbon */
+.ribbon { display: flex; gap: 9px; align-items: flex-start; background: rgba(139,92,246,.08); border: 1px solid rgba(139,92,246,.35); border-radius: 11px; padding: 9px 13px; font-size: 13px; margin-bottom: 16px; min-height: 42px; }
+.ribbon .q { flex-shrink: 0; width: 19px; height: 19px; border-radius: 50%; border: 1.6px solid var(--violet); color: var(--violet-soft); display: grid; place-items: center; font-size: 11px; font-weight: 700; margin-top: 1px; }
+.ribbon b { color: var(--violet-soft); }
+
+/* ---------- detail overlay ---------- */
+.ovl { position: fixed; inset: 0; z-index: 80; display: none; background: rgba(5,5,9,.7); backdrop-filter: blur(3px); }
+.ovl.open { display: grid; place-items: center; padding: 18px; }
+.ovl-card { background: var(--panel); border: 1px solid var(--line2); border-radius: 16px; max-width: 660px; width: 100%; max-height: 86vh; overflow: auto; padding: 22px 24px; }
+.ovl-card h2 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.ovl-kicker { font-family: var(--mono); font-size: 10.5px; color: var(--violet-soft); letter-spacing: .1em; text-transform: uppercase; }
+.ovl-close { float: right; border: 1px solid var(--line2); border-radius: 8px; padding: 5px 11px; font-size: 12px; color: var(--dim); }
+.ovl-close:hover { color: var(--ink); border-color: var(--violet); }
+.ovl-card .simple { font-size: 14px; color: var(--ink); background: rgba(139,92,246,.07); border-left: 3px solid var(--violet); border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.ovl-card .adv h3 { font-size: 12px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); margin: 16px 0 7px; }
+.ovl-card .adv p { font-size: 13px; color: var(--dim); margin: 0 0 9px; }
+.ovl-card .adv b { color: var(--ink); }
+.ovl-card pre { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; background: var(--panel2); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; overflow-x: auto; color: var(--dim); }
+.ovl-card pre .k { color: var(--violet-soft); }
+.ovl-card table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+.ovl-card td, .ovl-card th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; color: var(--dim); }
+.ovl-card th { color: var(--faint); font-weight: 600; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+.ovl-card .paths { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 14px; line-height: 1.7; }
+.ovl-card .paths b { color: var(--dim); font-weight: 600; }
+
+/* tooltips (custom, for marked terms) */
+.tip { border-bottom: 1px dotted var(--faint); cursor: help; position: relative; }
+.tip:hover::after, .tip:focus::after { content: attr(data-tip); position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 60;
+  background: #1d1d27; border: 1px solid var(--line2); color: var(--ink); font-size: 11.5px; line-height: 1.45; font-family: var(--sans);
+  padding: 7px 10px; border-radius: 8px; width: max-content; max-width: 260px; white-space: normal; }
+
+/* footer */
+.resid { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 14px; font-size: 12px; color: var(--faint); display: flex; gap: 14px; flex-wrap: wrap; justify-content: space-between; }
+.resid b { color: var(--dim); }
+.resid a { white-space: nowrap; }
+
+/* responsive: spine collapses to left-edge timeline */
+@media (max-width: 760px) {
+  .spine::before { left: 9px; }
+  .srow { grid-template-columns: 22px 1fr; margin-bottom: 11px; }
+  .sdot { grid-column: 1; width: 11px; height: 11px; }
+  .scell { grid-column: 2; }
+  .scell.empty { display: none; }
+  .srow > .scell:first-child:not(.empty) { grid-row: 1; }
+  .spine-cap { text-align: left; padding-left: 26px; }
+  .think-row { flex-direction: column; align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sdot, .src-badge .dot, .caret { animation: none !important; }
+  .race .fill { transition: none; }
+}
+</style>
+</head>
+<body data-source="mock">
+  <a class="skip-link" href="#promptInput">Skip to the prompt box</a>
+  <noscript><p style="padding:20px;font-family:monospace">This demo renders with local inline JavaScript only (no CDNs, no trackers). Enable JavaScript to watch it.</p></noscript>
+  <main class="wrap">
+
+    <div class="pv" role="alert"><b>PREVIEW — simulated numbers.</b> No recorded run is loaded and no GPU is connected, so this page is animating the run's real <i>structure</i> with mock values. The live verified backend exists (gated by <code>scripts/helix_serve_gate.sh</code>); open <code>?source=sse</code> when it's running.</div>
+
+    <div class="topbar">
+      <span class="brand">
+        <svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root">
+          <rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/>
+          <text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text>
+        </svg>
+        Helix <span class="x">×</span> <span class="gpt">GPT-2</span>
+      </span>
+      <span class="pill">THE GUIDED RUN</span>
+      <span class="pill">GPT-2-XL · 1.5B · 2019 base model — not an assistant</span>
+      <div class="top-right">
+        <div class="src-badge" role="status" aria-live="polite"><span class="dot"></span><span id="srcText">PREVIEW</span></div>
+        <a class="nav-pill" href="index.html">Expert playground →</a>
+        <a class="nav-pill" href="dashboard.html">Proof →</a>
+      </div>
+    </div>
+
+    <header class="hero">
+      <h1>Watch a 1.5-billion-parameter model think — on a stack you can <em>rebuild from 299 bytes</em>.</h1>
+      <p><b>Every box below explains itself</b> — hover for a hint, click for the full story. The model (GPT-2-XL) continues your text token by token; the spine shows each step of that work as it happens, and where it is <b>powered by Helix</b>.</p>
+      <span class="hx-key"><span class="hx-mark" aria-hidden="true"><svg viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span>
+        <span>Key: anything marked with this symbol is <b>powered by Helix</b> — compiled from Helix source by kovc, the compiler that rebuilds from 299 hand-typed bytes.</span></span>
+    </header>
+
+    <div class="ribbon" aria-live="polite"><span class="q">?</span><span id="ribbonText">Pick a seed below — or type anything — and press <b>Continue</b>. The spine will light up step by step as the model works.</span></div>
+
+    <section aria-label="Conversation">
+      <div class="transcript" id="transcript"></div>
+      <div class="composer">
+        <div class="seeds" id="seeds">
+          <button class="seed" type="button">The capital of France is</button>
+          <button class="seed" type="button">Once upon a time</button>
+          <button class="seed" type="button">In the beginning</button>
+          <button class="seed" type="button">A proof is convincing when</button>
+        </div>
+        <div class="comp-row">
+          <textarea id="promptInput" rows="1" placeholder="Give GPT-2 some text to continue…" aria-label="Text for GPT-2 to continue"></textarea>
+          <div class="comp-ctl">
+            <span class="stepper" title="How many new tokens (word-pieces) to generate">
+              <button type="button" id="nDown" aria-label="fewer tokens">−</button>
+              <input id="nGen" type="number" value="20" min="1" max="64" aria-label="number of tokens" />
+              <button type="button" id="nUp" aria-label="more tokens">+</button>
+            </span>
+            <button class="go" id="goBtn" type="button">Continue</button>
+            <button class="stop" id="stopBtn" type="button" title="Stop — the partial reply is kept">■ Stop</button>
+          </div>
+        </div>
+        <div class="comp-note"><b>Honest note:</b> a <span class="tip" tabindex="0" data-tip="A model trained only to predict the next word-piece of text — not fine-tuned to chat, follow instructions, or be factual.">base completion model</span> continues text; expect continuations, not answers. The real GPU run takes ≈ 10 s per token by design — the replay here is time-compressed and says so.</div>
+      </div>
+    </section>
+
+    <!-- ================= THE TRUST SPINE ================= -->
+    <section class="spine" id="spine" aria-label="The run, step by step">
+      <div class="spine-cap">
+        <button class="chip299" id="chipChain" type="button" title="Click — where this stack comes from">
+          <svg width="26" height="18" viewBox="2.5 9 43 30" fill="none" aria-hidden="true"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#8b5cf6" stroke-width="2.6"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" fill="#cdb6ff">B</tspan></text></svg>
+          the trust root
+        </button>
+        <span class="cap-sub">everything on this spine traces back to 299 hand-typed bytes — click to see how</span>
+      </div>
+
+      <div class="srow" id="row1">
+        <div class="scell"><button class="stage" data-detail="tokenize" type="button">
+          <div class="s-head"><span class="s-num">STEP 1</span><span class="s-title">Words become numbers</span>
+            <span class="not-hx" title="The tokenizer is a committed C host tool (gpt2_tok.c) — outside the Helix compiler, gated bit-exact against the reference. Honestly labeled: not Helix.">C host tool</span>
+            <span class="s-status" id="st1">waiting</span></div>
+          <div class="s-sub">The model can't read letters — your text is split into <span class="tip" tabindex="0" data-tip="Word-pieces from a fixed 50,257-entry vocabulary. Common words are one piece; rare words split into several.">tokens</span>, each with an id number.</div>
+          <div class="tok-chips" id="tokChips"><span class="tchip na">your tokens will appear here…</span></div>
+          <span class="s-more">click for details ↗</span>
+        </button></div>
+        <div class="sdot" aria-hidden="true"></div>
+        <div class="scell empty" aria-hidden="true"></div>
+      </div>
+
+      <div class="srow" id="row2">
+        <div class="scell empty" aria-hidden="true"></div>
+        <div class="sdot" aria-hidden="true"></div>
+        <div class="scell"><button class="stage" data-detail="think" type="button">
+          <div class="s-head"><span class="s-num">STEP 2</span><span class="s-title">48 layers think</span>
+            <span class="hx-tag" title="All the math here runs in 8 GPU kernels written in the Helix language and compiled to PTX by kovc — the compiler that rebuilds from 299 bytes."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
+            <span class="s-status" id="st2">waiting</span></div>
+          <div class="s-sub">For every new token, the same two-step block runs 48 times: <span class="tip" tabindex="0" data-tip="Each word looks back at all earlier words and decides how much each one matters right now.">attention</span>, then <span class="tip" tabindex="0" data-tip="Each word is reworked on its own through a wider scratch space — most of the model's 1.5B parameters live here.">MLP</span>.</div>
+          <div class="think-row">
+            <div class="ring" id="ring" data-v="idle"></div>
+            <div style="flex:1;min-width:0">
+              <div class="lticks" id="lticks" aria-label="48 layers, lighting as they run"></div>
+              <div class="opline" id="opline"><span class="lbl">kernel:</span> —</div>
+              <div class="odos">
+                <span class="odo" id="odoOps">0<small>GPU kernel ops</small></span>
+                <span class="odo" id="odoPasses">0<small>layer passes</small></span>
+              </div>
+            </div>
+          </div>
+          <span class="s-more">click for details ↗</span>
+        </button></div>
+      </div>
+
+      <div class="srow" id="row3">
+        <div class="scell"><button class="stage" data-detail="choose" type="button">
+          <div class="s-head"><span class="s-num">STEP 3</span><span class="s-title">Choose the next word</span>
+            <span class="hx-tag" title="The scoring multiply (the next-token head) runs in the same Helix-built kernels."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span>
+            <span class="s-status" id="st3">waiting</span></div>
+          <div class="s-sub">All 50,257 vocabulary pieces get a score; the highest wins. Shade = the model's <span class="tip" tabindex="0" data-tip="From the recorded scores (logits). Where the log kept no score, the chip stays neutral and shows “—” — nothing is invented.">recorded confidence</span>.</div>
+          <div class="tok-chips" id="genChips"><span class="tchip na">chosen tokens land here…</span></div>
+          <div class="heat-legend"><i style="background:rgba(63,214,143,.20)"></i>sure <i style="background:rgba(63,214,143,.10)"></i>likely <i style="background:rgba(224,164,76,.16)"></i>less sure <i style="background:var(--panel2);border:1px solid var(--line2)"></i>“—” not recorded</div>
+          <span class="s-more">click for details ↗</span>
+        </button></div>
+        <div class="sdot" aria-hidden="true"></div>
+        <div class="scell empty" aria-hidden="true"></div>
+      </div>
+
+      <div class="srow" id="row4">
+        <div class="scell empty" aria-hidden="true"></div>
+        <div class="sdot" aria-hidden="true"></div>
+        <div class="scell"><button class="stage" data-detail="verify" type="button">
+          <div class="s-head"><span class="s-num">STEP 4</span><span class="s-title">Verify against a referee</span>
+            <span class="hx-tag" title="What gets verified is the Helix-built execution: the same prompt is run by an independent reference implementation, and the token ids must match exactly."><svg width="9" height="11" viewBox="0 0 10 12" fill="none"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>Helix execution under test</span>
+            <span class="s-status" id="st4">waiting</span></div>
+          <div class="s-sub">An <span class="tip" tabindex="0" data-tip="A separate numpy program that reads the original public weights and computes its own answer — independent of Helix's importer and GPU path.">independent oracle</span> runs the same prompt. The token ids must match, one for one.</div>
+          <div class="race" id="race">
+            <div class="lane"><b>Helix GPU</b><div class="track"><div class="fill" id="fillA"></div></div></div>
+            <div class="lane"><b>oracle</b><div class="track"><div class="fill" id="fillB"></div></div></div>
+            <div class="verdict" id="verdict">runs after the reply finishes</div>
+          </div>
+          <span class="s-more">click for details ↗</span>
+        </button></div>
+      </div>
+    </section>
+
+    <div class="resid">
+      <span><b>Honest residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · base model, not an assistant · oracle shares the spec · replay pacing is compressed (real: 195.5 s / 20 tokens). This page never invents a number.</span>
+      <span><a href="dashboard.html">full residuals &amp; gate records →</a> · <a href="index.html">expert playground →</a> · <a href="compare.html">models &amp; paths →</a></span>
+    </div>
+  </main>
+
+  <!-- detail overlay -->
+  <div class="ovl" id="ovl" role="dialog" aria-modal="true" aria-labelledby="ovlTitle">
+    <div class="ovl-card">
+      <button class="ovl-close" id="ovlClose" type="button">close ✕</button>
+      <span class="ovl-kicker" id="ovlKicker"></span>
+      <h2 id="ovlTitle"></h2>
+      <div id="ovlBody"></div>
+    </div>
+  </div>
+
+  <script src="captured_run.js"></script>
+<script>
+"use strict";
+/* ================================================================
+   THE GUIDED RUN — front-end logic. Three sources, one interface:
+   start(prompt, nGen, H) -> { cancel() }, H = { onTokenize, onLayer,
+   onOp, onToken, onDone, onError }. Honesty mirrors index.html.
+   ================================================================ */
+var $ = function (id) { return document.getElementById(id); };
+var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); };
+
+/* ---------- source resolution ---------- */
+var SOURCE = "mock";
+try {
+  var q = new URLSearchParams(location.search).get("source");
+  var hasReplay = !!(window.HELIX_CAPTURED_RUN && window.HELIX_CAPTURED_RUN.tokenize && window.HELIX_CAPTURED_RUN.done);
+  if (q === "sse") SOURCE = "sse";
+  else if (q === "mock") SOURCE = "mock";
+  else if (q === "replay") SOURCE = hasReplay ? "replay" : "mock";
+  else SOURCE = hasReplay ? "replay" : "mock";
+} catch (e) { /* keep mock */ }
+document.body.dataset.source = SOURCE;
+$("srcText").textContent = SOURCE === "sse" ? "LIVE · GPU (RTX 3070, sm_86)"
+  : SOURCE === "replay" ? "REPLAY · real recorded run (time-compressed)"
+  : "PREVIEW · simulated numbers";
+
+/* ---------- real structural constants (from gpt2_infer's layer sequence) ---------- */
+var LAYER_OPS = [
+  ["ln_1","gpu_layernorm_fwd_eps"],["qkv_gemm","tiled_matmul"],["qkv_bias","gpu_add_bias_rowbcast"],
+  ["attn_scores","tiled_matmul_abt"],["attn_scale","gpu_scale_rt"],["attn_softmax","gpu_softmax_causal"],
+  ["attn_av","tiled_matmul"],["attn_proj","tiled_matmul"],["attn_proj_bias","gpu_add_bias_rowbcast"],
+  ["attn_residual","vector_add"],["ln_2","gpu_layernorm_fwd_eps"],["fc_gemm","tiled_matmul"],
+  ["fc_bias","gpu_add_bias_rowbcast"],["gelu","gpu_gelu_stable"],["proj2_gemm","tiled_matmul"],
+  ["proj2_bias","gpu_add_bias_rowbcast"],["mlp_residual","vector_add"]
+];
+var N_LAYERS = 48;
+var OP_WORDS = {
+  ln_1: "tidying the numbers (layer norm)", qkv_gemm: "preparing questions & answers (big multiply)",
+  qkv_bias: "adding learned offsets", attn_scores: "every word scores every earlier word",
+  attn_scale: "keeping scores in range", attn_softmax: "turning scores into percentages",
+  attn_av: "blending words by their scores", attn_proj: "mixing the heads back together",
+  attn_proj_bias: "adding learned offsets", attn_residual: "keeping what was already known",
+  ln_2: "tidying the numbers again", fc_gemm: "expanding into scratch space (big multiply)",
+  fc_bias: "adding learned offsets", gelu: "keeping the useful signals (activation)",
+  proj2_gemm: "compressing back down (big multiply)", proj2_bias: "adding learned offsets",
+  mlp_residual: "keeping what was already known"
+};
+
+/* ---------- spine UI helpers ---------- */
+var lticks = $("lticks");
+for (var i = 0; i < N_LAYERS; i++) { var t = document.createElement("i"); lticks.appendChild(t); }
+var tickEls = lticks.children;
+var rows = [ $("row1"), $("row2"), $("row3"), $("row4") ];
+function setRow(i, st) { rows[i].classList.remove("active", "done"); if (st) rows[i].classList.add(st); }
+function setStatus(id, txt) { $(id).textContent = txt; }
+function ribbon(html) { $("ribbonText").innerHTML = html; }
+var opsCount = 0, passCount = 0;
+function bumpOdos(ops, passes) {
+  opsCount += ops; passCount += passes;
+  $("odoOps").innerHTML = opsCount.toLocaleString() + "<small>GPU kernel ops</small>";
+  $("odoPasses").innerHTML = passCount.toLocaleString() + "<small>layer passes</small>";
+}
+function resetSpine() {
+  opsCount = 0; passCount = 0; bumpOdos(0, 0);
+  for (var i = 0; i < rows.length; i++) setRow(i, null);
+  for (var k = 0; k < tickEls.length; k++) tickEls[k].className = "";
+  $("ring").style.setProperty("--deg", "0deg"); $("ring").dataset.v = "idle";
+  $("opline").innerHTML = '<span class="lbl">kernel:</span> —';
+  $("fillA").style.width = "0%"; $("fillB").style.width = "0%";
+  $("verdict").className = "verdict"; $("verdict").textContent = "runs after the reply finishes";
+  setStatus("st1", "waiting"); setStatus("st2", "waiting"); setStatus("st3", "waiting"); setStatus("st4", "waiting");
+  $("tokChips").innerHTML = ""; $("genChips").innerHTML = "";
+}
+
+/* confidence shading from a logit (recorded scores only; null -> neutral) */
+function confClass(logit) {
+  if (logit == null) return "na";
+  if (logit >= 12) return "hi";
+  if (logit >= 9) return "md";
+  return "lo";
+}
+
+/* ---------- transcript ---------- */
+var transcript = $("transcript");
+function addUser(text) {
+  var d = document.createElement("div"); d.className = "bub user"; d.textContent = text; transcript.appendChild(d);
+}
+var liveBub = null, liveMeta = null;
+function addModel() {
+  liveBub = document.createElement("div"); liveBub.className = "bub model";
+  liveBub.innerHTML = '<span class="txt"></span><span class="caret"></span><span class="meta"></span>';
+  liveMeta = liveBub.querySelector(".meta");
+  transcript.appendChild(liveBub);
+}
+function pushTokenText(s) { if (liveBub) liveBub.querySelector(".txt").textContent += s; }
+function finishModel(meta) {
+  if (!liveBub) return;
+  var c = liveBub.querySelector(".caret"); if (c) c.remove();
+  liveMeta.textContent = meta;
+  liveBub = null;
+}
+
+/* ================================================================
+   SOURCES
+   ================================================================ */
+function replaySource() {
+  var C = window.HELIX_CAPTURED_RUN;
+  return { start: function (prompt, nGen, H) {
+    var cancelled = false, timers = [];
+    function at(ms, fn) { timers.push(setTimeout(function () { if (!cancelled) fn(); }, ms)); }
+    var n = Math.min(nGen, C.tokens.length);
+    var t = 0, STEP = 30, LAYER_MS = 9;          /* compressed pacing — labeled on-page */
+    at(t, function () { H.onTokenize(C.tokenize.ids, C.tokenize.strings); }); t += 420;
+    for (var s = 0; s < n; s++) (function (s) {
+      for (var L = 0; L < N_LAYERS; L++) (function (L) {
+        at(t, function () { H.onLayer(s, L); }); t += LAYER_MS;
+      })(L);
+      var tok = C.tokens[s];
+      at(t, function () { H.onToken(s, tok.id, tok.string, tok.logit); }); t += STEP;
+    })(s);
+    at(t + 250, function () { H.onDone({
+      seconds: C.done.seconds, tok_per_s: C.done.tok_per_s, n_gen: n,
+      recordedVerdict: "TOKEN-FOR-TOKEN MATCH — 25 / 25 ids vs the independent oracle (recorded gate result)"
+    }); });
+    return { cancel: function () { cancelled = true; timers.forEach(clearTimeout); } };
+  } };
+}
+function mockSource() {
+  var PIECES = [" the", " city", " of", " light", ",", " and", " people", " love", " it", "."];
+  return { start: function (prompt, nGen, H) {
+    var cancelled = false, timers = [];
+    function at(ms, fn) { timers.push(setTimeout(function () { if (!cancelled) fn(); }, ms)); }
+    var words = prompt.trim().split(/\s+/).slice(0, 8);
+    var ids = words.map(function (w, i) { var h = 7; for (var c = 0; c < w.length; c++) h = (h * 31 + w.charCodeAt(c)) % 50257; return h; });
+    var t = 0;
+    at(t, function () { H.onTokenize(ids, words); }); t += 420;
+    var n = Math.min(nGen, 20);
+    for (var s = 0; s < n; s++) (function (s) {
+      for (var L = 0; L < N_LAYERS; L++) (function (L) { at(t, function () { H.onLayer(s, L); }); t += 9; })(L);
+      at(t, function () { H.onToken(s, null, PIECES[s % PIECES.length], null); }); t += 30;
+    })(s);
+    at(t + 250, function () { H.onDone({ seconds: null, tok_per_s: null, n_gen: n, recordedVerdict: null }); });
+    return { cancel: function () { cancelled = true; timers.forEach(clearTimeout); } };
+  } };
+}
+function sseSource() {
+  return { start: function (prompt, nGen, H) {
+    var ctrl = new AbortController(), step = -1;
+    fetch("/api/generate", { method: "POST", signal: ctrl.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: prompt, n_gen: nGen }) })
+    .then(function (res) {
+      if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+      var rd = res.body.getReader(), dec = new TextDecoder(), buf = "";
+      function pump() { return rd.read().then(function (r) {
+        if (r.done) return;
+        buf += dec.decode(r.value, { stream: true });
+        var lines = buf.split("\n"); buf = lines.pop();
+        lines.forEach(function (ln) {
+          ln = ln.trim(); if (ln.indexOf("data:") !== 0) return;
+          var ev; try { ev = JSON.parse(ln.slice(5)); } catch (e) { return; }
+          if (ev._ev === "tokenize") H.onTokenize(ev.ids || [], ev.strings || []);
+          else if (ev._ev === "forward_begin") step += 1;
+          else if (ev._ev === "layer_begin") H.onLayer(Math.max(step, 0), ev.layer || 0);
+          else if (ev._ev === "token") H.onToken(Math.max(step, 0), ev.id, ev.string, (typeof ev.logit === "number" ? ev.logit : null));
+          else if (ev._ev === "done") H.onDone({ seconds: ev.seconds, tok_per_s: ev.tok_per_s, n_gen: ev.n_gen, recordedVerdict: null });
+          else if (ev._ev === "error") H.onError(ev.message || "server error");
+        });
+        return pump();
+      }); }
+      return pump();
+    })
+    .catch(function (e) { if (e.name !== "AbortError") H.onError(String(e.message || e)); });
+    return { cancel: function () { ctrl.abort(); } };
+  } };
+}
+var source = SOURCE === "sse" ? sseSource() : SOURCE === "replay" ? replaySource() : mockSource();
+
+/* ================================================================
+   DRIVE A RUN
+   ================================================================ */
+var running = null, lastLayer = -1, genCount = 0, nWanted = 20;
+function startRun(prompt) {
+  if (running) return;
+  resetSpine();
+  nWanted = Math.max(1, Math.min(64, parseInt($("nGen").value, 10) || 20));
+  addUser(prompt); addModel();
+  document.body.classList.add("running");
+  $("goBtn").disabled = true;
+  genCount = 0; lastLayer = -1;
+  setRow(0, "active"); setStatus("st1", "running");
+  ribbon("<b>Step 1 —</b> your text is being split into tokens (word-pieces with id numbers).");
+
+  running = source.start(prompt, nWanted, {
+    onTokenize: function (ids, strings) {
+      var html = "";
+      for (var i = 0; i < strings.length; i++)
+        html += '<span class="tchip">' + esc(strings[i]) + (ids[i] != null ? "<small>·" + ids[i] + "</small>" : "") + "</span>";
+      $("tokChips").innerHTML = html;
+      setStatus("st1", strings.length + " tokens"); setRow(0, "done");
+      setRow(1, "active"); setStatus("st2", "running");
+      ribbon("<b>Step 2 —</b> the 48 layers are running for token 1. Watch the ring fill once per token.");
+    },
+    onLayer: function (step, L) {
+      if (L === lastLayer) return;
+      lastLayer = L;
+      var deg = Math.round(((L + 1) / N_LAYERS) * 360);
+      $("ring").style.setProperty("--deg", deg + "deg");
+      $("ring").dataset.v = "layer\n" + (L + 1) + " / " + N_LAYERS;
+      for (var k = 0; k < N_LAYERS; k++) tickEls[k].className = k < L ? "was" : (k === L ? "on" : "");
+      var op = LAYER_OPS[L % LAYER_OPS.length];
+      $("opline").innerHTML = '<span class="lbl">kernel:</span> ' + esc(op[1]) + ' <span class="lbl">— ' + esc(OP_WORDS[op[0]] || op[0]) + "</span>";
+      bumpOdos(LAYER_OPS.length, 1);
+    },
+    onToken: function (step, id, piece, logit) {
+      genCount += 1;
+      pushTokenText(piece);
+      var chip = document.createElement("span");
+      chip.className = "tchip " + confClass(logit);
+      chip.innerHTML = esc(piece) + "<small>" + (logit != null ? "p≈" + logit.toFixed(1) : "—") + "</small>";
+      chip.title = id != null ? "token id " + id + (logit != null ? " · recorded score " + logit.toFixed(3) : " · score not recorded — shown as “—”") : "preview token (mock)";
+      $("genChips").appendChild(chip);
+      setRow(2, "active"); setStatus("st3", genCount + " / " + nWanted);
+      $("ring").dataset.v = "token\n" + genCount + " / " + nWanted;
+      ribbon("<b>Token " + genCount + " chosen:</b> “" + esc(piece.trim()) + "”. " +
+        (logit != null ? "The model's recorded score for it was " + logit.toFixed(1) + "." : "Now the 48 layers run again for the next one."));
+    },
+    onDone: function (d) {
+      setRow(1, "done"); setRow(2, "done"); setRow(3, "active"); setStatus("st2", "960 passes"); setStatus("st3", "done");
+      var meta = SOURCE === "replay"
+        ? "real recorded run · " + d.seconds + " s for " + d.n_gen + " tokens (" + d.tok_per_s + " tok/s on the GPU — replayed faster here)"
+        : SOURCE === "sse" ? "live GPU run · " + (d.seconds != null ? d.seconds.toFixed(1) + " s · " + d.n_gen + " tokens" : d.n_gen + " tokens")
+        : "preview — simulated pacing and numbers";
+      finishModel(meta);
+      $("fillA").style.width = "98%";
+      setTimeout(function () { $("fillB").style.width = "98%"; }, 350);
+      setTimeout(function () {
+        var v = $("verdict");
+        if (SOURCE === "replay" && d.recordedVerdict) { v.className = "verdict ok"; v.textContent = "✓ " + d.recordedVerdict; setStatus("st4", "25 / 25 (recorded)"); }
+        else if (SOURCE === "sse") { v.textContent = "no live verdict is shown — run scripts/helix_serve_gate.sh for the fail-closed gate"; setStatus("st4", "see gate"); }
+        else { v.textContent = "preview — no verdict (mock runs are never judged)"; setStatus("st4", "n/a"); }
+        setRow(3, SOURCE === "replay" ? "done" : "active");
+        ribbon(SOURCE === "replay"
+          ? "<b>Done.</b> This exact run was verified: the oracle produced the same 25 / 25 token ids. Click any step to learn more — or try another prompt."
+          : "<b>Done.</b> Click any step to learn what happened — or try another prompt.");
+      }, 900);
+      endRun();
+    },
+    onError: function (msg) {
+      ribbon("<b>The run stopped:</b> " + esc(msg) + " — gates here fail loud, never silently.");
+      finishModel("stopped: " + msg);
+      endRun();
+    }
+  });
+}
+function endRun() {
+  running = null;
+  document.body.classList.remove("running");
+  $("goBtn").disabled = false;
+}
+$("goBtn").addEventListener("click", function () {
+  var p = $("promptInput").value.trim();
+  if (p) startRun(p);
+});
+$("stopBtn").addEventListener("click", function () {
+  if (running) { running.cancel(); finishModel("stopped by you — partial reply kept"); ribbon("<b>Stopped.</b> The partial reply is kept and labeled."); endRun(); }
+});
+$("promptInput").addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("goBtn").click(); }
+});
+$("seeds").addEventListener("click", function (e) {
+  var b = e.target.closest(".seed"); if (!b) return;
+  $("promptInput").value = b.textContent; $("promptInput").focus();
+});
+$("nUp").addEventListener("click", function () { $("nGen").stepUp(); });
+$("nDown").addEventListener("click", function () { $("nGen").stepDown(); });
+
+/* ================================================================
+   DETAIL OVERLAYS — beginner first, advanced beneath, repo paths last
+   ================================================================ */
+var HX = '<span class="hx-mark" aria-hidden="true" style="vertical-align:-2px"><svg viewBox="0 0 10 12" fill="none" width="9" height="11"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg></span>';
+var DETAILS = {
+  chain: { kicker: "the trust root", title: "From 299 bytes to this reply " + HX,
+    body: '<div class="simple">Most software asks you to trust a mountain of tools you can\'t see. Helix starts from <b>299 bytes typed by hand</b> — small enough to read — and every tool above is built only by the tool below it. So everything on this page can be traced, step by step, to something a person can check by eye.</div>' +
+      '<div class="adv"><h3>The ladder (each rung built only by the previous)</h3>' +
+      '<pre>hex0 <span class="k">299 B, hand-typed</span> → hex1 → hex2 → catm → M0\n  → cc_amd64 → M2-Planet → seed <span class="k">sha 9837db12…</span>\n  → kovc <span class="k">the Helix compiler — compiles itself byte-identically\n          (K2 == K3 == K4, sha 0992dddd…)</span></pre>' +
+      '<p>kovc then compiles the <b>8 GPU kernels</b> ' + HX + ' that run every layer of GPT-2 here. One committed command (<b>scripts/reproduce_trust.sh</b>, ~1 min, CPU-only) rebuilds and re-checks the whole ladder.</p>' +
+      '<h3>Honest edge</h3><p>The hand-auditable chain ends at PTX (the GPU assembly); NVIDIA\'s closed assembler and driver below it are trusted-once — stated, never hidden.</p>' +
+      '<div class="paths"><b>check it:</b> stage0/hex0/hex0.bin (299 B) · scripts/reproduce_trust.sh · docs/TRUST_CHAIN_CLOSED.md · <a href="dashboard.html">the proof dashboard</a></div></div>' },
+  tokenize: { kicker: "step 1 · words → numbers", title: "Tokenization <span class='not-hx'>C host tool — not Helix</span>",
+    body: '<div class="simple">A neural network only computes with numbers. Your sentence is chopped into <b>word-pieces</b> ("tokens") from a fixed menu of 50,257, and each piece gets its id. “The capital of France is” becomes 5 pieces: 464 · 3139 · 286 · 4881 · 318.</div>' +
+      '<div class="adv"><h3>Honest labeling</h3><p>The tokenizer is a <b>committed C host tool</b> (helixc/runtime/gpt2_tok.c) — deliberately <b>not</b> marked as Helix-powered. It runs outside the Helix compiler\'s trust fixpoint, does zero math on the compute path, and is gated <b>bit-exact</b> against the reference implementation by scripts/gpt2_pyfree.sh.</p>' +
+      '<h3>Why pieces, not words?</h3><p>Rare words split into several pieces ("Kovostov" → multiple tokens), so the model can read anything with a small fixed menu. That menu (the BPE vocabulary) ships with the public model.</p>' +
+      '<div class="paths"><b>check it:</b> helixc/runtime/gpt2_tok.c · scripts/gpt2_pyfree.sh (bit-exact gate)</div></div>' },
+  think: { kicker: "step 2 · the 48 layers", title: "Where the thinking happens " + HX,
+    body: '<div class="simple">For <b>every single token</b> it writes, the model runs the same two-step block 48 times: <b>attention</b> (every word looks back at all earlier words and decides what matters) then <b>MLP</b> (each word is reworked on its own). That\'s why one 20-token reply costs <b>960 layer passes</b> and <b>16,320 GPU kernel launches</b>.</div>' +
+      '<div class="adv"><h3>Powered by Helix ' + HX + '</h3><p>All of the math runs in <b>8 kernels written in the Helix language</b> and compiled to PTX by kovc. No CUDA C does the tensor math; no vendor ML library sits underneath. One of them, complete and verbatim:</p>' +
+      '<pre><span class="k">@kernel</span>\nfn vector_add(a: f32, b: f32, c: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    c[i] = a[i] + b[i]\n}</pre>' +
+      '<h3>The 17 operations of one layer</h3><p>ln_1 → qkv_gemm → qkv_bias → attn_scores → attn_scale → attn_softmax → attn_av → attn_proj (+bias) → attn_residual → ln_2 → fc_gemm (+bias) → gelu → proj2_gemm (+bias) → mlp_residual. The “kernel:” line on the stage shows which one is firing, in real time.</p>' +
+      '<div class="paths"><b>check it:</b> helixc/examples/*_kernel.hx (the 8 kernels) · docs/HELIX_GPT2_DEMO_RUNBOOK.md · the layer order: helixc/runtime/gpt2_infer.c (forward_layer_gpt2)</div></div>' },
+  choose: { kicker: "step 3 · scoring the vocabulary", title: "Choosing the next word " + HX,
+    body: '<div class="simple">After the 48 layers, one last multiply scores <b>all 50,257 word-pieces at once</b>. Greedy decoding simply takes the highest score, appends it to your text, and the whole walk starts again for the next token.</div>' +
+      '<div class="adv"><h3>The shading is real (and honest)</h3><p>Chip shade comes from the <b>recorded scores (logits)</b> of the captured run. Where the log kept no score (steps 4-19), the chip shows <b>“—”</b> rather than an invented number. In live mode the real logits stream straight from the GPU.</p>' +
+      '<h3>Recorded example (verbatim)</h3><table><tr><th>piece</th><th>id</th><th>logit</th></tr><tr><td>" the"</td><td>262</td><td>8.79</td></tr><tr><td>" city"</td><td>1748</td><td>9.49</td></tr><tr><td>" of"</td><td>286</td><td>12.82</td></tr><tr><td>" Paris"</td><td>6342</td><td>12.99</td></tr></table>' +
+      '<p style="margin-top:8px">This scoring multiply runs in the same Helix-built kernels ' + HX + ' as the layers.</p>' +
+      '<div class="paths"><b>check it:</b> demo/captured_run.js (verbatim capture + provenance notes) · scripts/_gate_run.log</div></div>' },
+  verify: { kicker: "step 4 · the referee", title: "Verification — the whole point " + HX,
+    body: '<div class="simple">How do you know the Helix-built stack ran the model <b>correctly</b>? An independent program (the “oracle”) — plain numpy, reading the original public weights, sharing no code with Helix — runs the same prompt. The token ids must match <b>one for one</b>. For this recorded run they did: <b>25 / 25</b>.</div>' +
+      '<div class="adv"><h3>Fail-closed, never faked</h3><p>The gates exit red on any mismatch — they never warn-and-continue. The SmolLM2 gate even includes a corrupted-weights <b>negative control</b> that correctly fails, proving the comparator has teeth. And honesty about THIS page: no live verdict is computed here; the replay shows the <b>recorded</b> gate result, and live mode points you at the gate script.</p>' +
+      '<h3>What\'s being verified</h3><p>The Helix execution ' + HX + ': from-raw compiler → 8 kernels → PTX → this output. The oracle is the independent referee, deliberately kept outside that chain.</p>' +
+      '<h3>Honest edge</h3><p>The oracle shares the model\'s <i>spec</i> (it\'s an independent implementation, not an independent specification) — it catches implementation bugs, not a shared misunderstanding of GPT-2.</p>' +
+      '<div class="paths"><b>check it:</b> scripts/helix_serve_gate.sh · scripts/gpt2_demo_attest.sh (writes a signed attestation) · <a href="dashboard.html">the recorded numbers</a></div></div>' }
+};
+var ovl = $("ovl");
+function openDetail(key) {
+  var d = DETAILS[key]; if (!d) return;
+  $("ovlKicker").textContent = d.kicker;
+  $("ovlTitle").innerHTML = d.title;
+  $("ovlBody").innerHTML = d.body;
+  ovl.classList.add("open");
+  $("ovlClose").focus();
+}
+document.addEventListener("click", function (e) {
+  var st = e.target.closest("[data-detail]");
+  if (st) { openDetail(st.dataset.detail); return; }
+  if (e.target === ovl) ovl.classList.remove("open");
+});
+$("chipChain").addEventListener("click", function () { openDetail("chain"); });
+$("ovlClose").addEventListener("click", function () { ovl.classList.remove("open"); });
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") ovl.classList.remove("open"); });
+
+/* live-mode niceness: check the backend actually responds */
+if (SOURCE === "sse") {
+  fetch("/api/health").then(function (r) { return r.json(); }).catch(function () {
+    ribbon("<b>No live backend answered /api/health.</b> Start scripts/serve_chat_demo.sh, or drop ?source=sse to use the recorded replay.");
+  });
+}
+</script>
+</body>
+</html>

@@ -14,7 +14,7 @@ import Base from "../layouts/Base.astro";
       <h1>Run the model you know. <em>Verify every byte</em> beneath it.</h1>
       <p class="lede">Helix is a verifiable execution layer for AI. Bring your weights: every layer and every kernel beneath them traces back to 299 hand-typed bytes, and the output is matched token-for-token against an independent reference. Audit instead of trust. Trust first — with performance improving as Helix develops.</p>
       <div class="btn-row">
-        <a class="btn btn-primary" href="/demo/">Watch the real run <span class="arrow">→</span></a>
+        <a class="btn btn-primary" href="/demo/journey.html">Watch the real run <span class="arrow">→</span></a>
         <a class="btn btn-ghost" href="/demo/dashboard.html">See the proof</a>
       </div>
     </div>
@@ -259,9 +259,15 @@ bash scripts/llama_model_gate.sh     <span class="cmt"># SmolLM2-135M gate · fi
       </div>
 
       <div class="card-grid">
+        <a class="link-card" href="/demo/journey.html">
+          <span class="lc-kicker">Start here · guided</span>
+          <h3>The guided run</h3>
+          <p>The beginner-first walk-through: watch the model think step by step on the trust spine, every metric clickable and explained.</p>
+          <span class="lc-arrow">/demo/journey.html →</span>
+        </a>
         <a class="link-card" href="/demo/">
-          <span class="lc-kicker">Replay · captured run</span>
-          <h3>The chat replay</h3>
+          <span class="lc-kicker">Expert · playground</span>
+          <h3>The expert playground</h3>
           <p>A replay of a real, captured GPT-2-on-Helix session. Labeled REPLAY throughout — nothing here is generated on the fly.</p>
           <span class="lc-arrow">/demo/ →</span>
         </a>

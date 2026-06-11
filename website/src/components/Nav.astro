@@ -34,7 +34,7 @@ const isCurrent = (href) => (href.replace(/\/+$/, "") || "/") === path;
       {links.map((l) => (
         <a href={l.href} aria-current={isCurrent(l.href) ? "page" : undefined}>{l.label}</a>
       ))}
-      <a href="/demo/" class="nav-cta">Watch the run →</a>
+      <a href="/demo/journey.html" class="nav-cta">Watch the run →</a>
     </div>
   </div>
 </nav>
