@@ -757,7 +757,7 @@ function effortNote() {
   $("effortNote").textContent = note;
 }
 function syncEffortFromN() {
-  if (UNLIMITED) { $("effortSel").value = "max"; effortNote(); return; }
+  if (UNLIMITED) return;   /* unlimited: the token count is meaningless — don't touch the effort dropdown */
   var n = parseInt($("nGen").value, 10) || 20;
   var sel = $("effortSel");
   sel.value = (n === 8) ? "quick" : (n === 20) ? "standard" : (n === 40) ? "deep" : sel.value;
@@ -771,7 +771,9 @@ $("effortSel").addEventListener("change", function () {
 });
 $("infBtn").addEventListener("click", function () {
   setUnlimited(!UNLIMITED);
-  if (UNLIMITED) $("effortSel").value = "max"; else syncEffortFromN();
+  /* turning ∞ OFF restores the effort level from the token count; turning it ON
+     leaves the effort dropdown unchanged (selecting ∞ must NOT jump to Max effort). */
+  if (!UNLIMITED) syncEffortFromN();
   effortNote();
 });
 $("nGen").addEventListener("input", function () { syncEffortFromN(); });
