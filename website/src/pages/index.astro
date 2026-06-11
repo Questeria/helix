@@ -320,8 +320,8 @@ import Base from "../layouts/Base.astro";
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 18 C 8 18 8 6 12 6 C 16 6 16 18 20 18" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="20" cy="18" r="1.6" fill="currentColor"/></svg>
           </div>
           <h3>ML-first language design.</h3>
-          <p>Forward- and reverse-mode autodiff are language features, not libraries. Tiles and tensors are types. Effects are verified at the IR level, reflection is verifier-gated, and the same compiler emits x86-64 ELF and PTX for real GPUs.</p>
-          <div class="pillar-foot"><span>grad / grad_rev_all</span><span>tile&lt;f32, [N,N], REG&gt;</span></div>
+          <p>Forward- and reverse-mode autodiff are language features, not libraries. <code>@pure</code> is enforced at autodiff checkpoint boundaries, reflection is lowered at compile time, and the same compiler emits both x86-64 ELF and PTX for real GPUs.</p>
+          <div class="pillar-foot"><span>grad / grad_rev_all</span><span>@kernel → PTX</span></div>
         </article>
       </div>
     </div>
@@ -389,14 +389,13 @@ import Base from "../layouts/Base.astro";
         </div>
 
         <div class="code-card">
-          <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>matmul.hx</span></div>
-<pre class="code-body"><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f32</span> &#123;
-    <span class="kw">let</span> a = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
-    <span class="kw">let</span> b = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
-    <span class="kw">let</span> c = <span class="fn">tile_matmul</span>(a, b);
-    c.<span class="fn">get</span>(<span class="num">2</span>, <span class="num">3</span>)
+          <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>gpu_scale_rt.hx</span></div>
+<pre class="code-body"><span class="kw">@kernel</span>
+<span class="kw">fn</span> <span class="fn">gpu_scale_rt</span>(a: <span class="ty">f32</span>, s: <span class="ty">f32</span>, n: <span class="ty">i32</span>) &#123;
+    <span class="kw">let</span> i = <span class="fn">block_idx</span>() * <span class="fn">block_dim</span>() + <span class="fn">thread_idx</span>();
+    a[i] = s[<span class="num">0</span>] * a[i]
 &#125;</pre>
-          <div class="code-foot"><span>tiles · compile-time shapes</span><span class="out">→ 4.0_f32</span></div>
+          <div class="code-foot"><span>@kernel → PTX, sm_86</span><span class="out">→ runs on the GPU</span></div>
         </div>
 
         <div class="code-card">

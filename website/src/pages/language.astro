@@ -2,8 +2,8 @@
 import Base from "../layouts/Base.astro";
 ---
 <Base
-  title="The Helix language — autodiff, shapes, and GPU codegen as language features"
-  description="Forward- and reverse-mode autodiff as built-ins, Presburger-checked tensor shapes, verifier-gated reflection, IR-level effect verification, and PTX codegen for real GPUs — every kovc build gated by a 109-program corpus. Self-hosting: the compiler is written in Helix."
+  title="The Helix language — autodiff, a typed core, and GPU codegen as language features"
+  description="Forward- and reverse-mode autodiff as built-ins, a statically typed self-hosting core, compile-time reflection, and PTX codegen for real GPUs — every kovc kernel parity-gated against an independent oracle. The compiler is written in Helix and rebuildable from 299 bytes."
 >
   <!-- ============================================================
        01 PAGE HERO
@@ -68,25 +68,24 @@ import Base from "../layouts/Base.astro";
     <div class="wrap">
       <div class="split">
         <div class="split-label">
-          <span class="eyebrow">Shapes &amp; silicon</span>
-          <h2>Dimension bugs die at compile time.</h2>
-          <p>Tensor shapes are Presburger-checked: a mismatched matmul is a compile error, not a wrong number at runtime. The same compiler then emits PTX that runs on real NVIDIA GPUs.</p>
+          <span class="eyebrow">Source to silicon</span>
+          <h2>From Helix source to GPU.</h2>
+          <p>Write a kernel in Helix, and the same compiler that type-checks it emits PTX that runs on real NVIDIA GPUs — every kernel gated for numerical parity against an independent reference before it counts as covered.</p>
         </div>
         <div>
           <div class="code-card">
             <div class="code-head">
               <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
-              <span>matmul.hx · compile-time shapes</span>
+              <span>gpu_scale_rt.hx · @kernel → PTX</span>
             </div>
-<pre class="code-body"><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">f32</span> &#123;
-    <span class="kw">let</span> a = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
-    <span class="kw">let</span> b = <span class="ty">tile</span>&lt;<span class="ty">f32</span>, [<span class="num">4</span>, <span class="num">4</span>], REG&gt;::<span class="fn">ones</span>();
-    <span class="kw">let</span> c = <span class="fn">tile_matmul</span>(a, b);
-    c.<span class="fn">get</span>(<span class="num">2</span>, <span class="num">3</span>)
+<pre class="code-body"><span class="kw">@kernel</span>
+<span class="kw">fn</span> <span class="fn">gpu_scale_rt</span>(a: <span class="ty">f32</span>, s: <span class="ty">f32</span>, n: <span class="ty">i32</span>) &#123;
+    <span class="kw">let</span> i = <span class="fn">block_idx</span>() * <span class="fn">block_dim</span>() + <span class="fn">thread_idx</span>();
+    a[i] = s[<span class="num">0</span>] * a[i]
 &#125;</pre>
             <div class="code-foot">
-              <span>tiles · Presburger-checked shapes</span>
-              <span class="out">→ 4.0_f32</span>
+              <span>one thread per element</span>
+              <span class="out">→ PTX, sm_86</span>
             </div>
           </div>
           <p style="margin: 24px 0 0; color: var(--fg-mute); font-size: 15px; max-width: 60ch;">
@@ -137,7 +136,7 @@ import Base from "../layouts/Base.astro";
             </div>
           </div>
           <p style="margin: 24px 0 0; color: var(--fg-mute); font-size: 15px; max-width: 60ch;">
-            Effects get the same treatment at the other end: <code>@pure</code> functions are verified at the IR level and transitively prohibited from reaching effectful code. Purity is a checked property, not a comment.
+            Effects get the same treatment at the other end: at autodiff checkpoint boundaries the compiler enforces <code>@pure</code>, rejecting a checkpointed function that reaches effectful code. Purity is a checked property there, not a comment.
           </p>
         </div>
       </div>
@@ -189,11 +188,7 @@ import Base from "../layouts/Base.astro";
           </tr>
           <tr>
             <td class="mono">effects &amp; reflection</td>
-            <td><code>@pure</code> verified at the IR level; <code>quote</code> / <code>splice_f</code> / <code>modify_f</code> gated by your verifier.</td>
-          </tr>
-          <tr>
-            <td class="mono">research types</td>
-            <td>Presburger-checked tensor shapes; confidence types <code>D&lt;T&gt;</code>; memory-tier types; agent types — all checked at compile time.</td>
+            <td><code>@pure</code> enforced at autodiff checkpoint boundaries; <code>quote</code> / <code>splice_f</code> / <code>modify_f</code> reflection, lowered at compile time.</td>
           </tr>
           <tr>
             <td class="mono">gpu</td>
