@@ -128,3 +128,46 @@ A beginner layer over the live telemetry — same SSE events, no new event types
   panel and the transcript stream unchanged. No tokens/sec figure is invented anywhere.
 - All three features work in mock, replay and live, and from file:// (no new network calls);
   the inline JS passes `node --check`.
+
+## 7. Assistant-class chat UX (2026-06, fable/demo-assistant-w12) - integration contracts
+
+Page 1 (demo/index.html) now carries a ChatGPT-class conversation layer: Stop (Esc) with
+partial-kept bubbles, Continue-as-assistant-prefill, Regenerate (seed-aware), edit-a-past-message,
+conversation BRANCHING (tree of turns + a ChatGPT-style < k/n > pager), saved chats + prompt
+library (localStorage only), a hand-written escape-first markdown renderer with per-code-block
+copy, a Ctrl/Cmd-K command palette, a generation-settings drawer, per-token confidence shading,
+and a light theme. All of it works in mock / replay / live and from file://; no new network
+calls are made by the UI layer itself.
+
+The backend lands sampling in parallel. The EXACT capability gates the page honors:
+
+- `/api/health` "sampling": true  -> the page starts sending the ADDITIVE request fields
+  {temperature, top_p, top_k, min_p, rep_penalty, freq_penalty, pres_penalty, seed, stop:[...]}
+  on POST /api/generate. Until that flag appears, the body stays exactly
+  {prompt, n_gen, request_id, model?, detail?} - byte-identical key set to today (verified by
+  fetch interception). temperature 0 stays the greedy verified default and the drawer says so.
+- `/api/health` "max_ctx": <int> -> lifts the client n_gen clamp (default 256) and powers the
+  "unlimited" max-tokens option: n_gen = max_ctx - rough prompt estimate (chars/4, labeled).
+  The server's own budget must stay fail-closed; the client treats its estimate as advisory.
+- `token` SSE event additive fields {p, H, alts:[[id,piece,p],...]} -> per-token confidence
+  shading (5 buckets by p; entropy-only payloads use a labeled 1/(1+H) proxy) + a click/Enter
+  popover listing the alternatives, labeled "real data from the live logits". When the fields
+  are absent NOTHING renders - no legend, no shading. Never synthesize these client-side.
+- Seed semantics the page assumes: a seeded sampled request is reproducible; "regenerate"
+  bumps the seed, "regenerate identically" resends the recorded one. If the server echoes the
+  effective seed in `done` (recommended, additive), nothing breaks - the page already shows
+  the seed it sent.
+- CONTINUE sends the ORIGINAL wire prompt + the assistant text so far as the new prompt
+  (chat models: the ChatML template still ends inside the open assistant turn - the server
+  must NOT re-template or append a new <|im_start|>; base models: plain concatenation).
+  Greedy continues are exact-by-construction; sampled continues are labeled
+  "continued (new sampling segment)" in the UI.
+- Client aborts (Stop/Esc) surface as a closed request body stream - treat as cancel, free
+  the single-flight slot. The page keeps and labels the partial text it already received.
+
+Honesty notes for reviewers: the "$0 / watt-seconds" meter was SKIPPED - the done event
+carries only n_gen/seconds/tok_per_s and the browser cannot measure GPU power, so any
+energy figure would be invented. Saved chats/prompts/settings are localStorage-only and the
+sidebar says so. Replay turns never offer continue/regenerate/edit (replaying the capture is
+the only honest re-run). /api/verify semantics are untouched: no live PASS is ever rendered
+client-side.

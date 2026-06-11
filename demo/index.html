@@ -1094,6 +1094,285 @@
   .speed-toggle .sp-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); cursor: default; }
   .speed-toggle .sp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
+  /* ============================================================
+     ASSISTANT-CLASS CHAT UX (2026-06, fable/demo-assistant-w12).
+     New classes only — nothing above this block is modified.
+     Components: stop button, per-turn actions + branch pager,
+     in-bubble edit, markdown rendering, saved-chats sidebar,
+     command palette, generation-settings drawer, token-confidence
+     shading + popover, jump-to-bottom pill, light theme.
+     ============================================================ */
+  /* stop button (shown only while a generation is in flight) */
+  .stop-btn {
+    display: none;
+    background: linear-gradient(180deg, rgba(240,114,106,0.16), rgba(240,114,106,0.07));
+    border: 1px solid var(--red-dim); color: var(--red);
+    border-radius: var(--radius-sm); padding: 10px 14px; cursor: pointer;
+    font-weight: 700; font-size: 14px; letter-spacing: 0.3px;
+  }
+  .stop-btn.show { display: block; }
+  .stop-btn:hover { border-color: var(--red); background: rgba(240,114,106,0.22); }
+  .ctl-mini { display: flex; gap: 6px; justify-content: flex-end; }
+  .ctl-mini .ctx-clear { font-size: 10.5px; padding: 3px 9px; }
+
+  /* per-turn meta tags + actions */
+  .turn-meta .stop-tag {
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  }
+  .turn-meta .seg-tag {
+    color: var(--blue); border: 1px solid var(--blue-dim); background: var(--blue-bg);
+    padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 600;
+  }
+  .branch-pager { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-dim); }
+  .branch-pager button {
+    background: none; border: 1px solid var(--border-2); color: var(--ink-dim);
+    border-radius: 5px; cursor: pointer; font-size: 12px; padding: 0 7px; line-height: 1.5;
+  }
+  .branch-pager button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent-dim); }
+  .branch-pager button:disabled { opacity: 0.35; cursor: default; }
+
+  /* in-bubble edit (creates a branch) */
+  .edit-area {
+    width: 100%; min-height: 64px; background: var(--panel);
+    border: 1px solid var(--accent-dim); border-radius: 8px; color: var(--ink);
+    font-family: var(--sans); font-size: 14.5px; line-height: 1.45; padding: 9px 11px; resize: vertical;
+  }
+  .edit-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .edit-note { font-size: 11px; color: var(--ink-faint); }
+
+  /* markdown rendering inside the model bubble (assistant text only) */
+  .turn.model .bubble .cont.md-block { display: block; margin-top: 4px; }
+  .md-rendered { white-space: normal; }
+  .md-rendered .md-p { margin: 0 0 8px; }
+  .md-rendered .md-p:last-child { margin-bottom: 0; }
+  .md-rendered .md-h { font-weight: 700; margin: 10px 0 6px; line-height: 1.3; color: var(--ink); }
+  .md-rendered .md-h1 { font-size: 1.25em; } .md-rendered .md-h2 { font-size: 1.15em; }
+  .md-rendered .md-h3 { font-size: 1.06em; } .md-rendered .md-h4 { font-size: 1em; }
+  .md-rendered .md-ul, .md-rendered .md-ol { margin: 4px 0 8px; padding-left: 22px; }
+  .md-rendered .md-li { margin: 2px 0; }
+  .md-rendered .md-codei {
+    font-family: var(--mono); font-size: 0.88em; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+  }
+  .md-codeblock { margin: 8px 0; border: 1px solid var(--border-2); border-radius: 8px; overflow: hidden; background: var(--panel-2); }
+  .md-codehead {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 4px 10px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+  }
+  .md-codeblock pre {
+    margin: 0; padding: 10px 12px; overflow-x: auto;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.5; white-space: pre; color: var(--ink);
+  }
+  .prefill-seg { border-bottom: 1px dotted var(--blue-dim); cursor: help; }
+
+  /* token-confidence shading (renders ONLY when the live token events
+     carry the additive p/H/alts fields — real logits, never invented) */
+  .tok-c { border-radius: 3px; cursor: pointer; }
+  .tc-4 { background: rgba(52,211,153,0.26); }
+  .tc-3 { background: rgba(52,211,153,0.13); }
+  .tc-2 { background: rgba(245,177,76,0.16); }
+  .tc-1 { background: rgba(245,177,76,0.30); }
+  .tc-0 { background: rgba(240,114,106,0.30); }
+  .conf-off .tok-c { background: transparent; cursor: default; }
+  .conf-legend {
+    display: none; align-items: center; gap: 7px; flex-wrap: wrap;
+    padding: 5px 22px 0; font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+  }
+  .conf-legend.show { display: flex; }
+  .conf-sw { width: 14px; height: 9px; border-radius: 2px; display: inline-block; border: 1px solid var(--border); }
+  .tok-pop {
+    position: fixed; z-index: 96; min-width: 220px; max-width: 320px;
+    background: var(--panel); border: 1px solid var(--accent-dim); border-radius: 8px;
+    box-shadow: 0 10px 32px rgba(0,0,0,0.5); padding: 9px 11px;
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+  }
+  .tok-pop .tp-h { color: var(--ink); font-size: 9.5px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 5px; }
+  .tok-pop .alt { display: flex; justify-content: space-between; gap: 12px; }
+  .tok-pop .alt.chosen { color: var(--accent); }
+  .tok-pop .tp-note { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 5px; color: var(--ink-faint); font-size: 10px; }
+
+  /* jump-to-bottom pill (auto-scroll pauses when you scroll up) */
+  .conv-col { position: relative; }
+  .jump-pill {
+    position: absolute; left: 50%; transform: translateX(-50%); z-index: 5;
+    background: var(--panel); border: 1px solid var(--accent-dim); color: var(--accent);
+    border-radius: 999px; padding: 6px 14px; cursor: pointer;
+    font-family: var(--sans); font-weight: 700; font-size: 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  }
+  .jump-pill[hidden] { display: none; }
+  .jump-pill:hover { background: var(--accent-bg); }
+
+  /* saved-chats sidebar (localStorage only — nothing leaves the page) */
+  .chats-overlay { position: fixed; inset: 0; z-index: 88; background: rgba(6,9,14,0.6); }
+  .chats-overlay[hidden] { display: none; }
+  .chats-panel {
+    position: absolute; top: 0; left: 0; bottom: 0; width: min(360px, 92vw);
+    background: var(--bg-2); border-right: 1px solid var(--border-2);
+    box-shadow: 12px 0 40px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; padding: 14px;
+  }
+  .chats-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .chats-head h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--ink); letter-spacing: 0.3px; }
+  .chats-tabs { display: flex; gap: 5px; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 999px; padding: 3px; margin-bottom: 9px; }
+  .chats-tabs button {
+    flex: 1; background: none; border: 1px solid transparent; color: var(--ink-dim);
+    border-radius: 999px; padding: 5px 10px; cursor: pointer; font-family: var(--sans); font-weight: 700; font-size: 12px;
+  }
+  .chats-tabs button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .chats-search {
+    width: 100%; background: var(--panel); border: 1px solid var(--border-2); border-radius: 7px;
+    color: var(--ink); font-family: var(--sans); font-size: 13px; padding: 7px 10px;
+  }
+  .chats-search:focus { outline: none; border-color: var(--accent-dim); }
+  .chats-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .chat-item {
+    display: flex; align-items: center; gap: 8px; text-align: left; width: 100%;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; cursor: pointer; color: var(--ink-dim); font-family: var(--sans);
+  }
+  .chat-item:hover { border-color: var(--accent-dim); }
+  .chat-item.active { border-color: var(--accent-dim); background: var(--accent-bg); }
+  .chat-item .ci-main { flex: 1; min-width: 0; }
+  .chat-item .ci-title { color: var(--ink); font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-item .ci-sub { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .chat-item .ci-del {
+    background: none; border: 1px solid var(--border-2); color: var(--ink-faint);
+    border-radius: 5px; cursor: pointer; font-size: 11px; padding: 2px 7px; flex: none;
+  }
+  .chat-item .ci-del:hover { color: var(--red); border-color: var(--red-dim); }
+  .chats-empty { font-size: 12px; color: var(--ink-faint); font-style: italic; padding: 10px 2px; }
+  .chats-foot { margin-top: 10px; font-size: 10.5px; color: var(--ink-faint); border-top: 1px solid var(--border); padding-top: 9px; }
+
+  /* command palette (Ctrl/Cmd-K) */
+  .pal-overlay {
+    position: fixed; inset: 0; z-index: 95; background: rgba(6,9,14,0.72);
+    display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px;
+  }
+  .pal-overlay[hidden] { display: none; }
+  .pal-card {
+    width: min(560px, 94vw);
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--accent-dim); border-radius: var(--radius);
+    box-shadow: 0 18px 60px rgba(0,0,0,0.55); overflow: hidden;
+  }
+  .pal-input {
+    width: 100%; background: var(--panel-2); border: none; border-bottom: 1px solid var(--border);
+    padding: 13px 16px; color: var(--ink); font-family: var(--sans); font-size: 15px; outline: none;
+  }
+  .pal-list { max-height: 46vh; overflow-y: auto; padding: 6px; }
+  .pal-item {
+    display: flex; justify-content: space-between; gap: 10px; align-items: center; width: 100%;
+    text-align: left; background: none; border: 1px solid transparent; border-radius: 7px;
+    padding: 9px 11px; color: var(--ink-dim); cursor: pointer; font-family: var(--sans); font-size: 13.5px;
+  }
+  .pal-item[aria-selected="true"] { background: var(--accent-bg); border-color: var(--accent-dim); color: var(--ink); }
+  .pal-item .pk {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 6px; white-space: nowrap;
+  }
+  .pal-empty { padding: 14px; font-size: 12.5px; color: var(--ink-faint); font-style: italic; }
+
+  /* generation-settings drawer */
+  .gen-overlay { position: fixed; inset: 0; z-index: 86; background: rgba(6,9,14,0.6); }
+  .gen-overlay[hidden] { display: none; }
+  .gen-card {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(430px, 94vw);
+    background: var(--bg-2); border-left: 1px solid var(--border-2);
+    box-shadow: -12px 0 40px rgba(0,0,0,0.5); overflow-y: auto; padding: 16px 18px 24px;
+  }
+  .gen-card h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+  .gs-status {
+    display: inline-block; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    padding: 2px 9px; border-radius: 5px; margin: 9px 0; line-height: 1.5;
+  }
+  .gs-status.is-on { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .gs-note { font-size: 11.5px; color: var(--ink-dim); line-height: 1.55; margin: 4px 0 10px; }
+  .gs-note b { color: var(--ink); font-weight: 650; }
+  .gs-row { display: grid; grid-template-columns: 1fr 70px; gap: 8px; align-items: center; margin: 7px 0; }
+  .gs-row .gs-lbl { display: block; font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 2px; }
+  .gs-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .gs-row input[type="number"], .gs-row input[type="text"] {
+    width: 100%; background: var(--panel); border: 1px solid var(--border-2); border-radius: 6px;
+    color: var(--ink); font-family: var(--mono); font-size: 12px; padding: 4px 6px;
+  }
+  .gs-row input:disabled, .gen-card textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+  .gs-sec { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+  .gs-sec .gs-h {
+    font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase;
+    color: var(--ink-faint); font-weight: 700; margin: 0 0 8px;
+  }
+  .gen-card textarea {
+    width: 100%; background: var(--panel); border: 1px solid var(--border-2); border-radius: 7px;
+    color: var(--ink); font-family: var(--sans); font-size: 13px; line-height: 1.45;
+    padding: 8px 10px; resize: vertical; min-height: 56px;
+  }
+  .gs-check { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--ink-dim); margin: 7px 0; cursor: pointer; }
+  .gs-check input { accent-color: var(--accent); }
+  .persona-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .persona-chip {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 12px; font-size: 12px; color: var(--ink-dim); cursor: pointer;
+  }
+  .persona-chip:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .persona-chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
+  .fewshot-pair { border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin: 7px 0; }
+  .fewshot-pair textarea { min-height: 38px; margin-bottom: 6px; }
+
+  /* mic button (feature-detected) */
+  .mic-btn {
+    background: var(--panel); border: 1px solid var(--border-2); color: var(--ink-dim);
+    border-radius: var(--radius-sm); padding: 8px 11px; cursor: pointer; font-size: 14px;
+  }
+  .mic-btn.listening { color: var(--red); border-color: var(--red-dim); background: var(--red-bg); }
+
+  /* screen-reader-only live region */
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* composer auto-grow (JS caps the height; the textarea scrolls past it) */
+  .composer textarea { max-height: 240px; overflow-y: auto; }
+
+  /* ---------- LIGHT THEME (opt-in; default stays dark) ---------- */
+  body.theme-light {
+    --bg:        #eef1f5;
+    --bg-2:      #e4e9ef;
+    --panel:     #ffffff;
+    --panel-2:   #f1f4f8;
+    --border:    #d8dfe7;
+    --border-2:  #c4cdd7;
+    --ink:       #1b2430;
+    --ink-dim:   #475563;
+    --ink-faint: #6f7d8b;
+    --accent:    #0b8a5f;
+    --accent-dim:#9bd6bd;
+    --accent-bg: rgba(13,138,95,0.08);
+    --amber:     #8f6510;
+    --amber-dim: #ddc28b;
+    --amber-bg:  rgba(176,128,24,0.10);
+    --red:       #b3382f;
+    --red-dim:   #e2a39e;
+    --red-bg:    rgba(190,60,50,0.07);
+    --blue:      #2563a8;
+    --blue-dim:  #a8c8e8;
+    --blue-bg:   rgba(60,130,210,0.07);
+    background: radial-gradient(1200px 700px at 50% -10%, #ffffff 0%, var(--bg) 55%, var(--bg-2) 100%);
+    background-attachment: fixed;
+  }
+  body.theme-light::before {
+    background-image:
+      linear-gradient(rgba(13,138,95,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(13,138,95,0.05) 1px, transparent 1px);
+  }
+  body.theme-light .ob-overlay, body.theme-light .pal-overlay,
+  body.theme-light .ksrc-overlay, body.theme-light .why-overlay { background: rgba(40,48,58,0.55); }
+  body.theme-light .chats-overlay, body.theme-light .gen-overlay { background: rgba(40,48,58,0.4); }
+
   /* ---------- honor prefers-reduced-motion (matches dashboard) ---------- */
   @media (prefers-reduced-motion: reduce) {
     .status-badge .dot { animation: none; }
@@ -1165,6 +1444,10 @@
           <span class="dot" aria-hidden="true"></span>
           <span id="connText">PREVIEW · MOCK TELEMETRY (no GPU connected)</span>
         </div>
+        <button class="nav-link" id="chatsBtn" type="button"
+          title="Saved chats + prompt library — stored locally in this browser (localStorage), nothing leaves the page">Chats</button>
+        <button class="nav-link" id="themeBtn" type="button" aria-pressed="false"
+          title="Toggle light/dark theme (remembered in this browser)">Light</button>
         <button class="nav-link" id="whyHelixBtn" type="button"
           title="What the Helix language can actually do — real code + the repo path for every claim">Why Helix <span class="arr">&rarr;</span></button>
         <a class="nav-link" href="compare.html">Models &amp; paths <span class="arr">&rarr;</span></a>
@@ -1205,6 +1488,8 @@
         <div class="conv-head">
           <span class="ch-title">Conversation — text completion</span>
           <span class="conv-tools">
+            <button class="ctx-clear" id="newChatBtn" type="button"
+              title="Start a fresh conversation — the current one is saved locally and stays in Chats">+ new chat</button>
             <label class="ctx-toggle" id="ctxToggleWrap"
               title="When on, each new message is appended to the conversation so far and the WHOLE text is sent as the completion prompt — that is the honest way to give a 2019 base model 'memory'. The live server enforces its --max-ctx token cap and errors honestly beyond it.">
               <input type="checkbox" id="ctxCarry" checked /> carry context
@@ -1233,6 +1518,17 @@
           </div>
         </div>
 
+        <button class="jump-pill" id="jumpPill" type="button" hidden
+          title="Auto-scroll paused because you scrolled up — click to follow the stream again">&darr; jump to latest</button>
+        <div class="conf-legend" id="confLegend" aria-label="Token-confidence shading legend">
+          <span>token shade = p(chosen token) — <b>real data from the live logits</b>, “what the model actually considered”; click a token for alternatives</span>
+          <span class="conf-sw" style="background:rgba(240,114,106,0.30)" aria-hidden="true"></span><span>&lt;25%</span>
+          <span class="conf-sw" style="background:rgba(245,177,76,0.30)" aria-hidden="true"></span><span>25–45%</span>
+          <span class="conf-sw" style="background:rgba(245,177,76,0.16)" aria-hidden="true"></span><span>45–70%</span>
+          <span class="conf-sw" style="background:rgba(52,211,153,0.13)" aria-hidden="true"></span><span>70–90%</span>
+          <span class="conf-sw" style="background:rgba(52,211,153,0.26)" aria-hidden="true"></span><span>&ge;90%</span>
+          <button class="ctx-clear" id="confToggle" type="button" aria-pressed="true">shading on</button>
+        </div>
         <div class="composer">
           <div class="conv-honesty">
             <b>Conversation = repeated completion with carried context.</b>
@@ -1261,6 +1557,14 @@
                 <button type="button" id="nGenUp" aria-label="more tokens">+</button>
               </div>
               <button class="send-btn" id="sendBtn" type="button">Continue</button>
+              <button class="stop-btn" id="stopBtn" type="button"
+                title="Stop generating (Esc) — the partial text is kept and labeled">&#9632; Stop</button>
+              <div class="ctl-mini">
+                <button class="ctx-clear" id="genSettingsBtn" type="button"
+                  title="Generation settings — sampling, seed, stop sequences, system prompt, prefill (Ctrl/⌘-K opens the command palette)">&#9881; settings</button>
+                <button class="mic-btn" id="micBtn" type="button" hidden
+                  title="Voice input (browser speech recognition — audio handled by your browser/OS)">&#127908;</button>
+              </div>
             </div>
           </div>
           <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="ctxInfo" class="ctx-meter"></span><span id="charCount"></span></div>
@@ -1630,6 +1934,132 @@ K2 == K3 == K4        # byte-identical, 601707 B,
       </div>
     </div>
   </div>
+
+  <!-- ============================================================
+       SAVED CHATS + PROMPT LIBRARY sidebar. Everything is localStorage
+       in THIS browser — no server, no sync, nothing leaves the page.
+       ============================================================ -->
+  <div class="chats-overlay" id="chatsOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="chatsTitle">
+    <div class="chats-panel">
+      <div class="chats-head">
+        <h2 id="chatsTitle">Saved chats</h2>
+        <span>
+          <button class="ctx-clear" id="chatsNewBtn" type="button" title="Start a fresh conversation">+ new chat</button>
+          <button class="ksrc-close" id="chatsClose" type="button">close &#10005;</button>
+        </span>
+      </div>
+      <div class="chats-tabs" role="tablist" aria-label="Sidebar sections">
+        <button id="tabChats" type="button" role="tab" aria-pressed="true">chats</button>
+        <button id="tabPrompts" type="button" role="tab" aria-pressed="false">prompt library</button>
+      </div>
+      <input class="chats-search" id="chatsSearch" type="search" placeholder="search&hellip;" aria-label="Search saved chats and prompts" />
+      <div class="chats-list" id="chatsList" aria-live="polite"></div>
+      <div class="chats-foot">Saved locally in this browser (localStorage) — nothing is uploaded anywhere.</div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       COMMAND PALETTE (Ctrl/Cmd-K). Pure client-side actions.
+       ============================================================ -->
+  <div class="pal-overlay" id="palOverlay" hidden role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="pal-card">
+      <input id="palInput" class="pal-input" type="text" autocomplete="off" spellcheck="false"
+        placeholder="Type a command&hellip;  (&uarr;&darr; to choose, Enter to run, Esc to close)"
+        role="combobox" aria-expanded="true" aria-controls="palList" aria-autocomplete="list" />
+      <div class="pal-list" id="palList" role="listbox" aria-label="Commands"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       GENERATION SETTINGS drawer. HONESTY CONTRACT: the sampling
+       controls are SENT only when the live /api/health advertises
+       "sampling":true — until then they are visibly disabled and
+       nothing extra goes on the wire (greedy stays the verified
+       default). The drawer itself works in every source mode.
+       ============================================================ -->
+  <div class="gen-overlay" id="genOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="genTitle">
+    <div class="gen-card">
+      <div class="chats-head">
+        <h2 id="genTitle">Generation settings</h2>
+        <button class="ksrc-close" id="genClose" type="button">close &#10005;</button>
+      </div>
+      <span class="gs-status" id="gsStatus">sampling not advertised by the backend — nothing extra is sent</span>
+      <p class="gs-note"><b>temperature 0 = greedy</b> — the token-for-token-verified default;
+        sampled replies are seeded and reproducible. These controls only go on the wire once the
+        live backend advertises <code>"sampling":true</code> on <code>/api/health</code>.</p>
+
+      <div class="gs-row"><span><label class="gs-lbl" for="gsTemp">temperature (0 = greedy)</label>
+        <input type="range" id="gsTemp" min="0" max="2" step="0.05" value="0" /></span>
+        <input type="number" id="gsTempN" min="0" max="2" step="0.05" value="0" aria-label="temperature value" /></div>
+      <div class="gs-row"><span><label class="gs-lbl" for="gsTopP">top_p</label>
+        <input type="range" id="gsTopP" min="0" max="1" step="0.01" value="1" /></span>
+        <input type="number" id="gsTopPN" min="0" max="1" step="0.01" value="1" aria-label="top_p value" /></div>
+      <div class="gs-row"><span><label class="gs-lbl" for="gsTopK">top_k (0 = off)</label>
+        <input type="range" id="gsTopK" min="0" max="200" step="1" value="0" /></span>
+        <input type="number" id="gsTopKN" min="0" max="200" step="1" value="0" aria-label="top_k value" /></div>
+      <div class="gs-row"><span><label class="gs-lbl" for="gsMinP">min_p</label>
+        <input type="range" id="gsMinP" min="0" max="1" step="0.01" value="0" /></span>
+        <input type="number" id="gsMinPN" min="0" max="1" step="0.01" value="0" aria-label="min_p value" /></div>
+      <div class="gs-row"><span><label class="gs-lbl" for="gsRep">repetition penalty</label>
+        <input type="range" id="gsRep" min="1" max="2" step="0.01" value="1" /></span>
+        <input type="number" id="gsRepN" min="1" max="2" step="0.01" value="1" aria-label="repetition penalty value" /></div>
+      <div class="gs-row"><span><label class="gs-lbl" for="gsFreq">frequency penalty</label>
+        <input type="range" id="gsFreq" min="0" max="2" step="0.01" value="0" /></span>
+        <input type="number" id="gsFreqN" min="0" max="2" step="0.01" value="0" aria-label="frequency penalty value" /></div>
+      <div class="gs-row"><span><label class="gs-lbl" for="gsPres">presence penalty</label>
+        <input type="range" id="gsPres" min="0" max="2" step="0.01" value="0" /></span>
+        <input type="number" id="gsPresN" min="0" max="2" step="0.01" value="0" aria-label="presence penalty value" /></div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Seed (sampled runs)</h3>
+        <label class="gs-check"><input type="checkbox" id="gsSeedAuto" checked />
+          random each send — the used seed is shown afterwards (reproducible)</label>
+        <div class="gs-row"><span><label class="gs-lbl" for="gsSeed">seed</label></span>
+          <input type="number" id="gsSeed" min="0" step="1" placeholder="auto" aria-label="seed value" /></div>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Stop sequences</h3>
+        <textarea id="gsStop" rows="2" aria-label="Stop sequences, one per line"
+          placeholder="one per line — generation halts when the model emits one"></textarea>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Max tokens</h3>
+        <label class="gs-check"><input type="checkbox" id="gsUnlimited" />
+          <span>unlimited — sends n_gen = <span id="gsCapText">context cap − prompt estimate</span></span></label>
+        <p class="gs-note" id="gsCapNote">The honest cap: the server enforces its context budget
+          fail-closed; “unlimited” just requests everything that fits.</p>
+      </div>
+
+      <div class="gs-sec" id="gsSystemSec">
+        <h3 class="gs-h">System prompt &amp; persona <span id="gsSysChip"></span></h3>
+        <p class="gs-note" id="gsSysNote"><b>Instruct model only.</b> The ChatML system turn is the
+          first thing the model reads. Base completion models (GPT-2) have <b>no system prompt</b> —
+          this section stays off for them.</p>
+        <div class="persona-row" id="personaRow" role="group" aria-label="Persona presets">
+          <button class="persona-chip" type="button" data-persona="helpful" aria-pressed="true">Helpful (default)</button>
+          <button class="persona-chip" type="button" data-persona="concise" aria-pressed="false">Concise</button>
+          <button class="persona-chip" type="button" data-persona="teacher" aria-pressed="false">Teacher</button>
+          <button class="persona-chip" type="button" data-persona="pirate" aria-pressed="false">Pirate</button>
+        </div>
+        <textarea id="gsSystem" rows="3" aria-label="System prompt text"></textarea>
+      </div>
+
+      <div class="gs-sec" id="gsPowerSec">
+        <h3 class="gs-h">Power user — assistant prefill &amp; few-shot</h3>
+        <label class="gs-lbl" for="gsPrefill">start the reply with&hellip; (assistant prefill — shown in the bubble, honestly marked as yours)</label>
+        <textarea id="gsPrefill" rows="2" placeholder="e.g.  Here are three options:"></textarea>
+        <p class="gs-note">Few-shot examples (chat mode): prepended as prior turns in the real ChatML
+          template. They consume context budget — oldest turns are dropped first when over it.</p>
+        <div id="fewshotList"></div>
+        <button class="ctx-clear" id="fewshotAdd" type="button">+ add example</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- screen-reader announcements for run state (start/stop/done) -->
+  <div class="visually-hidden" id="liveStatus" role="status" aria-live="polite"></div>
 
   <!-- Captured-run data (OPTIONAL). When present it enables the REPLAY backup
        mode: a real, gated XL run recorded earlier, replayed with clear
@@ -2213,15 +2643,35 @@ var LiveSSESource = (function () {
     var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var cancelled = false;
 
+    /* n_gen cap: 256 unless the live /api/health advertised a bigger context
+       cap (max_ctx) — the "unlimited" option requests cap − prompt estimate
+       and the server's own budget stays the fail-closed ground truth. */
+    var nGenCap = (UI.health && +UI.health.max_ctx > 0) ? Math.max(256, +UI.health.max_ctx) : 256;
     var reqObj = {
       prompt: prompt,
-      n_gen: Math.max(1, Math.min(nGen | 0, 256)),
+      n_gen: Math.max(1, Math.min(nGen | 0, nGenCap)),
       request_id: (typeof crypto !== "undefined" && crypto.randomUUID)
         ? crypto.randomUUID() : ("req-" + Date.now())
     };
     /* ADDITIVE field, only ever present when /api/health advertised a
        models[] capability (the dual-model server does; single-model servers omit models[] -> never sent). */
     if (UI.selectedModel) reqObj.model = UI.selectedModel;
+    /* ADDITIVE sampling fields — sent ONLY when /api/health advertised
+       "sampling":true AND the page snapshotted params for this run. The
+       greedy default (temperature 0) sends nothing extra at all when the
+       capability is absent, so today's wire bytes stay byte-identical. */
+    if (samplingAdvertised() && UI.pendingParams) {
+      var gp = UI.pendingParams;
+      if (gp.temperature != null) reqObj.temperature = gp.temperature;
+      if (gp.top_p != null) reqObj.top_p = gp.top_p;
+      if (gp.top_k != null) reqObj.top_k = gp.top_k;
+      if (gp.min_p != null) reqObj.min_p = gp.min_p;
+      if (gp.rep_penalty != null) reqObj.rep_penalty = gp.rep_penalty;
+      if (gp.freq_penalty != null) reqObj.freq_penalty = gp.freq_penalty;
+      if (gp.pres_penalty != null) reqObj.pres_penalty = gp.pres_penalty;
+      if (gp.seed != null) reqObj.seed = gp.seed;
+      if (gp.stop && gp.stop.length) reqObj.stop = gp.stop.slice();
+    }
     /* ADDITIVE field, same pattern as "model": detail:"token" is sent ONLY
        when the user picked fast mode AND the live backend advertised the
        fast-decode capability on /api/health — otherwise the wire bytes are
@@ -2330,7 +2780,18 @@ var UI = {
   activeMeta: null,       /* {n_gen,...} captured for verify */
   fastRun: false,         /* current run requested with detail:"token" (fast mode, live only) */
   pendingOps: [],         /* batched op events flushed on rAF (anti-flood) */
-  rafScheduled: false
+  rafScheduled: false,
+  /* ---- assistant-class chat UX (2026-06) ---- */
+  genText: "",            /* raw text streamed so far in the CURRENT run/segment */
+  genTokens: [],          /* the raw token events of the current run (for confidence + stats) */
+  continuing: null,       /* {nodeId} when the in-flight run EXTENDS an existing reply (assistant-prefill continue) */
+  pendingUserNode: null,  /* tree node id of the in-flight user turn */
+  pendingAssistantNode: null, /* tree node id of the in-flight assistant turn */
+  prefillUsed: "",        /* assistant prefill prepended to this run's reply (user-authored) */
+  lastWirePrompt: null,   /* the EXACT prompt string sent on the wire (incl. prefill) — 409 retries reuse it */
+  stick: true,            /* transcript auto-scroll follows the stream until the user scrolls up */
+  health: null,           /* last /api/health JSON (capability gates: sampling, max_ctx, models, fast) */
+  pendingParams: null     /* sampling params snapshot for the in-flight request (null = greedy default) */
 };
 
 /* ---- one-time static panel population (from RUNBOOK / 'hello') ---- */
@@ -2499,6 +2960,9 @@ var handlers = {
   },
 
   onToken: function (d) {
+    /* raw-text + token bookkeeping for stop/continue/markdown/confidence */
+    UI.genText += (d.string != null ? d.string : "");
+    UI.genTokens.push(d);
     appendToken(d);
     xpOnToken(d);
     /* token & throughput panel */
@@ -2534,18 +2998,13 @@ var handlers = {
 
   onDone: function (d) {
     finishStreamingBubble();
-    /* multi-turn: the next turn's context = everything sent + everything
-       generated this turn (replay never carries) */
-    if (TELEMETRY_SOURCE !== "replay" && UI.lastSentPrompt != null) {
-      if (isChatModel() && TELEMETRY_SOURCE === "sse") {
-        /* record the REAL turn (assistant text minus the control token) for the next template */
-        var aTxt = (d.text != null ? d.text : "").replace(/<\|im_end\|>\s*$/, "");
-        if (UI.lastChatUser != null) { UI.chatTurns.push({ user: UI.lastChatUser, assistant: aTxt }); UI.lastChatUser = null; }
-      } else {
-        UI.contextText = UI.lastSentPrompt + (d.text != null ? d.text : "");
-      }
-      updateCtxInfo();
-    }
+    /* multi-turn carry is now derived from the conversation TREE (branch-,
+       edit-, continue- and prefill-aware): convoOnDone records the completed
+       node, then rebuilds UI.contextText / UI.chatTurns from the current
+       path — the same strings the old incremental update produced for the
+       linear case. Replay turns are recorded but never carried (the carry
+       readers stay gated on TELEMETRY_SOURCE exactly as before). */
+    convoOnDone(d);
     /* reconcile the live gauges with the final measured seconds/tok_per_s
        so the right-column gauges agree with the run summary (during the
        stream they show real elapsed; here they settle to the reported totals). */
@@ -2558,6 +3017,9 @@ var handlers = {
     finalizeTurnMeta(d);
     flushKernelLegendCounts();
     xpOnDone(d);
+    /* run-scoped flags end with the run */
+    UI.continuing = null;
+    UI.prefillUsed = "";
   },
 
   onError: function (d) {
@@ -2757,9 +3219,10 @@ function enterBusyWait() {
     if (w.tick) clearInterval(w.tick);
     count.textContent = "retrying now…";
     /* re-fire the SAME request into the SAME turn; a fresh 409 lands back
-       in enterBusyWait with attempt+1, success streams into this bubble */
+       in enterBusyWait with attempt+1, success streams into this bubble.
+       (lastWirePrompt = the exact wire string incl. any assistant prefill) */
     var src = getTelemetrySource();
-    activeStream = src.start(UI.lastSentPrompt, UI.reply.nGen, handlers);
+    activeStream = src.start(UI.lastWirePrompt || UI.lastSentPrompt, UI.reply.nGen, handlers);
   }, delayMs);
   UI.busyWait = w;
 
@@ -2790,10 +3253,17 @@ function clearEmptyState() {
 
 function addUserTurn(text) {
   clearEmptyState();
+  var label = el("div", { class: "turn-label" }, "You");
+  var metaEl = el("div", { class: "turn-meta" });
   var turn = el("div", { class: "turn user" }, [
-    el("div", { class: "turn-label" }, "You"),
-    el("div", { class: "bubble" }, text)
+    label,
+    el("div", { class: "bubble" }, text),
+    metaEl
   ]);
+  if (UI.pendingUserNode) {
+    turn.setAttribute("data-node", UI.pendingUserNode);
+    attachUserActions(turn, UI.pendingUserNode);
+  }
   $("transcript").appendChild(turn);
   scrollTranscript();
 }
@@ -2846,8 +3316,16 @@ function addModelTurn(prompt, carriedLen, trimmedChars) {
     bubble,
     metaEl
   ]);
+  if (UI.pendingAssistantNode) turn.setAttribute("data-node", UI.pendingAssistantNode);
   $("transcript").appendChild(turn);
-  UI.activeBubble = { bubble: bubble, contEl: contEl, caretEl: caretEl, metaEl: metaEl };
+  UI.activeBubble = { bubble: bubble, contEl: contEl, caretEl: caretEl, metaEl: metaEl, turnEl: turn };
+  /* assistant prefill: seed the reply with the user-authored start, honestly marked */
+  if (UI.prefillUsed) {
+    contEl.appendChild(el("span", {
+      class: "prefill-seg",
+      title: "assistant prefill — you wrote this start; the model continues from it"
+    }, UI.prefillUsed));
+  }
   scrollTranscript();
 }
 
@@ -2857,7 +3335,11 @@ function appendToken(d) {
   /* de-highlight the previous just-arrived token */
   var prev = contEl.querySelector(".tok-new");
   if (prev) prev.classList.remove("tok-new");
-  var span = el("span", { class: "tok-new" }, d.string);
+  var span = el("span", { class: "tok-new" }, d.string != null ? String(d.string) : "");
+  /* ADDITIVE token fields {p, H, alts} (real logits, live backend): when
+     present, shade by confidence + arm the alternatives popover. When the
+     fields are absent this is a no-op — nothing is invented. */
+  decorateConfidence(span, d);
   contEl.appendChild(span);
   scrollTranscript();
 }
@@ -2875,10 +3357,21 @@ function finalizeTurnMeta(d) {
   if (!UI.activeBubble) return;
   var meta = UI.activeBubble.metaEl;
   meta.innerHTML = "";
+  /* per-message stats from the done event (n_gen / seconds / tok_per_s),
+     plus the honest decode-mode label (greedy unless sampling was really
+     sent) and the model that actually ran. */
+  var nodeFin = convoNode(UI.pendingAssistantNode);
   meta.appendChild(document.createTextNode(
-    "continued " + d.n_gen + " tokens · " + d.seconds + " s · " + d.tok_per_s +
-    " tok/s · GPT-2-XL fp32 · greedy"
+    ((nodeFin && nodeFin.meta && nodeFin.meta.continued) ? "+" : "") +
+    d.n_gen + " tokens · " + d.seconds + " s · " + d.tok_per_s +
+    " tok/s · " + currentModelLabel() + " fp32 · " + decodeModeLabel()
   ));
+  if (nodeFin && nodeFin.meta && nodeFin.meta.continued) {
+    meta.appendChild(el("span", { class: "seg-tag" },
+      nodeFin.meta.contMode === "sampled"
+        ? "continued (new sampling segment)"
+        : "continued (greedy — exact by construction)"));
+  }
   if (TELEMETRY_SOURCE === "replay") {
     meta.appendChild(el("span", { class: "replay-tag" }, "REPLAY · captured run"));
     /* shareable permalink: same page, ?source=replay (works wherever this
@@ -2924,6 +3417,9 @@ function finalizeTurnMeta(d) {
 
   /* the teaching affordance: what verification means here, honestly */
   attachVerifyExplainer(meta);
+
+  /* assistant-class actions: copy / continue / regenerate / read-aloud */
+  attachAssistantActions(meta, UI.pendingAssistantNode);
 }
 
 /* Render an /api/verify outcome. TODAY the only verdict the server ever
@@ -3106,9 +3602,14 @@ function paintRunSummary(d) {
   body.appendChild(expBox);
 }
 
-function scrollTranscript() {
+function scrollTranscript(force) {
   var t = $("transcript");
+  if (force) UI.stick = true;
+  /* auto-scroll pauses while the user has scrolled up; the jump pill brings
+     them (and the auto-follow) back. */
+  if (!UI.stick) { updateJumpPill(); return; }
   t.scrollTop = t.scrollHeight;
+  updateJumpPill();
 }
 
 /* ================================================================
@@ -3215,7 +3716,7 @@ function configureComposerForSource() {
     input.disabled = false;
     ng.disabled = false; up.disabled = false; down.disabled = false;
     send.textContent = "Continue";
-    hint.textContent = "Enter ↵ to run · Shift+Enter for a newline";
+    hint.textContent = "Enter ↵ run · Shift+Enter newline · Esc stop · ↑ edit last message · Ctrl/⌘-K commands";
     $("ctxCarry").disabled = false;
     $("ctxClear").disabled = false;
   }
@@ -3273,6 +3774,8 @@ function showCtxCutNote(msg) {
 function setBusy(b) {
   UI.busy = b;
   $("sendBtn").disabled = b;
+  var stopB = $("stopBtn");
+  if (stopB) stopB.classList.toggle("show", b);
   $("busyHint").classList.toggle("show", b);
   $("transcript").setAttribute("aria-busy", b ? "true" : "false");
   var ms = $("modelSelect");
@@ -3297,9 +3800,13 @@ function setBusy(b) {
    the fail-closed gate verified token-for-token. Nothing is faked: the templated prompt
    is sent verbatim and shows up in the tokenize telemetry. */
 function isChatModel() { return !!(UI.selectedModel && /instruct/i.test(UI.selectedModel)); }
-var CHAT_SYSTEM = "You are a helpful AI assistant named SmolLM, trained by Hugging Face";
-function buildChatML(turns, userMsg) {
-  var s = "<|im_start|>system\n" + CHAT_SYSTEM + "<|im_end|>\n";
+var CHAT_SYSTEM_DEFAULT = "You are a helpful AI assistant named SmolLM, trained by Hugging Face";
+/* mutable: the system-prompt editor / persona presets (chat models only) write
+   this; base completion models have NO system prompt and never see it. */
+var CHAT_SYSTEM = CHAT_SYSTEM_DEFAULT;
+function buildChatML(turns, userMsg, systemText) {
+  var sys = (systemText != null) ? systemText : CHAT_SYSTEM;
+  var s = "<|im_start|>system\n" + sys + "<|im_end|>\n";
   for (var i = 0; i < turns.length; i++) {
     s += "<|im_start|>user\n" + turns[i].user + "<|im_end|>\n";
     s += "<|im_start|>assistant\n" + turns[i].assistant + "<|im_end|>\n";
@@ -3308,7 +3815,8 @@ function buildChatML(turns, userMsg) {
 }
 
 var activeStream = null;
-function startGeneration(prompt, nGen) {
+function startGeneration(prompt, nGen, opts) {
+  opts = opts || {};   /* {skipUserTurn, userNodeId, forceSeed} — regenerate/edit re-runs */
   if (UI.busy) return;
   if (TELEMETRY_SOURCE === "replay") {
     /* replay can only honestly replay the captured run */
@@ -3318,9 +3826,19 @@ function startGeneration(prompt, nGen) {
   }
   prompt = (prompt || "").replace(/\s+$/g, "");
   if (!prompt) return;
+  /* "unlimited" max tokens: request the advertised context cap minus the
+     labeled rough prompt estimate — the server's own --max-ctx stays the
+     fail-closed ground truth (it refuses honestly past the cap). */
+  if (GENSET.nUnlimited && TELEMETRY_SOURCE !== "replay") {
+    nGen = unlimitedNGen((carryEnabled() ? UI.contextText : "") + prompt);
+  }
   /* retry stores the USER text; carry-over is re-derived at send time so a
      retried turn builds the identical effective prompt */
   UI.lastRequest = { prompt: prompt, nGen: nGen };
+  /* conversation tree: record the user turn + a pending assistant node
+     (regenerate/edit pass an existing user node — that re-run becomes a
+     SIBLING branch, never destroying the old reply) */
+  convoBeginTurn(prompt, opts);
 
   /* multi-turn: prepend the carried conversation (completion-model "memory"
      = literally resending the text so far; nothing hidden, marker in the
@@ -3332,7 +3850,10 @@ function startGeneration(prompt, nGen) {
   if (isChatModel() && TELEMETRY_SOURCE === "sse") {
     /* CHAT MODE: multi-turn = the model's real ChatML template over the REAL prior turns.
        Budget honestly: drop the OLDEST whole turns first (visible note), never the new text. */
-    var turns = carryEnabled() ? UI.chatTurns.slice() : [];
+    /* few-shot examples (power-user drawer) ride as the OLDEST prior turns in
+       the template — over budget they are dropped first, like any old turn. */
+    var turns = (GENSET.fewshot && GENSET.fewshot.length ? GENSET.fewshot.slice() : [])
+      .concat(carryEnabled() ? UI.chatTurns.slice() : []);
     var budgetTokC = Math.max(16, MAX_CTX_TOKENS - nGen - CTX_SAFETY_TOKENS);
     var droppedTurns = 0;
     while (turns.length && estTokens(buildChatML(turns, prompt)) > budgetTokC) { turns.shift(); droppedTurns++; }
@@ -3372,45 +3893,32 @@ function startGeneration(prompt, nGen) {
   UI.lastTrim = trimmedChars;
   UI.lastSentPrompt = prompt;
 
+  /* assistant prefill (power-user): the reply STARTS with user-authored
+     text. chat: the ChatML template already ends with
+     "<|im_start|>assistant\n", so the prefill is appended verbatim — NO new
+     <|im_start|>; base: plain text concat. The prefill is treated as part of
+     the ASSISTANT text everywhere (bubble, carry, continue) and is visibly
+     marked as user-authored — never passed off as model output. */
+  UI.prefillUsed = (TELEMETRY_SOURCE !== "replay" && GENSET.prefill) ? GENSET.prefill : "";
+  UI.lastWirePrompt = UI.prefillUsed ? prompt + UI.prefillUsed : prompt;
+
+  /* sampling snapshot for THIS request — null = the greedy verified default;
+     only ever serialized when /api/health advertised "sampling":true */
+  UI.pendingParams = samplingAdvertised() ? currentGenParams(opts.forceSeed) : null;
+
   setBusy(true);
-
-  /* reset per-run UI state */
-  UI.kernelCounts = {};
-  paintKernelLegend(RUNBOOK.kernels);
-  UI.run.tokens = 0;
-  UI.run.t0 = performance.now();
-  UI.reply.step = 0;
-  UI.reply.nGen = nGen;
-  UI.reply.totalPasses = nGen * RUNBOOK.n_layer;
-  $("ppNgen").textContent = nGen;
-  $("ladderStep").textContent = "step 1 / " + nGen;
-  $("gaugeToks").textContent = "0"; $("gaugeToks").classList.add("is-idle");
-  $("gaugeTps").textContent = "—"; $("gaugeTps").classList.add("is-idle");
-  $("gaugeSecs").textContent = "0.0"; $("gaugeSecs").classList.add("is-idle");
-  $("streamTokens").innerHTML = '<span class="stream-tokens-empty">streaming…</span>';
-  $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
-  $("ladderOpNow").innerHTML = "&nbsp;";
-  /* fast mode (live-only): per-op events won't arrive — say so up front
-     instead of leaving "launching kernels…" dangling. Token progress and
-     the transcript stream exactly as in glass box. */
-  UI.fastRun = (TELEMETRY_SOURCE === "sse" && SPEED.mode === "fast" && SPEED.fastAvailable);
-  if (UI.fastRun) {
-    $("ktFeed").innerHTML = "";
-    $("ktFeed").appendChild(el("span", { class: "kt-feed-empty" }, FAST_OFF_MSG));
-    $("ladderOpNow").textContent = FAST_OFF_MSG;
-  }
-  xpRunStart();
-
+  resetRunPanels(nGen);
   updateCtxInfo();
 
   /* transcript turns: the user bubble shows what was typed; the model bubble
-     echoes the FULL sent prompt with the carried prefix collapsed */
-  addUserTurn(displayPrompt);
+     echoes the FULL sent prompt with the carried prefix collapsed.
+     (skipUserTurn = regenerate/edit: the user turn is already on screen.) */
+  if (!opts.skipUserTurn) addUserTurn(displayPrompt);
   addModelTurn(prompt, carriedLen, trimmedChars);
 
   /* subscribe once; the source does the rest */
   var src = getTelemetrySource();
-  activeStream = src.start(prompt, nGen, handlers);
+  activeStream = src.start(UI.lastWirePrompt, nGen, handlers);
 }
 
 /* ================================================================
@@ -3430,24 +3938,41 @@ function initControls() {
     startGeneration(input.value, clampNGen(nGenInput.value));
   });
 
-  /* Enter to send, Shift+Enter for newline */
+  /* Enter to send, Shift+Enter for newline, ArrowUp (empty box) edits the
+     last user message in place (re-running creates a branch) */
   input.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (!UI.busy) startGeneration(input.value, clampNGen(nGenInput.value));
+    } else if (e.key === "ArrowUp" && !input.value && !UI.busy) {
+      e.preventDefault();
+      editLastUserMessage();
     }
   });
 
   /* lightweight typing feedback (chars only — token count is the
-     tokenizer's job and is shown truthfully once a run tokenizes) */
+     tokenizer's job and is shown truthfully once a run tokenizes)
+     + composer auto-grow (capped; the box scrolls past the cap, so long
+     pastes stay manageable) */
   input.addEventListener("input", function () {
     $("charCount").textContent = input.value.length ? (input.value.length + " chars") : "";
+    autoGrowComposer();
+  });
+  input.addEventListener("paste", function () {
+    setTimeout(autoGrowComposer, 0);
   });
 
-  /* Escape closes the mobile internals drawer */
+  /* Escape: closes the mobile internals drawer; with no dialog open it
+     STOPS the in-flight generation (the partial text is kept) */
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") openDrawer(false);
+    if (e.key === "Escape") {
+      openDrawer(false);
+      if (UI.busy && !anyOverlayOpen()) stopActiveGeneration();
+    }
   });
+
+  /* stop button — aborts the stream, keeps the partial reply */
+  $("stopBtn").addEventListener("click", stopActiveGeneration);
 
   /* multi-turn context controls */
   $("ctxCarry").addEventListener("change", updateCtxInfo);
@@ -3458,16 +3983,16 @@ function initControls() {
     showCtxCutNote(null);
   });
 
-  /* seed chips fill the box and (when idle) fire immediately */
-  var chips = $("seedRow").querySelectorAll(".seed-chip");
-  for (var i = 0; i < chips.length; i++) {
-    chips[i].addEventListener("click", function (e) {
-      if (UI.busy) return;
-      var seed = e.currentTarget.textContent;
-      input.value = seed;
-      startGeneration(seed, clampNGen(nGenInput.value));
-    });
-  }
+  /* seed chips fill the box and (when idle) fire immediately. Delegated so
+     the chip set can be swapped per model (instruct vs base suggestions). */
+  $("seedRow").addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest(".seed-chip") : null;
+    if (!b || b.disabled || UI.busy) return;
+    var seed = b.textContent;
+    input.value = seed;
+    autoGrowComposer();
+    startGeneration(seed, clampNGen(nGenInput.value));
+  });
 
   /* stepper */
   $("nGenUp").addEventListener("click", function () { nGenInput.value = clampNGen(+nGenInput.value + 1); });
@@ -3501,8 +4026,10 @@ function gateLiveReadiness() {
        live run it can't back. */
     USE_LIVE_BACKEND = false;
     TELEMETRY_SOURCE = replayAvailable() ? "replay" : "mock";
+    UI.health = null;
     applySourceHonesty();
     applyFastAvailability(null);
+    applySamplingAvailability();
     maybeAutoReplay();
     startUpgradeWatch();
   }
@@ -3514,9 +4041,11 @@ function gateLiveReadiness() {
     }).then(function (j) {
       if (j === null) return; /* already fell back */
       if (j && j.ready) {
+        UI.health = j; /* capability gates: sampling / max_ctx / models / fast */
         setConnState("live", "LIVE · " + (j.device || RUNBOOK.device) + " · fp32");
         populateModelSelect(j);
         applyFastAvailability(j);
+        applySamplingAvailability();
       } else {
         /* reachable worker, still warming (XL weights + PTX load) —
            honest connecting state + keep reconnecting for ~2 minutes */
@@ -3567,6 +4096,8 @@ function populateModelSelect(health) {
     if (TELEMETRY_SOURCE === "sse") {
       $("convMode").textContent = UI.selectedModelLabel + " · fp32 · greedy · LIVE";
     }
+    /* swap suggestion chips + system-prompt section for instruct vs base */
+    try { onModelChanged(); } catch (e) { /* assistant-UX module not booted yet */ }
   }
   syncSelected();
   sel.hidden = false;
@@ -4238,6 +4769,1592 @@ function initSpeedToggle() {
 }
 
 /* ================================================================
+   ASSISTANT-CLASS CHAT UX (2026-06, fable/demo-assistant-w12)
+   ----------------------------------------------------------------
+   Everything below is ADDITIVE: stop/continue/regenerate/edit,
+   conversation BRANCHING (a tree of turns; editing or regenerating
+   creates a sibling instead of destroying history), saved chats +
+   prompt library (localStorage only), a hand-written safe markdown
+   renderer, a command palette, a generation-settings drawer
+   (capability-gated on /api/health "sampling":true), token-confidence
+   shading driven ONLY by real additive token fields, scroll/composer
+   QoL, light theme, voice in/out.
+   HONESTY: nothing here invents data. Sampling fields go on the wire
+   only when advertised; confidence shading renders only when the live
+   events carry p/H/alts; mock/replay labeling is untouched; /api/verify
+   semantics are untouched.
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   Generation settings (GENSET) + sampling capability gate
+   ---------------------------------------------------------------- */
+var GENSET_LS_KEY = "helix_genset_v1";
+var SYSTEM_LS_KEY = "helix_system_v1";
+var CONF_LS_KEY   = "helix_conf_shade";
+var THEME_LS_KEY  = "helix_theme";
+var CHATS_LS_KEY  = "helix_chats_v1";
+var PROMPTS_LS_KEY = "helix_prompts_v1";
+
+var GENSET = {
+  temperature: 0, top_p: 1, top_k: 0, min_p: 0,
+  rep_penalty: 1, freq_penalty: 0, pres_penalty: 0,
+  seedAuto: true, seed: null, stop: [],
+  nUnlimited: false, prefill: "", fewshot: []
+};
+
+function samplingAdvertised() {
+  /* DEFENSIVE: the backend engineer lands "sampling":true on /api/health in
+     parallel — until it appears, no sampling field is ever sent. */
+  return TELEMETRY_SOURCE === "sse" && !!(UI.health && UI.health.sampling === true);
+}
+function newRandomSeed() { return Math.floor(Math.random() * 4294967296); }
+function persistGenset() { try { lsSet(GENSET_LS_KEY, JSON.stringify(GENSET)); } catch (e) { /* quota */ } }
+function restoreGenset() {
+  try {
+    var j = JSON.parse(lsGet(GENSET_LS_KEY) || "null");
+    if (j && typeof j === "object") {
+      for (var k in GENSET) {
+        if (Object.prototype.hasOwnProperty.call(j, k)) GENSET[k] = j[k];
+      }
+    }
+  } catch (e) { /* corrupted store: defaults */ }
+  if (!Array.isArray(GENSET.fewshot)) GENSET.fewshot = [];
+  if (!Array.isArray(GENSET.stop)) GENSET.stop = [];
+  var sys = lsGet(SYSTEM_LS_KEY);
+  if (sys) CHAT_SYSTEM = sys;
+}
+function currentGenParams(forceSeed) {
+  var seed;
+  if (forceSeed != null) seed = forceSeed;
+  else if (!GENSET.seedAuto && GENSET.seed != null) seed = GENSET.seed;
+  else seed = newRandomSeed();
+  /* random-but-SHOWN: surface the seed that is actually used */
+  var f = $("gsSeed");
+  if (f && GENSET.seedAuto) f.value = String(seed);
+  return {
+    temperature: +GENSET.temperature || 0,
+    top_p: +GENSET.top_p, top_k: GENSET.top_k | 0, min_p: +GENSET.min_p,
+    rep_penalty: +GENSET.rep_penalty, freq_penalty: +GENSET.freq_penalty,
+    pres_penalty: +GENSET.pres_penalty,
+    seed: seed, stop: (GENSET.stop || []).slice()
+  };
+}
+function decodeModeIsSampled() {
+  return !!(UI.pendingParams && +UI.pendingParams.temperature > 0);
+}
+function decodeModeLabel() {
+  if (!decodeModeIsSampled()) return "greedy";
+  var gp = UI.pendingParams;
+  return "sampled (T=" + gp.temperature + (gp.seed != null ? " · seed " + gp.seed : "") + " — seeded, reproducible)";
+}
+function unlimitedNGen(promptText) {
+  /* honest cap: the advertised live max_ctx, else the documented --max-ctx
+     default; minus the LABELED rough ÷4 prompt estimate. The server's own
+     tokenizer/budget stays the fail-closed ground truth. */
+  var cap = (UI.health && +UI.health.max_ctx > 0) ? +UI.health.max_ctx : MAX_CTX_TOKENS;
+  return Math.max(1, cap - estTokens(promptText) - CTX_SAFETY_TOKENS);
+}
+
+/* ----------------------------------------------------------------
+   Per-run panel reset (factored verbatim out of startGeneration so
+   continueReply() can reuse it)
+   ---------------------------------------------------------------- */
+function resetRunPanels(nGen) {
+  UI.stick = true; /* a fresh run re-arms auto-scroll */
+  UI.kernelCounts = {};
+  paintKernelLegend(RUNBOOK.kernels);
+  UI.run.tokens = 0;
+  UI.run.t0 = performance.now();
+  UI.reply.step = 0;
+  UI.reply.nGen = nGen;
+  UI.reply.totalPasses = nGen * RUNBOOK.n_layer;
+  UI.genText = "";
+  UI.genTokens = [];
+  $("ppNgen").textContent = nGen;
+  $("ladderStep").textContent = "step 1 / " + nGen;
+  $("gaugeToks").textContent = "0"; $("gaugeToks").classList.add("is-idle");
+  $("gaugeTps").textContent = "—"; $("gaugeTps").classList.add("is-idle");
+  $("gaugeSecs").textContent = "0.0"; $("gaugeSecs").classList.add("is-idle");
+  $("streamTokens").innerHTML = '<span class="stream-tokens-empty">streaming…</span>';
+  $("ktFeed").innerHTML = '<span class="kt-feed-empty">launching kernels…</span>';
+  $("ladderOpNow").innerHTML = "&nbsp;";
+  /* fast mode (live-only): per-op events won't arrive — say so up front
+     instead of leaving "launching kernels…" dangling. Token progress and
+     the transcript stream exactly as in glass box. */
+  UI.fastRun = (TELEMETRY_SOURCE === "sse" && SPEED.mode === "fast" && SPEED.fastAvailable);
+  if (UI.fastRun) {
+    $("ktFeed").innerHTML = "";
+    $("ktFeed").appendChild(el("span", { class: "kt-feed-empty" }, FAST_OFF_MSG));
+    $("ladderOpNow").textContent = FAST_OFF_MSG;
+  }
+  xpRunStart();
+}
+
+/* ----------------------------------------------------------------
+   CONVERSATION TREE (branching data model)
+   ----------------------------------------------------------------
+   - Every message is a node {id, parent, children[], role, text, meta}.
+   - The visible transcript is the PATH from a root to CONVO.leaf.
+   - Editing a user message adds a SIBLING user node (a new branch);
+     regenerating adds a SIBLING assistant node under the same user
+     turn. Old branches stay reachable via the ‹ k/n › pager.
+   - Persisted (slimmed) to localStorage as the saved-chats store.
+   ---------------------------------------------------------------- */
+function newNodeId() { return "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function newConvo() {
+  return {
+    id: "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    title: "", createdAt: Date.now(),
+    nodes: {}, roots: [], leaf: null
+  };
+}
+var CONVO = newConvo();
+
+function convoNode(id) { return (id && CONVO.nodes[id]) ? CONVO.nodes[id] : null; }
+function convoPath() {
+  var out = [], n = convoNode(CONVO.leaf);
+  while (n) { out.unshift(n); n = convoNode(n.parent); }
+  return out;
+}
+function convoSiblings(n) {
+  var ids = n.parent ? (convoNode(n.parent) ? convoNode(n.parent).children : []) : CONVO.roots;
+  var out = [];
+  for (var i = 0; i < ids.length; i++) { var s = convoNode(ids[i]); if (s) out.push(s); }
+  return out;
+}
+function deepestDescendant(id) {
+  var n = convoNode(id);
+  while (n && n.children.length) n = convoNode(n.children[n.children.length - 1]);
+  return n ? n.id : id;
+}
+function convoAddNode(parentId, role, text) {
+  var n = { id: newNodeId(), parent: parentId || null, children: [], role: role, text: text || "", meta: {} };
+  CONVO.nodes[n.id] = n;
+  if (parentId && convoNode(parentId)) convoNode(parentId).children.push(n.id);
+  else CONVO.roots.push(n.id);
+  return n;
+}
+/* called from startGeneration: record the user turn + pending assistant */
+function convoBeginTurn(userText, opts) {
+  opts = opts || {};
+  stripLastTurnActions(); /* earlier turns lose continue/regenerate */
+  var userNode = opts.userNodeId ? convoNode(opts.userNodeId) : null;
+  if (!userNode) {
+    var leaf = convoNode(CONVO.leaf);
+    var parentId = leaf ? (leaf.role === "assistant" ? leaf.id : leaf.parent) : null;
+    userNode = convoAddNode(parentId, "user", userText);
+  }
+  var aNode = convoAddNode(userNode.id, "assistant", "");
+  aNode.meta = {
+    source: TELEMETRY_SOURCE,
+    model: currentModelLabel(),
+    modelId: UI.selectedModel || RUNBOOK.model,
+    echoMode: (isChatModel() && TELEMETRY_SOURCE === "sse") ? "chat" : "base",
+    startedAt: Date.now()
+  };
+  CONVO.leaf = aNode.id;
+  UI.pendingUserNode = userNode.id;
+  UI.pendingAssistantNode = aNode.id;
+  if (!CONVO.title && userNode.text) CONVO.title = userNode.text.split("\n")[0].slice(0, 64);
+}
+/* called from handlers.onDone: record the finished reply + rebuild carry */
+function convoOnDone(d) {
+  var node = convoNode(UI.pendingAssistantNode);
+  if (node) {
+    var raw = (d && d.text != null) ? String(d.text) : UI.genText;
+    var stripped = raw.replace(/<\|im_end\|>\s*$/, "");
+    if (UI.continuing) {
+      node.text += stripped;
+      node.meta.n_gen = (node.meta.n_gen || 0) + ((d && d.n_gen) || 0);
+      if (d && d.seconds != null) node.meta.seconds = +(((+node.meta.seconds || 0) + (+d.seconds || 0)).toFixed(1));
+      node.meta.continued = (node.meta.continued || 0) + 1;
+    } else {
+      node.text = (UI.prefillUsed || "") + stripped;
+      node.meta.n_gen = d ? d.n_gen : UI.genTokens.length;
+      node.meta.seconds = d ? d.seconds : null;
+      node.meta.tok_per_s = d ? d.tok_per_s : null;
+      node.meta.sentPrompt = UI.lastSentPrompt;
+      if (UI.prefillUsed) node.meta.prefill = UI.prefillUsed;
+    }
+    node.meta.stopped = false;
+    node.meta.source = TELEMETRY_SOURCE;
+    node.meta.params = UI.pendingParams
+      ? JSON.parse(JSON.stringify(UI.pendingParams))
+      : { temperature: 0, mode: "greedy (verified default)" };
+    node.tokens = (node.tokens || []).concat(UI.genTokens);
+    markdownizeBubbleForNode(node);
+  }
+  UI.lastChatUser = null;
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  saveCurrentChat();
+  announce("reply finished — " + ((d && d.n_gen != null) ? d.n_gen + " tokens" : "done"));
+}
+/* carry (UI.contextText / UI.chatTurns) re-derived from the current path —
+   branch/edit/regenerate-aware; produces the same strings the old
+   incremental update built in the linear case (incomplete turns carry
+   nothing, exactly as before). */
+function rebuildCarryFromPath() {
+  var path = convoPath();
+  var turns = [], ctx = "";
+  for (var i = 0; i < path.length - 1; i++) {
+    var u = path[i], a = path[i + 1];
+    if (u.role !== "user" || a.role !== "assistant") continue;
+    if (!a.text) continue;
+    turns.push({ user: u.text, assistant: a.text });
+    ctx += u.text + a.text;
+  }
+  UI.chatTurns = turns;
+  UI.contextText = ctx;
+}
+function findTurnRefs(nodeIdStr) {
+  if (!nodeIdStr) return null;
+  var turnEl = $("transcript").querySelector('[data-node="' + nodeIdStr + '"]');
+  if (!turnEl) return null;
+  var bubble = turnEl.querySelector(".bubble");
+  return {
+    turnEl: turnEl,
+    bubble: bubble,
+    contEl: bubble ? bubble.querySelector(".cont") : null,
+    metaEl: turnEl.querySelector(".turn-meta")
+  };
+}
+function stripLastTurnActions() {
+  var olds = document.querySelectorAll(".act-last");
+  for (var i = olds.length - 1; i >= 0; i--) {
+    if (olds[i].parentNode) olds[i].parentNode.removeChild(olds[i]);
+  }
+}
+
+/* ----------------------------------------------------------------
+   STOP (button + Esc): abort the stream, KEEP the partial text
+   ---------------------------------------------------------------- */
+function anyOverlayOpen() {
+  var ids = ["ksrcOverlay", "whyOverlay", "onboardOverlay", "palOverlay", "chatsOverlay", "genOverlay"];
+  for (var i = 0; i < ids.length; i++) {
+    var o = $(ids[i]);
+    if (o && !o.hidden) return true;
+  }
+  return !!UI.tokPop;
+}
+function stopActiveGeneration() {
+  if (!UI.busy) return;
+  clearBusyWait(false);
+  if (activeStream) { try { activeStream.cancel(); } catch (e) { /* already closed */ } }
+  flushOpsNow();
+  finishStreamingBubble();
+  var node = convoNode(UI.pendingAssistantNode);
+  var stripped = (UI.genText || "").replace(/<\|im_end\|>\s*$/, "");
+  var kept = UI.genTokens.length;
+  if (node) {
+    node.text = UI.continuing ? (node.text + stripped) : ((UI.prefillUsed || "") + stripped);
+    node.meta.stopped = true;
+    node.meta.n_gen = (UI.continuing ? (node.meta.n_gen || 0) : 0) + kept;
+    if (node.meta.sentPrompt == null) node.meta.sentPrompt = UI.lastSentPrompt;
+    node.meta.params = UI.pendingParams
+      ? JSON.parse(JSON.stringify(UI.pendingParams))
+      : { temperature: 0, mode: "greedy (verified default)" };
+    node.tokens = (node.tokens || []).concat(UI.genTokens);
+    markdownizeBubbleForNode(node);
+  }
+  UI.lastChatUser = null;
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  if (UI.activeBubble) {
+    var meta = UI.activeBubble.metaEl;
+    meta.innerHTML = "";
+    meta.appendChild(el("span", { class: "stop-tag" }, "stopped early — partial"));
+    meta.appendChild(document.createTextNode(" " + kept + " token" + (kept === 1 ? "" : "s") + " kept · " + currentModelLabel()));
+    if (TELEMETRY_SOURCE === "replay") meta.appendChild(el("span", { class: "replay-tag" }, "REPLAY · captured run"));
+    else if (TELEMETRY_SOURCE !== "sse") meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
+    attachAssistantActions(meta, node ? node.id : null);
+  }
+  setBusy(false);
+  UI.continuing = null;
+  UI.prefillUsed = "";
+  xpOnError({});
+  var p = $("xpProgress");
+  if (p) { p.textContent = "stopped"; p.classList.remove("is-idle"); }
+  announce("generation stopped — kept " + kept + " partial token" + (kept === 1 ? "" : "s"));
+  saveCurrentChat();
+}
+
+/* ----------------------------------------------------------------
+   CONTINUE: more tokens extending the SAME reply (assistant prefill)
+   ----------------------------------------------------------------
+   instruct model: the wire prompt is the ORIGINAL templated prompt +
+   the assistant text so far — the template still ends inside the open
+   assistant turn, NO new <|im_start|> is added. base models: plain
+   text concatenation. Greedy continues are exact-by-construction;
+   sampled continues are labeled "new sampling segment".
+   ---------------------------------------------------------------- */
+function continueReply(nodeIdStr) {
+  if (UI.busy || TELEMETRY_SOURCE === "replay") return;
+  var node = convoNode(nodeIdStr);
+  if (!node || node.meta.sentPrompt == null) return;
+  var refs = findTurnRefs(node.id);
+  if (!refs || !refs.contEl) return;
+  var nGen = clampNGen($("nGen").value);
+  var prompt = node.meta.sentPrompt + node.text;
+  if (GENSET.nUnlimited) nGen = unlimitedNGen(prompt);
+  UI.continuing = { nodeId: node.id };
+  UI.pendingAssistantNode = node.id;
+  UI.pendingUserNode = node.parent;
+  UI.lastRequest = null; /* a continue is not retryable as a fresh turn */
+  UI.lastSentPrompt = prompt;
+  UI.lastWirePrompt = prompt;
+  UI.prefillUsed = "";
+  UI.pendingParams = samplingAdvertised() ? currentGenParams(null) : null;
+  node.meta.contMode = decodeModeIsSampled() ? "sampled" : "greedy";
+  CONVO.leaf = node.id;
+  setBusy(true);
+  resetRunPanels(nGen);
+  updateCtxInfo();
+  /* re-open the bubble: back to raw text so new tokens append faithfully;
+     markdown re-renders at done */
+  refs.contEl.classList.remove("md-block");
+  refs.contEl.textContent = node.text;
+  var caret = el("span", { class: "caret", "aria-hidden": "true" });
+  refs.contEl.parentNode.appendChild(caret);
+  refs.metaEl.innerHTML = "";
+  refs.metaEl.appendChild(document.createTextNode("continuing…"));
+  UI.activeBubble = { bubble: refs.bubble, contEl: refs.contEl, caretEl: caret, metaEl: refs.metaEl, turnEl: refs.turnEl };
+  scrollTranscript(true);
+  announce("continuing the reply");
+  var src = getTelemetrySource();
+  activeStream = src.start(prompt, nGen, handlers);
+}
+
+/* ----------------------------------------------------------------
+   REGENERATE (last assistant turn) — a sibling branch, never a wipe
+   ---------------------------------------------------------------- */
+function regenerateLast(reuseSeed) {
+  if (UI.busy || TELEMETRY_SOURCE === "replay") return;
+  var path = convoPath();
+  var a = null;
+  for (var i = path.length - 1; i >= 0; i--) {
+    if (path[i].role === "assistant") { a = path[i]; break; }
+  }
+  if (!a) return;
+  var u = convoNode(a.parent);
+  if (!u) return;
+  var seed = null;
+  if (samplingAdvertised()) {
+    /* "regenerate" bumps the seed; "regenerate identically" reuses it */
+    seed = (reuseSeed && a.meta.params && a.meta.params.seed != null)
+      ? a.meta.params.seed
+      : newRandomSeed();
+  }
+  CONVO.leaf = u.id;          /* path ends at the user turn… */
+  rebuildCarryFromPath();     /* …so carry excludes the regenerated pair */
+  updateCtxInfo();
+  renderPath();               /* the old reply stays reachable via ‹ › */
+  startGeneration(u.text, clampNGen($("nGen").value), { skipUserTurn: true, userNodeId: u.id, forceSeed: seed });
+}
+
+/* ----------------------------------------------------------------
+   EDIT a past user message → branch + re-run from there
+   ---------------------------------------------------------------- */
+function startEditUserTurn(nodeIdStr) {
+  if (UI.busy || TELEMETRY_SOURCE === "replay") return;
+  var n = convoNode(nodeIdStr);
+  var refs = findTurnRefs(nodeIdStr);
+  if (!n || !refs || !refs.bubble) return;
+  if (refs.bubble.querySelector(".edit-area")) return;
+  var bubble = refs.bubble;
+  bubble.innerHTML = "";
+  var ta = el("textarea", { class: "edit-area", "aria-label": "Edit your message and re-run from here" });
+  ta.value = n.text;
+  var send = el("button", { class: "send-btn", type: "button" }, "send — re-run from here");
+  var cancel = el("button", { class: "tm-btn", type: "button" }, "cancel");
+  var note = el("span", { class: "edit-note" }, "re-running creates a new branch — the old reply stays reachable via the ‹ › pager");
+  bubble.appendChild(ta);
+  bubble.appendChild(el("div", { class: "edit-row" }, [send, cancel, note]));
+  function commit() {
+    var txt = ta.value.replace(/\s+$/g, "");
+    if (!txt || UI.busy) return;
+    commitEditUserTurn(n, txt);
+  }
+  send.addEventListener("click", commit);
+  cancel.addEventListener("click", function () { renderPath(); });
+  ta.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
+    else if (e.key === "Escape") { e.stopPropagation(); renderPath(); }
+  });
+  ta.focus();
+  try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) { /* ok */ }
+}
+function commitEditUserTurn(n, txt) {
+  var newUser = convoAddNode(n.parent, "user", txt);
+  CONVO.leaf = newUser.id;
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  renderPath();
+  startGeneration(txt, clampNGen($("nGen").value), { skipUserTurn: true, userNodeId: newUser.id });
+}
+function editLastUserMessage() {
+  var path = convoPath();
+  for (var i = path.length - 1; i >= 0; i--) {
+    if (path[i].role === "user") {
+      startEditUserTurn(path[i].id);
+      var refs = findTurnRefs(path[i].id);
+      if (refs && refs.turnEl && refs.turnEl.scrollIntoView) refs.turnEl.scrollIntoView({ block: "center" });
+      return;
+    }
+  }
+}
+
+/* ----------------------------------------------------------------
+   BRANCH navigation (‹ k/n › pager, ChatGPT-style)
+   ---------------------------------------------------------------- */
+function switchBranchAt(nodeIdStr, delta) {
+  if (UI.busy) return;
+  var n = convoNode(nodeIdStr);
+  if (!n) return;
+  var sibs = convoSiblings(n), idx = -1;
+  for (var i = 0; i < sibs.length; i++) { if (sibs[i].id === n.id) { idx = i; break; } }
+  var ni = idx + delta;
+  if (idx === -1 || ni < 0 || ni >= sibs.length) return;
+  CONVO.leaf = deepestDescendant(sibs[ni].id);
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  renderPath();
+  saveCurrentChat();
+}
+function buildPager(n) {
+  var sibs = convoSiblings(n);
+  if (sibs.length < 2) return null;
+  var idx = 0;
+  for (var i = 0; i < sibs.length; i++) { if (sibs[i].id === n.id) { idx = i; break; } }
+  var left = el("button", { type: "button", "aria-label": "previous branch at this turn" }, "‹");
+  var right = el("button", { type: "button", "aria-label": "next branch at this turn" }, "›");
+  left.disabled = idx === 0;
+  right.disabled = idx === sibs.length - 1;
+  left.addEventListener("click", function () { switchBranchAt(n.id, -1); });
+  right.addEventListener("click", function () { switchBranchAt(n.id, +1); });
+  return el("span", { class: "branch-pager", role: "group", "aria-label": "conversation branches at this turn" },
+    [left, el("span", { class: "bp-k" }, (idx + 1) + "/" + sibs.length), right]);
+}
+
+/* ----------------------------------------------------------------
+   PER-TURN ACTIONS
+   ---------------------------------------------------------------- */
+function copyText(text, btn) {
+  function done_(ok) {
+    if (!btn) return;
+    var old = btn.textContent;
+    btn.textContent = ok ? "copied ✓" : "copy failed";
+    setTimeout(function () { btn.textContent = old; }, 1400);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () { done_(true); }, function () { done_(false); });
+  } else done_(false);
+}
+function appendReadAloud(meta, node) {
+  if (!window.speechSynthesis || !node.text) return;
+  var ra = el("button", { class: "tm-btn", type: "button",
+    title: "read this reply aloud — your browser's local speech synthesis, no network" }, "read aloud");
+  ra.addEventListener("click", function () {
+    try {
+      if (window.speechSynthesis.speaking) { window.speechSynthesis.cancel(); ra.textContent = "read aloud"; return; }
+      var ut = new SpeechSynthesisUtterance(node.text);
+      ut.onend = function () { ra.textContent = "read aloud"; };
+      window.speechSynthesis.speak(ut);
+      ra.textContent = "stop reading";
+    } catch (e) { /* no voices: no-op */ }
+  });
+  meta.appendChild(ra);
+}
+function attachAssistantActions(meta, nodeIdStr) {
+  var node = convoNode(nodeIdStr || UI.pendingAssistantNode);
+  if (!node || !meta) return;
+  /* per-message copy — the RAW reply text (not the markdown rendering) */
+  var cp = el("button", { class: "tm-btn", type: "button", title: "copy this reply's raw text" }, "copy");
+  cp.addEventListener("click", function () { copyText(node.text || "", cp); });
+  meta.appendChild(cp);
+  if (TELEMETRY_SOURCE === "replay") { appendReadAloud(meta, node); var pgR = buildPager(node); if (pgR) meta.appendChild(pgR); return; }
+  var isLast = (CONVO.leaf === node.id);
+  if (isLast && node.meta.sentPrompt != null) {
+    var cont = el("button", { class: "tm-btn act-last", type: "button",
+      title: "ask for more tokens continuing THIS reply — the conversation is re-sent with the assistant text so far as a prefill (chat template keeps the open assistant turn; greedy continues are exact by construction)" }, "continue");
+    cont.addEventListener("click", function () { continueReply(node.id); });
+    meta.appendChild(cont);
+  }
+  if (isLast && convoNode(node.parent)) {
+    var rg = el("button", { class: "tm-btn act-last", type: "button",
+      title: samplingAdvertised()
+        ? "re-run this turn with a NEW seed — the old reply stays reachable via the ‹ › pager"
+        : "re-run this turn — greedy decoding is deterministic, so this reproduces the same tokens (that re-runnability is itself a check); the old reply stays reachable via the ‹ › pager" }, "regenerate");
+    rg.addEventListener("click", function () { regenerateLast(false); });
+    meta.appendChild(rg);
+    if (samplingAdvertised() && node.meta.params && node.meta.params.seed != null) {
+      var rgi = el("button", { class: "tm-btn act-last", type: "button",
+        title: "re-run with the SAME seed (" + node.meta.params.seed + ") — a seeded sampled reply must reproduce" }, "regenerate identically");
+      rgi.addEventListener("click", function () { regenerateLast(true); });
+      meta.appendChild(rgi);
+    }
+  }
+  var pg = buildPager(node);
+  if (pg) meta.appendChild(pg);
+  appendReadAloud(meta, node);
+}
+function attachUserActions(turnEl, nodeIdStr) {
+  var meta = turnEl.querySelector(".turn-meta");
+  var n = convoNode(nodeIdStr);
+  if (!meta || !n) return;
+  meta.innerHTML = "";
+  if (TELEMETRY_SOURCE !== "replay") {
+    var ed = el("button", { class: "tm-btn", type: "button",
+      title: "edit this message and re-run from here — the current replies stay reachable as a branch" }, "edit");
+    ed.addEventListener("click", function () { startEditUserTurn(nodeIdStr); });
+    meta.appendChild(ed);
+  }
+  var pg = buildPager(n);
+  if (pg) meta.appendChild(pg);
+}
+
+/* ----------------------------------------------------------------
+   RENDER the current path (branch switch / chat load / edit cancel)
+   ---------------------------------------------------------------- */
+function buildEmptyState() {
+  return el("div", { class: "transcript-empty", id: "transcriptEmpty" }, [
+    el("div", { class: "te-glyph", "aria-hidden": "true" }, "⌨"),
+    el("div", { class: "te-title" }, "Give GPT-2 some text to continue"),
+    el("div", { class: "te-sub" },
+      "Pick a seed below or type your own. GPT-2-XL will continue it token-by-token while the " +
+      "48 transformer layers and kovc kernels light up on the right. It is a base model — expect " +
+      "continuations, not answers.")
+  ]);
+}
+function paintAssistantMetaRow(meta, n) {
+  meta.innerHTML = "";
+  var bits = [];
+  if (n.meta.n_gen != null) bits.push(n.meta.n_gen + " tokens");
+  if (n.meta.seconds != null) bits.push(n.meta.seconds + " s");
+  if (n.meta.tok_per_s != null) bits.push(n.meta.tok_per_s + " tok/s");
+  bits.push(n.meta.model || "GPT-2-XL");
+  meta.appendChild(document.createTextNode(bits.join(" · ")));
+  if (n.meta.stopped) meta.appendChild(el("span", { class: "stop-tag" }, "stopped early — partial"));
+  if (n.meta.continued) meta.appendChild(el("span", { class: "seg-tag" },
+    n.meta.contMode === "sampled" ? "continued (new sampling segment)" : "continued (greedy — exact by construction)"));
+  if (n.meta.source === "replay") meta.appendChild(el("span", { class: "replay-tag" }, "REPLAY · captured run"));
+  else if (n.meta.source && n.meta.source !== "sse") meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
+  attachAssistantActions(meta, n.id);
+}
+function buildUserTurnDom(n) {
+  var meta = el("div", { class: "turn-meta" });
+  var turn = el("div", { class: "turn user", "data-node": n.id }, [
+    el("div", { class: "turn-label" }, "You"),
+    el("div", { class: "bubble" }, n.text),
+    meta
+  ]);
+  attachUserActions(turn, n.id);
+  return turn;
+}
+function buildAssistantTurnDom(n) {
+  var u = convoNode(n.parent);
+  var echo = el("span", { class: "prompt-echo" });
+  if (n.meta.echoMode === "chat") {
+    echo.appendChild(el("span", { class: "carried-mark",
+      title: "ChatML — this turn went through the model's real chat template when it ran" }, "⟨ChatML⟩ "));
+    echo.appendChild(document.createTextNode(u ? u.text : ""));
+  } else {
+    echo.appendChild(document.createTextNode(u ? u.text : ""));
+  }
+  var cont = el("span", { class: "cont" });
+  var bubble = el("div", { class: "bubble" }, [echo, cont]);
+  var meta = el("div", { class: "turn-meta" });
+  var turn = el("div", { class: "turn model", "data-node": n.id }, [
+    el("div", { class: "turn-label" }, [
+      document.createTextNode(n.meta.model || "GPT-2-XL"),
+      el("span", { class: "ml-pill" }, "continuation")
+    ]),
+    bubble, meta
+  ]);
+  if (n.text) renderNodeTextInto(cont, n);
+  else cont.appendChild(el("span", { class: "carried-mark",
+    title: "this turn produced no reply (stopped before any tokens, or errored)" }, "(no reply)"));
+  paintAssistantMetaRow(meta, n);
+  return turn;
+}
+function renderPath() {
+  var t = $("transcript");
+  t.innerHTML = "";
+  var path = convoPath();
+  if (!path.length) {
+    t.appendChild(buildEmptyState());
+    updateJumpPill();
+    return;
+  }
+  for (var i = 0; i < path.length; i++) {
+    t.appendChild(path[i].role === "user" ? buildUserTurnDom(path[i]) : buildAssistantTurnDom(path[i]));
+  }
+  scrollTranscript(true);
+}
+
+/* ----------------------------------------------------------------
+   MARKDOWN renderer — hand-written, escape-FIRST, no external libs.
+   Supports: headings, bold/italic, inline code, fenced code blocks
+   (language label + copy button), ordered/unordered lists. Links are
+   deliberately NOT linkified (model output never becomes a clickable
+   URL on a no-external-resources page).
+   ---------------------------------------------------------------- */
+function mdEscape(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function mdInline(esc) {
+  /* operates on ALREADY-ESCAPED text; code spans are protected first */
+  var parts = esc.split(/(`[^`]*`)/);
+  var out = "";
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (!p) continue;
+    if (p.length > 1 && p.charAt(0) === "`" && p.charAt(p.length - 1) === "`") {
+      out += '<code class="md-codei">' + p.slice(1, -1) + "</code>";
+    } else {
+      out += p
+        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+        .replace(/__([^_]+)__/g, "<b>$1</b>")
+        .replace(/\*([^*\n]+)\*/g, "<i>$1</i>")
+        .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
+    }
+  }
+  return out;
+}
+function buildCodeBlock(lang, code) {
+  var pre = el("pre", null, code); /* textContent — never parsed as HTML */
+  var copy = el("button", { class: "ctx-clear", type: "button", "aria-label": "copy this code block" }, "copy");
+  copy.addEventListener("click", function () { copyText(code, copy); });
+  return el("div", { class: "md-codeblock" }, [
+    el("div", { class: "md-codehead" }, [el("span", {}, lang || "text"), copy]),
+    pre
+  ]);
+}
+function renderMarkdown(raw) {
+  var root = el("div", { class: "md-rendered" });
+  var lines = String(raw).replace(/\r\n/g, "\n").split("\n");
+  var i = 0, hasBlocks = false, para = [];
+  function flushPara() {
+    if (!para.length) return;
+    root.appendChild(el("div", { class: "md-p", html: mdInline(mdEscape(para.join("\n"))).replace(/\n/g, "<br>") }));
+    para = [];
+  }
+  while (i < lines.length) {
+    var ln = lines[i];
+    var fence = ln.match(/^```([\w+#.-]*)\s*$/);
+    if (fence) {
+      flushPara(); hasBlocks = true;
+      var lang = fence[1] || "text", buf = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; /* closing fence (or EOF — unclosed fences render what they have) */
+      root.appendChild(buildCodeBlock(lang, buf.join("\n")));
+      continue;
+    }
+    var h = ln.match(/^(#{1,4})\s+(.*)$/);
+    if (h) {
+      flushPara(); hasBlocks = true;
+      root.appendChild(el("div", { class: "md-h md-h" + h[1].length, role: "heading", "aria-level": String(h[1].length + 2), html: mdInline(mdEscape(h[2])) }));
+      i++; continue;
+    }
+    if (/^\s*[-*]\s+/.test(ln)) {
+      flushPara(); hasBlocks = true;
+      var ul = el("ul", { class: "md-ul" });
+      while (i < lines.length) {
+        var mU = lines[i].match(/^\s*[-*]\s+(.*)$/);
+        if (!mU) break;
+        ul.appendChild(el("li", { class: "md-li", html: mdInline(mdEscape(mU[1])) }));
+        i++;
+      }
+      root.appendChild(ul);
+      continue;
+    }
+    if (/^\s*\d+[.)]\s+/.test(ln)) {
+      flushPara(); hasBlocks = true;
+      var ol = el("ol", { class: "md-ol" });
+      while (i < lines.length) {
+        var mO = lines[i].match(/^\s*\d+[.)]\s+(.*)$/);
+        if (!mO) break;
+        ol.appendChild(el("li", { class: "md-li", html: mdInline(mdEscape(mO[1])) }));
+        i++;
+      }
+      root.appendChild(ol);
+      continue;
+    }
+    if (/^\s*$/.test(ln)) { flushPara(); i++; continue; }
+    para.push(ln);
+    i++;
+  }
+  flushPara();
+  return { root: root, hasBlocks: hasBlocks || root.children.length > 1 };
+}
+function nodeHasConf(node) {
+  if (!node || !node.tokens || !node.tokens.length) return false;
+  for (var i = 0; i < node.tokens.length; i++) {
+    var t = node.tokens[i];
+    if (t && (typeof t.p === "number" || typeof t.H === "number" || (t.alts && t.alts.length))) return true;
+  }
+  return false;
+}
+function renderNodeTextInto(contEl, node) {
+  contEl.innerHTML = "";
+  /* when the run carried REAL per-token confidence and shading is on, keep
+     the token spans (the inspect view); markdown renders once shading is
+     toggled off */
+  if (nodeHasConf(node) && CONF_ON) {
+    contEl.classList.remove("md-block");
+    if (node.meta.prefill) {
+      contEl.appendChild(el("span", { class: "prefill-seg",
+        title: "assistant prefill — you wrote this start" }, node.meta.prefill));
+    }
+    for (var i = 0; i < node.tokens.length; i++) {
+      var t = node.tokens[i];
+      var sp = el("span", null, t && t.string != null ? String(t.string) : "");
+      decorateConfidence(sp, t);
+      contEl.appendChild(sp);
+    }
+    return;
+  }
+  var r = renderMarkdown(node.text);
+  contEl.classList.toggle("md-block", r.hasBlocks);
+  contEl.appendChild(r.root);
+}
+function markdownizeBubbleForNode(node) {
+  var refs = findTurnRefs(node.id);
+  if (!refs || !refs.contEl) return;
+  renderNodeTextInto(refs.contEl, node);
+}
+
+/* ----------------------------------------------------------------
+   TOKEN-CONFIDENCE shading + alternatives popover.
+   Renders ONLY when the live token events carry the ADDITIVE fields
+   {p, H, alts} — real data from the live logits. Absent fields = no
+   shading, no legend, no popover. Nothing is ever invented.
+   ---------------------------------------------------------------- */
+var CONF_ON = true;
+function showConfLegend() {
+  var l = $("confLegend");
+  if (l && !l.classList.contains("show")) { l.classList.add("show"); updateJumpPill(); }
+}
+function decorateConfidence(span, d) {
+  if (!d) return;
+  var hasP = (typeof d.p === "number" && isFinite(d.p));
+  var hasH = (typeof d.H === "number" && isFinite(d.H));
+  var hasAlts = !!(d.alts && d.alts.length);
+  if (!hasP && !hasH && !hasAlts) return;
+  showConfLegend();
+  /* p drives the shade; entropy-only payloads use a 1/(1+H) proxy */
+  var v = hasP ? d.p : (hasH ? 1 / (1 + Math.max(0, d.H)) : null);
+  if (v != null) {
+    var b = v >= 0.9 ? 4 : v >= 0.7 ? 3 : v >= 0.45 ? 2 : v >= 0.25 ? 1 : 0;
+    span.classList.add("tok-c", "tc-" + b);
+  } else span.classList.add("tok-c");
+  span.setAttribute("tabindex", "0");
+  span.setAttribute("role", "button");
+  span.setAttribute("aria-label", "token " + (d.string != null ? JSON.stringify(String(d.string)) : "") +
+    (hasP ? ", probability " + Math.round(d.p * 100) + " percent" : "") + " — press Enter for the alternatives the model considered");
+  span.__tokInfo = d;
+}
+function closeTokPopover() {
+  if (UI.tokPop && UI.tokPop.parentNode) UI.tokPop.parentNode.removeChild(UI.tokPop);
+  UI.tokPop = null;
+}
+function openTokPopover(span) {
+  closeTokPopover();
+  var d = span.__tokInfo;
+  if (!d) return;
+  var pop = el("div", { class: "tok-pop", role: "dialog", "aria-label": "what the model actually considered for this token" });
+  pop.appendChild(el("div", { class: "tp-h" }, "what the model actually considered"));
+  if (typeof d.p === "number") {
+    pop.appendChild(el("div", { class: "alt chosen" }, [
+      el("span", {}, "“" + pieceForChip(String(d.string != null ? d.string : "")) + "” (chosen)"),
+      el("span", {}, (d.p * 100).toFixed(1) + "%")
+    ]));
+  }
+  if (typeof d.H === "number") {
+    pop.appendChild(el("div", { class: "alt" }, [el("span", {}, "entropy H"), el("span", {}, d.H.toFixed(3))]));
+  }
+  if (d.alts && d.alts.length) {
+    for (var i = 0; i < Math.min(d.alts.length, 8); i++) {
+      var a = d.alts[i];
+      if (!a || a.length == null) continue; /* defensive: [[id,piece,p],...] */
+      var piece = a[1] != null ? String(a[1]) : String(a[0]);
+      pop.appendChild(el("div", { class: "alt" + (piece === d.string ? " chosen" : "") }, [
+        el("span", {}, "“" + pieceForChip(piece) + "”" + (a[0] != null ? " · id " + a[0] : "")),
+        el("span", {}, (typeof a[2] === "number") ? (a[2] * 100).toFixed(1) + "%" : "—")
+      ]));
+    }
+  }
+  pop.appendChild(el("div", { class: "tp-note" }, "real data from the live logits — not a mock"));
+  document.body.appendChild(pop);
+  var rect = span.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 340)) + "px";
+  var top = rect.bottom + 6;
+  if (top + pop.offsetHeight > window.innerHeight - 8) top = Math.max(8, rect.top - pop.offsetHeight - 6);
+  pop.style.top = top + "px";
+  UI.tokPop = pop;
+}
+function setConfShading(on) {
+  CONF_ON = !!on;
+  var t = $("transcript");
+  if (t) t.classList.toggle("conf-off", !CONF_ON);
+  var b = $("confToggle");
+  if (b) { b.setAttribute("aria-pressed", CONF_ON ? "true" : "false"); b.textContent = CONF_ON ? "shading on" : "shading off"; }
+  lsSet(CONF_LS_KEY, CONF_ON ? "1" : "0");
+  closeTokPopover();
+  /* completed bubbles re-render: token spans (shading on) vs markdown (off) */
+  var path = convoPath();
+  for (var i = 0; i < path.length; i++) {
+    var n = path[i];
+    if (n.role !== "assistant" || !n.text) continue;
+    if (UI.busy && n.id === UI.pendingAssistantNode) continue; /* never touch the streaming bubble */
+    var refs = findTurnRefs(n.id);
+    if (refs && refs.contEl) renderNodeTextInto(refs.contEl, n);
+  }
+}
+function initConfidence() {
+  CONF_ON = lsGet(CONF_LS_KEY) !== "0";
+  var t = $("transcript");
+  if (t) t.classList.toggle("conf-off", !CONF_ON);
+  var b = $("confToggle");
+  if (b) {
+    b.setAttribute("aria-pressed", CONF_ON ? "true" : "false");
+    b.textContent = CONF_ON ? "shading on" : "shading off";
+    b.addEventListener("click", function () { setConfShading(!CONF_ON); });
+  }
+  document.addEventListener("click", function (e) {
+    if (UI.tokPop && !UI.tokPop.contains(e.target)) closeTokPopover();
+    var tk = e.target && e.target.closest ? e.target.closest(".tok-c") : null;
+    if (tk && CONF_ON) openTokPopover(tk);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeTokPopover();
+    else if ((e.key === "Enter" || e.key === " ") && document.activeElement &&
+             document.activeElement.classList && document.activeElement.classList.contains("tok-c")) {
+      e.preventDefault();
+      openTokPopover(document.activeElement);
+    }
+  });
+}
+
+/* ----------------------------------------------------------------
+   SAVED CHATS + PROMPT LIBRARY (localStorage; search; delete)
+   ---------------------------------------------------------------- */
+var SIDEBAR = { tab: "chats" };
+function loadChatStore() {
+  try {
+    var j = JSON.parse(lsGet(CHATS_LS_KEY) || "null");
+    if (j && j.chats && j.order) return j;
+  } catch (e) { /* corrupted: fresh store */ }
+  return { v: 1, chats: {}, order: [] };
+}
+function slimConvo(c) {
+  /* persisted copy: node.tokens (per-run confidence data) stays in memory only */
+  var copy = { id: c.id, title: c.title, createdAt: c.createdAt, savedAt: Date.now(), leaf: c.leaf, roots: c.roots.slice(), nodes: {} };
+  for (var k in c.nodes) {
+    if (!Object.prototype.hasOwnProperty.call(c.nodes, k)) continue;
+    var n = c.nodes[k];
+    copy.nodes[k] = { id: n.id, parent: n.parent, children: n.children.slice(), role: n.role, text: n.text, meta: n.meta };
+  }
+  return copy;
+}
+function saveCurrentChat() {
+  try {
+    if (!CONVO.roots.length) return;
+    var store = loadChatStore();
+    store.chats[CONVO.id] = slimConvo(CONVO);
+    var ix = store.order.indexOf(CONVO.id);
+    if (ix !== -1) store.order.splice(ix, 1);
+    store.order.unshift(CONVO.id);
+    while (store.order.length > 60) { var dropped = store.order.pop(); delete store.chats[dropped]; }
+    lsSet(CHATS_LS_KEY, JSON.stringify(store));
+  } catch (e) { /* quota/private mode: the chat lives in memory this session */ }
+}
+function loadChat(id) {
+  if (UI.busy) return;
+  var store = loadChatStore();
+  var c = store.chats[id];
+  if (!c) return;
+  saveCurrentChat();
+  CONVO = { id: c.id, title: c.title || "", createdAt: c.createdAt || Date.now(), leaf: c.leaf || null, roots: (c.roots || []).slice(), nodes: {} };
+  for (var k in c.nodes) {
+    if (!Object.prototype.hasOwnProperty.call(c.nodes, k)) continue;
+    var n = c.nodes[k];
+    CONVO.nodes[k] = { id: n.id, parent: n.parent || null, children: (n.children || []).slice(), role: n.role, text: n.text || "", meta: n.meta || {} };
+  }
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  renderPath();
+  openChats(false);
+  announce("loaded chat: " + (CONVO.title || "untitled"));
+}
+function deleteChat(id) {
+  var store = loadChatStore();
+  delete store.chats[id];
+  var ix = store.order.indexOf(id);
+  if (ix !== -1) store.order.splice(ix, 1);
+  lsSet(CHATS_LS_KEY, JSON.stringify(store));
+  renderSidebar();
+}
+function newChat() {
+  if (UI.busy) return;
+  saveCurrentChat();
+  CONVO = newConvo();
+  UI.contextText = ""; UI.chatTurns = []; UI.lastChatUser = null;
+  UI.pendingUserNode = null; UI.pendingAssistantNode = null;
+  UI.lastSentPrompt = null; UI.lastWirePrompt = null; UI.lastRequest = null;
+  renderPath();
+  updateCtxInfo();
+  showCtxCutNote(null);
+  focusComposer();
+  announce("new chat started");
+}
+function loadPrompts() {
+  try { var j = JSON.parse(lsGet(PROMPTS_LS_KEY) || "null"); return Array.isArray(j) ? j : []; }
+  catch (e) { return []; }
+}
+function savePrompts(arr) { try { lsSet(PROMPTS_LS_KEY, JSON.stringify(arr)); } catch (e) { /* quota */ } }
+function savePromptFromComposer() {
+  var v = ($("promptInput").value || "").trim();
+  if (!v) { announce("composer is empty — nothing to save"); return; }
+  var arr = loadPrompts();
+  arr.unshift({ id: "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), title: v.split("\n")[0].slice(0, 48), text: v, ts: Date.now() });
+  while (arr.length > 100) arr.pop();
+  savePrompts(arr);
+  announce("prompt saved to the library");
+  if (!$("chatsOverlay").hidden) renderSidebar();
+}
+function setSidebarTab(tab) {
+  SIDEBAR.tab = tab;
+  $("tabChats").setAttribute("aria-pressed", tab === "chats" ? "true" : "false");
+  $("tabPrompts").setAttribute("aria-pressed", tab === "prompts" ? "true" : "false");
+  $("chatsTitle").textContent = tab === "chats" ? "Saved chats" : "Prompt library";
+  renderSidebar();
+}
+function renderSidebar() {
+  var list = $("chatsList");
+  if (!list) return;
+  var q = ($("chatsSearch").value || "").toLowerCase();
+  list.innerHTML = "";
+  if (SIDEBAR.tab === "chats") {
+    var store = loadChatStore(), shown = 0;
+    for (var i = 0; i < store.order.length; i++) {
+      var c = store.chats[store.order[i]];
+      if (!c) continue;
+      var title = c.title || "untitled chat";
+      if (q && title.toLowerCase().indexOf(q) === -1) continue;
+      shown++;
+      (function (c, title) {
+        var del = el("button", { class: "ci-del", type: "button", "aria-label": "delete chat: " + title, title: "delete (cannot be undone)" }, "✕");
+        del.addEventListener("click", function (e) { e.stopPropagation(); deleteChat(c.id); });
+        var item = el("div", { class: "chat-item" + (c.id === CONVO.id ? " active" : ""), role: "button", tabindex: "0" }, [
+          el("span", { class: "ci-main" }, [
+            el("div", { class: "ci-title" }, title),
+            el("div", { class: "ci-sub" }, new Date(c.savedAt || c.createdAt).toLocaleString() + (c.id === CONVO.id ? " · current" : ""))
+          ]),
+          del
+        ]);
+        item.addEventListener("click", function () { loadChat(c.id); });
+        item.addEventListener("keydown", function (e) { if (e.key === "Enter") loadChat(c.id); });
+        list.appendChild(item);
+      })(c, title);
+    }
+    if (!shown) list.appendChild(el("div", { class: "chats-empty" },
+      q ? "no chats match the search" : "no saved chats yet — finish a turn and it lands here automatically"));
+  } else {
+    var saveB = el("button", { class: "chat-item", type: "button" },
+      el("span", { class: "ci-main" }, [
+        el("div", { class: "ci-title" }, "+ save the composer text as a prompt"),
+        el("div", { class: "ci-sub" }, "reusable · stored locally")
+      ]));
+    saveB.addEventListener("click", function () { savePromptFromComposer(); renderSidebar(); });
+    list.appendChild(saveB);
+    var arr = loadPrompts(), shownP = 0;
+    for (var j2 = 0; j2 < arr.length; j2++) {
+      var p = arr[j2];
+      if (q && (p.title + " " + p.text).toLowerCase().indexOf(q) === -1) continue;
+      shownP++;
+      (function (p) {
+        var delp = el("button", { class: "ci-del", type: "button", "aria-label": "delete prompt: " + p.title }, "✕");
+        delp.addEventListener("click", function (e) {
+          e.stopPropagation();
+          savePrompts(loadPrompts().filter(function (x) { return x.id !== p.id; }));
+          renderSidebar();
+        });
+        var it = el("div", { class: "chat-item", role: "button", tabindex: "0", title: p.text }, [
+          el("span", { class: "ci-main" }, [
+            el("div", { class: "ci-title" }, p.title),
+            el("div", { class: "ci-sub" }, new Date(p.ts).toLocaleString())
+          ]),
+          delp
+        ]);
+        it.addEventListener("click", function () {
+          $("promptInput").value = p.text;
+          autoGrowComposer();
+          openChats(false);
+          focusComposer();
+        });
+        it.addEventListener("keydown", function (e) { if (e.key === "Enter") it.click(); });
+        list.appendChild(it);
+      })(p);
+    }
+    if (!shownP) list.appendChild(el("div", { class: "chats-empty" }, q ? "no prompts match" : "no saved prompts yet"));
+  }
+}
+function openChats(open) {
+  var ov = $("chatsOverlay");
+  if (!ov) return;
+  if (open) {
+    UI.chatsPrevFocus = document.activeElement;
+    ov.hidden = false;
+    renderSidebar();
+    $("chatsSearch").focus();
+  } else {
+    ov.hidden = true;
+    if (UI.chatsPrevFocus && UI.chatsPrevFocus.focus) { try { UI.chatsPrevFocus.focus(); } catch (e) { /* gone */ } }
+  }
+}
+function initChatsSidebar() {
+  $("chatsClose").addEventListener("click", function () { openChats(false); });
+  $("chatsNewBtn").addEventListener("click", function () { newChat(); openChats(false); });
+  var ov = $("chatsOverlay");
+  ov.addEventListener("click", function (e) { if (e.target === ov) openChats(false); });
+  ov.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.stopPropagation(); openChats(false); return; }
+    trapFocusIn(ov, e);
+  });
+  $("tabChats").addEventListener("click", function () { setSidebarTab("chats"); });
+  $("tabPrompts").addEventListener("click", function () { setSidebarTab("prompts"); });
+  $("chatsSearch").addEventListener("input", renderSidebar);
+}
+
+/* ----------------------------------------------------------------
+   EXPORT — Markdown + JSON ({model, params} per reply)
+   ---------------------------------------------------------------- */
+function downloadFile(name, mime, text) {
+  try {
+    var blob = new Blob([text], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = el("a", { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      if (a.parentNode) a.parentNode.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 400);
+  } catch (e) { announce("export failed"); }
+}
+function exportStamp() { return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19); }
+function sourceLabelLong() {
+  return TELEMETRY_SOURCE === "sse" ? "live (gated GPU backend)"
+    : TELEMETRY_SOURCE === "replay" ? "replay of a captured real run (not live)"
+    : "mock preview (no model ran — simulated)";
+}
+function exportMarkdown() {
+  var path = convoPath(), L = [];
+  L.push("# " + (CONVO.title || "Helix chat"));
+  L.push("");
+  L.push("> source: **" + sourceLabelLong() + "** · exported " + new Date().toISOString());
+  L.push("> page: demo/index.html — Helix × GPT-2 completion playground");
+  L.push("");
+  for (var i = 0; i < path.length; i++) {
+    var n = path[i];
+    if (n.role === "user") {
+      L.push("## You"); L.push(""); L.push(n.text); L.push("");
+    } else {
+      L.push("## " + (n.meta.model || "model") + (n.meta.stopped ? " _(stopped early — partial)_" : ""));
+      L.push(""); L.push(n.text || "_(no reply)_"); L.push("");
+      var bits = [];
+      if (n.meta.n_gen != null) bits.push(n.meta.n_gen + " tokens");
+      if (n.meta.seconds != null) bits.push(n.meta.seconds + " s");
+      if (n.meta.tok_per_s != null) bits.push(n.meta.tok_per_s + " tok/s");
+      bits.push("source: " + (n.meta.source || "?"));
+      bits.push("params: `" + JSON.stringify(n.meta.params || { temperature: 0, mode: "greedy (verified default)" }) + "`");
+      L.push("_" + bits.join(" · ") + "_");
+      L.push("");
+    }
+  }
+  downloadFile("helix-chat-" + exportStamp() + ".md", "text/markdown", L.join("\n"));
+}
+function exportJSON() {
+  var payload = {
+    format: "helix-demo-chat/v1",
+    exported_at: new Date().toISOString(),
+    source: TELEMETRY_SOURCE,
+    source_label: sourceLabelLong(),
+    note: "per-reply meta carries {model, params} for reproducibility; greedy (temperature 0) replies re-run to identical ids by construction on the gated backend",
+    conversation: slimConvo(CONVO),
+    current_path: convoPath().map(function (n) { return n.id; })
+  };
+  downloadFile("helix-chat-" + exportStamp() + ".json", "application/json", JSON.stringify(payload, null, 2));
+}
+
+/* ----------------------------------------------------------------
+   COMMAND PALETTE (Ctrl/Cmd-K)
+   ---------------------------------------------------------------- */
+var PAL = { open: false, sel: 0, items: [], prevFocus: null };
+function focusComposer() { var i = $("promptInput"); if (i) i.focus(); }
+function paletteActions() {
+  var a = [];
+  function add(label, k, run) { a.push({ label: label, k: k || "", run: run }); }
+  if (UI.busy) add("Stop generating — keep the partial reply", "Esc", stopActiveGeneration);
+  add("New chat", "", newChat);
+  add("Open saved chats & prompt library", "", function () { openChats(true); });
+  add("Focus the composer", "", focusComposer);
+  add("Generation settings — sampling · seed · system prompt · prefill", "", function () { openGenSettings(true); });
+  add("Export conversation — Markdown", "", exportMarkdown);
+  add("Export conversation — JSON (per-reply {model, params})", "", exportJSON);
+  add("Save composer text to the prompt library", "", savePromptFromComposer);
+  add(EXPLAIN_ON ? "Internals: switch to Expert view" : "Internals: switch to Explain mode", "",
+    function () { setExplainMode(!EXPLAIN_ON, true); });
+  if (SPEED.fastAvailable) {
+    add(SPEED.mode === "fast" ? "Speed: switch to glass box" : "Speed: switch to fast (gated backend)", "",
+      function () { setSpeedMode(SPEED.mode === "fast" ? "glass" : "fast"); });
+  }
+  var sel = $("modelSelect");
+  if (sel && !sel.hidden) {
+    for (var i = 0; i < sel.options.length; i++) {
+      (function (opt) {
+        if (opt.value === sel.value) return;
+        add("Switch model: " + opt.textContent, "", function () {
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event("change"));
+        });
+      })(sel.options[i]);
+    }
+  }
+  add(document.body.classList.contains("theme-light") ? "Theme: switch to dark" : "Theme: switch to light", "", toggleTheme);
+  return a;
+}
+function openPalette() {
+  PAL.prevFocus = document.activeElement;
+  PAL.open = true;
+  $("palOverlay").hidden = false;
+  $("palInput").value = "";
+  renderPalette("");
+  $("palInput").focus();
+}
+function closePalette() {
+  PAL.open = false;
+  $("palOverlay").hidden = true;
+  if (PAL.prevFocus && PAL.prevFocus.focus) { try { PAL.prevFocus.focus(); } catch (e) { /* gone */ } }
+}
+function renderPalette(q) {
+  q = (q || "").toLowerCase();
+  var all = paletteActions();
+  PAL.items = [];
+  for (var i = 0; i < all.length; i++) {
+    if (!q || all[i].label.toLowerCase().indexOf(q) !== -1) PAL.items.push(all[i]);
+  }
+  PAL.sel = 0;
+  paintPalette();
+}
+function paintPalette() {
+  var list = $("palList");
+  list.innerHTML = "";
+  if (!PAL.items.length) {
+    list.appendChild(el("div", { class: "pal-empty" }, "no matching command"));
+    return;
+  }
+  for (var i = 0; i < PAL.items.length; i++) {
+    (function (i) {
+      var it = PAL.items[i];
+      var btn = el("button", {
+        class: "pal-item", type: "button", role: "option", id: "pal-item-" + i,
+        "aria-selected": i === PAL.sel ? "true" : "false"
+      }, [
+        el("span", {}, it.label),
+        it.k ? el("span", { class: "pk" }, it.k) : null
+      ]);
+      btn.addEventListener("click", function () { closePalette(); it.run(); });
+      btn.addEventListener("mousemove", function () { if (PAL.sel !== i) { PAL.sel = i; refreshPalSel(); } });
+      list.appendChild(btn);
+    })(i);
+  }
+  $("palInput").setAttribute("aria-activedescendant", "pal-item-" + PAL.sel);
+}
+function refreshPalSel() {
+  var kids = $("palList").children;
+  for (var i = 0; i < kids.length; i++) {
+    if (kids[i].setAttribute) kids[i].setAttribute("aria-selected", i === PAL.sel ? "true" : "false");
+  }
+  var cur = $("pal-item-" + PAL.sel);
+  if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+  $("palInput").setAttribute("aria-activedescendant", "pal-item-" + PAL.sel);
+}
+function movePalSel(d) {
+  if (!PAL.items.length) return;
+  PAL.sel = (PAL.sel + d + PAL.items.length) % PAL.items.length;
+  refreshPalSel();
+}
+function initPalette() {
+  var ov = $("palOverlay"), input = $("palInput");
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      if (PAL.open) closePalette(); else openPalette();
+    }
+  });
+  ov.addEventListener("click", function (e) { if (e.target === ov) closePalette(); });
+  ov.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.stopPropagation(); closePalette(); return; }
+    if (e.key === "Tab") { e.preventDefault(); input.focus(); return; } /* single-field focus trap */
+    if (e.key === "ArrowDown") { e.preventDefault(); movePalSel(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); movePalSel(-1); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      var it = PAL.items[PAL.sel];
+      if (it) { closePalette(); it.run(); }
+    }
+  });
+  input.addEventListener("input", function () { renderPalette(input.value); });
+}
+
+/* ----------------------------------------------------------------
+   GENERATION-SETTINGS drawer (+ system prompt / personas / prefill /
+   few-shot). Sampling controls stay DISABLED until /api/health
+   advertises "sampling":true — nothing extra ever goes on the wire.
+   ---------------------------------------------------------------- */
+var PERSONAS = {
+  helpful: CHAT_SYSTEM_DEFAULT,
+  concise: "You are a helpful assistant. Answer in at most two short sentences. No filler.",
+  teacher: "You are a patient teacher. Explain ideas step by step in simple words, with one small example.",
+  pirate: "You are a cheerful pirate. Answer helpfully, but speak like a pirate."
+};
+function trapFocusIn(overlay, e) {
+  if (e.key !== "Tab") return;
+  var f = overlay.querySelectorAll("button, input, textarea, select, a[href], [tabindex]");
+  var list = [];
+  for (var i = 0; i < f.length; i++) {
+    if (!f[i].disabled && f[i].offsetParent !== null) list.push(f[i]);
+  }
+  if (!list.length) return;
+  var first = list[0], last = list[list.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+function bindRangePair(rid, nid, key, isInt) {
+  var r = $(rid), n = $(nid);
+  if (!r || !n) return;
+  function setv(v) {
+    v = isInt ? (parseInt(v, 10) || 0) : +v;
+    if (isNaN(v)) v = 0;
+    GENSET[key] = v;
+    r.value = String(v);
+    n.value = String(v);
+    persistGenset();
+  }
+  r.addEventListener("input", function () { setv(r.value); });
+  n.addEventListener("change", function () { setv(n.value); });
+  r.value = String(GENSET[key]);
+  n.value = String(GENSET[key]);
+}
+function syncPersonaPressed() {
+  var chips = document.querySelectorAll("#personaRow .persona-chip");
+  for (var i = 0; i < chips.length; i++) {
+    var key = chips[i].getAttribute("data-persona");
+    chips[i].setAttribute("aria-pressed", PERSONAS[key] === CHAT_SYSTEM ? "true" : "false");
+  }
+}
+function renderFewshot() {
+  var box = $("fewshotList");
+  if (!box) return;
+  box.innerHTML = "";
+  for (var i = 0; i < GENSET.fewshot.length; i++) {
+    (function (i) {
+      var ex = GENSET.fewshot[i];
+      var u = el("textarea", { rows: "2", placeholder: "example user message", "aria-label": "few-shot example: user message" });
+      u.value = ex.user || "";
+      var a2 = el("textarea", { rows: "2", placeholder: "example assistant reply", "aria-label": "few-shot example: assistant reply" });
+      a2.value = ex.assistant || "";
+      u.addEventListener("input", function () { ex.user = u.value; persistGenset(); });
+      a2.addEventListener("input", function () { ex.assistant = a2.value; persistGenset(); });
+      var rm = el("button", { class: "ctx-clear", type: "button" }, "remove example");
+      rm.addEventListener("click", function () { GENSET.fewshot.splice(i, 1); persistGenset(); renderFewshot(); });
+      box.appendChild(el("div", { class: "fewshot-pair" }, [u, a2, rm]));
+    })(i);
+  }
+}
+function paintCapText() {
+  var live = !!(UI.health && +UI.health.max_ctx > 0);
+  var cap = live ? +UI.health.max_ctx : MAX_CTX_TOKENS;
+  var t = $("gsCapText");
+  if (t) t.textContent = "cap " + cap + " tok − prompt estimate (rough ÷4)";
+  var note = $("gsCapNote");
+  if (note) {
+    note.textContent = "The honest cap: " +
+      (live ? "the live backend advertises max_ctx = " + cap
+            : "no live cap advertised — using the documented --max-ctx default of " + cap) +
+      " tokens. The server budget stays the fail-closed ground truth; “unlimited” just requests everything that fits.";
+  }
+}
+function applySamplingAvailability() {
+  var on = samplingAdvertised();
+  var s = $("gsStatus");
+  if (s) {
+    s.classList.toggle("is-on", on);
+    s.textContent = on
+      ? "sampling advertised on /api/health — these values are sent with each request"
+      : "sampling not advertised by the backend — controls disabled, nothing extra is sent (greedy verified default)";
+  }
+  var ids = ["gsTemp", "gsTempN", "gsTopP", "gsTopPN", "gsTopK", "gsTopKN", "gsMinP", "gsMinPN",
+             "gsRep", "gsRepN", "gsFreq", "gsFreqN", "gsPres", "gsPresN", "gsSeedAuto", "gsSeed", "gsStop"];
+  for (var i = 0; i < ids.length; i++) {
+    var n = $(ids[i]);
+    if (n) n.disabled = !on || (ids[i] === "gsSeed" && GENSET.seedAuto);
+  }
+  paintCapText();
+}
+function applySystemSectionState() {
+  var chat = isChatModel() && TELEMETRY_SOURCE === "sse";
+  var chip = $("gsSysChip");
+  if (chip) chip.textContent = chat ? "· active (instruct model)" : "· off (base model — no system prompt)";
+  var ta = $("gsSystem");
+  if (ta) ta.disabled = !chat;
+  var chips = document.querySelectorAll("#personaRow .persona-chip");
+  for (var i = 0; i < chips.length; i++) chips[i].disabled = !chat;
+  var fa = $("fewshotAdd");
+  if (fa) fa.disabled = !chat; /* few-shot turns ride the ChatML template */
+}
+function openGenSettings(open) {
+  var ov = $("genOverlay");
+  if (!ov) return;
+  if (open) {
+    UI.genPrevFocus = document.activeElement;
+    applySamplingAvailability();
+    applySystemSectionState();
+    ov.hidden = false;
+    $("genClose").focus();
+  } else {
+    ov.hidden = true;
+    if (UI.genPrevFocus && UI.genPrevFocus.focus) { try { UI.genPrevFocus.focus(); } catch (e) { /* gone */ } }
+  }
+}
+function initGenSettings() {
+  var ov = $("genOverlay");
+  $("genClose").addEventListener("click", function () { openGenSettings(false); });
+  ov.addEventListener("click", function (e) { if (e.target === ov) openGenSettings(false); });
+  ov.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.stopPropagation(); openGenSettings(false); return; }
+    trapFocusIn(ov, e);
+  });
+  bindRangePair("gsTemp", "gsTempN", "temperature", false);
+  bindRangePair("gsTopP", "gsTopPN", "top_p", false);
+  bindRangePair("gsTopK", "gsTopKN", "top_k", true);
+  bindRangePair("gsMinP", "gsMinPN", "min_p", false);
+  bindRangePair("gsRep", "gsRepN", "rep_penalty", false);
+  bindRangePair("gsFreq", "gsFreqN", "freq_penalty", false);
+  bindRangePair("gsPres", "gsPresN", "pres_penalty", false);
+  var sa = $("gsSeedAuto"), sv = $("gsSeed");
+  sa.checked = !!GENSET.seedAuto;
+  if (GENSET.seed != null) sv.value = String(GENSET.seed);
+  sa.addEventListener("change", function () {
+    GENSET.seedAuto = sa.checked;
+    persistGenset();
+    applySamplingAvailability();
+  });
+  sv.addEventListener("change", function () {
+    var v = parseInt(sv.value, 10);
+    GENSET.seed = isNaN(v) ? null : v;
+    persistGenset();
+  });
+  var st = $("gsStop");
+  st.value = (GENSET.stop || []).join("\n");
+  st.addEventListener("change", function () {
+    GENSET.stop = st.value.split("\n").filter(function (s2) { return s2.length > 0; });
+    persistGenset();
+  });
+  var un = $("gsUnlimited");
+  un.checked = !!GENSET.nUnlimited;
+  un.addEventListener("change", function () {
+    GENSET.nUnlimited = un.checked;
+    persistGenset();
+    paintCapText();
+  });
+  var sysTa = $("gsSystem");
+  sysTa.value = CHAT_SYSTEM;
+  sysTa.addEventListener("input", function () {
+    CHAT_SYSTEM = sysTa.value || CHAT_SYSTEM_DEFAULT;
+    lsSet(SYSTEM_LS_KEY, CHAT_SYSTEM);
+    syncPersonaPressed();
+  });
+  var chips = document.querySelectorAll("#personaRow .persona-chip");
+  for (var i = 0; i < chips.length; i++) {
+    chips[i].addEventListener("click", function (e) {
+      var key = e.currentTarget.getAttribute("data-persona");
+      if (!PERSONAS[key]) return;
+      CHAT_SYSTEM = PERSONAS[key];
+      sysTa.value = CHAT_SYSTEM;
+      lsSet(SYSTEM_LS_KEY, CHAT_SYSTEM);
+      syncPersonaPressed();
+    });
+  }
+  syncPersonaPressed();
+  var pf = $("gsPrefill");
+  pf.value = GENSET.prefill || "";
+  pf.addEventListener("input", function () { GENSET.prefill = pf.value; persistGenset(); });
+  $("fewshotAdd").addEventListener("click", function () {
+    GENSET.fewshot.push({ user: "", assistant: "" });
+    persistGenset();
+    renderFewshot();
+  });
+  renderFewshot();
+  applySamplingAvailability();
+}
+
+/* ----------------------------------------------------------------
+   SUGGESTED-PROMPT chips per model (replay keeps its pinned chips)
+   ---------------------------------------------------------------- */
+var SEEDS_BASE = [
+  "The capital of France is",
+  "In the beginning",
+  "The three laws of robotics are",
+  "Once upon a time",
+  "Once there was a compiler that",
+  "A proof is convincing when"
+];
+/* curated for a 360M instruct model: short factual Qs, small rewrite /
+   summarize tasks, simple creative asks — things it does credibly */
+var SEEDS_INSTRUCT = [
+  "What is the capital of France?",
+  "Explain in two sentences what a compiler does.",
+  "Rewrite this politely: the build is broken again, someone fix it now",
+  "Summarize in one sentence: Helix is a language whose compiler rebuilds itself from a 299-byte seed.",
+  "Write a four-line poem about a very small language model.",
+  "List three creative uses for a paperclip."
+];
+function refreshSeedChips() {
+  var row = $("seedRow");
+  if (!row || TELEMETRY_SOURCE === "replay") return;
+  var seeds = (isChatModel() && TELEMETRY_SOURCE === "sse") ? SEEDS_INSTRUCT : SEEDS_BASE;
+  row.innerHTML = "";
+  for (var i = 0; i < seeds.length; i++) {
+    row.appendChild(el("button", { class: "seed-chip", type: "button" }, seeds[i]));
+  }
+}
+function onModelChanged() {
+  refreshSeedChips();
+  applySystemSectionState();
+  updateCtxInfo();
+}
+
+/* ----------------------------------------------------------------
+   SCROLL UX (pause-on-scroll-up + jump pill) and composer auto-grow
+   ---------------------------------------------------------------- */
+function updateJumpPill() {
+  var p = $("jumpPill"), t = $("transcript");
+  if (!p || !t) return;
+  var below = t.scrollHeight - t.scrollTop - t.clientHeight > 60;
+  p.hidden = !below;
+  if (below) {
+    var comp = document.querySelector(".composer");
+    var legend = $("confLegend");
+    var off = (comp ? comp.offsetHeight : 0) +
+              (legend && legend.classList.contains("show") ? legend.offsetHeight : 0) + 10;
+    p.style.bottom = off + "px";
+  }
+}
+function initScrollUX() {
+  var t = $("transcript");
+  t.addEventListener("scroll", function () {
+    UI.stick = (t.scrollHeight - t.scrollTop - t.clientHeight) < 60;
+    updateJumpPill();
+  });
+  $("jumpPill").addEventListener("click", function () {
+    UI.stick = true;
+    /* instant jump (bypass the transcript's smooth scroll-behavior) */
+    t.style.scrollBehavior = "auto";
+    t.scrollTop = t.scrollHeight;
+    t.style.scrollBehavior = "";
+    updateJumpPill();
+  });
+}
+function autoGrowComposer() {
+  var i = $("promptInput");
+  if (!i) return;
+  i.style.height = "auto";
+  i.style.height = Math.min(i.scrollHeight + 2, 240) + "px";
+}
+
+/* ----------------------------------------------------------------
+   THEME (light palette via CSS vars; default stays dark)
+   ---------------------------------------------------------------- */
+function applyTheme(light, persist) {
+  document.body.classList.toggle("theme-light", !!light);
+  var b = $("themeBtn");
+  if (b) {
+    b.setAttribute("aria-pressed", light ? "true" : "false");
+    b.textContent = light ? "Dark" : "Light";
+    b.title = light ? "Switch back to the dark theme" : "Toggle light/dark theme (remembered in this browser)";
+  }
+  if (persist) lsSet(THEME_LS_KEY, light ? "1" : "0");
+}
+function toggleTheme() { applyTheme(!document.body.classList.contains("theme-light"), true); }
+
+/* ----------------------------------------------------------------
+   VOICE INPUT (feature-detected; hidden without browser support)
+   ---------------------------------------------------------------- */
+function initVoice() {
+  var btn = $("micBtn");
+  if (!btn) return;
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { btn.hidden = true; return; }
+  btn.hidden = false;
+  var rec = null;
+  btn.addEventListener("click", function () {
+    if (rec) { try { rec.stop(); } catch (e) { /* ok */ } return; }
+    try {
+      rec = new SR();
+      rec.lang = navigator.language || "en-US";
+      rec.interimResults = false;
+      rec.maxAlternatives = 1;
+      rec.onresult = function (ev) {
+        var txt = "";
+        for (var i = 0; i < ev.results.length; i++) txt += ev.results[i][0].transcript;
+        var input = $("promptInput");
+        input.value = (input.value ? input.value + " " : "") + txt;
+        autoGrowComposer();
+        input.dispatchEvent(new Event("input"));
+      };
+      rec.onend = function () { rec = null; btn.classList.remove("listening"); };
+      rec.onerror = function () { rec = null; btn.classList.remove("listening"); };
+      btn.classList.add("listening");
+      rec.start();
+    } catch (e) { rec = null; btn.classList.remove("listening"); }
+  });
+}
+
+/* ----------------------------------------------------------------
+   screen-reader announcements (start/stop/done/load)
+   ---------------------------------------------------------------- */
+function announce(msg) {
+  var n = $("liveStatus");
+  if (n) n.textContent = msg;
+}
+
+/* ----------------------------------------------------------------
+   assistant-UX boot — called from the main boot() below
+   ---------------------------------------------------------------- */
+function initAssistantUX() {
+  restoreGenset();
+  applyTheme(lsGet(THEME_LS_KEY) === "1", false);
+  initScrollUX();
+  initPalette();
+  initChatsSidebar();
+  initGenSettings();
+  initConfidence();
+  initVoice();
+  refreshSeedChips();
+  applySystemSectionState();
+  $("newChatBtn").addEventListener("click", newChat);
+  $("chatsBtn").addEventListener("click", function () { openChats(true); });
+  $("themeBtn").addEventListener("click", toggleTheme);
+  $("genSettingsBtn").addEventListener("click", function () { openGenSettings(true); });
+  autoGrowComposer();
+  updateJumpPill();
+}
+
+/* ================================================================
    BOOT
    ================================================================ */
 (function boot() {
@@ -4256,6 +6373,7 @@ function initSpeedToggle() {
     initKernelSourceUI(); /* source <-> execution link: kernel names open the real .hx source */
     initWhyHelix();     /* "Why Helix" capability drawer (header button) */
     initSpeedToggle();  /* glass box / fast selector (fast is backend-gated) */
+    initAssistantUX();  /* stop/continue/regenerate/edit/branching/chats/palette/settings (2026-06) */
     gateLiveReadiness();
     maybeAutoReplay();
   } catch (e) {
