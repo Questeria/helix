@@ -1386,6 +1386,138 @@
     .xp-node, .xp-half, .xp-layerbar .fill, .xp-why, .xm-btn { transition: none; }
     /* Data still updates (token/layer state is data); only decorative motion is disabled. */
   }
+
+  /* ============================================================
+     W12 — deep-think modes, lens viewer, reproduce, model race,
+     tools-lite, memory pins, summary turns. All additive.
+     ============================================================ */
+  .dt-select {
+    background: var(--panel-2); color: var(--ink-dim); border: 1px solid var(--border);
+    border-radius: 7px; font-family: var(--mono); font-size: 10.5px; padding: 3px 5px; max-width: 170px;
+  }
+  .dt-select:disabled { opacity: 0.5; cursor: not-allowed; }
+  .dt-panel {
+    display: block; margin: 8px 0 2px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--panel-2); padding: 9px 11px; font-size: 12px; color: var(--ink-dim);
+  }
+  .dt-panel .dt-status { font-family: var(--mono); font-size: 11px; color: var(--amber); display: block; }
+  .dt-panel .dt-note { font-size: 11px; color: var(--ink-faint); display: block; margin-top: 3px; line-height: 1.5; }
+  .dt-cand {
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+    padding: 7px 9px; margin-top: 7px;
+  }
+  .dt-cand.winner { border-color: var(--accent-dim); background: var(--accent-bg); }
+  .dt-cand .dc-head { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); display: flex; gap: 10px; flex-wrap: wrap; }
+  .dt-cand .dc-head b { color: var(--accent); font-weight: 650; }
+  .dt-cand .dc-text { white-space: pre-wrap; font-size: 12.5px; color: var(--ink-dim); margin-top: 4px; max-height: 150px; overflow: auto; }
+  .dt-cand .dc-text.streaming { color: var(--ink); }
+  .dt-budget {
+    display: inline-block; margin-top: 8px; font-family: var(--mono); font-size: 10.5px;
+    color: var(--amber); border: 1px solid var(--amber-dim); background: var(--amber-bg);
+    border-radius: 6px; padding: 2px 8px;
+  }
+  .dt-tally { font-family: var(--mono); font-size: 11px; margin-top: 6px; color: var(--ink-dim); }
+  .dt-tally b { color: var(--accent); }
+  .dt-tree { margin-top: 6px; }
+  .dt-tree .tt-trunk { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+  .dt-tree .tt-branch {
+    display: flex; gap: 8px; align-items: flex-start; margin: 6px 0 0 10px;
+    border-left: 2px solid var(--border-2); padding-left: 10px;
+  }
+  .dt-tree .tt-branch.chosen { border-left-color: var(--accent); }
+  .dt-tree .tt-branch .tb-body { flex: 1; min-width: 0; }
+  .turn-meta .dt-badge {
+    display: inline-block; font-family: var(--mono); font-size: 10px; color: var(--blue);
+    border: 1px solid var(--blue-dim); background: var(--blue-bg); border-radius: 6px; padding: 1px 7px; margin-left: 8px;
+  }
+  .turn-meta .verify-result.is-pass, .repro-ok {
+    color: var(--accent); border-color: var(--accent-dim);
+  }
+  .repro-ok, .repro-bad {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px; border-radius: 6px;
+    padding: 1px 7px; margin-left: 8px; border: 1px solid var(--accent-dim);
+    background: var(--accent-bg); color: var(--accent);
+  }
+  .repro-bad { color: var(--red); border-color: var(--red-dim); background: var(--red-bg); }
+  /* lens overlay */
+  .lens-overlay { position: fixed; inset: 0; z-index: 87; background: rgba(6,9,14,0.6); }
+  .lens-overlay[hidden] { display: none; }
+  .lens-card {
+    position: absolute; top: 4vh; left: 50%; transform: translateX(-50%);
+    width: min(860px, 94vw); max-height: 90vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius);
+    padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .lens-card h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+  .lens-frame { font-size: 11.5px; color: var(--ink-dim); line-height: 1.55; }
+  .lens-frame b { color: var(--ink); }
+  .lens-grid { display: flex; flex-direction: column; gap: 3px; }
+  .lens-row { display: flex; gap: 6px; align-items: center; }
+  .lens-row .lr-l { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); width: 44px; flex: none; text-align: right; }
+  .lens-row.first-top1 .lr-l { color: var(--accent); font-weight: 700; }
+  .lens-chip {
+    font-family: var(--mono); font-size: 10.5px; border: 1px solid var(--border); border-radius: 6px;
+    padding: 1px 6px; color: var(--ink-dim); background: var(--panel-2); white-space: nowrap;
+    max-width: 130px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lens-chip.is-pick { border-color: var(--accent-dim); color: var(--accent); background: var(--accent-bg); }
+  .lens-chip .lc-p { color: var(--ink-faint); }
+  .attn-head { display: flex; gap: 6px; align-items: center; margin-top: 2px; flex-wrap: wrap; }
+  .attn-head .ah-l { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); width: 44px; flex: none; text-align: right; }
+  .attn-chip {
+    font-family: var(--mono); font-size: 10.5px; border: 1px solid var(--border); border-radius: 6px;
+    padding: 1px 6px; color: var(--ink); white-space: nowrap; max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* race overlay */
+  .race-overlay { position: fixed; inset: 0; z-index: 87; background: rgba(6,9,14,0.6); }
+  .race-overlay[hidden] { display: none; }
+  .race-card {
+    position: absolute; top: 4vh; left: 50%; transform: translateX(-50%);
+    width: min(1100px, 96vw); max-height: 90vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius);
+    padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .race-card h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink); }
+  .race-lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .race-lane { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-2); padding: 9px 11px; min-width: 0; }
+  .race-lane .rl-name { font-weight: 650; font-size: 12.5px; color: var(--ink); }
+  .race-lane .rl-status { font-family: var(--mono); font-size: 10.5px; color: var(--amber); display: block; margin: 2px 0 6px; }
+  .race-lane.done .rl-status { color: var(--accent); }
+  .race-lane .rl-text { white-space: pre-wrap; font-size: 12.5px; color: var(--ink-dim); max-height: 260px; overflow: auto; }
+  .race-note { font-size: 11.5px; color: var(--ink-faint); line-height: 1.55; }
+  /* tools drawer (reuses gen-card scaffolding) */
+  .tools-out {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim); background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; margin-top: 6px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .tools-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+  .tools-row input[type="text"], .tools-row input[type="date"], .tools-row input[type="number"], .tools-row select {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--border); border-radius: 7px;
+    font-family: var(--mono); font-size: 11.5px; padding: 4px 7px; min-width: 0;
+  }
+  .tools-row input[type="text"] { flex: 1; }
+  .rag-hit { border: 1px solid var(--border); border-radius: 7px; background: var(--panel-2); padding: 6px 9px; margin-top: 6px; }
+  .rag-hit .rh-src { font-family: var(--mono); font-size: 10px; color: var(--blue); display: block; }
+  .rag-hit .rh-txt { font-size: 11.5px; color: var(--ink-dim); white-space: pre-wrap; }
+  /* memory pins */
+  .pins-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0 0; }
+  .pins-row[hidden] { display: none; }
+  .pins-row .pins-lbl { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+  .pin-chip {
+    display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: var(--ink-dim);
+    border: 1px solid var(--blue-dim); background: var(--blue-bg); border-radius: 999px; padding: 1px 9px;
+    max-width: 280px;
+  }
+  .pin-chip .pc-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pin-chip button { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 11px; padding: 0; }
+  .pin-chip button:hover { color: var(--red); }
+  .turn-meta .sum-tag {
+    display: inline-block; font-family: var(--mono); font-size: 10px; color: var(--blue);
+    border: 1px solid var(--blue-dim); background: var(--blue-bg); border-radius: 6px; padding: 1px 7px; margin-left: 8px;
+  }
+  .ctx-compress { margin-left: 8px; }
+  .sp-btn.lens-on { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
 </style>
 </head>
 <body>
@@ -1499,7 +1631,19 @@
             <span class="speed-toggle" id="speedToggle" role="group" aria-label="Telemetry detail mode">
               <button class="sp-btn" id="speedGlass" type="button" aria-pressed="true">glass box</button>
               <button class="sp-btn" id="speedFast" type="button" aria-pressed="false" disabled>fast</button>
+              <button class="sp-btn" id="lensBtn" type="button" aria-pressed="false" disabled>lens</button>
             </span>
+            <select id="dtMode" class="dt-select" disabled
+              aria-label="Deep-think mode — orchestrates several real generations per turn"
+              title="needs the live backend">
+              <option value="normal">think: normal</option>
+              <option value="bo3">think: best-of-3</option>
+              <option value="bo5">think: best-of-5</option>
+              <option value="sc3">think: self-consistency ×3</option>
+              <option value="sc5">think: self-consistency ×5</option>
+              <option value="cr">think: critique &amp; revise</option>
+              <option value="tot">think: tree-of-thought</option>
+            </select>
             <select id="modelSelect" class="model-select" hidden
               aria-label="Model served by the live backend"></select>
             <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
@@ -1562,11 +1706,14 @@
               <div class="ctl-mini">
                 <button class="ctx-clear" id="genSettingsBtn" type="button"
                   title="Generation settings — sampling, seed, stop sequences, system prompt, prefill (Ctrl/⌘-K opens the command palette)">&#9881; settings</button>
+                <button class="ctx-clear" id="toolsBtn" type="button"
+                  title="Tools — calculator, dates, units, docs lookup. The model cannot call tools; YOU run them and the result is injected visibly into your next message.">&#129520; tools</button>
                 <button class="mic-btn" id="micBtn" type="button" hidden
                   title="Voice input (browser speech recognition — audio handled by your browser/OS)">&#127908;</button>
               </div>
             </div>
           </div>
+          <div class="pins-row" id="pinsRow" hidden aria-label="Pinned facts (prepended to the system prompt for instruct models)"></div>
           <div class="composer-hint"><span id="composerHint">Enter ↵ to run · Shift+Enter for a newline</span><span id="ctxInfo" class="ctx-meter"></span><span id="charCount"></span></div>
           <div class="ctx-cut-note" id="ctxCutNote" role="status"></div>
           <div class="busy-hint" id="busyHint">GPU busy — one generation at a time (single-flight; the server keeps no queue, so the page just waits politely and retries).</div>
@@ -1922,6 +2069,26 @@ K2 == K3 == K4        # byte-identical, 601707 B,
           <div class="wc-ev"><b>where it lives:</b> helixc/examples/gpu_gemv_abt_kernel.hx / gpu_gemv_ab_kernel.hx / gpu_softmax_row_kernel.hx (in gating now) · scripts/gate_kovc.sh · demo/dashboard.html</div>
         </div>
 
+        <div class="why-card">
+          <h3>Every gate proves it can fail — the negative control</h3>
+          <div class="wc-what">
+            A green checkmark means nothing if the check cannot go red. So every model gate runs a
+            <b>negative control</b>: it deliberately corrupts the weights and the same parity leg
+            <b>MUST fail</b>, or the whole gate fails. Verbatim from the committed evidence log of
+            the latest sampling re-gate (<code>scripts/_gate_sampling4.log</code>):
+          </div>
+          <pre>=== [7] NEGATIVE CONTROL: corrupted weights must FAIL the logits leg ===
+  NEG-CONTROL OK: corrupted weights correctly FAILED
+  ...
+  NEG control   : PASS
+LLAMA_MODEL_GATE_PASS</pre>
+          <div class="wc-enables"><b>what this enables</b>
+            Confidence that the token-for-token checks are load-bearing, not decorative: tampered
+            weights are caught by construction. Honesty note: this is <b>committed offline gate
+            evidence</b> — no tamper test runs live in your browser, and this page never claims one did.</div>
+          <div class="wc-ev"><b>where it lives:</b> scripts/_gate_sampling4.log (lines above, verbatim) · scripts/llama_model_gate.sh (the gate) · demo/dashboard.html (all recorded verdicts)</div>
+        </div>
+
       </div>
       <div class="why-foot">
         <b>Checked and deliberately left out:</b> a standalone &ldquo;effect system&rdquo; card —
@@ -2054,6 +2221,133 @@ K2 == K3 == K4        # byte-identical, 601707 B,
           template. They consume context budget — oldest turns are dropped first when over it.</p>
         <div id="fewshotList"></div>
         <button class="ctx-clear" id="fewshotAdd" type="button">+ add example</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       LENS VIEWER (W12). Live + glass-box only: renders ONLY the real
+       per-layer logit-lens / attention fields the backend attached to
+       the clicked token's SSE event. Nothing is synthesized.
+       ============================================================ -->
+  <div class="lens-overlay" id="lensOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="lensTitle">
+    <div class="lens-card">
+      <div class="chats-head">
+        <h2 id="lensTitle">Logit lens — layer-by-layer view of one token</h2>
+        <button class="ksrc-close" id="lensClose" type="button">close &#10005;</button>
+      </div>
+      <div class="lens-frame" id="lensFrame"></div>
+      <div id="lensBody"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       MODEL RACE (W12). The same prompt on every served model,
+       SEQUENTIALLY — the GPU is single-flight, so the queue is the
+       honest truth and is shown as such. Results are not added to
+       the conversation.
+       ============================================================ -->
+  <div class="race-overlay" id="raceOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="raceTitle">
+    <div class="race-card">
+      <div class="chats-head">
+        <h2 id="raceTitle">Model race — same prompt, every model</h2>
+        <button class="ksrc-close" id="raceClose" type="button">close &#10005;</button>
+      </div>
+      <div class="race-note" id="raceNote"></div>
+      <div class="race-lanes" id="raceLanes"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       TOOLS-LITE drawer (W12). HONESTY CONTRACT: the model cannot
+       call tools — YOU run them in your browser, and the result is
+       injected as visible text into your next message. No eval().
+       ============================================================ -->
+  <div class="gen-overlay" id="toolsOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="toolsTitle">
+    <div class="gen-card">
+      <div class="chats-head">
+        <h2 id="toolsTitle">Tools — you run them, not the model</h2>
+        <button class="ksrc-close" id="toolsClose" type="button">close &#10005;</button>
+      </div>
+      <p class="gs-note"><b>The model cannot call tools.</b> These run locally in your browser; a
+        result you insert becomes a visible <code>[tool]</code> block in your next message — the
+        model sees exactly the same text you do, nothing happens behind the scenes.</p>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Calculator (hand-written parser — no eval)</h3>
+        <div class="tools-row">
+          <input type="text" id="tcExpr" placeholder="e.g.  (1500 * 0.21) + 42 ^ 2" aria-label="Calculator expression" />
+          <button class="ctx-clear" id="tcRun" type="button">= compute</button>
+        </div>
+        <div class="tools-out" id="tcOut" hidden></div>
+        <div class="tools-row"><button class="ctx-clear" id="tcInsert" type="button" hidden>insert result into message</button></div>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Dates</h3>
+        <div class="tools-row">
+          <input type="date" id="tdA" aria-label="First date" />
+          <input type="date" id="tdB" aria-label="Second date" />
+          <button class="ctx-clear" id="tdDiff" type="button">days between</button>
+        </div>
+        <div class="tools-row">
+          <input type="number" id="tdN" value="30" step="1" aria-label="Days offset" style="width:80px" />
+          <button class="ctx-clear" id="tdAdd" type="button">today + N days</button>
+        </div>
+        <div class="tools-out" id="tdOut" hidden></div>
+        <div class="tools-row"><button class="ctx-clear" id="tdInsert" type="button" hidden>insert result into message</button></div>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Units</h3>
+        <div class="tools-row">
+          <input type="number" id="tuVal" value="1" step="any" aria-label="Value to convert" style="width:90px" />
+          <select id="tuKind" aria-label="Conversion">
+            <option value="km-mi">km &rarr; miles</option>
+            <option value="mi-km">miles &rarr; km</option>
+            <option value="kg-lb">kg &rarr; lb</option>
+            <option value="lb-kg">lb &rarr; kg</option>
+            <option value="c-f">&deg;C &rarr; &deg;F</option>
+            <option value="f-c">&deg;F &rarr; &deg;C</option>
+            <option value="cm-in">cm &rarr; inches</option>
+            <option value="in-cm">inches &rarr; cm</option>
+          </select>
+          <button class="ctx-clear" id="tuRun" type="button">convert</button>
+        </div>
+        <div class="tools-out" id="tuOut" hidden></div>
+        <div class="tools-row"><button class="ctx-clear" id="tuInsert" type="button" hidden>insert result into message</button></div>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Memory pins</h3>
+        <p class="gs-note">Pinned facts are prepended to the <b>system prompt</b> (instruct models
+          only — base GPT-2 has no system prompt) and shown as chips above the composer. Pins
+          consume context budget like any other text.</p>
+        <div class="tools-row">
+          <input type="text" id="tpFact" placeholder="e.g.  My name is Sam; I prefer metric units." aria-label="Fact to pin" />
+          <button class="ctx-clear" id="tpAdd" type="button">pin it</button>
+        </div>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Ask the docs (RAG-lite — tiny bundled corpus)</h3>
+        <p class="gs-note"><b>Honest scope:</b> 12 short excerpts copied verbatim from README.md and
+          two trust docs, keyword-scored (BM25-ish) in your browser. Top-2 hits are inserted as a
+          visible <code>[retrieved from &lt;path&gt;]</code> block above your question — the model
+          reads exactly what you see.</p>
+        <div class="tools-row">
+          <input type="text" id="trQ" placeholder="e.g.  how is the compiler bootstrapped?" aria-label="Docs question" />
+          <button class="ctx-clear" id="trRun" type="button">search</button>
+        </div>
+        <div id="trHits"></div>
+        <div class="tools-row"><button class="ctx-clear" id="trInsert" type="button" hidden>insert top-2 + question into message</button></div>
+      </div>
+
+      <div class="gs-sec">
+        <h3 class="gs-h">Model race</h3>
+        <p class="gs-note">Send the composer text to <b>every served model, one after another</b>
+          (the GPU is single-flight — the queue is real). Live backend with several models only.</p>
+        <div class="tools-row"><button class="ctx-clear" id="raceStart" type="button">start a race with the composer text</button></div>
       </div>
     </div>
   </div>
@@ -2639,7 +2933,12 @@ var LiveSSESource = (function () {
     done: "onDone", error: "onError"
   };
 
-  function start(prompt, nGen, h) {
+  function start(prompt, nGen, h, opts) {
+    /* opts (W12, ADDITIVE — every existing caller passes nothing and gets
+       the exact old behavior): {params, model, forceGlass, lens} for the
+       deep-think / reproduce / model-race orchestrators, which need one-off
+       sampling params, a one-off model, and never want fast mode. */
+    opts = opts || {};
     var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var cancelled = false;
 
@@ -2655,13 +2954,17 @@ var LiveSSESource = (function () {
     };
     /* ADDITIVE field, only ever present when /api/health advertised a
        models[] capability (the dual-model server does; single-model servers omit models[] -> never sent). */
-    if (UI.selectedModel) reqObj.model = UI.selectedModel;
+    if (opts.model) reqObj.model = opts.model;
+    else if (UI.selectedModel) reqObj.model = UI.selectedModel;
     /* ADDITIVE sampling fields — sent ONLY when /api/health advertised
        "sampling":true AND the page snapshotted params for this run. The
        greedy default (temperature 0) sends nothing extra at all when the
-       capability is absent, so today's wire bytes stay byte-identical. */
-    if (samplingAdvertised() && UI.pendingParams) {
-      var gp = UI.pendingParams;
+       capability is absent, so today's wire bytes stay byte-identical.
+       opts.params overrides per-call (deep-think candidates / reproduce);
+       opts.params === null forces the greedy default for that call. */
+    var gp = (opts.params !== undefined) ? opts.params
+           : ((samplingAdvertised() && UI.pendingParams) ? UI.pendingParams : null);
+    if (gp && samplingAdvertised()) {
       if (gp.temperature != null) reqObj.temperature = gp.temperature;
       if (gp.top_p != null) reqObj.top_p = gp.top_p;
       if (gp.top_k != null) reqObj.top_k = gp.top_k;
@@ -2676,9 +2979,16 @@ var LiveSSESource = (function () {
        when the user picked fast mode AND the live backend advertised the
        fast-decode capability on /api/health — otherwise the wire bytes are
        exactly today's. In fast mode the stream is a SUBSET of the same
-       events (hello/tokenize/forward_begin/token/done) — no renames. */
-    var fastReq = (SPEED.mode === "fast" && SPEED.fastAvailable);
+       events (hello/tokenize/forward_begin/token/done) — no renames.
+       opts.forceGlass (deep-think/reproduce/race) never sends fast. */
+    var fastReq = (SPEED.mode === "fast" && SPEED.fastAvailable && !opts.forceGlass);
     if (fastReq) reqObj.detail = "token";
+    /* ADDITIVE "lens":1 — ONLY when the user enabled Lens mode (live +
+       glass box; the backend computes the real logit-lens per layer, which
+       is SLOWER — labeled in the UI). Orchestrator calls pass lens:false. */
+    var wantLens = (opts.lens !== undefined) ? !!opts.lens
+                 : (typeof LENS !== "undefined" && LENS.on && !fastReq);
+    if (wantLens && !fastReq) reqObj.lens = 1;
     var body = JSON.stringify(reqObj);
 
     fetch(fastReq ? "/api/generate?detail=token" : "/api/generate?detail=op", {
@@ -2870,6 +3180,13 @@ function resetLadder() {
 /* ================================================================
    EVENT HANDLERS — the uniform interface both sources call into.
    ================================================================ */
+/* id -> decoded piece, filled ONLY from real backend data this session
+   (tokenize ids/strings, token events, alts entries). The browser has no
+   tokenizer: the lens viewer shows raw ids for never-decoded ids. */
+var TOKPIECE = {};
+function tokpieceLearn(id, piece) {
+  if (id != null && piece != null && TOKPIECE[id] == null) TOKPIECE[id] = String(piece);
+}
 var handlers = {
   onHello: function (d) {
     /* if we were politely waiting out a 409, the slot just opened */
@@ -2898,6 +3215,10 @@ var handlers = {
     $("tokCount").classList.remove("is-idle");
     $("ctxLen").textContent = "T = " + d.n_prompt;
     UI.promptTokenChipCount = d.ids.length;
+    /* per-run context strings (position -> token text) for the attention
+       row in the lens viewer; also feed the id->piece map (real data only) */
+    UI.runCtxTokens = (d.strings || []).slice();
+    for (var ti = 0; ti < d.ids.length; ti++) tokpieceLearn(d.ids[ti], d.strings && d.strings[ti]);
     xpOnTokenize(d);
   },
 
@@ -2963,6 +3284,13 @@ var handlers = {
     /* raw-text + token bookkeeping for stop/continue/markdown/confidence */
     UI.genText += (d.string != null ? d.string : "");
     UI.genTokens.push(d);
+    /* lens viewer support: remember this run's context strings (the attn
+       positions index into them) + feed the id->piece map from real fields */
+    if (UI.runCtxTokens) { d._ctx = UI.runCtxTokens; UI.runCtxTokens.push(d.string); }
+    tokpieceLearn(d.id, d.string);
+    if (d.alts) for (var ai = 0; ai < d.alts.length; ai++) {
+      if (d.alts[ai]) tokpieceLearn(d.alts[ai][0], d.alts[ai][1]);
+    }
     appendToken(d);
     xpOnToken(d);
     /* token & throughput panel */
@@ -3692,6 +4020,10 @@ function applySourceHonesty() {
   /* explain-mode source chip + why-thread follow the same source switch */
   xpApplySource();
 
+  /* deep-think / lens / race availability follows the source switch too
+     (function is hoisted; its state vars initialize before boot runs) */
+  applyW12Availability();
+
   configureComposerForSource();
 }
 
@@ -3759,6 +4091,9 @@ function updateCtxInfo() {
     elx.textContent = "";
     elx.classList.remove("is-warn");
   }
+  /* W12: when the carry is near the budget, offer the real-model-call
+     compression (the offer renders only when honest preconditions hold) */
+  renderCompressOffer();
 }
 
 /* visible, transient notice that the oldest carried text was cut (or that
@@ -3783,6 +4118,10 @@ function setBusy(b) {
   var sg = $("speedGlass"), sf = $("speedFast");
   if (sg) sg.disabled = b;
   if (sf) sf.disabled = b || !SPEED.fastAvailable;
+  var dmb = $("dtMode");
+  if (dmb) dmb.disabled = b || TELEMETRY_SOURCE !== "sse";
+  var lbb = $("lensBtn");
+  if (lbb) lbb.disabled = b || !(TELEMETRY_SOURCE === "sse" && SPEED.mode !== "fast");
   var chips = $("seedRow").querySelectorAll(".seed-chip");
   for (var i = 0; i < chips.length; i++) {
     chips[i].disabled = b ||
@@ -3806,6 +4145,14 @@ var CHAT_SYSTEM_DEFAULT = "You are a helpful AI assistant named SmolLM, trained 
 var CHAT_SYSTEM = CHAT_SYSTEM_DEFAULT;
 function buildChatML(turns, userMsg, systemText) {
   var sys = (systemText != null) ? systemText : CHAT_SYSTEM;
+  /* memory pins (W12): pinned facts ride the system turn, VISIBLY mirrored
+     by the chip row above the composer. They are plain template text — the
+     tokenize event shows exactly what was sent. Chat models only (base
+     models have no system turn and never see pins). */
+  if (typeof PINS !== "undefined" && PINS.items.length && systemText == null) {
+    sys += "\nFacts pinned by the user (treat as true):";
+    for (var pi = 0; pi < PINS.items.length; pi++) sys += "\n- " + PINS.items[pi];
+  }
   var s = "<|im_start|>system\n" + sys + "<|im_end|>\n";
   for (var i = 0; i < turns.length; i++) {
     s += "<|im_start|>user\n" + turns[i].user + "<|im_end|>\n";
@@ -3840,6 +4187,34 @@ function startGeneration(prompt, nGen, opts) {
      SIBLING branch, never destroying the old reply) */
   convoBeginTurn(prompt, opts);
 
+  var pw = prepareWirePrompt(prompt, nGen);
+
+  /* sampling snapshot for THIS request — null = the greedy verified default;
+     only ever serialized when /api/health advertised "sampling":true */
+  UI.pendingParams = samplingAdvertised() ? currentGenParams(opts.forceSeed) : null;
+
+  setBusy(true);
+  resetRunPanels(nGen);
+  updateCtxInfo();
+
+  /* transcript turns: the user bubble shows what was typed; the model bubble
+     echoes the FULL sent prompt with the carried prefix collapsed.
+     (skipUserTurn = regenerate/edit: the user turn is already on screen.) */
+  if (!opts.skipUserTurn) addUserTurn(pw.displayPrompt);
+  addModelTurn(pw.prompt, pw.carriedLen, pw.trimmedChars);
+
+  /* subscribe once; the source does the rest */
+  var src = getTelemetrySource();
+  activeStream = src.start(UI.lastWirePrompt, nGen, handlers);
+}
+
+/* Build the EXACT wire prompt for one turn — factored verbatim out of
+   startGeneration (W12) so the deep-think orchestrator reuses the same
+   carry / ChatML / budget-cut / prefill logic, single source of truth.
+   Side effects preserved: UI.contextText may be cut (visible note),
+   UI.lastChatUser / lastChatCarried / lastTrim / lastSentPrompt /
+   prefillUsed / lastWirePrompt are all set exactly as before. */
+function prepareWirePrompt(prompt, nGen) {
   /* multi-turn: prepend the carried conversation (completion-model "memory"
      = literally resending the text so far; nothing hidden, marker in the
      bubble shows what was carried) */
@@ -3902,23 +4277,7 @@ function startGeneration(prompt, nGen, opts) {
   UI.prefillUsed = (TELEMETRY_SOURCE !== "replay" && GENSET.prefill) ? GENSET.prefill : "";
   UI.lastWirePrompt = UI.prefillUsed ? prompt + UI.prefillUsed : prompt;
 
-  /* sampling snapshot for THIS request — null = the greedy verified default;
-     only ever serialized when /api/health advertised "sampling":true */
-  UI.pendingParams = samplingAdvertised() ? currentGenParams(opts.forceSeed) : null;
-
-  setBusy(true);
-  resetRunPanels(nGen);
-  updateCtxInfo();
-
-  /* transcript turns: the user bubble shows what was typed; the model bubble
-     echoes the FULL sent prompt with the carried prefix collapsed.
-     (skipUserTurn = regenerate/edit: the user turn is already on screen.) */
-  if (!opts.skipUserTurn) addUserTurn(displayPrompt);
-  addModelTurn(prompt, carriedLen, trimmedChars);
-
-  /* subscribe once; the source does the rest */
-  var src = getTelemetrySource();
-  activeStream = src.start(UI.lastWirePrompt, nGen, handlers);
+  return { prompt: prompt, displayPrompt: displayPrompt, carriedLen: carriedLen, trimmedChars: trimmedChars };
 }
 
 /* ================================================================
@@ -3935,7 +4294,7 @@ function initControls() {
   var nGenInput = $("nGen");
 
   $("sendBtn").addEventListener("click", function () {
-    startGeneration(input.value, clampNGen(nGenInput.value));
+    submitPrompt(input.value, clampNGen(nGenInput.value));
   });
 
   /* Enter to send, Shift+Enter for newline, ArrowUp (empty box) edits the
@@ -3943,7 +4302,7 @@ function initControls() {
   input.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!UI.busy) startGeneration(input.value, clampNGen(nGenInput.value));
+      if (!UI.busy) submitPrompt(input.value, clampNGen(nGenInput.value));
     } else if (e.key === "ArrowUp" && !input.value && !UI.busy) {
       e.preventDefault();
       editLastUserMessage();
@@ -3991,7 +4350,7 @@ function initControls() {
     var seed = b.textContent;
     input.value = seed;
     autoGrowComposer();
-    startGeneration(seed, clampNGen(nGenInput.value));
+    submitPrompt(seed, clampNGen(nGenInput.value));
   });
 
   /* stepper */
@@ -4739,6 +5098,8 @@ function setSpeedMode(m) {
   var g = $("speedGlass"), f = $("speedFast");
   if (g) g.setAttribute("aria-pressed", m === "glass" ? "true" : "false");
   if (f) f.setAttribute("aria-pressed", m === "fast" ? "true" : "false");
+  /* lens is glass-box only — switching to fast visibly disables it (W12) */
+  applyW12Availability();
 }
 
 function applyFastAvailability(health) {
@@ -4760,6 +5121,7 @@ function applyFastAvailability(health) {
     f.title = SPEED.fastAvailable ? SPEED_TITLE_FAST_ON : SPEED_TITLE_FAST_OFF;
   }
   if (!SPEED.fastAvailable && SPEED.mode === "fast") setSpeedMode("glass");
+  applyW12Availability();
 }
 
 function initSpeedToggle() {
@@ -4968,6 +5330,9 @@ function convoOnDone(d) {
       node.meta.n_gen = (node.meta.n_gen || 0) + ((d && d.n_gen) || 0);
       if (d && d.seconds != null) node.meta.seconds = +(((+node.meta.seconds || 0) + (+d.seconds || 0)).toFixed(1));
       node.meta.continued = (node.meta.continued || 0) + 1;
+      /* a continued reply is multi-segment — no single request reproduces it */
+      node.meta.gen_ids = null;
+      node.meta.repro = null;
     } else {
       node.text = (UI.prefillUsed || "") + stripped;
       node.meta.n_gen = d ? d.n_gen : UI.genTokens.length;
@@ -4975,6 +5340,14 @@ function convoOnDone(d) {
       node.meta.tok_per_s = d ? d.tok_per_s : null;
       node.meta.sentPrompt = UI.lastSentPrompt;
       if (UI.prefillUsed) node.meta.prefill = UI.prefillUsed;
+      /* reproduce-this-reply (W12): the EXACT request that produced these
+         ids — same wire prompt (incl. prefill), same requested n_gen; the
+         params (incl. seed) are recorded just below in meta.params. Real
+         server ids only — absent on mock (nothing real to reproduce). */
+      if (d && d.gen_ids && TELEMETRY_SOURCE === "sse") {
+        node.meta.gen_ids = d.gen_ids.slice();
+        node.meta.repro = { prompt: UI.lastWirePrompt, n_gen: UI.reply.nGen };
+      }
     }
     node.meta.stopped = false;
     node.meta.source = TELEMETRY_SOURCE;
@@ -5030,7 +5403,8 @@ function stripLastTurnActions() {
    STOP (button + Esc): abort the stream, KEEP the partial text
    ---------------------------------------------------------------- */
 function anyOverlayOpen() {
-  var ids = ["ksrcOverlay", "whyOverlay", "onboardOverlay", "palOverlay", "chatsOverlay", "genOverlay"];
+  var ids = ["ksrcOverlay", "whyOverlay", "onboardOverlay", "palOverlay", "chatsOverlay", "genOverlay",
+             "toolsOverlay", "lensOverlay", "raceOverlay"];
   for (var i = 0; i < ids.length; i++) {
     var o = $(ids[i]);
     if (o && !o.hidden) return true;
@@ -5039,6 +5413,10 @@ function anyOverlayOpen() {
 }
 function stopActiveGeneration() {
   if (!UI.busy) return;
+  /* a deep-think / reproduce / race / summarize orchestration owns the busy
+     state: stop THAT, never the (stale) single-stream machinery below */
+  if (typeof DT !== "undefined" && DT.run) { dtAbortRun(); return; }
+  if (typeof QUIET !== "undefined" && QUIET.op) { quietAbort(); return; }
   clearBusyWait(false);
   if (activeStream) { try { activeStream.cancel(); } catch (e) { /* already closed */ } }
   flushOpsNow();
@@ -5294,6 +5672,10 @@ function attachAssistantActions(meta, nodeIdStr) {
       meta.appendChild(rgi);
     }
   }
+  /* W12: verify-by-reproduction + the downloadable provenance receipt
+     (both render only when the reply carries REAL recorded server ids) */
+  attachReproduce(meta, node);
+  attachReceipt(meta, node);
   var pg = buildPager(node);
   if (pg) meta.appendChild(pg);
   appendReadAloud(meta, node);
@@ -5339,6 +5721,28 @@ function paintAssistantMetaRow(meta, n) {
     n.meta.contMode === "sampled" ? "continued (new sampling segment)" : "continued (greedy — exact by construction)"));
   if (n.meta.source === "replay") meta.appendChild(el("span", { class: "replay-tag" }, "REPLAY · captured run"));
   else if (n.meta.source && n.meta.source !== "sse") meta.appendChild(el("span", { class: "mock-tag" }, "MOCK"));
+  /* W12: a [summary] turn says what it replaced; a deep-think reply carries
+     its badge + the full candidate panel (all real calls, nothing hidden) */
+  if (n.meta.summary) {
+    meta.appendChild(el("span", { class: "sum-tag",
+      title: "this summary was generated by a REAL model call and replaced the older turns in the carry; " +
+        "the original conversation is still reachable via the ‹ › branch pager on the first turn" },
+      "[summary] — replaces " + n.meta.summary.replaced + " older turn(s) · original kept as a branch"));
+  }
+  if (n.meta.deepthink) {
+    var dtr = n.meta.deepthink;
+    meta.appendChild(el("span", { class: "dt-badge" },
+      "deep-think · " + dtr.label + (dtr.winner === -1 ? " (stopped)" : "")));
+    var dtPanel = buildDeepthinkPanel(n);
+    var dtLbl = dtr.calls + " real calls · " + dtr.total_tokens + " tok · " + dtr.total_seconds + " s";
+    var dtBtn = el("button", { class: "tm-btn", type: "button" }, "show the deep-think work (" + dtLbl + ")");
+    dtBtn.addEventListener("click", function () {
+      dtPanel.hidden = !dtPanel.hidden;
+      dtBtn.textContent = (dtPanel.hidden ? "show" : "hide") + " the deep-think work (" + dtLbl + ")";
+    });
+    meta.appendChild(dtBtn);
+    (meta.parentNode || meta).appendChild(dtPanel);
+  }
   attachAssistantActions(meta, n.id);
 }
 function buildUserTurnDom(n) {
@@ -5584,6 +5988,18 @@ function openTokPopover(span) {
         el("span", {}, (typeof a[2] === "number") ? (a[2] * 100).toFixed(1) + "%" : "—")
       ]));
     }
+  }
+  /* W12 lens: when this token's event carried the per-layer fields (lens
+     mode was ON for that run), offer the layer-by-layer viewer */
+  if ((d.lens && d.lens.length) || (d.attn && d.attn.length)) {
+    var lensB = el("button", { class: "tm-btn", type: "button",
+      title: "the logit lens: the model's intermediate guess after every layer — real values from the live computation (gate G-LENS)" },
+      "layer-by-layer view (logit lens) →");
+    lensB.addEventListener("click", function () {
+      closeTokPopover();
+      openLensOverlay(d);
+    });
+    pop.appendChild(lensB);
   }
   pop.appendChild(el("div", { class: "tp-note" }, "real data from the live logits — not a mock"));
   document.body.appendChild(pop);
@@ -5910,6 +6326,33 @@ function paletteActions() {
   if (SPEED.fastAvailable) {
     add(SPEED.mode === "fast" ? "Speed: switch to glass box" : "Speed: switch to fast (gated backend)", "",
       function () { setSpeedMode(SPEED.mode === "fast" ? "glass" : "fast"); });
+  }
+  /* W12 */
+  add("Tools — calculator · dates · units · pins · docs (you run them, not the model)", "",
+    function () { openTools(true); });
+  add("Pin selected transcript text as a memory pin", "", pinSelection);
+  if (TELEMETRY_SOURCE === "sse") {
+    var modeKeys = ["normal", "bo3", "bo5", "sc3", "sc5", "cr", "tot"];
+    for (var mi = 0; mi < modeKeys.length; mi++) {
+      (function (mk) {
+        if (mk === DT.mode) return;
+        add("Deep-think mode: " + (mk === "normal" ? "normal (single call)" : DT_LABEL[mk]) +
+          (mk === "normal" ? "" : " — real sequential calls"), "", function () {
+          DT.mode = mk;
+          var dmsel = $("dtMode");
+          if (dmsel) dmsel.value = mk;
+          announce("deep-think mode: " + (mk === "normal" ? "normal" : DT_LABEL[mk]));
+        });
+      })(modeKeys[mi]);
+    }
+    if (SPEED.mode !== "fast") {
+      add(LENS.on ? "Lens mode: turn OFF" : "Lens mode: turn ON (slower — real per-layer logit lens)", "",
+        function () { setLens(!LENS.on); });
+    }
+    if (raceModelList().length > 1) {
+      add("Model race — composer text on every served model (sequential)", "",
+        function () { startModelRace($("promptInput").value); });
+    }
   }
   var sel = $("modelSelect");
   if (sel && !sel.hidden) {
@@ -6332,6 +6775,1337 @@ function announce(msg) {
   if (n) n.textContent = msg;
 }
 
+/* ================================================================
+   W12 — HONEST DEEP-THINK + GLASS-BOX VIEWERS (2026-06)
+   ----------------------------------------------------------------
+   Everything below is ADDITIVE and consumes only REAL data:
+   - deep-think modes ORCHESTRATE real sequential /api/generate calls
+     (the GPU is single-flight: candidates run one after another with
+     visible progress and a visible total think-budget);
+   - lens mode adds "lens":1 to live glass-box requests and renders
+     ONLY the per-layer fields the backend attaches (gate G-LENS);
+   - reproduce re-sends the exact recorded request and byte-compares
+     the returned ids — reproducibility on THIS stack, stated as such;
+   - the model race, tools, pins, summarize and RAG-lite all say
+     exactly what they are. Nothing is simulated anywhere here.
+   ================================================================ */
+
+/* ---------------- shared: one quiet REAL call with 409 queue+retry ----- */
+/* The single-flight server answers 409 "busy" with NO queue — so this
+   wrapper waits politely with backoff+jitter and retries the SAME request,
+   reporting honest status text (never a queue position). The internals
+   column tracks each real sub-call (resetRunPanels + the normal handlers). */
+function dtCall(prompt, nGen, callOpts, onTok, onStatus, cb) {
+  var cancelled = false, cur = null, timer = null, tick = null, attempt = 0;
+  function cleanup() {
+    if (timer) clearTimeout(timer);
+    if (tick) clearInterval(tick);
+    timer = null; tick = null;
+  }
+  function go() {
+    /* honest visibility: orchestrated calls are glass-box (the scorer and
+       the lens need the per-token stats the fast path doesn't emit) */
+    if (SPEED.mode === "fast") setSpeedMode("glass");
+    resetRunPanels(nGen);
+    var h = {
+      onHello: handlers.onHello,
+      onTokenize: handlers.onTokenize,
+      onForwardBegin: handlers.onForwardBegin,
+      onEmbed: handlers.onEmbed,
+      onLayerBegin: handlers.onLayerBegin,
+      onOp: handlers.onOp,
+      onLayerEnd: handlers.onLayerEnd,
+      onHead: handlers.onHead,
+      onToken: function (d) { handlers.onToken(d); if (onTok) onTok(d); },
+      onDone: function (d) {
+        if (cancelled) return;
+        flushOpsNow();
+        flushKernelLegendCounts();
+        xpOnDone(d);
+        if (d && d.seconds != null) $("gaugeSecs").textContent = (+d.seconds).toFixed(1);
+        if (d && d.tok_per_s != null) $("gaugeTps").textContent = (+d.tok_per_s).toFixed(2);
+        paintRunSummary(d);
+        cb(null, { done: d, tokens: UI.genTokens.slice(),
+                   text: (d && d.text != null) ? String(d.text) : UI.genText });
+      },
+      onError: function (d) {
+        if (cancelled) return;
+        if (d && d.message === "busy") {
+          attempt++;
+          if (attempt > BUSY_RETRY_MAX_ATTEMPTS) {
+            cb({ busy: true, message: "the GPU stayed busy through " + BUSY_RETRY_MAX_ATTEMPTS + " retries" });
+            return;
+          }
+          /* same backoff discipline as the single-turn busy-wait: the server
+             keeps NO queue, so there is no honest position number to show */
+          var base = Math.min(BUSY_RETRY_BASE_MS * Math.pow(1.5, attempt - 1), BUSY_RETRY_MAX_MS);
+          var delay = Math.round(base * (0.8 + Math.random() * 0.4));
+          var dueAt = Date.now() + delay;
+          function paintWait() {
+            if (onStatus) onStatus("⏳ GPU busy (single-flight, no queue) — retrying in " +
+              Math.max(0, Math.ceil((dueAt - Date.now()) / 1000)) + " s · attempt " +
+              attempt + "/" + BUSY_RETRY_MAX_ATTEMPTS);
+          }
+          paintWait();
+          tick = setInterval(paintWait, 1000);
+          timer = setTimeout(function () { cleanup(); if (!cancelled) go(); }, delay);
+          return;
+        }
+        cb(d || { message: "unknown error" });
+      }
+    };
+    cur = LiveSSESource.start(prompt, nGen, h, {
+      params: (callOpts && callOpts.params !== undefined) ? callOpts.params : null,
+      model: callOpts ? callOpts.model : undefined,
+      forceGlass: true,
+      lens: false
+    });
+  }
+  go();
+  return {
+    cancel: function () {
+      cancelled = true;
+      cleanup();
+      if (cur) { try { cur.cancel(); } catch (e) { /* closed */ } }
+    }
+  };
+}
+
+/* quiet-op registry (reproduce / race / summarize): Esc + Stop route here */
+var QUIET = { op: null };
+function quietAbort() {
+  var q = QUIET.op;
+  QUIET.op = null;
+  if (q) {
+    try { if (q.cancel) q.cancel(); } catch (e) { /* closed */ }
+    if (q.onAbort) { try { q.onAbort(); } catch (e2) { /* ui */ } }
+  }
+  setBusy(false);
+  announce("stopped");
+}
+
+/* ---------------- deep-think orchestrator ------------------------------ */
+var DT = { mode: "normal", run: null };
+var DT_LABEL = {
+  bo3: "best-of-3", bo5: "best-of-5",
+  sc3: "self-consistency ×3", sc5: "self-consistency ×5",
+  cr: "critique & revise", tot: "tree-of-thought"
+};
+function dtModeNote(mode) {
+  if (mode === "bo3" || mode === "bo5") {
+    return "best-of-N: N REAL seeded samples of this turn, run strictly one after another (the GPU is " +
+      "single-flight). Each is scored by mean token logprob — the mean of ln(p) over its tokens, from " +
+      "the real per-token stats — and the best becomes the reply. All candidates, seeds and scores are shown.";
+  }
+  if (mode === "sc3" || mode === "sc5") {
+    return "self-consistency: N REAL seeded samples; each candidate's FINAL LINE is taken as its answer " +
+      "(a simple heuristic) and the majority answer wins. Works best for short factual / math questions — " +
+      "and this is a small model, so expect rough candidates. The full vote tally is shown.";
+  }
+  if (mode === "cr") {
+    return "critique & revise: 3 REAL greedy calls — a draft, then a templated prompt asking the model to " +
+      "critique its own draft, then a templated revision. Honest framing: a ~360M model's critiques are " +
+      "shallow — this demonstrates the TECHNIQUE, not expert review. All three steps are shown.";
+  }
+  if (mode === "tot") {
+    return "tree-of-thought, made visible: 3 short REAL sampled approach stubs (~24 tokens each, distinct " +
+      "seeds); one is chosen — by you or auto by mean logprob — and extended into the full reply. This is " +
+      "sequential best-first search on a single-flight GPU, not parallel beams.";
+  }
+  return "";
+}
+function dtSampledParams(seed) {
+  var gp = currentGenParams(seed);
+  var forced = false;
+  if (!(+gp.temperature > 0)) { gp.temperature = 0.8; forced = true; }
+  return { params: gp, forced: forced };
+}
+function meanLogProb(tokens) {
+  var s = 0, n = 0;
+  for (var i = 0; i < tokens.length; i++) {
+    var t = tokens[i];
+    if (t && typeof t.p === "number" && isFinite(t.p) && t.p > 0) { s += Math.log(t.p); n++; }
+  }
+  return n ? +(s / n).toFixed(4) : null;
+}
+function dtClean(t) { return String(t || "").replace(/<\|im_end\|>\s*$/, ""); }
+function dtFinalAnswer(text) {
+  var lines = dtClean(text).split("\n");
+  for (var i = lines.length - 1; i >= 0; i--) {
+    var ln = lines[i].trim();
+    if (ln) return ln;
+  }
+  return "";
+}
+function dtAnswerKey(ans) {
+  return String(ans).toLowerCase()
+    .replace(/^(the answer is|answer\s*[:=]|final answer\s*[:=]?)\s*/i, "")
+    .replace(/[\s.!?,;:*"']+$/g, "").replace(/^["'*\s]+/, "").trim();
+}
+
+/* the front door: normal sends go to startGeneration; a selected deep-think
+   mode orchestrates instead (live only — the selector is disabled otherwise) */
+function submitPrompt(text, nGen) {
+  if (DT.mode !== "normal" && TELEMETRY_SOURCE === "sse") { runDeepThink(DT.mode, text, nGen); return; }
+  startGeneration(text, nGen);
+}
+
+function runDeepThink(mode, userText, nGen) {
+  if (UI.busy || TELEMETRY_SOURCE !== "sse") return;
+  userText = (userText || "").replace(/\s+$/g, "");
+  if (!userText) return;
+  if (mode !== "cr" && !samplingAdvertised()) {
+    showCtxCutNote("deep-think “" + DT_LABEL[mode] + "” needs seeded sampling, which this backend does not " +
+      "advertise on /api/health — use “critique & revise” (3 greedy calls) or think: normal.");
+    return;
+  }
+  /* deep-think is glass-box by necessity (the scorer reads real per-token
+     stats); the toggle is switched VISIBLY, never silently */
+  if (SPEED.mode === "fast") setSpeedMode("glass");
+  if (GENSET.nUnlimited) nGen = unlimitedNGen((carryEnabled() ? UI.contextText : "") + userText);
+
+  UI.lastRequest = null; /* deep-think turns re-run via regenerate, not retry */
+  convoBeginTurn(userText, {});
+  var pw = prepareWirePrompt(userText, nGen);
+  UI.pendingParams = null;
+
+  setBusy(true);
+  updateCtxInfo();
+  addUserTurn(pw.displayPrompt);
+  addModelTurn(pw.prompt, pw.carriedLen, pw.trimmedChars);
+  var ab = UI.activeBubble;
+  UI.activeBubble = null; /* candidates stream into their own cards, never the reply area */
+  if (ab.caretEl && ab.caretEl.parentNode) ab.caretEl.parentNode.removeChild(ab.caretEl);
+
+  var run = {
+    mode: mode, node: UI.pendingAssistantNode, userNode: UI.pendingUserNode,
+    wire: UI.lastWirePrompt, sent: UI.lastSentPrompt, prefill: UI.prefillUsed,
+    userText: userText, nGen: nGen,
+    calls: 0, totTok: 0, totSec: 0, cands: [], cancel: null, refs: ab
+  };
+  DT.run = run;
+  ab.metaEl.innerHTML = "";
+  ab.metaEl.appendChild(document.createTextNode("deep-think running — Esc / ■ Stop cancels (candidates so far are kept in the panel)"));
+
+  var panel = el("div", { class: "dt-panel" });
+  run.statusEl = el("span", { class: "dt-status", role: "status" }, "deep-think: " + DT_LABEL[mode] + " — starting…");
+  panel.appendChild(run.statusEl);
+  panel.appendChild(el("span", { class: "dt-note" }, dtModeNote(mode)));
+  run.candBox = el("div", {});
+  panel.appendChild(run.candBox);
+  ab.contEl.appendChild(panel);
+  scrollTranscript(true);
+  announce("deep-think started: " + DT_LABEL[mode]);
+
+  if (mode === "bo3" || mode === "bo5") dtRunSamples(run, mode === "bo5" ? 5 : 3, false);
+  else if (mode === "sc3" || mode === "sc5") dtRunSamples(run, mode === "sc5" ? 5 : 3, true);
+  else if (mode === "cr") dtRunCritique(run);
+  else dtRunTree(run);
+}
+
+function dtNewCand(run, label) {
+  var head = el("div", { class: "dc-head" }, [el("b", {}, label)]);
+  var text = el("div", { class: "dc-text streaming" }, "");
+  var card = el("div", { class: "dt-cand" }, [head, text]);
+  run.candBox.appendChild(card);
+  scrollTranscript();
+  return { card: card, headEl: head, textEl: text };
+}
+function dtRecord(run, ui, label, role, res, params) {
+  run.calls++;
+  var d = res.done || {};
+  run.totTok += (d.n_gen || res.tokens.length || 0);
+  run.totSec += (+d.seconds || 0);
+  var c = {
+    label: label, role: role,
+    seed: params && params.seed != null ? params.seed : null,
+    n_gen: d.n_gen != null ? d.n_gen : res.tokens.length,
+    seconds: d.seconds != null ? d.seconds : null,
+    tok_per_s: d.tok_per_s != null ? d.tok_per_s : null,
+    text: dtClean(res.text), score: meanLogProb(res.tokens),
+    tokens: res.tokens, done: d, params: params || null
+  };
+  run.cands.push(c);
+  if (ui) {
+    ui.textEl.classList.remove("streaming");
+    ui.textEl.textContent = c.text;
+    ui.headEl.appendChild(el("span", {}, c.n_gen + " tok · " + (c.seconds != null ? c.seconds + " s" : "—")));
+    if (c.score != null) ui.headEl.appendChild(el("span", {}, "mean ln(p) " + c.score));
+  }
+  return c;
+}
+function dtFail(run, err) {
+  if (DT.run !== run) return;
+  run.statusEl.textContent = "deep-think stopped: " + (err && err.message ? err.message : "error") +
+    " — nothing was hidden; candidates completed so far are kept below.";
+  dtConcludePartial(run, err && err.message ? err.message : "error");
+}
+function dtAbortRun() {
+  var run = DT.run;
+  if (!run) return;
+  if (run.cancel) { try { run.cancel.cancel(); } catch (e) { /* closed */ } }
+  run.statusEl.textContent = "deep-think cancelled — candidates completed so far are kept below.";
+  dtConcludePartial(run, "cancelled by you");
+}
+function dtBaseRecord(run, extra) {
+  var rec = {
+    mode: run.mode, label: DT_LABEL[run.mode], note: dtModeNote(run.mode),
+    calls: run.calls, total_tokens: run.totTok, total_seconds: +run.totSec.toFixed(1),
+    cands: []
+  };
+  for (var i = 0; i < run.cands.length; i++) {
+    var c = run.cands[i];
+    rec.cands.push({ label: c.label, role: c.role, seed: c.seed, n_gen: c.n_gen,
+      seconds: c.seconds, score: c.score, text: c.text });
+  }
+  if (extra) for (var k in extra) { if (Object.prototype.hasOwnProperty.call(extra, k)) rec[k] = extra[k]; }
+  return rec;
+}
+function dtConcludePartial(run, why) {
+  var node = convoNode(run.node);
+  if (node) {
+    node.meta.stopped = true;
+    node.meta.deepthink = dtBaseRecord(run, { error: why, winner: -1 });
+    node.meta.params = { temperature: 0, mode: "deep-think (stopped)" };
+  }
+  DT.run = null;
+  UI.lastChatUser = null;
+  UI.prefillUsed = "";
+  setBusy(false);
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  saveCurrentChat();
+  renderPath();
+}
+function dtConclude(run, info) {
+  var node = convoNode(run.node);
+  if (node) {
+    node.text = (run.prefill || "") + info.text;
+    node.tokens = info.tokens || [];
+    node.meta.n_gen = info.n_gen;
+    node.meta.seconds = info.seconds;
+    node.meta.tok_per_s = info.tok_per_s != null ? info.tok_per_s : null;
+    node.meta.sentPrompt = (info.sentPrompt != null) ? info.sentPrompt : run.sent;
+    if (run.prefill) node.meta.prefill = run.prefill;
+    node.meta.params = info.params || { temperature: 0, mode: "greedy (verified default)" };
+    node.meta.stopped = false;
+    node.meta.source = TELEMETRY_SOURCE;
+    if (info.gen_ids && info.reproPrompt != null) {
+      node.meta.gen_ids = info.gen_ids.slice();
+      node.meta.repro = { prompt: info.reproPrompt, n_gen: info.reproNGen };
+    }
+    node.meta.deepthink = info.record;
+  }
+  DT.run = null;
+  UI.lastChatUser = null;
+  UI.prefillUsed = "";
+  setBusy(false);
+  rebuildCarryFromPath();
+  updateCtxInfo();
+  saveCurrentChat();
+  renderPath();
+  announce("deep-think finished — " + info.record.label);
+  scrollTranscript(true);
+}
+
+/* best-of-N and self-consistency share the sampling loop */
+function dtRunSamples(run, N, isSC) {
+  var i = 0, tempForced = false;
+  function next() {
+    if (DT.run !== run) return;
+    if (i >= N) { finish(); return; }
+    i++;
+    var sp = dtSampledParams(newRandomSeed());
+    tempForced = tempForced || sp.forced;
+    var ui = dtNewCand(run, "sample " + i + "/" + N + " · seed " + sp.params.seed);
+    var got = 0;
+    run.statusEl.textContent = "deep-think: " + DT_LABEL[run.mode] + " — sample " + i + " of " + N +
+      " (REAL call · seed " + sp.params.seed + ")…";
+    run.cancel = dtCall(run.wire, run.nGen, { params: sp.params }, function (d) {
+      got++;
+      ui.textEl.textContent += (d.string != null ? d.string : "");
+      run.statusEl.textContent = "deep-think: " + DT_LABEL[run.mode] + " — sample " + i + " of " + N +
+        " · " + got + " tok";
+    }, function (st) { run.statusEl.textContent = st; }, function (err, res) {
+      if (DT.run !== run) return;
+      if (err) { dtFail(run, err); return; }
+      dtRecord(run, ui, "sample " + i + "/" + N, "sample", res, sp.params);
+      next();
+    });
+  }
+  function finish() {
+    var cands = run.cands;
+    var scored = false, win = 0, j;
+    for (j = 0; j < cands.length; j++) if (cands[j].score != null) scored = true;
+    var extra = { temp_forced: tempForced };
+    if (isSC) {
+      /* majority vote over the final-line answers */
+      var groups = {}, order = [];
+      for (j = 0; j < cands.length; j++) {
+        cands[j].answer = dtFinalAnswer(cands[j].text);
+        var key = dtAnswerKey(cands[j].answer) || "(empty)";
+        cands[j].answerKey = key;
+        if (!groups[key]) { groups[key] = { key: key, answer: cands[j].answer, count: 0, first: j, best: -Infinity }; order.push(key); }
+        groups[key].count++;
+        if (cands[j].score != null && cands[j].score > groups[key].best) groups[key].best = cands[j].score;
+      }
+      var bestG = null;
+      for (j = 0; j < order.length; j++) {
+        var g = groups[order[j]];
+        if (!bestG || g.count > bestG.count || (g.count === bestG.count && g.best > bestG.best)) bestG = g;
+      }
+      win = bestG.first;
+      extra.votes = [];
+      for (j = 0; j < order.length; j++) extra.votes.push({ answer: groups[order[j]].answer, count: groups[order[j]].count });
+      extra.scorer = "majority vote on the final line (tie-break: mean logprob)";
+    } else {
+      if (scored) {
+        for (j = 1; j < cands.length; j++) {
+          if (cands[j].score != null && (cands[win].score == null || cands[j].score > cands[win].score)) win = j;
+        }
+        extra.scorer = "mean token logprob (mean of ln p over the reply's tokens — real per-token stats)";
+      } else {
+        extra.scorer = "no scorer available (the token events carried no p fields) — candidates UNSCORED; the first sample was used";
+      }
+    }
+    extra.winner = win;
+    var w = cands[win];
+    for (j = 0; j < run.cands.length; j++) run.cands[j].won = (j === win);
+    dtConclude(run, {
+      text: w.text, tokens: w.tokens, n_gen: w.n_gen, seconds: w.seconds, tok_per_s: w.tok_per_s,
+      params: w.params, gen_ids: w.done.gen_ids, reproPrompt: run.wire, reproNGen: run.nGen,
+      record: dtBaseRecord(run, extra)
+    });
+  }
+  next();
+}
+
+/* draft -> critique -> revision, all greedy, all templated, all shown */
+function dtCritiquePrompt(run, draft) {
+  if (isChatModel()) {
+    return buildChatML([], "Here is a question and a draft answer.\n\nQuestion:\n" + run.userText +
+      "\n\nDraft answer:\n" + draft +
+      "\n\nList the concrete problems with the draft answer (factual errors, missing pieces, unclear wording). Be specific and brief.",
+      CHAT_SYSTEM);
+  }
+  return run.wire + draft + "\n\nA critical review of the answer above, listing its concrete problems:\n-";
+}
+function dtRevisePrompt(run, draft, critique) {
+  if (isChatModel()) {
+    return buildChatML([], "Question:\n" + run.userText + "\n\nDraft answer:\n" + draft +
+      "\n\nCritique of the draft:\n" + critique +
+      "\n\nWrite an improved final answer that fixes every problem the critique found. Answer only.",
+      CHAT_SYSTEM);
+  }
+  return run.wire + draft + "\n\nA critical review of the answer above:\n-" + critique + "\n\nThe improved answer:\n";
+}
+function dtRunCritique(run) {
+  function step(label, role, prompt, nGen, onOk) {
+    if (DT.run !== run) return;
+    var ui = dtNewCand(run, label);
+    run.statusEl.textContent = "deep-think: critique & revise — " + label + " (REAL greedy call)…";
+    run.cancel = dtCall(prompt, nGen, { params: null }, function (d) {
+      ui.textEl.textContent += (d.string != null ? d.string : "");
+    }, function (st) { run.statusEl.textContent = st; }, function (err, res) {
+      if (DT.run !== run) return;
+      if (err) { dtFail(run, err); return; }
+      onOk(dtRecord(run, ui, label, role, res, null));
+    });
+  }
+  step("1/3 · draft (greedy)", "draft", run.wire, run.nGen, function (cDraft) {
+    var critPrompt = dtCritiquePrompt(run, cDraft.text);
+    step("2/3 · critique (templated prompt)", "critique", critPrompt, Math.min(96, Math.max(32, run.nGen)), function (cCrit) {
+      var revPrompt = dtRevisePrompt(run, cDraft.text, cCrit.text);
+      step("3/3 · revision (templated prompt) — becomes the reply", "revision", revPrompt, run.nGen, function (cRev) {
+        for (var j = 0; j < run.cands.length; j++) run.cands[j].won = (run.cands[j].role === "revision");
+        dtConclude(run, {
+          text: cRev.text, tokens: cRev.tokens, n_gen: cRev.n_gen, seconds: cRev.seconds,
+          tok_per_s: cRev.tok_per_s, params: null, gen_ids: cRev.done.gen_ids,
+          reproPrompt: revPrompt, reproNGen: run.nGen,
+          sentPrompt: revPrompt,
+          record: dtBaseRecord(run, { winner: 2 })
+        });
+      });
+    });
+  });
+}
+
+/* tree-of-thought: 3 sampled stubs -> pick (user or auto) -> extend */
+var DT_TOT_STUB_TOKENS = 24;
+function dtRunTree(run) {
+  var i = 0, N = 3, tempForced = false;
+  function nextStub() {
+    if (DT.run !== run) return;
+    if (i >= N) { choose(); return; }
+    i++;
+    var sp = dtSampledParams(newRandomSeed());
+    tempForced = tempForced || sp.forced;
+    var ui = dtNewCand(run, "approach " + i + "/" + N + " · seed " + sp.params.seed + " · " + DT_TOT_STUB_TOKENS + " tok stub");
+    run.statusEl.textContent = "deep-think: tree-of-thought — growing approach stub " + i + " of " + N + " (REAL call)…";
+    run.cancel = dtCall(run.wire, DT_TOT_STUB_TOKENS, { params: sp.params }, function (d) {
+      ui.textEl.textContent += (d.string != null ? d.string : "");
+    }, function (st) { run.statusEl.textContent = st; }, function (err, res) {
+      if (DT.run !== run) return;
+      if (err) { dtFail(run, err); return; }
+      var c = dtRecord(run, ui, "approach " + i + "/" + N, "approach", res, sp.params);
+      c.ui = ui;
+      nextStub();
+    });
+  }
+  function choose() {
+    run.cancel = null;
+    run.statusEl.textContent = "deep-think: tree-of-thought — pick the branch to extend (the GPU is idle while you choose)";
+    var auto = el("button", { class: "tm-btn", type: "button",
+      title: "picks the stub with the best mean token logprob — the same scorer best-of-N uses" },
+      "auto-pick best (mean logprob)");
+    var row = el("div", { class: "tools-row" }, [auto]);
+    run.candBox.appendChild(row);
+    function extend(k, wasAuto) {
+      if (DT.run !== run) return;
+      row.remove();
+      for (var j = 0; j < run.cands.length; j++) {
+        run.cands[j].won = (j === k);
+        if (run.cands[j].ui) run.cands[j].ui.card.classList.toggle("winner", j === k);
+      }
+      var stub = run.cands[k];
+      var contPrompt = run.wire + stub.text;
+      var ui2 = dtNewCand(run, "extending approach " + (k + 1) + " (greedy continuation)");
+      run.statusEl.textContent = "deep-think: tree-of-thought — extending the chosen branch (REAL greedy call)…";
+      run.cancel = dtCall(contPrompt, run.nGen, { params: null }, function (d) {
+        ui2.textEl.textContent += (d.string != null ? d.string : "");
+      }, function (st) { run.statusEl.textContent = st; }, function (err, res) {
+        if (DT.run !== run) return;
+        if (err) { dtFail(run, err); return; }
+        var cExt = dtRecord(run, ui2, "extension of approach " + (k + 1), "extension", res, null);
+        dtConclude(run, {
+          text: stub.text + cExt.text,
+          tokens: stub.tokens.concat(cExt.tokens),
+          n_gen: (stub.n_gen || 0) + (cExt.n_gen || 0),
+          seconds: +(((+stub.seconds || 0) + (+cExt.seconds || 0)).toFixed(1)),
+          tok_per_s: null,
+          params: stub.params,
+          /* two calls produced this reply — no single request reproduces it */
+          gen_ids: null, reproPrompt: null, reproNGen: null,
+          record: dtBaseRecord(run, { winner: k, auto: !!wasAuto, temp_forced: tempForced })
+        });
+      });
+    }
+    for (var k0 = 0; k0 < run.cands.length; k0++) {
+      (function (k) {
+        var b = el("button", { class: "tm-btn", type: "button" }, "extend approach " + (k + 1) +
+          (run.cands[k].score != null ? " (ln p " + run.cands[k].score + ")" : ""));
+        b.addEventListener("click", function () { extend(k, false); });
+        row.insertBefore(b, auto);
+      })(k0);
+    }
+    auto.addEventListener("click", function () {
+      var best = 0;
+      for (var j = 1; j < run.cands.length; j++) {
+        if (run.cands[j].score != null && (run.cands[best].score == null || run.cands[j].score > run.cands[best].score)) best = j;
+      }
+      extend(best, true);
+    });
+    scrollTranscript();
+  }
+  nextStub();
+}
+
+/* the finished-record panel (rebuilt on every renderPath from node.meta) */
+function buildDeepthinkPanel(n) {
+  var r = n.meta.deepthink;
+  var panel = el("div", { class: "dt-panel" });
+  panel.hidden = true;
+  panel.appendChild(el("span", { class: "dt-note" }, r.note || ""));
+  if (r.scorer) panel.appendChild(el("span", { class: "dt-note" }, "scorer: " + r.scorer));
+  if (r.temp_forced) panel.appendChild(el("span", { class: "dt-note" },
+    "note: your temperature was 0 (greedy) — identical samples would be useless, so the candidates were " +
+    "sampled at temperature 0.8 (shown here, not hidden)."));
+  if (r.error) panel.appendChild(el("span", { class: "dt-status" }, "stopped early: " + r.error));
+  if (r.mode === "tot") {
+    var tree = el("div", { class: "dt-tree" }, [el("span", { class: "tt-trunk" }, "prompt (trunk)")]);
+    for (var t = 0; t < r.cands.length; t++) {
+      var c0 = r.cands[t];
+      var chosen = (t === r.winner) || c0.role === "extension";
+      var head0 = el("div", { class: "dc-head" }, [
+        el("b", {}, c0.label + (t === r.winner ? " — CHOSEN" + (r.auto ? " (auto)" : " (by you)") : "")),
+        el("span", {}, (c0.seed != null ? "seed " + c0.seed + " · " : "") + c0.n_gen + " tok" +
+          (c0.seconds != null ? " · " + c0.seconds + " s" : "") + (c0.score != null ? " · ln p " + c0.score : ""))
+      ]);
+      tree.appendChild(el("div", { class: "tt-branch" + (chosen ? " chosen" : "") },
+        el("div", { class: "tb-body" }, [head0, el("div", { class: "dc-text" }, c0.text)])));
+    }
+    panel.appendChild(tree);
+  } else {
+    for (var i = 0; i < r.cands.length; i++) {
+      var c = r.cands[i];
+      var isWin = (i === r.winner);
+      var head = el("div", { class: "dc-head" }, [
+        el("b", {}, c.label + (isWin ? " — chosen reply" : "")),
+        el("span", {}, (c.seed != null ? "seed " + c.seed + " · " : "") + c.n_gen + " tok" +
+          (c.seconds != null ? " · " + c.seconds + " s" : "") + (c.score != null ? " · mean ln(p) " + c.score : ""))
+      ]);
+      panel.appendChild(el("div", { class: "dt-cand" + (isWin ? " winner" : "") },
+        [head, el("div", { class: "dc-text" }, c.text)]));
+    }
+  }
+  if (r.votes) {
+    var tl = el("div", { class: "dt-tally" });
+    tl.appendChild(document.createTextNode("vote tally (final-line answers): "));
+    for (var v = 0; v < r.votes.length; v++) {
+      if (v) tl.appendChild(document.createTextNode(" · "));
+      var b2 = el("b", {}, String(r.votes[v].count) + "×");
+      tl.appendChild(b2);
+      tl.appendChild(document.createTextNode(" “" + String(r.votes[v].answer).slice(0, 60) + "”"));
+    }
+    panel.appendChild(tl);
+  }
+  panel.appendChild(el("span", { class: "dt-budget" },
+    "think budget (real compute): " + r.calls + " calls · " + r.total_tokens + " tokens · " +
+    r.total_seconds + " s total"));
+  return panel;
+}
+
+/* ---------------- LENS mode (live + glass box only) -------------------- */
+var LENS = { on: false };
+var LENS_TITLE_OFF = "lens mode — sends \"lens\":1 with live glass-box requests: the backend decodes the " +
+  "residual stream through the model's REAL final-norm + head after every layer (the logit lens) and " +
+  "reports last-layer attention. SLOWER — one extra decode per layer per token. Click a generated token to view.";
+var LENS_TITLE_ON = "lens ON — requests carry \"lens\":1; generation is SLOWER (real extra GPU work per " +
+  "layer per token). Click any generated token, then “layer-by-layer view”.";
+function setLens(on) {
+  LENS.on = !!on;
+  var b = $("lensBtn");
+  if (b) {
+    b.setAttribute("aria-pressed", LENS.on ? "true" : "false");
+    b.classList.toggle("lens-on", LENS.on);
+    b.title = LENS.on ? LENS_TITLE_ON : LENS_TITLE_OFF;
+  }
+  announce(LENS.on ? "lens mode on — generation will be slower; click a token afterwards" : "lens mode off");
+}
+function lensPieceFor(id) {
+  return (TOKPIECE[id] != null) ? ("“" + pieceForChip(TOKPIECE[id]) + "”") : ("#" + id);
+}
+function openLensOverlay(d) {
+  var ov = $("lensOverlay"), body = $("lensBody"), frame = $("lensFrame");
+  if (!ov || !body) return;
+  body.innerHTML = "";
+  frame.innerHTML =
+    "Token <b>“" + mdEscape(pieceForChip(String(d.string != null ? d.string : ""))) + "”</b> (id " + (d.id | 0) + ")" +
+    (typeof d.p === "number" ? " · final p " + (d.p * 100).toFixed(1) + "%" : "") +
+    " — the rows below are the model's <b>intermediate guesses after each layer</b>: the residual stream " +
+    "decoded through the REAL final-norm + unembedding head (the logit lens). These are real values from " +
+    "the live computation that produced this token, cross-checked against the independent oracle " +
+    "(gate <b>G-LENS</b>). Lens runs are slower — one extra decode per layer. The first token of a reply " +
+    "(prefill) carries no lens data. Token text is shown only for ids this session actually decoded; " +
+    "others appear as raw #ids (the browser has no tokenizer).";
+  var firstTop1 = -1;
+  if (d.lens && d.lens.length) {
+    var grid = el("div", { class: "lens-grid" });
+    for (var L = 0; L < d.lens.length; L++) {
+      var row = d.lens[L] || [];
+      var isFirst = (firstTop1 === -1 && row[0] && row[0][0] === d.id);
+      if (isFirst) firstTop1 = L;
+      var rowEl = el("div", { class: "lens-row" + (isFirst ? " first-top1" : "") }, [
+        el("span", { class: "lr-l" }, "L" + (L + 1) + (isFirst ? " ★" : ""))
+      ]);
+      for (var t = 0; t < row.length; t++) {
+        var ent = row[t];
+        if (!ent || ent[0] == null || ent[0] < 0) continue; /* -1 = unfilled slot */
+        rowEl.appendChild(el("span", {
+          class: "lens-chip" + (ent[0] === d.id ? " is-pick" : ""),
+          title: "id " + ent[0] + " · p " + (typeof ent[1] === "number" ? (ent[1] * 100).toFixed(2) + "%" : "—")
+        }, [
+          document.createTextNode(lensPieceFor(ent[0]) + " "),
+          el("span", { class: "lc-p" }, (typeof ent[1] === "number" ? (ent[1] * 100).toFixed(1) + "%" : "—"))
+        ]));
+      }
+      grid.appendChild(rowEl);
+    }
+    body.appendChild(el("div", { class: "lens-frame" }, firstTop1 >= 0
+      ? "★ layer " + (firstTop1 + 1) + " is the first where the final pick becomes top-1."
+      : "the final pick never became top-1 in an intermediate layer — it only won at the real head."));
+    body.appendChild(grid);
+    /* the real final head distribution (same additive alts field as the popover) */
+    if (d.alts && d.alts.length) {
+      var fin = el("div", { class: "lens-row" }, [el("span", { class: "lr-l" }, "head")]);
+      for (var a = 0; a < d.alts.length; a++) {
+        var al = d.alts[a];
+        if (!al) continue;
+        fin.appendChild(el("span", { class: "lens-chip" + (al[0] === d.id ? " is-pick" : "") }, [
+          document.createTextNode("“" + pieceForChip(String(al[1] != null ? al[1] : al[0])) + "” "),
+          el("span", { class: "lc-p" }, (typeof al[2] === "number" ? (al[2] * 100).toFixed(1) + "%" : "—"))
+        ]));
+      }
+      body.appendChild(el("div", { class: "lens-frame" }, "and the real final head (what actually decided):"));
+      body.appendChild(fin);
+    }
+  } else {
+    body.appendChild(el("div", { class: "lens-frame" },
+      "No lens data on this token. Lens fields arrive only on DECODE steps of runs made with lens mode ON " +
+      "(live + glass box) — the first token of a reply has none, and runs made before enabling the toggle have none."));
+  }
+  if (d.attn && d.attn.length) {
+    body.appendChild(el("div", { class: "lens-frame", html:
+      "<b>Attention (last layer)</b> — for each head, the top-8 context positions this step attended to " +
+      "(REAL weights; chip intensity = weight). The text on each chip is the actual context token at that position." }));
+    for (var h = 0; h < d.attn.length; h++) {
+      var headRow = el("div", { class: "attn-head" }, [el("span", { class: "ah-l" }, "head " + (h + 1))]);
+      var entries = d.attn[h] || [];
+      for (var e2 = 0; e2 < entries.length; e2++) {
+        var en = entries[e2];
+        if (!en || en[0] == null || en[0] < 0) continue;
+        var w = (typeof en[1] === "number") ? Math.max(0, Math.min(1, en[1])) : 0;
+        var txt = (d._ctx && d._ctx[en[0]] != null) ? pieceForChip(String(d._ctx[en[0]])) : ("pos " + en[0]);
+        headRow.appendChild(el("span", {
+          class: "attn-chip",
+          style: "background: rgba(52,211,153," + (0.06 + 0.5 * w).toFixed(3) + ")",
+          title: "position " + en[0] + " · weight " + w.toFixed(4)
+        }, txt));
+      }
+      body.appendChild(headRow);
+    }
+  } else if (d.lens && d.lens.length) {
+    body.appendChild(el("div", { class: "lens-frame" }, "No attention row on this token event."));
+  }
+  ov.hidden = false;
+  $("lensClose").focus();
+}
+
+/* ---------------- REPRODUCE-THIS-REPLY --------------------------------- */
+function attachReproduce(meta, node) {
+  if (TELEMETRY_SOURCE !== "sse" || !node.meta || node.meta.source !== "sse") return;
+  if (!node.meta.gen_ids || !node.meta.repro || node.meta.stopped) return;
+  var slot = el("span", {});
+  if (node.meta.reproResult) {
+    slot.appendChild(el("span", { class: node.meta.reproResult.ok ? "repro-ok" : "repro-bad" },
+      node.meta.reproResult.ok ? "reproduced byte-identical ✓" : "⚠ NOT byte-identical"));
+  }
+  var btn = el("button", { class: "tm-btn", type: "button",
+    title: "re-sends the EXACT same request — same model, same wire prompt, same seed and params, same " +
+      "n_gen — and byte-compares the returned token ids with this reply's. Proves REPRODUCIBILITY on this " +
+      "stack; the independent-oracle token-for-token check is the offline gate (see the proof page)." },
+    "reproduce this reply");
+  btn.addEventListener("click", function () {
+    if (UI.busy || TELEMETRY_SOURCE !== "sse") return;
+    setBusy(true);
+    btn.disabled = true;
+    btn.textContent = "reproducing… (real run)";
+    var got = 0;
+    var op = { onAbort: function () { btn.disabled = false; btn.textContent = "reproduce this reply"; } };
+    QUIET.op = op;
+    var params = (node.meta.params && node.meta.params.mode == null) ? node.meta.params : null;
+    op.cancel = dtCall(node.meta.repro.prompt, node.meta.repro.n_gen,
+      { params: params, model: node.meta.modelId },
+      function () { got++; btn.textContent = "reproducing… " + got + " tok"; },
+      function (st) { btn.textContent = st; },
+      function (err, res) {
+        if (QUIET.op !== op) return;
+        QUIET.op = null;
+        setBusy(false);
+        btn.remove();
+        slot.innerHTML = "";
+        if (err) {
+          slot.appendChild(el("span", { class: "repro-bad" }, "reproduction did not complete: " + (err.message || "error")));
+          return;
+        }
+        var a = node.meta.gen_ids, b = (res.done && res.done.gen_ids) || [];
+        var same = a.length === b.length;
+        for (var k = 0; same && k < a.length; k++) same = (a[k] === b[k]);
+        node.meta.reproResult = { ok: same, at: Date.now(), got: b.length };
+        saveCurrentChat();
+        if (same) {
+          slot.appendChild(el("span", { class: "repro-ok" },
+            "reproduced byte-identical ✓ (same seed → same tokens on this stack)"));
+        } else {
+          slot.appendChild(el("span", { class: "repro-bad" },
+            "⚠ NOT byte-identical (" + b.length + " ids returned vs " + a.length + ") — that would mean " +
+            "nondeterminism on this stack. Please report this."));
+        }
+        var det = el("span", { class: "verify-detail" });
+        det.appendChild(el("span", { class: "vd" },
+          "this checks REPRODUCIBILITY on this stack; the independent-oracle token-for-token check is the offline gate"));
+        slot.appendChild(det);
+        slot.appendChild(document.createTextNode(" "));
+        slot.appendChild(el("a", { href: "dashboard.html" }, "trust dashboard →"));
+      });
+  });
+  meta.appendChild(btn);
+  meta.appendChild(slot);
+}
+
+/* ---------------- PROVENANCE RECEIPT ------------------------------------ */
+function attachReceipt(meta, node) {
+  if (!node.meta || node.meta.source !== "sse" || !node.meta.gen_ids) return;
+  var btn = el("button", { class: "tm-btn", type: "button",
+    title: "downloads a JSON receipt: model, params, seed, the exact wire prompt, the returned token ids, " +
+      "and the pinned trust anchors — everything needed to re-derive and re-verify this reply." },
+    "provenance receipt ⬇");
+  btn.addEventListener("click", function () {
+    var receipt = {
+      format: "helix-provenance-receipt/v1",
+      exported_at: new Date().toISOString(),
+      note: "everything needed to re-derive and re-verify this reply: on the same gated stack, the same " +
+        "wire prompt + params + seed + n_gen must return the same gen_ids (greedy and seeded sampling are " +
+        "both deterministic). The independent-oracle token-for-token verification is the offline gate — " +
+        "see demo/dashboard.html.",
+      model: { id: node.meta.modelId || RUNBOOK.model, label: node.meta.model || null },
+      params: node.meta.params || { temperature: 0, mode: "greedy (verified default)" },
+      seed: (node.meta.params && node.meta.params.seed != null) ? node.meta.params.seed : null,
+      prompt: {
+        wire: node.meta.repro ? node.meta.repro.prompt : node.meta.sentPrompt,
+        sent_prompt: node.meta.sentPrompt != null ? node.meta.sentPrompt : null,
+        prefill: node.meta.prefill || null,
+        n_gen_requested: node.meta.repro ? node.meta.repro.n_gen : null
+      },
+      reply: { text: node.text, n_gen: node.meta.n_gen, seconds: node.meta.seconds, gen_ids: node.meta.gen_ids },
+      trust_anchors: {
+        seed_sha256: RUNBOOK.seed_sha,
+        selfhost_fixpoint_sha256: RUNBOOK.fixpoint_sha,
+        gcc_ddc_k1_sha256: RUNBOOK.gcc_ddc_sha,
+        kovc_selfcompile_bytes: 698392,
+        seed_bytes: 299
+      },
+      page: { file: "demo/index.html", source: node.meta.source, deepthink: node.meta.deepthink ? node.meta.deepthink.label : null }
+    };
+    downloadFile("helix-receipt-" + exportStamp() + ".json", "application/json", JSON.stringify(receipt, null, 2));
+  });
+  meta.appendChild(btn);
+}
+
+/* ---------------- MODEL RACE (sequential — the honest queue) ----------- */
+function raceModelList() {
+  var out = [];
+  var sel = $("modelSelect");
+  if (TELEMETRY_SOURCE !== "sse" || !sel || sel.hidden) return out;
+  for (var i = 0; i < sel.options.length; i++) {
+    out.push({ id: sel.options[i].value, label: sel.options[i].textContent });
+  }
+  return out;
+}
+function startModelRace(promptText) {
+  if (UI.busy) { announce("busy — wait for the current run"); return; }
+  if (TELEMETRY_SOURCE !== "sse") { announce("model race needs the live backend"); return; }
+  var models = raceModelList();
+  if (models.length < 2) { announce("model race needs a backend serving several models"); return; }
+  promptText = (promptText || "").replace(/\s+$/g, "");
+  if (!promptText) { announce("type a prompt in the composer first — the race sends it to every model"); return; }
+  var nGen = clampNGen($("nGen").value);
+  var ov = $("raceOverlay"), lanes = $("raceLanes");
+  $("raceNote").textContent =
+    "The SAME text, sent verbatim to each model with greedy decoding (no chat template, no sampling — a " +
+    "fair, deterministic comparison), strictly one after another: the GPU runs one verified generation at " +
+    "a time, so the queue you watch is the real execution order. n_gen " + nGen +
+    " per model. Results are NOT added to the conversation. Closing this panel cancels the race.";
+  lanes.innerHTML = "";
+  var ui = [];
+  for (var i = 0; i < models.length; i++) {
+    var st = el("span", { class: "rl-status" }, "queued (single-flight GPU)");
+    var tx = el("div", { class: "rl-text" }, "");
+    var lane = el("div", { class: "race-lane" }, [
+      el("div", { class: "rl-name" }, models[i].label), st, tx
+    ]);
+    lanes.appendChild(lane);
+    ui.push({ lane: lane, st: st, tx: tx });
+  }
+  ov.hidden = false;
+  setBusy(true);
+  var op = { onAbort: function () { ov.hidden = true; } };
+  QUIET.op = op;
+  var idx = 0;
+  function next() {
+    if (QUIET.op !== op) return;
+    if (idx >= models.length) {
+      QUIET.op = null;
+      setBusy(false);
+      announce("model race finished");
+      return;
+    }
+    var m = models[idx], u = ui[idx];
+    idx++;
+    var got = 0;
+    u.st.textContent = "running… (REAL call)";
+    op.cancel = dtCall(promptText, nGen, { params: null, model: m.id }, function (d) {
+      got++;
+      u.tx.textContent += (d.string != null ? d.string : "");
+      u.st.textContent = "running… " + got + " tok";
+    }, function (st2) { u.st.textContent = st2; }, function (err, res) {
+      if (QUIET.op !== op) return;
+      if (err) {
+        u.st.textContent = "failed: " + (err.message || "error");
+        next();
+        return;
+      }
+      var d = res.done || {};
+      u.lane.classList.add("done");
+      u.st.textContent = "done · " + d.n_gen + " tok · " + d.seconds + " s · " + d.tok_per_s + " tok/s";
+      next();
+    });
+  }
+  next();
+}
+
+/* ---------------- TOOLS-LITE (calculator / dates / units) -------------- */
+/* shunting-yard expression evaluator — numbers, + - * / % ^, parens, unary
+   minus. Hand-written: NO eval(), NO Function(). Throws on bad input. */
+function calcEvaluate(src) {
+  var toks = [], i = 0, s = String(src);
+  while (i < s.length) {
+    var ch = s[i];
+    if (ch === " " || ch === "\t") { i++; continue; }
+    if (/[0-9.]/.test(ch)) {
+      var m = /^\d*\.?\d+(?:[eE][+-]?\d+)?/.exec(s.slice(i));
+      if (!m) throw new Error("bad number at position " + i);
+      toks.push({ t: "num", v: parseFloat(m[0]) });
+      i += m[0].length;
+      continue;
+    }
+    if ("+-*/%^()".indexOf(ch) !== -1) { toks.push({ t: ch }); i++; continue; }
+    if (ch === "×") { toks.push({ t: "*" }); i++; continue; }
+    if (ch === "÷") { toks.push({ t: "/" }); i++; continue; }
+    if (ch === ",") { i++; continue; }
+    throw new Error("unsupported character “" + ch + "”");
+  }
+  /* shunting-yard to RPN; "u-" is unary minus (right-assoc, highest prec) */
+  var out = [], ops = [], prev = null;
+  var PREC = { "u-": 4, "^": 3, "*": 2, "/": 2, "%": 2, "+": 1, "-": 1 };
+  var RIGHT = { "u-": true, "^": true };
+  for (i = 0; i < toks.length; i++) {
+    var tk = toks[i];
+    if (tk.t === "num") { out.push(tk); prev = "num"; continue; }
+    if (tk.t === "(") { ops.push(tk.t); prev = "("; continue; }
+    if (tk.t === ")") {
+      while (ops.length && ops[ops.length - 1] !== "(") out.push({ t: ops.pop() });
+      if (!ops.length) throw new Error("unbalanced )");
+      ops.pop();
+      prev = "num";
+      continue;
+    }
+    var op = tk.t;
+    if (op === "-" && prev !== "num") op = "u-";
+    if (op === "+" && prev !== "num") { prev = null; continue; } /* unary plus: no-op */
+    while (ops.length) {
+      var top = ops[ops.length - 1];
+      if (top === "(") break;
+      if (PREC[top] > PREC[op] || (PREC[top] === PREC[op] && !RIGHT[op])) out.push({ t: ops.pop() });
+      else break;
+    }
+    ops.push(op);
+    prev = null;
+  }
+  while (ops.length) {
+    var rest = ops.pop();
+    if (rest === "(") throw new Error("unbalanced (");
+    out.push({ t: rest });
+  }
+  /* evaluate RPN */
+  var st = [];
+  for (i = 0; i < out.length; i++) {
+    var o = out[i];
+    if (o.t === "num") { st.push(o.v); continue; }
+    if (o.t === "u-") {
+      if (!st.length) throw new Error("misplaced minus");
+      st.push(-st.pop());
+      continue;
+    }
+    if (st.length < 2) throw new Error("incomplete expression");
+    var b = st.pop(), a = st.pop();
+    if (o.t === "+") st.push(a + b);
+    else if (o.t === "-") st.push(a - b);
+    else if (o.t === "*") st.push(a * b);
+    else if (o.t === "/") { if (b === 0) throw new Error("division by zero"); st.push(a / b); }
+    else if (o.t === "%") { if (b === 0) throw new Error("modulo by zero"); st.push(a % b); }
+    else if (o.t === "^") st.push(Math.pow(a, b));
+  }
+  if (st.length !== 1) throw new Error("incomplete expression");
+  if (!isFinite(st[0])) throw new Error("result is not finite");
+  return st[0];
+}
+function calcFormat(x) {
+  var r = +(+x).toPrecision(12);
+  return String(r);
+}
+function insertToolBlock(text) {
+  var input = $("promptInput");
+  input.value = (input.value ? input.value.replace(/\s+$/g, "") + "\n" : "") + text;
+  input.dispatchEvent(new Event("input"));
+  autoGrowComposer();
+  openTools(false);
+  focusComposer();
+  announce("tool result inserted into your message — visible to you and (when you send) to the model");
+}
+function openTools(open) {
+  var ov = $("toolsOverlay");
+  if (!ov) return;
+  if (open) {
+    UI.toolsPrevFocus = document.activeElement;
+    ov.hidden = false;
+    var rb = $("raceStart");
+    if (rb) {
+      var n = raceModelList().length;
+      rb.disabled = !(TELEMETRY_SOURCE === "sse" && n > 1);
+      rb.title = rb.disabled ? "needs the live backend serving several models" : "";
+    }
+    $("toolsClose").focus();
+  } else {
+    ov.hidden = true;
+    if (UI.toolsPrevFocus && UI.toolsPrevFocus.focus) { try { UI.toolsPrevFocus.focus(); } catch (e) { /* gone */ } }
+  }
+}
+
+/* ---------------- MEMORY PINS ------------------------------------------ */
+var PINS_LS_KEY = "helix_pins_v1";
+var PINS = { items: [] };
+function loadPins() {
+  try {
+    var j = JSON.parse(lsGet(PINS_LS_KEY) || "null");
+    if (Array.isArray(j)) PINS.items = j.filter(function (x) { return typeof x === "string" && x; });
+  } catch (e) { PINS.items = []; }
+}
+function savePins() { try { lsSet(PINS_LS_KEY, JSON.stringify(PINS.items)); } catch (e) { /* quota */ } }
+function renderPins() {
+  var row = $("pinsRow");
+  if (!row) return;
+  row.innerHTML = "";
+  row.hidden = !PINS.items.length;
+  if (!PINS.items.length) { updateCtxInfo(); return; }
+  row.appendChild(el("span", { class: "pins-lbl",
+    title: "pinned facts ride the ChatML system turn — instruct models only (base GPT-2 has no system " +
+      "prompt and never sees them). They consume context budget like any other text." },
+    "📌 pins → system prompt (instruct models only):"));
+  for (var i = 0; i < PINS.items.length; i++) {
+    (function (i) {
+      var x = el("button", { type: "button", "aria-label": "remove this pin" }, "✕");
+      x.addEventListener("click", function () {
+        PINS.items.splice(i, 1);
+        savePins();
+        renderPins();
+      });
+      row.appendChild(el("span", { class: "pin-chip", title: PINS.items[i] },
+        [el("span", { class: "pc-t" }, PINS.items[i]), x]));
+    })(i);
+  }
+  updateCtxInfo();
+}
+function addPin(text) {
+  text = (text || "").trim();
+  if (!text) return;
+  if (PINS.items.length >= 8) { announce("pin limit (8) — remove one first; pins consume context budget"); return; }
+  PINS.items.push(text.slice(0, 200));
+  savePins();
+  renderPins();
+  announce("pinned — will ride the system prompt on instruct models");
+}
+function pinSelection() {
+  var sel = window.getSelection ? String(window.getSelection()) : "";
+  sel = sel.trim();
+  if (!sel) { announce("select some text in the transcript first, then pin it"); return; }
+  addPin(sel);
+}
+
+/* ---------------- RAG-LITE (tiny bundled corpus, keyword match) -------- */
+/* Every excerpt below is copied VERBATIM from the named repo file. */
+var RAG_DOCS = [
+  { src: "README.md", text: "A source-available, fully auditable programming language whose entire compiler is rebuildable from 299 hand-typed bytes — and runs real neural networks on the GPU, verifiably." },
+  { src: "README.md", text: "The bootstrap chain begins with hand-encoded bytes you can audit one at a time: `hex0` (299 hand-authored hex bytes) → `hex1` → `hex2` → `catm` → `M0` → `cc_amd64` → `M2-Planet` → `seed` (a C-subset bootstrap compiler) → `kovc` (the Helix compiler, written *in Helix*)." },
+  { src: "README.md", text: "**Self-hosting, proven byte-identical.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-for-byte** — the compiler written in Helix reproduces itself exactly." },
+  { src: "README.md", text: "An independent `gcc` lineage (zero M2-Planet ancestry) and the from-raw build produce a **byte-identical** seed/`K1` — a Wheeler diverse-double-compile. `gcc` is only an *auditor*, never the shipped root." },
+  { src: "README.md", text: "**GPU performance is ~50–67% of cuBLAS, NOT parity** (reference RTX 3070 Laptop, sm_86). Helix emits correct, reasonably-performant kernels; it does **not** beat NVIDIA's hand-tuned library." },
+  { src: "README.md", text: "**Live chat (GPT-2-XL on Helix):** `bash scripts/serve_chat_demo.sh`, then open <http://127.0.0.1:8848/?source=sse>. Bound to `127.0.0.1`; gated green by `scripts/helix_serve_gate.sh`." },
+  { src: "README.md", text: "**One-command attestation:** `bash scripts/gpt2_demo_attest.sh` — fail-closed; rebuilds the compiler from raw, runs GPT-2 124M through kovc-emitted kernels token-for-token vs the oracle, re-runs byte-identical, and writes a signed attestation." },
+  { src: "docs/TRUST_CHAIN_CLOSED.md", text: "the toolchain is **reproducible from a hand-typed root, self-hosting, defended against a trusting-trust attack at the `seed→K1` rung, demonstrably capable, and Python-free** — verified by independent and reproducible means, **with the residuals in §R disclosed.**" },
+  { src: "docs/TRUST_CHAIN_CLOSED.md", text: "**Complete to PTX, not SASS:** the GPU path is hand-auditable `hex0 → PTX`; NVIDIA's closed `ptxas` + driver + the CUDA-driver-FFI host launcher are trusted past PTX. Single GPU target (sm_86)." },
+  { src: "docs/TRUST_CHAIN_CLOSED.md", text: "**Python-free toolchain.** Exactly **one** committed `.py` (a fenced numpy audit oracle, never on the compile/run path); compiler + runtime are Helix + a small hand-authored C subset (24 `.c`/`.h`)." },
+  { src: "docs/HELIX_V1_DEFINITION_OF_DONE.md", text: "A small but real transformer language model (≥ 2 attention layers) trains end-to-end on a GPU, entirely in Helix-native — with ZERO Python in the training loop — on a toolchain bootstrapped from raw binary (hex0 → seed → kovc) and diverse-double-compile-verified, and it converges to results matching a trusted reference: final training loss within 2% of an **independent numpy oracle** on a fixed dataset / config / seed, with eval-metric parity." },
+  { src: "docs/HELIX_V1_DEFINITION_OF_DONE.md", text: "A 2-layer pre-norm transformer (V=32, d=16, S=16, 1 head, MLP H=64, NL=2) trains end-to-end on the RTX 3070 in pure Helix-native: all 15 math kernels (forward, full backward, Adam) are **kovc-emitted PTX**, with **zero Python in the training loop**. Adam K=500: loss 62.35 → 0.42." }
+];
+function ragTokenize(s) { return String(s).toLowerCase().match(/[a-z0-9]+/g) || []; }
+function ragSearch(query) {
+  /* BM25-ish: idf-weighted term overlap with tf saturation — honest label:
+     keyword match over a 12-excerpt corpus, nothing semantic. */
+  var qt = ragTokenize(query);
+  if (!qt.length) return [];
+  var N = RAG_DOCS.length, df = {}, docToks = [];
+  var i, j;
+  for (i = 0; i < N; i++) {
+    var tf = {};
+    var toks = ragTokenize(RAG_DOCS[i].text + " " + RAG_DOCS[i].src);
+    for (j = 0; j < toks.length; j++) tf[toks[j]] = (tf[toks[j]] || 0) + 1;
+    docToks.push(tf);
+    var seen = {};
+    for (j = 0; j < toks.length; j++) {
+      if (!seen[toks[j]]) { seen[toks[j]] = 1; df[toks[j]] = (df[toks[j]] || 0) + 1; }
+    }
+  }
+  var scoredDocs = [];
+  for (i = 0; i < N; i++) {
+    var sc = 0;
+    for (j = 0; j < qt.length; j++) {
+      var t = qt[j];
+      var f = docToks[i][t] || 0;
+      if (!f) continue;
+      var idf = Math.log(1 + (N - (df[t] || 0) + 0.5) / ((df[t] || 0) + 0.5));
+      sc += idf * (f / (f + 1.2));
+    }
+    if (sc > 0) scoredDocs.push({ doc: RAG_DOCS[i], score: +sc.toFixed(3) });
+  }
+  scoredDocs.sort(function (a, b) { return b.score - a.score; });
+  return scoredDocs.slice(0, 2);
+}
+
+/* ---------------- SUMMARIZE-AND-CONTINUE -------------------------------- */
+function compressEligible() {
+  if (TELEMETRY_SOURCE !== "sse" || UI.busy || !carryEnabled()) return false;
+  var path = convoPath(), pairs = 0;
+  for (var i = 0; i + 1 < path.length; i++) {
+    if (path[i].role === "user" && path[i + 1].role === "assistant" && path[i + 1].text) pairs++;
+  }
+  if (pairs < 2) return false;
+  var est = isChatModel() ? estTokens(buildChatML(UI.chatTurns, "")) : estTokens(UI.contextText);
+  return est > MAX_CTX_TOKENS - 120;
+}
+function renderCompressOffer() {
+  var old = $("ctxCompress");
+  if (old) old.remove();
+  if (!compressEligible()) return;
+  var host = $("ctxInfo");
+  if (!host || !host.parentNode) return;
+  var b = el("button", { class: "ctx-clear ctx-compress", id: "ctxCompress", type: "button",
+    title: "a REAL model call summarizes the older turns; they are replaced by a visibly-labeled [summary] " +
+      "turn so the carry fits the budget. The original conversation stays reachable as a branch." },
+    "✂ compress older turns (real model call)");
+  b.addEventListener("click", runSummarizeCompress);
+  host.parentNode.insertBefore(b, host.nextSibling);
+}
+function runSummarizeCompress() {
+  if (UI.busy || TELEMETRY_SOURCE !== "sse") return;
+  var path = convoPath(), pairs = [];
+  for (var i = 0; i + 1 < path.length; i++) {
+    if (path[i].role === "user" && path[i + 1].role === "assistant" && path[i + 1].text) {
+      pairs.push({ u: path[i], a: path[i + 1] });
+    }
+  }
+  if (pairs.length < 2) return;
+  var keep = pairs[pairs.length - 1];
+  var older = pairs.slice(0, pairs.length - 1);
+  var txt = "";
+  for (i = 0; i < older.length; i++) {
+    txt += "User: " + older[i].u.text + "\nAssistant: " + older[i].a.text + "\n\n";
+  }
+  var prompt = isChatModel()
+    ? buildChatML([], "Summarize this conversation in at most 80 words. Keep names, facts and numbers.\n\n" + txt,
+        "You are a precise summarizer.")
+    : txt + "A short summary of the conversation above:";
+  setBusy(true);
+  showCtxCutNote("⏳ compressing " + older.length + " older turn(s) — a REAL model call is summarizing them now…");
+  var op = { onAbort: function () { showCtxCutNote("compression cancelled — nothing was changed."); } };
+  QUIET.op = op;
+  op.cancel = dtCall(prompt, 72, { params: null }, null,
+    function (st) { showCtxCutNote(st); },
+    function (err, res) {
+      if (QUIET.op !== op) return;
+      QUIET.op = null;
+      setBusy(false);
+      if (err) {
+        showCtxCutNote("compression failed (" + (err.message || "error") + ") — nothing was changed.");
+        return;
+      }
+      var summary = dtClean(res.text).trim();
+      if (!summary) { showCtxCutNote("the model returned an empty summary — nothing was changed."); return; }
+      /* new branch from the ROOT: a visibly-labeled [summary] pair, then a
+         COPY of the most recent turn. The original full conversation stays
+         reachable via the ‹ › pager on the first turn. */
+      var sumU = convoAddNode(null, "user",
+        "[summary] compress " + older.length + " older turn(s) — requested from the toolbar");
+      var sumA = convoAddNode(sumU.id, "assistant", summary);
+      sumA.meta = {
+        source: TELEMETRY_SOURCE, model: currentModelLabel(),
+        modelId: UI.selectedModel || RUNBOOK.model,
+        n_gen: res.done ? res.done.n_gen : null, seconds: res.done ? res.done.seconds : null,
+        params: { temperature: 0, mode: "greedy (verified default)" },
+        summary: { replaced: older.length }
+      };
+      var cpU = convoAddNode(sumA.id, "user", keep.u.text);
+      var cpA = convoAddNode(cpU.id, "assistant", keep.a.text);
+      cpA.meta = JSON.parse(JSON.stringify(keep.a.meta || {}));
+      cpA.meta.copiedFrom = keep.a.id;
+      CONVO.leaf = cpA.id;
+      rebuildCarryFromPath();
+      updateCtxInfo();
+      saveCurrentChat();
+      renderPath();
+      showCtxCutNote("✂ compressed: " + older.length + " older turn(s) replaced by a labeled [summary] turn " +
+        "(REAL model call, " + (res.done ? res.done.n_gen : "?") + " tok). The original conversation is still " +
+        "reachable via the ‹ › pager on the first turn.");
+      announce("older turns compressed into a labeled summary");
+    });
+}
+
+/* ---------------- availability + wiring -------------------------------- */
+function applyW12Availability() {
+  var live = (TELEMETRY_SOURCE === "sse");
+  var dm = $("dtMode");
+  if (dm) {
+    if (!live && DT.mode !== "normal") { DT.mode = "normal"; dm.value = "normal"; }
+    dm.disabled = !live || UI.busy;
+    dm.title = live
+      ? "deep-think: orchestrates several REAL sequential generations per turn (single-flight GPU — visible progress, visible total compute; all candidates shown)"
+      : "needs the live backend — deep-think orchestrates REAL calls, and there is nothing real to orchestrate in " + (TELEMETRY_SOURCE === "replay" ? "replay" : "mock") + " mode";
+  }
+  var lb = $("lensBtn");
+  if (lb) {
+    var ok = live && SPEED.mode !== "fast";
+    if (!ok && LENS.on) setLens(false);
+    lb.disabled = !ok || UI.busy;
+    lb.title = !live
+      ? "needs the live backend — the lens decodes the REAL residual stream; there is nothing real to decode in " + (TELEMETRY_SOURCE === "replay" ? "replay" : "mock") + " mode"
+      : (SPEED.mode === "fast" ? "lens needs glass box — the fast path skips per-layer instrumentation"
+                               : (LENS.on ? LENS_TITLE_ON : LENS_TITLE_OFF));
+  }
+}
+function initW12() {
+  var dm = $("dtMode");
+  if (dm) dm.addEventListener("change", function () { DT.mode = dm.value; });
+  var lb = $("lensBtn");
+  if (lb) lb.addEventListener("click", function () { if (!lb.disabled) setLens(!LENS.on); });
+  /* lens overlay */
+  var lov = $("lensOverlay");
+  $("lensClose").addEventListener("click", function () { lov.hidden = true; });
+  lov.addEventListener("click", function (e) { if (e.target === lov) lov.hidden = true; });
+  lov.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.stopPropagation(); lov.hidden = true; return; }
+    trapFocusIn(lov, e);
+  });
+  /* race overlay (closing cancels the race) */
+  var rov = $("raceOverlay");
+  function closeRace() {
+    if (QUIET.op && UI.busy) quietAbort();
+    rov.hidden = true;
+  }
+  $("raceClose").addEventListener("click", closeRace);
+  rov.addEventListener("click", function (e) { if (e.target === rov) closeRace(); });
+  rov.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.stopPropagation(); closeRace(); return; }
+    trapFocusIn(rov, e);
+  });
+  /* tools drawer */
+  var tov = $("toolsOverlay");
+  $("toolsBtn").addEventListener("click", function () { openTools(true); });
+  $("toolsClose").addEventListener("click", function () { openTools(false); });
+  tov.addEventListener("click", function (e) { if (e.target === tov) openTools(false); });
+  tov.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.stopPropagation(); openTools(false); return; }
+    trapFocusIn(tov, e);
+  });
+  /* calculator */
+  function runCalc() {
+    var expr = $("tcExpr").value;
+    var out = $("tcOut"), ins = $("tcInsert");
+    try {
+      var v = calcFormat(calcEvaluate(expr));
+      out.textContent = expr + " = " + v;
+      out.hidden = false;
+      ins.hidden = false;
+      ins.onclick = function () { insertToolBlock("[tool: calculator] " + expr.trim() + " = " + v); };
+    } catch (e) {
+      out.textContent = "cannot compute: " + e.message;
+      out.hidden = false;
+      ins.hidden = true;
+    }
+  }
+  $("tcRun").addEventListener("click", runCalc);
+  $("tcExpr").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); runCalc(); } });
+  /* dates */
+  var WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  function dateOut(msg, insText) {
+    var out = $("tdOut"), ins = $("tdInsert");
+    out.textContent = msg;
+    out.hidden = false;
+    ins.hidden = false;
+    ins.onclick = function () { insertToolBlock(insText); };
+  }
+  $("tdDiff").addEventListener("click", function () {
+    var a = $("tdA").value, b = $("tdB").value;
+    if (!a || !b) { $("tdOut").textContent = "pick both dates"; $("tdOut").hidden = false; $("tdInsert").hidden = true; return; }
+    var days = Math.round((Date.parse(b + "T00:00:00Z") - Date.parse(a + "T00:00:00Z")) / 86400000);
+    var msg = a + " → " + b + " = " + days + " day(s); " + b + " is a " + WD[new Date(b + "T00:00:00Z").getUTCDay()];
+    dateOut(msg, "[tool: dates] " + msg);
+  });
+  $("tdAdd").addEventListener("click", function () {
+    var n = parseInt($("tdN").value, 10) || 0;
+    var d = new Date();
+    d.setUTCDate(d.getUTCDate() + n);
+    var iso = d.toISOString().slice(0, 10);
+    var msg = "today + " + n + " day(s) = " + iso + " (" + WD[d.getUTCDay()] + ")";
+    dateOut(msg, "[tool: dates] " + msg);
+  });
+  /* units */
+  var UNITS = {
+    "km-mi": { f: function (v) { return v * 0.621371; }, l: "km → miles" },
+    "mi-km": { f: function (v) { return v * 1.609344; }, l: "miles → km" },
+    "kg-lb": { f: function (v) { return v * 2.2046226218; }, l: "kg → lb" },
+    "lb-kg": { f: function (v) { return v * 0.45359237; }, l: "lb → kg" },
+    "c-f":   { f: function (v) { return v * 9 / 5 + 32; }, l: "°C → °F" },
+    "f-c":   { f: function (v) { return (v - 32) * 5 / 9; }, l: "°F → °C" },
+    "cm-in": { f: function (v) { return v / 2.54; }, l: "cm → inches" },
+    "in-cm": { f: function (v) { return v * 2.54; }, l: "inches → cm" }
+  };
+  $("tuRun").addEventListener("click", function () {
+    var v = parseFloat($("tuVal").value);
+    var k = $("tuKind").value;
+    var out = $("tuOut"), ins = $("tuInsert");
+    if (isNaN(v) || !UNITS[k]) { out.textContent = "enter a number"; out.hidden = false; ins.hidden = true; return; }
+    var msg = v + " " + UNITS[k].l.split(" → ")[0] + " = " + calcFormat(UNITS[k].f(v)) + " " + UNITS[k].l.split(" → ")[1];
+    out.textContent = msg;
+    out.hidden = false;
+    ins.hidden = false;
+    ins.onclick = function () { insertToolBlock("[tool: units] " + msg + " (" + UNITS[k].l + ")"); };
+  });
+  /* pins */
+  $("tpAdd").addEventListener("click", function () {
+    addPin($("tpFact").value);
+    $("tpFact").value = "";
+  });
+  $("tpFact").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); addPin($("tpFact").value); $("tpFact").value = ""; }
+  });
+  loadPins();
+  renderPins();
+  /* RAG-lite */
+  function runRag() {
+    var q = $("trQ").value;
+    var hits = ragSearch(q);
+    var box = $("trHits"), ins = $("trInsert");
+    box.innerHTML = "";
+    if (!hits.length) {
+      box.appendChild(el("div", { class: "tools-out" }, "no keyword match in the 12-excerpt corpus (this is honest keyword search, not semantic)"));
+      ins.hidden = true;
+      return;
+    }
+    for (var i = 0; i < hits.length; i++) {
+      box.appendChild(el("div", { class: "rag-hit" }, [
+        el("span", { class: "rh-src" }, "[retrieved from " + hits[i].doc.src + "] · keyword score " + hits[i].score),
+        el("span", { class: "rh-txt" }, "“" + hits[i].doc.text + "”")
+      ]));
+    }
+    ins.hidden = false;
+    ins.onclick = function () {
+      var blocks = "";
+      for (var j = 0; j < hits.length; j++) {
+        blocks += "[retrieved from " + hits[j].doc.src + " — keyword match, verbatim excerpt]\n\"" + hits[j].doc.text + "\"\n\n";
+      }
+      insertToolBlock(blocks + (q ? q.trim() : ""));
+    };
+  }
+  $("trRun").addEventListener("click", runRag);
+  $("trQ").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); runRag(); } });
+  /* race */
+  $("raceStart").addEventListener("click", function () {
+    openTools(false);
+    startModelRace($("promptInput").value);
+  });
+  applyW12Availability();
+}
+
 /* ----------------------------------------------------------------
    assistant-UX boot — called from the main boot() below
    ---------------------------------------------------------------- */
@@ -6350,6 +8124,7 @@ function initAssistantUX() {
   $("chatsBtn").addEventListener("click", function () { openChats(true); });
   $("themeBtn").addEventListener("click", toggleTheme);
   $("genSettingsBtn").addEventListener("click", function () { openGenSettings(true); });
+  initW12();          /* deep-think · lens · reproduce · race · tools · pins (2026-06 W12) */
   autoGrowComposer();
   updateJumpPill();
 }

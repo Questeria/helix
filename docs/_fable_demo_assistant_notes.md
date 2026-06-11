@@ -26,3 +26,20 @@
 6. **Deferred honestly (state, don't bury):** worker-side stop-sequences (the page sends
    stop[] but the worker ignores unknown fields -- harmless until implemented); token-event
    alts/p/H telemetry (the page renders them only when present); waves 3-5 untouched.
+
+7. **The logit lens gates clean at top-1 granularity.** Per-layer argmax through the real
+   final-norm + head matched the oracle on all 32 layers first try (G-LENS) -- mid-network
+   margins are large enough that the ~1e-5 fp32 divergence never flips a layer's top-1
+   (unlike sampled CDF boundaries). Top-1-per-layer is the right gate granularity.
+
+8. **The kernel-tool sandbox is honest about what it does NOT prove.** It proves the
+   from-raw pipeline runs model-written code (compile + ptxas + bounded launch); it does
+   NOT verify the kernel computes anything correct (no auto-derivable reference for
+   arbitrary kernels) -- the output is labeled raw. Defense layers + residual risks are
+   documented IN the script for the security audit; the endpoint is 403 unless
+   --tool-kernel 1.
+
+9. **Deep-think honesty hinges on small disclosures:** sampled candidates at temp .8 even
+   when the user set 0 (disclosed in-panel; identical greedy samples would be theater);
+   ToT replies span 2 calls so they get no reproduce button (no single request re-derives
+   them); the 409 status never claims a queue position (single-flight is the truth).

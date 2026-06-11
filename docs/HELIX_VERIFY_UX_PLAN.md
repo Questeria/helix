@@ -171,3 +171,81 @@ energy figure would be invented. Saved chats/prompts/settings are localStorage-o
 sidebar says so. Replay turns never offer continue/regenerate/edit (replaying the capture is
 the only honest re-run). /api/verify semantics are untouched: no live PASS is ever rendered
 client-side.
+
+## 8. Deep-think + glass-box viewers (2026-06, fable/demo-assistant-w12) - integration contracts
+
+Page 1 now carries HONEST deep-think modes and glass-box viewers. Everything orchestrates REAL
+/api/generate calls or consumes REAL additive SSE fields; nothing is simulated anywhere.
+
+Backend contract consumed (additive on the existing "token" event; absent = render nothing):
+
+- every token event: {p, H, alts:[[id,piece,prob] x5]} - real host-side stats of the live logits
+  (already consumed by W1 confidence shading; W12 reuses, never duplicates).
+- request field "lens":1 (sent ONLY when the user enables Lens mode AND live AND glass box):
+  DECODE-step token events additionally carry "lens":[[ [id,p] x5 ] per layer] (the logit lens:
+  the residual decoded through the real final-norm+head after every layer) and
+  "attn":[[ [pos,weight] x8 ] per head, last layer]. Prefill (first token) has no lens fields -
+  the viewer says so. Lens parity has its own gate leg (G-LENS). Lens is SLOWER and labeled so.
+- "stop":[...] now actually stops generation server-side (the page already sent it).
+
+Features and their honesty contracts:
+
+- DEEP-THINK selector (#dtMode, next to the model switcher; live-only, disabled elsewhere with
+  an honest tooltip): normal / best-of-3 / best-of-5 / self-consistency x3 / x5 / critique&revise
+  / tree-of-thought. Each mode runs REAL sequential calls (single-flight GPU; visible "sample k
+  of N" progress). 409-busy during orchestration = the SAME backoff+jitter retry discipline as
+  the single-turn busy-wait (queue of one, no invented position numbers). All candidates + seeds
+  + scores are recorded on the reply node (meta.deepthink) and rendered in a collapsible panel;
+  the visible think-budget line sums n_gen + seconds across ALL calls. Sampled modes need
+  /api/health "sampling":true (refused honestly otherwise); a user temperature of 0 is bumped to
+  0.8 for candidate sampling and DISCLOSED in the panel. Deep-think forces glass box (visible
+  toggle switch) because the scorer needs the per-token p fields. Scorer: mean of ln(p) over the
+  reply tokens; when p fields are absent the panel says "no scorer available" and shows the
+  candidates unscored. Self-consistency votes on the last non-empty line (labeled heuristic,
+  small-model framing). Critique&revise = 3 greedy calls (draft/critique/revision, templated
+  prompts shown verbatim; labeled "a 360M model's critiques are shallow - this shows the
+  technique"). Tree-of-thought = 3 sampled ~24-token stubs, user-or-auto pick, greedy extension;
+  rendered as a tree and labeled sequential best-first search, never "parallel beams".
+- LENS mode (#lensBtn in the speed-toggle group; live + glass box only): adds "lens":1. Click a
+  token -> the existing W1 alternatives popover gains "layer-by-layer view" -> an overlay renders
+  rows = layers with top-5 [token,prob] per layer, starring the first layer where the final pick
+  becomes top-1, plus per-head attention chips (token text from the run's real context strings,
+  intensity = weight). Token text for lens ids comes ONLY from ids actually decoded this session
+  (tokenize/token/alts events feed an id->piece map); unknown ids render as raw #id - the browser
+  has no tokenizer and never invents text.
+- REPRODUCE-THIS-REPLY (per live reply with recorded gen_ids + request): re-sends the EXACT
+  {model, wire prompt, params incl. seed, n_gen}, byte-compares returned gen_ids; green
+  "reproduced byte-identical (same seed -> same tokens on this stack)" or red mismatch +
+  "report this". Labeled: proves REPRODUCIBILITY on this stack; the independent-oracle check is
+  the offline gate (link to the dashboard). Continued/stopped replies are multi-segment and
+  never offer it.
+- PROVENANCE RECEIPT (per live reply): downloads JSON {model, params, seed, wire prompt, gen_ids,
+  reply text, pinned trust anchors (seed sha 9837db12..., fixpoint 0992dddd..., kovc self-compile
+  698392 B, 299-byte seed)} - "everything needed to re-derive and re-verify this reply".
+- MODEL RACE (tools drawer + palette; live with models[] > 1): the same text VERBATIM to every
+  served model, strictly sequential (the visible queue IS the single-flight truth), greedy for a
+  fair deterministic comparison; per-model tok/s + honest size labels; never added to the convo.
+- TAMPER CARD (Why-Helix drawer): quotes scripts/_gate_sampling4.log's NEG-control lines verbatim
+  and states explicitly that this is committed OFFLINE gate evidence - no in-browser tamper run
+  is claimed.
+- TOOLS-LITE (#toolsBtn drawer): calculator (hand-written shunting-yard, no eval()), dates, unit
+  conversions, framed "the model cannot call tools - you can"; results insert as visible [tool]
+  blocks into the next user message.
+- MEMORY PINS: pinned facts ride the ChatML system turn (instruct models only - base models have
+  no system prompt and the chip row says so); visible chip row above the composer; pins consume
+  context budget like any text. Explicit-systemText calls (deep-think templates, summarizer)
+  skip pins by design.
+- SUMMARIZE-AND-CONTINUE: near the context budget, "compress older turns" runs a REAL model call
+  to summarize them; the carry switches to a visibly-labeled [summary] branch (summary pair + a
+  copy of the latest turn) while the ORIGINAL conversation stays reachable via the root branch
+  pager. Fail/cancel = nothing changes, said visibly.
+- RAG-LITE (tools drawer): 12 excerpts copied VERBATIM from README.md / TRUST_CHAIN_CLOSED.md /
+  HELIX_V1_DEFINITION_OF_DONE.md with source paths, BM25-ish keyword scoring in-browser, top-2
+  inserted as visible "[retrieved from <path>]" blocks. Labeled: tiny corpus, keyword match,
+  shown verbatim - not semantic search.
+
+Invariants kept: SSE event names unchanged (only additive fields consumed); request bodies gain
+fields only behind their capability gates (sampling / lens / model / detail); fast mode stays a
+subset (deep-think/lens/reproduce force glass box VISIBLY); mock/replay keep working with the
+new controls disabled behind honest tooltips (deep-think, lens, reproduce, race are live-only);
+replay stays pinned; the model is never said to call tools; no CDNs; node --check green.
