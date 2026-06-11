@@ -13,8 +13,5 @@
   "dependencies": {
     "astro": "^5.7.0",
     "three": "0.160.1"
-  },
-  "devDependencies": {
-    "adm-zip": "^0.5.17"
   }
 }

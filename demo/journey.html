@@ -1305,7 +1305,7 @@ if (SOURCE === "sse") {
   segL.addEventListener("click", function () {
     if (SOURCE === "sse") return;
     if (segL.classList.contains("ready")) { go("sse"); return; }
-    ribbon('<b>No live backend yet.</b> Run <code>scripts/serve_chat_demo.sh</code> then reload, or see <a href="https://299bytes.com/run-local/">how to run it live</a> — meanwhile this is the recorded replay.');
+    ribbon('<b>No live backend yet.</b> Run <code>scripts/serve_chat_demo.sh</code> and reload to chat live — meanwhile this is the recorded replay.');
   });
   /* probe for a backend (any non-live mode) so Live can light up */
   if (SOURCE !== "sse") {

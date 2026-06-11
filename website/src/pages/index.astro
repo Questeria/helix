@@ -177,16 +177,11 @@ import Base from "../layouts/Base.astro";
         <div class="hero-text reveal">
           <span class="eyebrow">trust chain closed · v1.3 · source-available</span>
           <h1 class="hero-headline">A compiler that builds itself from <em>299 bytes</em> of hand-typed hex.</h1>
-          <p class="hero-sub">Helix is a from-scratch, ML-native systems language — autodiff, tile types and GPU codegen built into the language, bootstrapped from raw binary with no trusted pre-built compiler. And it runs real language models — a modern SmolLM2 chat model and GPT-2 — verified token-for-token. <strong>Download the interactive demo and run it offline in your browser.</strong></p>
+          <p class="hero-sub">Helix is a from-scratch, ML-native systems language — autodiff, tile types and GPU codegen built into the language, bootstrapped from raw binary with no trusted pre-built compiler. And it runs real language models — a modern SmolLM2 chat model and GPT-2 — verified token-for-token.</p>
           <div class="btn-row">
-            <a class="btn btn-download" href="/helix-demo.zip" download>
-              <svg class="dl-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5v8.5M8 10l3-3M8 10L5 7M2.5 11.5v1A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Download the demo
-            </a>
             <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
-            <a class="btn btn-ghost" href="/run-local/">Run it live</a>
+            <a class="btn btn-ghost" href="#bootstrap">Explore the bootstrap</a>
           </div>
-          <p class="hero-dl-note">The interactive demo runs offline in your browser — no install, no GPU. <a href="/run-local/">Want a real model live? Run it on your own machine →</a></p>
         </div>
 
         <div class="hero-3d" id="hero-3d" role="img" aria-label="3D rendering of a double helix — one strand carbon, one strand silicon"></div>
@@ -254,12 +249,6 @@ import Base from "../layouts/Base.astro";
             <h3>What “verified” means here</h3>
             <p>Independent numpy oracle, fail-closed gates, honest residuals — the precise claim, stated edge-first, and how a third party reproduces it.</p>
             <span class="lc-arrow">Verifiable execution →</span>
-          </a>
-          <a class="link-card" href="/run-local/">
-            <span class="lc-kicker">Download · run it yourself</span>
-            <h3>Run it on your machine</h3>
-            <p>Download the demo and open it offline in any browser, or serve a real model live on your own GPU — on a toolchain you rebuild from 299 bytes.</p>
-            <span class="lc-arrow">Run locally →</span>
           </a>
         </div>
 
