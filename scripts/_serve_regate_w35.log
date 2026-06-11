@@ -1,0 +1,50 @@
+=================== HELIX SERVE GATE  02:21:45 ===================
+=== [BUILD] mint XL PTX from raw seed (9837db12) + build serve worker + HTTP server ===
+  ext4 seed.bin sha=9837db12 (== pinned 9837db12)
+  PTX 44019 B, 8 .entry kernels (seed-minted)
+  built /tmp/gpt2_infer_serve + /tmp/gpt2_serve_http
+=== [OFFLINE] gpt2_scale.sh MODEL=gpt2-xl (the G1 token-for-token reference) ===
+  gpt2_scale.sh =================== VERDICT (gpt2-xl, mode: full-logits + token-for-token generation) ===================
+  gpt2_scale.sh xl: GPT2_SCALE_PARITY_PASS (PRIMARY full-logits + token-for-token -- genuine oracle anchor)
+  OFFLINE gen-ids (25): 464 3139 286 4881 318 262 1748 286 6342 13 632 318 262 3139 286 4881 290 262 4387 1748 287 4881 13 632 318
+=== [SERVER] start gpt2_serve_http (spawns the persistent --serve worker) ===
+  server pid=4608; waiting for worker GPT2_SERVE_READY (load XL weights + PTX)...
+  /api/health ready after ~4s: {"ok":true,"serve":true,"fast":true,"sampling":true,"model":"gpt2-xl","ready":true,"device":"","busy":false,"models":[{"model":"gpt2-xl","ready":true,"device":""}]}
+=== [G1] POST /api/generate {prompt:"The capital of France is", n_gen:20} -> capture SSE ===
+  SSE bytes: 2807383; event lines: 18343
+  --- SSE transcript (event histogram) ---
+          1 event: done
+         20 event: embed
+         20 event: forward_begin
+         40 event: head
+          1 event: hello
+        960 event: layer_begin
+        960 event: layer_end
+      16320 event: op
+         20 event: token
+          1 event: tokenize
+  --- done event ---
+    {"_ev":"done","seq":18342,"n_prompt":5,"n_gen":20,"n_total":25,"seconds":132.105,"tok_per_s":0.151,"text":" the city of Paris. It is the capital of France and the largest city in France. It is","gen_ids":[262,1748,286,6342,13,632,318,262,3139,286,4881,290,262,4387,1748,287,4881,13,632,318],"nonfinite":0}
+  SERVED  ids (prompt+gen, 25): 464 3139 286 4881 318 262 1748 286 6342 13 632 318 262 3139 286 4881 290 262 4387 1748 287 4881 13 632 318
+  --- sample token events (id + string + logit) ---
+    {"_ev":"tokenize","seq":1,"ids":[464,3139,286,4881,318],"strings":["The"," capital"," of"," France"," is"],"n_prompt":5,"s_pad":64}
+    {"_ev":"token","seq":918,"step":0,"id":262,"string":" the","logit":8.79165,"context_len":6,"p":0.10120,"H":5.352,"alts":[[262," the",0.10120],[257," a",0.09896],[6342," Paris",0.08632],[287," in",0.02491],[530," one",0.02353]]}
+    {"_ev":"token","seq":1835,"step":1,"id":1748,"string":" city","logit":9.49102,"context_len":7,"p":0.11110,"H":5.455,"alts":[[1748," city",0.11110],[749," most",0.05931],[4387," largest",0.05922],[4141," French",0.04211],[1218," second",0.04151]]}
+    {"_ev":"token","seq":2752,"step":2,"id":286,"string":" of","logit":12.81686,"context_len":8,"p":0.89674,"H":0.747,"alts":[[286," of",0.89674],[326," that",0.01151],[11,",",0.01003],[810," where",0.00828],[2346," itself",0.00821]]}
+    {"_ev":"token","seq":3669,"step":3,"id":6342,"string":" Paris","logit":12.99207,"context_len":9,"p":0.82445,"H":1.281,"alts":[[6342," Paris",0.82445],[35193," Lyon",0.03409],[45996," Marse",0.01013],[18460," Nice",0.00849],[347," B",0.00797]]}
+  G1 TOKEN_FOR_TOKEN_MATCH: served == offline gpt2_scale.sh (25/25 ids)
+=== [G7] single-flight: fire TWO concurrent /api/generate (expect one 200 stream + one 409) ===
+  request B (concurrent) HTTP status: 409  body: {"error":"busy"}
+  request A (first) HTTP status: 200
+  G7 PASS: one 200 stream + one 409 busy (no interleave)
+  server stopped
+=== [G-FIX] self-host fixpoint protected files byte-identical (git status) ===
+  protected fixpoint files CLEAN (kovc.hx/lexer.hx/parser.hx/train_transformer.c/seed.c byte-identical)
+=================== HELIX SERVE GATE VERDICT ===================
+  G-BUILD : PASS   (PTX minted + worker + server built, serial)
+  G-HEALTH: PASS   (/api/health ready: weights+PTX)
+  G1      : PASS   (served XL == offline gpt2_scale.sh token-for-token)
+  G7      : PASS   (single-flight: 200 + 409)
+  G-FIX   : PASS   (fixpoint protected files byte-identical)
+(done 02:38:08)
+HELIX_SERVE_GATE_PASS
