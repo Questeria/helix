@@ -274,6 +274,15 @@
   .transcript-empty .te-glyph { font-size: 30px; opacity: 0.5; margin-bottom: 10px; }
   .transcript-empty .te-title { color: var(--ink-dim); font-weight: 600; font-size: 15px; margin-bottom: 6px; }
   .transcript-empty .te-sub { font-size: 13px; line-height: 1.55; }
+  /* chat model: this empty box IS the response area ("your reply appears
+     here") — give it a subtle emerald frame so it reads as the place a reply
+     will land. On-brand (emerald/slate); no new colors. */
+  .transcript-empty.is-chat {
+    border: 1px dashed var(--accent-dim); border-radius: 12px;
+    background: var(--accent-bg); padding: 26px 18px;
+  }
+  .transcript-empty.is-chat .te-glyph { opacity: 0.65; color: var(--accent); }
+  .transcript-empty.is-chat .te-title { color: var(--ink-dim); }
 
   .turn { display: flex; flex-direction: column; gap: 5px; }
   .turn .turn-label {
@@ -1396,6 +1405,17 @@
     border-radius: 7px; font-family: var(--mono); font-size: 10.5px; padding: 3px 5px; max-width: 170px;
   }
   .dt-select:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* AI configuration preset — same dropdown look as think-mode/model, with an
+     emerald left edge marking it as the "macro" that drives the other controls.
+     On-brand (emerald/slate); no new colors. */
+  .preset-select {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--border-2);
+    border-left: 2px solid var(--accent-dim);
+    border-radius: 7px; font-family: var(--mono); font-size: 10.5px; padding: 3px 6px; max-width: 180px;
+    cursor: pointer;
+  }
+  .preset-select:hover { border-color: var(--accent-dim); }
+  .preset-select:disabled { opacity: 0.5; cursor: not-allowed; }
   .dt-panel {
     display: block; margin: 8px 0 2px; border: 1px solid var(--border); border-radius: var(--radius-sm);
     background: var(--panel-2); padding: 9px 11px; font-size: 12px; color: var(--ink-dim);
@@ -1633,6 +1653,16 @@
               <button class="sp-btn" id="speedFast" type="button" aria-pressed="false" disabled>fast</button>
               <button class="sp-btn" id="lensBtn" type="button" aria-pressed="false" disabled>lens</button>
             </span>
+            <select id="presetSelect" class="preset-select"
+              aria-label="AI configuration preset — sets several controls at once"
+              title="AI configuration presets — each one just bundles the existing controls below (model, think-mode, glass-box/fast, lens, n_tokens, sampling). Live-only bits apply only when the backend advertises them.">
+              <option value="balanced">preset: balanced</option>
+              <option value="max">preset: max effort</option>
+              <option value="fast">preset: fast</option>
+              <option value="reproducible">preset: reproducible</option>
+              <option value="inspect">preset: inspect</option>
+              <option value="custom" hidden>(custom)</option>
+            </select>
             <select id="dtMode" class="dt-select" disabled
               aria-label="Deep-think mode — orchestrates several real generations per turn"
               title="needs the live backend">
@@ -1674,7 +1704,7 @@
           <button class="ctx-clear" id="confToggle" type="button" aria-pressed="true">shading on</button>
         </div>
         <div class="composer">
-          <div class="conv-honesty">
+          <div class="conv-honesty" id="convHonesty">
             <b>Conversation = repeated completion with carried context.</b>
             Each turn re-sends the conversation so far as one completion prompt — the model itself is
             stateless between requests: a 2019 <b>base completion model, not an assistant</b>. The live
@@ -3291,7 +3321,11 @@ var handlers = {
     if (d.alts) for (var ai = 0; ai < d.alts.length; ai++) {
       if (d.alts[ai]) tokpieceLearn(d.alts[ai][0], d.alts[ai][1]);
     }
-    appendToken(d);
+    /* chat reply bubble: do not render ChatML control tokens (e.g. <|im_end|>, the stop
+       marker) as conversational content -- the raw token-stream panel below still shows
+       them (honest), and genText/node.text strip them at done. */
+    var _ctrlTok = (isChatModel() && TELEMETRY_SOURCE === "sse" && /^\s*<\|[^|]*\|>\s*$/.test(d.string || ""));
+    if (!_ctrlTok) appendToken(d);
     xpOnToken(d);
     /* token & throughput panel */
     UI.run.tokens++;
@@ -3599,7 +3633,7 @@ function addUserTurn(text) {
 function addModelTurn(prompt, carriedLen, trimmedChars) {
   var labelKids = [
     document.createTextNode(currentModelLabel()),
-    el("span", { class: "ml-pill" }, "continuation")
+    el("span", { class: "ml-pill" }, modelPillLabel())
   ];
   var promptEcho = el("span", { class: "prompt-echo" });
   if (trimmedChars > 0) {
@@ -4047,7 +4081,7 @@ function configureComposerForSource() {
   } else {
     input.disabled = false;
     ng.disabled = false; up.disabled = false; down.disabled = false;
-    send.textContent = "Continue";
+    send.textContent = sendBtnLabel();
     hint.textContent = "Enter ↵ run · Shift+Enter newline · Esc stop · ↑ edit last message · Ctrl/⌘-K commands";
     $("ctxCarry").disabled = false;
     $("ctxClear").disabled = false;
@@ -4061,6 +4095,9 @@ function configureComposerForSource() {
       ? "Replay mode can only replay the captured run (no backend connected)"
       : "";
   }
+  /* source changed -> re-apply model-aware framing (send button already set
+     above for the replay case; this also refreshes the empty state + honesty) */
+  refreshModelFraming();
 }
 
 /* ---- multi-turn context carry-over helpers ---- */
@@ -4139,6 +4176,73 @@ function setBusy(b) {
    the fail-closed gate verified token-for-token. Nothing is faked: the templated prompt
    is sent verbatim and shows up in the tokenize telemetry. */
 function isChatModel() { return !!(UI.selectedModel && /instruct/i.test(UI.selectedModel)); }
+
+/* ----------------------------------------------------------------
+   MODEL-AWARE FRAMING (2026-06). A base completion model (GPT-2)
+   genuinely CONTINUES your text, so it keeps the "Continue / continuation"
+   framing. Only an instruction-tuned model on the LIVE backend earns the
+   "Send / reply" framing — and even then it stays honest about being a
+   small (~360M) model. These helpers are the single source of truth for
+   every label that shifts with the selected model; refreshModelFraming()
+   re-applies them on model-switch and on source-change so the UI never
+   lies about what the active model will do. */
+function sendBtnLabel() { return isChatModel() ? "Send" : "Continue"; }
+function modelPillLabel() { return isChatModel() ? "reply" : "continuation"; }
+function emptyStateTitle() {
+  return isChatModel() ? "Send a message to get a reply" : "Give GPT-2 some text to continue";
+}
+function emptyStateSub() {
+  if (isChatModel()) {
+    return currentModelLabel() + " replies here, token by token, while the transformer layers and " +
+      "kovc kernels light up on the right. It is a small (~360M) instruction-tuned model — keep " +
+      "prompts simple.";
+  }
+  return "Pick a seed below or type your own. GPT-2-XL will continue it token-by-token while the " +
+    "48 transformer layers and kovc kernels light up on the right. It is a base model — expect " +
+    "continuations, not answers.";
+}
+/* the composer honesty line: TRUE for both kinds of model, just different
+   truths. Returned as an HTML string (matches the static markup's <b>/<code>). */
+function convHonestyHTML() {
+  if (isChatModel()) {
+    return "<b>Real instruction-tuned chat, used with its real chat template.</b> " +
+      "This is an actual instruction-tuned model — each message goes through the model's own " +
+      "<b>ChatML</b> chat template, and every completed turn is carried back inside that template " +
+      "so the conversation has memory. It is <b>small (~360M)</b>, so replies are short and simple. " +
+      "The live server caps the prompt at ~320 tokens (<code>--max-ctx</code>); when the carried " +
+      "turns would blow that budget, the <b>oldest turns drop first</b> and the page says so.";
+  }
+  return "<b>Conversation = repeated completion with carried context.</b> " +
+    "Each turn re-sends the conversation so far as one completion prompt — the model itself is " +
+    "stateless between requests: a 2019 <b>base completion model, not an assistant</b>. The live " +
+    "server caps the prompt at ~320 tokens (<code>--max-ctx</code>); when the carried text would " +
+    "blow that budget, the <b>oldest text is cut first</b> and the page says so.";
+}
+/* update the EMPTY STATE in place if it is currently shown (it is the
+   "your reply appears here" response area), so it always matches the model. */
+function applyEmptyStateFraming() {
+  var e = $("transcriptEmpty");
+  if (!e) return;
+  e.classList.toggle("is-chat", isChatModel());
+  var t = e.querySelector(".te-title");
+  if (t) t.textContent = emptyStateTitle();
+  var s = e.querySelector(".te-sub");
+  if (s) s.textContent = emptyStateSub();
+}
+function applyConvHonestyFraming() {
+  var c = $("convHonesty");
+  if (c) c.innerHTML = convHonestyHTML();
+}
+/* one call re-applies every model-dependent label. Safe in any source mode:
+   in mock/replay isChatModel() is false (no live instruct model), so the
+   base-model framing is preserved exactly. */
+function refreshModelFraming() {
+  var send = $("sendBtn");
+  if (send && TELEMETRY_SOURCE !== "replay") send.textContent = sendBtnLabel();
+  applyEmptyStateFraming();
+  applyConvHonestyFraming();
+}
+
 var CHAT_SYSTEM_DEFAULT = "You are a helpful AI assistant named SmolLM, trained by Hugging Face";
 /* mutable: the system-prompt editor / persona presets (chat models only) write
    this; base completion models have NO system prompt and never see it. */
@@ -4405,6 +4509,9 @@ function gateLiveReadiness() {
         populateModelSelect(j);
         applyFastAvailability(j);
         applySamplingAvailability();
+        /* now the backend capabilities are known (models/sampling/fast) — re-apply
+           the persisted preset so its live-only bits can actually take effect */
+        try { applyPresetAfterCapabilities(); } catch (e) { if (window.console) console.warn("preset re-apply", e); }
       } else {
         /* reachable worker, still warming (XL weights + PTX load) —
            honest connecting state + keep reconnecting for ~2 minutes */
@@ -5699,13 +5806,13 @@ function attachUserActions(turnEl, nodeIdStr) {
    RENDER the current path (branch switch / chat load / edit cancel)
    ---------------------------------------------------------------- */
 function buildEmptyState() {
-  return el("div", { class: "transcript-empty", id: "transcriptEmpty" }, [
+  /* model-aware: helpers pick "reply" vs "continuation" framing (honest in
+     every source mode — mock/replay have no live instruct model). The is-chat
+     class lets CSS lift the prominence of the response area for chat models. */
+  return el("div", { class: "transcript-empty" + (isChatModel() ? " is-chat" : ""), id: "transcriptEmpty" }, [
     el("div", { class: "te-glyph", "aria-hidden": "true" }, "⌨"),
-    el("div", { class: "te-title" }, "Give GPT-2 some text to continue"),
-    el("div", { class: "te-sub" },
-      "Pick a seed below or type your own. GPT-2-XL will continue it token-by-token while the " +
-      "48 transformer layers and kovc kernels light up on the right. It is a base model — expect " +
-      "continuations, not answers.")
+    el("div", { class: "te-title" }, emptyStateTitle()),
+    el("div", { class: "te-sub" }, emptyStateSub())
   ]);
 }
 function paintAssistantMetaRow(meta, n) {
@@ -5771,7 +5878,7 @@ function buildAssistantTurnDom(n) {
   var turn = el("div", { class: "turn model", "data-node": n.id }, [
     el("div", { class: "turn-label" }, [
       document.createTextNode(n.meta.model || "GPT-2-XL"),
-      el("span", { class: "ml-pill" }, "continuation")
+      el("span", { class: "ml-pill" }, modelPillLabel())
     ]),
     bubble, meta
   ]);
@@ -5913,7 +6020,11 @@ function renderNodeTextInto(contEl, node) {
     }
     for (var i = 0; i < node.tokens.length; i++) {
       var t = node.tokens[i];
-      var sp = el("span", null, t && t.string != null ? String(t.string) : "");
+      var ts = (t && t.string != null) ? String(t.string) : "";
+      /* chat reply: skip ChatML control tokens (the <|im_end|> stop marker) -- not content.
+         The raw token-stream panel still shows them; only the reply bubble is cleaned. */
+      if (node.meta && node.meta.echoMode === "chat" && /^\s*<\|[^|]*\|>\s*$/.test(ts)) continue;
+      var sp = el("span", null, ts);
       decorateConfidence(sp, t);
       contEl.appendChild(sp);
     }
@@ -6679,6 +6790,281 @@ function onModelChanged() {
   refreshSeedChips();
   applySystemSectionState();
   updateCtxInfo();
+  refreshModelFraming();   /* send button / empty state / honesty follow the model */
+}
+
+/* ================================================================
+   AI CONFIGURATION PRESETS (2026-06)
+   ----------------------------------------------------------------
+   A preset is purely a BUNDLE of the existing controls — it sets the
+   model / think-mode / glass-box-or-fast / lens / n_tokens / sampling
+   the same way a user would, by driving the REAL controls (value +
+   the event that runs their side-effects). Nothing new is sent on the
+   wire; nothing is faked. Live-only bits (sampling, fast, lens, model
+   switch) apply ONLY when the backend advertises them — otherwise the
+   preset sets what it can and notes the rest is live-only, so a preset
+   never throws or lies in mock/replay. The dropdown shows "(custom)"
+   the moment the user nudges any individual control, so it never
+   misrepresents the current state.
+   ================================================================ */
+var PRESET_LS_KEY = "helix_preset_v1";
+var PRESET_DEFAULT = "balanced";
+var PRESET_APPLYING = false;   /* guard: suppress custom-detection while we drive controls */
+var PRESET_IDS = { balanced: 1, max: 1, fast: 1, reproducible: 1, inspect: 1 };
+var PRESET_FIXED_SEED = 1234;  /* the "same input -> same output" seed for reproducible */
+
+/* parse a rough parameter size out of a served model id, e.g.
+   "smollm2-360m-instruct" -> 360, "gpt2-xl" (1.5b) -> 1500. Used only to
+   pick the LARGEST served instruct model; never shown as a claim. */
+function modelSizeRank(id) {
+  if (!id) return 0;
+  var s = String(id).toLowerCase();
+  var m = s.match(/(\d+(?:\.\d+)?)\s*b\b/);
+  if (m) return Math.round(parseFloat(m[1]) * 1000);
+  m = s.match(/(\d+(?:\.\d+)?)\s*m\b/);
+  if (m) return Math.round(parseFloat(m[1]));
+  if (/\bxl\b/.test(s)) return 1500;     /* gpt2-xl */
+  if (/\blarge\b/.test(s)) return 774;
+  return 0;
+}
+function servedModelIds() {
+  var h = UI.health;
+  if (!h || !h.models || !h.models.length) return [];
+  var out = [];
+  for (var i = 0; i < h.models.length; i++) {
+    var m = h.models[i], id = m && (m.id || m.model);
+    if (id) out.push(id);
+  }
+  return out;
+}
+function instructModelIds() {
+  return servedModelIds().filter(function (id) { return /instruct/i.test(id); });
+}
+/* "best" = the default-ish first served instruct model; "largest" = the
+   biggest by parsed size. Both return null when no instruct model is served
+   (e.g. mock/replay, or a base-only backend) so the preset leaves the model
+   control untouched and the live-only note covers it. */
+function bestInstructModelId() {
+  var ids = instructModelIds();
+  return ids.length ? ids[0] : null;
+}
+function largestInstructModelId() {
+  var ids = instructModelIds();
+  if (!ids.length) return null;
+  var best = ids[0], bestR = modelSizeRank(best);
+  for (var i = 1; i < ids.length; i++) {
+    var r = modelSizeRank(ids[i]);
+    if (r > bestR) { best = ids[i]; bestR = r; }
+  }
+  return best;
+}
+function modelSwitchAvailable() {
+  /* the switcher only exists when the live backend advertised a models[] list */
+  var sel = $("modelSelect");
+  return TELEMETRY_SOURCE === "sse" && sel && !sel.hidden && sel.options.length > 0;
+}
+
+/* ---- low-level control setters (set value + run the real side-effects) ---- */
+function presetSetModel(id) {
+  if (!id || !modelSwitchAvailable()) return false;
+  var sel = $("modelSelect");
+  var found = false;
+  for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === id) { found = true; break; } }
+  if (!found) return false;
+  sel.value = id;
+  sel.dispatchEvent(new Event("change"));   /* runs syncSelected -> onModelChanged */
+  return true;
+}
+function presetSetThink(mode) {
+  var dm = $("dtMode");
+  if (!dm) return;
+  /* deep-think only runs live; in mock/replay it is forced to "normal" by
+     applyW12Availability, so only push a non-normal mode when it can take. */
+  if (mode !== "normal" && TELEMETRY_SOURCE !== "sse") { DT.mode = "normal"; dm.value = "normal"; return; }
+  dm.value = mode;
+  dm.dispatchEvent(new Event("change"));     /* runs DT.mode = dm.value */
+}
+function presetSetSpeed(mode) {
+  /* setSpeedMode self-guards: requesting "fast" when not advertised falls back
+     to glass. So "glass" always lands; "fast" lands only when available. */
+  setSpeedMode(mode);
+}
+function presetSetLens(on) {
+  /* setLens + the W12 availability gate: lens only turns ON live + glass-box.
+     Requesting ON when unavailable is a no-op via applyW12Availability, which
+     calls setLens(false) when the gate is closed. */
+  if (on) { setLens(true); applyW12Availability(); }
+  else setLens(false);
+}
+function presetSetNTokens(n) {
+  var ng = $("nGen");
+  if (ng) ng.value = String(clampNGen(n));
+}
+function presetSetGreedy() {
+  /* temperature 0 (greedy). Drive the bound number input so bindRangePair's
+     setter writes GENSET + the slider + persists. */
+  var tn = $("gsTempN");
+  if (tn) { tn.value = "0"; tn.dispatchEvent(new Event("change")); }
+  else { GENSET.temperature = 0; persistGenset(); }
+}
+function presetSetTemperature(t) {
+  var tn = $("gsTempN");
+  if (tn) { tn.value = String(t); tn.dispatchEvent(new Event("change")); }
+  else { GENSET.temperature = +t; persistGenset(); }
+}
+function presetSetSeedFixed(seed) {
+  var sa = $("gsSeedAuto"), sv = $("gsSeed");
+  if (sa) { sa.checked = false; sa.dispatchEvent(new Event("change")); }
+  else GENSET.seedAuto = false;
+  if (sv) { sv.value = String(seed); sv.dispatchEvent(new Event("change")); }
+  else { GENSET.seed = seed; persistGenset(); }
+}
+function presetSetSeedRandom() {
+  var sa = $("gsSeedAuto");
+  if (sa) { sa.checked = true; sa.dispatchEvent(new Event("change")); }
+  else GENSET.seedAuto = true;
+}
+
+/* The preset table. Each entry is a function that drives the controls and
+   returns a list of human-readable "deferred (live only)" notes for bits the
+   current backend can't honor — surfaced to the user, never hidden. */
+var PRESETS = {
+  /* best instruct model, normal think, glass box, greedy (temperature 0) */
+  balanced: function () {
+    var notes = [];
+    presetSetThink("normal");
+    presetSetSpeed("glass");
+    presetSetLens(false);
+    presetSetGreedy();
+    presetSetSeedRandom();
+    if (!presetSetModel(bestInstructModelId())) notes.push("best instruct model (the model switch is live-only)");
+    return notes;
+  },
+  /* everything maxed: largest instruct model, best-of-5, glass box, LENS ON,
+     sampling T~0.7 + fresh random seed, n_tokens ~80. Honest: still ~360M. */
+  max: function () {
+    var notes = [];
+    presetSetNTokens(80);
+    presetSetSpeed("glass");
+    if (!presetSetModel(largestInstructModelId())) notes.push("largest served instruct model (live-only)");
+    if (TELEMETRY_SOURCE === "sse") presetSetThink("bo5"); else { presetSetThink("normal"); notes.push("best-of-5 deep-think (live-only)"); }
+    if (samplingAdvertised()) { presetSetTemperature(0.7); presetSetSeedRandom(); }
+    else { presetSetGreedy(); presetSetSeedRandom(); notes.push("sampling T≈0.7 (live-only — greedy in this mode)"); }
+    /* lens last: it needs glass box (already set) + live */
+    presetSetLens(true);
+    if (!(TELEMETRY_SOURCE === "sse")) notes.push("logit lens (live-only)");
+    return notes;
+  },
+  /* fast mode, greedy, n_tokens ~20, normal think */
+  fast: function () {
+    var notes = [];
+    presetSetThink("normal");
+    presetSetNTokens(20);
+    presetSetGreedy();
+    presetSetSeedRandom();
+    presetSetSpeed("fast");
+    if (!(SPEED.mode === "fast")) notes.push("fast mode (live-only — staying on glass box)");
+    presetSetLens(false);
+    return notes;
+  },
+  /* greedy + a FIXED seed + glass box — same input -> same output every time */
+  reproducible: function () {
+    var notes = [];
+    presetSetThink("normal");
+    presetSetSpeed("glass");
+    presetSetLens(false);
+    presetSetGreedy();
+    presetSetSeedFixed(PRESET_FIXED_SEED);
+    /* greedy is already deterministic; the fixed seed makes it reproducible
+       too if the user later raises temperature. */
+    return notes;
+  },
+  /* glass box + LENS ON, normal think — watch every layer */
+  inspect: function () {
+    var notes = [];
+    presetSetThink("normal");
+    presetSetSpeed("glass");
+    presetSetGreedy();
+    presetSetSeedRandom();
+    presetSetLens(true);
+    if (!(TELEMETRY_SOURCE === "sse")) notes.push("logit lens (live-only)");
+    return notes;
+  }
+};
+
+function persistPreset(name) { try { lsSet(PRESET_LS_KEY, name); } catch (e) { /* quota */ } }
+function selectPresetInDropdown(name) {
+  var sel = $("presetSelect");
+  if (!sel) return;
+  var custom = sel.querySelector('option[value="custom"]');
+  if (name === "custom") { if (custom) custom.hidden = false; sel.value = "custom"; }
+  else { sel.value = name; if (custom) custom.hidden = true; }
+}
+/* called by the per-control listeners when the USER (not a preset) changes a
+   control: the dropdown must stop claiming a preset it no longer matches. */
+function markPresetCustom() {
+  if (PRESET_APPLYING) return;
+  var sel = $("presetSelect");
+  if (!sel || sel.value === "custom") return;
+  selectPresetInDropdown("custom");
+  persistPreset("custom");
+}
+function applyPreset(name, opts) {
+  opts = opts || {};
+  if (!PRESETS[name]) name = PRESET_DEFAULT;
+  var notes;
+  PRESET_APPLYING = true;
+  try { notes = PRESETS[name]() || []; }
+  finally { PRESET_APPLYING = false; }
+  selectPresetInDropdown(name);
+  if (!opts.noPersist) persistPreset(name);
+  if (!opts.silent) {
+    var sel = $("presetSelect");
+    if (sel) {
+      var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : name;
+      var msg = "applied " + label;
+      if (notes.length) msg += " — not live: " + notes.join("; ");
+      if (typeof announce === "function") announce(msg);
+    }
+  }
+  return notes;
+}
+/* re-apply the persisted preset AFTER backend capabilities are known, so its
+   live-only bits (model/sampling/fast/lens) can actually take. Skips when the
+   user had drifted to (custom). */
+function applyPresetAfterCapabilities() {
+  var saved = lsGet(PRESET_LS_KEY) || PRESET_DEFAULT;
+  if (saved === "custom" || !PRESETS[saved]) { selectPresetInDropdown(saved === "custom" ? "custom" : PRESET_DEFAULT); return; }
+  applyPreset(saved, { silent: true });
+}
+function initPresetSelect() {
+  var sel = $("presetSelect");
+  if (!sel) return;
+  sel.addEventListener("change", function () {
+    if (sel.value === "custom") return;   /* selecting the synthetic entry is a no-op */
+    applyPreset(sel.value);
+  });
+  /* CUSTOM detection: when the user changes any individual control, fall to
+     "(custom)". These listeners ignore preset-driven changes via the guard. */
+  var watch = ["dtMode", "nGen", "gsTempN", "gsTemp", "gsSeed", "gsSeedAuto", "modelSelect"];
+  for (var i = 0; i < watch.length; i++) {
+    var elx = $(watch[i]);
+    if (elx) {
+      elx.addEventListener("change", markPresetCustom);
+      if (elx.tagName === "INPUT" && elx.type === "number") elx.addEventListener("input", markPresetCustom);
+    }
+  }
+  /* the glass/fast/lens buttons and the nGen steppers don't fire change on the
+     elements above; hook them directly. */
+  var clicky = ["speedGlass", "speedFast", "lensBtn", "nGenUp", "nGenDown"];
+  for (var j = 0; j < clicky.length; j++) {
+    var b = $(clicky[j]);
+    if (b) b.addEventListener("click", function () { /* defer so the control's own handler runs first */ setTimeout(markPresetCustom, 0); });
+  }
+  /* restore the saved choice now (capabilities re-apply happens after health) */
+  var saved = lsGet(PRESET_LS_KEY) || PRESET_DEFAULT;
+  if (saved === "custom") selectPresetInDropdown("custom");
+  else applyPreset(PRESETS[saved] ? saved : PRESET_DEFAULT, { silent: true });
 }
 
 /* ----------------------------------------------------------------
@@ -8125,6 +8511,7 @@ function initAssistantUX() {
   $("themeBtn").addEventListener("click", toggleTheme);
   $("genSettingsBtn").addEventListener("click", function () { openGenSettings(true); });
   initW12();          /* deep-think · lens · reproduce · race · tools · pins (2026-06 W12) */
+  initPresetSelect(); /* AI configuration presets — bundle the controls above (2026-06) */
   autoGrowComposer();
   updateJumpPill();
 }
