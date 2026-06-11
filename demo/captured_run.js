@@ -1,113 +1,105 @@
 /* ============================================================
-   demo/captured_run.js — the REAL captured run that powers the
-   chat page's REPLAY (backup) mode when no live backend exists
+   demo/captured_run.js -- the REAL captured run that powers the
+   guided run's REPLAY (backup) mode when no live backend exists
    (e.g. featured on a public website with no GPU).
 
    PROVENANCE (nothing here is invented):
-   Every value below is transcribed from the committed log of the
-   fail-closed serve gate, scripts/_gate_run.log
-   ("HELIX SERVE GATE ... HELIX_SERVE_GATE_PASS", G1 capture:
-   POST /api/generate {prompt:"The capital of France is", n_gen:20}
-   against the live GPT-2-XL worker on the RTX 3070; served ids
-   matched the offline oracle token-for-token, 25/25).
+   Captured live on 2026-06-11 from the running Helix demo backend
+   (scripts/serve_chat_demo.sh) on an RTX 3070, the SmolLM2-360M-Instruct
+   worker (Llama architecture, 2024). The exact request:
+     POST /api/generate  prompt = the ChatML-wrapped chat turn for
+       "What is the capital of France?", model = smollm2-360m-instruct.
+   The reply, "The capital of France is Paris.", and its 8 token ids were
+   then re-derived by the INDEPENDENT numpy oracle (helix-llm/tools/
+   llama_numpy_ref.py, original public weights, shares no code with Helix)
+   via POST /api/verify and matched the GPU token-for-token: 8 / 8.
 
-   WHAT IS VERBATIM from that capture:
-     - tokenize event (ids / strings / n_prompt / s_pad)
-     - token events for steps 0-3 (id / string / logit / context_len)
-     - done event (seconds 195.513, tok_per_s 0.102, text, gen_ids,
-       nonfinite 0)
-     - gen-id -> string pairs for ALL 20 tokens (each id's piece is
-       pinned by the captured samples + the captured done.text)
-     - ptx_bytes 44019 (8 seed-minted .entry kernels)
-     - the event histogram (1 hello / 1 tokenize / 20 forward_begin /
-       20 embed / 960 layer_begin / 16320 op / 960 layer_end /
-       40 head / 20 token / 1 done = 18343 SSE events)
-   WHAT WAS NOT RETAINED in the log (and is therefore NOT shown as
-   data during replay):
-     - per-token logits beyond step 3  -> null  (UI renders "—")
-     - per-layer host-clock ms         -> 0     (untimed, never faked)
-   The replay's layer/op sweep re-walks the run's real structure
-   (48 layers x 17 ops per token step — exactly the histogram's
-   counts); its on-screen pacing is time-compressed and the page
-   says so. The REAL pacing was ~9.8 s/token (195.513 s / 20 tok).
+   VERBATIM from that capture:
+     - tokenize event (the real ChatML token ids/strings the model read)
+     - every token event (id / string / logit / context_len) -- logits REAL for all
+     - done event (seconds 2.252, tok_per_s 3.553, text, gen_ids, nonfinite 0)
+     - the live verify verdict (PASS 8 / 8 vs the numpy oracle)
+     - the event histogram (8 forward_begin / 256 layer_begin / 4352 op /
+       256 layer_end / 16 head / 8 token = 4900 SSE events; 32 layers x 17 ops)
+   The replay's layer/op sweep re-walks this real structure; its on-screen
+   pacing is time-compressed and the page says so. Real pacing was
+   ~0.28 s/token (2.252 s / 8 tokens) -- a 360M model is far
+   faster than the 1.5B GPT-2-XL leg.
 
-   To swap in a verbatim full-stream capture later: re-run
-   scripts/helix_serve_gate.sh, keep the raw SSE body, and emit it
-   here as {events:[...]} — the page prefers `events` when present.
+   GPT-2-XL is still a real, supported model in this demo (switch to it in
+   live mode); this default replay simply leads with the modern, capable
+   instruction-tuned chat model.
    ============================================================ */
 window.HELIX_CAPTURED_RUN = {
   schema_version: 1,
   kind: "captured-replay",
-  captured_from: "scripts/_gate_run.log — HELIX SERVE GATE (G1), real served GPT-2-XL run, token-for-token vs oracle 25/25",
-  model: "gpt2-xl",
-  params: "1.5B",
-  n_layer: 48,
-  n_head: 25,
-  d_model: 1600,
-  d_ff: 6400,
-  n_vocab: 50257,
+  captured_from: "live POST /api/generate on serve_chat_demo.sh (RTX 3070), SmolLM2-360M-Instruct; verified 8/8 vs the independent numpy oracle via /api/verify",
+  model: "smollm2-360m-instruct",
+  params: "360M",
+  arch: "llama",
+  n_layer: 32,
+  n_head: 15,
+  n_kv_head: 5,
+  d_model: 960,
+  d_ff: 2560,
+  n_vocab: 49152,
   device: "RTX 3070",
   sm: "sm_86",
   precision: "fp32",
   build: "forward-only",
-  ptx_bytes: 44019,
-  prompt: "The capital of France is",
-  n_gen: 20,
+  ptx_bytes: 57633,
+  ptx_entries: 14,
+  chat: true,
+  prompt: "What is the capital of France?",
+  reply: "The capital of France is Paris.",
+  n_gen: 8,
 
-  /* verbatim: {"_ev":"tokenize","seq":1,...} */
+  /* the REAL ChatML tokenization the instruct model read (system + user turn
+     + the assistant cue). Chat models wrap your message in this template. */
   tokenize: {
-    ids: [464, 3139, 286, 4881, 318],
-    strings: ["The", " capital", " of", " France", " is"],
-    n_prompt: 5,
+    ids: [1, 9690, 198, 2683, 359, 253, 5356, 5646, 11173, 3365, 3511, 308, 34519, 28, 7018, 411, 407, 19712, 8182, 2, 198, 1, 4093, 198, 1780, 314, 260, 3575, 282, 4649, 47, 2, 198, 1, 520, 9531, 198],
+    strings: ["<|im_start|>", "system", "\n", "You", " are", " a", " helpful", " AI", " assistant", " named", " Sm", "ol", "LM", ",", " trained", " by", " H", "ugging", " Face", "<|im_end|>", "\n", "<|im_start|>", "user", "\n", "What", " is", " the", " capital", " of", " France", "?", "<|im_end|>", "\n", "<|im_start|>", "ass", "istant", "\n"],
+    n_prompt: 37,
     s_pad: 64
   },
 
-  /* steps 0-3 verbatim (incl. logits); steps 4-19: id + string + context_len
-     are captured (gen_ids + done.text + the pinned id<->piece pairs),
-     logit was not retained -> null (rendered as "—", never invented). */
+  /* every generated token, verbatim -- id / string / logit / context_len.
+     Logits are REAL for all tokens (the live stream retained them). The final
+     <|im_end|> (id 2) is the chat stop token; the page hides it from the reply. */
   tokens: [
-    { id: 262,  string: " the",     logit: 8.79165,  context_len: 6  },
-    { id: 1748, string: " city",    logit: 9.49102,  context_len: 7  },
-    { id: 286,  string: " of",      logit: 12.81686, context_len: 8  },
-    { id: 6342, string: " Paris",   logit: 12.99207, context_len: 9  },
-    { id: 13,   string: ".",        logit: null,     context_len: 10 },
-    { id: 632,  string: " It",      logit: null,     context_len: 11 },
-    { id: 318,  string: " is",      logit: null,     context_len: 12 },
-    { id: 262,  string: " the",     logit: null,     context_len: 13 },
-    { id: 3139, string: " capital", logit: null,     context_len: 14 },
-    { id: 286,  string: " of",      logit: null,     context_len: 15 },
-    { id: 4881, string: " France",  logit: null,     context_len: 16 },
-    { id: 290,  string: " and",     logit: null,     context_len: 17 },
-    { id: 262,  string: " the",     logit: null,     context_len: 18 },
-    { id: 4387, string: " largest", logit: null,     context_len: 19 },
-    { id: 1748, string: " city",    logit: null,     context_len: 20 },
-    { id: 287,  string: " in",      logit: null,     context_len: 21 },
-    { id: 4881, string: " France",  logit: null,     context_len: 22 },
-    { id: 13,   string: ".",        logit: null,     context_len: 23 },
-    { id: 632,  string: " It",      logit: null,     context_len: 24 },
-    { id: 318,  string: " is",      logit: null,     context_len: 25 }
+    { id: 504, string: "The", logit: 16.19659, context_len: 38 },
+    { id: 3575, string: " capital", logit: 23.05727, context_len: 39 },
+    { id: 282, string: " of", logit: 27.43804, context_len: 40 },
+    { id: 4649, string: " France", logit: 24.46700, context_len: 41 },
+    { id: 314, string: " is", logit: 24.18748, context_len: 42 },
+    { id: 7042, string: " Paris", logit: 24.32419, context_len: 43 },
+    { id: 30, string: ".", logit: 19.15237, context_len: 44 },
+    { id: 2, string: "<|im_end|>", logit: 18.48693, context_len: 45 }
   ],
 
-  /* verbatim: {"_ev":"done","seq":18342,...} */
   done: {
-    n_prompt: 5,
-    n_gen: 20,
-    n_total: 25,
-    seconds: 195.513,
-    tok_per_s: 0.102,
-    text: " the city of Paris. It is the capital of France and the largest city in France. It is",
-    gen_ids: [262,1748,286,6342,13,632,318,262,3139,286,4881,290,262,4387,1748,287,4881,13,632,318],
+    n_prompt: 37,
+    n_gen: 8,
+    n_total: 45,
+    seconds: 2.252,
+    tok_per_s: 3.553,
+    text: "The capital of France is Paris.<|im_end|>",
+    gen_ids: [504, 3575, 282, 4649, 314, 7042, 30, 2],
     nonfinite: 0
   },
 
-  /* verbatim histogram of the captured SSE stream (18343 events) */
-  event_histogram: {
-    hello: 1, tokenize: 1, forward_begin: 20, embed: 20,
-    layer_begin: 960, op: 16320, layer_end: 960, head: 40, token: 20, done: 1
+  /* the live token-for-token verdict that was actually computed for THIS run
+     by the independent numpy oracle (not invented, not a placeholder). */
+  verify: {
+    verdict: "PASS",
+    matched: 8,
+    total: 8,
+    oracle: "numpy fp32 (smollm2-360m-instruct)"
   },
 
-  /* optional verbatim full event stream — absent in this capture;
-     when present the replay uses it directly instead of re-walking
-     the structure. */
+  event_histogram: {
+    hello: 1, tokenize: 1, forward_begin: 8, embed: 1,
+    layer_begin: 256, op: 4352, layer_end: 256, head: 16, token: 8, done: 1
+  },
   events: null
 };

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GPT-2-XL on Helix — Completion Playground</title>
+<title>SmolLM2-360M-Instruct on Helix — Model Playground</title>
 <style>
   /* ============================================================
      GPT-2-XL x Helix — COMPLETION PLAYGROUND (page 1, the MAIN page).
@@ -1597,10 +1597,10 @@
           <svg class="helix-glyph" viewBox="2.5 9 43 30" fill="none" aria-hidden="true" style="width:31px;height:22px"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg>
           Helix
           <span class="x">×</span>
-          <span class="gpt">GPT-2</span>
+          <span class="gpt">SmolLM2</span>
         </span>
-        <span class="sub-pill">COMPLETION PLAYGROUND</span>
-        <span class="model-tag"><b>GPT-2-XL</b> · 1.5B · 2019 base model · not an assistant</span>
+        <span class="sub-pill">MODEL PLAYGROUND</span>
+        <span class="model-tag"><b>SmolLM2-360M-Instruct</b> · 360M · 2024 instruct chat model · GPT-2-XL switchable</span>
       </div>
       <div class="topbar-right">
         <div id="connBadge" class="status-badge is-preview" role="status" aria-live="polite">
@@ -1627,17 +1627,20 @@
               stroke="#8b5cf6" stroke-width="1.1" stroke-linecap="round"/>
       </svg>
       <div class="hero-eyebrow"><span class="he-dot" aria-hidden="true"></span>Helix — the verifiable execution layer</div>
-      <h1>Watch a 1.5-billion-parameter model think on a stack you can <span class="em">rebuild from 299 bytes</span>.</h1>
+      <h1>Watch a modern instruction-tuned chat model think on a stack you can <span class="em">rebuild from 299 bytes</span>.</h1>
       <p class="frame">
-        <b>GPT-2-XL is a 2019 base completion model.</b> It continues text; it is not tuned to chat,
-        follow instructions, or be factual. The live thing being proven here is the verified compute
-        underneath — every layer and kernel comes from the from-raw Helix toolchain.
+        <b>SmolLM2-360M-Instruct is the headline model here — a 2024 Llama-architecture chat model</b> that
+        really follows instructions through its own ChatML template (recorded reply to “What is the capital of
+        France?” → “The capital of France is Paris.”, verified token-for-token 8/8 by the oracle). The older
+        <b>GPT-2-XL base model is switchable</b> too, and the offline preview replays it. Either way the live
+        thing being proven is the verified compute underneath — every layer and kernel comes from the from-raw
+        Helix toolchain.
       </p>
       <div class="hero-facts" aria-label="Demo facts">
-        <span class="hf"><b>1.5B</b> params · 48 layers</span>
+        <span class="hf"><b>SmolLM2-360M-Instruct</b> · 360M · 32 layers · 2024 Llama arch</span>
         <span class="hf is-accent"><b>8</b> kovc-emitted kernels</span>
-        <span class="hf">fp32 · forward-only · greedy</span>
-        <span class="hf is-slow">live XL ≈ <b>10 s/token</b> — intentionally slow; the pitch is trust, not speed</span>
+        <span class="hf">fp32 · greedy · GPT-2-XL (1.5B · 48 layers) switchable</span>
+        <span class="hf is-slow">live pacing is intentionally slow; the pitch is trust, not speed</span>
       </div>
     </header>
 
@@ -1687,7 +1690,7 @@
             </select>
             <select id="modelSelect" class="model-select" hidden
               aria-label="Model served by the live backend"></select>
-            <span class="ch-mode" id="convMode">GPT-2-XL · fp32 · greedy</span>
+            <span class="ch-mode" id="convMode">SmolLM2-360M-Instruct · fp32 · greedy</span>
           </span>
         </div>
 
@@ -1941,8 +1944,10 @@
     <div class="ob-card">
       <h2 id="obTitle">You're about to watch a model actually compute</h2>
       <p>
-        This page shows a real AI model (<b>GPT-2-XL</b>, a small 2019 model) running on a fully auditable
-        software stack — one you can rebuild and check starting from a <b>299-byte seed</b>.
+        This page runs real AI models — headlined by <b>SmolLM2-360M-Instruct</b> (a 2024 instruction-tuned
+        chat model), with <b>GPT-2-XL</b> (a 2019 base model) switchable — on a fully auditable
+        software stack you can rebuild and check starting from a <b>299-byte seed</b>. The offline preview
+        below replays a recorded GPT-2-XL run; the live backend serves SmolLM2 chat.
         When a prompt runs, the panel on the right walks through the model's computation step by
         step: every token, every layer, every GPU kernel.
         Nothing here pretends to be what it isn't — the badge at the top always says whether you
@@ -2479,13 +2484,13 @@ var TELEMETRY_SOURCE = USE_LIVE_BACKEND
    ================================================================ */
 var RUNBOOK = {
   schema_version: 1,
-  model: "gpt2-xl",
-  params: "1.5B",
-  n_layer: 48,
-  n_head: 25,
-  d_model: 1600,
-  d_ff: 6400,
-  n_vocab: 50257,
+  model: "smollm2-360m-instruct",
+  params: "360M",
+  n_layer: 32,
+  n_head: 15,
+  d_model: 960,
+  d_ff: 2560,
+  n_vocab: 49152,
   device: "RTX 3070",
   sm: "sm_86",
   precision: "fp32",
@@ -2494,14 +2499,14 @@ var RUNBOOK = {
   fixpoint_sha: "0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f",
   gcc_ddc_sha: "84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba",
   ptx_bytes: null,   /* unknown on mock -- the live backend fills the real minted-PTX byte length; never invent a number next to the verified anchors */
-  /* the literal cuModuleGetFunction names — the 8 real kovc kernels */
+  /* the literal cuModuleGetFunction names — the real kovc kernels of the Llama (SmolLM2) forward */
   kernels: [
+    "gpu_rmsnorm_fwd_eps",
     "tiled_matmul",
     "tiled_matmul_abt",
-    "gpu_layernorm_fwd_eps",
+    "gpu_rope_rot",
     "gpu_softmax_causal",
-    "gpu_add_bias_rowbcast",
-    "gpu_gelu_stable",
+    "gpu_silu_mul",
     "vector_add",
     "gpu_scale_rt"
   ]
@@ -2564,28 +2569,30 @@ function pieceForChip(s) {
    the UI is forced into the unmistakable PREVIEW state, so this mock
    can never render as a real run.
    ================================================================ */
-/* Real per-layer op order from forward_layer_gpt2 (12 per-head launches
-   COLLAPSED into 3 aggregate attention ops, per the design contract).
-   SHARED by the mock generator AND the captured-run replay, so the
-   structural walk is identical everywhere. */
+/* Real per-layer op order of the Llama (SmolLM2) forward — transcribed from the
+   captured run's real op events (17 ops/layer; the per-head launches collapsed
+   into aggregate attention ops). SHARED by the mock generator AND the captured-run
+   replay, so the structural walk is identical everywhere. (GPT-2's layer-norm /
+   bias-add / GELU sequence is different; in LIVE mode the real op events stream
+   each model's own kernels.) */
 var HELIX_LAYER_OPS = [
-  { label: "ln_1",            kernel: "gpu_layernorm_fwd_eps", phase: "attn" },
-  { label: "qkv_gemm",        kernel: "tiled_matmul",          phase: "attn" },
-  { label: "qkv_bias",        kernel: "gpu_add_bias_rowbcast", phase: "attn" },
-  { label: "attn_scores",     kernel: "tiled_matmul_abt",      phase: "attn" }, /* collapsed head loop */
-  { label: "attn_scale",      kernel: "gpu_scale_rt",          phase: "attn" },
-  { label: "attn_softmax",    kernel: "gpu_softmax_causal",    phase: "attn" }, /* collapsed head loop */
-  { label: "attn_av",         kernel: "tiled_matmul",          phase: "attn" }, /* collapsed head loop */
-  { label: "attn_proj_gemm",  kernel: "tiled_matmul",          phase: "attn" },
-  { label: "attn_proj_bias",  kernel: "gpu_add_bias_rowbcast", phase: "attn" },
-  { label: "attn_residual",   kernel: "vector_add",            phase: "attn" },
-  { label: "ln_2",            kernel: "gpu_layernorm_fwd_eps", phase: "mlp"  },
-  { label: "fc_gemm",         kernel: "tiled_matmul",          phase: "mlp"  },
-  { label: "fc_bias",         kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
-  { label: "gelu",            kernel: "gpu_gelu_stable",       phase: "mlp"  },
-  { label: "proj2_gemm",      kernel: "tiled_matmul",          phase: "mlp"  },
-  { label: "proj2_bias",      kernel: "gpu_add_bias_rowbcast", phase: "mlp"  },
-  { label: "mlp_residual",    kernel: "vector_add",            phase: "mlp"  }
+  { label: "rms_1",         kernel: "gpu_rmsnorm_fwd_eps", phase: "attn" },
+  { label: "q_gemm",        kernel: "tiled_matmul_abt",    phase: "attn" },
+  { label: "k_gemm",        kernel: "tiled_matmul_abt",    phase: "attn" },
+  { label: "v_gemm",        kernel: "tiled_matmul_abt",    phase: "attn" },
+  { label: "rope_qk",       kernel: "gpu_rope_rot",        phase: "attn" },
+  { label: "attn_scores",   kernel: "tiled_matmul_abt",    phase: "attn" }, /* collapsed head loop */
+  { label: "attn_scale",    kernel: "gpu_scale_rt",        phase: "attn" },
+  { label: "attn_softmax",  kernel: "gpu_softmax_causal",  phase: "attn" }, /* collapsed head loop */
+  { label: "attn_av",       kernel: "tiled_matmul",        phase: "attn" }, /* collapsed head loop */
+  { label: "attn_proj",     kernel: "tiled_matmul_abt",    phase: "attn" },
+  { label: "attn_residual", kernel: "vector_add",          phase: "attn" },
+  { label: "rms_2",         kernel: "gpu_rmsnorm_fwd_eps", phase: "mlp"  },
+  { label: "fc_gate",       kernel: "tiled_matmul_abt",    phase: "mlp"  },
+  { label: "fc_up",         kernel: "tiled_matmul_abt",    phase: "mlp"  },
+  { label: "silu_mul",      kernel: "gpu_silu_mul",        phase: "mlp"  },
+  { label: "proj_down",     kernel: "tiled_matmul_abt",    phase: "mlp"  },
+  { label: "mlp_residual",  kernel: "vector_add",          phase: "mlp"  }
 ];
 
 var MockTelemetryGenerator = (function () {
@@ -2768,7 +2775,7 @@ var MockTelemetryGenerator = (function () {
 
         /* head x2: ln_f then lm_head */
         after(clock, function () {
-          h.onHead && h.onHead({ seq: S(), step: step, label: "ln_f", kernel: "gpu_layernorm_fwd_eps" });
+          h.onHead && h.onHead({ seq: S(), step: step, label: "ln_f", kernel: "gpu_rmsnorm_fwd_eps" });
         });
         clock += 18;
         after(clock, function () {
@@ -2921,7 +2928,7 @@ var ReplaySource = (function () {
           })(L);
         }
         after(clock, function () {
-          h.onHead && h.onHead({ seq: S(), step: step, label: "ln_f", kernel: "gpu_layernorm_fwd_eps" });
+          h.onHead && h.onHead({ seq: S(), step: step, label: "ln_f", kernel: "gpu_rmsnorm_fwd_eps" });
         });
         clock += 14;
         after(clock, function () {
@@ -3105,7 +3112,7 @@ function replayPrompt() {
 /* honest turn label: the capability-advertised model when one was chosen
    (live /api/health models[] only), else the page's default GPT-2-XL */
 function currentModelLabel() {
-  return UI.selectedModelLabel || "GPT-2-XL";
+  return UI.selectedModelLabel || "SmolLM2-360M-Instruct";
 }
 
 /* ================================================================
@@ -4008,7 +4015,7 @@ function applySourceHonesty() {
     setConnState("preview", "CONNECTING · awaiting worker /api/health…");
     banner.hidden = true;
     $("upgradeBar").classList.remove("show");
-    $("convMode").textContent = "GPT-2-XL · fp32 · greedy · LIVE";
+    $("convMode").textContent = currentModelLabel() + " · fp32 · greedy · LIVE";
   } else if (TELEMETRY_SOURCE === "replay") {
     setConnState("replay", "REPLAY · CAPTURED REAL RUN (not live)");
     banner.hidden = false;
@@ -4020,7 +4027,7 @@ function applySourceHonesty() {
       "token-for-token, 25/25; 195.5 s for 20 tokens ≈ 9.8 s/token). The replay animation is " +
       "time-compressed; per-layer timings were not captured, so they are shown untimed — never " +
       "invented. Start the backend and open <code>?source=sse</code> to watch it live.";
-    $("convMode").textContent = "GPT-2-XL · fp32 · greedy · REPLAY (captured)";
+    $("convMode").textContent = currentModelLabel() + " · fp32 · greedy · REPLAY (captured)";
   } else {
     setConnState("preview", "PREVIEW · MOCK TELEMETRY (no GPU connected)");
     banner.hidden = false;
@@ -4034,7 +4041,7 @@ function applySourceHonesty() {
       "structurally faithful; only the numbers are mock. <b>The preview animation is time-compressed:</b> " +
       "live XL really runs at ≈ 10 s/token (~3 min for 20 tokens) — by design, the demo is about " +
       "verifiability, not speed.";
-    $("convMode").textContent = "GPT-2-XL · fp32 · greedy · (mock)";
+    $("convMode").textContent = currentModelLabel() + " · fp32 · greedy · (mock)";
   }
 
   /* honest-latency footnote under the throughput gauges (every source) */
@@ -4565,7 +4572,20 @@ function populateModelSelect(health) {
     if (m.default) def = mid;
   }
   if (!sel.children.length) return;
-  sel.value = def || (health.model || sel.children[0].value);
+  /* DEFAULT pick (lead with the modern instruct chat model): honor an explicit
+     server "default":true first; otherwise prefer the largest served instruct
+     model (e.g. smollm2-360m-instruct) over an arbitrary first/health.model
+     entry — so the headline default is the real chat model, not a base GPT-2.
+     largestInstructModelId() reads UI.health (already set by the caller) and
+     returns null when no instruct model is served, leaving the old behavior. */
+  var instructDefault = (function () {
+    try { return (typeof largestInstructModelId === "function") ? largestInstructModelId() : null; }
+    catch (e) { return null; }
+  })();
+  var wantDefault = def || instructDefault || health.model || sel.children[0].value;
+  /* only adopt wantDefault if it is actually one of the rendered options */
+  sel.value = wantDefault;
+  if (sel.value !== wantDefault) sel.value = sel.children[0].value;
   function syncSelected() {
     UI.selectedModel = sel.value;
     var opt = sel.options[sel.selectedIndex];
@@ -6395,7 +6415,7 @@ function exportMarkdown() {
   L.push("# " + (CONVO.title || "Helix chat"));
   L.push("");
   L.push("> source: **" + sourceLabelLong() + "** · exported " + new Date().toISOString());
-  L.push("> page: demo/index.html — Helix × GPT-2 completion playground");
+  L.push("> page: demo/index.html — Helix × SmolLM2 model playground");
   L.push("");
   for (var i = 0; i < path.length; i++) {
     var n = path[i];

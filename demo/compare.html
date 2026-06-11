@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Helix × GPT-2 — models & paths</title>
+<title>Helix × SmolLM2 — models & paths</title>
 <style>
 :root { --bg:#0c0c12; --bg2:#0a0a0f; --panel:#15151d; --panel2:#101017; --line:#2a2a36; --line2:#3a3a48;
   --ink:#f4f4f8; --dim:#9d9da8; --faint:#6e6e7a; --violet:#8b5cf6; --vsoft:#cdb6ff; --cyan:#5ed3f0;
@@ -101,7 +101,7 @@ table.t tr:last-child td { border-bottom:0 }
 <body>
 <main class="wrap">
   <div class="topbar">
-    <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">GPT-2</span></span>
+    <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">SmolLM2</span></span>
     <span class="rec-badge">▶ RECORDED RESULTS — real gate outputs, not live</span>
     </div>
   <nav class="tabs" aria-label="Demo pages">
@@ -122,7 +122,7 @@ table.t tr:last-child td { border-bottom:0 }
   
 <section class="sec">
   <div class="sec-h"><span class="n">THE MODELS</span><h2>Four sizes, one stack — all verified 25/25</h2></div>
-  <p class="sec-sub">From the 124M starter to the 1.5B flagship, the GPT-2 family runs on the <b>exact same 8 kernels</b> — only the dimensions change. SmolLM2 brings 2024's Llama architecture onto the same stack with just 3 extra kernels.</p>
+  <p class="sec-sub">SmolLM2 brings 2024's Llama architecture onto the stack — and the whole GPT-2 family, from the 124M starter to the 1.5B flagship, runs on the <b>exact same 8 kernels</b> beneath it, only the dimensions changing. The Llama leg costs just 3 extra kernels.</p>
   <div class="cards">
     <button class="cardb" data-ovl="m124" type="button">
       <span class="k">GPT-2 124M <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></span><h3>The quick one</h3>

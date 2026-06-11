@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Helix × GPT-2 — start here</title>
+<title>Helix × SmolLM2 — start here</title>
 <style>
 :root { --bg:#0c0c12; --bg2:#0a0a0f; --panel:#15151d; --panel2:#101017; --line:#2a2a36; --line2:#3a3a48;
   --ink:#f4f4f8; --dim:#9d9da8; --faint:#6e6e7a; --violet:#8b5cf6; --vsoft:#cdb6ff; --cyan:#5ed3f0;
@@ -101,7 +101,7 @@ table.t tr:last-child td { border-bottom:0 }
 <body>
 <main class="wrap">
   <div class="topbar">
-    <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">GPT-2</span></span>
+    <span class="brand"><svg class="badge299" viewBox="2.5 9 43 30" fill="none" aria-label="299 bytes — the Helix trust root"><rect x="4.5" y="11" width="39" height="26" rx="9" stroke="#5a5a66" stroke-width="2.4"/><text x="24" y="28.5" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#f4f4f8">299<tspan dx="2" font-size="9.5" font-weight="600" fill="#9d9da8">B</tspan></text></svg> Helix <span class="x">×</span> <span class="gpt">SmolLM2</span></span>
     <span class="rec-badge">▶ RECORDED RESULTS — real gate outputs, not live</span>
     </div>
   <nav class="tabs" aria-label="Demo pages">
@@ -114,9 +114,9 @@ table.t tr:last-child td { border-bottom:0 }
 </nav>
   
 <header class="hero">
-  <h1>The model you know, on a stack you can <em>verify from the first byte</em>.</h1>
-  <p>This demo runs <b>real, unchanged GPT-2</b> on Helix — a software stack that rebuilds itself from <b>299 hand-typed bytes</b>,
-  so every layer of it can be audited instead of trusted. The output was checked, token by token, against an independent referee. Pick your door:</p>
+  <h1>A real chat model, on a stack you can <em>verify from the first byte</em>.</h1>
+  <p>This demo runs a real, modern <b>instruction-tuned chat model — SmolLM2-360M-Instruct</b> (2024) — on Helix, a software stack that rebuilds itself from <b>299 hand-typed bytes</b>,
+  so every layer of it can be audited instead of trusted. It also runs the classic <b>GPT-2-XL</b> and more — switch any time. Every output is checked, token by token, against an independent referee. Pick your door:</p>
 </header>
   
 <section class="sec">
@@ -145,14 +145,14 @@ table.t tr:last-child td { border-bottom:0 }
   <div class="cards" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
     <div class="cardb static">
       <span class="k" style="color:var(--good)">IT IS</span>
-      <p>· The real, unchanged public GPT-2 (and SmolLM2), running on kernels compiled from Helix source by a compiler that rebuilds from 299 bytes <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></p>
-      <p>· Verified: every model matched an independent oracle <b>token-for-token (25/25)</b>, gated fail-closed</p>
+      <p>· The real, unchanged public SmolLM2 (and GPT-2), running on kernels compiled from Helix source by a compiler that rebuilds from 299 bytes <span class="hx-tag" title="Compiled from Helix source by kovc — the compiler that rebuilds from 299 hand-typed bytes."><svg viewBox="0 0 10 12" fill="none" width="9" height="11" aria-hidden="true"><path d="M2 1 C2 4 8 4 8 7 M8 1 C8 4 2 4 2 7 M2 11 c0-2 6-2 6 0" stroke="#cdb6ff" stroke-width="1.3" stroke-linecap="round"/></svg>powered by Helix</span></p>
+      <p>· Verified: every model matched an independent oracle <b>token-for-token</b> (8/8 for the SmolLM2 chat, 25/25 for GPT-2-XL), gated fail-closed</p>
       <p>· Honest about its sources: the badge always says <b>LIVE</b>, <b>REPLAY</b> (a real recorded run) or <b>PREVIEW</b> (mock)</p>
     </div>
     <div class="cardb static">
       <span class="k" style="color:var(--warn)">IT ISN'T</span>
-      <p>· An assistant. GPT-2 is a <span class="tip" tabindex="0" data-tip="A model trained only to predict the next word-piece — not tuned to chat, follow instructions, or be factual.">2019 base completion model</span> — it continues text, sometimes repetitively. That's the real model, not a bug.</p>
-      <p>· Fast. Live GPT-2-XL runs at ≈10 s/token <b>by design</b> — the pitch is trust, not speed (it will get faster as Helix develops).</p>
+      <p>· A frontier assistant. The default <b>SmolLM2-360M-Instruct</b> is a small 2024 chat model — it answers simple prompts, but at 360M it's tiny, so keep expectations modest. (The classic GPT-2-XL here is a 2019 <span class="tip" tabindex="0" data-tip="A model trained only to predict the next word-piece — not tuned to chat, follow instructions, or be factual.">base completion model</span> that only continues text.)</p>
+      <p>· A speed demo. The small SmolLM2 chat answers in a few seconds; the larger GPT-2-XL runs ≈10 s/token <b>by design</b> — the pitch is trust, not raw speed (it gets faster as Helix develops).</p>
       <p>· Verified below <span class="tip" tabindex="0" data-tip="The GPU's portable assembly — the last human-auditable layer. NVIDIA's closed assembler sits beneath it, trusted-once.">PTX</span>. One closed NVIDIA step is trusted-once — disclosed, never hidden.</p>
     </div>
   </div>

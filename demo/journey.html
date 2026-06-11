@@ -337,7 +337,7 @@ body.running .stop { display: inline-block; }
               </select>
             </div>
             <div class="setting">
-              <label for="modelSel">Model <span class="tip" tabindex="0" data-tip="Which verified model runs. The recorded replay is the GPT-2-XL run; in live mode this list comes from the backend's /api/health.">?</span></label>
+              <label for="modelSel">Model <span class="tip" tabindex="0" data-tip="Which verified model runs. The recorded replay is the SmolLM2-360M-Instruct run; in live mode this list comes from the backend's /api/health — switch to any served model, including GPT-2-XL.">?</span></label>
               <select id="modelSel" title="The recorded replay is the GPT-2-XL run — more models in live mode"><option value="gpt2-xl">GPT-2-XL · 1.5B</option></select>
             </div>
           </div>
@@ -447,7 +447,7 @@ body.running .stop { display: inline-block; }
     </div><!-- /shell -->
 
     <div class="resid">
-      <span><b>Honest note:</b> <span id="residModelNote">these are verified transformers — the spine shows their real work, never an invented number.</span> Recorded-run GPU pacing was ≈ 10 s per token by design (the recorded GPT-2-XL replay: 195.5 s / 20 tokens). <b>Residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · oracle shares the spec. This page never invents a number.</span>
+      <span><b>Honest note:</b> <span id="residModelNote">these are verified transformers — the spine shows their real work, never an invented number.</span> Recorded-run GPU pacing is real (this SmolLM2-360M-Instruct replay: 2.25 s / 8 tokens ≈ 0.28 s/token; the larger GPT-2-XL leg runs ≈ 10 s/token by design). <b>Residuals:</b> fp32 · verified to PTX, not SASS · single GPU (sm_86) · oracle shares the spec. This page never invents a number.</span>
       <span><a href="dashboard.html">full residuals &amp; gate records →</a> · <a href="index.html">expert playground →</a> · <a href="compare.html">models &amp; paths →</a></span>
     </div>
   </main>
@@ -509,8 +509,26 @@ var OP_WORDS = {
   ln_2: "tidying the numbers again", fc_gemm: "expanding into scratch space (big multiply)",
   fc_bias: "adding learned offsets", gelu: "keeping the useful signals (activation)",
   proj2_gemm: "compressing back down (big multiply)", proj2_bias: "adding learned offsets",
-  mlp_residual: "keeping what was already known"
+  mlp_residual: "keeping what was already known",
+  rms_1: "tidying the numbers (RMS-norm)", rms_2: "tidying the numbers again (RMS-norm)",
+  q_gemm: "preparing the questions (big multiply)", k_gemm: "preparing the keys (big multiply)",
+  v_gemm: "preparing the values (big multiply)", rope_qk: "marking word positions (rotary)",
+  fc_gate: "opening the gate (big multiply)", fc_up: "expanding into scratch space (big multiply)",
+  silu_mul: "keeping the useful signals (SiLU gate)", proj_down: "compressing back down (big multiply)"
 };
+/* SmolLM2 / Llama recorded layer sequence (transcribed from the captured run's
+   real op events — 17 ops/layer). Real kernel names; used ONLY for the Llama
+   recorded-replay narration, never imposed on GPT-2. */
+var LLAMA_OPS = [
+  ["rms_1","gpu_rmsnorm_fwd_eps"],["q_gemm","tiled_matmul_abt"],["k_gemm","tiled_matmul_abt"],
+  ["v_gemm","tiled_matmul_abt"],["rope_qk","gpu_rope_rot"],["attn_scores","tiled_matmul_abt"],
+  ["attn_scale","gpu_scale_rt"],["attn_softmax","gpu_softmax_causal"],["attn_av","tiled_matmul"],
+  ["attn_proj","tiled_matmul_abt"],["attn_residual","vector_add"],["rms_2","gpu_rmsnorm_fwd_eps"],
+  ["fc_gate","tiled_matmul_abt"],["fc_up","tiled_matmul_abt"],["silu_mul","gpu_silu_mul"],
+  ["proj_down","tiled_matmul_abt"],["mlp_residual","vector_add"]
+];
+/* which recorded op-sequence the REPLAY narrates — chosen by the captured run's arch. */
+var REPLAY_OPS = (window.HELIX_CAPTURED_RUN && window.HELIX_CAPTURED_RUN.arch === "llama") ? LLAMA_OPS : LAYER_OPS;
 
 /* Plain-English fallback narration keyed off the REAL streamed kernel name —
    used in live mode so the op line reads in beginner words even for a kernel we
@@ -769,7 +787,11 @@ function replaySource() {
     })(s);
     at(t + 250, function () { H.onDone({
       seconds: C.done.seconds, tok_per_s: C.done.tok_per_s, n_gen: n,
-      recordedVerdict: "TOKEN-FOR-TOKEN MATCH — 25 / 25 ids vs the independent oracle (recorded gate result)"
+      recordedVerdict: C.verify
+        ? ("TOKEN-FOR-TOKEN MATCH — " + C.verify.matched + " / " + C.verify.total + " ids vs the independent " + (C.verify.oracle || "numpy oracle") + " (recorded)")
+        : null,
+      recordedMatched: C.verify ? C.verify.matched : null,
+      recordedTotal: C.verify ? C.verify.total : null
     }); });
     return { cancel: function () { cancelled = true; timers.forEach(clearTimeout); } };
   } };
@@ -864,6 +886,9 @@ function verifyLastRun() {
   if (!lastRun || !lastRun.ids.length) return;
   var v = $("verdict"), btn = $("verifyBtn");
   if (btn) btn.disabled = true;
+  /* the referee bars animate now — only because the user chose to run the check. */
+  $("fillA").style.width = "98%";
+  setTimeout(function () { $("fillB").style.width = "98%"; }, 350);
   v.className = "verdict";
   v.innerHTML = '<span class="spin"></span>running the independent numpy oracle on your prompt… (seconds for the small models; minutes for GPT-2-XL — leave it open)';
   setStatus("st4", "verifying…");
@@ -941,7 +966,7 @@ function startRun(prompt) {
            only — never a wrong kernel name. */
         var per = opsPerLayer || OPS_PER_LAYER || LAYER_OPS.length;
         if (SOURCE === "replay") {
-          var op = LAYER_OPS[L % LAYER_OPS.length];   /* GPT-2's recorded ops */
+          var op = REPLAY_OPS[L % REPLAY_OPS.length];   /* the captured run's real recorded ops (Llama or GPT-2) */
           $("opline").innerHTML = '<span class="lbl">kernel:</span> ' + esc(op[1]) + ' <span class="lbl">— ' + esc(OP_WORDS[op[0]] || op[0]) + "</span>";
         } else {
           var phase = (L % 2 === 0) ? "attention — every word weighs all earlier words"
@@ -985,11 +1010,13 @@ function startRun(prompt) {
         : SOURCE === "sse" ? "live GPU run · " + (d.seconds != null ? d.seconds.toFixed(1) + " s · " + d.n_gen + " tokens" : d.n_gen + " tokens")
         : "preview — simulated pacing and numbers";
       finishModel(meta);
-      $("fillA").style.width = "98%";
-      setTimeout(function () { $("fillB").style.width = "98%"; }, 350);
+      /* the verify bars represent the referee comparison: fill them automatically
+         only for the RECORDED replay (a real recorded result). In LIVE mode they
+         stay empty until the user actually presses Verify (filled in verifyLastRun). */
+      if (SOURCE === "replay") { $("fillA").style.width = "98%"; setTimeout(function () { $("fillB").style.width = "98%"; }, 350); }
       setTimeout(function () {
         var v = $("verdict");
-        if (SOURCE === "replay" && d.recordedVerdict) { v.className = "verdict ok"; v.textContent = "✓ " + d.recordedVerdict; setStatus("st4", "25 / 25 (recorded)"); }
+        if (SOURCE === "replay" && d.recordedVerdict) { v.className = "verdict ok"; v.textContent = "✓ " + d.recordedVerdict; setStatus("st4", (d.recordedMatched != null ? d.recordedMatched + " / " + d.recordedTotal : "matched") + " (recorded)"); }
         else if (SOURCE === "sse") {
           lastRun = { model: runModel, prompt: prompt, ids: genIdList.slice() };
           if (genIdList.length) {
@@ -1021,7 +1048,7 @@ function endRun() {
   $("goBtn").disabled = false;
 }
 $("goBtn").addEventListener("click", function () {
-  if (SOURCE === "replay") { startRun("The capital of France is"); return; }   /* play the recorded run regardless of the (pinned) box */
+  if (SOURCE === "replay") { startRun((window.HELIX_CAPTURED_RUN || {}).prompt || "What is the capital of France?"); return; }   /* play the recorded run regardless of the (pinned) box */
   var p = $("promptInput").value.trim();
   if (p) startRun(p);
 });
@@ -1132,12 +1159,14 @@ function selectModel(id) {   /* set the dropdown + re-theme the whole page */
    first applyModelTheme can rebuild the overlays for the real model. */
 function wireModelSelect() {
   if (SOURCE === "replay") {
-    /* the recorded replay IS the GPT-2-XL run — lock to it and label it so. */
-    modelSel.innerHTML = '<option value="gpt2-xl">GPT-2-XL · 1.5B (this recorded run)</option>';
+    /* the recorded replay IS the captured run — lock the model + prompt to it. */
+    var CR = window.HELIX_CAPTURED_RUN || {};
+    var rm = CR.model || "smollm2-360m-instruct", rf = factsFor(rm);
+    modelSel.innerHTML = '<option value="' + esc(rm) + '">' + esc(rf.label) + (rf.params ? " · " + rf.params : "") + ' (this recorded run)</option>';
     modelSel.disabled = true;
-    applyModelTheme("gpt2-xl");
+    applyModelTheme(rm);
     /* pin the prompt to the recorded run + label the play button so ▶ plays it */
-    $("promptInput").value = "The capital of France is";   /* the recorded run's prompt (captured_run.js provenance) */
+    $("promptInput").value = CR.prompt || "What is the capital of France?";
     $("promptInput").disabled = true;
     $("goBtn").textContent = "▶ Replay the captured run";
   } else if (SOURCE === "mock") {
@@ -1202,18 +1231,30 @@ function buildDetails(f) {
     body: '<div class="simple">For <b>every single token</b> it writes, the model runs the same two-step block ' + esc(nL) + (f.layers ? ' times' : ' layers') + ': <b>attention</b> (every word looks back at all earlier words and decides what matters) then <b>MLP</b> (each word is reworked on its own). ' + perTok + '</div>' +
       '<div class="adv"><h3>Powered by Helix ' + HX + '</h3><p>All of the math runs in <b>' + esc(f.kernelPhrase) + '</b> written in the Helix language and compiled to PTX by kovc. No CUDA C does the tensor math; no vendor ML library sits underneath. One of them, complete and verbatim:</p>' +
       '<pre><span class="k">@kernel</span>\nfn vector_add(a: f32, b: f32, c: f32, n: i32) {\n    let i = block_idx() * block_dim() + thread_idx();\n    c[i] = a[i] + b[i]\n}</pre>' +
-      '<h3>The operations of one layer</h3><p>' + f.opSequence + '. The “kernel:” line on the stage shows which one is firing' + (isGpt2 ? ', in real time' : ' (in live mode it streams each real kernel; the recorded GPT-2-XL replay shows GPT-2\'s)') + '.</p>' +
+      '<h3>The operations of one layer</h3><p>' + f.opSequence + '. The “kernel:” line on the stage shows which one is firing' + (isGpt2 ? ', in real time' : ' (in live mode it streams each real kernel as it fires; the recorded replay shows the captured sequence)') + '.</p>' +
       '<div class="paths"><b>check it:</b> the Helix GPU kernels (helixc/examples/*_kernel.hx) · the model\'s forward pass in helixc/runtime/</div></div>' };
 
   DETAILS.choose = { kicker: "step 3 · scoring the vocabulary", title: "Choosing the next word " + HX,
     body: '<div class="simple">After the ' + esc(nL) + (f.layers ? ' layers' : '') + ', one last multiply scores <b>all ' + esc(vocab) + ' word-pieces at once</b>. Greedy decoding simply takes the highest score, appends it to your text, and the whole walk starts again for the next token.</div>' +
       '<div class="adv"><h3>The shading is real (and honest)</h3><p>Chip shade comes from the <b>recorded scores (logits)</b> of a captured run. Where the log kept no score, the chip shows <b>“—”</b> rather than an invented number. In live mode the real logits stream straight from the GPU.</p>' +
-      (isGpt2 ? ('<h3>Recorded example (verbatim — the GPT-2-XL run)</h3><table><tr><th>piece</th><th>id</th><th>logit</th></tr><tr><td>" the"</td><td>262</td><td>8.79</td></tr><tr><td>" city"</td><td>1748</td><td>9.49</td></tr><tr><td>" of"</td><td>286</td><td>12.82</td></tr><tr><td>" Paris"</td><td>6342</td><td>12.99</td></tr></table>') : '') +
+      (function () {
+        /* recorded logit example — verbatim from the captured run, shown ONLY for the
+           model that run actually used (so the ids/logits always match the model). */
+        var C = window.HELIX_CAPTURED_RUN;
+        if (!C || !C.tokens || factsFor(C.model) !== f) return '';
+        var rows = '';
+        for (var i = 0; i < C.tokens.length && i < 6; i++) {
+          var tk = C.tokens[i];
+          if (tk.logit == null) continue;
+          rows += '<tr><td>"' + esc(tk.string) + '"</td><td>' + tk.id + '</td><td>' + tk.logit.toFixed(2) + '</td></tr>';
+        }
+        return rows ? ('<h3>Recorded example (verbatim — this ' + esc(f.label) + ' run)</h3><table><tr><th>piece</th><th>id</th><th>logit</th></tr>' + rows + '</table>') : '';
+      })() +
       '<p style="margin-top:8px">This scoring multiply runs in the same Helix-built kernels ' + HX + ' as the layers.</p>' +
-      '<div class="paths"><b>check it:</b> demo/captured_run.js (verbatim GPT-2-XL capture + provenance notes) · the serve-gate log</div></div>' };
+      '<div class="paths"><b>check it:</b> demo/captured_run.js (verbatim SmolLM2-360M-Instruct capture + provenance notes) · the live /api/verify oracle</div></div>' };
 
   DETAILS.verify = { kicker: "step 4 · the referee", title: "Verification — the whole point " + HX,
-    body: '<div class="simple">How do you know the Helix-built stack ran the model <b>correctly</b>? An independent program (the “oracle”) — plain numpy, reading the original public weights, sharing no code with Helix — runs the same prompt. The token ids must match <b>one for one</b>. For the recorded GPT-2-XL run they did: <b>25 / 25</b>.</div>' +
+    body: '<div class="simple">How do you know the Helix-built stack ran the model <b>correctly</b>? An independent program (the “oracle”) — plain numpy, reading the original public weights, sharing no code with Helix — runs the same prompt. The token ids must match <b>one for one</b>. For this page&rsquo;s recorded run they did: <b>' + ((window.HELIX_CAPTURED_RUN || {}).verify ? (window.HELIX_CAPTURED_RUN.verify.matched + " / " + window.HELIX_CAPTURED_RUN.verify.total) : "token-for-token") + '</b>.</div>' +
       '<div class="adv"><h3>Fail-closed, never faked</h3><p>The gates exit red on any mismatch — they never warn-and-continue. The SmolLM2 gate even includes a corrupted-weights <b>negative control</b> that correctly fails, proving the comparator has teeth. And honesty about THIS page: no live verdict is computed here; the replay shows the <b>recorded</b> gate result, and live mode points you at the gate script.</p>' +
       '<h3>What\'s being verified</h3><p>The Helix execution ' + HX + ': from-raw compiler → the GPU kernels → PTX → this output. The oracle is the independent referee, deliberately kept outside that chain.</p>' +
       '<h3>Honest edge</h3><p>The oracle shares the model\'s <i>spec</i> (it\'s an independent implementation, not an independent specification) — it catches implementation bugs, not a shared misunderstanding of the model.</p>' +

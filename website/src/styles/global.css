@@ -369,6 +369,15 @@ section { padding: var(--section-y) 0; position: relative; }
 .btn-ghost { border: 1px solid var(--line-strong); color: var(--fg); }
 .btn-ghost:hover { border-color: var(--fg); }
 
+/* download CTA — violet-accented so the demo download reads as a distinct primary action */
+.btn-download { background: var(--violet); color: var(--paper); border: 1px solid var(--violet); }
+.btn-download:hover { filter: brightness(1.08); color: var(--paper); }
+.btn-download .dl-icon { width: 16px; height: 16px; transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+.btn-download:hover .dl-icon { transform: translateY(2px); }
+.hero-dl-note { margin-top: 14px; font-size: 13.5px; color: var(--fg-soft); max-width: 60ch; }
+.hero-dl-note a { color: var(--violet); }
+.hero-dl-note a:hover { text-decoration: underline; }
+
 .btn .arrow {
   display: inline-block;
   transition: transform 220ms cubic-bezier(.2,.8,.2,1);
