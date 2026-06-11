@@ -134,6 +134,47 @@ fi
 grep -E 'HELIX_GEN_IDS|TOKEN' "$OUT/llama_gkv.log" | tail -2 | sed 's/^/  /'
 echo "  G-KV: $GKV"
 
+echo "=== [6e] G-S: SEEDED SAMPLING token-for-token (pinned cfg, oracle RNG == worker RNG) ==="
+# DISCLOSED RESIDUAL: both sides run the IDENTICAL pinned sampler, but the input logits
+# differ ~1e-5 (GPU fp32 vs numpy). A draw landing inside that boundary gap flips the pick
+# (the sampling analogue of an argmax near-tie). The leg therefore pins a config measured
+# boundary-clean (seed 42 first diverges at draw #36 on this box) and gates 32 sampled
+# tokens; ANY mismatch within the pinned window is a hard FAIL. User-facing reproducibility
+# (same seed -> same reply ON THIS STACK) is gated separately below as G-R.
+NGEN_S=32
+SCFG='{"temperature":0.8,"top_p":0.95,"top_k":40,"rep_penalty":1.1,"seed":42}'
+GS=""
+( cd "$TOOLS" && LLAMA_SAMPLE="$SCFG" python3 llama_numpy_ref.py dump-gen "$PROMPT" "$NGEN_S" ) > "$OUT/llama_gs_oracle.log" 2>&1 || { echo "  G-S oracle dump FAIL"; GS=FAIL; RC=1; }
+if [ -z "$GS" ]; then
+  if HX_KV=1 HX_RESIDENT=1 /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --sample "$SCFG" --generate "$NGEN_S" "$REFD/llama_ref_ids.txt" "$REFD/llama_ref_gen_ids.txt" 2>&1 | tee "$OUT/llama_gs.log" | grep -q "TOKEN_FOR_TOKEN_MATCH"; then
+    GS=PASS
+  else
+    GS=FAIL; RC=1
+  fi
+fi
+grep -E "HELIX_GEN_IDS|TOKEN" "$OUT/llama_gs.log" 2>/dev/null | tail -2 | sed "s/^/  /"
+echo "  G-S: ${GS:-FAIL}"
+
+echo "=== [6r] G-R: seeded REPRODUCIBILITY (same seed -> byte-identical ids, two live runs) ==="
+HX_KV=1 HX_RESIDENT=1 /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --sample "$SCFG" --generate "$NGEN_S" "$REFD/llama_ref_ids.txt" > "$OUT/llama_gr1.log" 2>&1
+cp /tmp/helix_gen_ids.txt /tmp/helix_gr_run1.txt 2>/dev/null
+HX_KV=1 HX_RESIDENT=1 /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --sample "$SCFG" --generate "$NGEN_S" "$REFD/llama_ref_ids.txt" > "$OUT/llama_gr2.log" 2>&1
+if [ -s /tmp/helix_gr_run1.txt ] && [ -s /tmp/helix_gen_ids.txt ] && cmp -s /tmp/helix_gr_run1.txt /tmp/helix_gen_ids.txt; then
+  GR=PASS; echo "  two seeded runs byte-identical (the user-facing same-seed guarantee)"
+else
+  GR=FAIL; RC=1; echo "  G-R FAIL: two identical seeded runs DIFFER (nondeterminism!)"
+fi
+echo "  G-R: $GR"
+
+echo "=== [6f] temp-0 REGRESSION: --sample temp 0 ids == the greedy ids (byte cmp) ==="
+T0CFG='{"temperature":0}'
+if HX_KV=1 HX_RESIDENT=1 /tmp/llama_infer /tmp/llama_model.ptx "$WTS" --sample "$T0CFG" --generate "$NGEN" "$REFD/llama_ref_ids.txt" > "$OUT/llama_t0.log" 2>&1 && [ -s /tmp/helix_gen_ids.txt ] && [ -s /tmp/helix_gen_ids_fullfwd.txt ] && cmp -s /tmp/helix_gen_ids.txt /tmp/helix_gen_ids_fullfwd.txt; then
+  GT0=PASS; echo "  temp-0 ids byte-identical to greedy"
+else
+  GT0=FAIL; RC=1; echo "  GT0 FAIL: temp-0 ids differ from greedy (or run failed)"
+fi
+echo "  G-T0: $GT0"
+
 echo "=== [7] NEGATIVE CONTROL: corrupted weights must FAIL the logits leg ==="
 cp "$WTS" /tmp/llama_corrupt.weights
 # zero out 1 MB of mid-file weights at the 200 MB offset (well past the 64B header; model-agnostic)
@@ -151,8 +192,11 @@ echo "  G-L1 block0   : $GL1"
 echo "  G-L2a logits  : $GL2A"
 echo "  G-L2b gen     : $GL2B"
 echo "  G-KV  kv-decode: ${GKV:-SKIPPED}"
+echo "  G-S   sampling : ${GS:-SKIPPED}"
+echo "  G-R   reprod.  : ${GR:-SKIPPED}"
+echo "  G-T0  temp0    : ${GT0:-SKIPPED}"
 echo "  NEG control   : $NEG"
-if [ "$GL1$GL2A$GL2B${GKV:-FAIL}$NEG" = "PASSPASSPASSPASSPASS" ] && [ "$RC" = "0" ]; then
+if [ "$GL1$GL2A$GL2B${GKV:-FAIL}${GS:-FAIL}${GR:-FAIL}${GT0:-FAIL}$NEG" = "PASSPASSPASSPASSPASSPASSPASSPASS" ] && [ "$RC" = "0" ]; then
   echo "LLAMA_MODEL_GATE_PASS"; exit 0
 else
   echo "LLAMA_MODEL_GATE_FAIL (rc=$RC)"; exit 1

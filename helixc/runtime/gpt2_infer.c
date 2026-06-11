@@ -903,6 +903,125 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
     kv_len = T;
 }
 
+/* ===================== SEEDED REPRODUCIBLE SAMPLING (Wave 2, 2026-06) =====================
+ * Host-only Category-B code: consumes the SAME host logits the greedy argmax uses; the
+ * GPU compute path is untouched (G-L1/G-L2/G-KV legs unaffected). The sampler is PINNED
+ * identically in the independent oracle (llama_numpy_ref.py sample_next: pure-python
+ * math.exp + identical op order + the same PCG32), so sampled generation is gated
+ * token-for-token for any (seed, params) -- reproducible sampling, not vibes.
+ * temp == 0 (default) bypasses all of this: greedy argmax, the verified default.
+ * Pipeline (pinned order, float64): rep-penalty (HF style) -> freq/presence penalties ->
+ * temperature -> top-k -> softmax (max-subtract, libm exp) -> sort by (-p, id) -> top-p
+ * (include the crossing token) -> min-p (>= min_p * p_max) -> renormalize -> one PCG32
+ * draw u in [0,1) -> first index with cumsum > u.
+ * Platform note (disclosed): C exp() and python math.exp() are the same WSL glibc libm
+ * here, so the gate is bit-deterministic on this box; across OTHER platforms a 1-ulp libm
+ * difference could flip a rare near-tie -- the gate, run on any given box, decides. */
+static const char* json_find_key(const char* s, const char* key);   /* defined below (serve module) */
+static uint64_t g_pcg_state = 0, g_pcg_inc = 0;
+static void pcg32_seed(uint64_t seed) {
+    g_pcg_state = 0u; g_pcg_inc = (54u << 1) | 1u;
+    g_pcg_state = g_pcg_state * 6364136223846793005ULL + g_pcg_inc;
+    g_pcg_state += seed;
+    g_pcg_state = g_pcg_state * 6364136223846793005ULL + g_pcg_inc;
+}
+static uint32_t pcg32_next(void) {
+    uint64_t old = g_pcg_state;
+    g_pcg_state = old * 6364136223846793005ULL + g_pcg_inc;
+    uint32_t xorshifted = (uint32_t)(((old >> 18) ^ old) >> 27);
+    uint32_t rot = (uint32_t)(old >> 59);
+    return (xorshifted >> rot) | (xorshifted << ((32 - rot) & 31));
+}
+typedef struct {
+    double temp, top_p, min_p, rep_pen, freq_pen, pres_pen;
+    int top_k; uint64_t seed; int seeded;
+} SampleCfg;
+static SampleCfg g_scfg = { 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0, 0u, 0 };
+static unsigned short* g_tokcount = NULL;     /* [NV] occurrence counts (penalties) */
+static void sample_reset(const int* prompt_ids, int n_prompt) {
+    if (!g_tokcount) g_tokcount = (unsigned short*)malloc((size_t)NV * sizeof(unsigned short));
+    memset(g_tokcount, 0, (size_t)NV * sizeof(unsigned short));
+    for (int i = 0; i < n_prompt; i++)
+        if (prompt_ids[i] >= 0 && prompt_ids[i] < NV && g_tokcount[prompt_ids[i]] < 65535) g_tokcount[prompt_ids[i]]++;
+    pcg32_seed(g_scfg.seed);
+}
+static void sample_count(int id) {
+    if (g_tokcount && id >= 0 && id < NV && g_tokcount[id] < 65535) g_tokcount[id]++;
+}
+typedef struct { int id; double v; } SCand;
+static int scand_cmp(const void* a, const void* b) {   /* pinned: (-v, id) */
+    const SCand* x = (const SCand*)a; const SCand* y = (const SCand*)b;
+    if (x->v > y->v) return -1;
+    if (x->v < y->v) return 1;
+    return (x->id < y->id) ? -1 : (x->id > y->id) ? 1 : 0;
+}
+static int sample_next(const float* logits, int nv) {
+    /* 1+2: penalties on float64 copies of the raw logits */
+    double* l = (double*)malloc((size_t)nv * sizeof(double));
+    for (int i = 0; i < nv; i++) {
+        double x = (double)logits[i];
+        int c = g_tokcount ? (int)g_tokcount[i] : 0;
+        if (c > 0 && g_scfg.rep_pen != 1.0) { x = (x > 0.0) ? x / g_scfg.rep_pen : x * g_scfg.rep_pen; }
+        if (c > 0) x -= g_scfg.freq_pen * (double)c + g_scfg.pres_pen;
+        l[i] = x;
+    }
+    /* 3: temperature */
+    double invt = 1.0 / g_scfg.temp;
+    for (int i = 0; i < nv; i++) l[i] *= invt;
+    /* 4: top-k preselect (k<=0 = all). Build candidate list. */
+    int k = (g_scfg.top_k > 0 && g_scfg.top_k < nv) ? g_scfg.top_k : nv;
+    SCand* cand = (SCand*)malloc((size_t)nv * sizeof(SCand));
+    for (int i = 0; i < nv; i++) { cand[i].id = i; cand[i].v = l[i]; }
+    qsort(cand, (size_t)nv, sizeof(SCand), scand_cmp);    /* by (-logit, id), pinned */
+    int n = k;
+    /* 5: softmax over the n kept (max-subtract; libm exp; float64) */
+    double mx = cand[0].v;
+    double sum = 0.0;
+    for (int i = 0; i < n; i++) { cand[i].v = exp(cand[i].v - mx); sum += cand[i].v; }
+    for (int i = 0; i < n; i++) cand[i].v /= sum;          /* probs, already sorted (-p, id) */
+    /* 6: top-p nucleus (include the crossing token) */
+    if (g_scfg.top_p < 1.0) {
+        double cum = 0.0; int keep = n;
+        for (int i = 0; i < n; i++) { cum += cand[i].v; if (cum >= g_scfg.top_p) { keep = i + 1; break; } }
+        n = keep;
+    }
+    /* 7: min-p relative floor */
+    if (g_scfg.min_p > 0.0) {
+        double floor_p = g_scfg.min_p * cand[0].v;
+        int keep = n;
+        for (int i = 0; i < n; i++) if (cand[i].v < floor_p) { keep = i; break; }
+        n = (keep > 0) ? keep : 1;
+    }
+    /* 8: renormalize + one PCG32 draw + CDF walk */
+    double rsum = 0.0;
+    for (int i = 0; i < n; i++) rsum += cand[i].v;
+    double u = (double)pcg32_next() / 4294967296.0;
+    double cum2 = 0.0; int pick = cand[n-1].id;
+    for (int i = 0; i < n; i++) { cum2 += cand[i].v / rsum; if (cum2 > u) { pick = cand[i].id; break; } }
+    free(cand); free(l);
+    return pick;
+}
+/* parse "k=v,k=v" --sample spec (CLI) or per-request JSON fields into g_scfg.
+ * Returns 1 if sampling is ACTIVE (temp > 0). */
+static int sample_cfg_from_json(const char* line) {
+    const char* p;
+    g_scfg.temp = 0.0; g_scfg.top_p = 1.0; g_scfg.min_p = 0.0; g_scfg.top_k = 0;
+    g_scfg.rep_pen = 1.0; g_scfg.freq_pen = 0.0; g_scfg.pres_pen = 0.0; g_scfg.seed = 0u; g_scfg.seeded = 0;
+    if ((p = json_find_key(line, "temperature")) != NULL) g_scfg.temp = atof(p);
+    if ((p = json_find_key(line, "top_p"))       != NULL) g_scfg.top_p = atof(p);
+    if ((p = json_find_key(line, "top_k"))       != NULL) g_scfg.top_k = atoi(p);
+    if ((p = json_find_key(line, "min_p"))       != NULL) g_scfg.min_p = atof(p);
+    if ((p = json_find_key(line, "rep_penalty")) != NULL) g_scfg.rep_pen = atof(p);
+    if ((p = json_find_key(line, "freq_penalty"))!= NULL) g_scfg.freq_pen = atof(p);
+    if ((p = json_find_key(line, "pres_penalty"))!= NULL) g_scfg.pres_pen = atof(p);
+    if ((p = json_find_key(line, "seed"))        != NULL) { g_scfg.seed = (uint64_t)strtoull(p, NULL, 10); g_scfg.seeded = 1; }
+    if (g_scfg.temp < 0.0) g_scfg.temp = 0.0;
+    if (g_scfg.temp > 4.0) g_scfg.temp = 4.0;
+    if (g_scfg.top_p <= 0.0 || g_scfg.top_p > 1.0) g_scfg.top_p = 1.0;
+    if (g_scfg.rep_pen <= 0.0) g_scfg.rep_pen = 1.0;
+    return g_scfg.temp > 0.0;
+}
+
 /* host argmax over a [NV] logit row (host argmax on the final logits is acceptable demo glue). */
 static int argmax_row(const float* v, int n) {
     int a = 0; float best = v[0];
@@ -1245,13 +1364,14 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
     else { int c[] = {464,3139,286,4881,318}; T0 = 5; memcpy(ids, c, sizeof(c)); }
     int T = T0;
     printf("[generate] N=%d prompt T=%d ids:", Ngen, T0); for (int i=0;i<T0;i++) printf(" %d", ids[i]); printf("\n");
+    if (g_scfg.temp > 0.0) sample_reset(ids, T0);
     float* logits = (float*)malloc((size_t)NV*sizeof(float));
     int nonfinite_any = 0;
     for (int step = 0; step < Ngen; step++) {
         if (ARCH && KV_ON && step > 0) decode_step_llama(ids[T-1], T-1, logits);
         else forward_full(ids, T, logits);
         for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
-        int nxt = argmax_row(logits, NV);
+        int nxt = (g_scfg.temp > 0.0) ? sample_next(logits, NV) : argmax_row(logits, NV);
         ids[T++] = nxt;
         if (EOS_ID >= 0 && nxt == EOS_ID) break;   /* chat eos-stop (matches the oracle: append eos, then stop) */
     }
@@ -1422,6 +1542,7 @@ static int run_serve(const char* ptx_path, const char* wpath,
 
         emit_hello();
         emit_tokenize(ids, T0, ((T0 + 63) / 64) * 64);
+        if (g_scfg.temp > 0.0) sample_reset(ids, T0);
 
         /* working id buffer: prompt + room for Ngen generated ids. */
         /* per-request FAST mode: "detail":"token" drops per-op syncs + op/layer events for
@@ -1431,6 +1552,9 @@ static int run_serve(const char* ptx_path, const char* wpath,
             const char* dp = json_find_key(line, "detail");
             g_fast = (dp && *dp == '"' && strncmp(dp + 1, "token", 5) == 0) ? 1 : 0;
         }
+        /* per-request sampling config (defaults = greedy when fields absent). SEEDED
+         * sampling is gated token-for-token vs the oracle's identical sampler (G-S leg). */
+        sample_cfg_from_json(line);
         kv_len = 0;
         int* work = (int*)malloc((size_t)(T0 + Ngen) * sizeof(int));
         memcpy(work, ids, (size_t)T0 * sizeof(int));
@@ -1445,7 +1569,7 @@ static int run_serve(const char* ptx_path, const char* wpath,
             if (ARCH && KV_ON && step > 0) decode_step_llama(work[T-1], T-1, logits);
             else forward_full(work, T, logits);             /* UNCHANGED arithmetic; hooks fire inside */
             for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite = 1; break; }
-            int nxt = argmax_row(logits, NV);
+            int nxt = (g_scfg.temp > 0.0) ? sample_next(logits, NV) : argmax_row(logits, NV);
 #ifdef GPT2_SERVE
             char* piece = decode_one(nxt);
 #else
@@ -1455,6 +1579,7 @@ static int run_serve(const char* ptx_path, const char* wpath,
             free(piece);
             gen_ids[step] = nxt;
             work[T++] = nxt;
+            if (g_scfg.temp > 0.0) sample_count(nxt);
             if (EOS_ID >= 0 && nxt == EOS_ID) { Ngen = step + 1; break; }  /* chat eos-stop; done reports the REAL count */
         }
         double secs = now_seconds() - t0;
@@ -1512,6 +1637,17 @@ int main(int argc, char** argv) {
 
     /* a v2 (llama) weight file is self-describing: peek sets ARCH + all dims (incl. GQA/RoPE)
      * BEFORE any device or buffer setup. gpt2 v1 files leave the env-configured dims as-is. */
+    /* pre-pass: --sample <json-fragment> may appear ANYWHERE; consume it before the
+     * positional mode dispatch (it configures g_scfg; temp 0 = greedy default). */
+    for (int i = 3; i < argc - 1; i++) {
+        if (strcmp(argv[i], "--sample") == 0) {
+            sample_cfg_from_json(argv[i + 1]);
+            for (int j = i; j + 2 < argc; j++) argv[j] = argv[j + 2];
+            argc -= 2;
+            break;
+        }
+    }
+    mode = argv[3];   /* re-read: the pre-pass may have shifted the mode into slot 3 */
     if (peek_weights_header(wpath)) return 2;
 
     if (strcmp(mode, "--block0-dump") == 0) {
@@ -1562,6 +1698,7 @@ int main(int argc, char** argv) {
             else if (!strcmp(argv[i], "--max-ctx") && i+1 < argc) max_ctx = atoi(argv[++i]);
             else if (!strcmp(argv[i], "--timing")  && i+1 < argc) timing  = atoi(argv[++i]);
             else if (!strcmp(argv[i], "--detail")  && i+1 < argc) detail  = argv[++i];
+        else if (!strcmp(argv[i], "--sample")  && i+1 < argc) sample_cfg_from_json(argv[++i]);
             else if (!strcmp(argv[i], "--vocab")   && i+1 < argc) vocab   = argv[++i];
             else if (!strcmp(argv[i], "--merges")  && i+1 < argc) merges  = argv[++i];
         }

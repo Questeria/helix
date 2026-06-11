@@ -311,7 +311,7 @@ static void handle_health(int fd) {
     snprintf(models + mo, sizeof models - mo, "]");
     char body[1024];
     snprintf(body, sizeof body,
-        "{\"ok\":true,\"serve\":true,\"fast\":true,\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\",\"busy\":%s,\"models\":%s}",
+        "{\"ok\":true,\"serve\":true,\"fast\":true,\"sampling\":true,\"model\":\"%s\",\"ready\":%s,\"device\":\"%s\",\"busy\":%s,\"models\":%s}",
         cfg_model_name(0),
         g_worker.ready ? "true" : "false",
         g_worker.device[0] ? g_worker.device : "",
