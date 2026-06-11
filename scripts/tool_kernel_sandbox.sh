@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
 # tool_kernel_sandbox.sh -- W5 "the model writes a Helix kernel and runs it" SANDBOX.
-# SECURITY-AUDIT-PENDING: this executes MODEL-SUPPLIED code. It ships DISABLED by default
-# (the server requires --tool-kernel 1 AND this script) and must clear the independent
-# security audit before being enabled anywhere public.
+# This executes MODEL-SUPPLIED code. It ships DISABLED by default (the server requires
+# --tool-kernel 1 AND this script); the shipped launcher serve_chat_demo.sh never passes it.
+#
+# INDEPENDENT SECURITY AUDIT (fresh-context, 2026-06-10): SAFE AS SHIPPED (disabled) --
+# default-off verified (Cfg.tool_kernel zero-init, sole setter is --tool-kernel, 403 before
+# any work), no command injection (model code only ever reaches the FILE, never the shell
+# line), process/CUDA-context isolation holds (a hostile kernel is confined to its own
+# throwaway context + cannot reach the resident workers' weights/KV -- separate fork+execv
+# processes, separate GPU address spaces), DoS bounds correctly applied, no network egress.
+# BEFORE THIS MAY EVER BE ENABLED (even locally), three things MUST be fixed first:
+#   E1. /tmp handling: /tmp/hxtool_<pid>.hx (server) + the fixed /tmp/kernel_in.hx and
+#       /tmp/out.ptx here are predictable, non-O_EXCL, symlink-followable, world-writable,
+#       and shared with the gate scripts -> local TOCTOU/symlink + gate-collision. Use
+#       mkstemp + O_NOFOLLOW and move ALL intermediates into the per-run mktemp -d.
+#   E2. CSRF/Origin: the server sends Access-Control-Allow-Origin:* and binds 127.0.0.1, so
+#       if enabled, ANY website the user visits could POST /api/tool/kernel via the browser.
+#       Add an Origin / Sec-Fetch-Site / CSRF-token check on that route before enabling.
+#   E3. In-context GPU OOB is UNFIXABLE without bounds-checked index lowering (the kovc
+#       kernel language has no `if i<n` requirement; arr[idx] lowers to ld/st.global with no
+#       guard). It is CONTAINED ONLY by per-process CUDA isolation -- so NEVER enable this on
+#       a host with CUDA MPS on. Accept it explicitly, or add bounds-checked lowering.
 # DEFENSE LAYERS (documented for the audit):
 #   1. INPUT SHAPE: exactly ONE @kernel fn; <= 4 KB; <= 120 lines; ASCII only; the ONLY
 #      tokens admitted are the gated-kernel language subset (see the allowlist scan) --
