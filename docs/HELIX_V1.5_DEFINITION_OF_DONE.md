@@ -81,3 +81,57 @@ never force-push or skip hooks; preserve all existing tags; DDC-clean; honest al
 (`verification/oracle/oracle_train.py`); `scripts/reproduce_trust.sh` + `scripts/gate_kovc.sh`
 (CPU/x86, ptxas-free); `docs/HELIX_V1_DEFINITION_OF_DONE.md` (template); `docs/TRUST_CHAIN_CLOSED.md`;
 the bf16/f16 dtype machinery in `helixc/bootstrap/kovc.hx`. v1.4 tag annotation read live.*
+
+---
+
+## S0 ternary — implementation plan (synthesized from the read-only probe `wf_8c943229-120`, 2026-06-13)
+
+Three read-only agents mapped the type-system, the PTX/tile emitter, and the gate/oracle/corpus
+surfaces. Decisions + two gate-able increments:
+
+**Design decisions**
+- **Type tag = 12** (next free; 0–11 taken, 12+ reserved — namespace comment `kovc.hx:1632`). Ident
+  provisionally `t2` (confirm no collision in `ty_ident_to_tag`, `parser.hx:1658`).
+- **Scalar domain = i32.** {-1,0,+1} ⊂ i32, so ternary scalar values + arithmetic fall through to the
+  existing i32 codegen — NO new x86 scalar binop cascade, NO out-of-domain trap. Ternary's
+  distinctness is (a) packed storage and (b) the GPU **integer-accumulate** matmul (the BitNet
+  kernel) — those are the substantive new work, not scalar arithmetic.
+- **GPU path = a NEW self-contained fused intrinsic `__ternary_matmul_smem`**, NOT a dtype threaded
+  through the f32 emitters. Mandatory: the committed `vector_add_kernel.ref.ptx` +
+  `tiled_matmul_kernel.ref.ptx` are byte-compared by the gate, so the shared f32 emitters
+  (`emit_ptx_fma`, `emit_ptx_ld_shared`, `emit_ptx_gload_f32`, the stride-4 literals) must NOT change.
+  The new intrinsic is a copy of `emit_ptx_tiled_matmul_smem` (`kovc.hx:12969`) with int32
+  accumulators (existing `add.s32` @12387 + a tiny new `sub.s32`/neg), a new int shared/global load,
+  ≤6 args, reusing the dtype-agnostic `cp.async.cg16` (16-byte) staging.
+
+**Increment 1 — CPU only (no GPU / oracle / .ref.ptx): the first gate-able win**
+- Edits: `t2`→12 arm in `ty_ident_to_tag` (`parser.hx:1658`); reverse arm in `ty_tag_push_name`
+  (`parser.hx:1201`); a `type_width_class` arm for tag 12 (`kovc.hx:1914`, width 4 = i32-like).
+- Corpus: add `stage0/helixc-bootstrap/corpus_gen/trit_dot.hx` (a {-1,0,+1} dot product,
+  runtime-accumulated, full-i32-compared → 42/0 sentinel; template = `corpus_gen/V4_bf16_add.hx`).
+  Wire `chk "$GENC/trit_dot.hx" 42` into `gate_kovc.sh` leg [4] (~line 615).
+- **Lockstep count bumps (THREE places or reproduction breaks):** `gate_kovc.sh:728` numeric floor
+  109→110; the expect-string `gate_kovc.sh:616`; the exact literal `CORPUS: 109 passed, 0 failed` at
+  `reproduce_trust.sh:123` → 110. Dated bump-log comment (existing style).
+- Gate: K2==K3==K4 byte-identical (self-host source never uses `t2`, so 3-way identical, but the
+  pinned `EXPECT_FIX` @`gate_kovc.sh:117` + `FIX_SHA` @`reproduce_trust.sh:69` MOVE → re-mint +
+  re-commit the pinned SHA *with a reason*, the V1–V4 pattern) + vector_add/tiled PTX byte-identical +
+  corpus 110/0. Commit LOCALLY.
+
+**Increment 2 — GPU + oracle (completes S0's DoD)**
+- New `__ternary_matmul_smem` emitter + name-branch in `emit_ptx_call` (`kovc.hx:14628`);
+  `helixc/examples/ternary_matmul_kernel.hx` + freshly-minted committed `.ref.ptx` (eol=lf auto) + a
+  provenance grep; ≥2 more corpus rows.
+- Independent numpy ternary-matmul oracle: fold into the single committed `oracle_train.py`
+  (env-gated, byte-identical default) OR runtime-generate a fenced `/tmp` witness — keep
+  `committed .py == 1`.
+- GPU-vs-oracle execution check on the RTX 3070 with a **load-bearing negative control** (corrupt a
+  weight, assert not-a-no-op, assert the compare then FAILS), modeled on `capstone_audit.sh`
+  NC-PERTURB; **exact-int** compare (not within-2%) with a ≥N-element vacuous-pass guard.
+- Avoid a new host `.c` (the `committed .c/.h == 29` fence) — reuse `cuda_launch.c`'s positional
+  `void*[]` arg convention.
+
+**Risks carried:** keep ternary OUT of the self-host source (corpus-only) or the fixpoint story
+changes; the corpus count is triple-booked (bump all three in lockstep); mint the `.ref.ptx` only
+once the emitter is frozen; declare nothing "done" until the GPU-vs-oracle check + its negative
+control are green.
