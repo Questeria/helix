@@ -887,7 +887,8 @@ int main(int argc, char** argv) {
         /* activations b: non-degenerate f16-representable, f16-rounded (refB shares the rounded bits) */
         for (size_t i = 0; i < bN; i++) { float v = ((float)((i * 5 + 1) % 11) - 5.0f) * 0.3f; hB[i] = f32_to_f16(v); refB[i] = f16_to_f32(hB[i]); }
         /* wflip NC: bump element-0's nibble (the GPU sees a changed weight; the oracle keeps hCode).
-         * The fixed data has code[0]=3 (1.5) -> 4 (2.0): a real value change, in every C[0,*] sum. */
+         * The fixed data has code[0]=3 (1.5) -> 4 (2.0): a real value change, in MOST C[0,*] sums
+         * (b[k=0,cc=3]=0 zeros that one cell's delta; the NC only needs >=1 of the 8 cells to fail). */
         if (wflip) { int n0 = hW[0] & 15; hW[0] = hW[0] - n0 + ((n0 + 1) & 15); }
         CUdeviceptr dW, dSc, dB, dC;
         CK(cuMemAlloc(&dW, wN * sizeof(int)), "cuMemAlloc W (mxfp4 packed)");
@@ -919,7 +920,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        double mxbytes = (double)wN * 4.0 + (double)scN * 1.0;       /* measured: packed words + 1B/scale */
+        double mxbytes = (double)wN * 4.0 + (double)scN * 1.0;       /* STORAGE footprint: packed words (4B each) + the E8M0 scale at its native 1B. (The device sc buffer is f32 only as a runtime dequant artifact -- no __gpu_exp2 on the @kernel path -- NOT the stored size; the storage win is what is claimed.) */
         double f32b = (double)Md * Kd * 4.0, f16b = (double)Md * Kd * 2.0;
         printf("GPU [%s] naive_mxfp4_matmul(dequant->f32-acc->f16) %dx%dx%d over %d cells: C[1,1]=%g, max_abs=%g max_rel=%g, %d bad -> %s | footprint(measured): mxfp4=%.0fB vs f32=%.0fB (%.2fx) vs f16=%.0fB (%.2fx)\n",
                gpu, Md, Kd, Nd, Md * Nd, f16_to_f32(hC[1 * Nd + 1]), maxabs, maxrel, xbad, xbad ? "FAIL" : "PASS",
