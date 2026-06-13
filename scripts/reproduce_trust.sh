@@ -65,8 +65,14 @@ bad(){ echo "[reproduce_trust] *** FAIL: $*" >&2; FAIL=1; }
 
 # Pinned release anchors (the values an independent run must reproduce):
 SEED_SHA=9837db12752a22159ca75a533910bc0d7b9afb35df9b9963f256b7b1b915c9bb
-K1_SHA=84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba
-FIX_SHA=0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f
+# v1.5 S0 re-mint (2026-06-13): K1 84363adb... -> 029e6822... (K1 = seed compiling k1src.hx, which
+# includes the edited parser.hx; gcc==M2-seed DDC self-consistency holds at the new value). v1.4 K1 kept at the v1.4 tag.
+K1_SHA=029e68225c27a412e79d4fae9c23c97191e7d17cfe6ae4ccc29cd5179da9ee2f
+# v1.5 S0 re-mint (2026-06-13): fixpoint 0992dddd... -> dffd778c... (additive ternary type t2; the
+# 3-way fixpoint K2==K3==K4 holds, corpus 110/0, PTX byte-identical). v1.4-shipped 0992dddd is kept
+# at the v1.4 tag. NOTE: K1_SHA above also moves under this edit (K1 = seed compiling the edited .hx);
+# it is re-minted to the value the gcc-DDC reproduces, not guessed.
+FIX_SHA=dffd778cc4f75e4bd28ad33c99541049974fb713d329e2d3a4f3c774a58cb24e
 
 echo "============================================================"
 echo " Helix from-raw trust-core reproduction"
@@ -120,7 +126,7 @@ say "[3] self-host fixpoint gate (scripts/gate_kovc.sh)"
 bash scripts/gate_kovc.sh >/tmp/rt_gate.log 2>&1 || true
 if grep -q '^GATE_PASS' /tmp/rt_gate.log; then say "    GATE_PASS"; else bad "gate did not reach GATE_PASS (tail):"; tail -15 /tmp/rt_gate.log >&2; fi
 if grep -q 'FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)' /tmp/rt_gate.log; then say "    fixpoint K2==K3==K4 == pinned ($FIX_SHA)"; else bad "fixpoint not pinned-OK"; fi
-if grep -q 'CORPUS: 109 passed, 0 failed' /tmp/rt_gate.log; then say "    corpus 109/0"; else bad "corpus not 109/0"; fi
+if grep -q 'CORPUS: 110 passed, 0 failed' /tmp/rt_gate.log; then say "    corpus 110/0"; else bad "corpus not 110/0"; fi
 if grep -q 'CHECK_ERR: 4 passed, 0 failed' /tmp/rt_gate.log; then say "    check_err 4/0"; else bad "check_err not 4/0"; fi
 
 # --- [4] gcc diverse-double-compile -------------------------------------------------------------

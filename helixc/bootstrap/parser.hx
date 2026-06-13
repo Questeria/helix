@@ -1229,10 +1229,15 @@ fn ty_tag_push_name(tag: i32) -> i32 {
         let start = __arena_len();
         __arena_push(105); __arena_push(56);
         start * 8 + 2
+    } else { if tag == 12 {
+        // v1.5 S0: t2 — 2 bytes (ternary -1/0/+1, BitNet b1.58)
+        let start = __arena_len();
+        __arena_push(116); __arena_push(50);
+        start * 8 + 2
     } else {
         // 3-byte (and default-i32) tags
         ty_tag_push_name_3byte(tag)
-    } } }
+    } } } }
 }
 fn var_struct_tab_add(sb: i32, name_s: i32, name_l: i32, struct_idx: i32) -> i32 {
     let count = var_struct_tab_count(sb);
@@ -1675,10 +1680,11 @@ fn ty_ident_to_tag(ty_s: i32, ty_l: i32) -> i32 {
         } else { 0 } } }
     } else { if ty_l == 2 {
         // Stage 2.3 / 2.5b: 2-byte idents — u8 → 7, i8 → 10.
+        // v1.5 S0 (2026-06-13): t2 (116 50) -> 12 = ternary -1/0/+1 (BitNet b1.58); scalar domain i32.
         let b0 = __arena_get(ty_s);
         let b1 = __arena_get(ty_s + 1);
         if b0 == 117 { if b1 == 56 { 7 } else { 0 } }
-        else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { 0 } }
+        else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { if b0 == 116 { if b1 == 50 { 12 } else { 0 } } else { 0 } } }
     } else { if ty_l == 4 {
         // Stage 1.5: 4-byte ident — bf16 → 4.
         let b0 = __arena_get(ty_s);
@@ -13150,10 +13156,11 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
             } else { if ty_l == 2 {
                 // Stage 2.3: 2-byte type idents — `u8` -> 7.
                 // Stage 2.5b: `i8` (105 56) -> 10.
+                // v1.5 S0 (2026-06-13): t2 (116 50) -> 12 = ternary -1/0/+1 (typed-param resolver).
                 let b0 = __arena_get(ty_s);
                 let b1 = __arena_get(ty_s + 1);
                 if b0 == 117 { if b1 == 56 { 7 } else { 0 } }
-                else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { 0 } }
+                else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { if b0 == 116 { if b1 == 50 { 12 } else { 0 } } else { 0 } } }
             } else { if ty_l == 4 {
                 // Stage 1.5: 4-byte type idents — `bf16` (98 102 49 54) -> 4.
                 // bf16 is the brain-float-16 dtype: truncated f32 (drop low
@@ -13438,10 +13445,11 @@ fn parse_fn_decl(tok_base: i32, sb: i32) -> i32 {
     } else { if rt_l == 2 {
         // Stage 2.3: 2-byte type idents — `u8` -> 7.
         // Stage 2.5b: `i8` (105 56) -> 10.
+        // v1.5 S0 (2026-06-13): t2 (116 50) -> 12 = ternary -1/0/+1 (return-type resolver).
         let b0 = __arena_get(rt_s);
         let b1 = __arena_get(rt_s + 1);
         if b0 == 117 { if b1 == 56 { 7 } else { 0 } }
-        else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { 0 } }
+        else { if b0 == 105 { if b1 == 56 { 10 } else { 0 } } else { if b0 == 116 { if b1 == 50 { 12 } else { 0 } } else { 0 } } }
     } else { if rt_l == 4 {
         // Stage 1.5: 4-byte type idents — `bf16` -> 4.
         let b0 = __arena_get(rt_s);
