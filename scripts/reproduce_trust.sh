@@ -126,7 +126,7 @@ say "[3] self-host fixpoint gate (scripts/gate_kovc.sh)"
 bash scripts/gate_kovc.sh >/tmp/rt_gate.log 2>&1 || true
 if grep -q '^GATE_PASS' /tmp/rt_gate.log; then say "    GATE_PASS"; else bad "gate did not reach GATE_PASS (tail):"; tail -15 /tmp/rt_gate.log >&2; fi
 if grep -q 'FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)' /tmp/rt_gate.log; then say "    fixpoint K2==K3==K4 == pinned ($FIX_SHA)"; else bad "fixpoint not pinned-OK"; fi
-if grep -q 'CORPUS: 110 passed, 0 failed' /tmp/rt_gate.log; then say "    corpus 110/0"; else bad "corpus not 110/0"; fi
+if grep -q 'CORPUS: 112 passed, 0 failed' /tmp/rt_gate.log; then say "    corpus 112/0"; else bad "corpus not 112/0"; fi
 if grep -q 'CHECK_ERR: 4 passed, 0 failed' /tmp/rt_gate.log; then say "    check_err 4/0"; else bad "check_err not 4/0"; fi
 
 # --- [4] gcc diverse-double-compile -------------------------------------------------------------
