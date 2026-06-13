@@ -112,6 +112,32 @@ static float e8m0_scale(int e8m0) {
     if (e8m0 == 0xFF) return nanf("");   /* NaN sentinel -- a caller must not feed it as data */
     return ldexpf(1.0f, e8m0 - 127);
 }
+/* v1.5 S3 (NVFP4): from-scratch FP8 E4M3 micro-scale codec (HOST oracle; bitwise OK). 1 sign / 4 exp
+ * (bias 7) / 3 mantissa. CRITICAL: E4M3 has NO Inf -- the ONLY special is S.1111.111 = NaN; e=15, m<=6
+ * are FINITE normals (max |448|). So do NOT copy the f16 'exp==0x1F -> inf' arm (line ~77). exp==0 ->
+ * subnormal (m/8)*2^-6 (min nonzero 2^-9); else normal (1+m/8)*2^(e-7). Used by the NVFP4 two-level
+ * scale (host-collapses e4m3_micro * fp32_tensor -> one effective f32 / 16-block, the S2 E8M0 pattern). */
+static float e4m3_decode(int c) {
+    int s = (c >> 7) & 1;
+    int e = (c >> 3) & 15;
+    int m = c & 7;
+    if (e == 15 && m == 7) return nanf("");                   /* the only special: NaN (no Inf in E4M3) */
+    float mag;
+    if (e == 0) mag = (m / 8.0f) * ldexpf(1.0f, -6);          /* subnormal: (m/8)*2^-6 */
+    else        mag = (1.0f + m / 8.0f) * ldexpf(1.0f, e - 7); /* normal: (1+m/8)*2^(e-7) */
+    return s ? -mag : mag;
+}
+/* f32 -> nearest E4M3 code (brute-force over the 256 codes, skipping the +/-NaN sentinel); for the
+ * round-trip selftest + any f32-source micro-scale packing. */
+static int e4m3_encode(float v) {
+    int best = 0; float bestd = 1.0e30f;
+    for (int c = 0; c < 256; c++) {
+        if ((c & 0x7F) == 0x7F) continue;                     /* skip +NaN / -NaN */
+        float d = e4m3_decode(c) - v; if (d < 0) d = -d;
+        if (d < bestd) { bestd = d; best = c; }
+    }
+    return best;
+}
 
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
@@ -227,6 +253,30 @@ int main(int argc, char** argv) {
         }
         printf("mxfp4_codec_selftest: 16 E2M1 codes + 5 E8M0 scales, %d bad -> %s\n", mbad, mbad ? "FAIL" : "PASS");
         return mbad ? 1 : 0;
+    }
+
+    /* v1.5 S3 (NVFP4): nvfp4_codec_selftest -- verify the E2M1 (reused) + FP8 E4M3 codec. The E4M3
+     * boundary set covers 0, the min subnormal (2^-9), the min normal (2^-6), 1.0 (e=7), a mid value,
+     * the MAX FINITE (448 = e15/m6, NOT Inf), and confirms the NaN sentinel (0x7F) decodes to NaN.
+     * NEVER hand-verify the decode -- this catches an off-by-one (the S1/S2 subnormal-bug class).
+     * GPU-free. Usage: cuda_launch <anyptx> x 0 nvfp4_codec_selftest. */
+    if (strcmp(op, "nvfp4_codec_selftest") == 0) {
+        float E2[16] = {  0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+                         -0.0f,-0.5f,-1.0f,-1.5f,-2.0f,-3.0f,-4.0f,-6.0f };
+        int nbad = 0;
+        for (int c = 0; c < 16; c++) if (e2m1_decode(c) != E2[c]) { fprintf(stderr, "nvfp4 e2m1 FAIL code %d got %g want %g\n", c, e2m1_decode(c), E2[c]); nbad++; }
+        /* (E4M3 code, expected value): 0x00->0; 0x01(e0,m1)->2^-9; 0x08(e1,m0)->2^-6; 0x38(e7,m0)->1.0;
+         * 0x7E(e15,m6)->1.75*256=448 (FINITE, not Inf); 0x40(e8,m0)->2.0. */
+        int   EC[6] = { 0x00,        0x01,          0x08,        0x38, 0x7E,   0x40 };
+        float EV[6] = { 0.0f, 0.001953125f, 0.015625f, 1.0f, 448.0f, 2.0f };
+        for (int i = 0; i < 6; i++) {
+            float got = e4m3_decode(EC[i]); float e = got - EV[i]; if (e < 0) e = -e;
+            if (e > 1.0e-9f * (EV[i] > 0 ? EV[i] : 1.0f)) { fprintf(stderr, "nvfp4 e4m3 FAIL code 0x%02X got %g want %g\n", EC[i], got, EV[i]); nbad++; }
+        }
+        float nv = e4m3_decode(0x7F);                         /* the NaN sentinel MUST decode to NaN */
+        if (!(nv != nv)) { fprintf(stderr, "nvfp4 e4m3 NaN-sentinel FAIL: 0x7F -> %g (expected NaN)\n", nv); nbad++; }
+        printf("nvfp4_codec_selftest: 16 E2M1 + 6 E4M3 + NaN sentinel, %d bad -> %s\n", nbad, nbad ? "FAIL" : "PASS");
+        return nbad ? 1 : 0;
     }
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
@@ -929,6 +979,96 @@ int main(int argc, char** argv) {
         cuMemFree(dW); cuMemFree(dSc); cuMemFree(dB); cuMemFree(dC);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hCode); free(hW); free(hSc); free(hB); free(refB); free(hC); free(ptx);
+        return rc;
+    }
+
+    /* nvfp4 mode (v1.5 S3): NVFP4 (OCP/NVIDIA) two-level-scaled 4-bit DEQUANT verify (NOT a matmul --
+     * the DoD S3 test is "verified dequant"; native FP4 MMA needs Blackwell, DEFERRED+labeled).
+     *   cuda_launch <ptx> nvfp4_dequant <Nignored> nvfp4 <M> <K> <N> [mutate|wflip|sflip].
+     * Weights are E2M1 (reused from S2) packed 7/i32 word; the scale is TWO-level: an FP8 E4M3 micro
+     * per 16-block + an FP32 per-tensor, HOST-collapsed to ONE effective f32/16-block (the device just
+     * reads it -- the S2 E8M0 pattern). The device dequants ON-DEVICE (div-unpack + the f32-literal
+     * E2M1 if-ladder + mag*scale) writing f32, so the result is f32-EXACT vs the CPU oracle (tight tol:
+     * abs 1e-5 OR rel 1e-6 -- the dequant is a single f32 mul of identical operands both sides). K must
+     * be a multiple of 112 = LCM(7,16). NCs: "mutate" = magnitude-scaled comparator; "wflip" = a
+     * packed-weight nibble bump (the ELEMENT is load-bearing); "sflip" = a per-block effective-scale
+     * bump (the TWO-LEVEL SCALE is load-bearing -- S3's novelty). The kernel-corruption NC is external
+     * (gpu_nvfp4_check.sh). Measured footprint vs f32 AND f16 reported. */
+    if (strcmp(op, "nvfp4") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 8;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 112;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 1;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        int wflip  = (argc > 8 && strcmp(argv[8], "wflip") == 0);
+        int sflip  = (argc > 8 && strcmp(argv[8], "sflip") == 0);
+        if (Kd % 112 != 0) { fprintf(stderr, "nvfp4: K must be a multiple of 112 = LCM(7,16); got K=%d\n", Kd); return 2; }
+        int kwords = Kd / 7;     /* packed i32 words per row */
+        int kblk   = Kd / 16;    /* E4M3 micro-scale blocks per row */
+        float tensor_scale = 1.0f / 3.0f;   /* non-trivial per-tensor FP32 scale (load-bearing) */
+        size_t wN = (size_t)Md * kwords, scN = (size_t)Md * kblk, oN = (size_t)Md * Kd;
+        int* hCode = (int*)malloc(oN * sizeof(int));      /* original E2M1 codes (for the oracle) */
+        int* hW = (int*)malloc(wN * sizeof(int));         /* packed words (device weight buffer) */
+        int* hMicro = (int*)malloc(scN * sizeof(int));    /* E4M3 micro-scale codes (for the oracle) */
+        float* hSc = (float*)malloc(scN * sizeof(float)); /* effective f32 = e4m3*tensor (device scale) */
+        float* hOut = (float*)malloc(oN * sizeof(float));
+        if (!hCode || !hW || !hMicro || !hSc || !hOut) return 2;
+        for (int r = 0; r < Md; r++)
+            for (int k = 0; k < Kd; k++)
+                hCode[r * Kd + k] = (r * 5 + k * 7 + 3) % 16;        /* NON-DEGENERATE, spans all 16 E2M1 */
+        for (int r = 0; r < Md; r++)
+            for (int kw = 0; kw < kwords; kw++) {                    /* pack 7/word base-16 low-nibble-first */
+                int word = 0, pw = 1;
+                for (int j = 0; j < 7; j++) { word += (hCode[r * Kd + kw * 7 + j] & 15) * pw; pw *= 16; }
+                hW[r * kwords + kw] = word;
+            }
+        for (int r = 0; r < Md; r++)
+            for (int bk = 0; bk < kblk; bk++) {                      /* NON-DEGENERATE E4M3 micro, never NaN */
+                int mc = (r * 3 + bk * 11 + 0x30) & 0x7E;
+                if ((mc & 0x7F) == 0x7F) mc = 0x38;                  /* belt+braces: never the NaN code -> 1.0 */
+                hMicro[r * kblk + bk] = mc;
+                hSc[r * kblk + bk] = e4m3_decode(mc) * tensor_scale; /* the effective f32 the device reads */
+            }
+        /* corruption NCs touch ONLY the device buffers (the oracle recomputes from the originals below) */
+        if (wflip) { int n0 = hW[0] & 15; hW[0] = hW[0] - n0 + ((n0 + 1) & 15); } /* bump element-0's nibble */
+        if (sflip) { hSc[0] = hSc[0] * 1.5f + 0.123f; }                           /* bump block-0's scale */
+        CUdeviceptr dW, dSc, dOut;
+        CK(cuMemAlloc(&dW, wN * sizeof(int)), "cuMemAlloc W (nvfp4 packed)");
+        CK(cuMemAlloc(&dSc, scN * sizeof(float)), "cuMemAlloc Sc (effective f32)");
+        CK(cuMemAlloc(&dOut, oN * sizeof(float)), "cuMemAlloc Out (f32 dequant)");
+        CK(cuMemcpyHtoD(dW, hW, wN * sizeof(int)), "HtoD W");
+        CK(cuMemcpyHtoD(dSc, hSc, scN * sizeof(float)), "HtoD Sc");
+        void* nargs[] = { &dW, &dSc, &dOut, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Kd, 1, 1, 0, 0, nargs, 0), "cuLaunchKernel nvfp4_dequant");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hOut, dOut, oN * sizeof(float)), "DtoH Out");
+        int nbad = 0; float maxabs = 0.0f, maxrel = 0.0f;
+        for (int r = 0; r < Md; r++) {
+            for (int k = 0; k < Kd; k++) {
+                int mc = hMicro[r * kblk + k / 16];                  /* ORIGINAL micro (oracle is un-sflip'd) */
+                float oscale = e4m3_decode(mc) * tensor_scale;
+                float ref = e2m1_decode(hCode[r * Kd + k]) * oscale;
+                float got = hOut[r * Kd + k];
+                if (mutate && r == 0 && k == 0) { got += 0.5f + 0.1f * fabsf(got); }
+                float e = got - ref; if (e < 0) e = -e;
+                float denom = fabsf(ref); float rel = denom > 1.0e-9f ? e / denom : e;
+                if (e > maxabs) maxabs = e;
+                if (rel > maxrel) maxrel = rel;
+                if (isnan(got) || (e > 1.0e-5f && rel > 1.0e-6f)) {  /* TIGHT: dequant is f32-exact */
+                    if (nbad < 4) fprintf(stderr, "nvfp4 mismatch out[%d,%d]=%g ref %g (abs %g rel %g)\n", r, k, got, ref, e, rel);
+                    nbad++;
+                }
+            }
+        }
+        double nvbytes = (double)wN * 4.0 + (double)scN * 1.0 + 4.0; /* packed words + 1B/E4M3-micro + one FP32 tensor */
+        double f32b = (double)Md * Kd * 4.0, f16b = (double)Md * Kd * 2.0;
+        int si = ((int)oN > 17) ? 17 : 0;
+        printf("GPU [%s] nvfp4_dequant(E2M1 + E4M3/16-block + FP32-tensor, f32-EXACT) %dx%d (%d elems): out[%d]=%g, max_abs=%g max_rel=%g, %d bad -> %s | footprint(measured): nvfp4=%.0fB vs f32=%.0fB (%.2fx) vs f16=%.0fB (%.2fx)\n",
+               gpu, Md, Kd, (int)oN, si, hOut[si], maxabs, maxrel, nbad, nbad ? "FAIL" : "PASS",
+               nvbytes, f32b, f32b / nvbytes, f16b, f16b / nvbytes);
+        int rc = nbad ? 1 : 0;
+        cuMemFree(dW); cuMemFree(dSc); cuMemFree(dOut);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hCode); free(hW); free(hMicro); free(hSc); free(hOut); free(ptx);
         return rc;
     }
 

@@ -320,6 +320,39 @@ else
   else echo "  FAIL: mxfp4 kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
 fi
 
+# v1.5 S3 (2026-06-13): NVFP4 (OCP/NVIDIA) two-level-scaled 4-bit DEQUANT PTX regression.
+# nvfp4_dequant_kernel.hx declares w:t2 (packed E2M1, 7/i32) + sc:f32 (the host-collapsed E4M3-micro *
+# FP32-tensor effective scale, one per 16-block) + out:f32, and dequants ON-DEVICE (div-unpack + the
+# f32-literal E2M1 if-ladder + mag*scale) writing f32 (DEQUANT-only; native FP4 MMA needs Blackwell ->
+# DEFERRED). NO kovc.hx edit (rides the existing path: S0 div-unpack + the f32 emitters), so the
+# fixpoint stays cdcf8673 byte-identical. Gated by a byte-exact committed ref + a provenance grep
+# RETARGETED for f32 output (require div.s32 + ld.global.u32 (w) + ld.global.f32 (scale) + st.global.f32
+# (out) + mov.f32; NO f16/b16 greps -- a dequant-f32 kernel has none, and a bare 'grep f16' would
+# FALSE-MATCH the %f16 register name). GPU-hardware verify is scripts/gpu_nvfp4_check.sh (f32-EXACT tol
+# vs an independent from-scratch-codec oracle + comparator + weight-flip + SCALE-flip + kernel-corruption NCs).
+NVREF=$EX/nvfp4_dequant_kernel.ref.ptx
+NVKern=$EX/nvfp4_dequant_kernel.hx
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: no re-minted driver -- cannot run the nvfp4 PTX text regression"; GATE_OK=0
+elif [ ! -s "$NVREF" ]; then
+  echo "  FAIL: committed nvfp4 PTX reference missing/empty ($NVREF) -- text regression has no anchor"; GATE_OK=0
+elif [ ! -f "$NVKern" ]; then
+  echo "  FAIL: nvfp4 kernel source missing ($NVKern) -- cannot emit nvfp4 PTX"; GATE_OK=0
+else
+  cp "$NVKern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
+  timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
+  if [ -s /tmp/out.ptx ]; then
+    cp "$NVREF" /tmp/nvref.ptx
+    if cmp -s /tmp/out.ptx /tmp/nvref.ptx; then echo "  NVFP4 PTX REGRESSION OK (matches committed nvfp4_dequant_kernel.ref.ptx)";
+    else echo "  NVFP4 PTX CHANGED -- re-mint+re-commit the nvfp4 reference with a reason"; GATE_OK=0; fi
+    if grep -q 'div\.s32' /tmp/out.ptx && grep -q 'ld\.global\.u32' /tmp/out.ptx \
+       && grep -q 'ld\.global\.f32' /tmp/out.ptx && grep -q 'st\.global\.f32' /tmp/out.ptx \
+       && grep -q 'mov\.f32' /tmp/out.ptx \
+       && ! grep -qE '%r-1|%f-1|%rd-1' /tmp/out.ptx; then echo "  NVFP4 PROVENANCE OK (div.s32 nibble-unpack + ld.global.u32 weight + ld.global.f32 scale + st.global.f32 dequant-out + f32-literal decode mov.f32; no unbound reg)";
+    else echo "  NVFP4 PROVENANCE FAIL (missing div-unpack / w-load / scale-load / f32 store / f32 literal -- or an unbound reg present)"; GATE_OK=0; fi
+  else echo "  FAIL: nvfp4 kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
+fi
+
 echo "=== [4] FEATURE CORPUS via new K2 ==="
 gen() { cat > "$CD/$1"; }
 gen i64_basic.hx <<'EOF'
