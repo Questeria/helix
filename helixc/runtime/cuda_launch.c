@@ -509,6 +509,58 @@ int main(int argc, char** argv) {
         return mbad ? 1 : 0;
     }
 
+    /* imatmul mode (v1.5 S0 increment 2b): INTEGER (ternary) matmul verify.
+     *   cuda_launch <ptx> ternary_matmul <Nignored> imatmul <M> <K> <N> [mutate].
+     * Mirrors the f32 'matmul' mode above but with INT32 buffers, so it exercises the
+     * ternary_matmul kernel (a/b declared t2 -> ld.global.u32, mul.lo.s32, add.s32). A
+     * (weights) is TERNARY {-1,0,+1}; B (activations) is small int. Integer sums are EXACT,
+     * so the GPU result must EQUAL the CPU int reference bit-for-bit (NO tolerance -- the
+     * point of ternary on the GPU). The optional "mutate" arg perturbs one C cell pre-compare
+     * (comparator negative control -> the check MUST then FAIL, proving it has teeth). Launch
+     * geometry matches naive/ternary: grid=(M,1,1) block=(N,1,1), one thread per output cell. */
+    if (strcmp(op, "imatmul") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 16;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 16;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 16;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        int* hA = (int*)malloc(aN * sizeof(int));
+        int* hB = (int*)malloc(bN * sizeof(int));
+        int* hC = (int*)malloc(cN * sizeof(int));
+        if (!hA || !hB || !hC) return 2;
+        /* NON-DEGENERATE data: a (i%3)-1 ternary weight against a simple b made the matmul
+         * rank-1-collapsible (a wrong kernel could pass), so b uses a period-11 signed fill
+         * coprime with the 3/5/16 strides -> a genuine matmul that a wrong kernel must fail. */
+        for (size_t i = 0; i < aN; i++) hA[i] = (int)(i % 3) - 1;            /* ternary weights: -1/0/+1 */
+        for (size_t i = 0; i < bN; i++) hB[i] = (int)((i * 13 + 7) % 11) - 5; /* signed int activations [-5,5] */
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(int)), "cuMemAlloc A");
+        CK(cuMemAlloc(&dB, bN * sizeof(int)), "cuMemAlloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(int)), "cuMemAlloc C");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(int)), "cuMemcpyHtoD A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(int)), "cuMemcpyHtoD B");
+        void* margs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, margs, 0), "cuLaunchKernel imatmul");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(int)), "cuMemcpyDtoH C");
+        if (mutate && cN > 0) hC[0] += 1;   /* comparator negative control: must trip a mismatch */
+        int mbad = 0;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                long ref = (long)hA[r * Kd] * (long)hB[cc];
+                for (int t = 1; t < Kd; t++) ref += (long)hA[r * Kd + t] * (long)hB[t * Nd + cc];
+                long got = (long)hC[r * Nd + cc];
+                if (got != ref) { if (mbad < 4) fprintf(stderr, "imatmul mismatch C[%d,%d]=%ld ref %ld\n", r, cc, got, ref); mbad++; }
+            }
+        }
+        printf("GPU [%s] ternary_matmul(int) %dx%dx%d over %d cells: C[1,1]=%d, %d bad -> %s\n",
+               gpu, Md, Kd, Nd, Md * Nd, hC[1 * Nd + 1], mbad, mbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return mbad ? 1 : 0;
+    }
+
     /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul
      *   <Nignored> gemm_perf <M> <K> <N> [mutate].
      * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device.

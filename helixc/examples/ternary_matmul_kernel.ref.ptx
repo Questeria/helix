@@ -2,7 +2,7 @@
 .target sm_86
 .address_size 64
 
-.visible .entry ternary_matmul(.param .b64 param_0, .param .b64 param_1, .param .u32 param_2, .param .u32 param_3, .param .u32 param_4, .param .u32 param_5)
+.visible .entry ternary_matmul(.param .b64 param_0, .param .b64 param_1, .param .b64 param_2, .param .u32 param_3, .param .u32 param_4, .param .u32 param_5)
 {
     .reg .pred  %p<256>;
     .reg .b32   %r<256>;
