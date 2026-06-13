@@ -1,8 +1,26 @@
 # Helix v1.5 — Definition of Done (DRAFT, 2026-06-13)
 
-> **STATUS: DRAFT charter.** This document is the falsifiable finish line for the **v1.5 slate**.
-> It is a planning artifact — *nothing here is built yet.* Each component is DONE only when its
-> measurable acceptance test passes its stated gate, honestly, with no lowered bar.
+> **STATUS (2026-06-13): S0 DONE — adversarial-audit PASS.** The falsifiable finish line for the
+> **v1.5 slate**. Each component is DONE only when its measurable acceptance test passes its stated
+> gate, honestly, with no lowered bar.
+>
+> **S0 (ternary `t2`) — ✅ DONE (committed LOCALLY, push HELD; commits 62248ed, f83ae42, e768f3c,
+> f8241b1, f3f8eae):** a first-class i32-domain ternary type `t2` (tag 12) registered end-to-end
+> (CPU clean-room reproduced: seed 9837db12 / self-host fixpoint dffd778c / gcc-DDC K1 029e6822); a
+> kovc-emitted ternary matmul verified EXACT on the RTX 3070 (unpacked) **and** a 2-bit PACKED
+> representation (15 trits/i32 word, measured **15.0x** footprint, on-device `div.s32` unpack)
+> verified EXACT on the RTX 3070 — each with a comparator + a kernel-corruption negative control
+> (both caught); 4 ternary corpus rows green (corpus 113/0); the self-host fixpoint stayed
+> dffd778c **byte-identical throughout (no compiler edit)**. A 4-lens independent adversarial
+> re-audit returned PASS with 0 real gaps. **Honest scope:** a TRUST + memory-footprint result; the
+> BitNet add/sub-no-multiply COMPUTE win + any throughput claim are explicitly DEFERRED (not claimed).
+> **Lessons banked:** byte-exact PTX != executes-correctly (the `c:i32` param-ABI bug the live GPU
+> run caught, not the PTX gate); a negative control must be data-INDEPENDENT (degenerate ternary data
+> masked a "drop a term" corruption); the 16-trit i32 OVERFLOW was caught by the multi-agent design
+> SYNTHESIS (a single reviewer had passed it); the full gate is DrvFs-I/O-bound — run via
+> `gate_ext4.sh` on ext4 (~28min -> ~1-2min) + `fast_iter.sh` for kernel iteration (~seconds).
+>
+> **NEXT: S1 (fp16/bf16 GEMM).** S1-S3 + #2/#4/#3 remain (the fixed v1.5-complete BAR is below).
 
 ## Version baseline (read first)
 
