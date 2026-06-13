@@ -190,6 +190,37 @@ else
   else echo "  FAIL: tiled kernel emitted no /tmp/out.ptx (PTX text emit failed -- not a GPU-execution skip)"; GATE_OK=0; fi
 fi
 
+# v1.5 S0 increment 2 (2026-06-13): TERNARY matmul PTX regression. ternary_matmul_kernel.hx
+# declares its inputs as the first-class ternary type t2 (tag 12, BitNet b1.58, -1/0/+1, scalar
+# domain i32) and runs a naive one-thread-per-cell GEMM. Because t2's domain is i32, a BARE t2
+# load lowers to the integer path -> the kernel emits EXACT integer PTX (ld.global.u32 + mul.lo.s32
+# + add.s32 + st.global.u32, NO f32) -- proving t2 is usable end-to-end ON THE GPU, not just a CPU
+# type label. This is a SELF-CONTAINED generic @kernel (NO kovc.hx edit -> the self-host fixpoint
+# stays byte-identical, unlike a hand-emitted intrinsic), gated like vector_add/tiled by a byte-exact
+# committed reference + an OUTPUT provenance grep. The add/sub-no-multiply (BitNet) optimization +
+# 2-bit packed storage are a LATER increment, NOT claimed here.
+TNREF=$EX/ternary_matmul_kernel.ref.ptx
+TNKern=$EX/ternary_matmul_kernel.hx
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: no re-minted driver -- cannot run the ternary PTX text regression"; GATE_OK=0
+elif [ ! -s "$TNREF" ]; then
+  echo "  FAIL: committed ternary PTX reference missing/empty ($TNREF) -- text regression has no anchor"; GATE_OK=0
+elif [ ! -f "$TNKern" ]; then
+  echo "  FAIL: ternary kernel source missing ($TNKern) -- cannot emit ternary PTX"; GATE_OK=0
+else
+  cp "$TNKern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
+  timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
+  if [ -s /tmp/out.ptx ]; then
+    cp "$TNREF" /tmp/tnref.ptx
+    if cmp -s /tmp/out.ptx /tmp/tnref.ptx; then echo "  TERNARY PTX REGRESSION OK (matches committed ternary_matmul_kernel.ref.ptx)";
+    else echo "  TERNARY PTX CHANGED -- re-mint+re-commit the ternary reference with a reason"; GATE_OK=0; fi
+    if grep -q 'ld\.global\.u32' /tmp/out.ptx && grep -q 'mul\.lo\.s32' /tmp/out.ptx \
+       && grep -q 'add\.s32' /tmp/out.ptx && grep -q 'st\.global\.u32' /tmp/out.ptx \
+       && ! grep -q 'ld\.global\.f32' /tmp/out.ptx; then echo "  TERNARY PROVENANCE OK (exact integer ld.global.u32 + mul.lo.s32 + add.s32 + st.global.u32 in the OUTPUT, no f32 load)";
+    else echo "  TERNARY PROVENANCE FAIL (missing integer ld/mul/add/st OR an f32 load present in emitted PTX)"; GATE_OK=0; fi
+  else echo "  FAIL: ternary kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
+fi
+
 echo "=== [4] FEATURE CORPUS via new K2 ==="
 gen() { cat > "$CD/$1"; }
 gen i64_basic.hx <<'EOF'
