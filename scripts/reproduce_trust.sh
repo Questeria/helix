@@ -67,12 +67,17 @@ bad(){ echo "[reproduce_trust] *** FAIL: $*" >&2; FAIL=1; }
 SEED_SHA=9837db12752a22159ca75a533910bc0d7b9afb35df9b9963f256b7b1b915c9bb
 # v1.5 S0 re-mint (2026-06-13): K1 84363adb... -> 029e6822... (K1 = seed compiling k1src.hx, which
 # includes the edited parser.hx; gcc==M2-seed DDC self-consistency holds at the new value). v1.4 K1 kept at the v1.4 tag.
-K1_SHA=029e68225c27a412e79d4fae9c23c97191e7d17cfe6ae4ccc29cd5179da9ee2f
+# v1.5 S1 re-mint (2026-06-13): K1 029e6822... -> 6ee5ec2b... -- k1src.hx now concatenates the
+# fp16-emission kovc.hx; gcc-seed and M2-Planet-seed lineages BOTH reproduce K1 byte-identically at
+# 6ee5ec2b (DDC self-consistency holds; both 699486 B). 029e6822 (S0) kept in the history above.
+K1_SHA=6ee5ec2bdd5ecbea249e46e42243dae695656f3857cfde3674e753609989658c
 # v1.5 S0 re-mint (2026-06-13): fixpoint 0992dddd... -> dffd778c... (additive ternary type t2; the
 # 3-way fixpoint K2==K3==K4 holds, corpus 110/0, PTX byte-identical). v1.4-shipped 0992dddd is kept
 # at the v1.4 tag. NOTE: K1_SHA above also moves under this edit (K1 = seed compiling the edited .hx);
 # it is re-minted to the value the gcc-DDC reproduces, not guessed.
-FIX_SHA=dffd778cc4f75e4bd28ad33c99541049974fb713d329e2d3a4f3c774a58cb24e
+# v1.5 S1 re-mint (2026-06-13): fixpoint dffd778c... -> cdcf8673... (fp16 @kernel emission edit; the
+# 3-way fixpoint K2==K3==K4 holds byte-identical at cdcf8673; corpus 113/0, all PTX refs byte-OK).
+FIX_SHA=cdcf8673e8dd0bfc0c0da9a554ecc7b7d6bead3892d3c663dbf007bcdc139bdd
 
 echo "============================================================"
 echo " Helix from-raw trust-core reproduction"

@@ -28,6 +28,60 @@
 #include <string.h>
 #include <math.h>
 
+/* v1.5 S1: IEEE-754 binary16 <-> binary32, in plain C (NOT cuda_fp16.h -- that is a
+ * C++ header that does not compile cleanly under gcc-as-C, AND a from-scratch codec
+ * keeps the hgemm oracle's f16 conversion trusted-from-source, matching the Helix
+ * no-hidden-NVIDIA-math ethos). f16 storage is a uint16. f16->f32 is EXACT (every
+ * binary16 maps to one binary32) -- this is the one that MUST be rigorous, since it
+ * decodes the GPU's cvt.rn.f16.f32 output and up-converts the shared rounded inputs.
+ * f32->f16 is round-to-nearest-even (used only to choose the input bits both sides
+ * then share, so its exact rounding is non-critical, only determinism + validity).
+ * Covers normal/subnormal/zero/inf/nan; the hgemm data is bounded so only the
+ * normal+zero paths are exercised, but the full range is implemented for honesty. */
+static unsigned short f32_to_f16(float f) {
+    unsigned int x; memcpy(&x, &f, 4);
+    unsigned int sign = (x >> 16) & 0x8000u;
+    unsigned int e8 = (x >> 23) & 0xFFu;
+    unsigned int mant = x & 0x7FFFFFu;
+    if (e8 == 0xFFu) return (unsigned short)(sign | 0x7C00u | (mant ? 0x200u : 0u)); /* inf/nan */
+    int exp = (int)e8 - 127 + 15;
+    if (exp >= 0x1F) return (unsigned short)(sign | 0x7C00u);                        /* overflow -> inf */
+    if (exp <= 0) {                                                                  /* subnormal/zero */
+        if (exp < -10) return (unsigned short)sign;
+        mant |= 0x800000u;
+        int shift = 14 - exp;                       /* exp in [-10,0] -> shift [14,24] */
+        unsigned int half = mant >> shift;
+        unsigned int rem = mant & ((1u << shift) - 1u);
+        unsigned int mid = 1u << (shift - 1);
+        if (rem > mid || (rem == mid && (half & 1u))) half++;
+        return (unsigned short)(sign | half);
+    }
+    unsigned int half = ((unsigned int)exp << 10) | (mant >> 13);
+    unsigned int rem = mant & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (half & 1u))) half++; /* RNE; a carry into exp is correct */
+    return (unsigned short)(sign | half);
+}
+static float f16_to_f32(unsigned short h) {
+    unsigned int sign = (unsigned int)(h & 0x8000u) << 16;
+    unsigned int exp = (h >> 10) & 0x1Fu;
+    unsigned int mant = h & 0x3FFu;
+    unsigned int out;
+    if (exp == 0u) {
+        if (mant == 0u) { out = sign; }
+        else {                                       /* subnormal: normalize into binary32 */
+            int e = 0;
+            while (!(mant & 0x400u)) { mant <<= 1; e++; }
+            mant &= 0x3FFu;
+            out = sign | ((unsigned int)(127 - 15 - e) << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1Fu) {
+        out = sign | 0x7F800000u | (mant << 13);     /* inf/nan */
+    } else {
+        out = sign | ((exp - 15u + 127u) << 23) | (mant << 13);
+    }
+    float f; memcpy(&f, &out, 4); return f;
+}
+
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
         const char* msg = 0;
@@ -626,6 +680,72 @@ int main(int argc, char** argv) {
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hW); free(hA); free(hB); free(hC); free(ptx);
         return pbad ? 1 : 0;
+    }
+
+    /* hgemm mode (v1.5 S1): HALF-PRECISION (f16 storage, f32 accumulate) matmul verify.
+     *   cuda_launch <ptx> naive_matmul_f16 <Nignored> hgemm <M> <K> <N> [mutate].
+     * Device buffers are uint16 IEEE-binary16 -- exactly what the kernel's
+     * ld.global.b16 / cvt.f32.f16 ... cvt.rn.f16.f32 / st.global.b16 path reads/writes.
+     * Host generates NON-DEGENERATE data (period-coprime fills so a rank-collapsed wrong
+     * kernel fails) at a NON-f16-exact scale (x0.1 / x0.3 -> neither 0.1 nor 0.3 is exactly
+     * representable in binary16), rounds it to f16, and up-converts the SAME f16 bits
+     * (refA/refB) for the f32-accum reference -- so oracle + kernel agree on the input
+     * EXACTLY (both consume the identical rounded f16 value; input agreement is exact
+     * regardless of the original scale). The GPU may contract mul+add into FMA and the
+     * RESULT is f16-rounded, so genuine (nonzero) error appears and the compare is
+     * DUAL-bound tolerance: a cell is OK if within EITHER abs 1e-3 OR rel 1e-2 (small refs blow up
+     * rel, large refs blow up abs -- so "bad" needs BOTH exceeded). 'mutate' perturbs one
+     * output cell by a MAGNITUDE-SCALED amount (0.5 + 0.1*|got|) guaranteed to exceed both
+     * bounds at any magnitude -> the comparator NC then MUST FAIL (a bare +1 is vacuous on
+     * large cells). Launch geometry matches naive/ternary: grid=(M,1,1) block=(N,1,1). */
+    if (strcmp(op, "hgemm") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 16;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 16;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 16;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        size_t aN = (size_t)Md * Kd, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        unsigned short* hA = (unsigned short*)malloc(aN * sizeof(unsigned short));
+        unsigned short* hB = (unsigned short*)malloc(bN * sizeof(unsigned short));
+        unsigned short* hC = (unsigned short*)malloc(cN * sizeof(unsigned short));
+        float* refA = (float*)malloc(aN * sizeof(float));   /* f16-rounded inputs, up-converted */
+        float* refB = (float*)malloc(bN * sizeof(float));
+        if (!hA || !hB || !hC || !refA || !refB) return 2;
+        for (size_t i = 0; i < aN; i++) { float v = ((float)((i * 7 + 3) % 13) - 6.0f) * 0.1f; hA[i] = f32_to_f16(v); refA[i] = f16_to_f32(hA[i]); }
+        for (size_t i = 0; i < bN; i++) { float v = ((float)((i * 5 + 1) % 11) - 5.0f) * 0.3f; hB[i] = f32_to_f16(v); refB[i] = f16_to_f32(hB[i]); }
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aN * sizeof(unsigned short)), "cuMemAlloc A (f16)");
+        CK(cuMemAlloc(&dB, bN * sizeof(unsigned short)), "cuMemAlloc B (f16)");
+        CK(cuMemAlloc(&dC, cN * sizeof(unsigned short)), "cuMemAlloc C (f16)");
+        CK(cuMemcpyHtoD(dA, hA, aN * sizeof(unsigned short)), "cuMemcpyHtoD A (f16)");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(unsigned short)), "cuMemcpyHtoD B (f16)");
+        void* hargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, hargs, 0), "cuLaunchKernel hgemm");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(unsigned short)), "cuMemcpyDtoH C (f16)");
+        int hbad = 0; float maxabs = 0.0f, maxrel = 0.0f;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                float ref = refA[r * Kd] * refB[cc];
+                for (int t = 1; t < Kd; t++) ref += refA[r * Kd + t] * refB[t * Nd + cc];
+                float got = f16_to_f32(hC[r * Nd + cc]);
+                if (mutate && r == 0 && cc == 0) { got += 0.5f + 0.1f * fabsf(got); } /* magnitude-scaled NC */
+                float e = got - ref; if (e < 0) e = -e;
+                float denom = fabsf(ref); float rel = denom > 1.0e-6f ? e / denom : e;
+                if (e > maxabs) maxabs = e;
+                if (rel > maxrel) maxrel = rel;
+                if (isnan(got) || (e > 1.0e-3f && rel > 1.0e-2f)) {
+                    if (hbad < 4) fprintf(stderr, "hgemm mismatch C[%d,%d]=%g ref %g (abs %g rel %g)\n", r, cc, got, ref, e, rel);
+                    hbad++;
+                }
+            }
+        }
+        printf("GPU [%s] naive_matmul_f16(f16-IO/f32-acc) %dx%dx%d over %d cells: C[1,1]=%g, max_abs=%g max_rel=%g, %d bad -> %s\n",
+               gpu, Md, Kd, Nd, Md * Nd, f16_to_f32(hC[1 * Nd + 1]), maxabs, maxrel, hbad, hbad ? "FAIL" : "PASS");
+        int rc = hbad ? 1 : 0;
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(refA); free(refB); free(ptx);
+        return rc;
     }
 
     /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul

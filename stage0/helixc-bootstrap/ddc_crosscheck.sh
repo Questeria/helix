@@ -53,7 +53,7 @@ echo "  K1_gcc sha256=$sg"
 # which assemble_k1.sh concatenates from the committed .hx INCL the edited parser.hx (additive ternary
 # type t2, tag 12). gcc and M2-Planet seed lineages BOTH reproduce this K1 byte-identically (DDC self-
 # consistency HOLDS at 029e6822); only the pinned value advances. v1.4-shipped K1 84363adb kept at the v1.4 tag.
-EXPECT_K1=029e68225c27a412e79d4fae9c23c97191e7d17cfe6ae4ccc29cd5179da9ee2f   # pinned known-good K1 (release-proof anchor)
+EXPECT_K1=6ee5ec2bdd5ecbea249e46e42243dae695656f3857cfde3674e753609989658c   # pinned known-good K1; v1.5 S1 re-mint 029e6822 -> 6ee5ec2b (k1src.hx now includes the fp16-emission kovc.hx; gcc==M2-seed byte-identical at the new value)
 if [ "$sm" = "$sg" ] && [ "$sm" = "$EXPECT_K1" ]; then
   echo "  DDC_ANCHOR_OK -- gcc (independent lineage) reproduces the M2-Planet seed's K1 byte-for-byte AND == pinned known-good."
   echo "  => The seed's behavior is independently double-compiled; identical K1 implies identical K2==K3==K4."

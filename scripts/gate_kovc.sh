@@ -119,7 +119,12 @@ if [ "$FIX_OK" = "1" ]; then
   # still HOLDS, corpus 110/0 (incl. trit_dot), vector_add/tiled PTX byte-identical (NO GPU codegen
   # change). The v1.4-shipped pin 0992dddd is preserved at the v1.4 tag + the public demo (those update
   # only at the eventual owner-approved v1.5 release, not mid-loop).
-  EXPECT_FIX=dffd778cc4f75e4bd28ad33c99541049974fb713d329e2d3a4f3c774a58cb24e
+  # v1.5 S1 re-mint (2026-06-13): dffd778c... -> cdcf8673... -- the fp16 @kernel emission edit
+  # (kovc.hx: emit_ptx_index_load/store f16 element arms + ptx_alloc_h/emit_ptx_h + vtab slot 109)
+  # moves the compiler self-image. K2==K3==K4 STILL byte-identical at the new value (the self-host
+  # source uses no f16 @kernel param, so f16 emission is unreachable in the bootstrap path); corpus
+  # 113/0, all PTX refs (vector_add/tiled/ternary/packed/f16) byte-OK. dffd778c (S0) preserved above.
+  EXPECT_FIX=cdcf8673e8dd0bfc0c0da9a554ecc7b7d6bead3892d3c663dbf007bcdc139bdd
   if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ] && cmp -s /tmp/K2.bin /tmp/K3.bin && cmp -s /tmp/K3.bin /tmp/K4.bin; then
     if [ "$S2" = "$EXPECT_FIX" ]; then
       echo "  FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)"
@@ -248,6 +253,39 @@ else
        && ! grep -q 'ld\.global\.f32' /tmp/out.ptx; then echo "  PACKED TERNARY PROVENANCE OK (div.s32 unpacking + mul.lo.s32 + add.s32 + st.global.u32 in the OUTPUT, no f32 load)";
     else echo "  PACKED TERNARY PROVENANCE FAIL (missing div.s32/mul/add/st OR an f32 load present in emitted PTX)"; GATE_OK=0; fi
   else echo "  FAIL: packed ternary kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
+fi
+
+# v1.5 S1 (2026-06-13): FP16 (half-precision) matmul PTX regression. naive_matmul_f16_kernel.hx
+# declares a/b/c as f16 and runs a naive one-thread-per-cell GEMM. This is the FIRST v1.5 component
+# that REQUIRED a kovc.hx edit (the @kernel PTX path had NO fp16 emission): emit_ptx_index_load/store
+# gained an f16 element arm (2-byte stride; ld.global.b16 -> cvt.f32.f16 load-narrow; cvt.rn.f16.f32 ->
+# st.global.b16 store-narrow) + a %h b16 register file (ptx_alloc_h/emit_ptx_h, vtab slot 109). The
+# MATH stays full f32 (mul.f32 + add.f32) -> honest f16-I/O / f32-accumulate (NOT pure-f16 arithmetic).
+# Because that edit moves the self-host fixpoint, EXPECT_FIX above was re-minted (the self-host source
+# uses no f16 @kernel param, so K2==K3==K4 stay byte-identical at the new sha). Gated like ternary by a
+# byte-exact committed ref + an OUTPUT provenance grep; GPU-hardware tolerance verify is the separate
+# scripts/gpu_f16_check.sh (positive within abs/rel tol + comparator + kernel-corruption NCs).
+F16REF=$EX/naive_matmul_f16_kernel.ref.ptx
+F16Kern=$EX/naive_matmul_f16_kernel.hx
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: no re-minted driver -- cannot run the f16 PTX text regression"; GATE_OK=0
+elif [ ! -s "$F16REF" ]; then
+  echo "  FAIL: committed f16 PTX reference missing/empty ($F16REF) -- text regression has no anchor"; GATE_OK=0
+elif [ ! -f "$F16Kern" ]; then
+  echo "  FAIL: f16 kernel source missing ($F16Kern) -- cannot emit f16 PTX"; GATE_OK=0
+else
+  cp "$F16Kern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
+  timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
+  if [ -s /tmp/out.ptx ]; then
+    cp "$F16REF" /tmp/f16ref.ptx
+    if cmp -s /tmp/out.ptx /tmp/f16ref.ptx; then echo "  F16 PTX REGRESSION OK (matches committed naive_matmul_f16_kernel.ref.ptx)";
+    else echo "  F16 PTX CHANGED -- re-mint+re-commit the f16 reference with a reason"; GATE_OK=0; fi
+    if grep -q 'ld\.global\.b16' /tmp/out.ptx && grep -q 'cvt\.f32\.f16' /tmp/out.ptx \
+       && grep -q 'cvt\.rn\.f16\.f32' /tmp/out.ptx && grep -q 'st\.global\.b16' /tmp/out.ptx \
+       && grep -q 'mul\.f32' /tmp/out.ptx && grep -q 'add\.f32' /tmp/out.ptx \
+       && ! grep -q 'ld\.global\.f32' /tmp/out.ptx; then echo "  F16 PROVENANCE OK (ld.global.b16 + cvt.f32.f16 load-narrow, mul.f32 + add.f32 f32-accumulate, cvt.rn.f16.f32 + st.global.b16 store-narrow; no f32 load)";
+    else echo "  F16 PROVENANCE FAIL (missing b16 load/store, f16<->f32 cvt, or f32 mul/add -- or an f32 load present)"; GATE_OK=0; fi
+  else echo "  FAIL: f16 kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
 fi
 
 echo "=== [4] FEATURE CORPUS via new K2 ==="

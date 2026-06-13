@@ -10864,7 +10864,7 @@ fn ptx_vtab_init() -> i32 {
     let bse = __arena_push(0);   // slot 0: next_reg
     __arena_push(0);             // slot 1: var_count
     let mut i: i32 = 0;
-    while i < 107 {              // 16 var triples (2..49) + 6 counters +
+    while i < 108 {              // 16 var triples (2..49) + 6 counters +
         __arena_push(0);         // 50=next_pred,51=next_label,52=next_rd,
         i = i + 1;               // 53=cur_fn_idx,54=next_f,55=last_is_float;
     }                            // T2/G2 GEMM context (cp.async tile-load,
@@ -10876,6 +10876,8 @@ fn ptx_vtab_init() -> i32 {
                                  // 67..70=A %r, 71..72=B %r, 73..76=C %f.
                                  // M-G3.3 warp N-tiling accumulator-id store (NB<=8
                                  // subtiles x 4 %f accumulators each): slots 77..108.
+                                 // S1 (v1.5 f16): 109=next_h (per-kernel %h<n> b16
+                                 // register counter for f16 load-narrow/store-narrow).
 fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab, 0);        // next_reg = 0
     __arena_set(vtab + 1, 0);    // var_count = 0
@@ -10884,6 +10886,7 @@ fn ptx_vtab_reset(vtab: i32) -> i32 {
     __arena_set(vtab + 52, 0);   // K1.M10: next_rd = 0
     __arena_set(vtab + 54, 0);   // K1.M11: next_f = 0
     __arena_set(vtab + 55, 0);   // K1.M12: last_is_float = 0
+    __arena_set(vtab + 109, 0);  // S1 (v1.5 f16): next_h = 0
     0
 }
 fn ptx_alloc_reg(vtab: i32) -> i32 {
@@ -10914,6 +10917,15 @@ fn ptx_alloc_rd(vtab: i32) -> i32 {
 fn ptx_alloc_f(vtab: i32) -> i32 {
     let r = __arena_get(vtab + 54);
     __arena_set(vtab + 54, r + 1);
+    r
+}
+// S1 (v1.5 f16): allocate a fresh 16-bit register index (%hN). The %h<256>
+// .b16 file is already declared in emit_ptx_reg_block; this is the transient
+// holder for f16 load-narrow (ld.global.b16 -> cvt.f32.f16) and store-narrow
+// (cvt.rn.f16.f32 -> st.global.b16). Counter at vtab slot 109.
+fn ptx_alloc_h(vtab: i32) -> i32 {
+    let r = __arena_get(vtab + 109);
+    __arena_set(vtab + 109, r + 1);
     r
 }
 fn ptx_vtab_add(vtab: i32, name_s: i32, name_l: i32, ridx: i32, is_f: i32) -> i32 {
@@ -11445,6 +11457,13 @@ fn emit_ptx_f(n: i32) -> i32 {
     emit_ptx_decimal(n);
     0
 }
+// S1 (v1.5 f16): "%hN" -- the b16 register class used transiently for f16
+// load-narrow / store-narrow conversions.
+fn emit_ptx_h(n: i32) -> i32 {
+    emit_ptx_byte(37); emit_ptx_byte(104);   // "%h"
+    emit_ptx_decimal(n);
+    0
+}
 
 // K1.M10: resolve a name to its 0-based kernel-parameter index by
 // walking the AST_PARAM list (fn_idx slot 4 = params_head; each
@@ -11515,6 +11534,11 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     let fn_idx = __arena_get(vtab + 53);
     let pidx = ptx_param_index(fn_idx, __arena_get(base + 1),
                                __arena_get(base + 2));
+    // S1 (v1.5 f16): element type drives BOTH the address stride (f16 elems are
+    // 2 bytes, else 4) and the load instruction; hoisted here (pre-S1 it was
+    // computed only at the load site below) so the stride can branch on it.
+    let elem_ty = ptx_param_type(fn_idx, __arena_get(base + 1),
+                                 __arena_get(base + 2));
     let ri = emit_ptx_expr(idx_node, vtab);
     // "    ld.param.u64 %rd<rdb>, [param_<pidx>];\n"
     let rdb = ptx_alloc_rd(vtab);
@@ -11544,7 +11568,8 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_rd(rdb);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // "    mul.wide.s32 %rd<rdo>, %r<ri>, 4;\n"
+    // "    mul.wide.s32 %rd<rdo>, %r<ri>, <stride>;\n"  (S1: stride digit is
+    // '2' [byte 50] for f16 elements [elem_ty 5], else '4' [byte 52].)
     let rdo = ptx_alloc_rd(vtab);
     emit_ptx_indent();
     emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);
@@ -11555,7 +11580,8 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     emit_ptx_rd(rdo);
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_r(ri);
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(52);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    if elem_ty == 5 { emit_ptx_byte(50); } else { emit_ptx_byte(52); };
     emit_ptx_byte(59); emit_ptx_byte(10);
     // "    add.s64 %rd<rda>, %rd<rdg>, %rd<rdo>;\n"
     let rda = ptx_alloc_rd(vtab);
@@ -11569,11 +11595,12 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_rd(rdo);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // K1.M11: the load instruction depends on the element type. If the
-    // base param is f32 (type_tag 1) emit "ld.global.f32 %f<n>" (into a
-    // float register); else the i32 path "ld.global.u32 %r<n>".
-    let elem_ty = ptx_param_type(fn_idx, __arena_get(base + 1),
-                                 __arena_get(base + 2));
+    // K1.M11/S1: the load instruction depends on the element type. f32 (tag 1)
+    // -> "ld.global.f32 %f<n>"; f16 (tag 5) -> "ld.global.b16 %h<n>" then
+    // "cvt.f32.f16 %f<n>, %h<n>" (load-narrow: widen to f32 in-reg so the value
+    // reads as f32 downstream and the binop path is UNCHANGED -- honest
+    // f32-accum/f16-I/O); else the i32 path "ld.global.u32 %r<n>". elem_ty is
+    // hoisted above (it also picks the stride).
     if elem_ty == 1 {
         // "    ld.global.f32 %f<fdst>, [%rd<rda>];\n"
         let fdst = ptx_alloc_f(vtab);
@@ -11590,20 +11617,48 @@ fn emit_ptx_index_load(node: i32, vtab: i32) -> i32 {
         __arena_set(vtab + 55, 1);   // K1.M12: result is f32
         fdst
     } else {
-        // "    ld.global.u32 %r<rdst>, [%rd<rda>];\n"
-        let rdst = ptx_alloc_reg(vtab);
-        emit_ptx_indent();
-        emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
-        emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
-        emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
-        emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
-        emit_ptx_byte(50); emit_ptx_byte(32);
-        emit_ptx_r(rdst);
-        emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
-        emit_ptx_rd(rda);
-        emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
-        __arena_set(vtab + 55, 0);   // K1.M12: result is i32
-        rdst
+        if elem_ty == 5 {
+            // "    ld.global.b16 %h<hraw>, [%rd<rda>];\n"
+            let hraw = ptx_alloc_h(vtab);
+            emit_ptx_indent();
+            emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);   // "ld."
+            emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);  // "glo"
+            emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);    // "bal"
+            emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(49);     // ".b1"
+            emit_ptx_byte(54); emit_ptx_byte(32);                        // "6 "
+            emit_ptx_h(hraw);
+            emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);     // ", ["
+            emit_ptx_rd(rda);
+            emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);     // "];\n"
+            // "    cvt.f32.f16 %f<fdst>, %h<hraw>;\n"
+            let fdst = ptx_alloc_f(vtab);
+            emit_ptx_indent();
+            emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);   // "cvt"
+            emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51);    // ".f3"
+            emit_ptx_byte(50); emit_ptx_byte(46); emit_ptx_byte(102);    // "2.f"
+            emit_ptx_byte(49); emit_ptx_byte(54); emit_ptx_byte(32);     // "16 "
+            emit_ptx_f(fdst);
+            emit_ptx_byte(44); emit_ptx_byte(32);                        // ", "
+            emit_ptx_h(hraw);
+            emit_ptx_byte(59); emit_ptx_byte(10);                        // ";\n"
+            __arena_set(vtab + 55, 1);   // K1.M12: f16 widened to f32 in-reg
+            fdst
+        } else {
+            // "    ld.global.u32 %r<rdst>, [%rd<rda>];\n"
+            let rdst = ptx_alloc_reg(vtab);
+            emit_ptx_indent();
+            emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);
+            emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);
+            emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);
+            emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51);
+            emit_ptx_byte(50); emit_ptx_byte(32);
+            emit_ptx_r(rdst);
+            emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);
+            emit_ptx_rd(rda);
+            emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);
+            __arena_set(vtab + 55, 0);   // K1.M12: result is i32
+            rdst
+        }
     }
 }
 
@@ -11620,6 +11675,12 @@ fn emit_ptx_index_store(node: i32, vtab: i32) -> i32 {
     let fn_idx = __arena_get(vtab + 53);
     let pidx = ptx_param_index(fn_idx, __arena_get(base + 1),
                                __arena_get(base + 2));
+    // S1 (v1.5 f16): the STORE element type (destination array param). f16
+    // (tag 5) forces a 2-byte stride + a cvt.rn.f16.f32 narrow before the
+    // store, INDEPENDENT of the in-reg value's f32-ness (is_f) -- the memory
+    // element type wins (the S0 c-param-class lesson).
+    let est = ptx_param_type(fn_idx, __arena_get(base + 1),
+                             __arena_get(base + 2));
     let rv = emit_ptx_expr(val_node, vtab);
     let is_f = __arena_get(vtab + 55);   // K1.M12: value type BEFORE the
                                          // index lowering clobbers the flag
@@ -11663,7 +11724,8 @@ fn emit_ptx_index_store(node: i32, vtab: i32) -> i32 {
     emit_ptx_rd(rdo);
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_r(ri);
-    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(52);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    if est == 5 { emit_ptx_byte(50); } else { emit_ptx_byte(52); };
     emit_ptx_byte(59); emit_ptx_byte(10);
     // "    add.s64 %rd<rda>, %rd<rdg>, %rd<rdo>;\n"
     let rda = ptx_alloc_rd(vtab);
@@ -11677,27 +11739,57 @@ fn emit_ptx_index_store(node: i32, vtab: i32) -> i32 {
     emit_ptx_byte(44); emit_ptx_byte(32);
     emit_ptx_rd(rdo);
     emit_ptx_byte(59); emit_ptx_byte(10);
-    // "    st.global.<f32|u32> [%rd<rda>], <%f|%r><rv>;\n" (K1.M12:
-    // type from is_f -- f32 store of a %f value, else i32 of a %r).
-    emit_ptx_indent();
-    emit_ptx_byte(115); emit_ptx_byte(116); emit_ptx_byte(46);   // "st."
-    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);  // "glo"
-    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);    // "bal"
-    emit_ptx_byte(46);                                           // "."
-    if is_f == 1 {
-        emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // "f32"
-    } else {
-        emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);   // "u32"
-    };
-    emit_ptx_byte(32); emit_ptx_byte(91);                        // " ["
-    emit_ptx_rd(rda);
-    emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);     // "], "
-    if is_f == 1 {
+    // S1 (v1.5 f16): if the destination element is f16 (est 5), narrow the
+    // (f32 in-reg) value with cvt.rn.f16.f32 then st.global.b16 -- INDEPENDENT
+    // of is_f (the memory element type wins). Else the K1.M12 path:
+    // st.global.f32 of a %f value, or st.global.u32 of a %r.
+    if est == 5 {
+        // "    cvt.rn.f16.f32 %h<hres>, %f<rv>;\n"
+        let hres = ptx_alloc_h(vtab);
+        emit_ptx_indent();
+        emit_ptx_byte(99); emit_ptx_byte(118); emit_ptx_byte(116);   // "cvt"
+        emit_ptx_byte(46); emit_ptx_byte(114); emit_ptx_byte(110);   // ".rn"
+        emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(49);    // ".f1"
+        emit_ptx_byte(54); emit_ptx_byte(46); emit_ptx_byte(102);    // "6.f"
+        emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);     // "32 "
+        emit_ptx_h(hres);
+        emit_ptx_byte(44); emit_ptx_byte(32);                        // ", "
         emit_ptx_f(rv);
+        emit_ptx_byte(59); emit_ptx_byte(10);                        // ";\n"
+        // "    st.global.b16 [%rd<rda>], %h<hres>;\n"
+        emit_ptx_indent();
+        emit_ptx_byte(115); emit_ptx_byte(116); emit_ptx_byte(46);   // "st."
+        emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);  // "glo"
+        emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);    // "bal"
+        emit_ptx_byte(46); emit_ptx_byte(98); emit_ptx_byte(49);     // ".b1"
+        emit_ptx_byte(54); emit_ptx_byte(32); emit_ptx_byte(91);     // "6 ["
+        emit_ptx_rd(rda);
+        emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);     // "], "
+        emit_ptx_h(hres);
+        emit_ptx_byte(59); emit_ptx_byte(10);
     } else {
-        emit_ptx_r(rv);
+        // "    st.global.<f32|u32> [%rd<rda>], <%f|%r><rv>;\n" (K1.M12:
+        // type from is_f -- f32 store of a %f value, else i32 of a %r).
+        emit_ptx_indent();
+        emit_ptx_byte(115); emit_ptx_byte(116); emit_ptx_byte(46);   // "st."
+        emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);  // "glo"
+        emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);    // "bal"
+        emit_ptx_byte(46);                                           // "."
+        if is_f == 1 {
+            emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);   // "f32"
+        } else {
+            emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);   // "u32"
+        };
+        emit_ptx_byte(32); emit_ptx_byte(91);                        // " ["
+        emit_ptx_rd(rda);
+        emit_ptx_byte(93); emit_ptx_byte(44); emit_ptx_byte(32);     // "], "
+        if is_f == 1 {
+            emit_ptx_f(rv);
+        } else {
+            emit_ptx_r(rv);
+        };
+        emit_ptx_byte(59); emit_ptx_byte(10);
     };
-    emit_ptx_byte(59); emit_ptx_byte(10);
     0 - 1
 }
 

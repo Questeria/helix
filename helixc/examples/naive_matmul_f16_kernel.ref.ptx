@@ -1,0 +1,73 @@
+.version 8.3
+.target sm_86
+.address_size 64
+
+.visible .entry naive_matmul_f16(.param .b64 param_0, .param .b64 param_1, .param .b64 param_2, .param .u32 param_3, .param .u32 param_4, .param .u32 param_5)
+{
+    .reg .pred  %p<256>;
+    .reg .b32   %r<256>;
+    .reg .b64   %rd<256>;
+    .reg .f32   %f<256>;
+    .reg .b16   %h<256>;
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %tid.x;
+    ld.param.u32 %r2, [param_4];
+    mul.lo.s32 %r3, %r0, %r2;
+    ld.param.u64 %rd0, [param_0];
+    cvta.to.global.u64 %rd1, %rd0;
+    mul.wide.s32 %rd2, %r3, 2;
+    add.s64 %rd3, %rd1, %rd2;
+    ld.global.b16 %h0, [%rd3];
+    cvt.f32.f16 %f0, %h0;
+    ld.param.u64 %rd4, [param_1];
+    cvta.to.global.u64 %rd5, %rd4;
+    mul.wide.s32 %rd6, %r1, 2;
+    add.s64 %rd7, %rd5, %rd6;
+    ld.global.b16 %h1, [%rd7];
+    cvt.f32.f16 %f1, %h1;
+    mul.f32 %f2, %f0, %f1;
+    mov.s32 %r4, 1;
+$Ltop_0:
+    ld.param.u32 %r5, [param_4];
+    setp.lt.s32 %p0, %r4, %r5;
+    selp.b32 %r6, 1, 0, %p0;
+    setp.ne.s32 %p1, %r6, 0;
+    @!%p1 bra $Lwend_0;
+    ld.param.u32 %r7, [param_4];
+    mul.lo.s32 %r8, %r0, %r7;
+    add.s32 %r9, %r8, %r4;
+    ld.param.u64 %rd8, [param_0];
+    cvta.to.global.u64 %rd9, %rd8;
+    mul.wide.s32 %rd10, %r9, 2;
+    add.s64 %rd11, %rd9, %rd10;
+    ld.global.b16 %h2, [%rd11];
+    cvt.f32.f16 %f3, %h2;
+    ld.param.u32 %r10, [param_5];
+    mul.lo.s32 %r11, %r4, %r10;
+    add.s32 %r12, %r11, %r1;
+    ld.param.u64 %rd12, [param_1];
+    cvta.to.global.u64 %rd13, %rd12;
+    mul.wide.s32 %rd14, %r12, 2;
+    add.s64 %rd15, %rd13, %rd14;
+    ld.global.b16 %h3, [%rd15];
+    cvt.f32.f16 %f4, %h3;
+    mul.f32 %f5, %f3, %f4;
+    add.f32 %f6, %f2, %f5;
+    mov.f32 %f2, %f6;
+    mov.s32 %r13, 1;
+    add.s32 %r14, %r4, %r13;
+    mov.s32 %r4, %r14;
+    bra $Ltop_0;
+$Lwend_0:
+    ld.param.u32 %r15, [param_5];
+    mul.lo.s32 %r16, %r0, %r15;
+    add.s32 %r17, %r16, %r1;
+    ld.param.u64 %rd16, [param_2];
+    cvta.to.global.u64 %rd17, %rd16;
+    mul.wide.s32 %rd18, %r17, 2;
+    add.s64 %rd19, %rd17, %rd18;
+    cvt.rn.f16.f32 %h4, %f2;
+    st.global.b16 [%rd19], %h4;
+    ret;
+}
