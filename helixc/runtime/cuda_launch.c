@@ -82,6 +82,37 @@ static float f16_to_f32(unsigned short h) {
     float f; memcpy(&f, &out, 4); return f;
 }
 
+/* v1.5 S2 (MXFP4): from-scratch OCP MXFP4 codec (NOT a library) -- E2M1 4-bit element + E8M0 8-bit
+ * block scale. This is HOST code (the oracle), so bitwise is fine here; only the @kernel DEVICE path
+ * forbids bitwise (it div-unpacks). E2M1 code (s | e1e0 | m): exp==0 -> subnormal mag = 0.5*m; else
+ * normal mag = (1 + 0.5*m) * 2^(exp-1). Magnitudes {0,0.5,1,1.5,2,3,4,6}; the sign bit negates.
+ * MUST EXACTLY match the @kernel's f32-literal if-ladder in naive_mxfp4_matmul_kernel.hx. E8M0 is a
+ * pure power-of-2 exponent (bias 127): linear scale = 2^(e8m0-127); 0xFF is the OCP NaN sentinel. */
+static float e2m1_decode(int code) {
+    int s = (code >> 3) & 1;
+    int e = (code >> 1) & 3;
+    int m = code & 1;
+    float mag;
+    if (e == 0) mag = 0.5f * (float)m;                          /* subnormal: 0 or 0.5 */
+    else mag = (1.0f + 0.5f * (float)m) * (float)(1 << (e - 1)); /* normal: (1|1.5) * 2^(e-1) */
+    return s ? -mag : mag;
+}
+/* f32 -> nearest E2M1 code (brute-force over the 16 codes; the format is tiny). Used by the
+ * round-trip selftest + any f32-source packing. */
+static int e2m1_encode(float v) {
+    int best = 0; float bestd = 1.0e30f;
+    for (int c = 0; c < 16; c++) {
+        float d = e2m1_decode(c) - v; if (d < 0) d = -d;
+        if (d < bestd) { bestd = d; best = c; }
+    }
+    return best;
+}
+/* E8M0 (8-bit exponent, bias 127) -> linear f32 scale 2^(e-127). 0xFF = OCP NaN sentinel. */
+static float e8m0_scale(int e8m0) {
+    if (e8m0 == 0xFF) return nanf("");   /* NaN sentinel -- a caller must not feed it as data */
+    return ldexpf(1.0f, e8m0 - 127);
+}
+
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
         const char* msg = 0;
@@ -173,6 +204,29 @@ int main(int argc, char** argv) {
         }
         printf("codec_selftest: %d cases, %d bad -> %s\n", ncase, cbad, cbad ? "FAIL" : "PASS");
         return cbad ? 1 : 0;
+    }
+
+    /* v1.5 S2 (MXFP4): mxfp4_codec_selftest -- verify the from-scratch E2M1+E8M0 codec across ALL 16
+     * E2M1 codes (incl the subnormal 0.5 + both signs + zero) vs a canonical table, a round-trip, and
+     * a few E8M0 scales. NEVER hand-verify the decode -- this catches an off-by-one (the S1 subnormal
+     * bug class). GPU-free. Usage: cuda_launch <anyptx> x 0 mxfp4_codec_selftest. */
+    if (strcmp(op, "mxfp4_codec_selftest") == 0) {
+        float WANT[16] = {  0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+                           -0.0f,-0.5f,-1.0f,-1.5f,-2.0f,-3.0f,-4.0f,-6.0f };
+        int mbad = 0;
+        for (int c = 0; c < 16; c++) {
+            float got = e2m1_decode(c);
+            if (got != WANT[c]) { fprintf(stderr, "mxfp4 e2m1 decode FAIL code %d got %g want %g\n", c, got, WANT[c]); mbad++; }
+            int rt = e2m1_encode(WANT[c]);                 /* round-trip: re-encode must decode to the same value */
+            if (e2m1_decode(rt) != WANT[c]) { fprintf(stderr, "mxfp4 e2m1 round-trip FAIL code %d -> %d (%g vs %g)\n", c, rt, e2m1_decode(rt), WANT[c]); mbad++; }
+        }
+        int SE[5] = { 127, 128, 126, 130, 123 }; float SV[5] = { 1.0f, 2.0f, 0.5f, 8.0f, 0.0625f };
+        for (int i = 0; i < 5; i++) {
+            float got = e8m0_scale(SE[i]); float e = got - SV[i]; if (e < 0) e = -e;
+            if (e > 1.0e-9f * SV[i]) { fprintf(stderr, "mxfp4 e8m0 FAIL e=%d got %g want %g\n", SE[i], got, SV[i]); mbad++; }
+        }
+        printf("mxfp4_codec_selftest: 16 E2M1 codes + 5 E8M0 scales, %d bad -> %s\n", mbad, mbad ? "FAIL" : "PASS");
+        return mbad ? 1 : 0;
     }
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
@@ -781,6 +835,99 @@ int main(int argc, char** argv) {
         cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hA); free(hB); free(hC); free(refA); free(refB); free(ptx);
+        return rc;
+    }
+
+    /* mxfp4 mode (v1.5 S2): MXFP4 (OCP) dequant -> f16 matmul verify.
+     *   cuda_launch <ptx> naive_mxfp4_matmul <Nignored> mxfp4 <M> <K> <N> [mutate|wflip].
+     * Weights are MXFP4: E2M1 4-bit codes packed 7/i32 word (base-16 low-nibble-first; 7 NOT 8 keeps
+     * the word < 2^31 so the kernel's signed div.s32 nibble-unpack is exact) + a shared E8M0 scale per
+     * 32-element block, HOST-decoded to a linear f32 'sc' buffer (no __gpu_exp2 on the @kernel path).
+     * The device kernel dequants ON-DEVICE (div-unpack the nibble, f32-literal E2M1 decode, * the f32
+     * scale) and matmuls in f32, storing f16. K must be a multiple of 224 = LCM(7,32). Compared vs an
+     * INDEPENDENT CPU dequant+matmul reference (SAME codes, SAME f32 scales, SAME f16-rounded b) within
+     * DUAL-bound tolerance (abs 1e-3 OR rel 1e-2; the dequant is f32-EXACT, the only error is the f16 b
+     * input + the f16 output round). NCs: "mutate" = magnitude-scaled comparator (got += 0.5+0.1*|got|,
+     * MUST fail at any magnitude); "wflip" = a packed-WEIGHT nibble bump (the GPU reads a changed weight
+     * while the oracle keeps the original codes -> MUST fail, proving the weights are load-bearing). The
+     * kernel-corruption NC is driven externally by gpu_mxfp4_check.sh [E]. Measured footprint vs f32
+     * AND f16 reported (the 7-not-8 sign-safety cap is in the measured bytes -- honest, not theoretical). */
+    if (strcmp(op, "mxfp4") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 8;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 224;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 8;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        int wflip  = (argc > 8 && strcmp(argv[8], "wflip") == 0);
+        if (Kd % 224 != 0) { fprintf(stderr, "mxfp4: K must be a multiple of 224 = LCM(7,32); got K=%d\n", Kd); return 2; }
+        int kwords = Kd / 7;     /* packed i32 words per row */
+        int kblk   = Kd / 32;    /* E8M0 scale blocks per row */
+        size_t wN = (size_t)Md * kwords, scN = (size_t)Md * kblk, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        int* hCode = (int*)malloc((size_t)Md * Kd * sizeof(int));   /* original E2M1 codes (for the oracle) */
+        int* hW = (int*)malloc(wN * sizeof(int));                   /* packed words (device weight buffer) */
+        float* hSc = (float*)malloc(scN * sizeof(float));           /* linear f32 block scales */
+        unsigned short* hB = (unsigned short*)malloc(bN * sizeof(unsigned short));
+        float* refB = (float*)malloc(bN * sizeof(float));
+        unsigned short* hC = (unsigned short*)malloc(cN * sizeof(unsigned short));
+        if (!hCode || !hW || !hSc || !hB || !refB || !hC) return 2;
+        /* NON-DEGENERATE weight codes (period-coprime fill spans all 16 magnitudes/signs) */
+        for (int r = 0; r < Md; r++)
+            for (int k = 0; k < Kd; k++)
+                hCode[r * Kd + k] = (r * 5 + k * 7 + 3) % 16;
+        /* pack 7 codes/word base-16 low-nibble-first: word = sum_{j=0..6} code_{kw*7+j} * 16^j */
+        for (int r = 0; r < Md; r++)
+            for (int kw = 0; kw < kwords; kw++) {
+                int word = 0, pw = 1;
+                for (int j = 0; j < 7; j++) { word += (hCode[r * Kd + kw * 7 + j] & 15) * pw; pw *= 16; }
+                hW[r * kwords + kw] = word;
+            }
+        /* E8M0 scales near 127 (0.5..2.0), host-decoded to linear f32 */
+        for (int r = 0; r < Md; r++)
+            for (int bk = 0; bk < kblk; bk++)
+                hSc[r * kblk + bk] = e8m0_scale(126 + ((r + bk) % 3));   /* 126,127,128 -> 0.5,1,2 */
+        /* activations b: non-degenerate f16-representable, f16-rounded (refB shares the rounded bits) */
+        for (size_t i = 0; i < bN; i++) { float v = ((float)((i * 5 + 1) % 11) - 5.0f) * 0.3f; hB[i] = f32_to_f16(v); refB[i] = f16_to_f32(hB[i]); }
+        /* wflip NC: bump element-0's nibble (the GPU sees a changed weight; the oracle keeps hCode).
+         * The fixed data has code[0]=3 (1.5) -> 4 (2.0): a real value change, in every C[0,*] sum. */
+        if (wflip) { int n0 = hW[0] & 15; hW[0] = hW[0] - n0 + ((n0 + 1) & 15); }
+        CUdeviceptr dW, dSc, dB, dC;
+        CK(cuMemAlloc(&dW, wN * sizeof(int)), "cuMemAlloc W (mxfp4 packed)");
+        CK(cuMemAlloc(&dSc, scN * sizeof(float)), "cuMemAlloc Sc (e8m0->f32)");
+        CK(cuMemAlloc(&dB, bN * sizeof(unsigned short)), "cuMemAlloc B (f16)");
+        CK(cuMemAlloc(&dC, cN * sizeof(unsigned short)), "cuMemAlloc C (f16)");
+        CK(cuMemcpyHtoD(dW, hW, wN * sizeof(int)), "HtoD W");
+        CK(cuMemcpyHtoD(dSc, hSc, scN * sizeof(float)), "HtoD Sc");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(unsigned short)), "HtoD B");
+        void* margs[] = { &dW, &dSc, &dB, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, margs, 0), "cuLaunchKernel mxfp4");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(unsigned short)), "DtoH C");
+        int xbad = 0; float maxabs = 0.0f, maxrel = 0.0f;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                float ref = 0.0f;
+                for (int k = 0; k < Kd; k++)
+                    ref += e2m1_decode(hCode[r * Kd + k]) * hSc[r * kblk + k / 32] * refB[k * Nd + cc];
+                float got = f16_to_f32(hC[r * Nd + cc]);
+                if (mutate && r == 0 && cc == 0) { got += 0.5f + 0.1f * fabsf(got); }
+                float e = got - ref; if (e < 0) e = -e;
+                float denom = fabsf(ref); float rel = denom > 1.0e-6f ? e / denom : e;
+                if (e > maxabs) maxabs = e;
+                if (rel > maxrel) maxrel = rel;
+                if (isnan(got) || (e > 1.0e-3f && rel > 1.0e-2f)) {
+                    if (xbad < 4) fprintf(stderr, "mxfp4 mismatch C[%d,%d]=%g ref %g (abs %g rel %g)\n", r, cc, got, ref, e, rel);
+                    xbad++;
+                }
+            }
+        }
+        double mxbytes = (double)wN * 4.0 + (double)scN * 1.0;       /* measured: packed words + 1B/scale */
+        double f32b = (double)Md * Kd * 4.0, f16b = (double)Md * Kd * 2.0;
+        printf("GPU [%s] naive_mxfp4_matmul(dequant->f32-acc->f16) %dx%dx%d over %d cells: C[1,1]=%g, max_abs=%g max_rel=%g, %d bad -> %s | footprint(measured): mxfp4=%.0fB vs f32=%.0fB (%.2fx) vs f16=%.0fB (%.2fx)\n",
+               gpu, Md, Kd, Nd, Md * Nd, f16_to_f32(hC[1 * Nd + 1]), maxabs, maxrel, xbad, xbad ? "FAIL" : "PASS",
+               mxbytes, f32b, f32b / mxbytes, f16b, f16b / mxbytes);
+        int rc = xbad ? 1 : 0;
+        cuMemFree(dW); cuMemFree(dSc); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hCode); free(hW); free(hSc); free(hB); free(refB); free(hC); free(ptx);
         return rc;
     }
 

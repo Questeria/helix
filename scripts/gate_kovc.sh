@@ -288,6 +288,38 @@ else
   else echo "  FAIL: f16 kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
 fi
 
+# v1.5 S2 (2026-06-13): MXFP4 (OCP) dequant->f16 matmul PTX regression. naive_mxfp4_matmul_kernel.hx
+# declares w:t2 (packed E2M1, 7 elems/i32 word) + sc:f32 (host-decoded E8M0 linear scale) + b/c:f16, and
+# dequants ON-DEVICE (div-unpack the nibble + an f32-literal E2M1 if-ladder + the per-32-block scale)
+# then matmuls in f32, storing f16. NO kovc.hx edit (rides the existing path: S0 div-unpack + S1 f16),
+# so the self-host fixpoint stays cdcf8673 byte-identical (gated like ternary/packed/f16 by a byte-exact
+# committed ref + an OUTPUT provenance grep). GPU-hardware verify is the separate scripts/gpu_mxfp4_check.sh
+# (dual-bound tol vs an independent from-scratch-codec oracle + comparator + weight-flip + kernel-corruption NCs).
+MXREF=$EX/naive_mxfp4_matmul_kernel.ref.ptx
+MXKern=$EX/naive_mxfp4_matmul_kernel.hx
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: no re-minted driver -- cannot run the mxfp4 PTX text regression"; GATE_OK=0
+elif [ ! -s "$MXREF" ]; then
+  echo "  FAIL: committed mxfp4 PTX reference missing/empty ($MXREF) -- text regression has no anchor"; GATE_OK=0
+elif [ ! -f "$MXKern" ]; then
+  echo "  FAIL: mxfp4 kernel source missing ($MXKern) -- cannot emit mxfp4 PTX"; GATE_OK=0
+else
+  cp "$MXKern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
+  timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
+  if [ -s /tmp/out.ptx ]; then
+    cp "$MXREF" /tmp/mxref.ptx
+    if cmp -s /tmp/out.ptx /tmp/mxref.ptx; then echo "  MXFP4 PTX REGRESSION OK (matches committed naive_mxfp4_matmul_kernel.ref.ptx)";
+    else echo "  MXFP4 PTX CHANGED -- re-mint+re-commit the mxfp4 reference with a reason"; GATE_OK=0; fi
+    if grep -q 'div\.s32' /tmp/out.ptx && grep -q 'ld\.global\.u32' /tmp/out.ptx \
+       && grep -q 'ld\.global\.f32' /tmp/out.ptx && grep -q 'ld\.global\.b16' /tmp/out.ptx \
+       && grep -q 'cvt\.f32\.f16' /tmp/out.ptx && grep -q 'cvt\.rn\.f16\.f32' /tmp/out.ptx \
+       && grep -q 'st\.global\.b16' /tmp/out.ptx && grep -q 'mul\.f32' /tmp/out.ptx \
+       && grep -q 'add\.f32' /tmp/out.ptx && grep -q 'mov\.f32' /tmp/out.ptx \
+       && ! grep -qE '%r-1|%f-1|%rd-1' /tmp/out.ptx; then echo "  MXFP4 PROVENANCE OK (div.s32 nibble-unpack + ld.global.u32/f32/b16 + cvt.f32.f16 + f32-literal decode mov.f32 + mul.f32/add.f32 + cvt.rn.f16.f32/st.global.b16; no unbound reg)";
+    else echo "  MXFP4 PROVENANCE FAIL (missing div-unpack / a load type / cvt / f32 math / f32 literal -- or an unbound reg present)"; GATE_OK=0; fi
+  else echo "  FAIL: mxfp4 kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
+fi
+
 echo "=== [4] FEATURE CORPUS via new K2 ==="
 gen() { cat > "$CD/$1"; }
 gen i64_basic.hx <<'EOF'
