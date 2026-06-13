@@ -69,6 +69,18 @@ builds; commit ONLY green; never ship red; never fake.
 - **v1.5 is DONE** only when every component row is green + several consecutive clean independent
   adversarial audits. At that point: finalize this doc, tag `v1.5-complete`, update
   `docs/TRUST_CHAIN_CLOSED.md` honestly, and announce. Until then the self-paced loop keeps going.
+- **The v1.5-complete BAR (fixed 2026-06-13, owner-deferred to the loop):** "every row green" means
+  each row's OWN stated test passes its gate + negative control — and for the three research-grade
+  rows that test IS a *first increment*, not full coverage: **#2** = a per-compile equivalence
+  witness + its falsifiable checker on ONE named kernel (start: matmul), a wrong kernel REJECTED;
+  **#4** = ONE re-derivable/succinct inference receipt + a fast independent checker, a forged receipt
+  REJECTED; **#3** = a verifiable PTX->SASS path (or SASS validator) on ONE named sm_86 kernel,
+  output verified + a negative control. So the stopping condition is: **S0-S3 fully green + #2/#4/#3
+  each landed as a labeled first increment + the audit streak** — NOT full formal/ZK/SASS coverage
+  (those are explicitly post-v1.5). v1.6 (verifiable inference of a much larger model on
+  should-be-impossible hardware: quantize + layer-stream/offload + verified-correct + a receipt) and
+  v1.7 (speed: same-or-better capability, made fast) build directly on this — #4's receipts + #2's
+  certified kernels are exactly what make a streamed-70B run on an 8GB laptop GPU *provable* in v1.6.
 
 ## Discipline (carried, non-negotiable)
 

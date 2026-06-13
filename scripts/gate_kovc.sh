@@ -221,6 +221,35 @@ else
   else echo "  FAIL: ternary kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
 fi
 
+# v1.5 S0 increment 3 (2026-06-13): PACKED TERNARY matmul PTX regression. packed_ternary_matmul_kernel.hx
+# declares weights as 2-bit PACKED trits (15 trits/i32 word, base-4 code 2/0/1 for trit -1/0/+1; 15 fields
+# keep the word < 2^31 so the signed div.s32 unpack is exact), unpacked ON DEVICE via DIVISION (code =
+# w-(w/4)*4; trit = code-3*(code/2)) in a one-thread-per-cell GEMM. The kernel emits PACKED-ternary PTX
+# (div.s32 for unpacking + mul.lo.s32 + add.s32 + st.global.u32, NO f32) -- proving the packed
+# representation works end-to-end ON THE GPU. Self-contained generic @kernel (NO kovc.hx edit -> fixpoint
+# byte-identical). Gated like ternary_matmul by a byte-exact committed ref + an OUTPUT provenance grep.
+PTNREF=$EX/packed_ternary_matmul_kernel.ref.ptx
+PTNKern=$EX/packed_ternary_matmul_kernel.hx
+if [ ! -s /tmp/newdrv.bin ]; then
+  echo "  FAIL: no re-minted driver -- cannot run the packed ternary PTX text regression"; GATE_OK=0
+elif [ ! -s "$PTNREF" ]; then
+  echo "  FAIL: committed packed ternary PTX reference missing/empty ($PTNREF) -- text regression has no anchor"; GATE_OK=0
+elif [ ! -f "$PTNKern" ]; then
+  echo "  FAIL: packed ternary kernel source missing ($PTNKern) -- cannot emit packed ternary PTX"; GATE_OK=0
+else
+  cp "$PTNKern" /tmp/kernel_in.hx; rm -f /tmp/out.ptx
+  timeout 30 /tmp/newdrv.bin >/dev/null 2>&1 || true
+  if [ -s /tmp/out.ptx ]; then
+    cp "$PTNREF" /tmp/ptnref.ptx
+    if cmp -s /tmp/out.ptx /tmp/ptnref.ptx; then echo "  PACKED TERNARY PTX REGRESSION OK (matches committed packed_ternary_matmul_kernel.ref.ptx)";
+    else echo "  PACKED TERNARY PTX CHANGED -- re-mint+re-commit the packed ternary reference with a reason"; GATE_OK=0; fi
+    if grep -q 'div\.s32' /tmp/out.ptx && grep -q 'mul\.lo\.s32' /tmp/out.ptx \
+       && grep -q 'add\.s32' /tmp/out.ptx && grep -q 'st\.global\.u32' /tmp/out.ptx \
+       && ! grep -q 'ld\.global\.f32' /tmp/out.ptx; then echo "  PACKED TERNARY PROVENANCE OK (div.s32 unpacking + mul.lo.s32 + add.s32 + st.global.u32 in the OUTPUT, no f32 load)";
+    else echo "  PACKED TERNARY PROVENANCE FAIL (missing div.s32/mul/add/st OR an f32 load present in emitted PTX)"; GATE_OK=0; fi
+  else echo "  FAIL: packed ternary kernel emitted no /tmp/out.ptx (PTX text emit failed)"; GATE_OK=0; fi
+fi
+
 echo "=== [4] FEATURE CORPUS via new K2 ==="
 gen() { cat > "$CD/$1"; }
 gen i64_basic.hx <<'EOF'
@@ -662,7 +691,10 @@ chk "$GENC/trit_dot.hx" 42
 # trit_matmul_cpu: a 2x2 ternary matmul (mixed +/-/0 weights) on the self-hosted CPU toolchain -> 42.
 chk "$GENC/trit_roundtrip.hx" 42
 chk "$GENC/trit_matmul_cpu.hx" 42
-echo "  CORPUS: $pass passed, $fail failed (expect 112 pass [+3 v1.5 S0 ternary: trit_dot + trit_roundtrip + trit_matmul_cpu, t2 tag-12]: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 7 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42 -- bf16-arith-bound RETIRED, now SHIPPED in V4] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug] + 3 v1.3 V3 capturing-closure-by-value [V3_capture_arg x=40;|y| x+y; apply(c,2)->42 -- a CAPTURING closure passed by value + invoked, reads its capture; the v1.2 M-6 capturing bound SHIPS; V3_multi_capture 3 captures a+b+c+y->42; V3_modify_after capture-by-value-at-creation, modify-after->still 42 not 1001] + 3 v1.3 V4 bf16/f16 arithmetic [V4_bf16_add 256+3 f32-sum-259 RNE->260 vs trunc-258 (==260->42), V4_bf16_mul 17*19 f32-prod-323 RNE->324 vs trunc-322 (==324->42), V4_bf16_roundtrip f32-1.1->bf16-RNE-1.1015625 roundtrip==ref->42 -- convert-op-convert, round-to-nearest-even (bf16 literal fold ALSO RNE now -- consistent across literal/cast/arith); the bf16/f16 storage-only bound SHIPS, arm_bf16_arith_bound RETIRED] + 2 v1.3 f16-GAP-FIX f16 SAME-TYPE arith via F16C [V4_f16_add 100+28->128 exact (the silent-wrong fix: f16 ident/literal now map to tag 5 -> emit_f16_binop reached; old path mis-routed to bf16 and returned ~0), V4_f16_mul 7*293 f32-prod-2051 RNE->2052 vs trunc-2048 (==2052->42) -- vcvtph2ps/vcvtps2ph PRESENT in the emitted binary, was 0/0 dead code])"
+# v1.5 S0 (2026-06-13): +1 PACKED-ternary corpus row (DoD "packed representation" criterion).
+# trit_pack: pack 4 ternary t2 values into one i32 (base-4) + unpack via the /4,%4 device decode -> round-trip -> 42.
+chk "$GENC/trit_pack.hx" 42
+echo "  CORPUS: $pass passed, $fail failed (expect 113 pass [+4 v1.5 S0 ternary: trit_dot + trit_roundtrip + trit_matmul_cpu + trit_pack(packed), t2 tag-12]: 35 v1.0 + 8 H2 generics + 7 H3 traits/closures + 3 H4 pattern-guards + 3 H5 i64-literals [3e9->30, 5e9->50 (> 2^32), 2.2e9->22 -- full i64 range, no truncation] + 3 T3 >6-arg [f8->36, f9->45, f11->66] + 1 T3 L-1 index-store [L1_index_store->42] + 5 T3 L-7 dark-arms [neg/bnot/not/i8/u32 ->42] + 3 T3 desugars [M-1 for / M-2 op= / L-4 &&|| ->42] + 3 T3 doc-as-bound [M-5 bare-generic ->0, M-7 privacy ->42, L-3 non-exhaustive ->42] + 2 T3 H-1 collections [H1_vec growth->42, H1_hashmap collision->42] + 1 T3 H-2 rich String [H2_string concat+eq+byte_at->42] + 6 T3 §1.6 aggregate-return-by-value [sret 1/2/3/5-field->42, arm_enum_payload3->42, eret_option->42] + 2 T3 H-4 trait-defaults [t1 default-used->42, t5 default/override-mix->42] + 2 T3 M-4 turbofish-enum-ctor [M4_turbofish_enum payload+unit->42, gen_option_i32 turbofish-match->42] + 3 T3 M-6 closure-as-arg [M6_closure_arg multi-form->42, t6_closure_arg charter-probe->42, M6_capture_regression capturing-by-name->42] + 7 T3 L-7 REMAINING frozen-arm sweep [block-comment/radix+_/char-lit/continue/early-return/tuple-struct/bf16-f16-decl ->42 -- bf16-arith-bound RETIRED, now SHIPPED in V4] + 4 v1.3 V1 wide struct fields [V1_i64 5e9/1e8->50 EXACT (the silent-bug fix; M-3 bound RETIRED), V1_u64 5e9/1e8->50, V1_f64 field==local-ref->42, V1_multi i64/f64/i32 offsets+widths->42] + 3 v1.3 V2 u64 literals >= 2^32 [V2_u64_lit_over_2p32 5e9/1e8->50 EXACT (L-2 bound SHIPPED), V2_u64_lit_near_max 2^64-1 > 2^63-1 unsigned->42, V2_u64_lit_div_max (2^64-1)/(2^63-1) unsigned->2 -- full unsigned range, no sign/truncation bug] + 3 v1.3 V3 capturing-closure-by-value [V3_capture_arg x=40;|y| x+y; apply(c,2)->42 -- a CAPTURING closure passed by value + invoked, reads its capture; the v1.2 M-6 capturing bound SHIPS; V3_multi_capture 3 captures a+b+c+y->42; V3_modify_after capture-by-value-at-creation, modify-after->still 42 not 1001] + 3 v1.3 V4 bf16/f16 arithmetic [V4_bf16_add 256+3 f32-sum-259 RNE->260 vs trunc-258 (==260->42), V4_bf16_mul 17*19 f32-prod-323 RNE->324 vs trunc-322 (==324->42), V4_bf16_roundtrip f32-1.1->bf16-RNE-1.1015625 roundtrip==ref->42 -- convert-op-convert, round-to-nearest-even (bf16 literal fold ALSO RNE now -- consistent across literal/cast/arith); the bf16/f16 storage-only bound SHIPS, arm_bf16_arith_bound RETIRED] + 2 v1.3 f16-GAP-FIX f16 SAME-TYPE arith via F16C [V4_f16_add 100+28->128 exact (the silent-wrong fix: f16 ident/literal now map to tag 5 -> emit_f16_binop reached; old path mis-routed to bf16 and returned ~0), V4_f16_mul 7*293 f32-prod-2051 RNE->2052 vs trunc-2048 (==2052->42) -- vcvtph2ps/vcvtps2ph PRESENT in the emitted binary, was 0/0 dead code])"
 
 echo "=== [4b] CHECK_ERR negative corpus (H-3 file:line:col diagnostics) ==="
 # H-3 (charter §1.6): a malformed program must produce a COMPILE-TIME non-zero
@@ -782,7 +814,10 @@ if [ "$efail" -ne 0 ] || [ "$epass" -lt 4 ]; then echo "  CHECK_ERR REGRESSION (
 # so S0 meets the DoD's ">=3 new ternary corpus rows" criterion (with trit_dot = 3 total). No GPU/PTX
 # change -> vector_add/tiled/ternary .ref.ptx byte-identical; self-host source uses no t2 -> fixpoint
 # stays dffd778c byte-identical.
-if [ "$pass" -lt 112 ]; then echo "  CORPUS REGRESSION (pass=$pass < 112)"; GATE_OK=0; fi
+# v1.5 S0 corpus floor bump 112->113 (2026-06-13): +1 packed-ternary row (trit_pack) -- closes the
+# DoD's "packed representation" criterion. No GPU/PTX change to existing kernels; self-host source uses
+# no t2 -> fixpoint stays dffd778c byte-identical.
+if [ "$pass" -lt 113 ]; then echo "  CORPUS REGRESSION (pass=$pass < 113)"; GATE_OK=0; fi
 if [ "$GATE_OK" = "1" ]; then echo "GATE_PASS"; else echo "GATE_FAIL"; fi
 # H-3 (2026-06-03): exit reflects the verdict so the detached runner's
 # exit-code check (detached_gate.sh) reports RED on ANY gate failure

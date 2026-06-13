@@ -561,6 +561,73 @@ int main(int argc, char** argv) {
         return mbad ? 1 : 0;
     }
 
+    /* ptmatmul mode (v1.5 S0 increment 3): PACKED TERNARY matmul verify.
+     *   cuda_launch <ptx> packed_ternary_matmul <Nignored> ptmatmul <M> <K> <N> [mutate].
+     * Like 'imatmul' but the weights are 2-bit PACKED: 15 trits per i32 word, base-4 code
+     * (trit -1/0/+1 -> code 2/0/1; word = sum_{j=0..14} code_j*4^j). 15 (NOT 16) fields keep
+     * the word < 2^31 so the device's SIGNED div.s32 unpack stays exact (16 fields would spill
+     * into the sign bit -> mis-decode). K MUST be divisible by 15. Host packs W -> M*(K/15)
+     * words; the kernel unpacks ON DEVICE (code=w-(w/4)*4; trit=code-3*(code/2)). EXACT integer
+     * compare vs the UNPACKED CPU reference; 'mutate' is the comparator NC; the packed-vs-unpacked
+     * footprint (15x) is reported. */
+    if (strcmp(op, "ptmatmul") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 16;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 15;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 16;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        if (Kd % 15 != 0) { fprintf(stderr, "ptmatmul: K must be divisible by 15 (15 trits/word); got K=%d\n", Kd); return 2; }
+        int kpacked = Kd / 15;
+        size_t wN = (size_t)Md * Kd;       /* unpacked weights (for the pack + the CPU ref) */
+        size_t aP = (size_t)Md * kpacked;  /* packed words (the device weight buffer) */
+        size_t bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        int* hW = (int*)malloc(wN * sizeof(int));
+        int* hA = (int*)malloc(aP * sizeof(int));
+        int* hB = (int*)malloc(bN * sizeof(int));
+        int* hC = (int*)malloc(cN * sizeof(int));
+        if (!hW || !hA || !hB || !hC) return 2;
+        for (size_t i = 0; i < wN; i++) hW[i] = (int)(i % 3) - 1;             /* ternary weights -1/0/+1 */
+        for (int r = 0; r < Md; r++) {
+            for (int kw = 0; kw < kpacked; kw++) {
+                int word = 0, power = 1;
+                for (int j = 0; j < 15; j++) {
+                    int w = hW[r * Kd + kw * 15 + j];
+                    int code = (w < 0) ? 2 : (w > 0 ? 1 : 0);   /* -1->2, 0->0, +1->1 */
+                    word += code * power;
+                    power *= 4;
+                }
+                hA[r * kpacked + kw] = word;
+            }
+        }
+        for (size_t i = 0; i < bN; i++) hB[i] = (int)((i * 13 + 7) % 11) - 5; /* signed activations [-5,5] */
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, aP * sizeof(int)), "cuMemAlloc A (packed)");
+        CK(cuMemAlloc(&dB, bN * sizeof(int)), "cuMemAlloc B");
+        CK(cuMemAlloc(&dC, cN * sizeof(int)), "cuMemAlloc C");
+        CK(cuMemcpyHtoD(dA, hA, aP * sizeof(int)), "cuMemcpyHtoD A (packed)");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(int)), "cuMemcpyHtoD B");
+        void* pargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, pargs, 0), "cuLaunchKernel ptmatmul");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(int)), "cuMemcpyDtoH C");
+        if (mutate && cN > 0) hC[0] += 1;   /* comparator negative control: must trip a mismatch */
+        int pbad = 0;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                long ref = (long)hW[r * Kd] * (long)hB[cc];
+                for (int t = 1; t < Kd; t++) ref += (long)hW[r * Kd + t] * (long)hB[t * Nd + cc];
+                long got = (long)hC[r * Nd + cc];
+                if (got != ref) { if (pbad < 4) fprintf(stderr, "ptmatmul mismatch C[%d,%d]=%ld ref %ld\n", r, cc, got, ref); pbad++; }
+            }
+        }
+        printf("GPU [%s] packed_ternary_matmul(15t/word) %dx%dx%d: C[1,1]=%d, %d bad -> %s | footprint: packed_a=%zuB vs unpacked=%zuB (%.1fx)\n",
+               gpu, Md, Kd, Nd, hC[1 * Nd + 1], pbad, pbad ? "FAIL" : "PASS",
+               aP * sizeof(int), wN * sizeof(int), (double)wN / (double)aP);
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hW); free(hA); free(hB); free(hC); free(ptx);
+        return pbad ? 1 : 0;
+    }
+
     /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul
      *   <Nignored> gemm_perf <M> <K> <N> [mutate].
      * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device.
