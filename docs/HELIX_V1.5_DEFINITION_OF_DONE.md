@@ -1,6 +1,6 @@
 # Helix v1.5 — Definition of Done (DRAFT, 2026-06-13)
 
-> **STATUS (2026-06-13): S0 + S1 DONE — adversarial-audit PASS.** (S1 delivered a *naive* fp16 GEMM
+> **STATUS (2026-06-13): S0 + S1 + S2 DONE — adversarial-audit PASS.** (S1 delivered a *naive* fp16 GEMM
 > I/O path with f32 accumulation; the *tiled / Tensor-Core* fp16 perf path is the S1 row's own "perf
 > later" residual, explicitly deferred to the v1.7 speed track and logged below — not silently dropped.)
 > The falsifiable finish line for the
@@ -54,7 +54,28 @@
 > speed). A naive correct fp16 GEMM IS the valid dequant/compute target FP4 (S2/S3) widens into; the
 > tiled perf variant is a TRACKED v1.7 residual, NOT silently dropped.
 >
-> **NEXT: S2 (MXFP4).** S2-S3 + #2/#4/#3 remain (the fixed v1.5-complete BAR is below).
+> **S2 (MXFP4) — ✅ DONE (committed LOCALLY, push HELD; commit e3808fb):** OCP MXFP4 (E2M1 4-bit
+> element + a shared E8M0 8-bit power-of-2 scale per 32-block) dequant -> f16 matmul, riding the
+> existing @kernel path with **NO kovc.hx edit** (S0 div-unpack + S1 f16 + an f32-literal decode), so
+> the self-host fixpoint stays **cdcf8673** byte-identical (the S0-packed-ternary pattern). A
+> kovc-emitted naive_mxfp4_matmul dequants ON-DEVICE (7 E2M1/i32 word div-unpack — 7 NOT 8, the S0
+> 15-trit overflow lesson re-derived for base-16 — + an f32-EXACT if-ladder decode + a host-decoded
+> linear f32 E8M0 scale) and matmuls in f32, storing f16; verified on the RTX 3070 within dual-bound
+> tolerance (abs 1e-3 OR rel 1e-2; max_rel 4.1e-4, the rel bound load-bearing) vs an INDEPENDENT
+> from-scratch C E2M1+E8M0 oracle, with THREE load-bearing NCs (a magnitude-scaled comparator + a
+> packed-weight nibble flip + a kernel-corruption acc->acc+acc) + a codec self-test (16 codes + 5
+> scales). Measured footprint 6.64x vs f32 / 3.32x vs f16. GATE_PASS (fixpoint cdcf8673 unchanged, all
+> PTX refs byte-identical, corpus 113/0); a MXFP4 PTX-regression block added.
+> **HONEST RECONCILIATION (S2 vs this row's original wording):** the row said "first-class storage
+> TYPE" + a "numpy oracle". MXFP4 is a BLOCK format (a 4-bit element + a per-32-block scale), NOT a
+> scalar — so it is realized as the packed-i32 (t2) representation + a host E8M0->f32 scale + the
+> on-device @kernel div-unpack/decode (pack/unpack + block-scale ARE delivered), NOT a new scalar
+> type-TAG like t2/f16 (a scalar tag does not fit a block format; this is the honest realization). The
+> oracle is the from-scratch C codec (not numpy — Python-free-fence superior, same as S1). sm_86 has NO
+> native FP4 -> a STORAGE + verifiable-DEQUANT (memory) win, NOT FP4 Tensor-Core throughput; the E8M0
+> 2^x is host-side (no __gpu_exp2 on-device) — the device does the full E2M1 nibble dequant + mag*scale.
+>
+> **NEXT: S3 (NVFP4).** S3 + #2/#4/#3 remain (the fixed v1.5-complete BAR is below).
 
 ## Version baseline (read first)
 
@@ -105,7 +126,7 @@ builds; commit ONLY green; never ship red; never fake.
 |---|-----------|----------------------|------|--------------------------|
 | **S0** | **Ternary (BitNet b1.58, {-1,0,+1}) first-class type + verified ternary matmul** | A `ternary` element type exists in the type system (lexer ident + parser + `expr_type`/`ty_ident_to_tag` tag + codegen), with a packed representation; a `kovc`-emitted ternary matmul kernel runs on the RTX 3070 and matches an independent numpy ternary-matmul oracle to a stated tolerance (target: exact for integer-accumulated ternary·activation), with a corrupted-kernel negative control caught; >=3 new ternary corpus rows green. | Universal gate (fixpoint byte-identical — self-host source doesn't use ternary; PTX regressions byte-identical; corpus +ternary rows) **+** the ternary-matmul oracle execution gate. | No new HW needed (add/sub/int on sm_86). Claim is **trust, not speed**; a small ternary model demo, NOT modern capability. |
 | **S1** ✅ DONE (8732487) | **fp16 GEMM compute path** (naive; the dequant/compute target FP4 needs) | A `kovc`-emitted **naive** fp16 matmul (`naive_matmul_f16`) runs on the RTX 3070 and matches an independent **from-scratch C** IEEE-binary16 oracle within dual-bound fp16 tolerance (abs 1e-3 OR rel 1e-2; observed max_rel 4.4e-4), comparator + kernel-corruption NCs caught, codec self-test green; gated by a PTX-regression block + `gpu_f16_check.sh` (GPU kernels gate via PTX-regression, not CPU chk rows). bf16/f16 *scalar* arith already ships (v1.3 V4) — this added the GPU *tensor* I/O path. | Universal gate (fixpoint re-minted **cdcf8673**; gcc-DDC K1 **6ee5ec2b**) + the fp16 GEMM execution gate. | **DELIVERED:** naive fp16 I/O + f32 accumulate (honest; no speed claim). **DEFERRED to v1.7 (speed):** the TILED/SMEM + Tensor-Core fp16 path (the original "tiled" + "perf later" residual, tracked not dropped). Oracle = from-scratch C codec (not numpy; Python-free-fence superior). bf16 optional/deferred. |
-| **S2** | **MXFP4 first-class storage type + verified dequant→matmul** | An `mxfp4` tensor type (OCP: E2M1 4-bit elements + one shared **E8M0** 8-bit scale per 32-block); pack/unpack + block-scale; a dequant→(fp16/bf16)→matmul path whose result matches a numpy MXFP4 oracle within stated tolerance, negative control caught; the 4-bit storage footprint is measured + reported. | Universal gate + the MXFP4 dequant→matmul oracle execution gate. | On `sm_86` this is **storage + dequant** (memory win), NOT native FP4 Tensor-Core throughput (that needs Blackwell). Never imply FP4 speed parity. |
+| **S2** ✅ DONE (e3808fb) | **MXFP4 storage format + verified dequant→matmul** | OCP MXFP4 (E2M1 4-bit + shared **E8M0** 8-bit scale per 32-block) realized as a packed-i32 representation + on-device `@kernel` dequant (NOT a scalar type-tag — MXFP4 is a block format); pack (7 E2M1/i32 word, host) + on-device div-unpack + a host E8M0→f32 block-scale; a `kovc`-emitted dequant→f16→matmul (`naive_mxfp4_matmul`) matches an independent **from-scratch C** MXFP4 oracle within dual-bound tolerance (abs 1e-3 OR rel 1e-2; max_rel 4.1e-4), THREE NCs caught (comparator + weight-flip + kernel-corruption), codec self-test green; measured footprint 6.64x vs f32 / 3.32x vs f16. | Universal gate (fixpoint **cdcf8673 UNCHANGED** — no kovc edit) + the MXFP4 PTX-regression block + the `gpu_mxfp4_check.sh` execution gate. | **DELIVERED:** storage + verifiable on-device dequant (memory win). NOT native FP4 Tensor-Core throughput (needs Blackwell; never implied). Realized as packed-i32 + `@kernel`-decode, not a scalar type-tag (block format). Oracle = from-scratch C codec (not numpy). E8M0 2^x is host-side. |
 | **S3** | **NVFP4 first-class storage type + verified dequant** | An `nvfp4` tensor type (E2M1 + **FP8 E4M3** micro-scale per 16-block + FP32 per-tensor); pack/unpack + two-level scale; verified dequant vs a numpy NVFP4 oracle within tolerance, negative control caught. | Universal gate + the NVFP4 dequant oracle execution gate. | **Native FP4 MMA needs Blackwell (sm_100/sm_120)** — NOT available on this box, so the *speed* leg is explicitly DEFERRED and labeled; only the format + verified dequant land here. |
 | **#2** | **Certified / translation-validated ML kernels + verifiable autodiff** | A per-compile pass emits, for a target kernel (start: matmul / softmax / layernorm), a machine-checkable **equivalence witness** that the emitted kernel computes its spec within a verified numerical envelope — *beyond* empirical token-match — plus a check that the backward kernel is the derivative of the forward (extend the existing finite-difference check toward a certificate). | Universal gate + the witness-checker runs green on the target kernel(s); negative control (a wrong kernel) is REJECTED by the witness. | Full formal PTX+IEEE-FP semantics is multi-week research; v1.5 DONE = the FIRST witness pass + its falsifiable checker on a named kernel set, honestly scoped. |
 | **#4** | **Succinct / ZK verifiable-inference receipts** | A receipt format + an independent checker such that "this model on this input produced this output" is verifiable **without re-running the full model and without trusting the runner**, faster than re-execution OR with a re-derivable transcript; checker rejects a forged receipt. | Universal gate + the receipt checker green on a real inference + a forgery negative control. | Full ZK-SNARK proving is expensive + an active field (EZKL/Modulus/Giza); v1.5 DONE = the first re-derivable/succinct receipt increment with a fast independent checker; full ZK is the labeled stretch. |
