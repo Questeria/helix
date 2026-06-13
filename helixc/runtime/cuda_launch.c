@@ -72,7 +72,7 @@ static float f16_to_f32(unsigned short h) {
             int e = 0;
             while (!(mant & 0x400u)) { mant <<= 1; e++; }
             mant &= 0x3FFu;
-            out = sign | ((unsigned int)(127 - 15 - e) << 23) | (mant << 13);
+            out = sign | ((unsigned int)(127 - 14 - e) << 23) | (mant << 13);  /* 113-e (S1-audit fix): a half subnormal mantissa m*2^-10 * 2^-14 normalizes to 1.f * 2^(-14-e); biased f32 exp = (-14-e)+127 = 113-e. Was 127-15-e, an off-by-one that halved EVERY f16 subnormal (out-of-path for S1, but S2/MXFP4 hits small magnitudes). Verified by the codec_selftest op below. */
         }
     } else if (exp == 0x1Fu) {
         out = sign | 0x7F800000u | (mant << 13);     /* inf/nan */
@@ -138,6 +138,42 @@ int main(int argc, char** argv) {
     const char* op = (argc > 4) ? argv[4] : "add";
     int is_exp = (strcmp(op, "exp") == 0);    /* c[i]=e^a[i] via __gpu_exp; small inputs, tol-checked */
     int is_relu = (strcmp(op, "relu") == 0);  /* c[i]=max(a[i],0); negative inputs exercise the float compare */
+
+    /* v1.5 S1 audit follow-up: codec_selftest -- verify the from-scratch IEEE binary16 codec
+     * (f16_to_f32 / f32_to_f16 above) across normal / zero / subnormal / boundary values. Guards
+     * the subnormal-decode off-by-one fixed above (it halved every f16 subnormal; out-of-path for
+     * S1's data but S2/MXFP4 dequant produces small magnitudes). No GPU/PTX needed -- returns before
+     * the module load. Usage: cuda_launch <anyptx> x 0 codec_selftest. Each case: f16 bits decode to
+     * the IEEE value within a tight relative epsilon AND the value round-trips f32->f16->f32 exactly. */
+    if (strcmp(op, "codec_selftest") == 0) {
+        struct { unsigned short h; float v; } CASES[] = {
+            { 0x0000, 0.0f }, { 0x3C00, 1.0f }, { 0xC000, -2.0f }, { 0x3800, 0.5f },
+            { 0x0001, 5.9604644775390625e-08f },  /* smallest subnormal = 2^-24 */
+            { 0x03FF, 6.097555160522461e-05f },   /* largest subnormal = 1023*2^-24 */
+            { 0x0400, 6.103515625e-05f },         /* smallest normal = 2^-14 */
+            { 0x7BFF, 65504.0f }                  /* max finite normal */
+        };
+        int ncase = (int)(sizeof(CASES) / sizeof(CASES[0]));
+        int cbad = 0;
+        for (int i = 0; i < ncase; i++) {
+            float got = f16_to_f32(CASES[i].h);
+            float want = CASES[i].v;
+            float e = got - want; if (e < 0) e = -e;
+            float den = want < 0 ? -want : want;
+            float rel = den > 0.0f ? e / den : e;
+            int decode_ok = (e == 0.0f) || (rel <= 1.0e-6f);
+            unsigned short rt = f32_to_f16(want);        /* every CASES value is f16-exact -> round-trip must be identity */
+            float back = f16_to_f32(rt);
+            int rt_ok = (back == want);
+            if (!decode_ok || !rt_ok) {
+                fprintf(stderr, "codec_selftest FAIL case %d h=0x%04X got=%g want=%g rel=%g rt=0x%04X back=%g\n",
+                        i, CASES[i].h, got, want, rel, rt, back);
+                cbad++;
+            }
+        }
+        printf("codec_selftest: %d cases, %d bad -> %s\n", ncase, cbad, cbad ? "FAIL" : "PASS");
+        return cbad ? 1 : 0;
+    }
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
     FILE* f = fopen(ptx_path, "rb");

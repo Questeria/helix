@@ -96,5 +96,14 @@ else
 fi
 # NOTE: [E] never edits the committed kernel -- sed reads $KERN, writes /tmp; corrupted PTX from a /tmp copy.
 
+# --- [F] codec self-test: the from-scratch IEEE binary16 codec across normal/zero/subnormal/boundary
+#         (no GPU/PTX -- returns before the module load; guards the subnormal-decode fix for S2/MXFP4) ---
+say "[F] f16 codec self-test (normal/zero/subnormal/boundary, GPU-free)"
+if /tmp/f16_cl /tmp/f16_good.ptx naive_matmul_f16 0 codec_selftest >/tmp/f16_codec.log 2>&1; then
+  say "    $(grep -m1 'codec_selftest' /tmp/f16_codec.log || echo 'PASS (rc=0)')"
+else
+  bad "codec self-test FAILED (rc!=0):"; tail -4 /tmp/f16_codec.log >&2
+fi
+
 echo "------------------------------------------------------------"
 if [ "$OK" = "1" ]; then echo "F16_GPU_PASS"; exit 0; else echo "GPU_F16_FAIL"; exit 1; fi

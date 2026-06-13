@@ -32,6 +32,15 @@ cd "$ROOT"
 
 # Pinned trust anchors (the three from-raw values the demo binds to; bound here for the attestation,
 # and asserted against reproduce_trust.sh's own output below).
+#
+# RELEASE-ANCHORED (v1.5 S1 audit follow-up, 2026-06-13): these K1/FIX values are the v1.3-release /
+# v1.4-shipped from-raw anchors the GPT-2 investor demo was built + verified on. RUN THIS DEMO FROM A
+# RELEASE TAG ("git checkout v1.3-release", or v1.4) where reproduce_trust.sh's pins == these. On the
+# v1.5-WORKING main HEAD, reproduce_trust.sh prints RE-MINTED anchors (the v1.5 low-precision slate
+# advances the self-host fixpoint + gcc-DDC K1 per component: S0 -> dffd778c / 029e6822, S1 ->
+# cdcf8673 / 6ee5ec2b, ...), so this FAIL-CLOSED demo INTENTIONALLY fails on working HEAD -- BY DESIGN,
+# not a regression. Do NOT re-pin to the working-line SHAs mid-loop: the demo attests the SHIPPED
+# release; its anchors re-advance only at an owner-approved v1.5 release re-anchor. SEED_SHA never moves.
 SEED_SHA=9837db12752a22159ca75a533910bc0d7b9afb35df9b9963f256b7b1b915c9bb
 K1_SHA=84363adb84f4fa657d7bf86270c5bded9e04b7adb15f5c7d0c846c763346abba
 FIX_SHA=0992dddd0edba367d6ff32599c18c4316df1b56d644db36bbc6f69ff0a4bd20f
