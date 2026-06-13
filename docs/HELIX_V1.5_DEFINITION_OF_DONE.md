@@ -38,7 +38,12 @@
 > audit (`wf_29de8f98`) returned the artifacts CLEAN (honest scope, real verification teeth, byte-correct
 > PTX) and CAUGHT two reconciliation gaps now fixed: a stale-pin propagation to the v1.3-release GPT-2
 > demo (annotated as release-anchored, run-from-tag), the subnormal-decode off-by-one (fixed + the new
-> codec self-test), and THIS doc's un-reconciled S1 row (this block).
+> codec self-test), and THIS doc's un-reconciled S1 row (this block). The focused re-audit
+> (`wf_02e315b5`, at b5c3caf) then confirmed **BOTH major gaps CLOSED — PASS**, no new major issue (it
+> even simulated 113-e vs the pre-fix 112-e against numpy IEEE-half: fixed 8/0, pre-fix 8/2 FAIL,
+> proving the codec self-test has teeth). 3 pre-existing COSMETIC residuals are noted (display-only
+> pins in `gpt2_infer.c`, a stale CI comment whose run-step uses the re-minted script, the planning
+> prose below) — none can fail-close, none reopen a gap.
 > **HONEST RECONCILIATION (S1 vs this row's original wording):** S1 shipped a **NAIVE** one-thread-per-cell
 > fp16 GEMM, verified vs a **from-scratch C** IEEE-binary16 oracle (not numpy — superior for the
 > exactly-1-`.py` fence), gated by a PTX-regression block + `gpu_f16_check.sh` (the same way EVERY GPU
@@ -108,8 +113,8 @@ builds; commit ONLY green; never ship red; never fake.
 
 ## Honest completion policy
 
-- **Realistically completable this session:** S0 (ternary) is the first shippable win; S1 (fp16/bf16
-  GEMM) is plausible. S2/S3/#2/#4/#3 are research-grade — expect **honest gated partial progress**,
+- **Realistically completable this session:** S0 (ternary) + S1 (naive fp16 GEMM) SHIPPED (DONE,
+  local, push HELD). S2/S3/#2/#4/#3 are research-grade — expect **honest gated partial progress**,
   not necessarily full completion overnight.
 - **NEVER fake "done."** A component is DONE only when its row's test passes its gate with a
   negative control. Partial progress is logged honestly here + in the tracker each tick.
