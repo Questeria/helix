@@ -424,6 +424,79 @@ static void bilin_one(const float* LHS, const float* RHS, const float* S, size_t
     }
 }
 
+/* v1.5 #3 Phase 1 (verifiable PTX->SASS, the foundation): a from-scratch sm_86 SASS DECODER for the
+ * straight-line vector_add opcode subset, derived empirically (probe + diff vs ptxas, NOT from NVIDIA
+ * docs) and validated to reproduce cuobjdump/nvdisasm instruction-for-instruction. It reads the cubin's
+ * .text.<kernel> bytes (sass_elf_find_text -- a from-scratch ELF64 walk, no libelf) and decodes each
+ * 128-bit bundle with NO NVIDIA library, so the disassembly no longer takes cuobjdump's word for what the
+ * bytes mean. HONEST SCOPE: Phase 1 de-trusts the DISASSEMBLER and lets us SEE the emitted machine code;
+ * it does NOT yet de-trust ptxas (that is Phase 3's SASS->spec translation-validation). Opcode dispatch
+ * uses lo&0xffff (the unpredicated PT subset; predicated forms fall to .UNKNOWN -> FAIL-CLOSED, out of
+ * Phase-1 scope). Empirically-confirmed fields: Rd=lo[16:23], Ra=lo[24:31], Rb=lo[32:39] (or hi[0:7] when
+ * a c[][] occupies the lo word), c[][] byte offset=lo[40:53]<<2, S2R sel=hi[8:15], IMAD.WIDE writes the
+ * pair Rd:Rd+1, BRA target=addr+16+(i32)lo[32:63], .reuse=hi[58:59]. */
+static unsigned long long sass_bits(unsigned long long v, int lo, int hi) {
+    return (v >> lo) & ((hi - lo == 63) ? ~0ULL : ((1ULL << (hi - lo + 1)) - 1));
+}
+static const char* sass_sr_name(unsigned sel) {
+    switch (sel) { case 0x21: return "SR_TID.X"; case 0x22: return "SR_TID.Y"; case 0x23: return "SR_TID.Z";
+        case 0x25: return "SR_CTAID.X"; case 0x26: return "SR_CTAID.Y"; case 0x27: return "SR_CTAID.Z";
+        case 0x00: return "SR_LANEID"; default: return "SR_?"; }
+}
+/* decode one 128-bit bundle -> a cuobjdump-format mnemonic string. Returns 0 for a known opcode, -1 if
+ * the opcode is outside the whitelist (FAIL-CLOSED -- the unknown-instruction / corruption signal). */
+static int sass_disasm(unsigned long long lo, unsigned long long hi, int addr, char* out) {
+    unsigned op = (unsigned)(lo & 0xffff);
+    int pred = (int)sass_bits(lo, 12, 15); char pfx[16] = "";
+    if (pred != 7) { int neg = (pred >> 3) & 1; int pi = pred & 7; sprintf(pfx, "@%sP%d ", neg ? "!" : "", pi); }
+    int Rd = (int)sass_bits(lo, 16, 23), Ra = (int)sass_bits(lo, 24, 31);
+    unsigned coff = (unsigned)sass_bits(lo, 40, 53) * 4;
+    switch (op) {
+        case 0x7a02: sprintf(out, "%sMOV R%d, c[0x0][0x%x]", pfx, Rd, coff); break;
+        case 0x7802: sprintf(out, "%sMOV R%d, 0x%x", pfx, Rd, (unsigned)sass_bits(lo, 32, 63)); break;
+        case 0x7919: sprintf(out, "%sS2R R%d, %s", pfx, Rd, sass_sr_name((unsigned)sass_bits(hi, 8, 15))); break;
+        case 0x7ab9: sprintf(out, "%sULDC.64 UR%d, c[0x0][0x%x]", pfx, Rd, coff); break;
+        case 0x7a24: sprintf(out, "%sIMAD R%d, R%d, c[0x0][0x%x], R%d", pfx, Rd, Ra, coff, (int)sass_bits(hi, 0, 7)); break;
+        case 0x7224: sprintf(out, "%sIMAD R%d, R%d, R%d, R%d", pfx, Rd, Ra, (int)sass_bits(lo, 32, 39), (int)sass_bits(hi, 0, 7)); break;
+        case 0x7625: { int reuse = (int)sass_bits(hi, 58, 59); char r1[8] = "", r2[8] = ""; if (reuse & 1) strcpy(r1, ".reuse"); if (reuse & 2) strcpy(r2, ".reuse");
+            sprintf(out, "%sIMAD.WIDE R%d, R%d%s, R%d%s, c[0x0][0x%x]", pfx, Rd, Ra, r1, (int)sass_bits(hi, 0, 7), r2, coff); } break;
+        case 0x7981: sprintf(out, "%sLDG.E R%d, [R%d.64]", pfx, Rd, Ra); break;
+        case 0x7221: sprintf(out, "%sFADD R%d, R%d, R%d", pfx, Rd, Ra, (int)sass_bits(lo, 32, 39)); break;
+        case 0x7986: sprintf(out, "%sSTG.E [R%d.64], R%d", pfx, Ra, (int)sass_bits(lo, 32, 39)); break;
+        case 0x794d: sprintf(out, "%sEXIT", pfx); break;
+        case 0x7947: { long long rel = (int)sass_bits(lo, 32, 63); sprintf(out, "%sBRA 0x%x", pfx, (unsigned)(addr + 16 + (int)rel)); } break;
+        case 0x7918: sprintf(out, "%sNOP", pfx); break;
+        default: sprintf(out, "%s.UNKNOWN op=0x%04x", pfx, op); return -1;
+    }
+    return 0;
+}
+/* from-scratch ELF64 section-header walk -> {file offset, size} of the section named ".text.<kname>".
+ * No libelf. Returns 0 on success; fail-closed (nonzero) on bad magic / not-ELF64 / section absent. */
+static int sass_elf_find_text(const unsigned char* b, size_t sz, const char* kname, size_t* off, size_t* len) {
+    if (sz < 64 || b[0] != 0x7f || b[1] != 'E' || b[2] != 'L' || b[3] != 'F' || b[4] != 2 /*ELFCLASS64*/) return 1;
+    unsigned long long e_shoff = 0; memcpy(&e_shoff, b + 0x28, 8);
+    unsigned short e_shentsize = 0, e_shnum = 0, e_shstrndx = 0;
+    memcpy(&e_shentsize, b + 0x3a, 2); memcpy(&e_shnum, b + 0x3c, 2); memcpy(&e_shstrndx, b + 0x3e, 2);
+    if (e_shoff == 0 || e_shentsize < 64 || e_shnum == 0 || e_shstrndx >= e_shnum) return 2;
+    if (e_shoff + (size_t)e_shnum * e_shentsize > sz) return 3;
+    const unsigned char* sh_str = b + e_shoff + (size_t)e_shstrndx * e_shentsize;   /* the .shstrtab section header */
+    unsigned long long str_off = 0, str_sz = 0; memcpy(&str_off, sh_str + 0x18, 8); memcpy(&str_sz, sh_str + 0x20, 8);
+    if (str_off + str_sz > sz) return 4;
+    char want[128]; snprintf(want, sizeof want, ".text.%s", kname);
+    for (unsigned i = 0; i < e_shnum; i++) {
+        const unsigned char* sh = b + e_shoff + (size_t)i * e_shentsize;
+        unsigned int sh_name = 0; memcpy(&sh_name, sh + 0x00, 4);
+        if (str_off + sh_name >= sz) continue;
+        const char* nm = (const char*)(b + str_off + sh_name);
+        if (strcmp(nm, want) == 0) {
+            unsigned long long so = 0, sl = 0; memcpy(&so, sh + 0x18, 8); memcpy(&sl, sh + 0x20, 8);
+            if (so + sl > sz) return 5;
+            *off = (size_t)so; *len = (size_t)sl; return 0;
+        }
+    }
+    return 6;
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub|reverse]\n", argv[0]);
@@ -618,6 +691,42 @@ int main(int argc, char** argv) {
         printf("receipt_check [%s]: M=%d K=%d N=%d t=%d p=%lld REJECT=%s -> %s\n", rpath, Md,Kd,Nd,t,p, rej, bad?"RECEIPT_FAIL":"RECEIPT_PASS");
         free(W);free(X);free(C);
         return bad ? 1 : 0;
+    }
+
+    /* v1.5 #3 Phase 1: sass_check -- read the cubin's .text.<kname> and decode every 128-bit bundle from
+     * scratch, printing cuobjdump-format lines + a final token. FAIL-CLOSED on an unknown opcode or a bad
+     * ELF (the corruption signal). GPU-free; argv[1] is a CUBIN here (not PTX), so this returns before the
+     * module load. Usage: cuda_launch <cubin> <kname> 0 sass_check. The gate (gpu_sass_check.sh) cross-
+     * checks this output vs cuobjdump/nvdisasm (untrusted oracles) for the positive, and detects a
+     * corrupted cubin by this from-scratch decode CHANGING vs the genuine, or fail-closing. */
+    if (strcmp(op, "sass_check") == 0) {
+        FILE* cf = fopen(ptx_path, "rb");
+        if (!cf) { printf("sass_check [%s]: cannot open cubin -> SASS_DECODE_FAIL\n", ptx_path); return 1; }
+        fseek(cf, 0, SEEK_END); long csz = ftell(cf); fseek(cf, 0, SEEK_SET);
+        if (csz <= 0) { fclose(cf); printf("sass_check: empty cubin -> SASS_DECODE_FAIL\n"); return 1; }
+        unsigned char* cb = (unsigned char*)malloc((size_t)csz);
+        if (!cb) { fclose(cf); return 2; }
+        if (fread(cb, 1, (size_t)csz, cf) != (size_t)csz) { fclose(cf); free(cb); printf("sass_check: short read -> SASS_DECODE_FAIL\n"); return 1; }
+        fclose(cf);
+        size_t toff = 0, tlen = 0;
+        if (sass_elf_find_text(cb, (size_t)csz, kname, &toff, &tlen) != 0) {
+            printf("sass_check [%s]: .text.%s not found / bad ELF -> SASS_DECODE_FAIL\n", ptx_path, kname); free(cb); return 1;
+        }
+        int nbundle = (int)(tlen / 16), unknown = 0, real = 0;
+        for (int i = 0; i < nbundle; i++) {
+            unsigned long long lo = 0, hi = 0;
+            memcpy(&lo, cb + toff + (size_t)i * 16, 8); memcpy(&hi, cb + toff + (size_t)i * 16 + 8, 8);
+            char buf[160];
+            int r = sass_disasm(lo, hi, i * 16, buf);
+            printf("/*%04x*/ %s\n", i * 16, buf);
+            if (r != 0) unknown++;
+            else if (strncmp(buf, "NOP", 3) != 0) real++;
+        }
+        int ok = (unknown == 0 && real >= 10);     /* vector_add = 15 real instrs; >=10 is the non-vacuity floor */
+        printf("sass_check [%s]: %d bundles, %d real, %d unknown -> %s\n", ptx_path, nbundle, real, unknown,
+               ok ? "SASS_DECODE_OK" : "SASS_DECODE_FAIL");
+        free(cb);
+        return ok ? 0 : 1;
     }
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
