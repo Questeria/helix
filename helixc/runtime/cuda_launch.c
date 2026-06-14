@@ -547,12 +547,25 @@ static int sass_exec1(SassVM* vm, unsigned long long lo, unsigned long long hi, 
     return 0;
 }
 
-/* v1.5 #3 Phase 3 LEG1 (SASS-level cflow): a fail-closed data-INDEPENDENCE taint over the decoded SASS.
- * Single in-order pass (the kernel is straight-line). Seed: every LDG.E destination is a loaded DATA value.
- * Propagate def->use. Return -1 FAIL-CLOSED if a tainted reg reaches an LDG/STG ADDRESS, a branch/EXIT, or
- * ANY non-PT predicated instruction; return 1 if data-INDEPENDENT (=> a fixed per-thread straight-line
- * function of the loads, which licenses lifting the symbolic check to ALL inputs). NOT cflow_witness (that
- * is over the PTX = ptxas's INPUT; this is over ptxas's OUTPUT SASS -- the non-circular part). */
+/* v1.5 #3 Phase 3 LEG1 (SASS-level cflow): a fail-closed data-INDEPENDENCE taint that ALSO ENFORCES the
+ * straight-line assumption it relies on. Single in-order pass. Seed: every LDG.E destination is a loaded DATA
+ * value; propagate def->use. Return -1 FAIL-CLOSED if: a tainted reg reaches an LDG/STG ADDRESS; ANY non-PT
+ * predicated instruction; ANY unmodeled opcode (it would halt the interpreter and could hide a clobber); or
+ * ANY BRA that is not ptxas's benign self-loop trap pad (rel==-16) -- so no forward/backward branch can
+ * re-route execution (closes the audit-3 forward-BRA-over-EXIT P0). Return 1 => a fixed per-thread truly
+ * straight-line function of the loads, which licenses lifting the symbolic check to ALL inputs. NOT
+ * cflow_witness (that is over the PTX = ptxas's INPUT; this is over ptxas's OUTPUT SASS -- the non-circular part). */
+/* the opcodes the TV fully models. Anything else is fail-closed: an unmodeled op halts the interpreter
+ * (sass_exec1 default returns 1) just like a branch, which could hide a post-latch clobber store from LEG3. */
+static int sass_known_op(unsigned op) {
+    switch (op) {
+        case 0x7a02: case 0x7802: case 0x7919: case 0x7ab9: case 0x7a24: case 0x7224:
+        case 0x7625: case 0x7981: case 0x7221: case 0x7986: case 0x794d: case 0x7947: case 0x7918:
+            return 1;
+        default: return 0;
+    }
+}
+
 static int sass_taint_indep(const unsigned char* cb, size_t toff, int ninst) {
     unsigned char taint[256]; memset(taint, 0, sizeof taint);
     for (int i = 0; i < ninst; i++) {
@@ -562,7 +575,15 @@ static int sass_taint_indep(const unsigned char* cb, size_t toff, int ninst) {
         int pred = (int)sass_bits(lo, 12, 15);
         int Rd = (int)sass_bits(lo, 16, 23), Ra = (int)sass_bits(lo, 24, 31), Rb = (int)sass_bits(lo, 32, 39), Rc = (int)sass_bits(hi, 0, 7);
         if (pred != 7) return -1;                                  /* any non-PT predication -> out of the data-independent straight-line scope */
-        if (op == 0x7947 /*BRA*/ || op == 0x794d /*EXIT*/) continue; /* unconditional here (pred==7 enforced above) */
+        if (!sass_known_op(op)) return -1;                         /* fail-closed on unmodeled ops (they halt the interpreter and can hide a clobber) */
+        /* CONTROL-FLOW SOUNDNESS: the whole analysis assumes straight-line execution, so ENFORCE it. The only
+         * benign branch is ptxas's self-loop trap pad (BRA to its own address: target=addr+16+rel==addr <=>
+         * rel==-16), which sits AFTER EXIT and is never reached. ANY other BRA can re-route execution -- e.g. a
+         * forward BRA over an EXIT to a clobber store, or a branch skipping the FADD -- which silently breaks the
+         * straight-line assumption while the from-scratch interpreter merely STOPS at the branch. Reject it.
+         * (Closes the audit-3 P0: decode-clean forward-BRA-over-EXIT double-store that computed c=a on silicon.) */
+        if (op == 0x7947 /*BRA*/) { if ((int)(unsigned)(lo >> 32) != -16) return -1; continue; }
+        if (op == 0x794d /*EXIT*/) continue;                       /* unconditional here (pred==7 enforced above) */
         if (op == 0x7981 /*LDG*/ || op == 0x7986 /*STG*/) {
             if (taint[Ra & 255] || taint[(Ra + 1) & 255]) return -1; /* the [Rptr.64] address must be gid-derived, never a loaded value */
         }
@@ -579,8 +600,9 @@ static int sass_taint_indep(const unsigned char* cb, size_t toff, int ninst) {
 
 /* v1.5 #3 Phase 3 LEG2 (symbolic structural equality): run the decoded SASS in program order tracking a
  * symbolic TAG per register (over OPAQUE load symbols, so the result holds for ALL f32 inputs). Return 1
- * iff the value stored to the c pointer is EXACTLY a PLAIN FADD(LOAD_A, LOAD_B) with the loads at
- * base_a/base_b + gid*4, gid = ctaid*ntid + tid -- i.e. the SASS computes c[gid]=a[gid]+b[gid]. The
+ * iff the kernel performs EXACTLY ONE store and that store is a PLAIN FADD(LOAD_A, LOAD_B) to addr_c, with
+ * the loads at base_a/base_b + gid*4, gid = ctaid*ntid + tid -- i.e. the SASS computes c[gid]=a[gid]+b[gid]
+ * and nothing clobbers it (unique-store rule, not a monotone latch -- closes the audit-3 double-store P0). The
  * value/address-path opcodes are MODIFIER-GUARDED (fail-closed on an unmodeled set bit): FADD requires
  * lo[40:63]==0 (no Rb-side negate lo[63]/abs lo[62] -> sub.f32 REJECTED) AND hi[0:39]==0 (no Ra-side neg
  * hi[8]/abs hi[9], no SAT hi[13], no round hi[14:15], no FTZ hi[16] -- the FULL FADD operand/output modifier
@@ -594,7 +616,7 @@ static int sass_taint_indep(const unsigned char* cb, size_t toff, int ninst) {
 enum { TG_UNK = 0, TG_CTAID, TG_TID, TG_C4, TG_GID, TG_ADDRA, TG_ADDRB, TG_ADDRC, TG_LOADA, TG_LOADB, TG_SUM };
 static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
     int tg[256]; for (int i = 0; i < 256; i++) tg[i] = TG_UNK;
-    int stored_c_sum = 0;
+    int n_stg = 0, c_sum_store = 0;     /* count ALL stores (must be exactly 1) + that the one store is SUM->c */
     for (int i = 0; i < ninst; i++) {
         unsigned long long lo = 0, hi = 0;
         memcpy(&lo, cb + toff + (size_t)i * 16, 8); memcpy(&hi, cb + toff + (size_t)i * 16 + 8, 8);
@@ -626,11 +648,15 @@ static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
                  * known or not (closes the audit's P0: a faithfully-lowered FADD.SAT/-Ra/.RZ/.FTZ no longer certifies). */
                 int plain = off0 && ((hi & 0x000000FFFFFFFFFFULL) == 0);
                 tg[Rd] = (plain && ab) ? TG_SUM : TG_UNK; } break;
-            case 0x7986: if (off0 && stg_hi && tg[Ra] == TG_ADDRC && tg[Rb] == TG_SUM) stored_c_sum = 1; break; /* STG.E 32-bit, plain: c[gid]=SUM */
+            case 0x7986: n_stg++; if (off0 && stg_hi && tg[Ra] == TG_ADDRC && tg[Rb] == TG_SUM) c_sum_store++; break; /* STG.E 32-bit, plain: c[gid]=SUM */
             default: break;                                        /* MOV-stack/ULDC/EXIT/BRA/NOP: irrelevant to the value path */
         }
     }
-    return stored_c_sum ? 1 : 0;
+    /* SOUND against the audit-3 latch P0: require EXACTLY ONE store in the whole kernel, and that store is the
+     * plain SUM to addr_c. A monotone "saw a sum store" latch is NOT enough -- a second (clobber) store to c
+     * could overwrite it on silicon while the latch stayed set. vector_add stores c[gid] exactly once; any
+     * extra store (a write-after-write clobber, or a store elsewhere) => not vector_add => reject. */
+    return (n_stg == 1 && c_sum_store == 1) ? 1 : 0;
 }
 
 /* v1.5 #3 Phase 3 LEG3 helper: run the from-scratch interpreter (CPU only, NO GPU) on chosen inputs and

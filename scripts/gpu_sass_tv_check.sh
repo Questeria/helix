@@ -7,9 +7,13 @@
 # WHAT THIS IS (honest scope -- do NOT overstate): this is the step that removes ptxas's PTX->SASS lowering
 # from the trusted computing base for ONE named kernel. cuda_launch.c's sass_tv mode runs two LOAD-BEARING
 # legs + a sanity cross-check over the ELF .text bytes ptxas emitted: LEG1 sass_taint_indep (the SASS is a
-# data-INDEPENDENT straight-line per-thread function of the loads -> a structural check lifts to all inputs);
-# LEG2 sass_symbolic_addb (symbolic structural equality over OPAQUE load symbols: the value stored to c is
-# EXACTLY a PLAIN FADD(LOAD_A,LOAD_B) at base+gid*4 -> holds for every f32). LEG2 is MODIFIER-COMPLETE for the
+# data-INDEPENDENT STRAIGHT-LINE per-thread function of the loads -> a structural check lifts to all inputs).
+# LEG1 ENFORCES the straight-line assumption rather than assuming it: fail-closed on any non-PT predication,
+# any unmodeled opcode, and any BRA that is not ptxas's benign self-loop trap pad (rel==-16) -- so no forward/
+# backward branch can re-route execution. LEG2 sass_symbolic_addb (symbolic structural equality over OPAQUE
+# load symbols: the value stored to c is EXACTLY a PLAIN FADD(LOAD_A,LOAD_B) at base+gid*4 -> holds for every
+# f32), requiring EXACTLY ONE store in the kernel and that it is the SUM->c (a unique-store rule, not a
+# monotone latch, so a write-after-write clobber cannot slip through). LEG2 is MODIFIER-COMPLETE for the
 # FADD operand/output modifier set: it requires lo[40:63]==0 (rejects Rb-side neg lo[63]/abs lo[62], i.e.
 # sub.f32) AND hi[0:39]==0 (rejects Ra-side neg hi[8]/abs hi[9], SAT hi[13], round hi[14:15], FTZ hi[16] --
 # the full hi-word modifier region; scheduling bits start at hi[41]). [LEG3] basis+linearity via the Phase-2
@@ -23,15 +27,19 @@
 # is a translation-validation WITNESS (per-compilation, machine-checked), NOT a formal proof of ptxas. Full
 # kernel coverage (loops/branches/other ops/arches) is a labeled multi-week+ stretch, not claimed here.
 #
-# Six load-bearing NCs (a WRONG kernel whose lo word is byte-identical to genuine -> the TV must REJECT,
+# Eight load-bearing NCs (a WRONG kernel whose lo word is byte-identical to genuine -> the TV must REJECT,
 # proving it checks SEMANTICS not just decode): NC1 FADD->IMAD (a*b+c) -> SASS_TV_FAIL; NC2 sub.f32 (a-b,
 # negate lo[63]) -> SASS_TV_FAIL; NC3 FADD.SAT (clamp, hi[13]) + NC4 neg-Ra (b-a, hi[8]) -> SASS_TV_FAIL --
 # the HI-WORD FADD-modifier class adversarial audit #1 (wtmv9bcog) proved was a P0 false-accept before the
 # hi[0:39]==0 guard; NC5 LDG.E.U8 + NC6 STG.E.U8 (1-byte load/store, hi-word width) -> SASS_TV_FAIL -- the
-# SIBLING class re-audit (w9hjc67k4) flagged, closed by LEG2's FIELD-COMPLETE address-path hi-word pins
-# (every value/address opcode pins its unmodeled hi[0:39] region to the genuine plain encoding, so no width/
-# +UR/cx[]/signedness modifier can spoof the structure -- the sass_tv leg is sound STANDALONE, not leaning on
-# the Phase-2 GPU oracle). genuine PASSES while all six FAIL. Each NC has non-vacuity guards (bytes really
+# SIBLING modifier/width class re-audit #2 (w9hjc67k4) flagged, closed by LEG2's FIELD-COMPLETE address-path
+# hi-word pins (every value/address opcode pins its unmodeled hi[0:39] region to the genuine plain encoding);
+# NC7 forward-BRA-over-EXIT double-store (a DECODE-CLEAN, legal-SASS control-flow kernel that computes c=a on
+# the RTX-3070) + NC8 unmodeled-opcode -> SASS_TV_FAIL -- the STRUCTURAL control-flow/latch class audit #3
+# (wksw71qo0) proved was a P0 (the old monotone latch + interpreter-stops-at-branch certified it), closed by
+# LEG1's straight-line enforcement + LEG2's unique-store rule. With these the sass_tv leg is sound STANDALONE
+# (it does not lean on the Phase-2 GPU oracle for soundness). genuine PASSES while all eight FAIL. Each NC has
+# non-vacuity guards (bytes really
 # changed AND cuobjdump confirms the intended different instruction/modifier/width).
 # Token-gated '-> SASS_TV_PASS/FAIL', run AS A FILE (mem #42). Committed cubin/kernel never edited (corruption
 # on /tmp copies). Run under WSL (CUDA 12.8, RTX 3070): bash scripts/gpu_sass_tv_check.sh
@@ -172,6 +180,39 @@ if [ "$FOFF" -ge 0 ]; then
   else
     t6=$(tv /tmp/stv_nc6.cubin)
     if [ "$t6" = SASS_TV_FAIL ]; then say "    NC6 STG.E.U8 sass_tv=SASS_TV_FAIL  OK"; else bad "NC6 STG.E.U8 sass_tv=$t6 but expected SASS_TV_FAIL (1-byte store certified!)"; fi
+  fi
+fi
+
+# --- [J] NC7 STRUCTURAL control-flow + latch P0 (audit-3 w9hjc67k4/wksw71qo0): a DECODE-CLEAN, hand-craftable
+#         cubin -- FADD;STG(c)=sum ; forward BRA 0xf0 OVER an EXIT ; STG(c)=R2 (clobber) ; EXIT -- whose real
+#         RTX-3070 execution computes c=a (the forward BRA is taken on silicon, the clobber overwrites c), while
+#         the old TV certified it (LEG3 interpreter STOPS at the BRA and reads the still-correct intermediate c;
+#         LEG2's stored_c_sum latch stayed set). NO modifier, NO unknown op -- a legal SASS control-flow pattern,
+#         in scope because ptxas is the adversary. Closed by LEG1 (reject any non-self BRA) + LEG2 (require
+#         EXACTLY ONE store = SUM->c). NC8: an unmodeled opcode (would halt the interpreter and hide a clobber)
+#         -> LEG1 fail-closes on unknown ops. ---
+say "[J] NC7 forward-BRA-over-EXIT double-store (GPU computes c=a) + NC8 unknown-op -> sass_tv MUST reject"
+if [ "$FOFF" -ge 0 ]; then
+  spl(){ printf "$2" | dd of=/tmp/stv_nc7.cubin bs=1 seek=$((BS + $1)) count=16 conv=notrunc 2>/dev/null; }
+  cp /tmp/stv_va.cubin /tmp/stv_nc7.cubin
+  spl 0xd0 '\x47\x79\x00\x00\x10\x00\x00\x00\x00\x00\x80\x03\x00\xc0\x0f\x00'   # BRA 0xf0 (forward, GPU-taken)
+  spl 0xe0 '\x4d\x79\x00\x00\x00\x00\x00\x00\x00\x00\x80\x03\x00\xea\x0f\x00'   # EXIT (branched over)
+  spl 0xf0 '\x86\x79\x00\x06\x02\x00\x00\x00\x04\x19\x10\x0c\x00\xe2\x0f\x00'   # STG.E [R6.64],R2  (clobber c=a)
+  spl 0x100 '\x4d\x79\x00\x00\x00\x00\x00\x00\x00\x00\x80\x03\x00\xea\x0f\x00'  # EXIT
+  if cmp -s /tmp/stv_nc7.cubin /tmp/stv_va.cubin; then bad "NC7 vacuous -- splice did not change the cubin";
+  elif ! "$OBJ" -sass /tmp/stv_nc7.cubin 2>/dev/null | grep -q 'BRA 0xf0'; then bad "NC7 vacuous -- cuobjdump does not show the forward BRA 0xf0 (decode-clean check failed)";
+  elif [ "$("$OBJ" -sass /tmp/stv_nc7.cubin 2>/dev/null | grep -c 'STG.E \[R6.64\]')" -lt 2 ]; then bad "NC7 vacuous -- cuobjdump does not show the second (clobber) STG to c";
+  else
+    t7=$(tv /tmp/stv_nc7.cubin)
+    if [ "$t7" = SASS_TV_FAIL ]; then say "    NC7 forward-BRA double-store sass_tv=SASS_TV_FAIL  OK -- straight-line + unique-store enforcement is load-bearing"; else bad "NC7 sass_tv=$t7 but expected SASS_TV_FAIL (GPU computes c=a yet certified -- the audit-3 P0!)"; fi
+  fi
+  # NC8: patch the FADD opcode to 0x7212 (an unmodeled op) -> LEG1 must fail-close
+  cp /tmp/stv_va.cubin /tmp/stv_nc8.cubin
+  printf '\x12' | dd of=/tmp/stv_nc8.cubin bs=1 seek=$FOFF count=1 conv=notrunc 2>/dev/null
+  if cmp -s /tmp/stv_nc8.cubin /tmp/stv_va.cubin; then bad "NC8 vacuous -- opcode byte unchanged";
+  else
+    t8=$(tv /tmp/stv_nc8.cubin)
+    if [ "$t8" = SASS_TV_FAIL ]; then say "    NC8 unmodeled-opcode sass_tv=SASS_TV_FAIL  OK -- the TV fail-closes on ops it does not model"; else bad "NC8 unmodeled-opcode sass_tv=$t8 but expected SASS_TV_FAIL"; fi
   fi
 fi
 
