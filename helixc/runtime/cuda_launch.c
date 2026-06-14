@@ -498,6 +498,47 @@ static int sass_elf_find_text(const unsigned char* b, size_t sz, const char* kna
     return 6;
 }
 
+/* v1.5 #3 Phase 2: a from-scratch sm_86 SASS INTERPRETER for the vector_add subset -- it EXECUTES the
+ * decoded SASS on the CPU (modeling the register file, uniform registers, the constant bank, the special
+ * registers, and a flat global memory), so we can run ptxas's emitted machine code OURSELVES. The
+ * per-opcode semantics are VALIDATED against real RTX-3070 execution of the SAME cubin (the sass_exec
+ * mode), not assumed. HONEST: Phase 2 validates the interpreter vs hardware on PROBE inputs -- it does NOT
+ * yet PROVE the SASS computes the spec for ALL inputs (that is Phase 3's translation-validation, which
+ * lifts decode+interpret to the real ptxas de-trust). */
+typedef struct { unsigned int R[256], UR[64]; unsigned int ctaid_x, tid_x, ntid_x; unsigned int cbank[1024]; unsigned char* gmem; } SassVM;
+static unsigned long long sv_cbank64(SassVM* vm, unsigned b) { unsigned d = b / 4; return (unsigned long long)vm->cbank[d] | ((unsigned long long)vm->cbank[d + 1] << 32); }
+static unsigned int sv_cbank32(SassVM* vm, unsigned b) { return vm->cbank[b / 4]; }
+static unsigned long long sv_regpair(SassVM* vm, int r) { return (unsigned long long)vm->R[r] | ((unsigned long long)vm->R[r + 1] << 32); }
+static void sv_set_regpair(SassVM* vm, int r, unsigned long long v) { vm->R[r] = (unsigned int)v; vm->R[r + 1] = (unsigned int)(v >> 32); }
+/* execute one decoded bundle over the VM state; returns 1 to STOP (EXIT/BRA or an unmodeled op), 0 to go
+ * on. nc_wrong_fadd!=0 deliberately MIS-models FADD (a-b instead of a+b) -- the load-bearing NC: a wrong
+ * interpreter must DIVERGE from the GPU, proving the interp==GPU validation has teeth. */
+static int sass_exec1(SassVM* vm, unsigned long long lo, unsigned long long hi, int nc_wrong_fadd) {
+    unsigned op = (unsigned)(lo & 0xffff);
+    int Rd = (int)sass_bits(lo, 16, 23), Ra = (int)sass_bits(lo, 24, 31);
+    unsigned coff = (unsigned)sass_bits(lo, 40, 53) * 4;
+    switch (op) {
+        case 0x7a02: vm->R[Rd] = sv_cbank32(vm, coff); break;                                  /* MOV Rd, c[][] */
+        case 0x7802: vm->R[Rd] = (unsigned)sass_bits(lo, 32, 63); break;                        /* MOV Rd, imm */
+        case 0x7919: { unsigned sel = (unsigned)sass_bits(hi, 8, 15); vm->R[Rd] = (sel == 0x25) ? vm->ctaid_x : (sel == 0x21) ? vm->tid_x : 0; } break; /* S2R */
+        case 0x7ab9: { unsigned long long v = sv_cbank64(vm, coff); vm->UR[Rd] = (unsigned)v; vm->UR[Rd + 1] = (unsigned)(v >> 32); } break; /* ULDC.64 */
+        case 0x7a24: { unsigned a = vm->R[Ra], b = sv_cbank32(vm, coff), c = vm->R[(int)sass_bits(hi, 0, 7)]; vm->R[Rd] = a * b + c; } break; /* IMAD Rd,Ra,c[][],Rc */
+        case 0x7224: { unsigned a = vm->R[Ra], b = vm->R[(int)sass_bits(lo, 32, 39)], c = vm->R[(int)sass_bits(hi, 0, 7)]; vm->R[Rd] = a * b + c; } break; /* IMAD all-reg */
+        case 0x7625: { int sgn = (sass_bits(hi, 8, 15) == 0x02); int a = (int)vm->R[Ra], b = (int)vm->R[(int)sass_bits(hi, 0, 7)];
+            unsigned long long base = sv_cbank64(vm, coff);
+            long long prod = sgn ? (long long)a * (long long)b : (long long)((unsigned long long)(unsigned)a * (unsigned long long)(unsigned)b);
+            sv_set_regpair(vm, Rd, (unsigned long long)((long long)base + prod)); } break;       /* IMAD.WIDE -> 64-bit pair (address calc) */
+        case 0x7981: { unsigned long long ad = sv_regpair(vm, Ra); unsigned v; memcpy(&v, vm->gmem + ad, 4); vm->R[Rd] = v; } break; /* LDG.E [Rptr.64] */
+        case 0x7221: { float fa, fb; unsigned ra = vm->R[Ra], rb = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(&fa, &ra, 4); memcpy(&fb, &rb, 4); float r = nc_wrong_fadd ? (fa - fb) : (fa + fb); memcpy(&vm->R[Rd], &r, 4); } break; /* FADD (nc: a-b) */
+        case 0x7986: { unsigned long long ad = sv_regpair(vm, Ra); unsigned v = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(vm->gmem + ad, &v, 4); } break; /* STG.E */
+        case 0x794d: return 1;                                                                  /* EXIT */
+        case 0x7947: return 1;                                                                  /* BRA (self-loop trap) */
+        case 0x7918: break;                                                                     /* NOP */
+        default: return 1;   /* unmodeled op -> stop; sass_exec then sees the interpreter DIVERGE from the GPU */
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: %s <module.ptx> <kernel_name> [N] [op:add|mul|sub|reverse]\n", argv[0]);
@@ -728,6 +769,64 @@ int main(int argc, char** argv) {
                ok ? "SASS_DECODE_OK" : "SASS_DECODE_FAIL");
         free(cb);
         return ok ? 0 : 1;
+    }
+
+    /* v1.5 #3 Phase 2: sass_exec -- EXECUTE the cubin's decoded vector_add SASS on the CPU (from-scratch
+     * interpreter) AND run the SAME cubin on the RTX 3070 (cuModuleLoadData of the cubin -> the driver runs
+     * its SASS directly, no re-JIT, so the interpreter models EXACTLY what the GPU runs), then assert the
+     * interpreter's c[] == the GPU's c[] element-for-element. This VALIDATES the interpreter semantics vs
+     * HARDWARE on probe inputs (not assumed). Usage: cuda_launch <cubin> <kname> 0 sass_exec. argv[1] is a
+     * CUBIN; returns before the normal PTX path. Prints '-> SASS_EXEC_PASS/SASS_EXEC_FAIL'. */
+    if (strcmp(op, "sass_exec") == 0) {
+        FILE* cf = fopen(ptx_path, "rb");
+        if (!cf) { printf("sass_exec [%s]: cannot open cubin -> SASS_EXEC_FAIL\n", ptx_path); return 1; }
+        fseek(cf, 0, SEEK_END); long csz = ftell(cf); fseek(cf, 0, SEEK_SET);
+        if (csz <= 0) { fclose(cf); printf("sass_exec: empty cubin -> SASS_EXEC_FAIL\n"); return 1; }
+        unsigned char* cb = (unsigned char*)malloc((size_t)csz);
+        if (!cb) { fclose(cf); return 2; }
+        if (fread(cb, 1, (size_t)csz, cf) != (size_t)csz) { fclose(cf); free(cb); return 2; }
+        fclose(cf);
+        size_t toff = 0, tlen = 0;
+        if (sass_elf_find_text(cb, (size_t)csz, kname, &toff, &tlen) != 0) { printf("sass_exec: .text.%s not found -> SASS_EXEC_FAIL\n", kname); free(cb); return 1; }
+        int ninst = (int)(tlen / 16);
+        if (ninst < 1 || ninst > 4096) { printf("sass_exec: bad ninst %d -> SASS_EXEC_FAIL\n", ninst); free(cb); return 1; }
+        int N = 8, ntid = 4, nblk = 2;
+        int mutate = (argc > 5 && strcmp(argv[5], "mutate") == 0);   /* NC: a deliberately-wrong interpreter (FADD a-b) must diverge from the GPU */
+        float ha[8], hb[8]; for (int i = 0; i < N; i++) { ha[i] = (float)(i + 1); hb[i] = 10.0f * (float)(i + 1); }
+        /* --- INTERPRET the decoded SASS on the CPU (model global memory: a@0, b@256, c@512) --- */
+        static unsigned char G[4096]; memset(G, 0, sizeof G);
+        unsigned ab = 0, bb = 256, cbo = 512;
+        memcpy(G + ab, ha, (size_t)N * 4); memcpy(G + bb, hb, (size_t)N * 4);
+        for (int blk = 0; blk < nblk; blk++) for (int t = 0; t < ntid; t++) {
+            SassVM vm; memset(&vm, 0, sizeof vm); vm.gmem = G; vm.ctaid_x = (unsigned)blk; vm.tid_x = (unsigned)t; vm.ntid_x = (unsigned)ntid;
+            vm.cbank[0x0 / 4] = (unsigned)ntid;
+            vm.cbank[0x160 / 4] = ab; vm.cbank[0x168 / 4] = bb; vm.cbank[0x170 / 4] = cbo;   /* a/b/c pointers (32-bit offsets; high halves stay 0) */
+            for (int i = 0; i < ninst; i++) {
+                unsigned long long lo = 0, hi = 0;
+                memcpy(&lo, cb + toff + (size_t)i * 16, 8); memcpy(&hi, cb + toff + (size_t)i * 16 + 8, 8);
+                if (sass_exec1(&vm, lo, hi, mutate)) break;
+            }
+        }
+        float c_interp[8]; memcpy(c_interp, G + cbo, (size_t)N * 4);
+        /* --- run the SAME cubin on the GPU (driver loads its SASS directly) --- */
+        if (check(cuInit(0), "cuInit")) { free(cb); return 2; }
+        CUdevice dev; CUcontext ctx; CUmodule mod; CUfunction fn;
+        if (check(cuDeviceGet(&dev, 0), "cuDeviceGet") || check(cuCtxCreate(&ctx, 0, dev), "cuCtxCreate")) { free(cb); return 2; }
+        if (check(cuModuleLoadData(&mod, cb), "cuModuleLoadData(cubin)") || check(cuModuleGetFunction(&fn, mod, kname), "getFunc")) { free(cb); return 2; }
+        CUdeviceptr dA, dB, dC; int nn = N;
+        if (check(cuMemAlloc(&dA, (size_t)N * 4), "A") || check(cuMemAlloc(&dB, (size_t)N * 4), "B") || check(cuMemAlloc(&dC, (size_t)N * 4), "C")) { free(cb); return 2; }
+        cuMemcpyHtoD(dA, ha, (size_t)N * 4); cuMemcpyHtoD(dB, hb, (size_t)N * 4);
+        void* args[] = { &dA, &dB, &dC, &nn };
+        if (check(cuLaunchKernel(fn, (unsigned)nblk, 1, 1, (unsigned)ntid, 1, 1, 0, 0, args, 0), "launch") || check(cuCtxSynchronize(), "sync")) { free(cb); return 2; }
+        float c_gpu[8]; cuMemcpyDtoH(c_gpu, dC, (size_t)N * 4);
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC); cuModuleUnload(mod); cuCtxDestroy(ctx);
+        /* --- compare the from-scratch interpreter vs the GPU (the load-bearing semantics validation) --- */
+        int bad = 0;
+        for (int i = 0; i < N; i++) if (c_interp[i] != c_gpu[i]) { if (bad < 4) fprintf(stderr, "sass_exec mismatch [%d] interp=%g gpu=%g\n", i, c_interp[i], c_gpu[i]); bad++; }
+        printf("sass_exec [%s]: %d instrs, N=%d (gpu c[0..2]=%g,%g,%g interp=%g,%g,%g) %d bad -> %s\n",
+               ptx_path, ninst, N, c_gpu[0], c_gpu[1], c_gpu[2], c_interp[0], c_interp[1], c_interp[2], bad, bad ? "SASS_EXEC_FAIL" : "SASS_EXEC_PASS");
+        free(cb);
+        return bad ? 1 : 0;
     }
 
     /* slurp the PTX text (NUL-terminated; cuModuleLoadData wants a C string) */
