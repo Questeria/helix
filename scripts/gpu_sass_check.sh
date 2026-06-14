@@ -99,10 +99,14 @@ if [ "$FOFF" -ge 0 ]; then
   elif "$OBJ" -sass /tmp/sass_nc2.cubin 2>/dev/null | norm_oracle /dev/stdin | diff -q - /tmp/sass_obj.txt >/dev/null; then bad "NC2 vacuous -- cuobjdump shows no change";
   else
     "$CL" /tmp/sass_nc2.cubin "$KNAME" 0 sass_check 2>/dev/null | norm_mine /dev/stdin > /tmp/sass_nc2_mine.txt
-    if diff -q /tmp/sass_nc2_mine.txt /tmp/sass_mine.txt >/dev/null; then bad "NC2 vacuous -- from-scratch decode did NOT change (decoder ignores the byte!)"; else
-      # the changed line must be the FADD->IMAD one, and the corrupt decode must still match cuobjdump-of-corrupt (decoder is correct on the new bytes too)
-      grep -q '^IMAD R9' /tmp/sass_nc2_mine.txt && say "    NC2 decode changed FADD->IMAD (decoder tracks the bytes)  OK" || bad "NC2 decode changed but not to the expected IMAD R9"
-    fi
+    "$OBJ" -sass /tmp/sass_nc2.cubin 2>/dev/null | norm_oracle /dev/stdin > /tmp/sass_nc2_obj.txt
+    # NC2 must (a) CHANGE the from-scratch decode (FADD->IMAD: proves the decoder reads the real bytes, not
+    # a hardcoded answer) AND (b) the changed decode must STILL reproduce cuobjdump-of-corrupt (proves the
+    # decoder is faithful on the new bytes too, incl. the .U32 signedness suffix on the all-reg IMAD).
+    if diff -q /tmp/sass_nc2_mine.txt /tmp/sass_mine.txt >/dev/null; then bad "NC2 vacuous -- from-scratch decode did NOT change (decoder ignores the byte!)";
+    elif ! grep -q '^IMAD' /tmp/sass_nc2_mine.txt; then bad "NC2 decode changed but not to the expected IMAD (FADD->IMAD)";
+    elif diff -q /tmp/sass_nc2_mine.txt /tmp/sass_nc2_obj.txt >/dev/null; then say "    NC2 decode changed FADD->IMAD AND still reproduces cuobjdump-of-corrupt (faithful on the new bytes)  OK";
+    else bad "NC2 decode changed but != cuobjdump-of-corrupt (decoder display-fidelity gap):"; diff /tmp/sass_nc2_mine.txt /tmp/sass_nc2_obj.txt | head -4 >&2; fi
   fi
 fi
 

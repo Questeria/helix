@@ -451,15 +451,16 @@ static int sass_disasm(unsigned long long lo, unsigned long long hi, int addr, c
     if (pred != 7) { int neg = (pred >> 3) & 1; int pi = pred & 7; sprintf(pfx, "@%sP%d ", neg ? "!" : "", pi); }
     int Rd = (int)sass_bits(lo, 16, 23), Ra = (int)sass_bits(lo, 24, 31);
     unsigned coff = (unsigned)sass_bits(lo, 40, 53) * 4;
+    const char* su = (sass_bits(hi, 8, 15) == 0) ? ".U32" : "";  /* IMAD-family signedness: hi[8:15]=0 -> .U32, 0x02 -> signed (suffix-free), matching cuobjdump */
     switch (op) {
         case 0x7a02: sprintf(out, "%sMOV R%d, c[0x0][0x%x]", pfx, Rd, coff); break;
         case 0x7802: sprintf(out, "%sMOV R%d, 0x%x", pfx, Rd, (unsigned)sass_bits(lo, 32, 63)); break;
         case 0x7919: sprintf(out, "%sS2R R%d, %s", pfx, Rd, sass_sr_name((unsigned)sass_bits(hi, 8, 15))); break;
         case 0x7ab9: sprintf(out, "%sULDC.64 UR%d, c[0x0][0x%x]", pfx, Rd, coff); break;
-        case 0x7a24: sprintf(out, "%sIMAD R%d, R%d, c[0x0][0x%x], R%d", pfx, Rd, Ra, coff, (int)sass_bits(hi, 0, 7)); break;
-        case 0x7224: sprintf(out, "%sIMAD R%d, R%d, R%d, R%d", pfx, Rd, Ra, (int)sass_bits(lo, 32, 39), (int)sass_bits(hi, 0, 7)); break;
+        case 0x7a24: sprintf(out, "%sIMAD%s R%d, R%d, c[0x0][0x%x], R%d", pfx, su, Rd, Ra, coff, (int)sass_bits(hi, 0, 7)); break;
+        case 0x7224: sprintf(out, "%sIMAD%s R%d, R%d, R%d, R%d", pfx, su, Rd, Ra, (int)sass_bits(lo, 32, 39), (int)sass_bits(hi, 0, 7)); break;
         case 0x7625: { int reuse = (int)sass_bits(hi, 58, 59); char r1[8] = "", r2[8] = ""; if (reuse & 1) strcpy(r1, ".reuse"); if (reuse & 2) strcpy(r2, ".reuse");
-            sprintf(out, "%sIMAD.WIDE R%d, R%d%s, R%d%s, c[0x0][0x%x]", pfx, Rd, Ra, r1, (int)sass_bits(hi, 0, 7), r2, coff); } break;
+            sprintf(out, "%sIMAD.WIDE%s R%d, R%d%s, R%d%s, c[0x0][0x%x]", pfx, su, Rd, Ra, r1, (int)sass_bits(hi, 0, 7), r2, coff); } break;
         case 0x7981: sprintf(out, "%sLDG.E R%d, [R%d.64]", pfx, Rd, Ra); break;
         case 0x7221: sprintf(out, "%sFADD R%d, R%d, R%d", pfx, Rd, Ra, (int)sass_bits(lo, 32, 39)); break;
         case 0x7986: sprintf(out, "%sSTG.E [R%d.64], R%d", pfx, Ra, (int)sass_bits(lo, 32, 39)); break;
