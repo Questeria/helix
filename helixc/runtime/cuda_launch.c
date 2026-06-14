@@ -462,8 +462,15 @@ static int sass_disasm(unsigned long long lo, unsigned long long hi, int addr, c
         case 0x7625: { int reuse = (int)sass_bits(hi, 58, 59); char r1[8] = "", r2[8] = ""; if (reuse & 1) strcpy(r1, ".reuse"); if (reuse & 2) strcpy(r2, ".reuse");
             sprintf(out, "%sIMAD.WIDE%s R%d, R%d%s, R%d%s, c[0x0][0x%x]", pfx, su, Rd, Ra, r1, (int)sass_bits(hi, 0, 7), r2, coff); } break;
         case 0x7981: sprintf(out, "%sLDG.E R%d, [R%d.64]", pfx, Rd, Ra); break;
-        case 0x7221: { int nb = (int)sass_bits(lo, 63, 63); /* negate-Rb (lo[63]): sub.f32 = FADD a,-b */
-            sprintf(out, "%sFADD R%d, R%d, %sR%d", pfx, Rd, Ra, nb ? "-" : "", (int)sass_bits(lo, 32, 39)); } break;
+        case 0x7221: { /* FADD: decode the FULL modifier set (empirically pinned, sm_86/12.8) so a modified */
+            int nra = (int)sass_bits(hi, 8, 8), ara = (int)sass_bits(hi, 9, 9);   /* FADD never disassembles as plain. */
+            int nrb = (int)sass_bits(lo, 63, 63), arb = (int)sass_bits(lo, 62, 62); /* Ra mods in hi[8:9]; Rb mods in lo[62:63]. */
+            int sat = (int)sass_bits(hi, 13, 13), ftz = (int)sass_bits(hi, 16, 16); int rmv = (int)sass_bits(hi, 14, 15);
+            const char* rs = (rmv == 1) ? ".RM" : (rmv == 2) ? ".RP" : (rmv == 3) ? ".RZ" : ""; int Rbb = (int)sass_bits(lo, 32, 39);
+            char oa[24], ob[24];
+            if (ara) sprintf(oa, "|R%d|", Ra); else sprintf(oa, "%sR%d", nra ? "-" : "", Ra);
+            if (arb) sprintf(ob, "|R%d|", Rbb); else sprintf(ob, "%sR%d", nrb ? "-" : "", Rbb);
+            sprintf(out, "%sFADD%s%s%s R%d, %s, %s", pfx, rs, ftz ? ".FTZ" : "", sat ? ".SAT" : "", Rd, oa, ob); } break;
         case 0x7986: sprintf(out, "%sSTG.E [R%d.64], R%d", pfx, Ra, (int)sass_bits(lo, 32, 39)); break;
         case 0x794d: sprintf(out, "%sEXIT", pfx); break;
         case 0x7947: { long long rel = (int)sass_bits(lo, 32, 63); sprintf(out, "%sBRA 0x%x", pfx, (unsigned)(addr + 16 + (int)rel)); } break;
@@ -506,7 +513,7 @@ static int sass_elf_find_text(const unsigned char* b, size_t sz, const char* kna
  * mode), not assumed. HONEST: Phase 2 validates the interpreter vs hardware on PROBE inputs -- it does NOT
  * yet PROVE the SASS computes the spec for ALL inputs (that is Phase 3's translation-validation, which
  * lifts decode+interpret to the real ptxas de-trust). */
-typedef struct { unsigned int R[256], UR[64]; unsigned int ctaid_x, tid_x, ntid_x; unsigned int cbank[1024]; unsigned char* gmem; } SassVM;
+typedef struct { unsigned int R[256], UR[64]; unsigned int ctaid_x, tid_x, ntid_x; unsigned int cbank[1024]; unsigned char* gmem; unsigned int gmem_sz; } SassVM;
 static unsigned long long sv_cbank64(SassVM* vm, unsigned b) { unsigned d = b / 4; return (unsigned long long)vm->cbank[d] | ((unsigned long long)vm->cbank[d + 1] << 32); }
 static unsigned int sv_cbank32(SassVM* vm, unsigned b) { return vm->cbank[b / 4]; }
 static unsigned long long sv_regpair(SassVM* vm, int r) { return (unsigned long long)vm->R[r] | ((unsigned long long)vm->R[r + 1] << 32); }
@@ -529,9 +536,9 @@ static int sass_exec1(SassVM* vm, unsigned long long lo, unsigned long long hi, 
             unsigned long long base = sv_cbank64(vm, coff);
             long long prod = sgn ? (long long)a * (long long)b : (long long)((unsigned long long)(unsigned)a * (unsigned long long)(unsigned)b);
             sv_set_regpair(vm, Rd, (unsigned long long)((long long)base + prod)); } break;       /* IMAD.WIDE -> 64-bit pair (address calc) */
-        case 0x7981: { unsigned long long ad = sv_regpair(vm, Ra); unsigned v; memcpy(&v, vm->gmem + ad, 4); vm->R[Rd] = v; } break; /* LDG.E [Rptr.64] */
+        case 0x7981: { unsigned long long ad = sv_regpair(vm, Ra); if (vm->gmem_sz && ad + 4 > vm->gmem_sz) return 1; /* OOB -> STOP (no wild read; a data-dep gather is already rejected by LEG1) */ unsigned v; memcpy(&v, vm->gmem + ad, 4); vm->R[Rd] = v; } break; /* LDG.E [Rptr.64] */
         case 0x7221: { float fa, fb; unsigned ra = vm->R[Ra], rb = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(&fa, &ra, 4); memcpy(&fb, &rb, 4); if (sass_bits(lo, 63, 63)) fb = -fb; /* honor negate-Rb (sub.f32) */ float r = nc_wrong_fadd ? (fa - fb) : (fa + fb); memcpy(&vm->R[Rd], &r, 4); } break; /* FADD (nc: a-b) */
-        case 0x7986: { unsigned long long ad = sv_regpair(vm, Ra); unsigned v = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(vm->gmem + ad, &v, 4); } break; /* STG.E */
+        case 0x7986: { unsigned long long ad = sv_regpair(vm, Ra); if (vm->gmem_sz && ad + 4 > vm->gmem_sz) return 1; /* OOB -> STOP (no wild write) */ unsigned v = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(vm->gmem + ad, &v, 4); } break; /* STG.E */
         case 0x794d: return 1;                                                                  /* EXIT */
         case 0x7947: return 1;                                                                  /* BRA (self-loop trap) */
         case 0x7918: break;                                                                     /* NOP */
@@ -575,8 +582,10 @@ static int sass_taint_indep(const unsigned char* cb, size_t toff, int ninst) {
  * iff the value stored to the c pointer is EXACTLY a PLAIN FADD(LOAD_A, LOAD_B) with the loads at
  * base_a/base_b + gid*4, gid = ctaid*ntid + tid -- i.e. the SASS computes c[gid]=a[gid]+b[gid]. The
  * value/address-path opcodes are MODIFIER-GUARDED (fail-closed on an unmodeled set bit): FADD requires
- * lo[40:63]==0 (no negate/abs -> sub.f32 REJECTED), IMAD/IMAD.WIDE require lo[54:63]==0, LDG/STG require a
- * zero immediate offset (lo[40:63]==0) -- so a modifier cannot spoof the structure. */
+ * lo[40:63]==0 (no Rb-side negate lo[63]/abs lo[62] -> sub.f32 REJECTED) AND hi[0:39]==0 (no Ra-side neg
+ * hi[8]/abs hi[9], no SAT hi[13], no round hi[14:15], no FTZ hi[16] -- the FULL FADD operand/output modifier
+ * region; scheduling bits start at hi[41]), IMAD/IMAD.WIDE require lo[54:63]==0, LDG/STG require a zero
+ * immediate offset (lo[40:63]==0) -- so NO operand/output modifier (lo- OR hi-word) can spoof the structure. */
 enum { TG_UNK = 0, TG_CTAID, TG_TID, TG_C4, TG_GID, TG_ADDRA, TG_ADDRB, TG_ADDRC, TG_LOADA, TG_LOADB, TG_SUM };
 static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
     int tg[256]; for (int i = 0; i < 256; i++) tg[i] = TG_UNK;
@@ -597,7 +606,13 @@ static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
                 ((coff == 0x160) ? TG_ADDRA : (coff == 0x168) ? TG_ADDRB : (coff == 0x170) ? TG_ADDRC : TG_UNK) : TG_UNK; break;
             case 0x7981: tg[Rd] = (off0 && tg[Ra] == TG_ADDRA) ? TG_LOADA : (off0 && tg[Ra] == TG_ADDRB) ? TG_LOADB : TG_UNK; break; /* LDG */
             case 0x7221: { int ab = (tg[Ra] == TG_LOADA && tg[Rb] == TG_LOADB) || (tg[Ra] == TG_LOADB && tg[Rb] == TG_LOADA);
-                tg[Rd] = (off0 && ab) ? TG_SUM : TG_UNK; } break;   /* FADD: PLAIN (off0 => no negate/abs) of the two loads */
+                /* PLAIN = NO operand/output modifier on EITHER side. Rb-side mods (neg lo[63], abs lo[62]) are
+                 * caught by off0 (lo[40:63]==0). Ra-side + output mods (neg-Ra hi[8], abs-Ra hi[9], SAT hi[13],
+                 * round hi[14:15], FTZ hi[16]) ALL live in the FADD hi word; the genuine plain FADD has hi[0:39]==0
+                 * (scheduling bits start at hi[41]), so require it -- FAIL-CLOSED on the ENTIRE hi modifier region,
+                 * known or not (closes the audit's P0: a faithfully-lowered FADD.SAT/-Ra/.RZ/.FTZ no longer certifies). */
+                int plain = off0 && ((hi & 0x000000FFFFFFFFFFULL) == 0);
+                tg[Rd] = (plain && ab) ? TG_SUM : TG_UNK; } break;
             case 0x7986: if (off0 && tg[Ra] == TG_ADDRC && tg[Rb] == TG_SUM) stored_c_sum = 1; break; /* STG c[gid]=SUM */
             default: break;                                        /* MOV-stack/ULDC/EXIT/BRA/NOP: irrelevant to the value path */
         }
@@ -613,7 +628,7 @@ static void sass_cpu_run(const unsigned char* cb, size_t toff, int ninst, const 
     unsigned ab = 0, bb = 256, cbo = 512;
     memcpy(G + ab, ha, (size_t)N * 4); memcpy(G + bb, hb, (size_t)N * 4);
     for (int blk = 0; blk < nblk; blk++) for (int t = 0; t < ntid; t++) {
-        SassVM vm; memset(&vm, 0, sizeof vm); vm.gmem = G; vm.ctaid_x = (unsigned)blk; vm.tid_x = (unsigned)t; vm.ntid_x = (unsigned)ntid;
+        SassVM vm; memset(&vm, 0, sizeof vm); vm.gmem = G; vm.gmem_sz = (unsigned)sizeof G; vm.ctaid_x = (unsigned)blk; vm.tid_x = (unsigned)t; vm.ntid_x = (unsigned)ntid;
         vm.cbank[0x0 / 4] = (unsigned)ntid;
         vm.cbank[0x160 / 4] = ab; vm.cbank[0x168 / 4] = bb; vm.cbank[0x170 / 4] = cbo;
         for (int i = 0; i < ninst; i++) {
@@ -884,7 +899,7 @@ int main(int argc, char** argv) {
         unsigned ab = 0, bb = 256, cbo = 512;
         memcpy(G + ab, ha, (size_t)N * 4); memcpy(G + bb, hb, (size_t)N * 4);
         for (int blk = 0; blk < nblk; blk++) for (int t = 0; t < ntid; t++) {
-            SassVM vm; memset(&vm, 0, sizeof vm); vm.gmem = G; vm.ctaid_x = (unsigned)blk; vm.tid_x = (unsigned)t; vm.ntid_x = (unsigned)ntid;
+            SassVM vm; memset(&vm, 0, sizeof vm); vm.gmem = G; vm.gmem_sz = (unsigned)sizeof G; vm.ctaid_x = (unsigned)blk; vm.tid_x = (unsigned)t; vm.ntid_x = (unsigned)ntid;
             vm.cbank[0x0 / 4] = (unsigned)ntid;
             vm.cbank[0x160 / 4] = ab; vm.cbank[0x168 / 4] = bb; vm.cbank[0x170 / 4] = cbo;   /* a/b/c pointers (32-bit offsets; high halves stay 0) */
             for (int i = 0; i < ninst; i++) {
@@ -923,12 +938,16 @@ int main(int argc, char** argv) {
      *                             is what licenses lifting a symbolic/probe check to ALL inputs.
      *   LEG2 sass_symbolic_addb-- symbolic structural equality over OPAQUE load symbols: the value stored to
      *                             c is EXACTLY a PLAIN FADD(LOAD_A, LOAD_B) at base+gid*4 (so it holds for
-     *                             every f32, not just probes). MODIFIER-COMPLETE: a sub.f32 (FADD negate
-     *                             lo[63]) or any operand modifier is rejected (no SUM tag).
-     *   LEG3 basis + homogeneity-- an independent EXECUTION cross-check via the GPU-validated interpreter:
-     *                             f(1,0)=f(0,1)=1, f(0,0)=0 (exact), f(2a,2b)=2*f(a,b) (exact, powers of 2),
-     *                             additivity f(a1+a2,b1+b2)=f(a1,b1)+f(a2,b2) within tau=c_safe*u*(|a|+|b|).
-     *   LEG4 (separate gate) Phase-2's interp==GPU validation of FADD = IEEE add.
+     *                             every f32, not just probes). MODIFIER-COMPLETE: the FADD must carry NO
+     *                             operand/output modifier -- lo[40:63]==0 rejects Rb-side neg/abs (sub.f32),
+     *                             hi[0:39]==0 rejects Ra-side neg/abs + SAT + round-mode + FTZ (the full
+     *                             hi-word modifier region). A faithfully-lowered modified FADD gets no SUM tag.
+     *   LEG3 basis + homogeneity-- a SANITY cross-check (NOT independently load-bearing -- soundness rests on
+     *                             LEG1+LEG2) via the GPU-validated interpreter, gated on LEG1&&LEG2 so it never
+     *                             runs a rejected kernel: f(1,0)=f(0,1)=1, f(0,0)=0 (exact, distinguishes
+     *                             add/sub/mul/scale), f(2a,2b)=2*f(a,b) + additivity within tau (interpreter
+     *                             linearity tripwire; it does NOT catch modifier kernels -- LEG2 does).
+     *   LEG4 (separate gate) Phase-2's interp==GPU validation of FADD = IEEE add (genuine cubin).
      * Usage: cuda_launch <cubin> <kname> 0 sass_tv. argv[1] is a CUBIN; returns before the PTX path. */
     if (strcmp(op, "sass_tv") == 0) {
         FILE* cf = fopen(ptx_path, "rb");
@@ -947,25 +966,35 @@ int main(int argc, char** argv) {
         int cflow = (sass_taint_indep(cb, toff, ninst) == 1);
         /* LEG2: symbolic structural equality c[gid] == plain FADD(LOAD_A, LOAD_B), all inputs */
         int symbolic = (sass_symbolic_addb(cb, toff, ninst) == 1);
-        /* LEG3: independent execution cross-check via the GPU-validated interpreter */
+        /* LEG3: an interpreter SANITY cross-check (NOT independently load-bearing -- the soundness rests on
+         * LEG1 taint + LEG2 modifier-complete structural equality; LEG3 confirms the from-scratch decode and the
+         * GPU-validated interpreter agree with a+b on probes). RUN ONLY when the structural legs already passed,
+         * so the interpreter never executes a rejected / data-dependent kernel (with the LDG/STG bounds-check,
+         * the audit's OOB path is closed two ways). basis distinguishes add from sub/mul/scale; homogeneity is a
+         * linearity tripwire on the interpreter itself (it does NOT catch modifier kernels -- LEG2 does). */
         int N = 8, ntid = 4, nblk = 2;
         float c[8], a[8], b[8], a2[8], b2[8], c1[8], c2[8];
-        int i, basis = 1, homog = 1, addit = 1;
-        for (i = 0; i < N; i++) { a[i] = 1.0f; b[i] = 0.0f; } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c); for (i = 0; i < N; i++) if (c[i] != 1.0f) basis = 0;   /* f(1,0)=1 */
-        for (i = 0; i < N; i++) { a[i] = 0.0f; b[i] = 1.0f; } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c); for (i = 0; i < N; i++) if (c[i] != 1.0f) basis = 0;   /* f(0,1)=1 -- catches sub.f32 (0-1=-1) */
-        for (i = 0; i < N; i++) { a[i] = 0.0f; b[i] = 0.0f; } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c); for (i = 0; i < N; i++) if (c[i] != 0.0f) basis = 0;   /* f(0,0)=0 */
-        for (i = 0; i < N; i++) { a[i] = (float)(i + 1); b[i] = 10.0f * (float)(i + 1); } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c1);
-        for (i = 0; i < N; i++) { a2[i] = 2.0f * a[i]; b2[i] = 2.0f * b[i]; } sass_cpu_run(cb, toff, ninst, a2, b2, N, ntid, nblk, c2);
-        for (i = 0; i < N; i++) if (c2[i] != 2.0f * c1[i]) homog = 0;                                                   /* f(2a,2b)=2 f(a,b) exact (catches FADD->IMAD a*b+c) */
-        for (i = 0; i < N; i++) { a[i] = 0.5f * (i + 1); a2[i] = 0.25f * (i + 1); b[i] = 3.0f * (i + 1); b2[i] = 7.0f * (i + 1); }
-        { float A[8], B[8], cab[8], ca[8], cbv[8]; double u = ldexp(1.0, -24);
-          for (i = 0; i < N; i++) { A[i] = a[i] + a2[i]; B[i] = b[i] + b2[i]; }
-          sass_cpu_run(cb, toff, ninst, A, B, N, ntid, nblk, cab);
-          sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, ca);
-          sass_cpu_run(cb, toff, ninst, a2, b2, N, ntid, nblk, cbv);
-          for (i = 0; i < N; i++) { double tau = 8.0 * u * ((double)fabsf(A[i]) + (double)fabsf(B[i])) + 1e-30;
-            if ((double)fabsf(cab[i] - (ca[i] + cbv[i])) > tau) addit = 0; } }                                          /* f(a1+a2,b1+b2)=f(a1,b1)+f(a2,b2) within tau */
+        int i, basis = 0, homog = 0, addit = 0;
+        if (cflow && symbolic) {
+            basis = homog = addit = 1;
+            for (i = 0; i < N; i++) { a[i] = 1.0f; b[i] = 0.0f; } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c); for (i = 0; i < N; i++) if (c[i] != 1.0f) basis = 0;   /* f(1,0)=1 */
+            for (i = 0; i < N; i++) { a[i] = 0.0f; b[i] = 1.0f; } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c); for (i = 0; i < N; i++) if (c[i] != 1.0f) basis = 0;   /* f(0,1)=1 */
+            for (i = 0; i < N; i++) { a[i] = 0.0f; b[i] = 0.0f; } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c); for (i = 0; i < N; i++) if (c[i] != 0.0f) basis = 0;   /* f(0,0)=0 */
+            for (i = 0; i < N; i++) { a[i] = (float)(i + 1); b[i] = 10.0f * (float)(i + 1); } sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, c1);
+            for (i = 0; i < N; i++) { a2[i] = 2.0f * a[i]; b2[i] = 2.0f * b[i]; } sass_cpu_run(cb, toff, ninst, a2, b2, N, ntid, nblk, c2);
+            for (i = 0; i < N; i++) if (c2[i] != 2.0f * c1[i]) homog = 0;                                               /* f(2a,2b)=2 f(a,b) exact (interpreter-linearity tripwire) */
+            for (i = 0; i < N; i++) { a[i] = 0.5f * (i + 1); a2[i] = 0.25f * (i + 1); b[i] = 3.0f * (i + 1); b2[i] = 7.0f * (i + 1); }
+            { float A[8], B[8], cab[8], ca[8], cbv[8]; double u = ldexp(1.0, -24);
+              for (i = 0; i < N; i++) { A[i] = a[i] + a2[i]; B[i] = b[i] + b2[i]; }
+              sass_cpu_run(cb, toff, ninst, A, B, N, ntid, nblk, cab);
+              sass_cpu_run(cb, toff, ninst, a, b, N, ntid, nblk, ca);
+              sass_cpu_run(cb, toff, ninst, a2, b2, N, ntid, nblk, cbv);
+              for (i = 0; i < N; i++) { double tau = 8.0 * u * ((double)fabsf(A[i]) + (double)fabsf(B[i])) + 1e-30;
+                if ((double)fabsf(cab[i] - (ca[i] + cbv[i])) > tau) addit = 0; } }                                      /* f(a1+a2,b1+b2)=f(a1,b1)+f(a2,b2) within tau */
+        }
         int laws = homog && addit;
+        /* LOAD-BEARING = cflow (data-independence) AND symbolic (modifier-complete structural equality). basis/laws
+         * are a probe sanity cross-check, gated on the structural legs (so they cannot mask a structural failure). */
         int pass = cflow && symbolic && basis && laws;
         printf("sass_tv [%s]: %d instrs cflow=%d symbolic=%d basis=%d laws=%d(homog=%d addit=%d) -> %s\n",
                ptx_path, ninst, cflow, symbolic, basis, laws, homog, addit, pass ? "SASS_TV_PASS" : "SASS_TV_FAIL");

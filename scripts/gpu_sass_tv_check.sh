@@ -5,27 +5,33 @@
 # appearing anywhere in the proof (they are untrusted oracles used only by the negative-control guards).
 #
 # WHAT THIS IS (honest scope -- do NOT overstate): this is the step that removes ptxas's PTX->SASS lowering
-# from the trusted computing base for ONE named kernel. cuda_launch.c's sass_tv mode runs four co-necessary
-# legs over the ELF .text bytes ptxas emitted: LEG1 sass_taint_indep (the SASS is a data-INDEPENDENT
-# straight-line per-thread function of the loads -> a probe/symbolic check lifts to all inputs); LEG2
-# sass_symbolic_addb (symbolic structural equality over OPAQUE load symbols: the value stored to c is
-# EXACTLY a PLAIN FADD(LOAD_A,LOAD_B) at base+gid*4 -> holds for every f32; MODIFIER-COMPLETE, so a sub.f32
-# = FADD-with-negate is rejected); LEG3 basis+linearity via the Phase-2 GPU-validated interpreter (exact
-# f(1,0)=f(0,1)=1, f(0,0)=0, f(2a,2b)=2f(a,b); additivity within tau). LEG4 is Phase 2's interp==GPU FADD
-# validation. Composed with Phase 1 (from-scratch decode==cuobjdump) and Phase 2 (interp==GPU), Helix now
-# DECODES + INTERPRETS + PROVES ptxas's output for this kernel from-scratch.
+# from the trusted computing base for ONE named kernel. cuda_launch.c's sass_tv mode runs two LOAD-BEARING
+# legs + a sanity cross-check over the ELF .text bytes ptxas emitted: LEG1 sass_taint_indep (the SASS is a
+# data-INDEPENDENT straight-line per-thread function of the loads -> a structural check lifts to all inputs);
+# LEG2 sass_symbolic_addb (symbolic structural equality over OPAQUE load symbols: the value stored to c is
+# EXACTLY a PLAIN FADD(LOAD_A,LOAD_B) at base+gid*4 -> holds for every f32). LEG2 is MODIFIER-COMPLETE for the
+# FADD operand/output modifier set: it requires lo[40:63]==0 (rejects Rb-side neg lo[63]/abs lo[62], i.e.
+# sub.f32) AND hi[0:39]==0 (rejects Ra-side neg hi[8]/abs hi[9], SAT hi[13], round hi[14:15], FTZ hi[16] --
+# the full hi-word modifier region; scheduling bits start at hi[41]). [LEG3] basis+linearity via the Phase-2
+# GPU-validated interpreter is a SANITY cross-check (NOT independently load-bearing; gated on LEG1&&LEG2):
+# exact f(1,0)=f(0,1)=1, f(0,0)=0, f(2a,2b)=2f(a,b); additivity within tau. LEG4 is Phase 2's interp==GPU FADD
+# validation on the genuine cubin. Composed with Phase 1 (from-scratch decode==cuobjdump) and Phase 2
+# (interp==GPU), Helix now DECODES + INTERPRETS + PROVES ptxas's output for this kernel from-scratch.
 # WHAT THIS IS NOT (the residual, stated plainly): ptxas still RAN (we validate its output, not re-derive
 # it); the driver+GPU+silicon still EXECUTE the validated SASS (not removed from the TCB). ONE straight-line
 # kernel (vector_add), f32, data-independent control flow + affine addressing, sm_86 + CUDA-12.8 pinned. It
 # is a translation-validation WITNESS (per-compilation, machine-checked), NOT a formal proof of ptxas. Full
 # kernel coverage (loops/branches/other ops/arches) is a labeled multi-week+ stretch, not claimed here.
 #
-# Two load-bearing NCs (a WRONG kernel that ptxas lowers FAITHFULLY -> the TV must REJECT, proving the TV
+# Four load-bearing NCs (a WRONG kernel that ptxas lowers FAITHFULLY -> the TV must REJECT, proving the TV
 # checks the SEMANTICS, not just that decode succeeded): NC1 FADD->IMAD (a*b+c, opcode byte-flipped) ->
-# SASS_TV_FAIL; NC2 sub.f32 (a-b, same FADD opcode + the negate bit lo[63]) -> SASS_TV_FAIL. NC2 is the
-# decisive one: genuine (plain FADD) PASSES and sub (negate FADD) FAILS on the SAME opcode, so the rejection
-# is SPECIFICALLY the modifier-complete decode (the skeptic's wrong-kernel-passes hole, closed). Each NC has
-# non-vacuity guards (the bytes really changed AND cuobjdump confirms the intended different instruction).
+# SASS_TV_FAIL; NC2 sub.f32 (a-b, same FADD opcode + the negate bit lo[63]) -> SASS_TV_FAIL; NC3 FADD.SAT
+# (clamp(a+b,0,1), hi[13]) and NC4 neg-Ra (b-a, hi[8]) -> SASS_TV_FAIL. NC3/NC4 are the HI-WORD modifier class
+# the adversarial audit (wtmv9bcog) proved was a P0 false-accept before the hi[0:39]==0 guard: their lo word is
+# BYTE-IDENTICAL to the genuine plain FADD, the silicon honors the modifier (clamp / b-a) so they are WRONG
+# kernels, and they now FAIL. genuine (plain FADD) PASSES while all four FAIL on the SAME opcode, so the
+# rejection is SPECIFICALLY the modifier-complete (lo+hi) decode. Each NC has non-vacuity guards (the bytes
+# really changed AND cuobjdump confirms the intended different instruction/modifier).
 # Token-gated '-> SASS_TV_PASS/FAIL', run AS A FILE (mem #42). Committed cubin/kernel never edited (corruption
 # on /tmp copies). Run under WSL (CUDA 12.8, RTX 3070): bash scripts/gpu_sass_tv_check.sh
 set -u
@@ -72,7 +78,7 @@ if [ "$te" = SASS_EXEC_PASS ]; then say "    interpreter == GPU (SASS_EXEC_PASS)
 say "[E] Phase 3 positive: sass_tv PROVES the emitted SASS computes a+b for all f32 inputs"
 "$CL" /tmp/stv_va.cubin "$KNAME" 0 sass_tv 2>&1 | sed -n 's/^sass_tv/    sass_tv/p'
 tg=$(tv /tmp/stv_va.cubin)
-if [ "$tg" = SASS_TV_PASS ]; then say "    translation-validation PASS (4 legs: cflow + symbolic + basis + laws)  OK"; else bad "genuine sass_tv=$tg (expected SASS_TV_PASS)"; fi
+if [ "$tg" = SASS_TV_PASS ]; then say "    translation-validation PASS (LEG1 cflow + LEG2 modifier-complete symbolic = load-bearing; basis+laws sanity)  OK"; else bad "genuine sass_tv=$tg (expected SASS_TV_PASS)"; fi
 
 # locate the FADD bundle (lo=0x...097221 -> LE bytes 21 72 09 02 05) for the NC1 byte-flip
 FOFF=$(grep -aboP '\x21\x72\x09\x02\x05' /tmp/stv_va.cubin | head -1 | cut -d: -f1)
@@ -105,6 +111,34 @@ else
       t2=$(tv /tmp/stv_sub.cubin)
       if [ "$t2" = SASS_TV_FAIL ]; then say "    NC2 sass_tv=SASS_TV_FAIL  OK -- genuine(plain FADD)=PASS vs sub(negate FADD)=FAIL on the SAME opcode => the modifier-complete decode is load-bearing"; else bad "NC2 sass_tv=$t2 but expected SASS_TV_FAIL (sub.f32 certified as a+b -- the skeptic's hole!)"; fi
     fi
+  fi
+fi
+
+# --- [H] NC3/NC4 hi-word FADD modifiers -- a faithfully-lowered FADD.SAT / neg-Ra has a BYTE-IDENTICAL lo word
+#         (every operand/output modifier lives in the FADD HI word: SAT=hi[13], neg-Ra=hi[8], abs-Ra=hi[9],
+#         round=hi[14:15], FTZ=hi[16]); the silicon HONORS them (clamp / b-a / wrong-rounding / subnormal-flush)
+#         so these are WRONG kernels. This is the audit's P0 class -- the TV MUST reject (hi[0:39]==0 guard). ---
+say "[H] NC3/NC4 hi-word FADD modifiers (SAT, neg-Ra) -> wrong kernels, sass_tv MUST reject (SASS_TV_FAIL)"
+if [ "$FOFF" -ge 0 ]; then
+  HB=$((FOFF+9))                                              # the FADD hi[8:15] byte (SAT=0x20, neg-Ra=0x01)
+  base=$(xxd -s "$HB" -l1 -p /tmp/stv_va.cubin)
+  # NC3: set SAT (hi[13])
+  cp /tmp/stv_va.cubin /tmp/stv_nc3.cubin
+  printf "\\x$(printf '%02x' $(( 0x$base | 0x20 )))" | dd of=/tmp/stv_nc3.cubin bs=1 seek=$HB count=1 conv=notrunc 2>/dev/null
+  if cmp -s /tmp/stv_nc3.cubin /tmp/stv_va.cubin; then bad "NC3 vacuous -- SAT byte flip did not change the cubin";
+  elif ! "$OBJ" -sass /tmp/stv_nc3.cubin 2>/dev/null | grep -q 'FADD.SAT R9, R2, R5'; then bad "NC3 vacuous -- cuobjdump does not show FADD.SAT (bit map drift)";
+  else
+    t3=$(tv /tmp/stv_nc3.cubin)
+    if [ "$t3" = SASS_TV_FAIL ]; then say "    NC3 FADD.SAT sass_tv=SASS_TV_FAIL  OK -- the hi-word modifier guard (hi[0:39]==0) is load-bearing"; else bad "NC3 FADD.SAT sass_tv=$t3 but expected SASS_TV_FAIL (clamp(a+b) certified as a+b -- the audit P0!)"; fi
+  fi
+  # NC4: set neg-Ra (hi[8]) -- computes b-a
+  cp /tmp/stv_va.cubin /tmp/stv_nc4.cubin
+  printf "\\x$(printf '%02x' $(( 0x$base | 0x01 )))" | dd of=/tmp/stv_nc4.cubin bs=1 seek=$HB count=1 conv=notrunc 2>/dev/null
+  if cmp -s /tmp/stv_nc4.cubin /tmp/stv_va.cubin; then bad "NC4 vacuous -- neg-Ra byte flip did not change the cubin";
+  elif ! "$OBJ" -sass /tmp/stv_nc4.cubin 2>/dev/null | grep -q 'FADD R9, -R2, R5'; then bad "NC4 vacuous -- cuobjdump does not show FADD R9, -R2, R5";
+  else
+    t4=$(tv /tmp/stv_nc4.cubin)
+    if [ "$t4" = SASS_TV_FAIL ]; then say "    NC4 neg-Ra (b-a) sass_tv=SASS_TV_FAIL  OK"; else bad "NC4 neg-Ra sass_tv=$t4 but expected SASS_TV_FAIL (b-a certified as a+b!)"; fi
   fi
 fi
 
