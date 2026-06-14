@@ -139,6 +139,85 @@ static int e4m3_encode(float v) {
     return best;
 }
 
+/* v1.5 #2 LEG 1 (certified kernels -- translation validation): a data-independent-control-flow witness.
+ * Static text analysis of the emitted PTX (HOST, no GPU). Taint every loaded DATA value (the dest of
+ * ld.global/ld.shared -- NOT ld.param, which loads dims/pointers, not data), propagate def->use to a
+ * fixpoint, then assert NO setp and NO predicated branch consumes a tainted value. If clean, the
+ * kernel's control flow AND selection are data-INDEPENDENT, so for a fixed (M,K,N) it executes a FIXED
+ * straight-line program over the inputs (=> a fixed polynomial; LEG 3 then certifies BILINEARITY, LEG 2
+ * that the bilinear form == matmul). This is the load-bearing precondition that lifts the basis sweep
+ * from sampling to an all-inputs equivalence proof. */
+static int cf_is_taint(char taint[][12], int nt, const char* r) {
+    for (int i = 0; i < nt; i++) if (strcmp(taint[i], r) == 0) return 1;
+    return 0;
+}
+/* extract up to maxr %-register tokens from a PTX line, in order (e.g. "%f2","%rd3","%p0"). */
+static int cf_regs(const char* line, char out[][12], int maxr) {
+    int n = 0;
+    for (const char* p = line; *p; p++) {
+        if (*p == '%') {
+            char buf[12]; int j = 0; buf[j++] = '%'; p++;
+            while (*p && j < 11 && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                                    (*p >= '0' && *p <= '9') || *p == '_')) buf[j++] = *p++;
+            buf[j] = 0; p--;
+            if (n < maxr) { strcpy(out[n], buf); n++; }
+        }
+    }
+    return n;
+}
+/* returns 1 = data-INDEPENDENT control flow (PASS), 0 = data-DEPENDENT (FAIL), -1 = fail-closed
+ * (an unanalyzable op, e.g. a call). Multi-pass taint to a fixpoint over the whole .entry. */
+static int cflow_witness(const char* ptx) {
+    static char taint[4096][12]; int nt = 0;
+    char line[1024], regs[24][12];
+    const char* p; const char* e; int len;
+    /* PASS 0: seed taint from ld.global/ld.shared dests (the loaded DATA values) */
+    for (p = ptx; *p; p = (*e ? e + 1 : e)) {
+        e = p; while (*e && *e != '\n') e++;
+        len = (int)(e - p); if (len > 1023) len = 1023; memcpy(line, p, len); line[len] = 0;
+        const char* o = line; while (*o == ' ' || *o == '\t') o++;
+        if (strncmp(o, "ld.global", 9) == 0 || strncmp(o, "ld.shared", 9) == 0) {
+            int nr = cf_regs(line, regs, 24);
+            if (nr >= 1 && !cf_is_taint(taint, nt, regs[0]) && nt < 4096) { strcpy(taint[nt], regs[0]); nt++; }
+        }
+    }
+    /* PASS 1..: propagate (any non-load/store/branch op whose source is tainted taints its dest) */
+    int changed = 1, guard = 0;
+    while (changed && guard < 200) {
+        changed = 0; guard++;
+        for (p = ptx; *p; p = (*e ? e + 1 : e)) {
+            e = p; while (*e && *e != '\n') e++;
+            len = (int)(e - p); if (len > 1023) len = 1023; memcpy(line, p, len); line[len] = 0;
+            const char* o = line; while (*o == ' ' || *o == '\t') o++;
+            if (*o == 0 || *o == '/' || *o == '.' || *o == '{' || *o == '}' || *o == '$' || *o == '@') continue;
+            if (strncmp(o, "ld.", 3) == 0 || strncmp(o, "st.", 3) == 0 || strncmp(o, "bra", 3) == 0 ||
+                strncmp(o, "ret", 3) == 0 || strncmp(o, "bar", 3) == 0) continue;  /* no propagatable dest */
+            int nr = cf_regs(line, regs, 24);
+            if (nr < 2) continue;
+            int srctaint = 0;
+            for (int i = 1; i < nr; i++) if (cf_is_taint(taint, nt, regs[i])) { srctaint = 1; break; }
+            if (srctaint && !cf_is_taint(taint, nt, regs[0]) && nt < 4096) { strcpy(taint[nt], regs[0]); nt++; changed = 1; }
+        }
+    }
+    /* CHECK: a tainted setp source, a tainted predicated-branch guard, or a call -> data-dependent / unanalyzable */
+    int violation = 0, failclosed = 0;
+    for (p = ptx; *p; p = (*e ? e + 1 : e)) {
+        e = p; while (*e && *e != '\n') e++;
+        len = (int)(e - p); if (len > 1023) len = 1023; memcpy(line, p, len); line[len] = 0;
+        const char* o = line; while (*o == ' ' || *o == '\t') o++;
+        if (strncmp(o, "setp", 4) == 0) {
+            int nr = cf_regs(line, regs, 24);
+            for (int i = 1; i < nr; i++) if (cf_is_taint(taint, nt, regs[i])) { violation = 1; break; }  /* regs[0] is the %p dest */
+        } else if (*o == '@') {                       /* predicated op (usually @%p bra): guard is the first %reg */
+            int nr = cf_regs(line, regs, 24);
+            if (nr >= 1 && cf_is_taint(taint, nt, regs[0])) violation = 1;
+        } else if (strncmp(o, "call", 4) == 0) {
+            failclosed = 1;                            /* a function call we cannot analyze -> conservatively reject */
+        }
+    }
+    return failclosed ? -1 : (violation ? 0 : 1);
+}
+
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
         const char* msg = 0;
@@ -178,6 +257,37 @@ static void attn_forward_cpu(const float* Q, const float* K, const float* V, flo
         for (int j = 0; j < S; j++) at[i * S + j] = expf(sc[i * S + j] - mx) / sm;
     }
     for (int i = 0; i < S; i++) for (int t = 0; t < d; t++) { float o = 0.0f; for (int j = 0; j < S; j++) o += at[i * S + j] * V[j * d + t]; out[i * d + t] = o; }
+}
+
+/* v1.5 #2 LEG 3 helper: one square-L naive_matmul launch -- hOut[L*L] = hA @ hB (both [L*L] row-major).
+ * Alloc/copy/launch/copy/free each call (L is small; bilinearity needs ~7 evals). Returns 0 on success. */
+static int mm_eval(CUfunction fn, const float* hA, const float* hB, float* hOut, int L) {
+    CUdeviceptr dA = 0, dB = 0, dC = 0; size_t n = (size_t)L * L; int rc = 0;
+    if (cuMemAlloc(&dA, n * 4) || cuMemAlloc(&dB, n * 4) || cuMemAlloc(&dC, n * 4)) { rc = 1; goto done; }
+    {
+        int M = L, K = L, N = L; void* args[] = { &dA, &dB, &dC, &M, &K, &N };
+        rc = cuMemcpyHtoD(dA, hA, n * 4) || cuMemcpyHtoD(dB, hB, n * 4)
+           || cuLaunchKernel(fn, L, 1, 1, L, 1, 1, 0, 0, args, 0) || cuCtxSynchronize()
+           || cuMemcpyDtoH(hOut, dC, n * 4);
+    }
+done:
+    if (dA) cuMemFree(dA); if (dB) cuMemFree(dB); if (dC) cuMemFree(dC);
+    return rc ? 1 : 0;
+}
+
+/* v1.5 #2 LEG 3 helper: count elements where |LHS-RHS| exceeds the derived f32 matmul rounding bound
+ * tau_k = c_safe * L * u * S[k] (u = 2^-24 unit roundoff; S[k] = sum of |operands| flowing into element
+ * k; c_safe an envelope multiple over the standard gamma_K = K*u summation bound -- derived, not tuned).
+ * When tau==0 (a zero operand row), require an exact match. Tracks the worst rel = |LHS-RHS|/tau. */
+static void bilin_one(const float* LHS, const float* RHS, const float* S, size_t n,
+                      int L, float u, float c_safe, const char* nm, long* bad, float* maxrel) {
+    for (size_t k = 0; k < n; k++) {
+        float tau = c_safe * (float)L * u * S[k];
+        float diff = LHS[k] - RHS[k]; if (diff < 0) diff = -diff;
+        float rel = (tau > 0.0f) ? diff / tau : (diff == 0.0f ? 0.0f : 1.0e30f);
+        if (rel > *maxrel) *maxrel = rel;
+        if (!(diff <= tau)) { if (*bad < 4) fprintf(stderr, "bilin %s [%zu] |LHS-RHS|=%g tau=%g\n", nm, k, diff, tau); (*bad)++; }
+    }
 }
 
 int main(int argc, char** argv) {
@@ -288,6 +398,20 @@ int main(int argc, char** argv) {
     if (!ptx) { fclose(f); return 2; }
     if (fread(ptx, 1, (size_t)sz, f) != (size_t)sz) { fclose(f); free(ptx); return 2; }
     ptx[sz] = 0; fclose(f);
+
+    /* v1.5 #2 LEG 1: cflow mode -- data-independent-control-flow witness on the loaded PTX (GPU-free,
+     * returns before cuInit). Usage: cuda_launch <ptx> <kname-ignored> 0 cflow. PASS => the kernel is a
+     * fixed straight-line program (data-independent control flow + selection); FAIL => a setp/branch
+     * consumes a loaded value (data-dependent). */
+    if (strcmp(op, "cflow") == 0) {
+        int r = cflow_witness(ptx);
+        const char* v = (r == 1) ? "DATA-INDEPENDENT control flow (fixed straight-line program over the inputs)"
+                      : (r == 0) ? "DATA-DEPENDENT (a setp/branch consumes a loaded value)"
+                                 : "FAIL-CLOSED (an unanalyzable op, e.g. a call)";
+        printf("cflow_witness [%s]: %s -> %s\n", ptx_path, v, (r == 1) ? "PASS" : "FAIL");
+        free(ptx);
+        return (r == 1) ? 0 : 1;
+    }
 
     CK(cuInit(0), "cuInit");
     CUdevice dev; CK(cuDeviceGet(&dev, 0), "cuDeviceGet");
@@ -701,6 +825,134 @@ int main(int argc, char** argv) {
         cuModuleUnload(mod); cuCtxDestroy(ctx);
         free(hA); free(hB); free(hC); free(ptx);
         return mbad ? 1 : 0;
+    }
+
+    /* v1.5 #2 LEG 2 (basis-agreement): the EXACT all-inputs equivalence teeth. For the kovc-emitted
+     * naive_matmul at a fixed square shape L (default 8), sweep ALL rank-1 0/1 probes A=e_{a,b}, B=e_{c,d}
+     * over (a,b,c,d) in [0,L)^4. With 0/1 inputs every product/partial sum is 0 or 1 -> EXACT in f32, so
+     * the device output must EQUAL the spec bit-for-bit: matmul(e_ab, e_cd)[i][j] = [i==a]*[b==c]*[j==d]
+     * (a single 1 at [a][d] when b==c, else all-zero). Because LEG 1 certifies the kernel is a fixed
+     * straight-line (data-INDEPENDENT) program for this shape, agreement on the 0/1 BASIS of the
+     * bilinear-form space lifts to agreement on ALL f32 inputs (this compiled shape) -- not sampling. We
+     * sweep the FULL quad incl. the OFF-DIAGONAL b!=c (=> all-zero) so a spurious extra/transposed term
+     * cannot hide, and assert executed-probes == L^4 AND expected-nonzero == L^3 (non-vacuity: a skipped
+     * sweep cannot false-pass). Usage: cuda_launch <ptx> naive_matmul 0 matmul_basis [L]. */
+    if (strcmp(op, "matmul_basis") == 0) {
+        int L = (argc > 5) ? atoi(argv[5]) : 8;
+        if (L < 2) L = 2; if (L > 16) L = 16;            /* L^4 launches: 16 -> 65536, keep bounded */
+        /* kind selects the bilinear spec so the SAME basis sweep certifies the matmul AND its two adjoint
+         * (autodiff) siblings: ab = A@B [naive_matmul], atb = A^T@B [gpu_matmul_atb, the weight gradient],
+         * abt = A@B^T [gpu_matmul_abt, the input gradient]. For square L the launch geometry (grid=L,
+         * block=L, args {.,.,.,L,L,L}) is identical; only the 0/1 reference index map differs. */
+        const char* kind = (argc > 6) ? argv[6] : "ab";
+        int k_ab = (strcmp(kind, "ab") == 0), k_atb = (strcmp(kind, "atb") == 0), k_abt = (strcmp(kind, "abt") == 0);
+        if (!k_ab && !k_atb && !k_abt) { fprintf(stderr, "matmul_basis: unknown kind '%s' (ab|atb|abt)\n", kind); return 2; }
+        size_t nn2 = (size_t)L * L;
+        float* hA = (float*)calloc(nn2, sizeof(float));
+        float* hB = (float*)calloc(nn2, sizeof(float));
+        float* hC = (float*)malloc(nn2 * sizeof(float));
+        if (!hA || !hB || !hC) return 2;
+        CUdeviceptr dA, dB, dC;
+        CK(cuMemAlloc(&dA, nn2 * sizeof(float)), "basis A");
+        CK(cuMemAlloc(&dB, nn2 * sizeof(float)), "basis B");
+        CK(cuMemAlloc(&dC, nn2 * sizeof(float)), "basis C");
+        long probes = 0, nonzero_probes = 0, bad = 0;
+        for (int a = 0; a < L; a++) for (int b = 0; b < L; b++)
+        for (int cc = 0; cc < L; cc++) for (int d = 0; d < L; d++) {
+            hA[(size_t)a * L + b] = 1.0f;                /* A = e_{a,b} */
+            hB[(size_t)cc * L + d] = 1.0f;               /* B = e_{cc,d} */
+            CK(cuMemcpyHtoD(dA, hA, nn2 * sizeof(float)), "basis HtoD A");
+            CK(cuMemcpyHtoD(dB, hB, nn2 * sizeof(float)), "basis HtoD B");
+            int Md = L, Kd = L, Nd = L;
+            void* bargs[] = { &dA, &dB, &dC, &Md, &Kd, &Nd };
+            CK(cuLaunchKernel(fn, L, 1, 1, L, 1, 1, 0, 0, bargs, 0), "basis launch");
+            CK(cuCtxSynchronize(), "basis sync");
+            CK(cuMemcpyDtoH(hC, dC, nn2 * sizeof(float)), "basis DtoH");
+            int nz = k_ab ? (b == cc) : k_atb ? (a == cc) : (b == d);  /* this probe yields a single 1 */
+            if (nz) nonzero_probes++;
+            for (int i = 0; i < L; i++) for (int j = 0; j < L; j++) {
+                /* ab: C[i,j]=[i==a][b==cc][j==d]; atb: [a==cc][i==b][j==d]; abt: [i==a][j==cc][b==d] */
+                int one = k_ab  ? (i == a && j == d  && b == cc)
+                        : k_atb ? (i == b && j == d  && a == cc)
+                        :         (i == a && j == cc && b == d);
+                float ref = one ? 1.0f : 0.0f;
+                if (hC[(size_t)i * L + j] != ref) {
+                    if (bad < 4) fprintf(stderr, "matmul_basis[%s] mismatch A=e[%d,%d] B=e[%d,%d] C[%d,%d]=%g ref %g\n",
+                                         kind, a, b, cc, d, i, j, hC[(size_t)i * L + j], ref);
+                    bad++;
+                }
+            }
+            hA[(size_t)a * L + b] = 0.0f;                /* reset for the next probe */
+            hB[(size_t)cc * L + d] = 0.0f;
+            probes++;
+        }
+        long ep = (long)L * L * L * L, enz = (long)L * L * L;
+        int vacuity = (probes != ep) || (nonzero_probes != enz);
+        printf("matmul_basis[%s] L=%d: probes=%ld/%ld nonzero=%ld/%ld bad=%ld vacuity=%d -> %s\n",
+               kind, L, probes, ep, nonzero_probes, enz, bad, vacuity, (bad == 0 && !vacuity) ? "PASS" : "FAIL");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hC); free(ptx);
+        return (bad == 0 && !vacuity) ? 0 : 1;
+    }
+
+    /* v1.5 #2 LEG 3 (bilinearity): the f32-envelope certificate + REQUIRED redundancy (it catches the
+     * nonlinearity NC a*a, which is INVISIBLE to LEG 2's 0/1 basis since 0^2=0, 1^2=1). On random f32
+     * A1,A2,B1,B2 (|.|<=R) and a scalar s, verify the kernel f obeys bilinearity within the derived f32
+     * matmul rounding bound: additivity f(A1+A2,B)=f(A1,B)+f(A2,B) (and in B) and homogeneity
+     * f(s*A,B)=s*f(A,B) (and in B). Per element tau = c_safe*L*u*S, u=2^-24, S=sum_t |operands| into both
+     * sides (covers the host As=fl(A1+A2) rounding AND both device accumulations); c_safe=8 envelope over
+     * gamma_K=K*u -- derived, not tuned. A genuine bilinear matmul passes; +const / a*a break it. Reports
+     * max rel = |LHS-RHS|/tau (PASS => <=1). Usage: cuda_launch <ptx> naive_matmul 0 matmul_bilin [L]. */
+    if (strcmp(op, "matmul_bilin") == 0) {
+        int L = (argc > 5) ? atoi(argv[5]) : 8;
+        if (L < 2) L = 2; if (L > 64) L = 64;
+        float R = 4.0f, s = 2.5f, u = 5.9604645e-8f /* 2^-24 */, c_safe = 8.0f;
+        size_t n = (size_t)L * L;
+        float *A1 = malloc(n*4), *A2 = malloc(n*4), *B1 = malloc(n*4), *B2 = malloc(n*4);
+        float *As = malloc(n*4), *Bs = malloc(n*4), *sA = malloc(n*4), *sB = malloc(n*4);
+        float *FA1B1 = malloc(n*4), *FA2B1 = malloc(n*4), *FA1B2 = malloc(n*4);
+        float *FAsB1 = malloc(n*4), *FA1Bs = malloc(n*4), *FsAB1 = malloc(n*4), *FA1sB = malloc(n*4);
+        float *RHS = malloc(n*4), *Sb = malloc(n*4);
+        if (!A1||!A2||!B1||!B2||!As||!Bs||!sA||!sB||!FA1B1||!FA2B1||!FA1B2||!FAsB1||!FA1Bs||!FsAB1||!FA1sB||!RHS||!Sb) return 2;
+        unsigned int seed = 0x1234567u;                  /* deterministic LCG -> [-R,R] (reproducible; NO rand/time) */
+        for (size_t i = 0; i < n; i++) {
+            seed = seed*1664525u+1013904223u; A1[i] = ((float)(seed>>8)/(float)(1u<<24))*2.0f*R-R;
+            seed = seed*1664525u+1013904223u; A2[i] = ((float)(seed>>8)/(float)(1u<<24))*2.0f*R-R;
+            seed = seed*1664525u+1013904223u; B1[i] = ((float)(seed>>8)/(float)(1u<<24))*2.0f*R-R;
+            seed = seed*1664525u+1013904223u; B2[i] = ((float)(seed>>8)/(float)(1u<<24))*2.0f*R-R;
+        }
+        for (size_t i = 0; i < n; i++) { As[i]=A1[i]+A2[i]; Bs[i]=B1[i]+B2[i]; sA[i]=s*A1[i]; sB[i]=s*B1[i]; }
+        int rc = 0;
+        rc |= mm_eval(fn,A1,B1,FA1B1,L); rc |= mm_eval(fn,A2,B1,FA2B1,L); rc |= mm_eval(fn,A1,B2,FA1B2,L);
+        rc |= mm_eval(fn,As,B1,FAsB1,L); rc |= mm_eval(fn,A1,Bs,FA1Bs,L);
+        rc |= mm_eval(fn,sA,B1,FsAB1,L); rc |= mm_eval(fn,A1,sB,FA1sB,L);
+        if (rc) { fprintf(stderr, "matmul_bilin: a GPU eval failed\n"); return 2; }
+        long bad = 0; float maxrel = 0.0f, maxsig = 0.0f;
+        for (size_t k = 0; k < n; k++) { float v = FA1B1[k]; if (v<0) v=-v; if (v>maxsig) maxsig=v; }
+        /* additivity in A: f(A1+A2,B1) == f(A1,B1)+f(A2,B1); S = sum_t (|A1|+|A2|)*|B1| */
+        for (int i=0;i<L;i++) for (int j=0;j<L;j++){ size_t k=(size_t)i*L+j; RHS[k]=FA1B1[k]+FA2B1[k];
+            float S=0; for (int t=0;t<L;t++) S += (fabsf(A1[i*L+t])+fabsf(A2[i*L+t]))*fabsf(B1[t*L+j]); Sb[k]=S; }
+        bilin_one(FAsB1, RHS, Sb, n, L, u, c_safe, "add_A", &bad, &maxrel);
+        /* additivity in B: f(A1,B1+B2) == f(A1,B1)+f(A1,B2); S = sum_t |A1|*(|B1|+|B2|) */
+        for (int i=0;i<L;i++) for (int j=0;j<L;j++){ size_t k=(size_t)i*L+j; RHS[k]=FA1B1[k]+FA1B2[k];
+            float S=0; for (int t=0;t<L;t++) S += fabsf(A1[i*L+t])*(fabsf(B1[t*L+j])+fabsf(B2[t*L+j])); Sb[k]=S; }
+        bilin_one(FA1Bs, RHS, Sb, n, L, u, c_safe, "add_B", &bad, &maxrel);
+        /* homogeneity in A: f(s*A1,B1) == s*f(A1,B1); S = |s| * sum_t |A1|*|B1| */
+        for (int i=0;i<L;i++) for (int j=0;j<L;j++){ size_t k=(size_t)i*L+j; RHS[k]=s*FA1B1[k];
+            float S=0; for (int t=0;t<L;t++) S += fabsf(A1[i*L+t])*fabsf(B1[t*L+j]); Sb[k]=fabsf(s)*S; }
+        bilin_one(FsAB1, RHS, Sb, n, L, u, c_safe, "hom_A", &bad, &maxrel);
+        /* homogeneity in B: f(A1,s*B1) == s*f(A1,B1); same S as hom_A */
+        for (int i=0;i<L;i++) for (int j=0;j<L;j++){ size_t k=(size_t)i*L+j; RHS[k]=s*FA1B1[k];
+            float S=0; for (int t=0;t<L;t++) S += fabsf(A1[i*L+t])*fabsf(B1[t*L+j]); Sb[k]=fabsf(s)*S; }
+        bilin_one(FA1sB, RHS, Sb, n, L, u, c_safe, "hom_B", &bad, &maxrel);
+        int sig_ok = (maxsig > 1.0f);                    /* non-vacuity: outputs are real signal, not ~0 */
+        printf("matmul_bilin L=%d R=%g s=%g c_safe=%g: 4 laws x %zu cells, bad=%ld maxrel=%g maxsig=%g sig_ok=%d -> %s\n",
+               L, R, s, c_safe, n, bad, maxrel, maxsig, sig_ok, (bad == 0 && sig_ok) ? "PASS" : "FAIL");
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(A1);free(A2);free(B1);free(B2);free(As);free(Bs);free(sA);free(sB);
+        free(FA1B1);free(FA2B1);free(FA1B2);free(FAsB1);free(FA1Bs);free(FsAB1);free(FA1sB);free(RHS);free(Sb);free(ptx);
+        return (bad == 0 && sig_ok) ? 0 : 1;
     }
 
     /* imatmul mode (v1.5 S0 increment 2b): INTEGER (ternary) matmul verify.
