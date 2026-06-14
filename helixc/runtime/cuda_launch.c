@@ -462,7 +462,8 @@ static int sass_disasm(unsigned long long lo, unsigned long long hi, int addr, c
         case 0x7625: { int reuse = (int)sass_bits(hi, 58, 59); char r1[8] = "", r2[8] = ""; if (reuse & 1) strcpy(r1, ".reuse"); if (reuse & 2) strcpy(r2, ".reuse");
             sprintf(out, "%sIMAD.WIDE%s R%d, R%d%s, R%d%s, c[0x0][0x%x]", pfx, su, Rd, Ra, r1, (int)sass_bits(hi, 0, 7), r2, coff); } break;
         case 0x7981: sprintf(out, "%sLDG.E R%d, [R%d.64]", pfx, Rd, Ra); break;
-        case 0x7221: sprintf(out, "%sFADD R%d, R%d, R%d", pfx, Rd, Ra, (int)sass_bits(lo, 32, 39)); break;
+        case 0x7221: { int nb = (int)sass_bits(lo, 63, 63); /* negate-Rb (lo[63]): sub.f32 = FADD a,-b */
+            sprintf(out, "%sFADD R%d, R%d, %sR%d", pfx, Rd, Ra, nb ? "-" : "", (int)sass_bits(lo, 32, 39)); } break;
         case 0x7986: sprintf(out, "%sSTG.E [R%d.64], R%d", pfx, Ra, (int)sass_bits(lo, 32, 39)); break;
         case 0x794d: sprintf(out, "%sEXIT", pfx); break;
         case 0x7947: { long long rel = (int)sass_bits(lo, 32, 63); sprintf(out, "%sBRA 0x%x", pfx, (unsigned)(addr + 16 + (int)rel)); } break;
@@ -529,7 +530,7 @@ static int sass_exec1(SassVM* vm, unsigned long long lo, unsigned long long hi, 
             long long prod = sgn ? (long long)a * (long long)b : (long long)((unsigned long long)(unsigned)a * (unsigned long long)(unsigned)b);
             sv_set_regpair(vm, Rd, (unsigned long long)((long long)base + prod)); } break;       /* IMAD.WIDE -> 64-bit pair (address calc) */
         case 0x7981: { unsigned long long ad = sv_regpair(vm, Ra); unsigned v; memcpy(&v, vm->gmem + ad, 4); vm->R[Rd] = v; } break; /* LDG.E [Rptr.64] */
-        case 0x7221: { float fa, fb; unsigned ra = vm->R[Ra], rb = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(&fa, &ra, 4); memcpy(&fb, &rb, 4); float r = nc_wrong_fadd ? (fa - fb) : (fa + fb); memcpy(&vm->R[Rd], &r, 4); } break; /* FADD (nc: a-b) */
+        case 0x7221: { float fa, fb; unsigned ra = vm->R[Ra], rb = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(&fa, &ra, 4); memcpy(&fb, &rb, 4); if (sass_bits(lo, 63, 63)) fb = -fb; /* honor negate-Rb (sub.f32) */ float r = nc_wrong_fadd ? (fa - fb) : (fa + fb); memcpy(&vm->R[Rd], &r, 4); } break; /* FADD (nc: a-b) */
         case 0x7986: { unsigned long long ad = sv_regpair(vm, Ra); unsigned v = vm->R[(int)sass_bits(lo, 32, 39)]; memcpy(vm->gmem + ad, &v, 4); } break; /* STG.E */
         case 0x794d: return 1;                                                                  /* EXIT */
         case 0x7947: return 1;                                                                  /* BRA (self-loop trap) */
