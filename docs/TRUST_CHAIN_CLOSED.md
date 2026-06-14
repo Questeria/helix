@@ -42,8 +42,14 @@
 > **§R — Residuals (what "closed" does NOT cover; disclosed in full):**
 > - **Shared TCB:** host OS, kernel, filesystem, shell, coreutils, `gcc`/`libc`/`binutils`/loader, CPU +
 >   microcode, RAM, and the audited `seed.c` source remain trusted. No DDC retires the shared substrate.
-> - **Complete to PTX, not SASS:** the GPU path is hand-auditable `hex0 → PTX`; NVIDIA's closed `ptxas` +
->   driver + the CUDA-driver-FFI host launcher are trusted past PTX. Single GPU target (sm_86).
+> - **Complete to PTX — and, for one kernel, past PTX to SASS:** the GPU path is hand-auditable `hex0 → PTX`;
+>   NVIDIA's closed `ptxas` + driver + the CUDA-driver-FFI host launcher are trusted past PTX for kernels in
+>   general. **EXCEPTION (v1.5 #3):** for the `vector_add` sm_86 subset, ptxas's PTX→SASS lowering is now
+>   **independently translation-validated from-scratch** (the COMPOSITE `sass_tv` AND `sass_exec` — a from-scratch
+>   ELF/SASS decode + symbolic all-inputs proof of the value semantics + a GPU-differential for scheduling),
+>   removing `ptxas` from the TCB **for that one kernel**. Residual there: ptxas still ran, and the GPU/driver/
+>   silicon still execute the validated SASS (the GPU is also the scheduling differential-oracle). Single GPU
+>   target (sm_86 / CUDA 12.8). See `docs/HELIX_V1.5_DEFINITION_OF_DONE.md` #3 + `scripts/gpu_sass_tv_check.sh`.
 > - **V5 v1.1-surface DDC** is a *manually-reconciled behavioral* audit; its witness is gitignored / not
 >   clean-checkout reproducible. The byte-identical, hash-pinned, one-command DDC is the separate
 >   `seed→K1` `ddc_crosscheck.sh`.
@@ -185,12 +191,22 @@ claim is precise, not inflated.
 > **Front-door residuals (8–10) — the limits most likely to surprise an outside reader.**
 > Stated prominently because they bound what "complete" and "reproducible" mean here.
 
-8. **Complete to PTX, NOT to GPU machine code.** The hand-auditable from-raw chain ends at
-   **PTX text**. The **trusted computing base below the from-raw chain** is therefore the
-   **closed NVIDIA `ptxas`** (PTX→SASS assembler) + the **CUDA driver** + the **GPU
-   hardware** + the **OS/kernel** + the **C host launcher** (`helixc/runtime/cuda_launch.c`
-   / `train_transformer.c`). None of these are reproduced from raw binary; they are
-   trusted-once. "Complete to PTX" is the precise claim — *not* complete to GPU machine code.
+8. **Complete to PTX, NOT to GPU machine code — EXCEPT one translation-validated kernel.** The
+   hand-auditable from-raw chain ends at **PTX text**. The **trusted computing base below the from-raw
+   chain** is therefore the **closed NVIDIA `ptxas`** (PTX→SASS assembler) + the **CUDA driver** + the
+   **GPU hardware** + the **OS/kernel** + the **C host launcher** (`helixc/runtime/cuda_launch.c` /
+   `train_transformer.c`). None of these are reproduced from raw binary; they are trusted-once. "Complete
+   to PTX" is the precise claim for kernels in general — *not* complete to GPU machine code. **v1.5 #3
+   EXCEPTION:** for the **`vector_add` sm_86 subset**, `ptxas`'s PTX→SASS lowering is **removed from the
+   TCB** — its emitted SASS is independently **translation-validated from-scratch** (the COMPOSITE
+   `sass_tv` AND `sass_exec`: a from-scratch ELF/SASS decoder + interpreter + a symbolic all-inputs proof
+   that the machine code computes `c[gid]=a[gid]+b[gid]`, plus a GPU-differential that discharges
+   instruction-scheduling correctness). For that ONE kernel the trust chain extends past PTX to SASS.
+   Residual: ptxas still *ran* (we validate its output, not re-derive it), and the GPU/driver/silicon still
+   *execute* the validated SASS **and serve as the scheduling differential-oracle** — a per-compilation
+   machine-checked **witness**, not a formal proof of ptxas. Hardened through 5 adversarial audits. A
+   pure-CPU scoreboard model + multi-kernel coverage are labeled stretches. (`scripts/gpu_sass_tv_check.sh`,
+   `docs/HELIX_V1.5_DEFINITION_OF_DONE.md` #3.)
 9. **The V5 v1.1-surface behavioral DDC (44/44) is NOT clean-checkout reproducible.** The
    second-witness tree-walking interpreter is **gitignored, was never committed, and has no
    clean restore path**, so the 44/44 v1.1-surface behavioral cross-check is replayable
