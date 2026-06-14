@@ -95,16 +95,25 @@ static void sha256_hex(const unsigned char dig[32], char out[65]) {
  * tampered-weight NC). seed 0 == the imatmul/ternary_matmul test data (W[i]=(i%3)-1, X[i]=((i*13+7)%11)-5). */
 static void receipt_gen_W(int* W, size_t n, unsigned seed) { for (size_t i = 0; i < n; i++) W[i] = (int)(((i + seed) % 3)) - 1; }
 static void receipt_gen_X(int* X, size_t n, unsigned seed) { for (size_t i = 0; i < n; i++) X[i] = (int)((((i + seed) * 13 + 7) % 11)) - 5; }
-/* Fiat-Shamir Freivalds challenge: r = u32( SHA256(dW || dX || dC || round || j) )[0:4] mod p, bound to the
- * RECOMPUTED commitments so a malicious runner cannot pick an r in the error null-space (a checker that
- * trusted runner-supplied projections would be unsound -- the runner-chosen-challenge hole; NC closes it). */
+/* Fiat-Shamir Freivalds challenge: r = SHA256(dW || dX || dC || round || j) reduced UNIFORMLY mod p, bound
+ * to the RECOMPUTED commitments so a malicious runner cannot pick an r in the error null-space (a checker
+ * that trusted runner-supplied projections would be unsound -- the runner-chosen-challenge hole; NC closes
+ * it). DE-BIASED by rejection sampling over the digest's 8 four-byte words: a bare u32%p over-represents
+ * the residues {0,1} (since 2^32 = 2p+2), which would weaken the per-round Freivalds bound to ~1.5/p;
+ * rejecting any word >= 2p (the largest multiple of p <= 2^32) makes r EXACTLY uniform on [0,p), so the
+ * per-round bound is a clean 1/p and the stated <= (1/p)^t holds literally (not approximately). */
 static long long receipt_fs_r(const unsigned char dW[32], const unsigned char dX[32], const unsigned char dC[32], int rd, int j, long long p) {
     unsigned char fb[104]; memcpy(fb, dW, 32); memcpy(fb + 32, dX, 32); memcpy(fb + 64, dC, 32);
     fb[96]=(unsigned char)(rd>>24); fb[97]=(unsigned char)(rd>>16); fb[98]=(unsigned char)(rd>>8); fb[99]=(unsigned char)rd;
     fb[100]=(unsigned char)(j>>24); fb[101]=(unsigned char)(j>>16); fb[102]=(unsigned char)(j>>8); fb[103]=(unsigned char)j;
     unsigned char fd[32]; sha256(fb, 104, fd);
-    unsigned int u = ((unsigned)fd[0]<<24)|((unsigned)fd[1]<<16)|((unsigned)fd[2]<<8)|(unsigned)fd[3];
-    return (long long)(u % (unsigned)p);
+    unsigned int lim = 2u * (unsigned int)p;   /* = 4294967294; reject [2p, 2^32) -> uniform u%p on [0,p) */
+    for (int w = 0; w < 8; w++) {
+        unsigned int u = ((unsigned)fd[w*4]<<24)|((unsigned)fd[w*4+1]<<16)|((unsigned)fd[w*4+2]<<8)|(unsigned)fd[w*4+3];
+        if (u < lim) return (long long)(u % (unsigned)p);
+    }
+    /* all 8 words landed in [2p,2^32) (probability ~ (2/2^32)^8 = 2^-248) -> negligible fallback */
+    { unsigned int u = ((unsigned)fd[0]<<24)|((unsigned)fd[1]<<16)|((unsigned)fd[2]<<8)|(unsigned)fd[3]; return (long long)(u % (unsigned)p); }
 }
 
 /* v1.5 S1: IEEE-754 binary16 <-> binary32, in plain C (NOT cuda_fp16.h -- that is a
@@ -539,12 +548,19 @@ int main(int argc, char** argv) {
      * cflow_witness). Given a receipt (+ its .cbytes side-file), ACCEPT iff three ANDed checks hold:
      *   CHECK1 commitment-bind: regenerate W,X from the receipt seeds, recompute SHA-256, == H_W,H_X.
      *   CHECK3 output-bind: SHA-256 of the C-bytes == H_C (so the verified C is exactly the committed one).
-     *   CHECK2 EXACT FREIVALDS over F_p: for each of t Fiat-Shamir rounds, r derived by THIS checker
-     *     (never read from the receipt), assert W*(X*r) == C*r mod p for all M rows. A RANGE GUARD
-     *     (|C[i]| < p/2) makes mod-p equality <=> integer equality (genuine |C| <= K*max|W|*max|X| << p/2),
-     *     so a multiple-of-p forgery cannot hide. Soundness: C != W*X => accept prob <= (1/p)^t.
+     *   CHECK2 FREIVALDS over F_p (exact integer): for each of t Fiat-Shamir rounds, r derived by THIS
+     *     checker (never read from the receipt) and UNIFORM mod p (de-biased in receipt_fs_r), assert
+     *     W*(X*r) == C*r mod p for all M rows. A RANGE GUARD (|C[i]| < p/2) makes mod-p equality <=>
+     *     integer equality (genuine |C| <= K*max|W|*max|X| << p/2; any multiple-of-p forgery has an entry
+     *     >= p-|C| > p/2 and is caught), so this is EXACT (no tolerance). Soundness: C != W*X => accept
+     *     prob <= (1/p)^t, literally (uniform r); with p=2^31-1, t=2 that is <= 2^-62 + the SHA-256
+     *     collision advantage.
      * Cost O(MK+KN+MN) << the O(MKN) matmul -> faster than re-execution; the checker NEVER runs the kernel.
-     * Usage: cuda_launch <anyptx-ignored> x 0 receipt_check <receiptpath>. Prints '-> RECEIPT_PASS/FAIL'. */
+     * SCOPE: NOT zero-knowledge (W,X,C are revealed to the checker), NOT a succinct SNARK (only Freivalds
+     * is sublinear), matmul-only. ENDIANNESS: the commitments hash native int bytes, so emit + check must
+     * run on the same-endianness host (cross-endian it fails CLOSED -- a spurious RECEIPT_FAIL, never an
+     * accepted forgery). Usage: cuda_launch <anyptx-ignored> x 0 receipt_check <receiptpath>. Prints
+     * '-> RECEIPT_PASS/RECEIPT_FAIL' + a REJECT=<which-check> cause. */
     if (strcmp(op, "receipt_check") == 0) {
         const char* rpath = (argc > 5) ? argv[5] : "/tmp/helix_receipt.txt";
         FILE* rf = fopen(rpath, "r");
@@ -565,27 +581,27 @@ int main(int argc, char** argv) {
         }
         fclose(rf);
         if (!ok_hdr || !haveW || !haveX || !haveC || Md<=0 || Kd<=0 || Nd<=0 || t<1 || p<2) {
-            printf("receipt_check [%s]: malformed/vacuous receipt -> RECEIPT_FAIL\n", rpath); return 1;
+            printf("receipt_check [%s]: malformed/vacuous receipt REJECT=VACUITY -> RECEIPT_FAIL\n", rpath); return 1;
         }
         size_t nW=(size_t)Md*Kd, nX=(size_t)Kd*Nd, nC=(size_t)Md*Nd;
         int* W=(int*)malloc(nW*sizeof(int)); int* X=(int*)malloc(nX*sizeof(int)); int* C=(int*)malloc(nC*sizeof(int));
         if (!W||!X||!C) { printf("receipt_check: oom -> RECEIPT_FAIL\n"); free(W);free(X);free(C); return 1; }
         receipt_gen_W(W,nW,uW); receipt_gen_X(X,nX,uX);
-        int bad = 0;
+        int bad = 0; const char* rej = "NONE";   /* records WHICH check first rejected (per-check NC attribution) */
         unsigned char dW[32],dX[32],dC[32]; char xW[65],xX[65],xC[65];
         sha256((unsigned char*)W,nW*sizeof(int),dW); sha256_hex(dW,xW);
         sha256((unsigned char*)X,nX*sizeof(int),dX); sha256_hex(dX,xX);
-        if (strcmp(xW,hW)!=0) { fprintf(stderr,"CHECK1 H_W mismatch\n"); bad=1; }
-        if (strcmp(xX,hX)!=0) { fprintf(stderr,"CHECK1 H_X mismatch\n"); bad=1; }
+        if (strcmp(xW,hW)!=0) { fprintf(stderr,"CHECK1 H_W mismatch\n"); bad=1; rej="CHECK1"; }
+        if (strcmp(xX,hX)!=0) { fprintf(stderr,"CHECK1 H_X mismatch\n"); bad=1; rej="CHECK1"; }
         char cpath[600]; snprintf(cpath,sizeof cpath,"%s.cbytes",rpath);
         FILE* cf=fopen(cpath,"rb");
         if (!cf) { printf("receipt_check: cannot open C-bytes %s -> RECEIPT_FAIL\n",cpath); free(W);free(X);free(C); return 1; }
         size_t cgot=fread(C,1,nC*sizeof(int),cf); int extra=fgetc(cf)!=EOF; fclose(cf);
         if (cgot != nC*sizeof(int) || extra) { printf("receipt_check: C-bytes size mismatch -> RECEIPT_FAIL\n"); free(W);free(X);free(C); return 1; }
         sha256((unsigned char*)C,nC*sizeof(int),dC); sha256_hex(dC,xC);
-        if (strcmp(xC,hC)!=0) { fprintf(stderr,"CHECK3 H_C mismatch\n"); bad=1; }
+        if (strcmp(xC,hC)!=0) { fprintf(stderr,"CHECK3 H_C mismatch\n"); bad=1; if (!strcmp(rej,"NONE")) rej="CHECK3"; }
         long long half = p/2;
-        for (size_t i=0;i<nC && !bad;i++) if ((long long)C[i] >= half || (long long)C[i] <= -half) { fprintf(stderr,"CHECK2 range guard: |C[%zu]|=%d >= p/2\n",i,C[i]); bad=1; }
+        for (size_t i=0;i<nC && !bad;i++) if ((long long)C[i] >= half || (long long)C[i] <= -half) { fprintf(stderr,"CHECK2 range guard: |C[%zu]|=%d >= p/2\n",i,C[i]); bad=1; rej="CHECK2_RANGE"; }
         for (int rd=0; rd<t && !bad; rd++) {
             long long* r=(long long*)malloc((size_t)Nd*sizeof(long long));
             long long* Br=(long long*)malloc((size_t)Kd*sizeof(long long));
@@ -595,11 +611,11 @@ int main(int argc, char** argv) {
             for (int i=0;i<Md;i++){
                 long long lhs=0; for(int k=0;k<Kd;k++){ long long wv=(((long long)W[(size_t)i*Kd+k])%p+p)%p; lhs=(lhs+wv*Br[k])%p; }
                 long long rhs=0; for(int j=0;j<Nd;j++){ long long cv=(((long long)C[(size_t)i*Nd+j])%p+p)%p; rhs=(rhs+cv*r[j])%p; }
-                if (lhs!=rhs){ fprintf(stderr,"CHECK2 Freivalds FAIL round %d row %d lhs=%lld rhs=%lld\n",rd,i,lhs,rhs); bad=1; break; }
+                if (lhs!=rhs){ fprintf(stderr,"CHECK2 Freivalds FAIL round %d row %d lhs=%lld rhs=%lld\n",rd,i,lhs,rhs); bad=1; rej="CHECK2"; break; }
             }
             free(r); free(Br);
         }
-        printf("receipt_check [%s]: M=%d K=%d N=%d t=%d p=%lld -> %s\n", rpath, Md,Kd,Nd,t,p, bad?"RECEIPT_FAIL":"RECEIPT_PASS");
+        printf("receipt_check [%s]: M=%d K=%d N=%d t=%d p=%lld REJECT=%s -> %s\n", rpath, Md,Kd,Nd,t,p, rej, bad?"RECEIPT_FAIL":"RECEIPT_PASS");
         free(W);free(X);free(C);
         return bad ? 1 : 0;
     }
