@@ -649,7 +649,13 @@ static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
                 int plain = off0 && ((hi & 0x000000FFFFFFFFFFULL) == 0);
                 tg[Rd] = (plain && ab) ? TG_SUM : TG_UNK; } break;
             case 0x7986: n_stg++; if (off0 && stg_hi && tg[Ra] == TG_ADDRC && tg[Rb] == TG_SUM) c_sum_store++; break; /* STG.E 32-bit, plain: c[gid]=SUM */
-            default: break;                                        /* MOV-stack/ULDC/EXIT/BRA/NOP: irrelevant to the value path */
+            /* TAG-INVALIDATION (audit-4 stale-tag P0): any opcode LEG2 does not STRUCTURALLY model still WRITES a
+             * register on the GPU -- so it must INVALIDATE its destination tag(s), else a stale TG_LOADA/TG_SUM/
+             * TG_ADDRC survives an overwrite and a GPU-wrong kernel certifies (e.g. IMAD-all-reg 0x7224 or MOV-c
+             * 0x7a02 overwriting a load reg). Clear tg[Rd] AND tg[Rd+1] (an unmodeled op may write a pair),
+             * mirroring LEG1's over-taint -- fail-closed. The genuine vector_add's default-case ops (MOV-c R1,
+             * ULDC R4, EXIT, BRA, NOP) write regs that are untagged at that point, so the genuine still PASSES. */
+            default: tg[Rd] = TG_UNK; tg[(Rd + 1) & 255] = TG_UNK; break;
         }
     }
     /* SOUND against the audit-3 latch P0: require EXACTLY ONE store in the whole kernel, and that store is the
@@ -971,22 +977,26 @@ int main(int argc, char** argv) {
 
     /* v1.5 #3 Phase 3: sass_tv -- the SASS->spec TRANSLATION-VALIDATION (the REAL ptxas de-trust). PROVE the
      * cubin's emitted vector_add SASS computes c[gid]=a[gid]+b[gid] for ALL f32 inputs, from-scratch, WITHOUT
-     * trusting ptxas's lowering (and without ptxas/cuobjdump appearing anywhere in the proof). Four legs:
-     *   LEG1 sass_taint_indep  -- the SASS is a data-INDEPENDENT straight-line per-thread function of the
-     *                             loads (fail-closed on any data-dependent address/branch/predication), which
-     *                             is what licenses lifting a symbolic/probe check to ALL inputs.
-     *   LEG2 sass_symbolic_addb-- symbolic structural equality over OPAQUE load symbols: the value stored to
-     *                             c is EXACTLY a PLAIN FADD(LOAD_A, LOAD_B) at base+gid*4 (so it holds for
-     *                             every f32, not just probes). MODIFIER-COMPLETE: the FADD must carry NO
-     *                             operand/output modifier -- lo[40:63]==0 rejects Rb-side neg/abs (sub.f32),
-     *                             hi[0:39]==0 rejects Ra-side neg/abs + SAT + round-mode + FTZ (the full
-     *                             hi-word modifier region). A faithfully-lowered modified FADD gets no SUM tag.
-     *   LEG3 basis + homogeneity-- a SANITY cross-check (NOT independently load-bearing -- soundness rests on
-     *                             LEG1+LEG2) via the GPU-validated interpreter, gated on LEG1&&LEG2 so it never
-     *                             runs a rejected kernel: f(1,0)=f(0,1)=1, f(0,0)=0 (exact, distinguishes
-     *                             add/sub/mul/scale), f(2a,2b)=2*f(a,b) + additivity within tau (interpreter
-     *                             linearity tripwire; it does NOT catch modifier kernels -- LEG2 does).
-     *   LEG4 (separate gate) Phase-2's interp==GPU validation of FADD = IEEE add (genuine cubin).
+     * trusting ptxas's lowering (no ptxas/cuobjdump in the CPU proof). The DE-TRUST VERDICT is the COMPOSITE
+     * sass_tv AND sass_exec -- BOTH are load-bearing (see LEG4); sass_tv ALONE is NOT sound:
+     *   LEG1 sass_taint_indep  -- the SASS is a data-INDEPENDENT straight-line per-thread function of the loads;
+     *                             ENFORCED, fail-closed on non-PT predication, any unmodeled opcode, and any BRA
+     *                             that is not the self-loop pad (rel==-16) -- licenses lifting to ALL inputs.
+     *   LEG2 sass_symbolic_addb-- symbolic structural equality over OPAQUE load symbols: the kernel does EXACTLY
+     *                             ONE store and it is a PLAIN FADD(LOAD_A,LOAD_B) at base+gid*4 (holds for every
+     *                             f32). MODIFIER-COMPLETE (FADD lo[40:63]==0 + hi[0:39]==0 reject all operand/
+     *                             output modifiers; address-path opcodes pin their hi[0:39]) and TAG-INVALIDATING
+     *                             (any opcode LEG2 does not model clears its dest tag, so a stale LOAD/SUM cannot
+     *                             survive an overwrite -- audit-4 stale-tag P0).
+     *   LEG3 basis + homogeneity-- a LOAD-BEARING execution cross-check via the from-scratch interpreter, gated on
+     *                             LEG1&&LEG2: catches e.g. an early-EXIT that leaves c unwritten. (Does NOT catch
+     *                             modifier kernels -- LEG2 does -- nor scheduling hazards -- LEG4 does.)
+     *   LEG4 sass_exec (separate mode, REQUIRED) -- the GPU-DIFFERENTIAL: the CANDIDATE's actual RTX-3070 execution
+     *                             must match the from-scratch interpreter. This discharges INSTRUCTION-SCHEDULING /
+     *                             dependency-scoreboard correctness (control word hi[40:63], which this CPU proof
+     *                             has NO model for: a cleared dependency-wait bit is decode-clean yet GPU-wrong --
+     *                             audit-4 scoreboard P0). The de-trust requires sass_tv AND sass_exec; a pure-CPU
+     *                             scoreboard model that would remove the GPU from the verifier is a labeled stretch.
      * Usage: cuda_launch <cubin> <kname> 0 sass_tv. argv[1] is a CUBIN; returns before the PTX path. */
     if (strcmp(op, "sass_tv") == 0) {
         FILE* cf = fopen(ptx_path, "rb");
@@ -1005,12 +1015,13 @@ int main(int argc, char** argv) {
         int cflow = (sass_taint_indep(cb, toff, ninst) == 1);
         /* LEG2: symbolic structural equality c[gid] == plain FADD(LOAD_A, LOAD_B), all inputs */
         int symbolic = (sass_symbolic_addb(cb, toff, ninst) == 1);
-        /* LEG3: an interpreter SANITY cross-check (NOT independently load-bearing -- the soundness rests on
-         * LEG1 taint + LEG2 modifier-complete structural equality; LEG3 confirms the from-scratch decode and the
-         * GPU-validated interpreter agree with a+b on probes). RUN ONLY when the structural legs already passed,
-         * so the interpreter never executes a rejected / data-dependent kernel (with the LDG/STG bounds-check,
-         * the audit's OOB path is closed two ways). basis distinguishes add from sub/mul/scale; homogeneity is a
-         * linearity tripwire on the interpreter itself (it does NOT catch modifier kernels -- LEG2 does). */
+        /* LEG3: a LOAD-BEARING execution cross-check via the from-scratch interpreter -- it is the leg that
+         * catches e.g. an early-EXIT that leaves c unwritten (basis reads the final c). RUN ONLY when the
+         * structural legs already passed, so the interpreter never executes a rejected / data-dependent kernel
+         * (with the LDG/STG bounds-check, the OOB path is closed two ways). basis distinguishes add from
+         * sub/mul/scale; homogeneity is a linearity tripwire. NOTE: LEG3 runs the from-scratch interpreter,
+         * which has NO scheduling/scoreboard model -- so it does NOT catch instruction-scheduling hazards; the
+         * separate sass_exec GPU-differential (a REQUIRED part of the de-trust verdict) is what discharges that. */
         int N = 8, ntid = 4, nblk = 2;
         float c[8], a[8], b[8], a2[8], b2[8], c1[8], c2[8];
         int i, basis = 0, homog = 0, addit = 0;
@@ -1032,8 +1043,10 @@ int main(int argc, char** argv) {
                 if ((double)fabsf(cab[i] - (ca[i] + cbv[i])) > tau) addit = 0; } }                                      /* f(a1+a2,b1+b2)=f(a1,b1)+f(a2,b2) within tau */
         }
         int laws = homog && addit;
-        /* LOAD-BEARING = cflow (data-independence) AND symbolic (modifier-complete structural equality). basis/laws
-         * are a probe sanity cross-check, gated on the structural legs (so they cannot mask a structural failure). */
+        /* sass_tv (CPU) requires cflow (data-independence + straight-line) AND symbolic (modifier-complete +
+         * unique-store + tag-invalidating structural equality) AND basis/laws (the load-bearing interpreter
+         * cross-check, e.g. early-EXIT). sass_tv proves the VALUE semantics for all inputs but has NO scheduling
+         * model -- the DE-TRUST verdict additionally requires the sass_exec GPU-differential (see the header). */
         int pass = cflow && symbolic && basis && laws;
         printf("sass_tv [%s]: %d instrs cflow=%d symbolic=%d basis=%d laws=%d(homog=%d addit=%d) -> %s\n",
                ptx_path, ninst, cflow, symbolic, basis, laws, homog, addit, pass ? "SASS_TV_PASS" : "SASS_TV_FAIL");

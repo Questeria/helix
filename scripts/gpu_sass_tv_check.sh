@@ -5,42 +5,45 @@
 # appearing anywhere in the proof (they are untrusted oracles used only by the negative-control guards).
 #
 # WHAT THIS IS (honest scope -- do NOT overstate): this is the step that removes ptxas's PTX->SASS lowering
-# from the trusted computing base for ONE named kernel. cuda_launch.c's sass_tv mode runs two LOAD-BEARING
-# legs + a sanity cross-check over the ELF .text bytes ptxas emitted: LEG1 sass_taint_indep (the SASS is a
-# data-INDEPENDENT STRAIGHT-LINE per-thread function of the loads -> a structural check lifts to all inputs).
-# LEG1 ENFORCES the straight-line assumption rather than assuming it: fail-closed on any non-PT predication,
-# any unmodeled opcode, and any BRA that is not ptxas's benign self-loop trap pad (rel==-16) -- so no forward/
-# backward branch can re-route execution. LEG2 sass_symbolic_addb (symbolic structural equality over OPAQUE
-# load symbols: the value stored to c is EXACTLY a PLAIN FADD(LOAD_A,LOAD_B) at base+gid*4 -> holds for every
-# f32), requiring EXACTLY ONE store in the kernel and that it is the SUM->c (a unique-store rule, not a
-# monotone latch, so a write-after-write clobber cannot slip through). LEG2 is MODIFIER-COMPLETE for the
-# FADD operand/output modifier set: it requires lo[40:63]==0 (rejects Rb-side neg lo[63]/abs lo[62], i.e.
-# sub.f32) AND hi[0:39]==0 (rejects Ra-side neg hi[8]/abs hi[9], SAT hi[13], round hi[14:15], FTZ hi[16] --
-# the full hi-word modifier region; scheduling bits start at hi[41]). [LEG3] basis+linearity via the Phase-2
-# GPU-validated interpreter is a SANITY cross-check (NOT independently load-bearing; gated on LEG1&&LEG2):
-# exact f(1,0)=f(0,1)=1, f(0,0)=0, f(2a,2b)=2f(a,b); additivity within tau. LEG4 is Phase 2's interp==GPU FADD
-# validation on the genuine cubin. Composed with Phase 1 (from-scratch decode==cuobjdump) and Phase 2
-# (interp==GPU), Helix now DECODES + INTERPRETS + PROVES ptxas's output for this kernel from-scratch.
-# WHAT THIS IS NOT (the residual, stated plainly): ptxas still RAN (we validate its output, not re-derive
-# it); the driver+GPU+silicon still EXECUTE the validated SASS (not removed from the TCB). ONE straight-line
-# kernel (vector_add), f32, data-independent control flow + affine addressing, sm_86 + CUDA-12.8 pinned. It
-# is a translation-validation WITNESS (per-compilation, machine-checked), NOT a formal proof of ptxas. Full
-# kernel coverage (loops/branches/other ops/arches) is a labeled multi-week+ stretch, not claimed here.
+# from the trusted computing base for ONE named kernel. The de-trust VERDICT is the COMPOSITE of TWO checks
+# over the ELF .text bytes ptxas emitted, both REQUIRED and both LOAD-BEARING:
+#   (1) sass_tv (cuda_launch.c) -- a from-scratch CPU structural proof of the VALUE semantics for ALL inputs:
+#       LEG1 sass_taint_indep proves the SASS is a data-INDEPENDENT STRAIGHT-LINE per-thread function of the
+#       loads, ENFORCING (not assuming) straight-line-ness: fail-closed on any non-PT predication, any unmodeled
+#       opcode, and any BRA that is not ptxas's self-loop trap pad (rel==-16). LEG2 sass_symbolic_addb proves
+#       symbolic structural equality over OPAQUE load symbols -- the kernel performs EXACTLY ONE store and it is
+#       a PLAIN FADD(LOAD_A,LOAD_B) to c at base+gid*4 -- MODIFIER-COMPLETE (rejects FADD lo[40:63] + hi[0:39]
+#       operand/output modifiers and the field-complete address-path hi[0:39] pins) and TAG-INVALIDATING (any
+#       opcode LEG2 does not model clears its destination tag, so a stale LOAD/SUM cannot survive an overwrite).
+#       LEG3 basis+linearity via the from-scratch interpreter is a LOAD-BEARING execution cross-check (it catches
+#       e.g. an early-EXIT that leaves c unwritten), gated on LEG1&&LEG2.
+#   (2) sass_exec (cuda_launch.c) -- a GPU-DIFFERENTIAL check: the candidate cubin's ACTUAL RTX-3070 execution
+#       must match the from-scratch interpreter element-for-element. LOAD-BEARING, not Phase-2-only: it discharges
+#       INSTRUCTION-SCHEDULING / dependency-scoreboard correctness (the control word hi[40:63] the CPU structural
+#       proof has no model for). A scheduling hazard produces wrong output for EVERY input (input-independent),
+#       so a probe-level differential catches it deterministically.
+# Together: the CPU legs prove the value computation is a+b for all inputs; the GPU-differential confirms the
+# real hardware execution (scheduling included) matches that model. With Phase 1 (from-scratch decode==cuobjdump),
+# Helix DECODES + INTERPRETS + VALIDATES ptxas's output for this kernel from-scratch.
+# WHAT THIS IS NOT (the residual, stated plainly): ptxas still RAN (we validate its output, not re-derive it);
+# the driver+GPU+silicon still EXECUTE the validated SASS AND the GPU is also the differential ORACLE -- it is
+# the trust root the witness leans on for scheduling correctness (NOT removed from the TCB). A PURE-CPU proof of
+# scheduling correctness (a from-scratch scoreboard/hazard model that removes the GPU from the verifier) is a
+# labeled stretch, NOT done here. ONE straight-line kernel (vector_add), f32, data-independent control flow +
+# affine addressing, sm_86 + CUDA-12.8 pinned. It is a translation-validation WITNESS (per-compilation,
+# machine-checked), NOT a formal proof of ptxas. Full kernel coverage (loops/branches/other ops/arches) is a
+# labeled multi-week+ stretch, not claimed here.
 #
-# Eight load-bearing NCs (a WRONG kernel whose lo word is byte-identical to genuine -> the TV must REJECT,
-# proving it checks SEMANTICS not just decode): NC1 FADD->IMAD (a*b+c) -> SASS_TV_FAIL; NC2 sub.f32 (a-b,
-# negate lo[63]) -> SASS_TV_FAIL; NC3 FADD.SAT (clamp, hi[13]) + NC4 neg-Ra (b-a, hi[8]) -> SASS_TV_FAIL --
-# the HI-WORD FADD-modifier class adversarial audit #1 (wtmv9bcog) proved was a P0 false-accept before the
-# hi[0:39]==0 guard; NC5 LDG.E.U8 + NC6 STG.E.U8 (1-byte load/store, hi-word width) -> SASS_TV_FAIL -- the
-# SIBLING modifier/width class re-audit #2 (w9hjc67k4) flagged, closed by LEG2's FIELD-COMPLETE address-path
-# hi-word pins (every value/address opcode pins its unmodeled hi[0:39] region to the genuine plain encoding);
-# NC7 forward-BRA-over-EXIT double-store (a DECODE-CLEAN, legal-SASS control-flow kernel that computes c=a on
-# the RTX-3070) + NC8 unmodeled-opcode -> SASS_TV_FAIL -- the STRUCTURAL control-flow/latch class audit #3
-# (wksw71qo0) proved was a P0 (the old monotone latch + interpreter-stops-at-branch certified it), closed by
-# LEG1's straight-line enforcement + LEG2's unique-store rule. With these the sass_tv leg is sound STANDALONE
-# (it does not lean on the Phase-2 GPU oracle for soundness). genuine PASSES while all eight FAIL. Each NC has
-# non-vacuity guards (bytes really
-# changed AND cuobjdump confirms the intended different instruction/modifier/width).
+# Ten load-bearing NCs (a WRONG kernel whose lo word is byte-identical to genuine -> the COMPOSITE must REJECT):
+# NC1 FADD->IMAD; NC2 sub.f32; NC3 FADD.SAT; NC4 neg-Ra (the hi-word FADD-modifier P0, audit #1); NC5 LDG.E.U8 +
+# NC6 STG.E.U8 (the width/addressing sibling, audit #2); NC7 forward-BRA-over-EXIT double-store + NC8 unmodeled
+# opcode (the control-flow/latch P0, audit #3) -- all rejected by sass_tv; NC9 stale-tag (an unmodeled op clobbers
+# the FADD result before the store) -> sass_tv FAIL, and NC10 scoreboard (a cleared FADD dependency-wait bit, a
+# DECODE-CLEAN scheduling-only edit the CPU proof cannot see) -> sass_exec FAIL -- the two orthogonal P0s audit #4
+# (wdxvu1koz) proved, closed by LEG2 tag-invalidation and the load-bearing GPU-differential. genuine PASSES both
+# checks while all ten NCs are rejected by the composite. Each NC has non-vacuity guards (bytes really
+# changed AND cuobjdump confirms the intended different instruction/modifier/width/clobber, or stays decode-clean
+# for the scheduling NC).
 # Token-gated '-> SASS_TV_PASS/FAIL', run AS A FILE (mem #42). Committed cubin/kernel never edited (corruption
 # on /tmp copies). Run under WSL (CUDA 12.8, RTX 3070): bash scripts/gpu_sass_tv_check.sh
 set -u
@@ -213,6 +216,39 @@ if [ "$FOFF" -ge 0 ]; then
   else
     t8=$(tv /tmp/stv_nc8.cubin)
     if [ "$t8" = SASS_TV_FAIL ]; then say "    NC8 unmodeled-opcode sass_tv=SASS_TV_FAIL  OK -- the TV fail-closes on ops it does not model"; else bad "NC8 unmodeled-opcode sass_tv=$t8 but expected SASS_TV_FAIL"; fi
+  fi
+fi
+
+# --- [K] NC9 stale-tag + NC10 scoreboard (audit #4 wdxvu1koz, two orthogonal P0s). NC9: an opcode LEG2 does
+#         not structurally model (IMAD-all-reg 0x7224) overwrites the FADD result R9 (tag SUM) before the store
+#         -- decode-clean, GPU stores garbage -- and the OLD stale-tag certified it. Closed by LEG2 invalidating
+#         the destination tag of any unmodeled op -> sass_tv MUST FAIL. NC10: clearing the FADD dependency-WAIT
+#         bit (control word hi[40:63], which the CPU structural proof has NO model for) makes the GPU read stale
+#         registers (garbage) while sass_tv still passes -- the GPU-DIFFERENTIAL leg (sass_exec, interp==GPU on
+#         THE CANDIDATE) is what catches it. This is why the de-trust verdict is sass_tv AND sass_exec, and why
+#         sass_exec is LOAD-BEARING (not Phase-2-only). ---
+say "[K] NC9 stale-tag (unmodeled-op clobber) -> sass_tv MUST FAIL; NC10 scoreboard hazard -> sass_exec MUST catch"
+if [ "$FOFF" -ge 0 ]; then
+  ksp(){ printf "$2" | dd of=/tmp/stv_nc9.cubin bs=1 seek=$((BS + $1)) count=16 conv=notrunc 2>/dev/null; }
+  cp /tmp/stv_va.cubin /tmp/stv_nc9.cubin
+  ksp 0xc0 '\x24\x72\x09\x09\x08\x00\x00\x00\x00\x00\x00\x00\x00\xc0\x0f\x00'   # IMAD R9,R9,R8,R0 (0x7224, clobbers R9=SUM; LEG2-unmodeled)
+  ksp 0xd0 '\x86\x79\x00\x06\x09\x00\x00\x00\x04\x19\x10\x0c\x00\xe2\x0f\x00'   # STG.E [R6.64],R9 (single store, of clobbered R9)
+  ksp 0xe0 '\x4d\x79\x00\x00\x00\x00\x00\x00\x00\x00\x80\x03\x00\xea\x0f\x00'   # EXIT
+  if cmp -s /tmp/stv_nc9.cubin /tmp/stv_va.cubin; then bad "NC9 vacuous -- splice did not change the cubin";
+  elif ! "$OBJ" -sass /tmp/stv_nc9.cubin 2>/dev/null | grep -qE 'IMAD[^;]* R9, R9, R8, R0'; then bad "NC9 vacuous -- cuobjdump does not show the IMAD R9 clobber";
+  else
+    t9=$(tv /tmp/stv_nc9.cubin)
+    if [ "$t9" = SASS_TV_FAIL ]; then say "    NC9 stale-tag sass_tv=SASS_TV_FAIL  OK -- unmodeled-op tag-invalidation is load-bearing"; else bad "NC9 stale-tag sass_tv=$t9 but expected SASS_TV_FAIL (clobbered R9 certified as SUM -- audit-4 P0!)"; fi
+  fi
+  # NC10: clear the FADD dependency-WAIT bit (control byte FOFF+14, the 0x40 bit) -> GPU reads stale loads.
+  cp /tmp/stv_va.cubin /tmp/stv_nc10.cubin
+  cb10=$(xxd -s $((FOFF+14)) -l1 -p /tmp/stv_va.cubin); nb10=$(printf '%02x' $(( 0x$cb10 & ~0x40 & 0xff )))
+  printf "\\x$nb10" | dd of=/tmp/stv_nc10.cubin bs=1 seek=$((FOFF+14)) count=1 conv=notrunc 2>/dev/null
+  if cmp -s /tmp/stv_nc10.cubin /tmp/stv_va.cubin; then bad "NC10 vacuous -- scoreboard byte unchanged (already 0)";
+  elif ! "$OBJ" -sass /tmp/stv_nc10.cubin 2>/dev/null | grep -q 'FADD R9, R2, R5'; then bad "NC10 vacuous -- cuobjdump no longer shows the plain FADD (the edit must be decode-clean: scheduling-only)";
+  else
+    e10=$(exe /tmp/stv_nc10.cubin); s10=$(tv /tmp/stv_nc10.cubin)
+    if [ "$e10" = SASS_EXEC_FAIL ]; then say "    NC10 scoreboard sass_exec=SASS_EXEC_FAIL  OK -- the GPU-differential leg catches the timing hazard (sass_tv alone=$s10, decode-clean, has no scoreboard model)"; else bad "NC10 scoreboard sass_exec=$e10 but expected SASS_EXEC_FAIL (the GPU-differential MUST catch a dependency-wait hazard)"; fi
   fi
 fi
 
