@@ -139,46 +139,72 @@ static int e4m3_encode(float v) {
     return best;
 }
 
-/* v1.5 #2 LEG 1 (certified kernels -- translation validation): a data-independent-control-flow witness.
- * Static text analysis of the emitted PTX (HOST, no GPU). Taint every loaded DATA value (the dest of
- * ld.global/ld.shared -- NOT ld.param, which loads dims/pointers, not data), propagate def->use to a
- * fixpoint, then assert NO setp and NO predicated branch consumes a tainted value. If clean, the
- * kernel's control flow AND selection are data-INDEPENDENT, so for a fixed (M,K,N) it executes a FIXED
- * straight-line program over the inputs (=> a fixed polynomial; LEG 3 then certifies BILINEARITY, LEG 2
- * that the bilinear form == matmul). This is the load-bearing precondition that lifts the basis sweep
- * from sampling to an all-inputs equivalence proof. */
+/* v1.5 #2 LEG 1 (certified kernels -- translation validation): a data-independence witness over the
+ * emitted PTX (HOST static text analysis, no GPU). Taint every loaded DATA value (the dest of
+ * ld.global/ld.shared -- NOT ld.param, which loads dims/pointers, not data) and propagate def->use to a
+ * fixpoint, then REJECT if a tainted value reaches: (1) a setp compare source, (2) a predicated branch
+ * or predicated-op guard, (3) a selp/slct SELECTOR, or (4) a memory-ADDRESS operand (data-dependent
+ * gather/scatter). FAIL-CLOSED (-1) on a call, on a tainted non-polynomial op (div/rcp/sqrt/ex2/...), on
+ * any cap saturation (regs/taint/iteration/line-length), or on non-convergence. PASS => control flow,
+ * selection, AND addressing are all data-INDEPENDENT, so for a fixed (M,K,N) the kernel runs a FIXED
+ * straight-line dataflow over the inputs. This is the load-bearing PRECONDITION; LEG 2 (exact 0/1 basis)
+ * AND LEG 3 (bilinearity within the f32 envelope) are BOTH co-necessary on top of it to conclude
+ * f == matmul -- LEG 3 is NOT optional (the nonlinearity a*a NC is invisible to the 0/1 basis). Honest
+ * scope: this lifts a single empirical sample to basis-exact + bilinearity-SAMPLED equivalence on this
+ * compiled shape, under the affine-addressing/arithmetic assumption -- a translation-validation WITNESS,
+ * not a machine-checked proof. */
 static int cf_is_taint(char taint[][12], int nt, const char* r) {
     for (int i = 0; i < nt; i++) if (strcmp(taint[i], r) == 0) return 1;
     return 0;
 }
-/* extract up to maxr %-register tokens from a PTX line, in order (e.g. "%f2","%rd3","%p0"). */
+/* extract %-register tokens from a PTX line, in order (e.g. "%f2","%rd3","%p0"); stores up to maxr but
+ * RETURNS THE TRUE COUNT so the caller can fail-closed when a line carries more regs than the buffer. */
 static int cf_regs(const char* line, char out[][12], int maxr) {
-    int n = 0;
+    int n = 0, total = 0;
     for (const char* p = line; *p; p++) {
         if (*p == '%') {
             char buf[12]; int j = 0; buf[j++] = '%'; p++;
             while (*p && j < 11 && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
                                     (*p >= '0' && *p <= '9') || *p == '_')) buf[j++] = *p++;
             buf[j] = 0; p--;
+            total++;
             if (n < maxr) { strcpy(out[n], buf); n++; }
         }
     }
-    return n;
+    return total;
 }
-/* returns 1 = data-INDEPENDENT control flow (PASS), 0 = data-DEPENDENT (FAIL), -1 = fail-closed
- * (an unanalyzable op, e.g. a call). Multi-pass taint to a fixpoint over the whole .entry. */
+/* extract the %-registers inside the FIRST [...] of a PTX line -- the memory-ADDRESS operand of a
+ * ld/st. A tainted register here means a data-DEPENDENT address (gather/scatter), which breaks the
+ * fixed-straight-line precondition. Returns the true count (stores up to maxr). */
+static int cf_addr_regs(const char* line, char out[][12], int maxr) {
+    const char* lb = strchr(line, '[');
+    if (!lb) return 0;
+    const char* rb = strchr(lb, ']');
+    if (!rb || rb < lb) return 0;
+    char sub[256]; int len = (int)(rb - lb - 1); if (len < 0) len = 0; if (len > 255) len = 255;
+    memcpy(sub, lb + 1, (size_t)len); sub[len] = 0;
+    return cf_regs(sub, out, maxr);
+}
+/* returns 1 = data-INDEPENDENT (PASS), 0 = data-DEPENDENT (FAIL), -1 = fail-closed (unanalyzable / a
+ * cap saturated / non-convergence). Multi-pass taint to a fixpoint over the whole .entry. The reg buffer
+ * holds CFCAP=64 (realistic PTX lines carry <10); a line exceeding it sets fail-closed rather than
+ * silently dropping regs. */
+#define CFCAP 64
 static int cflow_witness(const char* ptx) {
     static char taint[4096][12]; int nt = 0;
-    char line[1024], regs[24][12];
+    char line[1024], regs[CFCAP][12];
     const char* p; const char* e; int len;
+    int failclosed = 0;
     /* PASS 0: seed taint from ld.global/ld.shared dests (the loaded DATA values) */
     for (p = ptx; *p; p = (*e ? e + 1 : e)) {
         e = p; while (*e && *e != '\n') e++;
-        len = (int)(e - p); if (len > 1023) len = 1023; memcpy(line, p, len); line[len] = 0;
+        len = (int)(e - p); if (len > 1023) { len = 1023; failclosed = 1; } memcpy(line, p, len); line[len] = 0;
         const char* o = line; while (*o == ' ' || *o == '\t') o++;
         if (strncmp(o, "ld.global", 9) == 0 || strncmp(o, "ld.shared", 9) == 0) {
-            int nr = cf_regs(line, regs, 24);
-            if (nr >= 1 && !cf_is_taint(taint, nt, regs[0]) && nt < 4096) { strcpy(taint[nt], regs[0]); nt++; }
+            int raw = cf_regs(line, regs, CFCAP); if (raw > CFCAP) failclosed = 1;
+            if (raw >= 1 && !cf_is_taint(taint, nt, regs[0])) {
+                if (nt >= 4096) failclosed = 1; else { strcpy(taint[nt], regs[0]); nt++; }
+            }
         }
     }
     /* PASS 1..: propagate (any non-load/store/branch op whose source is tainted taints its dest) */
@@ -187,36 +213,53 @@ static int cflow_witness(const char* ptx) {
         changed = 0; guard++;
         for (p = ptx; *p; p = (*e ? e + 1 : e)) {
             e = p; while (*e && *e != '\n') e++;
-            len = (int)(e - p); if (len > 1023) len = 1023; memcpy(line, p, len); line[len] = 0;
+            len = (int)(e - p); if (len > 1023) { len = 1023; failclosed = 1; } memcpy(line, p, len); line[len] = 0;
             const char* o = line; while (*o == ' ' || *o == '\t') o++;
             if (*o == 0 || *o == '/' || *o == '.' || *o == '{' || *o == '}' || *o == '$' || *o == '@') continue;
             if (strncmp(o, "ld.", 3) == 0 || strncmp(o, "st.", 3) == 0 || strncmp(o, "bra", 3) == 0 ||
-                strncmp(o, "ret", 3) == 0 || strncmp(o, "bar", 3) == 0) continue;  /* no propagatable dest */
-            int nr = cf_regs(line, regs, 24);
-            if (nr < 2) continue;
+                strncmp(o, "ret", 3) == 0 || strncmp(o, "bar", 3) == 0) continue;  /* dest handled elsewhere / none */
+            int raw = cf_regs(line, regs, CFCAP); if (raw > CFCAP) { failclosed = 1; continue; }
+            if (raw < 2) continue;
             int srctaint = 0;
-            for (int i = 1; i < nr; i++) if (cf_is_taint(taint, nt, regs[i])) { srctaint = 1; break; }
-            if (srctaint && !cf_is_taint(taint, nt, regs[0]) && nt < 4096) { strcpy(taint[nt], regs[0]); nt++; changed = 1; }
+            for (int i = 1; i < raw; i++) if (cf_is_taint(taint, nt, regs[i])) { srctaint = 1; break; }
+            if (srctaint && !cf_is_taint(taint, nt, regs[0])) {
+                if (nt >= 4096) failclosed = 1; else { strcpy(taint[nt], regs[0]); nt++; changed = 1; }
+            }
         }
     }
-    /* CHECK: a tainted setp source, a tainted predicated-branch guard, or a call -> data-dependent / unanalyzable */
-    int violation = 0, failclosed = 0;
+    if (changed) failclosed = 1;                       /* taint did not converge within the guard -> reject */
+    /* CHECK pass -- a tainted value reaching any of these is a data-dependence violation (or fail-closed) */
+    int violation = 0;
     for (p = ptx; *p; p = (*e ? e + 1 : e)) {
         e = p; while (*e && *e != '\n') e++;
-        len = (int)(e - p); if (len > 1023) len = 1023; memcpy(line, p, len); line[len] = 0;
+        len = (int)(e - p); if (len > 1023) { len = 1023; failclosed = 1; } memcpy(line, p, len); line[len] = 0;
         const char* o = line; while (*o == ' ' || *o == '\t') o++;
-        if (strncmp(o, "setp", 4) == 0) {
-            int nr = cf_regs(line, regs, 24);
+        if (strncmp(o, "setp", 4) == 0) {              /* (1) data-dependent COMPARE -> control flow */
+            int raw = cf_regs(line, regs, CFCAP); if (raw > CFCAP) failclosed = 1; int nr = raw > CFCAP ? CFCAP : raw;
             for (int i = 1; i < nr; i++) if (cf_is_taint(taint, nt, regs[i])) { violation = 1; break; }  /* regs[0] is the %p dest */
-        } else if (*o == '@') {                       /* predicated op (usually @%p bra): guard is the first %reg */
-            int nr = cf_regs(line, regs, 24);
+        } else if (strncmp(o, "selp", 4) == 0 || strncmp(o, "slct", 4) == 0) {  /* (3) data-dependent SELECTION */
+            int raw = cf_regs(line, regs, CFCAP); if (raw > CFCAP) failclosed = 1; int nr = raw > CFCAP ? CFCAP : raw;
+            if (nr >= 1 && cf_is_taint(taint, nt, regs[nr - 1])) violation = 1;  /* selector is the LAST operand */
+        } else if (*o == '@') {                        /* (2) predicated op (usually @%p bra): guard is the first %reg */
+            int raw = cf_regs(line, regs, CFCAP); if (raw > CFCAP) failclosed = 1; int nr = raw > CFCAP ? CFCAP : raw;
             if (nr >= 1 && cf_is_taint(taint, nt, regs[0])) violation = 1;
+        } else if (strncmp(o, "ld.", 3) == 0 || strncmp(o, "st.", 3) == 0) {    /* (4) data-dependent ADDRESS */
+            int na = cf_addr_regs(line, regs, CFCAP); if (na > CFCAP) failclosed = 1; int nr = na > CFCAP ? CFCAP : na;
+            for (int i = 0; i < nr; i++) if (cf_is_taint(taint, nt, regs[i])) { violation = 1; break; }
+        } else if (strncmp(o, "div", 3) == 0 || strncmp(o, "rcp", 3) == 0 || strncmp(o, "sqrt", 4) == 0 ||
+                   strncmp(o, "rsqrt", 5) == 0 || strncmp(o, "ex2", 3) == 0 || strncmp(o, "lg2", 3) == 0 ||
+                   strncmp(o, "sin", 3) == 0 || strncmp(o, "cos", 3) == 0 || strncmp(o, "tanh", 4) == 0) {
+            /* a NON-polynomial op on a loaded value -> not a fixed polynomial -> fail-closed. (matmul's PTX
+             * is +/* only; LEG 3 would also reject a non-bilinear map, but reject here too for soundness.) */
+            int raw = cf_regs(line, regs, CFCAP); if (raw > CFCAP) failclosed = 1; int nr = raw > CFCAP ? CFCAP : raw;
+            for (int i = 1; i < nr; i++) if (cf_is_taint(taint, nt, regs[i])) { failclosed = 1; break; }
         } else if (strncmp(o, "call", 4) == 0) {
             failclosed = 1;                            /* a function call we cannot analyze -> conservatively reject */
         }
     }
     return failclosed ? -1 : (violation ? 0 : 1);
 }
+#undef CFCAP
 
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) {
@@ -405,9 +448,9 @@ int main(int argc, char** argv) {
      * consumes a loaded value (data-dependent). */
     if (strcmp(op, "cflow") == 0) {
         int r = cflow_witness(ptx);
-        const char* v = (r == 1) ? "DATA-INDEPENDENT control flow (fixed straight-line program over the inputs)"
-                      : (r == 0) ? "DATA-DEPENDENT (a setp/branch consumes a loaded value)"
-                                 : "FAIL-CLOSED (an unanalyzable op, e.g. a call)";
+        const char* v = (r == 1) ? "DATA-INDEPENDENT control flow + selection + addressing (fixed straight-line dataflow)"
+                      : (r == 0) ? "DATA-DEPENDENT (a loaded value reaches a setp / predicate / selp-slct selector / address)"
+                                 : "FAIL-CLOSED (call, tainted non-polynomial op, cap saturation, or non-convergence)";
         printf("cflow_witness [%s]: %s -> %s\n", ptx_path, v, (r == 1) ? "PASS" : "FAIL");
         free(ptx);
         return (r == 1) ? 0 : 1;
@@ -831,9 +874,12 @@ int main(int argc, char** argv) {
      * naive_matmul at a fixed square shape L (default 8), sweep ALL rank-1 0/1 probes A=e_{a,b}, B=e_{c,d}
      * over (a,b,c,d) in [0,L)^4. With 0/1 inputs every product/partial sum is 0 or 1 -> EXACT in f32, so
      * the device output must EQUAL the spec bit-for-bit: matmul(e_ab, e_cd)[i][j] = [i==a]*[b==c]*[j==d]
-     * (a single 1 at [a][d] when b==c, else all-zero). Because LEG 1 certifies the kernel is a fixed
-     * straight-line (data-INDEPENDENT) program for this shape, agreement on the 0/1 BASIS of the
-     * bilinear-form space lifts to agreement on ALL f32 inputs (this compiled shape) -- not sampling. We
+     * (a single 1 at [a][d] when b==c, else all-zero). Given LEG 1 (the kernel is a fixed straight-line
+     * data-INDEPENDENT program for this shape), basis agreement pins the kernel's BILINEAR coefficient
+     * tensor to the matmul's -- but that ALONE does not exclude higher-degree terms, so LEG 3 (bilinearity)
+     * is CO-NECESSARY (the a*a nonlinearity NC passes this 0/1 basis: 0^2=0, 1^2=1). LEG 1 + LEG 2 + LEG 3
+     * TOGETHER give f == matmul on all f32 inputs (this compiled shape, f32 envelope); LEG 2 is not a
+     * standalone all-inputs proof. We
      * sweep the FULL quad incl. the OFF-DIAGONAL b!=c (=> all-zero) so a spurious extra/transposed term
      * cannot hide, and assert executed-probes == L^4 AND expected-nonzero == L^3 (non-vacuity: a skipped
      * sweep cannot false-pass). Usage: cuda_launch <ptx> naive_matmul 0 matmul_basis [L]. */
@@ -901,8 +947,12 @@ int main(int argc, char** argv) {
      * A1,A2,B1,B2 (|.|<=R) and a scalar s, verify the kernel f obeys bilinearity within the derived f32
      * matmul rounding bound: additivity f(A1+A2,B)=f(A1,B)+f(A2,B) (and in B) and homogeneity
      * f(s*A,B)=s*f(A,B) (and in B). Per element tau = c_safe*L*u*S, u=2^-24, S=sum_t |operands| into both
-     * sides (covers the host As=fl(A1+A2) rounding AND both device accumulations); c_safe=8 envelope over
-     * gamma_K=K*u -- derived, not tuned. A genuine bilinear matmul passes; +const / a*a break it. Reports
+     * sides. The true worst case is ~4*K*u*S (each f32 dot of length K accumulates (2K-1)*u, plus the host
+     * As=fl(A1+A2) rounding and the final add, across both compared sides); c_safe=8 gives 8*K*u*S, a
+     * conservative ~2x rigorous margin (exactly 2x at K=L=8) -- DERIVED, not reverse-tuned. NOTE this is a
+     * SAMPLED tripwire: bilinearity is checked at ONE input tuple (a single fixed LCG seed + one s, 7
+     * evals), not swept -- it catches the nonlinearity NC a*a (invisible to LEG 2's 0/1 basis) but is a
+     * tolerance probe, not a proof. A genuine bilinear matmul passes; +const / a*a break it. Reports
      * max rel = |LHS-RHS|/tau (PASS => <=1). Usage: cuda_launch <ptx> naive_matmul 0 matmul_bilin [L]. */
     if (strcmp(op, "matmul_bilin") == 0) {
         int L = (argc > 5) ? atoi(argv[5]) : 8;
