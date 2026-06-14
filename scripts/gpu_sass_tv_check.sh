@@ -23,15 +23,16 @@
 # is a translation-validation WITNESS (per-compilation, machine-checked), NOT a formal proof of ptxas. Full
 # kernel coverage (loops/branches/other ops/arches) is a labeled multi-week+ stretch, not claimed here.
 #
-# Four load-bearing NCs (a WRONG kernel that ptxas lowers FAITHFULLY -> the TV must REJECT, proving the TV
-# checks the SEMANTICS, not just that decode succeeded): NC1 FADD->IMAD (a*b+c, opcode byte-flipped) ->
-# SASS_TV_FAIL; NC2 sub.f32 (a-b, same FADD opcode + the negate bit lo[63]) -> SASS_TV_FAIL; NC3 FADD.SAT
-# (clamp(a+b,0,1), hi[13]) and NC4 neg-Ra (b-a, hi[8]) -> SASS_TV_FAIL. NC3/NC4 are the HI-WORD modifier class
-# the adversarial audit (wtmv9bcog) proved was a P0 false-accept before the hi[0:39]==0 guard: their lo word is
-# BYTE-IDENTICAL to the genuine plain FADD, the silicon honors the modifier (clamp / b-a) so they are WRONG
-# kernels, and they now FAIL. genuine (plain FADD) PASSES while all four FAIL on the SAME opcode, so the
-# rejection is SPECIFICALLY the modifier-complete (lo+hi) decode. Each NC has non-vacuity guards (the bytes
-# really changed AND cuobjdump confirms the intended different instruction/modifier).
+# Six load-bearing NCs (a WRONG kernel whose lo word is byte-identical to genuine -> the TV must REJECT,
+# proving it checks SEMANTICS not just decode): NC1 FADD->IMAD (a*b+c) -> SASS_TV_FAIL; NC2 sub.f32 (a-b,
+# negate lo[63]) -> SASS_TV_FAIL; NC3 FADD.SAT (clamp, hi[13]) + NC4 neg-Ra (b-a, hi[8]) -> SASS_TV_FAIL --
+# the HI-WORD FADD-modifier class adversarial audit #1 (wtmv9bcog) proved was a P0 false-accept before the
+# hi[0:39]==0 guard; NC5 LDG.E.U8 + NC6 STG.E.U8 (1-byte load/store, hi-word width) -> SASS_TV_FAIL -- the
+# SIBLING class re-audit (w9hjc67k4) flagged, closed by LEG2's FIELD-COMPLETE address-path hi-word pins
+# (every value/address opcode pins its unmodeled hi[0:39] region to the genuine plain encoding, so no width/
+# +UR/cx[]/signedness modifier can spoof the structure -- the sass_tv leg is sound STANDALONE, not leaning on
+# the Phase-2 GPU oracle). genuine PASSES while all six FAIL. Each NC has non-vacuity guards (bytes really
+# changed AND cuobjdump confirms the intended different instruction/modifier/width).
 # Token-gated '-> SASS_TV_PASS/FAIL', run AS A FILE (mem #42). Committed cubin/kernel never edited (corruption
 # on /tmp copies). Run under WSL (CUDA 12.8, RTX 3070): bash scripts/gpu_sass_tv_check.sh
 set -u
@@ -139,6 +140,38 @@ if [ "$FOFF" -ge 0 ]; then
   else
     t4=$(tv /tmp/stv_nc4.cubin)
     if [ "$t4" = SASS_TV_FAIL ]; then say "    NC4 neg-Ra (b-a) sass_tv=SASS_TV_FAIL  OK"; else bad "NC4 neg-Ra sass_tv=$t4 but expected SASS_TV_FAIL (b-a certified as a+b!)"; fi
+  fi
+fi
+
+# --- [I] NC5/NC6 hi-word MEMORY-WIDTH modifiers (re-audit w9hjc67k4 sibling of the FADD hole) -- LDG.E.U8 /
+#         STG.E.U8 read/write ONE byte instead of 4 = WRONG kernel, but the lo word is byte-identical to the
+#         genuine 32-bit .E load/store (width lives in the hi word). LEG2's field-complete hi[0:39] pin
+#         (ldg_hi/stg_hi/imx_hi) MUST reject them -- so sass_tv is sound STANDALONE, not leaning on the GPU
+#         oracle. Clearing bit 0x08 of the LDG/STG hi[8:15] byte (0x19->0x11) flips .E -> .E.U8. ---
+say "[I] NC5/NC6 hi-word memory-width (LDG.E.U8, STG.E.U8) -> wrong kernels, sass_tv MUST reject (SASS_TV_FAIL)"
+if [ "$FOFF" -ge 0 ]; then
+  BS=$((FOFF - 0xb0))                                          # .text base (FADD is at base+0xb0)
+  # NC5: LDG.E.U8 (the load at base+0x80)
+  LB=$((BS + 0x80 + 9))                                        # LDG hi[8:15] byte
+  lb=$(xxd -s "$LB" -l1 -p /tmp/stv_va.cubin)
+  cp /tmp/stv_va.cubin /tmp/stv_nc5.cubin
+  printf "\\x$(printf '%02x' $(( 0x$lb & ~0x08 & 0xff )))" | dd of=/tmp/stv_nc5.cubin bs=1 seek=$LB count=1 conv=notrunc 2>/dev/null
+  if cmp -s /tmp/stv_nc5.cubin /tmp/stv_va.cubin; then bad "NC5 vacuous -- LDG width byte flip did not change the cubin";
+  elif ! "$OBJ" -sass /tmp/stv_nc5.cubin 2>/dev/null | grep -q 'LDG.E.U8 R2'; then bad "NC5 vacuous -- cuobjdump does not show LDG.E.U8 (bit map drift)";
+  else
+    t5=$(tv /tmp/stv_nc5.cubin)
+    if [ "$t5" = SASS_TV_FAIL ]; then say "    NC5 LDG.E.U8 sass_tv=SASS_TV_FAIL  OK -- the field-complete LDG hi-word pin is load-bearing"; else bad "NC5 LDG.E.U8 sass_tv=$t5 but expected SASS_TV_FAIL (1-byte load certified as a+b -- re-audit sibling!)"; fi
+  fi
+  # NC6: STG.E.U8 (the store at base+0xc0)
+  SB=$((BS + 0xc0 + 9))                                        # STG hi[8:15] byte
+  sb=$(xxd -s "$SB" -l1 -p /tmp/stv_va.cubin)
+  cp /tmp/stv_va.cubin /tmp/stv_nc6.cubin
+  printf "\\x$(printf '%02x' $(( 0x$sb & ~0x08 & 0xff )))" | dd of=/tmp/stv_nc6.cubin bs=1 seek=$SB count=1 conv=notrunc 2>/dev/null
+  if cmp -s /tmp/stv_nc6.cubin /tmp/stv_va.cubin; then bad "NC6 vacuous -- STG width byte flip did not change the cubin";
+  elif ! "$OBJ" -sass /tmp/stv_nc6.cubin 2>/dev/null | grep -q 'STG.E.U8'; then bad "NC6 vacuous -- cuobjdump does not show STG.E.U8";
+  else
+    t6=$(tv /tmp/stv_nc6.cubin)
+    if [ "$t6" = SASS_TV_FAIL ]; then say "    NC6 STG.E.U8 sass_tv=SASS_TV_FAIL  OK"; else bad "NC6 STG.E.U8 sass_tv=$t6 but expected SASS_TV_FAIL (1-byte store certified!)"; fi
   fi
 fi
 

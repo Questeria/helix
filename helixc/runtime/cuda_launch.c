@@ -584,8 +584,13 @@ static int sass_taint_indep(const unsigned char* cb, size_t toff, int ninst) {
  * value/address-path opcodes are MODIFIER-GUARDED (fail-closed on an unmodeled set bit): FADD requires
  * lo[40:63]==0 (no Rb-side negate lo[63]/abs lo[62] -> sub.f32 REJECTED) AND hi[0:39]==0 (no Ra-side neg
  * hi[8]/abs hi[9], no SAT hi[13], no round hi[14:15], no FTZ hi[16] -- the FULL FADD operand/output modifier
- * region; scheduling bits start at hi[41]), IMAD/IMAD.WIDE require lo[54:63]==0, LDG/STG require a zero
- * immediate offset (lo[40:63]==0) -- so NO operand/output modifier (lo- OR hi-word) can spoof the structure. */
+ * region; scheduling bits start at hi[41]). The address-path opcodes are FIELD-COMPLETE: each pins its
+ * UNMODELED hi[0:39] region to the genuine plain encoding (LDG hi[0:39]==0x0C1E1900, STG ==0x0C101904,
+ * IMAD/IMAD.WIDE hi[8:39]==0x00078E02; scheduling hi[40:63] excluded) plus lo[54:63]==0 (IMAD) / zero
+ * immediate offset lo[40:63]==0 (LDG/STG) -- so a memory-WIDTH (LDG.E.U8), +UR/cx[] addressing, or
+ * signedness modifier cannot spoof the structure either. NO operand/output/width/address modifier (lo OR
+ * hi word) on any value/address-path opcode can yield a TG_SUM. (sm_86/CUDA-12.8-pinned, like the rest of
+ * the TV; a legit recompile with a different encoding fails CLOSED -- sound, not a hole.) */
 enum { TG_UNK = 0, TG_CTAID, TG_TID, TG_C4, TG_GID, TG_ADDRA, TG_ADDRB, TG_ADDRC, TG_LOADA, TG_LOADB, TG_SUM };
 static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
     int tg[256]; for (int i = 0; i < 256; i++) tg[i] = TG_UNK;
@@ -598,13 +603,21 @@ static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
         unsigned coff = (unsigned)sass_bits(lo, 40, 53) * 4;
         int himod0 = ((lo >> 54) == 0);                            /* no high lo-modifier (genuine IMAD/IMAD.WIDE have lo[54:63]==0) */
         int off0   = ((lo >> 40) == 0);                            /* zero immediate offset (genuine LDG/STG/plain-FADD) */
+        /* FIELD-COMPLETE hi-word pins (sm_86/CUDA-12.8): the value/address-path opcodes carry width/cache/UR-
+         * descriptor/cx[]/signedness control bits in hi[0:39] (scheduling is hi[40:63], excluded). Pin the
+         * UNMODELED region to the genuine plain encoding so no such modifier -- the audit's LDG/STG-width +
+         * IMAD.WIDE-cx[]/+UR sibling of the FADD hi-word hole -- can change semantics undetected. The register/
+         * signedness fields I DO model (hi[0:7], IMAD.WIDE hi[8:15]) are excluded from the pinned mask. */
+        int ldg_hi  = ((hi & 0xFFFFFFFFFFULL) == 0x0C1E1900ULL);    /* LDG.E 32-bit global, plain (both genuine loads agree) */
+        int stg_hi  = ((hi & 0xFFFFFFFFFFULL) == 0x0C101904ULL);    /* STG.E 32-bit global, plain */
+        int imx_hi  = (((hi >> 8) & 0xFFFFFFFFULL) == 0x00078E02ULL); /* IMAD + IMAD.WIDE signed, no cx/+UR/sgn-flip (hi[8:39]; both genuine agree) */
         switch (op) {
             case 0x7919: { unsigned sel = (unsigned)sass_bits(hi, 8, 15); tg[Rd] = (sel == 0x25) ? TG_CTAID : (sel == 0x21) ? TG_TID : TG_UNK; } break; /* S2R */
             case 0x7802: tg[Rd] = (sass_bits(lo, 32, 63) == 4) ? TG_C4 : TG_UNK; break;   /* MOV imm 4 -> the f32 stride */
-            case 0x7a24: tg[Rd] = (tg[Ra] == TG_CTAID && coff == 0x0 && tg[Rc] == TG_TID && himod0) ? TG_GID : TG_UNK; break; /* IMAD gid=ctaid*ntid+tid */
-            case 0x7625: tg[Rd] = (tg[Ra] == TG_GID && tg[Rc] == TG_C4 && himod0) ?                  /* IMAD.WIDE addr=ptr+gid*4; multiplier reg is hi[0:7] (=Rc), matching sass_exec1 */
+            case 0x7a24: tg[Rd] = (tg[Ra] == TG_CTAID && coff == 0x0 && tg[Rc] == TG_TID && himod0 && imx_hi) ? TG_GID : TG_UNK; break; /* IMAD gid=ctaid*ntid+tid */
+            case 0x7625: tg[Rd] = (tg[Ra] == TG_GID && tg[Rc] == TG_C4 && himod0 && imx_hi) ?         /* IMAD.WIDE addr=ptr+gid*4; multiplier reg is hi[0:7] (=Rc), matching sass_exec1 */
                 ((coff == 0x160) ? TG_ADDRA : (coff == 0x168) ? TG_ADDRB : (coff == 0x170) ? TG_ADDRC : TG_UNK) : TG_UNK; break;
-            case 0x7981: tg[Rd] = (off0 && tg[Ra] == TG_ADDRA) ? TG_LOADA : (off0 && tg[Ra] == TG_ADDRB) ? TG_LOADB : TG_UNK; break; /* LDG */
+            case 0x7981: tg[Rd] = (off0 && ldg_hi && tg[Ra] == TG_ADDRA) ? TG_LOADA : (off0 && ldg_hi && tg[Ra] == TG_ADDRB) ? TG_LOADB : TG_UNK; break; /* LDG.E 32-bit, plain */
             case 0x7221: { int ab = (tg[Ra] == TG_LOADA && tg[Rb] == TG_LOADB) || (tg[Ra] == TG_LOADB && tg[Rb] == TG_LOADA);
                 /* PLAIN = NO operand/output modifier on EITHER side. Rb-side mods (neg lo[63], abs lo[62]) are
                  * caught by off0 (lo[40:63]==0). Ra-side + output mods (neg-Ra hi[8], abs-Ra hi[9], SAT hi[13],
@@ -613,7 +626,7 @@ static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
                  * known or not (closes the audit's P0: a faithfully-lowered FADD.SAT/-Ra/.RZ/.FTZ no longer certifies). */
                 int plain = off0 && ((hi & 0x000000FFFFFFFFFFULL) == 0);
                 tg[Rd] = (plain && ab) ? TG_SUM : TG_UNK; } break;
-            case 0x7986: if (off0 && tg[Ra] == TG_ADDRC && tg[Rb] == TG_SUM) stored_c_sum = 1; break; /* STG c[gid]=SUM */
+            case 0x7986: if (off0 && stg_hi && tg[Ra] == TG_ADDRC && tg[Rb] == TG_SUM) stored_c_sum = 1; break; /* STG.E 32-bit, plain: c[gid]=SUM */
             default: break;                                        /* MOV-stack/ULDC/EXIT/BRA/NOP: irrelevant to the value path */
         }
     }
