@@ -152,7 +152,10 @@ static int e4m3_encode(float v) {
  * f == matmul -- LEG 3 is NOT optional (the nonlinearity a*a NC is invisible to the 0/1 basis). Honest
  * scope: this lifts a single empirical sample to basis-exact + bilinearity-SAMPLED equivalence on this
  * compiled shape, under the affine-addressing/arithmetic assumption -- a translation-validation WITNESS,
- * not a machine-checked proof. */
+ * not a machine-checked proof. SCOPE NOTE: the certified kernel set (naive_matmul + the atb/abt adjoints)
+ * emits only @...bra predication and affine addressing; predicated MEMORY ops (@%p ld/st) and cp.async
+ * (multi-bracket, tiled kernels only) are out of this increment's scope -- generalizing the witness to
+ * tiled kernels would extend the @-arm to also check the underlying ld/st address. */
 static int cf_is_taint(char taint[][12], int nt, const char* r) {
     for (int i = 0; i < nt; i++) if (strcmp(taint[i], r) == 0) return 1;
     return 0;
@@ -947,7 +950,8 @@ int main(int argc, char** argv) {
      * A1,A2,B1,B2 (|.|<=R) and a scalar s, verify the kernel f obeys bilinearity within the derived f32
      * matmul rounding bound: additivity f(A1+A2,B)=f(A1,B)+f(A2,B) (and in B) and homogeneity
      * f(s*A,B)=s*f(A,B) (and in B). Per element tau = c_safe*L*u*S, u=2^-24, S=sum_t |operands| into both
-     * sides. The true worst case is ~4*K*u*S (each f32 dot of length K accumulates (2K-1)*u, plus the host
+     * sides (L is the contraction length K at the certified SQUARE shape M=K=N=L; a non-square reuse must
+     * substitute the real K, not L). The true worst case is ~4*K*u*S (each f32 dot of length K accumulates (2K-1)*u, plus the host
      * As=fl(A1+A2) rounding and the final add, across both compared sides); c_safe=8 gives 8*K*u*S, a
      * conservative ~2x rigorous margin (exactly 2x at K=L=8) -- DERIVED, not reverse-tuned. NOTE this is a
      * SAMPLED tripwire: bilinearity is checked at ONE input tuple (a single fixed LCG seed + one s, 7

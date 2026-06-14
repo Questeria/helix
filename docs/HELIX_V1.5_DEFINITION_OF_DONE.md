@@ -96,8 +96,44 @@
 > FP4 so the MMA/throughput leg is DEFERRED+labeled (Blackwell). The E4M3 2^x + the FP32-tensor collapse
 > are host-side; the device does the full E2M1 nibble dequant + mag*scale on-device.
 >
-> **NEXT: #2 / #4 / #3 (the research-grade first-increments).** The S0-S3 low-precision slate is DONE; #2
-> (certified kernels) / #4 (ZK receipts) / #3 (PTX->SASS) each remain as a labeled FIRST-increment (the v1.5-complete BAR is below).
+>
+> **#2 (Certified / translation-validated kernels + verifiable autodiff) — ✅ DONE (committed LOCALLY,
+> push HELD; c834e1f build + de40ecd audit-fix):** a HOST-SIDE algebraic translation-validation **WITNESS**
+> (NOT a machine-checked proof) on the kovc-emitted naive_matmul, with **NO kovc.hx edit** -> the self-host
+> fixpoint stays **cdcf8673** byte-identical (cuda_launch.c is gcc-built, outside the corpus). THREE
+> co-necessary legs (the gate ANDs all three): LEG 1 cflow — a fail-closed def-use PTX taint-scan that
+> REJECTS a loaded value reaching a setp / predicate / selp-slct selector / memory ADDRESS, and
+> FAIL-CLOSES on a call / tainted non-poly op / cap-saturation / non-convergence (=> data-independent
+> control flow + selection + addressing); LEG 2 matmul_basis — an EXACT 0/1 rank-1 basis sweep over
+> [0,L)^4 incl. the off-diagonal (pins the bilinear coefficients; non-vacuity probes==L^4 & nonzero==L^3);
+> LEG 3 matmul_bilin — additivity+homogeneity within a DERIVED f32 bound tau=c_safe*L*u*S (~2x over the
+> worst case), SAMPLED at one input tuple. **LEG 1 + LEG 2 + LEG 3 TOGETHER** (LEG 3 NOT optional — the
+> a*a nonlinearity NC is invisible to the 0/1 basis) => f == matmul on all f32 inputs for this compiled
+> shape, within the f32 envelope. scripts/gpu_matmul_witness_check.sh -> **MATMUL_WITNESS_PASS** on the RTX
+> 3070: 3 legs PASS + SEVEN load-bearing NCs each caught by its leg (drop-term/transpose/scale->LEG2,
+> add-const->LEG2+LEG3, nonlinearity->LEG3-only, data-branch->LEG1-only [control flow], data-gather->
+> LEG1-only [addressing — proves the address arm has teeth]). **Verifiable autodiff:** the adjoint cert is
+> a full 3-leg witness (cflow+basis+bilin) on the bilinear backward kernels gpu_matmul_atb (dW=X^T@dY) +
+> gpu_matmul_abt (dX=dC@B^T), each + a drop-term basis NC — an exact-on-the-0/1-basis + bilinearity-sampled
+> adjoint for the matmul GRADIENT (the prior single-sample finite-difference, upgraded). GATE_PASS
+> (fixpoint cdcf8673 unchanged, corpus 113/0). **TWO adversarial audits:** wjww7gtrj returned GAPS =
+> overstated PROSE ("LEG1+LEG2 => all inputs", dropping the co-necessary LEG 3) + latent robustness (no
+> address/selp check, fail-OPEN caps, basis-only adjoint) — NOT a wrong-kernel-passes break (the gate ANDs
+> all 3 legs; the genuine affine kernel is correct); de40ecd HARDENED cflow (address+selp+slct arms,
+> fail-closed caps, non-poly reject) AND corrected the prose + upgraded the adjoint to 3-leg; the focused
+> re-audit wjkqe06n2 -> **PASS** (scope_honesty_ok=true, all 6 findings closed in committed code, 2
+> non-reachable minors).
+> **HONEST RECONCILIATION (#2 vs the row's wording):** the row asked for a "machine-checkable equivalence
+> witness ... within a verified numerical envelope" + a backward-derivative check. DELIVERED on ONE named
+> kernel (naive_matmul) + its two matmul-gradient adjoints — a translation-validation WITNESS, NOT full
+> formal PTX+IEEE-FP semantics (multi-week, explicitly out of scope), NOT ptxas/SASS (#3); the nonlinear
+> layers (gelu/softmax) stay sampled. Scope: per-compiled-shape (square L), f32 envelope, under the
+> data-independent-control-flow + affine-addressing precondition. Matches the row's "FIRST witness pass +
+> its falsifiable checker on a named kernel set, honestly scoped" and the BAR's "#2 = ... ONE named kernel
+> (start: matmul), a wrong kernel REJECTED."
+>
+> **NEXT: #4 / #3 (the remaining research-grade first-increments).** S0-S3 + #2 are DONE; #4 (ZK receipts)
+> / #3 (PTX->SASS) each remain as a labeled FIRST-increment (the v1.5-complete BAR is below).
 
 ## Version baseline (read first)
 
@@ -150,7 +186,7 @@ builds; commit ONLY green; never ship red; never fake.
 | **S1** ✅ DONE (8732487) | **fp16 GEMM compute path** (naive; the dequant/compute target FP4 needs) | A `kovc`-emitted **naive** fp16 matmul (`naive_matmul_f16`) runs on the RTX 3070 and matches an independent **from-scratch C** IEEE-binary16 oracle within dual-bound fp16 tolerance (abs 1e-3 OR rel 1e-2; observed max_rel 4.4e-4), comparator + kernel-corruption NCs caught, codec self-test green; gated by a PTX-regression block + `gpu_f16_check.sh` (GPU kernels gate via PTX-regression, not CPU chk rows). bf16/f16 *scalar* arith already ships (v1.3 V4) — this added the GPU *tensor* I/O path. | Universal gate (fixpoint re-minted **cdcf8673**; gcc-DDC K1 **6ee5ec2b**) + the fp16 GEMM execution gate. | **DELIVERED:** naive fp16 I/O + f32 accumulate (honest; no speed claim). **DEFERRED to v1.7 (speed):** the TILED/SMEM + Tensor-Core fp16 path (the original "tiled" + "perf later" residual, tracked not dropped). Oracle = from-scratch C codec (not numpy; Python-free-fence superior). bf16 optional/deferred. |
 | **S2** ✅ DONE (e3808fb) | **MXFP4 storage format + verified dequant→matmul** | OCP MXFP4 (E2M1 4-bit + shared **E8M0** 8-bit scale per 32-block) realized as a packed-i32 representation + on-device `@kernel` dequant (NOT a scalar type-tag — MXFP4 is a block format); pack (7 E2M1/i32 word, host) + on-device div-unpack + a host E8M0→f32 block-scale; a `kovc`-emitted dequant→f16→matmul (`naive_mxfp4_matmul`) matches an independent **from-scratch C** MXFP4 oracle within dual-bound tolerance (abs 1e-3 OR rel 1e-2; max_rel 4.1e-4), THREE NCs caught (comparator + weight-flip + kernel-corruption), codec self-test green; measured footprint 6.64x vs f32 / 3.32x vs f16. | Universal gate (fixpoint **cdcf8673 UNCHANGED** — no kovc edit) + the MXFP4 PTX-regression block + the `gpu_mxfp4_check.sh` execution gate. | **DELIVERED:** storage + verifiable on-device dequant (memory win). NOT native FP4 Tensor-Core throughput (needs Blackwell; never implied). Realized as packed-i32 + `@kernel`-decode, not a scalar type-tag (block format). Oracle = from-scratch C codec (not numpy). E8M0 2^x is host-side. |
 | **S3** ✅ DONE (adc7745) | **NVFP4 storage format + verified dequant** | OCP/NVIDIA NVFP4 (E2M1 4-bit [reused from S2] + **FP8 E4M3** micro-scale per 16-block + FP32 per-tensor) realized as a packed-i32 representation + host two-level scale + on-device `@kernel` decode (NOT a scalar type-tag — a block format); pack (7 E2M1/i32) + on-device div-unpack + a host-collapsed effective f32 scale/16-block; a `kovc`-emitted dequant (`nvfp4_dequant`) matches an independent **from-scratch C** E2M1+E4M3 oracle **f32-EXACTLY** (max_abs=0 / max_rel=0), FOUR NCs caught (comparator + weight-flip + SCALE-flip + kernel-corruption), codec self-test green; measured footprint 6.27x vs f32 / 3.13x vs f16. | Universal gate (fixpoint **cdcf8673 UNCHANGED** — no kovc edit) + the NVFP4 PTX-regression block + the `gpu_nvfp4_check.sh` execution gate. | **DELIVERED:** format + verified on-device DEQUANT (the row's measurable test). **DEFERRED+labeled:** native FP4 MMA/throughput (needs Blackwell sm_100/sm_120). Realized as packed-i32 + `@kernel`-decode, not a scalar type-tag. Oracle = from-scratch C (not numpy). E4M3 2^x + FP32-tensor collapse are host-side. |
-| **#2** | **Certified / translation-validated ML kernels + verifiable autodiff** | A per-compile pass emits, for a target kernel (start: matmul / softmax / layernorm), a machine-checkable **equivalence witness** that the emitted kernel computes its spec within a verified numerical envelope — *beyond* empirical token-match — plus a check that the backward kernel is the derivative of the forward (extend the existing finite-difference check toward a certificate). | Universal gate + the witness-checker runs green on the target kernel(s); negative control (a wrong kernel) is REJECTED by the witness. | Full formal PTX+IEEE-FP semantics is multi-week research; v1.5 DONE = the FIRST witness pass + its falsifiable checker on a named kernel set, honestly scoped. |
+| **#2** ✅ DONE (c834e1f+de40ecd) | **Certified / translation-validated ML kernels + verifiable autodiff** | A per-compile pass emits, for a target kernel (start: matmul / softmax / layernorm), a machine-checkable **equivalence witness** that the emitted kernel computes its spec within a verified numerical envelope — *beyond* empirical token-match — plus a check that the backward kernel is the derivative of the forward (extend the existing finite-difference check toward a certificate). | Universal gate + the witness-checker runs green on the target kernel(s); negative control (a wrong kernel) is REJECTED by the witness. | **DELIVERED:** a host-side translation-validation WITNESS on `naive_matmul` (LEG 1 cflow data-independence [control flow + selection + addressing, fail-closed] + LEG 2 exact 0/1 basis + LEG 3 sampled bilinearity within a derived τ), all 3 co-necessary; `gpu_matmul_witness_check.sh` → MATMUL_WITNESS_PASS with 7 NCs (a wrong kernel REJECTED); verifiable autodiff = a 3-leg adjoint cert on `gpu_matmul_atb/abt`. NO kovc edit (fixpoint cdcf8673). Two adversarial audits (GAPS→fixed→PASS). **Scope (honest):** ONE kernel set, per-compiled-shape (square L), f32 envelope, data-independent-control-flow + affine-addressing precondition — NOT full formal PTX+IEEE (multi-week), NOT ptxas/SASS (#3), nonlinear layers sampled. |
 | **#4** | **Succinct / ZK verifiable-inference receipts** | A receipt format + an independent checker such that "this model on this input produced this output" is verifiable **without re-running the full model and without trusting the runner**, faster than re-execution OR with a re-derivable transcript; checker rejects a forged receipt. | Universal gate + the receipt checker green on a real inference + a forgery negative control. | Full ZK-SNARK proving is expensive + an active field (EZKL/Modulus/Giza); v1.5 DONE = the first re-derivable/succinct receipt increment with a fast independent checker; full ZK is the labeled stretch. |
 | **#3** | **Verifiable PTX→SASS (kill the last trusted closed binary)** | A from-scratch, verifiable PTX→SASS path (or verified SASS validator) for the emitted `sm_86` kernel subset, so the hex0→…→PTX→**SASS** chain has no trusted closed `ptxas` in it for that subset; output verified against a reference. | Universal gate + the SASS path/validator green on the kernel subset, with a negative control. | SASS is proprietary/reverse-engineered + arch-specific — **the hardest**. v1.5 DONE = the first verifiable increment on a named kernel subset; full coverage is multi-week+ and labeled. |
 
