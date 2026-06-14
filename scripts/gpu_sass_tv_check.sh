@@ -157,8 +157,9 @@ fi
 # --- [I] NC5/NC6 hi-word MEMORY-WIDTH modifiers (re-audit w9hjc67k4 sibling of the FADD hole) -- LDG.E.U8 /
 #         STG.E.U8 read/write ONE byte instead of 4 = WRONG kernel, but the lo word is byte-identical to the
 #         genuine 32-bit .E load/store (width lives in the hi word). LEG2's field-complete hi[0:39] pin
-#         (ldg_hi/stg_hi/imx_hi) MUST reject them -- so sass_tv is sound STANDALONE, not leaning on the GPU
-#         oracle. Clearing bit 0x08 of the LDG/STG hi[8:15] byte (0x19->0x11) flips .E -> .E.U8. ---
+#         (ldg_hi/stg_hi/imx_hi) rejects this width/value class WITHOUT the GPU; the de-trust VERDICT still
+#         requires sass_exec for SCHEDULING (per the header: verdict = sass_tv AND sass_exec). Clearing bit 0x08
+#         of the LDG/STG hi[8:15] byte (0x19->0x11) flips .E -> .E.U8. ---
 say "[I] NC5/NC6 hi-word memory-width (LDG.E.U8, STG.E.U8) -> wrong kernels, sass_tv MUST reject (SASS_TV_FAIL)"
 if [ "$FOFF" -ge 0 ]; then
   BS=$((FOFF - 0xb0))                                          # .text base (FADD is at base+0xb0)

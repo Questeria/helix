@@ -638,7 +638,8 @@ static int sass_symbolic_addb(const unsigned char* cb, size_t toff, int ninst) {
             case 0x7802: tg[Rd] = (sass_bits(lo, 32, 63) == 4) ? TG_C4 : TG_UNK; break;   /* MOV imm 4 -> the f32 stride */
             case 0x7a24: tg[Rd] = (tg[Ra] == TG_CTAID && coff == 0x0 && tg[Rc] == TG_TID && himod0 && imx_hi) ? TG_GID : TG_UNK; break; /* IMAD gid=ctaid*ntid+tid */
             case 0x7625: tg[Rd] = (tg[Ra] == TG_GID && tg[Rc] == TG_C4 && himod0 && imx_hi) ?         /* IMAD.WIDE addr=ptr+gid*4; multiplier reg is hi[0:7] (=Rc), matching sass_exec1 */
-                ((coff == 0x160) ? TG_ADDRA : (coff == 0x168) ? TG_ADDRB : (coff == 0x170) ? TG_ADDRC : TG_UNK) : TG_UNK; break;
+                ((coff == 0x160) ? TG_ADDRA : (coff == 0x168) ? TG_ADDRB : (coff == 0x170) ? TG_ADDRC : TG_UNK) : TG_UNK;
+                tg[(Rd + 1) & 255] = TG_UNK; break;   /* IMAD.WIDE writes the PAIR Rd:Rd+1 -- the high half carries no value tag; clear it so a stale tag cannot survive a pair-high clobber (audit-5 P2: LEG2 tag-invalidating invariant made literally true; the genuine high-halves R3/R5/R7 are untagged here) */
             case 0x7981: tg[Rd] = (off0 && ldg_hi && tg[Ra] == TG_ADDRA) ? TG_LOADA : (off0 && ldg_hi && tg[Ra] == TG_ADDRB) ? TG_LOADB : TG_UNK; break; /* LDG.E 32-bit, plain */
             case 0x7221: { int ab = (tg[Ra] == TG_LOADA && tg[Rb] == TG_LOADB) || (tg[Ra] == TG_LOADB && tg[Rb] == TG_LOADA);
                 /* PLAIN = NO operand/output modifier on EITHER side. Rb-side mods (neg lo[63], abs lo[62]) are
