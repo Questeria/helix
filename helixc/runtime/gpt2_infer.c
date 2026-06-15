@@ -243,6 +243,12 @@ static int    g_prof = 0;
 static double g_pf_htod = 0, g_pf_sb = 0, g_pf_dq = 0, g_pf_cmp = 0;
 static long   g_pf_n = 0;
 static long   g_dqscr_elems = 0;   /* v1.7 INC2: element capacity of d_dqscr/g_scbuf (= alloc_buffers sc); sizes the chunked lm_head GPU dequant */
+/* v1.7 INC2c: resident effective per-16-block scale cache, one device buffer per packed tensor idx.
+ * The scales are STATIC (weights never change), so DECODE rebuilds + re-uploads them every token for
+ * nothing. Opt-in via HX_SCALECACHE; built lazily on first touch; non-fatal on VRAM-full (falls back to
+ * the per-forward scratch build). 8B layer scales ~1.74GB resident -> fits the 8GB card. */
+static CUdeviceptr g_sc_res[400] = {0};   /* idx = L*11+t < 36*11 for 8B; 400 covers all packed tensors */
+static int    g_scache = 0;
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -1194,7 +1200,11 @@ static void forward_full(const int* ids, int T, float* out_last_logits) {
 static void decode_step_llama(int new_id, int pos, float* out_logits) {
     int T = pos + 1;
     int group = NH / NKV;
-    const float* emb = &g_wbase[off_embed_ll()];
+    /* v3 (QWEN3) lays the embedding out via the descriptor table, not the linear off_embed_ll() offset;
+     * decode used the non-v3 path unconditionally -> OOB host read -> segfault. Mirror embed_gather(). */
+    const float* emb = QWEN3
+        ? (const float*)((const unsigned char*)g_map + g_desc[v3_idx_embed()].data_off)
+        : &g_wbase[off_embed_ll()];
     CKX(cuMemcpyHtoD(d_x1, &emb[(size_t)new_id*DM], (size_t)DM*sizeof(float)), "h2d x1");
     for (int L = 0; L < NL; L++) {
         g_emit_layer = L;
@@ -1208,6 +1218,12 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
         gemv_abt(d_xn1, d_kW, d_k1, KVD, DM);
         emit_op(L, 3, "gpu_gemv_abt", "attn", "v_gemv", 1);
         gemv_abt(d_xn1, d_vW, d_v1, KVD, DM);
+        if (QWEN3) {   /* Qwen3 per-head QK-norm over DH, BEFORE RoPE -- prefill does this (forward_layer_llama
+                        * ~1110); decode omitted it -> un-normalized Q/K -> wrong attention -> wrong tokens.
+                        * d_q1 is [NH x DH], d_k1 is [NKV x DH]; one rms_norm_k call normalizes every head. */
+            rms_norm_k(d_q1, d_q1, d_qnorm, NH,  DH);
+            rms_norm_k(d_k1, d_k1, d_knorm, NKV, DH);
+        }
         for (int h = 0; h < NH; h++)
             rope_at(d_q1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)), 1, pos);
         for (int kv = 0; kv < NKV; kv++) {
@@ -1450,7 +1466,8 @@ static void load_dequant_module(void) {
 
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
 static int device_init(const char* ptx_path, const char* wpath) {
-    g_prof = getenv("HX_PROF") ? 1 : 0;   /* v1.7 INCREMENT 2: per-upload profiling */
+    g_prof   = getenv("HX_PROF") ? 1 : 0;        /* v1.7 INCREMENT 2: per-upload profiling */
+    g_scache = getenv("HX_SCALECACHE") ? 1 : 0;  /* v1.7 INC2c: resident static-scale cache */
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
     g_ptx=(char*)malloc(psz+1); if (fread(g_ptx,1,psz,pf)!=(size_t)psz) { fclose(pf); return 2; } g_ptx[psz]=0; fclose(pf);
@@ -1627,13 +1644,24 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     memcpy(g_hpin, w, (size_t)rows*kwords*4);   /* v1.7 INC2b: mmap->pinned (faults pages), then DMA HtoD */
     CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD");
     double tB = g_prof ? now_seconds() : 0.0; g_pf_htod += tB - tA;
-    for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* v1.7: LUT, byte-identical to v3_e4m3_decode */
-    double tC = g_prof ? now_seconds() : 0.0; g_pf_sb += tC - tB;
-    CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD");
-    double tD = g_prof ? now_seconds() : 0.0; g_pf_htod += tD - tC;
+    /* v1.7 INC2c: reuse the resident effective-scale cache (the scales are static) or build into scratch. */
+    CUdeviceptr d_sc_use = d_sc;
+    int nsc = (int)(sizeof(g_sc_res)/sizeof(g_sc_res[0]));
+    if (g_scache && idx >= 0 && idx < nsc && g_sc_res[idx]) {
+        d_sc_use = g_sc_res[idx];                                        /* cached: skip the build + HtoD */
+    } else {
+        for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* byte-identical to v3_e4m3_decode */
+        if (g_scache && idx >= 0 && idx < nsc) {                         /* first touch: cache it resident (non-fatal on VRAM-full) */
+            CUdeviceptr p = 0;
+            if (cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
+                cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) { g_sc_res[idx] = p; d_sc_use = p; }
+            else { if (p) cuMemFree(p); CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD"); }
+        } else CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD");
+    }
+    double tD = g_prof ? now_seconds() : 0.0; g_pf_sb += tD - tB;        /* scale build+upload, or cache reuse */
     CUdeviceptr out_dev = (Kpad==K) ? dst : d_dqscr;
     int mm0=0, kk=Kpad, bd=BD;
-    void* ar[] = { &d_packed, &d_sc, &out_dev, &mm0, &kk, &bd };
+    void* ar[] = { &d_packed, &d_sc_use, &out_dev, &mm0, &kk, &bd };
     LX(f_dq_tiled, (unsigned)((long)rows*(Kpad/BD)), (unsigned)BD, ar);
     double tE = g_prof ? now_seconds() : 0.0; g_pf_dq += tE - tD; g_pf_n++;
     if (Kpad != K) {   /* compact [rows x Kpad] -> [rows x K], drop the pad cols (host did this via memmove) */
