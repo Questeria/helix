@@ -36,6 +36,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <math.h>
 
 #define MAGIC   0x48584757u   /* 'HXGW' (little-endian bytes: 'W''G''X''H') */
 #define VERSION 1u
@@ -269,7 +270,102 @@ static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, i
 
 static long shape_prod(const long* s, int nd) { long p = 1; for (int i = 0; i < nd; i++) p *= s[i]; return p; }
 
+/* ============================ v1.6 NVFP4 forward quantizer (host) ============================
+ * The packed format MUST match helixc/examples/nvfp4_dequant_kernel.hx byte-for-byte. Per weight
+ * [rows x K] with K padded to a multiple of 112 (LCM(7,16)): packed words w[rows*(Kp/7)] hold 7 E2M1
+ * codes/i32 word base-16 LOW-NIBBLE-FIRST; effective f32 scales sc[rows*(Kp/16)] hold one per 16-block,
+ * value = e4m3_decode(micro) * fp32_tensor_scale (host pre-collapsed; device does mag*sc only).
+ * Codecs copied VERBATIM from cuda_launch.c (the v1.5 oracle) -- never re-derive. */
+static float e2m1_decode(int code) {
+    int s=(code>>3)&1, e=(code>>1)&3, m=code&1; float mag;
+    if (e==0) mag = 0.5f*(float)m; else mag = (1.0f+0.5f*(float)m)*(float)(1<<(e-1));
+    return s ? -mag : mag;
+}
+static int e2m1_encode(float v) {
+    int best=0; float bd=1.0e30f;
+    for (int c=0;c<16;c++){ float d=e2m1_decode(c)-v; if(d<0)d=-d; if(d<bd){bd=d;best=c;} }
+    return best;
+}
+static float e4m3_decode(int c) {
+    int s=(c>>7)&1, e=(c>>3)&15, m=c&7;
+    if (e==15 && m==7) return nanf("");
+    float mag; if (e==0) mag=(m/8.0f)*ldexpf(1.0f,-6); else mag=(1.0f+m/8.0f)*ldexpf(1.0f,e-7);
+    return s ? -mag : mag;
+}
+static int e4m3_encode(float v) {
+    int best=0; float bd=1.0e30f;
+    for (int c=0;c<256;c++){ if((c&0x7F)==0x7F) continue; float d=e4m3_decode(c)-v; if(d<0)d=-d; if(d<bd){bd=d;best=c;} }
+    return best;
+}
+/* Quantize [rows x K] f32 -> NVFP4; K padded to Kpad (mult of 112) with ZEROS. Caller sizes
+ * outW[rows*(Kpad/7)] (i32) + outSc[rows*(Kpad/16)] (f32). Returns Kpad. */
+static int nvfp4_quantize_tensor(const float* w, int rows, int K, int32_t* outW, float* outSc) {
+    int Kpad = ((K + 111)/112)*112;
+    int kwords = Kpad/7, kblk = Kpad/16;
+    float amax = 0.0f;
+    for (long i=0;i<(long)rows*K;i++){ float a = w[i]<0?-w[i]:w[i]; if (a>amax) amax=a; }
+    float ts = amax/(6.0f*448.0f); if (ts <= 0.0f) ts = 1.0f;   /* E2M1_max(6)*E4M3_max(448); all-zero guard */
+    int* codes = (int*)malloc((size_t)Kpad*sizeof(int));
+    for (int r=0;r<rows;r++){
+        for (int bk=0;bk<kblk;bk++){
+            float bamax=0.0f;
+            for (int j=0;j<16;j++){ int k=bk*16+j; float v=(k<K)?w[(long)r*K+k]:0.0f; float a=v<0?-v:v; if(a>bamax)bamax=a; }
+            int micro = e4m3_encode(bamax/(ts*6.0f));
+            float eff = e4m3_decode(micro)*ts;
+            outSc[(long)r*kblk+bk] = eff;
+            for (int j=0;j<16;j++){ int k=bk*16+j; float v=(k<K)?w[(long)r*K+k]:0.0f; codes[k]=(eff>0.0f)?e2m1_encode(v/eff):0; }
+        }
+        for (int kw=0;kw<kwords;kw++){ int word=0,pw=1; for(int j=0;j<7;j++){ word += (codes[kw*7+j]&15)*pw; pw*=16; } outW[(long)r*kwords+kw]=word; }
+    }
+    free(codes);
+    return Kpad;
+}
+/* Host dequant -- a LINE-FOR-LINE mirror of nvfp4_dequant_kernel.hx (the device formula). */
+static void nvfp4_host_dequant(const int32_t* w, const float* sc, float* out, int rows, int Kpad) {
+    int kwords=Kpad/7, kblk=Kpad/16;
+    for (int r=0;r<rows;r++) for (int col=0;col<Kpad;col++){
+        int word=col/7, slot=col-word*7;
+        int wv = w[(long)r*kwords+word];
+        for (int j=0;j<slot;j++) wv = wv/16;
+        int code = wv - (wv/16)*16;
+        int c8 = code - (code/8)*8;
+        float magf = (c8==0)?0.0f:(c8==1)?0.5f:(c8==2)?1.0f:(c8==3)?1.5f:(c8==4)?2.0f:(c8==5)?3.0f:(c8==6)?4.0f:6.0f;
+        float sm = (code/8==0)?magf:-magf;
+        out[(long)r*Kpad+col] = sm * sc[(long)r*kblk+col/16];
+    }
+}
+/* CPU-only self-test: quantize a synthetic tensor (with a non-112-multiple K to exercise padding),
+ * dequant via the device-mirror, and require the pack/unpack to round-trip the codes + scale index
+ * EXACTLY (the FORMAT is the part that must be byte-exact; the quant error is informational). */
+static int nvfp4_selftest(void) {
+    int rows=5, K=100;                          /* 100 -> Kpad 112 (exercises zero-padding) */
+    int Kpad=((K+111)/112)*112, kwords=Kpad/7, kblk=Kpad/16;
+    float*   w     = (float*)malloc((size_t)rows*K*sizeof(float));
+    int32_t* W     = (int32_t*)malloc((size_t)rows*kwords*sizeof(int32_t));
+    float*   Sc    = (float*)malloc((size_t)rows*kblk*sizeof(float));
+    float*   recon = (float*)malloc((size_t)rows*Kpad*sizeof(float));
+    for (int r=0;r<rows;r++) for (int k=0;k<K;k++) w[(long)r*K+k] = ((float)((r*37+k*13)%101)-50.0f)*0.043f;
+    int kp = nvfp4_quantize_tensor(w, rows, K, W, Sc);
+    nvfp4_host_dequant(W, Sc, recon, rows, kp);
+    int fmtbad=0, padbad=0; float qmax=0.0f;
+    for (int r=0;r<rows;r++) for (int k=0;k<kp;k++){
+        float eff  = Sc[(long)r*kblk + k/16];
+        float orig = (k<K)? w[(long)r*K+k] : 0.0f;
+        int   code = (eff>0.0f)? e2m1_encode(orig/eff) : 0;     /* the SAME choice the quantizer made */
+        float expect = e2m1_decode(code) * eff;
+        float g = recon[(long)r*kp+k];
+        if (g != expect) { if (fmtbad<4) fprintf(stderr,"nvfp4 FORMAT mismatch r%d k%d got %g expect %g\n",r,k,g,expect); fmtbad++; }
+        if (k>=K && g != 0.0f) padbad++;
+        if (k<K){ float e=g-orig; if(e<0)e=-e; if(e>qmax)qmax=e; }
+    }
+    printf("nvfp4_selftest: rows=%d K=%d Kpad=%d | FORMAT exact-mismatches=%d | pad-nonzero=%d | quant max_abs=%.6g -> %s\n",
+           rows,K,kp,fmtbad,padbad,qmax,(fmtbad==0&&padbad==0)?"PASS":"FAIL");
+    free(w);free(W);free(Sc);free(recon);
+    return (fmtbad==0&&padbad==0)?0:1;
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
     if (argc < 4) {
         fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights> [--arch llama]\n", argv[0]);
         return 2;
