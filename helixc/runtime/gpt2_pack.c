@@ -250,20 +250,22 @@ static int build_order(OrderEntry* ord, int cap, int NL, int DM, int NV, int NC,
  * (Qwen3 applies a per-head RMSNorm on q/k -- weight shape = head_dim) right after q_proj/k_proj,
  * and an UNTIED lm_head.weight [NV x DM] after the final norm. qwen3=0 is byte-identical to the
  * SmolLM2/TinyLlama order (head_dim is then unused). */
+/* QD = num_q_heads * head_dim = the attention/query-projection dim. For SmolLM2 + Qwen3-8B QD==DM
+ * (so q/o are [DM,DM]); for Qwen3-32B QD=8192 != DM=5120 (q_proj [QD,DM], o_proj [DM,QD]). */
 static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, int DF, int KVD,
-                             int head_dim, int qwen3) {
+                             int QD, int head_dim, int qwen3) {
     int n = 0;
 #define ADD1(NM, S0)        do { snprintf(ord[n].name, 128, "%s", NM); ord[n].ndim=1; ord[n].shape[0]=(S0); n++; } while(0)
 #define ADD2(NM, S0, S1)    do { snprintf(ord[n].name, 128, "%s", NM); ord[n].ndim=2; ord[n].shape[0]=(S0); ord[n].shape[1]=(S1); n++; } while(0)
     char nm[128];
     for (int L = 0; L < NL; L++) {
         snprintf(nm, sizeof(nm), "model.layers.%d.input_layernorm.weight", L);          ADD1(nm, DM);
-        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.q_proj.weight", L);         ADD2(nm, DM, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.q_proj.weight", L);         ADD2(nm, QD, DM);
         if (qwen3) { snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.q_norm.weight", L); ADD1(nm, head_dim); }
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.k_proj.weight", L);         ADD2(nm, KVD, DM);
         if (qwen3) { snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.k_norm.weight", L); ADD1(nm, head_dim); }
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.v_proj.weight", L);         ADD2(nm, KVD, DM);
-        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.o_proj.weight", L);         ADD2(nm, DM, DM);
+        snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.o_proj.weight", L);         ADD2(nm, DM, QD);
         snprintf(nm, sizeof(nm), "model.layers.%d.post_attention_layernorm.weight", L); ADD1(nm, DM);
         snprintf(nm, sizeof(nm), "model.layers.%d.mlp.gate_proj.weight", L);            ADD2(nm, DF, DM);
         snprintf(nm, sizeof(nm), "model.layers.%d.mlp.up_proj.weight", L);              ADD2(nm, DF, DM);
@@ -524,7 +526,7 @@ typedef struct { int fd; size_t flen; unsigned char* base; } ShardMap;
  * points at its shard's tensor-data region. Fills sh[] with the per-shard mmaps (caller munmaps). */
 static int load_model_tensors(const char* dir, STensor* ts, int maxt, ShardMap* sh, int* n_sh) {
     char idx[1100]; snprintf(idx, sizeof(idx), "%s/model.safetensors.index.json", dir);
-    char shards[16][300]; int nshard = 0;
+    char shards[64][300]; int nshard = 0;   /* up to 64 shards (Qwen3-32B has 17; 8B has 5) */
     int ifd = open(idx, O_RDONLY);
     if (ifd >= 0) {
         struct stat ist; fstat(ifd, &ist);
@@ -532,7 +534,7 @@ static int load_model_tensors(const char* dir, STensor* ts, int maxt, ShardMap* 
         ssize_t g = read(ifd, ij, (size_t)ist.st_size); close(ifd);
         if (g < 0) g = 0;
         ij[g] = 0;
-        nshard = index_shards(ij, shards, 16);
+        nshard = index_shards(ij, shards, 64);
         free(ij);
         if (nshard == 0) { fprintf(stderr, "[load] index.json has no shard filenames\n"); exit(2); }
     } else {
@@ -603,17 +605,18 @@ static int pack_qwen3(const char* model_dir, const char* out_path) {
         if (!json_find_float(cfg,cn,"rms_norm_eps",&eps)) eps = 1e-6;
         free(cfg);
     }
-    long KVD = NKV * HD;
-    fprintf(stderr, "[pack-qwen3] NL=%ld DM=%ld NH=%ld NKV=%ld HD=%ld DF=%ld NV=%ld KVD=%ld theta=%g eps=%g\n",
-            NL,DM,NH,NKV,HD,DF,NV,KVD,theta,eps);
+    long KVD = NKV * HD;          /* kv-projection dim  */
+    long QD  = NH * HD;           /* query/attention dim (== DM for 8B; 8192 != DM=5120 for 32B) */
+    fprintf(stderr, "[pack-qwen3] NL=%ld DM=%ld NH=%ld NKV=%ld HD=%ld QD=%ld DF=%ld NV=%ld KVD=%ld theta=%g eps=%g\n",
+            NL,DM,NH,NKV,HD,QD,DF,NV,KVD,theta,eps);
 
     STensor* ts = (STensor*)malloc(sizeof(STensor)*4096);
-    ShardMap sh[16]; int n_sh = 0;
+    ShardMap sh[64]; int n_sh = 0;
     int nt = load_model_tensors(model_dir, ts, 4096, sh, &n_sh);
 
     int cap = (int)(NL*12 + 24);
     OrderEntry* ord = (OrderEntry*)malloc(sizeof(OrderEntry)*cap);
-    int no = build_order_llama(ord, cap, (int)NL,(int)DM,(int)NV,(int)DF,(int)KVD,(int)HD, 1);
+    int no = build_order_llama(ord, cap, (int)NL,(int)DM,(int)NV,(int)DF,(int)KVD,(int)QD,(int)HD, 1);
 
     /* descriptor sizes/offsets (no data touched yet) */
     HXGWv3Desc* desc = (HXGWv3Desc*)calloc((size_t)no, sizeof(HXGWv3Desc));
@@ -813,7 +816,7 @@ int main(int argc, char** argv) {
     /* ---- build order ---- */
     OrderEntry* ord = (OrderEntry*)malloc(sizeof(OrderEntry) * (NL * 12 + 8 + 16));
     int no = arch_llama
-        ? build_order_llama(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)DF, (int)KVD, (int)(DM/NH), 0)
+        ? build_order_llama(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)DF, (int)KVD, (int)DM, (int)(DM/NH), 0)
         : build_order(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)NC, (int)DF);
 
     /* ---- open output, write 64-byte header (v2 carries the llama arch fields) ---- */
