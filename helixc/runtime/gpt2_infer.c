@@ -956,8 +956,12 @@ static void forward_layer_gpt2(void) {
 static void embed_gather(const int* ids, int T, int S) {
     float* hx = (float*)calloc((size_t)S*DM, sizeof(float));
     if (ARCH) {
-        /* llama: token embedding ONLY (RoPE replaces positional embeddings) -- pure row copy. */
-        const float* emb = &g_wbase[off_embed_ll()];
+        /* llama: token embedding ONLY (RoPE replaces positional embeddings) -- pure row copy.
+         * v3/Qwen3: embed_tokens is an f32 v3 tensor -> address it via its descriptor (gather just
+         * the T needed rows host-side; never upload the whole 2.5GB table). */
+        const float* emb = QWEN3
+            ? (const float*)((const unsigned char*)g_map + g_desc[v3_idx_embed()].data_off)
+            : &g_wbase[off_embed_ll()];
         for (int s = 0; s < T; s++)
             memcpy(&hx[(size_t)s*DM], &emb[(size_t)ids[s]*DM], (size_t)DM*sizeof(float));
     } else {
@@ -995,6 +999,10 @@ static void forward_layer_llama(void) {
         pack_head(d_Qh, d_q, h*DH,  DM);
         pack_head(d_Kh, d_k, kv*DH, KVD);
         pack_head(d_Vh, d_v, kv*DH, KVD);
+        if (QWEN3) {   /* Qwen3 per-head QK-norm: RMSNorm over DH (one shared weight), BEFORE RoPE */
+            rms_norm_k(d_Qh, d_Qh, d_qnorm, Spad, DH);
+            rms_norm_k(d_Kh, d_Kh, d_knorm, Spad, DH);
+        }
         rope_k(d_Qh, Spad);               /* rotate_half RoPE in-place, position == row */
         rope_k(d_Kh, Spad);
         mm_ABt(d_Qh, d_Kh, d_scores, Spad, DH, Spad);
