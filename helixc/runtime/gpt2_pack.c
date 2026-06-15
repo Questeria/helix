@@ -291,10 +291,42 @@ static float e2m1_decode(int code) {
     if (e==0) mag = 0.5f*(float)m; else mag = (1.0f+0.5f*(float)m)*(float)(1<<(e-1));
     return s ? -mag : mag;
 }
-static int e2m1_encode(float v) {
+/* REFERENCE: 16-way nearest search (kept for the equivalence self-test). */
+static int e2m1_encode_ref(float v) {
     int best=0; float bd=1.0e30f;
     for (int c=0;c<16;c++){ float d=e2m1_decode(c)-v; if(d<0)d=-d; if(d<bd){bd=d;best=c;} }
     return best;
+}
+/* FAST e2m1 encode (dev-opt, ~10x): direct nearest-magnitude threshold map over the E2M1 magnitudes
+ * {0,.5,1,1.5,2,3,4,6}; midpoints {.25,.75,1.25,1.75,2.5,3.5,5} use <= so a tie picks the LOWER
+ * magnitude == the 16-way's first-min tie-break; magnitude 0 -> code 0 (sign-less, the 16-way finds
+ * code 0 before code 8). PROVEN bit-identical to e2m1_encode_ref by e2m1_equiv_selftest. */
+static int e2m1_encode(float v) {
+    float a = v < 0.0f ? -v : v;
+    int mag;
+    if      (a <= 0.25f) return 0;
+    else if (a <= 0.75f) mag = 1;
+    else if (a <= 1.25f) mag = 2;
+    else if (a <= 1.75f) mag = 3;
+    else if (a <= 2.5f)  mag = 4;
+    else if (a <= 3.5f)  mag = 5;
+    else if (a <= 5.0f)  mag = 6;
+    else                 mag = 7;
+    return mag | (v < 0.0f ? 8 : 0);
+}
+/* the fast encode MUST be bit-identical to the 16-way ref over a fine grid + the exact f32 midpoints. */
+static int e2m1_equiv_selftest(void) {
+    int bad = 0; long n = 0;
+    for (double x = -8.0; x <= 8.0; x += 0.0005) {
+        float v = (float)x;
+        if (e2m1_encode(v) != e2m1_encode_ref(v)) { if (bad<8) fprintf(stderr,"e2m1 mismatch v=%.6g fast=%d ref=%d\n", v, e2m1_encode(v), e2m1_encode_ref(v)); bad++; }
+        n++;
+    }
+    float B[] = {0.0f,0.25f,0.5f,0.75f,1.0f,1.25f,1.5f,1.75f,2.0f,2.5f,3.0f,3.5f,4.0f,5.0f,6.0f,7.0f};
+    for (int i=0;i<16;i++) for (int s=-1;s<=1;s+=2) { float v=(float)s*B[i];
+        if (e2m1_encode(v)!=e2m1_encode_ref(v)){ if(bad<8) fprintf(stderr,"e2m1 boundary mismatch v=%.6g fast=%d ref=%d\n", v, e2m1_encode(v), e2m1_encode_ref(v)); bad++; } n++; }
+    printf("e2m1_equiv_selftest: %ld cases, %d mismatches -> %s\n", n, bad, bad ? "FAIL" : "PASS");
+    return bad ? 1 : 0;
 }
 static float e4m3_decode(int c) {
     int s=(c>>7)&1, e=(c>>3)&15, m=c&7;
@@ -698,6 +730,7 @@ static int pack_qwen3(const char* model_dir, const char* out_path) {
 }
 
 int main(int argc, char** argv) {
+    if (argc >= 2 && strcmp(argv[1], "--e2m1-equiv") == 0) return e2m1_equiv_selftest();
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3], argc>=5?argv[4]:NULL);
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3], argc>=5?argv[4]:NULL);
