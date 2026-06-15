@@ -101,9 +101,30 @@ else
   echo "=== [6-7] 32B steps SKIPPED (Q32=0 or 32B weights absent) ==="
 fi
 
+echo "=== [8] RELEASE 8B receipt (CALIBRATED tau + provenance) -> RECEIPT_CHECK_PASS ==="
+if [ -f "$D/q3_8b_release.receipt" ]; then
+  need "release 8B (calibrated)" "RECEIPT_CHECK_PASS" \
+    "$BIN" --v3-receipt-check "$D/q3_8b_release.receipt" "$D/qwen3-8b-v16.weights" "$D/q3_8b_release.receipt.logits" "$D/q3_logits_ref.bin"
+  if grep -q '^tier3_tau_prov ' "$D/q3_8b_release.receipt"; then echo "  [PASS] 8B receipt carries tier3_tau_prov"; else echo "  [FAIL] 8B receipt missing tau provenance"; rc=1; fi
+else echo "  [skip] $D/q3_8b_release.receipt absent (run the release re-emit first)"; fi
+
+if [ "$Q32" = "1" ] && [ -f "$D/q3_32b_release.receipt" ]; then
+  echo "=== [9] RELEASE 32B receipt (CALIBRATED tau, the headline) -> RECEIPT_CHECK_PASS ==="
+  need "release 32B (calibrated)" "RECEIPT_CHECK_PASS" \
+    "$BIN" --v3-receipt-check "$D/q3_32b_release.receipt" "$D/qwen3-32b-v16.weights" "$D/q3_32b_release.receipt.logits" "$D/q3_32b_rep_ref.bin"
+  if grep -q '^tier3_tau_prov ' "$D/q3_32b_release.receipt"; then echo "  [PASS] 32B receipt carries tier3_tau_prov"; else echo "  [FAIL] 32B receipt missing tau provenance"; rc=1; fi
+fi
+
+echo "=== [10] TEETH: a faithful run DECLARED with tau BELOW its own max_abs -> REJECT=TIER3_ENVELOPE ==="
+# proves the (calibrated) envelope rejects any run whose deviation exceeds the declared bound
+HX_TIER3_TAU=2.0 "$BIN" --v3-receipt-from-logits "$D/q3.receipt.logits" "$D/qwen3-8b-v16.weights" \
+  "$D/qwen3_ids.txt" "$D/q3_logits_ref.bin" "$T/teeth.receipt" >/dev/null 2>&1
+need "NC teeth (tau<max_abs)" "REJECT=TIER3_ENVELOPE" \
+  "$BIN" --v3-receipt-check "$T/teeth.receipt" "$D/qwen3-8b-v16.weights" "$D/q3.receipt.logits" "$D/q3_logits_ref.bin"
+
 echo
 if [ "$rc" = "0" ]; then
-  echo "RECEIPT_GATE_PASS (KAT + genuine 8B/32B + determinism + NCs by named reject)"
+  echo "RECEIPT_GATE_PASS (KAT + genuine 8B/32B + calibrated release receipts + determinism + NCs by named reject incl. teeth)"
 else
   echo "RECEIPT_GATE_FAIL"
 fi
