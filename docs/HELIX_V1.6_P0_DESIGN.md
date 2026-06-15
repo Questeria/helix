@@ -26,4 +26,22 @@ P0 design-investigate (read-only, 3 lenses + synthesis, Workflow wfllx727y). **G
 - Tier 3 = promote the gate's existing acceptance scaffold (argmax + max_abs<τ) into a recorded receipt field; τ empirically calibrated against the identically-quantized oracle, never hand-tuned.
 
 ## P1 first step
-**Qwen2.5-7B VRAM-resident warm-up** (fits at 4-bit in VRAM, no streaming) to de-risk the importer + QKV-bias + dequant before the 14B streaming integration.
+**Qwen3-8B VRAM-resident warm-up** (fits at 4-bit in VRAM, no streaming) to de-risk the importer + arch deltas + NVFP4 dequant before the streaming feat.
+
+---
+
+## P1a recon — model decision + Qwen3-8B (2026-06-14)
+
+**Model decision (owner: "best + most ambitious"):** the **Qwen3 family** (the on-disk staged models; Qwen2.5 is NOT on disk and Qwen3 is *closer* to the bias-free importer). **Warm-up = Qwen3-8B** (on disk, VRAM-resident at 4-bit, no streaming). **Headline feat = Qwen3-32B** — the most ambitious model that still fits the existing approach: 32B fp16 ~65 GB (**8× the 8 GB card**); 4-bit ~20 GB (**2.7× usable VRAM → streaming hard-load-bearing**) yet fits the 31.8 GB host RAM, so **no new disk tier** is needed (70B+ would need one — out of scope). Qwen3-14B is the fallback. Both feat models need a ~20–28 GB download; the 8B warm-up needs none.
+
+**Qwen3-8B config (verified `~/ingredients/Qwen_Qwen3-8B/config.json`, complete: 5 shards + index + tokenizer):** `Qwen3ForCausalLM`; DM=4096, NL=36, NH=32, NKV=8 (GQA×4), head_dim=128 (NH·128=4096=DM, KVD=8·128=1024), DF=12288, vocab=151936, rope_theta=1e6, **rms_norm_eps=1e-6**, **attention_bias=false**, **tie_word_embeddings=false**, bf16 source.
+
+**Arch deltas vs the v1.4 SmolLM2/Llama path (the importer + worker work):**
+1. **QK-norm (NEW):** per-head RMSNorm on q and k (`q_norm.weight`/`k_norm.weight` per layer, shape [head_dim=128]) before RoPE. Importer order table omits them → **ADD**; worker must apply per-head RMSNorm on q/k. (No QK-norm in v1.4.)
+2. **Untied head (NEW):** `tie_word_embeddings=false` → a separate `lm_head.weight` tensor exists. The importer's Llama path assumes **tied** (reuses embedding) → **ADD `lm_head.weight`**; worker uses it (not the embedding) for logits.
+3. **No QKV bias:** `attention_bias=false` → the planned `add_bias` wiring is **moot** (the bias-free path is correct). The Qwen2.5-bias assumption from P0 does not apply to Qwen3.
+4. **eps 1e-6 vs the kernel's baked 1e-5:** the RMSNorm `@kernel` bakes eps=1e-5 and the host **fail-closes on any other eps** (`gpt2_infer.c:321`). Qwen3 needs 1e-6. Numerically negligible (mean(x²)≫eps) but for a *faithful-execution* claim the kernel should use the model's eps → either make the `@kernel` eps a runtime param (an `@kernel` example edit — new PTX ref + NCs, **no kovc.hx edit**) or relax the guard + document eps as within the Tier-3 envelope. Decide in the build.
+
+**Runtime note (VRAM):** only ~2.7 GB free of 8 GB (~5.2 GB held by the Windows desktop/apps). A VRAM-resident Qwen3-8B-4bit warm-up needs ~5 GB → **free ~3–5 GB (close GPU apps / idle desktop) before the GPU run.** The importer is CPU-only.
+
+**P1a sub-plan (gate-able increments):** (i) **Importer** (`gpt2_pack.c`): add the Qwen3 order entries (q_norm/k_norm/lm_head) + the NVFP4 4-bit packing (matching the dequant `@kernel` + a from-scratch oracle EXACTLY — the silent-wrong-text hazard). **Gateable CPU-only:** pack Qwen3-8B → verify the packed bytes vs the oracle quantization. (ii) **Worker** (`gpt2_infer.c`): per-head QK-norm + untied head + eps + dequant-on-upload. **Gateable:** run + compare to the 4-bit-aware oracle within the Tier-3 envelope.
