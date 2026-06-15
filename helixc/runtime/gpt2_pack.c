@@ -383,7 +383,7 @@ static int nvfp4_selftest(void) {
 /* CPU test on a REAL safetensors tensor: load [out,in] (bf16->f32), quantize, dequant, report the
  * quant error. rmse/rms_w (relative RMS error) is the Tier-3 envelope basis; a high value would mean
  * the amax-per-tensor scale is outlier-dominated. Usage: --nvfp4-testreal <shard.safetensors> <name>. */
-static int nvfp4_testreal(const char* shard, const char* tname) {
+static int nvfp4_testreal(const char* shard, const char* tname, const char* dumpbin) {
     int fd = open(shard, O_RDONLY);
     if (fd < 0) { fprintf(stderr, "open %s: %s\n", shard, strerror(errno)); return 2; }
     struct stat st; if (fstat(fd, &st) != 0) { fprintf(stderr, "fstat\n"); return 2; }
@@ -423,6 +423,11 @@ static int nvfp4_testreal(const char* shard, const char* tname) {
     double packed = (double)rows*kwords*4 + (double)rows*kblk*4 + 4, f32b = (double)n*4;
     printf("nvfp4_testreal %s [%dx%d] Kpad=%d | w_amax=%.5g rms_w=%.5g | quant max_abs=%.5g mean_abs=%.5g rmse=%.5g (rmse/rms_w=%.4f) max_rel=%.3g | nvfp4=%.1fMB vs f32=%.1fMB (%.2fx)\n",
            tname, rows, K, Kpad, wamax, rms_w, maxabs, sum_abs_e/(double)cnt, rmse, rmse/rms_w, maxrel, packed/1e6, f32b/1e6, f32b/packed);
+    if (dumpbin) {   /* STEP-1 cross-tool gate: dump rec [rows x Kpad] for the worker to byte-match */
+        FILE* df = fopen(dumpbin, "wb");
+        if (df) { fwrite(rec, 4, (size_t)rows*Kpad, df); fclose(df);
+                  fprintf(stderr, "[testreal] dumped rec [%dx%d] -> %s\n", rows, Kpad, dumpbin); }
+    }
     free(w); free(W); free(Sc); free(rec); free(ts); munmap(base, flen); close(fd);
     return 0;
 }
@@ -452,13 +457,13 @@ static int index_shard(const char* idx_path, const char* tname, char* out, int o
 }
 /* like --nvfp4-testreal but on a (possibly sharded) MODEL DIR: look the tensor up in the index ->
  * the right shard -> quantize-test it. Usage: --nvfp4-testmodel <model_dir> <tensor.name>. */
-static int nvfp4_testmodel(const char* dir, const char* tname) {
+static int nvfp4_testmodel(const char* dir, const char* tname, const char* dumpbin) {
     char idx[1100]; snprintf(idx, sizeof(idx), "%s/model.safetensors.index.json", dir);
     char shard[300];
     if (!index_shard(idx, tname, shard, sizeof(shard))) { fprintf(stderr, "tensor %s not in index %s\n", tname, idx); return 2; }
     char path[1500]; snprintf(path, sizeof(path), "%s/%s", dir, shard);
     fprintf(stderr, "[testmodel] %s -> shard %s\n", tname, shard);
-    return nvfp4_testreal(path, tname);
+    return nvfp4_testreal(path, tname, dumpbin);
 }
 
 /* ===================== v1.6 sharded-model loader + HXGW v3 NVFP4 pack ===================== */
@@ -694,8 +699,8 @@ static int pack_qwen3(const char* model_dir, const char* out_path) {
 
 int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
-    if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3]);
-    if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3]);
+    if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3], argc>=5?argv[4]:NULL);
+    if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3], argc>=5?argv[4]:NULL);
     if (argc >= 4 && strcmp(argv[1], "--pack-qwen3") == 0) return pack_qwen3(argv[2], argv[3]);
     if (argc < 4) {
         fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights> [--arch llama]\n", argv[0]);

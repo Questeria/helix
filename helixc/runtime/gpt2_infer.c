@@ -92,6 +92,34 @@ static float RMS_EPS = 1e-5f;
 #define VERSION 1u
 #define HDR_BYTES 64
 
+/* ---- v1.6 HXGW v3 NVFP4 dequant (host) -- MIRRORS gpt2_pack.c quantizer/nvfp4_dequant_kernel.hx
+ * EXACTLY (same codecs, same device formula) so the worker reconstructs byte-identical f32 to the
+ * importer's verifier. v3 file = 64B hdr (VERSION=3@4, head_dim@56, n_tensors@60) + an n_tensors-entry
+ * HXGWv3Desc table (32B each) + data. packed tensor: data_off->i32 words[rows*(Kpad/7)];
+ * scale_off->E4M3 micro bytes[rows*(Kpad/16)] then ONE f32 per-tensor scale ts. */
+typedef struct { uint32_t packed, rows, K, Kpad; uint64_t data_off, scale_off; } HXGWv3Desc;
+static float v3_e4m3_decode(int c) {
+    int s=(c>>7)&1, e=(c>>3)&15, m=c&7;
+    if (e==15 && m==7) return nanf("");
+    float mag; if (e==0) mag=(m/8.0f)*ldexpf(1.0f,-6); else mag=(1.0f+m/8.0f)*ldexpf(1.0f,e-7);
+    return s ? -mag : mag;
+}
+/* dequant packed [rows x Kpad] NVFP4 -> out f32 (compact scales: micro byte per 16-block * ts). */
+static void v3_dequant_packed(const int32_t* w, const uint8_t* micro, float ts, float* out, int rows, int Kpad) {
+    int kwords=Kpad/7, kblk=Kpad/16;
+    for (int r=0;r<rows;r++) for (int col=0;col<Kpad;col++){
+        int word=col/7, slot=col-word*7;
+        int wv = w[(long)r*kwords+word];
+        for (int j=0;j<slot;j++) wv = wv/16;
+        int code = wv - (wv/16)*16;
+        int c8 = code - (code/8)*8;
+        float magf = (c8==0)?0.0f:(c8==1)?0.5f:(c8==2)?1.0f:(c8==3)?1.5f:(c8==4)?2.0f:(c8==5)?3.0f:(c8==6)?4.0f:6.0f;
+        float sm = (code/8==0)?magf:-magf;
+        float eff = v3_e4m3_decode(micro[(long)r*kblk + col/16]) * ts;
+        out[(long)r*Kpad+col] = sm * eff;
+    }
+}
+
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) { const char* m = 0; cuGetErrorString(r, &m); fprintf(stderr, "CUDA %s: %s (%d)\n", what, m ? m : "?", (int)r); return 1; }
     return 0;
@@ -1412,6 +1440,45 @@ static int run_block0_dump(const char* ids_path, const char* out_path) {
     return 0;
 }
 
+/* --v3-dequant-dump <weights.v3> <tensor_idx> <out.bin>: self-contained (no GPU) reader+dequant of
+ * ONE HXGW v3 tensor by its build-order index -> f32 to out.bin ([rows x Kpad] for packed, [rows x K]
+ * for f32). STEP-1 gate: must be byte-identical to gpt2_pack --nvfp4-testmodel's dequant of the same
+ * tensor (proves the worker reads the v3 format + dequants exactly like the importer). */
+static int run_v3_dequant_dump(const char* wpath, int idx, const char* outbin) {
+    int fd = open(wpath, O_RDONLY);
+    if (fd < 0) { fprintf(stderr, "open %s: %s\n", wpath, strerror(errno)); return 2; }
+    struct stat st; if (fstat(fd, &st) != 0) { fprintf(stderr, "fstat\n"); return 2; }
+    unsigned char* base = (unsigned char*)mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) { fprintf(stderr, "mmap %s\n", strerror(errno)); return 2; }
+    uint32_t magic, ver, ntens;
+    memcpy(&magic, base, 4); memcpy(&ver, base+4, 4); memcpy(&ntens, base+60, 4);
+    if (magic != MAGIC) { fprintf(stderr, "bad magic 0x%08x\n", magic); return 2; }
+    if (ver != 3u) { fprintf(stderr, "not an HXGW v3 file (ver=%u)\n", ver); return 2; }
+    if (idx < 0 || idx >= (int)ntens) { fprintf(stderr, "idx %d out of range [0,%u)\n", idx, ntens); return 2; }
+    HXGWv3Desc* desc = (HXGWv3Desc*)(base + HDR_BYTES);
+    HXGWv3Desc d = desc[idx];
+    fprintf(stderr, "[v3-dequant] idx=%d packed=%u rows=%u K=%u Kpad=%u data_off=%llu scale_off=%llu\n",
+            idx, d.packed, d.rows, d.K, d.Kpad, (unsigned long long)d.data_off, (unsigned long long)d.scale_off);
+    FILE* of = fopen(outbin, "wb"); if (!of) { fprintf(stderr, "open out %s\n", outbin); return 2; }
+    if (d.packed) {
+        int rows=(int)d.rows, Kpad=(int)d.Kpad, kblk=Kpad/16;
+        const int32_t* w = (const int32_t*)(base + d.data_off);
+        const uint8_t* micro = (const uint8_t*)(base + d.scale_off);
+        float ts; memcpy(&ts, base + d.scale_off + (size_t)rows*kblk, 4);
+        float* out = (float*)malloc((size_t)rows*Kpad*4);
+        v3_dequant_packed(w, micro, ts, out, rows, Kpad);
+        size_t nw = fwrite(out, 4, (size_t)rows*Kpad, of); free(out);
+        fprintf(stderr, "[v3-dequant] wrote %zu f32 ([rows x Kpad]) ts=%.6g\n", nw, (double)ts);
+    } else {
+        long n = (long)d.rows * d.K;
+        size_t nw = fwrite(base + d.data_off, 4, (size_t)n, of);
+        fprintf(stderr, "[v3-dequant] wrote %zu f32 (dense)\n", nw);
+    }
+    fclose(of); munmap(base, (size_t)st.st_size); close(fd);
+    printf("V3_DEQUANT_DUMP_OK idx=%d packed=%u rows=%u Kpad=%u\n", idx, d.packed, d.rows, d.Kpad);
+    return 0;
+}
+
 /* --block0: run ONE GPT-2 block on the canonical prompt + compare to ref_block0.npy (the committed
  * P5 gate-2 anchor; behaviour byte-identical to the prior single-block build). */
 static int run_block0(const char* refpath) {
@@ -1783,6 +1850,10 @@ int main(int argc, char** argv) {
     if ((e=getenv("HX_FAST")))     g_fast=atoi(e);
     DH = DM / NH;
     ATTN_SCALE = 1.0f / sqrtf((float)DH);
+
+    /* v1.6 STEP-1 self-contained gate (no GPU, no ptx): dequant ONE HXGW v3 tensor to f32. */
+    if (argc >= 5 && strcmp(argv[1], "--v3-dequant-dump") == 0)
+        return run_v3_dequant_dump(argv[2], atoi(argv[3]), argv[4]);
 
     if (argc < 4) {
         fprintf(stderr,
