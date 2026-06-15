@@ -409,10 +409,45 @@ static int nvfp4_testreal(const char* shard, const char* tname) {
     free(w); free(W); free(Sc); free(rec); free(ts); munmap(base, flen); close(fd);
     return 0;
 }
+/* sharded safetensors: find which shard file holds a tensor, from model.safetensors.index.json
+ * (weight_map = {"tensor.name":"model-0000N-of-...safetensors", ...}). Returns 1 + the shard
+ * filename in `out`, or 0. Plain substring search of the JSON text (the index is small). */
+static int index_shard(const char* idx_path, const char* tname, char* out, int outsz) {
+    int fd = open(idx_path, O_RDONLY); if (fd < 0) return 0;
+    struct stat st; if (fstat(fd, &st) != 0) { close(fd); return 0; }
+    char* j = (char*)malloc((size_t)st.st_size + 1);
+    ssize_t got = read(fd, j, (size_t)st.st_size); close(fd);
+    if (got < 0) { free(j); return 0; } j[got] = 0;
+    char key[300]; snprintf(key, sizeof(key), "\"%s\"", tname);
+    char* p = strstr(j, key); if (!p) { free(j); return 0; }
+    p += strlen(key);
+    while (*p && *p != ':') p++;
+    if (*p != ':') { free(j); return 0; }
+    p++;
+    while (*p && *p != '"') p++;
+    if (*p != '"') { free(j); return 0; }
+    p++;
+    char* q = strchr(p, '"');
+    if (!q) { free(j); return 0; }
+    int n = (int)(q - p); if (n >= outsz) n = outsz - 1;
+    memcpy(out, p, (size_t)n); out[n] = 0;
+    free(j); return 1;
+}
+/* like --nvfp4-testreal but on a (possibly sharded) MODEL DIR: look the tensor up in the index ->
+ * the right shard -> quantize-test it. Usage: --nvfp4-testmodel <model_dir> <tensor.name>. */
+static int nvfp4_testmodel(const char* dir, const char* tname) {
+    char idx[1100]; snprintf(idx, sizeof(idx), "%s/model.safetensors.index.json", dir);
+    char shard[300];
+    if (!index_shard(idx, tname, shard, sizeof(shard))) { fprintf(stderr, "tensor %s not in index %s\n", tname, idx); return 2; }
+    char path[1500]; snprintf(path, sizeof(path), "%s/%s", dir, shard);
+    fprintf(stderr, "[testmodel] %s -> shard %s\n", tname, shard);
+    return nvfp4_testreal(path, tname);
+}
 
 int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3]);
+    if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3]);
     if (argc < 4) {
         fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights> [--arch llama]\n", argv[0]);
         return 2;
