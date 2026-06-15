@@ -1,4 +1,4 @@
-// GPU FUSED NVFP4-dequant GEMV (v1.7 INCREMENT 4 -- the fast-decode leg). Computes ONE output row
+// GPU FUSED NVFP4-dequant GEMV (v1.7 INCREMENT 4 -- a VERIFIED building block, NOT a decode speedup; see FINDING). Computes ONE output row
 //   y[n] = sum_j x[j] * W[n,j]
 // where W is stored PACKED NVFP4 (never materialised to f32): for output n it reads that row's packed
 // i32 words and dequantises each 4-bit code INLINE in the accumulation -- so decode no longer has to
@@ -14,6 +14,14 @@
 // NO kovc.hx edit (rides the existing @kernel path) -> the self-host fixpoint stays cdcf8673.
 // NOTE: the per-iteration values are IMMUTABLE `let`s (the dequant if-ladder pattern); re-assigning a
 // `mut` with an if-expression result mis-allocates an unbound -1 register in the kovc emitter.
+//
+// FINDING (v1.7 INC4 P2, MEASURED 2026-06-15): wiring this into decode_step_llama is token-for-token
+// CORRECT but ~1.8x SLOWER than the f32 path (9.0 vs 4.9 s/tok, 8B RTX 3070). The per-output SERIAL
+// unpack (one thread per output, block=1) loses to the f32 path's PARALLEL dequant kernel + f32 gemv --
+// avoiding the f32 materialisation does not pay for the serial per-output unpack. Decode is fundamentally
+// block=1-gemv-bound (esp the 151936-output lm_head gemv, uncoalesced); the real decode lever is a
+// PARALLEL / warp-reduction gemv, NOT a fused-dequant gemv. The decode wiring was reverted; this kernel
+// is kept as a verified, oracle-checked building block.
 @kernel
 fn gemv_abt_nvfp4(x: f32, w: t2, sc: f32, y: f32, kpad: i32) {
     let n = block_idx() * block_dim() + thread_idx();
