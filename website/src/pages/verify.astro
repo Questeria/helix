@@ -169,11 +169,12 @@ import Base from "../layouts/Base.astro";
       </div>
 
       <div class="card-grid two">
-        <div class="link-card">
+        <a class="link-card" href="/reproduce/">
           <span class="lc-kicker">Tier A · repo only</span>
           <h3>The trust core</h3>
-          <p>Fully third-party-reproducible from the committed repo alone: <code class="mono">reproduce_trust.sh</code> plus CI. No weights, no oracle, no GPU — about one minute, CPU-only, fail-closed, green on a clean GitHub ubuntu-latest runner on every push.</p>
-        </div>
+          <p>Fully third-party-reproducible from the committed repo alone: <code class="mono">reproduce_trust.sh</code> plus CI. No weights, no oracle, no GPU — about one minute, CPU-only, fail-closed, green on a clean GitHub ubuntu-latest runner on every push. The step-by-step is on the Reproduce page.</p>
+          <span class="lc-arrow">Reproduce →</span>
+        </a>
         <div class="link-card">
           <span class="lc-kicker">Tier B · repo + external artifacts</span>
           <h3>The model demos</h3>
@@ -184,13 +185,10 @@ import Base from "../layouts/Base.astro";
       <div class="code-card" style="margin-top: 28px;">
         <div class="code-head">
           <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
-          <span>reproduce · tier A, then tier B</span>
+          <span>reproduce · tier B (the model demos)</span>
         </div>
-<pre class="code-body"><span class="cmt"># Tier A — the trust core. Repo only; no weights, no oracle, no GPU.</span>
-git clone https://github.com/Questeria/helix &amp;&amp; cd helix
-bash scripts/reproduce_trust.sh      <span class="cmt"># ~1 minute · CPU-only · fail-closed</span>
-
-<span class="cmt"># Tier B — the model demos, anchored to the v1.4 release. Weights + an oracle required.</span>
+<pre class="code-body"><span class="cmt"># Tier A (the trust core) is on the Reproduce page. Tier B — the model demos —</span>
+<span class="cmt"># are anchored to the v1.4 release and additionally need weights + an oracle:</span>
 git checkout v1.4
 bash scripts/gpt2_demo_attest.sh     <span class="cmt"># from-raw rebuild → GPT-2 vs oracle → signed attestation</span>
 bash scripts/llama_model_gate.sh     <span class="cmt"># SmolLM2-135M gate · first run 72 s · fail-closed</span></pre>

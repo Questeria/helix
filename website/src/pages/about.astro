@@ -114,7 +114,7 @@ import Base from "../layouts/Base.astro";
       </div>
 
       <ol class="resid-list">
-        <li><b>One-command reproduction, on someone else's machine.</b> <code>bash scripts/reproduce_trust.sh</code> — clean checkout, CPU-only, about a minute — runs green in CI on a clean ubuntu-latest runner, a different machine from the author's.</li>
+        <li><b>One-command reproduction, on someone else's machine.</b> <code>bash scripts/reproduce_trust.sh</code> — clean checkout, CPU-only, about a minute — runs green in CI on a clean ubuntu-latest runner, a different machine from the author's. <a href="/reproduce/" style="color: var(--violet); text-decoration: underline;">Run it yourself →</a></li>
         <li><b>Context-isolated adversarial reproductions.</b> Reproductions run without the author's context, looking for the claim to break rather than to confirm it.</li>
         <li><b>A different-model-lineage read-only review.</b> An independent review with no write access examined the chain; its findings were remediated.</li>
         <li><b>A live joint reproduction.</b> The closure itself: the chain rebuilt live, witnessed by the project owner, with the attestation and residuals committed to the trust record.</li>

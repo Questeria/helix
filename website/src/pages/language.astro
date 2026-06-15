@@ -243,26 +243,12 @@ import Base from "../layouts/Base.astro";
       </div>
 
       <div class="card-grid two" style="align-items: start;">
-        <div class="code-card">
-          <div class="code-head">
-            <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
-            <span>terminal · linux / wsl2</span>
-          </div>
-<pre class="code-body"><span class="cmt"># rebuild the toolchain from the 299-byte root</span>
-git clone https://github.com/Questeria/helix
-cd helix
-bash scripts/reproduce_trust.sh
-<span class="cmt"># builds the ladder + proves the fixpoint
-# clean checkout · CPU-only · ~1 min</span>
-
-<span class="cmt"># the universal gate: fixpoint + 109-program corpus
-# + 4 negative-diagnostic checks + PTX regression</span>
-bash scripts/gate_kovc.sh</pre>
-          <div class="code-foot">
-            <span>gcc — only as the independent DDC auditor</span>
-            <span class="out">GPU (CUDA, RTX-class) — only for the GPU legs</span>
-          </div>
-        </div>
+        <a class="link-card" href="/reproduce/">
+          <span class="lc-kicker">Step 1 · rebuild it</span>
+          <h3>Mint the compiler from 299 bytes</h3>
+          <p>One committed command rebuilds the whole ladder from the 299-byte root and proves the fixpoint — clean checkout, CPU-only, about a minute. The step-by-step, the expected output, and the universal gate all live on the Reproduce page.</p>
+          <span class="lc-arrow">Reproduce →</span>
+        </a>
         <div class="prose">
           <p>After that, the seed-minted kovc compiles your <code>.hx</code> directly to a Linux x86-64 ELF — no assembler, no linker, no libc, and no Python anywhere in the toolchain. The repo carries exactly one committed <code>.py</code> file: a fenced numpy verification oracle that is never on the compile or run path.</p>
           <p>No pre-built compiler is ever trusted: the ladder runs hex0 → hex1 → hex2 → catm → M0 → cc_amd64 → M2-Planet → seed → kovc, each rung built only by the rung before it.</p>
