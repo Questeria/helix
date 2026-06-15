@@ -57,5 +57,11 @@ France is" (an in-context-repetition / induction prompt — the worst case obser
   are within the quant noise of each other (top-1 margin ≲ ~1.7 logits on 32B), so greedy argmax can
   flip on genuine near-ties (DoD Risk #7). The receipt reports `tier3_argmax_match` honestly; the
   argmax sub-gate passes only when the top-1 is decisive.
+- **In-distribution caveat:** the shipped release receipts are emitted on prompts that are MEMBERS of
+  the calibration set (8B on the near-tie prompt; 32B on the France-repetition prompt that anchors its
+  max). They are therefore in-distribution — τ's generalization to *unseen* prompts rests on the 2×
+  margin + N, not on held-out receipts. The checker still recomputes `max_abs` independently and the
+  teeth NC proves the envelope rejects out-of-envelope declarations; a held-out demo prompt would
+  strengthen the generalization claim and is v1.7 work (cheap once GPU dequant lands).
 - **Is not cryptographic.** Tier-3 is an empirical envelope (TAO/CommitLLM-style acceptance region),
   never a soundness proof. Tier-1 exact Freivalds remains deferred (f32 GEMM).
