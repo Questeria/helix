@@ -234,7 +234,8 @@ static CUmodule   g_dqmod = 0;
 static CUfunction f_dq_tiled = 0;
 static int        g_gpu_dq = 0, g_hostdeq = 0;
 static CUdeviceptr d_packed = 0, d_sc = 0, d_dqscr = 0;
-static float*     g_scbuf = NULL;
+static float*     g_scbuf = NULL;   /* pinned (cuMemAllocHost) v1.7 INC2b -> DMA HtoD for the effective scales */
+static void*      g_hpin  = NULL;   /* v1.7 INC2b: pinned host bounce for the packed-words HtoD (DMA vs pageable staging) */
 static float      g_e4m3_tab[256];   /* v1.7: e4m3_decode LUT (256 byte values) -> the per-forward scale build avoids ldexpf */
 /* v1.7 INCREMENT 2: env-gated profiling (HX_PROF=1) of the per-forward upload breakdown -- splits the
  * v3_upload_gpu cost into mmap-touch+HtoD vs the CPU effective-scale build vs the dequant launch+sync. */
@@ -428,6 +429,10 @@ static int load_gpt2_weights(const char* path) {
     g_maplen = (size_t)st.st_size;
     g_map = mmap(NULL, g_maplen, PROT_READ, MAP_PRIVATE, g_fd, 0);
     if (g_map == MAP_FAILED) { fprintf(stderr, "mmap weights: %s\n", strerror(errno)); return 2; }
+    /* v1.7 INCREMENT 2b: prefetch the whole payload so the per-tensor uploads hit cached pages instead
+     * of the slow random mmap-fault pattern (cold mmap-fault read was ~3x a sequential read). WILLNEED
+     * (not SEQUENTIAL) keeps pages cached for decode's re-reads. Best-effort -- ignore the return. */
+    madvise(g_map, g_maplen, MADV_WILLNEED);
     const unsigned char* hb = (const unsigned char*)g_map;
     uint32_t magic, ver, nl, dm, nh, nv, nc, dff; uint64_t nfloat;
     memcpy(&magic,&hb[0],4); memcpy(&ver,&hb[4],4); memcpy(&nl,&hb[8],4); memcpy(&dm,&hb[12],4);
@@ -1537,8 +1542,8 @@ static int alloc_buffers(int Smax) {
                 d_packed = A(mp);                          /* packed i32 words (4B each) */
                 d_sc     = A(ms);                          /* effective per-16-block scales (f32) */
                 d_dqscr  = A(sc);                          /* dequant out [rows x Kpad] before Kpad->K compaction */
-                g_scbuf  = (float*)malloc((size_t)ms*4);
-                if (!g_scbuf) { fprintf(stderr, "dq g_scbuf malloc failed\n"); return 2; }
+                CK(cuMemAllocHost((void**)&g_scbuf, (size_t)ms*4), "pinned g_scbuf");   /* v1.7 INC2b: pinned -> DMA HtoD */
+                CK(cuMemAllocHost(&g_hpin,          (size_t)mp*4), "pinned packed bounce");
             }
         }
         /* q/k/v GEMM outputs are CARVED out of the (larger) fused d_qkv slab:
@@ -1619,7 +1624,8 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
     float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
     double tA = g_prof ? now_seconds() : 0.0;
-    CKX(cuMemcpyHtoD(d_packed, w, (size_t)rows*kwords*4), "dq packed HtoD");   /* first touch of `w` faults its mmap pages */
+    memcpy(g_hpin, w, (size_t)rows*kwords*4);   /* v1.7 INC2b: mmap->pinned (faults pages), then DMA HtoD */
+    CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD");
     double tB = g_prof ? now_seconds() : 0.0; g_pf_htod += tB - tA;
     for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* v1.7: LUT, byte-identical to v3_e4m3_decode */
     double tC = g_prof ? now_seconds() : 0.0; g_pf_sb += tC - tB;
@@ -1714,7 +1720,8 @@ static int setup_head(int Smax) {
             double t_lm = g_prof ? now_seconds() : 0.0;
             for (long r0=0; r0<rows; r0+=chunk) {
                 long nr = (r0+chunk<=rows) ? chunk : (rows-r0);
-                CK(cuMemcpyHtoD(d_packed, wb + (size_t)r0*kwords, (size_t)nr*kwords*4), "lm packed HtoD");
+                memcpy(g_hpin, wb + (size_t)r0*kwords, (size_t)nr*kwords*4);   /* v1.7 INC2b: pinned bounce -> DMA */
+                CK(cuMemcpyHtoD(d_packed, g_hpin, (size_t)nr*kwords*4), "lm packed HtoD");
                 for (long i=0;i<nr*(long)kblk;i++) g_scbuf[i] = g_e4m3_tab[mb[(size_t)r0*kblk + i]] * ts;
                 CK(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)nr*kblk*4), "lm scale HtoD");
                 int mm0=0, kk=Kpad, bd=BD; void* ar[]={ &d_packed,&d_sc,&d_dqscr,&mm0,&kk,&bd };
