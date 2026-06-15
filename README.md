@@ -10,6 +10,7 @@ Helix is a from-scratch, self-hosting language and compiler for machine learning
 - **Self-hosting, proven byte-identical.** `seed → K1 → K2 → K3 → K4`, with **K2 == K3 == K4 byte-for-byte** — the compiler written in Helix reproduces itself exactly.
 - **Anti-"trusting-trust."** An independent `gcc` lineage (zero M2-Planet ancestry) and the from-raw build produce a **byte-identical** seed/`K1` — a Wheeler diverse-double-compile. `gcc` is only an *auditor*, never the shipped root.
 - **Runs real ML on the GPU.** `kovc` emits PTX for a covered transformer-kernel set that executes on real NVIDIA hardware: a ≥2-layer transformer trains end-to-end on kovc-emitted GPU kernels to within ~2% (reproduced ~0%) loss of an independent numpy oracle, and GPT-2 (124M and the 1.5B XL) runs **token-for-token-verified** on the same stack (see the demo).
+- **Runs *billion-parameter* models on small GPUs, verifiably (v1.6).** Qwen3-8B — and even 32B — run on a single 8 GB consumer GPU via a from-scratch 4-bit (NVFP4) quantizer + per-layer streaming, each run emitting a reproducible **commitment + calibrated-envelope receipt** a minimal-trust verifier re-checks. Faithful *within a calibrated envelope* (the greedy next token matches the fp32 reference on decisive prompts) — honest scope, not "execution-proven" (see *Bigger models* below).
 - **ML-native language.** Forward + reverse-mode autodiff as built-ins (`grad`, `grad_rev`, `grad_rev_all`), tile/tensor types, an effect system (`@pure`), and a verifier-gated reflection runtime — language features, not libraries.
 
 The two authoritative trust records are **[`docs/TRUST_CHAIN_CLOSED.md`](docs/TRUST_CHAIN_CLOSED.md)** (the verified state + every residual, stated plainly) and **[`docs/CLEAN_REPRODUCTION.md`](docs/CLEAN_REPRODUCTION.md)** (rebuild the chain from a clean checkout). Read those for the full, precise claims.
@@ -52,6 +53,22 @@ A self-contained demo runs **GPT-2 — the real, unchanged public model (a 2019 
 - **Runbook (start here):** [`docs/HELIX_GPT2_DEMO_RUNBOOK.md`](docs/HELIX_GPT2_DEMO_RUNBOOK.md) — the operator script, honest-residuals card, and how a third party produces the weights from HuggingFace.
 - **Live chat (GPT-2-XL on Helix):** `bash scripts/serve_chat_demo.sh`, then open <http://127.0.0.1:8848/?source=sse>. Bound to `127.0.0.1`; gated green by `scripts/helix_serve_gate.sh`.
 - **One-command attestation:** `bash scripts/gpt2_demo_attest.sh` — fail-closed; rebuilds the compiler from raw, runs GPT-2 124M through kovc-emitted kernels token-for-token vs the oracle, re-runs byte-identical, and writes a signed attestation. The proof dashboard is `demo/dashboard.html`.
+
+## Bigger models — v1.6 (Qwen3-8B and 32B on an 8 GB GPU)
+
+v1.6 takes the same verify-don't-trust idea to *large* models. **Qwen3-8B — and even Qwen3-32B (≈4× the card's memory) — run on a single 8 GB consumer GPU** (reference RTX 3070), using a from-scratch **4-bit NVFP4 quantizer** + per-layer weight streaming so the full model never has to fit in VRAM at once. Each run writes a small, reproducible **receipt**.
+
+**What the receipt does — and does not — prove (stated edge-first):**
+
+- It is a **commitment + calibrated-envelope** receipt: SHA-256 over the weights, the logits, and the next-token argmax, plus a per-model calibrated bound τ. A **minimal-trust verifier** — rebuildable from the 299-byte root, with `ptxas` de-trusted and a NIST-KAT-checked SHA-256 — re-checks it and **rejects tampering by named reason** (wrong logits, wrong model, drift outside the envelope, and the "teeth" case of a too-tight declared bound).
+- The quantized run is **faithful within that calibrated envelope** — the greedy next token matches the fp32 reference on decisive prompts — but it is **not** bit-identical token-for-token (it is 4-bit), and the receipt **commits to** a run; it does **not** yet prove the GPU executed every layer faithfully (exact per-layer verification is deferred to a later release). Prior art (CommitLLM, TAO, zkLLM) is acknowledged — the contribution is the *minimal-trust* verifier, not a first.
+
+Reproduce (needs an NVIDIA GPU + the model weights):
+
+```bash
+git checkout v1.6-qwen3-32b-receipt
+bash scripts/gpu_qwen3_receipt_check.sh   # -> RECEIPT_GATE_PASS (genuine 8B/32B + named-reject negative controls)
+```
 
 ## Repository layout
 
