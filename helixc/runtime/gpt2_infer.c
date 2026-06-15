@@ -1814,6 +1814,17 @@ static int run_v3_smoke(const char* ids_path) {
     return nonfinite==0 ? 0 : 1;
 }
 
+/* v1.6 Tier-3 envelope tau. RELEASE path: a CALIBRATED bound supplied via HX_TIER3_TAU (the
+ * empirical-TAO pattern -- tau = a documented multiple of the max logit deviation measured over a
+ * calibration prompt set, a property of the (model,quant), NOT the per-run value), with HX_TAU_PROV
+ * labeling its provenance in the receipt. DEV default (env unset): the per-run measured max_abs. A
+ * calibrated tau is what gives Tier-3 independent teeth (a drifted run with max_abs>tau is rejected). */
+static double calib_tau(double measured_max_abs) {
+    const char* e = getenv("HX_TIER3_TAU");
+    double t = e ? atof(e) : 0.0;
+    return (t > 0.0) ? t : measured_max_abs;
+}
+
 /* --v3-receipt <ids> <oracle_logits.bin> <out.receipt>: run forward_full + emit a Tier-2(commitment)
  * + Tier-3(envelope) v1.6 receipt. SCOPE (honest, per docs/HELIX_V1.6_DEFINITION_OF_DONE.md):
  *   Tier-2 = reproducibility: SHA-256(committed packed weights) + ids + SHA-256(output logits) bind
@@ -1851,9 +1862,10 @@ static int run_v3_receipt(const char* ids_path, const char* oracle_path, const c
     fprintf(rf, "n_logits %d\n", NV);
     fprintf(rf, "logits_sha256 %s\n", logits_hex);
     fprintf(rf, "argmax %d\n", am);
-    fprintf(rf, "tier3_tau %.17g\n", max_abs);         /* declared envelope = the measured deviation; %.17g = exact double round-trip (a %.6f-rounded tau false-rejects at check time by ~1e-8) */
+    fprintf(rf, "tier3_tau %.17g\n", calib_tau(max_abs));   /* calibrated bound (HX_TIER3_TAU) or per-run max_abs; %.17g = exact double round-trip */
     fprintf(rf, "tier3_max_abs %.17g\n", max_abs);
     fprintf(rf, "tier3_argmax_match %d\n", argmatch);
+    { const char* tp = getenv("HX_TAU_PROV"); if (tp && *tp) fprintf(rf, "tier3_tau_prov %s\n", tp); }
     fprintf(rf, "note Tier-2=reproducibility(re-derive from committed weights, NOT faster-than-re-exec); Tier-3=envelope vs a TRUSTED f32 oracle (EMPIRICAL not crypto; argmax-preservation empirical when top1-margin<2*tau); Tier-1 exact-Freivalds DEFERRED (f32 GEMM). Prior art CommitLLM, TAO.\n");
     fclose(rf);
     printf("V3_RECEIPT_EMIT_OK argmax=%d model_sha=%.12s logits_sha=%.12s tier3_max_abs=%.4f argmatch=%d -> %s\n",
@@ -1903,9 +1915,10 @@ static int run_v3_receipt_from_logits(const char* logits_path, const char* weigh
     fprintf(rf, "n_logits %d\n", nlog);
     fprintf(rf, "logits_sha256 %s\n", logits_hex);
     fprintf(rf, "argmax %d\n", am);
-    fprintf(rf, "tier3_tau %.17g\n", max_abs);
+    fprintf(rf, "tier3_tau %.17g\n", calib_tau(max_abs));   /* calibrated bound (HX_TIER3_TAU) or per-run max_abs */
     fprintf(rf, "tier3_max_abs %.17g\n", max_abs);
     fprintf(rf, "tier3_argmax_match %d\n", argmatch);
+    { const char* tp = getenv("HX_TAU_PROV"); if (tp && *tp) fprintf(rf, "tier3_tau_prov %s\n", tp); }
     fprintf(rf, "note re-serialized from dumped logits (GPU-free re-attest); tau at full double precision; Tier-2=reproducibility (re-derive from committed weights, NOT faster-than-re-exec); Tier-3=EMPIRICAL envelope vs a TRUSTED f32 oracle (NOT crypto); Tier-1 exact-Freivalds DEFERRED. Prior art CommitLLM, TAO.\n");
     fclose(rf);
     printf("V3_RECEIPT_FROM_LOGITS_OK n_logits=%d argmax=%d model_sha=%.12s logits_sha=%.12s tier3_max_abs=%.9g argmatch=%d -> %s\n",
