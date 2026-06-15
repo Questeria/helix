@@ -226,6 +226,15 @@ static CUfunction f_mm_t, f_abt_t, f_ln_eps, f_sm_causal, f_bias, f_gelu, f_add,
 static CUfunction f_rms, f_rope, f_silu;
 /* KV-cache decode kernels (G-KV0-gated; loaded only when ARCH && KV_ON) */
 static CUfunction f_gv_abt, f_gv_ab, f_smrow;
+/* v1.7 INCREMENT 1: GPU NVFP4 dequant (the tiled sibling kernel). Default ON when HX_DQPTX points at
+ * the compiled nvfp4_dequant_tiled.ptx; HX_HOSTDEQ=1 forces the v1.6 host-dequant path (the fallback
+ * that keeps v1.6 behaviour one env away). d_packed/d_sc/d_dqscr are device scratch; g_scbuf is the
+ * host-built effective per-16-block scale (e4m3_decode(micro)*ts) staged before the launch. */
+static CUmodule   g_dqmod = 0;
+static CUfunction f_dq_tiled = 0;
+static int        g_gpu_dq = 0, g_hostdeq = 0;
+static CUdeviceptr d_packed = 0, d_sc = 0, d_dqscr = 0;
+static float*     g_scbuf = NULL;
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -1405,6 +1414,27 @@ static CUmodule g_mod;
 char            g_gpu[256];       /* non-static: read by the emit module's hello (declared extern above) */
 static char*    g_ptx = NULL;
 
+/* v1.7: optionally load the tiled NVFP4 dequant kernel (2nd module) -> sets g_gpu_dq. QWEN3/v3 only;
+ * HX_HOSTDEQ forces the host path; a missing/unloadable HX_DQPTX is non-fatal (host-dequant fallback).
+ * Called from device_init (forward modes) AND run_v3_upload_check (the byte-identical gate). */
+static void load_dequant_module(void) {
+    g_hostdeq = getenv("HX_HOSTDEQ") ? 1 : 0;
+    const char* dqp = getenv("HX_DQPTX");
+    if (!dqp || g_hostdeq || !QWEN3) return;
+    FILE* df = fopen(dqp, "rb");
+    if (!df) { fprintf(stderr, "[dq] HX_DQPTX '%s' not found; using host dequant\n", dqp); return; }
+    fseek(df,0,SEEK_END); long dsz=ftell(df); fseek(df,0,SEEK_SET);
+    char* dbuf=(char*)malloc(dsz+1);
+    if (dbuf && fread(dbuf,1,dsz,df)==(size_t)dsz) {
+        dbuf[dsz]=0;
+        if (cuModuleLoadData(&g_dqmod, dbuf)==CUDA_SUCCESS &&
+            cuModuleGetFunction(&f_dq_tiled, g_dqmod, "nvfp4_dequant_tiled")==CUDA_SUCCESS) {
+            g_gpu_dq=1; fprintf(stderr, "[dq] GPU NVFP4 dequant ON (%s)\n", dqp);
+        } else fprintf(stderr, "[dq] dequant ptx load failed; using host dequant\n");
+    }
+    fclose(df);
+}
+
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
 static int device_init(const char* ptx_path, const char* wpath) {
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
@@ -1437,6 +1467,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
             CK(cuModuleGetFunction(&f_smrow,  g_mod, "gpu_softmax_row"), "gpu_softmax_row");
         }
     }
+    load_dequant_module();   /* v1.7: GPU dequant (HX_DQPTX) -> g_gpu_dq; HX_HOSTDEQ forces host */
     if (load_gpt2_weights(wpath)) return 2;
     return 0;
 }
@@ -1491,6 +1522,14 @@ static int alloc_buffers(int Smax) {
             if ((long)DM*kpad_qd > sc) sc = (long)DM*kpad_qd;   /* o_proj [DM x QD] */
             g_v3scratch = (float*)malloc((size_t)sc*sizeof(float));
             if (!g_v3scratch) { fprintf(stderr, "v3 scratch malloc %ld failed\n", sc); return 2; }
+            if (g_gpu_dq) {   /* v1.7: device scratch for the GPU dequant, sized off sc = max rows*Kpad floats */
+                long mp = (sc+6)/7, ms = (sc+15)/16;       /* max rows*kwords, max rows*kblk */
+                d_packed = A(mp);                          /* packed i32 words (4B each) */
+                d_sc     = A(ms);                          /* effective per-16-block scales (f32) */
+                d_dqscr  = A(sc);                          /* dequant out [rows x Kpad] before Kpad->K compaction */
+                g_scbuf  = (float*)malloc((size_t)ms*4);
+                if (!g_scbuf) { fprintf(stderr, "dq g_scbuf malloc failed\n"); return 2; }
+            }
         }
         /* q/k/v GEMM outputs are CARVED out of the (larger) fused d_qkv slab:
          * q[Smax,DM] @ 0, k[Smax,KVD] after it, v[Smax,KVD] after that
@@ -1553,7 +1592,40 @@ static int alloc_buffers(int Smax) {
 
 /* upload llama layer L's 9 tensors (reuses d_ln1g for input_ln, d_ln2g for post_ln). */
 /* v3 dequant-on-upload: dequant tensor `idx` to host f32 (rows x K, NVFP4 padding dropped) -> dst. */
+/* v1.7 INCREMENT 1: dequant tensor `idx` ON THE GPU (replaces the host v3_dequant_packed for the
+ * per-layer packed weights). HtoD the packed words + the host-built effective per-16-block scale,
+ * launch nvfp4_dequant_tiled -> [rows x Kpad], then cuMemcpy2D-compact Kpad->K into dst. BYTE-IDENTICAL
+ * to v3_upload's host path by construction (same mag * (e4m3_decode(micro)*ts), single precision);
+ * --v3-upload-check gates it. Small f32 tensors stay on a plain HtoD. */
+static void v3_upload_gpu(int idx, CUdeviceptr dst) {
+    const HXGWv3Desc* d = &g_desc[idx];
+    const unsigned char* base = (const unsigned char*)g_map;
+    if (!d->packed) {
+        CKX(cuMemcpyHtoD(dst, base + d->data_off, (size_t)((long)d->rows*d->K)*4), "dq f32 HtoD");
+        return;
+    }
+    int rows=(int)d->rows, K=(int)d->K, Kpad=(int)d->Kpad, kwords=Kpad/7, kblk=Kpad/16, BD=112;
+    const int32_t* w = (const int32_t*)(base + d->data_off);
+    const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
+    float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
+    CKX(cuMemcpyHtoD(d_packed, w, (size_t)rows*kwords*4), "dq packed HtoD");
+    for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = v3_e4m3_decode(micro[i]) * ts;
+    CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD");
+    CUdeviceptr out_dev = (Kpad==K) ? dst : d_dqscr;
+    int mm0=0, kk=Kpad, bd=BD;
+    void* ar[] = { &d_packed, &d_sc, &out_dev, &mm0, &kk, &bd };
+    LX(f_dq_tiled, (unsigned)((long)rows*(Kpad/BD)), (unsigned)BD, ar);
+    if (Kpad != K) {   /* compact [rows x Kpad] -> [rows x K], drop the pad cols (host did this via memmove) */
+        CUDA_MEMCPY2D cp; memset(&cp, 0, sizeof(cp));
+        cp.srcMemoryType=CU_MEMORYTYPE_DEVICE; cp.srcDevice=d_dqscr; cp.srcPitch=(size_t)Kpad*4;
+        cp.dstMemoryType=CU_MEMORYTYPE_DEVICE; cp.dstDevice=dst;    cp.dstPitch=(size_t)K*4;
+        cp.WidthInBytes=(size_t)K*4; cp.Height=(size_t)rows;
+        CKX(cuMemcpy2D(&cp), "dq compact 2D");
+    }
+}
+
 static void v3_upload(int idx, CUdeviceptr dst) {
+    if (g_gpu_dq && !g_hostdeq) { v3_upload_gpu(idx, dst); return; }
     const HXGWv3Desc* d = &g_desc[idx];
     int rows=(int)d->rows, K=(int)d->K, Kpad=(int)d->Kpad;
     v3_get_tensor(idx, g_v3scratch);                   /* packed -> [rows x Kpad]; f32 -> [rows x K] */
@@ -1712,6 +1784,7 @@ static int run_v3_upload_check(const char* wpath) {
     if (load_gpt2_weights(wpath)) return 2;
     if (!QWEN3) { fprintf(stderr, "upload-check: not a v3/qwen3 file\n"); return 2; }
     fprintf(stderr, "[upload-check] GPU=%s; uploading Qwen3 layer 0 (dequant-on-upload)...\n", gpu);
+    load_dequant_module();   /* v1.7: so this gate exercises the GPU dequant path (g_gpu_dq) vs the host ref */
     if (alloc_buffers(64)) return 2;
     upload_layer_ll(0);
     CKX(cuCtxSynchronize(), "sync upload");
