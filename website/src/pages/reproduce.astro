@@ -149,7 +149,7 @@ git checkout v1.5-complete   <span class="cmt"># optional: pin to the release. o
           <span class="eyebrow">go further</span>
           <h2 class="section-title">Past the trust core.</h2>
         </div>
-        <p class="section-lede">Two optional steps. The first is still CPU-only; the second needs an NVIDIA GPU.</p>
+        <p class="section-lede">Optional steps past the core. The first is still CPU-only; the others need an NVIDIA GPU — the last runs a billion-parameter model.</p>
       </div>
 
       <div class="card-grid two">
@@ -163,6 +163,11 @@ git checkout v1.5-complete   <span class="cmt"># optional: pin to the release. o
           <h3>Run a real GPT-2 on it</h3>
           <p>Bring weights from HuggingFace and run an unchanged GPT-2 through Helix-emitted GPU kernels, checked token-for-token against an independent reference. Trust, not speed. It attests the <strong>v1.4 release</strong>, so run it from that tag.</p>
         </div>
+        <div class="link-card">
+          <span class="lc-kicker">needs an NVIDIA GPU + a big-model download</span>
+          <h3>Verify a billion-parameter model</h3>
+          <p>v1.6 runs <strong>Qwen3-8B</strong> (and 32B) on an 8&nbsp;GB GPU via verified 4-bit NVFP4 quantization, with a reproducible <strong>commitment + calibrated-envelope receipt</strong>. The greedy next token matches the fp32 reference on decisive prompts — <em>faithful within a calibrated envelope, not token-for-token</em>, and the receipt commits to the run, it does not yet prove execution. The gate re-checks every receipt and rejects tampering by named reason.</p>
+        </div>
       </div>
 
       <div class="code-card" style="margin-top:24px;">
@@ -171,7 +176,11 @@ git checkout v1.5-complete   <span class="cmt"># optional: pin to the release. o
 
 <span class="cmt"># the GPT-2 demo attests the v1.4 release, so run it from that tag</span>
 git checkout v1.4
-bash scripts/gpt2_demo_attest.sh   <span class="cmt"># GPU: from-raw rebuild, GPT-2 vs oracle, signed attestation</span></pre>
+bash scripts/gpt2_demo_attest.sh   <span class="cmt"># GPU: from-raw rebuild, GPT-2 vs oracle, signed attestation</span>
+
+<span class="cmt"># v1.6: an 8B (and 32B) model on an 8GB GPU via verified NVFP4 + a calibrated receipt</span>
+git checkout v1.6-qwen3-32b-receipt
+bash scripts/gpu_qwen3_receipt_check.sh   <span class="cmt"># -> RECEIPT_GATE_PASS (genuine 8B/32B + named-reject negative controls)</span></pre>
         <div class="code-foot"><span class="out">runbook: docs/HELIX_GPT2_DEMO_RUNBOOK.md</span></div>
       </div>
     </div>
