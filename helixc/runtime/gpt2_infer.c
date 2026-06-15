@@ -79,6 +79,7 @@ static float ATTN_SCALE = 0.125f;  /* 1/sqrt(head_dim)=1/sqrt(64) */
 static int   ARCH = 0;             /* 0=gpt2 (v1 header), 1=llama (v2 header) */
 static int   NKV = 0;              /* llama: n_kv_heads (GQA); KVD = NKV*DH */
 static int   KVD = 0;
+static int   QD  = 0;              /* query/attention dim = NH*DH (== DM for 8B/SmolLM2; != DM for Qwen3-32B) */
 static float ROPE_THETA = 0.0f;
 static int   EOS_ID = -1;
 static int   g_specials_on = 0;    /* HX_SPECIALS: ChatML control-token tokenize (serve, instruct) */
@@ -476,7 +477,7 @@ static int peek_weights_header(const char* path) {
         if (arch != 1u) { fprintf(stderr, "peek: v2 header with unknown arch %u\n", arch); return 2; }
         ARCH = 1; NL=(int)nl; DM=(int)dm; NH=(int)nh; NV=(int)nv; NC=(int)nc; DFF=(int)dff;
         NKV=(int)nkv; ROPE_THETA=th; RMS_EPS=ep;
-        DH = DM / NH; KVD = NKV * DH;
+        DH = DM / NH; KVD = NKV * DH; QD = NH * DH;
         ATTN_SCALE = 1.0f / sqrtf((float)DH);
         if (NKV <= 0 || NH % NKV) { fprintf(stderr, "peek: bad GQA heads %d/%d\n", NH, NKV); return 2; }
         /* the rmsnorm kernel BAKES eps=1e-5 (G-L0-verified); fail closed on any other eps
@@ -494,7 +495,7 @@ static int peek_weights_header(const char* path) {
         ARCH = 1; QWEN3 = 1;
         NL=(int)nl; DM=(int)dm; NH=(int)nh; NV=(int)nv; NC=(int)nc; DFF=(int)dff;
         NKV=(int)nkv; ROPE_THETA=th; RMS_EPS=ep; HD_CFG=(int)hd; g_ntensors=(int)ntens;
-        DH = HD_CFG > 0 ? HD_CFG : DM / NH; KVD = NKV * DH;
+        DH = HD_CFG > 0 ? HD_CFG : DM / NH; KVD = NKV * DH; QD = NH * DH;
         ATTN_SCALE = 1.0f / sqrtf((float)DH);
         if (NKV <= 0 || NH % NKV) { fprintf(stderr, "peek: bad GQA heads %d/%d\n", NH, NKV); return 2; }
         /* the rmsnorm kernel BAKES eps=1e-5; Qwen3 uses 1e-6. The gap is ~1e-6/mean(x^2), far below
@@ -593,10 +594,10 @@ static void pack_head(CUdeviceptr dst, CUdeviceptr src, int hbase, int srccols) 
         CKX(cuMemcpyDtoD(s_dst, s_src, (size_t)DH * sizeof(float)), "pack head");
     }
 }
-static void scatter_head(CUdeviceptr dst, int hbase, CUdeviceptr src) {
+static void scatter_head(CUdeviceptr dst, int hbase, CUdeviceptr src, int dststride) {
     for (int s = 0; s < Spad; s++) {
         CUdeviceptr s_src = src + (CUdeviceptr)((size_t)(s*DH) * sizeof(float));
-        CUdeviceptr s_dst = dst + (CUdeviceptr)((size_t)(s*DM + hbase) * sizeof(float));
+        CUdeviceptr s_dst = dst + (CUdeviceptr)((size_t)(s*dststride + hbase) * sizeof(float));
         CKX(cuMemcpyDtoD(s_dst, s_src, (size_t)DH * sizeof(float)), "scatter head");
     }
 }
@@ -991,7 +992,7 @@ static void forward_layer_gpt2(void) {
         softmax_causal(d_scores, d_attnw, Spad, Spad);
         mm_AB(d_attnw, d_Vh, d_aoh, Spad, Spad, DH);     /* ao_h[Spad,DH]=attn@V_h */
         if (g_dbg && h==0) { dbg_row("scores_h0", d_scores, 0, Spad); dbg_row("attnw_h0", d_attnw, 0, Spad); dbg_row("aoh_h0", d_aoh, 0, DH); }
-        scatter_head(d_ctx, qb, d_aoh);
+        scatter_head(d_ctx, qb, d_aoh, DM);   /* gpt2: d_ctx row-stride = DM */
     }
     /* the 3 aggregate attention ops (one per real per-head kernel; agg=NH launches each) */
     emit_op(L, 3, "tiled_matmul_abt", "attn", "attn_scores", NH);
@@ -1069,14 +1070,14 @@ static void forward_layer_llama(void) {
     emit_op(L, 0, "gpu_rmsnorm_fwd_eps", "attn", "rms_1", 1);
     rms_norm_k(d_x, d_xn, d_ln1g, Spad, DM);
     emit_op(L, 1, "tiled_matmul_abt", "attn", "q_gemm", 1);
-    mm_ABt(d_xn, d_qW, d_q, Spad, DM, DM);
+    mm_ABt(d_xn, d_qW, d_q, Spad, DM, QD);   /* q_proj: [Spad,DM] @ [QD,DM]^T -> [Spad,QD] */
     emit_op(L, 2, "tiled_matmul_abt", "attn", "k_gemm", 1);
     mm_ABt(d_xn, d_kW, d_k, Spad, DM, KVD);
     emit_op(L, 3, "tiled_matmul_abt", "attn", "v_gemm", 1);
     mm_ABt(d_xn, d_vW, d_v, Spad, DM, KVD);
     for (int h = 0; h < NH; h++) {
         int kv = h / group;               /* the pinned GQA mapping (oracle: gqa_kv_head) */
-        pack_head(d_Qh, d_q, h*DH,  DM);
+        pack_head(d_Qh, d_q, h*DH,  QD);   /* d_q row-stride = QD (= NH*DH) */
         pack_head(d_Kh, d_k, kv*DH, KVD);
         pack_head(d_Vh, d_v, kv*DH, KVD);
         if (QWEN3) {   /* Qwen3 per-head QK-norm: RMSNorm over DH (one shared weight), BEFORE RoPE */
@@ -1089,7 +1090,7 @@ static void forward_layer_llama(void) {
         scale_rt(d_scores, d_scale, Spad*Spad);
         softmax_causal(d_scores, d_attnw, Spad, Spad);
         mm_AB(d_attnw, d_Vh, d_aoh, Spad, Spad, DH);
-        scatter_head(d_ctx, h*DH, d_aoh);
+        scatter_head(d_ctx, h*DH, d_aoh, QD);   /* d_ctx row-stride = QD (= NH*DH) */
         if (KV_ON && (h % group) == 0) {
             /* PREFILL CAPTURE: d_Kh holds kv-head kv's ROPED K rows [Spad,DH]; d_Vh its V.
              * Pad rows land beyond kv_len and are overwritten by later appends -- decode
@@ -1104,7 +1105,7 @@ static void forward_layer_llama(void) {
     emit_op(L, 7, "gpu_softmax_causal", "attn", "attn_softmax", NH);
     emit_op(L, 8, "tiled_matmul",       "attn", "attn_av",      NH);
     emit_op(L, 9, "tiled_matmul_abt",   "attn", "attn_proj", 1);
-    mm_ABt(d_ctx, d_oW, d_proj, Spad, DM, DM);
+    mm_ABt(d_ctx, d_oW, d_proj, Spad, QD, DM);   /* o_proj: [Spad,QD] @ [DM,QD]^T -> [Spad,DM] */
     emit_op(L, 10, "vector_add", "attn", "attn_residual", 1);
     vadd(d_x, d_proj, d_x, Spad*DM);
     emit_op(L, 11, "gpu_rmsnorm_fwd_eps", "mlp", "rms_2", 1);
@@ -1457,14 +1458,14 @@ static int alloc_buffers(int Smax) {
     /* activations sized for the largest padded length we will see. */
     d_x      = A((size_t)Smax*DM);
     d_xn     = A((size_t)Smax*DM);
-    d_qkv    = A((size_t)Smax*3*DM);
+    d_qkv    = A((size_t)Smax * (ARCH ? (size_t)(QD + 2*KVD) : (size_t)(3*DM)));   /* llama carve q[QD]+k[KVD]+v[KVD] */
     d_Qh     = A((size_t)Smax*DH);
     d_Kh     = A((size_t)Smax*DH);
     d_Vh     = A((size_t)Smax*DH);
     d_scores = A((size_t)Smax*Smax);
     d_attnw  = A((size_t)Smax*Smax);
     d_aoh    = A((size_t)Smax*DH);
-    d_ctx    = A((size_t)Smax*DM);
+    d_ctx    = A((size_t)Smax * (ARCH ? (size_t)QD : (size_t)DM));   /* merged attention ctx is [Spad,QD] for llama */
     d_proj   = A((size_t)Smax*DM);
     d_xn2    = A((size_t)Smax*DM);
     d_mlp1   = A((size_t)Smax*DFF);
@@ -1472,20 +1473,22 @@ static int alloc_buffers(int Smax) {
     d_mlp2   = A((size_t)Smax*DM);
     d_scale  = A(1);
     CK(cuMemcpyHtoD(d_scale, &ATTN_SCALE, sizeof(float)), "h2d scale");
-    CK(cuMemsetD8(d_ctx, 0, (size_t)Smax*DM*sizeof(float)), "zero ctx");
+    CK(cuMemsetD8(d_ctx, 0, (size_t)Smax * (ARCH ? (size_t)QD : (size_t)DM) * sizeof(float)), "zero ctx");
     if (ARCH) {   /* llama extras: separate-GEMM weights, the SwiGLU 3rd slab, RoPE tables */
-        d_qW    = A((size_t)DM*DM);
+        d_qW    = A((size_t)QD*DM);   /* q_proj [QD,DM] */
         d_kW    = A((size_t)KVD*DM);
         d_vW    = A((size_t)KVD*DM);
-        d_oW    = A((size_t)DM*DM);
+        d_oW    = A((size_t)DM*QD);   /* o_proj [DM,QD] */
         d_gateW = A((size_t)DFF*DM);
         d_upW   = A((size_t)DFF*DM);
         d_downW = A((size_t)DM*DFF);
         d_mlp1c = A((size_t)Smax*DFF);
         if (QWEN3) {   /* per-head QK-norm weights [DH] + a reusable host dequant scratch (max layer tensor) */
             d_qnorm = A(DH); d_knorm = A(DH);
-            long kpad_dm = ((DM+111)/112)*112, kpad_dff = ((DFF+111)/112)*112;
-            long sc = (long)DFF*kpad_dm; if ((long)DM*kpad_dff > sc) sc = (long)DM*kpad_dff;
+            long kpad_dm = ((DM+111)/112)*112, kpad_dff = ((DFF+111)/112)*112, kpad_qd = ((QD+111)/112)*112;
+            long sc = (long)DFF*kpad_dm; if ((long)DM*kpad_dff > sc) sc = (long)DM*kpad_dff;   /* gate/up + down */
+            if ((long)QD*kpad_dm > sc) sc = (long)QD*kpad_dm;   /* q_proj [QD x DM] (QD!=DM on 32B) */
+            if ((long)DM*kpad_qd > sc) sc = (long)DM*kpad_qd;   /* o_proj [DM x QD] */
             g_v3scratch = (float*)malloc((size_t)sc*sizeof(float));
             if (!g_v3scratch) { fprintf(stderr, "v3 scratch malloc %ld failed\n", sc); return 2; }
         }
@@ -1493,7 +1496,7 @@ static int alloc_buffers(int Smax) {
          * q[Smax,DM] @ 0, k[Smax,KVD] after it, v[Smax,KVD] after that
          * (DM + 2*KVD <= 3*DM always, since KVD <= DM). */
         d_q = d_qkv;
-        d_k = d_qkv + (CUdeviceptr)((size_t)Smax*DM*sizeof(float));
+        d_k = d_qkv + (CUdeviceptr)((size_t)Smax*QD*sizeof(float));   /* d_q occupies [Smax,QD] */
         d_v = d_k   + (CUdeviceptr)((size_t)Smax*KVD*sizeof(float));
         /* RoPE tables [Smax, DH/2]: HF inv_freq convention, host-built in double, cast f32
          * (cos/sin tables are DATA like weights -- the plan's pinned convention). */
@@ -2218,7 +2221,7 @@ int main(int argc, char** argv) {
     if ((e=getenv("HX_KV")))       KV_ON=atoi(e);
     if ((e=getenv("HX_RESIDENT"))) RESIDENT=atoi(e);
     if ((e=getenv("HX_FAST")))     g_fast=atoi(e);
-    DH = DM / NH;
+    DH = DM / NH; QD = NH * DH;
     ATTN_SCALE = 1.0f / sqrtf((float)DH);
 
     /* v1.6 STEP-1 self-contained gate (no GPU, no ptx): dequant ONE HXGW v3 tensor to f32. */
