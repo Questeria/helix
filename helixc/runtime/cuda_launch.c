@@ -2047,6 +2047,54 @@ int main(int argc, char** argv) {
         return rc;
     }
 
+    /* gemv_nvfp4 mode (v1.7 INC4): cuda_launch <ptx> gemv_abt_nvfp4 <Nout> gemv_nvfp4 <K> [mutate].
+     * Verifies the FUSED NVFP4-dequant GEMV (y[n]=sum_j x[j]*dequant(W[n,j])) vs a from-scratch CPU
+     * oracle (host NVFP4 dequant + f32 gemv). Same column accumulation order -> agreement to ~FMA
+     * level; [mutate] bumps y[0] and MUST trip the compare (the gemv is load-bearing). */
+    if (strcmp(op, "gemv_nvfp4") == 0) {
+        int Nout = (argc > 5) ? atoi(argv[5]) : 64;
+        int Kd   = (argc > 6) ? atoi(argv[6]) : 112;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        if (Kd % 112 != 0) { fprintf(stderr, "gemv_nvfp4: K must be a multiple of 112; got %d\n", Kd); return 2; }
+        int kwords = Kd / 7, kblk = Kd / 16; float ts = 1.0f / 3.0f;
+        size_t wN = (size_t)Nout * kwords, scN = (size_t)Nout * kblk;
+        int* hCode = (int*)malloc((size_t)Nout * Kd * sizeof(int));
+        int* hW = (int*)malloc(wN * sizeof(int));
+        int* hMicro = (int*)malloc(scN * sizeof(int));
+        float* hSc = (float*)malloc(scN * sizeof(float));
+        float* hX = (float*)malloc((size_t)Kd * sizeof(float));
+        float* hY = (float*)malloc((size_t)Nout * sizeof(float));
+        float* yref = (float*)malloc((size_t)Nout * sizeof(float));
+        if (!hCode||!hW||!hMicro||!hSc||!hX||!hY||!yref) return 2;
+        for (int r=0;r<Nout;r++) for (int k=0;k<Kd;k++) hCode[r*Kd+k] = (r*5+k*7+3)%16;
+        for (int r=0;r<Nout;r++) for (int kw=0;kw<kwords;kw++){ int word=0,pw=1; for(int j=0;j<7;j++){word+=(hCode[r*Kd+kw*7+j]&15)*pw; pw*=16;} hW[r*kwords+kw]=word; }
+        for (int r=0;r<Nout;r++) for (int bk=0;bk<kblk;bk++){ int mc=(r*3+bk*11+0x30)&0x7E; if((mc&0x7F)==0x7F)mc=0x38; hMicro[r*kblk+bk]=mc; hSc[r*kblk+bk]=e4m3_decode(mc)*ts; }
+        for (int k=0;k<Kd;k++) hX[k] = (float)((k%11)-5) * 0.25f;
+        for (int n=0;n<Nout;n++){ float acc=0.0f; for(int j=0;j<Kd;j++){ float w=e2m1_decode(hCode[n*Kd+j])*(e4m3_decode(hMicro[n*kblk+j/16])*ts); acc+=hX[j]*w; } yref[n]=acc; }
+        CUdeviceptr dX,dW,dSc,dY;
+        CK(cuMemAlloc(&dX, Kd*sizeof(float)), "alloc X");
+        CK(cuMemAlloc(&dW, wN*sizeof(int)), "alloc W");
+        CK(cuMemAlloc(&dSc, scN*sizeof(float)), "alloc Sc");
+        CK(cuMemAlloc(&dY, Nout*sizeof(float)), "alloc Y");
+        CK(cuMemcpyHtoD(dX, hX, Kd*sizeof(float)), "H2D X");
+        CK(cuMemcpyHtoD(dW, hW, wN*sizeof(int)), "H2D W");
+        CK(cuMemcpyHtoD(dSc, hSc, scN*sizeof(float)), "H2D Sc");
+        void* gargs[] = { &dX, &dW, &dSc, &dY, &Kd };
+        CK(cuLaunchKernel(fn, Nout, 1, 1, 1, 1, 1, 0, 0, gargs, 0), "launch gemv_abt_nvfp4");
+        CK(cuCtxSynchronize(), "sync gemv_abt_nvfp4");
+        CK(cuMemcpyDtoH(hY, dY, Nout*sizeof(float)), "D2H Y");
+        if (mutate) hY[0] += 0.5f + 0.1f*fabsf(hY[0]);
+        int nbad=0; float maxrel=0.0f;
+        for (int n=0;n<Nout;n++){ float e=fabsf(hY[n]-yref[n]); float d=fabsf(yref[n]); float rel=d>1.0e-6f?e/d:e; if(rel>maxrel)maxrel=rel; if(isnan(hY[n])||rel>1.0e-3f){ if(nbad<4)fprintf(stderr,"gemv_nvfp4 mismatch y[%d]=%g ref %g (rel %g)\n",n,hY[n],yref[n],rel); nbad++; } }
+        printf("GPU [%s] gemv_abt_nvfp4 (fused NVFP4-dequant GEMV) Nout=%d K=%d: y[0]=%g ref=%g max_rel=%g, %d bad -> %s\n",
+               gpu, Nout, Kd, hY[0], yref[0], maxrel, nbad, nbad?"FAIL":"PASS");
+        int rc=nbad?1:0;
+        cuMemFree(dX);cuMemFree(dW);cuMemFree(dSc);cuMemFree(dY);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hCode);free(hW);free(hMicro);free(hSc);free(hX);free(hY);free(yref);free(ptx);
+        return rc;
+    }
+
     /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul
      *   <Nignored> gemm_perf <M> <K> <N> [mutate].
      * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device.
