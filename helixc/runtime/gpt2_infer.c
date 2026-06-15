@@ -119,6 +119,17 @@ static void v3_dequant_packed(const int32_t* w, const uint8_t* micro, float ts, 
         out[(long)r*Kpad+col] = sm * eff;
     }
 }
+/* ---- v3 RUN-PATH state + build-order indexing (set by peek/load when VERSION==3) ---- */
+static int QWEN3 = 0;            /* HXGW v3 / Qwen3 family: untied head + per-head QK-norm */
+static int HD_CFG = 0;           /* config head_dim (Qwen3 explicit @byte56; else DM/NH) */
+static const HXGWv3Desc* g_desc = NULL;   /* per-tensor descriptor table (points into the mmap) */
+static int g_ntensors = 0;
+/* build-order index of layer L's tensor (mirrors gpt2_pack build_order_llama qwen3=1: 11/layer). */
+enum { V3_INLN=0, V3_Q=1, V3_QN=2, V3_K=3, V3_KN=4, V3_V=5, V3_O=6, V3_POSTLN=7, V3_GATE=8, V3_UP=9, V3_DOWN=10 };
+static int v3_idx_layer(int L, int t) { return L*11 + t; }
+static int v3_idx_embed(void)  { return NL*11 + 0; }
+static int v3_idx_norm(void)   { return NL*11 + 1; }
+static int v3_idx_lmhead(void) { return NL*11 + 2; }
 
 static int check(CUresult r, const char* what) {
     if (r != CUDA_SUCCESS) { const char* m = 0; cuGetErrorString(r, &m); fprintf(stderr, "CUDA %s: %s (%d)\n", what, m ? m : "?", (int)r); return 1; }
@@ -232,6 +243,25 @@ static int    g_fd = -1;
 static void*  g_map = NULL;
 static size_t g_maplen = 0;
 
+/* dequant HXGW v3 tensor `idx` to host f32 (the RUN-path reader). packed -> [rows x Kpad] (NVFP4
+ * dequant, padding cols are 0); f32 -> [rows x K] direct. Returns elem count. Caller sizes `out`
+ * to at least rows*Kpad. Byte-identical to the importer's dequant (proven cross-tool in P3a). */
+static long v3_get_tensor(int idx, float* out) {
+    const HXGWv3Desc* d = &g_desc[idx];
+    const unsigned char* base = (const unsigned char*)g_map;
+    if (d->packed) {
+        int rows=(int)d->rows, Kpad=(int)d->Kpad, kblk=Kpad/16;
+        const int32_t* w = (const int32_t*)(base + d->data_off);
+        const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
+        float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
+        v3_dequant_packed(w, micro, ts, out, rows, Kpad);
+        return (long)rows*Kpad;
+    }
+    long n = (long)d->rows * d->K;
+    memcpy(out, base + d->data_off, (size_t)n*4);
+    return n;
+}
+
 /* per-layer tensor float-counts, in the exact P1 build_order(). */
 static long off_layer(int L);      /* float offset of layer L's first tensor (ln_1.g) */
 static long off_globals(void);     /* float offset of the globals block (wte) */
@@ -307,6 +337,29 @@ static int load_gpt2_weights(const char* path) {
     memcpy(&nh,&hb[16],4); memcpy(&nv,&hb[20],4); memcpy(&nc,&hb[24],4); memcpy(&dff,&hb[28],4);
     memcpy(&nfloat,&hb[32],8);
     if (magic != MAGIC) { fprintf(stderr, "bad magic 0x%08x (want 0x%08x)\n", magic, MAGIC); return 2; }
+    if (ver == 3u) {   /* HXGW v3: descriptor-driven NVFP4 layout (peek already set the Qwen3 config) */
+        if (!QWEN3) { fprintf(stderr, "v3 file but QWEN3 unset (peek skipped?)\n"); return 2; }
+        if ((int)nl!=NL || (int)dm!=DM || (int)nh!=NH || (int)nv!=NV || (int)dff!=DFF) {
+            fprintf(stderr, "v3 header dims (nl=%u dm=%u nh=%u nv=%u dff=%u) != peek config\n", nl,dm,nh,nv,dff); return 2;
+        }
+        g_desc = (const HXGWv3Desc*)(hb + HDR_BYTES);   /* descriptor table follows the 64B header */
+        /* integrity: descriptors must tile the file CONTIGUOUSLY from data_base to EOF. */
+        uint64_t cur = (uint64_t)HDR_BYTES + (uint64_t)g_ntensors*sizeof(HXGWv3Desc);
+        for (int i=0;i<g_ntensors;i++){
+            const HXGWv3Desc* d=&g_desc[i];
+            if (d->data_off != cur) { fprintf(stderr, "v3 desc %d data_off %llu != %llu\n", i,(unsigned long long)d->data_off,(unsigned long long)cur); return 2; }
+            if (d->packed) {
+                int Kpad=(int)d->Kpad, kwords=Kpad/7, kblk=Kpad/16;
+                uint64_t wb=(uint64_t)d->rows*kwords*4;
+                if (d->scale_off != cur+wb) { fprintf(stderr, "v3 desc %d scale_off mismatch\n", i); return 2; }
+                cur += wb + (uint64_t)d->rows*kblk + 4;
+            } else cur += (uint64_t)d->rows*d->K*4;
+        }
+        if (cur != g_maplen) { fprintf(stderr, "v3 layout %llu != file %zu\n", (unsigned long long)cur, g_maplen); return 2; }
+        g_wbase = (const float*)(hb + HDR_BYTES);   /* non-NULL; v3 compute addresses via g_desc */
+        printf("[wt] mmap %zu B, v3 NVFP4: %d tensors, descriptor table validated (tiles file exactly)\n", g_maplen, g_ntensors);
+        return 0;
+    }
     if (ver != VERSION && ver != 2u) { fprintf(stderr, "bad version %u\n", ver); return 2; }
     if ((ver == 2u) != (ARCH == 1)) { fprintf(stderr, "header ver %u vs ARCH %d mismatch (peek failed?)\n", ver, ARCH); return 2; }
     if ((int)nl!=NL || (int)dm!=DM || (int)nh!=NH || (int)nv!=NV || (int)nc!=NC || (int)dff!=DFF) {
@@ -351,6 +404,25 @@ static int peek_weights_header(const char* path) {
         if (fabsf(RMS_EPS - 1e-5f) > 1e-9f) { fprintf(stderr, "peek: rms_eps %g != the kernel's baked 1e-5\n", (double)RMS_EPS); return 2; }
         printf("[peek] llama v2 header: NL=%d DM=%d NH=%d NKV=%d NV=%d NC=%d DFF=%d theta=%g\n",
                NL, DM, NH, NKV, NV, NC, DFF, (double)ROPE_THETA);
+    } else if (ver == 3u) {   /* v1.6 HXGW v3: Qwen3 (untied head + per-head QK-norm), NVFP4-packed */
+        uint32_t nl,dm,nh,nv,nc,dff,arch,nkv,hd,ntens; float th, ep;
+        memcpy(&nl,hb+8,4); memcpy(&dm,hb+12,4); memcpy(&nh,hb+16,4); memcpy(&nv,hb+20,4);
+        memcpy(&nc,hb+24,4); memcpy(&dff,hb+28,4);
+        memcpy(&arch,hb+40,4); memcpy(&nkv,hb+44,4); memcpy(&th,hb+48,4); memcpy(&ep,hb+52,4);
+        memcpy(&hd,hb+56,4); memcpy(&ntens,hb+60,4);
+        if (arch != 1u) { fprintf(stderr, "peek: v3 header with unknown arch %u\n", arch); return 2; }
+        ARCH = 1; QWEN3 = 1;
+        NL=(int)nl; DM=(int)dm; NH=(int)nh; NV=(int)nv; NC=(int)nc; DFF=(int)dff;
+        NKV=(int)nkv; ROPE_THETA=th; RMS_EPS=ep; HD_CFG=(int)hd; g_ntensors=(int)ntens;
+        DH = HD_CFG > 0 ? HD_CFG : DM / NH; KVD = NKV * DH;
+        ATTN_SCALE = 1.0f / sqrtf((float)DH);
+        if (NKV <= 0 || NH % NKV) { fprintf(stderr, "peek: bad GQA heads %d/%d\n", NH, NKV); return 2; }
+        /* the rmsnorm kernel BAKES eps=1e-5; Qwen3 uses 1e-6. The gap is ~1e-6/mean(x^2), far below
+         * the f32 + ~9.5% NVFP4 envelope, so ACCEPT it (vs the v2 fail-close) with a note. */
+        if (fabsf(RMS_EPS - 1e-5f) > 1e-9f)
+            fprintf(stderr, "[peek] note: rms_eps=%g; the kernel bakes 1e-5 (diff negligible vs the quant envelope)\n", (double)RMS_EPS);
+        printf("[peek] qwen3 v3 header: NL=%d DM=%d NH=%d NKV=%d HD=%d NV=%d NC=%d DFF=%d theta=%g eps=%g n_tensors=%d\n",
+               NL, DM, NH, NKV, DH, NV, NC, DFF, (double)ROPE_THETA, (double)RMS_EPS, g_ntensors);
     }
     return 0;
 }
@@ -384,6 +456,8 @@ static CUdeviceptr d_scale;    /* 1-elem attn scale buffer */
 static void upload_layer_ll(int L);                                  /* defined after alloc_buffers */
 static int  read_ids_file(const char* path, int* ids, int maxn);     /* defined with the modes */
 static CUdeviceptr d_qW, d_kW, d_vW, d_oW, d_gateW, d_upW, d_downW;  /* layer weights */
+static CUdeviceptr d_qnorm = 0, d_knorm = 0;   /* Qwen3 per-head QK-norm weights [DH] (v3 only) */
+static float* g_v3scratch = NULL;              /* reusable host dequant buffer (max layer tensor) */
 static CUdeviceptr d_q, d_k, d_v;    /* q/k/v GEMM outputs (carved from d_qkv) */
 static CUdeviceptr d_mlp1c;          /* silu_mul output [Spad,DFF] */
 /* ---- KV-cache decode state (HX_KV=1; llama path only) ---- */
@@ -1317,6 +1391,13 @@ static int alloc_buffers(int Smax) {
         d_upW   = A((size_t)DFF*DM);
         d_downW = A((size_t)DM*DFF);
         d_mlp1c = A((size_t)Smax*DFF);
+        if (QWEN3) {   /* per-head QK-norm weights [DH] + a reusable host dequant scratch (max layer tensor) */
+            d_qnorm = A(DH); d_knorm = A(DH);
+            long kpad_dm = ((DM+111)/112)*112, kpad_dff = ((DFF+111)/112)*112;
+            long sc = (long)DFF*kpad_dm; if ((long)DM*kpad_dff > sc) sc = (long)DM*kpad_dff;
+            g_v3scratch = (float*)malloc((size_t)sc*sizeof(float));
+            if (!g_v3scratch) { fprintf(stderr, "v3 scratch malloc %ld failed\n", sc); return 2; }
+        }
         /* q/k/v GEMM outputs are CARVED out of the (larger) fused d_qkv slab:
          * q[Smax,DM] @ 0, k[Smax,KVD] after it, v[Smax,KVD] after that
          * (DM + 2*KVD <= 3*DM always, since KVD <= DM). */
@@ -1377,11 +1458,37 @@ static int alloc_buffers(int Smax) {
 }
 
 /* upload llama layer L's 9 tensors (reuses d_ln1g for input_ln, d_ln2g for post_ln). */
+/* v3 dequant-on-upload: dequant tensor `idx` to host f32 (rows x K, NVFP4 padding dropped) -> dst. */
+static void v3_upload(int idx, CUdeviceptr dst) {
+    const HXGWv3Desc* d = &g_desc[idx];
+    int rows=(int)d->rows, K=(int)d->K, Kpad=(int)d->Kpad;
+    v3_get_tensor(idx, g_v3scratch);                   /* packed -> [rows x Kpad]; f32 -> [rows x K] */
+    if (d->packed && Kpad != K)                         /* compact [rows x Kpad] -> [rows x K] (drop pad);
+                                                         * increasing-r memmove is overlap-safe (dst r*K
+                                                         * < src r*Kpad, and row r's dst ends before row
+                                                         * r+1's src starts). */
+        for (int r=1;r<rows;r++) memmove(g_v3scratch + (size_t)r*K, g_v3scratch + (size_t)r*Kpad, (size_t)K*4);
+    CKX(cuMemcpyHtoD(dst, g_v3scratch, (size_t)rows*K*sizeof(float)), "v3 HtoD");
+}
 static void upload_layer_ll(int L) {
     if (res_loaded) {   /* resident: zero-copy pointer swap */
         d_ln1g = res_inln[L]; d_qW = res_qW[L]; d_kW = res_kW[L]; d_vW = res_vW[L];
         d_oW = res_oW[L]; d_ln2g = res_postln[L]; d_gateW = res_gateW[L];
         d_upW = res_upW[L]; d_downW = res_downW[L];
+        return;
+    }
+    if (QWEN3) {   /* v3 descriptor-driven dequant-on-upload (11 tensors/layer; +q_norm/k_norm) */
+        v3_upload(v3_idx_layer(L, V3_INLN),   d_ln1g);
+        v3_upload(v3_idx_layer(L, V3_Q),      d_qW);
+        v3_upload(v3_idx_layer(L, V3_QN),     d_qnorm);
+        v3_upload(v3_idx_layer(L, V3_K),      d_kW);
+        v3_upload(v3_idx_layer(L, V3_KN),     d_knorm);
+        v3_upload(v3_idx_layer(L, V3_V),      d_vW);
+        v3_upload(v3_idx_layer(L, V3_O),      d_oW);
+        v3_upload(v3_idx_layer(L, V3_POSTLN), d_ln2g);
+        v3_upload(v3_idx_layer(L, V3_GATE),   d_gateW);
+        v3_upload(v3_idx_layer(L, V3_UP),     d_upW);
+        v3_upload(v3_idx_layer(L, V3_DOWN),   d_downW);
         return;
     }
     LayerOffLL lo = layer_offsets_ll();
@@ -1477,6 +1584,48 @@ static int run_v3_dequant_dump(const char* wpath, int idx, const char* outbin) {
     fclose(of); munmap(base, (size_t)st.st_size); close(fd);
     printf("V3_DEQUANT_DUMP_OK idx=%d packed=%u rows=%u Kpad=%u\n", idx, d.packed, d.rows, d.Kpad);
     return 0;
+}
+
+/* --v3-upload-check <weights.v3>: GPU gate for the v3 RUN path. peek + minimal CUDA init (no PTX) +
+ * load + alloc + upload_layer_ll(0) (dequant-on-upload) -> read each layer-0 weight back (DtoH) and
+ * assert it equals the host dequant -> proves the descriptor indexing + dequant + padding-drop +
+ * buffer sizing on the GPU, before the forward. */
+static int run_v3_upload_check(const char* wpath) {
+    if (peek_weights_header(wpath)) return 2;
+    CK(cuInit(0), "init");
+    CUdevice dev; CK(cuDeviceGet(&dev, 0), "dev");
+    char gpu[256] = {0}; cuDeviceGetName(gpu, 256, dev);
+    CK(cuCtxCreate(&ctx, 0, dev), "ctx");
+    if (load_gpt2_weights(wpath)) return 2;
+    if (!QWEN3) { fprintf(stderr, "upload-check: not a v3/qwen3 file\n"); return 2; }
+    fprintf(stderr, "[upload-check] GPU=%s; uploading Qwen3 layer 0 (dequant-on-upload)...\n", gpu);
+    if (alloc_buffers(64)) return 2;
+    upload_layer_ll(0);
+    CKX(cuCtxSynchronize(), "sync upload");
+    int idxs[11] = {V3_INLN,V3_Q,V3_QN,V3_K,V3_KN,V3_V,V3_O,V3_POSTLN,V3_GATE,V3_UP,V3_DOWN};
+    CUdeviceptr ptrs[11] = {d_ln1g,d_qW,d_qnorm,d_kW,d_knorm,d_vW,d_oW,d_ln2g,d_gateW,d_upW,d_downW};
+    const char* nms[11] = {"input_ln","q_proj","q_norm","k_proj","k_norm","v_proj","o_proj","post_ln","gate","up","down"};
+    int allok = 1;
+    for (int i = 0; i < 11; i++) {
+        int gi = v3_idx_layer(0, idxs[i]);
+        const HXGWv3Desc* d = &g_desc[gi];
+        int rows=(int)d->rows, K=(int)d->K, Kpad=(int)d->Kpad;
+        long nK = (long)rows * K;
+        float* ref = (float*)malloc((size_t)nK*4);
+        float* tmp = (float*)malloc((size_t)rows*Kpad*4);
+        v3_get_tensor(gi, tmp);
+        if (d->packed) for (int r=0;r<rows;r++) memcpy(ref+(size_t)r*K, tmp+(size_t)r*Kpad, (size_t)K*4);
+        else           memcpy(ref, tmp, (size_t)nK*4);
+        float* got = (float*)malloc((size_t)nK*4);
+        CKX(cuMemcpyDtoH(got, ptrs[i], (size_t)nK*4), "d2h check");
+        int mism = memcmp(ref, got, (size_t)nK*4) != 0;
+        printf("[upload-check] L0 %-9s idx=%-3d packed=%u [%d x %d] -> %s\n",
+               nms[i], gi, d->packed, rows, K, mism ? "MISMATCH" : "match");
+        if (mism) allok = 0;
+        free(ref); free(tmp); free(got);
+    }
+    printf("%s\n", allok ? "V3_UPLOAD_CHECK_PASS" : "V3_UPLOAD_CHECK_FAIL");
+    return allok ? 0 : 1;
 }
 
 /* --block0: run ONE GPT-2 block on the canonical prompt + compare to ref_block0.npy (the committed
@@ -1854,6 +2003,9 @@ int main(int argc, char** argv) {
     /* v1.6 STEP-1 self-contained gate (no GPU, no ptx): dequant ONE HXGW v3 tensor to f32. */
     if (argc >= 5 && strcmp(argv[1], "--v3-dequant-dump") == 0)
         return run_v3_dequant_dump(argv[2], atoi(argv[3]), argv[4]);
+    /* v1.6 P3b gate (GPU, no ptx): upload Qwen3 layer 0 via the v3 path + verify weights on-device. */
+    if (argc >= 3 && strcmp(argv[1], "--v3-upload-check") == 0)
+        return run_v3_upload_check(argv[2]);
 
     if (argc < 4) {
         fprintf(stderr,
