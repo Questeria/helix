@@ -1364,13 +1364,16 @@ static int device_init(const char* ptx_path, const char* wpath) {
  * NL=48 at XL via HX_NL) + the per-Smax activations. One layer's weights resident at a time. */
 static int alloc_buffers(int Smax) {
     Spad_max = Smax;
-    /* layer-weight buffers (one layer resident at a time; upload_layer() refills them per layer). */
+    /* layer-weight buffers (one layer resident at a time; upload_layer() refills them per layer).
+     * The fused-GPT-2 weight slabs (attW/prjW/fcW/pjW) are UNUSED on the llama/qwen3 path (which has
+     * its own d_qW..d_downW); for QWEN3 allocate them as size-1 stubs to save ~668MB VRAM (the head
+     * needs 2.5GB) -- SmolLM2 (ARCH && !QWEN3) keeps the full alloc, byte-unchanged. */
     d_ln1g = A(DM); d_ln1b = A(DM);
-    d_attW = A((size_t)DM*3*DM); d_attb = A(3*DM);
-    d_prjW = A((size_t)DM*DM);   d_prjb = A(DM);
+    d_attW = A(QWEN3 ? 1 : (size_t)DM*3*DM); d_attb = A(QWEN3 ? 1 : 3*DM);
+    d_prjW = A(QWEN3 ? 1 : (size_t)DM*DM);   d_prjb = A(DM);
     d_ln2g = A(DM); d_ln2b = A(DM);
-    d_fcW  = A((size_t)DM*DFF);  d_fcb  = A(DFF);
-    d_pjW  = A((size_t)DFF*DM);  d_pjb  = A(DM);
+    d_fcW  = A(QWEN3 ? 1 : (size_t)DM*DFF);  d_fcb  = A(QWEN3 ? 1 : DFF);
+    d_pjW  = A(QWEN3 ? 1 : (size_t)DFF*DM);  d_pjb  = A(DM);
     /* activations sized for the largest padded length we will see. */
     d_x      = A((size_t)Smax*DM);
     d_xn     = A((size_t)Smax*DM);
@@ -1516,7 +1519,26 @@ static void upload_layer_ll(int L) {
  * The tied head is wte itself (logits = x @ wte^T); we copy the NV real rows into a NVpad-row device
  * buffer whose pad rows [NV..NVpad) are zeroed so their logits are 0 and never argmaxed. */
 static int setup_head(int Smax) {
-    NVpad = ((NV + 63) / 64) * 64;     /* 50257 -> 50304 (llama 49152 is already %64) */
+    NVpad = ((NV + 63) / 64) * 64;     /* 50257 -> 50304 (llama 49152 is already %64; qwen3 151936 is %64) */
+    if (QWEN3) {   /* v3: final RMSNorm (f32 v3 tensor) + the UNTIED lm_head (packed v3 tensor) */
+        d_lnfg = A(DM);
+        v3_get_tensor(v3_idx_norm(), g_v3scratch);
+        CK(cuMemcpyHtoD(d_lnfg, g_v3scratch, (size_t)DM*sizeof(float)), "h2d v3 norm_f");
+        d_lnfb = 0;
+        const HXGWv3Desc* dl = &g_desc[v3_idx_lmhead()];
+        int rows=(int)dl->rows, K=(int)dl->K, Kpad=(int)dl->Kpad;   /* NV x DM, Kpad>=DM */
+        d_wte_pad = A((size_t)NVpad*DM);
+        CK(cuMemsetD8(d_wte_pad, 0, (size_t)NVpad*DM*sizeof(float)), "zero wte_pad");
+        float* hs = (float*)malloc((size_t)rows*Kpad*sizeof(float));   /* ~2.5GB host (lm_head dequant) */
+        if (!hs) { fprintf(stderr, "lm_head host scratch [%dx%d] malloc failed\n", rows, Kpad); return 2; }
+        v3_get_tensor(v3_idx_lmhead(), hs);                           /* [NV x Kpad] */
+        if (Kpad != K) for (int r=1;r<rows;r++) memmove(hs+(size_t)r*K, hs+(size_t)r*Kpad, (size_t)K*sizeof(float));
+        CK(cuMemcpyHtoD(d_wte_pad, hs, (size_t)rows*K*sizeof(float)), "h2d v3 lm_head");
+        free(hs);
+        d_logits = A((size_t)Smax*NVpad);
+        fprintf(stderr, "[head] qwen3 UNTIED lm_head [%dx%d] -> d_wte_pad, final-norm loaded\n", rows, K);
+        return 0;
+    }
     if (ARCH) {
         d_lnfg = up_slice(off_normf_ll(), DM);   /* final RMSNorm weight (no bias in llama) */
         d_lnfb = 0;
@@ -1685,6 +1707,28 @@ static int read_ids_file(const char* path, int* ids, int maxn) {
     while (n < maxn && fscanf(f, "%d", &v) == 1) ids[n++] = v;
     fclose(f);
     return n;
+}
+
+/* --v3-smoke <ids.txt>: run the FULL Qwen3 forward (36 layers + untied head) + assert finite logits +
+ * report the argmax next-token. Dumps the [NV] logits to /home/legoa/q3_logits.bin for the next-tick
+ * oracle compare. SMOKE = executes + finite + plausible argmax; correctness is the oracle's job. */
+static int run_v3_smoke(const char* ids_path) {
+    int ids[1024];
+    int T = read_ids_file(ids_path, ids, 1024);
+    if (T <= 0) { fprintf(stderr, "no ids in %s\n", ids_path); return 2; }
+    printf("[v3-smoke] T=%d ids:", T); for (int i=0;i<T;i++) printf(" %d", ids[i]); printf("\n");
+    float* logits = (float*)malloc((size_t)NV*sizeof(float));
+    forward_full(ids, T, logits);
+    int nonfinite = 0; double mx = 0.0;
+    for (int i=0;i<NV;i++){ double g=(double)logits[i]; if(!isfinite(g)){nonfinite++; continue;} double a=fabs(g); if(a>mx)mx=a; }
+    int am = argmax_row(logits, NV);
+    FILE* of = fopen("/home/legoa/q3_logits.bin", "wb");
+    if (of) { fwrite(logits, sizeof(float), (size_t)NV, of); fclose(of); }
+    printf("[v3-smoke] logits nonfinite=%d max_abs=%.5g argmax=%d (valid_token=%d)\n",
+           nonfinite, mx, am, (am>=0 && am<NV));
+    free(logits);
+    printf("%s argmax=%d nonfinite=%d\n", nonfinite==0 ? "V3_SMOKE_OK" : "V3_SMOKE_FAIL", am, nonfinite);
+    return nonfinite==0 ? 0 : 1;
 }
 
 /* --logits: 12 layers + ln_f + tied head; dump the LAST real-token logits [NV] to /tmp/helix_logits_last.bin
@@ -2067,6 +2111,13 @@ int main(int argc, char** argv) {
         if (alloc_buffers(Smax)) return 2;
         if (setup_head(Smax)) return 2;
         rc = run_logits(ref_logits, ref_argmax, ids_path);
+    } else if (strcmp(mode, "--v3-smoke") == 0) {
+        if (argc < 5) { fprintf(stderr, "--v3-smoke needs <ids.txt>\n"); return 2; }
+        if (device_init(ptx_path, wpath)) return 2;
+        int Smax = 128;
+        if (alloc_buffers(Smax)) return 2;
+        if (setup_head(Smax)) return 2;
+        rc = run_v3_smoke(argv[4]);
     } else if (strcmp(mode, "--generate") == 0) {
         if (argc < 5) { fprintf(stderr, "--generate needs <N> [<ref_ids.txt>] [<ref_gen_ids.txt>]\n"); return 2; }
         int Ngen = atoi(argv[4]);
