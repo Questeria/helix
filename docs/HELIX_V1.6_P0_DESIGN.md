@@ -61,3 +61,13 @@ P0 design-investigate (read-only, 3 lenses + synthesis, Workflow wfllx727y). **G
 **Importer changes (gpt2_pack.c, host-side, no kovc.hx edit):** (1) `build_order_llama` += per-layer `q_norm.weight`+`k_norm.weight` [head_dim=128] + untied `lm_head.weight` [NV x DM]; add a per-OrderEntry `quant` flag (NVFP4-pack the big matmuls q/k/v/o/gate/up/down; keep norms/embed f32; decide lm_head). (2) copy the e2m1/e4m3 codecs into gpt2_pack.c (host); add `nvfp4_quantize_tensor(f32* w,int rows,int K, int32* outW,float* outSc)` (the quantizer + K-padding). (3) the streaming loop branches: `quant` tensors -> BF16->f32 -> nvfp4_quantize -> write packed words + scales; f32 tensors -> existing path. (4) **HXGW v3 header** (VERSION=3): a per-tensor quant-descriptor table (offset, orig shape, K_pad, packed-vs-f32 flag) so `upload_layer_ll` knows the dequant-on-upload layout.
 
 **Verification (gate-able CPU-only, no GPU):** pack Qwen3-8B (or a slice) -> host-dequant each packed tensor (e2m1/e4m3) vs the original f32 (within the expected NVFP4 quant error) + round-trip the packed bytes through the device kernel (the gpu_nvfp4_check pattern) -> match. NCs: nibble-flip, scale-flip, wrong K_pad. THEN the worker (next phase) consumes HXGW v3.
+
+---
+
+## P1a — NVFP4 quantizer verified on REAL Qwen3 weights (2026-06-14)
+
+Ran `nvfp4_quantize` on real Qwen3-8B layer-0 weights (q_proj/o_proj [4096x4096], down_proj [4096x12288], both K-paddings): consistent **rmse/rms_w ≈ 9.5%** (the inherent E2M1 4-bit granularity; max_rel=1 only at near-zero weights = small absolute error), **~4.8x compression** vs f32. The quantizer + K-padding work on real data, not just synthetic.
+
+**COMPRESSION FINDING (revises the fit math):** measured footprint is **4.8x** (0.821 B/param), NOT 8x -- the v1.5 format stores the EFFECTIVE scale as **f32 per 16-block** (0.25 B/param, so the device that can't decode E4M3 reads it directly) + 7-codes-per-i32-word (0.571 B/param). **RAM impact on the 32B feat:** Qwen3-32B NVFP4 at 4.8x = ~27 GB host RAM + OS ~= the 31.8 GB ceiling -> **RAM-marginal**. Mitigation: the importer stores the COMPACT form (E4M3 micro = 1 B/16-block = 0.0625 B/param -> ~6.3x, 32B ~= 21 GB) + the worker decodes E4M3->f32 effective scale at upload-time (host, before H2D). 14B (~12 GB) is comfortable either way; the 8B warm-up (~6.6 GB) trivially fits. **DECISION:** use the compact E4M3 storage for the streamed feat (decode at upload); the device dequant input format is unchanged.
+
+**Quant quality:** 9.5% per-weight RMS is normal for 4-bit; whether the model stays argmax-correct (the Tier-3 envelope) is the model-run test. The amax-per-tensor scale could be refined (percentile/outlier-aware) if the envelope proves too loose.

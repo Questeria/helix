@@ -363,9 +363,56 @@ static int nvfp4_selftest(void) {
     free(w);free(W);free(Sc);free(recon);
     return (fmtbad==0&&padbad==0)?0:1;
 }
+/* CPU test on a REAL safetensors tensor: load [out,in] (bf16->f32), quantize, dequant, report the
+ * quant error. rmse/rms_w (relative RMS error) is the Tier-3 envelope basis; a high value would mean
+ * the amax-per-tensor scale is outlier-dominated. Usage: --nvfp4-testreal <shard.safetensors> <name>. */
+static int nvfp4_testreal(const char* shard, const char* tname) {
+    int fd = open(shard, O_RDONLY);
+    if (fd < 0) { fprintf(stderr, "open %s: %s\n", shard, strerror(errno)); return 2; }
+    struct stat st; if (fstat(fd, &st) != 0) { fprintf(stderr, "fstat\n"); return 2; }
+    size_t flen = (size_t)st.st_size;
+    unsigned char* base = (unsigned char*)mmap(NULL, flen, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) { fprintf(stderr, "mmap: %s\n", strerror(errno)); return 2; }
+    uint64_t hlen; memcpy(&hlen, base, 8);
+    const char* jhdr = (const char*)(base + 8);
+    const unsigned char* blob = base + 8 + hlen;
+    STensor* ts = (STensor*)malloc(sizeof(STensor) * 8192);
+    int nt = parse_safetensors_header(jhdr, (size_t)hlen, ts, 8192);
+    STensor* t = find_tensor(ts, nt, tname);
+    if (!t) { fprintf(stderr, "tensor %s not in this shard (%d tensors)\n", tname, nt); return 2; }
+    if (t->ndim != 2) { fprintf(stderr, "need a 2D weight; %s is %dD\n", tname, t->ndim); return 2; }
+    int rows = (int)t->shape[0], K = (int)t->shape[1];
+    long n = (long)rows * K;
+    float* w = (float*)malloc((size_t)n * sizeof(float));
+    const unsigned char* src = blob + t->off_start;
+    if (t->bf16) { for (long i=0;i<n;i++){ uint16_t u; memcpy(&u, src+i*2, 2); uint32_t x=((uint32_t)u)<<16; memcpy(&w[i], &x, 4); } }
+    else          { memcpy(w, src, (size_t)n * 4); }
+    int Kpad = ((K+111)/112)*112, kwords = Kpad/7, kblk = Kpad/16;
+    int32_t* W   = (int32_t*)malloc((size_t)rows*kwords*sizeof(int32_t));
+    float*   Sc  = (float*)malloc((size_t)rows*kblk*sizeof(float));
+    float*   rec = (float*)malloc((size_t)rows*Kpad*sizeof(float));
+    nvfp4_quantize_tensor(w, rows, K, W, Sc);
+    nvfp4_host_dequant(W, Sc, rec, rows, Kpad);
+    double sumsq_e=0, sumsq_w=0, sum_abs_e=0; float maxabs=0, maxrel=0, wamax=0; long cnt=0;
+    for (int r=0;r<rows;r++) for (int k=0;k<K;k++){
+        float o = w[(long)r*K+k], g = rec[(long)r*Kpad+k];
+        float e = g-o; if (e<0) e=-e;
+        float ao = o<0?-o:o; if (ao>wamax) wamax=ao;
+        if (e>maxabs) maxabs=e;
+        float rel = ao>1e-9f ? e/ao : 0.0f; if (rel>maxrel) maxrel=rel;
+        sumsq_e += (double)e*e; sumsq_w += (double)o*o; sum_abs_e += e; cnt++;
+    }
+    double rmse = sqrt(sumsq_e/(double)cnt), rms_w = sqrt(sumsq_w/(double)cnt);
+    double packed = (double)rows*kwords*4 + (double)rows*kblk*4 + 4, f32b = (double)n*4;
+    printf("nvfp4_testreal %s [%dx%d] Kpad=%d | w_amax=%.5g rms_w=%.5g | quant max_abs=%.5g mean_abs=%.5g rmse=%.5g (rmse/rms_w=%.4f) max_rel=%.3g | nvfp4=%.1fMB vs f32=%.1fMB (%.2fx)\n",
+           tname, rows, K, Kpad, wamax, rms_w, maxabs, sum_abs_e/(double)cnt, rmse, rmse/rms_w, maxrel, packed/1e6, f32b/1e6, f32b/packed);
+    free(w); free(W); free(Sc); free(rec); free(ts); munmap(base, flen); close(fd);
+    return 0;
+}
 
 int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
+    if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3]);
     if (argc < 4) {
         fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights> [--arch llama]\n", argv[0]);
         return 2;
