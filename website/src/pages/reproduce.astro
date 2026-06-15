@@ -210,7 +210,7 @@ bash scripts/gpt2_demo_attest.sh   <span class="cmt"># GPU: from-raw rebuild, GP
         <details><summary>It's crawling on Windows</summary><div class="faq-body"><p>You cloned into <code>/mnt/c</code>. Building on the Windows-mounted drive is far slower. Clone into your Linux home (<code>~</code>) inside WSL and run it there.</p></div></details>
         <details><summary><code>command not found: xxd</code></summary><div class="faq-body"><p>Re-run the install line. <code>xxd</code> is in the <code>xxd</code> package, <code>sha256sum</code> is in <code>coreutils</code>.</p></div></details>
         <details><summary><code>No such file: scripts/reproduce_trust.sh</code></summary><div class="faq-body"><p>You're not in the repo. Run <code>cd helix</code> first.</p></div></details>
-        <details><summary>A hash mismatch / a <code>*** FAIL</code> line</summary><div class="faq-body"><p>That's the guard doing its job — a byte differs. Re-clone fresh with no local edits and run again. If a clean clone still fails, that's exactly the kind of thing worth <a href="https://github.com/Questeria/helix/issues" style="color:var(--violet)">an issue</a>.</p></div></details>
+        <details><summary><span>A hash mismatch, or a <code>*** FAIL</code> line</span></summary><div class="faq-body"><p>That's the guard doing its job — a byte differs. Re-clone fresh with no local edits and run again. If a clean clone still fails, that's exactly the kind of thing worth <a href="https://github.com/Questeria/helix/issues" style="color:var(--violet)">an issue</a>.</p></div></details>
       </div>
     </div>
   </section>
