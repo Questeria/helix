@@ -45,3 +45,19 @@ P0 design-investigate (read-only, 3 lenses + synthesis, Workflow wfllx727y). **G
 **Runtime note (VRAM):** only ~2.7 GB free of 8 GB (~5.2 GB held by the Windows desktop/apps). A VRAM-resident Qwen3-8B-4bit warm-up needs ~5 GB → **free ~3–5 GB (close GPU apps / idle desktop) before the GPU run.** The importer is CPU-only.
 
 **P1a sub-plan (gate-able increments):** (i) **Importer** (`gpt2_pack.c`): add the Qwen3 order entries (q_norm/k_norm/lm_head) + the NVFP4 4-bit packing (matching the dequant `@kernel` + a from-scratch oracle EXACTLY — the silent-wrong-text hazard). **Gateable CPU-only:** pack Qwen3-8B → verify the packed bytes vs the oracle quantization. (ii) **Worker** (`gpt2_infer.c`): per-head QK-norm + untied head + eps + dequant-on-upload. **Gateable:** run + compare to the 4-bit-aware oracle within the Tier-3 envelope.
+
+---
+
+## P1a importer spec — NVFP4 forward quantization (build-ready, 2026-06-14)
+
+**Key finding:** v1.5 has the NVFP4 **dequant** + codecs (`cuda_launch.c` e2m1_encode/decode :190, e4m3_decode/encode :208/220, e8m0 :199) but **NO forward quantization** — the v1.5 `nvfp4` mode (`cuda_launch.c:1972`) uses *synthetic* E2M1 codes + a fixed `tensor_scale=1/3`, not a real f32->NVFP4 quantizer. v1.6's importer must **build** the forward quantizer, and the run-oracle must use the IDENTICAL algorithm (silent-wrong-text hazard).
+
+**NVFP4 device format the importer MUST produce byte-for-byte** (from `nvfp4_dequant_kernel.hx`): per weight [rows x K], **K multiple of 112** (LCM(7,16)). Packed words `w[]`: 7 E2M1 codes/i32 word, base-16 **low-nibble-first**, `rows*(K/7)` words (7 not 8: 16^8-1 spills the sign bit). Effective scales `sc[]` (f32): one per 16-block, `rows*(K/16)`, = `e4m3_decode(micro)*fp32_tensor_scale` (host pre-collapsed; device only does `mag*sc`). Dequant: `out[r*K+col] = sign(code)*magf(code&7)*sc[r*(K/16)+col/16]`.
+
+**Forward quantizer to BUILD (define exactly; oracle matches):** per tensor [rows x K]: (1) `tensor_amax=max|w|`; `fp32_tensor_scale = tensor_amax/(6.0*448.0)` (E2M1_max*E4M3_max), guard >0. (2) per 16-block: `block_amax`; `micro=e4m3_encode(block_amax/(fp32_tensor_scale*6.0))`; `eff=e4m3_decode(micro)*fp32_tensor_scale`. (3) per element: `code=e2m1_encode(w/eff)` (brute-force nearest over the 16 codes; eff==0 -> code 0).
+
+**K-padding (Qwen3 dims need it):** Qwen3-8B weight K = DM=4096 (4096%112=64) and DF=12288 (12288%112=80) -> NOT multiples of 112. **Pad each weight's K to the next multiple of 112** (4096->4144, 12288->12320) with ZEROS (dequant to E2M1 code 0 = 0.0, benign in the matmul). Worker GEMM uses K_pad; extra zero columns don't affect the result.
+
+**Importer changes (gpt2_pack.c, host-side, no kovc.hx edit):** (1) `build_order_llama` += per-layer `q_norm.weight`+`k_norm.weight` [head_dim=128] + untied `lm_head.weight` [NV x DM]; add a per-OrderEntry `quant` flag (NVFP4-pack the big matmuls q/k/v/o/gate/up/down; keep norms/embed f32; decide lm_head). (2) copy the e2m1/e4m3 codecs into gpt2_pack.c (host); add `nvfp4_quantize_tensor(f32* w,int rows,int K, int32* outW,float* outSc)` (the quantizer + K-padding). (3) the streaming loop branches: `quant` tensors -> BF16->f32 -> nvfp4_quantize -> write packed words + scales; f32 tensors -> existing path. (4) **HXGW v3 header** (VERSION=3): a per-tensor quant-descriptor table (offset, orig shape, K_pad, packed-vs-f32 flag) so `upload_layer_ll` knows the dequant-on-upload layout.
+
+**Verification (gate-able CPU-only, no GPU):** pack Qwen3-8B (or a slice) -> host-dequant each packed tensor (e2m1/e4m3) vs the original f32 (within the expected NVFP4 quant error) + round-trip the packed bytes through the device kernel (the gpu_nvfp4_check pattern) -> match. NCs: nibble-flip, scale-flip, wrong K_pad. THEN the worker (next phase) consumes HXGW v3.
