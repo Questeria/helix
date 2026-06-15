@@ -1851,13 +1851,65 @@ static int run_v3_receipt(const char* ids_path, const char* oracle_path, const c
     fprintf(rf, "n_logits %d\n", NV);
     fprintf(rf, "logits_sha256 %s\n", logits_hex);
     fprintf(rf, "argmax %d\n", am);
-    fprintf(rf, "tier3_tau %.6f\n", max_abs);          /* declared envelope = the measured deviation */
-    fprintf(rf, "tier3_max_abs %.6f\n", max_abs);
+    fprintf(rf, "tier3_tau %.17g\n", max_abs);         /* declared envelope = the measured deviation; %.17g = exact double round-trip (a %.6f-rounded tau false-rejects at check time by ~1e-8) */
+    fprintf(rf, "tier3_max_abs %.17g\n", max_abs);
     fprintf(rf, "tier3_argmax_match %d\n", argmatch);
     fprintf(rf, "note Tier-2=reproducibility(re-derive from committed weights, NOT faster-than-re-exec); Tier-3=envelope vs a TRUSTED f32 oracle (EMPIRICAL not crypto; argmax-preservation empirical when top1-margin<2*tau); Tier-1 exact-Freivalds DEFERRED (f32 GEMM). Prior art CommitLLM, TAO.\n");
     fclose(rf);
     printf("V3_RECEIPT_EMIT_OK argmax=%d model_sha=%.12s logits_sha=%.12s tier3_max_abs=%.4f argmatch=%d -> %s\n",
            am, model_hex, logits_hex, max_abs, argmatch, out_path);
+    free(logits);
+    return 0;
+}
+
+/* --v3-receipt-from-logits <logits.bin> <weights> <ids.txt> <oracle.bin> <out.receipt>: GPU-FREE
+ * re-attestation. Re-serialize a v1.6 receipt from an ALREADY-DUMPED logits file (produced by a real
+ * --v3-receipt / --v3-smoke GPU run) + the committed weights + the f32 oracle -- no forward, no CUDA.
+ * Identical fields to run_v3_receipt (same SHA-256 commitments, same envelope) except tau is written at
+ * full double precision and there is no GPU pass. Use to re-emit a stored run's receipt (e.g. with the
+ * corrected tau precision) or to re-attest off-GPU; the GPU --v3-receipt is the canonical emit. NV is
+ * taken from the logits file size. */
+static int run_v3_receipt_from_logits(const char* logits_path, const char* weights_path,
+                                      const char* ids_path, const char* oracle_path, const char* out_path) {
+    FILE* lf = fopen(logits_path, "rb");
+    if (!lf) { fprintf(stderr, "from-logits: open logits %s\n", logits_path); return 2; }
+    fseek(lf, 0, SEEK_END); long lsz = ftell(lf); fseek(lf, 0, SEEK_SET);
+    int nlog = (int)(lsz / (long)sizeof(float));
+    if (nlog <= 0) { fprintf(stderr, "from-logits: empty logits %s\n", logits_path); fclose(lf); return 2; }
+    float* logits = (float*)malloc((size_t)nlog * sizeof(float));
+    if (!logits) { fclose(lf); return 2; }
+    if (fread(logits, sizeof(float), (size_t)nlog, lf) != (size_t)nlog) {
+        fprintf(stderr, "from-logits: short logits read\n"); fclose(lf); free(logits); return 2; }
+    fclose(lf);
+    int ids[1024];
+    int T = read_ids_file(ids_path, ids, 1024);
+    if (T <= 0) { fprintf(stderr, "from-logits: no ids in %s\n", ids_path); free(logits); return 2; }
+    int am = argmax_row(logits, nlog);
+    char model_hex[65] = {0}, logits_hex[65] = {0};
+    if (!sha256_file(weights_path, model_hex)) { fprintf(stderr, "from-logits: hash weights %s\n", weights_path); free(logits); return 2; }
+    if (!sha256_file(logits_path, logits_hex)) { fprintf(stderr, "from-logits: hash logits %s\n", logits_path); free(logits); return 2; }
+    double max_abs = -1.0; int argmatch = -1;
+    { FILE* of = fopen(oracle_path, "rb");
+      if (of) { float* orc = (float*)malloc((size_t)nlog*sizeof(float));
+        size_t got = orc ? fread(orc, sizeof(float), (size_t)nlog, of) : 0; fclose(of);
+        if (got == (size_t)nlog) { double m=0; for (int i=0;i<nlog;i++){ double e=fabs((double)logits[i]-(double)orc[i]); if(e>m)m=e; }
+          max_abs = m; argmatch = (am == argmax_row(orc, nlog)) ? 1 : 0; }
+        free(orc); } }
+    FILE* rf = fopen(out_path, "wb");
+    if (!rf) { fprintf(stderr, "from-logits: open receipt %s\n", out_path); free(logits); return 2; }
+    fprintf(rf, "HELIX_V16_RECEIPT\n");
+    fprintf(rf, "model_sha256 %s\n", model_hex);
+    fprintf(rf, "ids"); for (int i=0;i<T;i++) fprintf(rf, " %d", ids[i]); fprintf(rf, "\n");
+    fprintf(rf, "n_logits %d\n", nlog);
+    fprintf(rf, "logits_sha256 %s\n", logits_hex);
+    fprintf(rf, "argmax %d\n", am);
+    fprintf(rf, "tier3_tau %.17g\n", max_abs);
+    fprintf(rf, "tier3_max_abs %.17g\n", max_abs);
+    fprintf(rf, "tier3_argmax_match %d\n", argmatch);
+    fprintf(rf, "note re-serialized from dumped logits (GPU-free re-attest); tau at full double precision; Tier-2=reproducibility (re-derive from committed weights, NOT faster-than-re-exec); Tier-3=EMPIRICAL envelope vs a TRUSTED f32 oracle (NOT crypto); Tier-1 exact-Freivalds DEFERRED. Prior art CommitLLM, TAO.\n");
+    fclose(rf);
+    printf("V3_RECEIPT_FROM_LOGITS_OK n_logits=%d argmax=%d model_sha=%.12s logits_sha=%.12s tier3_max_abs=%.9g argmatch=%d -> %s\n",
+           nlog, am, model_hex, logits_hex, max_abs, argmatch, out_path);
     free(logits);
     return 0;
 }
@@ -2235,6 +2287,9 @@ int main(int argc, char** argv) {
         return sha256_selftest();
     if (argc >= 6 && strcmp(argv[1], "--v3-receipt-check") == 0)
         return run_v3_receipt_check(argv[2], argv[3], argv[4], argv[5]);
+    /* v1.6 (no GPU, no ptx): re-serialize a receipt from ALREADY-DUMPED logits (GPU-free re-attest / re-emit with exact tau). */
+    if (argc >= 7 && strcmp(argv[1], "--v3-receipt-from-logits") == 0)
+        return run_v3_receipt_from_logits(argv[2], argv[3], argv[4], argv[5], argv[6]);
 
     if (argc < 4) {
         fprintf(stderr,
