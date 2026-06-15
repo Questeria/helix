@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify Helix yourself — rebuild the compiler from 299 bytes</title>
+<meta name="description" content="Rebuild the entire Helix compiler from 299 hand-typed bytes and check it byte-for-byte. One command, about five minutes, no GPU.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:oklch(98% 0.005 90); --paper-2:oklch(96% 0.006 90); --paper-3:oklch(93% 0.007 90);
+    --ink:oklch(15% 0.008 270); --ink-2:oklch(28% 0.008 270); --ink-3:oklch(45% 0.008 270);
+    --hairline:oklch(15% 0.008 270 / .10); --hairline-2:oklch(15% 0.008 270 / .16);
+    --carbon:oklch(10% 0.005 270); --carbon-2:oklch(14% 0.006 270); --carbon-3:oklch(20% 0.007 270);
+    --wafer:oklch(98% 0 0); --wafer-2:oklch(85% 0 0); --wafer-3:oklch(65% 0 0);
+    --violet:oklch(60% 0.18 290); --magenta:oklch(65% 0.20 340); --cyan:oklch(72% 0.14 220);
+    --bg:var(--paper); --bg-elev:var(--paper-2); --fg:var(--ink); --fg-mute:var(--ink-2); --fg-soft:var(--ink-3);
+    --line:var(--hairline); --line-strong:var(--hairline-2);
+    --display:"Geist","Inter Tight",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    --body:"Geist","Inter Tight",-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    --maxw:1080px; --gutter:clamp(20px,4vw,48px);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-size:17px;line-height:1.55;
+    font-feature-settings:"ss01","ss02","cv11";-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+  ::selection{background:var(--violet);color:var(--paper)}
+  a{color:inherit;text-decoration:none}
+  section{padding:clamp(60px,9vw,120px) 0;position:relative}
+  section.dark{--bg:var(--carbon);--bg-elev:var(--carbon-2);--fg:var(--wafer);--fg-mute:var(--wafer-2);
+    --fg-soft:var(--wafer-3);--line:oklch(98% 0 0 / .08);--line-strong:oklch(98% 0 0 / .16);background:var(--bg);color:var(--fg)}
+  .wrap{width:100%;max-width:var(--maxw);margin:0 auto;padding:0 var(--gutter)}
+
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-soft);
+    display:inline-flex;align-items:center;gap:10px}
+  .eyebrow::before{content:"";width:6px;height:6px;background:var(--violet);border-radius:50%;flex-shrink:0}
+
+  .page-hero{--bg:var(--carbon);--bg-elev:var(--carbon-2);--fg:var(--wafer);--fg-mute:var(--wafer-2);--fg-soft:var(--wafer-3);
+    --line:oklch(98% 0 0 / .08);--line-strong:oklch(98% 0 0 / .16);
+    background:oklch(5% 0.020 268);color:var(--fg);padding:clamp(56px,7vw,104px) 0 clamp(48px,6vw,88px)}
+  .page-hero h1{font-family:var(--display);font-size:clamp(40px,6vw,80px);line-height:1.0;letter-spacing:-.03em;
+    font-weight:500;margin:20px 0 18px;max-width:18ch;text-wrap:balance}
+  .page-hero h1 em{font-style:normal;font-family:var(--mono);font-weight:400;font-size:.84em;letter-spacing:-.02em;
+    background:linear-gradient(96deg,var(--violet),var(--magenta) 60%,var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .page-hero .lede{color:var(--wafer-2);font-size:clamp(16px,1.3vw,19px);max-width:56ch;line-height:1.55;margin:0;text-wrap:pretty}
+
+  .btn-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:30px}
+  .btn{display:inline-flex;align-items:center;gap:10px;height:46px;padding:0 22px;border-radius:999px;font-size:15px;
+    font-weight:500;transition:transform .2s,background .2s,border-color .2s,color .2s}
+  .btn:hover{transform:translateY(-1px)}
+  .btn-primary{background:var(--wafer);color:var(--carbon)}
+  .btn-primary:hover{background:var(--violet);color:var(--paper)}
+  .btn-ghost{border:1px solid var(--line-strong);color:var(--fg)}
+  .btn-ghost:hover{border-color:var(--fg)}
+  .btn .arrow{transition:transform .22s}
+  .btn:hover .arrow{transform:translateX(3px)}
+
+  .section-head{margin-bottom:clamp(32px,4vw,52px)}
+  .section-title{font-family:var(--display);font-weight:500;font-size:clamp(28px,3.4vw,46px);line-height:1.05;
+    letter-spacing:-.025em;margin:12px 0 0;max-width:24ch;text-wrap:balance}
+  .section-lede{color:var(--fg-mute);max-width:60ch;font-size:16px;line-height:1.55;margin:14px 0 0;text-wrap:pretty}
+
+  .prose{max-width:70ch;font-size:16.5px;line-height:1.65}
+  .prose p{color:var(--fg-mute);margin:0 0 1.1em}
+  .prose strong{color:var(--fg);font-weight:600}
+  .prose code,.mono{font-family:var(--mono)}
+  .prose code{font-size:.86em;background:var(--bg-elev);border:1px solid var(--line);padding:1.5px 7px;border-radius:6px}
+  .prose a{color:var(--violet);text-decoration:underline;text-decoration-color:color-mix(in oklch,var(--violet) 40%,transparent);text-underline-offset:3px}
+
+  /* bootstrap ladder strip */
+  .ladder{display:flex;flex-wrap:wrap;align-items:center;gap:8px 6px;margin:6px 0 4px;font-family:var(--mono);font-size:13px}
+  .ladder span.node{padding:7px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg-elev);color:var(--fg);white-space:nowrap}
+  .ladder span.node b{color:var(--violet);font-weight:600}
+  .ladder span.arr{color:var(--fg-soft)}
+
+  /* numbered list (proofs / residuals) */
+  .nlist{list-style:none;margin:0;padding:0;display:grid;gap:1px;background:var(--line);border:1px solid var(--line-strong);border-radius:16px;overflow:hidden;counter-reset:n}
+  .nlist li{background:var(--bg);padding:20px 24px 20px 62px;position:relative;font-size:15.5px;line-height:1.6;color:var(--fg-mute);counter-increment:n}
+  .nlist li::before{content:counter(n,decimal-leading-zero);position:absolute;left:22px;top:21px;font-family:var(--mono);font-size:12px;color:var(--violet);letter-spacing:.08em}
+  .nlist li b{color:var(--fg);font-weight:600}
+
+  /* code card */
+  .code-card{background:var(--bg-elev);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin:16px 0;
+    box-shadow:0 30px 60px -30px color-mix(in oklch,var(--ink) 25%,transparent)}
+  section.dark .code-card{box-shadow:0 30px 60px -30px #000}
+  .code-head{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:12px;color:var(--fg-soft);letter-spacing:.04em}
+  .code-head .dots{display:flex;gap:6px}
+  .code-head .dots span{width:10px;height:10px;border-radius:50%;background:var(--line-strong)}
+  .code-head .ch-label{margin-right:auto}
+  .copy{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-soft);
+    border:1px solid var(--line-strong);border-radius:7px;padding:5px 11px;cursor:pointer;background:none;
+    transition:color .16s,border-color .16s}
+  .copy:hover{color:var(--violet);border-color:var(--violet)}
+  .copy.ok{color:var(--violet);border-color:var(--violet)}
+  .code-body{font-family:var(--mono);font-size:14px;line-height:1.75;padding:20px 22px;white-space:pre;overflow-x:auto;margin:0;color:var(--fg)}
+  .code-body .cmt{color:var(--fg-soft);font-style:italic}
+  .code-body .pass{color:var(--violet);font-weight:600;font-style:normal}
+  .code-body .dim{color:var(--fg-soft)}
+  .code-foot{padding:13px 18px;border-top:1px solid var(--line);display:flex;gap:10px 18px;flex-wrap:wrap;
+    font-family:var(--mono);font-size:12px;color:var(--fg-soft)}
+  .code-foot .out{color:var(--violet);font-weight:500}
+
+  /* fact table */
+  .fact-table{width:100%;border:1px solid var(--line-strong);border-radius:14px;overflow:hidden;display:block;overflow-x:auto;margin:6px 0}
+  .fact-table table{width:100%;border-collapse:collapse;font-size:14.5px}
+  .fact-table th,.fact-table td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+  .fact-table th{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-soft);background:var(--bg-elev);font-weight:500;white-space:nowrap}
+  .fact-table tr:last-child td{border-bottom:0}
+  .fact-table code,.fact-table .mono{font-family:var(--mono);font-size:.92em;word-break:break-all}
+  .fact-table .ok{color:var(--violet);font-weight:500}
+
+  /* notice */
+  .notice{border:1px solid var(--line-strong);border-left:3px solid var(--violet);border-radius:12px;background:var(--bg-elev);padding:18px 22px;margin:18px 0}
+  .notice .notice-title{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--violet);margin:0 0 8px}
+  .notice p{margin:0;color:var(--fg-mute);font-size:15px;line-height:1.55}
+  .notice p+p{margin-top:.7em}
+  .notice code{font-family:var(--mono);font-size:.88em}
+
+  /* cards */
+  .card-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:8px 0}
+  @media(max-width:640px){.card-grid{grid-template-columns:1fr}}
+  .lcard{display:flex;flex-direction:column;gap:9px;padding:clamp(20px,2.6vw,30px);background:var(--bg);
+    border:1px solid var(--line-strong);border-radius:16px}
+  .lcard .lc-kicker{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--violet)}
+  .lcard h3{font-family:var(--display);font-size:19px;font-weight:600;letter-spacing:-.01em;margin:0}
+  .lcard p{margin:0;color:var(--fg-mute);font-size:14.5px;line-height:1.55}
+  .lcard code{font-family:var(--mono);font-size:.85em;background:var(--bg-elev);border:1px solid var(--line);padding:1px 6px;border-radius:5px}
+
+  .stat-strip{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 4px}
+  .stat-strip span{font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;color:var(--fg-mute);
+    border:1px solid var(--line-strong);border-radius:999px;padding:7px 14px;background:var(--bg-elev)}
+  .stat-strip b{color:var(--violet);font-weight:600}
+
+  /* faq */
+  .faq{display:grid;gap:12px}
+  .faq details{border:1px solid var(--line-strong);border-radius:14px;background:var(--bg);overflow:hidden}
+  .faq summary{cursor:pointer;padding:17px 22px;font-family:var(--display);font-size:16.5px;font-weight:500;
+    list-style:none;display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::after{content:"+";font-family:var(--mono);font-size:18px;color:var(--fg-soft);transition:transform .2s;flex-shrink:0}
+  .faq details[open] summary::after{transform:rotate(45deg);color:var(--violet)}
+  .faq .faq-body{padding:0 22px 19px;color:var(--fg-mute);font-size:15px;line-height:1.6}
+  .faq .faq-body code{font-family:var(--mono);font-size:.88em;background:var(--bg-elev);border:1px solid var(--line);padding:1px 6px;border-radius:5px}
+
+  .cta{text-align:center}
+  .cta h2{font-family:var(--display);font-size:clamp(34px,4.6vw,64px);line-height:1.0;letter-spacing:-.03em;font-weight:500;margin:14px auto 22px;max-width:16ch;text-wrap:balance}
+  .cta p{color:var(--fg-mute);font-size:17px;max-width:50ch;margin:0 auto 30px;text-wrap:pretty}
+  .cta .btn-row{justify-content:center}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 44px;font-family:var(--mono);font-size:12.5px;color:var(--fg-soft);letter-spacing:.03em}
+  footer a{color:var(--fg-mute)}footer a:hover{color:var(--fg)}
+  footer .fr{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+
+  .mt0{margin-top:0}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.btn:hover{transform:none}}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="page-hero">
+  <div class="wrap">
+    <span class="eyebrow">verify it yourself</span>
+    <h1>Don't trust us. <em>Rebuild it</em> from 299 bytes.</h1>
+    <p class="lede">Helix's whole compiler comes back from 299 hand-typed bytes, with no trusted compiler anywhere in the chain. One command rebuilds it on your machine and checks every byte against the pinned hashes. About five minutes, CPU only, no GPU.</p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="#run">Go to the commands <span class="arrow">→</span></a>
+      <a class="btn btn-ghost" href="https://github.com/Questeria/helix" target="_blank" rel="noopener">Browse the repo</a>
+    </div>
+  </div>
+</section>
+
+<!-- WHAT YOU PROVE -->
+<section>
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">the claim</span>
+      <h2 class="section-title">Three things, checked from your own copy.</h2>
+      <p class="section-lede">The reproduction rebuilds the whole ladder from the first byte up, then asserts it didn't drift.</p>
+    </div>
+
+    <p class="ladder">
+      <span class="node"><b>hex0</b> · 299 B</span><span class="arr">→</span>
+      <span class="node">hex1</span><span class="arr">→</span>
+      <span class="node">hex2</span><span class="arr">→</span>
+      <span class="node">catm</span><span class="arr">→</span>
+      <span class="node">M0</span><span class="arr">→</span>
+      <span class="node">cc_amd64</span><span class="arr">→</span>
+      <span class="node">M2-Planet</span><span class="arr">→</span>
+      <span class="node">seed</span><span class="arr">→</span>
+      <span class="node"><b>kovc</b></span>
+    </p>
+    <p style="color:var(--fg-soft);font-size:14px;margin:4px 0 26px">Each rung is built only by the rung before it. No pre-built compiler is trusted at any point.</p>
+
+    <ol class="nlist">
+      <li><b>It rebuilds from raw.</b> The ladder is rebuilt starting from <code class="mono" style="font-size:.92em">hex0</code> — 299 bytes you could type by hand — and every rung's SHA-256 matches its committed value.</li>
+      <li><b>It builds itself, byte for byte.</b> The compiler compiles itself until the output stops changing. <code class="mono" style="font-size:.92em">K2</code>, <code class="mono" style="font-size:.92em">K3</code> and <code class="mono" style="font-size:.92em">K4</code> come out identical.</li>
+      <li><b>An unrelated compiler agrees.</b> A separate <code class="mono" style="font-size:.92em">gcc</code> build that shares no ancestry produces the byte-identical seed. <code class="mono" style="font-size:.92em">gcc</code> only audits here; it's never the shipped root.</li>
+    </ol>
+
+    <div class="notice">
+      <p class="notice-title">Prefer to install nothing?</p>
+      <p>You don't have to run it at all. The same script runs on a clean <code>ubuntu-latest</code> machine on every push — open <a href="https://github.com/Questeria/helix/actions/workflows/trust-reproduce.yml" target="_blank" rel="noopener">the trust-reproduce runs</a> and look for the green checks, or fork the repo and watch your own copy do it.</p>
+    </div>
+  </div>
+</section>
+
+<!-- BEFORE YOU START -->
+<section class="dark">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">before you start</span>
+      <h2 class="section-title">A Linux shell and a handful of tools.</h2>
+      <p class="section-lede">The trust core builds real Linux binaries, so it runs on Linux. On Windows, use WSL2 (<code class="mono" style="font-size:.86em;background:var(--bg-elev);border:1px solid var(--line);padding:1px 6px;border-radius:5px">wsl --install</code> in PowerShell, then open Ubuntu). No GPU. No Python.</p>
+    </div>
+    <div class="code-card">
+      <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span class="ch-label">install the audit tools · Debian / Ubuntu / WSL</span><button class="copy" type="button">copy</button></div>
+<pre class="code-body">sudo apt-get update
+sudo apt-get install -y git xxd binutils gcc file coreutils</pre>
+    </div>
+    <p style="color:var(--fg-soft);font-size:14px;margin:14px 0 0">On macOS, run it inside a Linux container: <code class="mono" style="font-size:.86em;background:var(--bg-elev);border:1px solid var(--line);padding:1px 6px;border-radius:5px">docker run -it --rm -v "$PWD":/w -w /w ubuntu:24.04 bash</code>, then the two lines above.</p>
+  </div>
+</section>
+
+<!-- RUN IT -->
+<section id="run">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">the reproduction</span>
+      <h2 class="section-title">Clone it. Run one command.</h2>
+      <p class="section-lede">Clone anywhere you like — the script adjusts its own paths to wherever you put it.</p>
+    </div>
+
+    <div class="code-card">
+      <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span class="ch-label">1 · get the code</span><button class="copy" type="button">copy</button></div>
+<pre class="code-body">git clone https://github.com/Questeria/helix.git
+cd helix
+git checkout v1.5-complete   <span class="cmt"># optional: pin to the release. omit for the latest.</span></pre>
+    </div>
+
+    <div class="code-card">
+      <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span class="ch-label">2 · rebuild and check · ~1–5 min · no GPU</span><button class="copy" type="button">copy</button></div>
+<pre class="code-body">bash scripts/reproduce_trust.sh</pre>
+    </div>
+
+    <p class="prose" style="margin:22px 0 0">It deletes every pre-built rung, rebuilds the ladder from <code>hex0</code>, runs the self-host fixpoint and the <code>gcc</code> cross-build, and asserts the pinned hashes. It exits non-zero the moment a byte is off. The tail you're waiting for:</p>
+
+    <div class="code-card">
+      <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span class="ch-label">what you'll see</span></div>
+<pre class="code-body">[reproduce_trust]     rung hex0 : build + self-verify OK
+<span class="dim">          hex1 · hex2 · catm · M0 · cc_amd64 · M2-Planet · seed</span>
+[reproduce_trust]     <span class="pass">GATE_PASS</span>
+[reproduce_trust]     fixpoint K2==K3==K4 == pinned (cdcf8673…)
+[reproduce_trust]     <span class="pass">DDC_ANCHOR_OK</span>
+============================================================
+<span class="pass">REPRODUCE_TRUST: PASS</span></pre>
+      <div class="code-foot"><span>exit 0 = your machine re-derived the compiler from 299 bytes</span></div>
+    </div>
+
+    <p class="prose" style="margin:24px 0 10px"><code>REPRODUCE_TRUST: PASS</code> is the whole result. The script pins three hashes and prints them at the top of the run; if any differs, you get a <code>FAIL</code> line naming it.</p>
+
+    <div class="fact-table">
+      <table>
+        <thead><tr><th>Anchor</th><th>What it is</th><th>SHA-256 · v1.5-complete</th></tr></thead>
+        <tbody>
+          <tr><td>seed</td><td>the bootstrap compiler, built from raw <code>hex0</code></td><td><span class="mono">9837db12…b915c9bb</span></td></tr>
+          <tr><td>K1</td><td>the independent <code>gcc</code> cross-build (matches the from-raw build)</td><td><span class="mono">6ee5ec2b…9989658c</span></td></tr>
+          <tr><td>fixpoint</td><td>the self-host result, <span class="ok">K2 == K3 == K4</span></td><td><span class="mono">cdcf8673…dc139bdd</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="color:var(--fg-soft);font-size:13.5px;margin:12px 0 0">The <code class="mono" style="font-size:.92em">seed</code> hash is stable across releases. <code class="mono" style="font-size:.92em">K1</code> and the fixpoint move only when the compiler source intentionally changes, so trust the <code class="mono" style="font-size:.92em">PASS</code> line over any one number copied off a page.</p>
+  </div>
+</section>
+
+<!-- GO DEEPER -->
+<section class="dark">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">go further</span>
+      <h2 class="section-title">Past the trust core.</h2>
+      <p class="section-lede">Two optional steps. The first is still CPU-only; the second needs an NVIDIA GPU.</p>
+    </div>
+
+    <div class="card-grid">
+      <div class="lcard">
+        <span class="lc-kicker">still CPU-only</span>
+        <h3>Prove the compiler works</h3>
+        <p>The universal gate runs the self-host fixpoint plus a 113-program feature corpus — integer widths, floats, generics, traits, closures, pattern matching, diagnostics — and a PTX byte-diff. It prints <code>GATE_PASS</code> only when every leg is green.</p>
+      </div>
+      <div class="lcard">
+        <span class="lc-kicker">needs an NVIDIA GPU</span>
+        <h3>Run a real GPT-2 on it</h3>
+        <p>Bring weights from HuggingFace and run an unchanged GPT-2 through Helix-emitted GPU kernels, checked token-for-token against an independent reference. The point is trust, not speed. It attests the <b>v1.4 release</b>, so run it from that tag; the runbook walks it through.</p>
+      </div>
+    </div>
+
+    <div class="code-card">
+      <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span class="ch-label">deeper checks</span><button class="copy" type="button">copy</button></div>
+<pre class="code-body">bash scripts/gate_kovc.sh          <span class="cmt"># CPU, on this checkout -> GATE_PASS</span>
+
+<span class="cmt"># the GPT-2 demo attests the v1.4 release, so run it from that tag</span>
+git checkout v1.4
+bash scripts/gpt2_demo_attest.sh   <span class="cmt"># GPU: from-raw rebuild, GPT-2 vs oracle, signed attestation</span></pre>
+      <div class="code-foot"><span class="out">runbook: docs/HELIX_GPT2_DEMO_RUNBOOK.md</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- RESIDUALS -->
+<section>
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">said before you ask</span>
+      <h2 class="section-title">What a green run does not claim.</h2>
+      <p class="section-lede">The honesty is the point. These are the limits, stated up front so the claim stays exact.</p>
+    </div>
+    <ol class="nlist">
+      <li><b>Complete to PTX, not below.</b> The GPU path is auditable down to PTX text. Below PTX it trusts NVIDIA's closed <code class="mono" style="font-size:.92em">ptxas</code>, the driver, and the silicon. <span style="color:var(--fg-soft)">(As of v1.5, one kernel — <code class="mono" style="font-size:.92em">vector_add</code> on sm_86 — has its <code class="mono" style="font-size:.92em">ptxas</code>-emitted machine code independently checked, removing <code class="mono" style="font-size:.92em">ptxas</code> from the trusted base for that one kernel. A per-compilation witness, not a formal proof.)</span></li>
+      <li><b>Not GPU parity.</b> Kernels run at roughly half to two-thirds of cuBLAS on one RTX 3070 Laptop, fp32. Trust first; speed is on the roadmap.</li>
+      <li><b>The CPU chain is the byte-identical part.</b> The broad language surface is cross-checked behaviorally by a zero-ancestry interpreter, not by a second byte-identical compiler — that's impossible to build for it by construction.</li>
+      <li><b>One machine, so far.</b> A single sm_86 GPU, fp32. External reproduction on someone else's hardware is the open invitation, not a closed claim.</li>
+    </ol>
+    <p style="color:var(--fg-soft);font-size:14px;margin:18px 0 0">The full record lives in <a href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md" target="_blank" rel="noopener" style="color:var(--violet)">TRUST_CHAIN_CLOSED.md</a> and <a href="https://github.com/Questeria/helix/blob/main/docs/CLEAN_REPRODUCTION.md" target="_blank" rel="noopener" style="color:var(--violet)">CLEAN_REPRODUCTION.md</a>. They're the authority on the exact claims.</p>
+  </div>
+</section>
+
+<!-- TROUBLE -->
+<section class="dark">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">if something breaks</span>
+      <h2 class="section-title">The usual snags.</h2>
+    </div>
+    <div class="faq">
+      <details><summary>It's crawling on Windows</summary><div class="faq-body">You cloned into <code>/mnt/c</code>. Building on the Windows-mounted drive is far slower. Clone into your Linux home (<code>~</code>) inside WSL and run it there.</div></details>
+      <details><summary><code>command not found: xxd</code></summary><div class="faq-body">Re-run the install line. <code>xxd</code> is in the <code>xxd</code> package, <code>sha256sum</code> is in <code>coreutils</code>.</div></details>
+      <details><summary><code>No such file: scripts/reproduce_trust.sh</code></summary><div class="faq-body">You're not in the repo. Run <code>cd helix</code> first.</div></details>
+      <details><summary>A hash mismatch / a <code>*** FAIL</code> line</summary><div class="faq-body">That's the guard doing its job — a byte differs. Re-clone fresh with no local edits and run again. If a clean clone still fails, that's exactly the kind of thing worth <a href="https://github.com/Questeria/helix/issues" target="_blank" rel="noopener" style="color:var(--violet)">an issue</a>.</div></details>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta dark">
+  <div class="wrap">
+    <span class="eyebrow">all the way down</span>
+    <h2>Audit instead of trust.</h2>
+    <p>The compiler under all of this rebuilds from 299 hand-typed bytes — one command, about a minute, on your machine.</p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="#run">Run it <span class="arrow">→</span></a>
+      <a class="btn btn-ghost" href="https://github.com/Questeria/helix" target="_blank" rel="noopener">github.com/Questeria/helix</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fr">
+      <span>Helix · source-available · rebuildable from 299 bytes</span>
+      <span><a href="https://299bytes.com" target="_blank" rel="noopener">299bytes.com</a> · <a href="https://github.com/Questeria/helix" target="_blank" rel="noopener">repo</a> · <a href="https://github.com/Questeria/helix/actions/workflows/trust-reproduce.yml" target="_blank" rel="noopener">CI</a></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.copy').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var pre = btn.closest('.code-card').querySelector('.code-body');
+      var text = pre.innerText.replace(/[ \t]+$/gm,'').trim();
+      var done = function(){ btn.textContent='copied'; btn.classList.add('ok');
+        setTimeout(function(){ btn.textContent='copy'; btn.classList.remove('ok'); }, 1400); };
+      if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done,done); }
+      else { var t=document.createElement('textarea'); t.value=text; document.body.appendChild(t); t.select();
+        try{document.execCommand('copy');}catch(e){} t.remove(); done(); }
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,230 @@
+---
+import Base from "../layouts/Base.astro";
+---
+<Base
+  title="Reproduce Helix — rebuild the compiler from 299 bytes"
+  description="Rebuild the entire Helix compiler from 299 hand-typed bytes and check it byte-for-byte. One command, about five minutes, no GPU."
+>
+  <style>
+    .ladder{display:flex;flex-wrap:wrap;align-items:center;gap:8px 6px;margin:0 0 8px;font-family:var(--mono);font-size:13px}
+    .ladder .node{padding:7px 12px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg-elev);color:var(--fg);white-space:nowrap}
+    .ladder .node b{color:var(--violet);font-weight:600}
+    .ladder .arr{color:var(--fg-soft)}
+    .code-body .pass{color:var(--violet);font-weight:600}
+    .code-body .dim{color:var(--fg-soft)}
+    .micro{color:var(--fg-soft);font-size:13.5px;max-width:78ch;line-height:1.6}
+  </style>
+
+  <!-- 01 HERO -->
+  <section class="page-hero dark">
+    <div class="wrap">
+      <span class="eyebrow">verify it yourself</span>
+      <h1>Don't trust us. <em>Rebuild it</em> from 299 bytes.</h1>
+      <p class="lede">Helix's whole compiler comes back from 299 hand-typed bytes, with no trusted compiler anywhere in the chain. One command rebuilds it on your machine and checks every byte against the pinned hashes. About five minutes, CPU only, no GPU.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#run">Go to the commands <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/Questeria/helix">Browse the repo</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 THE CLAIM -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">the claim</span>
+          <h2 class="section-title">Three things, checked from your own copy.</h2>
+        </div>
+        <p class="section-lede">The reproduction rebuilds the whole ladder from the first byte up, then asserts it didn't drift.</p>
+      </div>
+
+      <p class="ladder">
+        <span class="node"><b>hex0</b> · 299 B</span><span class="arr">→</span>
+        <span class="node">hex1</span><span class="arr">→</span>
+        <span class="node">hex2</span><span class="arr">→</span>
+        <span class="node">catm</span><span class="arr">→</span>
+        <span class="node">M0</span><span class="arr">→</span>
+        <span class="node">cc_amd64</span><span class="arr">→</span>
+        <span class="node">M2-Planet</span><span class="arr">→</span>
+        <span class="node">seed</span><span class="arr">→</span>
+        <span class="node"><b>kovc</b></span>
+      </p>
+      <p class="micro" style="margin:0 0 26px;">Each rung is built only by the rung before it. No pre-built compiler is trusted at any point.</p>
+
+      <ol class="resid-list">
+        <li><b>It rebuilds from raw.</b> The ladder is rebuilt starting from <code class="mono">hex0</code> — 299 bytes you could type by hand — and every rung's SHA-256 matches its committed value.</li>
+        <li><b>It builds itself, byte for byte.</b> The compiler compiles itself until the output stops changing. <code class="mono">K2</code>, <code class="mono">K3</code> and <code class="mono">K4</code> come out identical.</li>
+        <li><b>An unrelated compiler agrees.</b> A separate <code class="mono">gcc</code> build that shares no ancestry produces the byte-identical seed. <code class="mono">gcc</code> only audits here; it's never the shipped root.</li>
+      </ol>
+
+      <div class="notice">
+        <p class="notice-title">Prefer to install nothing?</p>
+        <p>You don't have to run it at all. The same script runs on a clean <code>ubuntu-latest</code> machine on every push — open <a href="https://github.com/Questeria/helix/actions/workflows/trust-reproduce.yml">the trust-reproduce runs</a> and look for the green checks, or fork the repo and watch your own copy do it.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 BEFORE YOU START -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">before you start</span>
+          <h2 class="section-title">A Linux shell and a handful of tools.</h2>
+        </div>
+        <p class="section-lede">The trust core builds real Linux binaries, so it runs on Linux. On Windows, use WSL2 (<code class="mono">wsl --install</code> in PowerShell, then open Ubuntu). No GPU. No Python.</p>
+      </div>
+      <div class="code-card">
+        <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>install the audit tools · Debian / Ubuntu / WSL</span></div>
+<pre class="code-body">sudo apt-get update
+sudo apt-get install -y git xxd binutils gcc file coreutils</pre>
+      </div>
+      <p class="micro" style="margin:14px 0 0;">On macOS, run it inside a Linux container: <code class="mono">docker run -it --rm -v "$PWD":/w -w /w ubuntu:24.04 bash</code>, then the two lines above.</p>
+    </div>
+  </section>
+
+  <!-- 04 THE REPRODUCTION -->
+  <section id="run">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">the reproduction</span>
+          <h2 class="section-title">Clone it. Run one command.</h2>
+        </div>
+        <p class="section-lede">Clone anywhere you like — the script adjusts its own paths to wherever you put it.</p>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>1 · get the code</span></div>
+<pre class="code-body">git clone https://github.com/Questeria/helix.git
+cd helix
+git checkout v1.5-complete   <span class="cmt"># optional: pin to the release. omit for the latest.</span></pre>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>2 · rebuild and check · ~1–5 min · no GPU</span></div>
+<pre class="code-body">bash scripts/reproduce_trust.sh</pre>
+      </div>
+
+      <div class="prose" style="margin-top:22px;max-width:78ch;">
+        <p>It deletes every pre-built rung, rebuilds the ladder from <code>hex0</code>, runs the self-host fixpoint and the <code>gcc</code> cross-build, and asserts the pinned hashes. It exits non-zero the moment a byte is off. The tail you're waiting for:</p>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>what you'll see</span></div>
+<pre class="code-body">[reproduce_trust]     rung hex0 : build + self-verify OK
+<span class="dim">          hex1 · hex2 · catm · M0 · cc_amd64 · M2-Planet · seed</span>
+[reproduce_trust]     <span class="pass">GATE_PASS</span>
+[reproduce_trust]     fixpoint K2==K3==K4 == pinned (cdcf8673…)
+[reproduce_trust]     <span class="pass">DDC_ANCHOR_OK</span>
+============================================================
+<span class="pass">REPRODUCE_TRUST: PASS</span></pre>
+        <div class="code-foot"><span>exit 0 = your machine re-derived the compiler from 299 bytes</span></div>
+      </div>
+
+      <div class="prose" style="margin:24px 0 10px;max-width:78ch;">
+        <p><code>REPRODUCE_TRUST: PASS</code> is the whole result. The script pins three hashes and prints them at the top of the run; if any differs, you get a <code>FAIL</code> line naming it.</p>
+      </div>
+
+      <div class="fact-table">
+        <table>
+          <thead><tr><th>Anchor</th><th>What it is</th><th>SHA-256 · v1.5 self-host line</th></tr></thead>
+          <tbody>
+            <tr><td>seed</td><td>the bootstrap compiler, built from raw <code>hex0</code> (stable across releases)</td><td><span class="mono">9837db12…b915c9bb</span></td></tr>
+            <tr><td>K1</td><td>the independent <code>gcc</code> cross-build (matches the from-raw build)</td><td><span class="mono">6ee5ec2b…9989658c</span></td></tr>
+            <tr><td>fixpoint</td><td>the self-host result, <span class="ok">K2 == K3 == K4</span></td><td><span class="mono">cdcf8673…dc139bdd</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="micro" style="margin:12px 0 0;">The <code class="mono">seed</code> hash is stable across releases. <code class="mono">K1</code> and the fixpoint move only when the compiler source intentionally changes (the values above are the v1.5 self-host line), so trust the <code class="mono">PASS</code> line over any one number copied off a page.</p>
+    </div>
+  </section>
+
+  <!-- 05 GO FURTHER -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">go further</span>
+          <h2 class="section-title">Past the trust core.</h2>
+        </div>
+        <p class="section-lede">Two optional steps. The first is still CPU-only; the second needs an NVIDIA GPU.</p>
+      </div>
+
+      <div class="card-grid two">
+        <div class="link-card">
+          <span class="lc-kicker">still CPU-only</span>
+          <h3>Prove the compiler works</h3>
+          <p>The universal gate runs the self-host fixpoint plus a 113-program feature corpus — integer widths, floats, generics, traits, closures, pattern matching, diagnostics — and a PTX byte-diff. It prints <code class="mono">GATE_PASS</code> only when every leg is green.</p>
+        </div>
+        <div class="link-card">
+          <span class="lc-kicker">needs an NVIDIA GPU</span>
+          <h3>Run a real GPT-2 on it</h3>
+          <p>Bring weights from HuggingFace and run an unchanged GPT-2 through Helix-emitted GPU kernels, checked token-for-token against an independent reference. Trust, not speed. It attests the <strong>v1.4 release</strong>, so run it from that tag.</p>
+        </div>
+      </div>
+
+      <div class="code-card" style="margin-top:24px;">
+        <div class="code-head"><div class="dots" aria-hidden="true"><span></span><span></span><span></span></div><span>deeper checks</span></div>
+<pre class="code-body">bash scripts/gate_kovc.sh          <span class="cmt"># CPU, on this checkout -> GATE_PASS</span>
+
+<span class="cmt"># the GPT-2 demo attests the v1.4 release, so run it from that tag</span>
+git checkout v1.4
+bash scripts/gpt2_demo_attest.sh   <span class="cmt"># GPU: from-raw rebuild, GPT-2 vs oracle, signed attestation</span></pre>
+        <div class="code-foot"><span class="out">runbook: docs/HELIX_GPT2_DEMO_RUNBOOK.md</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 06 RESIDUALS -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">said before you ask</span>
+          <h2 class="section-title">What a green run does not claim.</h2>
+        </div>
+        <p class="section-lede">The honesty is the point. These are the limits, stated up front so the claim stays exact.</p>
+      </div>
+      <ol class="resid-list">
+        <li><b>Complete to PTX, not below.</b> The GPU path is auditable down to PTX text. Below PTX it trusts NVIDIA's closed <code class="mono">ptxas</code>, the driver, and the silicon. <span class="micro">(As of v1.5, one kernel — <code class="mono">vector_add</code> on sm_86 — has its <code class="mono">ptxas</code>-emitted machine code independently checked, removing <code class="mono">ptxas</code> from the trusted base for that one kernel. A per-compilation witness, not a formal proof.)</span></li>
+        <li><b>Not GPU parity.</b> Kernels run at roughly half to two-thirds of cuBLAS on one RTX 3070 Laptop, fp32. Trust first; speed is on the roadmap.</li>
+        <li><b>The CPU chain is the byte-identical part.</b> The broad language surface is cross-checked behaviorally by a zero-ancestry interpreter, not by a second byte-identical compiler — that's impossible to build for it by construction.</li>
+        <li><b>One machine, so far.</b> A single sm_86 GPU, fp32. External reproduction on someone else's hardware is the open invitation, not a closed claim.</li>
+      </ol>
+      <p class="micro" style="margin-top:18px;">The full record lives in <a href="https://github.com/Questeria/helix/blob/main/docs/TRUST_CHAIN_CLOSED.md" style="color:var(--violet)">TRUST_CHAIN_CLOSED.md</a> and <a href="https://github.com/Questeria/helix/blob/main/docs/CLEAN_REPRODUCTION.md" style="color:var(--violet)">CLEAN_REPRODUCTION.md</a>. They're the authority on the exact claims.</p>
+    </div>
+  </section>
+
+  <!-- 07 TROUBLE -->
+  <section class="dark">
+    <div class="wrap">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">if something breaks</span>
+          <h2 class="section-title">The usual snags.</h2>
+        </div>
+      </div>
+      <div class="faq">
+        <details><summary>It's crawling on Windows</summary><div class="faq-body"><p>You cloned into <code>/mnt/c</code>. Building on the Windows-mounted drive is far slower. Clone into your Linux home (<code>~</code>) inside WSL and run it there.</p></div></details>
+        <details><summary><code>command not found: xxd</code></summary><div class="faq-body"><p>Re-run the install line. <code>xxd</code> is in the <code>xxd</code> package, <code>sha256sum</code> is in <code>coreutils</code>.</p></div></details>
+        <details><summary><code>No such file: scripts/reproduce_trust.sh</code></summary><div class="faq-body"><p>You're not in the repo. Run <code>cd helix</code> first.</p></div></details>
+        <details><summary>A hash mismatch / a <code>*** FAIL</code> line</summary><div class="faq-body"><p>That's the guard doing its job — a byte differs. Re-clone fresh with no local edits and run again. If a clean clone still fails, that's exactly the kind of thing worth <a href="https://github.com/Questeria/helix/issues" style="color:var(--violet)">an issue</a>.</p></div></details>
+      </div>
+    </div>
+  </section>
+
+  <!-- 08 CTA -->
+  <section class="cta dark">
+    <div class="wrap">
+      <span class="eyebrow">all the way down</span>
+      <h2>Audit instead of trust.</h2>
+      <p>The compiler under all of this rebuilds from 299 hand-typed bytes — one command, about a minute, on your machine.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#run">Run it <span class="arrow">→</span></a>
+        <a class="btn btn-ghost" href="https://github.com/Questeria/helix">github.com/Questeria/helix</a>
+      </div>
+    </div>
+  </section>
+</Base>

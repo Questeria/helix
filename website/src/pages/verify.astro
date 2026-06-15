@@ -190,14 +190,16 @@ import Base from "../layouts/Base.astro";
 git clone https://github.com/Questeria/helix &amp;&amp; cd helix
 bash scripts/reproduce_trust.sh      <span class="cmt"># ~1 minute · CPU-only · fail-closed</span>
 
-<span class="cmt"># Tier B — the model demos. Public weights + an independent oracle required.</span>
+<span class="cmt"># Tier B — the model demos, anchored to the v1.4 release. Weights + an oracle required.</span>
+git checkout v1.4
 bash scripts/gpt2_demo_attest.sh     <span class="cmt"># from-raw rebuild → GPT-2 vs oracle → signed attestation</span>
 bash scripts/llama_model_gate.sh     <span class="cmt"># SmolLM2-135M gate · first run 72 s · fail-closed</span></pre>
         <div class="code-foot">
           <span>every gate exits nonzero on mismatch</span>
-          <span class="out">anchors: 9837db12 · 0992dddd · 84363adb</span>
+          <span class="out">v1.4 demo anchors: 9837db12 · 0992dddd · 84363adb</span>
         </div>
       </div>
+      <p style="margin-top: 16px; color: var(--fg-soft); font-size: 13.5px; max-width: 80ch;">The seed <code>9837db12…</code> never moves. The model demos stay anchored to the <strong>v1.4 release</strong> they were verified on — run Tier B from <code class="mono">git checkout v1.4</code>. On the v1.5 working line, <code class="mono">reproduce_trust.sh</code> re-mints the self-host fixpoint and gcc-DDC K1 (currently <code>cdcf8673…</code> / <code>6ee5ec2b…</code>) as the low-precision slate advances — by design, not drift.</p>
 
       <div class="faq" style="margin-top: 36px;">
         <details>
