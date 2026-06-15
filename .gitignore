@@ -76,6 +76,11 @@ demo/demo_report.js
 /.stage33-logs/
 
 # --- public-repo hygiene: never commit secrets / local scratch ---
+# Private investor materials — kept in the working tree as a convenience mirror,
+# but MUST NOT be committed to this PUBLIC repo. Canonical copy is the separate
+# PRIVATE repo C:/Projects/299bytes (github.com/Questeria/299bytes). Without this
+# guard a blind `git add -A` would leak fundraising docs and dollar figures.
+/company/
 *.env
 api.env
 .env
