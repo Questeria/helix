@@ -236,6 +236,12 @@ static int        g_gpu_dq = 0, g_hostdeq = 0;
 static CUdeviceptr d_packed = 0, d_sc = 0, d_dqscr = 0;
 static float*     g_scbuf = NULL;
 static float      g_e4m3_tab[256];   /* v1.7: e4m3_decode LUT (256 byte values) -> the per-forward scale build avoids ldexpf */
+/* v1.7 INCREMENT 2: env-gated profiling (HX_PROF=1) of the per-forward upload breakdown -- splits the
+ * v3_upload_gpu cost into mmap-touch+HtoD vs the CPU effective-scale build vs the dequant launch+sync. */
+static int    g_prof = 0;
+static double g_pf_htod = 0, g_pf_sb = 0, g_pf_dq = 0, g_pf_cmp = 0;
+static long   g_pf_n = 0;
+static long   g_dqscr_elems = 0;   /* v1.7 INC2: element capacity of d_dqscr/g_scbuf (= alloc_buffers sc); sizes the chunked lm_head GPU dequant */
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -1439,6 +1445,7 @@ static void load_dequant_module(void) {
 
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
 static int device_init(const char* ptx_path, const char* wpath) {
+    g_prof = getenv("HX_PROF") ? 1 : 0;   /* v1.7 INCREMENT 2: per-upload profiling */
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
     g_ptx=(char*)malloc(psz+1); if (fread(g_ptx,1,psz,pf)!=(size_t)psz) { fclose(pf); return 2; } g_ptx[psz]=0; fclose(pf);
@@ -1524,6 +1531,7 @@ static int alloc_buffers(int Smax) {
             if ((long)DM*kpad_qd > sc) sc = (long)DM*kpad_qd;   /* o_proj [DM x QD] */
             g_v3scratch = (float*)malloc((size_t)sc*sizeof(float));
             if (!g_v3scratch) { fprintf(stderr, "v3 scratch malloc %ld failed\n", sc); return 2; }
+            g_dqscr_elems = sc;   /* v1.7 INC2: capacity for chunked lm_head GPU dequant */
             if (g_gpu_dq) {   /* v1.7: device scratch for the GPU dequant, sized off sc = max rows*Kpad floats */
                 long mp = (sc+6)/7, ms = (sc+15)/16;       /* max rows*kwords, max rows*kblk */
                 d_packed = A(mp);                          /* packed i32 words (4B each) */
@@ -1610,13 +1618,18 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     const int32_t* w = (const int32_t*)(base + d->data_off);
     const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
     float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
-    CKX(cuMemcpyHtoD(d_packed, w, (size_t)rows*kwords*4), "dq packed HtoD");
+    double tA = g_prof ? now_seconds() : 0.0;
+    CKX(cuMemcpyHtoD(d_packed, w, (size_t)rows*kwords*4), "dq packed HtoD");   /* first touch of `w` faults its mmap pages */
+    double tB = g_prof ? now_seconds() : 0.0; g_pf_htod += tB - tA;
     for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* v1.7: LUT, byte-identical to v3_e4m3_decode */
+    double tC = g_prof ? now_seconds() : 0.0; g_pf_sb += tC - tB;
     CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD");
+    double tD = g_prof ? now_seconds() : 0.0; g_pf_htod += tD - tC;
     CUdeviceptr out_dev = (Kpad==K) ? dst : d_dqscr;
     int mm0=0, kk=Kpad, bd=BD;
     void* ar[] = { &d_packed, &d_sc, &out_dev, &mm0, &kk, &bd };
     LX(f_dq_tiled, (unsigned)((long)rows*(Kpad/BD)), (unsigned)BD, ar);
+    double tE = g_prof ? now_seconds() : 0.0; g_pf_dq += tE - tD; g_pf_n++;
     if (Kpad != K) {   /* compact [rows x Kpad] -> [rows x K], drop the pad cols (host did this via memmove) */
         CUDA_MEMCPY2D cp; memset(&cp, 0, sizeof(cp));
         cp.srcMemoryType=CU_MEMORYTYPE_DEVICE; cp.srcDevice=d_dqscr; cp.srcPitch=(size_t)Kpad*4;
@@ -1624,6 +1637,7 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
         cp.WidthInBytes=(size_t)K*4; cp.Height=(size_t)rows;
         CKX(cuMemcpy2D(&cp), "dq compact 2D");
     }
+    if (g_prof) g_pf_cmp += now_seconds() - tE;
 }
 
 static void v3_upload(int idx, CUdeviceptr dst) {
@@ -1686,12 +1700,42 @@ static int setup_head(int Smax) {
         int rows=(int)dl->rows, K=(int)dl->K, Kpad=(int)dl->Kpad;   /* NV x DM, Kpad>=DM */
         d_wte_pad = A((size_t)NVpad*DM);
         CK(cuMemsetD8(d_wte_pad, 0, (size_t)NVpad*DM*sizeof(float)), "zero wte_pad");
-        float* hs = (float*)malloc((size_t)rows*Kpad*sizeof(float));   /* ~2.5GB host (lm_head dequant) */
-        if (!hs) { fprintf(stderr, "lm_head host scratch [%dx%d] malloc failed\n", rows, Kpad); return 2; }
-        v3_get_tensor(v3_idx_lmhead(), hs);                           /* [NV x Kpad] */
-        if (Kpad != K) for (int r=1;r<rows;r++) memmove(hs+(size_t)r*K, hs+(size_t)r*Kpad, (size_t)K*sizeof(float));
-        CK(cuMemcpyHtoD(d_wte_pad, hs, (size_t)rows*K*sizeof(float)), "h2d v3 lm_head");
-        free(hs);
+        if (g_gpu_dq && !g_hostdeq && dl->packed) {
+            /* v1.7 INCREMENT 2: GPU-dequant the ~630M-element lm_head in row-chunks (reusing the layer
+             * scratch d_packed/d_sc/d_dqscr), replacing the ~22s single-threaded host v3_get_tensor.
+             * Byte-identical (same g_e4m3_tab[micro]*ts * E2M1-mag); writes straight into d_wte_pad's
+             * first NV rows. Drops the 2.5GB host scratch (less RAM pressure) as a bonus. */
+            const unsigned char* lb = (const unsigned char*)g_map;
+            int kwords=Kpad/7, kblk=Kpad/16, BD=112;
+            const int32_t* wb = (const int32_t*)(lb + dl->data_off);
+            const uint8_t*  mb = (const uint8_t*)(lb + dl->scale_off);
+            float ts; memcpy(&ts, lb + dl->scale_off + (size_t)rows*kblk, 4);
+            long chunk = g_dqscr_elems / Kpad; if (chunk < 1) chunk = 1; if (chunk > rows) chunk = rows;
+            double t_lm = g_prof ? now_seconds() : 0.0;
+            for (long r0=0; r0<rows; r0+=chunk) {
+                long nr = (r0+chunk<=rows) ? chunk : (rows-r0);
+                CK(cuMemcpyHtoD(d_packed, wb + (size_t)r0*kwords, (size_t)nr*kwords*4), "lm packed HtoD");
+                for (long i=0;i<nr*(long)kblk;i++) g_scbuf[i] = g_e4m3_tab[mb[(size_t)r0*kblk + i]] * ts;
+                CK(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)nr*kblk*4), "lm scale HtoD");
+                int mm0=0, kk=Kpad, bd=BD; void* ar[]={ &d_packed,&d_sc,&d_dqscr,&mm0,&kk,&bd };
+                LX(f_dq_tiled, (unsigned)((long)nr*(Kpad/BD)), (unsigned)BD, ar);
+                CUDA_MEMCPY2D cp; memset(&cp,0,sizeof(cp));   /* compact [nr x Kpad] -> d_wte_pad rows [r0,r0+nr) [nr x K] */
+                cp.srcMemoryType=CU_MEMORYTYPE_DEVICE; cp.srcDevice=d_dqscr; cp.srcPitch=(size_t)Kpad*4;
+                cp.dstMemoryType=CU_MEMORYTYPE_DEVICE; cp.dstDevice=d_wte_pad+(CUdeviceptr)((size_t)r0*DM*sizeof(float)); cp.dstPitch=(size_t)DM*4;
+                cp.WidthInBytes=(size_t)K*4; cp.Height=(size_t)nr;
+                CK(cuMemcpy2D(&cp), "lm compact 2D");
+            }
+            if (g_prof) fprintf(stderr, "[prof] lm_head GPU dequant (%dx%d, chunk=%ld rows): %.2fs\n", rows, Kpad, chunk, now_seconds()-t_lm);
+        } else {
+            float* hs = (float*)malloc((size_t)rows*Kpad*sizeof(float));   /* ~2.5GB host (lm_head dequant) */
+            if (!hs) { fprintf(stderr, "lm_head host scratch [%dx%d] malloc failed\n", rows, Kpad); return 2; }
+            double t_lm = g_prof ? now_seconds() : 0.0;
+            v3_get_tensor(v3_idx_lmhead(), hs);                           /* [NV x Kpad] */
+            if (g_prof) fprintf(stderr, "[prof] lm_head HOST dequant (%dx%d): %.2fs\n", rows, Kpad, now_seconds()-t_lm);
+            if (Kpad != K) for (int r=1;r<rows;r++) memmove(hs+(size_t)r*K, hs+(size_t)r*Kpad, (size_t)K*sizeof(float));
+            CK(cuMemcpyHtoD(d_wte_pad, hs, (size_t)rows*K*sizeof(float)), "h2d v3 lm_head");
+            free(hs);
+        }
         d_logits = A((size_t)Smax*NVpad);
         fprintf(stderr, "[head] qwen3 UNTIED lm_head [%dx%d] -> d_wte_pad, final-norm loaded\n", rows, K);
         return 0;
@@ -1877,6 +1921,8 @@ static int run_v3_smoke(const char* ids_path) {
     printf("[v3-smoke] T=%d ids:", T); for (int i=0;i<T;i++) printf(" %d", ids[i]); printf("\n");
     float* logits = (float*)malloc((size_t)NV*sizeof(float));
     forward_full(ids, T, logits);
+    if (g_prof) fprintf(stderr, "[prof] %ld uploads: mmap_touch+HtoD=%.2fs cpu_scale_build=%.2fs dequant_launch+sync=%.2fs compact2D=%.2fs\n",
+                        g_pf_n, g_pf_htod, g_pf_sb, g_pf_dq, g_pf_cmp);
     int nonfinite = 0; double mx = 0.0;
     for (int i=0;i<NV;i++){ double g=(double)logits[i]; if(!isfinite(g)){nonfinite++; continue;} double a=fabs(g); if(a>mx)mx=a; }
     int am = argmax_row(logits, NV);
