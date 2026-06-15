@@ -235,6 +235,7 @@ static CUfunction f_dq_tiled = 0;
 static int        g_gpu_dq = 0, g_hostdeq = 0;
 static CUdeviceptr d_packed = 0, d_sc = 0, d_dqscr = 0;
 static float*     g_scbuf = NULL;
+static float      g_e4m3_tab[256];   /* v1.7: e4m3_decode LUT (256 byte values) -> the per-forward scale build avoids ldexpf */
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -1429,7 +1430,8 @@ static void load_dequant_module(void) {
         dbuf[dsz]=0;
         if (cuModuleLoadData(&g_dqmod, dbuf)==CUDA_SUCCESS &&
             cuModuleGetFunction(&f_dq_tiled, g_dqmod, "nvfp4_dequant_tiled")==CUDA_SUCCESS) {
-            g_gpu_dq=1; fprintf(stderr, "[dq] GPU NVFP4 dequant ON (%s)\n", dqp);
+            g_gpu_dq=1; for (int c=0;c<256;c++) g_e4m3_tab[c]=v3_e4m3_decode(c);   /* v1.7: e4m3 LUT */
+            fprintf(stderr, "[dq] GPU NVFP4 dequant ON (%s)\n", dqp);
         } else fprintf(stderr, "[dq] dequant ptx load failed; using host dequant\n");
     }
     fclose(df);
@@ -1609,7 +1611,7 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
     float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
     CKX(cuMemcpyHtoD(d_packed, w, (size_t)rows*kwords*4), "dq packed HtoD");
-    for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = v3_e4m3_decode(micro[i]) * ts;
+    for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* v1.7: LUT, byte-identical to v3_e4m3_decode */
     CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD");
     CUdeviceptr out_dev = (Kpad==K) ? dst : d_dqscr;
     int mm0=0, kk=Kpad, bd=BD;
