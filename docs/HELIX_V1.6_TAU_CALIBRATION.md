@@ -33,7 +33,7 @@ France is" (an in-context-repetition / induction prompt — the worst case obser
 | capital-of-France | 5 | 3.264 | yes (12095 " Paris") |
 | France-repetition | 12 | **4.022** | yes (12095 " Paris") |
 
-**max = 4.022 → τ_8B = 8.044.**
+**max = 4.0219 → τ_8B = 8.0438** (the exact value emitted in the release receipt; table figures above are rounded to 3–4 dp).
 
 ### Qwen3-32B  (64 layers, untied head) — the headline model
 | prompt | tokens | max_abs (worker vs fp32 oracle) | argmax match |
@@ -41,7 +41,7 @@ France is" (an in-context-repetition / induction prompt — the worst case obser
 | near-tie | 6 | 2.974 | no — top-2 near-tie (279 vs 15473), 4-bit flips the order; DoD Risk #7 |
 | France-repetition | 12 | **5.610** | yes (12095 " Paris") |
 
-**max = 5.610 → τ_32B = 11.220.**
+**max = 5.6101 → τ_32B = 11.2202** (the exact value emitted in the release receipt).
 
 > **N is small for 32B (N=2)** because a 32B forward on the 8 GB card takes ~13.5 min (per-layer
 > streaming + host dequant). This is disclosed honestly; the structured-repetition prompt is the worst

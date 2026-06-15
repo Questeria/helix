@@ -1,6 +1,19 @@
 # Helix v1.6 — Definition of Done
 
-**Status:** design complete (w27dhtcp2) + **P0 design-investigate complete (gate PASS)**, build not started. Push HELD.
+**Status:** ✅ **v1.6 SHIPPED 2026-06-15** — Qwen3-8B (warm-up) + Qwen3-32B (headline) run on the 8 GB RTX 3070 via NVFP4 + per-layer streaming, with a calibrated verifiable receipt. Push HELD. **⚠ The one-line goal, pitch, and Tier-1 items in the DESIGN TEXT below are the ORIGINAL pre-build plan; the SHIPPED SCOPE CORRECTION immediately below is authoritative — where they differ, the correction governs.**
+
+## ⚠️ SHIPPED SCOPE CORRECTION (v1.6 release, 2026-06-15) — authoritative
+
+The design text below was written pre-build and over-describes relative to what shipped. The honest shipped scope:
+
+- **Model:** **Qwen3-8B** (warm-up) and **Qwen3-32B** (headline, ~8× the 8 GB card's fp16 capacity) — **not** Qwen2.5-14B. Both run end-to-end on the 8 GB RTX 3070 via NVFP4 4-bit + per-layer streaming.
+- **What the receipt PROVES:** **Tier-2** commitment/reproducibility — SHA-256 of the committed weights + output logits + argmax, all re-derivable; and **Tier-3** an **empirical calibrated envelope** (`max_abs(logits − fp32_oracle) ≤ τ` AND argmax match), τ provenance-labeled (see `HELIX_V1.6_TAU_CALIBRATION.md`). The verifier TCB is rebuildable from the 299-byte seed (fixpoint `cdcf8673`), ptxas de-trusted, with a from-scratch NIST-KAT'd SHA-256.
+- **What the receipt does NOT prove (DEFERRED):** **execution-faithfulness is NOT cryptographically proven.** Tier-1 exact per-layer Freivalds (DoD #4 / the "faithfully executed the committed model" language in the goal/pitch) is **DEFERRED** (f32 GEMM makes a tolerance-Freivalds unsound). A party holding the committed weights + *any* in-envelope logit vector could mint a passing receipt — this is the **disclosed minimal-trust scope**, not a flaw. Release-facing claims must say **commitment + empirical envelope**, never execution-faithfulness.
+- **"Checkable faster than re-running it" (one-line goal / DoD #5) is RETRACTED for the shipped checker:** the GPU-free checker **re-derives the commitments + the envelope** (re-hash weights/logits, recompute max_abs/argmax vs the oracle); it does **not** re-execute the forward, so it is **not** a faster faithful-re-execution substitute. (A faster-than-re-exec faithfulness check is precisely the deferred Tier-1.)
+- **Honest perf:** slow — ~5.7 s/layer (8B), ~12.7 s/layer (32B); CPU-side dequant dominates; speed is v1.7's job. No manufactured speedup.
+- **Prior art:** CommitLLM, TAO, zkLLM — this is **minimal-trust** verification, **NOT** "first verifiable quantized inference."
+
+Net: the DoD checklist below holds **as corrected here** — #4/Tier-1 = **DEFERRED** (not green), #5 = the GPU-free commitment+envelope check (not faster-faithful-re-exec). Full per-item evidence: `HELIX_V1.6_RELEASE_READINESS.md`.
 
 **P0 reconciliation (2026-06-14):** design-investigate done — **gate PASS, GO for P1, NO `kovc.hx` edit** (verified against the code: `nvfp4_dequant_kernel.hx:12,24-25`; `tiled_matmul_abt_kernel.hx:21`; `gate_kovc.sh:44`). One mandatory correction absorbed below: the dequant path is **dense f32** (the `@kernel` emits f32; the tiled GEMM is f32-only), **not** f16; and the tied head is **4-bit-packed dequant-per-step**, not f16-resident (an f16 head needs a new kernel → deferred to v1.7 with the f16 VRAM saving). P1 starts with the **Qwen2.5-7B VRAM-resident warm-up**.
 **One-line goal:** run **Qwen2.5-14B** on the **8 GB RTX 3070 Laptop** GPU — should-be-impossible without 4-bit quant + host-RAM layer streaming — **and emit a verifiable receipt** that the quantized/streamed run faithfully executed the committed model and stayed within a declared numerical envelope of the fp32 reference, **checkable faster than re-running it**, by a verifier rebuildable from 299 bytes with ptxas de-trusted.
