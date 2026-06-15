@@ -1,6 +1,8 @@
 # Helix v1.6 — Definition of Done
 
-**Status:** design complete (Workflow w27dhtcp2), build not started. Push HELD.
+**Status:** design complete (w27dhtcp2) + **P0 design-investigate complete (gate PASS)**, build not started. Push HELD.
+
+**P0 reconciliation (2026-06-14):** design-investigate done — **gate PASS, GO for P1, NO `kovc.hx` edit** (verified against the code: `nvfp4_dequant_kernel.hx:12,24-25`; `tiled_matmul_abt_kernel.hx:21`; `gate_kovc.sh:44`). One mandatory correction absorbed below: the dequant path is **dense f32** (the `@kernel` emits f32; the tiled GEMM is f32-only), **not** f16; and the tied head is **4-bit-packed dequant-per-step**, not f16-resident (an f16 head needs a new kernel → deferred to v1.7 with the f16 VRAM saving). P1 starts with the **Qwen2.5-7B VRAM-resident warm-up**.
 **One-line goal:** run **Qwen2.5-14B** on the **8 GB RTX 3070 Laptop** GPU — should-be-impossible without 4-bit quant + host-RAM layer streaming — **and emit a verifiable receipt** that the quantized/streamed run faithfully executed the committed model and stayed within a declared numerical envelope of the fp32 reference, **checkable faster than re-running it**, by a verifier rebuildable from 299 bytes with ptxas de-trusted.
 
 ---
@@ -25,8 +27,8 @@ The design pass found that the original framing ("nobody offers a checkable proo
 - **Q4 (4-bit)** ~8.5–9.0 GB (web-confirmed GGUF) — **still exceeds ~7.3 GB usable VRAM** → **host-RAM layer-streaming is load-bearing** (one layer VRAM-resident at a time).
 - **fp32** ~58 GB — **overruns the 31.8 GB host RAM** → **4-bit is load-bearing for the RAM tier too**.
 - A 7–8B model *would* fit at 4-bit in VRAM → no streaming needed → the "impossible" hook collapses. **The 14B choice is load-bearing.**
-- **Decode VRAM budget (S=2048):** 1 layer f16 (~0.55) + tied head **f16** 1.5 + KV f16 (~0.4) + scratch (~0.6) ≈ **~3.1 GB**, fits in 7.3 GB.
-- **The verified OOM trap:** the tied LM head `d_wte_pad` (gpt2_infer.c:1385) is a full NVpad×DM resident buffer ≈ **3.1 GB at fp32** for Qwen's 152k vocab — ~42% of usable VRAM, OOMs once a layer + KV land. **Head MUST be f16-resident (1.5 GB)** or 4-bit-streamed. (v1.4's 49k-vocab head hid this.)
+- **Decode VRAM budget (S=2048), corrected after P0:** the dequant `@kernel` emits **dense f32** (not f16) and the tiled GEMM is f32-only, so 1 layer is ~0.8 GB f32 (not 0.55 f16) + a **4-bit-packed head, dequant-per-step** + KV f16 (~0.4) + scratch (~0.6) ≈ **~3 GB**, fits one-layer-at-a-time in 7.3 GB. The f16 VRAM saving is deferred to v1.7 (needs a tiled-f16 GEMM).
+- **The verified OOM trap:** the tied LM head `d_wte_pad` (gpt2_infer.c:1385) is a full NVpad×DM resident buffer ≈ **3.1 GB at fp32** for Qwen's 152k vocab — ~42% of usable VRAM, OOMs once a layer + KV land. **P1 keeps the head 4-bit-packed and dequants per step** into the f32 head GEMM (mirrors layer-streaming); an f16-resident head doesn't compose (can't feed an f32 GEMM; needs a new kernel — deferred). (v1.4's 49k-vocab head hid this.)
 - **Honest caveat baked in:** 14B-4bit on this card is run routinely by llama.cpp/Ollama — the feat is **not** first-to-run, it is first-to-run-**with-a-checkable-faithfulness-receipt** on a 299-byte-rebuildable, ptxas-de-trusted toolchain.
 
 ---
@@ -44,7 +46,7 @@ Built one gate-able increment at a time on the verified #4 spine. **Key insight:
 
 ## Definition of Done (all must be green, honestly)
 
-1. **Model runs** — Qwen2.5-14B end-to-end on the 8 GB card via 4-bit NVFP4 (MXFP4 fallback) + existing per-layer streaming, emitting ≥N greedy tokens; QKV-bias wired; tied head f16-resident (not the fp32 OOM trap).
+1. **Model runs** — Qwen2.5-14B end-to-end on the 8 GB card via 4-bit NVFP4 (MXFP4 fallback) + existing per-layer streaming (dequant → **dense f32** → the existing f32 GEMM), emitting ≥N greedy tokens; QKV-bias wired; tied head **4-bit-packed + dequant-per-step** (not the fp32 ~3.1 GB OOM trap; the f16-resident route is deferred — needs a new kernel).
 2. **Impossible-honestly** — documented proof fp16 (~29 GB) and Q4 (~8.5–9 GB > 7.3 GB usable) and fp32 (~58 GB > 31.8 GB RAM) bounds, **with** the explicit prior-art caveat (llama.cpp/CommitLLM also run this).
 3. **Envelope defined** — written Tier-3 acceptance region (argmax + max_abs<τ) vs the fp32 numpy oracle, τ provenance stated, bound into the receipt.
 4. **Receipt emitted** — a real run emits the 3-tier receipt (Tier-1 exact Freivalds per layer, t=3; Tier-2 re-derivable transcript binding model hash / scales / stream schedule / envelope).
@@ -58,7 +60,7 @@ Built one gate-able increment at a time on the verified #4 spine. **Key insight:
 ## Phasing (each gate-able + adversarial-audited, v1.5 rhythm)
 
 - **P0 — De-risk / design (no GPU build):** finalize Qwen2.5-14B; write the **envelope spec** (τ + provenance) and the **receipt threat-model** doc (3-way soundness ledger: exact / spot-check / bounded-empirical); confirm the v1.5 NVFP4/MXFP4 primitives **compose** into dequant→GEMM via the existing @kernel-decode + existing GEMM with **no kovc.hx edit**; cite CommitLLM + TAO. **Gate:** design-audit PASS, novelty corrected.
-- **P1 — Capability (the visible feat):** extend `gpt2_pack.c` additively (48-layer dims, NVFP4 packing, QKV bias + 152k vocab + θ=1e6 in an HXGW v3 header); wire `add_bias()` into `forward_layer_llama`'s q/k/v + dequant-on-upload in `upload_layer_ll`; keep head f16; Qwen2.5-14B runs end-to-end within the Tier-3 envelope; corrupted-weights NC. *Optional P1a: Qwen2.5-7B VRAM-resident first to de-risk importer/bias/dequant.* Delivers DoD 1,2,3,6d,7.
+- **P1 — Capability (the visible feat):** **P1a (FIRST): Qwen2.5-7B VRAM-resident** to de-risk importer + QKV-bias + dequant with no streaming. Then: extend `gpt2_pack.c` additively (48-layer dims, NVFP4 packing, QKV bias + 152k vocab + θ=1e6 in an HXGW v3 header; the oracle must quantize identically); wire `add_bias()` into `forward_layer_llama`'s q/k/v (3 call-sites + decode mirror); dequant-on-upload in `upload_layer_ll` → **dense f32** (the `@kernel` emits f32, feeding the existing f32 GEMM); head **4-bit-packed dequant-per-step**; **pad/tile the dequant for Qwen K=5120/13824** (violate kk%112==0 → cuda_launch.c:1979 rejects non-conforming K). 14B runs end-to-end within the Tier-3 envelope; corrupted-weights NC. Delivers DoD 1,2,3,6d,7.
 - **P2 — The novelty (the moat):** Tier 1 first (= #4 generalized, start on the ternary/exact-int path, then lift NVFP4 dyadic dequant into integer code-space — the one genuinely-new kernel + NCs; t=3, state the union bound) → Tier 2 (transcript) → Tier 3 (envelope→receipt field). Build the from-scratch ptxas-de-trusted checker, faster-than-re-exec. Delivers DoD 4,5,6a,6b,6c.
 - **P3 — Demo + close:** the should-be-impossible end-to-end demo (run + receipt + INDEPENDENT check rehearsed on a fresh machine — ship the checker as a self-contained from-raw-buildable binary + a pinned reference receipt + a one-command check); universal gate; consecutive-clean-audit streak; honest TRUST_CHAIN/DoD doc citing CommitLLM/TAO; **tag `v1.6-*`** (preserve ALL existing tags).
 
@@ -69,7 +71,7 @@ Built one gate-able increment at a time on the verified #4 spine. **Key insight:
 1. **Over-claim (audit-sinking):** do NOT say "first/only verifiable quantized inference" — CommitLLM/TAO/zkLLM exist. Claim ONLY the de-trusted-verifier-TCB differentiator; cite them.
 2. **Receipt soundness over f32:** Freivalds is UNSOUND with a tolerance (a forged in-envelope C passes = theater). Keep Freivalds **exact** on the integer dequantized GEMM; push f32 approximation into Tier-2 transcript + Tier-3 envelope; never claim crypto soundness for f32.
 3. **Tier-1-on-4bit isn't free:** exact Freivalds proven only for ternary/int today; extending to NVFP4 needs the dyadic scale folded into the field exactly, or `|C|<p/2` breaks. Don't pre-announce 4-bit-exact-Freivalds until the FP4 kernel + data-independent NCs are green.
-4. **Tied-head OOM trap:** head must be f16-resident (1.5 GB) or 4-bit-streamed; verify VRAM headroom in P1.
+4. **Tied-head OOM trap:** P1 keeps the head 4-bit-packed + dequant-per-step (an f16-resident head needs a new kernel — deferred); verify VRAM headroom in P1.
 5. **Host-RAM outer wall + envelope vacuity:** scope to 14B (70B-4bit ~35 GB needs a new disk→RAM tier — OUT of scope); a too-loose τ makes the receipt vacuous → REQUIRE the outside-envelope NC (DoD 6d); calibrate τ against the oracle's own quant error (TAO pattern), documented, never hand-tuned to pass.
 6. **Importer correctness:** Qwen2.5 is bf16 + QKV bias + 152k vocab + θ=1e6; a quant bug passes ptxas and yields plausible-but-WRONG text. Oracle must quantize identically; NCs must be data-independent; land the 7B warm-up first.
 7. **Gate weaker than v1.4 + possible fixpoint move:** quantized 14B won't match an fp32 oracle token-for-token, so v1.4's 25/25-greedy-id method doesn't transfer — the gate becomes logits-within-τ-of-a-4-bit-aware-oracle + receipt-verifies; DECIDE + DOCUMENT this bar before building. If dequant→GEMM ever needs a kovc.hx intrinsic, the fixpoint `cdcf8673` MOVES (re-mint + 3-way byte-identical + reasoned commit, the S0/S1 pattern) — first attempt the no-kovc-edit composition.
