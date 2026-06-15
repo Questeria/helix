@@ -29,7 +29,7 @@ pre-build design text).
 
 ## What the receipt proves — and does not
 
-- **Proves:** the committed weights hash to the receipt's `model_sha256`; the committed logits hash to `logits_sha256`; those logits lie within the **calibrated** τ of the trusted fp32 oracle with matching argmax. Verifiable GPU-free, faster than re-running the forward, by a 299-byte-rebuildable + ptxas-de-trusted checker.
+- **Proves:** the committed weights hash to the receipt's `model_sha256`; the committed logits hash to `logits_sha256`; those logits lie within the **calibrated** τ of the trusted fp32 oracle with matching argmax. Verifiable GPU-free, faster than re-running the forward (this verifies the **commitment + envelope, not execution-faithfulness** — see the next bullet), by a 299-byte-rebuildable + ptxas-de-trusted checker.
 - **Does NOT prove:** that the logits were *produced by* the quantized forward (execution-faithfulness) — Tier-1 Freivalds is deferred; a party holding the committed weights + any in-envelope logit vector could mint a passing receipt. Nor exact next-token agreement on near-ties (4-bit reorders logits within the quant noise; argmax-exact holds on **decisive** prompts). Nor benchmark accuracy (not measured). Tier-3 is empirical, never cryptographic.
 
 ## Calibration (τ) — summary
@@ -49,6 +49,8 @@ Empirical/TAO: τ = 2.0 × max(max_abs over a diverse calibration set), per mode
 
 - **Round 1** — critic (code/evidence): **PASS** (HIGH); skeptic (claims/honesty): **FAIL** — found the authoritative DoD still carried pre-build claims (Qwen2.5-14B; "faithfully executed the committed model"; "checkable faster than re-running it") that overclaimed vs the honest shipped artifacts. Fixed in `504df37` (DoD SHIPPED SCOPE CORRECTION; τ-figure reconciliation).
 - **Round 2** (post-fix, fresh independent) — skeptic: **PASS** (p=0.82, HIGH, no critical/major); critic: **PASS** (p=0.92, HIGH, no critical/major). Both confirmed: no governing surface claims execution-faithfulness; τ sound + matches receipts; gate independently reproduced; commit hygiene clean. Minor findings (dangling RELEASE_READINESS pointer; in-distribution caveat; thin 32B N) addressed in this doc + the calibration doc.
+- **Round 3** (post-polish, fresh independent skeptic) — **PASS** (p=0.84, HIGH, no critical/major). Confirmed no governing surface overclaims execution-faithfulness, τ has reproduced teeth, every DoD green claim cross-checks, novelty honest. Independently reproduced the *disclosed* Tier-1 gap (minted a `RECEIPT_CHECK_PASS` from fabricated in-envelope logits) — exactly as documented, not worse. Two minor phrasing polishes applied.
+- **Verdict: rounds 2 + 3 both clean ⇒ DoD #8 (≥2 consecutive clean independent adversarial audits) is MET.** 3 PASS verdicts post-fix (round-2 skeptic+critic, round-3 skeptic); the only FAIL (round-1 skeptic) was the DoD staleness, now reconciled.
 
 ## Prior art (cited, honestly)
 
