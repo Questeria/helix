@@ -71,7 +71,8 @@ static int json_find_int(const char* s, size_t n, const char* key, long* out) {
 /* ============================ safetensors header parse ============================ */
 /* We need, per tensor name: dtype (must be F32), shape product, and [data_offset_start,
  * data_offset_end) into the blob (the bytes AFTER the 8-byte length + the JSON header). */
-typedef struct { char name[128]; long nbytes; long off_start; long off_end; long shape[8]; int ndim; int bf16; } STensor;
+typedef struct { char name[128]; long nbytes; long off_start; long off_end; long shape[8]; int ndim; int bf16;
+                 const unsigned char* blob; } STensor;   /* blob = this tensor's shard data base (sharded models) */
 
 /* find a float-valued field "key": <num> (handles 1e-05 scientific notation). */
 static int json_find_float(const char* s, size_t n, const char* key, double* out) {
@@ -243,8 +244,14 @@ static int build_order(OrderEntry* ord, int cap, int NL, int DM, int NV, int NC,
 /* Llama-arch build order (HF LlamaForCausalLM names). Per layer: input_layernorm,
  * q/k/v/o_proj (HF Linear [out,in], stored UN-TRANSPOSED; the consumer's GEMMs are A.Bt),
  * post_attention_layernorm, gate/up/down_proj. Globals: embed_tokens, final norm.
- * lm_head is TIED (absent); KVD = n_kv_heads * head_dim. */
-static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, int DF, int KVD) {
+ * lm_head is TIED (absent); KVD = n_kv_heads * head_dim.
+ *
+ * qwen3=1 (v1.6, additive): adds per-layer self_attn.q_norm.weight + k_norm.weight [head_dim]
+ * (Qwen3 applies a per-head RMSNorm on q/k -- weight shape = head_dim) right after q_proj/k_proj,
+ * and an UNTIED lm_head.weight [NV x DM] after the final norm. qwen3=0 is byte-identical to the
+ * SmolLM2/TinyLlama order (head_dim is then unused). */
+static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, int DF, int KVD,
+                             int head_dim, int qwen3) {
     int n = 0;
 #define ADD1(NM, S0)        do { snprintf(ord[n].name, 128, "%s", NM); ord[n].ndim=1; ord[n].shape[0]=(S0); n++; } while(0)
 #define ADD2(NM, S0, S1)    do { snprintf(ord[n].name, 128, "%s", NM); ord[n].ndim=2; ord[n].shape[0]=(S0); ord[n].shape[1]=(S1); n++; } while(0)
@@ -252,7 +259,9 @@ static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, i
     for (int L = 0; L < NL; L++) {
         snprintf(nm, sizeof(nm), "model.layers.%d.input_layernorm.weight", L);          ADD1(nm, DM);
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.q_proj.weight", L);         ADD2(nm, DM, DM);
+        if (qwen3) { snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.q_norm.weight", L); ADD1(nm, head_dim); }
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.k_proj.weight", L);         ADD2(nm, KVD, DM);
+        if (qwen3) { snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.k_norm.weight", L); ADD1(nm, head_dim); }
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.v_proj.weight", L);         ADD2(nm, KVD, DM);
         snprintf(nm, sizeof(nm), "model.layers.%d.self_attn.o_proj.weight", L);         ADD2(nm, DM, DM);
         snprintf(nm, sizeof(nm), "model.layers.%d.post_attention_layernorm.weight", L); ADD1(nm, DM);
@@ -263,6 +272,7 @@ static int build_order_llama(OrderEntry* ord, int cap, int NL, int DM, int NV, i
     }
     ADD2("model.embed_tokens.weight", NV, DM);
     ADD1("model.norm.weight", DM);
+    if (qwen3) ADD2("lm_head.weight", NV, DM);   /* untied head (tie_word_embeddings=false) */
 #undef ADD1
 #undef ADD2
     return n;
@@ -298,13 +308,19 @@ static int e4m3_encode(float v) {
     return best;
 }
 /* Quantize [rows x K] f32 -> NVFP4; K padded to Kpad (mult of 112) with ZEROS. Caller sizes
- * outW[rows*(Kpad/7)] (i32) + outSc[rows*(Kpad/16)] (f32). Returns Kpad. */
-static int nvfp4_quantize_tensor(const float* w, int rows, int K, int32_t* outW, float* outSc) {
+ * outW[rows*(Kpad/7)] (i32). outSc[rows*(Kpad/16)] (f32 effective scale) is OPTIONAL -- pass NULL
+ * to skip it. For COMPACT storage (v1.6 HXGW v3): pass outMicro[rows*(Kpad/16)] (u8, the per-block
+ * E4M3 micro code) + outTs (f32, the one per-tensor scale); at upload-time the worker rebuilds the
+ * effective scale eff = e4m3_decode(micro) * (*outTs). Either/both of outSc/outMicro may be NULL.
+ * Returns Kpad. */
+static int nvfp4_quantize_tensor(const float* w, int rows, int K, int32_t* outW, float* outSc,
+                                 uint8_t* outMicro, float* outTs) {
     int Kpad = ((K + 111)/112)*112;
     int kwords = Kpad/7, kblk = Kpad/16;
     float amax = 0.0f;
     for (long i=0;i<(long)rows*K;i++){ float a = w[i]<0?-w[i]:w[i]; if (a>amax) amax=a; }
     float ts = amax/(6.0f*448.0f); if (ts <= 0.0f) ts = 1.0f;   /* E2M1_max(6)*E4M3_max(448); all-zero guard */
+    if (outTs) *outTs = ts;
     int* codes = (int*)malloc((size_t)Kpad*sizeof(int));
     for (int r=0;r<rows;r++){
         for (int bk=0;bk<kblk;bk++){
@@ -312,7 +328,8 @@ static int nvfp4_quantize_tensor(const float* w, int rows, int K, int32_t* outW,
             for (int j=0;j<16;j++){ int k=bk*16+j; float v=(k<K)?w[(long)r*K+k]:0.0f; float a=v<0?-v:v; if(a>bamax)bamax=a; }
             int micro = e4m3_encode(bamax/(ts*6.0f));
             float eff = e4m3_decode(micro)*ts;
-            outSc[(long)r*kblk+bk] = eff;
+            if (outSc)    outSc[(long)r*kblk+bk] = eff;
+            if (outMicro) outMicro[(long)r*kblk+bk] = (uint8_t)micro;
             for (int j=0;j<16;j++){ int k=bk*16+j; float v=(k<K)?w[(long)r*K+k]:0.0f; codes[k]=(eff>0.0f)?e2m1_encode(v/eff):0; }
         }
         for (int kw=0;kw<kwords;kw++){ int word=0,pw=1; for(int j=0;j<7;j++){ word += (codes[kw*7+j]&15)*pw; pw*=16; } outW[(long)r*kwords+kw]=word; }
@@ -345,7 +362,7 @@ static int nvfp4_selftest(void) {
     float*   Sc    = (float*)malloc((size_t)rows*kblk*sizeof(float));
     float*   recon = (float*)malloc((size_t)rows*Kpad*sizeof(float));
     for (int r=0;r<rows;r++) for (int k=0;k<K;k++) w[(long)r*K+k] = ((float)((r*37+k*13)%101)-50.0f)*0.043f;
-    int kp = nvfp4_quantize_tensor(w, rows, K, W, Sc);
+    int kp = nvfp4_quantize_tensor(w, rows, K, W, Sc, NULL, NULL);
     nvfp4_host_dequant(W, Sc, recon, rows, kp);
     int fmtbad=0, padbad=0; float qmax=0.0f;
     for (int r=0;r<rows;r++) for (int k=0;k<kp;k++){
@@ -391,7 +408,7 @@ static int nvfp4_testreal(const char* shard, const char* tname) {
     int32_t* W   = (int32_t*)malloc((size_t)rows*kwords*sizeof(int32_t));
     float*   Sc  = (float*)malloc((size_t)rows*kblk*sizeof(float));
     float*   rec = (float*)malloc((size_t)rows*Kpad*sizeof(float));
-    nvfp4_quantize_tensor(w, rows, K, W, Sc);
+    nvfp4_quantize_tensor(w, rows, K, W, Sc, NULL, NULL);
     nvfp4_host_dequant(W, Sc, rec, rows, Kpad);
     double sumsq_e=0, sumsq_w=0, sum_abs_e=0; float maxabs=0, maxrel=0, wamax=0; long cnt=0;
     for (int r=0;r<rows;r++) for (int k=0;k<K;k++){
@@ -444,10 +461,242 @@ static int nvfp4_testmodel(const char* dir, const char* tname) {
     return nvfp4_testreal(path, tname);
 }
 
+/* ===================== v1.6 sharded-model loader + HXGW v3 NVFP4 pack ===================== */
+/* collect the UNIQUE shard filenames from an index.json weight_map (values "model-...safetensors"). */
+static int index_shards(const char* idx_json, char names[][300], int maxn) {
+    int n = 0;
+    const char* p = idx_json;
+    const char* needle = ".safetensors\"";
+    size_t nl = strlen(needle);
+    while ((p = strstr(p, needle)) != NULL) {
+        const char* end = p + strlen(".safetensors");   /* points AT the closing quote */
+        const char* q = p;
+        while (q > idx_json && *(q-1) != '"') q--;       /* walk back to first char after opening quote */
+        int len = (int)(end - q);
+        if (len > 0 && len < 300) {
+            char nm[300]; memcpy(nm, q, (size_t)len); nm[len] = 0;
+            int seen = 0; for (int k=0;k<n;k++) if (strcmp(names[k], nm)==0) { seen=1; break; }
+            if (!seen && n < maxn) { memcpy(names[n], nm, (size_t)len+1); n++; }
+        }
+        p += nl;
+    }
+    return n;
+}
+typedef struct { int fd; size_t flen; unsigned char* base; } ShardMap;
+/* load a (sharded OR single) safetensors model into ONE combined STensor list; each STensor.blob
+ * points at its shard's tensor-data region. Fills sh[] with the per-shard mmaps (caller munmaps). */
+static int load_model_tensors(const char* dir, STensor* ts, int maxt, ShardMap* sh, int* n_sh) {
+    char idx[1100]; snprintf(idx, sizeof(idx), "%s/model.safetensors.index.json", dir);
+    char shards[16][300]; int nshard = 0;
+    int ifd = open(idx, O_RDONLY);
+    if (ifd >= 0) {
+        struct stat ist; fstat(ifd, &ist);
+        char* ij = (char*)malloc((size_t)ist.st_size + 1);
+        ssize_t g = read(ifd, ij, (size_t)ist.st_size); close(ifd);
+        if (g < 0) g = 0;
+        ij[g] = 0;
+        nshard = index_shards(ij, shards, 16);
+        free(ij);
+        if (nshard == 0) { fprintf(stderr, "[load] index.json has no shard filenames\n"); exit(2); }
+    } else {
+        snprintf(shards[0], 300, "model.safetensors"); nshard = 1;   /* single-file fallback (v1.4-style) */
+    }
+    int nt = 0; *n_sh = 0;
+    for (int s = 0; s < nshard; s++) {
+        char path[1500]; snprintf(path, sizeof(path), "%s/%s", dir, shards[s]);
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) { fprintf(stderr, "[load] open shard %s: %s\n", path, strerror(errno)); exit(2); }
+        struct stat st; if (fstat(fd, &st) != 0) { fprintf(stderr, "[load] fstat %s\n", path); exit(2); }
+        size_t flen = (size_t)st.st_size;
+        unsigned char* base = (unsigned char*)mmap(NULL, flen, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (base == MAP_FAILED) { fprintf(stderr, "[load] mmap %s: %s\n", path, strerror(errno)); exit(2); }
+        uint64_t hlen; memcpy(&hlen, base, 8);
+        const char* jhdr = (const char*)(base + 8);
+        const unsigned char* blob = base + 8 + hlen;
+        int got = parse_safetensors_header(jhdr, (size_t)hlen, ts + nt, maxt - nt);
+        for (int k = 0; k < got; k++) ts[nt + k].blob = blob;
+        nt += got;
+        sh[*n_sh].fd = fd; sh[*n_sh].flen = flen; sh[*n_sh].base = base; (*n_sh)++;
+        fprintf(stderr, "[load] %s: %d tensors\n", shards[s], got);
+    }
+    fprintf(stderr, "[load] total %d tensors across %d shard(s)\n", nt, *n_sh);
+    return nt;
+}
+/* a tensor is NVFP4-packed iff it is a 2D matmul weight (q/k/v/o/gate/up/down/lm_head); the 1D
+ * norms and the embedding (a gather, not a matmul) stay dense f32. */
+static int is_packed_name(const char* nm, int ndim) {
+    if (ndim != 2) return 0;
+    if (strstr(nm, "embed_tokens")) return 0;
+    return (strstr(nm,"q_proj")||strstr(nm,"k_proj")||strstr(nm,"v_proj")||strstr(nm,"o_proj")||
+            strstr(nm,"gate_proj")||strstr(nm,"up_proj")||strstr(nm,"down_proj")||strstr(nm,"lm_head")) ? 1 : 0;
+}
+static void materialize_f32(const STensor* t, float* w) {
+    long n = shape_prod(t->shape, t->ndim);
+    const unsigned char* src = t->blob + t->off_start;
+    if (t->bf16) { for (long i=0;i<n;i++){ uint16_t u; memcpy(&u, src+i*2, 2); uint32_t x=((uint32_t)u)<<16; memcpy(&w[i], &x, 4); } }
+    else         { memcpy(w, src, (size_t)n*4); }
+}
+/* HXGW v3 per-tensor descriptor (32 bytes). packed=1: data_off->packed i32 words [rows*(Kpad/7)],
+ * scale_off->compact scale = E4M3 micro bytes [rows*(Kpad/16)] then ONE f32 per-tensor scale.
+ * packed=0: data_off->dense f32 [rows*K] (rows=1,K=numel,Kpad=numel), scale_off=0. */
+typedef struct { uint32_t packed, rows, K, Kpad; uint64_t data_off, scale_off; } HXGWv3Desc;
+_Static_assert(sizeof(HXGWv3Desc) == 32, "HXGWv3Desc must be 32 bytes");
+
+/* --pack-qwen3 <model_dir> <out.weights>: pack a (sharded) Qwen3 checkpoint to HXGW v3 NVFP4,
+ * then VERIFY by re-reading the file + host-dequant each packed tensor vs the original (~9.5% RMS).
+ * ISOLATED from the v1.4 single-file pack path (main) -> zero risk to the SmolLM2 demo. */
+static int pack_qwen3(const char* model_dir, const char* out_path) {
+    long NL=0,DM=0,NH=0,NKV=0,DF=0,NV=0,NC=0,HD=0; double theta=0, eps=0;
+    {
+        char cfgp[1100]; snprintf(cfgp, sizeof(cfgp), "%s/config.json", model_dir);
+        int fd = open(cfgp, O_RDONLY);
+        if (fd < 0) { fprintf(stderr, "[pack-qwen3] open %s: %s\n", cfgp, strerror(errno)); return 2; }
+        struct stat st; fstat(fd, &st);
+        char* cfg = (char*)malloc((size_t)st.st_size+1);
+        ssize_t got = read(fd, cfg, (size_t)st.st_size); close(fd); if (got<0) got=0; cfg[got]=0;
+        size_t cn = (size_t)got;
+        if (!json_find_int(cfg,cn,"num_hidden_layers",&NL) || !json_find_int(cfg,cn,"hidden_size",&DM) ||
+            !json_find_int(cfg,cn,"num_attention_heads",&NH) || !json_find_int(cfg,cn,"num_key_value_heads",&NKV) ||
+            !json_find_int(cfg,cn,"intermediate_size",&DF) || !json_find_int(cfg,cn,"vocab_size",&NV)) {
+            fprintf(stderr, "[pack-qwen3] config missing a required int field\n"); free(cfg); return 2;
+        }
+        if (!json_find_int(cfg,cn,"head_dim",&HD)) HD = DM/NH;
+        if (!json_find_int(cfg,cn,"max_position_embeddings",&NC)) NC = 40960;
+        if (!json_find_float(cfg,cn,"rope_theta",&theta)) theta = 1000000.0;
+        if (!json_find_float(cfg,cn,"rms_norm_eps",&eps)) eps = 1e-6;
+        free(cfg);
+    }
+    long KVD = NKV * HD;
+    fprintf(stderr, "[pack-qwen3] NL=%ld DM=%ld NH=%ld NKV=%ld HD=%ld DF=%ld NV=%ld KVD=%ld theta=%g eps=%g\n",
+            NL,DM,NH,NKV,HD,DF,NV,KVD,theta,eps);
+
+    STensor* ts = (STensor*)malloc(sizeof(STensor)*4096);
+    ShardMap sh[16]; int n_sh = 0;
+    int nt = load_model_tensors(model_dir, ts, 4096, sh, &n_sh);
+
+    int cap = (int)(NL*12 + 24);
+    OrderEntry* ord = (OrderEntry*)malloc(sizeof(OrderEntry)*cap);
+    int no = build_order_llama(ord, cap, (int)NL,(int)DM,(int)NV,(int)DF,(int)KVD,(int)HD, 1);
+
+    /* descriptor sizes/offsets (no data touched yet) */
+    HXGWv3Desc* desc = (HXGWv3Desc*)calloc((size_t)no, sizeof(HXGWv3Desc));
+    uint64_t cur = (uint64_t)HDR_BYTES + (uint64_t)no*sizeof(HXGWv3Desc);
+    int n_packed = 0;
+    for (int e=0;e<no;e++) {
+        STensor* t = find_tensor(ts, nt, ord[e].name);
+        if (!t) { fprintf(stderr, "[pack-qwen3] missing tensor %s\n", ord[e].name); return 2; }
+        long want = shape_prod(ord[e].shape, ord[e].ndim), have = shape_prod(t->shape, t->ndim);
+        if (want != have) { fprintf(stderr, "[pack-qwen3] %s shape prod %ld != expected %ld\n", ord[e].name, have, want); return 2; }
+        int packed = is_packed_name(ord[e].name, ord[e].ndim);
+        desc[e].packed = (uint32_t)packed;
+        if (packed) {
+            int rows=(int)t->shape[0], K=(int)t->shape[1];
+            int Kpad=((K+111)/112)*112, kwords=Kpad/7, kblk=Kpad/16;
+            desc[e].rows=(uint32_t)rows; desc[e].K=(uint32_t)K; desc[e].Kpad=(uint32_t)Kpad;
+            desc[e].data_off = cur;
+            uint64_t wbytes=(uint64_t)rows*kwords*4;
+            desc[e].scale_off = cur + wbytes;
+            cur += wbytes + (uint64_t)rows*kblk + 4;       /* words + micro bytes + 1 f32 ts */
+            n_packed++;
+        } else {
+            desc[e].rows=1; desc[e].K=(uint32_t)have; desc[e].Kpad=(uint32_t)have;
+            desc[e].data_off = cur; desc[e].scale_off = 0;
+            cur += (uint64_t)have*4;
+        }
+    }
+    uint64_t total_bytes = cur;
+    fprintf(stderr, "[pack-qwen3] %d tensors (%d packed), out = %llu B (%.2f GB)\n",
+            no, n_packed, (unsigned long long)total_bytes, (double)total_bytes/1e9);
+
+    FILE* of = fopen(out_path, "wb");
+    if (!of) { fprintf(stderr, "[pack-qwen3] open out %s: %s\n", out_path, strerror(errno)); return 2; }
+    {
+        unsigned char hdr[HDR_BYTES]; memset(hdr,0,sizeof(hdr));
+        uint32_t h32[8] = { MAGIC, 3u, (uint32_t)NL,(uint32_t)DM,(uint32_t)NH,(uint32_t)NV,(uint32_t)NC,(uint32_t)DF };
+        for (int k=0;k<8;k++) memcpy(hdr+k*4, &h32[k], 4);
+        uint32_t arch=1u, nkv=(uint32_t)NKV; float th=(float)theta, ep=(float)eps;
+        memcpy(hdr+40,&arch,4); memcpy(hdr+44,&nkv,4); memcpy(hdr+48,&th,4); memcpy(hdr+52,&ep,4);
+        uint32_t hd=(uint32_t)HD, ntens=(uint32_t)no;
+        memcpy(hdr+56,&hd,4); memcpy(hdr+60,&ntens,4);    /* @56 head_dim, @60 n_tensors (v3) */
+        if (fwrite(hdr,1,HDR_BYTES,of)!=HDR_BYTES){fprintf(stderr,"[pack-qwen3] write hdr\n");return 2;}
+        if (fwrite(desc,sizeof(HXGWv3Desc),(size_t)no,of)!=(size_t)no){fprintf(stderr,"[pack-qwen3] write desc\n");return 2;}
+    }
+    /* stream the data in order */
+    for (int e=0;e<no;e++) {
+        STensor* t = find_tensor(ts, nt, ord[e].name);
+        long have = shape_prod(t->shape, t->ndim);
+        long pos_now = ftell(of);
+        if ((uint64_t)pos_now != desc[e].data_off) { fprintf(stderr,"[pack-qwen3] FATAL offset drift %s: at %ld want %llu\n", ord[e].name, pos_now, (unsigned long long)desc[e].data_off); return 2; }
+        float* w = (float*)malloc((size_t)have*4); materialize_f32(t, w);
+        if (desc[e].packed) {
+            int rows=(int)desc[e].rows, K=(int)desc[e].K, Kpad=(int)desc[e].Kpad, kwords=Kpad/7, kblk=Kpad/16;
+            int32_t* W=(int32_t*)malloc((size_t)rows*kwords*4);
+            uint8_t* micro=(uint8_t*)malloc((size_t)rows*kblk);
+            float tsv=1.0f;
+            nvfp4_quantize_tensor(w, rows, K, W, NULL, micro, &tsv);
+            int ok = (fwrite(W,4,(size_t)rows*kwords,of)==(size_t)rows*kwords)
+                   & (fwrite(micro,1,(size_t)rows*kblk,of)==(size_t)rows*kblk)
+                   & (fwrite(&tsv,4,1,of)==1);
+            free(W); free(micro);
+            if (!ok) { fprintf(stderr,"[pack-qwen3] write packed %s\n", ord[e].name); free(w); return 2; }
+        } else {
+            if (fwrite(w,4,(size_t)have,of)!=(size_t)have){fprintf(stderr,"[pack-qwen3] write f32 %s\n",ord[e].name);free(w);return 2;}
+        }
+        free(w);
+    }
+    long endpos = ftell(of);
+    fclose(of);
+    if ((uint64_t)endpos != total_bytes) { fprintf(stderr,"[pack-qwen3] FATAL size %ld != %llu\n", endpos,(unsigned long long)total_bytes); return 2; }
+    fprintf(stderr, "[pack-qwen3] wrote %s (%ld B). Re-reading + verifying every tensor...\n", out_path, endpos);
+
+    /* VERIFY: re-read the FILE, dequant each packed tensor from the written bytes, compare to original */
+    int vfd = open(out_path, O_RDONLY);
+    struct stat vst; fstat(vfd, &vst);
+    unsigned char* vbase = (unsigned char*)mmap(NULL, (size_t)vst.st_size, PROT_READ, MAP_PRIVATE, vfd, 0);
+    if (vbase == MAP_FAILED) { fprintf(stderr,"[pack-qwen3] verify mmap\n"); return 2; }
+    HXGWv3Desc* vdesc = (HXGWv3Desc*)(vbase + HDR_BYTES);
+    double worst_rms = 0.0; const char* worst_name = "(none)";
+    int f32_exact = 1, verified = 0;
+    for (int e=0;e<no;e++) {
+        STensor* t = find_tensor(ts, nt, ord[e].name);
+        long have = shape_prod(t->shape, t->ndim);
+        float* w = (float*)malloc((size_t)have*4); materialize_f32(t, w);
+        if (vdesc[e].packed) {
+            int rows=(int)vdesc[e].rows, K=(int)vdesc[e].K, Kpad=(int)vdesc[e].Kpad, kblk=Kpad/16;
+            const int32_t* W = (const int32_t*)(vbase + vdesc[e].data_off);
+            const uint8_t* micro = (const uint8_t*)(vbase + vdesc[e].scale_off);
+            float tsv; memcpy(&tsv, vbase + vdesc[e].scale_off + (size_t)rows*kblk, 4);
+            float* eff = (float*)malloc((size_t)rows*kblk*4);
+            for (long i=0;i<(long)rows*kblk;i++) eff[i] = e4m3_decode(micro[i])*tsv;   /* rebuild effective scale */
+            float* deq = (float*)malloc((size_t)rows*Kpad*4);
+            nvfp4_host_dequant(W, eff, deq, rows, Kpad);
+            double se=0, sw=0;
+            for (int r=0;r<rows;r++) for (int k=0;k<K;k++){ float o=w[(long)r*K+k], g=deq[(long)r*Kpad+k]; double d=(double)g-o; se+=d*d; sw+=(double)o*o; }
+            double rmse=sqrt(se/((double)rows*K)), rms_w=sqrt(sw/((double)rows*K));
+            double rel = rms_w>0 ? rmse/rms_w : 0;
+            if (rel > worst_rms) { worst_rms = rel; worst_name = ord[e].name; }
+            free(eff); free(deq);
+        } else {
+            const float* fv = (const float*)(vbase + vdesc[e].data_off);
+            for (long i=0;i<have;i++) if (fv[i] != w[i]) { if (f32_exact) fprintf(stderr,"[pack-qwen3] f32 MISMATCH in %s at elt %ld\n", ord[e].name, i); f32_exact = 0; break; }
+        }
+        free(w); verified++;
+    }
+    munmap(vbase, (size_t)vst.st_size); close(vfd);
+    for (int s=0;s<n_sh;s++){ munmap(sh[s].base, sh[s].flen); close(sh[s].fd); }
+    free(ts); free(ord); free(desc);
+    int pass = (worst_rms < 0.15) && f32_exact;     /* packed ~9.5% expected; f32 must be bit-exact */
+    fprintf(stderr, "[pack-qwen3] VERIFY: %d tensors | worst packed rmse/rms_w=%.4f (%s) | f32 exact=%s -> %s\n",
+            verified, worst_rms, worst_name, f32_exact?"yes":"NO", pass?"PASS":"FAIL");
+    printf("%s worst_rms=%.4f f32_exact=%d tensors=%d\n", pass ? "PACK_QWEN3_OK" : "PACK_QWEN3_FAIL", worst_rms, f32_exact, verified);
+    return pass ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3]);
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3]);
+    if (argc >= 4 && strcmp(argv[1], "--pack-qwen3") == 0) return pack_qwen3(argv[2], argv[3]);
     if (argc < 4) {
         fprintf(stderr, "usage: %s <model.safetensors> <config.json> <out.weights> [--arch llama]\n", argv[0]);
         return 2;
@@ -526,7 +775,7 @@ int main(int argc, char** argv) {
     /* ---- build order ---- */
     OrderEntry* ord = (OrderEntry*)malloc(sizeof(OrderEntry) * (NL * 12 + 8 + 16));
     int no = arch_llama
-        ? build_order_llama(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)DF, (int)KVD)
+        ? build_order_llama(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)DF, (int)KVD, (int)(DM/NH), 0)
         : build_order(ord, (int)(NL * 12 + 24), (int)NL, (int)DM, (int)NV, (int)NC, (int)DF);
 
     /* ---- open output, write 64-byte header (v2 carries the llama arch fields) ---- */
