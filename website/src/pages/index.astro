@@ -176,8 +176,15 @@ import Base from "../layouts/Base.astro";
       <div class="hero-grid">
         <div class="hero-text reveal">
           <span class="eyebrow">trust chain closed · v1.3 · source-available</span>
-          <h1 class="hero-headline">A compiler that builds itself from <em>299 bytes</em> of hand-typed hex.</h1>
-          <p class="hero-sub">Helix is a from-scratch, ML-native systems language — autodiff, tile types and GPU codegen built into the language, bootstrapped from raw binary with no trusted pre-built compiler. And it runs real language models — a modern SmolLM2 chat model and GPT-2 — verified token-for-token.</p>
+          <div class="hero-ps">
+            <span class="ps-label is-problem">The problem</span>
+            <h1 class="hero-statement hero-problem">Every AI model runs on a foundation so complex and entangled with proprietary components that it can't be verified. Yet AI is being handed autonomy and pushed into critical systems faster than anyone can keep up.</h1>
+          </div>
+
+          <div class="hero-ps">
+            <span class="ps-label is-solution">The solution</span>
+            <p class="hero-statement hero-solution"><strong>Helix</strong> is a from-scratch stack you can verify — auditable from <em>299 bytes</em> up to the GPU kernel — so any model run on it can be checked and reproduced, end to end.</p>
+          </div>
           <div class="btn-row">
             <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
             <a class="btn btn-ghost" href="#bootstrap">Explore the bootstrap</a>
