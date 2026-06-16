@@ -1,5 +1,36 @@
 # Helix v1.7 — SPEED
 
+## Status — v1.7 SPEED: DONE (2026-06-15, tag `v1.7-speed`)
+
+**v1.7 (SPEED) is complete.** The v1.6 large-model path is **~14× faster** (warm 8B Qwen3
+forward 181.6 s → ~12.6 s); the KV-cache **decode** path — crashing and Qwen3-QK-norm-skipping
+in v1.6 — is **fixed and token-correct** (~4.6 s/token); and two ambitious levers (Tensor-Core
+GEMM, fused-dequant decode GEMV) were **measured and honestly shelved** (data below).
+
+**The v1.7 contract (every increment holds all four):**
+- **Byte-identical to v1.6** — gated on `V3_UPLOAD_CHECK_PASS` (GPU dequant == host) + unchanged
+  greedy argmax (`279`) before it ships.
+- **Opt-in** — the speed path is `HX_DQPTX`; `HX_HOSTDEQ=1` restores the exact v1.6 host path, so
+  **every v1.6 receipt still reproduces bit-for-bit**. The default path is unchanged.
+- **No compiler edit** — the 299-byte self-host fixpoint `cdcf8673` is **untouched**; every kernel
+  compiles via the cached kovc driver.
+- **Python-free** — exactly one committed `.py` (the fenced oracle), never on the compile/run path.
+
+**Verification basis (no overclaim).** Each increment was verified and committed with its receipt
+(cited per row below). The released HEAD's runtime/compiler is **byte-identical to the last verified
+v1.7 commit `4cd4eb8`** — `git diff 4cd4eb8 HEAD -- helixc/ stage0/ scripts/` is empty; only website
+files changed since — so those receipts hold at the tag. A fresh from-clean GPU reproduction is
+available on demand; it was not re-run while finalizing only because the GPU's VRAM was held by the
+desktop/display (no Helix job was running).
+
+**Honest residual — the one unbuilt lever.** Decode is **re-dequant-bound** at ~4.6 s/token: it
+re-dequantizes all 36 layers every token (the f32 weights are ~32 GB, far too big to keep resident).
+The remaining lever is keeping the **packed** 4-bit weights resident in VRAM (which shaves the
+per-token HtoD, not the dequant) — a modest, VRAM-tight win **deferred to a later pass**. It is the
+documented floor of this streaming approach, not a regression.
+
+---
+
 v1.6 proved an 8-billion-parameter model (and a 32B) runs on an 8 GB GPU via 4-bit NVFP4
 quantization + per-layer streaming, with a reproducible receipt — **trust first, speed later**.
 v1.7 is the speed pass. Every step here is **byte-identical** to the v1.6 result (same greedy

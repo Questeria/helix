@@ -70,6 +70,10 @@ git checkout v1.6-qwen3-32b-receipt
 bash scripts/gpu_qwen3_receipt_check.sh   # -> RECEIPT_GATE_PASS (genuine 8B/32B + named-reject negative controls)
 ```
 
+## Faster — v1.7 (speed pass)
+
+v1.7 keeps v1.6's receipts byte-for-byte and makes the path **fast**. On the same 8 GB RTX 3070 the warm Qwen3-8B forward dropped from **181.6 s to ~12.6 s (~14×)** by moving the NVFP4→f32 dequant onto the GPU, and the KV-cache **decode** path (which was crashing and skipping Qwen3's per-head QK-norm in v1.6) is fixed — it now generates token-correct text at **~4.6 s/token**. Every step is **opt-in** (`HX_DQPTX`; `HX_HOSTDEQ=1` restores the exact v1.6 host path) and **byte-identical** to v1.6 (gated on `V3_UPLOAD_CHECK_PASS` + unchanged greedy argmax), with **no compiler edit** — the 299-byte self-host fixpoint is untouched. Two more ambitious levers (Tensor-Core GEMM, a fused-dequant decode kernel) were **measured and shelved** because they lost to the incumbent at our shapes. Full record + honest residuals: [`docs/HELIX_V1.7_SPEED.md`](docs/HELIX_V1.7_SPEED.md).
+
 ## Repository layout
 
 - `stage0/` — the from-raw bootstrap ladder (`hex0` … `M2-Planet`, then the `helixc-bootstrap/seed`). Vendored rungs keep their own upstream licenses.
