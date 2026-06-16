@@ -325,7 +325,12 @@ static void silu_mul_k(CUdeviceptr g, CUdeviceptr u, CUdeviceptr y, int n) {
 /* ---- KV-decode wrappers (G-KV0 launch geometry: one thread per output, grid=N block=1) ---- */
 /* y[1,N] = x[1,K] . W[N,K]^T  (covers every decode GEMM incl. attention scores vs cached K) */
 static void gemv_abt(CUdeviceptr x, CUdeviceptr w, CUdeviceptr y, int N, int K) {
-    int k=K; void* ar[] = { &x,&w,&y,&k }; LX(f_gv_abt, (unsigned)N, 1, ar);
+    int k=K; void* ar[] = { &x,&w,&y,&k };
+    /* v1.7: block=1 ran each output on its own warp (1/32 lanes used). block=128 packs 128 outputs/block
+     * -> full warps, ~32x the in-flight threads. Byte-identical (block size is pure scheduling; n=bid*bdim+tid).
+     * Weight gemvs + lm_head have N%128==0 (QD/KVD/DFF, NVpad=128*1187); attention scores (N=T) keep block=1. */
+    if (N % 128 == 0) LX(f_gv_abt, (unsigned)(N/128), 128, ar);
+    else              LX(f_gv_abt, (unsigned)N, 1, ar);
 }
 /* y[1,N] = p[1,T] . M[T,N]  (decode probs x cached V) */
 static void gemv_ab(CUdeviceptr p, CUdeviceptr m, CUdeviceptr y, int N, int T) {
