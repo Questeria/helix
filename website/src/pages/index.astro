@@ -176,15 +176,8 @@ import Base from "../layouts/Base.astro";
       <div class="hero-grid">
         <div class="hero-text reveal">
           <span class="eyebrow">trust chain closed · v1.3 · source-available</span>
-          <div class="hero-ps">
-            <span class="ps-label is-problem">The problem</span>
-            <h1 class="hero-statement hero-problem">Every AI model runs on a foundation so complex and entangled with proprietary components that it can't be verified. Yet AI is being handed autonomy and pushed into critical systems faster than anyone can keep up.</h1>
-          </div>
-
-          <div class="hero-ps">
-            <span class="ps-label is-solution">The solution</span>
-            <p class="hero-statement hero-solution"><strong>Helix</strong> is a from-scratch stack you can verify — auditable from <em>299 bytes</em> up to the GPU kernel — so any model run on it can be checked and reproduced, end to end.</p>
-          </div>
+          <h1 class="hero-headline">A compiler that builds itself from <em>299 bytes</em> of hand-typed hex.</h1>
+          <p class="hero-sub">Helix is a from-scratch, ML-native systems language — autodiff, tile types and GPU codegen built into the language, bootstrapped from raw binary with no trusted pre-built compiler. And it runs real language models — a modern SmolLM2 chat model and GPT-2 — verified token-for-token.</p>
           <div class="btn-row">
             <a class="btn btn-primary" href="/verify/">See the verified run <span class="arrow">→</span></a>
             <a class="btn btn-ghost" href="#bootstrap">Explore the bootstrap</a>
@@ -217,9 +210,40 @@ import Base from "../layouts/Base.astro";
   </section>
 
   <!-- ============================================================
-       02 VERIFIABLE EXECUTION — the headline story
+       02 PROBLEM & SOLUTION — the thesis, before the proof
        ============================================================ -->
-  <section id="verified" data-screen-label="02 Verifiable execution">
+  <section id="why-helix" class="dark" data-screen-label="02 Problem & solution">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <div>
+          <span class="eyebrow">Why Helix exists</span>
+          <h2 class="section-title">The problem, and what we do about it.</h2>
+        </div>
+        <p class="section-lede">AI is being pushed into critical systems faster than anyone can verify it. Helix is the foundation you can actually check — every byte, end to end.</p>
+      </div>
+
+      <div class="ps-grid reveal">
+        <article class="ps-card is-problem">
+          <span class="ps-label is-problem">The problem</span>
+          <p class="ps-body">Every AI model runs on a foundation so complex, and so entangled with proprietary components, that it can’t be verified — yet that same AI is being handed autonomy and pushed into critical systems faster than anyone can keep up.</p>
+        </article>
+
+        <div class="ps-bridge" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 12h15M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+
+        <article class="ps-card is-solution">
+          <span class="ps-label is-solution">The solution</span>
+          <p class="ps-body"><strong>Helix</strong> is a from-scratch stack you can verify — auditable from <em>299 bytes</em> of hand-typed hex all the way up to the GPU kernel — so any model you run on it can be checked and reproduced, end to end.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================
+       03 VERIFIABLE EXECUTION — the headline story
+       ============================================================ -->
+  <section id="verified" data-screen-label="03 Verifiable execution">
     <div class="wrap">
       <div class="section-head reveal">
         <div>
@@ -267,9 +291,9 @@ import Base from "../layouts/Base.astro";
   </section>
 
   <!-- ============================================================
-       03 BOOTSTRAP CHAIN
+       04 BOOTSTRAP CHAIN
        ============================================================ -->
-  <section id="bootstrap" class="chain-section dark" data-screen-label="03 Bootstrap chain">
+  <section id="bootstrap" class="chain-section dark" data-screen-label="04 Bootstrap chain">
     <div class="wrap">
       <div class="section-head reveal">
         <div>
@@ -288,9 +312,9 @@ import Base from "../layouts/Base.astro";
   </section>
 
   <!-- ============================================================
-       04 PILLARS
+       05 PILLARS
        ============================================================ -->
-  <section id="why" data-screen-label="04 Pillars">
+  <section id="why" data-screen-label="05 Pillars">
     <div class="wrap">
       <div class="section-head reveal">
         <div>
@@ -335,9 +359,9 @@ import Base from "../layouts/Base.astro";
   </section>
 
   <!-- ============================================================
-       05 LANGUAGE — autodiff feature + code gallery
+       06 LANGUAGE — autodiff feature + code gallery
        ============================================================ -->
-  <section id="autodiff" class="dark" data-screen-label="05 Language">
+  <section id="autodiff" class="dark" data-screen-label="06 Language">
     <div class="wrap">
       <div class="feature-grid">
         <div class="code-card reveal">
@@ -421,9 +445,9 @@ import Base from "../layouts/Base.astro";
   </section>
 
   <!-- ============================================================
-       06 NUMBERS
+       07 NUMBERS
        ============================================================ -->
-  <section class="numbers-section" data-screen-label="06 Numbers">
+  <section class="numbers-section" data-screen-label="07 Numbers">
     <div class="wrap">
       <div class="section-head reveal">
         <div>
@@ -471,9 +495,9 @@ import Base from "../layouts/Base.astro";
   </section>
 
   <!-- ============================================================
-       07 CTA
+       08 CTA
        ============================================================ -->
-  <section class="cta dark" data-screen-label="07 CTA">
+  <section class="cta dark" data-screen-label="08 CTA">
     <div class="wrap reveal">
       <span class="eyebrow">Carbon meets silicon</span>
       <h2>Compile something honest today.</h2>
