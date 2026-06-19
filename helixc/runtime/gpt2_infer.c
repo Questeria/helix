@@ -1676,6 +1676,7 @@ static void packedres_fitcheck(void) {
     for (int i = 0; i < g_ntensors; i++) {
         const HXGWv3Desc* d = &g_desc[i];
         if (!d->packed) continue;
+        if (i == v3_idx_lmhead()) continue;   /* v1.8: the lm_head never goes through g_pk_res -- setup_head (INC1.5 resident, or FP32 d_wte_pad) owns it; don't double-count */
         int Kpad = (int)d->Kpad, kwords = Kpad/7, kblk = Kpad/16;
         need += (size_t)d->rows*kwords*4;   /* resident packed words */
         need += (size_t)d->rows*kblk*4;     /* resident effective scales (g_sc_res) */
