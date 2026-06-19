@@ -257,6 +257,20 @@ static CUdeviceptr g_pk_res[400] = {0};
 static int    g_packedres = 0;       /* HX_PACKEDRES requested */
 static int    g_packedres_off = 0;   /* latched: residency disabled (fit-check or an alloc failed) -> stream */
 static int    g_packedres_chk = 0;   /* the one-time fit-check has run */
+/* v1.8 INC1.5: keep the PACKED lm_head words+scales resident and dequant it in VOCAB-ROW chunks at use
+ * time, instead of the persistent FP32 d_wte_pad ([NVpad x DM] ~2.49 GiB). Opt-in HX_PACKEDHEAD (implied
+ * by HX_PACKEDRES). When ON+fitting, setup_head skips d_wte_pad and lm_head_logits_chunked() streams the
+ * chunked dequant->GEMM/GEMV. Byte-identical: the SAME g_e4m3_tab[micro]*ts scales feed the SAME f_dq_tiled
+ * into the SAME-math GEMM, just chunked over vocab rows. Non-fatal: alloc failure -> the FP32 d_wte_pad. */
+static int    g_packedhead = 0;       /* HX_PACKEDHEAD requested */
+static int    g_packedhead_on = 0;    /* latched: resident packed head active (allocs succeeded + fit) */
+static CUdeviceptr g_phk_words = 0;   /* resident packed lm_head i32 words [rows x kwords] */
+static CUdeviceptr g_phk_sc    = 0;   /* resident effective lm_head scales [rows x kblk] (g_e4m3_tab*ts) */
+static CUdeviceptr d_head_chunk = 0;  /* reusable dequant target [CHUNK x DM] f32 (compacted Kpad->DM) */
+static CUdeviceptr d_head_temp  = 0;  /* prefill GEMM temp [Smax x CHUNK] f32 (scattered into d_logits cols) */
+static int    g_head_chunk_rows = 0;  /* CHUNK = vocab rows per dequant pass (== the setup chunk count) */
+static int    g_head_rows = 0, g_head_kwords = 0, g_head_kblk = 0, g_head_Kpad = 0;
+static float  g_head_ts = 0;          /* per-tensor scale ts for the packed lm_head */
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -1162,6 +1176,9 @@ static void forward_layer_llama(void) {
     vadd(d_x, d_mlp2, d_x, Spad*DM);
 }
 
+/* v1.8 INC1.5: forward decl (defined after v3_upload_gpu, which it mirrors); used by the head call sites. */
+static void lm_head_logits_chunked(CUdeviceptr d_in, CUdeviceptr d_out, int M, int is_gemv);
+
 /* run the full GPT-2 forward for ids[0..T) and copy the LAST REAL-TOKEN row of logits [NV] into
  * out (host). S = T padded up to a multiple of 64 (set as the global Spad for the layer launches).
  * For greedy decoding only the last real row matters, but we compute the full [S,NVpad] head (the
@@ -1198,7 +1215,8 @@ static void forward_full(const int* ids, int T, float* out_last_logits) {
     }
     /* tied head: logits[S,NVpad] = xnorm[S,DM] @ wte_pad[NVpad,DM]^T (wte rows ARE the tied head). */
     emit_head(g_emit_step, "lm_head", "tiled_matmul_abt");
-    mm_ABt(d_xn, d_wte_pad, d_logits, S, DM, NVpad);
+    if (g_packedhead_on) lm_head_logits_chunked(d_xn, d_logits, S, 0);   /* v1.8 INC1.5: chunked packed head */
+    else                 mm_ABt(d_xn, d_wte_pad, d_logits, S, DM, NVpad);
     /* copy ONLY the last real-token row's first NV logits to the host (greedy decision row). */
     CKX(cuMemcpyDtoH(out_last_logits, d_logits + (CUdeviceptr)((size_t)(T-1)*NVpad*sizeof(float)),
                      (size_t)NV*sizeof(float)), "d2h last-row logits");
@@ -1285,7 +1303,8 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
             /* LOGIT LENS: decode the residual stream THROUGH the real final-norm + head
              * (read-only reuse of gated kernels; d_xn1/d_lg1 are free between layers). */
             rms_norm_k(d_x1, d_xn1, d_lnfg, 1, DM);
-            gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
+            if (g_packedhead_on) lm_head_logits_chunked(d_xn1, d_lg1, 1, 1);   /* v1.8 INC1.5 */
+            else                 gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
             if (!g_lens_host) g_lens_host = (float*)malloc((size_t)NV * sizeof(float));
             SYNC("lens sync");
             CKX(cuMemcpyDtoH(g_lens_host, d_lg1, (size_t)NV * sizeof(float)), "d2h lens");
@@ -1298,7 +1317,8 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
     emit_head(g_emit_step, "norm_f", "gpu_rmsnorm_fwd_eps");
     rms_norm_k(d_x1, d_xn1, d_lnfg, 1, DM);
     emit_head(g_emit_step, "lm_head", "gpu_gemv_abt");
-    gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
+    if (g_packedhead_on) lm_head_logits_chunked(d_xn1, d_lg1, 1, 1);   /* v1.8 INC1.5: chunked packed head */
+    else                 gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
     if (!g_fast) SYNC("decode end");
     CKX(cuMemcpyDtoH(out_logits, d_lg1, (size_t)NV*sizeof(float)), "d2h logits1");
     kv_len = T;
@@ -1483,6 +1503,8 @@ static int device_init(const char* ptx_path, const char* wpath) {
     g_scache = getenv("HX_SCALECACHE") ? 1 : 0;  /* v1.7 INC2c: resident static-scale cache */
     g_packedres = getenv("HX_PACKEDRES") ? 1 : 0;  /* v1.8 INC1: resident packed 4-bit layer weights */
     if (g_packedres) g_scache = 1;                 /* residency implies the static-scale cache */
+    g_packedhead = getenv("HX_PACKEDHEAD") ? 1 : 0;  /* v1.8 INC1.5: resident packed lm_head (no FP32 d_wte_pad) */
+    if (g_packedres) g_packedhead = 1;               /* resident layers imply the resident head (both shrink VRAM) */
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
     g_ptx=(char*)malloc(psz+1); if (fread(g_ptx,1,psz,pf)!=(size_t)psz) { fclose(pf); return 2; } g_ptx[psz]=0; fclose(pf);
@@ -1732,6 +1754,59 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     if (g_prof) g_pf_cmp += now_seconds() - tE;
 }
 
+/* v1.8 INC1.5: dequant a single vocab-row chunk [r0, r0+nr) of the resident packed lm_head into
+ * d_head_chunk [nr x DM] (compacted Kpad->DM). Mirrors the setup_head chunk loop EXACTLY (same packed
+ * words, same g_e4m3_tab*ts scales, same f_dq_tiled, same Kpad->K cuMemcpy2D) so the dequantized rows
+ * are byte-identical to what d_wte_pad held. Rows in [NV, r0+nr) (vocab pad) are zeroed -> 0 logits. */
+static void head_dequant_chunk(long r0, long nr) {
+    int Kpad = g_head_Kpad, kwords = g_head_kwords, kblk = g_head_kblk, BD = 112;
+    long real = nr;                                   /* real (non-pad) rows in this chunk */
+    if (r0 + real > (long)NV) real = (long)NV - r0;   /* clamp: rows >= NV are vocab pad */
+    if (real < 0) real = 0;
+    if (nr > real)   /* zero the dequant target tail so pad rows produce 0 logits (like the zeroed d_wte_pad) */
+        CKX(cuMemsetD8(d_head_chunk + (CUdeviceptr)((size_t)real*DM*sizeof(float)), 0,
+                       (size_t)(nr-real)*DM*sizeof(float)), "head pad zero");
+    if (real <= 0) return;
+    CUdeviceptr wsrc = g_phk_words + (CUdeviceptr)((size_t)r0*kwords*4);   /* resident packed words for [r0,..) */
+    CUdeviceptr ssrc = g_phk_sc    + (CUdeviceptr)((size_t)r0*kblk*4);     /* resident effective scales for [r0,..) */
+    int mm0=0, kk=Kpad, bd=BD; void* ar[] = { &wsrc, &ssrc, &d_dqscr, &mm0, &kk, &bd };
+    LX(f_dq_tiled, (unsigned)((long)real*(Kpad/BD)), (unsigned)BD, ar);
+    CUDA_MEMCPY2D cp; memset(&cp,0,sizeof(cp));   /* compact [real x Kpad] -> d_head_chunk rows [0,real) [real x DM] */
+    cp.srcMemoryType=CU_MEMORYTYPE_DEVICE; cp.srcDevice=d_dqscr;      cp.srcPitch=(size_t)Kpad*4;
+    cp.dstMemoryType=CU_MEMORYTYPE_DEVICE; cp.dstDevice=d_head_chunk; cp.dstPitch=(size_t)DM*4;
+    cp.WidthInBytes=(size_t)DM*4; cp.Height=(size_t)real;
+    CKX(cuMemcpy2D(&cp), "head chunk compact 2D");
+}
+
+/* v1.8 INC1.5: compute lm_head logits without the persistent FP32 d_wte_pad. Loops vocab-row chunks of
+ * the resident packed head, dequanting each into d_head_chunk then running the chunk's GEMM/GEMV into the
+ * right slice of d_out. Math-identical to mm_ABt/gemv_abt over the full d_wte_pad.
+ *   is_gemv==0 (prefill, M>1): d_out is [M x NVpad] row-major; gemm temp[M,nr]=d_in@chunk^T then scatter
+ *     the nr columns into d_out[:, r0:r0+nr] (non-contiguous per row -> cuMemcpy2D scatter).
+ *   is_gemv==1 (decode, M==1):  d_out is [NVpad]; gemv writes nr contiguous outputs at d_out + r0.
+ * Chunks tile [0, NVpad); CHUNK and NVpad are both %64 so every nr is %64 (mm_ABt N/64 grid is valid). */
+static void lm_head_logits_chunked(CUdeviceptr d_in, CUdeviceptr d_out, int M, int is_gemv) {
+    long CHUNK = g_head_chunk_rows;
+    for (long r0 = 0; r0 < (long)NVpad; r0 += CHUNK) {
+        long nr = (r0 + CHUNK <= (long)NVpad) ? CHUNK : ((long)NVpad - r0);   /* r0,CHUNK,NVpad %64 -> nr %64 */
+        head_dequant_chunk(r0, nr);
+        if (is_gemv) {
+            /* y[r0:r0+nr] = d_head_chunk[nr,DM] @ d_in[DM]; contiguous write at d_out + r0. */
+            gemv_abt(d_in, d_head_chunk, d_out + (CUdeviceptr)((size_t)r0*sizeof(float)), (int)nr, DM);
+        } else {
+            /* temp[M,nr] = d_in[M,DM] @ d_head_chunk[nr,DM]^T (M%64 from prefill, nr%64). */
+            mm_ABt(d_in, d_head_chunk, d_head_temp, M, DM, (int)nr);
+            /* scatter temp[M,nr] (pitch nr) -> d_out[:, r0:r0+nr] (pitch NVpad, col offset r0). */
+            CUDA_MEMCPY2D cp; memset(&cp,0,sizeof(cp));
+            cp.srcMemoryType=CU_MEMORYTYPE_DEVICE; cp.srcDevice=d_head_temp; cp.srcPitch=(size_t)nr*4;
+            cp.dstMemoryType=CU_MEMORYTYPE_DEVICE;
+            cp.dstDevice=d_out + (CUdeviceptr)((size_t)r0*sizeof(float)); cp.dstPitch=(size_t)NVpad*4;
+            cp.WidthInBytes=(size_t)nr*4; cp.Height=(size_t)M;
+            CKX(cuMemcpy2D(&cp), "head logits scatter 2D");
+        }
+    }
+}
+
 static void v3_upload(int idx, CUdeviceptr dst) {
     if (g_gpu_dq && !g_hostdeq) { v3_upload_gpu(idx, dst); return; }
     const HXGWv3Desc* d = &g_desc[idx];
@@ -1790,6 +1865,56 @@ static int setup_head(int Smax) {
         d_lnfb = 0;
         const HXGWv3Desc* dl = &g_desc[v3_idx_lmhead()];
         int rows=(int)dl->rows, K=(int)dl->K, Kpad=(int)dl->Kpad;   /* NV x DM, Kpad>=DM */
+        /* v1.8 INC1.5: resident PACKED lm_head instead of the 2.49 GiB FP32 d_wte_pad. Keep the packed
+         * words+effective-scales resident (alloc once, HtoD once from the mmap) + a small reusable dequant
+         * target d_head_chunk [CHUNK x DM] + a prefill GEMM temp d_head_temp [Smax x CHUNK]. lm_head_logits_
+         * chunked() then dequants+GEMMs in vocab-row chunks. Byte-identical, opt-in, non-fatal fallback. */
+        if (g_packedhead && g_gpu_dq && !g_hostdeq && dl->packed) {
+            int kwords=Kpad/7, kblk=Kpad/16;
+            long CHUNK = g_dqscr_elems / Kpad; if (CHUNK < 1) CHUNK = 1;   /* same chunk count as the setup loop */
+            if (CHUNK > NVpad) CHUNK = NVpad;
+            if (CHUNK % 64) CHUNK -= (CHUNK % 64);                          /* keep nr %64 for the mm_ABt N/64 grid */
+            if (CHUNK < 64) CHUNK = 64;
+            size_t need = (size_t)rows*kwords*4 + (size_t)rows*kblk*4       /* resident packed words + scales */
+                        + (size_t)CHUNK*DM*4 + (size_t)Smax*CHUNK*4;        /* d_head_chunk + d_head_temp */
+            size_t freeb=0, totb=0; cuMemGetInfo(&freeb, &totb);
+            size_t margin = (size_t)256*1024*1024;
+            CUdeviceptr pw=0, ps=0, pc=0, pt=0;
+            const unsigned char* lb = (const unsigned char*)g_map;
+            const int32_t* wb = (const int32_t*)(lb + dl->data_off);
+            const uint8_t*  mb = (const uint8_t*)(lb + dl->scale_off);
+            float ts; memcpy(&ts, lb + dl->scale_off + (size_t)rows*kblk, 4);
+            int ok = (freeb >= need + margin);
+            if (ok) ok = (cuMemAlloc(&pw, (size_t)rows*kwords*4) == CUDA_SUCCESS);
+            if (ok) ok = (cuMemAlloc(&ps, (size_t)rows*kblk*4)   == CUDA_SUCCESS);
+            if (ok) ok = (cuMemAlloc(&pc, (size_t)CHUNK*DM*4)    == CUDA_SUCCESS);
+            if (ok) ok = (cuMemAlloc(&pt, (size_t)Smax*CHUNK*4)  == CUDA_SUCCESS);
+            if (ok) ok = (cuMemcpyHtoD(pw, wb, (size_t)rows*kwords*4) == CUDA_SUCCESS);  /* one-time, from the mmap */
+            if (ok) {   /* build the effective scales (e4m3_decode(micro)*ts, byte-identical) in ROW-CHUNKS ->
+                         * resident ps. g_scbuf holds only ~max-layer (ms) elems, so rows*kblk (~39M for 8B)
+                         * MUST be staged in pieces; CHUNK rows * kblk <= g_dqscr_elems/16 fits g_scbuf. */
+                for (long r0=0; ok && r0<rows; r0+=CHUNK) {
+                    long nr = (r0+CHUNK<=rows) ? CHUNK : (rows-r0);
+                    for (long i=0;i<nr*(long)kblk;i++) g_scbuf[i] = g_e4m3_tab[mb[(size_t)r0*kblk + i]] * ts;
+                    ok = (cuMemcpyHtoD(ps + (CUdeviceptr)((size_t)r0*kblk*4), g_scbuf, (size_t)nr*kblk*4) == CUDA_SUCCESS);
+                }
+            }
+            if (ok) {
+                g_phk_words = pw; g_phk_sc = ps; d_head_chunk = pc; d_head_temp = pt;
+                g_head_chunk_rows = (int)CHUNK; g_head_rows = rows; g_head_kwords = kwords;
+                g_head_kblk = kblk; g_head_Kpad = Kpad; g_head_ts = ts;
+                g_packedhead_on = 1;
+                d_logits = A((size_t)Smax*NVpad);
+                fprintf(stderr, "[packedhead] resident ON: packed lm_head [%dx%d] chunk=%ld rows, "
+                                "need %zu MiB free %zu MiB (no FP32 d_wte_pad)\n",
+                        rows, K, CHUNK, need/(1024*1024), freeb/(1024*1024));
+                return 0;
+            }
+            if (pw) cuMemFree(pw); if (ps) cuMemFree(ps);                    /* non-fatal: release + fall to FP32 */
+            if (pc) cuMemFree(pc); if (pt) cuMemFree(pt);
+            fprintf(stderr, "[packedhead] need %zu MiB +margin, free %zu MiB -> FP32 d_wte_pad fallback\n",
+                    need/(1024*1024), freeb/(1024*1024));
+        }
         d_wte_pad = A((size_t)NVpad*DM);
         CK(cuMemsetD8(d_wte_pad, 0, (size_t)NVpad*DM*sizeof(float)), "zero wte_pad");
         if (g_gpu_dq && !g_hostdeq && dl->packed) {
