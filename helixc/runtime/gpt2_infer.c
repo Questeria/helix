@@ -249,6 +249,14 @@ static long   g_dqscr_elems = 0;   /* v1.7 INC2: element capacity of d_dqscr/g_s
  * the per-forward scratch build). 8B layer scales ~1.74GB resident -> fits the 8GB card. */
 static CUdeviceptr g_sc_res[400] = {0};   /* idx = L*11+t < 36*11 for 8B; 400 covers all packed tensors */
 static int    g_scache = 0;
+/* v1.8 INC1: keep the PACKED 4-bit layer words resident in VRAM (one buffer per packed tensor idx) so the
+ * per-token packed-words HtoD -- the measured ~2-4s/forward bottleneck -- is eliminated. Opt-in HX_PACKEDRES
+ * (implies HX_SCALECACHE). One-time cuMemGetInfo fit-check; per-tensor first-touch alloc; non-fatal -> the
+ * existing pinned-bounce streaming path. NO kovc edit; byte-identical (same dequant reads the same bytes). */
+static CUdeviceptr g_pk_res[400] = {0};
+static int    g_packedres = 0;       /* HX_PACKEDRES requested */
+static int    g_packedres_off = 0;   /* latched: residency disabled (fit-check or an alloc failed) -> stream */
+static int    g_packedres_chk = 0;   /* the one-time fit-check has run */
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -1473,6 +1481,8 @@ static void load_dequant_module(void) {
 static int device_init(const char* ptx_path, const char* wpath) {
     g_prof   = getenv("HX_PROF") ? 1 : 0;        /* v1.7 INCREMENT 2: per-upload profiling */
     g_scache = getenv("HX_SCALECACHE") ? 1 : 0;  /* v1.7 INC2c: resident static-scale cache */
+    g_packedres = getenv("HX_PACKEDRES") ? 1 : 0;  /* v1.8 INC1: resident packed 4-bit layer weights */
+    if (g_packedres) g_scache = 1;                 /* residency implies the static-scale cache */
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
     g_ptx=(char*)malloc(psz+1); if (fread(g_ptx,1,psz,pf)!=(size_t)psz) { fclose(pf); return 2; } g_ptx[psz]=0; fclose(pf);
@@ -1634,6 +1644,32 @@ static int alloc_buffers(int Smax) {
  * launch nvfp4_dequant_tiled -> [rows x Kpad], then cuMemcpy2D-compact Kpad->K into dst. BYTE-IDENTICAL
  * to v3_upload's host path by construction (same mag * (e4m3_decode(micro)*ts), single precision);
  * --v3-upload-check gates it. Small f32 tensors stay on a plain HtoD. */
+/* v1.8 INC1: one-time cuMemGetInfo budget check for resident packed words + scales across all packed
+ * tensors. If the full resident set won't fit free VRAM with a transient margin, latch residency OFF so
+ * every tensor streams (graceful degrade -- exactly the v1.6/v1.7 path, byte-identical). */
+static void packedres_fitcheck(void) {
+    if (g_packedres_chk) return;
+    g_packedres_chk = 1;
+    size_t need = 0;
+    for (int i = 0; i < g_ntensors; i++) {
+        const HXGWv3Desc* d = &g_desc[i];
+        if (!d->packed) continue;
+        int Kpad = (int)d->Kpad, kwords = Kpad/7, kblk = Kpad/16;
+        need += (size_t)d->rows*kwords*4;   /* resident packed words */
+        need += (size_t)d->rows*kblk*4;     /* resident effective scales (g_sc_res) */
+    }
+    size_t margin = (size_t)512*1024*1024;  /* transient dequant/HtoD scratch headroom */
+    size_t freeb = 0, totb = 0; cuMemGetInfo(&freeb, &totb);
+    if (freeb < need + margin) {
+        g_packedres_off = 1;
+        fprintf(stderr, "[packedres] need %zu MiB +margin, free %zu MiB -> streaming (resident OFF)\n",
+                need/(1024*1024), freeb/(1024*1024));
+    } else {
+        fprintf(stderr, "[packedres] resident ON: need %zu MiB, free %zu MiB\n",
+                need/(1024*1024), freeb/(1024*1024));
+    }
+}
+
 static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     const HXGWv3Desc* d = &g_desc[idx];
     const unsigned char* base = (const unsigned char*)g_map;
@@ -1646,8 +1682,25 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
     float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
     double tA = g_prof ? now_seconds() : 0.0;
-    memcpy(g_hpin, w, (size_t)rows*kwords*4);   /* v1.7 INC2b: mmap->pinned (faults pages), then DMA HtoD */
-    CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD");
+    /* v1.8 INC1: use the resident packed words if present; else first-touch alloc them resident (one-time
+     * HtoD straight from the mmap); else stream via the pinned bounce (the v1.7 INC2b path). The dequant
+     * kernel reads identical bytes either way -> output byte-identical. */
+    CUdeviceptr d_packed_use = d_packed;
+    int nsc1 = (int)(sizeof(g_pk_res)/sizeof(g_pk_res[0]));
+    if (g_packedres && !g_packedres_off) packedres_fitcheck();
+    if (g_packedres && !g_packedres_off && idx >= 0 && idx < nsc1 && g_pk_res[idx]) {
+        d_packed_use = g_pk_res[idx];                                       /* resident: NO memcpy, NO HtoD */
+    } else if (g_packedres && !g_packedres_off && idx >= 0 && idx < nsc1) {
+        CUdeviceptr p = 0;                                                  /* first touch: alloc resident + one-time HtoD */
+        if (cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
+            cuMemcpyHtoD(p, w, (size_t)rows*kwords*4) == CUDA_SUCCESS) { g_pk_res[idx] = p; d_packed_use = p; }
+        else { if (p) cuMemFree(p); g_packedres_off = 1;                    /* VRAM-full: latch off, stream this + the rest */
+               memcpy(g_hpin, w, (size_t)rows*kwords*4);
+               CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD"); }
+    } else {
+        memcpy(g_hpin, w, (size_t)rows*kwords*4);                          /* v1.7 INC2b: mmap->pinned, then DMA HtoD */
+        CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD");
+    }
     double tB = g_prof ? now_seconds() : 0.0; g_pf_htod += tB - tA;
     /* v1.7 INC2c: reuse the resident effective-scale cache (the scales are static) or build into scratch. */
     CUdeviceptr d_sc_use = d_sc;
@@ -1666,7 +1719,7 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     double tD = g_prof ? now_seconds() : 0.0; g_pf_sb += tD - tB;        /* scale build+upload, or cache reuse */
     CUdeviceptr out_dev = (Kpad==K) ? dst : d_dqscr;
     int mm0=0, kk=Kpad, bd=BD;
-    void* ar[] = { &d_packed, &d_sc_use, &out_dev, &mm0, &kk, &bd };
+    void* ar[] = { &d_packed_use, &d_sc_use, &out_dev, &mm0, &kk, &bd };
     LX(f_dq_tiled, (unsigned)((long)rows*(Kpad/BD)), (unsigned)BD, ar);
     double tE = g_prof ? now_seconds() : 0.0; g_pf_dq += tE - tD; g_pf_n++;
     if (Kpad != K) {   /* compact [rows x Kpad] -> [rows x K], drop the pad cols (host did this via memmove) */
