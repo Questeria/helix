@@ -1677,11 +1677,13 @@ static void packedres_fitcheck(void) {
         const HXGWv3Desc* d = &g_desc[i];
         if (!d->packed) continue;
         if (i == v3_idx_lmhead()) continue;   /* v1.8: the lm_head never goes through g_pk_res -- setup_head (INC1.5 resident, or FP32 d_wte_pad) owns it; don't double-count */
-        int Kpad = (int)d->Kpad, kwords = Kpad/7, kblk = Kpad/16;
-        need += (size_t)d->rows*kwords*4;   /* resident packed words */
-        need += (size_t)d->rows*kblk*4;     /* resident effective scales (g_sc_res) */
+        int Kpad = (int)d->Kpad, kwords = Kpad/7;
+        need += (size_t)d->rows*kwords*4;   /* resident packed WORDS only (the dominant ~3.7GiB). The effective
+                                             * scales (~1.6GiB) go resident via the SEPARATE g_sc_res lazy path,
+                                             * which already has its own non-fatal fallback -- budgeting them
+                                             * here too double-counts and wrongly blocks the fit by ~1.6GiB. */
     }
-    size_t margin = (size_t)512*1024*1024;  /* transient dequant/HtoD scratch headroom */
+    size_t margin = (size_t)768*1024*1024;  /* headroom for the dequant scratch + the lazily-resident scales */
     size_t freeb = 0, totb = 0; cuMemGetInfo(&freeb, &totb);
     if (freeb < need + margin) {
         g_packedres_off = 1;
