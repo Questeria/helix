@@ -2095,6 +2095,59 @@ int main(int argc, char** argv) {
         return rc;
     }
 
+    /* dgemv_blockred mode (T2/M7): cuda_launch <ptx> dequant_gemv_blockred <N> dgemv_blockred <Kpad> [mutate].
+     * Verifies the FUSED NVFP4-dequant BLOCK-REDUCTION GEMV (__dequant_gemv_blockred: one 256-thread
+     * block per output row, coalesced striped unpack + SMEM tree-reduce) vs a from-scratch CPU oracle
+     * (host NVFP4 dequant + f32 gemv) -- byte-identical setup to the gemv_nvfp4 mode above, the only
+     * difference being the launch geometry (block=(256,1,1) here vs block=(1,1,1) there) since the
+     * block-reduction is the load-bearing change. y[n]=sum_j x[j]*e2m1_decode(code(n,j))*sc[n*(K/16)+j/16].
+     * Same column accumulation order -> agreement to ~FMA level; [mutate] bumps y[0] and MUST trip the
+     * compare (the block-reduction is load-bearing). K must be a multiple of 112 = LCM(7,16). */
+    if (strcmp(op, "dgemv_blockred") == 0) {
+        int Nout = (argc > 5) ? atoi(argv[5]) : 64;
+        int Kd   = (argc > 6) ? atoi(argv[6]) : 112;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        if (Kd % 112 != 0) { fprintf(stderr, "dgemv_blockred: K must be a multiple of 112 = LCM(7,16); got %d\n", Kd); return 2; }
+        int kwords = Kd / 7, kblk = Kd / 16; float ts = 1.0f / 3.0f;
+        size_t wN = (size_t)Nout * kwords, scN = (size_t)Nout * kblk;
+        int* hCode = (int*)malloc((size_t)Nout * Kd * sizeof(int));
+        int* hW = (int*)malloc(wN * sizeof(int));
+        int* hMicro = (int*)malloc(scN * sizeof(int));
+        float* hSc = (float*)malloc(scN * sizeof(float));
+        float* hX = (float*)malloc((size_t)Kd * sizeof(float));
+        float* hY = (float*)malloc((size_t)Nout * sizeof(float));
+        float* yref = (float*)malloc((size_t)Nout * sizeof(float));
+        if (!hCode||!hW||!hMicro||!hSc||!hX||!hY||!yref) return 2;
+        for (int r=0;r<Nout;r++) for (int k=0;k<Kd;k++) hCode[r*Kd+k] = (r*5+k*7+3)%16;
+        for (int r=0;r<Nout;r++) for (int kw=0;kw<kwords;kw++){ int word=0,pw=1; for(int j=0;j<7;j++){word+=(hCode[r*Kd+kw*7+j]&15)*pw; pw*=16;} hW[r*kwords+kw]=word; }
+        for (int r=0;r<Nout;r++) for (int bk=0;bk<kblk;bk++){ int mc=(r*3+bk*11+0x30)&0x7E; if((mc&0x7F)==0x7F)mc=0x38; hMicro[r*kblk+bk]=mc; hSc[r*kblk+bk]=e4m3_decode(mc)*ts; }
+        for (int k=0;k<Kd;k++) hX[k] = (float)((k%11)-5) * 0.25f;
+        for (int n=0;n<Nout;n++){ float acc=0.0f; for(int j=0;j<Kd;j++){ float w=e2m1_decode(hCode[n*Kd+j])*(e4m3_decode(hMicro[n*kblk+j/16])*ts); acc+=hX[j]*w; } yref[n]=acc; }
+        CUdeviceptr dX,dW,dSc,dY;
+        CK(cuMemAlloc(&dX, Kd*sizeof(float)), "alloc X");
+        CK(cuMemAlloc(&dW, wN*sizeof(int)), "alloc W");
+        CK(cuMemAlloc(&dSc, scN*sizeof(float)), "alloc Sc");
+        CK(cuMemAlloc(&dY, Nout*sizeof(float)), "alloc Y");
+        CK(cuMemcpyHtoD(dX, hX, Kd*sizeof(float)), "H2D X");
+        CK(cuMemcpyHtoD(dW, hW, wN*sizeof(int)), "H2D W");
+        CK(cuMemcpyHtoD(dSc, hSc, scN*sizeof(float)), "H2D Sc");
+        void* gargs[] = { &dX, &dW, &dSc, &dY, &Kd };
+        /* BLOCK-REDUCTION launch: ONE 256-thread block per output row. */
+        CK(cuLaunchKernel(fn, Nout, 1, 1, 256, 1, 1, 0, 0, gargs, 0), "launch dequant_gemv_blockred");
+        CK(cuCtxSynchronize(), "sync dequant_gemv_blockred");
+        CK(cuMemcpyDtoH(hY, dY, Nout*sizeof(float)), "D2H Y");
+        if (mutate) hY[0] += 0.5f + 0.1f*fabsf(hY[0]);
+        int nbad=0; float maxrel=0.0f;
+        for (int n=0;n<Nout;n++){ float e=fabsf(hY[n]-yref[n]); float d=fabsf(yref[n]); float rel=d>1.0e-6f?e/d:e; if(rel>maxrel)maxrel=rel; if(isnan(hY[n])||rel>1.0e-3f){ if(nbad<4)fprintf(stderr,"dgemv_blockred mismatch y[%d]=%g ref %g (rel %g)\n",n,hY[n],yref[n],rel); nbad++; } }
+        printf("GPU [%s] dequant_gemv_blockred (fused NVFP4-dequant block-reduction GEMV, block=256) Nout=%d K=%d: y[0]=%g ref=%g max_rel=%g, %d bad -> %s\n",
+               gpu, Nout, Kd, hY[0], yref[0], maxrel, nbad, nbad?"FAIL":"PASS");
+        int rc=nbad?1:0;
+        cuMemFree(dX);cuMemFree(dW);cuMemFree(dSc);cuMemFree(dY);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hCode);free(hW);free(hMicro);free(hSc);free(hX);free(hY);free(yref);free(ptx);
+        return rc;
+    }
+
     /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul
      *   <Nignored> gemm_perf <M> <K> <N> [mutate].
      * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device.

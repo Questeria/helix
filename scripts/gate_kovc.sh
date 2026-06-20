@@ -124,7 +124,17 @@ if [ "$FIX_OK" = "1" ]; then
   # moves the compiler self-image. K2==K3==K4 STILL byte-identical at the new value (the self-host
   # source uses no f16 @kernel param, so f16 emission is unreachable in the bootstrap path); corpus
   # 113/0, all PTX refs (vector_add/tiled/ternary/packed/f16) byte-OK. dffd778c (S0) preserved above.
-  EXPECT_FIX=cdcf8673e8dd0bfc0c0da9a554ecc7b7d6bead3892d3c663dbf007bcdc139bdd
+  # v1.8 T2/M7 re-mint (2026-06-19): cdcf8673... -> 45bc8ac9... -- the FUSED NVFP4-dequant block-
+  # reduction GEMV intrinsic (kovc.hx: emit_ptx_dequant_gemv_blockred + the gload_u32/mov_f_bits/
+  # e2m1_mag_lut/bra_to_end helpers + the __dequant_gemv_blockred recognizer & dispatch branch)
+  # moves the compiler self-image. K2==K3==K4 STILL byte-identical at the new value (the new
+  # intrinsic is CALLED only in the example kernel dequant_gemv_blockred_kernel.hx, never in the
+  # bootstrap self-host source, so its emitter is dead code during self-compile); corpus 113/0, all
+  # 7 PTX refs (vector_add/tiled/ternary/packed/f16/mxfp4/nvfp4) byte-OK. Powers a ~1.9x 8B decode
+  # speedup -- deterministic synced metric 2.06->1.07 s/tok, per-token projection-dequant 45%->1%,
+  # token-for-token IDENTICAL output (HX_FAST fused ~0.56 s/tok; baseline noisier/thermal). cdcf8673
+  # (S1) preserved at the v1.5/1.6/1.7 tags + public demo.
+  EXPECT_FIX=45bc8ac9d2908649ba110db3725c8a70b2848a46167827f522e5b2c30e634db8
   if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ] && cmp -s /tmp/K2.bin /tmp/K3.bin && cmp -s /tmp/K3.bin /tmp/K4.bin; then
     if [ "$S2" = "$EXPECT_FIX" ]; then
       echo "  FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)"

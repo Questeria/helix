@@ -191,3 +191,35 @@ NL=36, DM=4096, QD=4096, KVD=1024, DFF=12288, NV=151936:
 - **INC3 (tensor cores) NOT exercised** - the smoke is a 6-token prompt so GEMM is tiny; tensor cores only matter for long-prompt prefill/throughput (UNMEASURED).
 
 **Honest v1.8 takeaway: the major speedup is the AUTONOMOUS INC1+INC1.5; v1.8 likely does NOT need to move the self-host fixpoint at all.** Caveats: noisy (HtoD 2.14 vs 4.29 = desktop contention); resident-packed (~5.4 GiB + 2.3 GiB FP32 head) needs the desktop idle (~7.6 GiB free) + INC1.5 + bounded context to FIT and be GPU-verified (at 4.5 GiB free it fit-checks -> falls back to streaming).
+
+
+---
+
+## VERIFIED RESULT (2026-06-19, GPU idle) — 8B resident decode win
+
+Built from committed source (bc7e583); GPU idle (~8018 MiB free); alt-8b-nvfp4 (Qwen3-class 8B).
+- **Resident path ACTIVATES**: `[packedres] resident ON` (need 3820 MiB, free 5370 at check) + `[packedhead] resident ON` (no FP32 d_wte_pad).
+- **Byte-identical**: token stream identical to baseline, GPT2_GENERATE_MATCH_PASS, V3_UPLOAD_CHECK_PASS.
+- **Steady-state decode (two-point N=8 / N=24)**: baseline **5.11 s/tok -> resident 2.97 s/tok = 1.72x**. (--generate 8: 5.37->3.22; --generate 24: 5.19->3.05.)
+- Mechanism: the per-token packed-words HtoD (~2-4s) is eliminated by the resident packed 4-bit weights. Remaining floor = per-token dequant (layer ~0.5s + INC1.5 head ~0.34s) + compute.
+- Constraints: needs the GPU mostly idle (resident ~4.5 GiB + buffers fits 8 GB at bounded context); INC1.5 packed head required for the fit. Opt-in HX_PACKEDRES (default OFF, exact streaming fallback). NO kovc edit; fixpoint cdcf8673 untouched.
+
+**v1.8 CORE DELIVERABLE DONE: a byte-identical ~1.7x 8B decode speedup, host-side, fixpoint-safe.** Further speedup needs cutting the per-token DEQUANT (fused dequant-GEMV / tensor cores = the ATTENDED fixpoint moves INC2/INC3, flagged marginal **pre-resident** -- but the T2/M7 result below shows the fused dequant-GEMV is NOT marginal once INC1 removes the HtoD). Commits 384a9b0, 7b41d5f, 1a487c9, bc7e583 (LOCAL, push HELD).
+
+
+---
+
+## T2/M7 RESULT (2026-06-19) — fused dequant-GEMV (the ATTENDED fixpoint move the pre-resident analysis under-rated)
+
+The pre-INC1 analysis above flagged the fused dequant-GEMV (INC2) as MARGINAL -- correctly, **for the streaming regime**, where the dequant was ~0.5 s of a ~4.6 s token (~11%) and the HtoD dominated. **INC1 changed the regime**: with the per-token HtoD eliminated (resident packed weights), the per-token **dequant is now ~45% of decode** -- the dominant remaining cost. Re-measuring with HX_DPROF post-INC1 confirmed decode ~= dequant 45% + gemv 25% + other 30%. So the fused dequant-GEMV is no longer marginal -- it attacks the largest slice.
+
+**The kernel (`__dequant_gemv_blockred`, a kovc.hx fixpoint move):** one 256-thread block per output row; threads stripe the packed 4-bit weight row with COALESCED i32-word loads, dequant each E2M1 code INLINE (no fp32 materialization, no separate dequant pass), accumulate, SMEM tree-reduce -> y[n]. This is the PARALLEL block-reduction GEMV the v1.7 notes named as the real decode lever -- and it OVERTURNS the earlier SERIAL fused-gemv finding (`gemv_abt_nvfp4`, one-thread-per-output, was 1.8x SLOWER; this is 256-thread coalesced + tree-reduce). Wired OPT-IN via `HX_FUSEDGEMV` (requires `HX_PACKEDRES`; default OFF = exact prior dequant+gemv path; fail-closed when residency is unavailable).
+
+**Fixpoint:** the edit moves the self-host fixpoint **cdcf8673 -> 45bc8ac9**. K2==K3==K4 byte-identical at the new hash (the intrinsic is called only in the example kernel `dequant_gemv_blockred_kernel.hx`, never in the bootstrap -> dead code during self-compile); all 7 PTX refs byte-identical, corpus 113/0, check_err 4/0. New pin rotated in gate_kovc.sh; cdcf8673 stays pinned at the v1.5/1.6/1.7 tags + public demo.
+
+**VERIFIED (2026-06-19, GPU idle clean window; alt-8b-nvfp4; byte-identical GPT2_GENERATE_MATCH_PASS every run):**
+- Kernel GPU-oracle faithful: cuda_launch `dgemv_blockred`, max_rel ~3e-6 across N=64/128/8 x Kpad, mutate NC fails.
+- **Deterministic synced metric (HX_DPROF, N=24, back-to-back): baseline 2.06 -> fused 1.07 s/tok = ~1.9x.** The fused gemv's time ~= the old gemv's, while the entire separate projection-dequant pass (~21 s / 24 tok) is eliminated (dequant share 45% -> 1%).
+- **HX_FAST production** (in-process HX_GENPROF timer): fused decode ~0.56 s/tok. The HX_FAST baseline is thermal/load-noisy (2.3-6 s/tok), so the overlapped win is larger (~3-4x) but the conservative, reproducible **~1.9x synced** is the headline.
+
+**HONEST framing (do NOT overstate):** a **~1.9x** decode speedup on the deterministic synced metric (token-for-token-identical greedy decode), mechanism = eliminating the per-token projection-dequant. An earlier draft mis-stated "~3.5x" by comparing a synced fused figure against a contention-inflated baseline -- corrected here after an adversarial audit. Caveats: (1) the kernel is FMA-faithful (~3e-6), not bit-exact, so SAMPLED decode (temp>0) could rarely differ from the non-fused path on a near-tie; greedy is token-identical and is what is gated. (2) Measurements are noisy on this contended laptop -- the ~1.9x synced ratio is the reproducible floor; HX_FAST production is at least that and likely more. Commit: this kovc fixpoint move + kernel + oracle + opt-in wiring, LOCAL, push HELD.

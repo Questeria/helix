@@ -242,6 +242,15 @@ static float      g_e4m3_tab[256];   /* v1.7: e4m3_decode LUT (256 byte values) 
 static int    g_prof = 0;
 static double g_pf_htod = 0, g_pf_sb = 0, g_pf_dq = 0, g_pf_cmp = 0;
 static long   g_pf_n = 0;
+/* HX_DPROF=1: decode-compute category profiler (measure-before-wire for the fused-GEMV fixpoint move).
+ * Splits per-token decode wall time into gemv_abt (the coalescing-fix candidate) vs per-layer dequant
+ * (upload_layer_ll) vs the residual (norms/attn/rope/launches). Run with HX_FAST UNSET for clean per-op
+ * attribution (every op syncs). Prints cumulative breakdown after each decode_step_llama. */
+static double now_seconds(void);
+static int    g_dprof = 0;
+static int    g_genprof = 0;          /* HX_GENPROF: HX_FAST-honest end-to-end decode s/tok (one sync at each end of the decode loop) */
+static double g_dp_gemv = 0, g_dp_dq = 0, g_dp_total = 0;
+static long   g_dp_n = 0;
 static long   g_dqscr_elems = 0;   /* v1.7 INC2: element capacity of d_dqscr/g_scbuf (= alloc_buffers sc); sizes the chunked lm_head GPU dequant */
 /* v1.7 INC2c: resident effective per-16-block scale cache, one device buffer per packed tensor idx.
  * The scales are STATIC (weights never change), so DECODE rebuilds + re-uploads them every token for
@@ -271,6 +280,22 @@ static CUdeviceptr d_head_temp  = 0;  /* prefill GEMM temp [Smax x CHUNK] f32 (s
 static int    g_head_chunk_rows = 0;  /* CHUNK = vocab rows per dequant pass (== the setup chunk count) */
 static int    g_head_rows = 0, g_head_kwords = 0, g_head_kblk = 0, g_head_Kpad = 0;
 static float  g_head_ts = 0;          /* per-tensor scale ts for the packed lm_head */
+/* T2/M7 MEASUREMENT (2026-06-19): OPT-IN fused dequant-GEMV decode path. For the 7 per-layer
+ * projections (q/k/v/o/gate/up/down) call __dequant_gemv_blockred on the RESIDENT packed words +
+ * resident effective scales (one coalesced block-reduction pass: read packed 4-bit weights coalesced,
+ * dequant inline, multiply x, SMEM tree-reduce -> y[n]). This SKIPS the per-token separate dequant of
+ * those 7 weights (the measured ~52% of decode) + the f32 weight round-trip + the uncoalesced block=1
+ * gemv (~26%). Default (HX_FUSEDGEMV unset) = the EXACT current path (dequant-on-upload + gemv_abt),
+ * byte-identical. REQUIRES HX_PACKEDRES (the fused path reads the resident g_pk_res / g_sc_res); if
+ * residency is off/latched-off it falls back to the normal path. Standalone PTX module (like HX_DQPTX),
+ * NO kovc.hx edit. Acceptance gate = token-for-token identical generation vs the baseline. */
+static int    g_fusedgemv = 0;        /* HX_FUSEDGEMV requested */
+static int    g_fusedgemv_on = 0;     /* latched: fused path active (module loaded + residency available) */
+static CUmodule   g_fgmod = 0;
+static CUfunction f_dgemv = 0;        /* the dequant_gemv_blockred entry */
+static int    g_fg_kpad_dm = 0;       /* Kpad of a [*, DM]  packed tensor (q/k/v/o/gate/up input pad) */
+static int    g_fg_kpad_dff = 0;      /* Kpad of a [*, DFF] packed tensor (down input pad) */
+static CUdeviceptr d_xn1pad = 0, d_xn21pad = 0, d_ctx1pad = 0, d_m1pad = 0;  /* Kpad-padded, tail-zeroed x for the fused gemv */
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -351,8 +376,10 @@ static void gemv_abt(CUdeviceptr x, CUdeviceptr w, CUdeviceptr y, int N, int K) 
     /* v1.7: block=1 ran each output on its own warp (1/32 lanes used). block=128 packs 128 outputs/block
      * -> full warps, ~32x the in-flight threads. Byte-identical (block size is pure scheduling; n=bid*bdim+tid).
      * Weight gemvs + lm_head have N%128==0 (QD/KVD/DFF, NVpad=128*1187); attention scores (N=T) keep block=1. */
+    double _t0 = g_dprof ? now_seconds() : 0.0;
     if (N % 128 == 0) LX(f_gv_abt, (unsigned)(N/128), 128, ar);
     else              LX(f_gv_abt, (unsigned)N, 1, ar);
+    if (g_dprof) { cuCtxSynchronize(); g_dp_gemv += now_seconds() - _t0; }
 }
 /* y[1,N] = p[1,T] . M[T,N]  (decode probs x cached V) */
 static void gemv_ab(CUdeviceptr p, CUdeviceptr m, CUdeviceptr y, int N, int T) {
@@ -589,6 +616,9 @@ static CUdeviceptr d_mlp2;     /* mlp c_proj output [Spad,DM] */
 static CUdeviceptr d_scale;    /* 1-elem attn scale buffer */
 /* llama-arch extras (ARCH==1 only) */
 static void upload_layer_ll(int L);                                  /* defined after alloc_buffers */
+static void upload_layer_ll_fused(int L);                            /* T2/M7: fused-decode upload (norms only) */
+static int  fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N);  /* T2/M7: fused dequant-GEMV projection */
+static int  v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows_out, int* kpad_out);  /* T2/M7: resident packed/scale ptrs */
 static int  read_ids_file(const char* path, int* ids, int maxn);     /* defined with the modes */
 static CUdeviceptr d_qW, d_kW, d_vW, d_oW, d_gateW, d_upW, d_downW;  /* layer weights */
 static CUdeviceptr d_qnorm = 0, d_knorm = 0;   /* Qwen3 per-head QK-norm weights [DH] (v3 only) */
@@ -1229,6 +1259,7 @@ static void forward_full(const int* ids, int T, float* out_last_logits) {
  * G-KV0-gated gpu_gemv_* kernels (M=1, no %64 constraint); softmax is the full-row form
  * (every cached position is attendable -- causality lives in WHAT is cached). */
 static void decode_step_llama(int new_id, int pos, float* out_logits) {
+    double _td = g_dprof ? now_seconds() : 0.0;
     int T = pos + 1;
     int group = NH / NKV;
     /* v3 (QWEN3) lays the embedding out via the descriptor table, not the linear off_embed_ll() offset;
@@ -1237,18 +1268,53 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
         ? (const float*)((const unsigned char*)g_map + g_desc[v3_idx_embed()].data_off)
         : &g_wbase[off_embed_ll()];
     CKX(cuMemcpyHtoD(d_x1, &emb[(size_t)new_id*DM], (size_t)DM*sizeof(float)), "h2d x1");
+    /* T2/M7: latch the fused-gemv path once. Active iff requested + module loaded + QWEN3 + residency is
+     * available (prefill or v3_resident_ptrs first-touch makes the 7 weights resident). The padded x
+     * buffers d_*pad carry the K-logical x with a zeroed [K,Kpad) tail for the full-Kpad fused sum. */
+    static int fg_latched = 0;
+    if (g_fusedgemv && !fg_latched) {
+        fg_latched = 1;
+        /* Pre-make ALL 7 projection weights of ALL layers resident up front (idempotent first-touch). Only
+         * then is the per-token fused dispatch guaranteed to find them -> the per-projection gemv_abt
+         * fallback is unreachable under fg (so it never reads the undequantized d_qW we skip). If any
+         * tensor can't go resident, latch fg OFF -> the normal full-dequant path runs (correct, just slow). */
+        int ok = (f_dgemv && QWEN3 && d_xn1pad);
+        if (ok) {
+            int proj[7] = { V3_Q, V3_K, V3_V, V3_O, V3_GATE, V3_UP, V3_DOWN };
+            for (int Lz = 0; Lz < NL && ok; Lz++)
+                for (int pj = 0; pj < 7 && ok; pj++) {
+                    CUdeviceptr pk=0, sc=0; int rr=0, kk=0;
+                    if (!v3_resident_ptrs(v3_idx_layer(Lz, proj[pj]), &pk, &sc, &rr, &kk)) ok = 0;
+                }
+        }
+        if (ok) {
+            g_fusedgemv_on = 1;
+            fprintf(stderr, "[fusedgemv] ACTIVE: 7 projections via fused dequant-GEMV (per-token weight dequant skipped)\n");
+        } else {
+            fprintf(stderr, "[fusedgemv] residency unavailable -> OFF (normal dequant+gemv path)\n");
+        }
+    }
+    int fg = g_fusedgemv_on;
+    /* fused producers write the normed/ctx x straight into the zero-tailed Kpad buffer (no extra copy). */
+    CUdeviceptr xn1_t  = fg ? d_xn1pad  : d_xn1;
+    CUdeviceptr ctx1_t = fg ? d_ctx1pad : d_ctx1;
+    CUdeviceptr xn21_t = fg ? d_xn21pad : d_xn21;
+    CUdeviceptr m1_t   = fg ? d_m1pad   : d_m1;
     for (int L = 0; L < NL; L++) {
         g_emit_layer = L;
-        upload_layer_ll(L);
+        double _tu = g_dprof ? now_seconds() : 0.0;
+        if (fg) upload_layer_ll_fused(L);   /* T2/M7: norms only -- skip the 7 gemv-weight dequants */
+        else    upload_layer_ll(L);
+        if (g_dprof) { cuCtxSynchronize(); g_dp_dq += now_seconds() - _tu; }
         emit_layer_begin(g_emit_step, L, NL);
         emit_op(L, 0, "gpu_rmsnorm_fwd_eps", "attn", "rms_1", 1);
-        rms_norm_k(d_x1, d_xn1, d_ln1g, 1, DM);
+        rms_norm_k(d_x1, xn1_t, d_ln1g, 1, DM);
         emit_op(L, 1, "gpu_gemv_abt", "attn", "q_gemv", 1);
-        gemv_abt(d_xn1, d_qW, d_q1, DM, DM);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_Q), xn1_t, d_q1, DM))  gemv_abt(xn1_t, d_qW, d_q1, DM, DM);
         emit_op(L, 2, "gpu_gemv_abt", "attn", "k_gemv", 1);
-        gemv_abt(d_xn1, d_kW, d_k1, KVD, DM);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_K), xn1_t, d_k1, KVD)) gemv_abt(xn1_t, d_kW, d_k1, KVD, DM);
         emit_op(L, 3, "gpu_gemv_abt", "attn", "v_gemv", 1);
-        gemv_abt(d_xn1, d_vW, d_v1, KVD, DM);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_V), xn1_t, d_v1, KVD)) gemv_abt(xn1_t, d_vW, d_v1, KVD, DM);
         if (QWEN3) {   /* Qwen3 per-head QK-norm over DH, BEFORE RoPE -- prefill does this (forward_layer_llama
                         * ~1110); decode omitted it -> un-normalized Q/K -> wrong attention -> wrong tokens.
                         * d_q1 is [NH x DH], d_k1 is [NKV x DH]; one rms_norm_k call normalizes every head. */
@@ -1277,26 +1343,26 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
                 g_attn_nh = (h + 1 > g_attn_nh) ? h + 1 : g_attn_nh;
             }
             gemv_ab(d_pr1, d_vcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float)), d_ao1, DH, T);
-            CKX(cuMemcpyDtoD(d_ctx1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)), d_ao1, (size_t)DH*sizeof(float)), "ctx1");
+            CKX(cuMemcpyDtoD(ctx1_t + (CUdeviceptr)((size_t)h*DH*sizeof(float)), d_ao1, (size_t)DH*sizeof(float)), "ctx1");
         }
         emit_op(L, 5, "gpu_gemv_abt",    "attn", "attn_scores",  NH);
         emit_op(L, 6, "gpu_scale_rt",    "attn", "attn_scale",   NH);
         emit_op(L, 7, "gpu_softmax_row", "attn", "attn_softmax", NH);
         emit_op(L, 8, "gpu_gemv_ab",     "attn", "attn_av",      NH);
         emit_op(L, 9, "gpu_gemv_abt",    "attn", "attn_proj", 1);
-        gemv_abt(d_ctx1, d_oW, d_pj1, DM, DM);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_O), ctx1_t, d_pj1, DM)) gemv_abt(ctx1_t, d_oW, d_pj1, DM, DM);
         emit_op(L, 10, "vector_add", "attn", "attn_residual", 1);
         vadd(d_x1, d_pj1, d_x1, DM);
         emit_op(L, 11, "gpu_rmsnorm_fwd_eps", "mlp", "rms_2", 1);
-        rms_norm_k(d_x1, d_xn21, d_ln2g, 1, DM);
+        rms_norm_k(d_x1, xn21_t, d_ln2g, 1, DM);
         emit_op(L, 12, "gpu_gemv_abt", "mlp", "fc_gate", 1);
-        gemv_abt(d_xn21, d_gateW, d_g1, DFF, DM);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_GATE), xn21_t, d_g1, DFF)) gemv_abt(xn21_t, d_gateW, d_g1, DFF, DM);
         emit_op(L, 13, "gpu_gemv_abt", "mlp", "fc_up", 1);
-        gemv_abt(d_xn21, d_upW, d_u1, DFF, DM);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_UP),   xn21_t, d_u1, DFF)) gemv_abt(xn21_t, d_upW, d_u1, DFF, DM);
         emit_op(L, 14, "gpu_silu_mul", "mlp", "silu_mul", 1);
-        silu_mul_k(d_g1, d_u1, d_m1, DFF);
+        silu_mul_k(d_g1, d_u1, m1_t, DFF);
         emit_op(L, 15, "gpu_gemv_abt", "mlp", "proj_down", 1);
-        gemv_abt(d_m1, d_downW, d_mo1, DM, DFF);
+        if (!fg || !fused_gemv(v3_idx_layer(L, V3_DOWN), m1_t, d_mo1, DM)) gemv_abt(m1_t, d_downW, d_mo1, DM, DFF);
         emit_op(L, 16, "vector_add", "mlp", "mlp_residual", 1);
         vadd(d_x1, d_mo1, d_x1, DM);
         if (g_lens_on && !g_fast && L < MAX_RES_LAYERS) {
@@ -1322,6 +1388,15 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
     if (!g_fast) SYNC("decode end");
     CKX(cuMemcpyDtoH(out_logits, d_lg1, (size_t)NV*sizeof(float)), "d2h logits1");
     kv_len = T;
+    if (g_dprof) {
+        g_dp_total += now_seconds() - _td; g_dp_n++;
+        double other = g_dp_total - g_dp_gemv - g_dp_dq;
+        fprintf(stderr, "[dprof] tok#%ld cumulative: total=%.3fs  gemv=%.3fs(%.0f%%)  dequant=%.3fs(%.0f%%)  other=%.3fs(%.0f%%)\n",
+                g_dp_n, g_dp_total,
+                g_dp_gemv, 100.0*g_dp_gemv/g_dp_total,
+                g_dp_dq,   100.0*g_dp_dq/g_dp_total,
+                other,     100.0*other/g_dp_total);
+    }
 }
 
 /* ===================== SEEDED REPRODUCIBLE SAMPLING (Wave 2, 2026-06) =====================
@@ -1497,14 +1572,47 @@ static void load_dequant_module(void) {
     fclose(df);
 }
 
+/* T2/M7: load the STANDALONE fused dequant-GEMV PTX module (entry "dequant_gemv_blockred"). Gated behind
+ * HX_FUSEDGEMV (which already required HX_PACKEDRES in device_init). Path from HX_FUSEDGEMV_PTX, default
+ * /home/legoa/dequant_gemv_blockred.ptx. Non-fatal: a missing/unloadable module just leaves g_fusedgemv
+ * armed-but-inactive -> the decode dispatch sees f_dgemv==0 and uses the normal gemv_abt path. */
+static void load_fusedgemv_module(void) {
+    if (!g_fusedgemv || !QWEN3) return;
+    const char* fp = getenv("HX_FUSEDGEMV_PTX");
+    if (!fp || !fp[0]) fp = "/home/legoa/dequant_gemv_blockred.ptx";
+    FILE* ff = fopen(fp, "rb");
+    if (!ff) { fprintf(stderr, "[fusedgemv] PTX '%s' not found -> OFF (normal gemv path)\n", fp); g_fusedgemv = 0; return; }
+    fseek(ff,0,SEEK_END); long fsz=ftell(ff); fseek(ff,0,SEEK_SET);
+    char* fbuf=(char*)malloc(fsz+1);
+    int ok = 0;
+    if (fbuf && fread(fbuf,1,fsz,ff)==(size_t)fsz) {
+        fbuf[fsz]=0;
+        if (cuModuleLoadData(&g_fgmod, fbuf)==CUDA_SUCCESS &&
+            cuModuleGetFunction(&f_dgemv, g_fgmod, "dequant_gemv_blockred")==CUDA_SUCCESS) {
+            ok = 1;
+            fprintf(stderr, "[fusedgemv] fused dequant-GEMV module ON (%s)\n", fp);
+        }
+    }
+    if (!ok) { fprintf(stderr, "[fusedgemv] fused ptx load failed -> OFF (normal gemv path)\n"); g_fusedgemv = 0; f_dgemv = 0; }
+    if (fbuf) free(fbuf);
+    fclose(ff);
+}
+
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
 static int device_init(const char* ptx_path, const char* wpath) {
     g_prof   = getenv("HX_PROF") ? 1 : 0;        /* v1.7 INCREMENT 2: per-upload profiling */
+    g_dprof  = getenv("HX_DPROF") ? 1 : 0;       /* v1.8: decode-compute breakdown (gemv vs dequant vs rest) */
+    g_genprof = getenv("HX_GENPROF") ? 1 : 0;    /* v1.8: HX_FAST-honest end-to-end decode s/tok (production wall) */
     g_scache = getenv("HX_SCALECACHE") ? 1 : 0;  /* v1.7 INC2c: resident static-scale cache */
     g_packedres = getenv("HX_PACKEDRES") ? 1 : 0;  /* v1.8 INC1: resident packed 4-bit layer weights */
     if (g_packedres) g_scache = 1;                 /* residency implies the static-scale cache */
     g_packedhead = getenv("HX_PACKEDHEAD") ? 1 : 0;  /* v1.8 INC1.5: resident packed lm_head (no FP32 d_wte_pad) */
     if (g_packedres) g_packedhead = 1;               /* resident layers imply the resident head (both shrink VRAM) */
+    g_fusedgemv = getenv("HX_FUSEDGEMV") ? 1 : 0;    /* T2/M7: fused dequant-GEMV decode (needs resident packed weights) */
+    if (g_fusedgemv && !g_packedres) {               /* the fused path reads g_pk_res/g_sc_res -> requires residency */
+        fprintf(stderr, "[fusedgemv] needs resident packed weights (set HX_PACKEDRES=1) -> OFF\n");
+        g_fusedgemv = 0;
+    }
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
     g_ptx=(char*)malloc(psz+1); if (fread(g_ptx,1,psz,pf)!=(size_t)psz) { fclose(pf); return 2; } g_ptx[psz]=0; fclose(pf);
@@ -1536,6 +1644,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
         }
     }
     load_dequant_module();   /* v1.7: GPU dequant (HX_DQPTX) -> g_gpu_dq; HX_HOSTDEQ forces host */
+    load_fusedgemv_module(); /* T2/M7: standalone fused dequant-GEMV module (HX_FUSEDGEMV) */
     if (load_gpt2_weights(wpath)) return 2;
     return 0;
 }
@@ -1635,6 +1744,23 @@ static int alloc_buffers(int Smax) {
             d_ctx1 = A(DM); d_pj1 = A(DM); d_xn21 = A(DM);
             d_g1 = A(DFF); d_u1 = A(DFF); d_m1 = A(DFF); d_mo1 = A(DM);
             d_lg1 = A((size_t)((NV + 63) / 64) * 64);
+            /* T2/M7: Kpad-padded, tail-ZEROED x scratch for the fused gemv. The fused kernel sums over the
+             * FULL Kpad row (pad cols dequant to 0, contributing 0) so x MUST be defined + zero in [K, Kpad).
+             * The rmsnorm/copy producers write only the first K elems; the zeroed tail persists across tokens.
+             * Kpad is read from the descriptor table (q==[*,DM]; down==[*,DFF]); same Kpad for q/k/v/o/gate/up. */
+            if (g_fusedgemv && QWEN3) {
+                /* size each padded x to ITS projection's input Kpad (q/k/v share the DM-input pad; o uses the
+                 * QD-input pad -- == DM-pad when QD==DM as on 8B, but distinct for QD!=DM models like 32B). */
+                int kp_q    = (int)g_desc[v3_idx_layer(0, V3_Q)].Kpad;    /* q/k/v input = DM  */
+                int kp_o    = (int)g_desc[v3_idx_layer(0, V3_O)].Kpad;    /* o     input = QD  */
+                int kp_gate = (int)g_desc[v3_idx_layer(0, V3_GATE)].Kpad; /* gate/up input = DM */
+                int kp_down = (int)g_desc[v3_idx_layer(0, V3_DOWN)].Kpad; /* down  input = DFF */
+                g_fg_kpad_dm = kp_q; g_fg_kpad_dff = kp_down;
+                d_xn1pad  = A((size_t)kp_q);    CK(cuMemsetD8(d_xn1pad,  0, (size_t)kp_q   *sizeof(float)), "fg xn1 zero");
+                d_ctx1pad = A((size_t)kp_o);    CK(cuMemsetD8(d_ctx1pad, 0, (size_t)kp_o   *sizeof(float)), "fg ctx1 zero");
+                d_xn21pad = A((size_t)kp_gate); CK(cuMemsetD8(d_xn21pad, 0, (size_t)kp_gate*sizeof(float)), "fg xn21 zero");
+                d_m1pad   = A((size_t)kp_down); CK(cuMemsetD8(d_m1pad,   0, (size_t)kp_down*sizeof(float)), "fg m1 zero");
+            }
         }
         if (RESIDENT && NL <= MAX_RES_LAYERS) {
             /* upload EVERY layer once; upload_layer_ll becomes a pointer swap (decode is
@@ -1757,6 +1883,58 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     if (g_prof) g_pf_cmp += now_seconds() - tE;
 }
 
+/* T2/M7: ensure tensor `idx`'s RESIDENT packed words + resident effective scales are present and return
+ * them (+ rows, Kpad). Mirrors the residency-ensure half of v3_upload_gpu (first-touch alloc + one-time
+ * HtoD straight from the mmap, byte-identical bytes) but does NO dequant -- the fused kernel consumes the
+ * packed words directly. Returns 1 if both are resident; 0 if residency is unavailable (latched off /
+ * VRAM-full / not packed) so the caller can fall back to the normal dequant+gemv path. */
+static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows_out, int* kpad_out) {
+    if (!g_packedres || g_packedres_off) return 0;
+    const HXGWv3Desc* d = &g_desc[idx];
+    if (!d->packed) return 0;
+    int rows=(int)d->rows, Kpad=(int)d->Kpad, kwords=Kpad/7, kblk=Kpad/16;
+    const unsigned char* base = (const unsigned char*)g_map;
+    const int32_t* w = (const int32_t*)(base + d->data_off);
+    const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
+    float ts; memcpy(&ts, base + d->scale_off + (size_t)rows*kblk, 4);
+    int nsc1 = (int)(sizeof(g_pk_res)/sizeof(g_pk_res[0]));
+    if (idx < 0 || idx >= nsc1) return 0;
+    packedres_fitcheck();
+    if (g_packedres_off) return 0;
+    /* resident packed words */
+    if (!g_pk_res[idx]) {
+        CUdeviceptr p = 0;
+        if (cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
+            cuMemcpyHtoD(p, w, (size_t)rows*kwords*4) == CUDA_SUCCESS) g_pk_res[idx] = p;
+        else { if (p) cuMemFree(p); g_packedres_off = 1; return 0; }
+    }
+    /* resident effective scales (the g_sc_res lazy cache; identical math to v3_upload_gpu's build) */
+    if (!g_sc_res[idx]) {
+        for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;
+        CUdeviceptr p = 0;
+        if (cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
+            cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) g_sc_res[idx] = p;
+        else { if (p) cuMemFree(p); return 0; }
+    }
+    *pk = g_pk_res[idx]; *sc = g_sc_res[idx]; *rows_out = rows; *kpad_out = Kpad;
+    return 1;
+}
+
+/* T2/M7: the fused projection. y[1,N] = x[1,Kpad] . dequant(W_packed[N,Kpad]) in ONE coalesced
+ * block-reduction kernel (grid=(N,1,1), block=(256,1,1)). d_xpad MUST be Kpad-padded + zero-tailed.
+ * Returns 1 on launch, 0 if the resident weights aren't available (caller falls back to gemv_abt). */
+static int fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N) {
+    CUdeviceptr pk = 0, sc = 0; int rows = 0, kpad = 0;
+    if (!f_dgemv || !v3_resident_ptrs(idx, &pk, &sc, &rows, &kpad)) return 0;
+    /* N (logical output rows) must equal the tensor's rows; the kernel writes y[0..rows). */
+    int kp = kpad; void* ar[] = { &d_xpad, &pk, &sc, &d_y, &kp };
+    double _t0 = g_dprof ? now_seconds() : 0.0;
+    CKX(cuLaunchKernel(f_dgemv, (unsigned)N,1,1, 256,1,1, 0,0, ar, 0), "fused dgemv");
+    if (!g_fast) SYNC("sync f_dgemv");
+    if (g_dprof) { cuCtxSynchronize(); g_dp_gemv += now_seconds() - _t0; }
+    return 1;
+}
+
 /* v1.8 INC1.5: dequant a single vocab-row chunk [r0, r0+nr) of the resident packed lm_head into
  * d_head_chunk [nr x DM] (compacted Kpad->DM). Mirrors the setup_head chunk loop EXACTLY (same packed
  * words, same g_e4m3_tab*ts scales, same f_dq_tiled, same Kpad->K cuMemcpy2D) so the dequantized rows
@@ -1854,6 +2032,17 @@ static void upload_layer_ll(int L) {
     CKX(cuMemcpyHtoD(d_gateW, &g_wbase[b+lo.gateW],  (size_t)DFF*DM*sizeof(float)),  "up gateW");
     CKX(cuMemcpyHtoD(d_upW,   &g_wbase[b+lo.upW],    (size_t)DFF*DM*sizeof(float)),  "up upW");
     CKX(cuMemcpyHtoD(d_downW, &g_wbase[b+lo.downW],  (size_t)DM*DFF*sizeof(float)),  "up downW");
+}
+
+/* T2/M7: the fused-decode upload. Uploads ONLY the 4 norm tensors (in_ln / q_norm / k_norm / post_ln);
+ * the 7 gemv-projection weights (q/k/v/o/gate/up/down) are consumed PACKED+RESIDENT by the fused kernel,
+ * so their per-token dequant (the ~52% the fused path removes) is SKIPPED entirely. QWEN3-only; the
+ * caller guarantees g_fusedgemv_on (which implies residency). Returns nothing. */
+static void upload_layer_ll_fused(int L) {
+    v3_upload(v3_idx_layer(L, V3_INLN),   d_ln1g);
+    v3_upload(v3_idx_layer(L, V3_QN),     d_qnorm);
+    v3_upload(v3_idx_layer(L, V3_KN),     d_knorm);
+    v3_upload(v3_idx_layer(L, V3_POSTLN), d_ln2g);
 }
 
 /* set up the tied LM head: ln_f buffers + the padded wte [NVpad,DM] on device + the logits buffer.
@@ -2374,7 +2563,9 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
     if (g_scfg.temp > 0.0) sample_reset(ids, T0);
     float* logits = (float*)malloc((size_t)NV*sizeof(float));
     int nonfinite_any = 0;
+    double _gp0 = 0;   /* HX_GENPROF: time the decode-only steps (1..) with one sync at each end -> HX_FAST-honest s/tok */
     for (int step = 0; step < Ngen; step++) {
+        if (g_genprof && step == 1) { cuCtxSynchronize(); _gp0 = now_seconds(); }
         if (ARCH && KV_ON && step > 0) decode_step_llama(ids[T-1], T-1, logits);
         else forward_full(ids, T, logits);
         for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
@@ -2382,6 +2573,8 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
         ids[T++] = nxt;
         if (EOS_ID >= 0 && nxt == EOS_ID) break;   /* chat eos-stop (matches the oracle: append eos, then stop) */
     }
+    if (g_genprof && _gp0 > 0) { cuCtxSynchronize(); double _el = now_seconds() - _gp0; int _ds = T - T0 - 1; if (_ds < 1) _ds = 1;
+        fprintf(stderr, "[genprof] decode %d steps in %.3fs = %.4f s/tok (g_fast=%d fused=%d)\n", _ds, _el, _el / _ds, g_fast, g_fusedgemv_on); }
     free(logits);
     /* dump produced ids (prompt + generated). */
     { FILE* gf = fopen("/tmp/helix_gen_ids.txt", "w");

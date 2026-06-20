@@ -13947,6 +13947,276 @@ fn emit_ptx_layernorm_blockred(node: i32, vtab: i32) -> i32 {
     0 - 1
 }
 // ===================================================================
+// T2/M7 (2026-06-19): FUSED NVFP4-dequant block-reduction GEMV intrinsic --
+// __dequant_gemv_blockred(x, w_packed, sc, y, kpad). ONE 256-thread block per
+// output row n. Threads cooperatively STRIPE the packed 4-bit weight row with
+// COALESCED i32-word loads (thread t reads word t, t+256, ...), dequant each
+// E2M1 code INLINE (7 codes / i32 word, base-16 low-first; mags
+// {0,.5,1,1.5,2,3,4,6}; sign=high bit), fold the host-collapsed effective f32
+// 16-block scale, accumulate a per-thread partial, then SMEM tree-reduce to
+// y[n]. Replaces the dequant(separate)+gemv(uncoalesced) pair with one fused
+// coalesced pass. Reached ONLY via the new intrinsic name (zero occurrences in
+// the self-host source) -> fixpoint-safe-by-construction. Mirrors
+// emit_ptx_softmax_blockred's block-per-row skeleton + emit_ptx_smem_tree_reduce
+// (op 0 = sum); the per-slot decode mirrors gemv_abt_nvfp4_kernel.hx /
+// the host e2m1_decode oracle (cuda_launch.c:179). Returns -1 (void body).
+// ===================================================================
+// global u32 load: addr = base + elem*4, then ld.global.u32 into the
+// caller-allocated %r<r_dst>. Mirrors emit_ptx_gload_f32 (mul.wide+add.s64) but
+// loads a 32-bit unsigned WORD (the packed NVFP4 row word) instead of an f32.
+fn emit_ptx_gload_u32(r_dst: i32, rd_base: i32, r_elem: i32, vtab: i32) -> i32 {
+    let rdo = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(117); emit_ptx_byte(108);  // mul
+    emit_ptx_byte(46); emit_ptx_byte(119); emit_ptx_byte(105);   // .wi
+    emit_ptx_byte(100); emit_ptx_byte(101); emit_ptx_byte(46);   // de.
+    emit_ptx_byte(115); emit_ptx_byte(51); emit_ptx_byte(50);    // s32
+    emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(r_elem);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(52);     // ", 4"
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    let rda = ptx_alloc_rd(vtab);
+    emit_ptx_indent();
+    emit_ptx_byte(97); emit_ptx_byte(100); emit_ptx_byte(100);   // add
+    emit_ptx_byte(46); emit_ptx_byte(115); emit_ptx_byte(54); emit_ptx_byte(52);  // .s64
+    emit_ptx_byte(32);
+    emit_ptx_rd(rda);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rd_base);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_rd(rdo);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_indent();
+    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);   // ld.
+    emit_ptx_byte(103); emit_ptx_byte(108); emit_ptx_byte(111);  // glo
+    emit_ptx_byte(98); emit_ptx_byte(97); emit_ptx_byte(108);    // bal
+    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);  // .u32
+    emit_ptx_byte(32);
+    emit_ptx_r(r_dst);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);     // ", ["
+    emit_ptx_rd(rda);
+    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);     // ];\n
+    0
+}
+// "    mov.f32 %f<fr>, 0f<HEX8>;\n" -- an f32 IMMEDIATE constant from its raw
+// IEEE-754 32-bit pattern (mirrors the AST_FLOATLIT path at ~11001 + the
+// zero-only emit_ptx_mov_f_zero). Used for the 8 E2M1 magnitude literals.
+fn emit_ptx_mov_f_bits(fr: i32, bits: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(109); emit_ptx_byte(111); emit_ptx_byte(118);   // mov
+    emit_ptx_byte(46); emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);  // .f32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32);    // ", "
+    emit_ptx_byte(48); emit_ptx_byte(102);   // "0f"
+    emit_ptx_hex8(bits);
+    emit_ptx_byte(59); emit_ptx_byte(10);    // ";\n"
+    0
+}
+// emit the E2M1 magnitude LUT: f_mag = MAG[r_mag3] where r_mag3 in 0..7 and
+// MAG = {0.0,0.5,1.0,1.5,2.0,3.0,4.0,6.0}. A nested if/elif/else lowered to a
+// setp.lt + bra ladder (no setp.eq in the seed compiler): arm v (v=0..6) runs
+// "if r_mag3 < v+1 -> f_mag = MAG[v]; bra END" else falls to the next test; the
+// final v=7 arm (mag3==7) is the default (no test). Exactly one arm assigns.
+fn emit_ptx_e2m1_mag_lut(f_mag: i32, r_mag3: i32, vtab: i32) -> i32 {
+    let lbl_end = ptx_alloc_label(vtab);
+    // arm 0: mag3 < 1 -> 0.0
+    let r_b0 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b0, 1);
+    let p0 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p0, r_mag3, r_b0);
+    let l0 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p0, 0, l0);
+    emit_ptx_mov_f_bits(f_mag, 0);            // 0.0 = 0x00000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l0);
+    // arm 1: mag3 < 2 -> 0.5
+    let r_b1 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b1, 2);
+    let p1 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p1, r_mag3, r_b1);
+    let l1 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p1, 0, l1);
+    emit_ptx_mov_f_bits(f_mag, 1056964608);   // 0.5 = 0x3F000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l1);
+    // arm 2: mag3 < 3 -> 1.0
+    let r_b2 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b2, 3);
+    let p2 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p2, r_mag3, r_b2);
+    let l2 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p2, 0, l2);
+    emit_ptx_mov_f_bits(f_mag, 1065353216);   // 1.0 = 0x3F800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l2);
+    // arm 3: mag3 < 4 -> 1.5
+    let r_b3 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b3, 4);
+    let p3 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p3, r_mag3, r_b3);
+    let l3 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p3, 0, l3);
+    emit_ptx_mov_f_bits(f_mag, 1069547520);   // 1.5 = 0x3FC00000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l3);
+    // arm 4: mag3 < 5 -> 2.0
+    let r_b4 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b4, 5);
+    let p4 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p4, r_mag3, r_b4);
+    let l4 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p4, 0, l4);
+    emit_ptx_mov_f_bits(f_mag, 1073741824);   // 2.0 = 0x40000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l4);
+    // arm 5: mag3 < 6 -> 3.0
+    let r_b5 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b5, 6);
+    let p5 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p5, r_mag3, r_b5);
+    let l5 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p5, 0, l5);
+    emit_ptx_mov_f_bits(f_mag, 1077936128);   // 3.0 = 0x40400000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l5);
+    // arm 6: mag3 < 7 -> 4.0
+    let r_b6 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_b6, 7);
+    let p6 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p6, r_mag3, r_b6);
+    let l6 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p6, 0, l6);
+    emit_ptx_mov_f_bits(f_mag, 1082130432);   // 4.0 = 0x40800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l6);
+    // arm 7 (default, mag3 == 7): 6.0
+    emit_ptx_mov_f_bits(f_mag, 1086324736);   // 6.0 = 0x40C00000
+    emit_ptx_label_def(1, lbl_end);
+    0
+}
+// "    bra $Lend_<n>;\n" -- an UNCONDITIONAL branch to an end_ label (kind 1),
+// mirroring the back-edge idiom at emit_ptx_softmax_blockred:13886. Used to jump
+// past the remaining elif arms once one LUT/sign arm has assigned.
+fn emit_ptx_bra_to_end(lbl: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(1, lbl);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// "__dequant_gemv_blockred" (23 chars) name matcher. Byte-compare idiom copied
+// from ptx_name_is_softmax_blockred.
+fn ptx_name_is_dequant_gemv_blockred(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 23 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 100 { ok = 0; };   // d
+        if __arena_get(name_s + 3) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 4) != 113 { ok = 0; };   // q
+        if __arena_get(name_s + 5) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 6) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 7) != 110 { ok = 0; };   // n
+        if __arena_get(name_s + 8) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 9) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 10) != 103 { ok = 0; };  // g
+        if __arena_get(name_s + 11) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 12) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 13) != 118 { ok = 0; };  // v
+        if __arena_get(name_s + 14) != 95 { ok = 0; };   // _
+        if __arena_get(name_s + 15) != 98 { ok = 0; };   // b
+        if __arena_get(name_s + 16) != 108 { ok = 0; };  // l
+        if __arena_get(name_s + 17) != 111 { ok = 0; };  // o
+        if __arena_get(name_s + 18) != 99 { ok = 0; };   // c
+        if __arena_get(name_s + 19) != 107 { ok = 0; };  // k
+        if __arena_get(name_s + 20) != 114 { ok = 0; };  // r
+        if __arena_get(name_s + 21) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 22) != 100 { ok = 0; };  // d
+        ok
+    }
+}
+// FUSED NVFP4-dequant block-reduction GEMV orchestrator. See the header block
+// above. Mirrors emit_ptx_softmax_blockred's skeleton: arg-walk -> .shared decl
+// -> sregs/param-bases -> per-thread COALESCED strided word loop (each iter
+// host-unrolls the 7 codes of one i32 word, dequant+scale+FMA into a partial)
+// -> SMEM tree-reduce (sum) -> tid==0 writes y[n].
+fn emit_ptx_dequant_gemv_blockred(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let pw = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let psc = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let py = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let pk = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    emit_ptx_shared_decl(0, 1024);   // smem reduction buffer (256 f32)
+    let r_tid = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tid, 0);   // tid.x
+    let r_n = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_n, 2);       // ctaid.x = output row n
+    let r_kp = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_kp, pk);  // kpad (= K)
+    let rd_x = emit_ptx_param_global_base(px, vtab);
+    let rd_w = emit_ptx_param_global_base(pw, vtab);
+    let rd_sc = emit_ptx_param_global_base(psc, vtab);
+    let rd_y = emit_ptx_param_global_base(py, vtab);
+    let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    // kwords = kpad/7 ; wbase = n*kwords ; scstride = kpad/16 ; scbase = n*scstride.
+    let r_kw = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_kw, r_kp, 7);
+    let r_wb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_wb, r_n, r_kw);
+    let r_scs = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_scs, r_kp, 16);
+    let r_scb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_scb, r_n, r_scs);
+    // per-thread partial acc = 0 ; word = tid (coalesced stripe across the row).
+    let f_acc = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_acc);
+    let r_word = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_word, r_tid);
+    // f32 0.0 constant reused by the sign-negate (0.0 - mag).
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let r_one = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_one, 1);
+    // ---- runtime word loop: while word < kwords ----
+    let lbl_w = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbl_w);                                   // $Ltop_<lbl_w>:
+    let p_w = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_w, r_word, r_kw);
+    emit_ptx_bra_ifnot(p_w, 3, lbl_w);                             // @!p bra $Lwend_<lbl_w>
+    let r_widx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_widx, r_wb, r_word);
+    let r_wv = ptx_alloc_reg(vtab); emit_ptx_gload_u32(r_wv, rd_w, r_widx, vtab);  // packed word
+    let r_col0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_col0, r_word, 7);       // base col = word*7
+    // host-unroll the 7 E2M1 codes of this word (iterate wv = wv/16 each slot).
+    let mut s: i32 = 0;
+    while s < 7 {
+        let r_col = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_col, r_col0, s);     // col = col0 + s
+        // code = wv mod 16 = wv - (wv/16)*16
+        let r_q = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_q, r_wv, 16);
+        let r_q16 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_q16, r_q, 16);
+        let r_code = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_code, r_wv, r_q16);
+        // sign = code/8 ; mag3 = code - sign*8 (= code mod 8)
+        let r_sign = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_sign, r_code, 8);
+        let r_s8 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_s8, r_sign, 8);
+        let r_mag3 = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_mag3, r_code, r_s8);
+        // f_mag = MAG[mag3]
+        let f_mag = ptx_alloc_f(vtab); emit_ptx_e2m1_mag_lut(f_mag, r_mag3, vtab);
+        // f_val0 = (sign==0) ? f_mag : -f_mag
+        let f_val0 = ptx_alloc_f(vtab); emit_ptx_mov_f_reg(f_val0, f_mag);
+        let p_s = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_s, r_sign, r_one);  // p = (sign<1)=(sign==0)
+        let l_neg = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p_s, 0, l_neg);      // sign!=0 -> negate
+        let l_sgn = ptx_alloc_label(vtab); emit_ptx_bra_to_end(l_sgn);             // sign==0: keep f_mag, skip negate
+        emit_ptx_label_def(0, l_neg);
+        emit_ptx_binop_f3(1, f_val0, f_zero, f_mag);               // f_val0 = 0.0 - f_mag
+        emit_ptx_label_def(1, l_sgn);
+        // scale: f_sc = sc[scbase + col/16]
+        let r_blk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_blk, r_col, 16);
+        let r_sci = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_sci, r_scb, r_blk);
+        let f_sc = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_sc, rd_sc, r_sci, vtab);
+        // f_val = f_val0 * f_sc
+        let f_val = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_val, f_val0, f_sc);
+        // f_x = x[col]
+        let f_x = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_x, rd_x, r_col, vtab);
+        // acc = x*val + acc
+        let f_an = ptx_alloc_f(vtab); emit_ptx_fma(f_an, f_x, f_val, f_acc);
+        emit_ptx_mov_f_reg(f_acc, f_an);
+        // advance to the next slot: wv = wv/16 (= r_q)
+        emit_ptx_mov_rr(r_wv, r_q);
+        s = s + 1;
+    };
+    emit_ptx_ri_imm(0, r_word, r_word, 256);                      // word += 256 (block-stride)
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbl_w);                                   // $Ltop_<lbl_w>
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbl_w);                                 // $Lwend_<lbl_w>:
+    // ---- block-reduce the per-thread partials, tid==0 writes y[n] ----
+    let f_y = emit_ptx_smem_tree_reduce(r_tid, r_sm, f_acc, 0, vtab);
+    let p_t0 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_t0, r_tid, r_one);    // tid<1 = tid==0
+    let lbl_g = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p_t0, 4, lbl_g);        // @!(tid==0) skip store
+    emit_ptx_gstore_f32(rd_y, r_n, f_y);
+    emit_ptx_label_def(4, lbl_g);                                 // $Lskip_<lbl_g>:
+    0 - 1
+}
+// ===================================================================
 // T2/M6 (2026-06-03): BACKWARD/SAVE block-reduction redux intrinsics -- the
 // block-per-row (256-thread) siblings of the one-thread-per-row LN-fwd-save,
 // softmax-backward, and LN-backward-dx kernels that DOMINATE the optimized
@@ -14737,9 +15007,11 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_softmax_backward_blockred(node, vtab)    // T2/M6: softmax-bwd block-reduction
     } else { if ptx_name_is_ln_bwd_dx_blockred(name_s, name_l) == 1 {
         emit_ptx_layernorm_backward_dx_blockred(node, vtab) // T2/M6: LN-bwd-dx block-reduction
+    } else { if ptx_name_is_dequant_gemv_blockred(name_s, name_l) == 1 {
+        emit_ptx_dequant_gemv_blockred(node, vtab)        // T2/M7: fused NVFP4-dequant block-reduction GEMV
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:
