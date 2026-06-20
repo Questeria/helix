@@ -250,6 +250,7 @@ static double now_seconds(void);
 static int    g_dprof = 0;
 static int    g_genprof = 0;          /* HX_GENPROF: HX_FAST-honest end-to-end decode s/tok (one sync at each end of the decode loop) */
 static double g_dp_gemv = 0, g_dp_dq = 0, g_dp_total = 0;
+static double g_dp_lmh = 0;           /* T2/M7b: lm_head (dequant+gemv, or the fused kernel) wall, isolated from "other" */
 static long   g_dp_n = 0;
 static long   g_dqscr_elems = 0;   /* v1.7 INC2: element capacity of d_dqscr/g_scbuf (= alloc_buffers sc); sizes the chunked lm_head GPU dequant */
 /* v1.7 INC2c: resident effective per-16-block scale cache, one device buffer per packed tensor idx.
@@ -291,6 +292,8 @@ static float  g_head_ts = 0;          /* per-tensor scale ts for the packed lm_h
  * NO kovc.hx edit. Acceptance gate = token-for-token identical generation vs the baseline. */
 static int    g_fusedgemv = 0;        /* HX_FUSEDGEMV requested */
 static int    g_fusedgemv_on = 0;     /* latched: fused path active (module loaded + residency available) */
+static int    g_nofusehead = 0;       /* HX_NOFUSEHEAD: MEASUREMENT escape hatch -- keep the lm_head on the chunked
+                                       * path even when the projections fuse (isolates the head's added win). */
 static CUmodule   g_fgmod = 0;
 static CUfunction f_dgemv = 0;        /* the dequant_gemv_blockred entry */
 static int    g_fg_kpad_dm = 0;       /* Kpad of a [*, DM]  packed tensor (q/k/v/o/gate/up input pad) */
@@ -618,6 +621,7 @@ static CUdeviceptr d_scale;    /* 1-elem attn scale buffer */
 static void upload_layer_ll(int L);                                  /* defined after alloc_buffers */
 static void upload_layer_ll_fused(int L);                            /* T2/M7: fused-decode upload (norms only) */
 static int  fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N);  /* T2/M7: fused dequant-GEMV projection */
+static int  fused_lm_head(CUdeviceptr d_xpad, int xpad_kpad, CUdeviceptr d_out);  /* T2/M7b: fused dequant-GEMV lm_head */
 static int  v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows_out, int* kpad_out);  /* T2/M7: resident packed/scale ptrs */
 static int  read_ids_file(const char* path, int* ids, int maxn);     /* defined with the modes */
 static CUdeviceptr d_qW, d_kW, d_vW, d_oW, d_gateW, d_upW, d_downW;  /* layer weights */
@@ -1381,20 +1385,36 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
         emit_layer_end(g_emit_step, L, 0.0);
     }
     emit_head(g_emit_step, "norm_f", "gpu_rmsnorm_fwd_eps");
-    rms_norm_k(d_x1, d_xn1, d_lnfg, 1, DM);
     emit_head(g_emit_step, "lm_head", "gpu_gemv_abt");
-    if (g_packedhead_on) lm_head_logits_chunked(d_xn1, d_lg1, 1, 1);   /* v1.8 INC1.5: chunked packed head */
-    else                 gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
+    /* T2/M7b: fuse the lm_head too when the fused-GEMV path is active AND the packed head is resident.
+     * The final RMSNorm writes straight into the zero-tailed Kpad pad buffer d_xn1pad (first DM elems; the
+     * [DM,Kpad) tail stays zero across tokens), then ONE fused dequant-GEMV pass computes the logits from
+     * the resident packed head -- skipping the INC1.5 chunked fp32 dequant entirely. fused_lm_head() is
+     * fail-closed: it returns 0 if the head isn't resident or d_xn1pad is too small for g_head_Kpad, in
+     * which case we fall through to the EXACT prior path (chunked packed head, or FP32 d_wte_pad). */
+    int head_fused = 0;
+    if (fg && g_packedhead_on && !g_nofusehead) {
+        rms_norm_k(d_x1, d_xn1pad, d_lnfg, 1, DM);                 /* normed hidden -> zero-tailed pad buffer */
+        head_fused = fused_lm_head(d_xn1pad, g_fg_kpad_dm, d_lg1);
+    }
+    if (!head_fused) {
+        double _tl = g_dprof ? now_seconds() : 0.0;
+        rms_norm_k(d_x1, d_xn1, d_lnfg, 1, DM);
+        if (g_packedhead_on) lm_head_logits_chunked(d_xn1, d_lg1, 1, 1);   /* v1.8 INC1.5: chunked packed head */
+        else                 gemv_abt(d_xn1, d_wte_pad, d_lg1, NVpad, DM);
+        if (g_dprof) { cuCtxSynchronize(); g_dp_lmh += now_seconds() - _tl; }   /* isolate the head's wall */
+    }
     if (!g_fast) SYNC("decode end");
     CKX(cuMemcpyDtoH(out_logits, d_lg1, (size_t)NV*sizeof(float)), "d2h logits1");
     kv_len = T;
     if (g_dprof) {
         g_dp_total += now_seconds() - _td; g_dp_n++;
-        double other = g_dp_total - g_dp_gemv - g_dp_dq;
-        fprintf(stderr, "[dprof] tok#%ld cumulative: total=%.3fs  gemv=%.3fs(%.0f%%)  dequant=%.3fs(%.0f%%)  other=%.3fs(%.0f%%)\n",
+        double other = g_dp_total - g_dp_gemv - g_dp_dq - g_dp_lmh;
+        fprintf(stderr, "[dprof] tok#%ld cumulative: total=%.3fs  gemv=%.3fs(%.0f%%)  dequant=%.3fs(%.0f%%)  lm_head=%.3fs(%.0f%%)  other=%.3fs(%.0f%%)\n",
                 g_dp_n, g_dp_total,
                 g_dp_gemv, 100.0*g_dp_gemv/g_dp_total,
                 g_dp_dq,   100.0*g_dp_dq/g_dp_total,
+                g_dp_lmh,  100.0*g_dp_lmh/g_dp_total,
                 other,     100.0*other/g_dp_total);
     }
 }
@@ -1609,6 +1629,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
     g_packedhead = getenv("HX_PACKEDHEAD") ? 1 : 0;  /* v1.8 INC1.5: resident packed lm_head (no FP32 d_wte_pad) */
     if (g_packedres) g_packedhead = 1;               /* resident layers imply the resident head (both shrink VRAM) */
     g_fusedgemv = getenv("HX_FUSEDGEMV") ? 1 : 0;    /* T2/M7: fused dequant-GEMV decode (needs resident packed weights) */
+    g_nofusehead = getenv("HX_NOFUSEHEAD") ? 1 : 0;  /* T2/M7b: measurement-only -- keep lm_head chunked */
     if (g_fusedgemv && !g_packedres) {               /* the fused path reads g_pk_res/g_sc_res -> requires residency */
         fprintf(stderr, "[fusedgemv] needs resident packed weights (set HX_PACKEDRES=1) -> OFF\n");
         g_fusedgemv = 0;
@@ -1843,10 +1864,12 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
         d_packed_use = g_pk_res[idx];                                       /* resident: NO memcpy, NO HtoD */
     } else if (g_packedres && !g_packedres_off && idx >= 0 && idx < nsc1) {
         CUdeviceptr p = 0;                                                  /* first touch: alloc resident + one-time HtoD */
-        if (cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
-            cuMemcpyHtoD(p, w, (size_t)rows*kwords*4) == CUDA_SUCCESS) { g_pk_res[idx] = p; d_packed_use = p; }
-        else { if (p) cuMemFree(p); g_packedres_off = 1;                    /* VRAM-full: latch off, stream this + the rest */
-               memcpy(g_hpin, w, (size_t)rows*kwords*4);
+        memcpy(g_hpin, w, (size_t)rows*kwords*4);                          /* v1.8 FIX: fault the mmap pages into PINNED RAM first (a direct cuMemcpyHtoD from a COLD file-backed mmap can hang the DMA; bytes identical to HtoD-from-w). */
+        size_t _frp=0,_top=0; cuMemGetInfo(&_frp,&_top);                   /* v1.8 FIX: proactive VRAM-headroom guard. On driver 610.62 a cuMemAlloc at ~0 free HANGS (the old driver returned OOM, which latched the graceful fallback). The fit-check under-budgets by ~1GiB of resident scales, so it would otherwise alloc until free=0 and hang. Latch off + stream BEFORE exhaustion, leaving 768MiB for dequant scratch + activations + KV. */
+        if (_frp < (size_t)rows*kwords*4 + (size_t)768*1024*1024) g_packedres_off = 1;
+        if (!g_packedres_off && cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
+            cuMemcpyHtoD(p, g_hpin, (size_t)rows*kwords*4) == CUDA_SUCCESS) { g_pk_res[idx] = p; d_packed_use = p; }
+        else { if (p) cuMemFree(p); g_packedres_off = 1;                    /* VRAM-tight: latch off, stream this + the rest (g_hpin already holds w) */
                CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD"); }
     } else {
         memcpy(g_hpin, w, (size_t)rows*kwords*4);                          /* v1.7 INC2b: mmap->pinned, then DMA HtoD */
@@ -1860,9 +1883,10 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
         d_sc_use = g_sc_res[idx];                                        /* cached: skip the build + HtoD */
     } else {
         for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* byte-identical to v3_e4m3_decode */
-        if (g_scache && idx >= 0 && idx < nsc) {                         /* first touch: cache it resident (non-fatal on VRAM-full) */
-            CUdeviceptr p = 0;
-            if (cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
+        if (g_scache && idx >= 0 && idx < nsc && !g_packedres_off) {     /* first touch: cache it resident (non-fatal on VRAM-tight) */
+            CUdeviceptr p = 0; size_t _frs=0,_tos=0; cuMemGetInfo(&_frs,&_tos);   /* v1.8 FIX: same proactive VRAM-headroom guard as the packed alloc (scales are ~1GiB total; don't exhaust VRAM). */
+            if (_frs >= (size_t)rows*kblk*4 + (size_t)768*1024*1024 &&
+                cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
                 cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) { g_sc_res[idx] = p; d_sc_use = p; }
             else { if (p) cuMemFree(p); CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD"); }
         } else CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD");
@@ -1871,6 +1895,7 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     CUdeviceptr out_dev = (Kpad==K) ? dst : d_dqscr;
     int mm0=0, kk=Kpad, bd=BD;
     void* ar[] = { &d_packed_use, &d_sc_use, &out_dev, &mm0, &kk, &bd };
+    if (getenv("HX_DBG")) { size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to); fprintf(stderr, "[dbg] idx=%d pre-dequant free=%zuMiB off=%d (rows=%ld Kpad=%d)\n", idx, _fr/1048576, g_packedres_off, (long)rows, Kpad); }
     LX(f_dq_tiled, (unsigned)((long)rows*(Kpad/BD)), (unsigned)BD, ar);
     double tE = g_prof ? now_seconds() : 0.0; g_pf_dq += tE - tD; g_pf_n++;
     if (Kpad != K) {   /* compact [rows x Kpad] -> [rows x K], drop the pad cols (host did this via memmove) */
@@ -1904,14 +1929,19 @@ static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows
     /* resident packed words */
     if (!g_pk_res[idx]) {
         CUdeviceptr p = 0;
+        memcpy(g_hpin, w, (size_t)rows*kwords*4);                          /* v1.8 FIX: fault mmap -> pinned (cold-mmap DMA can hang) */
+        size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);                       /* v1.8 FIX: VRAM-headroom guard -- a cuMemAlloc at ~0 free HANGS on driver 610.62; bail to fallback before exhaustion */
+        if (_fr < (size_t)rows*kwords*4 + (size_t)768*1024*1024) { g_packedres_off = 1; return 0; }
         if (cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
-            cuMemcpyHtoD(p, w, (size_t)rows*kwords*4) == CUDA_SUCCESS) g_pk_res[idx] = p;
+            cuMemcpyHtoD(p, g_hpin, (size_t)rows*kwords*4) == CUDA_SUCCESS) g_pk_res[idx] = p;
         else { if (p) cuMemFree(p); g_packedres_off = 1; return 0; }
     }
     /* resident effective scales (the g_sc_res lazy cache; identical math to v3_upload_gpu's build) */
     if (!g_sc_res[idx]) {
         for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;
         CUdeviceptr p = 0;
+        size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);                       /* v1.8 FIX: VRAM-headroom guard */
+        if (_fr < (size_t)rows*kblk*4 + (size_t)768*1024*1024) { g_packedres_off = 1; return 0; }
         if (cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
             cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) g_sc_res[idx] = p;
         else { if (p) cuMemFree(p); return 0; }
@@ -1932,6 +1962,30 @@ static int fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N) {
     CKX(cuLaunchKernel(f_dgemv, (unsigned)N,1,1, 256,1,1, 0,0, ar, 0), "fused dgemv");
     if (!g_fast) SYNC("sync f_dgemv");
     if (g_dprof) { cuCtxSynchronize(); g_dp_gemv += now_seconds() - _t0; }
+    return 1;
+}
+
+/* T2/M7b: FUSED lm_head logits. logits[NV] = x[Kpad] . dequant(packed_head[NV,Kpad]) in ONE coalesced
+ * block-reduction pass over the RESIDENT packed head words + resident effective scales (g_phk_words /
+ * g_phk_sc), exactly like fused_gemv does for the 7 projections -- grid=(g_head_rows,1,1), block=(256,1,1).
+ * This SKIPS the INC1.5 chunked fp32 dequant (head_dequant_chunk -> d_head_chunk -> gemv_abt), the biggest
+ * remaining decode slice. The head's packed layout is byte-identical to the projections' (setup_head built
+ * g_phk_words as [rows x Kpad/7] i32 + g_phk_sc as [rows x Kpad/16] effective e4m3*ts), so the SAME kernel
+ * consumes it with kpad=g_head_Kpad. The pad x buffer (d_xpad, the final-normed hidden zero-tailed to its
+ * own Kpad) MUST be >= g_head_Kpad so the kernel's full-Kpad sum sees zeros past DM. Rows are written to
+ * y[0..g_head_rows) (== NV, the real vocab); the [NV,NVpad) logits are never touched -- but the host argmax
+ * + the DtoH copy both span only NV, so untouched pad logits cannot affect the result. Returns 1 on launch,
+ * 0 (fail-closed) if the resident packed head isn't available or d_xpad is too small for g_head_Kpad. */
+static int fused_lm_head(CUdeviceptr d_xpad, int xpad_kpad, CUdeviceptr d_out) {
+    if (!f_dgemv || !g_packedhead_on || !g_phk_words || !g_phk_sc) return 0;
+    if (g_head_rows <= 0 || g_head_Kpad <= 0) return 0;
+    if (xpad_kpad < g_head_Kpad) return 0;   /* the pad buffer must cover the full Kpad the kernel sums */
+    int kp = g_head_Kpad;
+    void* ar[] = { &d_xpad, &g_phk_words, &g_phk_sc, &d_out, &kp };
+    double _t0 = g_dprof ? now_seconds() : 0.0;
+    CKX(cuLaunchKernel(f_dgemv, (unsigned)g_head_rows,1,1, 256,1,1, 0,0, ar, 0), "fused lm_head");
+    if (!g_fast) SYNC("sync fused lm_head");
+    if (g_dprof) { cuCtxSynchronize(); g_dp_lmh += now_seconds() - _t0; }
     return 1;
 }
 
