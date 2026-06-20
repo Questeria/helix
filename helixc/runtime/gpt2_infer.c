@@ -257,7 +257,15 @@ static long   g_dqscr_elems = 0;   /* v1.7 INC2: element capacity of d_dqscr/g_s
  * The scales are STATIC (weights never change), so DECODE rebuilds + re-uploads them every token for
  * nothing. Opt-in via HX_SCALECACHE; built lazily on first touch; non-fatal on VRAM-full (falls back to
  * the per-forward scratch build). 8B layer scales ~1.74GB resident -> fits the 8GB card. */
-static CUdeviceptr g_sc_res[400] = {0};   /* idx = L*11+t < 36*11 for 8B; 400 covers all packed tensors */
+static CUdeviceptr g_sc_res[400] = {0};   /* idx = L*11+t < 36*11 for 8B; 400 covers all packed tensors.
+                                           * H4: when g_fusedgemv is ON, this holds the RAW e4m3 micro packed
+                                           * 4-per-i32-word (rows*ceil(kblk/4) i32, ~4x smaller than the fp32
+                                           * effective) for the fused kernel's in-kernel decode; the non-fused
+                                           * f_dq_tiled path then builds fp32-effective into the scratch d_sc
+                                           * each forward (NOT cached here). When fusedgemv is OFF, unchanged
+                                           * (fp32 effective cache). */
+static CUdeviceptr g_ts_res[400] = {0};   /* H4: per-tensor ts as a 1-elem f32 device buffer (the fused kernel
+                                           * reads ts[0]); paired with the g_sc_res packed-micro entry. */
 static int    g_scache = 0;
 /* v1.8 INC1: keep the PACKED 4-bit layer words resident in VRAM (one buffer per packed tensor idx) so the
  * per-token packed-words HtoD -- the measured ~2-4s/forward bottleneck -- is eliminated. Opt-in HX_PACKEDRES
@@ -276,7 +284,11 @@ static size_t g_resmargin = (size_t)768*1024*1024;  /* HX_RESMARGIN (MiB): VRAM 
 static int    g_packedhead = 0;       /* HX_PACKEDHEAD requested */
 static int    g_packedhead_on = 0;    /* latched: resident packed head active (allocs succeeded + fit) */
 static CUdeviceptr g_phk_words = 0;   /* resident packed lm_head i32 words [rows x kwords] */
-static CUdeviceptr g_phk_sc    = 0;   /* resident effective lm_head scales [rows x kblk] (g_e4m3_tab*ts) */
+static CUdeviceptr g_phk_sc    = 0;   /* resident lm_head scales [rows x kblk]. H4: when g_fusedgemv is ON
+                                       * this holds RAW e4m3 micro packed 4/i32-word (rows*ceil(kblk/4) i32),
+                                       * decoded in-kernel by fused_lm_head; the non-fused head_dequant_chunk
+                                       * fallback rebuilds fp32 from the mmap into scratch. OFF: fp32 effective. */
+static CUdeviceptr g_phk_ts    = 0;   /* H4: per-tensor lm_head ts as a 1-elem f32 device buffer (fused path). */
 static CUdeviceptr d_head_chunk = 0;  /* reusable dequant target [CHUNK x DM] f32 (compacted Kpad->DM) */
 static CUdeviceptr d_head_temp  = 0;  /* prefill GEMM temp [Smax x CHUNK] f32 (scattered into d_logits cols) */
 static int    g_head_chunk_rows = 0;  /* CHUNK = vocab rows per dequant pass (== the setup chunk count) */
@@ -633,7 +645,7 @@ static void upload_layer_ll(int L);                                  /* defined 
 static void upload_layer_ll_fused(int L);                            /* T2/M7: fused-decode upload (norms only) */
 static int  fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N);  /* T2/M7: fused dequant-GEMV projection */
 static int  fused_lm_head(CUdeviceptr d_xpad, int xpad_kpad, CUdeviceptr d_out);  /* T2/M7b: fused dequant-GEMV lm_head */
-static int  v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows_out, int* kpad_out);  /* T2/M7: resident packed/scale ptrs */
+static int  v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, CUdeviceptr* tsp, int* rows_out, int* kpad_out);  /* T2/M7+H4: resident packed/micro-scale/ts ptrs */
 static int  read_ids_file(const char* path, int* ids, int maxn);     /* defined with the modes */
 static CUdeviceptr d_qW, d_kW, d_vW, d_oW, d_gateW, d_upW, d_downW;  /* layer weights */
 static CUdeviceptr d_qnorm = 0, d_knorm = 0;   /* Qwen3 per-head QK-norm weights [DH] (v3 only) */
@@ -1293,10 +1305,12 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
             size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
             size_t nw=0, nsc=0; int nres_w=0, nres_s=0;
             for (int i=0;i<g_ntensors;i++){ const HXGWv3Desc* d=&g_desc[i]; if(!d->packed||i==v3_idx_lmhead())continue;
-                int Kp=(int)d->Kpad; nw+=(size_t)d->rows*(Kp/7)*4; nsc+=(size_t)d->rows*(Kp/16)*4;
+                int Kp=(int)d->Kpad, kblk=Kp/16; nw+=(size_t)d->rows*(Kp/7)*4;
+                nsc += g_fusedgemv ? (size_t)d->rows*((kblk+3)/4)*4   /* H4: resident scale = packed e4m3 micro (~4x smaller) */
+                                   : (size_t)d->rows*kblk*4;          /* fp32 effective */
                 if(i<400&&g_pk_res[i])nres_w++; if(i<400&&g_sc_res[i])nres_s++; }
-            fprintf(stderr,"[h1census] decode-start free=%zuMiB  resident-need words=%zuMiB scales=%zuMiB (sum=%zuMiB)  already-resident words=%d/%d scales=%d/%d  resmargin=%zuMiB\n",
-                _fr/1048576, nw/1048576, nsc/1048576, (nw+nsc)/1048576, nres_w, 7*NL, nres_s, 7*NL, g_resmargin/1048576);
+            fprintf(stderr,"[h1census] decode-start free=%zuMiB  resident-need words=%zuMiB scales=%zuMiB (sum=%zuMiB, scale=%s)  already-resident words=%d/%d scales=%d/%d  resmargin=%zuMiB\n",
+                _fr/1048576, nw/1048576, nsc/1048576, (nw+nsc)/1048576, g_fusedgemv?"raw-micro":"fp32", nres_w, 7*NL, nres_s, 7*NL, g_resmargin/1048576);
         }
         /* H1 (HX_FREEPROJ): PREFILL IS DONE at this first decode step (callers run decode_step_llama only at
          * step>0; step 0 ran the full prefill forward). Under FUSED decode the 7 f32 projection buffers
@@ -1349,8 +1363,8 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
             int proj[7] = { V3_Q, V3_K, V3_V, V3_O, V3_GATE, V3_UP, V3_DOWN };
             for (int Lz = 0; Lz < NL && ok; Lz++)
                 for (int pj = 0; pj < 7 && ok; pj++) {
-                    CUdeviceptr pk=0, sc=0; int rr=0, kk=0;
-                    if (!v3_resident_ptrs(v3_idx_layer(Lz, proj[pj]), &pk, &sc, &rr, &kk)) {
+                    CUdeviceptr pk=0, sc=0, tsp=0; int rr=0, kk=0;
+                    if (!v3_resident_ptrs(v3_idx_layer(Lz, proj[pj]), &pk, &sc, &tsp, &rr, &kk)) {
                         ok = 0;
                         if (getenv("HX_DBG")) { size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
                             fprintf(stderr, "[h1remake] STOPPED at layer %d proj %d (v3 idx %d): free=%zuMiB off=%d\n",
@@ -1385,7 +1399,8 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
                     int nres1 = (int)(sizeof(g_pk_res)/sizeof(g_pk_res[0]));
                     int ev = 0;
                     for (int i=0;i<nres1;i++){ if(g_pk_res[i]){cuMemFree(g_pk_res[i]); g_pk_res[i]=0; ev++;}
-                                               if(g_sc_res[i]){cuMemFree(g_sc_res[i]); g_sc_res[i]=0;} }
+                                               if(g_sc_res[i]){cuMemFree(g_sc_res[i]); g_sc_res[i]=0;}
+                                               if(g_ts_res[i]){cuMemFree(g_ts_res[i]); g_ts_res[i]=0;} }   /* H4: free paired ts */
                     sv_resoff = 1;                          /* everything streamed now -> residency latched off */
                     cuMemGetInfo(&_fr,&_to);
                     fprintf(stderr, "[freeproj] non-seat tight (free<need): evicted %d resident packed tensors -> free %zuMiB (non-fused will re-stream)\n", ev, _fr/1048576);
@@ -1955,6 +1970,23 @@ static void packedres_fitcheck(void) {
     }
 }
 
+/* H4: pack [rows x kblk] raw e4m3 micro BYTES (from the mmap) into [rows x micstride] i32 WORDS, 4 micro
+ * per word base-256 low-byte-first, micstride = ceil(kblk/4) words/row. Output goes into `dst32` (caller
+ * provides >= rows*micstride ints). NVFP4 micro-scales are positive magnitudes (bit7 always 0) and never
+ * the NaN code, so each word <= 0x7F7F7F7F is non-negative -> the in-kernel signed-safe decode is exact.
+ * Byte-identical scale values to g_e4m3_tab[micro]*ts; this just re-lays-out the bytes for residency. */
+static void v3_pack_micro(const uint8_t* micro, long rows, int kblk, int32_t* dst32) {
+    int micstride = (kblk + 3) / 4;
+    memset(dst32, 0, (size_t)rows * micstride * 4);
+    for (long r = 0; r < rows; r++) {
+        const uint8_t* mr = micro + (size_t)r * kblk;
+        int32_t* wr = dst32 + (size_t)r * micstride;
+        for (int b = 0; b < kblk; b++) {
+            wr[b >> 2] |= ((int32_t)(mr[b] & 0xFF)) << (8 * (b & 3));
+        }
+    }
+}
+
 static void v3_upload_gpu(int idx, CUdeviceptr dst) {
     const HXGWv3Desc* d = &g_desc[idx];
     const unsigned char* base = (const unsigned char*)g_map;
@@ -1989,14 +2021,18 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
         CKX(cuMemcpyHtoD(d_packed, g_hpin, (size_t)rows*kwords*4), "dq packed HtoD");
     }
     double tB = g_prof ? now_seconds() : 0.0; g_pf_htod += tB - tA;
-    /* v1.7 INC2c: reuse the resident effective-scale cache (the scales are static) or build into scratch. */
+    /* v1.7 INC2c: reuse the resident effective-scale cache (the scales are static) or build into scratch.
+     * H4: when g_fusedgemv is ON, g_sc_res holds RAW e4m3 micro (for the fused decode), NOT the fp32
+     * effective scale -- so the f_dq_tiled dequant here always builds the fp32 effective into scratch d_sc
+     * (the resident fp32 cache is OFF under fused). Byte-identical output either way. */
     CUdeviceptr d_sc_use = d_sc;
     int nsc = (int)(sizeof(g_sc_res)/sizeof(g_sc_res[0]));
-    if (g_scache && idx >= 0 && idx < nsc && g_sc_res[idx]) {
+    int sc_cache_ok = (g_scache && !g_fusedgemv);   /* fp32 effective cache only when NOT fused */
+    if (sc_cache_ok && idx >= 0 && idx < nsc && g_sc_res[idx]) {
         d_sc_use = g_sc_res[idx];                                        /* cached: skip the build + HtoD */
     } else {
         for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* byte-identical to v3_e4m3_decode */
-        if (g_scache && idx >= 0 && idx < nsc && !g_packedres_off) {     /* first touch: cache it resident (non-fatal on VRAM-tight) */
+        if (sc_cache_ok && idx >= 0 && idx < nsc && !g_packedres_off) {  /* first touch: cache it resident (non-fatal on VRAM-tight) */
             CUdeviceptr p = 0; size_t _frs=0,_tos=0; cuMemGetInfo(&_frs,&_tos);   /* v1.8 FIX: same proactive VRAM-headroom guard as the packed alloc (scales are ~1GiB total; don't exhaust VRAM). */
             if (_frs >= (size_t)rows*kblk*4 + g_resmargin &&
                 cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
@@ -2026,11 +2062,11 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
  * HtoD straight from the mmap, byte-identical bytes) but does NO dequant -- the fused kernel consumes the
  * packed words directly. Returns 1 if both are resident; 0 if residency is unavailable (latched off /
  * VRAM-full / not packed) so the caller can fall back to the normal dequant+gemv path. */
-static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows_out, int* kpad_out) {
+static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, CUdeviceptr* tsp, int* rows_out, int* kpad_out) {
     if (!g_packedres || g_packedres_off) return 0;
     const HXGWv3Desc* d = &g_desc[idx];
     if (!d->packed) return 0;
-    int rows=(int)d->rows, Kpad=(int)d->Kpad, kwords=Kpad/7, kblk=Kpad/16;
+    int rows=(int)d->rows, Kpad=(int)d->Kpad, kwords=Kpad/7, kblk=Kpad/16, micstride=(kblk+3)/4;
     const unsigned char* base = (const unsigned char*)g_map;
     const int32_t* w = (const int32_t*)(base + d->data_off);
     const uint8_t* micro = (const uint8_t*)(base + d->scale_off);
@@ -2049,17 +2085,20 @@ static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows
             cuMemcpyHtoD(p, g_hpin, (size_t)rows*kwords*4) == CUDA_SUCCESS) g_pk_res[idx] = p;
         else { if (p) cuMemFree(p); g_packedres_off = 1; return 0; }
     }
-    /* resident effective scales (the g_sc_res lazy cache; identical math to v3_upload_gpu's build) */
+    /* H4: resident RAW e4m3 micro (packed 4/i32-word, ~4x smaller than the fp32 effective) + a 1-elem ts
+     * buffer; the fused kernel decodes e4m3_decode(micro)*ts in-kernel (byte-identical to g_e4m3_tab*ts). */
     if (!g_sc_res[idx]) {
-        for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;
-        CUdeviceptr p = 0;
+        v3_pack_micro(micro, rows, kblk, (int32_t*)g_scbuf);              /* pack into g_scbuf (rows*micstride*4 <= rows*kblk*4 fits) */
+        CUdeviceptr p = 0, pts = 0;
         size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);                       /* v1.8 FIX: VRAM-headroom guard */
-        if (_fr < (size_t)rows*kblk*4 + g_resmargin) { g_packedres_off = 1; return 0; }
-        if (cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
-            cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) g_sc_res[idx] = p;
-        else { if (p) cuMemFree(p); return 0; }
+        if (_fr < (size_t)rows*micstride*4 + g_resmargin) { g_packedres_off = 1; return 0; }
+        if (cuMemAlloc(&p, (size_t)rows*micstride*4) == CUDA_SUCCESS &&
+            cuMemcpyHtoD(p, g_scbuf, (size_t)rows*micstride*4) == CUDA_SUCCESS &&
+            cuMemAlloc(&pts, sizeof(float)) == CUDA_SUCCESS &&
+            cuMemcpyHtoD(pts, &ts, sizeof(float)) == CUDA_SUCCESS) { g_sc_res[idx] = p; g_ts_res[idx] = pts; }
+        else { if (p) cuMemFree(p); if (pts) cuMemFree(pts); return 0; }
     }
-    *pk = g_pk_res[idx]; *sc = g_sc_res[idx]; *rows_out = rows; *kpad_out = Kpad;
+    *pk = g_pk_res[idx]; *sc = g_sc_res[idx]; *tsp = g_ts_res[idx]; *rows_out = rows; *kpad_out = Kpad;
     return 1;
 }
 
@@ -2067,10 +2106,11 @@ static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows
  * block-reduction kernel (grid=(N,1,1), block=(256,1,1)). d_xpad MUST be Kpad-padded + zero-tailed.
  * Returns 1 on launch, 0 if the resident weights aren't available (caller falls back to gemv_abt). */
 static int fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N) {
-    CUdeviceptr pk = 0, sc = 0; int rows = 0, kpad = 0;
-    if (!f_dgemv || !v3_resident_ptrs(idx, &pk, &sc, &rows, &kpad)) return 0;
-    /* N (logical output rows) must equal the tensor's rows; the kernel writes y[0..rows). */
-    int kp = kpad; void* ar[] = { &d_xpad, &pk, &sc, &d_y, &kp };
+    CUdeviceptr pk = 0, sc = 0, tsp = 0; int rows = 0, kpad = 0;
+    if (!f_dgemv || !v3_resident_ptrs(idx, &pk, &sc, &tsp, &rows, &kpad)) return 0;
+    /* N (logical output rows) must equal the tensor's rows; the kernel writes y[0..rows). H4: sc = packed
+     * e4m3 micro, tsp = 1-elem ts buffer -> the kernel decodes the effective scale in-kernel. */
+    int kp = kpad; void* ar[] = { &d_xpad, &pk, &sc, &tsp, &d_y, &kp };
     double _t0 = g_dprof ? now_seconds() : 0.0;
     CKX(cuLaunchKernel(f_dgemv, (unsigned)N,1,1, 256,1,1, 0,0, ar, 0), "fused dgemv");
     if (!g_fast) SYNC("sync f_dgemv");
@@ -2090,11 +2130,12 @@ static int fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N) {
  * + the DtoH copy both span only NV, so untouched pad logits cannot affect the result. Returns 1 on launch,
  * 0 (fail-closed) if the resident packed head isn't available or d_xpad is too small for g_head_Kpad. */
 static int fused_lm_head(CUdeviceptr d_xpad, int xpad_kpad, CUdeviceptr d_out) {
-    if (!f_dgemv || !g_packedhead_on || !g_phk_words || !g_phk_sc) return 0;
+    if (!f_dgemv || !g_packedhead_on || !g_phk_words || !g_phk_sc || !g_phk_ts) return 0;  /* H4: need the micro+ts resident */
     if (g_head_rows <= 0 || g_head_Kpad <= 0) return 0;
     if (xpad_kpad < g_head_Kpad) return 0;   /* the pad buffer must cover the full Kpad the kernel sums */
+    /* H4: g_phk_sc = packed e4m3 micro, g_phk_ts = 1-elem ts -> the fused kernel decodes the scale in-kernel. */
     int kp = g_head_Kpad;
-    void* ar[] = { &d_xpad, &g_phk_words, &g_phk_sc, &d_out, &kp };
+    void* ar[] = { &d_xpad, &g_phk_words, &g_phk_sc, &g_phk_ts, &d_out, &kp };
     double _t0 = g_dprof ? now_seconds() : 0.0;
     CKX(cuLaunchKernel(f_dgemv, (unsigned)g_head_rows,1,1, 256,1,1, 0,0, ar, 0), "fused lm_head");
     if (!g_fast) SYNC("sync fused lm_head");
@@ -2116,7 +2157,21 @@ static void head_dequant_chunk(long r0, long nr) {
                        (size_t)(nr-real)*DM*sizeof(float)), "head pad zero");
     if (real <= 0) return;
     CUdeviceptr wsrc = g_phk_words + (CUdeviceptr)((size_t)r0*kwords*4);   /* resident packed words for [r0,..) */
-    CUdeviceptr ssrc = g_phk_sc    + (CUdeviceptr)((size_t)r0*kblk*4);     /* resident effective scales for [r0,..) */
+    CUdeviceptr ssrc;
+    if (g_fusedgemv) {
+        /* H4: g_phk_sc holds RAW e4m3 micro (for the fused path); f_dq_tiled needs the fp32 EFFECTIVE scale,
+         * so build it for this row-chunk from the mmap into the scratch d_sc (byte-identical g_e4m3_tab*ts).
+         * This fallback fires only when fused_lm_head returned 0 (residency dropped); rare, so per-chunk
+         * rebuild is fine. real*kblk <= CHUNK*kblk <= g_dqscr_elems/16 fits g_scbuf. */
+        const unsigned char* base = (const unsigned char*)g_map;
+        const HXGWv3Desc* dl = &g_desc[v3_idx_lmhead()];
+        const uint8_t* mb = (const uint8_t*)(base + dl->scale_off);
+        for (long i=0;i<real*(long)kblk;i++) g_scbuf[i] = g_e4m3_tab[mb[(size_t)r0*kblk + i]] * g_head_ts;
+        CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)real*kblk*4), "head chunk fp32 scale HtoD");
+        ssrc = d_sc;
+    } else {
+        ssrc = g_phk_sc + (CUdeviceptr)((size_t)r0*kblk*4);               /* resident effective scales for [r0,..) */
+    }
     int mm0=0, kk=Kpad, bd=BD; void* ar[] = { &wsrc, &ssrc, &d_dqscr, &mm0, &kk, &bd };
     LX(f_dq_tiled, (unsigned)((long)real*(Kpad/BD)), (unsigned)BD, ar);
     CUDA_MEMCPY2D cp; memset(&cp,0,sizeof(cp));   /* compact [real x Kpad] -> d_head_chunk rows [0,real) [real x DM] */
@@ -2229,29 +2284,37 @@ static int setup_head(int Smax) {
          * target d_head_chunk [CHUNK x DM] + a prefill GEMM temp d_head_temp [Smax x CHUNK]. lm_head_logits_
          * chunked() then dequants+GEMMs in vocab-row chunks. Byte-identical, opt-in, non-fatal fallback. */
         if (g_packedhead && g_gpu_dq && !g_hostdeq && dl->packed) {
-            int kwords=Kpad/7, kblk=Kpad/16;
+            int kwords=Kpad/7, kblk=Kpad/16, micstride=(kblk+3)/4;
+            int hfused = g_fusedgemv;                                       /* H4: resident scale = packed micro (fused) vs fp32 effective (chunked) */
             long CHUNK = g_dqscr_elems / Kpad; if (CHUNK < 1) CHUNK = 1;   /* same chunk count as the setup loop */
             if (CHUNK > NVpad) CHUNK = NVpad;
             if (CHUNK % 64) CHUNK -= (CHUNK % 64);                          /* keep nr %64 for the mm_ABt N/64 grid */
             if (CHUNK < 64) CHUNK = 64;
-            size_t need = (size_t)rows*kwords*4 + (size_t)rows*kblk*4       /* resident packed words + scales */
+            size_t scbytes = hfused ? (size_t)rows*micstride*4 : (size_t)rows*kblk*4;  /* H4: ~4x smaller resident scale when fused */
+            size_t need = (size_t)rows*kwords*4 + scbytes                   /* resident packed words + scales */
                         + (size_t)CHUNK*DM*4 + (size_t)Smax*CHUNK*4;        /* d_head_chunk + d_head_temp */
             size_t freeb=0, totb=0; cuMemGetInfo(&freeb, &totb);
             size_t margin = (size_t)256*1024*1024;
-            CUdeviceptr pw=0, ps=0, pc=0, pt=0;
+            CUdeviceptr pw=0, ps=0, pc=0, pt=0, pts=0;
             const unsigned char* lb = (const unsigned char*)g_map;
             const int32_t* wb = (const int32_t*)(lb + dl->data_off);
             const uint8_t*  mb = (const uint8_t*)(lb + dl->scale_off);
             float ts; memcpy(&ts, lb + dl->scale_off + (size_t)rows*kblk, 4);
             int ok = (freeb >= need + margin);
             if (ok) ok = (cuMemAlloc(&pw, (size_t)rows*kwords*4) == CUDA_SUCCESS);
-            if (ok) ok = (cuMemAlloc(&ps, (size_t)rows*kblk*4)   == CUDA_SUCCESS);
+            if (ok) ok = (cuMemAlloc(&ps, scbytes)               == CUDA_SUCCESS);
             if (ok) ok = (cuMemAlloc(&pc, (size_t)CHUNK*DM*4)    == CUDA_SUCCESS);
             if (ok) ok = (cuMemAlloc(&pt, (size_t)Smax*CHUNK*4)  == CUDA_SUCCESS);
+            if (ok && hfused) ok = (cuMemAlloc(&pts, sizeof(float)) == CUDA_SUCCESS);
+            if (ok && hfused) ok = (cuMemcpyHtoD(pts, &ts, sizeof(float)) == CUDA_SUCCESS);
             if (ok) ok = (cuMemcpyHtoD(pw, wb, (size_t)rows*kwords*4) == CUDA_SUCCESS);  /* one-time, from the mmap */
-            if (ok) {   /* build the effective scales (e4m3_decode(micro)*ts, byte-identical) in ROW-CHUNKS ->
-                         * resident ps. g_scbuf holds only ~max-layer (ms) elems, so rows*kblk (~39M for 8B)
-                         * MUST be staged in pieces; CHUNK rows * kblk <= g_dqscr_elems/16 fits g_scbuf. */
+            if (ok && hfused) {   /* H4: resident RAW e4m3 micro (packed 4/i32-word), decoded in-kernel by fused_lm_head. */
+                for (long r0=0; ok && r0<rows; r0+=CHUNK) {
+                    long nr = (r0+CHUNK<=rows) ? CHUNK : (rows-r0);
+                    v3_pack_micro(mb + (size_t)r0*kblk, nr, kblk, (int32_t*)g_scbuf);
+                    ok = (cuMemcpyHtoD(ps + (CUdeviceptr)((size_t)r0*micstride*4), g_scbuf, (size_t)nr*micstride*4) == CUDA_SUCCESS);
+                }
+            } else if (ok) {   /* non-fused: build the fp32 effective scales (e4m3_decode(micro)*ts, byte-identical) in ROW-CHUNKS. */
                 for (long r0=0; ok && r0<rows; r0+=CHUNK) {
                     long nr = (r0+CHUNK<=rows) ? CHUNK : (rows-r0);
                     for (long i=0;i<nr*(long)kblk;i++) g_scbuf[i] = g_e4m3_tab[mb[(size_t)r0*kblk + i]] * ts;
@@ -2259,17 +2322,17 @@ static int setup_head(int Smax) {
                 }
             }
             if (ok) {
-                g_phk_words = pw; g_phk_sc = ps; d_head_chunk = pc; d_head_temp = pt;
+                g_phk_words = pw; g_phk_sc = ps; g_phk_ts = pts; d_head_chunk = pc; d_head_temp = pt;
                 g_head_chunk_rows = (int)CHUNK; g_head_rows = rows; g_head_kwords = kwords;
                 g_head_kblk = kblk; g_head_Kpad = Kpad; g_head_ts = ts;
                 g_packedhead_on = 1;
                 d_logits = A((size_t)Smax*NVpad);
                 fprintf(stderr, "[packedhead] resident ON: packed lm_head [%dx%d] chunk=%ld rows, "
-                                "need %zu MiB free %zu MiB (no FP32 d_wte_pad)\n",
-                        rows, K, CHUNK, need/(1024*1024), freeb/(1024*1024));
+                                "scale=%s need %zu MiB free %zu MiB (no FP32 d_wte_pad)\n",
+                        rows, K, CHUNK, hfused?"raw-e4m3-micro":"fp32-effective", need/(1024*1024), freeb/(1024*1024));
                 return 0;
             }
-            if (pw) cuMemFree(pw); if (ps) cuMemFree(ps);                    /* non-fatal: release + fall to FP32 */
+            if (pw) cuMemFree(pw); if (ps) cuMemFree(ps); if (pts) cuMemFree(pts);  /* non-fatal: release + fall to FP32 */
             if (pc) cuMemFree(pc); if (pt) cuMemFree(pt);
             fprintf(stderr, "[packedhead] need %zu MiB +margin, free %zu MiB -> FP32 d_wte_pad fallback\n",
                     need/(1024*1024), freeb/(1024*1024));

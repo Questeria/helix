@@ -14086,6 +14086,257 @@ fn emit_ptx_bra_to_end(lbl: i32) -> i32 {
     emit_ptx_byte(59); emit_ptx_byte(10);
     0
 }
+// H4: "    setp.lt.s32 %p<pd>, %r<ra>, <imm>;\n" -- setp with an IMMEDIATE bound
+// (ptxas accepts an int immediate as the 2nd setp source). Saves one bound %r per
+// LUT arm vs the reg-reg emit_ptx_setp_lt_s32 -> keeps the fused decode (7 slots x
+// {8-arm frac + 16-arm pow}) under the %r<256> reg-file cap.
+fn emit_ptx_setp_lt_imm(pd: i32, ra: i32, imm: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(101); emit_ptx_byte(116);  // set
+    emit_ptx_byte(112); emit_ptx_byte(46); emit_ptx_byte(108);   // p.l
+    emit_ptx_byte(116); emit_ptx_byte(46); emit_ptx_byte(115);   // t.s
+    emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);     // 32 " "
+    emit_ptx_byte(37); emit_ptx_byte(112); emit_ptx_decimal(pd);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(ra);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_decimal(imm);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// H4: "    shr.u32 %r<rdst>, %r<rsrc>, %r<rsh>;\n" -- logical right shift by a
+// REGISTER amount (the immediate emit_ptx_shr_imm can't take a runtime shift).
+// Used to extract the mslot-th packed e4m3 micro byte (shamt = 8*mslot, runtime).
+// .u32 (unsigned/logical) so the high byte is extracted exactly (no sign fill).
+fn emit_ptx_shr_rr(rdst: i32, rsrc: i32, rsh: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(115); emit_ptx_byte(104); emit_ptx_byte(114);  // shr
+    emit_ptx_byte(46); emit_ptx_byte(117); emit_ptx_byte(51); emit_ptx_byte(50);  // .u32
+    emit_ptx_byte(32);
+    emit_ptx_r(rdst);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rsrc);
+    emit_ptx_byte(44); emit_ptx_byte(32);
+    emit_ptx_r(rsh);
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    0
+}
+// H4: "    ld.param.f32 %f<fr>, [param_<pidx>];\n" -- load a scalar f32 kernel
+// param (mirrors emit_ptx_ld_param_u32 but .f32 into an %f). NOTE the @kernel
+// param-decl loop emits f32-typed params as ".b64" (a pointer), NOT ".f32", so
+// this is NOT used for the fused kernel's `ts` (which is passed as a 1-elem f32
+// ARRAY and read via gload_f32 at index 0). Kept for completeness / future use.
+fn emit_ptx_ld_param_f32(fr: i32, pidx: i32) -> i32 {
+    emit_ptx_indent();
+    emit_ptx_byte(108); emit_ptx_byte(100); emit_ptx_byte(46);   // ld.
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);   // par
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(46);    // am.
+    emit_ptx_byte(102); emit_ptx_byte(51); emit_ptx_byte(50);    // f32
+    emit_ptx_byte(32);
+    emit_ptx_f(fr);
+    emit_ptx_byte(44); emit_ptx_byte(32); emit_ptx_byte(91);     // ", ["
+    emit_ptx_byte(112); emit_ptx_byte(97); emit_ptx_byte(114);   // par
+    emit_ptx_byte(97); emit_ptx_byte(109); emit_ptx_byte(95);    // am_
+    emit_ptx_decimal(pidx);
+    emit_ptx_byte(93); emit_ptx_byte(59); emit_ptx_byte(10);     // ];\n
+    fr
+}
+// H4: emit the E4M3 mantissa-fraction LUT: f_frac = FRAC[r_m] where r_m in 0..7
+// and FRAC = m/8 = {0,0.125,0.25,0.375,0.5,0.625,0.75,0.875}. EXACT f32 bit
+// patterns (m/8 is exactly representable). Same setp.lt + bra ladder as
+// emit_ptx_e2m1_mag_lut (no setp.eq in the seed): arm v runs "if r_m < v+1 ->
+// f_frac = FRAC[v]; bra END" else falls through; the final v=7 arm is default.
+fn emit_ptx_e4m3_frac_lut(f_frac: i32, r_m: i32, vtab: i32) -> i32 {
+    let lbl_end = ptx_alloc_label(vtab);
+    let p0 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p0, r_m, 1);
+    let l0 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p0, 0, l0);
+    emit_ptx_mov_f_bits(f_frac, 0);            // 0.0
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l0);
+    let p1 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p1, r_m, 2);
+    let l1 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p1, 0, l1);
+    emit_ptx_mov_f_bits(f_frac, 1040187392);   // 0.125 = 0x3E000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l1);
+    let p2 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p2, r_m, 3);
+    let l2 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p2, 0, l2);
+    emit_ptx_mov_f_bits(f_frac, 1048576000);   // 0.25 = 0x3E800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l2);
+    let p3 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p3, r_m, 4);
+    let l3 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p3, 0, l3);
+    emit_ptx_mov_f_bits(f_frac, 1052770304);   // 0.375 = 0x3EC00000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l3);
+    let p4 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p4, r_m, 5);
+    let l4 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p4, 0, l4);
+    emit_ptx_mov_f_bits(f_frac, 1056964608);   // 0.5 = 0x3F000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l4);
+    let p5 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p5, r_m, 6);
+    let l5 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p5, 0, l5);
+    emit_ptx_mov_f_bits(f_frac, 1059061760);   // 0.625 = 0x3F200000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l5);
+    let p6 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p6, r_m, 7);
+    let l6 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p6, 0, l6);
+    emit_ptx_mov_f_bits(f_frac, 1061158912);   // 0.75 = 0x3F400000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l6);
+    emit_ptx_mov_f_bits(f_frac, 1063256064);   // 0.875 = 0x3F600000 (default m==7)
+    emit_ptx_label_def(1, lbl_end);
+    0
+}
+// H4: emit the E4M3 magnitude pow LUT: f_pow = POW[r_e] where r_e in 0..15 and
+// POW = 2^(e-7) for e>=1, with POW[0]=2^-6 (subnormal uses 2^-6 = POW[1]). EXACT
+// f32 powers of two. Same setp.lt + bra ladder as the e2m1/frac LUTs (16 arms;
+// the final e==15 arm is the default). NaN code (e==15,m==7) never appears as a
+// real scale -> not special-cased (its f_pow=2^8 is a don't-care).
+fn emit_ptx_e4m3_pow_lut(f_pow: i32, r_e: i32, vtab: i32) -> i32 {
+    let lbl_end = ptx_alloc_label(vtab);
+    // arm 0: e < 1 -> 2^-6 (subnormal)
+    let p0 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p0, r_e, 1);
+    let l0 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p0, 0, l0);
+    emit_ptx_mov_f_bits(f_pow, 1015021568);    // 2^-6 = 0x3C800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l0);
+    // arm 1: e < 2 -> 2^-6 (e==1 normal: 2^(1-7))
+    let p1 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p1, r_e, 2);
+    let l1 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p1, 0, l1);
+    emit_ptx_mov_f_bits(f_pow, 1015021568);    // 2^-6 = 0x3C800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l1);
+    // arm 2: e < 3 -> 2^-5
+    let p2 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p2, r_e, 3);
+    let l2 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p2, 0, l2);
+    emit_ptx_mov_f_bits(f_pow, 1023410176);    // 2^-5 = 0x3D000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l2);
+    // arm 3: e < 4 -> 2^-4
+    let p3 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p3, r_e, 4);
+    let l3 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p3, 0, l3);
+    emit_ptx_mov_f_bits(f_pow, 1031798784);    // 2^-4 = 0x3D800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l3);
+    // arm 4: e < 5 -> 2^-3
+    let p4 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p4, r_e, 5);
+    let l4 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p4, 0, l4);
+    emit_ptx_mov_f_bits(f_pow, 1040187392);    // 2^-3 = 0x3E000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l4);
+    // arm 5: e < 6 -> 2^-2
+    let p5 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p5, r_e, 6);
+    let l5 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p5, 0, l5);
+    emit_ptx_mov_f_bits(f_pow, 1048576000);    // 2^-2 = 0x3E800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l5);
+    // arm 6: e < 7 -> 2^-1
+    let p6 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p6, r_e, 7);
+    let l6 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p6, 0, l6);
+    emit_ptx_mov_f_bits(f_pow, 1056964608);    // 2^-1 = 0x3F000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l6);
+    // arm 7: e < 8 -> 2^0
+    let p7 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p7, r_e, 8);
+    let l7 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p7, 0, l7);
+    emit_ptx_mov_f_bits(f_pow, 1065353216);    // 2^0 = 0x3F800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l7);
+    // arm 8: e < 9 -> 2^1
+    let p8 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p8, r_e, 9);
+    let l8 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p8, 0, l8);
+    emit_ptx_mov_f_bits(f_pow, 1073741824);    // 2^1 = 0x40000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l8);
+    // arm 9: e < 10 -> 2^2
+    let p9 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p9, r_e, 10);
+    let l9 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p9, 0, l9);
+    emit_ptx_mov_f_bits(f_pow, 1082130432);    // 2^2 = 0x40800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, l9);
+    // arm 10: e < 11 -> 2^3
+    let pa = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(pa, r_e, 11);
+    let la = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(pa, 0, la);
+    emit_ptx_mov_f_bits(f_pow, 1090519040);    // 2^3 = 0x41000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, la);
+    // arm 11: e < 12 -> 2^4
+    let pb = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(pb, r_e, 12);
+    let lb = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(pb, 0, lb);
+    emit_ptx_mov_f_bits(f_pow, 1098907648);    // 2^4 = 0x41800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, lb);
+    // arm 12: e < 13 -> 2^5
+    let pc = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(pc, r_e, 13);
+    let lc = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(pc, 0, lc);
+    emit_ptx_mov_f_bits(f_pow, 1107296256);    // 2^5 = 0x42000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, lc);
+    // arm 13: e < 14 -> 2^6
+    let pd = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(pd, r_e, 14);
+    let ld = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(pd, 0, ld);
+    emit_ptx_mov_f_bits(f_pow, 1115684864);    // 2^6 = 0x42800000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, ld);
+    // arm 14: e < 15 -> 2^7
+    let pe = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(pe, r_e, 15);
+    let le = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(pe, 0, le);
+    emit_ptx_mov_f_bits(f_pow, 1124073472);    // 2^7 = 0x43000000
+    emit_ptx_bra_to_end(lbl_end);
+    emit_ptx_label_def(0, le);
+    // arm 15 (default, e==15): 2^8
+    emit_ptx_mov_f_bits(f_pow, 1132462080);    // 2^8 = 0x43800000
+    emit_ptx_label_def(1, lbl_end);
+    0
+}
+// H4: decode ONE e4m3 micro byte -> the effective f32 scale (= e4m3_decode(micro)
+// * ts), BYTE-IDENTICAL to the host g_e4m3_tab[micro]*ts. Inputs: r_mw = the packed
+// micro i32 word (4 micro/word, base-256 low-byte-first), r_bidx = the byte index
+// 0..3, f_ts = the per-tensor f32 scale (already loaded). Writes f_out.
+//   byte = (r_mw >> (8*r_bidx)) & 0xFF   (shr.u32 reg + and.b32 -- exact, unsigned)
+//   s = byte>>7 ; e = (byte>>3)&15 ; m = byte&7
+//   mant = (e==0 ? 0.0 : 1.0) + FRAC[m]  ;  mag = mant * POW[e]
+//   eff  = (s==0 ? mag : -mag) * ts
+// The mantissa-fraction (m/8) and the 2^(e-7) magnitude are EXACT f32 literals from
+// the two LUTs, and 1.0+m/8 / mag*pow / negate / *ts are the SAME ops the host's
+// (1+m/8)*2^(e-7) does -> bit-identical (verified exhaustively over the 254 codes).
+fn emit_ptx_e4m3_eff_scale(f_out: i32, r_mw: i32, r_bidx: i32, f_ts: i32, vtab: i32) -> i32 {
+    // shamt = bidx*8 ; byte = (mw >> shamt) & 0xFF
+    let r_sh = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_sh, r_bidx, 8);
+    let r_shb = ptx_alloc_reg(vtab); emit_ptx_shr_rr(r_shb, r_mw, r_sh);
+    let r_byte = ptx_alloc_reg(vtab); emit_ptx_and_imm(r_byte, r_shb, 255);
+    // s = byte >> 7  (byte<256 -> 0 or 1)
+    let r_sign = ptx_alloc_reg(vtab); emit_ptx_shr_imm(r_sign, r_byte, 7);
+    // e = (byte >> 3) & 15
+    let r_e0 = ptx_alloc_reg(vtab); emit_ptx_shr_imm(r_e0, r_byte, 3);
+    let r_e = ptx_alloc_reg(vtab); emit_ptx_and_imm(r_e, r_e0, 15);
+    // m = byte & 7
+    let r_m = ptx_alloc_reg(vtab); emit_ptx_and_imm(r_m, r_byte, 7);
+    // f_frac = FRAC[m] ; f_pow = POW[e]
+    let f_frac = ptx_alloc_f(vtab); emit_ptx_e4m3_frac_lut(f_frac, r_m, vtab);
+    let f_pow = ptx_alloc_f(vtab); emit_ptx_e4m3_pow_lut(f_pow, r_e, vtab);
+    // mantbase = (e==0) ? 0.0 : 1.0  (default 1.0; if e<1 set 0.0 via skip idiom)
+    let f_mb = ptx_alloc_f(vtab); emit_ptx_mov_f_bits(f_mb, 1065353216);   // 1.0
+    let p_e0 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p_e0, r_e, 1);   // e<1 == e==0
+    let l_e1 = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p_e0, 0, l_e1);   // e!=0 -> keep 1.0
+    emit_ptx_mov_f_bits(f_mb, 0);                                          // e==0 -> 0.0
+    emit_ptx_label_def(0, l_e1);
+    // mant = mantbase + frac ; mag = mant * pow
+    let f_mant = ptx_alloc_f(vtab); emit_ptx_binop_f3(0, f_mant, f_mb, f_frac);   // add
+    let f_mag = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_mag, f_mant, f_pow);    // mul
+    // signed magnitude: default = f_mag ; if sign!=0 negate (0.0 - f_mag)
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let f_sm = ptx_alloc_f(vtab); emit_ptx_mov_f_reg(f_sm, f_mag);
+    let p_sp = ptx_alloc_pred(vtab); emit_ptx_setp_lt_imm(p_sp, r_sign, 1);  // sign<1 == sign==0
+    let l_neg = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p_sp, 0, l_neg);  // sign!=0 -> negate
+    let l_pos = ptx_alloc_label(vtab); emit_ptx_bra_to_end(l_pos);          // sign==0: keep, skip negate
+    emit_ptx_label_def(0, l_neg);
+    emit_ptx_binop_f3(1, f_sm, f_zero, f_mag);                             // f_sm = 0.0 - f_mag
+    emit_ptx_label_def(1, l_pos);
+    // eff = signed_mag * ts
+    emit_ptx_binop_f3(2, f_out, f_sm, f_ts);                               // mul
+    0
+}
 // "__dequant_gemv_blockred" (23 chars) name matcher. Byte-compare idiom copied
 // from ptx_name_is_softmax_blockred.
 fn ptx_name_is_dequant_gemv_blockred(name_s: i32, name_l: i32) -> i32 {
@@ -14132,25 +14383,35 @@ fn emit_ptx_dequant_gemv_blockred(node: i32, vtab: i32) -> i32 {
     let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
     let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
     let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2); let a5 = __arena_get(n5 + 1);
+    // H4 params: (x, w_packed, micro, ts, y, kpad).
     let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
     let pw = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
-    let psc = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
-    let py = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
-    let pk = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    let pmic = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let pts = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let py = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    let pk = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
     emit_ptx_shared_decl(0, 1024);   // smem reduction buffer (256 f32)
     let r_tid = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_tid, 0);   // tid.x
     let r_n = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_n, 2);       // ctaid.x = output row n
     let r_kp = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_kp, pk);  // kpad (= K)
     let rd_x = emit_ptx_param_global_base(px, vtab);
     let rd_w = emit_ptx_param_global_base(pw, vtab);
-    let rd_sc = emit_ptx_param_global_base(psc, vtab);
+    let rd_mic = emit_ptx_param_global_base(pmic, vtab);    // packed e4m3 micro words
+    let rd_ts = emit_ptx_param_global_base(pts, vtab);      // per-tensor ts (1-elem f32 array)
     let rd_y = emit_ptx_param_global_base(py, vtab);
     let r_sm = ptx_alloc_reg(vtab); emit_ptx_mov_sym(r_sm, 0);
+    // H4: f_ts = ts[0] (the per-tensor f32 scale; loaded once).
+    let r_z0 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_z0, 0);
+    let f_ts = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_ts, rd_ts, r_z0, vtab);
     // kwords = kpad/7 ; wbase = n*kwords ; scstride = kpad/16 ; scbase = n*scstride.
+    // micstride = ceil(scstride/4) = (scstride+3)/4 (4 micro/word) ; micbase = n*micstride.
     let r_kw = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_kw, r_kp, 7);
     let r_wb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_wb, r_n, r_kw);
-    let r_scs = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_scs, r_kp, 16);
-    let r_scb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_scb, r_n, r_scs);
+    let r_scs = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_scs, r_kp, 16);   // scstride = kpad/16
+    let r_mcs3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_mcs3, r_scs, 3);    // scstride+3
+    let r_mcs = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_mcs, r_mcs3, 4);     // /4 = micstride
+    let r_mcb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_mcb, r_n, r_mcs);       // micbase = n*micstride
     // per-thread partial acc = 0 ; word = tid (coalesced stripe across the row).
     let f_acc = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_acc);
     let r_word = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_word, r_tid);
@@ -14187,10 +14448,15 @@ fn emit_ptx_dequant_gemv_blockred(node: i32, vtab: i32) -> i32 {
         emit_ptx_label_def(0, l_neg);
         emit_ptx_binop_f3(1, f_val0, f_zero, f_mag);               // f_val0 = 0.0 - f_mag
         emit_ptx_label_def(1, l_sgn);
-        // scale: f_sc = sc[scbase + col/16]
+        // H4 scale: decode the raw e4m3 micro for this 16-block IN-KERNEL.
+        // blk = col/16 (block within row) ; micro word = micbase + blk/4, byte = blk mod 4.
         let r_blk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_blk, r_col, 16);
-        let r_sci = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_sci, r_scb, r_blk);
-        let f_sc = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_sc, rd_sc, r_sci, vtab);
+        let r_mwr = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_mwr, r_blk, 4);     // blk/4 (word within row)
+        let r_mwi = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_mwi, r_mcb, r_mwr);    // absolute micro word index
+        let r_mw4 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_mw4, r_mwr, 4);     // (blk/4)*4
+        let r_bsl = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_bsl, r_blk, r_mw4);    // byte slot = blk - (blk/4)*4
+        let r_mw = ptx_alloc_reg(vtab); emit_ptx_gload_u32(r_mw, rd_mic, r_mwi, vtab);  // packed micro word
+        let f_sc = ptx_alloc_f(vtab); emit_ptx_e4m3_eff_scale(f_sc, r_mw, r_bsl, f_ts, vtab);
         // f_val = f_val0 * f_sc
         let f_val = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_val, f_val0, f_sc);
         // f_x = x[col]

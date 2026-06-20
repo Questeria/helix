@@ -1,0 +1,1633 @@
+.version 8.3
+.target sm_86
+.address_size 64
+
+.visible .entry dequant_gemv_blockred(.param .b64 param_0, .param .b64 param_1, .param .b64 param_2, .param .b64 param_3, .param .b64 param_4, .param .u32 param_5)
+{
+    .reg .pred  %p<256>;
+    .reg .b32   %r<256>;
+    .reg .b64   %rd<256>;
+    .reg .f32   %f<256>;
+    .reg .b16   %h<256>;
+
+    .shared .align 16 .b8 smem_a0[1024];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    ld.param.u32 %r2, [param_5];
+    ld.param.u64 %rd0, [param_0];
+    cvta.to.global.u64 %rd1, %rd0;
+    ld.param.u64 %rd2, [param_1];
+    cvta.to.global.u64 %rd3, %rd2;
+    ld.param.u64 %rd4, [param_2];
+    cvta.to.global.u64 %rd5, %rd4;
+    ld.param.u64 %rd6, [param_3];
+    cvta.to.global.u64 %rd7, %rd6;
+    ld.param.u64 %rd8, [param_4];
+    cvta.to.global.u64 %rd9, %rd8;
+    mov.u32 %r3, smem_a0;
+    mov.s32 %r4, 0;
+    mul.wide.s32 %rd10, %r4, 4;
+    add.s64 %rd11, %rd7, %rd10;
+    ld.global.f32 %f0, [%rd11];
+    div.s32 %r5, %r2, 7;
+    mul.lo.s32 %r6, %r1, %r5;
+    div.s32 %r7, %r2, 16;
+    add.s32 %r8, %r7, 3;
+    div.s32 %r9, %r8, 4;
+    mul.lo.s32 %r10, %r1, %r9;
+    mov.f32 %f1, 0f00000000;
+    mov.s32 %r11, %r0;
+    mov.f32 %f2, 0f00000000;
+    mov.s32 %r12, 1;
+$Ltop_0:
+    setp.lt.s32 %p0, %r11, %r5;
+    @!%p0 bra $Lwend_0;
+    add.s32 %r13, %r6, %r11;
+    mul.wide.s32 %rd12, %r13, 4;
+    add.s64 %rd13, %rd3, %rd12;
+    ld.global.u32 %r14, [%rd13];
+    mul.lo.s32 %r15, %r11, 7;
+    add.s32 %r16, %r15, 0;
+    div.s32 %r17, %r14, 16;
+    mul.lo.s32 %r18, %r17, 16;
+    sub.s32 %r19, %r14, %r18;
+    div.s32 %r20, %r19, 8;
+    mul.lo.s32 %r21, %r20, 8;
+    sub.s32 %r22, %r19, %r21;
+    mov.s32 %r23, 1;
+    setp.lt.s32 %p1, %r22, %r23;
+    @!%p1 bra $Lelse_2;
+    mov.f32 %f3, 0f00000000;
+    bra $Lend_1;
+$Lelse_2:
+    mov.s32 %r24, 2;
+    setp.lt.s32 %p2, %r22, %r24;
+    @!%p2 bra $Lelse_3;
+    mov.f32 %f3, 0f3F000000;
+    bra $Lend_1;
+$Lelse_3:
+    mov.s32 %r25, 3;
+    setp.lt.s32 %p3, %r22, %r25;
+    @!%p3 bra $Lelse_4;
+    mov.f32 %f3, 0f3F800000;
+    bra $Lend_1;
+$Lelse_4:
+    mov.s32 %r26, 4;
+    setp.lt.s32 %p4, %r22, %r26;
+    @!%p4 bra $Lelse_5;
+    mov.f32 %f3, 0f3FC00000;
+    bra $Lend_1;
+$Lelse_5:
+    mov.s32 %r27, 5;
+    setp.lt.s32 %p5, %r22, %r27;
+    @!%p5 bra $Lelse_6;
+    mov.f32 %f3, 0f40000000;
+    bra $Lend_1;
+$Lelse_6:
+    mov.s32 %r28, 6;
+    setp.lt.s32 %p6, %r22, %r28;
+    @!%p6 bra $Lelse_7;
+    mov.f32 %f3, 0f40400000;
+    bra $Lend_1;
+$Lelse_7:
+    mov.s32 %r29, 7;
+    setp.lt.s32 %p7, %r22, %r29;
+    @!%p7 bra $Lelse_8;
+    mov.f32 %f3, 0f40800000;
+    bra $Lend_1;
+$Lelse_8:
+    mov.f32 %f3, 0f40C00000;
+$Lend_1:
+    mov.f32 %f4, %f3;
+    setp.lt.s32 %p8, %r20, %r12;
+    @!%p8 bra $Lelse_9;
+    bra $Lend_10;
+$Lelse_9:
+    sub.f32 %f4, %f2, %f3;
+$Lend_10:
+    div.s32 %r30, %r16, 16;
+    div.s32 %r31, %r30, 4;
+    add.s32 %r32, %r10, %r31;
+    mul.lo.s32 %r33, %r31, 4;
+    sub.s32 %r34, %r30, %r33;
+    mul.wide.s32 %rd14, %r32, 4;
+    add.s64 %rd15, %rd5, %rd14;
+    ld.global.u32 %r35, [%rd15];
+    mul.lo.s32 %r36, %r34, 8;
+    shr.u32 %r37, %r35, %r36;
+    and.b32 %r38, %r37, 255;
+    shr.u32 %r39, %r38, 7;
+    shr.u32 %r40, %r38, 3;
+    and.b32 %r41, %r40, 15;
+    and.b32 %r42, %r38, 7;
+    setp.lt.s32 %p9, %r42, 1;
+    @!%p9 bra $Lelse_12;
+    mov.f32 %f6, 0f00000000;
+    bra $Lend_11;
+$Lelse_12:
+    setp.lt.s32 %p10, %r42, 2;
+    @!%p10 bra $Lelse_13;
+    mov.f32 %f6, 0f3E000000;
+    bra $Lend_11;
+$Lelse_13:
+    setp.lt.s32 %p11, %r42, 3;
+    @!%p11 bra $Lelse_14;
+    mov.f32 %f6, 0f3E800000;
+    bra $Lend_11;
+$Lelse_14:
+    setp.lt.s32 %p12, %r42, 4;
+    @!%p12 bra $Lelse_15;
+    mov.f32 %f6, 0f3EC00000;
+    bra $Lend_11;
+$Lelse_15:
+    setp.lt.s32 %p13, %r42, 5;
+    @!%p13 bra $Lelse_16;
+    mov.f32 %f6, 0f3F000000;
+    bra $Lend_11;
+$Lelse_16:
+    setp.lt.s32 %p14, %r42, 6;
+    @!%p14 bra $Lelse_17;
+    mov.f32 %f6, 0f3F200000;
+    bra $Lend_11;
+$Lelse_17:
+    setp.lt.s32 %p15, %r42, 7;
+    @!%p15 bra $Lelse_18;
+    mov.f32 %f6, 0f3F400000;
+    bra $Lend_11;
+$Lelse_18:
+    mov.f32 %f6, 0f3F600000;
+$Lend_11:
+    setp.lt.s32 %p16, %r41, 1;
+    @!%p16 bra $Lelse_20;
+    mov.f32 %f7, 0f3C800000;
+    bra $Lend_19;
+$Lelse_20:
+    setp.lt.s32 %p17, %r41, 2;
+    @!%p17 bra $Lelse_21;
+    mov.f32 %f7, 0f3C800000;
+    bra $Lend_19;
+$Lelse_21:
+    setp.lt.s32 %p18, %r41, 3;
+    @!%p18 bra $Lelse_22;
+    mov.f32 %f7, 0f3D000000;
+    bra $Lend_19;
+$Lelse_22:
+    setp.lt.s32 %p19, %r41, 4;
+    @!%p19 bra $Lelse_23;
+    mov.f32 %f7, 0f3D800000;
+    bra $Lend_19;
+$Lelse_23:
+    setp.lt.s32 %p20, %r41, 5;
+    @!%p20 bra $Lelse_24;
+    mov.f32 %f7, 0f3E000000;
+    bra $Lend_19;
+$Lelse_24:
+    setp.lt.s32 %p21, %r41, 6;
+    @!%p21 bra $Lelse_25;
+    mov.f32 %f7, 0f3E800000;
+    bra $Lend_19;
+$Lelse_25:
+    setp.lt.s32 %p22, %r41, 7;
+    @!%p22 bra $Lelse_26;
+    mov.f32 %f7, 0f3F000000;
+    bra $Lend_19;
+$Lelse_26:
+    setp.lt.s32 %p23, %r41, 8;
+    @!%p23 bra $Lelse_27;
+    mov.f32 %f7, 0f3F800000;
+    bra $Lend_19;
+$Lelse_27:
+    setp.lt.s32 %p24, %r41, 9;
+    @!%p24 bra $Lelse_28;
+    mov.f32 %f7, 0f40000000;
+    bra $Lend_19;
+$Lelse_28:
+    setp.lt.s32 %p25, %r41, 10;
+    @!%p25 bra $Lelse_29;
+    mov.f32 %f7, 0f40800000;
+    bra $Lend_19;
+$Lelse_29:
+    setp.lt.s32 %p26, %r41, 11;
+    @!%p26 bra $Lelse_30;
+    mov.f32 %f7, 0f41000000;
+    bra $Lend_19;
+$Lelse_30:
+    setp.lt.s32 %p27, %r41, 12;
+    @!%p27 bra $Lelse_31;
+    mov.f32 %f7, 0f41800000;
+    bra $Lend_19;
+$Lelse_31:
+    setp.lt.s32 %p28, %r41, 13;
+    @!%p28 bra $Lelse_32;
+    mov.f32 %f7, 0f42000000;
+    bra $Lend_19;
+$Lelse_32:
+    setp.lt.s32 %p29, %r41, 14;
+    @!%p29 bra $Lelse_33;
+    mov.f32 %f7, 0f42800000;
+    bra $Lend_19;
+$Lelse_33:
+    setp.lt.s32 %p30, %r41, 15;
+    @!%p30 bra $Lelse_34;
+    mov.f32 %f7, 0f43000000;
+    bra $Lend_19;
+$Lelse_34:
+    mov.f32 %f7, 0f43800000;
+$Lend_19:
+    mov.f32 %f8, 0f3F800000;
+    setp.lt.s32 %p31, %r41, 1;
+    @!%p31 bra $Lelse_35;
+    mov.f32 %f8, 0f00000000;
+$Lelse_35:
+    add.f32 %f9, %f8, %f6;
+    mul.f32 %f10, %f9, %f7;
+    mov.f32 %f11, 0f00000000;
+    mov.f32 %f12, %f10;
+    setp.lt.s32 %p32, %r39, 1;
+    @!%p32 bra $Lelse_36;
+    bra $Lend_37;
+$Lelse_36:
+    sub.f32 %f12, %f11, %f10;
+$Lend_37:
+    mul.f32 %f5, %f12, %f0;
+    mul.f32 %f13, %f4, %f5;
+    mul.wide.s32 %rd16, %r16, 4;
+    add.s64 %rd17, %rd1, %rd16;
+    ld.global.f32 %f14, [%rd17];
+    fma.rn.f32 %f15, %f14, %f13, %f1;
+    mov.f32 %f1, %f15;
+    mov.s32 %r14, %r17;
+    add.s32 %r43, %r15, 1;
+    div.s32 %r44, %r14, 16;
+    mul.lo.s32 %r45, %r44, 16;
+    sub.s32 %r46, %r14, %r45;
+    div.s32 %r47, %r46, 8;
+    mul.lo.s32 %r48, %r47, 8;
+    sub.s32 %r49, %r46, %r48;
+    mov.s32 %r50, 1;
+    setp.lt.s32 %p33, %r49, %r50;
+    @!%p33 bra $Lelse_39;
+    mov.f32 %f16, 0f00000000;
+    bra $Lend_38;
+$Lelse_39:
+    mov.s32 %r51, 2;
+    setp.lt.s32 %p34, %r49, %r51;
+    @!%p34 bra $Lelse_40;
+    mov.f32 %f16, 0f3F000000;
+    bra $Lend_38;
+$Lelse_40:
+    mov.s32 %r52, 3;
+    setp.lt.s32 %p35, %r49, %r52;
+    @!%p35 bra $Lelse_41;
+    mov.f32 %f16, 0f3F800000;
+    bra $Lend_38;
+$Lelse_41:
+    mov.s32 %r53, 4;
+    setp.lt.s32 %p36, %r49, %r53;
+    @!%p36 bra $Lelse_42;
+    mov.f32 %f16, 0f3FC00000;
+    bra $Lend_38;
+$Lelse_42:
+    mov.s32 %r54, 5;
+    setp.lt.s32 %p37, %r49, %r54;
+    @!%p37 bra $Lelse_43;
+    mov.f32 %f16, 0f40000000;
+    bra $Lend_38;
+$Lelse_43:
+    mov.s32 %r55, 6;
+    setp.lt.s32 %p38, %r49, %r55;
+    @!%p38 bra $Lelse_44;
+    mov.f32 %f16, 0f40400000;
+    bra $Lend_38;
+$Lelse_44:
+    mov.s32 %r56, 7;
+    setp.lt.s32 %p39, %r49, %r56;
+    @!%p39 bra $Lelse_45;
+    mov.f32 %f16, 0f40800000;
+    bra $Lend_38;
+$Lelse_45:
+    mov.f32 %f16, 0f40C00000;
+$Lend_38:
+    mov.f32 %f17, %f16;
+    setp.lt.s32 %p40, %r47, %r12;
+    @!%p40 bra $Lelse_46;
+    bra $Lend_47;
+$Lelse_46:
+    sub.f32 %f17, %f2, %f16;
+$Lend_47:
+    div.s32 %r57, %r43, 16;
+    div.s32 %r58, %r57, 4;
+    add.s32 %r59, %r10, %r58;
+    mul.lo.s32 %r60, %r58, 4;
+    sub.s32 %r61, %r57, %r60;
+    mul.wide.s32 %rd18, %r59, 4;
+    add.s64 %rd19, %rd5, %rd18;
+    ld.global.u32 %r62, [%rd19];
+    mul.lo.s32 %r63, %r61, 8;
+    shr.u32 %r64, %r62, %r63;
+    and.b32 %r65, %r64, 255;
+    shr.u32 %r66, %r65, 7;
+    shr.u32 %r67, %r65, 3;
+    and.b32 %r68, %r67, 15;
+    and.b32 %r69, %r65, 7;
+    setp.lt.s32 %p41, %r69, 1;
+    @!%p41 bra $Lelse_49;
+    mov.f32 %f19, 0f00000000;
+    bra $Lend_48;
+$Lelse_49:
+    setp.lt.s32 %p42, %r69, 2;
+    @!%p42 bra $Lelse_50;
+    mov.f32 %f19, 0f3E000000;
+    bra $Lend_48;
+$Lelse_50:
+    setp.lt.s32 %p43, %r69, 3;
+    @!%p43 bra $Lelse_51;
+    mov.f32 %f19, 0f3E800000;
+    bra $Lend_48;
+$Lelse_51:
+    setp.lt.s32 %p44, %r69, 4;
+    @!%p44 bra $Lelse_52;
+    mov.f32 %f19, 0f3EC00000;
+    bra $Lend_48;
+$Lelse_52:
+    setp.lt.s32 %p45, %r69, 5;
+    @!%p45 bra $Lelse_53;
+    mov.f32 %f19, 0f3F000000;
+    bra $Lend_48;
+$Lelse_53:
+    setp.lt.s32 %p46, %r69, 6;
+    @!%p46 bra $Lelse_54;
+    mov.f32 %f19, 0f3F200000;
+    bra $Lend_48;
+$Lelse_54:
+    setp.lt.s32 %p47, %r69, 7;
+    @!%p47 bra $Lelse_55;
+    mov.f32 %f19, 0f3F400000;
+    bra $Lend_48;
+$Lelse_55:
+    mov.f32 %f19, 0f3F600000;
+$Lend_48:
+    setp.lt.s32 %p48, %r68, 1;
+    @!%p48 bra $Lelse_57;
+    mov.f32 %f20, 0f3C800000;
+    bra $Lend_56;
+$Lelse_57:
+    setp.lt.s32 %p49, %r68, 2;
+    @!%p49 bra $Lelse_58;
+    mov.f32 %f20, 0f3C800000;
+    bra $Lend_56;
+$Lelse_58:
+    setp.lt.s32 %p50, %r68, 3;
+    @!%p50 bra $Lelse_59;
+    mov.f32 %f20, 0f3D000000;
+    bra $Lend_56;
+$Lelse_59:
+    setp.lt.s32 %p51, %r68, 4;
+    @!%p51 bra $Lelse_60;
+    mov.f32 %f20, 0f3D800000;
+    bra $Lend_56;
+$Lelse_60:
+    setp.lt.s32 %p52, %r68, 5;
+    @!%p52 bra $Lelse_61;
+    mov.f32 %f20, 0f3E000000;
+    bra $Lend_56;
+$Lelse_61:
+    setp.lt.s32 %p53, %r68, 6;
+    @!%p53 bra $Lelse_62;
+    mov.f32 %f20, 0f3E800000;
+    bra $Lend_56;
+$Lelse_62:
+    setp.lt.s32 %p54, %r68, 7;
+    @!%p54 bra $Lelse_63;
+    mov.f32 %f20, 0f3F000000;
+    bra $Lend_56;
+$Lelse_63:
+    setp.lt.s32 %p55, %r68, 8;
+    @!%p55 bra $Lelse_64;
+    mov.f32 %f20, 0f3F800000;
+    bra $Lend_56;
+$Lelse_64:
+    setp.lt.s32 %p56, %r68, 9;
+    @!%p56 bra $Lelse_65;
+    mov.f32 %f20, 0f40000000;
+    bra $Lend_56;
+$Lelse_65:
+    setp.lt.s32 %p57, %r68, 10;
+    @!%p57 bra $Lelse_66;
+    mov.f32 %f20, 0f40800000;
+    bra $Lend_56;
+$Lelse_66:
+    setp.lt.s32 %p58, %r68, 11;
+    @!%p58 bra $Lelse_67;
+    mov.f32 %f20, 0f41000000;
+    bra $Lend_56;
+$Lelse_67:
+    setp.lt.s32 %p59, %r68, 12;
+    @!%p59 bra $Lelse_68;
+    mov.f32 %f20, 0f41800000;
+    bra $Lend_56;
+$Lelse_68:
+    setp.lt.s32 %p60, %r68, 13;
+    @!%p60 bra $Lelse_69;
+    mov.f32 %f20, 0f42000000;
+    bra $Lend_56;
+$Lelse_69:
+    setp.lt.s32 %p61, %r68, 14;
+    @!%p61 bra $Lelse_70;
+    mov.f32 %f20, 0f42800000;
+    bra $Lend_56;
+$Lelse_70:
+    setp.lt.s32 %p62, %r68, 15;
+    @!%p62 bra $Lelse_71;
+    mov.f32 %f20, 0f43000000;
+    bra $Lend_56;
+$Lelse_71:
+    mov.f32 %f20, 0f43800000;
+$Lend_56:
+    mov.f32 %f21, 0f3F800000;
+    setp.lt.s32 %p63, %r68, 1;
+    @!%p63 bra $Lelse_72;
+    mov.f32 %f21, 0f00000000;
+$Lelse_72:
+    add.f32 %f22, %f21, %f19;
+    mul.f32 %f23, %f22, %f20;
+    mov.f32 %f24, 0f00000000;
+    mov.f32 %f25, %f23;
+    setp.lt.s32 %p64, %r66, 1;
+    @!%p64 bra $Lelse_73;
+    bra $Lend_74;
+$Lelse_73:
+    sub.f32 %f25, %f24, %f23;
+$Lend_74:
+    mul.f32 %f18, %f25, %f0;
+    mul.f32 %f26, %f17, %f18;
+    mul.wide.s32 %rd20, %r43, 4;
+    add.s64 %rd21, %rd1, %rd20;
+    ld.global.f32 %f27, [%rd21];
+    fma.rn.f32 %f28, %f27, %f26, %f1;
+    mov.f32 %f1, %f28;
+    mov.s32 %r14, %r44;
+    add.s32 %r70, %r15, 2;
+    div.s32 %r71, %r14, 16;
+    mul.lo.s32 %r72, %r71, 16;
+    sub.s32 %r73, %r14, %r72;
+    div.s32 %r74, %r73, 8;
+    mul.lo.s32 %r75, %r74, 8;
+    sub.s32 %r76, %r73, %r75;
+    mov.s32 %r77, 1;
+    setp.lt.s32 %p65, %r76, %r77;
+    @!%p65 bra $Lelse_76;
+    mov.f32 %f29, 0f00000000;
+    bra $Lend_75;
+$Lelse_76:
+    mov.s32 %r78, 2;
+    setp.lt.s32 %p66, %r76, %r78;
+    @!%p66 bra $Lelse_77;
+    mov.f32 %f29, 0f3F000000;
+    bra $Lend_75;
+$Lelse_77:
+    mov.s32 %r79, 3;
+    setp.lt.s32 %p67, %r76, %r79;
+    @!%p67 bra $Lelse_78;
+    mov.f32 %f29, 0f3F800000;
+    bra $Lend_75;
+$Lelse_78:
+    mov.s32 %r80, 4;
+    setp.lt.s32 %p68, %r76, %r80;
+    @!%p68 bra $Lelse_79;
+    mov.f32 %f29, 0f3FC00000;
+    bra $Lend_75;
+$Lelse_79:
+    mov.s32 %r81, 5;
+    setp.lt.s32 %p69, %r76, %r81;
+    @!%p69 bra $Lelse_80;
+    mov.f32 %f29, 0f40000000;
+    bra $Lend_75;
+$Lelse_80:
+    mov.s32 %r82, 6;
+    setp.lt.s32 %p70, %r76, %r82;
+    @!%p70 bra $Lelse_81;
+    mov.f32 %f29, 0f40400000;
+    bra $Lend_75;
+$Lelse_81:
+    mov.s32 %r83, 7;
+    setp.lt.s32 %p71, %r76, %r83;
+    @!%p71 bra $Lelse_82;
+    mov.f32 %f29, 0f40800000;
+    bra $Lend_75;
+$Lelse_82:
+    mov.f32 %f29, 0f40C00000;
+$Lend_75:
+    mov.f32 %f30, %f29;
+    setp.lt.s32 %p72, %r74, %r12;
+    @!%p72 bra $Lelse_83;
+    bra $Lend_84;
+$Lelse_83:
+    sub.f32 %f30, %f2, %f29;
+$Lend_84:
+    div.s32 %r84, %r70, 16;
+    div.s32 %r85, %r84, 4;
+    add.s32 %r86, %r10, %r85;
+    mul.lo.s32 %r87, %r85, 4;
+    sub.s32 %r88, %r84, %r87;
+    mul.wide.s32 %rd22, %r86, 4;
+    add.s64 %rd23, %rd5, %rd22;
+    ld.global.u32 %r89, [%rd23];
+    mul.lo.s32 %r90, %r88, 8;
+    shr.u32 %r91, %r89, %r90;
+    and.b32 %r92, %r91, 255;
+    shr.u32 %r93, %r92, 7;
+    shr.u32 %r94, %r92, 3;
+    and.b32 %r95, %r94, 15;
+    and.b32 %r96, %r92, 7;
+    setp.lt.s32 %p73, %r96, 1;
+    @!%p73 bra $Lelse_86;
+    mov.f32 %f32, 0f00000000;
+    bra $Lend_85;
+$Lelse_86:
+    setp.lt.s32 %p74, %r96, 2;
+    @!%p74 bra $Lelse_87;
+    mov.f32 %f32, 0f3E000000;
+    bra $Lend_85;
+$Lelse_87:
+    setp.lt.s32 %p75, %r96, 3;
+    @!%p75 bra $Lelse_88;
+    mov.f32 %f32, 0f3E800000;
+    bra $Lend_85;
+$Lelse_88:
+    setp.lt.s32 %p76, %r96, 4;
+    @!%p76 bra $Lelse_89;
+    mov.f32 %f32, 0f3EC00000;
+    bra $Lend_85;
+$Lelse_89:
+    setp.lt.s32 %p77, %r96, 5;
+    @!%p77 bra $Lelse_90;
+    mov.f32 %f32, 0f3F000000;
+    bra $Lend_85;
+$Lelse_90:
+    setp.lt.s32 %p78, %r96, 6;
+    @!%p78 bra $Lelse_91;
+    mov.f32 %f32, 0f3F200000;
+    bra $Lend_85;
+$Lelse_91:
+    setp.lt.s32 %p79, %r96, 7;
+    @!%p79 bra $Lelse_92;
+    mov.f32 %f32, 0f3F400000;
+    bra $Lend_85;
+$Lelse_92:
+    mov.f32 %f32, 0f3F600000;
+$Lend_85:
+    setp.lt.s32 %p80, %r95, 1;
+    @!%p80 bra $Lelse_94;
+    mov.f32 %f33, 0f3C800000;
+    bra $Lend_93;
+$Lelse_94:
+    setp.lt.s32 %p81, %r95, 2;
+    @!%p81 bra $Lelse_95;
+    mov.f32 %f33, 0f3C800000;
+    bra $Lend_93;
+$Lelse_95:
+    setp.lt.s32 %p82, %r95, 3;
+    @!%p82 bra $Lelse_96;
+    mov.f32 %f33, 0f3D000000;
+    bra $Lend_93;
+$Lelse_96:
+    setp.lt.s32 %p83, %r95, 4;
+    @!%p83 bra $Lelse_97;
+    mov.f32 %f33, 0f3D800000;
+    bra $Lend_93;
+$Lelse_97:
+    setp.lt.s32 %p84, %r95, 5;
+    @!%p84 bra $Lelse_98;
+    mov.f32 %f33, 0f3E000000;
+    bra $Lend_93;
+$Lelse_98:
+    setp.lt.s32 %p85, %r95, 6;
+    @!%p85 bra $Lelse_99;
+    mov.f32 %f33, 0f3E800000;
+    bra $Lend_93;
+$Lelse_99:
+    setp.lt.s32 %p86, %r95, 7;
+    @!%p86 bra $Lelse_100;
+    mov.f32 %f33, 0f3F000000;
+    bra $Lend_93;
+$Lelse_100:
+    setp.lt.s32 %p87, %r95, 8;
+    @!%p87 bra $Lelse_101;
+    mov.f32 %f33, 0f3F800000;
+    bra $Lend_93;
+$Lelse_101:
+    setp.lt.s32 %p88, %r95, 9;
+    @!%p88 bra $Lelse_102;
+    mov.f32 %f33, 0f40000000;
+    bra $Lend_93;
+$Lelse_102:
+    setp.lt.s32 %p89, %r95, 10;
+    @!%p89 bra $Lelse_103;
+    mov.f32 %f33, 0f40800000;
+    bra $Lend_93;
+$Lelse_103:
+    setp.lt.s32 %p90, %r95, 11;
+    @!%p90 bra $Lelse_104;
+    mov.f32 %f33, 0f41000000;
+    bra $Lend_93;
+$Lelse_104:
+    setp.lt.s32 %p91, %r95, 12;
+    @!%p91 bra $Lelse_105;
+    mov.f32 %f33, 0f41800000;
+    bra $Lend_93;
+$Lelse_105:
+    setp.lt.s32 %p92, %r95, 13;
+    @!%p92 bra $Lelse_106;
+    mov.f32 %f33, 0f42000000;
+    bra $Lend_93;
+$Lelse_106:
+    setp.lt.s32 %p93, %r95, 14;
+    @!%p93 bra $Lelse_107;
+    mov.f32 %f33, 0f42800000;
+    bra $Lend_93;
+$Lelse_107:
+    setp.lt.s32 %p94, %r95, 15;
+    @!%p94 bra $Lelse_108;
+    mov.f32 %f33, 0f43000000;
+    bra $Lend_93;
+$Lelse_108:
+    mov.f32 %f33, 0f43800000;
+$Lend_93:
+    mov.f32 %f34, 0f3F800000;
+    setp.lt.s32 %p95, %r95, 1;
+    @!%p95 bra $Lelse_109;
+    mov.f32 %f34, 0f00000000;
+$Lelse_109:
+    add.f32 %f35, %f34, %f32;
+    mul.f32 %f36, %f35, %f33;
+    mov.f32 %f37, 0f00000000;
+    mov.f32 %f38, %f36;
+    setp.lt.s32 %p96, %r93, 1;
+    @!%p96 bra $Lelse_110;
+    bra $Lend_111;
+$Lelse_110:
+    sub.f32 %f38, %f37, %f36;
+$Lend_111:
+    mul.f32 %f31, %f38, %f0;
+    mul.f32 %f39, %f30, %f31;
+    mul.wide.s32 %rd24, %r70, 4;
+    add.s64 %rd25, %rd1, %rd24;
+    ld.global.f32 %f40, [%rd25];
+    fma.rn.f32 %f41, %f40, %f39, %f1;
+    mov.f32 %f1, %f41;
+    mov.s32 %r14, %r71;
+    add.s32 %r97, %r15, 3;
+    div.s32 %r98, %r14, 16;
+    mul.lo.s32 %r99, %r98, 16;
+    sub.s32 %r100, %r14, %r99;
+    div.s32 %r101, %r100, 8;
+    mul.lo.s32 %r102, %r101, 8;
+    sub.s32 %r103, %r100, %r102;
+    mov.s32 %r104, 1;
+    setp.lt.s32 %p97, %r103, %r104;
+    @!%p97 bra $Lelse_113;
+    mov.f32 %f42, 0f00000000;
+    bra $Lend_112;
+$Lelse_113:
+    mov.s32 %r105, 2;
+    setp.lt.s32 %p98, %r103, %r105;
+    @!%p98 bra $Lelse_114;
+    mov.f32 %f42, 0f3F000000;
+    bra $Lend_112;
+$Lelse_114:
+    mov.s32 %r106, 3;
+    setp.lt.s32 %p99, %r103, %r106;
+    @!%p99 bra $Lelse_115;
+    mov.f32 %f42, 0f3F800000;
+    bra $Lend_112;
+$Lelse_115:
+    mov.s32 %r107, 4;
+    setp.lt.s32 %p100, %r103, %r107;
+    @!%p100 bra $Lelse_116;
+    mov.f32 %f42, 0f3FC00000;
+    bra $Lend_112;
+$Lelse_116:
+    mov.s32 %r108, 5;
+    setp.lt.s32 %p101, %r103, %r108;
+    @!%p101 bra $Lelse_117;
+    mov.f32 %f42, 0f40000000;
+    bra $Lend_112;
+$Lelse_117:
+    mov.s32 %r109, 6;
+    setp.lt.s32 %p102, %r103, %r109;
+    @!%p102 bra $Lelse_118;
+    mov.f32 %f42, 0f40400000;
+    bra $Lend_112;
+$Lelse_118:
+    mov.s32 %r110, 7;
+    setp.lt.s32 %p103, %r103, %r110;
+    @!%p103 bra $Lelse_119;
+    mov.f32 %f42, 0f40800000;
+    bra $Lend_112;
+$Lelse_119:
+    mov.f32 %f42, 0f40C00000;
+$Lend_112:
+    mov.f32 %f43, %f42;
+    setp.lt.s32 %p104, %r101, %r12;
+    @!%p104 bra $Lelse_120;
+    bra $Lend_121;
+$Lelse_120:
+    sub.f32 %f43, %f2, %f42;
+$Lend_121:
+    div.s32 %r111, %r97, 16;
+    div.s32 %r112, %r111, 4;
+    add.s32 %r113, %r10, %r112;
+    mul.lo.s32 %r114, %r112, 4;
+    sub.s32 %r115, %r111, %r114;
+    mul.wide.s32 %rd26, %r113, 4;
+    add.s64 %rd27, %rd5, %rd26;
+    ld.global.u32 %r116, [%rd27];
+    mul.lo.s32 %r117, %r115, 8;
+    shr.u32 %r118, %r116, %r117;
+    and.b32 %r119, %r118, 255;
+    shr.u32 %r120, %r119, 7;
+    shr.u32 %r121, %r119, 3;
+    and.b32 %r122, %r121, 15;
+    and.b32 %r123, %r119, 7;
+    setp.lt.s32 %p105, %r123, 1;
+    @!%p105 bra $Lelse_123;
+    mov.f32 %f45, 0f00000000;
+    bra $Lend_122;
+$Lelse_123:
+    setp.lt.s32 %p106, %r123, 2;
+    @!%p106 bra $Lelse_124;
+    mov.f32 %f45, 0f3E000000;
+    bra $Lend_122;
+$Lelse_124:
+    setp.lt.s32 %p107, %r123, 3;
+    @!%p107 bra $Lelse_125;
+    mov.f32 %f45, 0f3E800000;
+    bra $Lend_122;
+$Lelse_125:
+    setp.lt.s32 %p108, %r123, 4;
+    @!%p108 bra $Lelse_126;
+    mov.f32 %f45, 0f3EC00000;
+    bra $Lend_122;
+$Lelse_126:
+    setp.lt.s32 %p109, %r123, 5;
+    @!%p109 bra $Lelse_127;
+    mov.f32 %f45, 0f3F000000;
+    bra $Lend_122;
+$Lelse_127:
+    setp.lt.s32 %p110, %r123, 6;
+    @!%p110 bra $Lelse_128;
+    mov.f32 %f45, 0f3F200000;
+    bra $Lend_122;
+$Lelse_128:
+    setp.lt.s32 %p111, %r123, 7;
+    @!%p111 bra $Lelse_129;
+    mov.f32 %f45, 0f3F400000;
+    bra $Lend_122;
+$Lelse_129:
+    mov.f32 %f45, 0f3F600000;
+$Lend_122:
+    setp.lt.s32 %p112, %r122, 1;
+    @!%p112 bra $Lelse_131;
+    mov.f32 %f46, 0f3C800000;
+    bra $Lend_130;
+$Lelse_131:
+    setp.lt.s32 %p113, %r122, 2;
+    @!%p113 bra $Lelse_132;
+    mov.f32 %f46, 0f3C800000;
+    bra $Lend_130;
+$Lelse_132:
+    setp.lt.s32 %p114, %r122, 3;
+    @!%p114 bra $Lelse_133;
+    mov.f32 %f46, 0f3D000000;
+    bra $Lend_130;
+$Lelse_133:
+    setp.lt.s32 %p115, %r122, 4;
+    @!%p115 bra $Lelse_134;
+    mov.f32 %f46, 0f3D800000;
+    bra $Lend_130;
+$Lelse_134:
+    setp.lt.s32 %p116, %r122, 5;
+    @!%p116 bra $Lelse_135;
+    mov.f32 %f46, 0f3E000000;
+    bra $Lend_130;
+$Lelse_135:
+    setp.lt.s32 %p117, %r122, 6;
+    @!%p117 bra $Lelse_136;
+    mov.f32 %f46, 0f3E800000;
+    bra $Lend_130;
+$Lelse_136:
+    setp.lt.s32 %p118, %r122, 7;
+    @!%p118 bra $Lelse_137;
+    mov.f32 %f46, 0f3F000000;
+    bra $Lend_130;
+$Lelse_137:
+    setp.lt.s32 %p119, %r122, 8;
+    @!%p119 bra $Lelse_138;
+    mov.f32 %f46, 0f3F800000;
+    bra $Lend_130;
+$Lelse_138:
+    setp.lt.s32 %p120, %r122, 9;
+    @!%p120 bra $Lelse_139;
+    mov.f32 %f46, 0f40000000;
+    bra $Lend_130;
+$Lelse_139:
+    setp.lt.s32 %p121, %r122, 10;
+    @!%p121 bra $Lelse_140;
+    mov.f32 %f46, 0f40800000;
+    bra $Lend_130;
+$Lelse_140:
+    setp.lt.s32 %p122, %r122, 11;
+    @!%p122 bra $Lelse_141;
+    mov.f32 %f46, 0f41000000;
+    bra $Lend_130;
+$Lelse_141:
+    setp.lt.s32 %p123, %r122, 12;
+    @!%p123 bra $Lelse_142;
+    mov.f32 %f46, 0f41800000;
+    bra $Lend_130;
+$Lelse_142:
+    setp.lt.s32 %p124, %r122, 13;
+    @!%p124 bra $Lelse_143;
+    mov.f32 %f46, 0f42000000;
+    bra $Lend_130;
+$Lelse_143:
+    setp.lt.s32 %p125, %r122, 14;
+    @!%p125 bra $Lelse_144;
+    mov.f32 %f46, 0f42800000;
+    bra $Lend_130;
+$Lelse_144:
+    setp.lt.s32 %p126, %r122, 15;
+    @!%p126 bra $Lelse_145;
+    mov.f32 %f46, 0f43000000;
+    bra $Lend_130;
+$Lelse_145:
+    mov.f32 %f46, 0f43800000;
+$Lend_130:
+    mov.f32 %f47, 0f3F800000;
+    setp.lt.s32 %p127, %r122, 1;
+    @!%p127 bra $Lelse_146;
+    mov.f32 %f47, 0f00000000;
+$Lelse_146:
+    add.f32 %f48, %f47, %f45;
+    mul.f32 %f49, %f48, %f46;
+    mov.f32 %f50, 0f00000000;
+    mov.f32 %f51, %f49;
+    setp.lt.s32 %p128, %r120, 1;
+    @!%p128 bra $Lelse_147;
+    bra $Lend_148;
+$Lelse_147:
+    sub.f32 %f51, %f50, %f49;
+$Lend_148:
+    mul.f32 %f44, %f51, %f0;
+    mul.f32 %f52, %f43, %f44;
+    mul.wide.s32 %rd28, %r97, 4;
+    add.s64 %rd29, %rd1, %rd28;
+    ld.global.f32 %f53, [%rd29];
+    fma.rn.f32 %f54, %f53, %f52, %f1;
+    mov.f32 %f1, %f54;
+    mov.s32 %r14, %r98;
+    add.s32 %r124, %r15, 4;
+    div.s32 %r125, %r14, 16;
+    mul.lo.s32 %r126, %r125, 16;
+    sub.s32 %r127, %r14, %r126;
+    div.s32 %r128, %r127, 8;
+    mul.lo.s32 %r129, %r128, 8;
+    sub.s32 %r130, %r127, %r129;
+    mov.s32 %r131, 1;
+    setp.lt.s32 %p129, %r130, %r131;
+    @!%p129 bra $Lelse_150;
+    mov.f32 %f55, 0f00000000;
+    bra $Lend_149;
+$Lelse_150:
+    mov.s32 %r132, 2;
+    setp.lt.s32 %p130, %r130, %r132;
+    @!%p130 bra $Lelse_151;
+    mov.f32 %f55, 0f3F000000;
+    bra $Lend_149;
+$Lelse_151:
+    mov.s32 %r133, 3;
+    setp.lt.s32 %p131, %r130, %r133;
+    @!%p131 bra $Lelse_152;
+    mov.f32 %f55, 0f3F800000;
+    bra $Lend_149;
+$Lelse_152:
+    mov.s32 %r134, 4;
+    setp.lt.s32 %p132, %r130, %r134;
+    @!%p132 bra $Lelse_153;
+    mov.f32 %f55, 0f3FC00000;
+    bra $Lend_149;
+$Lelse_153:
+    mov.s32 %r135, 5;
+    setp.lt.s32 %p133, %r130, %r135;
+    @!%p133 bra $Lelse_154;
+    mov.f32 %f55, 0f40000000;
+    bra $Lend_149;
+$Lelse_154:
+    mov.s32 %r136, 6;
+    setp.lt.s32 %p134, %r130, %r136;
+    @!%p134 bra $Lelse_155;
+    mov.f32 %f55, 0f40400000;
+    bra $Lend_149;
+$Lelse_155:
+    mov.s32 %r137, 7;
+    setp.lt.s32 %p135, %r130, %r137;
+    @!%p135 bra $Lelse_156;
+    mov.f32 %f55, 0f40800000;
+    bra $Lend_149;
+$Lelse_156:
+    mov.f32 %f55, 0f40C00000;
+$Lend_149:
+    mov.f32 %f56, %f55;
+    setp.lt.s32 %p136, %r128, %r12;
+    @!%p136 bra $Lelse_157;
+    bra $Lend_158;
+$Lelse_157:
+    sub.f32 %f56, %f2, %f55;
+$Lend_158:
+    div.s32 %r138, %r124, 16;
+    div.s32 %r139, %r138, 4;
+    add.s32 %r140, %r10, %r139;
+    mul.lo.s32 %r141, %r139, 4;
+    sub.s32 %r142, %r138, %r141;
+    mul.wide.s32 %rd30, %r140, 4;
+    add.s64 %rd31, %rd5, %rd30;
+    ld.global.u32 %r143, [%rd31];
+    mul.lo.s32 %r144, %r142, 8;
+    shr.u32 %r145, %r143, %r144;
+    and.b32 %r146, %r145, 255;
+    shr.u32 %r147, %r146, 7;
+    shr.u32 %r148, %r146, 3;
+    and.b32 %r149, %r148, 15;
+    and.b32 %r150, %r146, 7;
+    setp.lt.s32 %p137, %r150, 1;
+    @!%p137 bra $Lelse_160;
+    mov.f32 %f58, 0f00000000;
+    bra $Lend_159;
+$Lelse_160:
+    setp.lt.s32 %p138, %r150, 2;
+    @!%p138 bra $Lelse_161;
+    mov.f32 %f58, 0f3E000000;
+    bra $Lend_159;
+$Lelse_161:
+    setp.lt.s32 %p139, %r150, 3;
+    @!%p139 bra $Lelse_162;
+    mov.f32 %f58, 0f3E800000;
+    bra $Lend_159;
+$Lelse_162:
+    setp.lt.s32 %p140, %r150, 4;
+    @!%p140 bra $Lelse_163;
+    mov.f32 %f58, 0f3EC00000;
+    bra $Lend_159;
+$Lelse_163:
+    setp.lt.s32 %p141, %r150, 5;
+    @!%p141 bra $Lelse_164;
+    mov.f32 %f58, 0f3F000000;
+    bra $Lend_159;
+$Lelse_164:
+    setp.lt.s32 %p142, %r150, 6;
+    @!%p142 bra $Lelse_165;
+    mov.f32 %f58, 0f3F200000;
+    bra $Lend_159;
+$Lelse_165:
+    setp.lt.s32 %p143, %r150, 7;
+    @!%p143 bra $Lelse_166;
+    mov.f32 %f58, 0f3F400000;
+    bra $Lend_159;
+$Lelse_166:
+    mov.f32 %f58, 0f3F600000;
+$Lend_159:
+    setp.lt.s32 %p144, %r149, 1;
+    @!%p144 bra $Lelse_168;
+    mov.f32 %f59, 0f3C800000;
+    bra $Lend_167;
+$Lelse_168:
+    setp.lt.s32 %p145, %r149, 2;
+    @!%p145 bra $Lelse_169;
+    mov.f32 %f59, 0f3C800000;
+    bra $Lend_167;
+$Lelse_169:
+    setp.lt.s32 %p146, %r149, 3;
+    @!%p146 bra $Lelse_170;
+    mov.f32 %f59, 0f3D000000;
+    bra $Lend_167;
+$Lelse_170:
+    setp.lt.s32 %p147, %r149, 4;
+    @!%p147 bra $Lelse_171;
+    mov.f32 %f59, 0f3D800000;
+    bra $Lend_167;
+$Lelse_171:
+    setp.lt.s32 %p148, %r149, 5;
+    @!%p148 bra $Lelse_172;
+    mov.f32 %f59, 0f3E000000;
+    bra $Lend_167;
+$Lelse_172:
+    setp.lt.s32 %p149, %r149, 6;
+    @!%p149 bra $Lelse_173;
+    mov.f32 %f59, 0f3E800000;
+    bra $Lend_167;
+$Lelse_173:
+    setp.lt.s32 %p150, %r149, 7;
+    @!%p150 bra $Lelse_174;
+    mov.f32 %f59, 0f3F000000;
+    bra $Lend_167;
+$Lelse_174:
+    setp.lt.s32 %p151, %r149, 8;
+    @!%p151 bra $Lelse_175;
+    mov.f32 %f59, 0f3F800000;
+    bra $Lend_167;
+$Lelse_175:
+    setp.lt.s32 %p152, %r149, 9;
+    @!%p152 bra $Lelse_176;
+    mov.f32 %f59, 0f40000000;
+    bra $Lend_167;
+$Lelse_176:
+    setp.lt.s32 %p153, %r149, 10;
+    @!%p153 bra $Lelse_177;
+    mov.f32 %f59, 0f40800000;
+    bra $Lend_167;
+$Lelse_177:
+    setp.lt.s32 %p154, %r149, 11;
+    @!%p154 bra $Lelse_178;
+    mov.f32 %f59, 0f41000000;
+    bra $Lend_167;
+$Lelse_178:
+    setp.lt.s32 %p155, %r149, 12;
+    @!%p155 bra $Lelse_179;
+    mov.f32 %f59, 0f41800000;
+    bra $Lend_167;
+$Lelse_179:
+    setp.lt.s32 %p156, %r149, 13;
+    @!%p156 bra $Lelse_180;
+    mov.f32 %f59, 0f42000000;
+    bra $Lend_167;
+$Lelse_180:
+    setp.lt.s32 %p157, %r149, 14;
+    @!%p157 bra $Lelse_181;
+    mov.f32 %f59, 0f42800000;
+    bra $Lend_167;
+$Lelse_181:
+    setp.lt.s32 %p158, %r149, 15;
+    @!%p158 bra $Lelse_182;
+    mov.f32 %f59, 0f43000000;
+    bra $Lend_167;
+$Lelse_182:
+    mov.f32 %f59, 0f43800000;
+$Lend_167:
+    mov.f32 %f60, 0f3F800000;
+    setp.lt.s32 %p159, %r149, 1;
+    @!%p159 bra $Lelse_183;
+    mov.f32 %f60, 0f00000000;
+$Lelse_183:
+    add.f32 %f61, %f60, %f58;
+    mul.f32 %f62, %f61, %f59;
+    mov.f32 %f63, 0f00000000;
+    mov.f32 %f64, %f62;
+    setp.lt.s32 %p160, %r147, 1;
+    @!%p160 bra $Lelse_184;
+    bra $Lend_185;
+$Lelse_184:
+    sub.f32 %f64, %f63, %f62;
+$Lend_185:
+    mul.f32 %f57, %f64, %f0;
+    mul.f32 %f65, %f56, %f57;
+    mul.wide.s32 %rd32, %r124, 4;
+    add.s64 %rd33, %rd1, %rd32;
+    ld.global.f32 %f66, [%rd33];
+    fma.rn.f32 %f67, %f66, %f65, %f1;
+    mov.f32 %f1, %f67;
+    mov.s32 %r14, %r125;
+    add.s32 %r151, %r15, 5;
+    div.s32 %r152, %r14, 16;
+    mul.lo.s32 %r153, %r152, 16;
+    sub.s32 %r154, %r14, %r153;
+    div.s32 %r155, %r154, 8;
+    mul.lo.s32 %r156, %r155, 8;
+    sub.s32 %r157, %r154, %r156;
+    mov.s32 %r158, 1;
+    setp.lt.s32 %p161, %r157, %r158;
+    @!%p161 bra $Lelse_187;
+    mov.f32 %f68, 0f00000000;
+    bra $Lend_186;
+$Lelse_187:
+    mov.s32 %r159, 2;
+    setp.lt.s32 %p162, %r157, %r159;
+    @!%p162 bra $Lelse_188;
+    mov.f32 %f68, 0f3F000000;
+    bra $Lend_186;
+$Lelse_188:
+    mov.s32 %r160, 3;
+    setp.lt.s32 %p163, %r157, %r160;
+    @!%p163 bra $Lelse_189;
+    mov.f32 %f68, 0f3F800000;
+    bra $Lend_186;
+$Lelse_189:
+    mov.s32 %r161, 4;
+    setp.lt.s32 %p164, %r157, %r161;
+    @!%p164 bra $Lelse_190;
+    mov.f32 %f68, 0f3FC00000;
+    bra $Lend_186;
+$Lelse_190:
+    mov.s32 %r162, 5;
+    setp.lt.s32 %p165, %r157, %r162;
+    @!%p165 bra $Lelse_191;
+    mov.f32 %f68, 0f40000000;
+    bra $Lend_186;
+$Lelse_191:
+    mov.s32 %r163, 6;
+    setp.lt.s32 %p166, %r157, %r163;
+    @!%p166 bra $Lelse_192;
+    mov.f32 %f68, 0f40400000;
+    bra $Lend_186;
+$Lelse_192:
+    mov.s32 %r164, 7;
+    setp.lt.s32 %p167, %r157, %r164;
+    @!%p167 bra $Lelse_193;
+    mov.f32 %f68, 0f40800000;
+    bra $Lend_186;
+$Lelse_193:
+    mov.f32 %f68, 0f40C00000;
+$Lend_186:
+    mov.f32 %f69, %f68;
+    setp.lt.s32 %p168, %r155, %r12;
+    @!%p168 bra $Lelse_194;
+    bra $Lend_195;
+$Lelse_194:
+    sub.f32 %f69, %f2, %f68;
+$Lend_195:
+    div.s32 %r165, %r151, 16;
+    div.s32 %r166, %r165, 4;
+    add.s32 %r167, %r10, %r166;
+    mul.lo.s32 %r168, %r166, 4;
+    sub.s32 %r169, %r165, %r168;
+    mul.wide.s32 %rd34, %r167, 4;
+    add.s64 %rd35, %rd5, %rd34;
+    ld.global.u32 %r170, [%rd35];
+    mul.lo.s32 %r171, %r169, 8;
+    shr.u32 %r172, %r170, %r171;
+    and.b32 %r173, %r172, 255;
+    shr.u32 %r174, %r173, 7;
+    shr.u32 %r175, %r173, 3;
+    and.b32 %r176, %r175, 15;
+    and.b32 %r177, %r173, 7;
+    setp.lt.s32 %p169, %r177, 1;
+    @!%p169 bra $Lelse_197;
+    mov.f32 %f71, 0f00000000;
+    bra $Lend_196;
+$Lelse_197:
+    setp.lt.s32 %p170, %r177, 2;
+    @!%p170 bra $Lelse_198;
+    mov.f32 %f71, 0f3E000000;
+    bra $Lend_196;
+$Lelse_198:
+    setp.lt.s32 %p171, %r177, 3;
+    @!%p171 bra $Lelse_199;
+    mov.f32 %f71, 0f3E800000;
+    bra $Lend_196;
+$Lelse_199:
+    setp.lt.s32 %p172, %r177, 4;
+    @!%p172 bra $Lelse_200;
+    mov.f32 %f71, 0f3EC00000;
+    bra $Lend_196;
+$Lelse_200:
+    setp.lt.s32 %p173, %r177, 5;
+    @!%p173 bra $Lelse_201;
+    mov.f32 %f71, 0f3F000000;
+    bra $Lend_196;
+$Lelse_201:
+    setp.lt.s32 %p174, %r177, 6;
+    @!%p174 bra $Lelse_202;
+    mov.f32 %f71, 0f3F200000;
+    bra $Lend_196;
+$Lelse_202:
+    setp.lt.s32 %p175, %r177, 7;
+    @!%p175 bra $Lelse_203;
+    mov.f32 %f71, 0f3F400000;
+    bra $Lend_196;
+$Lelse_203:
+    mov.f32 %f71, 0f3F600000;
+$Lend_196:
+    setp.lt.s32 %p176, %r176, 1;
+    @!%p176 bra $Lelse_205;
+    mov.f32 %f72, 0f3C800000;
+    bra $Lend_204;
+$Lelse_205:
+    setp.lt.s32 %p177, %r176, 2;
+    @!%p177 bra $Lelse_206;
+    mov.f32 %f72, 0f3C800000;
+    bra $Lend_204;
+$Lelse_206:
+    setp.lt.s32 %p178, %r176, 3;
+    @!%p178 bra $Lelse_207;
+    mov.f32 %f72, 0f3D000000;
+    bra $Lend_204;
+$Lelse_207:
+    setp.lt.s32 %p179, %r176, 4;
+    @!%p179 bra $Lelse_208;
+    mov.f32 %f72, 0f3D800000;
+    bra $Lend_204;
+$Lelse_208:
+    setp.lt.s32 %p180, %r176, 5;
+    @!%p180 bra $Lelse_209;
+    mov.f32 %f72, 0f3E000000;
+    bra $Lend_204;
+$Lelse_209:
+    setp.lt.s32 %p181, %r176, 6;
+    @!%p181 bra $Lelse_210;
+    mov.f32 %f72, 0f3E800000;
+    bra $Lend_204;
+$Lelse_210:
+    setp.lt.s32 %p182, %r176, 7;
+    @!%p182 bra $Lelse_211;
+    mov.f32 %f72, 0f3F000000;
+    bra $Lend_204;
+$Lelse_211:
+    setp.lt.s32 %p183, %r176, 8;
+    @!%p183 bra $Lelse_212;
+    mov.f32 %f72, 0f3F800000;
+    bra $Lend_204;
+$Lelse_212:
+    setp.lt.s32 %p184, %r176, 9;
+    @!%p184 bra $Lelse_213;
+    mov.f32 %f72, 0f40000000;
+    bra $Lend_204;
+$Lelse_213:
+    setp.lt.s32 %p185, %r176, 10;
+    @!%p185 bra $Lelse_214;
+    mov.f32 %f72, 0f40800000;
+    bra $Lend_204;
+$Lelse_214:
+    setp.lt.s32 %p186, %r176, 11;
+    @!%p186 bra $Lelse_215;
+    mov.f32 %f72, 0f41000000;
+    bra $Lend_204;
+$Lelse_215:
+    setp.lt.s32 %p187, %r176, 12;
+    @!%p187 bra $Lelse_216;
+    mov.f32 %f72, 0f41800000;
+    bra $Lend_204;
+$Lelse_216:
+    setp.lt.s32 %p188, %r176, 13;
+    @!%p188 bra $Lelse_217;
+    mov.f32 %f72, 0f42000000;
+    bra $Lend_204;
+$Lelse_217:
+    setp.lt.s32 %p189, %r176, 14;
+    @!%p189 bra $Lelse_218;
+    mov.f32 %f72, 0f42800000;
+    bra $Lend_204;
+$Lelse_218:
+    setp.lt.s32 %p190, %r176, 15;
+    @!%p190 bra $Lelse_219;
+    mov.f32 %f72, 0f43000000;
+    bra $Lend_204;
+$Lelse_219:
+    mov.f32 %f72, 0f43800000;
+$Lend_204:
+    mov.f32 %f73, 0f3F800000;
+    setp.lt.s32 %p191, %r176, 1;
+    @!%p191 bra $Lelse_220;
+    mov.f32 %f73, 0f00000000;
+$Lelse_220:
+    add.f32 %f74, %f73, %f71;
+    mul.f32 %f75, %f74, %f72;
+    mov.f32 %f76, 0f00000000;
+    mov.f32 %f77, %f75;
+    setp.lt.s32 %p192, %r174, 1;
+    @!%p192 bra $Lelse_221;
+    bra $Lend_222;
+$Lelse_221:
+    sub.f32 %f77, %f76, %f75;
+$Lend_222:
+    mul.f32 %f70, %f77, %f0;
+    mul.f32 %f78, %f69, %f70;
+    mul.wide.s32 %rd36, %r151, 4;
+    add.s64 %rd37, %rd1, %rd36;
+    ld.global.f32 %f79, [%rd37];
+    fma.rn.f32 %f80, %f79, %f78, %f1;
+    mov.f32 %f1, %f80;
+    mov.s32 %r14, %r152;
+    add.s32 %r178, %r15, 6;
+    div.s32 %r179, %r14, 16;
+    mul.lo.s32 %r180, %r179, 16;
+    sub.s32 %r181, %r14, %r180;
+    div.s32 %r182, %r181, 8;
+    mul.lo.s32 %r183, %r182, 8;
+    sub.s32 %r184, %r181, %r183;
+    mov.s32 %r185, 1;
+    setp.lt.s32 %p193, %r184, %r185;
+    @!%p193 bra $Lelse_224;
+    mov.f32 %f81, 0f00000000;
+    bra $Lend_223;
+$Lelse_224:
+    mov.s32 %r186, 2;
+    setp.lt.s32 %p194, %r184, %r186;
+    @!%p194 bra $Lelse_225;
+    mov.f32 %f81, 0f3F000000;
+    bra $Lend_223;
+$Lelse_225:
+    mov.s32 %r187, 3;
+    setp.lt.s32 %p195, %r184, %r187;
+    @!%p195 bra $Lelse_226;
+    mov.f32 %f81, 0f3F800000;
+    bra $Lend_223;
+$Lelse_226:
+    mov.s32 %r188, 4;
+    setp.lt.s32 %p196, %r184, %r188;
+    @!%p196 bra $Lelse_227;
+    mov.f32 %f81, 0f3FC00000;
+    bra $Lend_223;
+$Lelse_227:
+    mov.s32 %r189, 5;
+    setp.lt.s32 %p197, %r184, %r189;
+    @!%p197 bra $Lelse_228;
+    mov.f32 %f81, 0f40000000;
+    bra $Lend_223;
+$Lelse_228:
+    mov.s32 %r190, 6;
+    setp.lt.s32 %p198, %r184, %r190;
+    @!%p198 bra $Lelse_229;
+    mov.f32 %f81, 0f40400000;
+    bra $Lend_223;
+$Lelse_229:
+    mov.s32 %r191, 7;
+    setp.lt.s32 %p199, %r184, %r191;
+    @!%p199 bra $Lelse_230;
+    mov.f32 %f81, 0f40800000;
+    bra $Lend_223;
+$Lelse_230:
+    mov.f32 %f81, 0f40C00000;
+$Lend_223:
+    mov.f32 %f82, %f81;
+    setp.lt.s32 %p200, %r182, %r12;
+    @!%p200 bra $Lelse_231;
+    bra $Lend_232;
+$Lelse_231:
+    sub.f32 %f82, %f2, %f81;
+$Lend_232:
+    div.s32 %r192, %r178, 16;
+    div.s32 %r193, %r192, 4;
+    add.s32 %r194, %r10, %r193;
+    mul.lo.s32 %r195, %r193, 4;
+    sub.s32 %r196, %r192, %r195;
+    mul.wide.s32 %rd38, %r194, 4;
+    add.s64 %rd39, %rd5, %rd38;
+    ld.global.u32 %r197, [%rd39];
+    mul.lo.s32 %r198, %r196, 8;
+    shr.u32 %r199, %r197, %r198;
+    and.b32 %r200, %r199, 255;
+    shr.u32 %r201, %r200, 7;
+    shr.u32 %r202, %r200, 3;
+    and.b32 %r203, %r202, 15;
+    and.b32 %r204, %r200, 7;
+    setp.lt.s32 %p201, %r204, 1;
+    @!%p201 bra $Lelse_234;
+    mov.f32 %f84, 0f00000000;
+    bra $Lend_233;
+$Lelse_234:
+    setp.lt.s32 %p202, %r204, 2;
+    @!%p202 bra $Lelse_235;
+    mov.f32 %f84, 0f3E000000;
+    bra $Lend_233;
+$Lelse_235:
+    setp.lt.s32 %p203, %r204, 3;
+    @!%p203 bra $Lelse_236;
+    mov.f32 %f84, 0f3E800000;
+    bra $Lend_233;
+$Lelse_236:
+    setp.lt.s32 %p204, %r204, 4;
+    @!%p204 bra $Lelse_237;
+    mov.f32 %f84, 0f3EC00000;
+    bra $Lend_233;
+$Lelse_237:
+    setp.lt.s32 %p205, %r204, 5;
+    @!%p205 bra $Lelse_238;
+    mov.f32 %f84, 0f3F000000;
+    bra $Lend_233;
+$Lelse_238:
+    setp.lt.s32 %p206, %r204, 6;
+    @!%p206 bra $Lelse_239;
+    mov.f32 %f84, 0f3F200000;
+    bra $Lend_233;
+$Lelse_239:
+    setp.lt.s32 %p207, %r204, 7;
+    @!%p207 bra $Lelse_240;
+    mov.f32 %f84, 0f3F400000;
+    bra $Lend_233;
+$Lelse_240:
+    mov.f32 %f84, 0f3F600000;
+$Lend_233:
+    setp.lt.s32 %p208, %r203, 1;
+    @!%p208 bra $Lelse_242;
+    mov.f32 %f85, 0f3C800000;
+    bra $Lend_241;
+$Lelse_242:
+    setp.lt.s32 %p209, %r203, 2;
+    @!%p209 bra $Lelse_243;
+    mov.f32 %f85, 0f3C800000;
+    bra $Lend_241;
+$Lelse_243:
+    setp.lt.s32 %p210, %r203, 3;
+    @!%p210 bra $Lelse_244;
+    mov.f32 %f85, 0f3D000000;
+    bra $Lend_241;
+$Lelse_244:
+    setp.lt.s32 %p211, %r203, 4;
+    @!%p211 bra $Lelse_245;
+    mov.f32 %f85, 0f3D800000;
+    bra $Lend_241;
+$Lelse_245:
+    setp.lt.s32 %p212, %r203, 5;
+    @!%p212 bra $Lelse_246;
+    mov.f32 %f85, 0f3E000000;
+    bra $Lend_241;
+$Lelse_246:
+    setp.lt.s32 %p213, %r203, 6;
+    @!%p213 bra $Lelse_247;
+    mov.f32 %f85, 0f3E800000;
+    bra $Lend_241;
+$Lelse_247:
+    setp.lt.s32 %p214, %r203, 7;
+    @!%p214 bra $Lelse_248;
+    mov.f32 %f85, 0f3F000000;
+    bra $Lend_241;
+$Lelse_248:
+    setp.lt.s32 %p215, %r203, 8;
+    @!%p215 bra $Lelse_249;
+    mov.f32 %f85, 0f3F800000;
+    bra $Lend_241;
+$Lelse_249:
+    setp.lt.s32 %p216, %r203, 9;
+    @!%p216 bra $Lelse_250;
+    mov.f32 %f85, 0f40000000;
+    bra $Lend_241;
+$Lelse_250:
+    setp.lt.s32 %p217, %r203, 10;
+    @!%p217 bra $Lelse_251;
+    mov.f32 %f85, 0f40800000;
+    bra $Lend_241;
+$Lelse_251:
+    setp.lt.s32 %p218, %r203, 11;
+    @!%p218 bra $Lelse_252;
+    mov.f32 %f85, 0f41000000;
+    bra $Lend_241;
+$Lelse_252:
+    setp.lt.s32 %p219, %r203, 12;
+    @!%p219 bra $Lelse_253;
+    mov.f32 %f85, 0f41800000;
+    bra $Lend_241;
+$Lelse_253:
+    setp.lt.s32 %p220, %r203, 13;
+    @!%p220 bra $Lelse_254;
+    mov.f32 %f85, 0f42000000;
+    bra $Lend_241;
+$Lelse_254:
+    setp.lt.s32 %p221, %r203, 14;
+    @!%p221 bra $Lelse_255;
+    mov.f32 %f85, 0f42800000;
+    bra $Lend_241;
+$Lelse_255:
+    setp.lt.s32 %p222, %r203, 15;
+    @!%p222 bra $Lelse_256;
+    mov.f32 %f85, 0f43000000;
+    bra $Lend_241;
+$Lelse_256:
+    mov.f32 %f85, 0f43800000;
+$Lend_241:
+    mov.f32 %f86, 0f3F800000;
+    setp.lt.s32 %p223, %r203, 1;
+    @!%p223 bra $Lelse_257;
+    mov.f32 %f86, 0f00000000;
+$Lelse_257:
+    add.f32 %f87, %f86, %f84;
+    mul.f32 %f88, %f87, %f85;
+    mov.f32 %f89, 0f00000000;
+    mov.f32 %f90, %f88;
+    setp.lt.s32 %p224, %r201, 1;
+    @!%p224 bra $Lelse_258;
+    bra $Lend_259;
+$Lelse_258:
+    sub.f32 %f90, %f89, %f88;
+$Lend_259:
+    mul.f32 %f83, %f90, %f0;
+    mul.f32 %f91, %f82, %f83;
+    mul.wide.s32 %rd40, %r178, 4;
+    add.s64 %rd41, %rd1, %rd40;
+    ld.global.f32 %f92, [%rd41];
+    fma.rn.f32 %f93, %f92, %f91, %f1;
+    mov.f32 %f1, %f93;
+    mov.s32 %r14, %r179;
+    add.s32 %r11, %r11, 256;
+    bra $Ltop_0;
+$Lwend_0:
+    bar.sync 0;
+    mul.lo.s32 %r205, %r0, 4;
+    add.s32 %r206, %r3, %r205;
+    st.shared.f32 [%r206], %f1;
+    bar.sync 0;
+    mov.s32 %r207, 128;
+    setp.lt.s32 %p225, %r0, %r207;
+    @!%p225 bra $Lskip_260;
+    ld.shared.f32 %f94, [%r206];
+    add.s32 %r208, %r0, 128;
+    mul.lo.s32 %r209, %r208, 4;
+    add.s32 %r210, %r3, %r209;
+    ld.shared.f32 %f95, [%r210];
+    add.f32 %f96, %f94, %f95;
+    st.shared.f32 [%r206], %f96;
+$Lskip_260:
+    bar.sync 0;
+    mov.s32 %r211, 64;
+    setp.lt.s32 %p226, %r0, %r211;
+    @!%p226 bra $Lskip_261;
+    ld.shared.f32 %f97, [%r206];
+    add.s32 %r212, %r0, 64;
+    mul.lo.s32 %r213, %r212, 4;
+    add.s32 %r214, %r3, %r213;
+    ld.shared.f32 %f98, [%r214];
+    add.f32 %f99, %f97, %f98;
+    st.shared.f32 [%r206], %f99;
+$Lskip_261:
+    bar.sync 0;
+    mov.s32 %r215, 32;
+    setp.lt.s32 %p227, %r0, %r215;
+    @!%p227 bra $Lskip_262;
+    ld.shared.f32 %f100, [%r206];
+    add.s32 %r216, %r0, 32;
+    mul.lo.s32 %r217, %r216, 4;
+    add.s32 %r218, %r3, %r217;
+    ld.shared.f32 %f101, [%r218];
+    add.f32 %f102, %f100, %f101;
+    st.shared.f32 [%r206], %f102;
+$Lskip_262:
+    bar.sync 0;
+    mov.s32 %r219, 16;
+    setp.lt.s32 %p228, %r0, %r219;
+    @!%p228 bra $Lskip_263;
+    ld.shared.f32 %f103, [%r206];
+    add.s32 %r220, %r0, 16;
+    mul.lo.s32 %r221, %r220, 4;
+    add.s32 %r222, %r3, %r221;
+    ld.shared.f32 %f104, [%r222];
+    add.f32 %f105, %f103, %f104;
+    st.shared.f32 [%r206], %f105;
+$Lskip_263:
+    bar.sync 0;
+    mov.s32 %r223, 8;
+    setp.lt.s32 %p229, %r0, %r223;
+    @!%p229 bra $Lskip_264;
+    ld.shared.f32 %f106, [%r206];
+    add.s32 %r224, %r0, 8;
+    mul.lo.s32 %r225, %r224, 4;
+    add.s32 %r226, %r3, %r225;
+    ld.shared.f32 %f107, [%r226];
+    add.f32 %f108, %f106, %f107;
+    st.shared.f32 [%r206], %f108;
+$Lskip_264:
+    bar.sync 0;
+    mov.s32 %r227, 4;
+    setp.lt.s32 %p230, %r0, %r227;
+    @!%p230 bra $Lskip_265;
+    ld.shared.f32 %f109, [%r206];
+    add.s32 %r228, %r0, 4;
+    mul.lo.s32 %r229, %r228, 4;
+    add.s32 %r230, %r3, %r229;
+    ld.shared.f32 %f110, [%r230];
+    add.f32 %f111, %f109, %f110;
+    st.shared.f32 [%r206], %f111;
+$Lskip_265:
+    bar.sync 0;
+    mov.s32 %r231, 2;
+    setp.lt.s32 %p231, %r0, %r231;
+    @!%p231 bra $Lskip_266;
+    ld.shared.f32 %f112, [%r206];
+    add.s32 %r232, %r0, 2;
+    mul.lo.s32 %r233, %r232, 4;
+    add.s32 %r234, %r3, %r233;
+    ld.shared.f32 %f113, [%r234];
+    add.f32 %f114, %f112, %f113;
+    st.shared.f32 [%r206], %f114;
+$Lskip_266:
+    bar.sync 0;
+    mov.s32 %r235, 1;
+    setp.lt.s32 %p232, %r0, %r235;
+    @!%p232 bra $Lskip_267;
+    ld.shared.f32 %f115, [%r206];
+    add.s32 %r236, %r0, 1;
+    mul.lo.s32 %r237, %r236, 4;
+    add.s32 %r238, %r3, %r237;
+    ld.shared.f32 %f116, [%r238];
+    add.f32 %f117, %f115, %f116;
+    st.shared.f32 [%r206], %f117;
+$Lskip_267:
+    bar.sync 0;
+    mov.s32 %r239, %r3;
+    ld.shared.f32 %f118, [%r239];
+    setp.lt.s32 %p233, %r0, %r12;
+    @!%p233 bra $Lskip_268;
+    mul.wide.s32 %rd0, %r1, 4;
+    add.s64 %rd1, %rd9, %rd0;
+    st.global.f32 [%rd1], %f118;
+$Lskip_268:
+    ret;
+}

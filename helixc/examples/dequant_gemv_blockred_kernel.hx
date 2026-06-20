@@ -10,13 +10,17 @@
 // block-reduction, the real decode lever flagged in that kernel's v1.7-INC4 FINDING.
 //
 // Reuses the verified NVFP4 unpack (7 E2M1 codes / i32 word, base-16 low-nibble-first; E2M1
-// magnitudes {0,.5,1,1.5,2,3,4,6}; sign = high bit) and the host-collapsed effective f32 16-block
-// scale `sc` (one f32 per 16-block = e4m3_decode(micro)*fp32_tensor), byte-identical to
-// gemv_abt_nvfp4_kernel.hx and the host e2m1_decode/e4m3_decode oracle (cuda_launch.c:179/208).
-// W rows are Kpad-padded (Kpad % 112 == 0 = LCM(7,16)); kwords = Kpad/7, scstride = Kpad/16.
+// magnitudes {0,.5,1,1.5,2,3,4,6}; sign = high bit). H4 (2026-06-20): the 16-block scale is now
+// RAW e4m3 micro (1 byte / 16-block) packed 4-per-i32-word in `micro` PLUS one per-tensor f32 `ts`,
+// e4m3-decoded IN-KERNEL as e4m3_decode(micro)*ts (was: the host-collapsed fp32 EFFECTIVE scale).
+// The in-kernel e4m3 decode is BYTE-IDENTICAL to the host g_e4m3_tab[micro]*ts (the same 2^(e-7)
+// pow LUT + (1+m/8) mantissa + sign), shrinking the resident scales ~4x so full 8B residency seats
+// on a 7.1GB card and this fused path activates. W rows are Kpad-padded (Kpad % 112 == 0 = LCM(7,16));
+// kwords = Kpad/7, scstride = Kpad/16; micro is [rows x ceil(scstride/4)] i32 words.
 //
 // The WHOLE body is emitted by the FUSED intrinsic __dequant_gemv_blockred (see
-// emit_ptx_dequant_gemv_blockred in kovc.hx). FAITHFUL (FMA-level) vs dequant-then-f32-gemv.
+// emit_ptx_dequant_gemv_blockred in kovc.hx). FAITHFUL (FMA-level) vs dequant-then-f32-gemv; the
+// e4m3 scale itself is byte-EXACT.
 //
 // !! This intrinsic is a NEW kovc.hx emitter -> building the driver from it ROTATES the
 //    self-host fixpoint. The full gate (K2==K3==K4 + corpus + PTX regressions) re-pins the hash;
@@ -24,6 +28,6 @@
 //
 // Launch / verify: cuda_launch out.ptx dequant_gemv_blockred <N> dgemv_blockred <Kpad> [mutate].
 @kernel
-fn dequant_gemv_blockred(x: f32, w_packed: t2, sc: f32, y: f32, kpad: i32) {
-    __dequant_gemv_blockred(x, w_packed, sc, y, kpad)
+fn dequant_gemv_blockred(x: f32, w_packed: t2, micro: t2, ts: f32, y: f32, kpad: i32) {
+    __dequant_gemv_blockred(x, w_packed, micro, ts, y, kpad)
 }

@@ -134,7 +134,24 @@ if [ "$FIX_OK" = "1" ]; then
   # speedup -- deterministic synced metric 2.06->1.07 s/tok, per-token projection-dequant 45%->1%,
   # token-for-token IDENTICAL output (HX_FAST fused ~0.56 s/tok; baseline noisier/thermal). cdcf8673
   # (S1) preserved at the v1.5/1.6/1.7 tags + public demo.
-  EXPECT_FIX=45bc8ac9d2908649ba110db3725c8a70b2848a46167827f522e5b2c30e634db8
+  # v1.8 H4 re-mint (2026-06-20): 45bc8ac9... -> 98cd7299... -- the fused dequant-GEMV emitter now
+  # decodes the e4m3 16-block scale IN-KERNEL from raw micro bytes + a per-tensor ts (kovc.hx:
+  # emit_ptx_dequant_gemv_blockred reworked to a 6-arg walk {x,w_packed,micro,ts,y,kpad} + new e4m3
+  # helpers emit_ptx_e4m3_frac_lut/pow_lut/eff_scale + setp_lt_imm/shr_rr) instead of loading a host-
+  # collapsed fp32 effective scale. Same dead-code property as T2/M7: the intrinsic is CALLED only in
+  # dequant_gemv_blockred_kernel.hx, never in the bootstrap self-host source, so K2==K3==K4 STILL
+  # byte-identical at the new value. Re-minted 3-way (K2==K3==K4=98cd7299, K1 ee0c0630) via a SHELL-
+  # built K1 source: assemble_k1.hx's Helix concatenator 0-byte-fails on this post-WSL-update drvfs
+  # (read_file_to_arena short-reads /mnt/c); seed.bin's C reader + the whole K-chain are unaffected,
+  # and the shell recipe is byte-identical to assemble_k1.hx (strip_demo+concat, k1ptxdrv.hx provenance
+  # cmp == agent's). In-kernel e4m3 decode is BYTE-EXACT vs host g_e4m3_tab[micro]*ts (all 254 valid
+  # codes; oracle scale_byte_exact=YES), shrinking resident scales 1671->419MiB (~4x) so full 8B
+  # residency SEATS on a 7.1GB card -> fused path activates: ~5.46x production decode (2.62->0.48 s/tok
+  # HX_GENPROF), token-for-token IDENTICAL (GPT2_GENERATE_MATCH_PASS). dequant_gemv_blockred_kernel.ref.ptx
+  # added (6-param, 21 shr.u32, 0 float-div, emitted by the provenance-verified H4 PTX driver). 45bc8ac9
+  # (T2/M7) preserved at 6fab14e + prior commits. NOTE: gate's own [0] assemble_k1 needs the same drvfs
+  # fix (or run on ext4) before this gate can self-run here; the fixpoint itself is re-minted + sound.
+  EXPECT_FIX=98cd7299518375f6c2c2b38a4f6391ef3998204d61b5496f93987acb1e95d96e
   if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ] && cmp -s /tmp/K2.bin /tmp/K3.bin && cmp -s /tmp/K3.bin /tmp/K4.bin; then
     if [ "$S2" = "$EXPECT_FIX" ]; then
       echo "  FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)"
