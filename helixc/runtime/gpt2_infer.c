@@ -267,6 +267,7 @@ static CUdeviceptr g_pk_res[400] = {0};
 static int    g_packedres = 0;       /* HX_PACKEDRES requested */
 static int    g_packedres_off = 0;   /* latched: residency disabled (fit-check or an alloc failed) -> stream */
 static int    g_packedres_chk = 0;   /* the one-time fit-check has run */
+static size_t g_resmargin = (size_t)768*1024*1024;  /* HX_RESMARGIN (MiB): VRAM headroom kept free of resident allocs (driver overhead + any lazy alloc). Tunable to fit full residency on a less-idle card. */
 /* v1.8 INC1.5: keep the PACKED lm_head words+scales resident and dequant it in VOCAB-ROW chunks at use
  * time, instead of the persistent FP32 d_wte_pad ([NVpad x DM] ~2.49 GiB). Opt-in HX_PACKEDHEAD (implied
  * by HX_PACKEDRES). When ON+fitting, setup_head skips d_wte_pad and lm_head_logits_chunked() streams the
@@ -294,6 +295,16 @@ static int    g_fusedgemv = 0;        /* HX_FUSEDGEMV requested */
 static int    g_fusedgemv_on = 0;     /* latched: fused path active (module loaded + residency available) */
 static int    g_nofusehead = 0;       /* HX_NOFUSEHEAD: MEASUREMENT escape hatch -- keep the lm_head on the chunked
                                        * path even when the projections fuse (isolates the head's added win). */
+/* H1 (2026-06-20): OPT-IN post-prefill free of the 7 f32 projection buffers (d_qW..d_downW, ~736MiB) at the
+ * decode fused-latch, so the resident packed scales can SEAT and the committed fused path goes ACTIVE on a
+ * ~7.1GB card (full residency is ~700MiB-1GB short until those dead-under-fused buffers are freed). PREFILL-
+ * SAFE: those buffers are written FULL-SIZE by the prefill forward (v3_upload+mm_ABt), so we free them ONLY
+ * at the first decode_step_llama (step>0, prefill done) AND only when fused is requested. If the scales then
+ * seat -> g_fusedgemv_on=1 AUTHORITATIVE (the per-projection gemv_abt fallback that reads d_qW is unreachable
+ * under fg). If they DON'T seat -> re-alloc the 7 buffers full-size (safety net) + restore residency state +
+ * g_fusedgemv_on=0 (exactly the non-fused fallback as today). Requires HX_FUSEDGEMV + HX_PACKEDRES; default
+ * OFF = byte-identical to today (no free, no re-make). */
+static int    g_freeproj = 0;         /* HX_FREEPROJ requested */
 static CUmodule   g_fgmod = 0;
 static CUfunction f_dgemv = 0;        /* the dequant_gemv_blockred entry */
 static int    g_fg_kpad_dm = 0;       /* Kpad of a [*, DM]  packed tensor (q/k/v/o/gate/up input pad) */
@@ -1278,6 +1289,57 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
     static int fg_latched = 0;
     if (g_fusedgemv && !fg_latched) {
         fg_latched = 1;
+        if (getenv("HX_DBG")) {   /* H1 census: free at decode-start + total resident words/scales need */
+            size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
+            size_t nw=0, nsc=0; int nres_w=0, nres_s=0;
+            for (int i=0;i<g_ntensors;i++){ const HXGWv3Desc* d=&g_desc[i]; if(!d->packed||i==v3_idx_lmhead())continue;
+                int Kp=(int)d->Kpad; nw+=(size_t)d->rows*(Kp/7)*4; nsc+=(size_t)d->rows*(Kp/16)*4;
+                if(i<400&&g_pk_res[i])nres_w++; if(i<400&&g_sc_res[i])nres_s++; }
+            fprintf(stderr,"[h1census] decode-start free=%zuMiB  resident-need words=%zuMiB scales=%zuMiB (sum=%zuMiB)  already-resident words=%d/%d scales=%d/%d  resmargin=%zuMiB\n",
+                _fr/1048576, nw/1048576, nsc/1048576, (nw+nsc)/1048576, nres_w, 7*NL, nres_s, 7*NL, g_resmargin/1048576);
+        }
+        /* H1 (HX_FREEPROJ): PREFILL IS DONE at this first decode step (callers run decode_step_llama only at
+         * step>0; step 0 ran the full prefill forward). Under FUSED decode the 7 f32 projection buffers
+         * d_qW..d_downW (~736MiB) are DEAD: upload_layer_ll_fused uploads norms only, and every per-projection
+         * gemv_abt(...,d_qW,...) fallback is guarded by `!fg || !fused_gemv(...)` -> unreachable once fg is on.
+         * Prefill needed them full-size (v3_upload + mm_ABt), but now they're freeable. Freeing them +736MiB
+         * lets the resident scales (which latched g_packedres_off=1 mid-prefill at the ~768MiB margin) SEAT.
+         * Snapshot the buffers so a non-seat can re-alloc them (the safety net keeps a non-seat correctness-safe). */
+        int sv_resoff = g_packedres_off;            /* restore exactly if we don't seat */
+        size_t sv_margin = g_resmargin;             /* restore after the (scoped-margin) re-make */
+        int freed = 0, freed_scr = 0;
+        /* Whether the fused HEAD will own the lm_head (so the chunked-head fallback -- the ONLY decode user of
+         * the streaming scratch d_dqscr/d_packed/d_sc -- can't fire). If so, that scratch (~240MiB) is also dead
+         * under full-resident+fused and can be freed UP FRONT to help the remaining projections seat. */
+        int head_will_fuse = (g_packedhead_on && !g_nofusehead);
+        if (g_freeproj) {
+            /* PREFILL DONE: free the 7 dead f32 projection buffers (~736MiB). They were full-size-live through
+             * prefill (v3_upload + mm_ABt); under fused decode upload_layer_ll_fused skips them and every
+             * gemv_abt(...,d_qW,...) fallback is `!fg`-guarded -> unreachable. d_qW..d_downW already hold layer
+             * NL-1's data (per-layer scratch) -- no state to preserve, just free. */
+            cuMemFree(d_qW); cuMemFree(d_kW); cuMemFree(d_vW); cuMemFree(d_oW);
+            cuMemFree(d_gateW); cuMemFree(d_upW); cuMemFree(d_downW);
+            d_qW=d_kW=d_vW=d_oW=d_gateW=d_upW=d_downW=0;
+            freed = 1;
+            /* Also free the streaming dequant scratch up front WHEN the fused head will own lm_head. v3_resident_ptrs
+             * (the re-make) does NOT use d_dqscr/d_packed/d_sc (it bounces through g_hpin/g_scbuf), so freeing them
+             * now is safe and recovers ~240MiB toward seating. The non-seat path re-allocs them for the fallback. */
+            if (head_will_fuse) {
+                if (d_dqscr) { cuMemFree(d_dqscr); d_dqscr = 0; }
+                if (d_packed){ cuMemFree(d_packed); d_packed = 0; }
+                if (d_sc)    { cuMemFree(d_sc); d_sc = 0; }
+                freed_scr = 1;
+            }
+            g_packedres_off = 0;                    /* freed VRAM -> re-enable residency so the remaining tensors can seat */
+            /* Scope a SMALLER per-alloc headroom for the re-make only: prefill's larger g_resmargin (its job was to
+             * leave room for prefill transients) over-reserves now that prefill is done and the decode buffers/KV
+             * are already allocated. A small tail margin lets the last few tensors seat. Tunable via HX_REMARGIN. */
+            { const char* _r = getenv("HX_REMARGIN"); long _v = _r ? atol(_r) : 96;
+              if (_v < 0) _v = 0; g_resmargin = (size_t)_v*1024*1024; }
+            { size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
+              fprintf(stderr, "[freeproj] freed d_qW..d_downW%s; free now %zuMiB, residency re-enabled (re-make margin %zuMiB)\n",
+                      freed_scr ? " + scratch(d_dqscr/d_packed/d_sc)" : "", _fr/1048576, g_resmargin/1048576); }
+        }
         /* Pre-make ALL 7 projection weights of ALL layers resident up front (idempotent first-touch). Only
          * then is the per-token fused dispatch guaranteed to find them -> the per-projection gemv_abt
          * fallback is unreachable under fg (so it never reads the undequantized d_qW we skip). If any
@@ -1288,14 +1350,59 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
             for (int Lz = 0; Lz < NL && ok; Lz++)
                 for (int pj = 0; pj < 7 && ok; pj++) {
                     CUdeviceptr pk=0, sc=0; int rr=0, kk=0;
-                    if (!v3_resident_ptrs(v3_idx_layer(Lz, proj[pj]), &pk, &sc, &rr, &kk)) ok = 0;
+                    if (!v3_resident_ptrs(v3_idx_layer(Lz, proj[pj]), &pk, &sc, &rr, &kk)) {
+                        ok = 0;
+                        if (getenv("HX_DBG")) { size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
+                            fprintf(stderr, "[h1remake] STOPPED at layer %d proj %d (v3 idx %d): free=%zuMiB off=%d\n",
+                                    Lz, pj, v3_idx_layer(Lz, proj[pj]), _fr/1048576, g_packedres_off); }
+                    }
                 }
         }
+        if (g_freeproj) g_resmargin = sv_margin;    /* restore prefill margin (decode's own resident-guards use it) */
         if (ok) {
             g_fusedgemv_on = 1;
             fprintf(stderr, "[fusedgemv] ACTIVE: 7 projections via fused dequant-GEMV (per-token weight dequant skipped)\n");
+            if (freed && !freed_scr) {   /* head NOT fused but projections seated: the scratch is still live for the
+                                          * chunked head -- leave it. (freed_scr already freed it when head fuses.) */
+                size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
+                fprintf(stderr, "[freeproj] seated (scratch kept for chunked head); free now %zuMiB\n", _fr/1048576);
+            }
         } else {
             fprintf(stderr, "[fusedgemv] residency unavailable -> OFF (normal dequant+gemv path)\n");
+            if (freed) {
+                /* SAFETY NET (crash-proof): residency didn't seat even after freeing -> restore the non-fused
+                 * world. The re-make may have consumed VRAM into newly-resident g_pk_res/g_sc_res (which still
+                 * BENEFIT the non-fused path -- v3_upload_gpu reuses resident words), so free can be tight. We
+                 * must re-alloc d_qW..d_downW (+scratch) without an OOM abort. Compute the bytes we need, and if
+                 * free is short, EVICT this session's resident packed words/scales (newest-first is overkill --
+                 * evict all, the non-fused path re-streams them correctly, just slower) until it fits. fg stays 0. */
+                size_t need = (size_t)QD*DM + (size_t)KVD*DM*2 + (size_t)DM*QD
+                            + (size_t)DFF*DM*2 + (size_t)DM*DFF;            /* 7 projection floats */
+                if (freed_scr) { long _sc=g_dqscr_elems; need += (size_t)_sc + (_sc+6)/7 + (_sc+15)/16; }
+                need *= sizeof(float);
+                size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);
+                if (_fr < need + (size_t)64*1024*1024) {   /* +64MiB slack for alloc granularity */
+                    int nres1 = (int)(sizeof(g_pk_res)/sizeof(g_pk_res[0]));
+                    int ev = 0;
+                    for (int i=0;i<nres1;i++){ if(g_pk_res[i]){cuMemFree(g_pk_res[i]); g_pk_res[i]=0; ev++;}
+                                               if(g_sc_res[i]){cuMemFree(g_sc_res[i]); g_sc_res[i]=0;} }
+                    sv_resoff = 1;                          /* everything streamed now -> residency latched off */
+                    cuMemGetInfo(&_fr,&_to);
+                    fprintf(stderr, "[freeproj] non-seat tight (free<need): evicted %d resident packed tensors -> free %zuMiB (non-fused will re-stream)\n", ev, _fr/1048576);
+                }
+                d_qW    = A((size_t)QD*DM);  d_kW = A((size_t)KVD*DM); d_vW = A((size_t)KVD*DM);
+                d_oW    = A((size_t)DM*QD);  d_gateW = A((size_t)DFF*DM);
+                d_upW   = A((size_t)DFF*DM); d_downW = A((size_t)DM*DFF);
+                if (freed_scr) {
+                    long _sc = g_dqscr_elems;                 /* the alloc_buffers size sc (== d_dqscr capacity) */
+                    long _mp = (_sc+6)/7, _ms = (_sc+15)/16;
+                    d_packed = A(_mp); d_sc = A(_ms); d_dqscr = A(_sc);
+                }
+                g_packedres_off = sv_resoff;
+                cuMemGetInfo(&_fr,&_to);
+                fprintf(stderr, "[freeproj] non-seat -> re-alloced d_qW..d_downW%s, restored residency state (off=%d); free now %zuMiB\n",
+                        freed_scr ? " + scratch" : "", g_packedres_off, _fr/1048576);
+            }
         }
     }
     int fg = g_fusedgemv_on;
@@ -1625,11 +1732,17 @@ static int device_init(const char* ptx_path, const char* wpath) {
     g_genprof = getenv("HX_GENPROF") ? 1 : 0;    /* v1.8: HX_FAST-honest end-to-end decode s/tok (production wall) */
     g_scache = getenv("HX_SCALECACHE") ? 1 : 0;  /* v1.7 INC2c: resident static-scale cache */
     g_packedres = getenv("HX_PACKEDRES") ? 1 : 0;  /* v1.8 INC1: resident packed 4-bit layer weights */
+    { const char* _rm = getenv("HX_RESMARGIN"); if (_rm) { long _v = atol(_rm); if (_v > 0) g_resmargin = (size_t)_v*1024*1024; } }  /* tunable resident VRAM headroom (MiB) */
     if (g_packedres) g_scache = 1;                 /* residency implies the static-scale cache */
     g_packedhead = getenv("HX_PACKEDHEAD") ? 1 : 0;  /* v1.8 INC1.5: resident packed lm_head (no FP32 d_wte_pad) */
     if (g_packedres) g_packedhead = 1;               /* resident layers imply the resident head (both shrink VRAM) */
     g_fusedgemv = getenv("HX_FUSEDGEMV") ? 1 : 0;    /* T2/M7: fused dequant-GEMV decode (needs resident packed weights) */
     g_nofusehead = getenv("HX_NOFUSEHEAD") ? 1 : 0;  /* T2/M7b: measurement-only -- keep lm_head chunked */
+    g_freeproj = getenv("HX_FREEPROJ") ? 1 : 0;      /* H1: post-prefill free d_qW..d_downW to seat full residency (needs HX_FUSEDGEMV+HX_PACKEDRES) */
+    if (g_freeproj && (!g_fusedgemv || !g_packedres)) {   /* only meaningful with the fused+resident path */
+        fprintf(stderr, "[freeproj] needs HX_FUSEDGEMV=1 + HX_PACKEDRES=1 -> OFF\n");
+        g_freeproj = 0;
+    }
     if (g_fusedgemv && !g_packedres) {               /* the fused path reads g_pk_res/g_sc_res -> requires residency */
         fprintf(stderr, "[fusedgemv] needs resident packed weights (set HX_PACKEDRES=1) -> OFF\n");
         g_fusedgemv = 0;
@@ -1830,7 +1943,7 @@ static void packedres_fitcheck(void) {
                                              * which already has its own non-fatal fallback -- budgeting them
                                              * here too double-counts and wrongly blocks the fit by ~1.6GiB. */
     }
-    size_t margin = (size_t)768*1024*1024;  /* headroom for the dequant scratch + the lazily-resident scales */
+    size_t margin = g_resmargin;  /* headroom for the dequant scratch + the lazily-resident scales (HX_RESMARGIN) */
     size_t freeb = 0, totb = 0; cuMemGetInfo(&freeb, &totb);
     if (freeb < need + margin) {
         g_packedres_off = 1;
@@ -1866,7 +1979,7 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
         CUdeviceptr p = 0;                                                  /* first touch: alloc resident + one-time HtoD */
         memcpy(g_hpin, w, (size_t)rows*kwords*4);                          /* v1.8 FIX: fault the mmap pages into PINNED RAM first (a direct cuMemcpyHtoD from a COLD file-backed mmap can hang the DMA; bytes identical to HtoD-from-w). */
         size_t _frp=0,_top=0; cuMemGetInfo(&_frp,&_top);                   /* v1.8 FIX: proactive VRAM-headroom guard. On driver 610.62 a cuMemAlloc at ~0 free HANGS (the old driver returned OOM, which latched the graceful fallback). The fit-check under-budgets by ~1GiB of resident scales, so it would otherwise alloc until free=0 and hang. Latch off + stream BEFORE exhaustion, leaving 768MiB for dequant scratch + activations + KV. */
-        if (_frp < (size_t)rows*kwords*4 + (size_t)768*1024*1024) g_packedres_off = 1;
+        if (_frp < (size_t)rows*kwords*4 + g_resmargin) g_packedres_off = 1;
         if (!g_packedres_off && cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
             cuMemcpyHtoD(p, g_hpin, (size_t)rows*kwords*4) == CUDA_SUCCESS) { g_pk_res[idx] = p; d_packed_use = p; }
         else { if (p) cuMemFree(p); g_packedres_off = 1;                    /* VRAM-tight: latch off, stream this + the rest (g_hpin already holds w) */
@@ -1885,7 +1998,7 @@ static void v3_upload_gpu(int idx, CUdeviceptr dst) {
         for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;   /* byte-identical to v3_e4m3_decode */
         if (g_scache && idx >= 0 && idx < nsc && !g_packedres_off) {     /* first touch: cache it resident (non-fatal on VRAM-tight) */
             CUdeviceptr p = 0; size_t _frs=0,_tos=0; cuMemGetInfo(&_frs,&_tos);   /* v1.8 FIX: same proactive VRAM-headroom guard as the packed alloc (scales are ~1GiB total; don't exhaust VRAM). */
-            if (_frs >= (size_t)rows*kblk*4 + (size_t)768*1024*1024 &&
+            if (_frs >= (size_t)rows*kblk*4 + g_resmargin &&
                 cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
                 cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) { g_sc_res[idx] = p; d_sc_use = p; }
             else { if (p) cuMemFree(p); CKX(cuMemcpyHtoD(d_sc, g_scbuf, (size_t)rows*kblk*4), "dq scale HtoD"); }
@@ -1931,7 +2044,7 @@ static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows
         CUdeviceptr p = 0;
         memcpy(g_hpin, w, (size_t)rows*kwords*4);                          /* v1.8 FIX: fault mmap -> pinned (cold-mmap DMA can hang) */
         size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);                       /* v1.8 FIX: VRAM-headroom guard -- a cuMemAlloc at ~0 free HANGS on driver 610.62; bail to fallback before exhaustion */
-        if (_fr < (size_t)rows*kwords*4 + (size_t)768*1024*1024) { g_packedres_off = 1; return 0; }
+        if (_fr < (size_t)rows*kwords*4 + g_resmargin) { g_packedres_off = 1; return 0; }
         if (cuMemAlloc(&p, (size_t)rows*kwords*4) == CUDA_SUCCESS &&
             cuMemcpyHtoD(p, g_hpin, (size_t)rows*kwords*4) == CUDA_SUCCESS) g_pk_res[idx] = p;
         else { if (p) cuMemFree(p); g_packedres_off = 1; return 0; }
@@ -1941,7 +2054,7 @@ static int v3_resident_ptrs(int idx, CUdeviceptr* pk, CUdeviceptr* sc, int* rows
         for (long i=0;i<(long)rows*kblk;i++) g_scbuf[i] = g_e4m3_tab[micro[i]] * ts;
         CUdeviceptr p = 0;
         size_t _fr=0,_to=0; cuMemGetInfo(&_fr,&_to);                       /* v1.8 FIX: VRAM-headroom guard */
-        if (_fr < (size_t)rows*kblk*4 + (size_t)768*1024*1024) { g_packedres_off = 1; return 0; }
+        if (_fr < (size_t)rows*kblk*4 + g_resmargin) { g_packedres_off = 1; return 0; }
         if (cuMemAlloc(&p, (size_t)rows*kblk*4) == CUDA_SUCCESS &&
             cuMemcpyHtoD(p, g_scbuf, (size_t)rows*kblk*4) == CUDA_SUCCESS) g_sc_res[idx] = p;
         else { if (p) cuMemFree(p); return 0; }
