@@ -319,6 +319,15 @@ static int    g_nofusehead = 0;       /* HX_NOFUSEHEAD: MEASUREMENT escape hatch
 static int    g_freeproj = 0;         /* HX_FREEPROJ requested */
 static CUmodule   g_fgmod = 0;
 static CUfunction f_dgemv = 0;        /* the dequant_gemv_blockred entry */
+/* v1.8 FUSED DECODE-ATTENTION (the "other"-reclaim): one STANDALONE kernel (fused_decode_attn) replaces
+ * the per-head decode attention loop (:1460-1473 -- NH x {scores gemv, scale, softmax, AV gemv} + NH
+ * ctx D2D == 128 launches + 32 D2D / layer) with ONE launch/layer. Default OFF (HX_FUSEDATTN unset) =
+ * the EXACT per-head path, byte-unchanged. Rides cuModuleLoadData EXACTLY like HX_DQPTX / HX_FUSEDGEMV;
+ * NO kovc.hx edit, fixpoint UNTOUCHED. Scale is the HOST ATTN_SCALE passed via a 1-elem f32 array (no
+ * on-device rsqrt). Acceptance gate = token-for-token identical generation vs OFF. */
+static int        g_fusedattn = 0;    /* HX_FUSEDATTN requested */
+static CUmodule   g_famod = 0;
+static CUfunction f_fattn = 0;        /* the fused_decode_attn entry (0 => fall back to per-head) */
 static int    g_fg_kpad_dm = 0;       /* Kpad of a [*, DM]  packed tensor (q/k/v/o/gate/up input pad) */
 static int    g_fg_kpad_dff = 0;      /* Kpad of a [*, DFF] packed tensor (down input pad) */
 static CUdeviceptr d_xn1pad = 0, d_xn21pad = 0, d_ctx1pad = 0, d_m1pad = 0;  /* Kpad-padded, tail-zeroed x for the fused gemv */
@@ -1457,6 +1466,24 @@ static void decode_step_llama(int new_id, int pos, float* out_logits) {
                              d_v1 + (CUdeviceptr)((size_t)kv*DH*sizeof(float)), (size_t)DH*sizeof(float)), "kv app V");
         }
         emit_op(L, 4, "gpu_rope_rot", "attn", "rope_qk", NH + NKV);
+        /* v1.8 FUSED DECODE-ATTENTION: ONE launch/layer replaces the NH-iteration per-head loop below
+         * (NH x {scores gemv, scale, softmax, AV gemv} + NH ctx D2D == 128 launches + 32 D2D / layer).
+         * Geometry grid=(NH) block=(DH); each block owns query head h, each lane d owns ctx1_t[h*DH+d].
+         * Args: q=d_q1, kc/vc=d_kcache/d_vcache, out=ctx1_t (in place), sc=d_scale (HOST ATTN_SCALE, 1-elem
+         * f32 array -- FIX 1: no on-device rsqrt), T, DH, koff=kvoff(L,0) (kernel adds (h/grp)*kvstride),
+         * grp=group, kvstride=kv_cap*DH. FIX 2: scalar params are .u32 + indices widen via mul.wide.s32
+         * (byte address is 64-bit), so the only requirement is the ELEMENT index koff+NKV*kvstride < 2^31.
+         * The guard below ASSERTS that and FAILS CLOSED to the exact per-head path if it would overflow
+         * (true at this model's NC<=32768; the guard makes a future larger cache safe-by-fallback). The
+         * per-head attention logit lens reads d_pr1 which the fused kernel never fills -> bypassed under
+         * fused (lens is a !g_fast debug path; HX_FUSEDATTN disables the per-head attention lens). */
+        size_t _famax = kvoff(L, 0) + (size_t)NKV * (size_t)kv_cap * (size_t)DH;
+        int _fattn_ok = (g_fusedattn && f_fattn && _famax < 0x7fffffffULL);
+        if (_fattn_ok) {
+            int Ti = T, DHi = DH, koffi = (int)kvoff(L, 0), grpi = group, kvsti = (int)((size_t)kv_cap * DH);
+            void* ar[] = { &d_q1, &d_kcache, &d_vcache, &ctx1_t, &d_scale, &Ti, &DHi, &koffi, &grpi, &kvsti };
+            LX(f_fattn, (unsigned)NH, (unsigned)DH, ar);   /* grid=NH, block=DH, shared=0 */
+        } else
         for (int h = 0; h < NH; h++) {
             int kv = h / group;
             gemv_abt(d_q1 + (CUdeviceptr)((size_t)h*DH*sizeof(float)),
@@ -1740,6 +1767,32 @@ static void load_fusedgemv_module(void) {
     fclose(ff);
 }
 
+/* v1.8: load the STANDALONE fused decode-attention PTX module (entry "fused_decode_attn"). Gated behind
+ * HX_FUSEDATTN. Path from HX_FUSEDATTN_PTX, default /home/legoa/fused_decode_attn.ptx. Non-fatal: a
+ * missing/unloadable module just leaves g_fusedattn armed-but-inactive -> the decode dispatch sees
+ * f_fattn==0 and runs the EXACT per-head loop. Mirrors load_fusedgemv_module exactly. */
+static void load_fusedattn_module(void) {
+    if (!g_fusedattn) return;
+    const char* fp = getenv("HX_FUSEDATTN_PTX");
+    if (!fp || !fp[0]) fp = "/home/legoa/fused_decode_attn.ptx";
+    FILE* ff = fopen(fp, "rb");
+    if (!ff) { fprintf(stderr, "[fusedattn] PTX '%s' not found -> OFF (per-head path)\n", fp); g_fusedattn = 0; return; }
+    fseek(ff,0,SEEK_END); long fsz=ftell(ff); fseek(ff,0,SEEK_SET);
+    char* fbuf=(char*)malloc(fsz+1);
+    int ok = 0;
+    if (fbuf && fread(fbuf,1,fsz,ff)==(size_t)fsz) {
+        fbuf[fsz]=0;
+        if (cuModuleLoadData(&g_famod, fbuf)==CUDA_SUCCESS &&
+            cuModuleGetFunction(&f_fattn, g_famod, "fused_decode_attn")==CUDA_SUCCESS) {
+            ok = 1;
+            fprintf(stderr, "[fusedattn] fused decode-attention module ON (%s)\n", fp);
+        }
+    }
+    if (!ok) { fprintf(stderr, "[fusedattn] fused ptx load failed -> OFF (per-head path)\n"); g_fusedattn = 0; f_fattn = 0; }
+    if (fbuf) free(fbuf);
+    fclose(ff);
+}
+
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
 static int device_init(const char* ptx_path, const char* wpath) {
     g_prof   = getenv("HX_PROF") ? 1 : 0;        /* v1.7 INCREMENT 2: per-upload profiling */
@@ -1752,6 +1805,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
     g_packedhead = getenv("HX_PACKEDHEAD") ? 1 : 0;  /* v1.8 INC1.5: resident packed lm_head (no FP32 d_wte_pad) */
     if (g_packedres) g_packedhead = 1;               /* resident layers imply the resident head (both shrink VRAM) */
     g_fusedgemv = getenv("HX_FUSEDGEMV") ? 1 : 0;    /* T2/M7: fused dequant-GEMV decode (needs resident packed weights) */
+    g_fusedattn = getenv("HX_FUSEDATTN") ? 1 : 0;    /* v1.8: fused decode-attention (one kernel/layer; independent of the gemv path) */
     g_nofusehead = getenv("HX_NOFUSEHEAD") ? 1 : 0;  /* T2/M7b: measurement-only -- keep lm_head chunked */
     g_freeproj = getenv("HX_FREEPROJ") ? 1 : 0;      /* H1: post-prefill free d_qW..d_downW to seat full residency (needs HX_FUSEDGEMV+HX_PACKEDRES) */
     if (g_freeproj && (!g_fusedgemv || !g_packedres)) {   /* only meaningful with the fused+resident path */
@@ -1794,6 +1848,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
     }
     load_dequant_module();   /* v1.7: GPU dequant (HX_DQPTX) -> g_gpu_dq; HX_HOSTDEQ forces host */
     load_fusedgemv_module(); /* T2/M7: standalone fused dequant-GEMV module (HX_FUSEDGEMV) */
+    load_fusedattn_module(); /* v1.8: standalone fused decode-attention module (HX_FUSEDATTN) */
     if (load_gpt2_weights(wpath)) return 2;
     return 0;
 }
