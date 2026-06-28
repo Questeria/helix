@@ -1865,6 +1865,63 @@ int main(int argc, char** argv) {
         return pbad ? 1 : 0;
     }
 
+    /* sptmatmul_real mode (v1.9 P3c): the SAME scaled_packed_ternary_matmul kernel, but on REAL BitNet
+     * data loaded from .bin files instead of synthetic.
+     *   cuda_launch <ptx> scaled_packed_ternary_matmul <Nignored> sptmatmul_real <packed.bin> <acts.bin> <expected.bin> <M> <K> <N> [mutate].
+     * packed.bin = host-packed ternary weights (i32 [M x K/15], 15 trits/word); acts.bin = signed int
+     * activations (i32 [K x N]); expected.bin = the reference INTEGER matmul (f32 [M x N], = python
+     * a_int @ W_ternary.T). Launches with sc=ALL-ONES so c = i2f(int_dot) is the pure integer result,
+     * and compares c == expected EXACTLY (==). Proves the kovc-emitted ternary kernel reproduces a REAL
+     * BitNet BitLinear's integer matmul element-for-element (the per-tensor/per-token dequant scales are
+     * applied host-side downstream, matching the verified P3c-step1 decomposition). 'mutate' = comparator NC. */
+    if (strcmp(op, "sptmatmul_real") == 0) {
+        const char* pf = (argc > 5) ? argv[5] : 0;
+        const char* af = (argc > 6) ? argv[6] : 0;
+        const char* ef = (argc > 7) ? argv[7] : 0;
+        int Md = (argc > 8) ? atoi(argv[8]) : 0;
+        int Kd = (argc > 9) ? atoi(argv[9]) : 0;
+        int Nd = (argc > 10) ? atoi(argv[10]) : 0;
+        int mutate = (argc > 11 && strcmp(argv[11], "mutate") == 0);
+        if (!pf || !af || !ef || Md <= 0 || Kd <= 0 || Nd <= 0) { fprintf(stderr, "sptmatmul_real: need <packed.bin> <acts.bin> <expected.bin> M K N\n"); return 2; }
+        if (Kd % 15 != 0) { fprintf(stderr, "sptmatmul_real: K must be divisible by 15 (15 trits/word); got K=%d\n", Kd); return 2; }
+        int kpacked = Kd / 15;
+        size_t aP = (size_t)Md * kpacked, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        int*   hA = (int*)malloc(aP * sizeof(int));
+        int*   hB = (int*)malloc(bN * sizeof(int));
+        float* hS = (float*)malloc((size_t)Md * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        float* hE = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hS || !hC || !hE) return 2;
+        FILE* fp;
+        fp = fopen(pf, "rb"); if (!fp || fread(hA, sizeof(int),   aP, fp) != aP) { fprintf(stderr, "sptmatmul_real: bad packed.bin (want %zu i32)\n", aP); return 2; } fclose(fp);
+        fp = fopen(af, "rb"); if (!fp || fread(hB, sizeof(int),   bN, fp) != bN) { fprintf(stderr, "sptmatmul_real: bad acts.bin (want %zu i32)\n", bN); return 2; } fclose(fp);
+        fp = fopen(ef, "rb"); if (!fp || fread(hE, sizeof(float), cN, fp) != cN) { fprintf(stderr, "sptmatmul_real: bad expected.bin (want %zu f32)\n", cN); return 2; } fclose(fp);
+        for (int r = 0; r < Md; r++) hS[r] = 1.0f;   /* sc = all-ones -> c = i2f(int_dot), the pure integer matmul */
+        CUdeviceptr dA, dB, dS, dC;
+        CK(cuMemAlloc(&dA, aP * sizeof(int)),           "cuMemAlloc A (packed)");
+        CK(cuMemAlloc(&dB, bN * sizeof(int)),           "cuMemAlloc B");
+        CK(cuMemAlloc(&dS, (size_t)Md * sizeof(float)), "cuMemAlloc S (scale)");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)),         "cuMemAlloc C (f32)");
+        CK(cuMemcpyHtoD(dA, hA, aP * sizeof(int)),           "cuMemcpyHtoD A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(int)),           "cuMemcpyHtoD B");
+        CK(cuMemcpyHtoD(dS, hS, (size_t)Md * sizeof(float)), "cuMemcpyHtoD S");
+        void* pargs[] = { &dA, &dB, &dS, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, pargs, 0), "cuLaunchKernel sptmatmul_real");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "cuMemcpyDtoH C (f32)");
+        if (mutate && cN > 0) hC[0] += 1.0f;   /* comparator negative control: must trip a mismatch */
+        int pbad = 0;
+        for (size_t i = 0; i < cN; i++) {
+            if (hC[i] != hE[i]) { if (pbad < 4) fprintf(stderr, "sptmatmul_real mismatch C[%zu]=%.9g exp %.9g (d=%.3g)\n", i, hC[i], hE[i], hC[i] - hE[i]); pbad++; }
+        }
+        printf("GPU [%s] scaled_packed_ternary_matmul on REAL BitNet data %dx%dx%d: C[0]=%.6g exp %.6g, %d bad -> %s\n",
+               gpu, Md, Kd, Nd, hC[0], hE[0], pbad, pbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dS); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hS); free(hC); free(hE); free(ptx);
+        return pbad ? 1 : 0;
+    }
+
     /* hgemm mode (v1.5 S1): HALF-PRECISION (f16 storage, f32 accumulate) matmul verify.
      *   cuda_launch <ptx> naive_matmul_f16 <Nignored> hgemm <M> <K> <N> [mutate].
      * Device buffers are uint16 IEEE-binary16 -- exactly what the kernel's
