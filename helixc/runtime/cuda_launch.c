@@ -1797,6 +1797,74 @@ int main(int argc, char** argv) {
         return pbad ? 1 : 0;
     }
 
+    /* sptmatmul mode (v1.9 P1): SCALED PACKED TERNARY matmul verify.
+     *   cuda_launch <ptx> scaled_packed_ternary_matmul <Nignored> sptmatmul <M> <K> <N> [mutate].
+     * Like 'ptmatmul' (15 trits/word packed, on-device div-unpack, exact i32 accumulate) but the
+     * kernel applies a per-OUTPUT-ROW f32 scale: c[r,col] = i2f(int_dot) * sc[r] (the BitNet dequant
+     * shape). Output is f32. The host reference is (float)int_ref * scale[r] -- the SAME op order as
+     * the kernel (__gpu_i2f then one mul.f32); the int accumulate is small so __gpu_i2f is exact and
+     * there is no FMA, so the GPU f32 result is BIT-IDENTICAL to the host -> the compare is EXACT (==),
+     * same teeth as ptmatmul. 'mutate' perturbs one output cell pre-compare (comparator NC). */
+    if (strcmp(op, "sptmatmul") == 0) {
+        int Md = (argc > 5) ? atoi(argv[5]) : 16;
+        int Kd = (argc > 6) ? atoi(argv[6]) : 15;
+        int Nd = (argc > 7) ? atoi(argv[7]) : 16;
+        int mutate = (argc > 8 && strcmp(argv[8], "mutate") == 0);
+        if (Kd % 15 != 0) { fprintf(stderr, "sptmatmul: K must be divisible by 15 (15 trits/word); got K=%d\n", Kd); return 2; }
+        int kpacked = Kd / 15;
+        size_t wN = (size_t)Md * Kd, aP = (size_t)Md * kpacked;
+        size_t bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        int*   hW = (int*)malloc(wN * sizeof(int));
+        int*   hA = (int*)malloc(aP * sizeof(int));
+        int*   hB = (int*)malloc(bN * sizeof(int));
+        float* hS = (float*)malloc((size_t)Md * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hW || !hA || !hB || !hS || !hC) return 2;
+        for (size_t i = 0; i < wN; i++) hW[i] = (int)(i % 3) - 1;             /* ternary weights -1/0/+1 */
+        for (int r = 0; r < Md; r++) {
+            for (int kw = 0; kw < kpacked; kw++) {
+                int word = 0, power = 1;
+                for (int j = 0; j < 15; j++) {
+                    int w = hW[r * Kd + kw * 15 + j];
+                    int code = (w < 0) ? 2 : (w > 0 ? 1 : 0);                 /* -1->2, 0->0, +1->1 */
+                    word += code * power; power *= 4;
+                }
+                hA[r * kpacked + kw] = word;
+            }
+        }
+        for (size_t i = 0; i < bN; i++) hB[i] = (int)((i * 13 + 7) % 11) - 5; /* signed activations [-5,5] */
+        for (int r = 0; r < Md; r++) hS[r] = 0.013125f * (float)(r + 1);      /* per-row scale, distinct + non-f32-exact */
+        CUdeviceptr dA, dB, dS, dC;
+        CK(cuMemAlloc(&dA, aP * sizeof(int)),          "cuMemAlloc A (packed)");
+        CK(cuMemAlloc(&dB, bN * sizeof(int)),          "cuMemAlloc B");
+        CK(cuMemAlloc(&dS, (size_t)Md * sizeof(float)), "cuMemAlloc S (scale)");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)),        "cuMemAlloc C (f32)");
+        CK(cuMemcpyHtoD(dA, hA, aP * sizeof(int)),          "cuMemcpyHtoD A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(int)),          "cuMemcpyHtoD B");
+        CK(cuMemcpyHtoD(dS, hS, (size_t)Md * sizeof(float)), "cuMemcpyHtoD S");
+        void* pargs[] = { &dA, &dB, &dS, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, pargs, 0), "cuLaunchKernel sptmatmul");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "cuMemcpyDtoH C (f32)");
+        if (mutate && cN > 0) hC[0] += 1.0f;   /* comparator negative control: must trip a mismatch */
+        int pbad = 0;
+        for (int r = 0; r < Md; r++) {
+            for (int cc = 0; cc < Nd; cc++) {
+                long iref = (long)hW[r * Kd] * (long)hB[cc];
+                for (int t = 1; t < Kd; t++) iref += (long)hW[r * Kd + t] * (long)hB[t * Nd + cc];
+                float ref = (float)iref * hS[r];        /* i2f(int) * scale[r] -- identical op to the kernel */
+                float got = hC[r * Nd + cc];
+                if (got != ref) { if (pbad < 4) fprintf(stderr, "sptmatmul mismatch C[%d,%d]=%.9g ref %.9g (d=%.3g)\n", r, cc, got, ref, got - ref); pbad++; }
+            }
+        }
+        printf("GPU [%s] scaled_packed_ternary_matmul(15t/word + per-row f32 scale) %dx%dx%d: C[1,1]=%.6g, %d bad -> %s\n",
+               gpu, Md, Kd, Nd, hC[1 * Nd + 1], pbad, pbad ? "FAIL" : "PASS");
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dS); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hW); free(hA); free(hB); free(hS); free(hC); free(ptx);
+        return pbad ? 1 : 0;
+    }
+
     /* hgemm mode (v1.5 S1): HALF-PRECISION (f16 storage, f32 accumulate) matmul verify.
      *   cuda_launch <ptx> naive_matmul_f16 <Nignored> hgemm <M> <K> <N> [mutate].
      * Device buffers are uint16 IEEE-binary16 -- exactly what the kernel's
