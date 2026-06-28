@@ -319,6 +319,14 @@ static int    g_nofusehead = 0;       /* HX_NOFUSEHEAD: MEASUREMENT escape hatch
 static int    g_freeproj = 0;         /* HX_FREEPROJ requested */
 static CUmodule   g_fgmod = 0;
 static CUfunction f_dgemv = 0;        /* the dequant_gemv_blockred entry */
+/* Phase-1 (P1) WARP-PER-ROW dequant-GEMV: an ALTERNATE fused gemv kernel (dequant_gemv_warp -- one 32-lane
+ * warp per output row, 8 warps/256-thread block, barrier-free shfl reduce). Loaded as a SECOND standalone
+ * module alongside f_dgemv; selected at the fused launch sites only when HX_GEMV3 is set AND it loaded.
+ * Default OFF (HX_GEMV3 unset OR module absent) -> f_dgemv_warp==0 -> the block-reduction f_dgemv path runs
+ * byte-unchanged. Same arg vector {x, w_packed, micro, ts, y, kpad}; only grid/block differ at launch. */
+static int        g_gemv3 = 0;        /* HX_GEMV3 requested (use the warp-per-row gemv at the fused sites) */
+static CUmodule   g_g3mod = 0;
+static CUfunction f_dgemv_warp = 0;   /* the dequant_gemv_warp entry; 0 = fail-closed (block-red path) */
 /* v1.8 FUSED DECODE-ATTENTION (the "other"-reclaim): one STANDALONE kernel (fused_decode_attn) replaces
  * the per-head decode attention loop (:1460-1473 -- NH x {scores gemv, scale, softmax, AV gemv} + NH
  * ctx D2D == 128 launches + 32 D2D / layer) with ONE launch/layer. Default OFF (HX_FUSEDATTN unset) =
@@ -331,6 +339,36 @@ static CUfunction f_fattn = 0;        /* the fused_decode_attn entry (0 => fall 
 static int    g_fg_kpad_dm = 0;       /* Kpad of a [*, DM]  packed tensor (q/k/v/o/gate/up input pad) */
 static int    g_fg_kpad_dff = 0;      /* Kpad of a [*, DFF] packed tensor (down input pad) */
 static CUdeviceptr d_xn1pad = 0, d_xn21pad = 0, d_ctx1pad = 0, d_m1pad = 0;  /* Kpad-padded, tail-zeroed x for the fused gemv */
+
+/* ===================== v1.8 PROMPT-LOOKUP GREEDY SPECULATIVE DECODE (HX_SPEC; PATH B) =====================
+ * Host-only n-gram drafter + an m1-row VERIFY forward in the resident llama KV path. The emitted token
+ * stream is BYTE-IDENTICAL to plain greedy --generate (a speedup, NOT a sampler change); the HELIX_GEN_IDS
+ * line + the TOKEN_FOR_TOKEN gate are the regression test. Default OFF -> run_generate unchanged. Greedy
+ * only (temp==0). NO fixpoint move: ONE standalone @kernel (softmax_causal_offset, an absolute-position
+ * causal-mask softmax) loaded via cuModuleLoadData EXACTLY like fused_decode_attn; everything else reuses
+ * the existing multi-row kernels (mm_ABt/mm_AB/rms_norm_k/rope_at/silu_mul_k/vadd/the packed head).
+ *
+ * PATH-B fixes vs the design's path A: (1) the NEW offset-mask kernel (the existing gpu_softmax_causal
+ * hardwires nvalid=row+1, window-relative; verify needs nvalid=pos+row+1, absolute); (2) KV-capture at
+ * kvoff(L,kv)+pos*DH (NOT base-0, which would clobber the confirmed prefix); (3) per-row RoPE rope_at(pos+r).
+ */
+#define PLD_DRAFT_MAX 16        /* hard cap on M; sizes g_draft + the verify window + g_vlogits */
+typedef struct {
+    int   on;        /* HX_SPEC=1 enables (forced 0 if temp>0 or !ARCH||!KV_ON) */
+    int   k_max;     /* longest n-gram suffix tried first   (HX_SPEC_K,    default 3) */
+    int   k_min;     /* shortest suffix fallback            (HX_SPEC_KMIN, default 1) */
+    int   m;         /* max draft length M per hit          (HX_SPEC_M,    default 6) */
+    long  steps, hits, drafted, accepted, emitted, forwards;   /* rolling stats -> [specprof] */
+} SpecCfg;
+static SpecCfg g_spec = { 0, 3, 1, 6, 0,0,0,0,0,0 };
+static int   g_draft[PLD_DRAFT_MAX];
+static int   g_draft_n = 0;            /* valid count; 0 == no match */
+static float* g_logits0 = NULL;        /* one NV row, no-match fallback (malloc once) */
+static float* g_vlogits_flat = NULL;   /* (1+PLD_DRAFT_MAX)*NV verify logits (malloc once) */
+/* the standalone absolute-offset causal-mask softmax (PATH-B fix #1) -- compiled by the cached kovc
+ * driver, loaded like f_fattn; if it fails to load, HX_SPEC fails closed to plain decode. */
+static CUmodule   g_scomod = 0;
+static CUfunction f_sm_offset = 0;     /* softmax_causal_offset(x,y,rows,cols,base) */
 
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn, grid, block, args)        do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); if (!g_fast) SYNC("sync " #fn); } while (0)
@@ -423,6 +461,12 @@ static void gemv_ab(CUdeviceptr p, CUdeviceptr m, CUdeviceptr y, int N, int T) {
 /* full-row softmax over [rows,cols], NO causal mask (the decode row attends every cached pos) */
 static void smrow(CUdeviceptr x, CUdeviceptr y, int rows, int cols) {
     int c=cols; void* ar[] = { &x,&y,&c }; LX(f_smrow, (unsigned)rows, 1, ar);
+}
+/* v1.8 HX_SPEC: ABSOLUTE-OFFSET causal softmax over [rows,cols]: query row r (abs pos base+r)
+ * reduces/normalizes over keys [0, base+r] (extent base+r+1), writes 0 to [base+r+1, cols). Row r's
+ * softmax is bit-identical to smrow over base+r+1 cols (same seed/order). grid=rows block=1. */
+static void softmax_causal_offset(CUdeviceptr x, CUdeviceptr y, int rows, int cols, int base) {
+    int r=rows,c=cols,b=base; void* ar[] = { &x,&y,&r,&c,&b }; LX(f_sm_offset, (unsigned)rows, 1, ar);
 }
 
 static CUdeviceptr A(size_t nf) { CUdeviceptr p; CKX(cuMemAlloc(&p, nf * sizeof(float)), "alloc"); return p; }
@@ -1765,6 +1809,32 @@ static void load_fusedgemv_module(void) {
     if (!ok) { fprintf(stderr, "[fusedgemv] fused ptx load failed -> OFF (normal gemv path)\n"); g_fusedgemv = 0; f_dgemv = 0; }
     if (fbuf) free(fbuf);
     fclose(ff);
+    /* P1: ALSO load the warp-per-row gemv as a SECOND module (only when the fused path is still armed).
+     * Path from HX_GEMV3_PTX, default /home/legoa/dequant_gemv_warp.ptx. FAIL-CLOSED: any failure leaves
+     * f_dgemv_warp=0 so the launch sites keep using the block-reduction f_dgemv (this never disarms the
+     * fused path itself -- HX_GEMV3 simply has no effect when the warp module is absent). */
+    if (g_fusedgemv && f_dgemv) {
+        const char* wp = getenv("HX_GEMV3_PTX");
+        if (!wp || !wp[0]) wp = "/home/legoa/dequant_gemv_warp.ptx";
+        FILE* wf = fopen(wp, "rb");
+        if (!wf) { fprintf(stderr, "[gemv3] warp PTX '%s' not found -> HX_GEMV3 inert (block-red gemv)\n", wp); }
+        else {
+            fseek(wf,0,SEEK_END); long wsz=ftell(wf); fseek(wf,0,SEEK_SET);
+            char* wbuf=(char*)malloc(wsz+1);
+            int wok = 0;
+            if (wbuf && fread(wbuf,1,wsz,wf)==(size_t)wsz) {
+                wbuf[wsz]=0;
+                if (cuModuleLoadData(&g_g3mod, wbuf)==CUDA_SUCCESS &&
+                    cuModuleGetFunction(&f_dgemv_warp, g_g3mod, "dequant_gemv_warp")==CUDA_SUCCESS) {
+                    wok = 1;
+                    fprintf(stderr, "[gemv3] warp-per-row dequant-GEMV module loaded (%s)%s\n", wp, g_gemv3 ? " -- HX_GEMV3 ACTIVE" : " -- inert (HX_GEMV3 unset)");
+                }
+            }
+            if (!wok) { fprintf(stderr, "[gemv3] warp ptx load failed -> HX_GEMV3 inert (block-red gemv)\n"); f_dgemv_warp = 0; }
+            if (wbuf) free(wbuf);
+            fclose(wf);
+        }
+    }
 }
 
 /* v1.8: load the STANDALONE fused decode-attention PTX module (entry "fused_decode_attn"). Gated behind
@@ -1793,6 +1863,32 @@ static void load_fusedattn_module(void) {
     fclose(ff);
 }
 
+/* v1.8 HX_SPEC: load the STANDALONE absolute-offset causal-softmax PTX module (entry
+ * "softmax_causal_offset"). Path from HX_SPEC_PTX, default /home/legoa/softmax_causal_offset.ptx.
+ * Mirrors load_fusedattn_module. FAIL-CLOSED: if it can't load, f_sm_offset stays 0 and spec_step
+ * disables HX_SPEC -> plain decode (so the byte-identity contract can never be silently broken). */
+static void load_specdec_module(void) {
+    if (!g_spec.on) return;
+    const char* fp = getenv("HX_SPEC_PTX");
+    if (!fp || !fp[0]) fp = "/home/legoa/softmax_causal_offset.ptx";
+    FILE* ff = fopen(fp, "rb");
+    if (!ff) { fprintf(stderr, "[specdec] PTX '%s' not found -> HX_SPEC OFF (plain decode)\n", fp); g_spec.on = 0; return; }
+    fseek(ff,0,SEEK_END); long fsz=ftell(ff); fseek(ff,0,SEEK_SET);
+    char* fbuf=(char*)malloc(fsz+1);
+    int ok = 0;
+    if (fbuf && fread(fbuf,1,fsz,ff)==(size_t)fsz) {
+        fbuf[fsz]=0;
+        if (cuModuleLoadData(&g_scomod, fbuf)==CUDA_SUCCESS &&
+            cuModuleGetFunction(&f_sm_offset, g_scomod, "softmax_causal_offset")==CUDA_SUCCESS) {
+            ok = 1;
+            fprintf(stderr, "[specdec] offset-mask softmax module ON (%s)\n", fp);
+        }
+    }
+    if (!ok) { fprintf(stderr, "[specdec] offset-mask ptx load failed -> HX_SPEC OFF (plain decode)\n"); g_spec.on = 0; f_sm_offset = 0; }
+    if (fbuf) free(fbuf);
+    fclose(ff);
+}
+
 /* load PTX, create the context, fetch the forward-only kernel handles, mmap the weight file. */
 static int device_init(const char* ptx_path, const char* wpath) {
     g_prof   = getenv("HX_PROF") ? 1 : 0;        /* v1.7 INCREMENT 2: per-upload profiling */
@@ -1805,6 +1901,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
     g_packedhead = getenv("HX_PACKEDHEAD") ? 1 : 0;  /* v1.8 INC1.5: resident packed lm_head (no FP32 d_wte_pad) */
     if (g_packedres) g_packedhead = 1;               /* resident layers imply the resident head (both shrink VRAM) */
     g_fusedgemv = getenv("HX_FUSEDGEMV") ? 1 : 0;    /* T2/M7: fused dequant-GEMV decode (needs resident packed weights) */
+    g_gemv3     = getenv("HX_GEMV3") ? 1 : 0;        /* P1: warp-per-row variant of the fused gemv (rides HX_FUSEDGEMV; selected per-launch if loaded) */
     g_fusedattn = getenv("HX_FUSEDATTN") ? 1 : 0;    /* v1.8: fused decode-attention (one kernel/layer; independent of the gemv path) */
     g_nofusehead = getenv("HX_NOFUSEHEAD") ? 1 : 0;  /* T2/M7b: measurement-only -- keep lm_head chunked */
     g_freeproj = getenv("HX_FREEPROJ") ? 1 : 0;      /* H1: post-prefill free d_qW..d_downW to seat full residency (needs HX_FUSEDGEMV+HX_PACKEDRES) */
@@ -1815,6 +1912,26 @@ static int device_init(const char* ptx_path, const char* wpath) {
     if (g_fusedgemv && !g_packedres) {               /* the fused path reads g_pk_res/g_sc_res -> requires residency */
         fprintf(stderr, "[fusedgemv] needs resident packed weights (set HX_PACKEDRES=1) -> OFF\n");
         g_fusedgemv = 0;
+    }
+    /* v1.8 HX_SPEC: prompt-lookup greedy speculative decode. The m1-row VERIFY forward batches the
+     * projections through mm_ABt over the fp32 dequant-on-upload weights d_qW..d_downW (mirrors
+     * forward_layer_llama -> reduction order matches PREFILL, which the KV gate proves == decode). The
+     * FUSED decode-gemv path (HX_FUSEDGEMV) is M=1-only AND HX_FREEPROJ frees those fp32 weights, so spec
+     * mode FORCES both OFF (the projection weights must stay live + non-fused). PACKEDRES/PACKEDHEAD/DQPTX
+     * stay ON (resident packed words still accelerate the per-layer dequant + the batched head). */
+    { const char* e;
+      if ((e=getenv("HX_SPEC")))      g_spec.on    = atoi(e);
+      if ((e=getenv("HX_SPEC_K")))    g_spec.k_max = atoi(e);
+      if ((e=getenv("HX_SPEC_KMIN"))) g_spec.k_min = atoi(e);
+      if ((e=getenv("HX_SPEC_M")))    g_spec.m     = atoi(e);
+    }
+    if (g_spec.on && (g_scfg.temp > 0.0)) { fprintf(stderr, "[specdec] temp>0 -> HX_SPEC OFF (greedy only)\n"); g_spec.on = 0; }
+    if (g_spec.on && (!ARCH || !KV_ON)) { fprintf(stderr, "[specdec] needs the llama KV path (ARCH+HX_KV) -> HX_SPEC OFF\n"); g_spec.on = 0; }
+    if (g_spec.on) {
+        if (g_fusedgemv || g_freeproj) {
+            fprintf(stderr, "[specdec] HX_SPEC needs live fp32 projection weights -> forcing HX_FUSEDGEMV=0 HX_FREEPROJ=0 (PACKEDRES/PACKEDHEAD/DQPTX kept)\n");
+            g_fusedgemv = 0; g_freeproj = 0;
+        }
     }
     FILE* pf = fopen(ptx_path, "rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
     fseek(pf,0,SEEK_END); long psz=ftell(pf); fseek(pf,0,SEEK_SET);
@@ -1849,6 +1966,7 @@ static int device_init(const char* ptx_path, const char* wpath) {
     load_dequant_module();   /* v1.7: GPU dequant (HX_DQPTX) -> g_gpu_dq; HX_HOSTDEQ forces host */
     load_fusedgemv_module(); /* T2/M7: standalone fused dequant-GEMV module (HX_FUSEDGEMV) */
     load_fusedattn_module(); /* v1.8: standalone fused decode-attention module (HX_FUSEDATTN) */
+    load_specdec_module();   /* v1.8: standalone offset-mask softmax module (HX_SPEC); fail-closed */
     if (load_gpt2_weights(wpath)) return 2;
     return 0;
 }
@@ -2167,7 +2285,12 @@ static int fused_gemv(int idx, CUdeviceptr d_xpad, CUdeviceptr d_y, int N) {
      * e4m3 micro, tsp = 1-elem ts buffer -> the kernel decodes the effective scale in-kernel. */
     int kp = kpad; void* ar[] = { &d_xpad, &pk, &sc, &tsp, &d_y, &kp };
     double _t0 = g_dprof ? now_seconds() : 0.0;
-    CKX(cuLaunchKernel(f_dgemv, (unsigned)N,1,1, 256,1,1, 0,0, ar, 0), "fused dgemv");
+    /* P1: when HX_GEMV3 is on AND the warp module loaded, run the warp-per-row variant (same args; grid
+     * (ceil(N/8),1,1) block (32,8,1) -- 8 rows/block). Else the committed block-reduction launch, byte-unchanged. */
+    if (g_gemv3 && f_dgemv_warp)
+        CKX(cuLaunchKernel(f_dgemv_warp, (unsigned)(N+7)/8,1,1, 32,8,1, 0,0, ar, 0), "fused dgemv_warp");
+    else
+        CKX(cuLaunchKernel(f_dgemv, (unsigned)N,1,1, 256,1,1, 0,0, ar, 0), "fused dgemv");
     if (!g_fast) SYNC("sync f_dgemv");
     if (g_dprof) { cuCtxSynchronize(); g_dp_gemv += now_seconds() - _t0; }
     return 1;
@@ -2192,7 +2315,11 @@ static int fused_lm_head(CUdeviceptr d_xpad, int xpad_kpad, CUdeviceptr d_out) {
     int kp = g_head_Kpad;
     void* ar[] = { &d_xpad, &g_phk_words, &g_phk_sc, &g_phk_ts, &d_out, &kp };
     double _t0 = g_dprof ? now_seconds() : 0.0;
-    CKX(cuLaunchKernel(f_dgemv, (unsigned)g_head_rows,1,1, 256,1,1, 0,0, ar, 0), "fused lm_head");
+    /* P1: HX_GEMV3 -> warp-per-row variant (same args; grid (ceil(rows/8),1,1) block (32,8,1)). Else block-red, byte-unchanged. */
+    if (g_gemv3 && f_dgemv_warp)
+        CKX(cuLaunchKernel(f_dgemv_warp, (unsigned)(g_head_rows+7)/8,1,1, 32,8,1, 0,0, ar, 0), "fused lm_head_warp");
+    else
+        CKX(cuLaunchKernel(f_dgemv, (unsigned)g_head_rows,1,1, 256,1,1, 0,0, ar, 0), "fused lm_head");
     if (!g_fast) SYNC("sync fused lm_head");
     if (g_dprof) { cuCtxSynchronize(); g_dp_lmh += now_seconds() - _t0; }
     return 1;
@@ -2835,6 +2962,161 @@ static int run_logits(const char* ref_logits_path, const char* ref_argmax_path, 
     return pass ? 0 : 1;
 }
 
+/* ===================== v1.8 PROMPT-LOOKUP GREEDY SPECULATIVE DECODE (HX_SPEC; PATH B) =====================
+ * forward_verify + pld_draft + spec_step. See the data-structure header (:333) for the contract.
+ * BYTE-IDENTICAL to plain greedy decode (a speedup, not a sampler change). QWEN3 + KV path only. */
+
+/* DRAFT (host, n-gram prompt-lookup): longest-k-first, most-recent-occurrence-first backward scan of
+ * the suffix ids[T-k..T) in ids[0..T). Writes the up-to-M tokens FOLLOWING the match into g_draft;
+ * returns the draft count (0 == no match). O(T*k) int-compares -- single-digit us vs a multi-ms forward. */
+static int pld_draft(const int* ids, int T) {
+    g_draft_n = 0;
+    if (!g_spec.on || T < g_spec.k_min + 1) return 0;
+    int M = g_spec.m;
+    if (M > PLD_DRAFT_MAX) M = PLD_DRAFT_MAX;
+    if (M < 1) return 0;
+    int k_hi = g_spec.k_max;
+    if (k_hi > T - 1) k_hi = T - 1;                 /* need >=1 token before the suffix */
+    for (int k = k_hi; k >= g_spec.k_min; k--) {
+        const int* suf = &ids[T - k];               /* the k-token query */
+        for (int j = T - k - 1; j >= 0; j--) {      /* j = candidate start; self-overlap-guarded (j <= T-k-1) */
+            int ok = 1;
+            for (int t = 0; t < k; t++) if (ids[j+t] != suf[t]) { ok = 0; break; }
+            if (!ok) continue;
+            int src = j + k, n = 0;                 /* continuation = tokens FOLLOWING the match (src < T) */
+            while (n < M && src < T) g_draft[n++] = ids[src++];
+            if (n > 0) { g_draft_n = n; g_spec.hits++; g_spec.drafted += n; g_spec.steps++; return n; }
+            /* match sat exactly at the live cursor (no continuation) -> keep scanning earlier */
+        }
+    }
+    g_spec.steps++;
+    return 0;                                       /* no match -> 1-token fallback */
+}
+
+/* VERIFY FORWARD over m1 window tokens at ABSOLUTE positions pos..pos+(m1-1). Mirrors
+ * forward_layer_llama's STRUCTURE (NOT a verbatim reuse) with the 3 PATH-B fixes:
+ *   fix 3: per-row RoPE rope_at(.., pos+r) (each row's absolute position, not window-row==position);
+ *   fix 2: KV-capture at kvoff(L,kv)+pos*DH (append after the confirmed prefix, NOT base-0);
+ *   fix 1: attention over the RESIDENT prefix [0,pos) + the new rows [pos,pos+dn] (contiguous in the
+ *          cache after capture), masked by softmax_causal_offset so row r attends [0, pos+r] ONLY.
+ * Per-row GEMM reduction order is kept bit-identical to PREFILL (same mm_ABt/mm_AB over the K-dim,
+ * row-count-independent tiling); PREFILL == M=1 decode by the KV gate, so a[i] == the plain-greedy
+ * token for the prefix (..., t, d_1..d_i). Writes m1 logit rows to g_vlogits_flat[i*NV .. ).
+ * PRECONDITION: kv_len == pos (positions [0,pos) resident). On return kv_len is UNCHANGED (spec_step
+ * sets it after accept). Requires the non-fused fp32 projection weights (spec mode guarantees this). */
+static void forward_verify(const int* win, int m1, int pos, float* vlogits_flat) {
+    int dn = m1 - 1;
+    int S  = ((m1 + 63) / 64) * 64;                 /* padded query rows */
+    int Nk = pos + m1;                              /* resident prefix [0,pos) + the m1 new rows */
+    int Nkpad = ((Nk + 63) / 64) * 64;              /* padded key count for the tiled GEMMs */
+    int group = NH / NKV;
+    Spad = S;                                       /* the multi-row kernels read the global Spad */
+    embed_gather(win, m1, S);                       /* rows 0..m1-1 = window tokens; pad rows zeroed */
+    for (int L = 0; L < NL; L++) {
+        g_emit_layer = L;
+        upload_layer_ll(L);                         /* fp32 dequant-on-upload weights (spec mode: non-fused) */
+        rms_norm_k(d_x, d_xn, d_ln1g, S, DM);
+        mm_ABt(d_xn, d_qW, d_q, S, DM, QD);         /* q_proj  [S,DM] @ [QD,DM]^T  -> [S,QD]  */
+        mm_ABt(d_xn, d_kW, d_k, S, DM, KVD);        /* k_proj */
+        mm_ABt(d_xn, d_vW, d_v, S, DM, KVD);        /* v_proj */
+        for (int h = 0; h < NH; h++) {
+            int kv = h / group;
+            pack_head(d_Qh, d_q, h*DH,  QD);
+            pack_head(d_Kh, d_k, kv*DH, KVD);
+            pack_head(d_Vh, d_v, kv*DH, KVD);
+            if (QWEN3) {                            /* per-head QK-norm over DH, BEFORE RoPE */
+                rms_norm_k(d_Qh, d_Qh, d_qnorm, S, DH);
+                rms_norm_k(d_Kh, d_Kh, d_knorm, S, DH);
+            }
+            for (int r = 0; r < m1; r++) {          /* FIX 3: per-row RoPE at the row's ABSOLUTE position pos+r */
+                rope_at(d_Qh + (CUdeviceptr)((size_t)r*DH*sizeof(float)), 1, pos + r);
+                rope_at(d_Kh + (CUdeviceptr)((size_t)r*DH*sizeof(float)), 1, pos + r);
+            }
+            if ((h % group) == 0) {                 /* FIX 2: capture the m1 NEW K/V rows AT kvoff + pos*DH */
+                CKX(cuMemcpyDtoD(d_kcache + (CUdeviceptr)((kvoff(L,kv) + (size_t)pos*DH)*sizeof(float)),
+                                 d_Kh, (size_t)m1*DH*sizeof(float)), "spec kv capture K");
+                CKX(cuMemcpyDtoD(d_vcache + (CUdeviceptr)((kvoff(L,kv) + (size_t)pos*DH)*sizeof(float)),
+                                 d_Vh, (size_t)m1*DH*sizeof(float)), "spec kv capture V");
+            }
+            /* FIX 1: attention over the resident-extended cache slab [0, Nk) with the absolute-offset mask.
+             * scores[S,Nkpad] = Q[S,DH] @ Kcache[Nkpad,DH]^T ; row r valid extent = pos+r+1. */
+            CUdeviceptr kslab = d_kcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float));
+            CUdeviceptr vslab = d_vcache + (CUdeviceptr)(kvoff(L,kv)*sizeof(float));
+            mm_ABt(d_Qh, kslab, d_scores, S, DH, Nkpad);
+            scale_rt(d_scores, d_scale, S*Nkpad);
+            softmax_causal_offset(d_scores, d_attnw, S, Nkpad, pos);
+            mm_AB(d_attnw, vslab, d_aoh, S, Nkpad, DH);
+            scatter_head(d_ctx, h*DH, d_aoh, QD);
+        }
+        mm_ABt(d_ctx, d_oW, d_proj, S, QD, DM);     /* o_proj */
+        vadd(d_x, d_proj, d_x, S*DM);
+        rms_norm_k(d_x, d_xn2, d_ln2g, S, DM);
+        mm_ABt(d_xn2, d_gateW, d_mlp1,  S, DM, DFF);
+        mm_ABt(d_xn2, d_upW,   d_mlp1g, S, DM, DFF);
+        silu_mul_k(d_mlp1, d_mlp1g, d_mlp1c, S*DFF);
+        mm_ABt(d_mlp1c, d_downW, d_mlp2, S, DFF, DM);
+        vadd(d_x, d_mlp2, d_x, S*DM);
+    }
+    rms_norm_k(d_x, d_xn, d_lnfg, S, DM);           /* final RMSNorm */
+    if (g_packedhead_on) lm_head_logits_chunked(d_xn, d_logits, S, 0);   /* batched packed head */
+    else                 mm_ABt(d_xn, d_wte_pad, d_logits, S, DM, NVpad);
+    if (!g_fast) SYNC("spec verify end");
+    for (int i = 0; i < m1; i++)                     /* D2H the m1 real logit rows (first NV cols each) */
+        CKX(cuMemcpyDtoH(vlogits_flat + (size_t)i*NV,
+                         d_logits + (CUdeviceptr)((size_t)i*NVpad*sizeof(float)),
+                         (size_t)NV*sizeof(float)), "spec d2h vlogits");
+}
+
+/* ONE spec iteration: draft -> verify -> greedy accept -> KV-rollback. Returns #tokens committed (>=1).
+ * a[0] is ALWAYS emitted (the true next token after t); drafts accepted while they equal the model's own
+ * argmax; the first mismatch keeps a[j] (already emitted) as the bonus and discards the wrong tail.
+ * kv_len = pos + commit is set on EVERY exit path. budget = remaining Ngen output slots. */
+static int spec_step(int* ids, int* Tp, int* nonfinite_any, int budget) {
+    int T = *Tp, pos = T - 1;
+    int dn = pld_draft(ids, T);                     /* DRAFT (host) */
+    if (dn == 0) {                                  /* NO MATCH -> single-token decode == plain path */
+        decode_step_llama(ids[T-1], T-1, g_logits0);   /* sets kv_len = T internally */
+        for (int i=0;i<NV;i++) if (!isfinite(g_logits0[i])) { *nonfinite_any = 1; break; }
+        ids[T++] = argmax_row(g_logits0, NV);
+        *Tp = T; return 1;
+    }
+    if (pos + dn >= kv_cap) { dn = kv_cap - 1 - pos; if (dn < 0) dn = 0; }   /* clamp to cache capacity */
+    if (dn == 0) {                                  /* no room to draft -> single-token */
+        decode_step_llama(ids[T-1], T-1, g_logits0);
+        for (int i=0;i<NV;i++) if (!isfinite(g_logits0[i])) { *nonfinite_any = 1; break; }
+        ids[T++] = argmax_row(g_logits0, NV);
+        *Tp = T; return 1;
+    }
+    int m1 = dn + 1;
+    int win[1 + PLD_DRAFT_MAX];
+    win[0] = ids[T-1];                              /* t (the last confirmed token) */
+    for (int i=0;i<dn;i++) win[1+i] = g_draft[i];
+
+    forward_verify(win, m1, pos, g_vlogits_flat);   /* m1 logit rows -> g_vlogits_flat */
+    g_spec.forwards++;
+
+    int a[1 + PLD_DRAFT_MAX];
+    for (int i=0;i<m1;i++) {
+        const float* row = g_vlogits_flat + (size_t)i*NV;
+        for (int x=0;x<NV;x++) if (!isfinite(row[x])) { *nonfinite_any = 1; break; }
+        a[i] = argmax_row(row, NV);                 /* identical argmax_row as plain decode */
+    }
+    /* GREEDY ACCEPT: a[0] always; each draft accepted iff it equals the model's own prior argmax. */
+    int j = 0;
+    for (int i=1;i<m1;i++) { if (g_draft[i-1] == a[i-1]) j = i; else break; }
+    int commit = j + 1;                             /* a[0..j], (j+1) true argmaxes (a contiguous prefix of a[]) */
+    /* EOS truncation: commit up to and including the first EOS in emission order. */
+    for (int i=0;i<commit;i++) if (EOS_ID >= 0 && a[i] == EOS_ID) { commit = i+1; break; }
+    if (commit > budget) commit = budget;           /* never overshoot Ngen output */
+    if (commit < 1) commit = 1;                      /* always commit >=1 (a[0]) */
+    for (int i=0;i<commit;i++) ids[T++] = a[i];
+    kv_len = pos + commit;                           /* KV-ROLLBACK: the SOLE rollback scalar (every exit path) */
+    g_spec.accepted += (commit - 1);                /* a[0] is not a draft */
+    g_spec.emitted  += commit;
+    *Tp = T;
+    return commit;
+}
+
 /* --generate N: greedy autoregressive loop. Forward the context, take the last-real-token argmax,
  * append, repeat N times. Dumps the produced id sequence to /tmp/helix_gen_ids.txt and prints it.
  * Compares token-for-token to the oracle's greedy continuation if ref_gen_ids is provided. */
@@ -2849,17 +3131,44 @@ static int run_generate(int Ngen, const char* ids_path, const char* ref_gen_path
     float* logits = (float*)malloc((size_t)NV*sizeof(float));
     int nonfinite_any = 0;
     double _gp0 = 0;   /* HX_GENPROF: time the decode-only steps (1..) with one sync at each end -> HX_FAST-honest s/tok */
-    for (int step = 0; step < Ngen; step++) {
-        if (g_genprof && step == 1) { cuCtxSynchronize(); _gp0 = now_seconds(); }
-        if (ARCH && KV_ON && step > 0) decode_step_llama(ids[T-1], T-1, logits);
-        else forward_full(ids, T, logits);
-        for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
-        int nxt = (g_scfg.temp > 0.0) ? sample_next(logits, NV) : argmax_row(logits, NV);
-        ids[T++] = nxt;
-        if (EOS_ID >= 0 && nxt == EOS_ID) break;   /* chat eos-stop (matches the oracle: append eos, then stop) */
+    if (g_spec.on) {                                /* one-time spec buffers (NV-sized fallback + m1 verify rows) */
+        if (!g_logits0)      g_logits0      = (float*)malloc((size_t)NV*sizeof(float));
+        if (!g_vlogits_flat) g_vlogits_flat = (float*)malloc((size_t)(1+PLD_DRAFT_MAX)*NV*sizeof(float));
+    }
+    if (!g_spec.on) {
+        for (int step = 0; step < Ngen; step++) {
+            if (g_genprof && step == 1) { cuCtxSynchronize(); _gp0 = now_seconds(); }
+            if (ARCH && KV_ON && step > 0) decode_step_llama(ids[T-1], T-1, logits);
+            else forward_full(ids, T, logits);
+            for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
+            int nxt = (g_scfg.temp > 0.0) ? sample_next(logits, NV) : argmax_row(logits, NV);
+            ids[T++] = nxt;
+            if (g_scfg.temp > 0.0) sample_count(nxt);   /* count GENERATED tokens for rep/freq/pres penalties -- matches the serve path (sample_count at the streaming loop) AND the numpy oracle (counts[nxt]+=1); run_generate previously counted only the prompt, so seeded sampling drifted from the oracle once a generated token was re-penalized (the G-S divergence) */
+            if (EOS_ID >= 0 && nxt == EOS_ID) break;   /* chat eos-stop (matches the oracle: append eos, then stop) */
+        }
+    } else {
+        /* ---- HX_SPEC PATH (greedy only; identical tokens, fewer forwards) ---- */
+        for (int step = 0; step < Ngen; ) {
+            if (g_genprof && step == 1) { cuCtxSynchronize(); _gp0 = now_seconds(); }
+            if (step == 0) {                        /* step 0 = the prefill forward (also seeds the resident KV) */
+                forward_full(ids, T, logits);
+                for (int i = 0; i < NV; i++) if (!isfinite(logits[i])) { nonfinite_any = 1; break; }
+                ids[T++] = argmax_row(logits, NV); step++;
+                if (EOS_ID >= 0 && ids[T-1] == EOS_ID) break;
+                continue;
+            }
+            int adv = spec_step(ids, &T, &nonfinite_any, Ngen - step);   /* >=1 committed */
+            step += adv;
+            if (EOS_ID >= 0 && ids[T-1] == EOS_ID) break;
+        }
     }
     if (g_genprof && _gp0 > 0) { cuCtxSynchronize(); double _el = now_seconds() - _gp0; int _ds = T - T0 - 1; if (_ds < 1) _ds = 1;
-        fprintf(stderr, "[genprof] decode %d steps in %.3fs = %.4f s/tok (g_fast=%d fused=%d)\n", _ds, _el, _el / _ds, g_fast, g_fusedgemv_on); }
+        fprintf(stderr, "[genprof] decode %d steps in %.3fs = %.4f s/tok (g_fast=%d fused=%d spec=%d)\n", _ds, _el, _el / _ds, g_fast, g_fusedgemv_on, g_spec.on); }
+    if (g_spec.on) {
+        double apf = g_spec.forwards ? (double)g_spec.emitted / (double)g_spec.forwards : 0.0;
+        fprintf(stderr, "[specprof] steps=%ld hits=%ld drafted=%ld accepted=%ld emitted=%ld forwards=%ld  mean accepted-tokens/forward=%.3f\n",
+                g_spec.steps, g_spec.hits, g_spec.drafted, g_spec.accepted, g_spec.emitted, g_spec.forwards, apf);
+    }
     free(logits);
     /* dump produced ids (prompt + generated). */
     { FILE* gf = fopen("/tmp/helix_gen_ids.txt", "w");

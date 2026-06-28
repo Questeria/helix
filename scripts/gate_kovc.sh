@@ -151,7 +151,17 @@ if [ "$FIX_OK" = "1" ]; then
   # added (6-param, 21 shr.u32, 0 float-div, emitted by the provenance-verified H4 PTX driver). 45bc8ac9
   # (T2/M7) preserved at 6fab14e + prior commits. NOTE: gate's own [0] assemble_k1 needs the same drvfs
   # fix (or run on ext4) before this gate can self-run here; the fixpoint itself is re-minted + sound.
-  EXPECT_FIX=98cd7299518375f6c2c2b38a4f6391ef3998204d61b5496f93987acb1e95d96e
+  # v1.8 P1 warp-GEMV re-mint (2026-06-20; finished/committed 2026-06-28): 98cd7299... -> 31e6cc27... --
+  # the WARP-PER-ROW NVFP4-dequant GEMV intrinsic (kovc.hx: emit_ptx_shfl_down_f + emit_ptx_warp_shfl_reduce
+  # + emit_ptx_dequant_gemv_warp + the ptx_name_is_dequant_gemv_warp recognizer & dispatch arm) moves the
+  # compiler self-image. Same dead-code property as the blockred GEMV: the new intrinsic is CALLED only in
+  # the example kernel dequant_gemv_warp_kernel.hx, never in the bootstrap self-host source, so K2==K3==K4
+  # STAY byte-identical at the new value. Re-minted 3-way (K2==K3==K4=31e6cc27) via the ext4 path
+  # (scripts/_fixpoint_native.sh -- assemble_k1's drvfs short-read workaround). dequant_gemv_warp_kernel.ref.ptx
+  # + softmax_causal_offset_kernel.ref.ptx added (both ptxas sm_86 OK, .version 8.3). The 135M LLAMA model
+  # gate is 9/9 (incl. seeded-sampling G-S, fixed by the run_generate rep-penalty count-fix). 98cd7299 (H4)
+  # preserved at the v1.7 tag + prior commits.
+  EXPECT_FIX=31e6cc272738c0e15e04b57383c0f4e21651063b7758b423421e2a9b8cd18061
   if [ "$S2" = "$S3" ] && [ "$S3" = "$S4" ] && cmp -s /tmp/K2.bin /tmp/K3.bin && cmp -s /tmp/K3.bin /tmp/K4.bin; then
     if [ "$S2" = "$EXPECT_FIX" ]; then
       echo "  FIXPOINT OK (K2==K3==K4 byte-identical AND == pinned known-good)"

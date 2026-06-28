@@ -13627,6 +13627,60 @@ fn emit_ptx_smem_tree_reduce(r_tid: i32, r_sm: i32, local_f: i32, op: i32, vtab:
     let f_res = ptx_alloc_f(vtab); emit_ptx_ld_shared(f_res, r_s0);
     f_res
 }
+// ===================================================================
+// v1.8/P1 (2026-06-20): WARP-SHUFFLE reduce primitives -- the barrier-free
+// replacement for emit_ptx_smem_tree_reduce in the warp-per-row GEMV. A
+// 32-lane warp owns one output row; the 5-step butterfly (deltas 16,8,4,2,1)
+// sums the lanes' partials with ZERO bar.sync and ZERO SMEM round-trips.
+// Reached ONLY via the new __dequant_gemv_warp intrinsic name (zero
+// occurrences in the self-host source) -> fixpoint-safe-by-construction.
+// ===================================================================
+// "    shfl.sync.down.b32 %f<f_dst>, %f<f_src>, <delta>, 0x1f, 0xffffffff;\n"
+//   0x1f       = full-warp shuffle clamp (lanes >= 32 wrap to self)
+//   0xffffffff = all-32-lanes membermask.
+// NOTE: shfl is .b32 ONLY -- there is no shfl.sync.down.f32 mnemonic. To
+// shuffle an f32 we pass the %f-backing register and emit on %f; ptxas treats
+// the lane datum as opaque 32-bit, so reinterpreting the f32 as b32 is a no-op.
+fn emit_ptx_shfl_down_f(f_dst: i32, f_src: i32, delta: i32) -> i32 {
+    emit_ptx_indent();
+    // "shfl."
+    emit_ptx_byte(115); emit_ptx_byte(104); emit_ptx_byte(102); emit_ptx_byte(108); emit_ptx_byte(46);
+    // "sync."
+    emit_ptx_byte(115); emit_ptx_byte(121); emit_ptx_byte(110); emit_ptx_byte(99); emit_ptx_byte(46);
+    // "down."
+    emit_ptx_byte(100); emit_ptx_byte(111); emit_ptx_byte(119); emit_ptx_byte(110); emit_ptx_byte(46);
+    // "b32 "
+    emit_ptx_byte(98); emit_ptx_byte(51); emit_ptx_byte(50); emit_ptx_byte(32);
+    emit_ptx_f(f_dst);
+    emit_ptx_byte(44); emit_ptx_byte(32);                                                // ", "
+    emit_ptx_f(f_src);
+    emit_ptx_byte(44); emit_ptx_byte(32);                                                // ", "
+    emit_ptx_decimal(delta);
+    emit_ptx_byte(44); emit_ptx_byte(32);                                                // ", "
+    // "0x1f"
+    emit_ptx_byte(48); emit_ptx_byte(120); emit_ptx_byte(49); emit_ptx_byte(102);
+    emit_ptx_byte(44); emit_ptx_byte(32);                                                // ", "
+    // "0x" + "ffff" + "ffff" = 0xffffffff
+    emit_ptx_byte(48); emit_ptx_byte(120);
+    emit_ptx_byte(102); emit_ptx_byte(102); emit_ptx_byte(102); emit_ptx_byte(102);
+    emit_ptx_byte(102); emit_ptx_byte(102); emit_ptx_byte(102); emit_ptx_byte(102);
+    emit_ptx_byte(59); emit_ptx_byte(10);                                                // ";\n"
+    f_dst
+}
+// 5-step butterfly sum over a 32-lane warp (deltas 16,8,4,2,1; no bar.sync,
+// no SMEM). op 0 = add (sum). After the loop every lane holds the full warp
+// sum; the caller uses lane 0. Costs 5 shfl + 5 add.f32 vs the SMEM tree's
+// 8 bar.sync + 16 SMEM ld/st.
+fn emit_ptx_warp_shfl_reduce(f_acc: i32, op: i32, vtab: i32) -> i32 {
+    let mut delta: i32 = 16;
+    while delta > 0 {
+        let f_shuf = ptx_alloc_f(vtab);
+        emit_ptx_shfl_down_f(f_shuf, f_acc, delta);     // f_shuf = lane[+delta].f_acc
+        emit_ptx_binop_f3(op, f_acc, f_acc, f_shuf);    // f_acc = f_acc <op> f_shuf
+        delta = delta / 2;
+    };
+    f_acc
+}
 // "__softmax_blockred" (18 chars) name matcher.
 fn ptx_name_is_softmax_blockred(name_s: i32, name_l: i32) -> i32 {
     if name_l != 18 {
@@ -14483,6 +14537,160 @@ fn emit_ptx_dequant_gemv_blockred(node: i32, vtab: i32) -> i32 {
     0 - 1
 }
 // ===================================================================
+// v1.8/P1 (2026-06-20): WARP-PER-ROW NVFP4-dequant GEMV. Structural clone of
+// emit_ptx_dequant_gemv_blockred with two limiter-killing changes:
+//   (1) NO bar.sync tree -- the per-lane partials are summed by the barrier-free
+//       5-step warp shuffle (emit_ptx_warp_shfl_reduce). No .shared decl needed.
+//   (2) ONE 32-lane warp owns ONE output row; a 256-thread block (32x8) holds 8
+//       warps -> 8 rows' loads in flight per block (8x MLP vs the baseline's
+//       single-row-per-block). Grid (ceil(M/8),1,1), block (32,8,1):
+//         r_warp = tid.y ; r_bx = ctaid.x ; r_row = r_bx*8 + r_warp.
+//       Each lane stripes its row's words: r_word = tid.x, stride += 32 (lane
+//       count) -- NOT 256 (the baseline's block-count stride).
+// The inner 7-code E2M1 + in-kernel e4m3 dequant/FMA loop body is COPIED VERBATIM
+// from the baseline -> byte-faithful NVFP4 preserved exactly (the warp shuffle
+// only reorders the final f32 sum, same FMA-faithful caveat as the SMEM tree).
+// Reached ONLY via the new __dequant_gemv_warp intrinsic name (zero occurrences
+// in the self-host source) -> fixpoint-safe-by-construction.
+// "__dequant_gemv_warp" (19 chars) name matcher.
+fn ptx_name_is_dequant_gemv_warp(name_s: i32, name_l: i32) -> i32 {
+    if name_l != 19 {
+        0
+    } else {
+        let mut ok: i32 = 1;
+        if __arena_get(name_s + 0) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 1) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 2) != 100 { ok = 0; };   // d
+        if __arena_get(name_s + 3) != 101 { ok = 0; };   // e
+        if __arena_get(name_s + 4) != 113 { ok = 0; };   // q
+        if __arena_get(name_s + 5) != 117 { ok = 0; };   // u
+        if __arena_get(name_s + 6) != 97 { ok = 0; };    // a
+        if __arena_get(name_s + 7) != 110 { ok = 0; };   // n
+        if __arena_get(name_s + 8) != 116 { ok = 0; };   // t
+        if __arena_get(name_s + 9) != 95 { ok = 0; };    // _
+        if __arena_get(name_s + 10) != 103 { ok = 0; };  // g
+        if __arena_get(name_s + 11) != 101 { ok = 0; };  // e
+        if __arena_get(name_s + 12) != 109 { ok = 0; };  // m
+        if __arena_get(name_s + 13) != 118 { ok = 0; };  // v
+        if __arena_get(name_s + 14) != 95 { ok = 0; };   // _
+        if __arena_get(name_s + 15) != 119 { ok = 0; };  // w
+        if __arena_get(name_s + 16) != 97 { ok = 0; };   // a
+        if __arena_get(name_s + 17) != 114 { ok = 0; };  // r
+        if __arena_get(name_s + 18) != 112 { ok = 0; };  // p
+        ok
+    }
+}
+fn emit_ptx_dequant_gemv_warp(node: i32, vtab: i32) -> i32 {
+    let fn_idx = __arena_get(vtab + 53);
+    let ah = __arena_get(node + 3);
+    let a0 = __arena_get(ah + 1);
+    let n1 = __arena_get(ah + 2); let a1 = __arena_get(n1 + 1);
+    let n2 = __arena_get(n1 + 2); let a2 = __arena_get(n2 + 1);
+    let n3 = __arena_get(n2 + 2); let a3 = __arena_get(n3 + 1);
+    let n4 = __arena_get(n3 + 2); let a4 = __arena_get(n4 + 1);
+    let n5 = __arena_get(n4 + 2); let a5 = __arena_get(n5 + 1);
+    // H4 params: (x, w_packed, micro, ts, y, kpad).
+    let px = ptx_param_index(fn_idx, __arena_get(a0 + 1), __arena_get(a0 + 2));
+    let pw = ptx_param_index(fn_idx, __arena_get(a1 + 1), __arena_get(a1 + 2));
+    let pmic = ptx_param_index(fn_idx, __arena_get(a2 + 1), __arena_get(a2 + 2));
+    let pts = ptx_param_index(fn_idx, __arena_get(a3 + 1), __arena_get(a3 + 2));
+    let py = ptx_param_index(fn_idx, __arena_get(a4 + 1), __arena_get(a4 + 2));
+    let pk = ptx_param_index(fn_idx, __arena_get(a5 + 1), __arena_get(a5 + 2));
+    // P1: NO .shared decl -- the warp shuffle replaces the SMEM tree-reduce.
+    let r_lane = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_lane, 0);  // tid.x = lane in warp (0..31)
+    let r_warp = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_warp, 1);  // tid.y = warp in block (0..7)
+    let r_bx = ptx_alloc_reg(vtab); emit_ptx_mov_sreg(r_bx, 2);      // ctaid.x = block index
+    // r_row = r_bx*8 + r_warp  (8 warps/block, one row per warp)
+    let r_bx8 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_bx8, r_bx, 8);
+    let r_row = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_row, r_bx8, r_warp);
+    let r_kp = ptx_alloc_reg(vtab); emit_ptx_ld_param_u32(r_kp, pk);  // kpad (= K)
+    let rd_x = emit_ptx_param_global_base(px, vtab);
+    let rd_w = emit_ptx_param_global_base(pw, vtab);
+    let rd_mic = emit_ptx_param_global_base(pmic, vtab);    // packed e4m3 micro words
+    let rd_ts = emit_ptx_param_global_base(pts, vtab);      // per-tensor ts (1-elem f32 array)
+    let rd_y = emit_ptx_param_global_base(py, vtab);
+    // H4: f_ts = ts[0] (the per-tensor f32 scale; loaded once).
+    let r_z0 = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_z0, 0);
+    let f_ts = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_ts, rd_ts, r_z0, vtab);
+    // kwords = kpad/7 ; wbase = row*kwords ; scstride = kpad/16 ; scbase = row*scstride.
+    // micstride = ceil(scstride/4) = (scstride+3)/4 (4 micro/word) ; micbase = row*micstride.
+    let r_kw = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_kw, r_kp, 7);
+    let r_wb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_wb, r_row, r_kw);
+    let r_scs = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_scs, r_kp, 16);   // scstride = kpad/16
+    let r_mcs3 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_mcs3, r_scs, 3);    // scstride+3
+    let r_mcs = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_mcs, r_mcs3, 4);     // /4 = micstride
+    let r_mcb = ptx_alloc_reg(vtab); emit_ptx_mul_rr(r_mcb, r_row, r_mcs);     // micbase = row*micstride
+    // per-lane partial acc = 0 ; word = lane (coalesced stripe across the row).
+    let f_acc = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_acc);
+    let r_word = ptx_alloc_reg(vtab); emit_ptx_mov_rr(r_word, r_lane);
+    // f32 0.0 constant reused by the sign-negate (0.0 - mag).
+    let f_zero = ptx_alloc_f(vtab); emit_ptx_mov_f_zero(f_zero);
+    let r_one = ptx_alloc_reg(vtab); emit_ptx_mov_const(r_one, 1);
+    // ---- runtime word loop: while word < kwords ----
+    let lbl_w = ptx_alloc_label(vtab);
+    emit_ptx_label_def(2, lbl_w);                                   // $Ltop_<lbl_w>:
+    let p_w = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_w, r_word, r_kw);
+    emit_ptx_bra_ifnot(p_w, 3, lbl_w);                             // @!p bra $Lwend_<lbl_w>
+    let r_widx = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_widx, r_wb, r_word);
+    let r_wv = ptx_alloc_reg(vtab); emit_ptx_gload_u32(r_wv, rd_w, r_widx, vtab);  // packed word
+    let r_col0 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_col0, r_word, 7);       // base col = word*7
+    // host-unroll the 7 E2M1 codes of this word (iterate wv = wv/16 each slot).
+    let mut s: i32 = 0;
+    while s < 7 {
+        let r_col = ptx_alloc_reg(vtab); emit_ptx_ri_imm(0, r_col, r_col0, s);     // col = col0 + s
+        // code = wv mod 16 = wv - (wv/16)*16
+        let r_q = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_q, r_wv, 16);
+        let r_q16 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_q16, r_q, 16);
+        let r_code = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_code, r_wv, r_q16);
+        // sign = code/8 ; mag3 = code - sign*8 (= code mod 8)
+        let r_sign = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_sign, r_code, 8);
+        let r_s8 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_s8, r_sign, 8);
+        let r_mag3 = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_mag3, r_code, r_s8);
+        // f_mag = MAG[mag3]
+        let f_mag = ptx_alloc_f(vtab); emit_ptx_e2m1_mag_lut(f_mag, r_mag3, vtab);
+        // f_val0 = (sign==0) ? f_mag : -f_mag
+        let f_val0 = ptx_alloc_f(vtab); emit_ptx_mov_f_reg(f_val0, f_mag);
+        let p_s = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_s, r_sign, r_one);  // p = (sign<1)=(sign==0)
+        let l_neg = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p_s, 0, l_neg);      // sign!=0 -> negate
+        let l_sgn = ptx_alloc_label(vtab); emit_ptx_bra_to_end(l_sgn);             // sign==0: keep f_mag, skip negate
+        emit_ptx_label_def(0, l_neg);
+        emit_ptx_binop_f3(1, f_val0, f_zero, f_mag);               // f_val0 = 0.0 - f_mag
+        emit_ptx_label_def(1, l_sgn);
+        // H4 scale: decode the raw e4m3 micro for this 16-block IN-KERNEL.
+        // blk = col/16 (block within row) ; micro word = micbase + blk/4, byte = blk mod 4.
+        let r_blk = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_blk, r_col, 16);
+        let r_mwr = ptx_alloc_reg(vtab); emit_ptx_ri_imm(2, r_mwr, r_blk, 4);     // blk/4 (word within row)
+        let r_mwi = ptx_alloc_reg(vtab); emit_ptx_add_rr(r_mwi, r_mcb, r_mwr);    // absolute micro word index
+        let r_mw4 = ptx_alloc_reg(vtab); emit_ptx_ri_imm(1, r_mw4, r_mwr, 4);     // (blk/4)*4
+        let r_bsl = ptx_alloc_reg(vtab); emit_ptx_sub_rr(r_bsl, r_blk, r_mw4);    // byte slot = blk - (blk/4)*4
+        let r_mw = ptx_alloc_reg(vtab); emit_ptx_gload_u32(r_mw, rd_mic, r_mwi, vtab);  // packed micro word
+        let f_sc = ptx_alloc_f(vtab); emit_ptx_e4m3_eff_scale(f_sc, r_mw, r_bsl, f_ts, vtab);
+        // f_val = f_val0 * f_sc
+        let f_val = ptx_alloc_f(vtab); emit_ptx_binop_f3(2, f_val, f_val0, f_sc);
+        // f_x = x[col]
+        let f_x = ptx_alloc_f(vtab); emit_ptx_gload_f32(f_x, rd_x, r_col, vtab);
+        // acc = x*val + acc
+        let f_an = ptx_alloc_f(vtab); emit_ptx_fma(f_an, f_x, f_val, f_acc);
+        emit_ptx_mov_f_reg(f_acc, f_an);
+        // advance to the next slot: wv = wv/16 (= r_q)
+        emit_ptx_mov_rr(r_wv, r_q);
+        s = s + 1;
+    };
+    emit_ptx_ri_imm(0, r_word, r_word, 32);                       // word += 32 (warp-lane-stride)
+    emit_ptx_indent();
+    emit_ptx_byte(98); emit_ptx_byte(114); emit_ptx_byte(97); emit_ptx_byte(32);  // "bra "
+    emit_ptx_lbl_ref(2, lbl_w);                                   // $Ltop_<lbl_w>
+    emit_ptx_byte(59); emit_ptx_byte(10);
+    emit_ptx_label_def(3, lbl_w);                                 // $Lwend_<lbl_w>:
+    // ---- warp-shuffle reduce the per-lane partials, lane 0 writes y[row] ----
+    let f_y = emit_ptx_warp_shfl_reduce(f_acc, 0, vtab);
+    let p_l0 = ptx_alloc_pred(vtab); emit_ptx_setp_lt_s32(p_l0, r_lane, r_one);   // lane<1 = lane==0
+    let lbl_g = ptx_alloc_label(vtab); emit_ptx_bra_ifnot(p_l0, 4, lbl_g);        // @!(lane==0) skip store
+    emit_ptx_gstore_f32(rd_y, r_row, f_y);
+    emit_ptx_label_def(4, lbl_g);                                 // $Lskip_<lbl_g>:
+    0 - 1
+}
+// ===================================================================
 // T2/M6 (2026-06-03): BACKWARD/SAVE block-reduction redux intrinsics -- the
 // block-per-row (256-thread) siblings of the one-thread-per-row LN-fwd-save,
 // softmax-backward, and LN-backward-dx kernels that DOMINATE the optimized
@@ -15275,9 +15483,11 @@ fn emit_ptx_call(node: i32, vtab: i32) -> i32 {
         emit_ptx_layernorm_backward_dx_blockred(node, vtab) // T2/M6: LN-bwd-dx block-reduction
     } else { if ptx_name_is_dequant_gemv_blockred(name_s, name_l) == 1 {
         emit_ptx_dequant_gemv_blockred(node, vtab)        // T2/M7: fused NVFP4-dequant block-reduction GEMV
+    } else { if ptx_name_is_dequant_gemv_warp(name_s, name_l) == 1 {
+        emit_ptx_dequant_gemv_warp(node, vtab)            // v1.8/P1: warp-per-row NVFP4-dequant GEMV (shfl reduce)
     } else {
         0 - 1
-    }}}}}}}}}}}}}}}}}}}}}}
+    }}}}}}}}}}}}}}}}}}}}}}}
 }
 
 // K1.M3 (2026-05-28): emit ONE PTX entry for the given @kernel fn:

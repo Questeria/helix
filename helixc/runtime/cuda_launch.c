@@ -2177,6 +2177,84 @@ int main(int argc, char** argv) {
         return rc;
     }
 
+    /* dgemv_warp mode (v1.8/P1): cuda_launch <ptx> dequant_gemv_warp <N> dgemv_warp <Kpad> [mutate|sflip].
+     * Verifies the FUSED NVFP4-dequant WARP-PER-ROW GEMV (__dequant_gemv_warp: ONE 32-lane warp per
+     * output row, 8 warps (8 rows) per 256-thread (32x8) block, barrier-free warp-shuffle reduce) vs
+     * the SAME from-scratch CPU oracle as dgemv_blockred. BYTE-IDENTICAL setup, oracle, scale self-check
+     * and arg layout {x,w_packed,micro,ts,y,kpad} to dgemv_blockred above -- the ONLY difference is the
+     * launch geometry: grid (ceil(N/8),1,1), block (32,8,1) (warp-per-row + 8x MLP) vs the baseline's
+     * (N,1,1)/(256,1,1). The warp-shuffle reduce reorders the final f32 sum vs the SMEM tree, so the
+     * compare is reduce-order-equivalent (FMA-faithful, rel<=1e-3), NOT bit-identical -- the gate is
+     * token-identical end-to-end (verified by the parent on GPU). [mutate] bumps y[0] and MUST trip the
+     * compare; [sflip] bumps a micro byte (the e4m3 SCALE is load-bearing). K must be a multiple of 112. */
+    if (strcmp(op, "dgemv_warp") == 0) {
+        int Nout = (argc > 5) ? atoi(argv[5]) : 64;
+        int Kd   = (argc > 6) ? atoi(argv[6]) : 112;
+        int mutate = (argc > 7 && strcmp(argv[7], "mutate") == 0);
+        int sflip  = (argc > 7 && strcmp(argv[7], "sflip") == 0);
+        if (Kd % 112 != 0) { fprintf(stderr, "dgemv_warp: K must be a multiple of 112 = LCM(7,16); got %d\n", Kd); return 2; }
+        int kwords = Kd / 7, kblk = Kd / 16; float ts = 1.0f / 3.0f;
+        int micstride = (kblk + 3) / 4;                 /* i32 micro words per row (4 micro/word) */
+        size_t wN = (size_t)Nout * kwords, scN = (size_t)Nout * kblk, micN = (size_t)Nout * micstride;
+        int* hCode = (int*)malloc((size_t)Nout * Kd * sizeof(int));
+        int* hW = (int*)malloc(wN * sizeof(int));
+        int* hMicro = (int*)malloc(scN * sizeof(int));
+        int* hMicW = (int*)calloc(micN, sizeof(int));   /* packed micro words (zero-init for the tail byte slots) */
+        float* hX = (float*)malloc((size_t)Kd * sizeof(float));
+        float* hY = (float*)malloc((size_t)Nout * sizeof(float));
+        float* yref = (float*)malloc((size_t)Nout * sizeof(float));
+        if (!hCode||!hW||!hMicro||!hMicW||!hX||!hY||!yref) return 2;
+        for (int r=0;r<Nout;r++) for (int k=0;k<Kd;k++) hCode[r*Kd+k] = (r*5+k*7+3)%16;
+        for (int r=0;r<Nout;r++) for (int kw=0;kw<kwords;kw++){ int word=0,pw=1; for(int j=0;j<7;j++){word+=(hCode[r*Kd+kw*7+j]&15)*pw; pw*=16;} hW[r*kwords+kw]=word; }
+        /* micro codes: bit7 ALWAYS clear (scales are positive) + never the NaN code -> packed words non-negative */
+        for (int r=0;r<Nout;r++) for (int bk=0;bk<kblk;bk++){ int mc=(r*3+bk*11+0x30)&0x7E; if((mc&0x7F)==0x7F)mc=0x38; hMicro[r*kblk+bk]=mc; }
+        /* pack 4 micro/word base-256 low-byte-first, per row (micstride words/row) */
+        for (int r=0;r<Nout;r++) for (int bk=0;bk<kblk;bk++){ int wi=bk/4, sl=bk%4; hMicW[r*micstride+wi] |= (hMicro[r*kblk+bk]&0xFF) << (8*sl); }
+        for (int k=0;k<Kd;k++) hX[k] = (float)((k%11)-5) * 0.25f;
+        for (int n=0;n<Nout;n++){ float acc=0.0f; for(int j=0;j<Kd;j++){ float w=e2m1_decode(hCode[n*Kd+j])*(e4m3_decode(hMicro[n*kblk+j/16])*ts); acc+=hX[j]*w; } yref[n]=acc; }
+        if (sflip) { hMicW[0] = (hMicW[0] & ~0xFF) | ((hMicro[0]==0x10?0x18:0x10)); }  /* bump block-0's micro byte */
+        CUdeviceptr dX,dW,dMic,dTs,dY;
+        CK(cuMemAlloc(&dX, Kd*sizeof(float)), "alloc X");
+        CK(cuMemAlloc(&dW, wN*sizeof(int)), "alloc W");
+        CK(cuMemAlloc(&dMic, micN*sizeof(int)), "alloc Micro");
+        CK(cuMemAlloc(&dTs, sizeof(float)), "alloc Ts");
+        CK(cuMemAlloc(&dY, Nout*sizeof(float)), "alloc Y");
+        CK(cuMemcpyHtoD(dX, hX, Kd*sizeof(float)), "H2D X");
+        CK(cuMemcpyHtoD(dW, hW, wN*sizeof(int)), "H2D W");
+        CK(cuMemcpyHtoD(dMic, hMicW, micN*sizeof(int)), "H2D Micro");
+        CK(cuMemcpyHtoD(dTs, &ts, sizeof(float)), "H2D Ts");
+        void* gargs[] = { &dX, &dW, &dMic, &dTs, &dY, &Kd };
+        /* WARP-PER-ROW launch: grid (ceil(N/8),1,1), block (32,8,1) -- 8 warps (8 rows) per block. */
+        int gx = (Nout + 7) / 8;
+        CK(cuLaunchKernel(fn, gx, 1, 1, 32, 8, 1, 0, 0, gargs, 0), "launch dequant_gemv_warp");
+        CK(cuCtxSynchronize(), "sync dequant_gemv_warp");
+        CK(cuMemcpyDtoH(hY, dY, Nout*sizeof(float)), "D2H Y");
+        if (mutate) hY[0] += 0.5f + 0.1f*fabsf(hY[0]);
+        /* (a) BYTE-EXACT scale self-check: the in-kernel decode path replicated on the host (the SAME
+         * exact-literal mantissa/pow recipe the emitter uses) MUST equal e4m3_decode(mc)*ts bit-for-bit. */
+        int sbad = 0;
+        for (int r=0;r<Nout && sbad<4;r++) for (int bk=0;bk<kblk;bk++){
+            int mc = hMicro[r*kblk+bk];
+            float href = e4m3_decode(mc) * ts;
+            int s=(mc>>7)&1, e=(mc>>3)&15, m=mc&7;
+            static const float FRAC[8]={0.0f,0.125f,0.25f,0.375f,0.5f,0.625f,0.75f,0.875f};
+            float pw = (e==0)? ldexpf(1.0f,-6) : ldexpf(1.0f,e-7);
+            float mant = ((e==0)?0.0f:1.0f) + FRAC[m];
+            float mag = mant * pw; float kref = (s==0? mag : -mag) * ts;
+            unsigned ah, bh; memcpy(&ah,&href,4); memcpy(&bh,&kref,4);
+            if (ah != bh) { if (sbad<4) fprintf(stderr,"dgemv_warp SCALE not byte-exact r%d bk%d mc=%d host=0x%08x kern=0x%08x\n",r,bk,mc,ah,bh); sbad++; }
+        }
+        int nbad=0; float maxrel=0.0f;
+        for (int n=0;n<Nout;n++){ float e=fabsf(hY[n]-yref[n]); float d=fabsf(yref[n]); float rel=d>1.0e-6f?e/d:e; if(rel>maxrel)maxrel=rel; if(isnan(hY[n])||rel>1.0e-3f){ if(nbad<4)fprintf(stderr,"dgemv_warp mismatch y[%d]=%g ref %g (rel %g)\n",n,hY[n],yref[n],rel); nbad++; } }
+        printf("GPU [%s] dequant_gemv_warp (fused NVFP4-dequant warp-per-row GEMV, block=(32,8), 8 rows/block, shfl reduce, IN-KERNEL e4m3) Nout=%d K=%d: y[0]=%g ref=%g max_rel=%g, %d bad, scale_byte_exact=%s -> %s\n",
+               gpu, Nout, Kd, hY[0], yref[0], maxrel, nbad, sbad?"NO":"YES", (nbad||sbad)?"FAIL":"PASS");
+        int rc=(nbad||sbad)?1:0;
+        cuMemFree(dX);cuMemFree(dW);cuMemFree(dMic);cuMemFree(dTs);cuMemFree(dY);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hCode);free(hW);free(hMicro);free(hMicW);free(hX);free(hY);free(yref);free(ptx);
+        return rc;
+    }
+
     /* gemm_perf mode (T2/M1 correctness + T2/G1 perf): cuda_launch <ptx> tiled_matmul
      *   <Nignored> gemm_perf <M> <K> <N> [mutate].
      * Launches the kovc SMEM-tiled GEMM (emit_ptx_tiled_matmul_smem) on the device.
