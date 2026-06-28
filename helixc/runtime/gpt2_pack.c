@@ -414,6 +414,85 @@ static int nvfp4_selftest(void) {
     free(w);free(W);free(Sc);free(recon);
     return (fmtbad==0&&padbad==0)?0:1;
 }
+
+/* --- v1.9 P2: TERNARY (BitNet b1.58) packing -- 15 trits/i32 word + per-OUTPUT-ROW abs-mean f32 scale.
+ * The packed format MUST match helixc/examples/{packed,scaled_packed}_ternary_matmul_kernel.hx
+ * byte-for-byte: trit -1/0/+1 -> base-4 code 2/0/1; word = sum_{j=0..14} code_j * 4^j (15 trits, K
+ * padded to a multiple of 15). Ternarize: scale[r] = mean(|w[r,:]|) (the BitNet abs-mean scale);
+ * trit[r,k] = clamp(round(w[r,k]/scale[r]), -1, 1). Dequant value = trit * scale[r]. */
+static int trit_from_float(float v, float scale) {
+    if (scale <= 0.0f) return 0;
+    float q = v / scale;
+    int t = (int)(q < 0.0f ? q - 0.5f : q + 0.5f);   /* round half away from zero */
+    return t < -1 ? -1 : (t > 1 ? 1 : t);
+}
+static int ternary_quantize_tensor(const float* w, int rows, int K, int32_t* outW, float* outSc) {
+    int Kpad = ((K + 14)/15)*15, kpacked = Kpad/15;
+    for (int r=0;r<rows;r++){
+        double s=0.0; for (int k=0;k<K;k++){ float a=w[(long)r*K+k]; s += a<0?-a:a; }
+        float scale = (K>0) ? (float)(s/(double)K) : 0.0f;        /* BitNet abs-mean per-row scale */
+        outSc[r] = scale;
+        for (int kw=0;kw<kpacked;kw++){
+            int word=0, power=1;
+            for (int j=0;j<15;j++){
+                int k = kw*15+j;
+                int t = (k<K) ? trit_from_float(w[(long)r*K+k], scale) : 0;
+                int code = (t<0)?2:(t>0?1:0);                     /* -1->2, 0->0, +1->1 */
+                word += code*power; power *= 4;
+            }
+            outW[(long)r*kpacked+kw] = word;
+        }
+    }
+    return Kpad;
+}
+/* Host dequant -- a LINE-FOR-LINE mirror of scaled_packed_ternary_matmul_kernel.hx: out=i2f(trit)*sc[r]. */
+static void ternary_host_dequant(const int32_t* w, const float* sc, float* out, int rows, int Kpad) {
+    int kpacked = Kpad/15;
+    for (int r=0;r<rows;r++) for (int col=0;col<Kpad;col++){
+        int word=col/15, slot=col-word*15;
+        int wv = w[(long)r*kpacked+word];
+        for (int j=0;j<slot;j++) wv = wv/4;
+        int code = wv - (wv/4)*4;
+        int trit = code - 3*(code/2);                            /* {0,1,2}->{0,+1,-1} */
+        out[(long)r*Kpad+col] = (float)trit * sc[r];
+    }
+}
+/* CPU-only self-test: ternarize a synthetic tensor (K not a multiple of 15 to exercise padding),
+ * pack, host-dequant via the device-mirror, and require: (a) the FORMAT round-trips exactly (unpacked
+ * trit*scale == the quantizer's trit*scale), (b) the scale == the row abs-mean, (c) pad cols == 0. */
+static int ternary_selftest(void) {
+    int rows=5, K=100;                               /* 100 -> Kpad 105 (exercises zero-padding) */
+    int Kpad=((K+14)/15)*15, kpacked=Kpad/15;
+    float*   w     = (float*)malloc((size_t)rows*K*sizeof(float));
+    int32_t* W     = (int32_t*)malloc((size_t)rows*kpacked*sizeof(int32_t));
+    float*   Sc    = (float*)malloc((size_t)rows*sizeof(float));
+    float*   recon = (float*)malloc((size_t)rows*Kpad*sizeof(float));
+    for (int r=0;r<rows;r++) for (int k=0;k<K;k++) w[(long)r*K+k] = ((float)((r*37+k*13)%101)-50.0f)*0.043f;
+    int kp = ternary_quantize_tensor(w, rows, K, W, Sc);
+    ternary_host_dequant(W, Sc, recon, rows, kp);
+    int fmtbad=0, padbad=0, scalebad=0; float qmax=0.0f;
+    for (int r=0;r<rows;r++){
+        double s=0.0; for (int k=0;k<K;k++){ float a=w[(long)r*K+k]; s+=a<0?-a:a; }
+        float expect_scale = (float)(s/(double)K);
+        if (Sc[r] != expect_scale) { if (scalebad<4) fprintf(stderr,"ternary scale mismatch r%d got %g expect %g\n",r,Sc[r],expect_scale); scalebad++; }
+        for (int k=0;k<kp;k++){
+            float orig = (k<K)? w[(long)r*K+k] : 0.0f;
+            int t = (k<K)? trit_from_float(orig, Sc[r]) : 0;     /* the SAME trit the quantizer chose */
+            float expect = (float)t * Sc[r];
+            float g = recon[(long)r*kp+k];
+            if (g != expect) { if (fmtbad<4) fprintf(stderr,"ternary FORMAT mismatch r%d k%d got %g expect %g\n",r,k,g,expect); fmtbad++; }
+            if (k>=K && g != 0.0f) padbad++;
+            if (k<K){ float e=g-orig; if(e<0)e=-e; if(e>qmax)qmax=e; }
+        }
+    }
+    size_t packed_b = (size_t)rows*kpacked*4 + (size_t)rows*4;   /* packed words + per-row scale */
+    size_t f32_b    = (size_t)rows*K*4;
+    printf("ternary_selftest: rows=%d K=%d Kpad=%d | FORMAT exact-mismatches=%d | scale-mismatches=%d | pad-nonzero=%d | quant max_abs=%.6g | footprint %zuB vs f32 %zuB (%.1fx) -> %s\n",
+           rows,K,kp,fmtbad,scalebad,padbad,qmax,packed_b,f32_b,(double)f32_b/(double)packed_b,
+           (fmtbad==0&&scalebad==0&&padbad==0)?"PASS":"FAIL");
+    free(w);free(W);free(Sc);free(recon);
+    return (fmtbad==0&&scalebad==0&&padbad==0)?0:1;
+}
 /* CPU test on a REAL safetensors tensor: load [out,in] (bf16->f32), quantize, dequant, report the
  * quant error. rmse/rms_w (relative RMS error) is the Tier-3 envelope basis; a high value would mean
  * the amax-per-tensor scale is outlier-dominated. Usage: --nvfp4-testreal <shard.safetensors> <name>. */
@@ -735,6 +814,7 @@ static int pack_qwen3(const char* model_dir, const char* out_path) {
 int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--e2m1-equiv") == 0) return e2m1_equiv_selftest();
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
+    if (argc >= 2 && strcmp(argv[1], "--ternary-selftest") == 0) return ternary_selftest();
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3], argc>=5?argv[4]:NULL);
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3], argc>=5?argv[4]:NULL);
     if (argc >= 4 && strcmp(argv[1], "--pack-qwen3") == 0) return pack_qwen3(argv[2], argv[3]);
