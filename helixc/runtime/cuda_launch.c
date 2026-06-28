@@ -1922,6 +1922,52 @@ int main(int argc, char** argv) {
         return pbad ? 1 : 0;
     }
 
+    /* sptmatmul_dump mode (v1.9 P3d): like sptmatmul_real but DUMP the kernel output instead of comparing.
+     *   cuda_launch <ptx> scaled_packed_ternary_matmul <Nignored> sptmatmul_dump <packed.bin> <acts.bin> <out.bin> <M> <K> <N>.
+     * Launches scaled_packed_ternary_matmul with sc=ALL-ONES (c = i2f(int_dot)) and writes c (f32 [M*N]) to
+     * out.bin. Lets a host driver (the BitNet forward) route each BitLinear's INTEGER matmul through the
+     * kovc-emitted ternary kernel; the host applies the *weight_scale*(absmax/127) dequant downstream. */
+    if (strcmp(op, "sptmatmul_dump") == 0) {
+        const char* pf = (argc > 5) ? argv[5] : 0;
+        const char* af = (argc > 6) ? argv[6] : 0;
+        const char* of = (argc > 7) ? argv[7] : 0;
+        int Md = (argc > 8) ? atoi(argv[8]) : 0;
+        int Kd = (argc > 9) ? atoi(argv[9]) : 0;
+        int Nd = (argc > 10) ? atoi(argv[10]) : 0;
+        if (!pf || !af || !of || Md <= 0 || Kd <= 0 || Nd <= 0) { fprintf(stderr, "sptmatmul_dump: need <packed.bin> <acts.bin> <out.bin> M K N\n"); return 2; }
+        if (Kd % 15 != 0) { fprintf(stderr, "sptmatmul_dump: K must be divisible by 15 (15 trits/word); got K=%d\n", Kd); return 2; }
+        int kpacked = Kd / 15;
+        size_t aP = (size_t)Md * kpacked, bN = (size_t)Kd * Nd, cN = (size_t)Md * Nd;
+        int*   hA = (int*)malloc(aP * sizeof(int));
+        int*   hB = (int*)malloc(bN * sizeof(int));
+        float* hS = (float*)malloc((size_t)Md * sizeof(float));
+        float* hC = (float*)malloc(cN * sizeof(float));
+        if (!hA || !hB || !hS || !hC) return 2;
+        FILE* fp;
+        fp = fopen(pf, "rb"); if (!fp || fread(hA, sizeof(int), aP, fp) != aP) { fprintf(stderr, "sptmatmul_dump: bad packed.bin (want %zu i32)\n", aP); return 2; } fclose(fp);
+        fp = fopen(af, "rb"); if (!fp || fread(hB, sizeof(int), bN, fp) != bN) { fprintf(stderr, "sptmatmul_dump: bad acts.bin (want %zu i32)\n", bN); return 2; } fclose(fp);
+        for (int r = 0; r < Md; r++) hS[r] = 1.0f;   /* sc = all-ones -> c = i2f(int_dot) */
+        CUdeviceptr dA, dB, dS, dC;
+        CK(cuMemAlloc(&dA, aP * sizeof(int)),           "cuMemAlloc A (packed)");
+        CK(cuMemAlloc(&dB, bN * sizeof(int)),           "cuMemAlloc B");
+        CK(cuMemAlloc(&dS, (size_t)Md * sizeof(float)), "cuMemAlloc S");
+        CK(cuMemAlloc(&dC, cN * sizeof(float)),         "cuMemAlloc C");
+        CK(cuMemcpyHtoD(dA, hA, aP * sizeof(int)),           "cuMemcpyHtoD A");
+        CK(cuMemcpyHtoD(dB, hB, bN * sizeof(int)),           "cuMemcpyHtoD B");
+        CK(cuMemcpyHtoD(dS, hS, (size_t)Md * sizeof(float)), "cuMemcpyHtoD S");
+        void* pargs[] = { &dA, &dB, &dS, &dC, &Md, &Kd, &Nd };
+        CK(cuLaunchKernel(fn, Md, 1, 1, Nd, 1, 1, 0, 0, pargs, 0), "cuLaunchKernel sptmatmul_dump");
+        CK(cuCtxSynchronize(), "cuCtxSynchronize");
+        CK(cuMemcpyDtoH(hC, dC, cN * sizeof(float)), "cuMemcpyDtoH C");
+        FILE* out = fopen(of, "wb");
+        if (!out || fwrite(hC, sizeof(float), cN, out) != cN) { fprintf(stderr, "sptmatmul_dump: write out.bin failed\n"); return 2; }
+        fclose(out);
+        cuMemFree(dA); cuMemFree(dB); cuMemFree(dS); cuMemFree(dC);
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hA); free(hB); free(hS); free(hC); free(ptx);
+        return 0;
+    }
+
     /* hgemm mode (v1.5 S1): HALF-PRECISION (f16 storage, f32 accumulate) matmul verify.
      *   cuda_launch <ptx> naive_matmul_f16 <Nignored> hgemm <M> <K> <N> [mutate].
      * Device buffers are uint16 IEEE-binary16 -- exactly what the kernel's
