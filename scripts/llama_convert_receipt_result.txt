@@ -1,0 +1,67 @@
+Helix v1.9 -- CONVERTED ternary SmolLM2-135M certification (the verifiable-conversion ARTIFACT)
+================================================================================================
+Repo: Kovostov-Native  branch v1.9-ternary  HEAD 1aaa1334c9dc0510bd70e9e96f1273bf9701f4f5
+Fixpoint: 31e6cc27 (helixc/bootstrap/kovc.hx UNCHANGED)  compiler_sha=412bc1b01225d6fed4e02840eaef870ec9b3dc2aad57155bdd2763117d566b33
+GPU: NVIDIA GeForce RTX 3070 Laptop GPU   ptxas: cuda-12.8
+Reproduce: HELIX_SRC=/mnt/c/Projects/Kovostov-Native bash scripts/llama_convert_certify.sh  -> LLAMA_CONVERT_CERTIFY_PASS
+
+Model dims (SmolLM2-135M, HXGW v2 / arch=llama, GQA): NL=30 DM=576 NH=9 NKV=3 head_dim=64 KVD=192 DF=1536 NV=49152
+Converted weights (epoch-10 best, KD): $HOME/smollm2_ternary_converted.bin.best  538060096 B  (fp32 latent, layout==input)
+Source fp weights: helix-llm/models/smollm2-135m/smollm2-135m.weights  538060096 B
+  source_fp_sha256        = 427397322d0d58a5dcae7d04d0e79358b30fc9c380616af921e68b7bebee1b4e
+  converted_latent_sha256 = 120959cb93802c14ad988516c0be46eb6f201c4de63b81146e4bac3f10999ea6
+
+Kernel provenance (the trusted compute path):
+  scaled_packed_ternary_matmul PTX (kovc-emitted) sha256 = 9ddc0fcf1410958f946d2abeb1dd58d0bf20e1b176dd73172438edb80ca01d0a
+  committed .ref.ptx                              sha256 = 9ddc0fcf1410958f946d2abeb1dd58d0bf20e1b176dd73172438edb80ca01d0a   (BYTE-IDENTICAL)
+  existing gate scripts/gpu_scaled_ternary_check.sh -> SCALED_TERNARY_GPU_PASS (kernel correctness + comparator NC + kernel-corruption NC)
+
+[1] PACK -- 7 linears (q,k,v,o,gate,up,down) x 30 layers = 210 ternary tensors
+    Ternarize (BitNet b1.58, == gpt2_pack.c ternary_quantize_tensor): per-row scale = mean(|W[r,:]|);
+      trit = clamp(round_half_away_from_zero(W/scale), -1, 1); 15 trits/i32 word; K padded to mult of 15.
+    Packer parity (C ternary_quantize_tensor packed-words + per-row scale, byte cmp vs numpy mirror):
+      gate L0  [1536x576]  PACK byte-identical  SCALE byte-identical
+      q    L0  [576x576]   PACK byte-identical  SCALE byte-identical
+      down L5  [576x1536]  PACK byte-identical  SCALE byte-identical
+      v    L29 [192x576]   PACK byte-identical  SCALE byte-identical
+    Footprint over the 210 linears:
+      packed_bytes = 29306880  (15-trit i32 words + per-row f32 scale)
+      fp32_bytes   = 424673280
+      COMPRESSION  = 14.4906x   (round-trip max-abs diff = 0)
+
+[2] RUN ON THE REAL KERNEL + VERIFY (the runs-on-real-kernel proof)
+    Tensor: gate L0 [out=1536, in=576] -> Kpad=585 (576 zero-padded to 39*15); N=8 int8-range activations.
+    (2a) pure integer matmul: GPU i2f(sum_k trit*x_int)  vs  host integer ref (sptmatmul_real, sc=1)
+         -> 1536x585x8 : 0 bad -> PASS (ELEMENT-EXACT)   |  comparator-mutate NC -> FAIL (has teeth)
+    (2b) FULL SCALED path: GPU dump i2f(int_dot) * per-row scale  vs  trainer fake-quant (ternarize-dequant
+         then matmul) deq @ x_int, deq[r,k]=trit*scale[r]
+         -> M=1536 N=8 : max_abs_diff = 0   exact_mismatches = 0/12288  -> PASS_ELEMENT_EXACT
+    => the converted ternary linear RUNS on the Helix verified-ternary kernel and equals the trainer
+       fake-quant abstraction bit-for-bit (no FMA in either path; scale factors out of the integer dot).
+
+[3] CONVERSION RECEIPT  (scripts/convert_receipt_llama.py; binds source-fp + converted-ternary Merkle + quality)
+    n_ternary leaves       = 210  (leaf = sha256(name | per-row scale f32 | packed 15-trit i32 words))
+    merkle_ternary         = ccf706658114aaa82d2dcf2b16ee938e3eefdc106922ebbc6eb71e89d2110a5a
+    fp_loss (held-out ppl) = 8.746700
+    converted_loss (ppl)   = 1140.550000   (gap 130.4x; delta_loss = 1131.803300)
+    certificate_sha256     = 05d4472c372eb893856db9c29d9fc71dd2f37687f3c3cd648d6ac57764f10c84
+    cert FILE sha256       = 4cbb0b26b34aa57a24094d148b4ae6f0a9c227094d55138c616a23cc5cf25206
+    --emit then --check    -> merkle=True src=True cert=True -> CONVERT_RECEIPT_PASS (re-derives byte-identical)
+    tamper NCs (each -> CONVERT_RECEIPT_FAIL):
+      mutate merkle_ternary  -> merkle=False -> FAIL
+      mutate converted_loss (1140.55 -> 9.0) -> cert=False -> FAIL (the cert sha binds the quality claim)
+      mutate source_fp_sha256 -> src=False  -> FAIL
+
+[4] INFERENCE RECEIPT  (Freivalds, cuda_launch receipt_emit_real/receipt_check; p=2^31-1, t=2, soundness 2^-62)
+    Over gate L0 ternary matmul: W=unpacked trit i32 [1536x585], X=int activations i32 [585x8], C=int [1536x8]
+    sha256 KAT (verifier self-test) = PASS
+    H_W = 4951b27f674eb5e5...   H_C = 4d3cd824fcbe704d...
+    receipt FILE sha256 = 3a89e0ceb3a1ede9a3dc98418f40387a2d3fe6e099657a0c7c661d652bcf08b6
+    genuine receipt_check  -> REJECT=NONE   -> RECEIPT_PASS (re-derivable: re-derives Fiat-Shamir r, Freivalds C==W*X over F_p)
+    forged-C NC (mutate)   -> REJECT=CHECK2 -> RECEIPT_FAIL
+
+VERDICT: LLAMA_CONVERT_CERTIFY_PASS -- the converted ternary SmolLM2-135M packs to the 15-trit kovc format
+(14.49x vs fp32), RUNS on the REAL kovc scaled_packed_ternary_matmul GPU kernel element-exact vs the trainer
+fake-quant, and is bound by a re-derivable conversion receipt (+ tamper NCs) and a re-derivable Freivalds
+inference receipt (+ forged-C NC). The artifacts (cert + receipt + side-files) live in $HOME/tern_cert_work/
+(they reference the 538 MB latent bins, which are NOT committed).

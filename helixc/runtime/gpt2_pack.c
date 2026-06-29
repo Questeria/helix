@@ -493,6 +493,47 @@ static int ternary_selftest(void) {
     free(w);free(W);free(Sc);free(recon);
     return (fmtbad==0&&scalebad==0&&padbad==0)?0:1;
 }
+/* --ternary-packfile (v1.9 llama-cert): pack a RAW f32 weight [rows x K] from <in_f32.bin> into the
+ * kovc 15-trit kernel format using the SAME verified ternary_quantize_tensor, and write the packed i32
+ * words [rows x Kpad/15] to <out_packed.bin> + the per-row f32 abs-mean scale [rows] to <out_scale.bin>.
+ * Zero new arithmetic -- it only calls the existing committed quantizer; it exists so a numpy mirror
+ * (scripts/llama_ternary_pack.py) can be byte-gated (cmp) against THIS reference packer. Round-trips the
+ * format via ternary_host_dequant and prints the row-0 scale + a deq spot value for a cross-tool check.
+ * Usage: gpt2_pack --ternary-packfile <in_f32.bin> <rows> <K> <out_packed.bin> <out_scale.bin> */
+static int ternary_packfile(const char* inf, int rows, int K, const char* outw, const char* outsc) {
+    if (rows <= 0 || K <= 0) { fprintf(stderr, "ternary-packfile: rows,K must be > 0\n"); return 2; }
+    long n = (long)rows * K;
+    float* w = (float*)malloc((size_t)n * 4);
+    FILE* f = fopen(inf, "rb");
+    if (!f || fread(w, 4, (size_t)n, f) != (size_t)n) { fprintf(stderr, "ternary-packfile: bad input %s (want %ld f32)\n", inf, n); if (f) fclose(f); free(w); return 2; }
+    int extra = fgetc(f) != EOF; fclose(f);
+    if (extra) { fprintf(stderr, "ternary-packfile: input %s has trailing bytes (rows*K mismatch)\n", inf); free(w); return 2; }
+    int Kpad = ((K + 14)/15)*15, kpacked = Kpad/15;
+    int32_t* W  = (int32_t*)malloc((size_t)rows*kpacked*4);
+    float*   Sc = (float*)malloc((size_t)rows*4);
+    int kp = ternary_quantize_tensor(w, rows, K, W, Sc);   /* the committed, selftested packer */
+    /* format round-trip self-check via the device-mirror dequant */
+    float* deq = (float*)malloc((size_t)rows*Kpad*4);
+    ternary_host_dequant(W, Sc, deq, rows, Kpad);
+    int rtbad = 0;
+    for (int r = 0; r < rows && rtbad < 1; r++)
+        for (int k = 0; k < K; k++) {
+            int t = trit_from_float(w[(long)r*K+k], Sc[r]);
+            float expect = (float)t * Sc[r];
+            if (deq[(long)r*Kpad+k] != expect) { rtbad++; break; }
+        }
+    FILE* wf = fopen(outw, "wb");
+    if (!wf || fwrite(W, 4, (size_t)rows*kpacked, wf) != (size_t)rows*kpacked) { fprintf(stderr, "ternary-packfile: write %s\n", outw); if (wf) fclose(wf); free(w); free(W); free(Sc); free(deq); return 2; }
+    fclose(wf);
+    FILE* sf = fopen(outsc, "wb");
+    if (!sf || fwrite(Sc, 4, (size_t)rows, sf) != (size_t)rows) { fprintf(stderr, "ternary-packfile: write %s\n", outsc); if (sf) fclose(sf); free(w); free(W); free(Sc); free(deq); return 2; }
+    fclose(sf);
+    printf("TERNARY_PACKFILE rows=%d K=%d Kpad=%d words=%d scale0=%.9g deq00=%.9g roundtrip=%s\n",
+           rows, K, Kpad, rows*kpacked, Sc[0], deq[0], rtbad ? "FAIL" : "OK");
+    free(w); free(W); free(Sc); free(deq);
+    return rtbad ? 1 : 0;
+}
+
 /* CPU test on a REAL safetensors tensor: load [out,in] (bf16->f32), quantize, dequant, report the
  * quant error. rmse/rms_w (relative RMS error) is the Tier-3 envelope basis; a high value would mean
  * the amax-per-tensor scale is outlier-dominated. Usage: --nvfp4-testreal <shard.safetensors> <name>. */
@@ -815,6 +856,7 @@ int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--e2m1-equiv") == 0) return e2m1_equiv_selftest();
     if (argc >= 2 && strcmp(argv[1], "--nvfp4-selftest") == 0) return nvfp4_selftest();
     if (argc >= 2 && strcmp(argv[1], "--ternary-selftest") == 0) return ternary_selftest();
+    if (argc >= 7 && strcmp(argv[1], "--ternary-packfile") == 0) return ternary_packfile(argv[2], atoi(argv[3]), atoi(argv[4]), argv[5], argv[6]);
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testreal") == 0) return nvfp4_testreal(argv[2], argv[3], argc>=5?argv[4]:NULL);
     if (argc >= 4 && strcmp(argv[1], "--nvfp4-testmodel") == 0) return nvfp4_testmodel(argv[2], argv[3], argc>=5?argv[4]:NULL);
     if (argc >= 4 && strcmp(argv[1], "--pack-qwen3") == 0) return pack_qwen3(argv[2], argv[3]);
