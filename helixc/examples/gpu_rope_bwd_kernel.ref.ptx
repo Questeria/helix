@@ -1,0 +1,83 @@
+.version 8.3
+.target sm_86
+.address_size 64
+
+.visible .entry gpu_rope_bwd(.param .b64 param_0, .param .b64 param_1, .param .b64 param_2, .param .u32 param_3)
+{
+    .reg .pred  %p<256>;
+    .reg .b32   %r<256>;
+    .reg .b64   %rd<256>;
+    .reg .f32   %f<256>;
+    .reg .b16   %h<256>;
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mul.lo.s32 %r2, %r0, %r1;
+    mov.u32 %r3, %tid.x;
+    add.s32 %r4, %r2, %r3;
+    ld.param.u32 %r5, [param_3];
+    ld.param.u32 %r6, [param_3];
+    add.s32 %r7, %r5, %r6;
+    mul.lo.s32 %r8, %r4, %r7;
+    ld.param.u32 %r9, [param_3];
+    mul.lo.s32 %r10, %r4, %r9;
+    mov.s32 %r11, 0;
+$Ltop_0:
+    ld.param.u32 %r12, [param_3];
+    setp.lt.s32 %p0, %r11, %r12;
+    selp.b32 %r13, 1, 0, %p0;
+    setp.ne.s32 %p1, %r13, 0;
+    @!%p1 bra $Lwend_0;
+    add.s32 %r14, %r8, %r11;
+    ld.param.u64 %rd0, [param_0];
+    cvta.to.global.u64 %rd1, %rd0;
+    mul.wide.s32 %rd2, %r14, 4;
+    add.s64 %rd3, %rd1, %rd2;
+    ld.global.f32 %f0, [%rd3];
+    ld.param.u32 %r15, [param_3];
+    add.s32 %r16, %r8, %r15;
+    add.s32 %r17, %r16, %r11;
+    ld.param.u64 %rd4, [param_0];
+    cvta.to.global.u64 %rd5, %rd4;
+    mul.wide.s32 %rd6, %r17, 4;
+    add.s64 %rd7, %rd5, %rd6;
+    ld.global.f32 %f1, [%rd7];
+    add.s32 %r18, %r10, %r11;
+    ld.param.u64 %rd8, [param_1];
+    cvta.to.global.u64 %rd9, %rd8;
+    mul.wide.s32 %rd10, %r18, 4;
+    add.s64 %rd11, %rd9, %rd10;
+    ld.global.f32 %f2, [%rd11];
+    add.s32 %r19, %r10, %r11;
+    ld.param.u64 %rd12, [param_2];
+    cvta.to.global.u64 %rd13, %rd12;
+    mul.wide.s32 %rd14, %r19, 4;
+    add.s64 %rd15, %rd13, %rd14;
+    ld.global.f32 %f3, [%rd15];
+    mul.f32 %f4, %f0, %f2;
+    mul.f32 %f5, %f1, %f3;
+    add.f32 %f6, %f4, %f5;
+    add.s32 %r20, %r8, %r11;
+    ld.param.u64 %rd16, [param_0];
+    cvta.to.global.u64 %rd17, %rd16;
+    mul.wide.s32 %rd18, %r20, 4;
+    add.s64 %rd19, %rd17, %rd18;
+    st.global.f32 [%rd19], %f6;
+    mul.f32 %f7, %f1, %f2;
+    mul.f32 %f8, %f0, %f3;
+    sub.f32 %f9, %f7, %f8;
+    ld.param.u32 %r21, [param_3];
+    add.s32 %r22, %r8, %r21;
+    add.s32 %r23, %r22, %r11;
+    ld.param.u64 %rd20, [param_0];
+    cvta.to.global.u64 %rd21, %rd20;
+    mul.wide.s32 %rd22, %r23, 4;
+    add.s64 %rd23, %rd21, %rd22;
+    st.global.f32 [%rd23], %f9;
+    mov.s32 %r24, 1;
+    add.s32 %r25, %r11, %r24;
+    mov.s32 %r11, %r25;
+    bra $Ltop_0;
+$Lwend_0:
+    ret;
+}
