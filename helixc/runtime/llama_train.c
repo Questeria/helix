@@ -855,6 +855,105 @@ static double compute_loss(const int* ids, int T) {
     return ce_loss(ids, T);
 }
 
+/* ===================== PERPLEXITY (v1.9 step5a): chunked held-out corpus reduction =====================
+ * The forward + the shifted-CE already exist (ce_loss = the MEAN over one sequence's T-1 positions).
+ * Perplexity over a held-out CORPUS is the same shifted-CE but (a) chunked into non-overlapping
+ * windows of <= Spad tokens, (b) SUMMED (not averaged) over every predicted position, then
+ * ppl = exp(sum_CE / total_predicted). ce_sum_window is ce_loss without the 1/(T-1) divide: it
+ * returns the SUM of -log p(target) over positions [0,T-1) of ONE window AND the count (T-1).
+ * Works in BOTH fp mode (QAT off) AND ternary mode (QAT on) for free: it calls the same forward(),
+ * which routes the GEMMs through EW() -> the ternarized Wt when HX_TERNARY_QAT=1, the fp W otherwise.
+ * (Same host log-softmax reduction as ce_loss; the forward arithmetic stays in the PTX kernels.) */
+static double ce_sum_window(const int* ids, int T, long* out_npred) {
+    /* sum_{t in [0,T-1)} -log softmax(logits_t)[ids[t+1]] ; predicted-token count = T-1. */
+    if (out_npred) *out_npred = 0;
+    if (T < 2) return 0.0;
+    float* row=(float*)malloc((size_t)NV*sizeof(float));
+    double tot=0.0; long cnt=0;
+    for (int t=0;t<T-1;t++) {
+        CKX(cuMemcpyDtoH(row, d_logits + (CUdeviceptr)((size_t)t*NVpad*sizeof(float)), (size_t)NV*sizeof(float)), "d2h ppl logit row");
+        double mx=-1e30; for (int i=0;i<NV;i++) if ((double)row[i]>mx) mx=(double)row[i];
+        double se=0.0; for (int i=0;i<NV;i++) se+=exp((double)row[i]-mx);
+        int tgt=ids[t+1];
+        double lp=(double)row[tgt]-mx-log(se);
+        tot += -lp; cnt++;
+    }
+    free(row);
+    if (out_npred) *out_npred = cnt;
+    return tot;
+}
+
+/* Held-out perplexity over a tokenized corpus stream (corpus[0..N)). Non-overlapping windows of
+ * `win` tokens (the last partial window is evaluated as-is if it has >=2 tokens). Returns ppl and
+ * fills the running totals. `win` MUST be <= Spad (the allocated activation depth). The first token
+ * of each window after the first is NOT carried over as context (non-overlapping == each window is a
+ * fresh sequence with its own causal mask from position 0); this is the standard "split into chunks"
+ * estimator -- a sliding window would lower-bound it but costs N forwards instead of N/win. */
+static double corpus_perplexity(const int* corpus, int N, int win, double* out_sumCE, long* out_npred) {
+    if (win > Spad) win = Spad;
+    if (!g_logits_scratch) g_logits_scratch=(float*)malloc((size_t)NV*sizeof(float));  /* fwd last-row sink */
+    double sumCE=0.0; long npred=0; int nwin=0;
+    for (int off=0; off<N; off+=win) {
+        int T = (N-off < win) ? (N-off) : win;     /* last window may be short */
+        if (T < 2) break;                            /* a 1-token tail predicts nothing */
+        long np=0;
+        forward(&corpus[off], T, g_logits_scratch);  /* fills d_logits[0..T) ; last row -> scratch */
+        double s = ce_sum_window(&corpus[off], T, &np);
+        sumCE += s; npred += np; nwin++;
+    }
+    if (out_sumCE) *out_sumCE = sumCE;
+    if (out_npred) *out_npred = npred;
+    double avg = (npred>0) ? sumCE/(double)npred : 0.0/0.0;
+    double ppl = exp(avg);
+    printf("[ppl] windows=%d win=%d total_predicted_tokens=%ld  sum_CE=%.4f  avg_CE(nats)=%.6f  PERPLEXITY=%.4f\n",
+           nwin, win, npred, sumCE, avg, ppl);
+    return ppl;
+}
+
+/* ===================== MULTI-SEQUENCE corpus training (v1.9 step5b QAT fine-tune) =====================
+ * Reads a corpus stream + a per-sequence length list (lens[0..nseq)), and runs E epochs, each epoch
+ * iterating the sequences in order: forward -> backward -> Adam, ONE optimizer step per sequence (a
+ * sequence == a minibatch of 1). Correctness-first (the existing forward/backward already sync every
+ * launch). Each sequence's T must be <= Spad. The Adam step counter `t` increments globally across all
+ * (epoch,sequence) so the bias correction is monotonic (capstone convention). Works fp OR ternary
+ * (the EW()/MASK() QAT path is exercised when HX_TERNARY_QAT=1). Reports the mean per-sequence loss
+ * at the start and end of training (and per-epoch) so the smoke can confirm the loss trends DOWN. */
+static double corpus_mean_loss(const int* corpus, const int* lens, int nseq) {
+    double tot=0.0; int cnt=0; int off=0;
+    for (int s=0;s<nseq;s++) {
+        int T=lens[s];
+        if (T>=2) { double l=compute_loss(&corpus[off], T); tot+=l; cnt++; }
+        off+=T;
+    }
+    return (cnt>0) ? tot/(double)cnt : 0.0/0.0;
+}
+static int run_corpus_train(const int* corpus, const int* lens, int nseq, int epochs) {
+    double l0 = corpus_mean_loss(corpus, lens, nseq);
+    printf("[corpus-train] %d sequences, %d epochs ; start mean per-seq shifted-CE = %.6f (lr=1e-3 baked)\n",
+           nseq, epochs, l0);
+    int t=0;            /* global Adam step counter (monotone bias correction) */
+    double lepoch=l0;
+    for (int e=1;e<=epochs;e++) {
+        int off=0; double esum=0.0; int ecnt=0;
+        for (int s=0;s<nseq;s++) {
+            int T=lens[s];
+            if (T>=2) {
+                double l=compute_loss(&corpus[off], T);   /* forward (fills d_logits) + host CE */
+                backward(&corpus[off], T);                /* grads from the SAME forward's saved acts */
+                t++; adam_step(t);
+                esum+=l; ecnt++;
+            }
+            off+=T;
+        }
+        lepoch = (ecnt>0) ? esum/(double)ecnt : lepoch;
+        printf("  epoch %2d mean per-seq loss %.6f\n", e, lepoch);
+    }
+    double lf = corpus_mean_loss(corpus, lens, nseq);
+    printf("[corpus-train] %d epochs x %d seqs: start %.6f -> final %.6f  (%s)\n", epochs, nseq, l0, lf,
+           lf < l0 ? "LLAMA_TRAIN_CORPUS_LOSS_DECREASED" : "LLAMA_TRAIN_CORPUS_LOSS_DID_NOT_DECREASE");
+    return (lf < l0) ? 0 : 1;
+}
+
 /* ===================== finite-difference gradient check (the acceptance gate) =====================
  * For a chosen resident-weight scalar, central difference (L(w+eps)-L(w-eps))/(2eps) vs the analytic
  * grad the backward produced for that scalar. eps in fp32; rel-err < ~1e-2 is a PASS (fp32-noisy).
@@ -967,23 +1066,38 @@ static int run_fdcheck(const int* ids, int T) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <combined.ptx> <smollm2-135m.weights> <ids.txt> [oracle_logits.bin] [--fdcheck] [--train N]\n", argv[0]);
+        fprintf(stderr, "usage: %s <combined.ptx> <smollm2-135m.weights> <ids.txt> [oracle_logits.bin]\n"
+                        "         [--fdcheck] [--train N] [--ppl <corpus_ids> [win]]\n"
+                        "         [--train-corpus <corpus_ids> <lens.txt> [epochs]]\n", argv[0]);
         return 2;
     }
     const char* ptx=argv[1]; const char* wts=argv[2]; const char* idsf=argv[3];
     /* v1.9 P5: opt-in STE ternary QAT (default OFF). Must be set before device_init/upload_all_weights
      * so the 3 STE kernels are bound + the ternarized/scale buffers are allocated. */
     if (getenv("HX_TERNARY_QAT") && atoi(getenv("HX_TERNARY_QAT"))!=0) QAT=1;
-    /* flag scan: --fdcheck (or HX_FDCHECK=1) runs the gradient check; --train N runs N Adam steps.
+    /* flag scan: --fdcheck (or HX_FDCHECK=1) the gradient check; --train N N Adam steps on argv[3];
+     * --ppl <file> [win] held-out perplexity over a tokenized corpus stream (v1.9 step5a);
+     * --train-corpus <file> <lens> [E] multi-sequence E-epoch training (v1.9 step5b).
      * the optional positional oracle_logits.bin is the first non-flag arg after ids (argv[4]). */
     int do_fd = (getenv("HX_FDCHECK") && atoi(getenv("HX_FDCHECK"))!=0);
     int do_train = 0; int train_K = 0;
+    int do_ppl = 0; const char* pplf=NULL; int ppl_win=0;
+    int do_corpus = 0; const char* corpusf=NULL; const char* lensf=NULL; int corpus_E=0;
     const char* oraclef = NULL;
     for (int i=4;i<argc;i++) {
         if (!strcmp(argv[i],"--fdcheck")) do_fd=1;
         else if (!strcmp(argv[i],"--train")) { do_train=1; if (i+1<argc && argv[i+1][0]!='-') train_K=atoi(argv[++i]); if (train_K<=0) train_K=10; }
+        else if (!strcmp(argv[i],"--ppl")) { do_ppl=1;
+            if (i+1<argc && argv[i+1][0]!='-') pplf=argv[++i];
+            if (i+1<argc && argv[i+1][0]!='-') ppl_win=atoi(argv[++i]); }
+        else if (!strcmp(argv[i],"--train-corpus")) { do_corpus=1;
+            if (i+1<argc && argv[i+1][0]!='-') corpusf=argv[++i];
+            if (i+1<argc && argv[i+1][0]!='-') lensf=argv[++i];
+            if (i+1<argc && argv[i+1][0]!='-') corpus_E=atoi(argv[++i]); if (corpus_E<=0) corpus_E=3; }
         else if (!oraclef) oraclef=argv[i];
     }
+    if (do_ppl && !pplf)    { fprintf(stderr, "--ppl needs a corpus ids file\n"); return 2; }
+    if (do_corpus && (!corpusf || !lensf)) { fprintf(stderr, "--train-corpus needs <corpus_ids> <lens.txt>\n"); return 2; }
 
     if (load_weights(wts)) return 2;
     if (device_init(ptx)) return 2;
@@ -994,11 +1108,47 @@ int main(int argc, char** argv) {
     int S=((T+63)/64)*64;
     printf("[run] T=%d ids:", T); for (int i=0;i<T;i++) printf(" %d", ids[i]); printf("  (Spad=%d)\n", S);
 
+    /* ---- corpus modes read their stream NOW so alloc_saved is sized to the largest window/sequence.
+     * Corpus capacity is generous (1M tokens); the ids[] array above stays the 4096 primary. ---- */
+    int *corpus=NULL, *lens=NULL, corpusN=0, nseq=0;
+    if (do_ppl || do_corpus) {
+        const char* cf = do_ppl ? pplf : corpusf;
+        int cap = 1<<20;                                  /* 1,048,576 tokens (laptop-sized) */
+        corpus = (int*)malloc((size_t)cap*sizeof(int));
+        corpusN = read_ids_file(cf, corpus, cap);
+        if (corpusN<=0) { fprintf(stderr, "no ids in corpus %s\n", cf); return 2; }
+        if (do_ppl) {
+            if (ppl_win<=0) ppl_win = 256;                /* default window (>= the 30-pos NL min) */
+            int wpad = ((ppl_win+63)/64)*64;              /* the window padded to %64 */
+            if (wpad > S) S = wpad;                       /* size activations to hold a full window */
+            printf("[ppl] corpus '%s': %d tokens, window=%d (Spad will be %d)\n", cf, corpusN, ppl_win, S);
+        }
+        if (do_corpus) {
+            int lcap = 1<<16; lens=(int*)malloc((size_t)lcap*sizeof(int));
+            nseq = read_ids_file(lensf, lens, lcap);
+            if (nseq<=0) { fprintf(stderr, "no lengths in %s\n", lensf); return 2; }
+            long tot=0; int mx=0; for (int s=0;s<nseq;s++){ tot+=lens[s]; if (lens[s]>mx) mx=lens[s]; }
+            if (tot != corpusN) { fprintf(stderr, "lens sum %ld != corpus tokens %d\n", tot, corpusN); return 2; }
+            int mpad = ((mx+63)/64)*64; if (mpad > S) S = mpad;
+            printf("[corpus-train] '%s': %d tokens, %d sequences (max len %d -> Spad %d)\n", cf, corpusN, nseq, mx, S);
+        }
+    }
+
     if (upload_all_weights()) return 2;
     if (alloc_saved(S)) return 2;
 
     /* ---- backward modes (allocate grad buffers + Adam state only when needed) ---- */
-    if (do_fd || do_train) { if (alloc_grads(S)) return 2; build_params(); }
+    if (do_fd || do_train || do_corpus) { if (alloc_grads(S)) return 2; build_params(); }
+    if (do_ppl) {
+        double sumCE=0.0; long npred=0;
+        corpus_perplexity(corpus, corpusN, ppl_win, &sumCE, &npred);
+        printf("LLAMA_TRAIN_PPL_DONE\n");
+        return (npred>0) ? 0 : 1;
+    }
+    if (do_corpus) {
+        int rc = run_corpus_train(corpus, lens, nseq, corpus_E);
+        return rc;
+    }
     if (do_fd) {
         int rc=run_fdcheck(ids, T);
         return rc;
