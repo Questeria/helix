@@ -1,8 +1,24 @@
-/* llama_train.c -- SmolLM2-135M (Llama-arch) TRAINER FORWARD scaffold (P7-step2 sub-step B).
+/* llama_train.c -- SmolLM2-135M (Llama-arch) TRAINER: forward + FULL BACKWARD + Adam (P7-step3).
  *
- * A forward-only pass in a TRAINABLE shape: fp32 weights kept resident + EVERY intermediate
- * activation allocated and SAVED (not freed/reused), so the backward (P7-step3) can read them.
- * This is NOT inference (which streams + reuses buffers); it is the forward leg of training.
+ * A forward pass in a TRAINABLE shape: fp32 weights kept resident + EVERY intermediate activation
+ * allocated and SAVED (not freed/reused), so the backward can read them. This is NOT inference
+ * (which streams + reuses buffers); it is the training forward + backward.
+ *
+ * P7-step3 (this file): the backward reverses the forward via the saved intermediates + the 4 new
+ * Llama bwd kernels (gpu_rmsnorm_bwd_dx, gpu_rope_bwd, gpu_silu_mul_bwd, gpu_repeat_kv_bwd) + the
+ * capstone-shared bwd kernels (gpu_ce_softmax_grad, tiled_matmul_atb, gpu_softmax_backward, gpu_adam),
+ * accumulating a gradient buffer per weight, then an Adam step (Param list, capstone pattern).
+ *   --fdcheck (or HX_FDCHECK=1): MULTI-EPS central finite-difference gradient check (THE acceptance
+ *       gate). Probes the max-|grad| cell of every tensor family (final-norm, tied-embed, all 7
+ *       projections + both layer-norms @ the top layer, attn+MLP @ middle & bottom layers) and
+ *       compares the analytic grad to (L(w+eps)-L(w-eps))/(2eps). PASS = rel-err < 5e-2 at the best
+ *       eps in {1e-3,4e-3,1.5e-2,5e-2}. (Multi-eps because the fp32 loss-noise floor needs a LARGE
+ *       eps for the tiny projection grads, while the big high-curvature RMSNorm grads need a SMALL
+ *       eps; HX_FD_SWEEP dumps the per-eps convergence that establishes this.)
+ *   --train N: N Adam steps on the input sequence (smoke: the loss overfits a single seq to ~0).
+ * The tied embedding is a SINGLE resident buffer (w_embed_pad): the input gather (embed_gather, now
+ * D2D from w_embed_pad) AND the lm_head AND the embedding grad all use it, so a perturbation/Adam
+ * update is seen by every leg -- which is what makes the embedding finite-diff well-posed.
  *
  * Trusted-C launcher, EXACTLY like train_transformer.c (the GPT-2 capstone) and gpt2_infer.c
  * (the Llama inference forward): ALL arithmetic stays in kovc-emitted PTX kernels; this C only
@@ -72,6 +88,9 @@ static CUmodule  g_mod;
 static char*     g_ptx=NULL;
 /* kernel handles (the 8 forward kernels) */
 static CUfunction f_mm, f_abt, f_sm_causal, f_rms, f_rope, f_silu, f_scale, f_add;
+/* backward kernels (bound only in --fdcheck/train mode): A^T@B (weight grads + dX), the 4 new
+ * Llama bwd ops, CE-softmax grad (loss root), softmax bwd (attn), Adam. */
+static CUfunction f_atb, f_rmsb, f_ropeb, f_silub, f_rkvb, f_ceg, f_smb, f_adam;
 
 /* sync after every launch (TRAINER FORWARD = correctness-first; no fast-mode skips). */
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
@@ -90,6 +109,46 @@ static void mm_AB(CUdeviceptr a, CUdeviceptr b, CUdeviceptr c, int M, int K, int
 static void mm_ABt(CUdeviceptr a, CUdeviceptr b, CUdeviceptr c, int M, int K, int N) {
     int m=M,k=K,n=N; void* ar[]={ &a,&b,&c,&m,&k,&n };
     LX2(f_abt, (unsigned)(N/64), (unsigned)(M/64), 16, 16, ar);
+}
+/* C[K,N] = A[M,K]^T @ B[M,N]  (SMEM-tiled A^T@B; contraction = M). The weight gradient
+ * dW = X^T @ dY and the dX-into-inputs path. tiled_matmul_atb args (mm=M contraction = k-loop
+ * bound, kk=K out-rows + A row stride, nn=N out-cols + B row stride); grid=(N/64,K/64). Needs
+ * K%64==0, N%64==0, M%8==0 (Spad=64, DM/QD=576, KVD=192, DFF=1536, NVpad=49152 all qualify). */
+static void mm_AtB(CUdeviceptr a, CUdeviceptr b, CUdeviceptr c, int M, int K, int N) {
+    int m=M,k=K,n=N; void* ar[]={ &a,&b,&c,&m,&k,&n };
+    LX2(f_atb, (unsigned)(N/64), (unsigned)(K/64), 16, 16, ar);
+}
+/* RMSNorm backward dx: dx = inv*(w*dy) - (x*inv^3/cols)*sum(w*dy*x). grid=rows block=1. */
+static void rms_bwd_dx(CUdeviceptr x, CUdeviceptr w, CUdeviceptr dy, CUdeviceptr dx, int rows, int cols) {
+    int c=cols; void* ar[]={ &x,&w,&dy,&dx,&c }; LX(f_rmsb, (unsigned)rows, 1, ar);
+}
+/* RoPE backward (transpose rotation) IN-PLACE on packed [rows,DH] (q holds dy in, dx out). */
+static void rope_bwd(CUdeviceptr q, CUdeviceptr dcos, CUdeviceptr dsin, int rows) {
+    int half=DH/2; void* ar[]={ &q,&dcos,&dsin,&half }; LX(f_ropeb, (unsigned)rows, 1, ar);
+}
+/* SwiGLU silu-mul backward: dg = dh*u*silu'(g), du = dh*silu(g). grid-stride exact tiling. */
+static void silu_mul_bwd(CUdeviceptr g, CUdeviceptr u, CUdeviceptr dh, CUdeviceptr dg, CUdeviceptr du, int n) {
+    int nn=n; void* ar[]={ &g,&u,&dh,&dg,&du,&nn };
+    int blk=1, cand[]={256,128,64,32,1}; for (int i=0;i<5;i++) if (n%cand[i]==0){blk=cand[i];break;}
+    LX(f_silub, (unsigned)(n/blk), (unsigned)blk, ar);
+}
+/* GQA repeat-KV backward: dout[kv,off] = sum_{r<nrep} din[(kv*nrep+r),off]. grid=nkv*blk block=1. */
+static void repeat_kv_bwd(CUdeviceptr din, CUdeviceptr dout, int nrep, int blk, int nkv) {
+    int n=nkv*blk; void* ar[]={ &din,&dout,&nrep,&blk,&n }; LX(f_rkvb, (unsigned)(nkv*blk), 1, ar);
+}
+/* CE+softmax grad: dlogits[r,:] = softmax(logits[r,:]) - onehot(tgtf[r]). grid=rows block=1. */
+static void ce_softmax_grad(CUdeviceptr logits, CUdeviceptr tgtf, CUdeviceptr dlog, int rows, int cols) {
+    int r=rows,c=cols; void* ar[]={ &logits,&tgtf,&dlog,&r,&c }; LX(f_ceg, (unsigned)rows, 1, ar);
+}
+/* softmax backward (Jacobian-vector): da = p*(dp - sum_k dp_k p_k). grid=rows block=1. */
+static void softmax_bwd(CUdeviceptr p, CUdeviceptr dp, CUdeviceptr da, int rows, int cols) {
+    int r=rows,c=cols; void* ar[]={ &p,&dp,&da,&r,&c }; LX(f_smb, (unsigned)rows, 1, ar);
+}
+/* Adam in-place step (lr=1e-3, b1=.9, b2=.999, eps=1e-8 baked; bc1/bc2 1-elem device scalars). */
+static void adam_step1(CUdeviceptr w, CUdeviceptr g, CUdeviceptr m, CUdeviceptr v, CUdeviceptr bc1, CUdeviceptr bc2, int n) {
+    void* ar[]={ &w,&g,&m,&v,&bc1,&bc2 };
+    int blk=1, cand[]={256,128,64,32,1}; for (int i=0;i<5;i++) if (n%cand[i]==0){blk=cand[i];break;}
+    LX(f_adam, (unsigned)(n/blk), (unsigned)blk, ar);
 }
 /* RMSNorm y[r,:]=x[r,:]*w/rms(x[r,:]); kernel bakes eps=1e-5. grid=rows block=1. */
 static void rms_norm(CUdeviceptr x, CUdeviceptr y, CUdeviceptr w, int rows, int cols) {
@@ -313,14 +372,100 @@ static int alloc_saved(int S) {
     return 0;
 }
 
-/* ===================== host embedding gather ===================== */
-/* llama: token embedding ONLY (RoPE replaces positional). Pure row copy into s_resid_in[0]. */
+/* ===================== BACKWARD: gradient buffers + activation-grad scratch (P7-step3) =====================
+ * One grad buffer PER resident weight (same shape as the weight), zeroed before each backward.
+ * Per layer: g_inln[DM] g_q[QD,DM] g_k[KVD,DM] g_v[KVD,DM] g_o[DM,QD] g_postln[DM]
+ *            g_gate[DFF,DM] g_up[DFF,DM] g_down[DM,DFF].  Globals: g_normf[DM], g_embed[NVpad,DM].
+ * Activation-grad scratch (reused across layers): d_x  = grad flowing INTO the block (d_resid_out),
+ * plus the per-stage intermediate grads. The per-head attention bwd reuses dh_*; the GQA fold
+ * uses d_krep/d_vrep ([NH,S,DH], one slab per q-head) -> repeat_kv_bwd -> d_kfold/d_vfold ([NKV,S,DH]).
+ * NOTE on the rmsnorm WEIGHT grad: there is no rmsnorm-dw kernel (RMSNorm has only the scale w,
+ * no beta), so dw_rms[c] = sum_s dy[s,c]*x[s,c]*inv[s] is reduced ON THE HOST (recomputing inv per
+ * row from the saved input x) -- exactly like the existing host CE reduction; the kernel path still
+ * does all the dx arithmetic. Same for the tied-embedding input-scatter at the very end. */
+static CUdeviceptr g_inln[MAXL], g_q[MAXL], g_k[MAXL], g_v[MAXL], g_o[MAXL],
+                   g_postln[MAXL], g_gate[MAXL], g_up[MAXL], g_down[MAXL];
+static CUdeviceptr g_normf, g_embed;
+/* activation grads (reused each layer) */
+static CUdeviceptr dg_logits, d_targets, dg_x, dg_rms, dg_tmpDM, dg_oproj, dg_ctx,
+                   dg_gate, dg_up, dg_silu, dg_q, dg_k, dg_v, dg_kfold, dg_vfold,
+                   dg_krep, dg_vrep;
+/* per-head attention bwd scratch */
+static CUdeviceptr dh_aoh, dh_attnw, dh_scores, dh_Qh, dh_Kh, dh_Vh;
+static CUdeviceptr d_bc1, d_bc2, d_unscale;   /* Adam bias-correction scalars; 1/sqrt(DH) for unscale */
+
+/* per-weight m/v Adam state, one slot per Param (built in build_params) */
+typedef struct { CUdeviceptr w, g, m, v; int n; } Param;
+static Param params[64*16]; static int nparams=0;
+
+static int alloc_grads(int S) {
+    for (int L=0;L<NL;L++) {
+        g_inln[L]  = A(DM);                 g_q[L]   = A((size_t)QD*DM);
+        g_k[L]     = A((size_t)KVD*DM);     g_v[L]   = A((size_t)KVD*DM);
+        g_o[L]     = A((size_t)DM*QD);      g_postln[L]= A(DM);
+        g_gate[L]  = A((size_t)DFF*DM);     g_up[L]  = A((size_t)DFF*DM);
+        g_down[L]  = A((size_t)DM*DFF);
+    }
+    g_normf = A(DM);
+    g_embed = A((size_t)NVpad*DM);
+    dg_logits = A((size_t)S*NVpad);  d_targets = A((size_t)S);
+    dg_x      = A((size_t)S*DM);     dg_rms    = A((size_t)S*DM);  dg_tmpDM = A((size_t)S*DM);
+    dg_oproj  = A((size_t)S*DM);     dg_ctx    = A((size_t)S*QD);
+    dg_gate   = A((size_t)S*DFF);    dg_up     = A((size_t)S*DFF); dg_silu  = A((size_t)S*DFF);
+    dg_q      = A((size_t)S*QD);     dg_k      = A((size_t)S*KVD); dg_v     = A((size_t)S*KVD);
+    dg_kfold  = A((size_t)NKV*S*DH); dg_vfold  = A((size_t)NKV*S*DH);
+    dg_krep   = A((size_t)NH*S*DH);  dg_vrep   = A((size_t)NH*S*DH);
+    dh_aoh=A((size_t)S*DH); dh_attnw=A((size_t)S*S); dh_scores=A((size_t)S*S);
+    dh_Qh=A((size_t)S*DH); dh_Kh=A((size_t)S*DH); dh_Vh=A((size_t)S*DH);
+    d_bc1=A(1); d_bc2=A(1);
+    d_unscale=A(1); CKX(cuMemcpyHtoD(d_unscale,&ATTN_SCALE,sizeof(float)),"h2d unscale");
+    printf("[bwd] gradient buffers + activation-grad scratch allocated (S=%d)\n", S);
+    return 0;
+}
+static void zero_dev(CUdeviceptr d, size_t nf) { CKX(cuMemsetD8(d, 0, nf*sizeof(float)), "zero grad"); }
+static void zero_all_grads(void) {
+    for (int L=0;L<NL;L++) {
+        zero_dev(g_inln[L],DM); zero_dev(g_q[L],(size_t)QD*DM); zero_dev(g_k[L],(size_t)KVD*DM);
+        zero_dev(g_v[L],(size_t)KVD*DM); zero_dev(g_o[L],(size_t)DM*QD); zero_dev(g_postln[L],DM);
+        zero_dev(g_gate[L],(size_t)DFF*DM); zero_dev(g_up[L],(size_t)DFF*DM); zero_dev(g_down[L],(size_t)DM*DFF);
+    }
+    zero_dev(g_normf,DM); zero_dev(g_embed,(size_t)NVpad*DM);
+}
+
+/* host reduction of an RMSNorm weight grad: dw[c] += sum_s dy[s,c]*x[s,c]*inv_s, inv_s recomputed
+ * from the saved rmsnorm INPUT x (mean of x^2 + eps). Accumulates INTO the device grad gw[DM]. Only
+ * the T real rows contribute (padded rows are zero activations -> zero contribution, but we sum all
+ * Spad rows for generality; padded x rows are 0 so inv is rsqrt(eps) and dy rows are 0 -> no effect). */
+static void rmsnorm_wgrad_host(CUdeviceptr d_x_in, CUdeviceptr d_dy, CUdeviceptr gw, int rows, int cols) {
+    float* x =(float*)malloc((size_t)rows*cols*sizeof(float));
+    float* dy=(float*)malloc((size_t)rows*cols*sizeof(float));
+    float* acc=(float*)calloc((size_t)cols,sizeof(float));
+    float* gwh=(float*)malloc((size_t)cols*sizeof(float));
+    CKX(cuMemcpyDtoH(x ,d_x_in,(size_t)rows*cols*sizeof(float)),"d2h rms x");
+    CKX(cuMemcpyDtoH(dy,d_dy ,(size_t)rows*cols*sizeof(float)),"d2h rms dy");
+    for (int s=0;s<rows;s++) {
+        double ss=0.0; const float* xr=&x[(size_t)s*cols]; const float* dr=&dy[(size_t)s*cols];
+        for (int c=0;c<cols;c++) ss += (double)xr[c]*xr[c];
+        double inv = 1.0/sqrt(ss/(double)cols + 1e-5);
+        for (int c=0;c<cols;c++) acc[c] += (float)((double)dr[c]*(double)xr[c]*inv);
+    }
+    CKX(cuMemcpyDtoH(gwh,gw,(size_t)cols*sizeof(float)),"d2h gw");
+    for (int c=0;c<cols;c++) gwh[c]+=acc[c];
+    CKX(cuMemcpyHtoD(gw,gwh,(size_t)cols*sizeof(float)),"h2d gw");
+    free(x); free(dy); free(acc); free(gwh);
+}
+
+/* ===================== embedding gather (from the RESIDENT tied weight) =====================
+ * llama: token embedding ONLY (RoPE replaces positional). The embedding is TIED to the lm_head,
+ * so it must be a SINGLE source of truth: we gather rows from the resident device buffer
+ * w_embed_pad (NOT the host mmap), so an Adam update to the embedding (or an fdcheck perturbation)
+ * is seen by BOTH the input gather and the lm_head. D2D per-row copy into s_resid_in[0]. */
 static void embed_gather(const int* ids, int T, int S, CUdeviceptr dst) {
-    float* hx=(float*)calloc((size_t)S*DM, sizeof(float));
-    const float* emb=&g_wbase[off_embed()];
-    for (int s=0;s<T;s++) memcpy(&hx[(size_t)s*DM], &emb[(size_t)ids[s]*DM], (size_t)DM*sizeof(float));
-    CKX(cuMemcpyHtoD(dst, hx, (size_t)S*DM*sizeof(float)), "h2d embed gather");
-    free(hx);
+    CKX(cuMemsetD8(dst, 0, (size_t)S*DM*sizeof(float)), "zero embed dst");
+    for (int s=0;s<T;s++)
+        CKX(cuMemcpyDtoD(dst + (CUdeviceptr)((size_t)s*DM*sizeof(float)),
+                         w_embed_pad + (CUdeviceptr)((size_t)ids[s]*DM*sizeof(float)),
+                         (size_t)DM*sizeof(float)), "d2d embed gather");
 }
 
 /* ===================== the forward (saving every intermediate) ===================== */
@@ -374,6 +519,156 @@ static void forward(const int* ids, int T, float* out_last_logits) {
                      (size_t)NV*sizeof(float)), "d2h last-row logits");
 }
 
+/* ===================== the BACKWARD (reverse forward via saved intermediates) =====================
+ * Shifted-CE loss = mean_{t in [0,T-1)} -log softmax(logits_t)[ids[t+1]]. So ONLY logit rows
+ * 0..T-2 carry gradient (row t predicts ids[t+1]); row T-1 + the padded rows T..Spad-1 are zeroed.
+ * The host CE reduction divides by (T-1); the analytic grad must match that 1/(T-1) scale, so after
+ * the fused (softmax - onehot) we scale every live row by 1/(T-1).
+ *
+ * Linear-layer conventions (forward y = x @ W^T, W is HF [out,in]):
+ *   dX = dY @ W           -> mm_AB (contraction = out)
+ *   dW = dY^T @ X         -> mm_AtB(M=rows, K=out, N=in) -> [out,in]   (accumulate? no: tiled_atb
+ *                            OVERWRITES, so for the few weights touched once per layer we write to a
+ *                            fresh per-layer grad buffer; layers are distinct buffers so no clobber).
+ * Residual adds route the incoming grad to BOTH branches (copy, then add the branch grad).            */
+
+static int g_T=0;   /* real token count (set by backward()) for the 1/(T-1) loss scale + row masking */
+
+/* backward through ONE layer. dIN = grad of this layer's OUTPUT (s_resid_out[L]); on return dg_x
+ * holds the grad of this layer's INPUT (s_resid_in[L]). All weight grads written to g_*[L]. */
+static void backward_layer(int L, CUdeviceptr dIN) {
+    int group=NH/NKV;
+    /* ---- MLP backward ----  resid_out = resid_mid + down(silu(gate,up)) ; both branches get dIN. */
+    /* down: s_down = silu @ w_down^T (w_down [DM,DFF]); dIN flows into the down output [S,DM]. */
+    mm_AB (dIN, w_down[L], dg_silu, Spad, DM, DFF);      /* d_silu = dDown @ w_down  [S,DFF] */
+    mm_AtB(dIN, s_silu[L], g_down[L], Spad, DM, DFF);    /* dW_down = dDown^T @ silu [DM,DFF] */
+    /* silu_mul: silu = up * silu(gate) ; d_silu -> dg_gate (into gate), dg_up (into up) */
+    silu_mul_bwd(s_gate[L], s_up[L], dg_silu, dg_gate, dg_up, Spad*DFF);
+    /* up: s_up = rms2 @ w_up^T  ; gate: s_gate = rms2 @ w_gate^T. Both feed dg_rms (sum into rms2 grad). */
+    mm_AtB(dg_up,   s_rms2[L], g_up[L],   Spad, DFF, DM);   /* dW_up   = dUp^T  @ rms2 [DFF,DM] */
+    mm_AtB(dg_gate, s_rms2[L], g_gate[L], Spad, DFF, DM);   /* dW_gate = dGate^T@ rms2 [DFF,DM] */
+    mm_AB (dg_up,   w_up[L],   dg_rms,   Spad, DFF, DM);    /* d_rms2 (from up)   [S,DM] */
+    mm_AB (dg_gate, w_gate[L], dg_tmpDM, Spad, DFF, DM);    /* d_rms2 (from gate) [S,DM] */
+    vadd(dg_rms, dg_tmpDM, dg_rms, Spad*DM);                /* d_rms2 total = up + gate */
+    /* rmsnorm2: s_rms2 = rmsnorm(resid_mid) * w_postln. dW_postln (host reduce); d_resid_mid via dx. */
+    rmsnorm_wgrad_host(s_resid_mid[L], dg_rms, g_postln[L], Spad, DM);
+    rms_bwd_dx(s_resid_mid[L], w_postln[L], dg_rms, dg_tmpDM, Spad, DM);  /* d_resid_mid (MLP branch) [S,DM] */
+    /* resid_mid = resid_in + oproj : the grad reaching resid_mid is (dIN through residual) + dg_tmpDM. */
+    vadd(dIN, dg_tmpDM, dg_x, Spad*DM);   /* dg_x = grad of resid_mid (== both branches of the 2nd add) */
+
+    /* ---- attention backward ----  resid_mid = resid_in + oproj(ctx) ; dg_x is grad of resid_mid. */
+    /* o_proj: s_oproj = ctx @ w_o^T (w_o [DM,QD]). dg_x is the grad into oproj output [S,DM]. */
+    mm_AB (dg_x, w_o[L], dg_ctx, Spad, DM, QD);     /* d_ctx = dOproj @ w_o  [S,QD] */
+    mm_AtB(dg_x, s_ctx[L], g_o[L], Spad, DM, QD);   /* dW_o = dOproj^T @ ctx [DM,QD] */
+    /* per q-head: ctx_h = attnw_h @ V_h ; scores -> softmax -> attnw ; scores = Qr_h @ Kr_h^T. */
+    zero_dev(dg_krep,(size_t)NH*Spad*DH); zero_dev(dg_vrep,(size_t)NH*Spad*DH);
+    for (int h=0; h<NH; h++) {
+        int kv=h/group;
+        CUdeviceptr attnw_h = s_attnw[L] + (CUdeviceptr)((size_t)h*Spad*Spad*sizeof(float));
+        /* d_aoh = grad into this head's context (slab h of dg_ctx) */
+        pack_head(dh_aoh, dg_ctx, h*DH, QD, Spad);              /* [S,DH] */
+        pack_head(dh_Vh,  s_v[L], kv*DH, KVD, Spad);            /* V_h (post-proj, pre-rope; V is unroped) */
+        /* ctx_h = attnw_h @ V_h : d_attnw = d_aoh @ V_h^T ; d_V_h = attnw_h^T @ d_aoh */
+        mm_ABt(dh_aoh, dh_Vh, dh_attnw, Spad, DH, Spad);       /* d_attnw [S,S] */
+        mm_AtB(attnw_h, dh_aoh, dh_Vh, Spad, Spad, DH);        /* d_V_h [S,DH] (reuse dh_Vh as output) */
+        /* fold d_V_h into the q-head-shaped repeat buffer slab h (summed later by repeat_kv_bwd) */
+        CKX(cuMemcpyDtoD(dg_vrep + (CUdeviceptr)((size_t)h*Spad*DH*sizeof(float)),
+                         dh_Vh, (size_t)Spad*DH*sizeof(float)), "stash dVrep");
+        /* softmax bwd: d_scores = J^T d_attnw (probs are attnw_h) */
+        softmax_bwd(attnw_h, dh_attnw, dh_scores, Spad, Spad); /* d_scores [S,S] */
+        /* the forward scaled scores by 1/sqrt(DH) AFTER the matmul, BEFORE softmax. scale is linear,
+         * so the grad of the pre-scale scores = d_scores * (1/sqrt(DH)). */
+        scale_rt(dh_scores, d_unscale, Spad*Spad);
+        /* scores = Qr_h @ Kr_h^T : d_Qr = d_scores @ Kr_h ; d_Kr = d_scores^T @ Qr_h */
+        pack_head(dh_Qh, s_qr[L], h*DH,  QD,  Spad);           /* roped Q_h (saved) */
+        pack_head(dh_Kh, s_kr[L], kv*DH, KVD, Spad);           /* roped K_h (saved) */
+        {   CUdeviceptr dQr=A((size_t)Spad*DH), dKr=A((size_t)Spad*DH);
+            mm_AB (dh_scores, dh_Kh, dQr, Spad, Spad, DH);     /* d_Qr_h [S,DH] */
+            mm_AtB(dh_scores, dh_Qh, dKr, Spad, Spad, DH);     /* d_Kr_h [S,DH] */
+            /* rope_bwd (transpose rotation) maps roped-grad -> pre-rope grad, in place */
+            rope_bwd(dQr, d_cos, d_sin, Spad);
+            rope_bwd(dKr, d_cos, d_sin, Spad);
+            /* d_Q_h goes straight to its q-head slab in dg_q; d_K_h folds into the repeat buffer */
+            scatter_head(dg_q, h*DH, dQr, QD, Spad);
+            CKX(cuMemcpyDtoD(dg_krep + (CUdeviceptr)((size_t)h*Spad*DH*sizeof(float)),
+                             dKr, (size_t)Spad*DH*sizeof(float)), "stash dKrep");
+            CKX(cuMemFree(dQr),"free dQr"); CKX(cuMemFree(dKr),"free dKr");
+        }
+    }
+    /* GQA fold: sum the n_rep q-head copies back into each kv head (broadcast adjoint). The repeat
+     * buffers are grouped by kv (slab h = kv*group + r), exactly the layout repeat_kv_bwd expects.
+     * dg_kfold/dg_vfold are [NKV,S,DH] (kv-major); scatter to the [S,KVD] proj-grad layout. */
+    repeat_kv_bwd(dg_krep, dg_kfold, group, Spad*DH, NKV);
+    repeat_kv_bwd(dg_vrep, dg_vfold, group, Spad*DH, NKV);
+    for (int kv=0; kv<NKV; kv++) {
+        CUdeviceptr ks = dg_kfold + (CUdeviceptr)((size_t)kv*Spad*DH*sizeof(float));
+        CUdeviceptr vs = dg_vfold + (CUdeviceptr)((size_t)kv*Spad*DH*sizeof(float));
+        scatter_head(dg_k, kv*DH, ks, KVD, Spad);
+        scatter_head(dg_v, kv*DH, vs, KVD, Spad);
+    }
+    /* q/k/v projections: s_q = rms1 @ w_q^T, etc. Accumulate dW and sum dX into dg_rms (rms1 grad). */
+    mm_AtB(dg_q, s_rms1[L], g_q[L], Spad, QD,  DM);    /* dW_q [QD,DM] */
+    mm_AtB(dg_k, s_rms1[L], g_k[L], Spad, KVD, DM);    /* dW_k [KVD,DM] */
+    mm_AtB(dg_v, s_rms1[L], g_v[L], Spad, KVD, DM);    /* dW_v [KVD,DM] */
+    mm_AB (dg_q, w_q[L], dg_rms,   Spad, QD,  DM);     /* d_rms1 (from q) [S,DM] */
+    mm_AB (dg_k, w_k[L], dg_tmpDM, Spad, KVD, DM); vadd(dg_rms, dg_tmpDM, dg_rms, Spad*DM);  /* + k */
+    mm_AB (dg_v, w_v[L], dg_tmpDM, Spad, KVD, DM); vadd(dg_rms, dg_tmpDM, dg_rms, Spad*DM);  /* + v */
+    /* rmsnorm1: s_rms1 = rmsnorm(resid_in) * w_inln. dW_inln (host); d_resid_in via dx; add residual. */
+    rmsnorm_wgrad_host(s_resid_in[L], dg_rms, g_inln[L], Spad, DM);
+    rms_bwd_dx(s_resid_in[L], w_inln[L], dg_rms, dg_tmpDM, Spad, DM);  /* d_resid_in (attn branch) */
+    /* resid_in feeds BOTH the attn rmsnorm AND the residual into resid_mid: total = dg_x + dg_tmpDM. */
+    vadd(dg_x, dg_tmpDM, dg_x, Spad*DM);   /* dg_x = grad of this layer's INPUT (s_resid_in[L]) */
+}
+
+/* full backward: CE-grad root -> tied lm_head -> final rmsnorm -> layers reversed. Leaves every
+ * g_*[L], g_normf, g_embed populated. Tied embedding: the lm_head weight grad AND the input-embedding
+ * scatter both accumulate into g_embed (the latter on the host, at the very end). */
+static void backward(const int* ids, int T) {
+    g_T=T;
+    zero_all_grads();
+    /* shifted targets as f32 (row t -> ids[t+1]); rows >= T-1 are masked to 0 grad after the kernel. */
+    { float* tg=(float*)calloc((size_t)Spad,sizeof(float));
+      for (int t=0;t<T-1;t++) tg[t]=(float)ids[t+1];
+      CKX(cuMemcpyHtoD(d_targets,tg,(size_t)Spad*sizeof(float)),"h2d targets"); free(tg); }
+    ce_softmax_grad(d_logits, d_targets, dg_logits, Spad, NVpad);  /* softmax - onehot, ALL rows */
+    /* zero rows >= T-1 (only t in [0,T-1) are loss positions) + scale live rows by 1/(T-1). */
+    { int live=T-1; double invn=1.0/(double)live; float s=(float)invn;
+      CUdeviceptr sbuf=A(1); CKX(cuMemcpyHtoD(sbuf,&s,sizeof(float)),"h2d lossscale");
+      if (live < Spad)
+          CKX(cuMemsetD8(dg_logits + (CUdeviceptr)((size_t)live*NVpad*sizeof(float)), 0,
+                         (size_t)(Spad-live)*NVpad*sizeof(float)), "zero pad+last rows");
+      scale_rt(dg_logits, sbuf, live*NVpad);   /* scale the live rows by 1/(T-1) */
+      CKX(cuMemFree(sbuf),"free lossscale");
+    }
+    /* tied lm_head: logits = rmsf @ embed^T. d_rmsf = dlogits @ embed ; g_embed += dlogits^T @ rmsf. */
+    mm_AB (dg_logits, w_embed_pad, dg_rms, Spad, NVpad, DM);   /* d_rmsf [S,DM] */
+    mm_AtB(dg_logits, s_rmsf, g_embed, Spad, NVpad, DM);       /* dW_embed (lm_head leg) [NVpad,DM] */
+    /* final rmsnorm: rmsf = rmsnorm(resid_out[NL-1]) * w_normf. dW_normf (host); dx -> dg_x. */
+    rmsnorm_wgrad_host(s_resid_out[NL-1], dg_rms, g_normf, Spad, DM);
+    rms_bwd_dx(s_resid_out[NL-1], w_normf, dg_rms, dg_x, Spad, DM);  /* dg_x = grad of resid_out[NL-1] */
+    /* layers in reverse (dg_x carries the grad of layer L's output into backward_layer) */
+    int trace = (getenv("HX_BWD_TRACE") && atoi(getenv("HX_BWD_TRACE"))!=0);
+    for (int L=NL-1; L>=0; L--) {
+        backward_layer(L, dg_x);
+        if (trace) {
+            float* h=(float*)malloc((size_t)Spad*DM*sizeof(float));
+            CKX(cuMemcpyDtoH(h,dg_x,(size_t)Spad*DM*sizeof(float)),"trace dgx");
+            double nn=0; for (size_t i=0;i<(size_t)Spad*DM;i++) nn+=(double)h[i]*h[i];
+            fprintf(stderr,"  [trace] after layer %d: |dg_x|=%.6g\n", L, sqrt(nn)); free(h);
+        }
+    }
+    /* tied-embedding INPUT scatter: x0[s,:] = embed[ids[s],:], so g_embed[ids[s],:] += dg_x[s,:]
+     * (dg_x now holds the grad of s_resid_in[0] = the input embeddings). Host scatter-add. */
+    { float* dxin=(float*)malloc((size_t)Spad*DM*sizeof(float));
+      float* ge  =(float*)malloc((size_t)NVpad*DM*sizeof(float));
+      CKX(cuMemcpyDtoH(dxin, dg_x, (size_t)Spad*DM*sizeof(float)),"d2h dxin");
+      CKX(cuMemcpyDtoH(ge,   g_embed, (size_t)NVpad*DM*sizeof(float)),"d2h g_embed");
+      for (int s=0;s<T;s++) { int id=ids[s]; for (int c=0;c<DM;c++) ge[(size_t)id*DM+c]+=dxin[(size_t)s*DM+c]; }
+      CKX(cuMemcpyHtoD(g_embed, ge, (size_t)NVpad*DM*sizeof(float)),"h2d g_embed");
+      free(dxin); free(ge);
+    }
+}
+
 /* ===================== device init (load PTX, bind the 8 kernels) ===================== */
 static int device_init(const char* ptx_path) {
     FILE* pf=fopen(ptx_path,"rb"); if (!pf) { fprintf(stderr, "open ptx '%s'\n", ptx_path); return 2; }
@@ -392,8 +687,39 @@ static int device_init(const char* ptx_path) {
     CK(cuModuleGetFunction(&f_silu,      g_mod, "gpu_silu_mul"),        "gpu_silu_mul");
     CK(cuModuleGetFunction(&f_scale,     g_mod, "gpu_scale_rt"),        "gpu_scale_rt");
     CK(cuModuleGetFunction(&f_add,       g_mod, "vector_add"),          "vector_add");
-    printf("[gpu] %s; PTX %ld B, 8 kernels bound\n", name, psz);
+    /* backward kernels (present in the extended combined PTX; bound unconditionally so --fdcheck
+     * and the train loop can use them. If an old fwd-only PTX is passed these GetFunction calls
+     * fail loudly -- the extended mint is required for the backward). */
+    CK(cuModuleGetFunction(&f_atb,   g_mod, "tiled_matmul_atb"),   "tiled_matmul_atb");
+    CK(cuModuleGetFunction(&f_rmsb,  g_mod, "gpu_rmsnorm_bwd_dx"), "gpu_rmsnorm_bwd_dx");
+    CK(cuModuleGetFunction(&f_ropeb, g_mod, "gpu_rope_bwd"),       "gpu_rope_bwd");
+    CK(cuModuleGetFunction(&f_silub, g_mod, "gpu_silu_mul_bwd"),   "gpu_silu_mul_bwd");
+    CK(cuModuleGetFunction(&f_rkvb,  g_mod, "gpu_repeat_kv_bwd"),  "gpu_repeat_kv_bwd");
+    CK(cuModuleGetFunction(&f_ceg,   g_mod, "gpu_ce_softmax_grad"),"gpu_ce_softmax_grad");
+    CK(cuModuleGetFunction(&f_smb,   g_mod, "gpu_softmax_backward"),"gpu_softmax_backward");
+    CK(cuModuleGetFunction(&f_adam,  g_mod, "gpu_adam"),           "gpu_adam");
+    printf("[gpu] %s; PTX %ld B, 8 fwd + 8 bwd kernels bound\n", name, psz);
     return 0;
+}
+
+/* ===================== Adam Param list (capstone pattern) ===================== */
+static void addp(CUdeviceptr w, CUdeviceptr g, int n) {
+    Param* p=&params[nparams++]; p->w=w; p->g=g; p->n=n; p->m=A(n); p->v=A(n);
+    CKX(cuMemsetD8(p->m,0,(size_t)n*sizeof(float)),"zero m"); CKX(cuMemsetD8(p->v,0,(size_t)n*sizeof(float)),"zero v");
+}
+static void build_params(void) {
+    for (int L=0;L<NL;L++) {
+        addp(w_inln[L],g_inln[L],DM);   addp(w_q[L],g_q[L],QD*DM);   addp(w_k[L],g_k[L],KVD*DM);
+        addp(w_v[L],g_v[L],KVD*DM);     addp(w_o[L],g_o[L],DM*QD);   addp(w_postln[L],g_postln[L],DM);
+        addp(w_gate[L],g_gate[L],DFF*DM); addp(w_up[L],g_up[L],DFF*DM); addp(w_down[L],g_down[L],DM*DFF);
+    }
+    addp(w_normf,g_normf,DM);
+    addp(w_embed_pad,g_embed,NVpad*DM);   /* tied: the single embedding param (lm_head + input share it) */
+}
+static void adam_step(int t) {
+    float bc1=1.0f/(1.0f-powf(0.9f,(float)t)), bc2=1.0f/(1.0f-powf(0.999f,(float)t));
+    CKX(cuMemcpyHtoD(d_bc1,&bc1,sizeof(float)),"bc1"); CKX(cuMemcpyHtoD(d_bc2,&bc2,sizeof(float)),"bc2");
+    for (int i=0;i<nparams;i++){ Param* p=&params[i]; adam_step1(p->w,p->g,p->m,p->v,d_bc1,d_bc2,p->n); }
 }
 
 static int read_ids_file(const char* path, int* ids, int maxn) {
@@ -422,13 +748,141 @@ static double ce_loss(const int* ids, int T) {
     return tot/(double)cnt;
 }
 
+/* run a full forward and return the shifted-CE loss (the trainer's own loss). Reused by --fdcheck:
+ * perturb a resident weight scalar -> compute_loss -> restore. A throwaway last-row buffer is fine. */
+static float* g_logits_scratch=NULL;
+static double compute_loss(const int* ids, int T) {
+    if (!g_logits_scratch) g_logits_scratch=(float*)malloc((size_t)NV*sizeof(float));
+    forward(ids, T, g_logits_scratch);
+    return ce_loss(ids, T);
+}
+
+/* ===================== finite-difference gradient check (the acceptance gate) =====================
+ * For a chosen resident-weight scalar, central difference (L(w+eps)-L(w-eps))/(2eps) vs the analytic
+ * grad the backward produced for that scalar. eps in fp32; rel-err < ~1e-2 is a PASS (fp32-noisy).
+ * Each probe: read the analytic grad cell, perturb the SAME device cell +/-eps, recompute the loss
+ * (full forward), restore. The tied embedding uses w_embed_pad both as lm_head AND (post-embed_gather
+ * fix) as the input-embedding source, so a single device perturbation captures BOTH paths. */
+typedef struct { const char* name; CUdeviceptr wbuf; CUdeviceptr gbuf; long n; long idx; } Probe;
+
+static double read_cell(CUdeviceptr buf, long idx) {
+    float v; CKX(cuMemcpyDtoH(&v, buf+(CUdeviceptr)((size_t)idx*sizeof(float)), sizeof(float)), "d2h cell"); return (double)v;
+}
+static void write_cell(CUdeviceptr buf, long idx, float v) {
+    CKX(cuMemcpyHtoD(buf+(CUdeviceptr)((size_t)idx*sizeof(float)), &v, sizeof(float)), "h2d cell");
+}
+/* pick the grad cell with the LARGEST |analytic| within a tensor (scan a strided sample). The
+ * finite-difference of an fp32 loss has an absolute noise floor ~|L|*2^-23 (~4e-7 here); a probe is
+ * only RESOLVABLE when |grad|*2*eps exceeds that floor, so we deliberately verify each tensor family
+ * at its most-resolvable cell. This is honest -- a near-zero gradient cannot be confirmed by a
+ * difference that is itself below the fp32 rounding of the loss. */
+static long max_abs_grad_cell(CUdeviceptr gbuf, long n) {
+    long stride = n>20000 ? n/20000 : 1;   /* sample up to ~20k cells (D2H of a few KB) */
+    long best=0; double bestv=-1.0;
+    for (long i=0;i<n;i+=stride) { double v=fabs(read_cell(gbuf,i)); if (v>bestv){bestv=v;best=i;} }
+    return best;
+}
+
+static int run_fdcheck(const int* ids, int T) {
+    /* MULTI-EPS central finite-difference (standard grad-check practice). A single eps cannot verify
+     * both weight classes here, as the HX_FD_SWEEP diagnostic shows:
+     *   - PROJECTION weights (value ~0.05, |grad| ~1e-4..1e-3): the central-diff signal 2*eps*grad
+     *     must clear the fp32 loss-noise floor (~|L|*2^-23 ~ 4e-7 on the 3.87 loss), so they need a
+     *     LARGE eps (>=1e-2); at eps=1e-3 numeric is pure noise.
+     *   - RMSNORM weights (value ~1.0..1.4, |grad| up to ~3, large curvature): they need a SMALL eps
+     *     (~1e-3); at eps=2e-2 the O(eps^2) truncation error is ~10-60%.
+     * So we try eps in {1e-3, 4e-3, 1.5e-2, 5e-2} and accept the probe if rel-err < 5e-2 at the BEST
+     * eps (the one in that weight's valid window between noise floor and truncation). 5% is the same
+     * fp32-noisy tolerance the GPT-2 capstone finite-diff uses. */
+    double epss[]={1e-3,4e-3,1.5e-2,5e-2}; int neps=(int)(sizeof(epss)/sizeof(epss[0]));
+    printf("\n[fdcheck] MULTI-EPS central finite-difference (eps in {1e-3,4e-3,1.5e-2,5e-2}, accept best rel<5e-2, T=%d, Spad=%d)\n", T, Spad);
+    double base = compute_loss(ids, T);
+    backward(ids, T);
+    printf("[fdcheck] base shifted-CE loss = %.6f ; probing the max-|grad| cell of each tensor family\n", base);
+
+    int Lt=NL-1, Lm=NL/2, L0=0;   /* top, middle, bottom layers -> exercises cross-layer propagation */
+    long qd_dm=(long)QD*DM, kvd_dm=(long)KVD*DM, dm_qd=(long)DM*QD, dff_dm=(long)DFF*DM, dm_dff=(long)DM*DFF;
+    Probe probes[] = {
+        /* output layers */
+        { "w_normf",       w_normf,      g_normf,      DM,        0 },
+        { "w_embed(tied)", w_embed_pad,  g_embed,      (long)NVpad*DM, 0 },  /* tied: lm_head + input-scatter */
+        /* TOP layer: every projection + both norms (shortest path, isolates per-layer logic) */
+        { "w_down[T]",     w_down[Lt],   g_down[Lt],   dm_dff,    0 },
+        { "w_up[T]",       w_up[Lt],     g_up[Lt],     dff_dm,    0 },
+        { "w_gate[T]",     w_gate[Lt],   g_gate[Lt],   dff_dm,    0 },
+        { "w_postln[T]",   w_postln[Lt], g_postln[Lt], DM,        0 },
+        { "w_o[T]",        w_o[Lt],      g_o[Lt],      dm_qd,     0 },
+        { "w_v[T]",        w_v[Lt],      g_v[Lt],      kvd_dm,    0 },
+        { "w_k[T]",        w_k[Lt],      g_k[Lt],      kvd_dm,    0 },
+        { "w_q[T]",        w_q[Lt],      g_q[Lt],      qd_dm,     0 },
+        { "w_inln[T]",     w_inln[Lt],   g_inln[Lt],   DM,        0 },
+        /* MIDDLE layer: one attention + one MLP weight (deep cross-layer grad must reach here) */
+        { "w_q[M]",        w_q[Lm],      g_q[Lm],      qd_dm,     0 },
+        { "w_down[M]",     w_down[Lm],   g_down[Lm],   dm_dff,    0 },
+        /* BOTTOM layer: attention + MLP (longest path: grad threads all 30 layers) */
+        { "w_q[0]",        w_q[L0],      g_q[L0],      qd_dm,     0 },
+        { "w_gate[0]",     w_gate[L0],   g_gate[L0],   dff_dm,    0 },
+    };
+    int nprobe=(int)(sizeof(probes)/sizeof(probes[0]));
+    int sweep = (getenv("HX_FD_SWEEP") && atoi(getenv("HX_FD_SWEEP"))!=0);
+    if (sweep) {   /* diagnostic kept: eps sweep exposing the fp32 loss-noise floor AND the
+                    * large-gradient TRUNCATION regime (w_postln[T] has the biggest grad ~3). */
+        long io=max_abs_grad_cell(g_o[Lt],dm_qd), ip=max_abs_grad_cell(g_postln[Lt],DM);
+        struct { const char* nm; CUdeviceptr wb,gb; long ix; } sp[2]={{"w_o[T]",w_o[Lt],g_o[Lt],io},{"w_postln[T]",w_postln[Lt],g_postln[Lt],ip}};
+        double epss[5]={1e-1,3e-2,1e-2,3e-3,1e-3};
+        for (int k=0;k<2;k++){ double an=read_cell(sp[k].gb,sp[k].ix); float w0=(float)read_cell(sp[k].wb,sp[k].ix);
+            fprintf(stderr,"  [sweep] %s analytic=%.6g (w0=%.5g)\n", sp[k].nm, an, (double)w0);
+            for (int e=0;e<5;e++){ double ep=epss[e];
+                write_cell(sp[k].wb,sp[k].ix,(float)(w0+ep)); double Lp=compute_loss(ids,T);
+                write_cell(sp[k].wb,sp[k].ix,(float)(w0-ep)); double Lm=compute_loss(ids,T);
+                write_cell(sp[k].wb,sp[k].ix,w0);
+                fprintf(stderr,"     eps=%.0e  Lp-Lm=%.3e  numeric=%.6g  rel=%.3e\n", ep, Lp-Lm, (Lp-Lm)/(2*ep), fabs(an-(Lp-Lm)/(2*ep))/(fabs(an)+1e-9));
+            }
+        }
+    }
+    printf("  %-16s | %14s | %14s | %10s | %7s | %s\n", "weight", "analytic", "numeric(best)", "rel-err", "best-eps", "verdict");
+    printf("  %-16s-+-%14s-+-%14s-+-%10s-+-%7s-+-%s\n", "----------------","--------------","--------------","----------","-------","-------");
+    int nfail=0;
+    for (int i=0;i<nprobe;i++) {
+        Probe* p=&probes[i];
+        p->idx = max_abs_grad_cell(p->gbuf, p->n);       /* verify where the gradient is resolvable */
+        double analytic = read_cell(p->gbuf, p->idx);
+        float  w0f=(float)read_cell(p->wbuf, p->idx);
+        double best_rel=1e30, best_num=0.0, best_eps=0.0;
+        for (int e=0;e<neps;e++) {
+            double eps=epss[e];
+            write_cell(p->wbuf, p->idx, (float)(w0f+eps)); double Lp=compute_loss(ids,T);
+            write_cell(p->wbuf, p->idx, (float)(w0f-eps)); double Lm2=compute_loss(ids,T);
+            double numeric=(Lp-Lm2)/(2.0*eps);
+            double rel=fabs(analytic-numeric)/(fabs(analytic)+fabs(numeric)+1e-9);
+            if (rel<best_rel){ best_rel=rel; best_num=numeric; best_eps=eps; }
+        }
+        write_cell(p->wbuf, p->idx, w0f);                 /* restore */
+        int ok = (best_rel < 5e-2) && isfinite(analytic) && isfinite(best_num);
+        if (!ok) nfail++;
+        printf("  %-16s | %14.6g | %14.6g | %10.3e | %7.0e | %s\n", p->name, analytic, best_num, best_rel, best_eps, ok?"PASS":"FAIL");
+    }
+    printf("[fdcheck] %d/%d probes PASS (families: final-norm, tied-embed, all 7 projections + both layer-norms @ top, attn+MLP @ mid & bottom)\n", nprobe-nfail, nprobe);
+    printf("%s\n", nfail==0 ? "LLAMA_TRAIN_FDCHECK_PASS" : "LLAMA_TRAIN_FDCHECK_FAIL");
+    return nfail==0 ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <combined.ptx> <smollm2-135m.weights> <ids.txt> [oracle_logits.bin]\n", argv[0]);
+        fprintf(stderr, "usage: %s <combined.ptx> <smollm2-135m.weights> <ids.txt> [oracle_logits.bin] [--fdcheck] [--train N]\n", argv[0]);
         return 2;
     }
     const char* ptx=argv[1]; const char* wts=argv[2]; const char* idsf=argv[3];
-    const char* oraclef = (argc>=5) ? argv[4] : NULL;
+    /* flag scan: --fdcheck (or HX_FDCHECK=1) runs the gradient check; --train N runs N Adam steps.
+     * the optional positional oracle_logits.bin is the first non-flag arg after ids (argv[4]). */
+    int do_fd = (getenv("HX_FDCHECK") && atoi(getenv("HX_FDCHECK"))!=0);
+    int do_train = 0; int train_K = 0;
+    const char* oraclef = NULL;
+    for (int i=4;i<argc;i++) {
+        if (!strcmp(argv[i],"--fdcheck")) do_fd=1;
+        else if (!strcmp(argv[i],"--train")) { do_train=1; if (i+1<argc && argv[i+1][0]!='-') train_K=atoi(argv[++i]); if (train_K<=0) train_K=10; }
+        else if (!oraclef) oraclef=argv[i];
+    }
 
     if (load_weights(wts)) return 2;
     if (device_init(ptx)) return 2;
@@ -441,6 +895,28 @@ int main(int argc, char** argv) {
 
     if (upload_all_weights()) return 2;
     if (alloc_saved(S)) return 2;
+
+    /* ---- backward modes (allocate grad buffers + Adam state only when needed) ---- */
+    if (do_fd || do_train) { if (alloc_grads(S)) return 2; build_params(); }
+    if (do_fd) {
+        int rc=run_fdcheck(ids, T);
+        return rc;
+    }
+    if (do_train) {
+        double l0=compute_loss(ids,T);
+        printf("[train] step0 shifted-CE loss = %.6f ; running %d Adam steps (lr=1e-3 baked)\n", l0, train_K);
+        double l=l0;
+        for (int t=1;t<=train_K;t++) {
+            l=compute_loss(ids,T);
+            backward(ids,T);
+            adam_step(t);
+            if (t==1 || t%5==0 || t==train_K) printf("  step %3d loss %.6f\n", t, l);
+        }
+        double lf=compute_loss(ids,T);
+        printf("[train] %d steps: start %.6f -> final %.6f  (%s)\n", train_K, l0, lf,
+               lf < l0 ? "LLAMA_TRAIN_LOSS_DECREASED" : "LLAMA_TRAIN_LOSS_DID_NOT_DECREASE");
+        return 0;
+    }
 
     float* logits=(float*)malloc((size_t)NV*sizeof(float));
     forward(ids, T, logits);
