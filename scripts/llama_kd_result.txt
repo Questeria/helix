@@ -1,0 +1,70 @@
+# SmolLM2-135M fp -> ternary (STE QAT) conversion WITH KNOWLEDGE DISTILLATION (KD) on MMLU.
+# Trainer: helixc/runtime/llama_train.c (v1.9-ternary). KD adds a FIXED fp teacher (the SAME
+#          SmolLM2 with QAT off) whose SOFT targets replace the hard one-hot label: the top-of-net
+#          loss gradient changes from (student_softmax - onehot) to (student_softmax - teacher_soft);
+#          backward + Adam UNCHANGED. Behind HX_KD=1 (default OFF -> CE path + bwd gate unaffected).
+#          New kernel: gpu_kd_softmax_grad (rides the same combined PTX; NO kovc.hx edit, fixpoint
+#          31e6cc27 untouched). Teacher softmax computed once/sequence (QAT-off fwd) + cached in host RAM.
+#
+# Corpus (SAME held-out as d0fe7c3; train near-identical): MMLU professional_psychology (MIT/open),
+#   regen: scripts/llama_stage_mmlu.sh professional_psychology 256 42 14
+TRAIN_TOKENS        4303    (42 sequences, disjoint-by-row from held-out)
+HELDOUT_TOKENS      1171    (5 windows, 1166 predicted -- EXACTLY matches d0fe7c3's held-out)
+ROW_OVERLAP         0       (PASS -- disjoint train/held-out by row index)
+PPL_WINDOW          256
+# NOTE: d0fe7c3 recorded 4225 train tok / 44 seqs; the current MMLU/tokenizer filter yields 4303/42 at
+# the closest row count. The HELD-OUT set (the measured quantity) reproduces the baseline EXACTLY
+# (1171 tok, 1166 predicted) and the fp baseline ppl reproduces to the digit (8.7467) -> the gap
+# comparison is fair (same held-out, same fp reference, near-identical train).
+
+# === KD-GRADIENT CORRECTNESS (a number) ===
+# teacher==student (both fp, T=1) -> the KD grad must vanish. Over 99 live rows x 49152 vocab:
+KD_SELFCHECK_max_abs    2.179e-04   (single-cell fp32 round-off: host double-softmax vs kernel f32-softmax)
+KD_SELFCHECK_mean_abs   2.475e-09   (~0 over 4.87M cells -> grad vanishes at the teacher)
+KD_SELFCHECK            PASS
+# Independent confirmation the KD grad is LIVE for the ternary student (2-seq micro-test):
+KD_GRAD_ternary_L2      ~9.1        (pre-scale |dg_logits|_2, max cell ~1.0 = |p-teach| bound; nonzero)
+
+# === FP BASELINE (QAT OFF) on the MMLU held-out (reproduced) ===
+FP_BASELINE_HELDOUT_PPL   8.7467    (windows=5, predicted=1166 -- identical to d0fe7c3)
+
+# === KD TERNARY RECOVERY TRAJECTORY (held-out ppl per epoch; HX_TERNARY_QAT=1 HX_KD=1 T=1) ===
+# HX_PPL_EVERY=1 ; --train-corpus ... 5 --ppl ... 256 ; wall 2686 s (~45 min), <=80% compute, sm_86
+# epoch : held_out_ppl        (train_mean_loss)
+KD_TRAJ epoch 0  2585517583.06   (19.994314)   # raw ternary, pre-fine-tune (same start as hard-CE)
+KD_TRAJ epoch 1  2678.91         (9.975138)
+KD_TRAJ epoch 2  1708.51         (7.190263)
+KD_TRAJ epoch 3  1511.02         (6.836581)
+KD_TRAJ epoch 4  1332.61         (6.682016)
+KD_TRAJ epoch 5  1278.95         (6.573756)     # BEST + FINAL (monotone DOWN; still improving)
+
+# === COMPARISON: fp vs KD vs hard-CE ===
+FP_BASELINE_HELDOUT_PPL        8.7467
+KD_BEST_CONVERTED_TERNARY_PPL  1278.95    AT_EPOCH 5   (== final; KD did not overfit on this corpus)
+HARD_CE_BEST_TERNARY_PPL       2302.24    AT_EPOCH 1   (d0fe7c3; then OVERFIT: 2521/2828/3051/3317)
+GAP_KD_best_over_FP            146.22x    (1278.95 / 8.7467)
+GAP_HARD_CE_best_over_FP       263.21x    (2302.24 / 8.7467)
+GAP_NARROWED_vs_263x           YES        (263.21x -> 146.22x ; 1.80x narrower)
+KD_vs_HARD_CE_best_ratio       0.556      (KD best ppl is 55.6% of hard-CE best -> KD ~1.8x better)
+
+# === JUDGMENT (honest) ===
+# KD HELPED, clearly and in the predicted way. The gap to fp narrowed from 263x (hard-CE) to 146x
+# (KD), a 1.80x improvement. More importantly the FAILURE MODE changed: hard-CE OVERFIT (best at
+# epoch 1, then monotonically WORSE on held-out while train loss fell), whereas KD's held-out ppl
+# decreased MONOTONICALLY every epoch (2679 -> 1279) and was STILL FALLING at epoch 5 -- the soft
+# teacher targets regularize the tiny corpus that the one-hot labels overfit. The model is now
+# COMPUTE/EPOCH-bound (not yet plateaued) AND still DATA-bound (4303 train tokens is tiny); KD did
+# not reach fp (146x is far from 1x) -- consistent with the standing finding that a real ternary
+# conversion needs a real-scale corpus + longer schedule. The host full-vocab (49152) softmax is the
+# wall-time bottleneck (one-time teacher cache = 42 fp forwards + the per-epoch reductions). HONEST:
+# KD is a genuine, measurable lever on the conversion gap; it did not close it on this small set.
+
+# === REPRODUCE ===
+# 0) prereq once: scripts/llama_train_bwd_gate.sh with REMINT=1 (mints the from-raw kovc PTX driver).
+# 1) stage corpus: scripts/llama_stage_mmlu.sh professional_psychology 256 42 14
+# 2) run:          scripts/llama_kd_conversion.sh         (EPOCHS=5 KDT=1 defaults)
+#    raw flags:    HX_TERNARY_QAT=1 HX_KD=1 HX_KD_T=1 HX_PPL_EVERY=1 \
+#                  $HOME/llama_train .m1probe/llama_train_kd.ptx <weights> <ids5> \
+#                  --train-corpus helix-llm/mmlu_train_ids.txt helix-llm/mmlu_train_lens.txt 5 \
+#                  --ppl helix-llm/mmlu_heldout_ids.txt 256
+# CE path unchanged (verified): fp fdcheck 15/15 PASS + fp/QAT train smokes DECREASED with HX_KD unset.

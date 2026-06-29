@@ -102,6 +102,25 @@ static CUfunction f_ternarize, f_rowabsmean, f_stemask;
 /* the ternarized buffers + per-out-row scale buffers (one per ternary linear, per layer) are
  * declared with the resident weights below (after #define MAXL). */
 
+/* v1.9 KD (knowledge distillation, opt-in HX_KD): a FIXED fp teacher (the SAME SmolLM2 with QAT
+ * OFF) supplies SOFT targets so the ternary student matches the teacher's full output distribution
+ * instead of the hard one-hot label. The top-of-net gradient becomes (student_softmax - teacher_soft)
+ * (* T*T at temperature T) via gpu_kd_softmax_grad, replacing the (student_softmax - onehot) of
+ * gpu_ce_softmax_grad; the ENTIRE rest of the backward + Adam is unchanged (only the loss-root grad
+ * source changes). The teacher distribution is computed ONCE per training sequence (QAT off forward
+ * -> host full-vocab softmax) and CACHED in host RAM (teacher is fixed -> reused across all epochs).
+ * Default OFF -> the CE path + scripts/llama_train_bwd_gate.sh are byte-for-byte unaffected. */
+static int   KD = 0;
+static float KD_T = 1.0f;            /* distillation temperature (HX_KD_T; default 1.0) */
+static CUfunction f_kdg;             /* gpu_kd_softmax_grad (bound only when KD) */
+static CUdeviceptr d_teacher = 0;    /* device staging buffer [Spad,NVpad] for the current seq's teacher */
+static CUdeviceptr d_tparm = 0;      /* 2-elem device buffer [T, T*T] for the KD kernel temperature */
+static CUdeviceptr d_tparm1 = 0;     /* 2-elem device buffer [1.0, 1.0] for the T=1 KD self-check */
+/* host teacher cache: one row-major [T_s, NV] block per training sequence (teacher softmax rows
+ * 0..T_s-1; only rows 0..T_s-2 carry KD loss but we store T_s-1 rows). Built by build_teacher_cache. */
+static float** g_teach = NULL; static int* g_teach_T = NULL; static int g_teach_nseq = 0;
+static const float* g_cur_teacher = NULL;   /* set per-step by the train loop -> read by backward() */
+
 /* sync after every launch (TRAINER FORWARD = correctness-first; no fast-mode skips). */
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
 #define LX(fn,grid,block,args)     do { CKX(cuLaunchKernel((fn),(grid),1,1,(block),1,1,0,0,(args),0), #fn); SYNC("sync " #fn); } while (0)
@@ -149,6 +168,13 @@ static void repeat_kv_bwd(CUdeviceptr din, CUdeviceptr dout, int nrep, int blk, 
 /* CE+softmax grad: dlogits[r,:] = softmax(logits[r,:]) - onehot(tgtf[r]). grid=rows block=1. */
 static void ce_softmax_grad(CUdeviceptr logits, CUdeviceptr tgtf, CUdeviceptr dlog, int rows, int cols) {
     int r=rows,c=cols; void* ar[]={ &logits,&tgtf,&dlog,&r,&c }; LX(f_ceg, (unsigned)rows, 1, ar);
+}
+/* KD softmax grad: dlogits[r,:] = (softmax(logits[r,:]/T) - teach[r,:]) * T*T. teach = the fixed
+ * teacher softmax (full distribution, one float per vocab cell). The temperature is a 1-elem-pair
+ * DEVICE buffer tparm=[T, T*T] (the emitter has no scalar-f32 ABI -> f32 runtime scalars MUST be
+ * device pointers, like gpu_scale_rt's `s`). grid=rows block=1. */
+static void kd_softmax_grad(CUdeviceptr logits, CUdeviceptr teach, CUdeviceptr dlog, int rows, int cols, CUdeviceptr tparm) {
+    int r=rows,c=cols; void* ar[]={ &logits,&teach,&dlog,&r,&c,&tparm }; LX(f_kdg, (unsigned)rows, 1, ar);
 }
 /* softmax backward (Jacobian-vector): da = p*(dp - sum_k dp_k p_k). grid=rows block=1. */
 static void softmax_bwd(CUdeviceptr p, CUdeviceptr dp, CUdeviceptr da, int rows, int cols) {
@@ -501,6 +527,10 @@ static int alloc_grads(int S) {
     dh_Qh=A((size_t)S*DH); dh_Kh=A((size_t)S*DH); dh_Vh=A((size_t)S*DH);
     d_bc1=A(1); d_bc2=A(1);
     d_unscale=A(1); CKX(cuMemcpyHtoD(d_unscale,&ATTN_SCALE,sizeof(float)),"h2d unscale");
+    if (KD) { d_teacher = A((size_t)S*NVpad);   /* per-step teacher-softmax staging [Spad,NVpad] */
+        d_tparm  = A(2); { float tp[2]={KD_T, KD_T*KD_T}; CKX(cuMemcpyHtoD(d_tparm, tp, 2*sizeof(float)),"h2d tparm"); }
+        d_tparm1 = A(2); { float tp1[2]={1.0f,1.0f};      CKX(cuMemcpyHtoD(d_tparm1,tp1,2*sizeof(float)),"h2d tparm1"); }
+        printf("[kd] teacher staging buffer [%d,%d] allocated (T=%.3g, T^2=%.3g)\n", S, NVpad, (double)KD_T, (double)(KD_T*KD_T)); }
     printf("[bwd] gradient buffers + activation-grad scratch allocated (S=%d)\n", S);
     return 0;
 }
@@ -716,11 +746,28 @@ static void backward_layer(int L, CUdeviceptr dIN) {
 static void backward(const int* ids, int T) {
     g_T=T;
     zero_all_grads();
-    /* shifted targets as f32 (row t -> ids[t+1]); rows >= T-1 are masked to 0 grad after the kernel. */
-    { float* tg=(float*)calloc((size_t)Spad,sizeof(float));
-      for (int t=0;t<T-1;t++) tg[t]=(float)ids[t+1];
-      CKX(cuMemcpyHtoD(d_targets,tg,(size_t)Spad*sizeof(float)),"h2d targets"); free(tg); }
-    ce_softmax_grad(d_logits, d_targets, dg_logits, Spad, NVpad);  /* softmax - onehot, ALL rows */
+    if (KD && g_cur_teacher) {
+        /* KD root: dlogits = (student_softmax(/T) - teacher_soft) * T*T over the LIVE rows. Upload the
+         * cached teacher rows [0,T-1) into d_teacher (rows >= T-1 left zero -> masked below anyway). The
+         * student logits are d_logits from the (ternary-QAT) forward; the teacher is the fixed fp dist. */
+        CKX(cuMemsetD8(d_teacher, 0, (size_t)Spad*NVpad*sizeof(float)), "zero d_teacher");
+        if (T-1 > 0)
+            CKX(cuMemcpyHtoD(d_teacher, g_cur_teacher, (size_t)(T-1)*NV*sizeof(float)), "h2d teacher rows");
+        kd_softmax_grad(d_logits, d_teacher, dg_logits, Spad, NVpad, d_tparm);  /* (p - teach)*T^2, ALL rows */
+        if (getenv("HX_KD_DBG") && atoi(getenv("HX_KD_DBG"))!=0) {
+            int live=T-1; float* h=(float*)malloc((size_t)live*(size_t)NVpad*sizeof(float));
+            CKX(cuMemcpyDtoH(h, dg_logits, (size_t)live*(size_t)NVpad*sizeof(float)), "dbg kd dg");
+            double nn=0,mx=0; for (long i=0;i<(long)live*NVpad;i++){ double a=fabs((double)h[i]); nn+=a*a; if(a>mx)mx=a; }
+            fprintf(stderr,"  [kd-dbg] pre-scale |dg_logits|_2=%.6g max=%.6g (live=%d)\n", sqrt(nn), mx, live);
+            free(h);
+        }
+    } else {
+        /* shifted targets as f32 (row t -> ids[t+1]); rows >= T-1 masked to 0 grad after the kernel. */
+        float* tg=(float*)calloc((size_t)Spad,sizeof(float));
+        for (int t=0;t<T-1;t++) tg[t]=(float)ids[t+1];
+        CKX(cuMemcpyHtoD(d_targets,tg,(size_t)Spad*sizeof(float)),"h2d targets"); free(tg);
+        ce_softmax_grad(d_logits, d_targets, dg_logits, Spad, NVpad);  /* softmax - onehot, ALL rows */
+    }
     /* zero rows >= T-1 (only t in [0,T-1) are loss positions) + scale live rows by 1/(T-1). */
     { int live=T-1; double invn=1.0/(double)live; float s=(float)invn;
       CUdeviceptr sbuf=A(1); CKX(cuMemcpyHtoD(sbuf,&s,sizeof(float)),"h2d lossscale");
@@ -796,7 +843,11 @@ static int device_init(const char* ptx_path) {
         CK(cuModuleGetFunction(&f_rowabsmean, g_mod, "row_abs_mean"),      "row_abs_mean");
         CK(cuModuleGetFunction(&f_stemask,    g_mod, "ste_mask"),          "ste_mask");
     }
-    printf("[gpu] %s; PTX %ld B, 8 fwd + 8 bwd%s kernels bound\n", name, psz, QAT?" + 3 STE-QAT":"");
+    /* v1.9 KD: bind the KD softmax-grad kernel only when HX_KD (it joins the SAME combined PTX as a
+     * @kernel; a KD run requires the 21-kernel mint, this GetFunction fails loudly if it is absent). */
+    if (KD) CK(cuModuleGetFunction(&f_kdg, g_mod, "gpu_kd_softmax_grad"), "gpu_kd_softmax_grad");
+    printf("[gpu] %s; PTX %ld B, 8 fwd + 8 bwd%s%s kernels bound\n", name, psz,
+           QAT?" + 3 STE-QAT":"", KD?" + 1 KD":"");
     return 0;
 }
 
@@ -910,6 +961,84 @@ static double corpus_perplexity(const int* corpus, int N, int win, double* out_s
     return ppl;
 }
 
+/* ===================== KD teacher cache (v1.9 HX_KD) =====================
+ * The teacher is the FIXED fp model (QAT off). For each training sequence we run ONE fp forward and
+ * compute the full-vocab teacher softmax (at temperature KD_T) for the live rows [0,T-1), caching it
+ * in host RAM. Teacher is fixed -> computed once, reused across all epochs. The forward routes through
+ * EW(); with QAT temporarily forced off, EW() returns the fp W -> a genuine fp teacher. Host softmax
+ * (double accum, exact for the cache) -- the same host log-softmax idiom as ce_loss, but storing the
+ * normalized probabilities. Returns 0 on success. Total cache ~= (sum_s T_s)*NV*4 bytes. */
+static int build_teacher_cache(const int* corpus, const int* lens, int nseq) {
+    int saveQAT = QAT; QAT = 0;                 /* teacher = fp (QAT OFF) regardless of student mode */
+    if (!g_logits_scratch) g_logits_scratch=(float*)malloc((size_t)NV*sizeof(float));
+    g_teach   = (float**)calloc((size_t)nseq, sizeof(float*));
+    g_teach_T = (int*)calloc((size_t)nseq, sizeof(int));
+    g_teach_nseq = nseq;
+    float* row=(float*)malloc((size_t)NV*sizeof(float));
+    int off=0; long total_rows=0;
+    for (int s=0;s<nseq;s++) {
+        int T=lens[s]; g_teach_T[s]=T;
+        if (T>=2) {
+            forward(&corpus[off], T, g_logits_scratch);     /* fp teacher logits -> d_logits[0..T) */
+            int live=T-1;
+            float* blk=(float*)malloc((size_t)live*(size_t)NV*sizeof(float));
+            for (int t=0;t<live;t++) {
+                CKX(cuMemcpyDtoH(row, d_logits + (CUdeviceptr)((size_t)t*NVpad*sizeof(float)),
+                                 (size_t)NV*sizeof(float)), "d2h teacher row");
+                double mx=-1e30; for (int i=0;i<NV;i++) if ((double)row[i]>mx) mx=(double)row[i];
+                double se=0.0; double invT=1.0/(double)KD_T;
+                for (int i=0;i<NV;i++) se += exp(((double)row[i]-mx)*invT);
+                float* dst=&blk[(size_t)t*NV];
+                for (int i=0;i<NV;i++) dst[i]=(float)(exp(((double)row[i]-mx)*invT)/se);
+            }
+            g_teach[s]=blk; total_rows+=live;
+        }
+        off+=T;
+    }
+    free(row);
+    QAT = saveQAT;                               /* restore the student's QAT mode */
+    printf("[kd] teacher cache built: %d sequences, %ld live rows x %d vocab (~%.1f MB host, T=%.3g)\n",
+           nseq, total_rows, NV, (double)total_rows*(double)NV*4.0/(1024*1024), (double)KD_T);
+    return 0;
+}
+static void free_teacher_cache(void) {
+    if (!g_teach) return;
+    for (int s=0;s<g_teach_nseq;s++) free(g_teach[s]);
+    free(g_teach); free(g_teach_T); g_teach=NULL;
+}
+
+/* KD-gradient CORRECTNESS self-check (a number). Builds the teacher (fp) for sequence 0, then runs
+ * the KD grad with the STUDENT ALSO the fp model (QAT off) at T=1: student_softmax == teacher_soft,
+ * so EVERY live KD-grad cell must be ~0. Reports the max |dg_logits| over the live rows -- the KD
+ * grad's zero-at-the-teacher property (analogous to CE's grad-sums-to-0). A tiny max (<~1e-5, fp32
+ * D2H/softmax round-off) confirms the KD kernel + teacher caching are wired correctly. */
+static int kd_selfcheck(const int* corpus, const int* lens, int nseq) {
+    if (nseq<1 || lens[0]<2 || !g_teach || !g_teach[0]) { printf("[kd-check] SKIP (no usable seq0)\n"); return 0; }
+    int saveQAT=QAT; QAT=0;                       /* student == fp teacher for the self-check */
+    int T=lens[0]; int live=T-1;
+    g_T=T;
+    forward(corpus, T, g_logits_scratch);         /* fp student logits == teacher logits */
+    CKX(cuMemsetD8(d_teacher, 0, (size_t)Spad*NVpad*sizeof(float)), "zero d_teacher chk");
+    CKX(cuMemcpyHtoD(d_teacher, g_teach[0], (size_t)live*NV*sizeof(float)), "h2d teacher chk");
+    kd_softmax_grad(d_logits, d_teacher, dg_logits, Spad, NVpad, d_tparm1);
+    /* max |dg_logits| over the live rows (rows>=live are unmasked here but we only scan live). */
+    float* h=(float*)malloc((size_t)live*(size_t)NVpad*sizeof(float));
+    CKX(cuMemcpyDtoH(h, dg_logits, (size_t)live*(size_t)NVpad*sizeof(float)), "d2h kd chk");
+    double mxabs=0.0, sumabs=0.0; long ncell=(long)live*NV;
+    for (int t=0;t<live;t++) for (int i=0;i<NV;i++){ double a=fabs((double)h[(size_t)t*NVpad+i]); if(a>mxabs)mxabs=a; sumabs+=a; }
+    free(h);
+    QAT=saveQAT;
+    double meanabs = ncell>0 ? sumabs/(double)ncell : 0.0;
+    /* threshold: the host teacher softmax is double-accumulated then cast f32; the kernel recomputes
+     * the student softmax in f32. On identical large-magnitude logits a single vocab cell can differ
+     * by fp32 round-off (~2e-4); the mean over millions of cells is ~1e-9 -> a genuine zero. Accept
+     * max < 5e-4 (the CE/KD grad cells are O(1), so this is a strong "grad vanishes at the teacher"). */
+    int ok = (mxabs < 5e-4) && (meanabs < 1e-6) && isfinite(mxabs);
+    printf("[kd-check] teacher==student KD-grad: max_abs=%.3e mean_abs=%.3e over %ld live cells -> %s\n",
+           mxabs, meanabs, ncell, ok?"KD_SELFCHECK_PASS":"KD_SELFCHECK_FAIL");
+    return ok ? 0 : 1;
+}
+
 /* ===================== MULTI-SEQUENCE corpus training (v1.9 step5b QAT fine-tune) =====================
  * Reads a corpus stream + a per-sequence length list (lens[0..nseq)), and runs E epochs, each epoch
  * iterating the sequences in order: forward -> backward -> Adam, ONE optimizer step per sequence (a
@@ -939,6 +1068,7 @@ static int run_corpus_train(const int* corpus, const int* lens, int nseq, int ep
             int T=lens[s];
             if (T>=2) {
                 double l=compute_loss(&corpus[off], T);   /* forward (fills d_logits) + host CE */
+                g_cur_teacher = (KD && g_teach) ? g_teach[s] : NULL;  /* KD: this seq's fixed teacher */
                 backward(&corpus[off], T);                /* grads from the SAME forward's saved acts */
                 t++; adam_step(t);
                 esum+=l; ecnt++;
@@ -989,6 +1119,7 @@ static int run_corpus_train_then_ppl(const int* corpus, const int* lens, int nse
             int T=lens[s];
             if (T>=2) {
                 double l=compute_loss(&corpus[off], T);   /* forward (fills d_logits) + host CE */
+                g_cur_teacher = (KD && g_teach) ? g_teach[s] : NULL;  /* KD: this seq's fixed teacher */
                 backward(&corpus[off], T);                /* grads from the SAME forward's saved acts */
                 t++; adam_step(t);
                 esum+=l; ecnt++;
@@ -1007,7 +1138,8 @@ static int run_corpus_train_then_ppl(const int* corpus, const int* lens, int nse
     }
     printf("[ft] DONE: %d epochs x %d seqs ; train_mean_loss %.6f -> %.6f ; held_out_ppl %.6g -> %.6g\n",
            epochs, nseq, l0, lepoch, ppl0, ppl_last);
-    printf("[ft] CONVERTED_TERNARY_HELDOUT_PPL = %.6f  (QAT=%d, fp_baseline_ref=13.1243)\n", ppl_last, QAT);
+    printf("[ft] CONVERTED_TERNARY_HELDOUT_PPL = %.6f  (QAT=%d, KD=%d, fp_baseline_ref=8.7467)\n",
+           ppl_last, QAT, KD);
     printf("LLAMA_TRAIN_FT_PPL_DONE\n");
     return isfinite(ppl_last) ? 0 : 1;
 }
@@ -1133,6 +1265,12 @@ int main(int argc, char** argv) {
     /* v1.9 P5: opt-in STE ternary QAT (default OFF). Must be set before device_init/upload_all_weights
      * so the 3 STE kernels are bound + the ternarized/scale buffers are allocated. */
     if (getenv("HX_TERNARY_QAT") && atoi(getenv("HX_TERNARY_QAT"))!=0) QAT=1;
+    /* v1.9 KD: opt-in knowledge distillation (default OFF). HX_KD=1 -> soft-target training from the
+     * fixed fp teacher; HX_KD_T sets the temperature (default 1.0). Set before device_init so the KD
+     * kernel is bound + the teacher staging buffer is allocated. KD only takes effect in a backward
+     * mode (train / train-corpus / combined); the CE path is untouched when HX_KD is unset. */
+    if (getenv("HX_KD") && atoi(getenv("HX_KD"))!=0) KD=1;
+    if (getenv("HX_KD_T")) { float t=(float)atof(getenv("HX_KD_T")); if (t>0.0f) KD_T=t; }
     /* flag scan: --fdcheck (or HX_FDCHECK=1) the gradient check; --train N N Adam steps on argv[3];
      * --ppl <file> [win] held-out perplexity over a tokenized corpus stream (v1.9 step5a);
      * --train-corpus <file> <lens> [E] multi-sequence E-epoch training (v1.9 step5b).
@@ -1209,6 +1347,15 @@ int main(int argc, char** argv) {
 
     /* ---- backward modes (allocate grad buffers + Adam state only when needed) ---- */
     if (do_fd || do_train || do_corpus) { if (alloc_grads(S)) return 2; build_params(); }
+    /* v1.9 KD: build the FIXED teacher (fp) cache + a one-number correctness self-check BEFORE any
+     * Adam step (so the teacher is the initial fp model). Only corpus modes carry per-sequence lens. */
+    if (KD && do_corpus) {
+        if (build_teacher_cache(corpus, lens, nseq)) return 2;
+        if (kd_selfcheck(corpus, lens, nseq)) { fprintf(stderr,"KD self-check FAILED\n"); return 2; }
+    } else if (KD) {
+        fprintf(stderr, "[kd] HX_KD set but no --train-corpus -> KD needs per-sequence corpus; ignoring KD\n");
+        KD = 0;
+    }
     if (do_combined) {   /* v1.9 step5c: train the corpus THEN eval held-out ppl on the SAME weights */
         int rc = run_corpus_train_then_ppl(corpus, lens, nseq, corpus_E, held, heldN, ppl_win);
         return rc;
