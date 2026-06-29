@@ -848,7 +848,16 @@ int main(int argc, char** argv) {
         size_t nW=(size_t)Md*Kd, nX=(size_t)Kd*Nd, nC=(size_t)Md*Nd;
         int* W=(int*)malloc(nW*sizeof(int)); int* X=(int*)malloc(nX*sizeof(int)); int* C=(int*)malloc(nC*sizeof(int));
         if (!W||!X||!C) { printf("receipt_check: oom -> RECEIPT_FAIL\n"); free(W);free(X);free(C); return 1; }
-        receipt_gen_W(W,nW,uW); receipt_gen_X(X,nX,uX);
+        if (uW==0xFFFFFFFFu) {  /* v1.9 P4: REAL-DATA receipt -- W,X read from side-files, not seed-regenerated */
+            char wpath[600],xpath[600]; snprintf(wpath,sizeof wpath,"%s.wbytes",rpath); snprintf(xpath,sizeof xpath,"%s.xbytes",rpath);
+            FILE* wf=fopen(wpath,"rb"); FILE* xf=fopen(xpath,"rb");
+            if (!wf||!xf){ printf("receipt_check: cannot open W/X side-files -> RECEIPT_FAIL\n"); if(wf)fclose(wf); if(xf)fclose(xf); free(W);free(X);free(C); return 1; }
+            size_t wg=fread(W,1,nW*sizeof(int),wf); int we=fgetc(wf)!=EOF; fclose(wf);
+            size_t xg=fread(X,1,nX*sizeof(int),xf); int xe=fgetc(xf)!=EOF; fclose(xf);
+            if (wg!=nW*sizeof(int)||we||xg!=nX*sizeof(int)||xe){ printf("receipt_check: W/X side-file size mismatch -> RECEIPT_FAIL\n"); free(W);free(X);free(C); return 1; }
+        } else {
+            receipt_gen_W(W,nW,uW); receipt_gen_X(X,nX,uX);
+        }
         int bad = 0; const char* rej = "NONE";   /* records WHICH check first rejected (per-check NC attribution) */
         unsigned char dW[32],dX[32],dC[32]; char xW[65],xX[65],xC[65];
         sha256((unsigned char*)W,nW*sizeof(int),dW); sha256_hex(dW,xW);
@@ -880,6 +889,54 @@ int main(int argc, char** argv) {
         printf("receipt_check [%s]: M=%d K=%d N=%d t=%d p=%lld REJECT=%s -> %s\n", rpath, Md,Kd,Nd,t,p, rej, bad?"RECEIPT_FAIL":"RECEIPT_PASS");
         free(W);free(X);free(C);
         return bad ? 1 : 0;
+    }
+
+    /* receipt_emit_real (v1.9 P4): like receipt_emit but over REAL data from files (a real BitNet ternary
+     * layer), GPU-free. Reads W (ternary i32 [M*K]), X (int i32 [K*N]), C (the kernel output i32 [M*N], e.g.
+     * from sptmatmul_dump) from <W.bin> <X.bin> <C.bin>; commits H_W||H_X||H_C; writes the receipt with the
+     * seed_W=seed_X=0xFFFFFFFF SENTINEL (= real, W/X in side-files) + .wbytes/.xbytes/.cbytes + the Fiat-
+     * Shamir rounds. The same receipt_check then re-derives r and Freivalds-verifies C==W*X over F_p (2^-62).
+     *   cuda_launch x x 0 receipt_emit_real <W.bin> <X.bin> <C.bin> <M> <K> <N> <receiptpath> [mutate]. */
+    if (strcmp(op, "receipt_emit_real") == 0) {
+        const char* wf=(argc>5)?argv[5]:0; const char* xf=(argc>6)?argv[6]:0; const char* cf=(argc>7)?argv[7]:0;
+        int Md=(argc>8)?atoi(argv[8]):0, Kd=(argc>9)?atoi(argv[9]):0, Nd=(argc>10)?atoi(argv[10]):0;
+        const char* rpath=(argc>11)?argv[11]:"/tmp/helix_receipt_real.txt";
+        int mutate=(argc>12 && strcmp(argv[12],"mutate")==0);
+        if (!wf||!xf||!cf||Md<=0||Kd<=0||Nd<=0){ fprintf(stderr,"receipt_emit_real: need W.bin X.bin C.bin M K N rpath\n"); return 2; }
+        long long p=2147483647LL; int t=2; unsigned SENT=0xFFFFFFFFu;
+        size_t nW=(size_t)Md*Kd,nX=(size_t)Kd*Nd,nC=(size_t)Md*Nd;
+        int* W=(int*)malloc(nW*sizeof(int)); int* X=(int*)malloc(nX*sizeof(int)); int* C=(int*)malloc(nC*sizeof(int));
+        if(!W||!X||!C){ free(W);free(X);free(C); return 2; }
+        FILE* f;
+        f=fopen(wf,"rb"); if(!f||fread(W,sizeof(int),nW,f)!=nW){fprintf(stderr,"receipt_emit_real: bad W.bin\n"); if(f)fclose(f); free(W);free(X);free(C); return 2;} fclose(f);
+        f=fopen(xf,"rb"); if(!f||fread(X,sizeof(int),nX,f)!=nX){fprintf(stderr,"receipt_emit_real: bad X.bin\n"); if(f)fclose(f); free(W);free(X);free(C); return 2;} fclose(f);
+        f=fopen(cf,"rb"); if(!f||fread(C,sizeof(int),nC,f)!=nC){fprintf(stderr,"receipt_emit_real: bad C.bin\n"); if(f)fclose(f); free(W);free(X);free(C); return 2;} fclose(f);
+        if (mutate && nC>0) C[0]+=1;  /* NC: forge one output cell -> Freivalds MUST reject */
+        unsigned char dWg[32],dXg[32],dCg[32]; char xW[65],xX[65],xC[65];
+        sha256((unsigned char*)W,nW*sizeof(int),dWg); sha256_hex(dWg,xW);
+        sha256((unsigned char*)X,nX*sizeof(int),dXg); sha256_hex(dXg,xX);
+        sha256((unsigned char*)C,nC*sizeof(int),dCg); sha256_hex(dCg,xC);
+        char sp[600];
+        snprintf(sp,sizeof sp,"%s.wbytes",rpath); f=fopen(sp,"wb"); if(f){fwrite(W,1,nW*sizeof(int),f); fclose(f);}
+        snprintf(sp,sizeof sp,"%s.xbytes",rpath); f=fopen(sp,"wb"); if(f){fwrite(X,1,nX*sizeof(int),f); fclose(f);}
+        snprintf(sp,sizeof sp,"%s.cbytes",rpath); f=fopen(sp,"wb"); if(f){fwrite(C,1,nC*sizeof(int),f); fclose(f);}
+        FILE* rfp=fopen(rpath,"w"); if(!rfp){fprintf(stderr,"receipt_emit_real: cannot write %s\n",rpath); free(W);free(X);free(C); return 2;}
+        fprintf(rfp,"HELIX_RECEIPT_V1\nshape M=%d K=%d N=%d\nprime p=%lld\nrounds t=%d\nseed_W=%u\nseed_X=%u\nH_W=%s\nH_X=%s\nH_C=%s\n",
+                Md,Kd,Nd,p,t,SENT,SENT,xW,xX,xC);
+        for (int rd=0; rd<t; rd++) {
+            long long* r=(long long*)malloc((size_t)Nd*sizeof(long long)); long long* Br=(long long*)malloc((size_t)Kd*sizeof(long long));
+            long long lhsf=0,rhsf=0;
+            for (int j=0;j<Nd;j++) r[j]=receipt_fs_r(dWg,dXg,dCg,rd,j,p);
+            for (int k=0;k<Kd;k++){ long long s=0; for(int j=0;j<Nd;j++){ long long xv=(((long long)X[(size_t)k*Nd+j])%p+p)%p; s=(s+xv*r[j])%p; } Br[k]=s; }
+            for (int i=0;i<Md;i++){ long long lh=0; for(int k=0;k<Kd;k++){ long long wv=(((long long)W[(size_t)i*Kd+k])%p+p)%p; lh=(lh+wv*Br[k])%p; } lhsf=(lhsf+lh*(i+1))%p;
+                                    long long rh=0; for(int j=0;j<Nd;j++){ long long cv=(((long long)C[(size_t)i*Nd+j])%p+p)%p; rh=(rh+cv*r[j])%p; } rhsf=(rhsf+rh*(i+1))%p; }
+            fprintf(rfp,"round %d lhs=%lld rhs=%lld\n",rd,lhsf,rhsf);
+            free(r); free(Br);
+        }
+        fclose(rfp);
+        printf("receipt_emit_real [%s]: REAL ternary layer %dx%dx%d committed (H_W=%.16s H_C=%.16s) -> RECEIPT_EMITTED\n", rpath,Md,Kd,Nd,xW,xC);
+        free(W);free(X);free(C);
+        return 0;
     }
 
     /* v1.5 #3 Phase 1: sass_check -- read the cubin's .text.<kname> and decode every 128-bit bundle from
