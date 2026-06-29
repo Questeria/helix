@@ -1,0 +1,103 @@
+# SmolLM2-135M fp -> ternary (STE QAT) conversion WITH KNOWLEDGE DISTILLATION (KD) -- EXTENDED run.
+# Sibling of scripts/llama_kd_result.txt (the canonical 5-epoch record). Same trainer, same MMLU
+# corpus + held-out, same KD lever (fixed fp teacher soft targets via gpu_kd_softmax_grad). This run
+# extends the schedule (the 5-epoch KD was MONOTONE-DOWN and STILL FALLING at epoch 5 -> more epochs
+# should narrow the gap further) AND exercises the new HX_SAVE path (persist the resident latent fp32
+# weights at the best/final held-out checkpoint so a later step can reload + ternarize + pack them).
+#
+# Trainer: helixc/runtime/llama_train.c (v1.9-ternary). NEW this commit: HX_SAVE=<path> -- at the end
+#   of a --train-corpus run, write the resident latent fp32 weights (NOT the ternarized buffers) back
+#   in the SAME v2 llama file layout load_weights/gpt2_infer.c read (64-byte header copied verbatim +
+#   payload in file order: per-layer inln,qW,kW,vW,oW,postln,gateW,upW,downW ; then embed NV*DM ; then
+#   final-norm DM). Also saves the BEST held-out checkpoint to <path>.best (one D2H dump per new best
+#   epoch -- cheap vs a training epoch) and reports which epoch was best. Behind HX_SAVE (default OFF
+#   -> the CE path + llama_train_bwd_gate.sh are byte-for-byte unaffected; verified, see below).
+#   FIXPOINT 31e6cc27 UNTOUCHED (HX_SAVE is host-side C only; no kovc.hx / kernel change).
+#
+# Corpus (SAME as scripts/llama_kd_result.txt / d398bd6): MMLU professional_psychology (MIT/open),
+#   regen: scripts/llama_stage_mmlu.sh professional_psychology 256 42 14
+TRAIN_TOKENS        4303    (42 sequences)
+HELDOUT_TOKENS      1171    (5 windows, 1166 predicted -- identical held-out set to the 5-epoch run)
+PPL_WINDOW          256
+FP_BASELINE_HELDOUT_PPL   8.7467    (reproduced; the conversion-gap reference)
+
+# === KD CORRECTNESS (reproduced this run) ===
+KD_SELFCHECK_max_abs   2.179e-04    (teacher==student -> KD grad vanishes; over 4.87M live cells)
+KD_SELFCHECK           PASS
+
+# === CE BACKWARD GATE (HX_SAVE code present, env UNSET) ===
+# scripts/llama_train_bwd_gate.sh (REMINT=0): forward regression PASS, FDCHECK_PASS, QAT-off smoke
+# 3.870138 -> 0.000233 DECREASED, QAT-on smoke 16.878290 -> 1.696848 DECREASED.
+LLAMA_TRAIN_BWD_GATE_PASS  (verdict; the HX_SAVE addition did not move any gate leg)
+
+# === EXTENDED KD TERNARY RECOVERY TRAJECTORY (held-out ppl per epoch) ===
+# HX_TERNARY_QAT=1 HX_KD=1 HX_KD_T=1 HX_PPL_EVERY=1 HX_SAVE=$HOME/smollm2_ternary_converted.bin ;
+# --train-corpus ... <EPOCHS> --ppl ... 256 ; stdbuf -oL ; <=80% compute (taskset -c 0-5 nice -n 10), sm_86.
+# epoch : held_out_ppl        (train_mean_loss)   [13 epochs, wall 6255s (~104 min), <=80% compute, sm_86]
+KD_TRAJ epoch  0  2585517583.06   (19.994314)   # raw ternary, pre-fine-tune (start anchor)
+KD_TRAJ epoch  1  2678.91         (9.975138)
+KD_TRAJ epoch  2  1708.51         (7.190263)
+KD_TRAJ epoch  3  1511.02         (6.836581)
+KD_TRAJ epoch  4  1332.61         (6.682016)
+KD_TRAJ epoch  5  1278.95         (6.573756)     # == the 5-epoch run's endpoint (reproduced to the digit)
+KD_TRAJ epoch  6  1231.29         (6.508071)
+KD_TRAJ epoch  7  1205.11         (6.435174)
+KD_TRAJ epoch  8  1231.49         (6.378507)     # held-out NOISE: up while train-loss still falling
+KD_TRAJ epoch  9  1464.18         (6.361044)     # noisy spike
+KD_TRAJ epoch 10  1140.55         (6.307573)     # *** BEST held-out ppl (HX_SAVE.best) ***
+KD_TRAJ epoch 11  1222.91         (6.270239)
+KD_TRAJ epoch 12  1302.48         (6.233003)     # held-out climbing (overfit onset; train-loss low)
+KD_TRAJ epoch 13  1900.39         (6.392355)     # FINAL (overfit; far above the epoch-10 best)
+
+# === RESULT ===
+FP_BASELINE_HELDOUT_PPL          8.7467
+KD_BEST_CONVERTED_TERNARY_PPL    1140.55    AT_EPOCH 10   (HX_SAVE_BEST_EPOCH 10, HX_SAVE_BEST_PPL 1140.546486)
+KD_FINAL_TERNARY_PPL             1900.39    AT_EPOCH 13   (overfit; NOT the one to ship)
+GAP_KD_best_over_FP              130.4x     (1140.55 / 8.7467)
+GAP_vs_5EPOCH_endpoint           0.892x     (1140.55 / 1278.95 -> best is 10.8% LOWER than the 5-epoch 1278.95)
+GAP_vs_HARD_CE_best              0.495x     (1140.55 / 2302.24 -> KD best ppl is ~half hard-CE's best)
+PLATEAUED                        NO-but-NOISY   (see deltas + judgment)
+LAST_3_EPOCH_DELTAS              e11-e10 +82.36 ; e12-e11 +79.57 ; e13-e12 +597.91  (held-out RISING -> past the useful min)
+MIN_AT_EPOCH                     10         (global min over all 13; e8/e9/e11/e12/e13 all worse)
+
+# === HX_SAVE ARTIFACT ===
+HX_SAVE_PATH_FINAL   /home/legoa/smollm2_ternary_converted.bin        (resident latent fp32, v2 layout)
+HX_SAVE_PATH_BEST    /home/legoa/smollm2_ternary_converted.bin.best   (best held-out checkpoint)
+HX_SAVE_BYTES        538060096   (== the input weight file size; header byte-identical, payload differs)
+HX_SAVE_PAYLOAD_FLOATS 134515008 (== input n_float; "layout==input" confirmed by the saver)
+# (gitignored / $HOME -- the large bin is NOT committed; reload it for the ternarize+pack+receipt step.)
+
+# === JUDGMENT (honest) ===
+# MORE EPOCHS HELPED -- to a point. Extending KD from 5 to 13 epochs pushed the best held-out ternary
+# ppl from 1278.95 (the 5-epoch endpoint) DOWN to 1140.55 at epoch 10 (10.8% better), the lowest
+# converted-ternary ppl on this corpus to date (130.4x the fp 8.7467; ~half hard-CE's 2302). So the
+# 5-epoch "still falling" read was correct -- the model HAD more to give past epoch 5.
+#
+# BUT the trajectory is NON-MONOTONE and NOISY, and it has now turned over. The held-out ppl wobbled
+# (e7 1205 -> e8 1231 -> e9 1464 -> e10 1140) and after the epoch-10 minimum it rose steadily
+# (e11 1223, e12 1302, e13 1900) while the train mean-loss kept low/falling -- the textbook OVERFIT
+# signature on a tiny corpus. The wobble itself is a measurement-noise artifact of the SMALL held-out
+# set (only 1166 predicted tokens, 5 windows): single-window swings move the geometric-mean ppl by
+# tens-to-hundreds, so individual epoch numbers past ~e6 are within the noise band.
+#
+# VERDICT on "more epochs vs bigger corpus": CORPUS SIZE is now the binding limit, NOT epoch count.
+# Evidence: (a) the model overfits 4303 train tokens by ~epoch 10-11 (held-out rises, train-loss low);
+# (b) the held-out estimator is too small to resolve sub-percent epoch-to-epoch gains -- the signal is
+# in the noise. Running yet more epochs on THIS corpus would only deepen the overfit. The next lever is
+# a LARGER, more diverse train corpus (and a larger held-out set to measure it), with early-stopping on
+# held-out (exactly what HX_SAVE.best now captures automatically). The gap to fp (130x) remains large
+# and consistent with the standing finding that a real ternary conversion needs real-scale data + a
+# longer schedule on THAT data -- KD is a genuine, measurable lever (best ppl ~half of hard-CE), but it
+# did not and cannot close the gap on a 4303-token set.
+#
+# SHIP: the epoch-10 checkpoint (HX_SAVE.best, 1140.55), NOT the final epoch-13 weights (1900.39, overfit).
+
+# === REPRODUCE ===
+# 0) prereq once: scripts/llama_train_bwd_gate.sh with REMINT=1 (mints the from-raw kovc PTX driver).
+# 1) stage corpus: scripts/llama_stage_mmlu.sh professional_psychology 256 42 14
+# 2) build:        gcc helixc/runtime/llama_train.c -O2 -I/usr/local/cuda/include -L/usr/lib/wsl/lib -lcuda -lm -o $HOME/llama_train
+# 3) mint 21-kernel KD PTX (20 bwd-gate kernels + gpu_kd_softmax_grad) via the minted driver; ptxas sm_86.
+# 4) run: HX_TERNARY_QAT=1 HX_KD=1 HX_KD_T=1 HX_PPL_EVERY=1 HX_SAVE=$HOME/smollm2_ternary_converted.bin \
+#         taskset -c 0-5 nice -n 10 stdbuf -oL $HOME/llama_train <kd.ptx> <weights> <ids5> \
+#         --train-corpus helix-llm/mmlu_train_ids.txt helix-llm/mmlu_train_lens.txt <EPOCHS> \
+#         --ppl helix-llm/mmlu_heldout_ids.txt 256

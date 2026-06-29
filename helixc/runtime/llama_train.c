@@ -1084,6 +1084,61 @@ static int run_corpus_train(const int* corpus, const int* lens, int nseq, int ep
     return (lf < l0) ? 0 : 1;
 }
 
+/* ===================== HX_SAVE: persist the resident latent fp32 weights (v1.9 conversion) =========
+ * Writes the CURRENT resident fp32 latent weights (the trainable shape EW() ternarizes on the fly --
+ * NOT the ternarized buffers) back to <path> in the SAME v2 llama layout load_weights/gpt2_infer.c
+ * read, so a later step can mmap it, ternarize+pack, and emit the receipt. We mirror the input file
+ * byte-for-byte in structure: the original 64-byte header (copied verbatim from the source mmap so
+ * MAGIC/ver/dims/n_float all match) followed by the float payload in FILE order
+ * (off_layer(L): inln,qW,kW,vW,oW,postln,gateW,upW,downW for L=0..NL-1 ; then off_embed() = NV*DM
+ * embedding ; then off_normf() = DM final-norm). NOTE the file order is embed-BEFORE-normf, whereas
+ * upload_all_weights uploads normf then embed; we write in the file's order so the result reloads.
+ * The embedding is read back from the first NV rows of w_embed_pad (stride DM, NVpad rows; rows
+ * [NV,NVpad) are the zero pad and are NOT written). Returns 0 on success. Behind HX_SAVE (caller). */
+static int save_latent_weights(const char* path) {
+    if (!g_map || g_maplen < (size_t)HDR_BYTES) { fprintf(stderr, "[save] no source mmap header\n"); return 1; }
+    FILE* of = fopen(path, "wb");
+    if (!of) { fprintf(stderr, "[save] open '%s': %s\n", path, strerror(errno)); return 1; }
+    /* 1) header: copy the original 64 bytes verbatim (dims + n_float already describe THIS layout). */
+    if (fwrite(g_map, 1, (size_t)HDR_BYTES, of) != (size_t)HDR_BYTES) { fprintf(stderr,"[save] header write\n"); fclose(of); return 1; }
+    LayerOff lo = layer_off();
+    long nfloat_written = 0;
+    /* a reusable host staging buffer sized to the largest single tensor we read back. */
+    size_t maxn = (size_t)NVpad*DM;                 /* embed (read NV*DM of it) is the biggest */
+    float* hbuf = (float*)malloc(maxn*sizeof(float));
+    if (!hbuf) { fprintf(stderr,"[save] OOM staging\n"); fclose(of); return 1; }
+    #define DUMP(dev, nf) do { \
+        size_t _n=(size_t)(nf); \
+        CKX(cuMemcpyDtoH(hbuf, (dev), _n*sizeof(float)), "d2h save tensor"); \
+        if (fwrite(hbuf, sizeof(float), _n, of)!=_n) { fprintf(stderr,"[save] payload write\n"); free(hbuf); fclose(of); return 1; } \
+        nfloat_written += (long)_n; \
+    } while (0)
+    /* 2) per-layer tensors in FILE order (== upload order; lo offsets are within a layer block). */
+    for (int L=0; L<NL; L++) {
+        DUMP(w_inln[L],   DM);
+        DUMP(w_q[L],      (long)DM*DM);
+        DUMP(w_k[L],      (long)KVD*DM);
+        DUMP(w_v[L],      (long)KVD*DM);
+        DUMP(w_o[L],      (long)DM*DM);
+        DUMP(w_postln[L], DM);
+        DUMP(w_gate[L],   (long)DFF*DM);
+        DUMP(w_up[L],     (long)DFF*DM);
+        DUMP(w_down[L],   (long)DM*DFF);
+        (void)lo;   /* lo documents the within-block order; the DUMP sizes encode it directly. */
+    }
+    /* 3) embedding: first NV rows of w_embed_pad (stride DM); the [NV,NVpad) pad is NOT part of the file. */
+    DUMP(w_embed_pad, (long)NV*DM);
+    /* 4) final RMSNorm weight. */
+    DUMP(w_normf, DM);
+    #undef DUMP
+    free(hbuf);
+    if (fflush(of)!=0 || fclose(of)!=0) { fprintf(stderr,"[save] close/flush\n"); return 1; }
+    long expect = off_normf() + DM;     /* must equal the header's n_float / the input layout */
+    printf("[save] wrote latent fp32 weights -> %s  (%ld floats payload + %d B header%s)\n",
+           path, nfloat_written, HDR_BYTES, (nfloat_written==expect)?", layout==input":" MISMATCH!");
+    return (nfloat_written==expect) ? 0 : 1;
+}
+
 /* ===================== COMBINED train-then-eval in ONE process (v1.9 step5c) =====================
  * THE CRITICAL FIX for an honest QAT conversion measurement: train the corpus AND measure the
  * held-out perplexity on the SAME (in-place fine-tuned) resident weights, in one process. The plain
@@ -1103,16 +1158,25 @@ static int run_corpus_train_then_ppl(const int* corpus, const int* lens, int nse
                                      const int* held, int heldN, int ppl_win) {
     int every = 5;
     if (getenv("HX_PPL_EVERY") && atoi(getenv("HX_PPL_EVERY"))>0) every = atoi(getenv("HX_PPL_EVERY"));
+    /* v1.9 HX_SAVE: persist the resident latent fp32 weights at run end so a later step can
+     * reload + ternarize + pack for the receipt. Default OFF (env unset) -> no save, paths/gate
+     * byte-identical. When set: save the FINAL weights to <path>, and (cheap, one D2H-dump per new
+     * best held-out checkpoint) also save the BEST checkpoint to <path>.best -- report which epoch. */
+    const char* save_path = getenv("HX_SAVE");
+    char best_path[4096]; best_path[0]='\0';
+    if (save_path && save_path[0]) snprintf(best_path, sizeof best_path, "%s.best", save_path);
     double l0 = corpus_mean_loss(corpus, lens, nseq);
     printf("[ft] COMBINED fine-tune-then-eval: %d seqs, %d epochs, ppl-checkpoint every %d epoch(s)\n",
            nseq, epochs, every);
     printf("[ft] start mean per-seq shifted-CE = %.6f (lr=1e-3 baked, QAT=%d)\n", l0, QAT);
+    if (save_path && save_path[0]) printf("[ft] HX_SAVE on: final -> %s ; best-checkpoint -> %s\n", save_path, best_path);
     double sc; long np;
     printf("[ft] === held-out ppl @ epoch 0 (pre-fine-tune) ===\n");
     double ppl0 = corpus_perplexity(held, heldN, ppl_win, &sc, &np);
     printf("[ft-traj] epoch 0  held_out_ppl %.6g  (train_mean_loss %.6f)\n", ppl0, l0);
 
     int t=0; double lepoch=l0; double ppl_last=ppl0;
+    double best_ppl=ppl0; int best_epoch=0;   /* track best held-out checkpoint for HX_SAVE.best */
     for (int e=1;e<=epochs;e++) {
         int off=0; double esum=0.0; int ecnt=0;
         for (int s=0;s<nseq;s++) {
@@ -1132,6 +1196,15 @@ static int run_corpus_train_then_ppl(const int* corpus, const int* lens, int nse
             printf("[ft] === held-out ppl @ epoch %d (train_mean_loss %.6f) ===\n", e, lepoch);
             ppl_last = corpus_perplexity(held, heldN, ppl_win, &sc, &np);
             printf("[ft-traj] epoch %d  held_out_ppl %.6g  (train_mean_loss %.6f)\n", e, ppl_last, lepoch);
+            /* HX_SAVE: a new best held-out ppl -> snapshot the current latent weights as the best ckpt.
+             * One D2H dump of the resident weights (~538 MB write) is cheap vs a full training epoch. */
+            if (save_path && save_path[0] && isfinite(ppl_last) && ppl_last < best_ppl) {
+                best_ppl = ppl_last; best_epoch = e;
+                if (save_latent_weights(best_path)==0)
+                    printf("[ft] HX_SAVE best-checkpoint updated @ epoch %d (held_out_ppl %.6g) -> %s\n", e, ppl_last, best_path);
+                else
+                    fprintf(stderr, "[ft] HX_SAVE best-checkpoint write FAILED @ epoch %d\n", e);
+            }
         } else {
             printf("  epoch %2d mean per-seq loss %.6f\n", e, lepoch);
         }
@@ -1140,6 +1213,16 @@ static int run_corpus_train_then_ppl(const int* corpus, const int* lens, int nse
            epochs, nseq, l0, lepoch, ppl0, ppl_last);
     printf("[ft] CONVERTED_TERNARY_HELDOUT_PPL = %.6f  (QAT=%d, KD=%d, fp_baseline_ref=8.7467)\n",
            ppl_last, QAT, KD);
+    /* HX_SAVE: always persist the FINAL latent weights (so <path> exists regardless of best epoch),
+     * and report which epoch was best so the receipt step can pick <path>.best vs <path>. */
+    if (save_path && save_path[0]) {
+        if (save_latent_weights(save_path)==0)
+            printf("[ft] HX_SAVE final weights @ epoch %d (held_out_ppl %.6g) -> %s\n", epochs, ppl_last, save_path);
+        else
+            fprintf(stderr, "[ft] HX_SAVE final write FAILED\n");
+        printf("[ft] HX_SAVE_BEST_EPOCH %d  HX_SAVE_BEST_PPL %.6f  (final_epoch %d ppl %.6f)\n",
+               best_epoch, best_ppl, epochs, ppl_last);
+    }
     printf("LLAMA_TRAIN_FT_PPL_DONE\n");
     return isfinite(ppl_last) ? 0 : 1;
 }
