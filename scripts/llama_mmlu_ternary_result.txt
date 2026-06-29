@@ -1,0 +1,56 @@
+# SmolLM2-135M fp -> ternary (STE QAT) conversion on MMLU (professional_psychology)
+# Trainer: helixc/runtime/llama_train.c (v1.9-ternary), combined --train-corpus + --ppl path.
+# Ternary: 7 linears (w_q/w_k/w_v/w_o/w_gate/w_up/w_down) -> {-1,0,+1} x per-out-row abs-mean,
+#          STE backward, Adam on latent fp32; norms + tied embedding stay fp. HX_TERNARY_QAT=1.
+# Corpus : MMLU cais___mmlu professional_psychology (MIT/open, on-disk, NO download), SmolLM2 tokenizer.
+# Compute: taskset -c 0-5 nice -n 10 (<=80%); single GPU job; sm_86; ptxas CUDA 12.8.
+# Extraction: scripts/llama_stage_mmlu.sh  (ids files gitignored under helix-llm/).
+#
+# === DATA ===
+SUBJECT          professional_psychology
+MAXLEN_PER_SEQ   160
+TRAIN_TOKENS     4225    (44 sequences, disjoint-by-row from held-out)
+HELDOUT_TOKENS   1171    (14 sequences)
+ROW_OVERLAP      0       (PASS -- disjoint train/held-out by row index)
+PPL_WINDOW       256
+# NOTE on size: the trainer's loss/ppl reduction is host-side full-vocab (49152) log-softmax
+# per predicted position, so per-sequence cost ~3-4 s on this RTX 3070 Laptop under WSL, and the
+# QAT forward re-ternarizes 7 linears x 30 layers each forward. A >=10000-token corpus x several
+# epochs did NOT fit the 60-90 min wall cap (the 110-seq/10716-tok initial mean-loss pass alone
+# ran ~8 min). Chose a 4225-token train set so a COMPLETE multi-epoch recovery trajectory finishes
+# in budget; held-out kept in the 1000-2000 token target band. (Compute-bound, not data-bound.)
+#
+# === FP BASELINE (QAT OFF) on the MMLU held-out ===
+# (held-out windows=5, total_predicted_tokens=1166, wall 28 s)
+FP_BASELINE_HELDOUT_PPL   8.7467
+#
+# === TERNARY QAT RECOVERY TRAJECTORY (held-out ppl per checkpoint) ===
+# HX_TERNARY_QAT=1 HX_PPL_EVERY=1 ; --train-corpus ... 6 --ppl ... 256
+# epoch : held_out_ppl              (train_mean_loss)
+TRAJ epoch 0  2585517583.06        (19.773129)   # raw ternary, pre-fine-tune
+TRAJ epoch 1  2302.24              (9.657640)
+TRAJ epoch 2  2521.85              (6.685474)    # held-out up while train down -> overfitting onset
+TRAJ epoch 3  2828.60              (6.425025)    # held-out still rising; minimum stands at epoch 1
+TRAJ epoch 4  3051.61              (6.314525)    # 4th consecutive rise; train loss plateaued
+TRAJ epoch 5  3153.50              (6.216280)    # 5th consecutive rise
+TRAJ epoch 6  3317.21              (6.158316)    # FINAL == trainer's CONVERTED_TERNARY (the overfit end)
+#
+# === RESULT ===
+FP_BASELINE_HELDOUT_PPL        8.7467
+BEST_CONVERTED_TERNARY_PPL     2302.24   AT_EPOCH 1
+FINAL_CONVERTED_TERNARY_PPL    3317.21   AT_EPOCH 6   (overfit; worse than best -> report BEST not final)
+GAP_BEST_over_FP               263.2x    (2302.24 / 8.7467)
+GAP_FINAL_over_FP              379.2x    (3317.21 / 8.7467)
+RAW_TERNARY_PPL_epoch0         2585517583   (pre-fine-tune; QAT recovered ~6 orders of magnitude to best)
+TRAIN_MEAN_LOSS                19.773 -> 6.158   (monotone down: model fits train; held-out diverges = overfit)
+EPOCHS_RUN                     6
+WALL_SECONDS                   3322   (~55 min, within the 60-90 min cap ; <=80% compute taskset -c 0-5 nice -n 10)
+PER_EPOCH_WALL_APPROX          ~440 s (~7.3 min ; host-side full-vocab log-softmax bound)
+EXIT_RC                        0   (PASS)
+#
+# JUDGMENT: ternary QAT on this corpus recovers ~6 orders of magnitude from raw-ternary (2.59e9 -> 2302)
+# but the best converted model is ~263x the fp held-out ppl == NOT close to fp. Held-out ppl rises
+# monotonically after epoch 1 while train loss keeps falling => DATA-BOUND (4225 train tokens overfit
+# almost immediately); more in-domain data (not more epochs/compute) is the lever. Consistent with the
+# project finding that post-hoc ternary is catastrophic and even QAT needs a real-scale corpus + longer
+# schedule to approach fp. HONEST: a meaningful conversion was measured; it is far from fp on this tiny set.
