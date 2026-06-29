@@ -231,6 +231,16 @@ static void upload_weights(const float* w) {
     UP(LNfg, D); UP(LNfb, D); UP(W_lm, DV);
 #undef UP
 }
+/* v1.9 P6: download the (trained) device weights back to a flat host array, SAME order as upload_weights.
+ * Used by HX_SAVE to persist a trained fp checkpoint that HX_INIT can then reload as the QAT latent init
+ * (the convert-a-trained-model-to-ternary loop: fp-train -> save -> reload-as-init -> STE-QAT fine-tune). */
+static void download_weights(float* w) {
+    int o = 0;
+#define DN(src, nf) do { CKX(cuMemcpyDtoH(&w[o], (src), (size_t)(nf)*sizeof(float)), "d2h w"); o += (nf); } while (0)
+    for (int L = 0; L < NL; L++) { DN(Wq[L], DD); DN(Wk[L], DD); DN(Wv[L], DD); DN(Wo[L], DD); DN(LN1g[L], D); DN(LN1b[L], D); DN(LN2g[L], D); DN(LN2b[L], D); DN(W1[L], DH); DN(W2[L], HD); }
+    DN(LNfg, D); DN(LNfb, D); DN(W_lm, DV);
+#undef DN
+}
 
 /* v1.9 P5 STE helpers (no-op unless QAT). EW: ternarize the latent W into wt (sc = row-abs-mean) and
  * return the buffer the matmul should consume. MASK: STE clip-gate dw in-place after its grad matmul.
@@ -426,7 +436,14 @@ int main(int argc, char** argv) {
     d_rowmean = A(S);   /* scratch per-row mean for the fused dgb (cols=D, rows=S) */
 
     float* hw = (float*)malloc(NW * sizeof(float));
-    gen_weights(hw);
+    const char* initf = getenv("HX_INIT");   /* v1.9 P6: load a trained fp checkpoint as the QAT latent init */
+    if (initf) {
+        FILE* inf = fopen(initf, "rb");
+        if (!inf || fread(hw, sizeof(float), NW, inf) != (size_t)NW) { fprintf(stderr, "ERROR: HX_INIT read fail: %s\n", initf); exit(3); }
+        fclose(inf); fprintf(stderr, "[init] loaded fp init weights from %s (%d floats)\n", initf, NW);
+    } else {
+        gen_weights(hw);
+    }
     FILE* wf = fopen("init_weights.bin", "wb");
     if (!wf) { fprintf(stderr, "ERROR: cannot open init_weights.bin for write: %s\n", strerror(errno)); exit(3); }
     fwrite(hw, sizeof(float), NW, wf); fclose(wf);
@@ -496,5 +513,7 @@ int main(int argc, char** argv) {
     printf("GPU [%s] train K=%d: start loss %.6f -> final %.6f (mean %.5f)\n", gpu, K, loss0, lf, lf / (double)S);
     printf("TRAIN_WALL_MS=%.3f  (OPT=%d S=%d D=%d H=%d V=%d NL=%d K=%d, %.4f ms/step)\n", wall, OPT, S, D, H, V, NL, K, wall/(double)K);
     if (PROF) { double acc=t_gemm+t_redux+t_elem+t_other+t_dgb; printf("PROF_MS gemm=%.1f redux=%.1f dgb=%.1f elem=%.1f other=%.1f acc=%.1f (gemm %.0f%% redux %.0f%% dgb %.0f%% elem %.0f%%)\n", t_gemm,t_redux,t_dgb,t_elem,t_other,acc, 100*t_gemm/acc,100*t_redux/acc,100*t_dgb/acc,100*t_elem/acc); }
+    const char* savef = getenv("HX_SAVE");   /* v1.9 P6: persist the TRAINED weights (for the convert-to-ternary loop) */
+    if (savef) { download_weights(hw); FILE* sf = fopen(savef, "wb"); if (sf) { fwrite(hw, sizeof(float), NW, sf); fclose(sf); fprintf(stderr, "[save] trained weights -> %s (%d floats)\n", savef, NW); } else fprintf(stderr, "ERROR: HX_SAVE open fail: %s\n", savef); }
     return 0;
 }
