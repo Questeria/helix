@@ -954,6 +954,64 @@ static int run_corpus_train(const int* corpus, const int* lens, int nseq, int ep
     return (lf < l0) ? 0 : 1;
 }
 
+/* ===================== COMBINED train-then-eval in ONE process (v1.9 step5c) =====================
+ * THE CRITICAL FIX for an honest QAT conversion measurement: train the corpus AND measure the
+ * held-out perplexity on the SAME (in-place fine-tuned) resident weights, in one process. The plain
+ * --ppl mode returns before --train-corpus runs (see main), so a single invocation could only ever
+ * report the PRE-fine-tune ternary ppl (~1.2e9) -- meaningless as a "converted model" number. Here:
+ *   - epoch 0  : measure the held-out ppl on the starting weights (the ~1.2e9 raw-ternary number
+ *                when QAT is on -> the trajectory's t=0 anchor).
+ *   - every HX_PPL_EVERY epochs (default 5): forward+backward+Adam over all sequences for those
+ *     epochs, THEN re-measure the held-out ppl on the now-updated resident latent weights (routed
+ *     through EW() -> ternarized Wt when QAT). This is the RECOVERY TRAJECTORY.
+ *   - final     : the held-out ppl AFTER the last epoch == the converted-ternary number to compare
+ *                 to the fp baseline.
+ * Adam step counter t is global+monotone across epochs (bias correction), exactly run_corpus_train.
+ * The ppl evals share the saved-intermediate buffers (main sized S = max(ppl_win_pad, max_seq_pad)),
+ * and forward() is re-run every training step, so a mid-train ppl eval leaves no stale state.        */
+static int run_corpus_train_then_ppl(const int* corpus, const int* lens, int nseq, int epochs,
+                                     const int* held, int heldN, int ppl_win) {
+    int every = 5;
+    if (getenv("HX_PPL_EVERY") && atoi(getenv("HX_PPL_EVERY"))>0) every = atoi(getenv("HX_PPL_EVERY"));
+    double l0 = corpus_mean_loss(corpus, lens, nseq);
+    printf("[ft] COMBINED fine-tune-then-eval: %d seqs, %d epochs, ppl-checkpoint every %d epoch(s)\n",
+           nseq, epochs, every);
+    printf("[ft] start mean per-seq shifted-CE = %.6f (lr=1e-3 baked, QAT=%d)\n", l0, QAT);
+    double sc; long np;
+    printf("[ft] === held-out ppl @ epoch 0 (pre-fine-tune) ===\n");
+    double ppl0 = corpus_perplexity(held, heldN, ppl_win, &sc, &np);
+    printf("[ft-traj] epoch 0  held_out_ppl %.6g  (train_mean_loss %.6f)\n", ppl0, l0);
+
+    int t=0; double lepoch=l0; double ppl_last=ppl0;
+    for (int e=1;e<=epochs;e++) {
+        int off=0; double esum=0.0; int ecnt=0;
+        for (int s=0;s<nseq;s++) {
+            int T=lens[s];
+            if (T>=2) {
+                double l=compute_loss(&corpus[off], T);   /* forward (fills d_logits) + host CE */
+                backward(&corpus[off], T);                /* grads from the SAME forward's saved acts */
+                t++; adam_step(t);
+                esum+=l; ecnt++;
+            }
+            off+=T;
+        }
+        lepoch = (ecnt>0) ? esum/(double)ecnt : lepoch;
+        int checkpoint = (e % every == 0) || (e == epochs);
+        if (checkpoint) {
+            printf("[ft] === held-out ppl @ epoch %d (train_mean_loss %.6f) ===\n", e, lepoch);
+            ppl_last = corpus_perplexity(held, heldN, ppl_win, &sc, &np);
+            printf("[ft-traj] epoch %d  held_out_ppl %.6g  (train_mean_loss %.6f)\n", e, ppl_last, lepoch);
+        } else {
+            printf("  epoch %2d mean per-seq loss %.6f\n", e, lepoch);
+        }
+    }
+    printf("[ft] DONE: %d epochs x %d seqs ; train_mean_loss %.6f -> %.6f ; held_out_ppl %.6g -> %.6g\n",
+           epochs, nseq, l0, lepoch, ppl0, ppl_last);
+    printf("[ft] CONVERTED_TERNARY_HELDOUT_PPL = %.6f  (QAT=%d, fp_baseline_ref=13.1243)\n", ppl_last, QAT);
+    printf("LLAMA_TRAIN_FT_PPL_DONE\n");
+    return isfinite(ppl_last) ? 0 : 1;
+}
+
 /* ===================== finite-difference gradient check (the acceptance gate) =====================
  * For a chosen resident-weight scalar, central difference (L(w+eps)-L(w-eps))/(2eps) vs the analytic
  * grad the backward produced for that scalar. eps in fp32; rel-err < ~1e-2 is a PASS (fp32-noisy).
@@ -1111,8 +1169,11 @@ int main(int argc, char** argv) {
     /* ---- corpus modes read their stream NOW so alloc_saved is sized to the largest window/sequence.
      * Corpus capacity is generous (1M tokens); the ids[] array above stays the 4096 primary. ---- */
     int *corpus=NULL, *lens=NULL, corpusN=0, nseq=0;
+    int *held=NULL, heldN=0;                               /* combined mode: SEPARATE held-out stream */
+    int do_combined = (do_corpus && do_ppl);              /* v1.9 step5c: train-then-eval one process */
     if (do_ppl || do_corpus) {
-        const char* cf = do_ppl ? pplf : corpusf;
+        /* primary corpus stream = the train corpus when training, else the ppl stream. */
+        const char* cf = do_corpus ? corpusf : pplf;
         int cap = 1<<20;                                  /* 1,048,576 tokens (laptop-sized) */
         corpus = (int*)malloc((size_t)cap*sizeof(int));
         corpusN = read_ids_file(cf, corpus, cap);
@@ -1121,7 +1182,8 @@ int main(int argc, char** argv) {
             if (ppl_win<=0) ppl_win = 256;                /* default window (>= the 30-pos NL min) */
             int wpad = ((ppl_win+63)/64)*64;              /* the window padded to %64 */
             if (wpad > S) S = wpad;                       /* size activations to hold a full window */
-            printf("[ppl] corpus '%s': %d tokens, window=%d (Spad will be %d)\n", cf, corpusN, ppl_win, S);
+            if (!do_combined)
+                printf("[ppl] corpus '%s': %d tokens, window=%d (Spad will be %d)\n", cf, corpusN, ppl_win, S);
         }
         if (do_corpus) {
             int lcap = 1<<16; lens=(int*)malloc((size_t)lcap*sizeof(int));
@@ -1132,6 +1194,14 @@ int main(int argc, char** argv) {
             int mpad = ((mx+63)/64)*64; if (mpad > S) S = mpad;
             printf("[corpus-train] '%s': %d tokens, %d sequences (max len %d -> Spad %d)\n", cf, corpusN, nseq, mx, S);
         }
+        if (do_combined) {
+            /* load the held-out stream into its OWN buffer (corpus holds the TRAIN stream). */
+            held = (int*)malloc((size_t)cap*sizeof(int));
+            heldN = read_ids_file(pplf, held, cap);
+            if (heldN<=0) { fprintf(stderr, "no ids in held-out %s\n", pplf); return 2; }
+            printf("[ft] train_corpus '%s' %d tok / %d seqs ; held_out '%s' %d tok ; ppl_win=%d (Spad will be %d)\n",
+                   corpusf, corpusN, nseq, pplf, heldN, ppl_win, S);
+        }
     }
 
     if (upload_all_weights()) return 2;
@@ -1139,6 +1209,10 @@ int main(int argc, char** argv) {
 
     /* ---- backward modes (allocate grad buffers + Adam state only when needed) ---- */
     if (do_fd || do_train || do_corpus) { if (alloc_grads(S)) return 2; build_params(); }
+    if (do_combined) {   /* v1.9 step5c: train the corpus THEN eval held-out ppl on the SAME weights */
+        int rc = run_corpus_train_then_ppl(corpus, lens, nseq, corpus_E, held, heldN, ppl_win);
+        return rc;
+    }
     if (do_ppl) {
         double sumCE=0.0; long npred=0;
         corpus_perplexity(corpus, corpusN, ppl_win, &sumCE, &npred);
