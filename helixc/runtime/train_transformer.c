@@ -31,7 +31,7 @@
 #include <errno.h>   /* strerror(errno) for output-open failure reporting (v1.3 4c) */
 
 /* ---- ENV-parameterized dims (default = the exact v1.0 capstone) ---- */
-static int V = 32, D = 16, S = 16, H = 64, NL = 2, K = 500, OPT = 0;
+static int V = 32, D = 16, S = 16, H = 64, NL = 2, K = 500, OPT = 0, QAT = 0;   /* QAT: v1.9 P5 opt-in STE ternary QAT */
 static int TF32 = 0;   /* OPT==2 -> route the plain-A@B GEMMs (mm_AB) to the TF32 Tensor-Core mma.sync kernel */
 static int DGBFUSE = 0; /* OPT>=1 (or HX_DGBFUSE) -> use the O(rows*cols) fused dgb (row_mean + dgb_pm) */
 #define MAXNL 16
@@ -56,6 +56,7 @@ static void init_dims(void) {
      * naive single-kernel dgb (to A/B the fusion); HX_DGBFUSE=1 forces it on even at OPT=0. */
     if (OPT >= 1) DGBFUSE = 1;
     if ((e = getenv("HX_DGBFUSE"))) DGBFUSE = atoi(e);
+    if (getenv("HX_TERNARY_QAT")) QAT = 1;   /* v1.9 P5: opt-in STE ternary QAT (default OFF) */
     if (NL > MAXNL) { fprintf(stderr, "NL>%d unsupported\n", MAXNL); exit(2); }
     SD = S*D; SS = S*S; SH = S*H; SV = S*V; DD = D*D; DH = D*H; HD = H*D; DV = D*V;
     NW = NL*(4*DD + 4*D + DH + HD) + 2*D + DV;
@@ -73,6 +74,13 @@ static CUcontext ctx;
 /* forward + elementwise kernels (naive set; opt set adds tiled GEMM + blockred softmax) */
 static CUfunction f_add, f_ln, f_mm, f_qkt, f_sm, f_gelu;
 static CUfunction f_ceg, f_atb, f_abt, f_geb, f_smb, f_lnbx, f_lnbg, f_scale, f_adam;
+/* v1.9 P5: opt-in STE ternary QAT (HX_TERNARY_QAT). The 6 weights/layer (Wq/Wk/Wv/Wo [D,D], W1 [D,H],
+ * W2 [H,D]) train with a latent fp32 W + a forward ternarize-dequant (W_t = clip3(W/sc)*sc, sc=row-abs-
+ * mean) + a backward STE clip-mask on dW. Adam stays on the latent W. Default OFF -> the fp baseline +
+ * the fixpoint gate are unaffected (the QAT path is dormant). All 3 kernels are @kernel (no kovc.hx edit). */
+static CUfunction f_ternarize, f_rowabsmean, f_stemask;
+static CUdeviceptr Wq_t[MAXNL], Wk_t[MAXNL], Wv_t[MAXNL], Wo_t[MAXNL], W1_t[MAXNL], W2_t[MAXNL];
+static CUdeviceptr scq[MAXNL], sck[MAXNL], scv[MAXNL], sco[MAXNL], sc1[MAXNL], sc2[MAXNL];
 /* OPT-path kernels (only loaded when OPT) */
 static CUfunction f_mm_t, f_atb_t, f_abt_t, f_sm_b, f_scale_rt;
 /* TF32 Tensor-Core A@B kernel (loaded when OPT>=2). Only the plain-A@B GEMMs route to it
@@ -224,22 +232,36 @@ static void upload_weights(const float* w) {
 #undef UP
 }
 
+/* v1.9 P5 STE helpers (no-op unless QAT). EW: ternarize the latent W into wt (sc = row-abs-mean) and
+ * return the buffer the matmul should consume. MASK: STE clip-gate dw in-place after its grad matmul.
+ * grid=rows for both; block=cols for ternarize/stemask, block=1 for the row-reduce abs-mean. Launches
+ * pipeline on the default stream (same-stream ordering -> the ternarize precedes the consuming mm_AB). */
+static CUdeviceptr EW(CUdeviceptr w, CUdeviceptr wt, CUdeviceptr sc, int rows, int cols) {
+    if (!QAT) return w;
+    void* am[] = { &w, &sc, &rows, &cols };      CKX(cuLaunchKernel(f_rowabsmean, rows,1,1, 1,1,1,    0,0, am, 0), "ste rowabsmean");
+    void* tn[] = { &w, &sc, &wt, &rows, &cols }; CKX(cuLaunchKernel(f_ternarize,  rows,1,1, cols,1,1, 0,0, tn, 0), "ste ternarize");
+    return wt;
+}
+static void MASK(CUdeviceptr dw, CUdeviceptr w, CUdeviceptr sc, int rows, int cols) {
+    if (!QAT) return;
+    void* a[] = { &dw, &w, &sc, &rows, &cols };  CKX(cuLaunchKernel(f_stemask, rows,1,1, cols,1,1, 0,0, a, 0), "ste mask");
+}
 static void forward_layer(int L, CUdeviceptr x) {
     ln_fwd(x, xn1[L], LN1g[L], LN1b[L], ist1[L], D);
-    mm_AB(xn1[L], Wq[L], Qb[L], S, D, D);
-    mm_AB(xn1[L], Wk[L], Kb[L], S, D, D);
-    mm_AB(xn1[L], Wv[L], Vb[L], S, D, D);
+    mm_AB(xn1[L], EW(Wq[L], Wq_t[L], scq[L], D, D), Qb[L], S, D, D);
+    mm_AB(xn1[L], EW(Wk[L], Wk_t[L], sck[L], D, D), Kb[L], S, D, D);
+    mm_AB(xn1[L], EW(Wv[L], Wv_t[L], scv[L], D, D), Vb[L], S, D, D);
     /* scores = (1/sqrt d) Q@K^T. naive: fused gpu_qkt (bakes 0.25). opt: tiled A@B^T then runtime scale. */
     if (OPT) { mm_ABt(Qb[L], Kb[L], scores[L], S, D, S); scale_attn(scores[L], SS); }
     else { void* aqk[] = { &Qb[L], &Kb[L], &scores[L], &Si, &Di }; LXT(t_gemm, f_qkt, S, S, aqk); }
     softmax(scores[L], attn[L], S, S);
     mm_AB(attn[L], Vb[L], ao[L], S, S, D);
-    mm_AB(ao[L], Wo[L], proj[L], S, D, D);
+    mm_AB(ao[L], EW(Wo[L], Wo_t[L], sco[L], D, D), proj[L], S, D, D);
     void* ah1[] = { &x, &proj[L], &h1[L], &SDi }; LXE(t_elem, f_add, SD, ah1);
     ln_fwd(h1[L], xn2[L], LN2g[L], LN2b[L], ist2[L], D);
-    mm_AB(xn2[L], W1[L], amlp[L], S, D, H);
+    mm_AB(xn2[L], EW(W1[L], W1_t[L], sc1[L], D, H), amlp[L], S, D, H);
     void* ag[] = { &amlp[L], &gmlp[L], &SHi }; LXE(t_elem, f_gelu, SH, ag);
-    mm_AB(gmlp[L], W2[L], mmlp[L], S, H, D);
+    mm_AB(gmlp[L], EW(W2[L], W2_t[L], sc2[L], H, D), mmlp[L], S, H, D);
     void* ah2[] = { &h1[L], &mmlp[L], &h2[L], &SDi }; LXE(t_elem, f_add, SD, ah2);
 }
 
@@ -263,9 +285,11 @@ static double forward_full(void) {
 static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     /* MLP */
     mm_AtB(gmlp[L], dh2_in, dW2[L], S, H, D);
+    MASK(dW2[L], W2[L], sc2[L], H, D);
     mm_ABt(dh2_in, W2[L], g_dg, S, D, H);
     void* ada[] = { &amlp[L], &g_dg, &g_da, &SHi }; LXE(t_elem, f_geb, SH, ada);
     mm_AtB(xn2[L], g_da, dW1[L], S, D, H);
+    MASK(dW1[L], W1[L], sc1[L], D, H);
     mm_ABt(g_da, W1[L], g_dxn2, S, H, D);
     /* LN2 bwd: dx is block-reduced (opt); dgb (column reduce) stays naive. */
     ln_bwd_dx(h1[L], g_dxn2, LN2g[L], ist2[L], g_dxln2, D);
@@ -273,6 +297,7 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     void* adh1[]= { &g_dxln2, &dh2_in, &g_dh1, &SDi }; LXE(t_elem, f_add, SD, adh1);
     /* attn proj */
     mm_AtB(ao[L], g_dh1, dWo[L], S, D, D);
+    MASK(dWo[L], Wo[L], sco[L], D, D);
     mm_ABt(g_dh1, Wo[L], g_dao, S, D, D);
     /* attn core */
     mm_AtB(attn[L], g_dao, g_dVv, S, S, D);
@@ -284,6 +309,9 @@ static void backward_layer(int L, CUdeviceptr dh2_in, CUdeviceptr dx_out) {
     mm_AtB(xn1[L], g_dQ, dWq[L], S, D, D);
     mm_AtB(xn1[L], g_dK, dWk[L], S, D, D);
     mm_AtB(xn1[L], g_dVv, dWv[L], S, D, D);
+    MASK(dWq[L], Wq[L], scq[L], D, D);
+    MASK(dWk[L], Wk[L], sck[L], D, D);
+    MASK(dWv[L], Wv[L], scv[L], D, D);
     /* dxn1 = dQ@Wq^T + dK@Wk^T + dVv@Wv^T */
     mm_ABt(g_dQ, Wq[L], g_t1, S, D, D);
     mm_ABt(g_dK, Wk[L], g_t2, S, D, D);
@@ -365,6 +393,11 @@ int main(int argc, char** argv) {
     CK(cuModuleGetFunction(&f_lnbg, mod, "gpu_layernorm_backward_dgb"), "lnbg");
     CK(cuModuleGetFunction(&f_scale, mod, "gpu_scale_inplace"), "scale");
     CK(cuModuleGetFunction(&f_adam, mod, "gpu_adam"), "adam");
+    if (QAT) {
+        CK(cuModuleGetFunction(&f_ternarize,  mod, "ternarize_dequant"), "ternarize");
+        CK(cuModuleGetFunction(&f_rowabsmean, mod, "row_abs_mean"),      "rowabsmean");
+        CK(cuModuleGetFunction(&f_stemask,    mod, "ste_mask"),          "stemask");
+    }
     if (DGBFUSE) {
         CK(cuModuleGetFunction(&f_rowmean, mod, "gpu_row_mean"), "rowmean");
         CK(cuModuleGetFunction(&f_dgb_pm,  mod, "gpu_layernorm_backward_dgb_pm"), "dgb_pm");
@@ -382,6 +415,8 @@ int main(int argc, char** argv) {
     }
     for (int L = 0; L < NL; L++) {
         Wq[L]=A(DD); Wk[L]=A(DD); Wv[L]=A(DD); Wo[L]=A(DD); LN1g[L]=A(D); LN1b[L]=A(D); LN2g[L]=A(D); LN2b[L]=A(D); W1[L]=A(DH); W2[L]=A(HD);
+        if (QAT) { Wq_t[L]=A(DD); Wk_t[L]=A(DD); Wv_t[L]=A(DD); Wo_t[L]=A(DD); W1_t[L]=A(DH); W2_t[L]=A(HD);
+                   scq[L]=A(D); sck[L]=A(D); scv[L]=A(D); sco[L]=A(D); sc1[L]=A(D); sc2[L]=A(H); }
         xn1[L]=A(SD); Qb[L]=A(SD); Kb[L]=A(SD); Vb[L]=A(SD); scores[L]=A(SS); attn[L]=A(SS); ao[L]=A(SD); proj[L]=A(SD); h1[L]=A(SD); xn2[L]=A(SD); amlp[L]=A(SH); gmlp[L]=A(SH); mmlp[L]=A(SD); h2[L]=A(SD); ist1[L]=A(S); ist2[L]=A(S);
         dWq[L]=A(DD); dWk[L]=A(DD); dWv[L]=A(DD); dWo[L]=A(DD); dLN1[L]=A(2*D); dLN2[L]=A(2*D); dW1[L]=A(DH); dW2[L]=A(HD); g_dh2[L]=A(SD);
     }

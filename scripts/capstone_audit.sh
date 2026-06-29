@@ -55,7 +55,7 @@ if [ -x "$DRV" ]; then echo "  driver (seed-minted) $(stat -c%s $DRV) B  sha=$(s
 
 # ---- [3] emit combined.ptx: 15 kovc-emitted transformer kernels, single PTX module ----
 echo "=== [3] emit combined.ptx (15 kovc-emitted kernels via the seed-minted driver) ==="
-KS="vector_add naive_matmul gpu_matmul_atb gpu_matmul_abt gpu_qkt gpu_softmax gpu_softmax_backward gpu_gelu gpu_gelu_backward gpu_layernorm_fwd_save gpu_layernorm_backward_dx gpu_layernorm_backward_dgb gpu_ce_softmax_grad gpu_scale_inplace gpu_adam"
+KS="vector_add naive_matmul gpu_matmul_atb gpu_matmul_abt gpu_qkt gpu_softmax gpu_softmax_backward gpu_gelu gpu_gelu_backward gpu_layernorm_fwd_save gpu_layernorm_backward_dx gpu_layernorm_backward_dgb gpu_ce_softmax_grad gpu_scale_inplace gpu_adam ternarize_dequant row_abs_mean ste_mask"
 : > /tmp/combined_kernels.hx
 nk=0
 for k in $KS; do
