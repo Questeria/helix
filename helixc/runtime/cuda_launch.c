@@ -2025,6 +2025,52 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    /* ste_check mode (v1.9 P5): element-exact verify the 3 STE QAT kernels vs an independent host ref.
+     * Dispatches on the kernel name (argv[2]): ternarize_dequant / row_abs_mean / ste_mask. Deterministic
+     * host input (w spanning ~[-2,2], distinct per-row sc, a separate dw for ste_mask). The kernels are
+     * pure div/compare/mul/in-order-sum (no FMA), so GPU == host BIT-EXACT (==). 'mutate' perturbs one
+     * output cell -> the comparator NC MUST fail.
+     *   cuda_launch <kernel.ptx> <ternarize_dequant|row_abs_mean|ste_mask> <Nignored> ste_check <rows> <cols> [mutate]. */
+    if (strcmp(op, "ste_check") == 0) {
+        const char* kn = argv[2];
+        int rows = (argc>5)?atoi(argv[5]):8, cols = (argc>6)?atoi(argv[6]):16;
+        int mutate = (argc>7 && strcmp(argv[7],"mutate")==0);
+        size_t n = (size_t)rows*cols;
+        float* hw=(float*)malloc(n*sizeof(float)); float* hsc=(float*)malloc((size_t)rows*sizeof(float));
+        float* hdw=(float*)malloc(n*sizeof(float)); float* hout=(float*)malloc(n*sizeof(float)); float* href=(float*)malloc(n*sizeof(float));
+        if(!hw||!hsc||!hdw||!hout||!href) return 2;
+        for (size_t i=0;i<n;i++) hw[i] = ((float)((int)((i*37+11)%101) - 50)) * 0.041f;   /* ~[-2,2] */
+        for (int r=0;r<rows;r++) hsc[r] = 0.3f + 0.05f*(float)r;                            /* distinct per-row scale */
+        for (size_t i=0;i<n;i++) hdw[i] = ((float)((int)((i*53+7)%97) - 48)) * 0.027f;       /* dw input (for ste_mask) */
+        CUdeviceptr dw_=0,dsc_=0,dout_=0,ddw_=0; size_t outN=n; int pbad=0;
+        if (strcmp(kn,"ternarize_dequant")==0) {
+            for (int r=0;r<rows;r++) for (int c=0;c<cols;c++){ float q=hw[r*cols+c]/hsc[r]; float t=(q>0.5f?1.0f:0.0f)-(q<-0.5f?1.0f:0.0f); href[r*cols+c]=t*hsc[r]; }
+            CK(cuMemAlloc(&dw_,n*sizeof(float)),"w");CK(cuMemAlloc(&dsc_,(size_t)rows*sizeof(float)),"sc");CK(cuMemAlloc(&dout_,n*sizeof(float)),"out");
+            CK(cuMemcpyHtoD(dw_,hw,n*sizeof(float)),"hw");CK(cuMemcpyHtoD(dsc_,hsc,(size_t)rows*sizeof(float)),"hsc");
+            void* a[]={ &dw_,&dsc_,&dout_,&rows,&cols }; CK(cuLaunchKernel(fn,rows,1,1,cols,1,1,0,0,a,0),"launch ternarize"); CK(cuCtxSynchronize(),"sync");
+            CK(cuMemcpyDtoH(hout,dout_,n*sizeof(float)),"dout"); cuMemFree(dw_);cuMemFree(dsc_);cuMemFree(dout_);
+        } else if (strcmp(kn,"row_abs_mean")==0) {
+            outN=(size_t)rows;
+            for (int r=0;r<rows;r++){ float s=0.0f; for(int c=0;c<cols;c++){ float v=hw[r*cols+c]; s+=(v<0.0f?-v:v);} href[r]=s/(float)cols; }
+            CK(cuMemAlloc(&dw_,n*sizeof(float)),"w");CK(cuMemAlloc(&dout_,(size_t)rows*sizeof(float)),"sc");
+            CK(cuMemcpyHtoD(dw_,hw,n*sizeof(float)),"hw");
+            void* a[]={ &dw_,&dout_,&rows,&cols }; CK(cuLaunchKernel(fn,rows,1,1,1,1,1,0,0,a,0),"launch rowabsmean"); CK(cuCtxSynchronize(),"sync");
+            CK(cuMemcpyDtoH(hout,dout_,(size_t)rows*sizeof(float)),"dout"); cuMemFree(dw_);cuMemFree(dout_);
+        } else if (strcmp(kn,"ste_mask")==0) {
+            for (int r=0;r<rows;r++) for (int c=0;c<cols;c++){ float q=hw[r*cols+c]/hsc[r]; float aq=q<0.0f?-q:q; float m=aq>1.0f?0.0f:1.0f; href[r*cols+c]=hdw[r*cols+c]*m; }
+            CK(cuMemAlloc(&ddw_,n*sizeof(float)),"dw");CK(cuMemAlloc(&dw_,n*sizeof(float)),"w");CK(cuMemAlloc(&dsc_,(size_t)rows*sizeof(float)),"sc");
+            CK(cuMemcpyHtoD(ddw_,hdw,n*sizeof(float)),"hdw");CK(cuMemcpyHtoD(dw_,hw,n*sizeof(float)),"hw");CK(cuMemcpyHtoD(dsc_,hsc,(size_t)rows*sizeof(float)),"hsc");
+            void* a[]={ &ddw_,&dw_,&dsc_,&rows,&cols }; CK(cuLaunchKernel(fn,rows,1,1,cols,1,1,0,0,a,0),"launch stemask"); CK(cuCtxSynchronize(),"sync");
+            CK(cuMemcpyDtoH(hout,ddw_,n*sizeof(float)),"dout"); cuMemFree(ddw_);cuMemFree(dw_);cuMemFree(dsc_);
+        } else { fprintf(stderr,"ste_check: unknown kernel %s\n",kn); return 2; }
+        if (mutate && outN>0) hout[0] += 1.0f;
+        for (size_t i=0;i<outN;i++) if (hout[i]!=href[i]) { if(pbad<4) fprintf(stderr,"ste_check %s mismatch [%zu] got %.9g ref %.9g\n",kn,i,hout[i],href[i]); pbad++; }
+        printf("GPU [%s] ste_check %s %dx%d: out[0]=%.6g ref[0]=%.6g, %d bad -> %s\n", gpu, kn, rows, cols, hout[0], href[0], pbad, pbad?"FAIL":"PASS");
+        cuModuleUnload(mod); cuCtxDestroy(ctx);
+        free(hw);free(hsc);free(hdw);free(hout);free(href);free(ptx);
+        return pbad?1:0;
+    }
+
     /* hgemm mode (v1.5 S1): HALF-PRECISION (f16 storage, f32 accumulate) matmul verify.
      *   cuda_launch <ptx> naive_matmul_f16 <Nignored> hgemm <M> <K> <N> [mutate].
      * Device buffers are uint16 IEEE-binary16 -- exactly what the kernel's
