@@ -91,6 +91,16 @@ static CUfunction f_mm, f_abt, f_sm_causal, f_rms, f_rope, f_silu, f_scale, f_ad
 /* backward kernels (bound only in --fdcheck/train mode): A^T@B (weight grads + dX), the 4 new
  * Llama bwd ops, CE-softmax grad (loss root), softmax bwd (attn), Adam. */
 static CUfunction f_atb, f_rmsb, f_ropeb, f_silub, f_rkvb, f_ceg, f_smb, f_adam;
+/* v1.9 P5 (STE ternary QAT, opt-in HX_TERNARY_QAT): the 7 LINEARS (w_q/w_k/w_v/w_o + w_gate/w_up/
+ * w_down) train with a latent fp32 W + a forward ternarize-dequant (Wt = clip3(W/sc)*sc, sc = per-
+ * out-row abs-mean) consumed by mm_ABt in place of W, + a backward STE clip-mask on each dW. Adam
+ * stays on the latent fp W. Default OFF -> the fp baseline + the fixpoint gate are unaffected (the
+ * QAT path is dormant). Same pattern as train_transformer.c (the GPT-2 capstone). All 3 kernels are
+ * @kernel (already element-exact gated; NO kovc.hx edit -- they join the combined-PTX concat list). */
+static int QAT = 0;
+static CUfunction f_ternarize, f_rowabsmean, f_stemask;
+/* the ternarized buffers + per-out-row scale buffers (one per ternary linear, per layer) are
+ * declared with the resident weights below (after #define MAXL). */
 
 /* sync after every launch (TRAINER FORWARD = correctness-first; no fast-mode skips). */
 #define SYNC(w) do { CKX(cuCtxSynchronize(), w); } while (0)
@@ -180,6 +190,58 @@ static void vadd(CUdeviceptr a, CUdeviceptr b, CUdeviceptr c, int n) {
     int blk=1, cand[]={256,128,64,32,1}; for (int i=0;i<5;i++) if (n%cand[i]==0){blk=cand[i];break;}
     LX(f_add, (unsigned)(n/blk), (unsigned)blk, ar);
 }
+/* ===================== STE ternary QAT helpers (v1.9 P5; no-op unless QAT) =====================
+ * EW: ternarize the latent W[out,in] into wt (sc[out] = per-out-row abs-mean) and return the buffer
+ *     the forward matmul should consume (wt when QAT, else W untouched).
+ * MASK: STE clip-gate dw[out,in] in-place AFTER its weight-grad matmul (zeros the grad where the
+ *     latent saturated |W/sc|>1; passes it through where in-range). Adam then steps the latent W.
+ * Launches pipeline on the default stream (same-stream ordering -> the ternarize precedes the
+ * consuming mm_ABt, and the mask precedes the Adam step). Mirrors train_transformer.c's EW/MASK.
+ *
+ * COLUMN-TILING (the one delta vs the capstone): ternarize_dequant + ste_mask are launched
+ *   grid=rows, block=cols because the kernel maps row=block_idx(), col=thread_idx() (kovc maps
+ *   thread_idx->%tid.x, no grid-stride). A CUDA block is capped at 1024 threads, but w_down has
+ *   in=DFF=1536>1024. The kernel uses its `cols` ARG as the row STRIDE, so we tile the columns by
+ *   OFFSETTING the w/wt(/dw) base pointers by tile_start floats while keeping cols=full-stride and
+ *   block=tile_width (<=1024): the kernel then computes w[row*cols + (tile_start+col)] for col in
+ *   [0,tile_width), and sc[block_idx()] is the TRUE per-row scale (sc is NOT offset). Iterating
+ *   tile_start over the row covers every column with the correct per-out-row scale -- byte-identical
+ *   to a single block=cols launch where cols<=1024. row_abs_mean handles cols natively (block=1,
+ *   internal while-loop), no tiling needed. (For the 6 linears with in=576<=1024 this is one tile.) */
+static int ste_coltile(int cols) {              /* largest tile<=1024 that divides cols */
+    int cand[]={1024,768,576,512,384,256,192,128,64,32,1};
+    for (int i=0;i<(int)(sizeof(cand)/sizeof(cand[0]));i++) if (cols%cand[i]==0 && cand[i]<=1024) return cand[i];
+    return 1;
+}
+static CUdeviceptr EW(CUdeviceptr w, CUdeviceptr wt, CUdeviceptr sc, int rows, int cols) {
+    if (!QAT) return w;
+    /* row_abs_mean(w,sc,rows,cols): grid=rows, block=1 (one thread per out-row; loops cols inside). */
+    { int r=rows,c=cols; void* am[]={ &w,&sc,&r,&c };
+      CKX(cuLaunchKernel(f_rowabsmean,(unsigned)rows,1,1, 1,1,1, 0,0, am,0), "ste rowabsmean");
+      SYNC("sync ste rowabsmean"); }
+    /* ternarize_dequant(w,sc,wt,rows,cols): grid=rows, block=tile, column-tiled (see header). */
+    int tile=ste_coltile(cols);
+    for (int t0=0;t0<cols;t0+=tile) {
+        CUdeviceptr wo  = w  + (CUdeviceptr)((size_t)t0*sizeof(float));
+        CUdeviceptr wto = wt + (CUdeviceptr)((size_t)t0*sizeof(float));
+        int r=rows,c=cols; void* tn[]={ &wo,&sc,&wto,&r,&c };   /* c = FULL stride, NOT the tile */
+        CKX(cuLaunchKernel(f_ternarize,(unsigned)rows,1,1, (unsigned)tile,1,1, 0,0, tn,0), "ste ternarize");
+        SYNC("sync ste ternarize");
+    }
+    return wt;
+}
+static void MASK(CUdeviceptr dw, CUdeviceptr w, CUdeviceptr sc, int rows, int cols) {
+    if (!QAT) return;
+    int tile=ste_coltile(cols);
+    for (int t0=0;t0<cols;t0+=tile) {
+        CUdeviceptr dwo = dw + (CUdeviceptr)((size_t)t0*sizeof(float));
+        CUdeviceptr wo  = w  + (CUdeviceptr)((size_t)t0*sizeof(float));
+        int r=rows,c=cols; void* a[]={ &dwo,&wo,&sc,&r,&c };    /* c = FULL stride, NOT the tile */
+        CKX(cuLaunchKernel(f_stemask,(unsigned)rows,1,1, (unsigned)tile,1,1, 0,0, a,0), "ste mask");
+        SYNC("sync ste mask");
+    }
+}
+
 /* strided per-row DtoD: dst[s,0:DH] = src[s, hbase:hbase+DH], src has srccols columns. */
 static void pack_head(CUdeviceptr dst, CUdeviceptr src, int hbase, int srccols, int rows) {
     for (int s=0;s<rows;s++) {
@@ -263,6 +325,13 @@ static CUdeviceptr w_inln[MAXL], w_q[MAXL], w_k[MAXL], w_v[MAXL], w_o[MAXL],
 static CUdeviceptr w_normf, w_embed_pad;   /* final RMSNorm weight; tied head = embed padded [NVpad,DM] */
 static int NVpad=0;
 
+/* v1.9 P5 (STE ternary QAT): per ternary linear, a ternarized buffer wt_*[out,in] (same shape as W)
+ * + a per-out-row scale sc_*[out]. Allocated only when QAT (in upload_all_weights). The 7 linears
+ * ternarized: w_q[QD,DM] w_k[KVD,DM] w_v[KVD,DM] w_o[DM,QD] w_gate[DFF,DM] w_up[DFF,DM] w_down[DM,DFF].
+ * The norms (w_inln/w_postln/w_normf) and the tied embedding (w_embed_pad) stay fp -- not ternarized. */
+static CUdeviceptr wt_q[MAXL], wt_k[MAXL], wt_v[MAXL], wt_o[MAXL], wt_gate[MAXL], wt_up[MAXL], wt_down[MAXL];
+static CUdeviceptr sc_q[MAXL], sc_k[MAXL], sc_v[MAXL], sc_o[MAXL], sc_gate[MAXL], sc_up[MAXL], sc_down[MAXL];
+
 static CUdeviceptr up_slice(long foff, size_t nf) {
     CUdeviceptr d=A(nf); CKX(cuMemcpyHtoD(d, &g_wbase[foff], nf*sizeof(float)), "h2d wslice"); return d;
 }
@@ -286,6 +355,19 @@ static int upload_all_weights(void) {
     CKX(cuMemsetD8(w_embed_pad, 0, (size_t)NVpad*DM*sizeof(float)), "zero embed_pad");
     CKX(cuMemcpyHtoD(w_embed_pad, &g_wbase[off_embed()], (size_t)NV*DM*sizeof(float)), "h2d embed_pad");
     printf("[wt] resident: %d layers fp32 on-device + final-norm + tied head [%d,%d]\n", NL, NVpad, DM);
+    /* v1.9 P5: QAT ternarized + scale buffers (only when HX_TERNARY_QAT). One per ternary linear. */
+    if (QAT) {
+        for (int L=0;L<NL;L++) {
+            wt_q[L]   =A((size_t)QD*DM);  sc_q[L]   =A(QD);
+            wt_k[L]   =A((size_t)KVD*DM); sc_k[L]   =A(KVD);
+            wt_v[L]   =A((size_t)KVD*DM); sc_v[L]   =A(KVD);
+            wt_o[L]   =A((size_t)DM*QD);  sc_o[L]   =A(DM);
+            wt_gate[L]=A((size_t)DFF*DM); sc_gate[L]=A(DFF);
+            wt_up[L]  =A((size_t)DFF*DM); sc_up[L]  =A(DFF);
+            wt_down[L]=A((size_t)DM*DFF); sc_down[L]=A(DM);
+        }
+        printf("[qat] STE ternary QAT ON: ternarized+scale buffers for 7 linears x %d layers allocated\n", NL);
+    }
     return 0;
 }
 
@@ -474,9 +556,10 @@ static void forward_layer(int L) {
     CUdeviceptr x = s_resid_in[L];               /* block input (== prev resid_out, or embeds for L0) */
     /* --- attention --- */
     rms_norm(x, s_rms1[L], w_inln[L], Spad, DM);
-    mm_ABt(s_rms1[L], w_q[L], s_q[L], Spad, DM, QD);    /* q [S,QD] */
-    mm_ABt(s_rms1[L], w_k[L], s_k[L], Spad, DM, KVD);   /* k [S,KVD] */
-    mm_ABt(s_rms1[L], w_v[L], s_v[L], Spad, DM, KVD);   /* v [S,KVD] */
+    /* QAT: ternarize the latent W (sc=per-out-row abs-mean) and consume Wt in the GEMM; else W. */
+    mm_ABt(s_rms1[L], EW(w_q[L],wt_q[L],sc_q[L],QD,DM),  s_q[L], Spad, DM, QD);    /* q [S,QD] */
+    mm_ABt(s_rms1[L], EW(w_k[L],wt_k[L],sc_k[L],KVD,DM), s_k[L], Spad, DM, KVD);   /* k [S,KVD] */
+    mm_ABt(s_rms1[L], EW(w_v[L],wt_v[L],sc_v[L],KVD,DM), s_v[L], Spad, DM, KVD);   /* v [S,KVD] */
     for (int h=0; h<NH; h++) {
         int kv=h/group;
         pack_head(d_Qh, s_q[L], h*DH,  QD,  Spad);
@@ -495,14 +578,14 @@ static void forward_layer(int L) {
         mm_AB(d_attnw_h, d_Vh, d_aoh, Spad, Spad, DH);  /* ao_h[S,DH] = attn @ V_h */
         scatter_head(s_ctx[L], h*DH, d_aoh, QD, Spad);  /* concat heads -> ctx [S,QD] */
     }
-    mm_ABt(s_ctx[L], w_o[L], s_oproj[L], Spad, QD, DM);  /* o_proj [S,DM] */
+    mm_ABt(s_ctx[L], EW(w_o[L],wt_o[L],sc_o[L],DM,QD), s_oproj[L], Spad, QD, DM);  /* o_proj [S,DM] */
     vadd(x, s_oproj[L], s_resid_mid[L], Spad*DM);        /* x + attn (residual) */
     /* --- MLP (SwiGLU) --- */
     rms_norm(s_resid_mid[L], s_rms2[L], w_postln[L], Spad, DM);
-    mm_ABt(s_rms2[L], w_gate[L], s_gate[L], Spad, DM, DFF);
-    mm_ABt(s_rms2[L], w_up[L],   s_up[L],   Spad, DM, DFF);
+    mm_ABt(s_rms2[L], EW(w_gate[L],wt_gate[L],sc_gate[L],DFF,DM), s_gate[L], Spad, DM, DFF);
+    mm_ABt(s_rms2[L], EW(w_up[L],  wt_up[L],  sc_up[L],  DFF,DM), s_up[L],   Spad, DM, DFF);
     silu_mul(s_gate[L], s_up[L], s_silu[L], Spad*DFF);    /* up * silu(gate) */
-    mm_ABt(s_silu[L], w_down[L], s_down[L], Spad, DFF, DM);
+    mm_ABt(s_silu[L], EW(w_down[L],wt_down[L],sc_down[L],DM,DFF), s_down[L], Spad, DFF, DM);
     vadd(s_resid_mid[L], s_down[L], s_resid_out[L], Spad*DM);  /* + residual */
 }
 
@@ -542,11 +625,14 @@ static void backward_layer(int L, CUdeviceptr dIN) {
     /* down: s_down = silu @ w_down^T (w_down [DM,DFF]); dIN flows into the down output [S,DM]. */
     mm_AB (dIN, w_down[L], dg_silu, Spad, DM, DFF);      /* d_silu = dDown @ w_down  [S,DFF] */
     mm_AtB(dIN, s_silu[L], g_down[L], Spad, DM, DFF);    /* dW_down = dDown^T @ silu [DM,DFF] */
+    MASK(g_down[L], w_down[L], sc_down[L], DM, DFF);     /* QAT STE clip-mask (no-op unless QAT) */
     /* silu_mul: silu = up * silu(gate) ; d_silu -> dg_gate (into gate), dg_up (into up) */
     silu_mul_bwd(s_gate[L], s_up[L], dg_silu, dg_gate, dg_up, Spad*DFF);
     /* up: s_up = rms2 @ w_up^T  ; gate: s_gate = rms2 @ w_gate^T. Both feed dg_rms (sum into rms2 grad). */
     mm_AtB(dg_up,   s_rms2[L], g_up[L],   Spad, DFF, DM);   /* dW_up   = dUp^T  @ rms2 [DFF,DM] */
+    MASK(g_up[L],   w_up[L],   sc_up[L],   DFF, DM);
     mm_AtB(dg_gate, s_rms2[L], g_gate[L], Spad, DFF, DM);   /* dW_gate = dGate^T@ rms2 [DFF,DM] */
+    MASK(g_gate[L], w_gate[L], sc_gate[L], DFF, DM);
     mm_AB (dg_up,   w_up[L],   dg_rms,   Spad, DFF, DM);    /* d_rms2 (from up)   [S,DM] */
     mm_AB (dg_gate, w_gate[L], dg_tmpDM, Spad, DFF, DM);    /* d_rms2 (from gate) [S,DM] */
     vadd(dg_rms, dg_tmpDM, dg_rms, Spad*DM);                /* d_rms2 total = up + gate */
@@ -560,6 +646,7 @@ static void backward_layer(int L, CUdeviceptr dIN) {
     /* o_proj: s_oproj = ctx @ w_o^T (w_o [DM,QD]). dg_x is the grad into oproj output [S,DM]. */
     mm_AB (dg_x, w_o[L], dg_ctx, Spad, DM, QD);     /* d_ctx = dOproj @ w_o  [S,QD] */
     mm_AtB(dg_x, s_ctx[L], g_o[L], Spad, DM, QD);   /* dW_o = dOproj^T @ ctx [DM,QD] */
+    MASK(g_o[L], w_o[L], sc_o[L], DM, QD);
     /* per q-head: ctx_h = attnw_h @ V_h ; scores -> softmax -> attnw ; scores = Qr_h @ Kr_h^T. */
     zero_dev(dg_krep,(size_t)NH*Spad*DH); zero_dev(dg_vrep,(size_t)NH*Spad*DH);
     for (int h=0; h<NH; h++) {
@@ -608,8 +695,11 @@ static void backward_layer(int L, CUdeviceptr dIN) {
     }
     /* q/k/v projections: s_q = rms1 @ w_q^T, etc. Accumulate dW and sum dX into dg_rms (rms1 grad). */
     mm_AtB(dg_q, s_rms1[L], g_q[L], Spad, QD,  DM);    /* dW_q [QD,DM] */
+    MASK(g_q[L], w_q[L], sc_q[L], QD, DM);
     mm_AtB(dg_k, s_rms1[L], g_k[L], Spad, KVD, DM);    /* dW_k [KVD,DM] */
+    MASK(g_k[L], w_k[L], sc_k[L], KVD, DM);
     mm_AtB(dg_v, s_rms1[L], g_v[L], Spad, KVD, DM);    /* dW_v [KVD,DM] */
+    MASK(g_v[L], w_v[L], sc_v[L], KVD, DM);
     mm_AB (dg_q, w_q[L], dg_rms,   Spad, QD,  DM);     /* d_rms1 (from q) [S,DM] */
     mm_AB (dg_k, w_k[L], dg_tmpDM, Spad, KVD, DM); vadd(dg_rms, dg_tmpDM, dg_rms, Spad*DM);  /* + k */
     mm_AB (dg_v, w_v[L], dg_tmpDM, Spad, KVD, DM); vadd(dg_rms, dg_tmpDM, dg_rms, Spad*DM);  /* + v */
@@ -698,7 +788,15 @@ static int device_init(const char* ptx_path) {
     CK(cuModuleGetFunction(&f_ceg,   g_mod, "gpu_ce_softmax_grad"),"gpu_ce_softmax_grad");
     CK(cuModuleGetFunction(&f_smb,   g_mod, "gpu_softmax_backward"),"gpu_softmax_backward");
     CK(cuModuleGetFunction(&f_adam,  g_mod, "gpu_adam"),           "gpu_adam");
-    printf("[gpu] %s; PTX %ld B, 8 fwd + 8 bwd kernels bound\n", name, psz);
+    /* v1.9 P5 STE kernels (bound only when QAT, so a QAT-off run accepts either the 17- or 20-kernel
+     * PTX; with QAT the extended 20-kernel mint is required and these GetFunction calls fail loudly
+     * if the 3 STE kernels are absent). @kernel sources -> no kovc.hx edit. */
+    if (QAT) {
+        CK(cuModuleGetFunction(&f_ternarize,  g_mod, "ternarize_dequant"), "ternarize_dequant");
+        CK(cuModuleGetFunction(&f_rowabsmean, g_mod, "row_abs_mean"),      "row_abs_mean");
+        CK(cuModuleGetFunction(&f_stemask,    g_mod, "ste_mask"),          "ste_mask");
+    }
+    printf("[gpu] %s; PTX %ld B, 8 fwd + 8 bwd%s kernels bound\n", name, psz, QAT?" + 3 STE-QAT":"");
     return 0;
 }
 
@@ -873,6 +971,9 @@ int main(int argc, char** argv) {
         return 2;
     }
     const char* ptx=argv[1]; const char* wts=argv[2]; const char* idsf=argv[3];
+    /* v1.9 P5: opt-in STE ternary QAT (default OFF). Must be set before device_init/upload_all_weights
+     * so the 3 STE kernels are bound + the ternarized/scale buffers are allocated. */
+    if (getenv("HX_TERNARY_QAT") && atoi(getenv("HX_TERNARY_QAT"))!=0) QAT=1;
     /* flag scan: --fdcheck (or HX_FDCHECK=1) runs the gradient check; --train N runs N Adam steps.
      * the optional positional oracle_logits.bin is the first non-flag arg after ids (argv[4]). */
     int do_fd = (getenv("HX_FDCHECK") && atoi(getenv("HX_FDCHECK"))!=0);
